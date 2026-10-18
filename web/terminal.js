@@ -6,6 +6,7 @@ import { terminalHistoryMethods } from './terminal-history.js';
 import { normalizePath } from './sessions.js';
 import {
     projectWorktreeLabel,
+    formatWorkspaceLabel,
     cpuLevel,
     worktreeGlyph,
     getTerminalActivityState,
@@ -743,6 +744,63 @@ export class TabManager {
 
     // ---- Drag-to-reorder (localStorage-only, v0.8.x polish) ----
 
+    _workspaceTabGroups(entries) {
+        const workspaces = Array.from(
+            new Set(
+                entries
+                    .map(([, tab]) => tab.workspace || '')
+                    .filter(Boolean),
+            ),
+        );
+        const groups = workspaces.map((workspace) => ({
+            workspace,
+            label: formatWorkspaceLabel(workspace, workspaces),
+            entries: [],
+        }));
+        groups.sort((a, b) => {
+            const nameOrder = a.label.localeCompare(b.label, undefined, {
+                sensitivity: 'base',
+                numeric: true,
+            });
+            if (nameOrder !== 0) return nameOrder;
+            const pathOrder = a.workspace.localeCompare(b.workspace, undefined, {
+                sensitivity: 'case',
+            });
+            if (pathOrder !== 0) return pathOrder;
+            if (a.workspace < b.workspace) return -1;
+            if (a.workspace > b.workspace) return 1;
+            return 0;
+        });
+        groups.push({ workspace: '', label: 'No workspace', entries: [] });
+
+        const groupsByWorkspace = new Map(
+            groups.map((group) => [group.workspace, group]),
+        );
+        for (const entry of entries) {
+            const workspace = entry[1].workspace || '';
+            groupsByWorkspace.get(workspace).entries.push(entry);
+        }
+
+        const labelCounts = new Map();
+        for (const { label } of groups) {
+            labelCounts.set(label, (labelCounts.get(label) || 0) + 1);
+        }
+        for (const group of groups) {
+            if (group.workspace && labelCounts.get(group.label) > 1) {
+                group.label = group.workspace;
+            }
+        }
+        return groups;
+    }
+
+    sortTabsByWorkspace() {
+        if (this.tabs.size < 2) return;
+        const order = this._workspaceTabGroups(
+            Array.from(this.tabs.entries()),
+        ).flatMap((group) => group.entries.map(([paneId]) => paneId));
+        this.applyTabOrder(order);
+    }
+
     applySavedTabOrder() {
         let saved = [];
         try {
@@ -796,6 +854,8 @@ export class TabManager {
         if (document.body.classList.contains('show-tab-shortcuts')) {
             this.updateTabShortcutHints(true);
         }
+        this.updateTabOverflow?.();
+        this._refreshOverflowDropdown?.();
     }
 
     // Splice `sourceId` into the order immediately before or after
@@ -1339,6 +1399,13 @@ export class TabManager {
             if (e.defaultPrevented) return;
             const t = e.target;
             if (
+                t instanceof Element &&
+                (t.closest('#tab-overflow-dropdown') ||
+                    t.closest('#tab-overflow-btn') ||
+                    t.closest('#sort-tabs-btn'))
+            )
+                return;
+            if (
                 t instanceof HTMLElement &&
                 t !== this.inputTextArea &&
                 (t.tagName === 'INPUT' ||
@@ -1568,6 +1635,14 @@ export class TabManager {
             }
         });
 
+        const sortTabsBtn = document.getElementById('sort-tabs-btn');
+        if (sortTabsBtn) {
+            sortTabsBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.sortTabsByWorkspace();
+            });
+        }
+
         const overflowBtn = document.getElementById('tab-overflow-btn');
         if (overflowBtn) {
             overflowBtn.addEventListener('click', (e) => {
@@ -1575,6 +1650,27 @@ export class TabManager {
                 this._toggleOverflowDropdown();
             });
         }
+
+        const handleOverflowEscape = (e) => {
+            if (e.key !== 'Escape') return;
+            e.preventDefault();
+            e.stopPropagation();
+            this._closeOverflowDropdown({ restoreFocus: true });
+        };
+        overflowBtn?.addEventListener('keydown', handleOverflowEscape);
+        document
+            .getElementById('tab-overflow-dropdown')
+            ?.addEventListener('keydown', handleOverflowEscape);
+        sortTabsBtn?.addEventListener('keydown', (e) => {
+            const dropdown = document.getElementById('tab-overflow-dropdown');
+            if (
+                e.key === 'Escape' &&
+                dropdown &&
+                !dropdown.classList.contains('hidden')
+            ) {
+                handleOverflowEscape(e);
+            }
+        });
 
         // Passive scroll listener keeps the tab-list selector state in sync as the
         // user horizontally scrolls the strip. rAF-coalesced via a tiny
@@ -1591,7 +1687,7 @@ export class TabManager {
                 });
             };
             strip.addEventListener('scroll', onScroll, { passive: true });
-            // Also recompute on resize so a window resize properly reveals/hides the chip.
+            // Recompute on resize to keep clipped-tab counts current.
             window.addEventListener('resize', onScroll, { passive: true });
         }
     }
@@ -5071,6 +5167,8 @@ export class TabManager {
             inline: 'nearest',
         });
         this.saveTabsState();
+        this.updateTabOverflow?.();
+        this._refreshOverflowDropdown?.();
 
         // Close-triggered selections use the same project synchronization as
         // any other tab selection so the sidebar matches the active tab.
@@ -5704,11 +5802,10 @@ export class TabManager {
         if (el) el.classList.add('hidden');
     }
 
-    // ---- Tab list selector + worktree grouping ----------------------
+    // ---- Tab list selector + workspace grouping --------------------
     //
-    // The small down-arrow button appears when tabs overflow or when one
-    // or more tabs are in the close grace period. Its dropdown lists all
-    // live tabs plus a separate Closing tabs section.
+    // The tab-list button stays available for all open tabs and the
+    // separate Closing tabs section; its tooltip reports clipping.
 
     updateTabOverflow() {
         const strip = document.getElementById('tabs-container');
@@ -5718,9 +5815,6 @@ export class TabManager {
         const closingCount = Array.from(this.tabs?.values?.() || []).filter(
             (tab) => tab.softClosing,
         ).length;
-        const overflowX = strip.scrollWidth - strip.clientWidth;
-        const hasOverflow = overflowX > 4;
-
         // Count live tabs whose right edge is clipped. Soft-closed tabs
         // remain in the DOM to preserve their order, but are not strip tabs.
         const stripRect = strip.getBoundingClientRect();
@@ -5738,13 +5832,6 @@ export class TabManager {
             }
         }
 
-        if (!hasOverflow && closingCount === 0) {
-            this._closeOverflowDropdown();
-            btn.classList.add('hidden');
-            return;
-        }
-
-        btn.classList.remove('hidden');
         const details = [];
         if (hiddenCount > 0)
             details.push(
@@ -6010,23 +6097,37 @@ export class TabManager {
     }
 
     _refreshOverflowDropdown() {
-        if (!this._overflowDropdownHidden()) this._buildOverflowDropdown();
+        if (!this._overflowDropdownHidden()) {
+            this._buildOverflowDropdown({ preserveState: true });
+        }
     }
 
-    _buildOverflowDropdown() {
+    _buildOverflowDropdown({ preserveState = false } = {}) {
         const dropdown = document.getElementById('tab-overflow-dropdown');
         if (!dropdown) return null;
-        dropdown.innerHTML = '';
-        const entries = Array.from(this.tabs?.entries?.() || []);
-        if (entries.length === 0) {
-            const empty = document.createElement('div');
-            empty.style.padding = '12px';
-            empty.style.color = 'var(--text-muted)';
-            empty.textContent = 'No tabs open';
-            dropdown.appendChild(empty);
-            return dropdown;
+
+        const collapsedKeys = new Set();
+        let savedScrollTop = 0;
+        let focusedKey = null;
+        let focusedPopup = false;
+        if (preserveState) {
+            savedScrollTop = dropdown.scrollTop;
+            for (const disclosure of dropdown.querySelectorAll(
+                'details[data-overflow-group-key]',
+            )) {
+                if (!disclosure.open) {
+                    collapsedKeys.add(disclosure.dataset.overflowGroupKey);
+                }
+            }
+            const active = document.activeElement;
+            if (active && dropdown.contains(active)) {
+                focusedPopup = active === dropdown;
+                focusedKey = active.dataset?.overflowFocusKey || null;
+            }
         }
 
+        dropdown.replaceChildren();
+        const entries = Array.from(this.tabs?.entries?.() || []);
         const faviconFor = (tab) =>
             tab.faviconUrl ||
             tab.tabEl?.querySelector('.tab-favicon')?.getAttribute('src') ||
@@ -6036,16 +6137,22 @@ export class TabManager {
             header.className = `tab-overflow-dropdown-group${extra}`;
             const icon = document.createElement('span');
             icon.className = 'tab-overflow-dropdown-group-icon';
+            icon.setAttribute('aria-hidden', 'true');
             icon.textContent = iconText;
             const text = document.createElement('span');
             text.textContent = labelText;
             const count = document.createElement('span');
-            count.style.marginLeft = 'auto';
+            count.className = 'tab-overflow-count';
             count.textContent = `${itemCount} tab${itemCount === 1 ? '' : 's'}`;
             header.append(icon, text, count);
             dropdown.appendChild(header);
         };
-        const appendRow = (paneId, tab, { closing = false } = {}) => {
+        const appendRow = (
+            parent,
+            paneId,
+            tab,
+            { closing = false } = {},
+        ) => {
             const row = document.createElement('div');
             row.className = `hostname-dropdown-row${closing ? ' tab-overflow-closing-row' : ''}`;
             row.dataset.paneId = paneId;
@@ -6055,6 +6162,10 @@ export class TabManager {
             const selectBtn = document.createElement('button');
             selectBtn.type = 'button';
             selectBtn.className = 'hostname-dropdown-select-btn';
+            selectBtn.dataset.overflowFocusKey = JSON.stringify([
+                'select',
+                paneId,
+            ]);
             const faviconImg = document.createElement('img');
             faviconImg.className = 'hostname-dropdown-favicon';
             faviconImg.src = faviconFor(tab);
@@ -6086,6 +6197,10 @@ export class TabManager {
             const actionBtn = document.createElement('button');
             actionBtn.type = 'button';
             actionBtn.className = 'hostname-dropdown-close-btn';
+            actionBtn.dataset.overflowFocusKey = JSON.stringify([
+                'action',
+                paneId,
+            ]);
             actionBtn.textContent = closing ? '↻' : '×';
             actionBtn.title = closing ? 'Undo close' : 'Close session';
             actionBtn.setAttribute(
@@ -6101,11 +6216,11 @@ export class TabManager {
                     this._closeOverflowDropdown();
                 } else {
                     this.closeTab(paneId);
-                    this._refreshOverflowDropdown();
                 }
             });
             row.appendChild(actionBtn);
-            dropdown.appendChild(row);
+            parent.appendChild(row);
+            return row;
         };
 
         const closingTabs = entries.filter(([, tab]) => tab.softClosing);
@@ -6116,29 +6231,186 @@ export class TabManager {
                 closingTabs.length,
                 ' tab-overflow-closing-group',
             );
-            for (const [paneId, tab] of closingTabs)
-                appendRow(paneId, tab, { closing: true });
+            for (const [paneId, tab] of closingTabs) {
+                appendRow(dropdown, paneId, tab, { closing: true });
+            }
         }
 
-        // Group live tabs by worktree glyph. Stable insertion order matches
-        // the tabs Map order, including tabs restored from drag-reordering.
-        const groups = new Map();
-        for (const [paneId, tab] of entries) {
-            if (tab.softClosing) continue;
-            const glyph = tab.tabEl?.dataset.worktreeGlyph || '◆';
-            const label = this.getProjectWorktreeLabel(tab.cwd);
-            if (!groups.has(glyph)) groups.set(glyph, { label, items: [] });
-            groups.get(glyph).items.push({ paneId, tab });
-        }
-        for (const [glyph, group] of groups.entries()) {
-            appendHeader(glyph, group.label, group.items.length);
-            for (const { paneId, tab } of group.items) appendRow(paneId, tab);
+        const liveEntries = entries.filter(([, tab]) => !tab.softClosing);
+        for (const workspaceGroup of this._workspaceTabGroups(liveEntries)) {
+            if (workspaceGroup.entries.length === 0) continue;
+
+            const workspace = document.createElement('details');
+            workspace.className = 'tab-overflow-workspace';
+            workspace.dataset.workspace = workspaceGroup.workspace;
+            workspace.dataset.overflowGroupKey = JSON.stringify([
+                'workspace',
+                workspaceGroup.workspace,
+            ]);
+            workspace.open = true;
+            const workspaceSummary = document.createElement('summary');
+            workspaceSummary.dataset.overflowFocusKey =
+                workspace.dataset.overflowGroupKey;
+            if (workspaceGroup.workspace) {
+                workspaceSummary.title = workspaceGroup.workspace;
+            }
+            const workspaceChevron = document.createElement('span');
+            workspaceChevron.className = 'tab-overflow-chevron';
+            workspaceChevron.setAttribute('aria-hidden', 'true');
+            workspaceChevron.textContent = '›';
+            const workspaceLabel = document.createElement('span');
+            workspaceLabel.className = 'tab-overflow-summary-label';
+            workspaceLabel.textContent = workspaceGroup.label;
+            const workspaceCount = document.createElement('span');
+            workspaceCount.className = 'tab-overflow-count';
+            workspaceCount.textContent = `${workspaceGroup.entries.length} tab${workspaceGroup.entries.length === 1 ? '' : 's'}`;
+            workspaceSummary.append(
+                workspaceChevron,
+                workspaceLabel,
+                workspaceCount,
+            );
+            workspace.appendChild(workspaceSummary);
+            dropdown.appendChild(workspace);
+
+            const worktrees = new Map();
+            for (const entry of workspaceGroup.entries) {
+                const cwd = entry[1].cwd || '';
+                if (!worktrees.has(cwd)) worktrees.set(cwd, []);
+                worktrees.get(cwd).push(entry);
+            }
+            const worktreeGroups = Array.from(worktrees, ([cwd, items]) => ({
+                cwd,
+                items,
+                label: cwd ? projectWorktreeLabel(cwd) : 'No directory',
+            }));
+            const worktreeLabelCounts = new Map();
+            for (const group of worktreeGroups) {
+                worktreeLabelCounts.set(
+                    group.label,
+                    (worktreeLabelCounts.get(group.label) || 0) + 1,
+                );
+            }
+
+            for (const worktreeGroup of worktreeGroups) {
+                const cwd = worktreeGroup.cwd;
+                const worktree = document.createElement('details');
+                worktree.className = 'tab-overflow-worktree';
+                worktree.dataset.workspace = workspaceGroup.workspace;
+                worktree.dataset.cwd = cwd;
+                worktree.dataset.overflowGroupKey = JSON.stringify([
+                    'worktree',
+                    workspaceGroup.workspace,
+                    cwd,
+                ]);
+                worktree.open = true;
+                const worktreeSummary = document.createElement('summary');
+                worktreeSummary.dataset.overflowFocusKey =
+                    worktree.dataset.overflowGroupKey;
+                if (cwd) worktreeSummary.title = cwd;
+                const chevron = document.createElement('span');
+                chevron.className = 'tab-overflow-chevron';
+                chevron.setAttribute('aria-hidden', 'true');
+                chevron.textContent = '›';
+                const glyph = document.createElement('span');
+                glyph.className = 'tab-overflow-worktree-glyph';
+                glyph.setAttribute('aria-hidden', 'true');
+                glyph.textContent =
+                    worktreeGroup.items[0][1].tabEl?.dataset.worktreeGlyph ||
+                    worktreeGlyph(cwd);
+                const worktreeLabel = document.createElement('span');
+                worktreeLabel.className = 'tab-overflow-summary-label';
+                worktreeLabel.textContent =
+                    cwd && worktreeLabelCounts.get(worktreeGroup.label) > 1
+                        ? cwd
+                        : worktreeGroup.label;
+                const worktreeCount = document.createElement('span');
+                worktreeCount.className = 'tab-overflow-count';
+                worktreeCount.textContent = `${worktreeGroup.items.length} tab${worktreeGroup.items.length === 1 ? '' : 's'}`;
+                worktreeSummary.append(
+                    chevron,
+                    glyph,
+                    worktreeLabel,
+                    worktreeCount,
+                );
+                worktree.appendChild(worktreeSummary);
+                workspace.appendChild(worktree);
+                for (const [paneId, tab] of worktreeGroup.items) {
+                    appendRow(worktree, paneId, tab);
+                }
+            }
         }
 
-        // Auto-scroll to the active row so users land on it.
-        const active = dropdown.querySelector('.hostname-dropdown-row.active');
-        if (active?.scrollIntoView) {
-            active.scrollIntoView({ block: 'nearest' });
+        if (entries.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'tab-overflow-empty';
+            empty.textContent = 'No tabs open';
+            dropdown.appendChild(empty);
+        }
+
+        if (preserveState) {
+            for (const disclosure of dropdown.querySelectorAll(
+                'details[data-overflow-group-key]',
+            )) {
+                disclosure.open = !collapsedKeys.has(
+                    disclosure.dataset.overflowGroupKey,
+                );
+            }
+            dropdown.scrollTop = savedScrollTop;
+            if (focusedPopup) {
+                dropdown.focus({ preventScroll: true });
+            } else if (focusedKey) {
+                const matching = Array.from(
+                    dropdown.querySelectorAll('[data-overflow-focus-key]'),
+                ).find(
+                    (element) =>
+                        element.dataset.overflowFocusKey === focusedKey,
+                );
+                const isVisible = (element) => {
+                    for (
+                        let ancestor = element.parentElement;
+                        ancestor && ancestor !== dropdown;
+                        ancestor = ancestor.parentElement
+                    ) {
+                        if (
+                            ancestor instanceof HTMLDetailsElement &&
+                            !ancestor.open &&
+                            !(element instanceof HTMLElement &&
+                                element.tagName === 'SUMMARY' &&
+                                element.parentElement === ancestor)
+                        ) {
+                            return false;
+                        }
+                    }
+                    return true;
+                };
+                if (matching && isVisible(matching)) {
+                    matching.focus({ preventScroll: true });
+                } else {
+                    const visible = (element) => isVisible(element);
+                    const liveRows = Array.from(
+                        dropdown.querySelectorAll(
+                            '.hostname-dropdown-row:not(.tab-overflow-closing-row)',
+                        ),
+                    ).filter(visible);
+                    const activeRow = liveRows.find((row) =>
+                        row.classList.contains('active'),
+                    );
+                    const fallback =
+                        activeRow?.querySelector(
+                            '.hostname-dropdown-select-btn',
+                        ) ||
+                        liveRows[0]?.querySelector(
+                            '.hostname-dropdown-select-btn',
+                        ) ||
+                        Array.from(
+                            dropdown.querySelectorAll(
+                                '.tab-overflow-closing-row .hostname-dropdown-select-btn',
+                            ),
+                        ).find(visible) ||
+                        dropdown;
+                    fallback.focus({ preventScroll: true });
+                }
+            }
         }
         return dropdown;
     }
@@ -6146,6 +6418,26 @@ export class TabManager {
     _overflowDropdownHidden() {
         const dd = document.getElementById('tab-overflow-dropdown');
         return !dd || dd.classList.contains('hidden');
+    }
+
+    _focusOverflowDropdownOnOpen(dropdown) {
+        const activeRow = dropdown.querySelector(
+            '.hostname-dropdown-row.active:not(.tab-overflow-closing-row)',
+        );
+        const firstLiveRow = dropdown.querySelector(
+            '.hostname-dropdown-row:not(.tab-overflow-closing-row)',
+        );
+        const undoButton = dropdown.querySelector(
+            '.tab-overflow-closing-row .hostname-dropdown-select-btn',
+        );
+        const row = activeRow || firstLiveRow;
+        const target =
+            row?.querySelector('.hostname-dropdown-select-btn') ||
+            undoButton ||
+            dropdown;
+        target.focus({ preventScroll: true });
+        const targetRow = target.closest('.hostname-dropdown-row');
+        targetRow?.scrollIntoView?.({ block: 'nearest' });
     }
 
     _toggleOverflowDropdown() {
@@ -6157,16 +6449,18 @@ export class TabManager {
             this._buildOverflowDropdown();
             dd.classList.remove('hidden');
             btn.setAttribute('aria-expanded', 'true');
+            this._focusOverflowDropdownOnOpen(dd);
         } else {
             this._closeOverflowDropdown();
         }
     }
 
-    _closeOverflowDropdown() {
+    _closeOverflowDropdown({ restoreFocus = false } = {}) {
         const dd = document.getElementById('tab-overflow-dropdown');
         const btn = document.getElementById('tab-overflow-btn');
         if (dd) dd.classList.add('hidden');
         if (btn) btn.setAttribute('aria-expanded', 'false');
+        if (restoreFocus) btn?.focus({ preventScroll: true });
     }
 
     sendInput(tabInfo, payload) {

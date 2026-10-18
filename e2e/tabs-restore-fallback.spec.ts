@@ -99,7 +99,14 @@ test('corrupt saved tabs do not abort Phi startup and Shell still launches', asy
         },
     });
     try {
-        await page.goto(phi.url);
+        await Promise.all([
+            page.waitForEvent(
+                'console',
+                (message) =>
+                    message.text() === '[app] Phi initialized successfully',
+            ),
+            page.goto(phi.url),
+        ]);
         const response = page.waitForResponse(
             (reply) =>
                 reply.url().endsWith('/api/terminals') &&

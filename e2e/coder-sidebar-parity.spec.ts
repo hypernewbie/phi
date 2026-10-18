@@ -14,56 +14,63 @@ test.afterAll(async () => {
 test('built-in coder controls keep their pre-registry layout before and after bootstrap', async ({
     page,
 }) => {
+    let releaseRegistry!: () => void;
+    const registryBarrier = new Promise<void>((resolve) => {
+        releaseRegistry = resolve;
+    });
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.route('**/api/coders', async (route) => {
-        // Hold the registry request long enough to inspect initial HTML.
-        await new Promise((resolve) => setTimeout(resolve, 750));
+        await registryBarrier;
         await route.continue();
     });
-    await page.goto(phi.url, { waitUntil: 'domcontentloaded' });
+    try {
+        await page.goto(phi.url, { waitUntil: 'domcontentloaded' });
 
-    const tabs = page.locator('#coder-selector .coder-tab');
-    const quick = page.locator('#empty-quick-launch .empty-launch-btn');
-    const tabIds = ['opencode', 'claude', 'agy', 'pi', 'codex', 'bash'];
-    const quickIds = ['opencode', 'claude', 'pi', 'agy', 'codex', 'bash'];
-    const assertControls = async () => {
-        expect(
-            await tabs.evaluateAll((els) =>
-                els.map((el) => el.getAttribute('data-coder')),
-            ),
-        ).toEqual(tabIds);
-        expect(
-            await quick.evaluateAll((els) =>
-                els.map((el) => el.getAttribute('data-coder')),
-            ),
-        ).toEqual(quickIds);
-        expect(
-            await tabs.evaluateAll((els) =>
-                els.map((el) => el.getAttribute('title')),
-            ),
-        ).toEqual([
-            'OpenCode',
-            'Claude Code',
-            'Antigravity / Agy',
-            'Pi (term)',
-            'OpenAI Codex',
-            'Shell Prompt',
-        ]);
-        expect(await tabs.locator('img.coder-logo').count()).toBe(6);
-        const widths = await tabs
-            .locator('img.coder-logo')
-            .evaluateAll((els) =>
-                els.map((el) => Math.round(el.getBoundingClientRect().width)),
-            );
-        expect(widths).toEqual([16, 16, 16, 16, 16, 16]);
-    };
+        const tabs = page.locator('#coder-selector .coder-tab');
+        const quick = page.locator('#empty-quick-launch .empty-launch-btn');
+        const tabIds = ['opencode', 'claude', 'agy', 'pi', 'codex', 'bash'];
+        const quickIds = ['opencode', 'claude', 'pi', 'agy', 'codex', 'bash'];
+        const assertControls = async () => {
+            expect(
+                await tabs.evaluateAll((els) =>
+                    els.map((el) => el.getAttribute('data-coder')),
+                ),
+            ).toEqual(tabIds);
+            expect(
+                await quick.evaluateAll((els) =>
+                    els.map((el) => el.getAttribute('data-coder')),
+                ),
+            ).toEqual(quickIds);
+            expect(
+                await tabs.evaluateAll((els) =>
+                    els.map((el) => el.getAttribute('title')),
+                ),
+            ).toEqual([
+                'OpenCode',
+                'Claude Code',
+                'Antigravity / Agy',
+                'Pi (term)',
+                'OpenAI Codex',
+                'Shell Prompt',
+            ]);
+            expect(await tabs.locator('img.coder-logo').count()).toBe(6);
+            const widths = await tabs
+                .locator('img.coder-logo')
+                .evaluateAll((els) =>
+                    els.map((el) =>
+                        Math.round(el.getBoundingClientRect().width),
+                    ),
+                );
+            expect(widths).toEqual([16, 16, 16, 16, 16, 16]);
+        };
 
-    await assertControls();
-    await page.evaluate(() => document.fonts.ready);
-    const geometry = () =>
-        page.evaluate(() =>
-            [...document.querySelectorAll('#coder-selector .coder-tab')].map(
-                (tab) => {
+        await assertControls();
+        await page.evaluate(() => document.fonts.ready);
+        const geometry = () =>
+            page.evaluate(() =>
+                [
+                    ...document.querySelectorAll('#coder-selector .coder-tab'),
+                ].map((tab) => {
                     const box = tab.getBoundingClientRect();
                     const logo = tab
                         .querySelector('.coder-logo')!
@@ -78,38 +85,42 @@ test('built-in coder controls keep their pre-registry layout before and after bo
                         logo.width,
                         logo.height,
                     ].map((n) => Math.round(n * 100) / 100);
-                },
-            ),
+                }),
+            );
+        const before = await geometry();
+        const initialTab = await tabs.first().elementHandle();
+        releaseRegistry();
+        await page.waitForFunction(
+            (node) =>
+                document.querySelector('#coder-selector .coder-tab') !== node,
+            initialTab,
         );
-    const before = await geometry();
-    const initialTab = await tabs.first().elementHandle();
-    await page.waitForFunction(
-        (node) => document.querySelector('#coder-selector .coder-tab') !== node,
-        initialTab,
-    );
-    await assertControls();
-    await page.evaluate(() => document.fonts.ready);
-    expect(await geometry()).toEqual(before);
+        await assertControls();
+        await page.evaluate(() => document.fonts.ready);
+        expect(await geometry()).toEqual(before);
 
-    // Collapsed sidebar must keep the logo visible (the label is hidden).
-    await page
-        .locator('#sidebar-panel')
-        .evaluate((el) => el.classList.add('sidebar-narrow'));
-    await expect(tabs.first().locator('img.coder-logo')).toBeVisible();
-    await expect
-        .poll(async () =>
-            Math.round(
-                (await tabs.first().locator('img.coder-logo').boundingBox())
-                    ?.width ?? 0,
-            ),
-        )
-        .toBe(18);
-    const narrowWidths = await tabs
-        .locator('img.coder-logo')
-        .evaluateAll((els) =>
-            els.map((el) => Math.round(el.getBoundingClientRect().width)),
-        );
-    expect(narrowWidths).toEqual([18, 18, 18, 18, 18, 18]);
+        // Collapsed sidebar must keep the logo visible (the label is hidden).
+        await page
+            .locator('#sidebar-panel')
+            .evaluate((el) => el.classList.add('sidebar-narrow'));
+        await expect(tabs.first().locator('img.coder-logo')).toBeVisible();
+        await expect
+            .poll(async () =>
+                Math.round(
+                    (await tabs.first().locator('img.coder-logo').boundingBox())
+                        ?.width ?? 0,
+                ),
+            )
+            .toBe(18);
+        const narrowWidths = await tabs
+            .locator('img.coder-logo')
+            .evaluateAll((els) =>
+                els.map((el) => Math.round(el.getBoundingClientRect().width)),
+            );
+        expect(narrowWidths).toEqual([18, 18, 18, 18, 18, 18]);
+    } finally {
+        releaseRegistry();
+    }
 });
 
 test('initial coder controls remain when config cannot load', async ({
