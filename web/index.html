@@ -543,11 +543,33 @@ eager to avoid a first-open unstyled flash. -->
                     <div class="terminal-tabs-bar" style="position: relative">
                         <div id="tabs-container" class="tabs-container"></div>
                         <button
+                            id="sort-tabs-btn"
+                            class="tab-sort-btn"
+                            type="button"
+                            title="Group tabs by workspace"
+                            aria-label="Group tabs by workspace"
+                        >
+                            <svg
+                                class="icon"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                aria-hidden="true"
+                            >
+                                <path d="M4 6h16M4 12h10M4 18h4"></path>
+                                <path d="M18 12v8m-3-3 3 3 3-3"></path>
+                            </svg>
+                        </button>
+                        <button
                             id="tab-overflow-btn"
-                            class="tab-overflow-btn hidden"
+                            class="tab-overflow-btn"
+                            type="button"
                             title="Show tab list"
                             aria-label="Show tab list"
-                            aria-haspopup="true"
+                            aria-controls="tab-overflow-dropdown"
                             aria-expanded="false"
                         >
                             <svg
@@ -566,7 +588,9 @@ eager to avoid a first-open unstyled flash. -->
                         <div
                             id="tab-overflow-dropdown"
                             class="tab-overflow-dropdown hidden"
-                            role="menu"
+                            role="group"
+                            aria-label="Open tabs"
+                            tabindex="-1"
                         ></div>
                         <button
                             id="close-all-tabs-btn"

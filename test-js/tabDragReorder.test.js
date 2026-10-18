@@ -60,6 +60,282 @@ beforeEach(() => {
     localStorage.clear();
 });
 
+const workspaceEntries = [
+    ['b1', '/repo/Beta', '/repo/Beta'],
+    ['a1', '/repo/alpha', '/repo/alpha'],
+    ['b2', '/repo/Beta', '/tmp/Beta-wt'],
+    ['a2', '/repo/alpha', '/tmp/alpha-wt'],
+    ['p1', '', '/orphan'],
+    ['b3', '/repo/Beta', '/repo/Beta'],
+    ['p2', '', ''],
+];
+
+function makeWorkspaceTabManager(entries = workspaceEntries) {
+    const tm = makeTabManager();
+    for (const [paneId, workspace, cwd] of entries) {
+        const tabEl = document.createElement('div');
+        tabEl.className = 'tab';
+        tabEl.dataset.paneId = paneId;
+        if (paneId === 'b3') tabEl.classList.add('soft-closed');
+        tm.tabsContainer.appendChild(tabEl);
+        const attachment = { name: `${paneId}.png` };
+        const tab = {
+            paneId,
+            title: paneId,
+            coder: paneId === 'p1' ? 'pi-rpc' : 'shell',
+            workspace,
+            cwd,
+            tabEl,
+            termContainer: document.createElement('div'),
+            term: { dispose: vi.fn() },
+            ws: { sendInput: vi.fn() },
+            draft: paneId === 'a1' ? 'draft text' : '',
+            draftAttachments: paneId === 'a1' ? [attachment] : [],
+            pinned: paneId === 'b1',
+            marked: paneId === 'b2',
+            softClosing: paneId === 'b3',
+            isDead: false,
+            isReview: false,
+            isKanban: paneId === 'p2',
+        };
+        tm.tabs.set(paneId, tab);
+    }
+    tm.activePaneId = 'b2';
+    tm.getProjectWorktreeLabel = vi.fn((cwd) => cwd);
+    return tm;
+}
+
+describe('workspace tab grouping and sort', () => {
+    it('groups the interleaved Map by exact workspace and preserves entries', () => {
+        const tm = makeWorkspaceTabManager();
+        const entries = Array.from(tm.tabs.entries());
+        const snapshot = entries.map(([paneId, tab]) => [paneId, tab]);
+
+        const groups = tm._workspaceTabGroups(entries);
+
+        expect(
+            groups.map(({ workspace, label }) => [workspace, label]),
+        ).toEqual([
+            ['/repo/alpha', 'alpha'],
+            ['/repo/Beta', 'Beta'],
+            ['', 'No workspace'],
+        ]);
+        expect(
+            groups.flatMap(({ entries: groupEntries }) =>
+                groupEntries.map(([id]) => id),
+            ),
+        ).toEqual(['a1', 'a2', 'b1', 'b2', 'b3', 'p1', 'p2']);
+        for (const group of groups) {
+            for (const [paneId, tab] of group.entries) {
+                expect(tm.tabs.get(paneId)).toBe(tab);
+            }
+        }
+        expect(entries).toEqual(snapshot);
+        expect(Array.from(tm.tabs.keys())).toEqual(
+            workspaceEntries.map(([id]) => id),
+        );
+    });
+
+    it('uses full paths for colliding labels and keeps case-distinct roots separate', () => {
+        const tm = makeWorkspaceTabManager([
+            ['one', '/one/team/project', '/one/team/project'],
+            ['missing', '', '/orphan'],
+            ['two', '/two/team/project', '/two/team/project'],
+            ['named', '/No workspace', '/No workspace'],
+            ['upper', '/repo/Alpha', '/repo/Alpha'],
+            ['lower', '/repo/alpha', '/repo/alpha'],
+        ]);
+
+        const groups = tm._workspaceTabGroups(Array.from(tm.tabs.entries()));
+        const byWorkspace = new Map(
+            groups.map((group) => [group.workspace, group]),
+        );
+
+        expect(byWorkspace.get('/one/team/project').label).toBe(
+            '/one/team/project',
+        );
+        expect(byWorkspace.get('/two/team/project').label).toBe(
+            '/two/team/project',
+        );
+        expect(byWorkspace.get('/No workspace').label).toBe('/No workspace');
+        expect(byWorkspace.get('').label).toBe('No workspace');
+        expect(byWorkspace.get('/repo/Alpha').label).toBe('Alpha');
+        expect(byWorkspace.get('/repo/alpha').label).toBe('alpha');
+        const workspaceOrder = groups.map((group) => group.workspace);
+        expect(workspaceOrder.indexOf('/one/team/project')).toBeLessThan(
+            workspaceOrder.indexOf('/two/team/project'),
+        );
+        expect(groups.at(-1).workspace).toBe('');
+        expect(
+            groups.flatMap((group) => group.entries.map(([id]) => id)),
+        ).toHaveLength(6);
+    });
+
+    it('sorts workspace names numerically and retains input order within each group', () => {
+        const tm = makeWorkspaceTabManager([
+            ['ten-a', '/repo/workspace 10', '/ten-a'],
+            ['two', '/repo/workspace 2', '/two'],
+            ['ten-b', '/repo/workspace 10', '/ten-b'],
+        ]);
+
+        const groups = tm._workspaceTabGroups(Array.from(tm.tabs.entries()));
+        expect(groups.map(({ workspace }) => workspace)).toEqual([
+            '/repo/workspace 2',
+            '/repo/workspace 10',
+            '',
+        ]);
+        expect(
+            groups.flatMap(({ entries: groupEntries }) =>
+                groupEntries.map(([id]) => id),
+            ),
+        ).toEqual(['two', 'ten-a', 'ten-b']);
+    });
+
+    it('sorts every entry once, including closing tabs, without replacing tab state', () => {
+        const tm = makeWorkspaceTabManager();
+        const originalEntries = Array.from(tm.tabs.entries());
+        const originalNodes = new Map(
+            originalEntries.map(([id, tab]) => [id, tab.tabEl]),
+        );
+        const originalContainers = new Map(
+            originalEntries.map(([id, tab]) => [id, tab.termContainer]),
+        );
+        const originalTerms = new Map(
+            originalEntries.map(([id, tab]) => [id, tab.term]),
+        );
+        const originalSockets = new Map(
+            originalEntries.map(([id, tab]) => [id, tab.ws]),
+        );
+        const attachment = tm.tabs.get('a1').draftAttachments[0];
+        const attachments = tm.tabs.get('a1').draftAttachments;
+        const disposeSpies = originalEntries.map(([, tab]) => tab.term.dispose);
+        tm.switchTab = vi.fn();
+        tm.reconnectTab = vi.fn();
+        tm.sendToTab = vi.fn();
+        const fetchSpy = vi.fn();
+        vi.stubGlobal('fetch', fetchSpy);
+        localStorage.setItem('phi_active_pane', 'b2');
+
+        tm.sortTabsByWorkspace();
+
+        const expected = ['a1', 'a2', 'b1', 'b2', 'b3', 'p1', 'p2'];
+        expect(Array.from(tm.tabs.keys())).toEqual(expected);
+        expect(domOrder(tm)).toEqual(expected);
+        expect(JSON.parse(localStorage.getItem('phi_tab_order'))).toEqual(
+            expected,
+        );
+        expect(new Set(Array.from(tm.tabs.keys())).size).toBe(tm.tabs.size);
+        for (const [id, tab] of originalEntries) {
+            expect(tm.tabs.get(id)).toBe(tab);
+            expect(
+                tm.tabsContainer.querySelector(`[data-pane-id="${id}"]`),
+            ).toBe(originalNodes.get(id));
+            expect(tab.termContainer).toBe(originalContainers.get(id));
+            expect(tab.term).toBe(originalTerms.get(id));
+            expect(tab.ws).toBe(originalSockets.get(id));
+        }
+        expect(tm.activePaneId).toBe('b2');
+        expect(localStorage.getItem('phi_active_pane')).toBe('b2');
+        expect(tm.tabs.get('a1').draft).toBe('draft text');
+        expect(tm.tabs.get('a1').draftAttachments).toBe(attachments);
+        expect(tm.tabs.get('a1').draftAttachments).toEqual([attachment]);
+        expect(tm.tabs.get('a1').draftAttachments[0]).toBe(attachment);
+        expect(tm.tabs.get('b1').pinned).toBe(true);
+        expect(tm.tabs.get('b2').marked).toBe(true);
+        expect(tm.tabs.get('b3').softClosing).toBe(true);
+        expect(tm.tabs.get('p1').coder).toBe('pi-rpc');
+        expect(tm.tabs.get('p2').isKanban).toBe(true);
+        expect(tm.switchTab).not.toHaveBeenCalled();
+        expect(tm.reconnectTab).not.toHaveBeenCalled();
+        expect(tm.sendToTab).not.toHaveBeenCalled();
+        expect(
+            disposeSpies.every((dispose) => !dispose.mock.calls.length),
+        ).toBe(true);
+        expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('keeps repeated sorts idempotent and does not mutate a later appended tab', () => {
+        const tm = makeWorkspaceTabManager();
+        tm.sortTabsByWorkspace();
+        const sorted = Array.from(tm.tabs.keys());
+        tm.sortTabsByWorkspace();
+        expect(Array.from(tm.tabs.keys())).toEqual(sorted);
+        expect(JSON.parse(localStorage.getItem('phi_tab_order'))).toEqual(
+            sorted,
+        );
+
+        const tabEl = document.createElement('div');
+        tabEl.className = 'tab';
+        tabEl.dataset.paneId = 'a3';
+        tm.tabsContainer.appendChild(tabEl);
+        tm.tabs.set('a3', {
+            paneId: 'a3',
+            workspace: '/repo/alpha',
+            tabEl,
+            termContainer: document.createElement('div'),
+        });
+        expect(Array.from(tm.tabs.keys())).toEqual([...sorted, 'a3']);
+        tm.sortTabsByWorkspace();
+        expect(Array.from(tm.tabs.keys())).toEqual([
+            'a1',
+            'a2',
+            'a3',
+            'b1',
+            'b2',
+            'b3',
+            'p1',
+            'p2',
+        ]);
+    });
+
+    it('leaves empty and one-tab Maps untouched', () => {
+        for (const entries of [[], [['only', '/repo/only', '/repo/only']]]) {
+            const tm = makeWorkspaceTabManager(entries);
+            const applySpy = vi.spyOn(tm, 'applyTabOrder');
+            const before = Array.from(tm.tabs.entries());
+            tm.sortTabsByWorkspace();
+            expect(applySpy).not.toHaveBeenCalled();
+            expect(Array.from(tm.tabs.entries())).toEqual(before);
+            expect(localStorage.getItem('phi_tab_order')).toBeNull();
+        }
+    });
+
+    it('keeps manual drag ordering and saved-order restoration working', () => {
+        const tm = makeWorkspaceTabManager();
+        tm.sortTabsByWorkspace();
+        expect(tm.moveTabTo('p1', 'b1', true)).toBe(true);
+        expect(Array.from(tm.tabs.keys())).toEqual([
+            'a1',
+            'a2',
+            'p1',
+            'b1',
+            'b2',
+            'b3',
+            'p2',
+        ]);
+        expect(JSON.parse(localStorage.getItem('phi_tab_order'))).toEqual([
+            'a1',
+            'a2',
+            'p1',
+            'b1',
+            'b2',
+            'b3',
+            'p2',
+        ]);
+
+        const sortedOrder = ['a1', 'a2', 'b1', 'b2', 'b3', 'p1', 'p2'];
+        localStorage.setItem('phi_tab_order', JSON.stringify(sortedOrder));
+        localStorage.setItem('phi_active_pane', 'b2');
+        const restored = makeWorkspaceTabManager(
+            [...workspaceEntries].reverse(),
+        );
+        restored.applySavedTabOrder();
+        expect(Array.from(restored.tabs.keys())).toEqual(sortedOrder);
+        expect(restored.activePaneId).toBe('b2');
+        expect(localStorage.getItem('phi_active_pane')).toBe('b2');
+    });
+});
+
 describe('moveTabTo - pure ordering logic', () => {
     it('moves a later tab to before an earlier tab', () => {
         const tm = makeTabManager({ withTabs: ['a', 'b', 'c'] });
