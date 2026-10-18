@@ -42,6 +42,7 @@ var (
 	cpuSampler   = system.NewSampler()
 	activeCWD    string
 	webRoot      fs.FS
+	diskStatic   http.Handler
 	fleetPoller  = fleet.NewPoller()
 
 	Version     = "dev"
@@ -66,6 +67,7 @@ func main() {
 	enableVirtualTerminalProcessing()
 	portFlag := flag.Int("port", 7070, "Port to run Go web server on")
 	ipFlag := flag.String("ip", "lan", `IP to bind. "lan" (default) binds loopback + every LAN (RFC 1918) + Tailscale (100.64/10) interface on the host. Use 0.0.0.0 to expose on every interface (public internet reachable), or an explicit IP to bind just one address.`)
+	webFlag := flag.String("web", "", "Directory to serve web assets from instead of embedded assets")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	rollbackFlag := flag.Bool("rollback", false, "Roll back to the previously installed binary (undoes the last self-update) and exit")
 	logLevelFlag := flag.String("log-level", "", "Log level: debug|info|warn|error (default: info, or PHI_LOG env var)")
@@ -108,6 +110,17 @@ func main() {
 	if err != nil {
 		slog.Error("failed to resolve current working directory", "err", err)
 		os.Exit(1)
+	}
+
+	if *webFlag != "" {
+		diskRoot, err := openDiskWebRoot(*webFlag)
+		if err != nil {
+			slog.Error("failed to open web asset directory", "dir", *webFlag, "err", err)
+			os.Exit(1)
+		}
+		defer diskRoot.Close()
+		diskStatic = newDiskStaticHandler(diskRoot.FS())
+		slog.Info("serving web assets from disk", "dir", diskRoot.Name())
 	}
 
 	log.Printf("[main] Starting Phi in CWD: %s", activeCWD)
@@ -204,16 +217,17 @@ func main() {
 		mdWatcher.Start()
 	}
 
-	// Embedded web assets (served when running an installed binary from any
-	// dir). Dev builds embed web/ raw; release builds (-tags=embedassets)
-	// decompress the webdist/ mirror — see embed_dev.go / embed_release.go.
-	var subErr error
-	webRoot, subErr = newWebRoot()
-	if subErr != nil {
-		slog.Error("failed to load embedded web assets", "err", subErr)
-		os.Exit(1)
+	// Without --web, use embedded assets from any working directory.
+	// Ordinary builds embed web/ raw; release builds decompress webdist/.
+	if diskStatic == nil {
+		var subErr error
+		webRoot, subErr = newWebRoot()
+		if subErr != nil {
+			slog.Error("failed to load embedded web assets", "err", subErr)
+			os.Exit(1)
+		}
+		initStaticAssets(webRoot)
 	}
-	initStaticAssets(webRoot)
 
 	// API Routing
 	http.HandleFunc("/api/auth/status", handleAccessAuthStatus)
