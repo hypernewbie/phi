@@ -17,7 +17,6 @@
     "sync:vendors": "node scripts/sync-frontend-vendors.mjs",
     "check:vendors": "node scripts/sync-frontend-vendors.mjs --check",
     "test:e2e": "playwright test",
-    "dev": "vite",
     "build:desktop": "pnpm --filter phi-desktop-electron run build",
     "dev:desktop": "pnpm --filter phi-desktop-electron run build && pnpm --filter phi-desktop-electron run dev",
     "watch:web": "tsc -p tsconfig.build.json -w --preserveWatchOutput",
@@ -57,7 +56,6 @@
     "stylelint-config-standard": "catalog:",
     "typescript": "catalog:",
     "viewerjs": "catalog:",
-    "vite": "catalog:",
     "vitest": "catalog:"
   }
 }

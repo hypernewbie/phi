@@ -107,13 +107,34 @@ go build -o phic ./cmd/phic
 
 In `phic`, `Ctrl-] PgUp` loads one older terminal history book. `Ctrl-] End` returns to live output. Wheel scrolling does not load older books.
 
-### Frontend dev (live reload)
+### Frontend development (disk assets)
 
-- Terminal 1: `./phi` (backend, :7070)
-- Terminal 2: `pnpm run dev` → open <http://localhost:5173>
-- If editing `web-src/*.ts`, also run `pnpm run watch:web` (tsc rewrites `web/*.js`; Vite reloads on the output).
-- If phi runs on a non-default port, set the env var for both: `PHI_PORT=8080 ./phi` + `PHI_PORT=8080 pnpm run dev` (the flag `-port` alone won't retarget the proxy).
-- Note: :5173 is dev-only; :7070 always serves the embedded (build-time) UI; prod is unchanged.
+From the checkout, install the development tools and start Phi:
+
+```bash
+pnpm install --frozen-lockfile
+make dev-server
+```
+
+Open <http://localhost:7070>. This target compiles TypeScript once, then serves `web/` from disk on loopback.
+Refresh the browser after an asset edit. No Go rebuild or Phi restart is necessary.
+For TypeScript edits, run `pnpm watch:web` in another terminal to compile `web-src/` into `web/`.
+This workflow does not automatically reload the browser.
+
+To serve a checkout's frontend from another workspace, use an absolute directory:
+
+```bash
+phi --web=/absolute/path/to/phi/web --ip=127.0.0.1
+```
+
+Relative directories resolve from Phi's startup directory. The asset directory does not change the active workspace.
+For another port, add `--port=8080` and open <http://localhost:8080>. No Vite proxy or coordinated `PHI_PORT` values are necessary.
+Without `--web`, Phi serves embedded assets as before. The binary retains those assets even with disk mode selected.
+Use loopback for development because connected clients can access files in the selected directory.
+
+Use `make dev-desktop` for the existing frontend, pet, and Electron build-and-start sequence.
+This target does not add automatic reload to Electron.
+
 - Browser vendor bundles are synchronized only from the pinned root catalog with `pnpm run sync:vendors -- --group <xterm|content|preview|kanban|auth>`; `pnpm run check:vendors` verifies checked-in bytes without writing. Fonts, logos, media, and the local PDF wrapper remain repository-owned assets.
 
 **Enable the pre-commit hook** (once per clone) so frontend checks run before you commit:
@@ -129,9 +150,12 @@ The hook (`.githooks/pre-commit`) only acts on commits that touch frontend files
 | Flag              | Default | Description                                                                                                                        |
 | ----------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | `-port`           | `7070`  | Port for the web server                                                                                                            |
+| `-web`            | `""`    | Serve assets from this directory instead of embedded assets. Relative paths use the startup directory. |
 | `-ip`             | `lan`   | Bind target. `lan` binds loopback plus every RFC 1918 LAN and Tailscale interface; use `127.0.0.1` for local-only access, `0.0.0.0` for every interface, or an explicit address. |
 | `-log-level`      | `info`  | Log level: `debug`\|`info`\|`warn`\|`error` (or `PHI_LOG` env var). `debug` also enables WS/PTY frame traces and span timing lines. |
 | `-otel-endpoint`  | (none)  | OTLP/gRPC collector endpoint (`host:port`) for OpenTelemetry export (or `PHI_OTEL_ENDPOINT` env var). Only takes effect in a binary built with `-tags otel` — the default build parses and ignores it, adding zero OTel dependencies. |
+
+Flags also accept double-dash forms, such as `--web=./web`.
 
 > **Network access:** By default Phi is available on localhost, private LAN, and Tailscale addresses—not public interfaces. Phi does not add authentication, so use `-ip 127.0.0.1` for local-only access and do not use `-ip 0.0.0.0` unless you deliberately want to expose it on every interface.
 

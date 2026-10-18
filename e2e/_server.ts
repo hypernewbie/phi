@@ -61,6 +61,7 @@ export async function startPhi(
         config?: Record<string, unknown>;
         setup?: (dir: string) => void | Promise<void>;
         env?: Record<string, string>;
+        web?: string;
     } = {},
 ): Promise<PhiServer> {
     const dir = mkdtempSync(join(tmpdir(), 'phi-e2e-'));
@@ -77,8 +78,10 @@ export async function startPhi(
     const port = await freePort();
     const bin = join(dir, process.platform === 'win32' ? 'phi.exe' : 'phi');
     await run('go', ['build', '-o', bin, '.'], process.cwd());
+    const args = ['--port', String(port), '--ip', '127.0.0.1'];
+    if (options.web !== undefined) args.push('--web', options.web);
     const launch = (): ChildProcess =>
-        spawn(bin, ['--port', String(port), '--ip', '127.0.0.1'], {
+        spawn(bin, args, {
             cwd: dir,
             env: {
                 ...process.env,

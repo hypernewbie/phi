@@ -3,7 +3,6 @@
     "files": {
         "includes": [
             ".stylelintrc.js",
-            "vite.config.js",
             "vitest.config.js",
             "npm/scripts/**/*.js",
             "web-src/**/*.ts",

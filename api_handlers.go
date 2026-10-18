@@ -270,7 +270,7 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fallback to static file server (embedded web assets).
+	// Fallback to static assets (embedded by default, disk with --web).
 	serveStatic(w, r)
 }
 

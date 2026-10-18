@@ -9,7 +9,9 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -74,6 +76,34 @@ var mimeOverride = map[string]string{
 // needs for an operator flag.
 var staticCompressionOn bool
 
+// openDiskWebRoot anchors the selected directory at startup and confines
+// subsequent file access to that tree, including through symlinks.
+func openDiskWebRoot(dir string) (*os.Root, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	return os.OpenRoot(abs)
+}
+
+// newDiskStaticHandler reads current files without the embedded caches.
+func newDiskStaticHandler(root fs.FS) http.Handler {
+	files := http.FileServer(http.FS(root))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		if ctype := mimeOverride[path.Ext(staticPath(r.URL.Path))]; ctype != "" {
+			w.Header().Set("Content-Type", ctype)
+		}
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			// Old browser validators must not hide edits with the same mtime.
+			r = r.Clone(r.Context())
+			r.Header.Del("If-Modified-Since")
+			r.Header.Del("If-None-Match")
+		}
+		files.ServeHTTP(w, r)
+	})
+}
+
 // initStaticAssets walks the embedded web/ tree and computes a strong
 // ETag per file. Called once at startup, right after webRoot is set.
 func initStaticAssets(root fs.FS) {
@@ -105,7 +135,7 @@ func initStaticAssets(root fs.FS) {
 	})
 }
 
-// staticPath maps a request URL path to its embedded file path.
+// staticPath maps a request URL path to its asset file path.
 // http.FileServer serves index.html for "/", so "/" must share its ETag.
 func staticPath(urlPath string) string {
 	p := strings.TrimPrefix(path.Clean(urlPath), "/")
@@ -197,10 +227,6 @@ func negotiateStaticEncoding(acceptEncoding string) string {
 	return ""
 }
 
-// serveStatic serves embedded web assets with ETag revalidation and,
-// when enabled, negotiated gzip/brotli compression. Non-GET/HEAD
-// requests pass through untouched (a matching If-None-Match on other
-// methods would yield 412, and FileServer serves bodies for POST too).
 // ifMatchStrong reports whether an If-Match header lists etag (or *),
 // comparing whole comma-separated members so substrings and weak tags
 // cannot match.
@@ -213,7 +239,14 @@ func ifMatchStrong(im, etag string) bool {
 	return false
 }
 
+// serveStatic dispatches disk assets directly, or serves embedded assets
+// with ETag revalidation and negotiated gzip/brotli compression.
+// Non-GET/HEAD requests retain the file server's precondition behavior.
 func serveStatic(w http.ResponseWriter, r *http.Request) {
+	if diskStatic != nil {
+		diskStatic.ServeHTTP(w, r)
+		return
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.FileServer(http.FS(webRoot)).ServeHTTP(w, r)
 		return
