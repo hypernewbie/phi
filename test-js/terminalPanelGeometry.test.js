@@ -43,13 +43,15 @@ function geometryHarness() {
             }),
         },
     };
+    let visible = true;
     tab.termContainer.getBoundingClientRect = () => ({
-        width: 800,
-        height: 480,
+        width: visible ? 800 : 0,
+        height: visible ? 480 : 0,
     });
     tab._sizedWs = tab.ws;
     let active = tab;
     const m = Object.assign(Object.create(TabManager.prototype), {
+        app: { config: {} },
         getActiveTab: () => active,
         resolveTerminalFontSize: () => 14,
         _spamScroll: vi.fn(),
@@ -63,6 +65,19 @@ function geometryHarness() {
             return observer;
         },
         frames,
+        hide() {
+            visible = false;
+        },
+        show() {
+            visible = true;
+        },
+        reactivate() {
+            active = tab;
+            m.activateTabViewport(tab, {
+                scrollToBottom: false,
+                autoReconnect: false,
+            });
+        },
         inactive() {
             active = {};
         },
@@ -73,6 +88,30 @@ function geometryHarness() {
         },
     };
 }
+
+it.each(['helper', 'direct'])(
+    'activation consumes a hidden %s fit deferral',
+    (route) => {
+        const h = geometryHarness();
+        h.hide();
+        h.desired.cols = 60;
+        h.desired.rows = 18;
+        if (route === 'helper') h.m._fitVisibleTerminal(h.tab);
+        else h.m.fitActiveTerminal();
+        expect(h.tab._pendingPanelFit).toBe(true);
+        expect(h.tab._pendingForceResize).toBe(true);
+        expect([h.tab.term.cols, h.tab.term.rows]).toEqual([80, 24]);
+        expect(h.tab.fitAddon.fit).not.toHaveBeenCalled();
+        expect(h.tab.ws.sendResize).not.toHaveBeenCalled();
+        h.show();
+        h.reactivate();
+        h.flush();
+        expect([h.tab.term.cols, h.tab.term.rows]).toEqual([60, 18]);
+        expect(h.tab.ws.sendResize).toHaveBeenCalledExactlyOnceWith(60, 18);
+        expect(h.tab._pendingPanelFit).toBe(false);
+        expect(h.tab._pendingForceResize).toBe(false);
+    },
+);
 
 it('actual panel dimensions reach the backend without a window resize', () => {
     const h = geometryHarness();

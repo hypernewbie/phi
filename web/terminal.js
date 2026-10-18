@@ -2391,7 +2391,7 @@ export class TabManager {
                 tabInfo.drainedSeq = end;
             }
             const oldest = tabInfo.paneOldest ?? 0;
-            tabInfo.fitAddon?.fit?.();
+            this._fitVisibleTerminal(tabInfo);
             if (this._terminalPanelVisible?.(tabInfo) !== false && tabInfo.ws === pty && typeof pty.sendResize === 'function' &&
                 pty.sendResize(tabInfo.term.cols, tabInfo.term.rows) !== false) tabInfo._sizedWs = pty;
             tabInfo._historyWindowStart = this._oldestHistoryAnchor(tabInfo)?.through ?? head;
@@ -2498,9 +2498,9 @@ export class TabManager {
             }
             cursor = end;
         }
-        // Historical geometry must not leave the live terminal at an old
-        // size. Fit without sending a historical resize to the backend.
-        tabInfo.fitAddon?.fit?.();
+        // Restore visible panel geometry; hidden parsers keep the recorded
+        // grid until activation provides measurable panel dimensions.
+        this._fitVisibleTerminal(tabInfo);
         // The fit restores geometry, not necessarily the viewport's derived
         // scroll position; re-derive it now that the replay is painted.
         this._refreshTerminalScreen(tabInfo);
@@ -2573,7 +2573,7 @@ export class TabManager {
                 tabInfo.queuedSeq = pty.lastFrameEnd;
                 cursor = end;
             }
-            if (!tabInfo._historyBrowsing) tabInfo.fitAddon?.fit?.();
+            if (!tabInfo._historyBrowsing) this._fitVisibleTerminal(tabInfo);
             recovered = true;
         } finally {
             if (tabInfo._bootstrapGen === bootGen) tabInfo._gapInFlight = false;
@@ -2717,6 +2717,15 @@ export class TabManager {
         if (typeof document === 'undefined' || document.hidden) return false;
         const rect = tabInfo.termContainer?.getBoundingClientRect?.();
         return !rect || (rect.width > 0 && rect.height > 0);
+    }
+
+    _fitVisibleTerminal(tabInfo) {
+        if (!this._terminalPanelVisible(tabInfo)) {
+            tabInfo._pendingPanelFit = true;
+            tabInfo._pendingForceResize = true;
+            return;
+        }
+        tabInfo.fitAddon?.fit?.();
     }
 
     _queueActiveRefresh() {
@@ -3628,7 +3637,7 @@ export class TabManager {
                                 autoReconnect: false,
                             });
                         } else {
-                            tabInfo.fitAddon.fit();
+                            this._fitVisibleTerminal(tabInfo);
                             this.sendResizeToBackend(tabInfo);
                         }
                     } catch (e) {
@@ -8499,9 +8508,10 @@ export class TabManager {
     fitActiveTerminal({ forceResize = false } = {}) {
         const activeTab = this.getActiveTab();
         if (!activeTab || activeTab.isDead) return;
-        if (activeTab._bootstrapGate) {
+        const visible = this._terminalPanelVisible(activeTab);
+        if (activeTab._bootstrapGate || !visible) {
             activeTab._pendingPanelFit = true;
-            activeTab._pendingForceResize = Boolean(activeTab._pendingForceResize || forceResize);
+            activeTab._pendingForceResize = Boolean(activeTab._pendingForceResize || forceResize || !visible);
             return;
         }
 
@@ -9873,7 +9883,7 @@ export class TabManager {
     }
 
     // applyFontToAllActiveTerminals sets a new fontFamily on every
-    // live xterm and re-fits the viewport so layout stays correct.
+    // live xterm. Hidden viewport fits wait until activation.
     // Empty/invalid input falls back to 'JetBrains Mono, monospace'.
     // Deliberately does NOT touch any scroll / _spamScroll timing
     // (see AGENTS.md hard-won-stabilization rule).
@@ -9885,7 +9895,7 @@ export class TabManager {
                 tab.term.options.fontFamily = safe;
                 if (tab.fitAddon && typeof tab.fitAddon.fit === 'function') {
                     try {
-                        tab.fitAddon.fit();
+                        this._fitVisibleTerminal(tab);
                     } catch (_e) {
                         /* tolerate closed term */
                     }
@@ -9899,8 +9909,8 @@ export class TabManager {
     }
 
     // applyTerminalFontSizeToAll sets a new fontSize on every live xterm,
-    // re-fits, and pushes the resulting geometry to the backend PTY (size
-    // changes cols/rows, unlike family). Deliberately does NOT touch any
+    // then fits visible panels and sends their geometry to the backend PTY.
+    // Hidden fits wait until activation. Deliberately does NOT touch any
     // scroll / _spamScroll timing (see AGENTS.md hard-won-stabilization rule).
     applyTerminalFontSizeToAll(size) {
         const preferred = terminalPreferredFontSize(size);
@@ -9910,14 +9920,14 @@ export class TabManager {
             // A hidden xterm has no meaningful proposed dimensions. Keep its
             // preferred scale; activation resolves it once it has a viewport.
             const resolved =
-                tab === activeTab
+                tab === activeTab && this._terminalPanelVisible(tab)
                     ? this.resolveTerminalFontSize(tab, preferred)
                     : preferred;
             if (tab.term.options.fontSize === resolved) continue;
             tab.term.options.fontSize = resolved;
             if (tab.fitAddon && typeof tab.fitAddon.fit === 'function') {
                 try {
-                    tab.fitAddon.fit();
+                    this._fitVisibleTerminal(tab);
                     this.sendResizeToBackend(tab);
                 } catch (_e) {
                     /* tolerate closed term */
