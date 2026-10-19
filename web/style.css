@@ -1559,71 +1559,53 @@ html[data-phi-desktop-root] .app-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 8px;
     flex-shrink: 0;
-    padding-right: 12px;
+    padding-right: 16px;
 }
 
 .tabs-container {
     display: flex;
-    padding: 0 8px;
+    padding: 0 0 0 8px;
     gap: 4px;
     overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
     flex: 1;
     align-self: flex-end;
     align-items: flex-end;
     height: 100%;
 }
 
-.close-all-tabs-btn,
-.refresh-console-btn {
+/* Tab action buttons stay pinned beside #tabs-container, outside the scroller. */
+.tab-action-btn {
     background-color: transparent;
-    border: 1px solid transparent;
+    border: none;
     color: var(--text-muted);
     cursor: pointer;
-    width: 26px;
-    height: 26px;
+    font-size: 14px;
+    width: 24px;
+    height: 24px;
     padding: 0;
     border-radius: 4px;
-    display: inline-flex;
+    display: flex;
     align-items: center;
     justify-content: center;
     transition: all 0.15s;
-    margin-bottom: 4px;
-    margin-left: 2px;
     flex-shrink: 0;
 }
-
-/* Tab action buttons stay pinned beside #tabs-container, outside the scroller. */
-.tab-overflow-btn,
-.tab-sort-btn {
-    background-color: var(--bg-elevated);
-    border: 1px solid var(--accent-soft);
-    color: var(--accent-bright);
-    cursor: pointer;
-    width: 26px;
-    height: 26px;
-    padding: 0;
-    border-radius: 5px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.15s;
-    margin-bottom: 4px;
-    margin-left: 2px;
-    flex-shrink: 0;
-    text-shadow: 0 0 6px var(--accent-glow);
-    box-shadow: 0 0 12px var(--accent-trace);
+.tab-action-btn:hover {
+    background-color: var(--bg-border);
+    color: var(--text-primary);
 }
-.tab-overflow-btn:hover,
-.tab-sort-btn:hover {
-    background-color: var(--accent-wash);
-    border-color: var(--accent);
-    box-shadow: 0 0 16px var(--accent-glow);
+.tab-action-btn:focus-visible {
+    outline: 2px solid var(--text-primary);
+    outline-offset: 2px;
+    box-shadow: none;
 }
-.tab-overflow-btn .icon,
-.tab-sort-btn .icon {
-    width: 12px;
-    height: 12px;
+.tab-action-btn .icon {
+    width: 14px;
+    height: 14px;
 }
 /* Hover preview card. Glassmorphism: translucent dark bg with backdrop
    blur, soft accent glow, big hieroglyph up top so users can identify
@@ -1936,36 +1918,6 @@ html[data-phi-desktop-root] .app-header {
 .tab-overflow-empty {
     padding: 12px;
     color: var(--text-muted);
-}
-
-.close-all-tabs-btn,
-#mobile-close-all-tabs-btn {
-    color: var(--red);
-}
-
-.close-all-tabs-btn:hover,
-#mobile-close-all-tabs-btn:hover {
-    background-color: rgba(239, 68, 68, 0.1);
-    color: var(--red);
-    border-color: rgba(239, 68, 68, 0.2);
-    box-shadow: 0 0 12px rgba(239, 68, 68, 0.18);
-}
-
-.close-all-tabs-btn .icon {
-    width: 14px;
-    height: 14px;
-}
-
-.refresh-console-btn:hover {
-    background-color: var(--accent-wash);
-    color: var(--accent-bright);
-    border-color: var(--accent-soft);
-    box-shadow: 0 0 12px var(--accent-glow);
-}
-
-.refresh-console-btn .icon {
-    width: 14px;
-    height: 14px;
 }
 
 .tab {
@@ -5316,31 +5268,6 @@ html[data-phi-config-page] .settings-modal {
     }
     .tab.active {
         padding-top: 5px !important;
-    }
-
-    /* Reload/Close All square icon-only buttons */
-    .close-all-tabs-btn,
-    .refresh-console-btn {
-        width: 32px !important;
-        height: 32px !important;
-        border-radius: 6px !important;
-        border: 1px solid var(--bg-border) !important;
-        background-color: var(--bg-elevated) !important;
-        padding: 0 !important;
-        margin: 0 2px 4px 2px !important;
-        justify-content: center !important;
-        align-items: center !important;
-        display: inline-flex !important;
-    }
-    .close-all-tabs-btn span,
-    .refresh-console-btn span {
-        display: none !important;
-    }
-    .close-all-tabs-btn .icon,
-    .refresh-console-btn .icon {
-        width: 16px !important;
-        height: 16px !important;
-        margin: 0 !important;
     }
 
     /* Bottom sheet modals on mobile */
