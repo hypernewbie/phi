@@ -543,29 +543,8 @@ eager to avoid a first-open unstyled flash. -->
                     <div class="terminal-tabs-bar" style="position: relative">
                         <div id="tabs-container" class="tabs-container"></div>
                         <button
-                            id="sort-tabs-btn"
-                            class="tab-sort-btn"
-                            type="button"
-                            title="Group tabs by workspace"
-                            aria-label="Group tabs by workspace"
-                        >
-                            <svg
-                                class="icon"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                aria-hidden="true"
-                            >
-                                <path d="M4 6h16M4 12h10M4 18h4"></path>
-                                <path d="M18 12v8m-3-3 3 3 3-3"></path>
-                            </svg>
-                        </button>
-                        <button
                             id="tab-overflow-btn"
-                            class="tab-overflow-btn"
+                            class="tab-action-btn tab-overflow-btn"
                             type="button"
                             title="Show tab list"
                             aria-label="Show tab list"
@@ -585,6 +564,27 @@ eager to avoid a first-open unstyled flash. -->
                                 <polyline points="6 9 12 15 18 9"></polyline>
                             </svg>
                         </button>
+                        <button
+                            id="sort-tabs-btn"
+                            class="tab-action-btn tab-sort-btn"
+                            type="button"
+                            title="Group tabs by workspace"
+                            aria-label="Group tabs by workspace"
+                        >
+                            <svg
+                                class="icon"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                aria-hidden="true"
+                            >
+                                <path d="M4 6h16M4 12h10M4 18h4"></path>
+                                <path d="M18 12v8m-3-3 3 3 3-3"></path>
+                            </svg>
+                        </button>
                         <div
                             id="tab-overflow-dropdown"
                             class="tab-overflow-dropdown hidden"
@@ -593,8 +593,31 @@ eager to avoid a first-open unstyled flash. -->
                             tabindex="-1"
                         ></div>
                         <button
+                            id="refresh-console-btn"
+                            class="tab-action-btn refresh-console-btn"
+                            type="button"
+                            title="Reload current terminal"
+                            aria-label="Reload current terminal"
+                        >
+                            <svg
+                                class="icon"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                            >
+                                <polyline points="1 4 1 10 7 10"></polyline>
+                                <path
+                                    d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"
+                                ></path>
+                            </svg>
+                        </button>
+                        <button
                             id="close-all-tabs-btn"
-                            class="close-all-tabs-btn"
+                            class="tab-action-btn close-all-tabs-btn"
+                            type="button"
                             title="Close all sessions"
                             aria-label="Close all sessions"
                         >
@@ -612,27 +635,6 @@ eager to avoid a first-open unstyled flash. -->
                                 <path d="m15 9 3-3"></path>
                                 <path d="M18 6c-1-3 2-5 4-3"></path>
                                 <path d="M20 1v2m1 4h2"></path>
-                            </svg>
-                        </button>
-                        <button
-                            id="refresh-console-btn"
-                            class="refresh-console-btn"
-                            title="Reload current terminal"
-                            aria-label="Reload current terminal"
-                        >
-                            <svg
-                                class="icon"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                            >
-                                <polyline points="1 4 1 10 7 10"></polyline>
-                                <path
-                                    d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"
-                                ></path>
                             </svg>
                         </button>
                     </div>

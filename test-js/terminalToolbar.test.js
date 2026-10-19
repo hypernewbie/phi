@@ -63,6 +63,23 @@ function setupManager() {
 }
 
 describe('terminal toolbar markup and bindings', () => {
+    it('orders desktop actions as dropdown, sort, reload, and close-all with a shared style', () => {
+        mountMarkup();
+        const buttons = [
+            ...document.querySelectorAll('.terminal-tabs-bar > button'),
+        ];
+        expect(buttons.map((button) => button.id)).toEqual([
+            'tab-overflow-btn',
+            'sort-tabs-btn',
+            'refresh-console-btn',
+            'close-all-tabs-btn',
+        ]);
+        for (const button of buttons) {
+            expect(button.classList.contains('tab-action-btn')).toBe(true);
+            expect(button.getAttribute('type')).toBe('button');
+        }
+    });
+
     it('removes the toolbar reconnect buttons and labels the retained controls', () => {
         mountMarkup();
         expect(document.getElementById('reconnect-all-tabs-btn')).toBeNull();

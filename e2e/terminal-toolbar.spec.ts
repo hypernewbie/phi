@@ -135,6 +135,168 @@ for (const surface of surfaces) {
                 page.locator('#mobile-reconnect-all-tabs-btn'),
             ).toHaveCount(0);
 
+            if (!surface.isMobile) {
+                const actionIds = [
+                    'tab-overflow-btn',
+                    'sort-tabs-btn',
+                    'refresh-console-btn',
+                    'close-all-tabs-btn',
+                ];
+                const actions = page.locator('.terminal-tabs-bar > button');
+                const reference = page.locator('#refresh-diff-btn');
+                const diffStyle = await reference.evaluate((button) => {
+                    const style = getComputedStyle(button);
+                    const rect = button.getBoundingClientRect();
+                    const icon = button
+                        .querySelector('.icon')
+                        ?.getBoundingClientRect();
+                    return {
+                        width: rect.width,
+                        height: rect.height,
+                        padding: style.padding,
+                        margin: style.margin,
+                        borderRadius: style.borderRadius,
+                        borderWidth: style.borderWidth,
+                        borderStyle: style.borderStyle,
+                        backgroundColor: style.backgroundColor,
+                        color: style.color,
+                        boxShadow: style.boxShadow,
+                        iconWidth: icon?.width,
+                        iconHeight: icon?.height,
+                    };
+                });
+                expect(diffStyle).toMatchObject({
+                    width: 24,
+                    height: 24,
+                    borderWidth: '0px',
+                    borderStyle: 'none',
+                    backgroundColor: 'rgba(0, 0, 0, 0)',
+                });
+                const { color: normalColor, ...buttonGeometry } = diffStyle;
+                for (const width of [1280, 900]) {
+                    await page.setViewportSize({ width, height: 900 });
+                    if (width === 900) {
+                        await page.locator('#close-diff-btn').click();
+                        await expect(page.locator('#diff-panel')).toHaveClass(
+                            /hidden/,
+                        );
+                        await expect
+                            .poll(() =>
+                                page
+                                    .locator('#diff-panel')
+                                    .evaluate(
+                                        (panel) =>
+                                            panel.getBoundingClientRect().left,
+                                    ),
+                            )
+                            .toBeGreaterThanOrEqual(width);
+                    }
+                    const metrics = await actions.evaluateAll((buttons) =>
+                        buttons.map((button) => {
+                            const rect = button.getBoundingClientRect();
+                            const style = getComputedStyle(button);
+                            const icon = button
+                                .querySelector('.icon')
+                                ?.getBoundingClientRect();
+                            return {
+                                id: button.id,
+                                left: rect.left,
+                                right: rect.right,
+                                centerY: rect.top + rect.height / 2,
+                                width: rect.width,
+                                height: rect.height,
+                                padding: style.padding,
+                                margin: style.margin,
+                                borderRadius: style.borderRadius,
+                                borderWidth: style.borderWidth,
+                                borderStyle: style.borderStyle,
+                                backgroundColor: style.backgroundColor,
+                                color: style.color,
+                                boxShadow: style.boxShadow,
+                                iconWidth: icon?.width,
+                                iconHeight: icon?.height,
+                            };
+                        }),
+                    );
+                    expect(metrics.map((button) => button.id)).toEqual(
+                        actionIds,
+                    );
+                    for (const [index, button] of metrics.entries()) {
+                        expect(button).toMatchObject(buttonGeometry);
+                        expect(button.centerY).toBe(metrics[0].centerY);
+                        expect(button.left).toBeGreaterThanOrEqual(0);
+                        expect(button.right).toBeLessThanOrEqual(width);
+                        if (index > 0) {
+                            expect(button.left - metrics[index - 1].right).toBe(
+                                8,
+                            );
+                        }
+                        expect(button.color).toBe(normalColor);
+                    }
+                    const stripRight = await page
+                        .locator('#tabs-container')
+                        .evaluate(
+                            (strip) => strip.getBoundingClientRect().right,
+                        );
+                    expect(metrics[0].left - stripRight).toBe(8);
+                    await page.screenshot({
+                        path: testInfo.outputPath(
+                            `desktop-toolbar-${width}.png`,
+                        ),
+                    });
+                }
+                await page.setViewportSize(surface.viewport);
+                await page
+                    .getByRole('button', { name: 'Diff', exact: true })
+                    .click();
+                await reference.hover();
+                const diffHover = await reference.evaluate(async (button) => {
+                    await Promise.all(
+                        button
+                            .getAnimations()
+                            .map((animation) => animation.finished),
+                    );
+                    const style = getComputedStyle(button);
+                    return {
+                        backgroundColor: style.backgroundColor,
+                        color: style.color,
+                        boxShadow: style.boxShadow,
+                        textShadow: style.textShadow,
+                    };
+                });
+                for (const id of actionIds) {
+                    const button = page.locator(`#${id}`);
+                    await button.hover();
+                    await expect(button).toHaveCSS(
+                        'background-color',
+                        diffHover.backgroundColor,
+                    );
+                    await expect(button).toHaveCSS('color', diffHover.color);
+                    await expect(button).toHaveCSS('border-width', '0px');
+                    await expect(button).toHaveCSS(
+                        'box-shadow',
+                        diffHover.boxShadow,
+                    );
+                    await expect(button).toHaveCSS(
+                        'text-shadow',
+                        diffHover.textShadow,
+                    );
+                }
+                await page.mouse.move(0, 0);
+                await page.locator(`#${actionIds[1]}`).focus();
+                await page.keyboard.press('Shift+Tab');
+                for (const [index, id] of actionIds.entries()) {
+                    const button = page.locator(`#${id}`);
+                    await expect(button).toBeFocused();
+                    await expect(button).toHaveCSS('outline-style', 'solid');
+                    await expect(button).toHaveCSS('outline-width', '2px');
+                    await expect(button).toHaveCSS('box-shadow', 'none');
+                    if (index < actionIds.length - 1) {
+                        await page.keyboard.press('Tab');
+                    }
+                }
+            }
+
             const reload = page.locator(`#${surface.reloadId}`);
             const bomb = page.locator(`#${surface.closeId}`);
             await expect(reload).toBeVisible();
@@ -147,20 +309,33 @@ for (const surface of surfaces) {
             await expect(icon).toBeVisible();
             await expect(icon).toHaveAttribute('fill', 'none');
             await expect(icon).toHaveAttribute('stroke', 'currentColor');
-            expect(
-                await bomb.evaluate((button) => getComputedStyle(button).color),
-            ).toBe('rgb(239, 68, 68)');
-            await bomb.hover();
-            await bomb.evaluate(async (button) => {
+            await expect(bomb).toHaveCSS(
+                'color',
+                await reload.evaluate(
+                    (button) => getComputedStyle(button).color,
+                ),
+            );
+            await reload.hover();
+            const reloadHover = await reload.evaluate(async (button) => {
                 await Promise.all(
                     button
                         .getAnimations()
                         .map((animation) => animation.finished),
                 );
+                const style = getComputedStyle(button);
+                return {
+                    color: style.color,
+                    backgroundColor: style.backgroundColor,
+                    boxShadow: style.boxShadow,
+                };
             });
-            expect(
-                await bomb.evaluate((button) => getComputedStyle(button).color),
-            ).toBe('rgb(239, 68, 68)');
+            await bomb.hover();
+            await expect(bomb).toHaveCSS('color', reloadHover.color);
+            await expect(bomb).toHaveCSS(
+                'background-color',
+                reloadHover.backgroundColor,
+            );
+            await expect(bomb).toHaveCSS('box-shadow', reloadHover.boxShadow);
             await page.mouse.move(0, 0);
             await page.screenshot({
                 path: testInfo.outputPath(

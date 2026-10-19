@@ -615,6 +615,50 @@ test('long navigator scrolls at desktop widths and keeps compact navigation unch
                     )
                     .toBeGreaterThanOrEqual(width);
             }
+            const stripMetrics = await page
+                .locator('#tabs-container')
+                .evaluate((strip) => {
+                    if (!(strip instanceof HTMLElement)) {
+                        throw new Error('Tab strip is not an HTML element');
+                    }
+                    strip.scrollLeft = strip.scrollWidth;
+                    const lastTab = strip.querySelector('.tab:last-child');
+                    const firstAction =
+                        document.getElementById('tab-overflow-btn');
+                    if (!lastTab || !firstAction) {
+                        throw new Error('Tab strip or first action is missing');
+                    }
+                    const style = getComputedStyle(strip);
+                    return {
+                        gap:
+                            firstAction.getBoundingClientRect().left -
+                            lastTab.getBoundingClientRect().right,
+                        paddingRight: style.paddingRight,
+                        overflowY: style.overflowY,
+                        scrollbarWidth: style.scrollbarWidth,
+                        verticalGutter: strip.offsetWidth - strip.clientWidth,
+                        horizontalGutter:
+                            strip.offsetHeight - strip.clientHeight,
+                        clientWidth: strip.clientWidth,
+                        scrollWidth: strip.scrollWidth,
+                    };
+                });
+            expect(stripMetrics.scrollWidth).toBeGreaterThan(
+                stripMetrics.clientWidth,
+            );
+            expect(stripMetrics).toMatchObject({
+                paddingRight: '0px',
+                overflowY: 'hidden',
+                scrollbarWidth: 'none',
+                verticalGutter: 0,
+                horizontalGutter: 0,
+            });
+            expect(stripMetrics.gap).toBeCloseTo(8, 0);
+            await page.locator('.terminal-tabs-bar').screenshot({
+                path: testInfo.outputPath(
+                    `toolbar-overflow-spacing-${width}.png`,
+                ),
+            });
             if (await dropdown.isHidden()) await trigger.click();
             await expect(dropdown).toBeVisible();
             const metrics = await dropdown.evaluate((element) => {
@@ -799,12 +843,12 @@ test('wide touch navigator retains native keyboard behavior and desktop controls
         ).toBeVisible();
 
         await page.keyboard.press('Shift+Tab');
-        await expect(trigger).toBeFocused();
         const sortButton = page.locator('#sort-tabs-btn');
-        await page.keyboard.press('Shift+Tab');
         await expect(sortButton).toBeFocused();
-        await page.keyboard.press('Tab');
+        await page.keyboard.press('Shift+Tab');
         await expect(trigger).toBeFocused();
+        await page.keyboard.press('Tab');
+        await expect(sortButton).toBeFocused();
         await page.keyboard.press('Tab');
         await expect(summary).toBeFocused();
         const worktreeSummary = firstWorkspace.locator(
@@ -815,8 +859,10 @@ test('wide touch navigator retains native keyboard behavior and desktop controls
         await page.keyboard.press('Shift+Tab');
         await expect(summary).toBeFocused();
         await page.keyboard.press('Shift+Tab');
-        await expect(trigger).toBeFocused();
+        await expect(sortButton).toBeFocused();
         await page.keyboard.press('Shift+Tab');
+        await expect(trigger).toBeFocused();
+        await page.keyboard.press('Tab');
         await expect(sortButton).toBeFocused();
         await saveScreenshot(
             page,
