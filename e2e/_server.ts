@@ -18,7 +18,7 @@ export interface PhiServer {
     url: string;
     dir: string;
     stop: () => Promise<void>;
-    restart: () => Promise<void>;
+    restart: (beforeStart?: () => void | Promise<void>) => Promise<void>;
     logPath: string;
 }
 
@@ -121,8 +121,9 @@ export async function startPhi(
         url: `http://127.0.0.1:${port}`,
         logPath,
         dir,
-        restart: async () => {
+        restart: async (beforeStart) => {
             await terminate();
+            await beforeStart?.();
             server = capture(launch());
             await waitForHealth(port);
         },

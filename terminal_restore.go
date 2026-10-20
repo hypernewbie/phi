@@ -65,6 +65,9 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg Co
 	if err != nil {
 		return nil, terminalLaunchError{http.StatusInternalServerError, err}
 	}
+	if piTitleService != nil {
+		piTitleService.Register(inst)
+	}
 	if req.Cols != 0 && req.Rows != 0 {
 		wsHub.RecordResize(inst.ID, req.Cols, req.Rows)
 	}

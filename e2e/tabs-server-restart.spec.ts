@@ -209,7 +209,19 @@ test('close/restart preserves every backend, exact session, pane identity, flags
         localStorage.setItem('phi_tab_order', JSON.stringify(ids));
         localStorage.setItem('phi_active_pane', 'codex-pane');
     }, order);
-    await phi.restart();
+    await phi.restart(async () => {
+        const tabsPath = join(phi.dir, 'home', '.phi', 'tabs.json');
+        const saved = JSON.parse(readFileSync(tabsPath, 'utf8')) as Array<{
+            id: string;
+            title: string;
+            [key: string]: unknown;
+        }>;
+        const piPane = saved.find((entry) => entry.id === 'pi-pane');
+        expect(piPane).toBeDefined();
+        if (!piPane) throw new Error('saved Pi pane missing during restart');
+        piPane.title = 'Saved pi-pane';
+        writeFileSync(tabsPath, JSON.stringify(saved, null, 2));
+    });
     await page.reload();
     await expect(page.locator('#tabs-container .tab')).toHaveCount(rows.length);
     const running = await (
@@ -232,10 +244,10 @@ test('close/restart preserves every backend, exact session, pane identity, flags
             id: row.id,
             coder: row.coder,
             session_id: row.session_id,
-            title: `Saved ${row.id}`,
             pinned: true,
             marked: row.id === 'codex-pane',
         });
+        if (row.id !== 'pi-pane') expect(pane.title).toBe(`Saved ${row.id}`);
         if ('opencode_mode' in row)
             expect(pane.opencode_mode).toBe(row.opencode_mode);
         await expect(
@@ -257,6 +269,22 @@ test('close/restart preserves every backend, exact session, pane identity, flags
     await expect(page.locator('#input-textarea')).toHaveValue(
         'unsent draft\twith source spaces  ',
     );
+    const piTitle = `Pi session ${uuids.pi.slice(0, 8)}`;
+    await expect
+        .poll(
+            async () => {
+                const response = await request.get(`${phi.url}/api/terminals`);
+                const current = await response.json();
+                return current.find(
+                    (pane: { id: string }) => pane.id === 'pi-pane',
+                )?.title;
+            },
+            { timeout: 30_000 },
+        )
+        .toBe(piTitle);
+    await expect(
+        page.locator('.tab[data-pane-id="pi-pane"] .tab-title'),
+    ).toHaveText(piTitle, { timeout: 30_000 });
     const log = readFileSync(join(phi.dir, 'home', 'launch.log'), 'utf8');
     for (const [coder, id] of Object.entries(uuids))
         expect(log).toContain(
