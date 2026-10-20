@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -257,41 +259,33 @@ func extractPiSessionTitle(filePath string) string {
 	}
 	defer file.Close()
 
-	customName := ""
-	firstUserMsg := ""
-
-	scanner := newPiScanner(file)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-
-		var psi PiSessionInfo
-		if err := json.Unmarshal(line, &psi); err == nil && psi.Type == "session_info" && psi.Name != "" {
-			customName = psi.Name
-			break // Found custom name, best possible title
-		}
-
-		if firstUserMsg != "" {
-			continue
-		}
-
-		var pm PiMessage
-		if err := json.Unmarshal(line, &pm); err == nil && (pm.Type == "message" || pm.Type == "msg") && len(pm.Message.Content) > 0 && pm.Message.Role == "user" {
-			for _, c := range pm.Message.Content {
-				if c.Type == "text" && c.Text != "" {
-					firstUserMsg = c.Text
-					if len(firstUserMsg) > 36 {
-						firstUserMsg = firstUserMsg[:36] + "..."
-					}
-					break
-				}
+	var state PiTitleState
+	var decoder piRecordDecoder
+	var warning error
+	consume := func(record []byte) error { return state.applyRecord(record) }
+	buffer := make([]byte, 64*1024)
+	for {
+		n, readErr := file.Read(buffer)
+		if n > 0 {
+			if err := decoder.Feed(buffer[:n], false, consume); err != nil && warning == nil {
+				warning = err
 			}
 		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				if err := decoder.Feed(nil, true, consume); err != nil && warning == nil {
+					warning = err
+				}
+			} else if warning == nil {
+				warning = fmt.Errorf("read Pi session title: %w", readErr)
+			}
+			break
+		}
 	}
-
-	if customName != "" {
-		return customName
+	if warning != nil {
+		log.Printf("[session] Pi title extraction warning in %s: %v", filePath, warning)
 	}
-	return firstUserMsg
+	return state.Title()
 }
 
 // ResolvePiSessionPath returns the exact validated session path for cwd.

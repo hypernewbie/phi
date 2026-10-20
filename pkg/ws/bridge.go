@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -208,6 +209,59 @@ func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
 	}()
 }
 
+type sessionTitleControlJSON struct {
+	Type      string `json:"type"`
+	PaneID    string `json:"pane_id"`
+	SessionID string `json:"session_id"`
+	Title     string `json:"title"`
+	Revision  uint64 `json:"revision"`
+}
+
+// EncodeSessionTitleControl produces the JSON payload for the existing 0x02
+// control channel. The caller supplies the frame byte when sending it.
+func EncodeSessionTitleControl(paneID, sessionID, title string, revision uint64) []byte {
+	payload, err := json.Marshal(sessionTitleControlJSON{
+		Type:      "session-title",
+		PaneID:    paneID,
+		SessionID: sessionID,
+		Title:     title,
+		Revision:  revision,
+	})
+	if err != nil {
+		return nil
+	}
+	return payload
+}
+
+// enqueuePiTitleSnapshot appends the current Pi title after the normal attach
+// frames. It holds the pane lock while checking registration so Unregister and
+// ClosePane cannot close Send between the check and this nonblocking send.
+func (h *Hub) enqueuePiTitleSnapshot(snapshot pty.PTYInstanceSnapshot, client *Client) bool {
+	if snapshot.Coder != "pi" || snapshot.SessionID == "" || client == nil {
+		return false
+	}
+	ph, ok := h.LookupPane(snapshot.ID)
+	if !ok {
+		return false
+	}
+	payload := EncodeSessionTitleControl(snapshot.ID, snapshot.SessionID, snapshot.Title, snapshot.TitleRevision)
+	if payload == nil {
+		return false
+	}
+	frame := append([]byte{0x02}, payload...)
+	ph.mu.Lock()
+	defer ph.mu.Unlock()
+	if !ph.clients[client] {
+		return false
+	}
+	select {
+	case client.Send <- frame:
+		return true
+	default:
+		return false
+	}
+}
+
 func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, manager *pty.Manager, hub *Hub) {
 	// Correlation is via the structured comp=ws + pane=<id> attrs on this
 	// connection's logger (both builds) — no hand-minted conn id. Under
@@ -242,6 +296,9 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 	} else {
 		hub.AttachWithReplay(inst.ID, client)
 	}
+	// Snapshot manager state only; the asynchronous title service supplies a
+	// later push after any cold file read completes. ATTACH_HEAD remains first.
+	hub.enqueuePiTitleSnapshot(inst.Snapshot(), client)
 
 	go client.WritePump()
 

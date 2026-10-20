@@ -35,15 +35,16 @@ import (
 )
 
 var (
-	ptyManager   *pty.Manager
-	coderManager *coders.Manager
-	wsHub        *ws.Hub
-	mdWatcher    *fswatch.Watcher
-	cpuSampler   = system.NewSampler()
-	activeCWD    string
-	webRoot      fs.FS
-	diskStatic   http.Handler
-	fleetPoller  = fleet.NewPoller()
+	ptyManager     *pty.Manager
+	coderManager   *coders.Manager
+	wsHub          *ws.Hub
+	mdWatcher      *fswatch.Watcher
+	piTitleService *piTerminalTitleService
+	cpuSampler     = system.NewSampler()
+	activeCWD      string
+	webRoot        fs.FS
+	diskStatic     http.Handler
+	fleetPoller    = fleet.NewPoller()
 
 	Version     = "dev"
 	Commit      = "none"
@@ -201,6 +202,8 @@ func main() {
 		}
 	}
 	restoreSavedTabs()
+	piTitleService = newPiTerminalTitleService(ptyManager, wsHub)
+	piTitleService.Start()
 
 	// Markdown watcher: fswatch over the resolved markdownDirs of every
 	// live pane cwd. Fires 0x07 md-changed so open UIs can silently
@@ -694,6 +697,9 @@ func gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace, grace time.D
 	}
 	if ptyManager != nil {
 		ptyManager.BeginDrain() // reject new PTY spawns for the whole drain window
+	}
+	if piTitleService != nil {
+		piTitleService.Close()
 	}
 	if drainDelay > 0 {
 		time.Sleep(drainDelay)

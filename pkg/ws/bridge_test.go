@@ -3,6 +3,7 @@ package ws
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,126 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+func TestEncodeSessionTitleControl(t *testing.T) {
+	payload := EncodeSessionTitleControl("pane-1", "native-id", "Native title", 7)
+	var control struct {
+		Type      string `json:"type"`
+		PaneID    string `json:"pane_id"`
+		SessionID string `json:"session_id"`
+		Title     string `json:"title"`
+		Revision  uint64 `json:"revision"`
+	}
+	if err := json.Unmarshal(payload, &control); err != nil {
+		t.Fatal(err)
+	}
+	if control.Type != "session-title" || control.PaneID != "pane-1" || control.SessionID != "native-id" || control.Title != "Native title" || control.Revision != 7 {
+		t.Fatalf("encoded session title control=%+v", control)
+	}
+}
+
+func TestPiTitleAttachSnapshotFollowsAttachHeadAndNeverBlocks(t *testing.T) {
+	hub := NewHub(0)
+	client := &Client{Send: make(chan []byte, 2)}
+	hub.AttachHot("pane-1", client)
+	snapshot := pty.PTYInstanceSnapshot{ID: "pane-1", Coder: "pi", SessionID: "native-id", Title: "Native title", TitleRevision: 4}
+	if !hub.enqueuePiTitleSnapshot(snapshot, client) {
+		t.Fatal("Pi title attach snapshot was not queued")
+	}
+	first, second := <-client.Send, <-client.Send
+	if len(first) == 0 || first[0] != 0x08 {
+		t.Fatalf("first hot attach frame type=%v, want ATTACH_HEAD 0x08", first)
+	}
+	if len(second) == 0 || second[0] != 0x02 {
+		t.Fatalf("second attach frame type=%v, want session-title 0x02", second)
+	}
+	var control struct {
+		Type      string `json:"type"`
+		PaneID    string `json:"pane_id"`
+		SessionID string `json:"session_id"`
+		Title     string `json:"title"`
+		Revision  uint64 `json:"revision"`
+	}
+	if err := json.Unmarshal(second[1:], &control); err != nil {
+		t.Fatal(err)
+	}
+	if control.Type != "session-title" || control.PaneID != snapshot.ID || control.SessionID != snapshot.SessionID || control.Title != snapshot.Title || control.Revision != snapshot.TitleRevision {
+		t.Fatalf("attach title snapshot=%+v", control)
+	}
+
+	fullHub := NewHub(0)
+	fullClient := &Client{Send: make(chan []byte, 1)}
+	fullHub.Register("full-pane", fullClient)
+	fullClient.Send <- []byte("already queued")
+	if fullHub.enqueuePiTitleSnapshot(pty.PTYInstanceSnapshot{ID: "full-pane", Coder: "pi", SessionID: "id"}, fullClient) {
+		t.Fatal("full client queue unexpectedly accepted snapshot")
+	}
+	fullHub.ClosePane("full-pane")
+	if fullHub.enqueuePiTitleSnapshot(pty.PTYInstanceSnapshot{ID: "full-pane", Coder: "pi", SessionID: "id"}, fullClient) {
+		t.Fatal("closed-pane client unexpectedly accepted snapshot")
+	}
+}
+
+func TestHandleWSQueuesCurrentPiTitleAfterHotAttach(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	manager := pty.NewManager()
+	shell, args := getTestShellForBridge()
+	instance, err := manager.SpawnWithOptions(context.Background(), home, shell, args, "pi", "native-id", pty.SpawnOptions{ID: "title-attach-pane", Title: "Saved title"})
+	if err != nil {
+		t.Fatalf("spawn attach-test PTY: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = manager.Kill(instance.ID)
+		_ = manager.FlushSaveState()
+	})
+	revision, changed := manager.SetDerivedPiTitle(instance, "native-id", home, "Native title")
+	if !changed || revision != 1 {
+		t.Fatalf("set attach-test title revision=%d changed=%v", revision, changed)
+	}
+	hub := NewHub(0)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		HandleWS(w, r, instance, manager, hub)
+	}))
+	defer server.Close()
+
+	url := "ws" + strings.TrimPrefix(server.URL, "http") + "/?term_proto=hot-v1"
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("dial hot attach: %v", err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for index, wantType := range []byte{0x08, 0x02} {
+		messageType, frame, err := conn.ReadMessage()
+		if err != nil {
+			_ = conn.Close()
+			t.Fatalf("read attach frame %d: %v", index, err)
+		}
+		if messageType != websocket.BinaryMessage || len(frame) == 0 || frame[0] != wantType {
+			_ = conn.Close()
+			t.Fatalf("attach frame %d type=%d first byte=%v, want 0x%02x", index, messageType, frame, wantType)
+		}
+		if index == 1 {
+			var title struct {
+				Type      string `json:"type"`
+				PaneID    string `json:"pane_id"`
+				SessionID string `json:"session_id"`
+				Title     string `json:"title"`
+				Revision  uint64 `json:"revision"`
+			}
+			if err := json.Unmarshal(frame[1:], &title); err != nil {
+				_ = conn.Close()
+				t.Fatal(err)
+			}
+			if title.Type != "session-title" || title.PaneID != instance.ID || title.SessionID != "native-id" || title.Title != "Native title" || title.Revision != 1 {
+				_ = conn.Close()
+				t.Fatalf("current attach title=%+v", title)
+			}
+		}
+	}
+	_ = conn.Close()
+}
 
 // TestWebSocketCompression verifies that our WebSocket Upgrader correctly negotiates
 // permessage-deflate compression and successfully handles reading/writing compressed binary frames.

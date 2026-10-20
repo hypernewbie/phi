@@ -76,6 +76,7 @@ type PTYInstance struct {
 	NotifiedIdle     bool                `json:"-"`
 	LastActivityUnix int64               `json:"last_activity_unix"`
 	Busy             bool                `json:"busy"`
+	titleRevision    uint64
 }
 
 func (inst *PTYInstance) UpdateActivity() {
@@ -552,6 +553,7 @@ type PTYInstanceSnapshot struct {
 	LastActivityUnix int64  `json:"last_activity_unix"`
 	Busy             bool   `json:"busy"`
 	Title            string `json:"title"`
+	TitleRevision    uint64 `json:"title_revision,omitempty"`
 	Workspace        string `json:"workspace"`
 }
 
@@ -574,6 +576,7 @@ func (inst *PTYInstance) Snapshot() PTYInstanceSnapshot {
 		LastActivityUnix: inst.LastActivityUnix,
 		Busy:             inst.Busy,
 		Title:            inst.Title,
+		TitleRevision:    inst.titleRevision,
 		Workspace:        inst.Workspace,
 	}
 }
@@ -637,6 +640,7 @@ func (m *Manager) LoadState() error {
 		// that never started. Mark them dead-but-known and stop the
 		// grace timer from immediately killing them.
 		inst.Pty = nil
+		inst.titleRevision = 0
 		inst.IsBusy = false
 		inst.Busy = false
 		inst.NotifiedIdle = true // suppress the post-restart idle toast
@@ -714,6 +718,49 @@ func (m *Manager) SetTitle(id string, title string) error {
 	log.Printf("[pty] SetTitle %s: title=%q", id, title)
 	_ = m.scheduleSave()
 	return nil
+}
+
+const maxPiTitleRevision uint64 = 1<<53 - 1
+
+// SetDerivedPiTitle applies a file-derived title only if the exact live
+// instance identity observed by the caller is still registered. CWD is
+// compared as the original snapshot string; session cache keys canonicalize
+// it separately. Persistence is scheduled after releasing both locks.
+func (m *Manager) SetDerivedPiTitle(expected *PTYInstance, nativeID, originalCWD, title string) (revision uint64, changed bool) {
+	if expected == nil {
+		return 0, false
+	}
+	m.mu.RLock()
+	if m.instances[expected.ID] != expected {
+		m.mu.RUnlock()
+		return 0, false
+	}
+	expected.mu.Lock()
+	if expected.Coder != "pi" || expected.SessionID != nativeID || expected.Cwd != originalCWD || expected.Pty == nil || expected.IsPtyDead() {
+		revision = expected.titleRevision
+		expected.mu.Unlock()
+		m.mu.RUnlock()
+		return revision, false
+	}
+	if expected.Title == title {
+		revision = expected.titleRevision
+		expected.mu.Unlock()
+		m.mu.RUnlock()
+		return revision, false
+	}
+	if expected.titleRevision >= maxPiTitleRevision {
+		revision = expected.titleRevision
+		expected.mu.Unlock()
+		m.mu.RUnlock()
+		return revision, false
+	}
+	expected.Title = title
+	expected.titleRevision++
+	revision = expected.titleRevision
+	expected.mu.Unlock()
+	m.mu.RUnlock()
+	_ = m.scheduleSave()
+	return revision, true
 }
 
 // IsDraining reports whether BeginDrain has been called. Used by the

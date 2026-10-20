@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/hypernewbie/phi/pkg/clipboard"
@@ -99,6 +100,41 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		inst, ok := ptyManager.Get(id)
+		if !ok || inst == nil {
+			http.Error(w, "terminal instance not found", http.StatusNotFound)
+			return
+		}
+		if inst.Coder == "pi" {
+			if strings.TrimSpace(req.Title) == "" {
+				http.Error(w, "Pi session name must be nonblank", http.StatusBadRequest)
+				return
+			}
+			for _, character := range req.Title {
+				if unicode.IsControl(character) {
+					http.Error(w, "Pi session name cannot contain control characters", http.StatusBadRequest)
+					return
+				}
+			}
+			if inst.Pty == nil || inst.IsPtyDead() {
+				http.Error(w, "Pi terminal is not live", http.StatusConflict)
+				return
+			}
+			command := []byte("/name " + req.Title + "\r")
+			inst.UpdateInput()
+			written, err := inst.Pty.Write(command)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadGateway)
+				return
+			}
+			if written != len(command) {
+				http.Error(w, "short write delivering Pi session name", http.StatusBadGateway)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
 			return
 		}
 

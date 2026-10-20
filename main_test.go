@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/session"
@@ -1271,6 +1272,103 @@ func TestHandleFallback_Rename(t *testing.T) {
 	}
 	if inst.Title != "deploy hotfix" {
 		t.Errorf("title not applied: want %q, got %q", "deploy hotfix", inst.Title)
+	}
+}
+
+func TestHandleFallback_PiRenameDeliversOneNativeNameCommand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native command-line fixture uses a Unix shell")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	withTempConfig(t)
+	manager := pty.NewManager()
+	oldManager := ptyManager
+	ptyManager = manager
+	t.Cleanup(func() {
+		for _, inst := range manager.ListActive() {
+			_ = manager.Kill(inst.ID)
+		}
+		_ = manager.FlushSaveState()
+		ptyManager = oldManager
+	})
+
+	outputPath := filepath.Join(home, "native-command.txt")
+	scriptPath := filepath.Join(home, "fake-pi.sh")
+	script := "#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\" >> \"$PHI_PI_COMMANDS\"; done\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	inst, err := manager.SpawnWithOptions(context.Background(), home, scriptPath, nil, "pi", "native-id", pty.SpawnOptions{ID: "pi-rename", Title: "Saved Pi title"}, map[string]string{"PHI_PI_COMMANDS": outputPath})
+	if err != nil {
+		t.Fatalf("spawn fake Pi writer: %v", err)
+	}
+	beforeInvalid := inst.LastActivity()
+	for _, body := range []string{`{"title":"  \t "}`, `{"title":"line\nbreak"}`} {
+		req := httptest.NewRequest(http.MethodPost, "/api/terminals/"+inst.ID+"/title", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		handleFallback(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("invalid Pi title %s returned HTTP %d", body, w.Code)
+		}
+	}
+	if !inst.LastActivity().Equal(beforeInvalid) {
+		t.Fatal("rejected Pi rename recorded input activity")
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/terminals/"+inst.ID+"/title", strings.NewReader(`{"title":"Native name"}`))
+	w := httptest.NewRecorder()
+	handleFallback(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("Pi rename returned HTTP %d: %s", w.Code, w.Body.String())
+	}
+	if !inst.LastActivity().After(beforeInvalid) {
+		t.Fatal("Pi rename did not record input activity")
+	}
+	deadline := time.After(2 * time.Second)
+	var contents string
+	for {
+		data, readErr := os.ReadFile(outputPath)
+		if readErr == nil {
+			contents = string(data)
+			if strings.Contains(contents, "Native name") {
+				break
+			}
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("fake Pi did not receive native name command; output=%q err=%v", contents, readErr)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), "/name Native name\n"; got != want {
+		t.Fatalf("native Pi command bytes=%q, want exactly %q", got, want)
+	}
+	if got := inst.Snapshot().Title; got != "Saved Pi title" {
+		t.Fatalf("Pi rename saved an optimistic alias: %q", got)
+	}
+}
+
+func TestHandleFallback_PiRenameRejectsMissingWriter(t *testing.T) {
+	oldManager := ptyManager
+	ptyManager = pty.NewManager()
+	t.Cleanup(func() { ptyManager = oldManager })
+	dead := &pty.PTYInstance{ID: "dead-pi-pane", Coder: "pi", SessionID: "native-id", Title: "Saved title"}
+	ptyManager.AddInstanceForTesting(dead)
+	req := httptest.NewRequest(http.MethodPost, "/api/terminals/"+dead.ID+"/title", strings.NewReader(`{"title":"New title"}`))
+	w := httptest.NewRecorder()
+	handleFallback(w, req)
+	if w.Code < 400 {
+		t.Fatalf("missing live Pi writer returned HTTP %d", w.Code)
+	}
+	if got := dead.Snapshot().Title; got != "Saved title" {
+		t.Fatalf("failed delivery changed the title alias: %q", got)
 	}
 }
 

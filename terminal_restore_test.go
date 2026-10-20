@@ -38,17 +38,21 @@ func restoreHarness(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	oldManager, oldCoders, oldHub, oldCwd := ptyManager, coderManager, wsHub, activeCWD
+	oldManager, oldCoders, oldHub, oldCwd, oldTitleService := ptyManager, coderManager, wsHub, activeCWD, piTitleService
 	ptyManager = pty.NewManager()
 	coderManager = coders.NewManager()
 	wsHub = ws.NewHub(64 * 1024)
 	activeCWD = home
+	piTitleService = nil
 	t.Cleanup(func() {
+		if piTitleService != nil {
+			piTitleService.Close()
+		}
 		for _, inst := range ptyManager.ListActive() {
 			_ = ptyManager.Kill(inst.ID)
 		}
 		_ = ptyManager.FlushSaveState()
-		ptyManager, coderManager, wsHub, activeCWD = oldManager, oldCoders, oldHub, oldCwd
+		ptyManager, coderManager, wsHub, activeCWD, piTitleService = oldManager, oldCoders, oldHub, oldCwd, oldTitleService
 	})
 	return home
 }
@@ -88,6 +92,33 @@ func TestRestoreBackendSlotsKeepIdentityMetadataAndExactResumeArgs(t *testing.T)
 		} else if len(args) != 2 || args[1] != "exact-native-id" {
 			t.Fatalf("%s resumed wrong conversation: %+v", id, args)
 		}
+	}
+}
+
+func TestSpawnedPiPaneRegistersThroughSharedLaunchPath(t *testing.T) {
+	home := restoreHarness(t)
+	coder := coderManager.MustGet("pi")
+	coder.Command = os.Args[0]
+	coder.Args = nil
+	coder.SessionSource = "none"
+	coder.Env = map[string]string{"PHI_TEST_RESTORE_CHILD": "1"}
+	coderManager.Add(coder)
+	service := newPiTerminalTitleService(ptyManager, wsHub)
+	piTitleService = service
+
+	tab := pty.SavedTab{PTYInstanceSnapshot: pty.PTYInstanceSnapshot{
+		ID: "registered-pi-pane", Coder: "pi", Cwd: home, SessionID: "native-id", Title: "Saved title",
+	}}
+	restoreSavedTab(tab)
+	instance, ok := ptyManager.Get(tab.ID)
+	if !ok || instance.IsPtyDead() {
+		t.Fatal("Pi pane did not launch through the shared terminal path")
+	}
+	service.mu.Lock()
+	track := service.panes[tab.ID]
+	service.mu.Unlock()
+	if track == nil || track.instance != instance || track.sessionID != "native-id" || track.cwd != home {
+		t.Fatalf("spawned Pi pane was not registered with exact identity: %+v", track)
 	}
 }
 

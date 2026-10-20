@@ -3602,6 +3602,7 @@ export class TabManager {
             // Without it, the scrollbar shows the line from N minutes ago
             // while content scrolls past, then snaps when the user wheels.
             userFollowBottom: true,
+            _piTitleRevision: -1,
         };
 
         if (pinned) {
@@ -3617,13 +3618,19 @@ export class TabManager {
         ws = new PTYWebSocket(
             tabInfo.paneId,
             (data) => {
+                if (tabInfo.ws !== ws) return;
                 this._paneData(tabInfo, data);
             },
             (control) => {
-                this.handleControlMessage(tabInfo, control);
+                if (tabInfo.ws !== ws) return;
+                this.handleControlMessage(tabInfo, control, ws);
             },
-            () => this._handleTerminalDisconnect(tabInfo),
             () => {
+                if (tabInfo.ws !== ws) return;
+                this._handleTerminalDisconnect(tabInfo);
+            },
+            () => {
+                if (tabInfo.ws !== ws) return;
                 tabInfo._perfAttachAt = performance.now();
                 tabInfo._perfWrote = false;
                 termPerfMark('ws-open');
@@ -3668,7 +3675,7 @@ export class TabManager {
             this._hotOptions(tabInfo),
         );
 
-        tabInfo.ws = ws;
+        this._setCurrentTabSocket(tabInfo, ws);
         this.tabs.set(paneId, tabInfo);
 
         // A real scroll gesture takes ownership away from any in-flight
@@ -5353,36 +5360,62 @@ export class TabManager {
         );
     }
 
+    _setTabTitle(tabInfo, title) {
+        if (!tabInfo || typeof title !== 'string') return false;
+        const changed = tabInfo.title !== title;
+        tabInfo.title = title;
+        const titleEl = tabInfo.tabEl?.querySelector('.tab-title');
+        // A native update changes stored state while the editor owns the
+        // label node; never replace or overwrite that draft.
+        if (titleEl && titleEl.tagName !== 'INPUT') {
+            titleEl.textContent = title;
+            titleEl.classList.toggle('marked', !!tabInfo.marked);
+        }
+        this.updateTabOverflow?.();
+        this._refreshOverflowDropdown?.();
+        if (
+            this._hieroPreview?.classList.contains('visible') &&
+            this._hieroPreviewSourceEl === tabInfo.tabEl
+        ) {
+            this._showHieroPreview(tabInfo.tabEl);
+        }
+        return changed;
+    }
+
     openTabRenamer(paneId, titleEl) {
         const tab = this.tabs.get(paneId);
         if (!tab) return;
-        const current = tab.title || '';
+        const openingTitle = tab.title || '';
 
         const input = document.createElement('input');
         input.type = 'text';
         input.className = 'rename-input tab-title';
-        input.value = current;
+        input.value = openingTitle;
         titleEl.replaceWith(input);
         input.focus({ preventScroll: true });
         input.select();
 
+        const restoreLatestTitle = () => {
+            const span = document.createElement('span');
+            span.className = `tab-title ${tab.marked ? 'marked' : ''}`;
+            input.replaceWith(span);
+            this._setTabTitle(tab, tab.title || '');
+        };
         let done = false;
         const commit = () => {
             if (done) return;
             done = true;
             const next = input.value.trim();
-            const span = document.createElement('span');
-            span.className = `tab-title ${tab.marked ? 'marked' : ''}`;
-            if (next && next !== current) {
-                tab.title = next;
-                span.textContent = next;
+            const latestTitle = tab.title || '';
+            if (next && next !== openingTitle && next !== latestTitle) {
                 if (tab.isReview || tab.isKanban) {
                     // Review and Kanban tabs own their own titles; no
                     // backend sync.
+                    this._setTabTitle(tab, next);
                 } else if (tab.isChatRpc) {
-                    // Pi-RPC: forward the new name to the child via the
-                    // control op so the underlying Pi session file gets
-                    // the session_info entry.
+                    // Pi-RPC keeps its existing optimistic behavior until its
+                    // native title acknowledgment contract is reviewed.
+                    this._setTabTitle(tab, next);
                     rpcChatSetName(paneId, next).catch((error) =>
                         console.error(
                             '[term] Failed to rename Pi RPC session:',
@@ -5391,35 +5424,23 @@ export class TabManager {
                     );
                     this.app?.sessionsManager?.loadSessions?.();
                 } else if (tab.coder === 'pi') {
-                    // Pi TUI: inject /name into the PTY so Pi itself
-                    // writes the session_info entry. Also update the
-                    // PTY label via the existing backend title sync.
-                    // Known limit: while Pi is busy or the user is
-                    // mid-draft in the prompt editor, the keystrokes
-                    // queue/merge; rename is a deliberate action so the
-                    // collision window is small.
-                    if (tab.ws && !tab.isDead) {
-                        tab.ws.sendInput(`/name ${next}\r`);
-                    }
-                    this.syncBackendTitle(paneId, next);
+                    // The backend sends one native /name command. Keep the
+                    // current label until file-backed native state confirms it.
+                    this.syncBackendTitle(paneId, next).catch(() => {});
                     setTimeout(() => {
                         this.app?.sessionsManager?.loadSessions?.();
                     }, 600);
                 } else {
-                    this.syncBackendTitle(paneId, next);
+                    this._setTabTitle(tab, next);
+                    this.syncBackendTitle(paneId, next).catch(() => {});
                 }
-            } else {
-                span.textContent = current;
             }
-            input.replaceWith(span);
+            restoreLatestTitle();
         };
         const cancel = () => {
             if (done) return;
             done = true;
-            const span = document.createElement('span');
-            span.className = `tab-title ${tab.marked ? 'marked' : ''}`;
-            span.textContent = current;
-            input.replaceWith(span);
+            restoreLatestTitle();
         };
 
         input.addEventListener('keydown', (e) => {
@@ -5435,13 +5456,21 @@ export class TabManager {
     }
 
     syncBackendTitle(paneId, title) {
-        fetch(`/api/terminals/${paneId}/title`, {
+        return fetch(`/api/terminals/${paneId}/title`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ title }),
-        }).catch((err) =>
-            console.error('[term] Failed to sync title on backend:', err),
-        );
+        })
+            .then((response) => {
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status} renaming terminal`);
+                }
+                return response;
+            })
+            .catch((err) => {
+                console.error('[term] Failed to sync title on backend:', err);
+                throw err;
+            });
     }
 
     // Soft-close: when the user clicks × on a tab, the tab leaves the
@@ -5885,6 +5914,7 @@ export class TabManager {
         `;
         document.body.appendChild(el);
         this._hieroPreview = el;
+        this._hieroPreviewSourceEl = null;
         this._hieroPreviewGlyph = el.querySelector('.tab-hiero-preview-glyph');
         this._hieroPreviewTitle = el.querySelector('.tab-hiero-preview-title');
         this._hieroPreviewLabel = el.querySelector('.tab-hiero-preview-label');
@@ -6061,6 +6091,7 @@ export class TabManager {
         p.classList.toggle('tab-hiero-preview-medium', size === 'medium');
         p.classList.toggle('is-busy', !!busy);
 
+        this._hieroPreviewSourceEl = sourceEl;
         this._hieroPreviewGlyph.textContent = glyph;
         this._hieroPreviewTitle.textContent = titleText || '';
         this._hieroPreviewLabel.textContent = label || '—';
@@ -6103,6 +6134,7 @@ export class TabManager {
         if (this._hieroPreview) {
             this._hieroPreview.classList.remove('visible');
         }
+        this._hieroPreviewSourceEl = null;
     }
 
     _refreshOverflowDropdown() {
@@ -7278,9 +7310,47 @@ export class TabManager {
         tabInfo.termContainer.appendChild(overlay);
     }
 
-    handleControlMessage(tabInfo, control) {
+    _setCurrentTabSocket(tabInfo, socket) {
+        tabInfo._piTitleRevision = -1;
+        tabInfo.ws = socket;
+    }
+
+    _acceptPiSessionTitle(tabInfo, control, socket = tabInfo?.ws) {
+        if (
+            !tabInfo ||
+            !socket ||
+            tabInfo.ws !== socket ||
+            this.tabs.get(tabInfo.paneId) !== tabInfo ||
+            tabInfo.coder !== 'pi' ||
+            typeof tabInfo.sessionId !== 'string' ||
+            tabInfo.sessionId.length === 0 ||
+            typeof control.session_id !== 'string' ||
+            control.session_id.length === 0 ||
+            control.pane_id !== tabInfo.paneId ||
+            control.session_id !== tabInfo.sessionId ||
+            typeof control.title !== 'string' ||
+            control.title.length === 0 ||
+            !Number.isSafeInteger(control.revision) ||
+            control.revision < 0
+        ) {
+            return false;
+        }
+        if (
+            Number.isSafeInteger(tabInfo._piTitleRevision) &&
+            control.revision < tabInfo._piTitleRevision
+        ) {
+            return false;
+        }
+        tabInfo._piTitleRevision = control.revision;
+        this._setTabTitle(tabInfo, control.title);
+        return true;
+    }
+
+    handleControlMessage(tabInfo, control, socket = tabInfo?.ws) {
         if (!control) return;
-        if (control.type === 'pty-exited') {
+        if (control.type === 'session-title') {
+            this._acceptPiSessionTitle(tabInfo, control, socket);
+        } else if (control.type === 'pty-exited') {
             tabInfo.exitCode = control.code;
             tabInfo.isDead = true;
             tabInfo.tabEl.classList.add('dead');
@@ -7443,7 +7513,7 @@ export class TabManager {
                 },
                 (control) => {
                     if (tabInfo.ws !== newWs) return;
-                    this.handleControlMessage(tabInfo, control);
+                    this.handleControlMessage(tabInfo, control, newWs);
                 },
                 () => {
                     if (tabInfo.ws !== newWs) return;
@@ -7529,7 +7599,7 @@ export class TabManager {
                 },
                 this._hotOptions(tabInfo),
             );
-            tabInfo.ws = newWs;
+            this._setCurrentTabSocket(tabInfo, newWs);
             tabInfo.reconnectWatchdogTimer = setTimeout(() => {
                 tabInfo.reconnectWatchdogTimer = null;
                 if (tabInfo.reconnectInFlight && tabInfo.ws === newWs) {
@@ -7653,7 +7723,7 @@ export class TabManager {
                     },
                     (control) => {
                         if (tabInfo.ws !== newWs) return;
-                        this.handleControlMessage(tabInfo, control);
+                        this.handleControlMessage(tabInfo, control, newWs);
                     },
                     () => {
                         if (tabInfo.ws !== newWs) return;
@@ -7699,7 +7769,7 @@ export class TabManager {
                     },
                     this._hotOptions(tabInfo),
                 );
-                tabInfo.ws = newWs;
+                this._setCurrentTabSocket(tabInfo, newWs);
 
                 // Sync with session list in sidebar
                 if (this.app.sessionsManager) {

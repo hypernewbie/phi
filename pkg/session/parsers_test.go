@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -179,6 +180,73 @@ func TestListPiSessions_TitleParsing(t *testing.T) {
 
 	if !foundSess1 || !foundSess2 {
 		t.Error("Did not find both expected sessions in results")
+	}
+}
+
+func TestExtractPiSessionTitleUsesLatestNameWithoutFinalNewline(t *testing.T) {
+	cwd, sessionsDir := setupPiTestSessions(t)
+	path := filepath.Join(sessionsDir, "latest-name.jsonl")
+	content := piSessionHeader("latest-name", cwd) + "\n" +
+		`{"type":"session_info","name":"First name"}` + "\n" +
+		`{"type":"session_info","name":"Latest name"}`
+	if err := os.MkdirAll(sessionsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := extractPiSessionTitle(path); got != "Latest name" {
+		t.Fatalf("extractPiSessionTitle() = %q, want latest name", got)
+	}
+}
+
+func TestExtractPiSessionTitlePreservesSessionAndTranscriptBytes(t *testing.T) {
+	cwd, sessionsDir := setupPiTestSessions(t)
+	path := filepath.Join(sessionsDir, "fallback.jsonl")
+	content := piSessionHeader("fallback-id", cwd) + "\n" +
+		`{"type":"session_info","name":"Old native name"}` + "\n" +
+		`{"type":"message","id":"root","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"Useful fallback prompt"}]}}` + "\n" +
+		`{"type":"session_info","name":null}`
+	if err := os.MkdirAll(sessionsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte(content)
+	if err := os.WriteFile(path, original, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	beforeTranscript, err := GetPiSessionTranscript(cwd, "fallback-id")
+	if err != nil {
+		t.Fatalf("GetPiSessionTranscript before extraction: %v", err)
+	}
+	if got := extractPiSessionTitle(path); got != "Useful fallback prompt" {
+		t.Fatalf("extractPiSessionTitle() after native clear = %q", got)
+	}
+	afterTranscript, err := GetPiSessionTranscript(cwd, "fallback-id")
+	if err != nil {
+		t.Fatalf("GetPiSessionTranscript after extraction: %v", err)
+	}
+	if !reflect.DeepEqual(afterTranscript, beforeTranscript) {
+		t.Fatalf("title extraction changed transcript output: before=%+v after=%+v", beforeTranscript, afterTranscript)
+	}
+	stored, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(stored, original) {
+		t.Fatal("title extraction changed session-file bytes")
+	}
+}
+
+func TestExtractPiSessionTitleRecoversAfterOversizedRecord(t *testing.T) {
+	cwd, sessionsDir := setupPiTestSessions(t)
+	path := writePiFixture(t, sessionsDir, "oversized.jsonl",
+		piSessionHeader("oversized", cwd),
+		strings.Repeat("x", maxPiTitleRecordBytes+1),
+		`{"type":"session_info","name":"Recovered native name"}`,
+	)
+	if got := extractPiSessionTitle(path); got != "Recovered native name" {
+		t.Fatalf("extractPiSessionTitle() after oversized record = %q", got)
 	}
 }
 
