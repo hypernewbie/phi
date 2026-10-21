@@ -173,6 +173,9 @@ func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
 	if done == nil {
 		return
 	}
+	// Register the owner before the goroutine starts: a same-ID retry
+	// must win over a delayed old exit that is still draining.
+	hub.notePaneOwner(inst)
 	logger := componentLogger().With("pane", inst.ID)
 	go func() {
 		defer close(done)
@@ -200,12 +203,11 @@ func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
 				break
 			}
 		}
-		// Reap process exit status and broadcast exit event
+		// Reap process exit status and run the guarded exit: a stale old
+		// loop after a same-ID retry skips broadcast, close, and hook.
 		<-inst.Pty.Closed
 		code := inst.Pty.ExitCode()
-		payload := []byte(fmt.Sprintf(`{"code":%d}`, code))
-		hub.Broadcast(inst.ID, 0x04, payload)
-		hub.ClosePane(inst.ID)
+		hub.exitPaneForOwner(inst, code)
 	}()
 }
 
@@ -231,6 +233,43 @@ func EncodeSessionTitleControl(paneID, sessionID, title string, revision uint64)
 		return nil
 	}
 	return payload
+}
+
+// enqueueBridgeSnapshot appends the Pi-bridge attach snapshot after the
+// normal attach frames. A full client is closed instead of dropping the
+// frame: the client reconnects and retries the attach, so bridge state is
+// never silently lost to congestion.
+func (h *Hub) enqueueBridgeSnapshot(snapshot pty.PTYInstanceSnapshot, client *Client) bool {
+	if h.bridgeAttach == nil || client == nil {
+		return false
+	}
+	payload := h.bridgeAttach(snapshot)
+	if payload == nil {
+		return false
+	}
+	ph, ok := h.LookupPane(snapshot.ID)
+	if !ok {
+		return false
+	}
+	frame := append([]byte{0x02}, payload...)
+	ph.mu.Lock()
+	defer ph.mu.Unlock()
+	if !ph.clients[client] {
+		return false
+	}
+	// The bridge produced a snapshot for this pane: from here on its
+	// attachments use the close-on-overflow policy.
+	ph.bridgeManaged = true
+	select {
+	case client.Send <- frame:
+		return true
+	default:
+		client.logger().Warn("ws bridge snapshot blocked; closing for reconnect", "pane", snapshot.ID)
+		if client.Ws != nil {
+			_ = client.Ws.Close()
+		}
+		return false
+	}
 }
 
 // enqueuePiTitleSnapshot appends the current Pi title after the normal attach
@@ -299,6 +338,7 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 	// Snapshot manager state only; the asynchronous title service supplies a
 	// later push after any cold file read completes. ATTACH_HEAD remains first.
 	hub.enqueuePiTitleSnapshot(inst.Snapshot(), client)
+	hub.enqueueBridgeSnapshot(inst.Snapshot(), client)
 
 	go client.WritePump()
 

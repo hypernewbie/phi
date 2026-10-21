@@ -1,0 +1,28 @@
+{
+    "name": "@phi/pi-phi",
+    "version": "0.1.0",
+    "private": true,
+    "description": "Phi's maintained Pi integration extension: lifecycle events over local IPC.",
+    "type": "module",
+    "main": "dist/pi-phi-extension.cjs",
+    "scripts": {
+        "typecheck": "tsc -p tsconfig.json",
+        "test": "vitest run -c vitest.config.mts",
+        "test:integration": "vitest run -c vitest.integration.config.mts"
+    },
+    "peerDependencies": {
+        "@earendil-works/pi-coding-agent": ">=1.0.1 <2"
+    },
+    "dependencies": {
+        "@bufbuild/protobuf": "2.14.1",
+        "@grpc/grpc-js": "1.14.6"
+    },
+    "devDependencies": {
+        "@bufbuild/buf": "1.74.0",
+        "@types/node": "catalog:",
+        "esbuild": "0.28.2",
+        "ts-proto": "2.18.0",
+        "typescript": "catalog:",
+        "vitest": "catalog:"
+    }
+}

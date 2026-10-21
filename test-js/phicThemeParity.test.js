@@ -1,10 +1,9 @@
-import { execFileSync } from 'node:child_process';
 import { expect, it } from 'vitest';
+import { execGoTest } from './_go.js';
 import { ACCENT_COLORS } from '../web/theme.js';
 
 it('native Phi client uses canonical web accents and Agy ANSI tokens', () => {
-    const output = execFileSync(
-        'go',
+    const output = execGoTest(
         [
             'test',
             './internal/phic',

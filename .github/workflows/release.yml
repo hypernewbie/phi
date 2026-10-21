@@ -93,8 +93,9 @@ jobs:
 
       - name: Build web assets
         run: |
-          pnpm install --frozen-lockfile --filter phi-dev
+          pnpm install --frozen-lockfile --filter phi-dev --filter @phi/pi-phi
           pnpm run build:web
+          pnpm run check:pi-phi-generated
           go run ./tools/webdist
 
       - name: Download prebuilt darwin phic

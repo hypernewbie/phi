@@ -96,6 +96,13 @@ type Config struct {
 	// default, so a missing key in an existing config file changes nothing.
 	PiOffline bool `json:"pi_offline"`
 
+	// PiBridgeNoInject skips the --extension injection when spawning the
+	// pi coder, for users who install the bridge extension into Pi
+	// manually. The lease and child credentials are still provisioned
+	// (a manual install needs them); only the flag is omitted. Off by
+	// default, so existing configs inject as before.
+	PiBridgeNoInject bool `json:"pi_bridge_no_inject"`
+
 	// OpenCode defaults to v2's full TUI; Mini is a per-launch option.
 	// Legacy selects v1's full-screen TUI. These startup-only options require a
 	// Phi restart; they never change the mode of a live terminal.
@@ -196,7 +203,7 @@ func configFilePath() string {
 			"isolate this test from ~/.phi/config.json — see the doc comment on " +
 			"testConfigPath.")
 	}
-	return expandHome("~/.phi/config.json")
+	return filepath.Join(system.PhiDataDir(), "config.json")
 }
 
 // customBackendsDir returns the directory phi scans for custom
@@ -219,7 +226,7 @@ func customBackendsDir() string {
 			"isolate this test from ~/.phi/backends/ — see the doc comment on " +
 			"testCustomBackendsDir.")
 	}
-	return expandHome("~/.phi/backends/")
+	return filepath.Join(system.PhiDataDir(), "backends")
 }
 
 // overrideDisplayName returns the hostname_override label for identity

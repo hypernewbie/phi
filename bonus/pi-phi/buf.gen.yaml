@@ -1,0 +1,27 @@
+# Generation inputs: bonus/pi-phi/proto/bridge.proto only.
+# Plugin binaries come from PATH, provided by scripts/pi-phi-generate.mjs:
+#   - protoc-gen-go / protoc-gen-go-grpc built from the pinned Go modules
+#     in the repository go.mod
+#   - protoc-gen-ts_proto from this package's pinned node_modules
+# Run through scripts/pi-phi-generate.mjs; do not invoke buf directly.
+version: v2
+inputs:
+  - directory: proto
+plugins:
+  - local: protoc-gen-go
+    out: ../../internal/pibridge/pb
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: ../../internal/pibridge/pb
+    opt: paths=source_relative
+  - local: protoc-gen-ts_proto
+    out: src/gen
+    opt:
+      - paths=source_relative
+      - outputServices=grpc-js
+      - env=node
+      - esModuleInterop=true
+      - importSuffix=.js
+      - oneof=unions-value
+      - forceLong=bigint
+      - outputJsonMethods=false

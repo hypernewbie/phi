@@ -186,6 +186,48 @@ jobs:
           pnpm --filter phi-desktop-electron exec vitest run \
             --exclude test/smoke.test.ts
 
+  test-pi-phi:
+    name: Pi-Phi Bridge (gen + drift + tests)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v5
+
+      # The integration suite builds the Go testserver fixture.
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install Bridge Dependencies
+        run: pnpm install --frozen-lockfile --filter @phi/pi-phi
+
+      # Regenerates the Protobuf bindings and rebuilds the runtime,
+      # then requires the committed canonical assets to match byte for
+      # byte. The packaged host checks stay a local gate: they install
+      # pinned Pi CLIs into isolated homes.
+      - name: Verify Generated and Bundle Drift
+        run: pnpm run check:pi-phi-generated
+
+      - name: Type Check Bridge
+        run: pnpm --filter @phi/pi-phi run typecheck
+
+      - name: Unit Test Bridge
+        run: pnpm --filter @phi/pi-phi run test
+
+      - name: Cross-Language IPC Integration
+        run: pnpm run test:pi-phi:integration
+
   test-e2e:
     name: Playwright Chromium E2E
     runs-on: ubuntu-latest

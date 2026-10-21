@@ -39,10 +39,29 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg Co
 	if id == "" {
 		c, id = coders.FreshSession(c)
 	}
-	plan, err := coders.ResolveLaunch(c, coders.SpawnRequest{Coder: req.Coder, Cwd: req.Cwd, SessionID: req.SessionID, ExtraArgs: req.ExtraArgs}, coders.LaunchOptions{
+	// Bridge provisioning precedes launch resolution so credentials and
+	// extension args enter the plan. The pane ID is fixed up front for
+	// managed coders; SpawnWithOptions adopts an explicit opts.ID.
+	var bridgeEnv map[string]string
+	var bridgeExtArgs []string
+	if piBridgeForCoder(c.ID) {
+		if opts.ID == "" {
+			opts.ID = pty.GenerateID()
+		}
+		var managed bool
+		bridgeEnv, bridgeExtArgs, managed = piBridge.Provision(opts.ID, !cfg.PiBridgeNoInject)
+		_ = managed // recorded; the launch proceeds on either path
+	}
+	revokeBridge := func() {
+		if piBridgeForCoder(c.ID) && opts.ID != "" {
+			piBridge.RevokePane(opts.ID)
+		}
+	}
+	plan, err := coders.ResolveLaunch(c, coders.SpawnRequest{Coder: req.Coder, Cwd: req.Cwd, SessionID: req.SessionID, ExtraArgs: req.ExtraArgs, ExtensionArgs: bridgeExtArgs}, coders.LaunchOptions{
 		Config: coders.ConfigView{PiOffline: cfg.PiOffline, ClaudeDangerouslySkipPermissions: cfg.ClaudeDangerouslySkipPermissions}, DefaultCwd: activeCWD,
 	})
 	if err != nil {
+		revokeBridge()
 		return bad(err)
 	}
 	opts.Title, opts.Workspace, opts.OpenCodeMode = req.Title, req.Workspace, c.OpenCodeMode
@@ -61,10 +80,12 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg Co
 			nativeObserver(data)
 		}
 	}
-	inst, err = ptyManager.SpawnWithOptions(ctx, plan.Cwd, plan.Command, plan.Args, c.ID, id, opts, plan.Env)
+	inst, err = ptyManager.SpawnWithOptions(ctx, plan.Cwd, plan.Command, plan.Args, c.ID, id, opts, plan.Env, bridgeEnv)
 	if err != nil {
+		revokeBridge()
 		return nil, terminalLaunchError{http.StatusInternalServerError, err}
 	}
+	piBridge.Complete(inst)
 	if piTitleService != nil {
 		piTitleService.Register(inst)
 	}
@@ -81,10 +102,12 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg Co
 		case <-firstOutput:
 		case <-inst.Pty.Closed:
 			_ = ptyManager.Kill(inst.ID)
+			revokeBridge() // synchronous: the restore retry reuses this tab ID
 			return nil, fmt.Errorf("backend exited before restoration (code %d)", inst.Pty.ExitCode())
 		case <-ctx.Done():
 			if inst.IsPtyDead() {
 				_ = ptyManager.Kill(inst.ID)
+				revokeBridge()
 				return nil, ctx.Err()
 			}
 			return inst, nil // a valid silent custom backend
@@ -94,11 +117,13 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg Co
 		case <-inst.Pty.Closed:
 			timer.Stop()
 			_ = ptyManager.Kill(inst.ID)
+			revokeBridge()
 			return nil, fmt.Errorf("backend exited during restoration (code %d)", inst.Pty.ExitCode())
 		case <-timer.C:
 		case <-ctx.Done():
 			timer.Stop()
 			_ = ptyManager.Kill(inst.ID)
+			revokeBridge()
 			return nil, ctx.Err()
 		}
 	}

@@ -30,11 +30,7 @@ func tabsFilePath() string {
 	if testTabsPath != "" {
 		return testTabsPath
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "tabs.json"
-	}
-	return filepath.Join(home, ".phi", "tabs.json")
+	return filepath.Join(system.PhiDataDir(), "tabs.json")
 }
 
 // saveTimer debounces phi_tabs.json writes (plan §3.3: "debounced 500ms").

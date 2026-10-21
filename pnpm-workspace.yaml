@@ -1,4 +1,5 @@
 packages:
+  - bonus/pi-phi
   - desktop/electron
   - desktop/pet
 

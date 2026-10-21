@@ -68,10 +68,7 @@ type Checker struct {
 // cachePath to use the default ~/.phi/phi_update.json.
 func NewChecker(currentVersion, installMethod string) *Checker {
 	cachePath := ""
-	home, err := os.UserHomeDir()
-	if err == nil {
-		cachePath = filepath.Join(home, ".phi", stateFileName)
-	}
+	cachePath = filepath.Join(system.PhiDataDir(), stateFileName)
 	return &Checker{
 		current:    currentVersion,
 		install:    installMethod,

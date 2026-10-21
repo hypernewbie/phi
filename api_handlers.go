@@ -397,12 +397,18 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 			pty.PTYInstanceSnapshot
 			ActiveWS      bool
 			ActiveWSCount int
+			PiBridge      *BridgePaneState `json:"pi_bridge,omitempty"`
 		}
 		views := make([]terminalView, 0, len(instances))
 		for _, inst := range instances {
 			snapshot := inst.Snapshot()
 			snapshot.OpenCodeMode = terminalOpenCodeMode(inst)
-			views = append(views, terminalView{snapshot, snapshot.ActiveWS, snapshot.ActiveWSCount})
+			view := terminalView{PTYInstanceSnapshot: snapshot, ActiveWS: snapshot.ActiveWS, ActiveWSCount: snapshot.ActiveWSCount}
+			if piBridgeForCoder(snapshot.Coder) {
+				state := piBridge.PaneSnapshot(snapshot.ID)
+				view.PiBridge = &state
+			}
+			views = append(views, view)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(views)
@@ -446,9 +452,12 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				w.Header().Set("Content-Type", "application/json")
-				payload := map[string]string{"pane_id": snapshot.ID, "session_id": snapshot.SessionID}
+				payload := map[string]any{"pane_id": snapshot.ID, "session_id": snapshot.SessionID}
 				if mode != "" {
 					payload["opencode_mode"] = mode
+				}
+				if piBridgeForCoder(snapshot.Coder) {
+					payload["pi_bridge"] = piBridge.PaneSnapshot(snapshot.ID)
 				}
 				_ = json.NewEncoder(w).Encode(payload)
 				return
@@ -478,9 +487,12 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	payload := map[string]string{"pane_id": inst.ID, "session_id": inst.Snapshot().SessionID}
+	payload := map[string]any{"pane_id": inst.ID, "session_id": inst.Snapshot().SessionID}
 	if c.OpenCodeMode != "" {
 		payload["opencode_mode"] = c.OpenCodeMode
+	}
+	if piBridgeForCoder(inst.Coder) {
+		payload["pi_bridge"] = piBridge.PaneSnapshot(inst.ID)
 	}
 	_ = json.NewEncoder(w).Encode(payload)
 }

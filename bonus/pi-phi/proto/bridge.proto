@@ -1,0 +1,163 @@
+// Canonical Phi ↔ Pi bridge contract.
+//
+// One service, one bidirectional stream per provisioned Pi runtime.
+// Phi owns the server on a local IPC listener (Unix-domain socket or
+// Windows named pipe). Pi's bundled extension is the only client.
+//
+// Compatibility rules: field numbers are stable; removed numbers and names
+// must be reserved; new fields must be optional-compatible. Unknown fields
+// are accepted and ignored by both peers, but a missing oneof payload is a
+// protocol error. See PROTOCOL.md for bounds and status mappings.
+syntax = "proto3";
+
+package phi.pi.v1;
+
+option go_package = "github.com/hypernewbie/phi/internal/pibridge/pb;pibridgepb";
+
+// Connect is the only RPC. Pi initiates one long-lived stream per runtime.
+service Integration {
+  rpc Connect(stream PiToPhi) returns (stream PhiToPi);
+}
+
+// ---------------------------------------------------------------------------
+// Envelopes
+// ---------------------------------------------------------------------------
+
+// Envelope for every Pi → Phi message. The identity fields are repeated on
+// each message so a single frame is self-describing after a reconnect.
+message PiToPhi {
+  string pane_id = 1;
+  string process_id = 2;
+  uint64 runtime_generation = 3;
+  reserved 14, 15, 16;
+  reserved "summary_result", "command_error", "cancel_acknowledged";
+  oneof payload {
+    Hello hello = 10;
+    AgentStarted agent_started = 11;
+    AgentSettled agent_settled = 12;
+    StateSnapshot state_snapshot = 13;
+  }
+}
+
+// Envelope for every Phi → Pi message.
+message PhiToPi {
+  string pane_id = 1;
+  string process_id = 2;
+  uint64 runtime_generation = 3;
+  reserved 11, 12;
+  reserved "summarize", "cancel";
+  oneof payload {
+    Accepted accepted = 10;
+    ProtocolError protocol_error = 13;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Handshake
+// ---------------------------------------------------------------------------
+
+// Hello is the first application message on every stream. Protocol version,
+// identities, capabilities, and the replay range of the retained journal.
+message Hello {
+  uint32 protocol_version = 1;
+  reserved 2, 3;
+  reserved "package_version", "host_version";
+  string session_id = 4;
+  string runtime_id = 5;
+  repeated string capabilities = 6;
+  StateSnapshot current_state = 7;
+  uint64 journal_first_sequence = 8;
+  uint64 journal_last_sequence = 9;
+}
+
+// Accepted confirms the negotiated version, the accepted capability set, and
+// the runtime identity Phi bound to this generation.
+message Accepted {
+  uint32 protocol_version = 1;
+  repeated string capabilities = 2;
+  uint64 runtime_generation = 3;
+  string runtime_id = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle
+// ---------------------------------------------------------------------------
+
+// Logical run outcome at settlement. UNSPECIFIED means explicitly unknown:
+// never guess success or cancellation from absent evidence.
+enum RunOutcome {
+  RUN_OUTCOME_UNSPECIFIED = 0;
+  RUN_OUTCOME_COMPLETED = 1;
+  RUN_OUTCOME_ERROR = 2;
+  RUN_OUTCOME_ABORTED = 3;
+}
+
+// Logical agent state. RUNNING covers every low-level start before the
+// matching settlement; IDLE is the settled baseline.
+enum LogicalState {
+  LOGICAL_STATE_UNSPECIFIED = 0;
+  LOGICAL_STATE_IDLE = 1;
+  LOGICAL_STATE_RUNNING = 2;
+}
+
+// AgentStarted opens or continues a logical run. A second start before
+// settlement belongs to the same run (retry, queued continuation, recovery).
+message AgentStarted {
+  uint64 event_sequence = 1;
+  uint64 run_id = 2;
+}
+
+// AgentSettled closes the logical run. Neither turn_end nor agent_end is a
+// settlement; only this message is the ready-for-input boundary.
+message AgentSettled {
+  uint64 event_sequence = 1;
+  uint64 run_id = 2;
+  RunOutcome outcome = 3;
+}
+
+// One retained lifecycle edge for replay. event_sequence values are
+// monotonic within a runtime and never reused.
+message LifecycleRecord {
+  uint64 event_sequence = 1;
+  uint64 run_id = 2;
+  bool settled = 3;
+  RunOutcome outcome = 4;
+}
+
+// Active model identity for lifecycle snapshots.
+message ModelSnapshot {
+  string provider = 1;
+  string model = 2;
+}
+
+// Authoritative current state, sent on attach, reconnect, and transitions.
+message StateSnapshot {
+  LogicalState state = 1;
+  string session_id = 2;
+  string leaf_id = 3;
+  ModelSnapshot model = 4;
+  repeated LifecycleRecord journal = 5;
+  bool journal_gap = 6;
+  uint64 state_revision = 7;
+  reserved 8;
+  reserved "outstanding_summaries";
+}
+
+// ---------------------------------------------------------------------------
+// Protocol failures
+// ---------------------------------------------------------------------------
+
+enum ProtocolErrorCode {
+  PROTOCOL_ERROR_UNSPECIFIED = 0;
+  PROTOCOL_ERROR_UNSUPPORTED_VERSION = 1;
+  PROTOCOL_ERROR_BAD_IDENTITY = 2;
+  PROTOCOL_ERROR_DUPLICATE_RUNTIME = 3;
+  PROTOCOL_ERROR_STALE_GENERATION = 4;
+  PROTOCOL_ERROR_BAD_PAYLOAD = 5;
+}
+
+// Terminal protocol-level rejection. Ends the stream attempt.
+message ProtocolError {
+  ProtocolErrorCode code = 1;
+  string safe_message = 2;
+}

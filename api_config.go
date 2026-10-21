@@ -29,6 +29,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		"use_hidden_terminal":                 cfg.UseHiddenTerminal,
 		"fast_mode":                           cfg.FastMode,
 		"pi_offline":                          cfg.PiOffline,
+		"pi_bridge_no_inject":                 cfg.PiBridgeNoInject,
 		"opencode_legacy":                     cfg.OpenCodeLegacy,
 		"claude_dangerously_skip_permissions": cfg.ClaudeDangerouslySkipPermissions,
 		"agy_theme_ansi":                      cfg.AgyThemeAnsi,
@@ -564,6 +565,31 @@ func handlePiOffline(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": cfg.PiOffline})
+}
+
+// handlePiBridgeNoInject toggles whether phi omits --extension when
+// spawning the pi coder, for manual bridge installs. Same shape as
+// handlePiOffline: takes effect on the next spawn.
+func handlePiBridgeNoInject(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	cfg := loadConfig()
+	cfg.PiBridgeNoInject = req.Enabled
+	saveConfig(cfg)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": cfg.PiBridgeNoInject})
 }
 
 // handleClaudeDangerouslySkipPermissions toggles whether the claude coder
