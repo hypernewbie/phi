@@ -776,6 +776,31 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             }
         });
 
+    const piBridgeNoInjectRow = _buildCheckboxRow(
+        'Skip Phi bridge injection for pi (manual install, new tabs only)',
+        'settings-pi-bridge-no-inject',
+        !!app.config?.pi_bridge_no_inject,
+    );
+    behGroup.appendChild(piBridgeNoInjectRow);
+    piBridgeNoInjectRow
+        .querySelector('input')
+        ?.addEventListener('change', async (e) => {
+            const enabled = !!e.target.checked;
+            if (app.config) app.config.pi_bridge_no_inject = enabled;
+            try {
+                await fetch('/api/config/pi-bridge-no-inject', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled }),
+                });
+            } catch (err) {
+                console.warn(
+                    '[settings] failed to persist pi-bridge-no-inject toggle',
+                    err,
+                );
+            }
+        });
+
     const claudeSkipPermsRow = _buildCheckboxRow(
         'Start Claude with --dangerously-skip-permissions (new tabs only)',
         'settings-claude-skip-permissions',

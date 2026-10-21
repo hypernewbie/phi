@@ -62,7 +62,7 @@ type AgyMeta = SessionMeta
 var agyMu sync.Mutex
 
 func getMetaFilePath() string {
-	return expandHome("~/.phi/sessions.json")
+	return filepath.Join(system.PhiDataDir(), "sessions.json")
 }
 
 func LoadSessionMetaMap() (map[string]SessionMeta, error) {

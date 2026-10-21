@@ -32,11 +32,7 @@ func syncFilePath() string {
 	if testSyncPath != "" {
 		return testSyncPath
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "syncboard.json"
-	}
-	return filepath.Join(home, ".phi", "syncboard.json")
+	return filepath.Join(system.PhiDataDir(), "syncboard.json")
 }
 
 func TriggerSaveSyncStore() {

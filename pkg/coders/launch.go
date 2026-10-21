@@ -48,6 +48,11 @@ type SpawnRequest struct {
 	Cwd       string
 	SessionID string
 	ExtraArgs []string
+	// ExtensionArgs are host-owned flags (such as a Pi --extension path)
+	// inserted before any "--" terminator so the child parses them as
+	// options, never as prompt input. Inserted before platform wrapping
+	// so quoting applies uniformly.
+	ExtensionArgs []string
 }
 
 // LaunchOptions carries the cross-cutting inputs the resolver needs:
@@ -134,6 +139,11 @@ func ResolveLaunch(c Coder, req SpawnRequest, opts LaunchOptions) (LaunchPlan, e
 		args = append(args, req.ExtraArgs...)
 	}
 
+	// 4b. Host-owned extension flags before any "--" terminator.
+	if len(req.ExtensionArgs) > 0 {
+		args = insertBeforeTerminator(args, req.ExtensionArgs)
+	}
+
 	// 5. Command resolution.
 	command := c.Command
 
@@ -171,6 +181,25 @@ func ResolveLaunch(c Coder, req SpawnRequest, opts LaunchOptions) (LaunchPlan, e
 		Cwd:     cwd,
 		Env:     env,
 	}, nil
+}
+
+// insertBeforeTerminator splices owned flags ahead of the first "--"
+// argv entry so option parsers consume them. Without a terminator the
+// flags append. The input slice is never mutated.
+func insertBeforeTerminator(args, owned []string) []string {
+	out := make([]string, 0, len(args)+len(owned))
+	inserted := false
+	for _, a := range args {
+		if !inserted && a == "--" {
+			out = append(out, owned...)
+			inserted = true
+		}
+		out = append(out, a)
+	}
+	if !inserted {
+		out = append(out, owned...)
+	}
+	return out
 }
 
 // resolveWindowsCommand applies the platform-specific wrapping. On

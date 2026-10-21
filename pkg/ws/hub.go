@@ -15,6 +15,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/hypernewbie/phi/internal/termstate"
+	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
@@ -88,6 +89,12 @@ type PaneHub struct {
 	recording    *coldRecording
 	recordingErr error
 
+	// bridgeManaged marks a pane with an active Pi bridge. Its
+	// attachments use the close-on-overflow policy: a full send queue
+	// closes the socket instead of evicting queued frames, so a queued
+	// bridge control is never silently dropped.
+	bridgeManaged bool
+
 	// epoch changes identity: a fresh random value per pane creation, so
 	// stale clients/caches cannot mix output from a previous PTY lifetime
 	// under the same pane id.
@@ -122,13 +129,46 @@ type Hub struct {
 	replayBufferBytes  int
 	recordingDirectory string
 	archives           map[string]*PaneHub
+
+	// bridgeAttach encodes an optional Pi-bridge snapshot control frame
+	// for an attaching client. bridgeExit observes pane death with the
+	// exit code. Both are set once before serving; nil disables them.
+	bridgeAttach func(snapshot pty.PTYInstanceSnapshot) []byte
+	onPaneExit   func(inst *pty.PTYInstance, code int)
+	// paneOwners tracks the current read-loop owner per pane ID. A restore
+	// retry reuses the same ID with a new instance pointer; the delayed old
+	// exit must not broadcast, close, or notify for the replacement.
+	paneOwners map[string]*pty.PTYInstance
 }
 
 func NewHub(replayBufferBytes int) *Hub {
 	return &Hub{
 		panes:             make(map[string]*PaneHub),
 		archives:          make(map[string]*PaneHub),
+		paneOwners:        make(map[string]*pty.PTYInstance),
 		replayBufferBytes: replayBufferBytes,
+	}
+}
+
+// SetBridgeAttach registers the Pi-bridge attach snapshot encoder.
+// HandleWS sends one encoded frame per attach; nil payload sends nothing.
+// Set once before serving.
+func (h *Hub) SetBridgeAttach(fn func(snapshot pty.PTYInstanceSnapshot) []byte) {
+	h.bridgeAttach = fn
+}
+
+// SetOnPaneExit registers the pane-death observer fired from the PTY
+// read loop after the exit broadcast. The exiting instance identifies the
+// lease owner, so a delayed old exit cannot revoke a replacement lease
+// that reused the pane ID. Set once before serving.
+func (h *Hub) SetOnPaneExit(fn func(inst *pty.PTYInstance, code int)) {
+	h.onPaneExit = fn
+}
+
+// notifyPaneExit fires the registered pane-death observer, if any.
+func (h *Hub) notifyPaneExit(inst *pty.PTYInstance, code int) {
+	if h.onPaneExit != nil {
+		h.onPaneExit(inst, code)
 	}
 }
 
@@ -641,6 +681,12 @@ func (h *Hub) CloseAllClients() {
 func (h *Hub) ClosePane(paneID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.closePaneLocked(paneID)
+}
+
+// closePaneLocked is shared by explicit close and the owner-guarded exit.
+// The caller holds h.mu.
+func (h *Hub) closePaneLocked(paneID string) {
 	if ph := h.panes[paneID]; ph != nil {
 		ph.mu.Lock()
 		for client := range ph.clients {
@@ -662,6 +708,70 @@ func (h *Hub) ClosePane(paneID string) {
 	}
 	delete(h.panes, paneID)
 	log.Printf("[ws] Closed pane %s; cold recording retained", paneID)
+}
+
+// notePaneOwner records the current read-loop owner for a pane ID.
+// StartPTYReadLoop calls this synchronously before its goroutine starts,
+// so a replacement owner is visible before any new attach or ingest.
+func (h *Hub) notePaneOwner(inst *pty.PTYInstance) {
+	if h == nil || inst == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.paneOwners == nil {
+		h.paneOwners = make(map[string]*pty.PTYInstance)
+	}
+	h.paneOwners[inst.ID] = inst
+}
+
+// exitPaneForOwner runs the full PTY exit cleanup (exit broadcast, pane
+// close, exit hook) only when inst still owns its pane ID. A delayed old
+// read loop after a same-ID retry returns false without touching the
+// replacement's clients, history, or lease hook. The owner check,
+// broadcast, and close hold h.mu so a concurrent replacement cannot
+// interleave new attach/ingest between the check and the close.
+func (h *Hub) exitPaneForOwner(inst *pty.PTYInstance, code int) bool {
+	if h == nil || inst == nil {
+		return false
+	}
+	h.mu.Lock()
+	if h.paneOwners[inst.ID] != inst {
+		h.mu.Unlock()
+		return false
+	}
+	delete(h.paneOwners, inst.ID)
+	if ph := h.panes[inst.ID]; ph != nil {
+		payload := []byte(fmt.Sprintf(`{"code":%d}`, code))
+		msg := make([]byte, len(payload)+1)
+		msg[0] = 0x04
+		copy(msg[1:], payload)
+		ph.mu.Lock()
+		for client := range ph.clients {
+			h.deliverPaneFrame(ph, client, msg)
+		}
+		ph.mu.Unlock()
+	}
+	h.closePaneLocked(inst.ID)
+	h.mu.Unlock()
+	h.notifyPaneExit(inst, code)
+	return true
+}
+
+// deliverOrClose pushes msg to a bridge-managed attachment. A full send
+// queue closes the socket instead of evicting queued frames: the client
+// reconnects and the attach snapshot replays the latest bridge state, so
+// a queued control frame survives the congestion.
+func (h *Hub) deliverOrClose(client *Client, msg []byte) {
+	select {
+	case client.Send <- msg:
+		client.FullSince = time.Time{}
+	default:
+		client.logger().Warn("ws send queue full; closing for reconnect")
+		if client.Ws != nil {
+			_ = client.Ws.Close()
+		}
+	}
 }
 
 // deliverOrDrop pushes msg to client's Send channel. If the channel is
@@ -805,17 +915,28 @@ func (h *Hub) Ingest(paneID string, payload []byte) error {
 				binary.BigEndian.PutUint64(hotMsg[1:9], start)
 				copy(hotMsg[9:], payload)
 			}
-			h.deliverOrDrop(client, hotMsg)
+			h.deliverPaneFrame(ph, client, hotMsg)
 		} else {
 			if legacyMsg == nil {
 				legacyMsg = make([]byte, len(payload)+1)
 				legacyMsg[0] = 0x01
 				copy(legacyMsg[1:], payload)
 			}
-			h.deliverOrDrop(client, legacyMsg)
+			h.deliverPaneFrame(ph, client, legacyMsg)
 		}
 	}
 	return nil
+}
+
+// deliverPaneFrame pushes one frame to a client of ph. Bridge-managed
+// panes close a full client instead of evicting queued frames, so PTY
+// output cannot drop an already queued bridge control.
+func (h *Hub) deliverPaneFrame(ph *PaneHub, client *Client, msg []byte) {
+	if ph.bridgeManaged {
+		h.deliverOrClose(client, msg)
+		return
+	}
+	h.deliverOrDrop(client, msg)
 }
 
 func (h *Hub) Broadcast(paneID string, msgType byte, payload []byte) {
@@ -835,7 +956,33 @@ func (h *Hub) Broadcast(paneID string, msgType byte, payload []byte) {
 	defer ph.mu.Unlock()
 
 	for client := range ph.clients {
-		h.deliverOrDrop(client, msg)
+		h.deliverPaneFrame(ph, client, msg)
+	}
+}
+
+// BroadcastBridge pushes one Pi-bridge control frame (0x02) to every
+// client of a pane. Unlike Broadcast, a full client is closed instead
+// of evicting queued frames: the client reconnects and the bridge
+// attach snapshot replays the latest settlement, so a qualifying
+// observed settlement is never silently lost to congestion.
+func (h *Hub) BroadcastBridge(paneID string, payload []byte) {
+	h.mu.RLock()
+	ph, exists := h.panes[paneID]
+	h.mu.RUnlock()
+
+	if !exists {
+		return
+	}
+
+	msg := make([]byte, len(payload)+1)
+	msg[0] = 0x02
+	copy(msg[1:], payload)
+
+	ph.mu.Lock()
+	defer ph.mu.Unlock()
+
+	for client := range ph.clients {
+		h.deliverOrClose(client, msg)
 	}
 }
 

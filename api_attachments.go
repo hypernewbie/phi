@@ -17,16 +17,9 @@ import (
 )
 
 // attachmentDir is the on-disk destination for dropped files and clipboard
-// images. Resolved through a helper so tests can override HOME and not
-// litter the developer's real ~/.phi/clipboard/ directory.
+// images. Resolved through a helper so tests can isolate Phi-owned files.
 func attachmentDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		// Fall back to a relative path; never panic — write attempts will
-		// fail with a clear error.
-		return filepath.Join(".phi", "clipboard")
-	}
-	return filepath.Join(home, ".phi", "clipboard")
+	return filepath.Join(system.PhiDataDir(), "clipboard")
 }
 
 // attachmentMaxBytes is the per-file size cap. Enforced via http.MaxBytesReader

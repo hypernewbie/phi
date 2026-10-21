@@ -1163,6 +1163,10 @@ export class TabManager {
                         ? ['', null, openCodePaneMode(t.opencode_mode)]
                         : []),
                 );
+                if (t.pi_bridge !== undefined) {
+                    const tab = this.tabs.get(t.id);
+                    if (tab) tab.piBridge = t.pi_bridge;
+                }
             }
             // Apply the user's drag-reorder (if any) from localStorage. Stale
             // paneIds (closed tabs, or IDs that changed during a session
@@ -7350,6 +7354,10 @@ export class TabManager {
         if (!control) return;
         if (control.type === 'session-title') {
             this._acceptPiSessionTitle(tabInfo, control, socket);
+        } else if (control.type === 'pi-bridge-state') {
+            this._acceptPiBridgeState(tabInfo, control);
+        } else if (control.type === 'pi-bridge-settled') {
+            this._acceptPiBridgeSettled(tabInfo, control);
         } else if (control.type === 'pty-exited') {
             tabInfo.exitCode = control.code;
             tabInfo.isDead = true;
@@ -7391,6 +7399,161 @@ export class TabManager {
                 this.app.syncManager.onSyncChanged(control);
             }
         }
+    }
+
+    // _acceptPiBridgeState records the per-pane bridge view. The first
+    // sight of a retained run establishes a silent baseline (a new browser
+    // never bells for history); only a newer run after a baseline rings a
+    // catch-up bell. Aborted runs never ring.
+    _acceptPiBridgeState(tabInfo, control) {
+        if (!tabInfo || tabInfo.coder !== 'pi') return;
+        tabInfo.piBridge = {
+            state: control.state || 'plain',
+            ...(control.reason ? { reason: control.reason } : {}),
+            ...(control.generation ? { generation: control.generation } : {}),
+            ...(control.last_run ? { last_run: control.last_run } : {}),
+            ...(control.last_outcome
+                ? { last_outcome: control.last_outcome }
+                : {}),
+            ...(control.running === 'true'
+                ? { running: true }
+                : control.running === 'false'
+                  ? { running: false }
+                  : {}),
+            ...(control.model ? { model: control.model } : {}),
+            ...(control.capabilities
+                ? {
+                      capabilities: control.capabilities
+                          .split(',')
+                          .filter(Boolean),
+                  }
+                : {}),
+        };
+        // running/last_run only arrive post-hello, so their first
+        // sight proves the bridge is live (not merely provisioned).
+        if (control.running !== undefined || control.last_run) {
+            tabInfo._piBridgeLive = true;
+        }
+        // Live state with no retained run establishes a zero baseline:
+        // the tab was already observing, so a later reconnect snapshot
+        // with run 1 must ring instead of silently baselining.
+        if (
+            !control.last_run &&
+            control.running !== undefined &&
+            !this._piBridgeHasBaseline(tabInfo)
+        ) {
+            tabInfo._piBridgeLastRun = '0';
+            if (
+                typeof control.generation === 'string' &&
+                /^\d+$/.test(control.generation)
+            ) {
+                tabInfo._piBridgeGeneration = control.generation;
+            }
+        }
+        if (
+            control.last_run &&
+            this._piBridgeRunIsNew(
+                tabInfo,
+                control.last_run,
+                control.generation,
+            )
+        ) {
+            const hadBaseline = this._piBridgeHasBaseline(tabInfo);
+            tabInfo._piBridgeLastRun = control.last_run;
+            if (
+                typeof control.generation === 'string' &&
+                /^\d+$/.test(control.generation)
+            ) {
+                tabInfo._piBridgeGeneration = control.generation;
+            }
+            if (hadBaseline && control.last_outcome !== 'aborted') {
+                this._ringPiBridgeBell(tabInfo);
+            }
+        }
+    }
+
+    // _acceptPiBridgeSettled rings one bell per observed run. Duplicates
+    // and aborted runs update the high-water mark without ringing.
+    _acceptPiBridgeSettled(tabInfo, control) {
+        if (!tabInfo || tabInfo.coder !== 'pi') return;
+        if (!control.run) return;
+        // Settled frames only arrive post-hello: proof of liveness.
+        tabInfo._piBridgeLive = true;
+        if (
+            !this._piBridgeRunIsNew(
+                tabInfo,
+                control.run,
+                control.generation,
+            )
+        )
+            return;
+        tabInfo._piBridgeLastRun = control.run;
+        if (
+            typeof control.generation === 'string' &&
+            /^\d+$/.test(control.generation)
+        ) {
+            tabInfo._piBridgeGeneration = control.generation;
+        }
+        // A settlement ends the run, whatever the outcome.
+        if (tabInfo.piBridge) tabInfo.piBridge.running = false;
+        if (control.outcome === 'aborted') return;
+        this._ringPiBridgeBell(tabInfo);
+    }
+
+    // Runs and generations are u64 decimal strings; compare numerically,
+    // defensively. Ordering is generation-major: any run in a newer
+    // generation is new, and any run in an older generation is stale.
+    // Frames without a generation fall back to the legacy run-only
+    // comparison.
+    _piBridgeRunIsNew(tabInfo, run, generation) {
+        if (typeof run !== 'string' || !/^\d+$/.test(run)) return false;
+        const seen = tabInfo._piBridgeLastRun;
+        if (typeof seen !== 'string' || !/^\d+$/.test(seen)) return true;
+        const seenGen = tabInfo._piBridgeGeneration;
+        if (
+            typeof generation === 'string' &&
+            /^\d+$/.test(generation) &&
+            typeof seenGen === 'string' &&
+            /^\d+$/.test(seenGen)
+        ) {
+            try {
+                const gen = BigInt(generation);
+                const prev = BigInt(seenGen);
+                if (gen > prev) return true;
+                if (gen < prev) return false;
+            } catch (_e) {
+                // Fall through to the run comparison.
+            }
+        }
+        try {
+            return BigInt(run) > BigInt(seen);
+        } catch (_e) {
+            return run !== seen;
+        }
+    }
+
+    // _piBridgeHasBaseline reports whether this tab has observed bridge
+    // run state before (a high-water mark exists). First sight is always
+    // a silent baseline, never a catch-up bell.
+    _piBridgeHasBaseline(tabInfo) {
+        const seen = tabInfo._piBridgeLastRun;
+        return typeof seen === 'string' && /^\d+$/.test(seen);
+    }
+
+    // _ringPiBridgeBell marks a settled run done and always raises
+    // attention (marker, toast, chime, OS notification), even for the
+    // active visible tab: a settlement is solid bridge signal, and
+    // completion is worth announcing while watching. The idle scan
+    // clears the marker for foreground tabs; the toast and chime stand.
+    _ringPiBridgeBell(tabInfo) {
+        tabInfo.userTaskActive = false;
+        tabInfo.busyStartTime = null;
+        tabInfo.isAttention = true;
+        tabInfo.tabEl?.classList.add('has-attention');
+        this.updateDocumentTitle();
+        // Ready-at-prompt, never a success claim: the outcome may be an
+        // error or explicitly unknown.
+        this.triggerAttentionNotification(tabInfo, true);
     }
 
     // handleServerShutdown is invoked when the WS control stream receives
@@ -7694,6 +7857,11 @@ export class TabManager {
                 if (tabInfo.coder === 'opencode') {
                     tabInfo.opencodeMode = openCodePaneMode(data.opencode_mode);
                 }
+                // A restart provisions a fresh lease; drop bridge state.
+                tabInfo.piBridge = data.pi_bridge;
+                tabInfo._piBridgeLastRun = undefined;
+                tabInfo._piBridgeGeneration = undefined;
+                tabInfo._piBridgeLive = undefined;
 
                 // Update DOM element references to synchronise new IDs
                 tabInfo.tabEl.setAttribute('data-pane-id', data.pane_id);
@@ -10062,8 +10230,22 @@ export class TabManager {
                         isShell(tab.coder) ||
                         tab.coder === 'bash' ||
                         tab.coder === 'pwsh';
+                    // Bridge-managed Pi panes ring only on explicit
+                    // settlements once the bridge is live: solid signal
+                    // replaces the heuristic guess. Managed-but-never-
+                    // connected panes (bridge disabled in Pi, manual
+                    // install missing, Pi crashed pre-hello) keep the
+                    // heuristic as a fallback, so a silent bridge never
+                    // means no signal at all. Unavailable panes likewise.
+                    const isBridgeActive =
+                        tab.piBridge?.state === 'managed' &&
+                        tab._piBridgeLive === true;
 
-                    if (!isActiveAndVisible && !isShellTab) {
+                    if (
+                        !isActiveAndVisible &&
+                        !isShellTab &&
+                        !isBridgeActive
+                    ) {
                         const taskWasRunning =
                             tab.userTaskActive === true ||
                             (tab.userTaskActive === undefined && isLongTask);

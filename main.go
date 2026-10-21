@@ -38,6 +38,7 @@ var (
 	ptyManager     *pty.Manager
 	coderManager   *coders.Manager
 	wsHub          *ws.Hub
+	piBridge       *Bridge
 	mdWatcher      *fswatch.Watcher
 	piTitleService *piTerminalTitleService
 	cpuSampler     = system.NewSampler()
@@ -69,6 +70,7 @@ func main() {
 	portFlag := flag.Int("port", 7070, "Port to run Go web server on")
 	ipFlag := flag.String("ip", "lan", `IP to bind. "lan" (default) binds loopback + every LAN (RFC 1918) + Tailscale (100.64/10) interface on the host. Use 0.0.0.0 to expose on every interface (public internet reachable), or an explicit IP to bind just one address.`)
 	webFlag := flag.String("web", "", "Directory to serve web assets from instead of embedded assets")
+	dataDirFlag := flag.String("data-dir", "", "Absolute directory for Phi state (default ~/.phi); does not change HOME or assistant settings")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	rollbackFlag := flag.Bool("rollback", false, "Roll back to the previously installed binary (undoes the last self-update) and exit")
 	logLevelFlag := flag.String("log-level", "", "Log level: debug|info|warn|error (default: info, or PHI_LOG env var)")
@@ -77,6 +79,14 @@ func main() {
 	// endpoint. obs.Init's body is the only tag-split part (plan §B).
 	otelEndpointFlag := flag.String("otel-endpoint", "", "OTLP/gRPC collector endpoint for OpenTelemetry export (host:port). Only takes effect in a binary built with -tags otel. Falls back to PHI_OTEL_ENDPOINT.")
 	flag.Parse()
+
+	if *dataDirFlag != "" {
+		if !filepath.IsAbs(*dataDirFlag) {
+			fmt.Fprintln(os.Stderr, "--data-dir must be an absolute path")
+			os.Exit(2)
+		}
+		system.SetPhiDataDir(filepath.Clean(*dataDirFlag))
+	}
 
 	initLogging(*logLevelFlag)
 
@@ -196,11 +206,13 @@ func main() {
 	})
 	startOpenCodeIdleWatcher()
 	wsHub = ws.NewHub(*cfg.ReplayBufferBytes)
-	if home, err := os.UserHomeDir(); err == nil {
-		if err := wsHub.SetRecordingDirectory(filepath.Join(home, ".phi", "recordings")); err != nil {
-			slog.Error("terminal recording directory unavailable", "err", err)
-		}
+	if err := wsHub.SetRecordingDirectory(filepath.Join(system.PhiDataDir(), "recordings")); err != nil {
+		slog.Error("terminal recording directory unavailable", "err", err)
 	}
+	// The Pi bridge serves before saved Pi tabs restore so relaunched
+	// panes provision against a live listener. A nil bridge (listener
+	// failure) leaves every launch on the unmanaged path.
+	piBridge = startPiBridge(wsHub)
 	restoreSavedTabs()
 	piTitleService = newPiTerminalTitleService(ptyManager, wsHub)
 	piTitleService.Start()
@@ -306,6 +318,7 @@ func main() {
 	http.HandleFunc("/api/cmd/batch-run", handleRunCommand)
 	http.HandleFunc("/api/config/fast-mode", handleFastMode)
 	http.HandleFunc("/api/config/pi-offline", handlePiOffline)
+	http.HandleFunc("/api/config/pi-bridge-no-inject", handlePiBridgeNoInject)
 	http.HandleFunc("/api/config/claude-dangerously-skip-permissions", handleClaudeDangerouslySkipPermissions)
 	http.HandleFunc("/api/config/agy-theme-ansi", handleAgyThemeAnsi)
 	http.HandleFunc("/api/config/auto-reconnect", handleAutoReconnect)
@@ -421,6 +434,7 @@ func main() {
 				envDuration("PHI_SHUTDOWN_PTY_GRACE", ptyGrace),
 				envDuration("PHI_SHUTDOWN_GRACE", httpGrace),
 			)
+			piBridge.Stop()
 			if err := obsShutdown(context.Background()); err != nil {
 				slog.Error("obs shutdown", "err", err)
 			}
@@ -751,11 +765,7 @@ var (
 )
 
 func promptHistoryPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		home = "."
-	}
-	return filepath.Join(home, ".phi", "prompt_history.json")
+	return filepath.Join(system.PhiDataDir(), "prompt_history.json")
 }
 
 func promptHistoryLazyStore() (*prompt_history.Store, error) {

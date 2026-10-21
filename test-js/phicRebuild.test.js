@@ -1,5 +1,5 @@
-import { execFileSync } from 'node:child_process';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { execGoTest } from './_go.js';
 import {
     Terminal,
     firstDifference,
@@ -9,8 +9,7 @@ import {
 
 let rebuild;
 beforeAll(() => {
-    const output = execFileSync(
-        'go',
+    const output = execGoTest(
         [
             'test',
             './internal/phic',

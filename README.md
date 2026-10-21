@@ -129,6 +129,7 @@ phi --web=/absolute/path/to/phi/web --ip=127.0.0.1
 
 Relative directories resolve from Phi's startup directory. The asset directory does not change the active workspace.
 For another port, add `--port=8080` and open <http://localhost:8080>. No Vite proxy or coordinated `PHI_PORT` values are necessary.
+For a separate test server, add `--data-dir=/absolute/path/to/phi-state`. This moves only Phi's config, tabs, recordings, and other Phi-owned files; `HOME` and Pi's own settings stay unchanged. The flag is not passed to processes launched by Phi.
 Without `--web`, Phi serves embedded assets as before. The binary retains those assets even with disk mode selected.
 Use loopback for development because connected clients can access files in the selected directory.
 
@@ -151,6 +152,7 @@ The hook (`.githooks/pre-commit`) only acts on commits that touch frontend files
 | ----------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | `-port`           | `7070`  | Port for the web server                                                                                                            |
 | `-web`            | `""`    | Serve assets from this directory instead of embedded assets. Relative paths use the startup directory. |
+| `-data-dir`       | `~/.phi` | Absolute directory for Phi-owned state. Does not change `HOME` or assistant settings. |
 | `-ip`             | `lan`   | Bind target. `lan` binds loopback plus every RFC 1918 LAN and Tailscale interface; use `127.0.0.1` for local-only access, `0.0.0.0` for every interface, or an explicit address. |
 | `-log-level`      | `info`  | Log level: `debug`\|`info`\|`warn`\|`error` (or `PHI_LOG` env var). `debug` also enables WS/PTY frame traces and span timing lines. |
 | `-otel-endpoint`  | (none)  | OTLP/gRPC collector endpoint (`host:port`) for OpenTelemetry export (or `PHI_OTEL_ENDPOINT` env var). Only takes effect in a binary built with `-tags otel` — the default build parses and ignores it, adding zero OTel dependencies. |

@@ -10,6 +10,11 @@
   },
   "scripts": {
     "build:web": "tsc -p tsconfig.build.json",
+    "gen:pi-phi": "node scripts/pi-phi-generate.mjs",
+    "build:pi-phi": "node scripts/pi-phi-build.mjs",
+    "check:pi-phi-generated": "node scripts/pi-phi-check-generated.mjs",
+    "test:pi-phi:integration": "node scripts/pi-phi-integration.mjs",
+    "test:pi-phi:hosts": "node scripts/pi-phi-hosts.mjs",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.e2e.json",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -25,7 +30,7 @@
     "format:check": "biome format .",
     "format": "biome format --write .",
     "check:code": "biome ci .",
-    "check": "pnpm typecheck && pnpm lint:web && pnpm check:code && pnpm check:vendors && pnpm test"
+    "check": "pnpm typecheck && pnpm --filter @phi/pi-phi typecheck && pnpm lint:web && pnpm check:code && pnpm check:vendors && pnpm --filter @phi/pi-phi test && pnpm test"
   },
   "devDependencies": {
     "@alenaksu/json-viewer": "catalog:",
