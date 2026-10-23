@@ -206,6 +206,53 @@ func TestStoreCheckpointRules(t *testing.T) {
 	}
 }
 
+func TestAttachHeadDropsCheckpointBelowRetentionFloor(t *testing.T) {
+	h := NewHub(8)
+	if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
+		t.Fatalf("SetRecordingDirectory: %v", err)
+	}
+	h.Ingest("p", []byte("0123456789"))
+	ph, ok := h.LookupPane("p")
+	if !ok {
+		t.Fatal("pane missing")
+	}
+	ph.mu.Lock()
+	epoch := ph.epoch
+	ph.mu.Unlock()
+	if !h.StoreCheckpoint("p", CheckpointUpload{Epoch: epoch, Through: 10, Cols: 80, Rows: 24, Ansi: []byte("snap-old")}) {
+		t.Fatal("valid checkpoint rejected")
+	}
+	// Rotate the retained window well past the stored checkpoint.
+	chunk := bytes.Repeat([]byte("A"), 64<<10)
+	for i := 0; i < 40; i++ {
+		h.Ingest("p", chunk)
+	}
+	ph.mu.Lock()
+	pos := ph.positionLocked()
+	ph.mu.Unlock()
+	if pos.Oldest <= 10 {
+		t.Fatalf("floor did not pass the checkpoint: %+v", pos)
+	}
+	c := &Client{Send: make(chan []byte, 4)}
+	h.AttachHot("p", c)
+	hdr, extra := parseAttachHead(t, drainOne(c.Send))
+	if hdr.Ckpt != nil {
+		t.Fatalf("attach advertised checkpoint %+v below floor %d", hdr.Ckpt, hdr.Oldest)
+	}
+	if hdr.Oldest != pos.Oldest || hdr.Head != pos.Head {
+		t.Fatalf("attach head %+v != position %+v", hdr, pos)
+	}
+	if len(extra) != 0 {
+		t.Fatalf("snapshot bytes %q sent without a checkpoint", extra)
+	}
+	ph.mu.Lock()
+	replayFrom := ph.recording.replayStart()
+	ph.mu.Unlock()
+	if replayFrom != hdr.ReplayFrom {
+		t.Fatalf("ReplayFrom = %d, want %d", hdr.ReplayFrom, replayFrom)
+	}
+}
+
 func TestEpochDiffersPerPane(t *testing.T) {
 	h := NewHub(64)
 	h.Ingest("a", []byte("x"))
@@ -272,7 +319,10 @@ func TestRandomEpochStaysDoubleSafe(t *testing.T) {
 func TestEpochSurvivesWireRoundTripIntoCheckpoint(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		h := NewHub(1024)
-		ph := h.GetOrCreatePaneHub("p")
+		ph, gerr := h.GetOrCreatePaneHub("p")
+		if gerr != nil {
+			t.Fatal(gerr)
+		}
 		// Simulate the JS client exactly: JSON number -> double ->
 		// decimal string -> uint64, as ws.js Number() + fetch URL do.
 		wire, err := json.Marshal(map[string]uint64{"epoch": ph.epoch})

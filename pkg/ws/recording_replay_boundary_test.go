@@ -10,12 +10,13 @@ func TestAttachCertifiesRawTailOnlyForPlainCRLFHistory(t *testing.T) {
 	for _, prefix := range []string{"", "\x1b[31m", "\x1b[?1049h", "\t", "界", "bare LF\n"} {
 		t.Run(prefix, func(t *testing.T) {
 			h := NewHub(8)
+			if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
+				t.Fatal(err)
+			}
 			data := append([]byte(prefix), body...)
 			if err := h.Ingest("p", data); err != nil {
 				t.Fatal(err)
 			}
-			ph, _ := h.LookupPane("p")
-			defer ph.recording.file.Close()
 			c := &Client{Send: make(chan []byte, 8)}
 			h.AttachHot("p", c)
 			header, _ := parseAttachHead(t, drainOne(c.Send))
@@ -31,12 +32,19 @@ func TestAttachCertifiesRawTailOnlyForPlainCRLFHistory(t *testing.T) {
 			if !bytes.Equal(data[header.ReplayFrom-2:header.ReplayFrom], []byte("\r\n")) {
 				t.Fatal("raw tail does not begin after a line reset")
 			}
-			reopened, err := openRecording(ph.recording.path)
-			if err != nil {
+			if err := h.Close(); err != nil {
 				t.Fatal(err)
 			}
-			defer reopened.file.Close()
-			if got := reopened.replayStart(); got != header.ReplayFrom {
+			reopened := NewHub(8)
+			t.Cleanup(func() { _ = reopened.Close() })
+			if err := reopened.SetRecordingDirectory(h.recordingDirectory); err != nil {
+				t.Fatal(err)
+			}
+			cold := reopened.recordingForRead("p")
+			if cold == nil || cold.recording == nil {
+				t.Fatal("restart lost the retained group")
+			}
+			if got := cold.recording.replayStart(); got != header.ReplayFrom {
 				t.Fatalf("restart changed the prefix certificate: %d != %d", got, header.ReplayFrom)
 			}
 		})
@@ -48,16 +56,20 @@ func TestPlainHistoryWithoutEnoughLineResetsCannotSkipItsPrefix(t *testing.T) {
 		bytes.Repeat([]byte("X"), 3*1024*1024),
 		bytes.Repeat([]byte("wide but few rows "), 150000),
 	} {
-		r, err := openRecording("")
+		g, err := openRetentionGroup("")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := r.append(1, data); err != nil {
+		if _, err := g.appendPayload(data, nil); err != nil {
+			g.close()
 			t.Fatal(err)
 		}
-		if from := r.replayStart(); from != 0 {
+		if from := g.replayStart(); from != 0 {
+			g.close()
 			t.Fatalf("unknown starting column was certified: %d", from)
 		}
-		r.file.Close()
+		if err := g.close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

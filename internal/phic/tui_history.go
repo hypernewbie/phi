@@ -68,6 +68,44 @@ func (a *apiClient) terminalState(ctx context.Context, pane string, epoch, throu
 	return header, data, nil
 }
 
+// liveState fetches the current parser snapshot for healing across an
+// evicted prefix. The cursor continues marker filtering on later pages.
+func (a *apiClient) liveState(ctx context.Context, pane string, epoch uint64, kind string) (wireproto.AttachHeadHeader, []byte, error) {
+	var header wireproto.AttachHeadHeader
+	query := url.Values{"epoch": {strconv.FormatUint(epoch, 10)}, "through": {"latest"}, "kind": {kind}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.base.String()+"/api/terminals/"+url.PathEscape(pane)+"/state?"+query.Encode(), nil)
+	if err != nil {
+		return header, nil, err
+	}
+	response, err := a.http.Do(req)
+	if err != nil {
+		return header, nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return header, nil, &apiError{Code: response.StatusCode, Message: response.Status}
+	}
+	bytes, err := io.ReadAll(io.LimitReader(response.Body, (2<<20)+4097))
+	if err != nil {
+		return header, nil, err
+	}
+	if len(bytes) < 4 || len(bytes) > (2<<20)+4096 {
+		return header, nil, errInvalidRecording
+	}
+	length := int(binary.BigEndian.Uint32(bytes))
+	if length > 4096 || length+4 > len(bytes) {
+		return header, nil, errInvalidRecording
+	}
+	if err = json.Unmarshal(bytes[4:4+length], &header); err != nil {
+		return header, nil, err
+	}
+	data := bytes[4+length:]
+	if header.Epoch != epoch || header.Ckpt == nil || header.Ckpt.Kind != kind || header.Ckpt.Through != header.Head || header.Ckpt.Len != len(data) || header.Ckpt.Cols == 0 || header.Ckpt.Rows == 0 || len(header.Ckpt.EventCursor) > 128 {
+		return header, nil, errInvalidRecording
+	}
+	return header, data, nil
+}
+
 func (p *paneActor) requestHistory() {
 	if p.historyPending || p.api == nil {
 		return
@@ -79,18 +117,21 @@ func (p *paneActor) requestHistory() {
 		}
 	}
 	p.mu.Lock()
-	epoch, frontier := p.epoch, p.frontier
+	epoch, frontier, oldest := p.epoch, p.frontier, p.oldest
 	p.mu.Unlock()
 	end := frontier
 	if p.history != nil {
 		end = p.historyThrough
 	}
-	if end == 0 {
+	if end == 0 || end <= oldest {
 		return
 	}
 	from := uint64(0)
 	if end > historyByteStep {
 		from = end - historyByteStep
+	}
+	if from < oldest {
+		from = oldest
 	}
 	p.historyGen++
 	gen := p.historyGen
@@ -104,7 +145,11 @@ func (p *paneActor) requestHistory() {
 		var record wireproto.RecordingHeader
 		var tail []byte
 		if err == nil {
-			record, tail, err = p.api.recording(ctx, p.spec.Key.ID, epoch, from, end)
+			after := ""
+			if header.Ckpt != nil {
+				after = header.Ckpt.EventCursor
+			}
+			record, tail, err = p.api.recording(ctx, p.spec.Key.ID, epoch, from, end, after)
 		}
 		select {
 		case p.histories <- historyResult{epoch: epoch, through: from, gen: gen, header: header, data: data, record: record, tail: tail, err: err}:

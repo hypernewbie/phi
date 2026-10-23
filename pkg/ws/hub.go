@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -86,7 +87,7 @@ type PaneHub struct {
 	clients      map[*Client]bool
 	mu           sync.Mutex
 	Ring         *RingBuffer
-	recording    *coldRecording
+	recording    *retentionGroup
 	recordingErr error
 
 	// bridgeManaged marks a pane with an active Pi bridge. Its
@@ -101,27 +102,24 @@ type PaneHub struct {
 	epoch uint64
 
 	// total is the head output sequence: the count of bytes ever ingested
-	// for this pane. Bytes carry absolute seqs [0, total); oldest retained
-	// is total - retained.
+	// for this pane. Bytes carry absolute seqs [0, total); the retention
+	// group reports the oldest retained byte as its moving floor.
 	total uint64
 
-	// resizes is a bounded FIFO of resize markers ordered by AtSeq.
-	resizes []ResizeMarker
+	// closedAtUnixNano records the wall-clock closure of an archived pane.
+	// Zero means live or unknown; the sweeper never expires those from
+	// memory alone.
+	closedAtUnixNano int64
+
 	// pendingResize blocks output admission until its geometry is durable.
 	pendingResize *ResizeMarker
 
 	// ckpt is the newest accepted client checkpoint, if any.
-	ckpt               *paneCheckpoint
-	state              *termstate.Terminal
-	stateHead          uint64
-	stateErr           error
-	stateAnchors       []stateAnchor
-	stateAnchorBytes   int
-	statePath          string
-	stateAnchorsLoaded bool
+	ckpt      *paneCheckpoint
+	state     *termstate.Terminal
+	stateHead uint64
+	stateErr  error
 }
-
-const maxResizeMarkers = 512
 
 type Hub struct {
 	panes              map[string]*PaneHub
@@ -139,6 +137,19 @@ type Hub struct {
 	// retry reuses the same ID with a new instance pointer; the delayed old
 	// exit must not broadcast, close, or notify for the replacement.
 	paneOwners map[string]*pty.PTYInstance
+
+	// Retention ownership and expiry. clock and savedReservations are
+	// overridable for deterministic tests.
+	clock             func() time.Time
+	savedReservations func() (map[string]bool, error)
+	leaseFile         *os.File
+	leaseHeld         bool
+	sweepDone         chan struct{}
+	sweepWg           sync.WaitGroup
+	sweepStarted      bool
+	importFailed      map[string]importFailure
+	importScans       uint64
+	lastStats         importStats
 }
 
 func NewHub(replayBufferBytes int) *Hub {
@@ -147,6 +158,9 @@ func NewHub(replayBufferBytes int) *Hub {
 		archives:          make(map[string]*PaneHub),
 		paneOwners:        make(map[string]*pty.PTYInstance),
 		replayBufferBytes: replayBufferBytes,
+		clock:             time.Now,
+		savedReservations: defaultSavedReservations,
+		importFailed:      make(map[string]importFailure),
 	}
 }
 
@@ -155,6 +169,21 @@ func NewHub(replayBufferBytes int) *Hub {
 // Set once before serving.
 func (h *Hub) SetBridgeAttach(fn func(snapshot pty.PTYInstanceSnapshot) []byte) {
 	h.bridgeAttach = fn
+}
+
+// wallClock is the retention clock, defaulting to real time for a
+// zero-value hub.
+func (h *Hub) wallClock() time.Time {
+	if h == nil || h.clock == nil {
+		return time.Now()
+	}
+	return h.clock()
+}
+
+func (h *Hub) takeGroupClock(g *retentionGroup) {
+	if g != nil && h != nil && h.clock != nil {
+		g.now = h.clock
+	}
 }
 
 // SetOnPaneExit registers the pane-death observer fired from the PTY
@@ -174,14 +203,73 @@ func (h *Hub) notifyPaneExit(inst *pty.PTYInstance, code int) {
 
 // SetRecordingDirectory enables private persistence for the application's
 // logical pane histories. Call before restoring or spawning any panes.
+// The first new server owns the versioned namespace through a nonblocking
+// file lease; a second server degrades to bounded private ephemeral
+// storage and reports no error. The lease cannot prove that an older
+// binary without leases has stopped; that deployment precondition is
+// documented, not enforced.
 func (h *Hub) SetRecordingDirectory(dir string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.recordingDirectory = dir
+	// Validate before mutating anything: the caller logs setup errors
+	// and keeps serving, so a rejected directory must leave the
+	// previous state (or the disabled zero state) behind, never a
+	// half-configured namespace without a lease.
+	for _, p := range []string{dir, filepath.Join(dir, "v2")} {
+		if fi, err := os.Lstat(p); err != nil {
+			if !os.IsNotExist(err) {
+				return err
+			}
+		} else if !fi.Mode().IsDir() {
+			return fmt.Errorf("retention path is not a directory: %s", p)
+		}
+	}
+	if h.leaseFile != nil {
+		// A repeat call releases first: flock conflicts even with
+		// the same process, so re-locking without release would
+		// demote this hub to ephemeral storage.
+		h.leaseFile.Close()
+		h.leaseFile = nil
+		h.leaseHeld = false
+	}
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	return os.Chmod(dir, 0700)
+	if err := os.Chmod(dir, 0700); err != nil {
+		return err
+	}
+	// Bounded retention groups live in a versioned namespace below the
+	// recording directory. Legacy journals stay untouched beside it.
+	if err := os.MkdirAll(filepath.Join(dir, "v2"), 0700); err != nil {
+		return err
+	}
+	if err := os.Chmod(filepath.Join(dir, "v2"), 0700); err != nil {
+		return err
+	}
+	h.recordingDirectory = dir
+	leasePath := filepath.Join(dir, "v2", "lease")
+	if fi, err := os.Lstat(leasePath); err == nil && !fi.Mode().IsRegular() {
+		// A planted link must never receive the namespace lock: drop the
+		// link itself (never the target) and create a real lease file.
+		if err := os.Remove(leasePath); err != nil {
+			return err
+		}
+	}
+	lease, err := os.OpenFile(leasePath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return err
+	}
+	if err := lockFileNonblocking(lease); err != nil {
+		lease.Close()
+		log.Printf("[ws] recordings namespace owned by another server; running on bounded ephemeral storage: %v", err)
+		h.recordingDirectory = ""
+		h.leaseHeld = false
+		h.leaseFile = nil
+		return nil
+	}
+	h.leaseFile = lease
+	h.leaseHeld = true
+	return nil
 }
 
 func (h *Hub) recordingEnabled() bool {
@@ -195,7 +283,7 @@ func (h *Hub) recordingPath(paneID string) string {
 	if h.recordingDirectory == "" {
 		return ""
 	}
-	return filepath.Join(h.recordingDirectory, fmt.Sprintf("%x.log", sha256.Sum256([]byte(paneID))))
+	return filepath.Join(h.recordingDirectory, "v2", fmt.Sprintf("%x", sha256.Sum256([]byte(paneID))))
 }
 
 func (h *Hub) SetReplayBufferBytes(bytes int) {
@@ -204,7 +292,38 @@ func (h *Hub) SetReplayBufferBytes(bytes int) {
 	h.mu.Unlock()
 }
 
-func (h *Hub) GetOrCreatePaneHub(paneID string) *PaneHub {
+// GetOrCreatePaneHub resolves the live owner for a pane, adopting an
+// eligible legacy journal first. An eligible source the importer cannot
+// adopt fails here: the caller gets no hub and no fresh authority is
+// published over the unreadable history.
+func (h *Hub) GetOrCreatePaneHub(paneID string) (*PaneHub, error) {
+	for {
+		h.mu.Lock()
+		_, exists := h.panes[paneID]
+		needAdopt := false
+		if !exists && h.archives[paneID] == nil {
+			if path := h.recordingPath(paneID); path != "" {
+				if _, err := os.Stat(path); os.IsNotExist(err) {
+					if _, err := os.Stat(h.legacyRecordingPath(paneID)); err == nil {
+						needAdopt = true
+					}
+				}
+			}
+		}
+		h.mu.Unlock()
+		if !needAdopt {
+			break
+		}
+		adopted, err := h.importLegacyGroup(paneID)
+		if err != nil {
+			return nil, err
+		}
+		if !adopted {
+			// Ineligible (or won by a racer): the resolve below
+			// promotes the adoption or creates a fresh pane.
+			break
+		}
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -221,24 +340,27 @@ func (h *Hub) GetOrCreatePaneHub(paneID string) *PaneHub {
 			delete(h.archives, paneID)
 		} else {
 			ph = &PaneHub{clients: make(map[*Client]bool)}
-			path := h.recordingPath(paneID)
-			ph.recording, ph.recordingErr = openRecording(path)
-			if !ph.recording.ephemeral {
-				ph.statePath = path + ".state"
-				ph.stateAnchors, ph.stateAnchorBytes, _ = loadStateAnchors(ph.statePath)
-				ph.stateAnchorsLoaded = true
-			}
+			ph.recording, ph.recordingErr = openRetentionGroup(h.recordingPath(paneID))
 		}
+		h.takeGroupClock(ph.recording)
 		ph.mu.Lock()
 		defer ph.mu.Unlock()
+		ph.closedAtUnixNano = 0
+		if ph.recording != nil && !ph.recording.isClosed() {
+			if err := ph.recording.markOpen(); err != nil {
+				log.Printf("[ws] pane %s: could not record its reopening: %v", paneID, err)
+			}
+		}
 		ph.Ring = ring
 		ph.epoch = randomEpoch()
-		if ph.recording != nil {
+		if ph.recording != nil && !ph.recording.isClosed() {
 			ph.total = ph.recording.head
 			if ring != nil {
-				from := uint64(0)
+				from := ph.recording.floor()
 				if ph.total > uint64(h.replayBufferBytes) {
-					from = ph.total - uint64(h.replayBufferBytes)
+					if back := ph.total - uint64(h.replayBufferBytes); back > from {
+						from = back
+					}
 				}
 				data, _, err := ph.recording.read(from, ph.total)
 				if err == nil {
@@ -248,7 +370,7 @@ func (h *Hub) GetOrCreatePaneHub(paneID string) *PaneHub {
 		}
 		h.panes[paneID] = ph
 	}
-	return ph
+	return ph, nil
 }
 
 func randomEpoch() uint64 {
@@ -284,7 +406,14 @@ func (ph *PaneHub) EpochOf() uint64 {
 }
 
 func (h *Hub) Register(paneID string, client *Client) {
-	ph := h.GetOrCreatePaneHub(paneID)
+	ph, err := h.GetOrCreatePaneHub(paneID)
+	if err != nil {
+		log.Printf("[ws] register pane %s: %v", paneID, err)
+		if client.Ws != nil {
+			_ = client.Ws.Close()
+		}
+		return
+	}
 	ph.mu.Lock()
 	ph.clients[client] = true
 	ph.mu.Unlock()
@@ -298,10 +427,16 @@ type PanePosition struct {
 	Epoch  uint64
 	Oldest uint64
 	Head   uint64
+	// EventCursor is the resize boundary a state response consumed,
+	// empty when the call produced no checkpoint.
+	EventCursor string
 }
 
 // positionLocked reads the pane's seq state under ph.mu.
 func (ph *PaneHub) positionLocked() PanePosition {
+	if ph.recording != nil && !ph.recording.isClosed() {
+		return PanePosition{Epoch: ph.epoch, Oldest: ph.recording.floor(), Head: ph.total}
+	}
 	retained := uint64(0)
 	if ph.Ring != nil {
 		used, _ := ph.Ring.Stats()
@@ -312,9 +447,6 @@ func (ph *PaneHub) positionLocked() PanePosition {
 		retained = ph.total
 	}
 	oldest = ph.total - retained
-	if ph.recording != nil {
-		oldest = 0
-	}
 	return PanePosition{Epoch: ph.epoch, Oldest: oldest, Head: ph.total}
 }
 
@@ -350,7 +482,14 @@ func frameFramedJSON(msgType byte, v any, extra []byte) []byte {
 // startSeq >= Head: the boundary is atomic, no gap, no duplication.
 // Nothing from before Head is pushed — history stays off the live path.
 func (h *Hub) AttachHot(paneID string, client *Client) {
-	ph := h.GetOrCreatePaneHub(paneID)
+	ph, err := h.GetOrCreatePaneHub(paneID)
+	if err != nil {
+		log.Printf("[ws] attach pane %s: %v", paneID, err)
+		if client.Ws != nil {
+			_ = client.Ws.Close()
+		}
+		return
+	}
 	ph.mu.Lock()
 	pos := ph.positionLocked()
 
@@ -396,8 +535,16 @@ func (h *Hub) AttachHot(paneID string, client *Client) {
 			return
 		}
 		hdr.Ckpt = &checkpointJSON{Through: pos.Head, Cols: uint16(cols), Rows: uint16(rows), Len: len(snapshot), Kind: kind}
+		if ph.recording != nil && !ph.recording.isClosed() {
+			if _, _, endOrdinal, rerr := ph.recording.readOrd(pos.Head, pos.Head, 0, false); rerr == nil {
+				hdr.Ckpt.EventCursor = EncodeEventCursor(pos.Epoch, pos.Head, endOrdinal)
+			}
+		}
 		extra = snapshot
-	} else if ph.ckpt != nil && ph.ckpt.Through <= pos.Head {
+	} else if ph.ckpt != nil && ph.ckpt.Through <= pos.Head && ph.ckpt.Through >= pos.Oldest {
+		// A stored checkpoint below the retention floor is unusable: clients
+		// validate checkpoint.through >= oldest and close on the mismatch.
+		// Drop it here so every client sees a consistent head.
 		hdr.Ckpt = &checkpointJSON{
 			Through: ph.ckpt.Through,
 			Cols:    ph.ckpt.Cols,
@@ -406,7 +553,7 @@ func (h *Hub) AttachHot(paneID string, client *Client) {
 		}
 		extra = ph.ckpt.Ansi
 	}
-	if hdr.Ckpt == nil && ph.recording != nil {
+	if hdr.Ckpt == nil && ph.recording != nil && !ph.recording.isClosed() {
 		hdr.ReplayFrom = ph.recording.replayStart()
 	}
 	frame := frameFramedJSON(0x08, hdr, extra)
@@ -425,48 +572,71 @@ func (h *Hub) AttachHot(paneID string, client *Client) {
 // against output for archive replay. Idempotent for consecutive
 // same-size resizes (TUI redraw nudges) to keep the ring small.
 func (ph *PaneHub) appendResizeLocked(marker ResizeMarker) error {
-	if ph.recording == nil {
+	if ph.recording == nil || ph.recording.isClosed() {
 		return fmt.Errorf("recording unavailable for resize")
 	}
 	marker.AtSeq = ph.total
-	var geometry [4]byte
-	binary.BigEndian.PutUint16(geometry[:2], marker.Cols)
-	binary.BigEndian.PutUint16(geometry[2:], marker.Rows)
-	if err := ph.recording.append(2, geometry[:]); err != nil {
+	applied, err := ph.recording.appendResize(marker, ph.snapshotBaseLocked)
+	if err != nil {
 		return err
 	}
-	ph.resizes = append(ph.resizes, marker)
-	if len(ph.resizes) > maxResizeMarkers {
-		ph.resizes = ph.resizes[len(ph.resizes)-maxResizeMarkers:]
+	for _, m := range applied {
+		ph.applyResizeToParserLocked(m)
 	}
 	ph.pendingResize = nil
-	if ph.state != nil {
-		if err := ph.state.Resize(int(marker.Cols), int(marker.Rows)); err != nil {
-			_ = ph.state.Close()
-			ph.state = nil
-			ph.stateHead = 0
-			ph.stateErr = err
-		} else if n := len(ph.stateAnchors); n > 0 && ph.stateAnchors[n-1].through == ph.stateHead {
-			_ = ph.addStateAnchorLocked()
-		}
-	}
 	return nil
+}
+
+func (ph *PaneHub) applyResizeToParserLocked(marker ResizeMarker) {
+	if ph.state == nil {
+		return
+	}
+	if err := ph.state.Resize(int(marker.Cols), int(marker.Rows)); err != nil {
+		_ = ph.state.Close()
+		ph.state = nil
+		ph.stateHead = 0
+		ph.stateErr = err
+	}
+}
+
+// snapshotBaseLocked gzip-compresses the live parser as a zero-scrollback
+// base checkpoint for a rotated-to segment. Any failure yields (nil, nil):
+// the segment commits with an unavailable base and live output continues.
+func (ph *PaneHub) snapshotBaseLocked() ([]byte, error) {
+	if ph.state == nil && ph.stateErr == nil {
+		_ = ph.prepareStateLocked()
+	}
+	if ph.state == nil {
+		return nil, nil
+	}
+	window, err := ph.state.ReadyWindow(0)
+	if err != nil {
+		return nil, nil
+	}
+	gz, err := gzipBase(window)
+	if err != nil {
+		return nil, nil
+	}
+	return gz, nil
 }
 
 func (h *Hub) RecordResize(paneID string, cols, rows uint16) {
 	if cols == 0 || rows == 0 {
 		return
 	}
-	ph := h.GetOrCreatePaneHub(paneID)
+	ph, err := h.GetOrCreatePaneHub(paneID)
+	if err != nil {
+		log.Printf("[ws] resize pane %s: %v", paneID, err)
+		return
+	}
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
 	if ph.pendingResize != nil {
 		if ph.pendingResize.Cols == cols && ph.pendingResize.Rows == rows {
 			return
 		}
-	} else if n := len(ph.resizes); n > 0 {
-		last := ph.resizes[n-1]
-		if last.Cols == cols && last.Rows == rows {
+	} else if ph.recording != nil && !ph.recording.isClosed() {
+		if last, ok := ph.recording.lastResize(); ok && last.Cols == cols && last.Rows == rows {
 			return
 		}
 	}
@@ -487,7 +657,16 @@ type Recording struct {
 	End     uint64
 	Data    []byte
 	Resizes []ResizeMarker
+	// EventCursor continues marker filtering on the next page.
+	EventCursor string
 }
+
+// Event cursor failures distinguish malformed requests from boundaries
+// rotation removed. Callers map invalid to 400 and expired to 409.
+var (
+	ErrEventCursorInvalid = errors.New("invalid event cursor")
+	ErrEventCursorExpired = errors.New("event cursor boundary expired")
+)
 
 func (h *Hub) recordingForRead(paneID string) *PaneHub {
 	h.mu.RLock()
@@ -502,37 +681,49 @@ func (h *Hub) recordingForRead(paneID string) *PaneHub {
 	// Opening includes journal recovery. Serialize it with every other
 	// opener and publish exactly one owner before any writer can append.
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if ph = h.panes[paneID]; ph != nil {
+		h.mu.Unlock()
 		return ph
 	}
 	if ph = h.archives[paneID]; ph != nil {
+		h.mu.Unlock()
 		return ph
 	}
 	path := h.recordingPath(paneID)
 	if path == "" {
+		h.mu.Unlock()
 		return nil
 	}
-	if _, err := os.Stat(path); err != nil {
+	if _, err := os.Stat(path); err == nil {
+		recording, err := openRetentionGroup(path)
+		if err != nil {
+			h.mu.Unlock()
+			return nil
+		}
+		h.takeGroupClock(recording)
+		ph = &PaneHub{
+			clients:   make(map[*Client]bool),
+			recording: recording,
+			epoch:     randomEpoch(),
+			total:     recording.head,
+		}
+		h.archives[paneID] = ph
+		h.mu.Unlock()
+		return ph
+	}
+	h.mu.Unlock()
+	// No versioned group: a legacy import does parser work and must
+	// not hold the hub lock. A failed eligible import reads as absent
+	// (no fresh authority), never as empty history.
+	if _, err := h.importLegacyGroup(paneID); err != nil {
 		return nil
 	}
-	recording, err := openRecording(path)
-	if err != nil {
-		return nil
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if ph = h.panes[paneID]; ph != nil {
+		return ph
 	}
-	ph = &PaneHub{
-		clients:   make(map[*Client]bool),
-		recording: recording,
-		epoch:     randomEpoch(),
-		total:     recording.head,
-	}
-	if !recording.ephemeral {
-		ph.statePath = path + ".state"
-		ph.stateAnchors, ph.stateAnchorBytes, _ = loadStateAnchors(ph.statePath)
-		ph.stateAnchorsLoaded = true
-	}
-	h.archives[paneID] = ph
-	return ph
+	return h.archives[paneID]
 }
 
 func (h *Hub) Recording(paneID string, from, through uint64) (Recording, bool) {
@@ -554,13 +745,89 @@ func (h *Hub) Recording(paneID string, from, through uint64) (Recording, bool) {
 	if end > pos.Head {
 		end = pos.Head
 	}
+	if end < from {
+		// The window lies wholly below the floor, so none of it is left.
+		// Serve the empty span at the floor: the start is above the
+		// requested position, which is how a client learns that the
+		// prefix expired.
+		end = from
+	}
+	if end-from > MaxCheckpointBytes {
+		end = from + MaxCheckpointBytes
+	}
 	rec := Recording{Epoch: pos.Epoch, Start: from, End: end}
-	if ph.recording == nil {
+	if ph.recording == nil || ph.recording.isClosed() {
 		return Recording{}, false
 	}
-	var err error
-	rec.Data, rec.Resizes, err = ph.recording.read(from, end)
-	return rec, err == nil
+	data, ords, endOrdinal, err := ph.recording.readOrd(from, end, 0, false)
+	if err != nil {
+		return Recording{}, false
+	}
+	rec.Data = data
+	rec.Resizes = make([]ResizeMarker, len(ords))
+	for i, o := range ords {
+		rec.Resizes[i] = o.ResizeMarker
+	}
+	rec.EventCursor = EncodeEventCursor(pos.Epoch, end, endOrdinal)
+	return rec, true
+}
+
+// RecordingAfterCursor serves a recording page after a checkpoint: only
+// resizes after the cursor's ordinal are included, so same-position
+// boundaries apply exactly once. The span rules match Recording; the
+// returned end cursor continues the chain.
+func (h *Hub) RecordingAfterCursor(paneID string, from, through uint64, after string) (Recording, string, error) {
+	cursorEpoch, cursorPos, afterOrdinal, err := ParseEventCursor(after)
+	if err != nil {
+		return Recording{}, "", ErrEventCursorInvalid
+	}
+	ph := h.recordingForRead(paneID)
+	if ph == nil {
+		return Recording{}, "", ErrEventCursorInvalid
+	}
+	ph.mu.Lock()
+	defer ph.mu.Unlock()
+
+	pos := ph.positionLocked()
+	if cursorEpoch != pos.Epoch {
+		return Recording{}, "", ErrEventCursorExpired
+	}
+	if from > pos.Head {
+		return Recording{}, "", ErrEventCursorInvalid
+	}
+	if from < pos.Oldest {
+		from = pos.Oldest
+	}
+	end := through
+	if end > pos.Head {
+		end = pos.Head
+	}
+	if end < from {
+		// The window lies wholly below the floor: the empty span at the
+		// floor reports the expired prefix, like Recording does.
+		end = from
+	}
+	if end-from > MaxCheckpointBytes {
+		end = from + MaxCheckpointBytes
+	}
+	if ph.recording == nil || ph.recording.isClosed() {
+		return Recording{}, "", ErrEventCursorInvalid
+	}
+	if ph.recording.cursorExpired(pos.Oldest, cursorPos, afterOrdinal) {
+		return Recording{}, "", ErrEventCursorExpired
+	}
+	data, ords, endOrdinal, err := ph.recording.readOrd(from, end, afterOrdinal, true)
+	if err != nil {
+		return Recording{}, "", ErrEventCursorInvalid
+	}
+	rec := Recording{Epoch: pos.Epoch, Start: from, End: end, Data: data}
+	rec.Resizes = make([]ResizeMarker, len(ords))
+	for i, o := range ords {
+		rec.Resizes[i] = o.ResizeMarker
+	}
+	endCursor := EncodeEventCursor(pos.Epoch, end, endOrdinal)
+	rec.EventCursor = endCursor
+	return rec, endCursor, nil
 }
 
 // MaxCheckpointBytes bounds client-uploaded screen snapshots.
@@ -606,7 +873,14 @@ func (h *Hub) StoreCheckpoint(paneID string, up CheckpointUpload) bool {
 }
 
 func (h *Hub) AttachWithReplay(paneID string, client *Client) {
-	ph := h.GetOrCreatePaneHub(paneID)
+	ph, err := h.GetOrCreatePaneHub(paneID)
+	if err != nil {
+		log.Printf("[ws] attach pane %s: %v", paneID, err)
+		if client.Ws != nil {
+			_ = client.Ws.Close()
+		}
+		return
+	}
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
 
@@ -678,6 +952,46 @@ func (h *Hub) CloseAllClients() {
 	}
 }
 
+// Close stops the sweep worker, releases every owned recording handle,
+// and releases the namespace lease without deleting it. Ephemeral groups
+// are deleted. A hub must not be used after Close; a restart test closes
+// the first hub before the second opens the same namespace. Close is
+// idempotent.
+func (h *Hub) Close() error {
+	h.mu.Lock()
+	started, done := h.sweepStarted, h.sweepDone
+	h.sweepStarted = false
+	h.sweepDone = nil
+	h.mu.Unlock()
+	if started {
+		close(done)
+		h.sweepWg.Wait()
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var errs []error
+	for _, ph := range h.panes {
+		ph.mu.Lock()
+		if ph.recording != nil {
+			errs = append(errs, ph.recording.close())
+		}
+		ph.mu.Unlock()
+	}
+	for _, ph := range h.archives {
+		ph.mu.Lock()
+		if ph.recording != nil {
+			errs = append(errs, ph.recording.close())
+		}
+		ph.mu.Unlock()
+	}
+	if h.leaseFile != nil {
+		errs = append(errs, h.leaseFile.Close())
+		h.leaseFile = nil
+		h.leaseHeld = false
+	}
+	return errors.Join(errs...)
+}
+
 func (h *Hub) ClosePane(paneID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -700,9 +1014,18 @@ func (h *Hub) closePaneLocked(paneID string) {
 			ph.state = nil
 			ph.stateHead = 0
 		}
-		ph.stateAnchors = nil
-		ph.stateAnchorBytes = 0
-		ph.stateAnchorsLoaded = false
+		closedAt := h.wallClock().UnixNano()
+		ph.closedAtUnixNano = closedAt
+		if ph.recording != nil && !ph.recording.isClosed() {
+			// A failed closure persist falls back to the last-update
+			// clock, which the last commit already recorded.
+			if err := ph.recording.markClosed(closedAt); err != nil {
+				log.Printf("[ws] pane %s: could not record its closure: %v", paneID, err)
+			}
+			// Closure can finish a pending commit. Cold reads must expose
+			// its completed head, not the last live-published frontier.
+			ph.total = ph.recording.head
+		}
 		h.archives[paneID] = ph
 		ph.mu.Unlock()
 	}
@@ -856,35 +1179,62 @@ func (h *Hub) injectDropWarning(client *Client, now time.Time) {
 
 func (h *Hub) Ingest(paneID string, payload []byte) error {
 	persistent := h.recordingEnabled()
-	ph := h.GetOrCreatePaneHub(paneID)
+	ph, err := h.GetOrCreatePaneHub(paneID)
+	if err != nil {
+		return err
+	}
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
 
 	// Begin parsing at the pane's first output. New sessions never replay
 	// their recording on attach; the recording remains the byte authority.
 	if persistent && ph.state == nil && ph.stateErr == nil {
-		ph.stateErr = ph.prepareStateLocked()
+		if err := ph.prepareStateLocked(); err != nil && !errors.Is(err, errStateBaseUnavailable) {
+			ph.stateErr = err
+		}
 	}
 
 	// Commit to the authoritative journal before publishing a frontier or
 	// admitting the bytes to the cache/live stream. A storage failure must
 	// backpressure the PTY reader, not silently drop output.
 	if ph.recording == nil {
-		ph.recording, ph.recordingErr = openRecording(h.recordingPath(paneID))
+		ph.recording, ph.recordingErr = openRetentionGroup(h.recordingPath(paneID))
 		if ph.recordingErr != nil {
 			return ph.recordingErr
 		}
+		h.takeGroupClock(ph.recording)
 		ph.total = ph.recording.head
+	} else if ph.recording.isClosed() {
+		return fmt.Errorf("pane recording closed")
 	}
+	payloadAdmitted := false
 	if ph.pendingResize != nil {
-		if err := ph.appendResizeLocked(*ph.pendingResize); err != nil {
+		// A durability-failed payload resolves before the queued
+		// resize: appendResize refuses while a payload is staged, so
+		// retrying the resize first would wedge behind it forever.
+		// The resize then waits one Ingest; its AtSeq is recomputed
+		// from the advanced head on the next call.
+		if resolved, err := ph.recording.resolvePendingPayload(payload); err != nil {
+			return err
+		} else if resolved {
+			payloadAdmitted = true
+			ph.total = ph.recording.head - uint64(len(payload))
+		} else if err := ph.appendResizeLocked(*ph.pendingResize); err != nil {
 			return err
 		}
 	}
-	if err := ph.recording.append(1, payload); err != nil {
-		return err
+	var applied []ResizeMarker
+	if !payloadAdmitted {
+		var err error
+		applied, err = ph.recording.appendPayload(payload, ph.snapshotBaseLocked)
+		if err != nil {
+			return err
+		}
 	}
 	start := ph.total
+	for _, m := range applied {
+		ph.applyResizeToParserLocked(m)
+	}
 	if ph.state != nil {
 		if err := ph.state.Feed(payload); err != nil {
 			_ = ph.state.Close()
@@ -893,15 +1243,12 @@ func (h *Hub) Ingest(paneID string, payload []byte) error {
 			ph.stateErr = err
 		} else {
 			ph.stateHead = start + uint64(len(payload))
-			if n := len(ph.stateAnchors); n > 0 && ph.stateHead-ph.stateAnchors[n-1].through >= stateAnchorInterval {
-				_ = ph.addStateAnchorLocked()
-			}
 		}
 	}
 	if ph.Ring != nil {
 		ph.Ring.Write(payload)
 	}
-	ph.total += uint64(len(payload))
+	ph.total = ph.recording.head
 
 	// 2. Broadcast to clients. Hot clients receive 0x09 LIVE_OUTPUT frames
 	// with the seq prefix; legacy clients keep the bare 0x01 replay framing

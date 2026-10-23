@@ -80,6 +80,9 @@ type CheckpointHeader struct {
 	Cols    uint16 `json:"cols"`
 	Rows    uint16 `json:"rows"`
 	Len     int    `json:"len"`
+	// EventCursor is the resize boundary this checkpoint consumed.
+	// Absent on old servers and client-uploaded snapshots.
+	EventCursor string `json:"event_cursor,omitempty"`
 }
 
 // RecordingHeader is the JSON half of the /recording HTTP
@@ -91,6 +94,9 @@ type RecordingHeader struct {
 	Start   uint64      `json:"start"`
 	End     uint64      `json:"end"`
 	Resizes [][3]uint64 `json:"resizes"` // [atSeq, cols, rows]
+	// EventCursor continues marker filtering on the next page.
+	// Absent on old servers.
+	EventCursor string `json:"event_cursor,omitempty"`
 }
 
 // EncodeAttachHeadFrame is the server-side helper that produces a
