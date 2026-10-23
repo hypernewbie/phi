@@ -13,6 +13,7 @@ function bridgeManager() {
         _piBridgeRunIsNew: TabManager.prototype._piBridgeRunIsNew,
         _piBridgeHasBaseline: TabManager.prototype._piBridgeHasBaseline,
         _ringPiBridgeBell: TabManager.prototype._ringPiBridgeBell,
+        _setTabAttention: TabManager.prototype._setTabAttention,
         _acceptPiBridgeState: TabManager.prototype._acceptPiBridgeState,
         _acceptPiBridgeSettled: TabManager.prototype._acceptPiBridgeSettled,
     };
@@ -379,6 +380,7 @@ describe('heuristic suppression for managed panes', () => {
             tabs: new Map([['pane-1', tab]]),
             activePaneId: 'other-pane',
             syncBackendPin: vi.fn(),
+            _setTabAttention: TabManager.prototype._setTabAttention,
             updateDocumentTitle: vi.fn(),
             triggerAttentionNotification: vi.fn(),
         };

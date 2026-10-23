@@ -162,6 +162,7 @@ describe('pollTerminalIdleAndNotifications — done vs inactive behavior', () =>
             updateDocumentTitle: vi.fn(),
             syncBackendPin: vi.fn(),
             triggerAttentionNotification: vi.fn(),
+            _setTabAttention: TabManager.prototype._setTabAttention,
             getActiveTab() {
                 return this.tabs.get(this.activePaneId);
             },

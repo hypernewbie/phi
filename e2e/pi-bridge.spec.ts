@@ -2,70 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import { startPhi } from './_server.js';
-
-// Synthetic Pi backend: loads the REAL committed bridge bundle and drives
-// it with a minimal mock Pi host. Stdin lines map to lifecycle edges:
-//   start       -> agent_start
-//   settle      -> agent_end (stop) then agent_settled (completed)
-//   abort       -> agent_settled (aborted)
-//   say <text>  -> terminal output without any bridge event
-//   exit        -> session_shutdown and process exit
-// The script speaks the real generated protocol through the real Runtime;
-// only the Pi host API surface is faked.
-function syntheticPiSource(bundlePath: string): string {
-    return `#!/usr/bin/env node
-const factory = require(${JSON.stringify(bundlePath)});
-const handlers = new Map();
-const mockPi = {
-    on(event, handler) {
-        if (!handlers.has(event)) handlers.set(event, []);
-        handlers.get(event).push(handler);
-        return () => {};
-    },
-};
-const mockCtx = () => ({
-    sessionManager: {
-        getSessionId: () => 'e2e-bridge-session',
-        getLeafId: () => 'e2e-leaf-1',
-    },
-    model: { provider: 'e2e-provider', id: 'e2e-model' },
-});
-const emit = (event, payload) => {
-    for (const handler of handlers.get(event) || []) handler(payload, mockCtx());
-};
-factory(mockPi);
-emit('session_start', { type: 'session_start', reason: 'startup' });
-console.log('synthetic pi ready');
-let buffer = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', (chunk) => {
-    buffer += chunk;
-    let idx;
-    while ((idx = buffer.search(/[\\r\\n]/)) >= 0) {
-        const line = buffer.slice(0, idx).trim();
-        buffer = buffer.slice(idx + 1);
-        if (!line) continue;
-        if (line === 'start') {
-            emit('agent_start', { type: 'agent_start' });
-            console.log('run started');
-        } else if (line === 'settle') {
-            emit('agent_end', { type: 'agent_end', messages: [{ role: 'assistant', content: [], stopReason: 'stop' }] });
-            emit('agent_settled', { type: 'agent_settled', aborted: false });
-            console.log('run settled');
-        } else if (line === 'abort') {
-            emit('agent_settled', { type: 'agent_settled', aborted: true });
-            console.log('run aborted');
-        } else if (line.startsWith('say ')) {
-            console.log(line.slice(4));
-        } else if (line === 'exit') {
-            emit('session_shutdown', { type: 'session_shutdown' });
-            process.exit(0);
-        }
-    }
-});
-process.stdin.on('end', () => process.exit(0));
-`;
-}
+import { syntheticPiSource } from './_pi-bridge.js';
 
 interface BridgeView {
     state: string;
@@ -189,6 +126,12 @@ test('Pi bridge reports managed state and rings the bell on settlement', async (
         expect(shell.ok()).toBe(true);
         const shellPane = (await shell.json()) as { pane_id: string };
 
+        // Keep sync polling on this fixture, never the default live port 7070.
+        const coordinator = await request.post(
+            `${phi.url}/api/config/sync-coordinator`,
+            { data: { sync_coordinator: phi.url } },
+        );
+        expect(coordinator.ok()).toBe(true);
         await page.goto(phi.url);
         const piTab = page.locator(`.tab[data-pane-id="${pane.pane_id}"]`);
         await expect(piTab).toBeVisible({ timeout: 10_000 });
@@ -225,6 +168,25 @@ test('Pi bridge reports managed state and rings the bell on settlement', async (
                 last_run: '1',
                 last_outcome: 'completed',
             });
+
+        const status = piTab.getByRole('img', { name: 'Needs attention' });
+        await expect(status).toBeVisible();
+        // The static cue must remain after all three two-second pulses.
+        await page.waitForTimeout(6500);
+        await expect(status).toBeVisible();
+        const cue = await piTab.evaluate((el) => {
+            const style = getComputedStyle(el);
+            return {
+                background: style.backgroundColor,
+                left: style.borderLeftColor,
+                right: style.borderRightColor,
+            };
+        });
+        expect(cue.background).not.toBe('rgba(0, 0, 0, 0)');
+        expect(cue.left).not.toBe(cue.right);
+        await piTab.click();
+        await expect(piTab).not.toHaveClass(/has-attention/);
+        await expect(status).toHaveCount(0);
 
         // Reload establishes a silent baseline, then a new run rings again.
         await page.reload();
