@@ -4,6 +4,7 @@ const MAX_CHECKPOINT_BYTES = 2 << 20;
 const LIVE_SCROLLBACK_ROWS = 10000;
 const HISTORY_MIN_STEP_BYTES = 4096;
 export const HISTORY_BOOK_BYTES = 64 << 10;
+const HISTORY_READ_ATTEMPTS = 8;
 
 export const terminalHistoryMethods = {
     _updateHistoryButton(tabInfo) {
@@ -37,7 +38,13 @@ export const terminalHistoryMethods = {
     // New servers own the parser. A book starts from an exact parser state,
     // never a guessed byte boundary; the recording still owns every byte.
     async _fetchTerminalState(paneId, epoch, through, signal) {
-        const response = await fetch(`/api/terminals/${encodeURIComponent(paneId)}/state?epoch=${epoch}&through=${through}&kind=ansi-v1`, { cache: 'no-store', signal });
+        // Bound each attempt like the range fetch: a hung server must not
+        // hold the reader's retry ceiling open forever.
+        const timeout = typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(10000) : undefined;
+        const requestSignal = signal && timeout && typeof AbortSignal.any === 'function'
+            ? AbortSignal.any([signal, timeout])
+            : (signal || timeout);
+        const response = await fetch(`/api/terminals/${encodeURIComponent(paneId)}/state?epoch=${epoch}&through=${through}&kind=ansi-v1`, { cache: 'no-store', signal: requestSignal });
         if (!response.ok) {
             if ([400, 404, 409, 413].includes(response.status)) {
                 const error = new Error(`Terminal history unavailable (${response.status}); the requested book was not skipped.`);
@@ -54,15 +61,21 @@ export const terminalHistoryMethods = {
         const c = header.ckpt;
         const bytes = body.subarray(4 + size);
         const frontier = through === 'latest' ? header.head : through;
+        const cursor = c?.event_cursor;
+        const validCursor = cursor === undefined || (typeof cursor === 'string' && cursor.length <= 128 && /^v1\.\d+\.\d+\.\d+$/.test(cursor));
         if (!Number.isSafeInteger(frontier) || frontier < 0 || header.epoch !== epoch || header.head !== frontier || !Number.isSafeInteger(header.oldest) || header.oldest < 0 || header.oldest > frontier ||
             !c || c.kind !== 'ansi-v1' || c.through !== frontier || c.len !== bytes.length || bytes.length > MAX_CHECKPOINT_BYTES ||
-            !Number.isInteger(c.cols) || c.cols <= 0 || c.cols > 65535 || !Number.isInteger(c.rows) || c.rows <= 0 || c.rows > 65535) return null;
-        return { ...c, bytes, oldest: header.oldest };
+            !Number.isInteger(c.cols) || c.cols <= 0 || c.cols > 65535 || !Number.isInteger(c.rows) || c.rows <= 0 || c.rows > 65535 || !validCursor) return null;
+        return { ...c, bytes, oldest: header.oldest, eventCursor: cursor };
     },
 
     async _historyRead(tabInfo, read, signal) {
         let delay = 250;
-        for (;;) {
+        // A moved retention floor cannot make this span valid again, so an
+        // endless retry only hides the miss. Bound it: every attempt is
+        // identical, so the ceiling costs nothing and the caller gets a
+        // visible error instead of a permanent spinner.
+        for (let attempt = 0; attempt < HISTORY_READ_ATTEMPTS; attempt++) {
             if (signal.aborted) throw signal.reason || new Error('History request canceled');
             try {
                 const result = await read(signal);
@@ -83,6 +96,7 @@ export const terminalHistoryMethods = {
             });
             delay = Math.min(5000, delay * 2);
         }
+        throw new Error('Terminal history temporarily unavailable; the requested book was not skipped.');
     },
 
     _cancelHistoryRequest(tabInfo) {
@@ -121,7 +135,11 @@ export const terminalHistoryMethods = {
                 // Do not hold the socket while fetching/retrying. Resident
                 // live delivery remains bounded; the current view stays intact.
                 const state = await this._historyRead(tabInfo, signal => this._fetchTerminalState(tabInfo.paneId, epoch, latest ? 'latest' : from, signal), request.signal);
-                const range = from < end ? await this._historyRead(tabInfo, signal => this._fetchRecordingRangeOnce(tabInfo.paneId, from, end, epoch, signal), request.signal) : null;
+                // Page from the floor the server just reported. The attach-time
+                // floor is stale by the time the reader pages again, and a
+                // range below it is already evicted.
+                if (Number.isSafeInteger(state?.oldest)) tabInfo.paneOldest = state.oldest;
+                const range = from < end ? await this._historyRead(tabInfo, signal => this._fetchRecordingRangeOnce(tabInfo.paneId, from, end, epoch, signal, state.eventCursor), request.signal) : null;
                 if (!current()) return;
                 pty = tabInfo.ws;
                 pty.hold();
@@ -184,7 +202,18 @@ export const terminalHistoryMethods = {
                 if (current()) {
                     tabInfo._historyError = error.message;
                     this.app?.showToast?.(error.message, { type: 'error', title: 'Terminal history' });
-                    if (reset) { try { pty?.ws?.close(); } catch (_e) {} }
+                    // A paging miss is not a broken socket. Closing here used to
+                    // turn every miss into a re-attach, and the re-attach
+                    // repainted the whole view while leaving this tab in
+                    // browsing mode, so the next wheel event ran the same miss
+                    // again: one paging failure became a replay loop. Before
+                    // reset, keep the existing view and its browsing state;
+                    // otherwise live output would enter a historical parser.
+                    if (reset) {
+                        tabInfo._historyBrowsing = false;
+                        const healed = await this._recoverBootstrapFromLiveState(tabInfo, pty, () => current() && tabInfo.ws === pty);
+                        if (healed === null) { try { pty?.ws?.close(); } catch (_e) {} }
+                    }
                 }
             } finally {
                 if (tabInfo._historyRequest === request) {

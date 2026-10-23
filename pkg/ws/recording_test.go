@@ -20,10 +20,11 @@ func TestPersistentRecordingAcrossHubRestart(t *testing.T) {
 	}
 	ph, _ := first.LookupPane("p")
 	oldEpoch := ph.EpochOf()
-	if err := ph.recording.file.Sync(); err != nil {
+	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
 	second := NewHub(8)
+	t.Cleanup(func() { _ = second.Close() })
 	if err := second.SetRecordingDirectory(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -40,21 +41,29 @@ func TestPersistentRecordingAcrossHubRestart(t *testing.T) {
 	if len(rec.Resizes) != 1 || rec.Resizes[0].Cols != 80 {
 		t.Fatal("restart lost geometry")
 	}
-	files, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(files) != 3 {
-		t.Fatalf("recording and bounded-state files=%d", len(files))
-	}
-	for _, entry := range files {
-		info, err := os.Stat(filepath.Join(dir, entry.Name()))
+	// One manifest, one raw file, and one resize file: no rotation yet,
+	// so no base checkpoint exists.
+	var files int
+	if err := filepath.WalkDir(second.recordingPath("p"), func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
-			t.Fatal(err)
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
 		}
 		if info.Mode().Perm()&0077 != 0 {
-			t.Fatalf("%s is readable by another user", entry.Name())
+			t.Fatalf("%s is readable by another user", path)
 		}
+		if !entry.IsDir() {
+			files++
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if files != 3 {
+		t.Fatalf("recording and bounded-state files=%d", files)
 	}
 }
 
@@ -91,11 +100,17 @@ func TestRecordingRecoversATornFinalAppend(t *testing.T) {
 
 func TestRecordingWriteFailureDoesNotAdvanceFrontier(t *testing.T) {
 	h := NewHub(8)
+	t.Cleanup(func() { _ = h.Close() })
 	if err := h.Ingest("p", []byte("retained")); err != nil {
 		t.Fatal(err)
 	}
 	ph, _ := h.LookupPane("p")
-	ph.recording.file.Close()
+	ph.mu.Lock()
+	if err := ph.recording.close(); err != nil {
+		ph.mu.Unlock()
+		t.Fatal(err)
+	}
+	ph.mu.Unlock()
 	if err := h.Ingest("p", []byte("not admitted")); err == nil {
 		t.Fatal("closed recording accepted bytes")
 	}
