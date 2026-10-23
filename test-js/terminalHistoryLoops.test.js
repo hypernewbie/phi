@@ -46,7 +46,7 @@ const filler = (n) => {
 
 // A server that keeps the newest `cap` bytes, like the retention window.
 const server = (cap) => {
-    const model = { oldest: 0, head: 0, cap, readsFail: false, failState: false, busy: false, burst: 512 << 10 };
+    const model = { oldest: 0, head: 0, cap, readsFail: false, burst: 512 << 10 };
     model.advance = (n) => {
         const from = model.head;
         model.head += n;
@@ -86,7 +86,7 @@ const server = (cap) => {
     return model;
 };
 
-const install = (model, pty, { stateBroken = false } = {}) => {
+const install = (model, { stateBroken = false } = {}) => {
     vi.stubGlobal(
         'fetch',
         vi.fn(async (url) => {
@@ -95,16 +95,7 @@ const install = (model, pty, { stateBroken = false } = {}) => {
                 if (stateBroken) return { ok: false, status: 503 };
                 // Build the answer first: the frontier is the server's head at
                 // request time.
-                const answer = model.state(query.get('through'));
-                if (model.busy) {
-                    // The pane kept producing while the request was in flight.
-                    // The client sees the first of it, and the retention floor
-                    // passes the frontier it asked about.
-                    model.failState = true;
-                    const from = model.advance(model.burst);
-                    pty.ws.output(from, filler(64));
-                }
-                return answer;
+                return model.state(query.get('through'));
             }
             if (String(url).includes('/recording?')) {
                 return model.recording(
@@ -173,7 +164,7 @@ for (const mode of MODES) {
             };
             track(pty);
             try {
-                install(model, pty);
+                install(model);
                 await longSession(h, model);
                 h.tab._serverStateAvailable = mode.serverState;
                 h.tab._historyOmitted = true;
@@ -285,7 +276,7 @@ it('a failed jump to the live tail cannot repeat itself', async () => {
         return original();
     };
     try {
-        install(model, h.pty);
+        install(model);
         await longSession(h, model);
         h.tab._serverStateAvailable = false;
         h.tab._historyOmitted = true;
@@ -322,11 +313,11 @@ it('a paging loop stops even when the server never answers', async () => {
     const model = server(256 << 10);
     const h = replayHarness(encode(''));
     try {
-        install(model, h.pty);
+        install(model);
         await longSession(h, model);
         h.tab._serverStateAvailable = true;
         h.tab._historyOmitted = true;
-        install(model, h.pty, { stateBroken: true });
+        install(model, { stateBroken: true });
         // The retry ceiling is wall-clock, so drive the clock instead of
         // waiting out the backoff.
         vi.useFakeTimers();
