@@ -31,6 +31,45 @@ function pathKey(path) {
     const parts = pathParts(path);
     return `${parts.root}\u0000${parts.segments.join('\u0000')}`;
 }
+function pickedPathParts(path) {
+    const windows = /^[A-Za-z]:[\\/]/u.test(path) || /^\\\\/u.test(path);
+    const normalized = windows ? path.replace(/\\/gu, '/') : path;
+    const drive = normalized.match(/^([A-Za-z]):(?=\/)/u);
+    const root = drive
+        ? `drive:${drive[1].toLowerCase()}`
+        : normalized.startsWith('//')
+            ? 'unc'
+            : normalized.startsWith('/')
+                ? '/'
+                : '';
+    const segments = normalized.split('/').filter(Boolean);
+    if (drive)
+        segments.shift();
+    return { root, segments };
+}
+export function formatPickedDir(selected, relativeTo) {
+    if (!relativeTo)
+        return selected;
+    const selectedParts = pickedPathParts(selected);
+    const baseParts = pickedPathParts(relativeTo);
+    if (selectedParts.root !== baseParts.root ||
+        selectedParts.segments.length < baseParts.segments.length) {
+        return selected;
+    }
+    const windowsDrive = selectedParts.root.startsWith('drive:');
+    const sharesBase = baseParts.segments.every((segment, index) => {
+        const selectedSegment = selectedParts.segments[index];
+        return windowsDrive
+            ? selectedSegment.toLowerCase() === segment.toLowerCase()
+            : selectedSegment === segment;
+    });
+    if (!sharesBase)
+        return selected;
+    const relativeSegments = selectedParts.segments.slice(baseParts.segments.length);
+    return relativeSegments.length === 0
+        ? '.'
+        : `./${relativeSegments.join('/')}`;
+}
 function samePath(left, right) {
     return pathKey(left) === pathKey(right);
 }

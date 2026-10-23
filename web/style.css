@@ -4322,6 +4322,11 @@ body.has-terminal-bg
     width: min(520px, calc(100vw - 24px));
 }
 
+.config-editor-path-modal {
+    width: min(600px, calc(100vw - 24px));
+    overflow: hidden;
+}
+
 /* ── Model quota overlay ───────────────────────────────────────────────
    Structure reuses .modal-overlay/.modal-content/.modal-header/body/
    footer, so compact rules (keyboard-aware heights, pinned footer)
@@ -4917,13 +4922,45 @@ html[data-phi-config-page] .settings-modal {
     gap: 6px;
 }
 
-.config-editor-field span {
+.config-editor-field > span,
+.config-editor-path-label {
     color: var(--text-muted);
     font-family: var(--font-mono);
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
+}
+
+.config-editor-path-field {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.config-editor-path-row input {
+    width: auto;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.config-editor-path-status {
+    min-height: 1.2em;
+    margin-top: -2px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.config-editor-path-status:not(:empty) {
+    color: var(--red);
+}
+
+.config-editor-path-tree {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    margin-top: 4px;
 }
 
 .config-editor-field input,

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
 import { mockFetch, setupDomHarness } from './_dom.js';
-import { mountDirectoryTree } from '../web/path-picker.js';
+import { formatPickedDir, mountDirectoryTree } from '../web/path-picker.js';
 
 setupDomHarness();
 
@@ -36,6 +36,55 @@ function expand(path) {
 function requestedPath(url) {
     return new URL(String(url), 'http://localhost').searchParams.get('path');
 }
+
+describe('formatPickedDir', () => {
+    it.each([
+        ['/work/app', '/work/app', '.'],
+        ['/work/app/docs', '/work/app', './docs'],
+        ['/work/app/a\\b', '/work/app', './a\\b'],
+        ['/work/app/a/b', '/work/app/a\\b', '/work/app/a/b'],
+        ['/work/app/a\\', '/work/app', './a\\'],
+        ['/work/app2', '/work/app', '/work/app2'],
+        ['/work/App/docs', '/work/app', '/work/App/docs'],
+        ['/work/app/docs', '/work/app/', './docs'],
+        ['/docs', '/', './docs'],
+        ['/', '/', '.'],
+        ['C:\\Work\\App\\Docs', 'c:\\work\\app', './Docs'],
+        ['C:\\Docs', 'C:\\', './Docs'],
+        ['C:\\', 'c:\\', '.'],
+        ['D:\\Docs', 'C:\\Work', 'D:\\Docs'],
+        ['\\\\server\\share\\docs', '\\\\server\\share', './docs'],
+        ['//server/share/docs', '\\\\server\\share', './docs'],
+        ['C:\\İ\\Docs', 'c:\\İ', './Docs'],
+    ])('formats %s relative to %s as %s', (selected, relativeTo, expected) => {
+        expect(formatPickedDir(selected, relativeTo)).toBe(expected);
+    });
+
+    it('returns the original path unchanged when no base is supplied', () => {
+        const selected = 'C:\\Work\\App\\';
+        expect(formatPickedDir(selected)).toBe(selected);
+        expect(formatPickedDir(selected, '')).toBe(selected);
+    });
+
+    it('ignores trailing separators when comparing equal and descendant paths', () => {
+        expect(formatPickedDir('/work/app/', '/work/app')).toBe('.');
+        expect(formatPickedDir('/work/app/docs/', '/work/app/')).toBe('./docs');
+    });
+
+    it('preserves nested path segments and spaces in relative output', () => {
+        expect(
+            formatPickedDir(
+                '/work/app/nested folder/a file/topic',
+                '/work/app',
+            ),
+        ).toBe('./nested folder/a file/topic');
+    });
+
+    it('preserves outside paths exactly, including separators and spelling', () => {
+        const selected = 'D:\\Other\\Folder With Spaces\\';
+        expect(formatPickedDir(selected, 'C:\\Work')).toBe(selected);
+    });
+});
 
 describe('embedded directory tree', () => {
     it('loads and expands the initial root without selecting it', async () => {

@@ -1141,16 +1141,21 @@ export class MarkdownManager {
     }
 
     async _promptAddDir(): Promise<void> {
+        const cwd = this.app?.sessionsManager?.activeCWD || '';
         let dir: string | undefined = '';
         if (typeof this.app?.openConfigEditor === 'function') {
             const values = await this.app.openConfigEditor({
                 title: 'Add markdown directory',
-                subtitle: 'Relative to workspace, e.g. ./docs',
+                subtitle:
+                    'Relative to workspace or absolute, for example ./docs',
                 fields: [
                     {
                         id: 'dir',
                         label: 'Directory',
-                        placeholder: './docs',
+                        placeholder: './docs or /absolute/path',
+                        path: cwd
+                            ? { startPath: cwd, relativeTo: cwd }
+                            : { startPath: '~' },
                     },
                 ],
                 submitLabel: 'Add',
@@ -1159,7 +1164,7 @@ export class MarkdownManager {
         } else if (typeof prompt === 'function') {
             dir =
                 prompt(
-                    'Add markdown directory (relative to workspace, e.g. ./docs):',
+                    'Add markdown directory (relative to workspace or absolute, e.g. ./docs):',
                 ) ?? undefined;
         }
         if (!dir?.trim()) return;

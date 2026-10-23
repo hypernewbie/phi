@@ -2,8 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -311,9 +314,6 @@ func loadConfig() Config {
 	if cfg.MarkdownDirs == nil {
 		cfg.MarkdownDirs = []string{".", "./temp", "./tmp"}
 	}
-	if cfg.SyncCoordinator == "" {
-		cfg.SyncCoordinator = "http://localhost:7070"
-	}
 	if cfg.ReplayBufferBytes == nil {
 		defaultBytes := 1048576
 		cfg.ReplayBufferBytes = &defaultBytes
@@ -326,6 +326,18 @@ func loadConfig() Config {
 	}
 	cfg.OpenCodeIdleStopMinutes = normalizeOpenCodeIdleStopMinutes(cfg.OpenCodeIdleStopMinutes)
 	return cfg
+}
+
+// Resolve the default at use time so saving config does not pin the port.
+func (cfg Config) syncCoordinatorURL(addr *net.TCPAddr) string {
+	if cfg.SyncCoordinator != "" {
+		return cfg.SyncCoordinator
+	}
+	address := addr.String()
+	if len(addr.IP) == 0 || addr.IP.IsUnspecified() {
+		address = net.JoinHostPort("localhost", strconv.Itoa(addr.Port))
+	}
+	return (&url.URL{Scheme: "http", Host: address}).String()
 }
 
 func normalizeOpenCodeIdleStopMinutes(mins int) int {

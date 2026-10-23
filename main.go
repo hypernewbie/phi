@@ -43,6 +43,7 @@ var (
 	piTitleService *piTerminalTitleService
 	cpuSampler     = system.NewSampler()
 	activeCWD      string
+	serverPort     = 7070
 	webRoot        fs.FS
 	diskStatic     http.Handler
 	fleetPoller    = fleet.NewPoller()
@@ -500,7 +501,8 @@ func main() {
 		boundAddrs = []bindaddr.Addr{{IP: parsed, Kind: kind}}
 	}
 
-	printWelcomeBanner(cfg, boundAddrs, *portFlag)
+	serverPort = listeners[0].Addr().(*net.TCPAddr).Port
+	printWelcomeBanner(cfg, boundAddrs, serverPort)
 	var serveErr error
 	shutdownServers, serveErr = serveAndCapture(listeners)
 	if serveErr != nil {
@@ -605,12 +607,16 @@ func printWelcomeBanner(cfg Config, addrs []bindaddr.Addr, port int) {
 	fmt.Printf("%s/_/   /_/ /_//_/%s   %sControl Center for AI Coding%s\n\n", colorEsc, resetEsc, boldEsc, resetEsc)
 
 	host := reportedHostname(cfg)
+	coordinatorAddr := &net.TCPAddr{Port: port}
+	if len(addrs) > 0 {
+		coordinatorAddr.IP = addrs[0].IP
+	}
 
 	fmt.Printf("%s── Status Dump ──────────────────────────────────────────%s\n", dimEsc, resetEsc)
 	fmt.Printf("  %sCWD:%s          %s\n", colorEsc, resetEsc, activeCWD)
 	fmt.Printf("  %sWorkspaces:%s   %d active\n", colorEsc, resetEsc, len(cfg.Workspaces))
 	fmt.Printf("  %sHostname:%s     %s\n", colorEsc, resetEsc, strings.ToUpper(host))
-	fmt.Printf("  %sCoordinator:%s  %s\n", colorEsc, resetEsc, cfg.SyncCoordinator)
+	fmt.Printf("  %sCoordinator:%s  %s\n", colorEsc, resetEsc, cfg.syncCoordinatorURL(coordinatorAddr))
 	fmt.Printf("  %sPort:%s         %d\n", colorEsc, resetEsc, port)
 	fmt.Printf("  %sTheme:%s        %s\n", colorEsc, resetEsc, cfg.ThemeColor)
 	fmt.Printf("%s────────────────────────────────────────────────────────%s\n\n", dimEsc, resetEsc)

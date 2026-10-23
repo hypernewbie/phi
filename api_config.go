@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 )
@@ -14,6 +15,10 @@ import (
 func handleConfig(w http.ResponseWriter, r *http.Request) {
 	cfg := loadConfig()
 	hName := strings.ToUpper(reportedHostname(cfg))
+	addr, _ := r.Context().Value(http.LocalAddrContextKey).(*net.TCPAddr)
+	if addr == nil {
+		addr = &net.TCPAddr{Port: serverPort}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -34,7 +39,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		"claude_dangerously_skip_permissions": cfg.ClaudeDangerouslySkipPermissions,
 		"agy_theme_ansi":                      cfg.AgyThemeAnsi,
 		"auto_reconnect":                      cfg.AutoReconnect,
-		"sync_coordinator":                    cfg.SyncCoordinator,
+		"sync_coordinator":                    cfg.syncCoordinatorURL(addr),
 		"ui_font_family":                      cfg.UIFontFamily,
 		"ui_font_size":                        cfg.UIFontSize,
 		"terminal_font_family":                cfg.TerminalFontFamily,
