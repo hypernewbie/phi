@@ -1,0 +1,161 @@
+package ws
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// manifestHead reads the committed head from the group's manifest. A group
+// that never flushed has no manifest yet, which is head zero.
+func manifestHead(t *testing.T, dir string) uint64 {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, "v2", manifestDirFor(t, dir), "MANIFEST"))
+	if os.IsNotExist(err) {
+		return 0
+	}
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	m, err := decodeRetentionManifest(raw)
+	if err != nil {
+		t.Fatalf("decode manifest: %v", err)
+	}
+	return m.head
+}
+
+// manifestDirFor returns the single group directory under the recording root.
+func manifestDirFor(t *testing.T, dir string) string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(dir, "v2"))
+	if err != nil {
+		t.Fatalf("read groups: %v", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			return e.Name()
+		}
+	}
+	t.Fatal("no retention group")
+	return ""
+}
+
+// A commit that stays under the flush threshold must not rewrite the
+// manifest: the manifest rewrite (create, write, sync, rename, directory
+// sync) cost 8 ms per chunk and throttled the pane to a fraction of the
+// speed the terminal produced output.
+func TestRetentionCommitsDoNotRewriteTheManifestPerChunk(t *testing.T) {
+	dir := t.TempDir()
+	h := NewHub(0)
+	t.Cleanup(func() { _ = h.Close() })
+	if err := h.SetRecordingDirectory(dir); err != nil {
+		t.Fatal(err)
+	}
+	chunk := bytes.Repeat([]byte("x"), 32*1024)
+	// Well under the flush threshold: the manifest must not move.
+	for i := 0; i < 4; i++ {
+		if err := h.Ingest("p", chunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := manifestHead(t, dir); got != 0 {
+		t.Fatalf("manifest head moved to %d before the flush threshold", got)
+	}
+	// The bytes are readable even though they are not durable yet: the
+	// client reads the live file, not the manifest.
+	rec, ok := h.Recording("p", 0, 4*32*1024)
+	if !ok || len(rec.Data) != 4*32*1024 {
+		t.Fatalf("unflushed bytes are not readable: ok=%t len=%d", ok, len(rec.Data))
+	}
+	// Crossing the threshold makes the group durable.
+	for i := 0; i < 8; i++ {
+		if err := h.Ingest("p", chunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := manifestHead(t, dir); got == 0 {
+		t.Fatal("the manifest did not advance past the flush threshold")
+	}
+}
+
+// The manifest names the last durable point. A crash therefore loses the
+// tail since that point, and the group must reopen at the manifest's head,
+// not at the longer file.
+func TestRetentionReopenTruncatesToTheDurableHead(t *testing.T) {
+	dir := t.TempDir()
+	h := NewHub(0)
+	t.Cleanup(func() { _ = h.Close() })
+	if err := h.SetRecordingDirectory(dir); err != nil {
+		t.Fatal(err)
+	}
+	chunk := bytes.Repeat([]byte("y"), 32*1024)
+	for i := 0; i < 4; i++ {
+		if err := h.Ingest("p", chunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Reopen the group the way a restart does, without the first hub
+	// closing it: the tail stays in the page cache, exactly like a crash.
+	group, err := openRetentionGroup(filepath.Join(dir, "v2", manifestDirFor(t, dir)))
+	if err != nil {
+		t.Fatalf("reopen group: %v", err)
+	}
+	t.Cleanup(func() { _ = group.close() })
+	if group.head != 0 {
+		t.Fatalf("the group reopened at head %d, past the durable head", group.head)
+	}
+	data, _, err := group.read(0, 4*32*1024)
+	if err == nil && len(data) != 0 {
+		t.Fatalf("the group reopened with %d bytes past the durable head", len(data))
+	}
+}
+
+// A clean close makes the admitted tail durable, so a restart keeps the
+// history a reader can page.
+func TestRetentionCloseMakesTheTailDurable(t *testing.T) {
+	dir := t.TempDir()
+	h := NewHub(0)
+	if err := h.SetRecordingDirectory(dir); err != nil {
+		t.Fatal(err)
+	}
+	chunk := bytes.Repeat([]byte("z"), 32*1024)
+	for i := 0; i < 4; i++ {
+		if err := h.Ingest("p", chunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second := NewHub(0)
+	t.Cleanup(func() { _ = second.Close() })
+	if err := second.SetRecordingDirectory(dir); err != nil {
+		t.Fatal(err)
+	}
+	rec, ok := second.Recording("p", 0, 4*32*1024)
+	if !ok || len(rec.Data) != 4*32*1024 {
+		t.Fatalf("the tail was not durable after a clean close: ok=%t len=%d", ok, len(rec.Data))
+	}
+}
+
+// The rotation always flushes: it evicts a segment, and the manifest must
+// stop naming that segment before its files are deleted.
+func TestRetentionRotationFlushesEvenUnderTheThreshold(t *testing.T) {
+	dir := t.TempDir()
+	h := NewHub(0)
+	t.Cleanup(func() { _ = h.Close() })
+	if err := h.SetRecordingDirectory(dir); err != nil {
+		t.Fatal(err)
+	}
+	// One full segment plus a little: the rotation happens at 1 MiB.
+	chunk := bytes.Repeat([]byte("q"), 64*1024)
+	for i := 0; i < 17; i++ {
+		if err := h.Ingest("p", chunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := manifestHead(t, dir); got == 0 {
+		t.Fatal("the rotation did not make the group durable")
+	}
+}

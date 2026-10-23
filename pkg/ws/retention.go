@@ -269,11 +269,24 @@ type retentionPending struct {
 	payloadDigest [32]byte
 }
 
+// retentionFlushBytes bounds how much admitted output may stay in the page
+// cache before the group makes it durable.
+//
+// The manifest names the last durable point, so a crash can lose at most
+// this much history, and the recovery truncates the segment to the manifest.
+// Making every chunk durable cost a file sync, a manifest rewrite, a rename
+// and a directory sync per 32 KiB of terminal output: on this machine that
+// is 11 ms per chunk against 18 us for the plain write, so a busy pane ran
+// at a fraction of the speed the terminal itself produced output. A var, so
+// the durability tests can pin the old per-commit granularity.
+var retentionFlushBytes uint64 = 256 << 10
+
 type retentionGroup struct {
 	dir          string
 	ephemeral    bool
 	closed       bool
 	head         uint64
+	durableHead  uint64
 	start        uint64
 	plain        bool
 	lastByte     byte
@@ -422,6 +435,14 @@ func openRetentionGroup(dir string) (*retentionGroup, error) {
 		g.segs = []retentionSeg{{retentionSegDesc: retentionSegDesc{gen: 1, startOrdinal: 1}}}
 		g.nextGen = 2
 		g.nextOrdinal = 1
+		// Durability is batched, so the first flush may never arrive. The
+		// group gets its manifest now: a group with segments and no
+		// manifest is unreadable, and a pane that produced less than one
+		// flush window would lose its history and its group on a restart.
+		if err := g.persistMetadata(); err != nil {
+			g.close()
+			return nil, err
+		}
 		return g, nil
 	}
 	m, err := decodeRetentionManifest(raw)
@@ -644,6 +665,38 @@ func (g *retentionGroup) isClosed() bool {
 	return g.closed
 }
 
+// flushDurable makes the admitted tail durable: the segment bytes reach the
+// disk before the manifest names them, so a crash always leaves the group
+// consistent at the last durable point.
+func (g *retentionGroup) flushDurable() error {
+	if g.dir == "" || g.closed {
+		return nil
+	}
+	if g.pending != nil {
+		// A pending transaction already put its manifest on disk. The
+		// in-memory head is behind it, so rewriting the manifest here would
+		// drop the staged bytes the pending commit still owns.
+		return nil
+	}
+	for i := range g.segs {
+		if g.segs[i].raw != nil {
+			if err := g.syncFileAs(g.segs[i].raw, &g.faults.rawSync); err != nil {
+				return err
+			}
+		}
+		if g.segs[i].rsz != nil {
+			if err := g.syncFileAs(g.segs[i].rsz, &g.faults.rszSync); err != nil {
+				return err
+			}
+		}
+	}
+	if err := g.persistMetadata(); err != nil {
+		return err
+	}
+	g.durableHead = g.head
+	return nil
+}
+
 // markClosed records a closure event in the manifest. A failed persist
 // leaves the previous manifest, whose last-update time clocks the group
 // as an orphan; closure and commit are seconds apart, so the fallback
@@ -651,7 +704,7 @@ func (g *retentionGroup) isClosed() bool {
 func (g *retentionGroup) markClosed(ns int64) error {
 	g.flags |= retentionFlagClosed
 	g.closedAtNs = ns
-	return g.persistMetadata()
+	return g.flushDurable()
 }
 
 // markOpen clears a stale closure when a pane goes live again.
@@ -661,7 +714,7 @@ func (g *retentionGroup) markOpen() error {
 	}
 	g.flags &^= retentionFlagClosed
 	g.closedAtNs = 0
-	return g.persistMetadata()
+	return g.flushDurable()
 }
 
 // persistMetadata rewrites the manifest with the current open/closed
@@ -713,6 +766,9 @@ func (g *retentionGroup) close() error {
 	if g.closed {
 		return nil
 	}
+	// The manifest must never name bytes the disk does not have, so the
+	// admitted tail becomes durable before the files go away.
+	_ = g.flushDurable()
 	g.closed = true
 	var errs []error
 	for i := range g.segs {
@@ -1394,6 +1450,14 @@ func (g *retentionGroup) commit(st *stagedCommit, in commitInput) error {
 	for _, gen := range st.evict {
 		evicted[gen] = true
 	}
+	// Durability is batched. The bytes are in the segment file; the manifest
+	// names the last durable point. A rotation always flushes (it evicts a
+	// segment, which the manifest must stop naming first), and so does a
+	// commit that carried the group past the flush threshold.
+	if !st.rotate && st.newHead-g.durableHead < retentionFlushBytes {
+		g.publish(st)
+		return nil
+	}
 	// Sync every file this transaction modified. Unmodified referenced
 	// files are append-only or immutable, so their committed bytes were
 	// already synced by the commit that wrote them; every byte the new
@@ -1479,6 +1543,7 @@ func (g *retentionGroup) commit(st *stagedCommit, in commitInput) error {
 		g.pending = p
 		return err
 	}
+	g.durableHead = st.newHead
 	g.publish(st)
 	return nil
 }
@@ -1550,6 +1615,9 @@ func (g *retentionGroup) publish(st *stagedCommit) {
 	if st.kind == stagedResize {
 		g.nextOrdinal++
 	}
+	// g.head is the admitted head; g.durableHead is the head the manifest
+	// names. Bytes between them are in the segment file but not yet durable,
+	// so only a durable commit advances it.
 	g.head = st.newHead
 	g.start = g.segs[0].start
 	g.plain = st.plainAfter

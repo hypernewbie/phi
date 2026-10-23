@@ -12,6 +12,7 @@ import (
 )
 
 func TestRetentionPendingPayloadSurvivesInterveningResize(t *testing.T) {
+	perCommitDurability(t)
 	dir := t.TempDir()
 	h := NewHub(0)
 	t.Cleanup(func() { _ = h.Close() })
@@ -207,6 +208,7 @@ func TestCommitRejectsSymlinkedNextSegment(t *testing.T) {
 }
 
 func TestRetentionPayloadCommitFailuresRetryExactlyOnce(t *testing.T) {
+	perCommitDurability(t)
 	stages := []struct {
 		name string
 		set  func(*retentionFaults, error)
@@ -292,6 +294,7 @@ func TestRetentionPayloadCommitFailuresRetryExactlyOnce(t *testing.T) {
 }
 
 func TestRetentionPendingPayloadRejectsDifferentPayload(t *testing.T) {
+	perCommitDurability(t)
 	dir := t.TempDir()
 	h := NewHub(0)
 	t.Cleanup(func() { _ = h.Close() })
@@ -331,6 +334,7 @@ func TestRetentionPendingPayloadRejectsDifferentPayload(t *testing.T) {
 }
 
 func TestRetentionPendingPayloadReopenAcceptsVisibleManifest(t *testing.T) {
+	perCommitDurability(t)
 	dir := t.TempDir()
 	h := NewHub(0)
 	if err := h.SetRecordingDirectory(dir); err != nil {
@@ -361,6 +365,7 @@ func TestRetentionPendingPayloadReopenAcceptsVisibleManifest(t *testing.T) {
 }
 
 func TestRetentionResizeCommitFailuresRetryWithoutDuplicates(t *testing.T) {
+	perCommitDurability(t)
 	stages := []struct {
 		name string
 		set  func(*retentionFaults, error)

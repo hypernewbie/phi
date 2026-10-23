@@ -90,6 +90,7 @@ func TestSweepKeepsFreshClosedGroups(t *testing.T) {
 }
 
 func TestSweepProtectsLiveIdlePanesRegardlessOfAge(t *testing.T) {
+	perCommitDurability(t)
 	fc := &fakeClock{now: time.Unix(1_700_000_000, 0).UTC()}
 	h, dir := expiryTestHub(t, fc)
 	if _, gerr := h.GetOrCreatePaneHub("live"); gerr != nil {
@@ -150,6 +151,7 @@ func TestSweepSkipsWhenReservationsUnreadable(t *testing.T) {
 }
 
 func TestOrphanExpiryUsesLastDurableUpdate(t *testing.T) {
+	perCommitDurability(t)
 	fc := &fakeClock{now: time.Unix(1_700_000_000, 0).UTC()}
 	h, dir := expiryTestHub(t, fc)
 	if err := h.Ingest("orphan", []byte("orphaned\r\n")); err != nil {
