@@ -743,6 +743,16 @@ func (h *Hub) Recording(paneID string, from, through uint64) (Recording, bool) {
 	if end > pos.Head {
 		end = pos.Head
 	}
+	if end < from {
+		// The window lies wholly below the floor, so none of it is left.
+		// Serve the empty span at the floor: the start is above the
+		// requested position, which is how a client learns that the
+		// prefix expired.
+		end = from
+	}
+	if end-from > MaxCheckpointBytes {
+		end = from + MaxCheckpointBytes
+	}
 	rec := Recording{Epoch: pos.Epoch, Start: from, End: end}
 	if ph.recording == nil || ph.recording.isClosed() {
 		return Recording{}, false
@@ -789,6 +799,14 @@ func (h *Hub) RecordingAfterCursor(paneID string, from, through uint64, after st
 	end := through
 	if end > pos.Head {
 		end = pos.Head
+	}
+	if end < from {
+		// The window lies wholly below the floor: the empty span at the
+		// floor reports the expired prefix, like Recording does.
+		end = from
+	}
+	if end-from > MaxCheckpointBytes {
+		end = from + MaxCheckpointBytes
 	}
 	if ph.recording == nil || ph.recording.isClosed() {
 		return Recording{}, "", ErrEventCursorInvalid

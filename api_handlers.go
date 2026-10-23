@@ -212,11 +212,10 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 			wantEpoch = v
 			hasEpoch = true
 		}
-		// Cold history can be much larger than the replay cache. Bound the
-		// response allocation; clients assemble the advertised byte spans.
-		if through > from && through-from > ws.MaxCheckpointBytes {
-			through = from + ws.MaxCheckpointBytes
-		}
+		// The span is bounded after the retention floor is applied, in
+		// the hub: it is the only place that knows where the floor is,
+		// and a request that starts below it must still answer with the
+		// retained window instead of an inverted one.
 		after := r.URL.Query().Get("after_event_cursor")
 		var rec ws.Recording
 		if after != "" {

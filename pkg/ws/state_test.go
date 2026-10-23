@@ -42,13 +42,16 @@ func TestBoundedStateRetainsRequestedBooks(t *testing.T) {
 		}
 	}
 	// A span starting in evicted history clamps to the floor; a span
-	// wholly below it is gone.
+	// wholly below it has no bytes left, so it answers as the empty span
+	// at the floor. Its start is above the requested position, which is
+	// the expired-prefix signal the clients read.
 	clamped, ok := h.Recording("books", 0, uint64(len(source)))
 	if !ok || clamped.Start != uint64(floor) || !bytes.Equal(clamped.Data, source[floor:]) {
 		t.Fatal("evicted prefix did not clamp to the retained floor")
 	}
-	if _, ok := h.Recording("books", 0, 1024); ok {
-		t.Fatal("wholly evicted span unexpectedly readable")
+	empty, ok := h.Recording("books", 0, 1024)
+	if !ok || empty.Start != uint64(floor) || empty.End != uint64(floor) || len(empty.Data) != 0 {
+		t.Fatal("wholly evicted span did not answer as the empty span at the floor")
 	}
 	client := &Client{NativeState: true, Send: make(chan []byte, 4)}
 	h.AttachHot("books", client)
