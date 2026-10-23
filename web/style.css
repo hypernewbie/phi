@@ -2113,18 +2113,53 @@ body.show-tab-shortcuts .tab.has-shortcut .tab-shortcut-badge {
     display: none !important;
 }
 
-/* Attention persists until the tab is clicked, so an infinite pulse here runs
-   for as long as nobody is looking -- an agent that finishes overnight would
-   have pulsed until morning. The state is held by the static colour and glow
-   (which is the keyframe peak, so it reads stronger at rest than the old
-   animation's average), and the pulse plays a bounded three times to catch
-   the eye when the attention first arrives. Iteration count, not `infinite`:
-   the burst replays whenever the class is re-added. */
+/* Bounded pulse (never infinite: attention can persist overnight) plus a
+   static cue that keeps attention visible after the pulse and without
+   motion. The burst replays whenever the class is re-added. */
 .tab.has-attention {
     animation: tab-pulse 2s ease-in-out 3;
     color: var(--accent, #7c6af7) !important;
     opacity: 1;
     text-shadow: 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+.tab.has-attention:not(.active) {
+    background-color: var(--accent-wash);
+    border-color: var(--accent-soft);
+    border-left-color: var(--accent);
+}
+
+.tab-attention-indicator {
+    flex-shrink: 0;
+    color: var(--accent-bright);
+    font-size: 10px;
+    line-height: 1;
+}
+
+.hostname-dropdown-row.has-attention:not(.active) {
+    background-color: var(--accent-wash);
+    box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.hostname-dropdown-row.has-attention .hostname-dropdown-title {
+    color: var(--accent-bright);
+}
+
+.hostname-dropdown-attention,
+.tab-overflow-attention {
+    flex-shrink: 0;
+    color: var(--accent-bright);
+    font-size: 10px;
+    line-height: 1.4;
+}
+
+.tab-overflow-dropdown .hostname-dropdown-attention {
+    grid-column: 2;
+}
+
+.tab-overflow-workspace.has-attention > summary .tab-overflow-summary-label,
+.tab-overflow-worktree.has-attention > summary .tab-overflow-summary-label {
+    color: var(--accent-bright);
 }
 
 @keyframes tab-pulse {

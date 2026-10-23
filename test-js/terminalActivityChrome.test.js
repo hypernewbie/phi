@@ -141,6 +141,7 @@ describe('terminal activity chrome rendering', () => {
             updateDocumentTitle,
             syncBackendPin: vi.fn(),
             triggerAttentionNotification,
+            _setTabAttention: TabManager.prototype._setTabAttention,
         };
 
         TabManager.prototype.pollTerminalIdleAndNotifications.call(doneManager);

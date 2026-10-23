@@ -502,8 +502,7 @@ export class TabManager {
             if (!document.hidden) {
                 const activeTab = this.getActiveTab();
                 if (activeTab?.isAttention) {
-                    activeTab.isAttention = false;
-                    activeTab.tabEl?.classList.remove('has-attention');
+                    this._setTabAttention(activeTab, false);
                     this.updateDocumentTitle();
                 }
                 this._reviveActiveTabIfDead();
@@ -797,10 +796,23 @@ export class TabManager {
 
     sortTabsByWorkspace() {
         if (this.tabs.size < 2) return;
-        const order = this._workspaceTabGroups(
+        const groups = this._workspaceTabGroups(
             Array.from(this.tabs.entries()),
-        ).flatMap((group) => group.entries.map(([paneId]) => paneId));
-        this.applyTabOrder(order);
+        );
+        // Unread (needing attention) first; workspace grouping stays
+        // secondary and each partition keeps its existing order (stable).
+        // Closing tabs keep their IDs in the read partition: no unread
+        // priority during the undo grace period.
+        const unread = [];
+        const read = [];
+        for (const group of groups) {
+            for (const [paneId, tab] of group.entries) {
+                (!tab.softClosing && tab.isAttention ? unread : read).push(
+                    paneId,
+                );
+            }
+        }
+        this.applyTabOrder([...unread, ...read]);
     }
 
     applySavedTabOrder() {
@@ -5237,8 +5249,7 @@ export class TabManager {
         newTab.tabEl.classList.add('active');
         newTab.termContainer.classList.add('active');
         if (newTab.isAttention) {
-            newTab.isAttention = false;
-            newTab.tabEl.classList.remove('has-attention');
+            this._setTabAttention(newTab, false);
             this.updateDocumentTitle();
         }
         this.renderPiRpcStatusBar();
@@ -5658,6 +5669,9 @@ export class TabManager {
         }, TabManager.SOFT_CLOSE_GRACE_MS);
         this.updateTabOverflow?.();
         this._refreshOverflowDropdown?.();
+        // An open hostname list stays open across strip-× soft-close:
+        // closing rows must lose their cues and unread priority at once.
+        this._refreshHostnameTabsDropdown?.();
     }
 
     _selectTabAfterClose(paneId) {
@@ -6237,6 +6251,18 @@ export class TabManager {
         }
     }
 
+    // Builds the shared ● completion-attention marker for tab-list rows
+    // and tree summaries. The strip indicator in _setTabAttention predates
+    // this helper and keeps its own construction.
+    _makeAttentionMarker(className, label) {
+        const marker = document.createElement('span');
+        marker.className = className;
+        marker.textContent = '●';
+        marker.setAttribute('role', 'img');
+        marker.setAttribute('aria-label', label);
+        return marker;
+    }
+
     _buildOverflowDropdown({ preserveState = false } = {}) {
         const dropdown = document.getElementById('tab-overflow-dropdown');
         if (!dropdown) return null;
@@ -6293,6 +6319,8 @@ export class TabManager {
             row.dataset.paneId = paneId;
             if (!closing && paneId === this.activePaneId)
                 row.classList.add('active');
+            if (!closing && tab.isAttention)
+                row.classList.add('has-attention');
 
             const selectBtn = document.createElement('button');
             selectBtn.type = 'button';
@@ -6309,6 +6337,14 @@ export class TabManager {
             titleSpan.className = 'hostname-dropdown-title';
             titleSpan.textContent = tab.title || 'Session';
             selectBtn.append(faviconImg, titleSpan);
+            if (!closing && tab.isAttention) {
+                selectBtn.appendChild(
+                    this._makeAttentionMarker(
+                        'hostname-dropdown-attention',
+                        'Needs attention',
+                    ),
+                );
+            }
 
             if (closing) {
                 const countdown = document.createElement('span');
@@ -6372,9 +6408,18 @@ export class TabManager {
         }
 
         const liveEntries = entries.filter(([, tab]) => !tab.softClosing);
-        for (const workspaceGroup of this._workspaceTabGroups(liveEntries)) {
-            if (workspaceGroup.entries.length === 0) continue;
-
+        const hasUnread = (items) =>
+            items.some((entry) => entry[1].isAttention);
+        // Unread-bearing groups first; the existing group order stays
+        // secondary and each partition keeps its order (stable).
+        const workspaceGroups = this._workspaceTabGroups(
+            liveEntries,
+        ).filter((group) => group.entries.length > 0);
+        const orderedWorkspaceGroups = [
+            ...workspaceGroups.filter((group) => hasUnread(group.entries)),
+            ...workspaceGroups.filter((group) => !hasUnread(group.entries)),
+        ];
+        for (const workspaceGroup of orderedWorkspaceGroups) {
             const workspace = document.createElement('details');
             workspace.className = 'tab-overflow-workspace';
             workspace.dataset.workspace = workspaceGroup.workspace;
@@ -6404,6 +6449,15 @@ export class TabManager {
                 workspaceLabel,
                 workspaceCount,
             );
+            if (hasUnread(workspaceGroup.entries)) {
+                workspace.classList.add('has-attention');
+                workspaceSummary.appendChild(
+                    this._makeAttentionMarker(
+                        'tab-overflow-attention',
+                        'Contains tabs needing attention',
+                    ),
+                );
+            }
             workspace.appendChild(workspaceSummary);
             dropdown.appendChild(workspace);
 
@@ -6426,7 +6480,11 @@ export class TabManager {
                 );
             }
 
-            for (const worktreeGroup of worktreeGroups) {
+            const orderedWorktreeGroups = [
+                ...worktreeGroups.filter((group) => hasUnread(group.items)),
+                ...worktreeGroups.filter((group) => !hasUnread(group.items)),
+            ];
+            for (const worktreeGroup of orderedWorktreeGroups) {
                 const cwd = worktreeGroup.cwd;
                 const worktree = document.createElement('details');
                 worktree.className = 'tab-overflow-worktree';
@@ -6467,9 +6525,26 @@ export class TabManager {
                     worktreeLabel,
                     worktreeCount,
                 );
+                if (hasUnread(worktreeGroup.items)) {
+                    worktree.classList.add('has-attention');
+                    worktreeSummary.appendChild(
+                        this._makeAttentionMarker(
+                            'tab-overflow-attention',
+                            'Contains tabs needing attention',
+                        ),
+                    );
+                }
                 worktree.appendChild(worktreeSummary);
                 workspace.appendChild(worktree);
-                for (const [paneId, tab] of worktreeGroup.items) {
+                const orderedItems = [
+                    ...worktreeGroup.items.filter(
+                        ([, tab]) => tab.isAttention,
+                    ),
+                    ...worktreeGroup.items.filter(
+                        ([, tab]) => !tab.isAttention,
+                    ),
+                ];
+                for (const [paneId, tab] of orderedItems) {
                     appendRow(worktree, paneId, tab);
                 }
             }
@@ -7660,8 +7735,7 @@ export class TabManager {
     _ringPiBridgeBell(tabInfo) {
         tabInfo.userTaskActive = false;
         tabInfo.busyStartTime = null;
-        tabInfo.isAttention = true;
-        tabInfo.tabEl?.classList.add('has-attention');
+        this._setTabAttention(tabInfo, true);
         this.updateDocumentTitle();
         // Ready-at-prompt, never a success claim: the outcome may be an
         // error or explicitly unknown.
@@ -9397,6 +9471,38 @@ export class TabManager {
         });
     }
 
+    _refreshHostnameTabsDropdown() {
+        const dropdown = document.getElementById('hostname-tabs-dropdown');
+        if (!dropdown || dropdown.classList.contains('hidden')) return;
+        // A live settlement rebuilds the list; keep the keyboard user's
+        // place (row + control) and the scroll offset across the rebuild.
+        const active = document.activeElement;
+        const focusRow = active?.closest?.('.hostname-dropdown-row') || null;
+        const focusControl = focusRow?.contains(active)
+            ? Array.from(focusRow.querySelectorAll('button')).indexOf(active)
+            : -1;
+        const focusPaneId =
+            focusRow && dropdown.contains(focusRow)
+                ? focusRow.dataset.paneId
+                : null;
+        const scrollTop = dropdown.scrollTop;
+        this.renderHostnameTabsDropdown();
+        dropdown.scrollTop = scrollTop;
+        if (focusPaneId && focusControl >= 0) {
+            // Equality match, never an interpolated selector: pane IDs
+            // can carry quotes or backslashes (e.g. review-${id}), which
+            // would throw here and interrupt completion handling.
+            const row = Array.from(
+                dropdown.querySelectorAll('.hostname-dropdown-row'),
+            ).find(
+                (candidate) => candidate.dataset.paneId === focusPaneId,
+            );
+            row?.querySelectorAll('button')[focusControl]?.focus({
+                preventScroll: true,
+            });
+        }
+    }
+
     renderHostnameTabsDropdown() {
         const dropdown = document.getElementById('hostname-tabs-dropdown');
         if (!dropdown) return;
@@ -9419,12 +9525,23 @@ export class TabManager {
             return;
         }
 
-        for (const [paneId, tabInfo] of this.tabs.entries()) {
+        const tabEntries = Array.from(this.tabs.entries());
+        // Unread (needing attention) first; existing tab order secondary.
+        // Closing rows get no unread priority during the undo grace period.
+        const isListUnread = (tabInfo) =>
+            !tabInfo.softClosing && tabInfo.isAttention;
+        const orderedEntries = [
+            ...tabEntries.filter(([, tabInfo]) => isListUnread(tabInfo)),
+            ...tabEntries.filter(([, tabInfo]) => !isListUnread(tabInfo)),
+        ];
+        for (const [paneId, tabInfo] of orderedEntries) {
             const row = document.createElement('div');
             row.className = 'hostname-dropdown-row';
+            row.dataset.paneId = paneId;
             if (paneId === this.activePaneId) {
                 row.classList.add('active');
             }
+            if (isListUnread(tabInfo)) row.classList.add('has-attention');
 
             // Click target to switch tab
             const selectBtn = document.createElement('button');
@@ -9465,6 +9582,14 @@ export class TabManager {
             selectBtn.appendChild(glyphSpan);
             selectBtn.appendChild(titleSpan);
             selectBtn.appendChild(metaSpan);
+            if (isListUnread(tabInfo)) {
+                selectBtn.appendChild(
+                    this._makeAttentionMarker(
+                        'hostname-dropdown-attention',
+                        'Needs attention',
+                    ),
+                );
+            }
             selectBtn.addEventListener('click', () => {
                 this.switchTab(paneId, { userInitiated: true });
                 dropdown.classList.add('hidden');
@@ -10305,8 +10430,7 @@ export class TabManager {
             // If the tab is currently focused and visible, clear attention states immediately.
             if (isActiveAndVisible) {
                 if (tab.isAttention) {
-                    tab.isAttention = false;
-                    tab.tabEl?.classList.remove('has-attention');
+                    this._setTabAttention(tab, false);
                     statusChanged = true;
                 }
                 // When actively focused on this tab, user sees it live: clear active task state once quiet/prompt
@@ -10387,11 +10511,10 @@ export class TabManager {
                                     processExited ||
                                     (isTestMockWithoutTerm && isLongTask)
                                 ) {
-                                    tab.isAttention = true;
+                                    this._setTabAttention(tab, true);
                                     tab.userTaskActive = false;
                                     tab.busyStartTime = null;
                                     statusChanged = true;
-                                    tab.tabEl?.classList.add('has-attention');
 
                                     this.triggerAttentionNotification(
                                         tab,
@@ -10469,16 +10592,39 @@ export class TabManager {
         }
     }
 
+    _setTabAttention(tab, attention) {
+        if (Boolean(tab.isAttention) === attention) return false;
+        tab.isAttention = attention;
+        if (tab.tabEl) {
+            tab.tabEl.classList.toggle('has-attention', attention);
+            const indicator = tab.tabEl.querySelector(
+                '.tab-attention-indicator',
+            );
+            if (attention && !indicator) {
+                const status = document.createElement('span');
+                status.className = 'tab-attention-indicator';
+                status.setAttribute('role', 'img');
+                status.setAttribute('aria-label', 'Needs attention');
+                status.textContent = '●';
+                tab.tabEl.insertBefore(
+                    status,
+                    tab.tabEl.querySelector('.tab-title'),
+                );
+            } else if (!attention) {
+                indicator?.remove();
+            }
+        }
+        this._refreshOverflowDropdown?.();
+        this._refreshHostnameTabsDropdown?.();
+        return true;
+    }
+
     clearAttentionIndicators() {
         // Clear the completion/attention layer, then recompose the title.
         // This intentionally preserves ϕ when another tab is still emitting.
         let cleared = false;
         for (const tab of this.tabs.values()) {
-            if (tab.isAttention) {
-                tab.isAttention = false;
-                tab.tabEl.classList.remove('has-attention');
-                cleared = true;
-            }
+            if (this._setTabAttention(tab, false)) cleared = true;
         }
         if (cleared) this.updateDocumentTitle();
     }
