@@ -51,6 +51,8 @@ allowBuilds:
   electron: true
   electron-winstaller: false
   protobufjs: false
+  # buf's postinstall only validates the binary, which runs without it.
+  '@bufbuild/buf': false
 minimumReleaseAgeExclude:
   - electron@44.4.3
   - html-encoding-sniffer@7.0.0
