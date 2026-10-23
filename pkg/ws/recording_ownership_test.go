@@ -60,11 +60,12 @@ func TestRecordingConcurrentColdReadersCannotTruncateLiveWriter(t *testing.T) {
 	if err := h.SetRecordingDirectory(dir); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = h.Close() })
 	const count = 150000
-	initial := bytes.Repeat([]byte{1, 0, 0, 0, 1, 'X'}, count)
-	if err := os.WriteFile(h.recordingPath("pane"), initial, 0600); err != nil {
+	if err := h.Ingest("pane", bytes.Repeat([]byte("X"), count)); err != nil {
 		t.Fatal(err)
 	}
+	h.ClosePane("pane")
 	done := make(chan struct{}, 24)
 	var wg sync.WaitGroup
 	for i := 0; i < 24; i++ {
@@ -77,7 +78,10 @@ func TestRecordingConcurrentColdReadersCannotTruncateLiveWriter(t *testing.T) {
 	}
 	<-done
 	cold := h.recordingForRead("pane")
-	ph := h.GetOrCreatePaneHub("pane")
+	ph, gerr := h.GetOrCreatePaneHub("pane")
+	if gerr != nil {
+		t.Fatal(gerr)
+	}
 	if ph != cold {
 		t.Fatal("cold-to-live promotion split the journal's mutex ownership")
 	}
@@ -91,15 +95,20 @@ func TestRecordingConcurrentColdReadersCannotTruncateLiveWriter(t *testing.T) {
 		}
 	}
 	<-stop
-	defer ph.recording.file.Close()
-	stat, err := ph.recording.file.Stat()
-	if err != nil {
-		t.Fatal(err)
+	ph.mu.Lock()
+	for _, s := range ph.recording.segs {
+		info, err := s.raw.Stat()
+		if err != nil {
+			ph.mu.Unlock()
+			t.Fatal(err)
+		}
+		if uint64(info.Size()) != s.rawLen {
+			ph.mu.Unlock()
+			t.Fatalf("concurrent cold opener truncated admitted writer bytes: size=%d expected=%d", info.Size(), s.rawLen)
+		}
 	}
-	if stat.Size() != ph.recording.offset {
-		t.Fatalf("concurrent cold opener truncated admitted writer bytes: size=%d expected=%d", stat.Size(), ph.recording.offset)
-	}
-	rec, ok := h.Recording("pane", count, ph.total)
+	ph.mu.Unlock()
+	rec, ok := h.Recording("pane", count, uint64(count+writes*len(payload)))
 	expected := bytes.Repeat(payload, writes)
 	if !ok || !bytes.Equal(rec.Data, expected) {
 		for i := 0; i < len(rec.Data) && i < len(expected); i++ {

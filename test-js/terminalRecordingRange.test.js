@@ -68,8 +68,17 @@ it('a requested book succeeds even when the server returns more than 68 positive
     expect(fetcher).toHaveBeenCalledTimes(90);
 });
 
+it('a skipped prefix ends the range with a typed permanent failure', async () => {
+    vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => recordingEnvelope(encode('data'), 0, 4, { start: 1 })),
+    );
+    await expect(manager()._fetchRecordingRangeOnce('p', 0, 4, 7)).rejects.toMatchObject({
+        historyPermanent: true,
+    });
+});
+
 it.each([
-    ['skipped prefix', { start: 1 }],
     ['epoch mismatch', { epoch: 8 }],
     ['unsafe epoch', { epoch: Number.MAX_SAFE_INTEGER + 1 }],
     ['wrong byte length', { end: 5 }],
@@ -95,7 +104,7 @@ it.each([
     expect(await manager()._fetchRecordingRangeOnce('p', 0, 4, 7)).toBeNull();
 });
 
-it.each([204, 409, 500])(
+it.each([204, 500])(
     'HTTP %i cannot authorize skipping source bytes',
     async (status) => {
         vi.stubGlobal(
@@ -107,6 +116,13 @@ it.each([204, 409, 500])(
         ).toBeNull();
     },
 );
+
+it('HTTP 409 ends the range with a typed permanent failure', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 409 })));
+    await expect(manager()._fetchRecordingRangeOnce('p', 0, 4, 7)).rejects.toMatchObject({
+        historyPermanent: true,
+    });
+});
 
 it('malformed envelopes and network failures leave the interval unfilled', async () => {
     vi.stubGlobal(

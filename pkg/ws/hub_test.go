@@ -24,7 +24,10 @@ func TestHub_RegisterAndUnregister(t *testing.T) {
 	h.Register(paneID, client1)
 	h.Register(paneID, client2)
 
-	ph := h.GetOrCreatePaneHub(paneID)
+	ph, gerr := h.GetOrCreatePaneHub(paneID)
+	if gerr != nil {
+		t.Fatal(gerr)
+	}
 	ph.mu.Lock()
 	clientCount := len(ph.clients)
 	ph.mu.Unlock()
@@ -75,7 +78,10 @@ func TestHubCloseAllClientsPreservesPaneState(t *testing.T) {
 	// A nil Ws is valid for unit-created clients; the important contract is
 	// that forced live-connection cleanup does not discard pane/ring state.
 	h.CloseAllClients()
-	ph := h.GetOrCreatePaneHub("pane")
+	ph, gerr := h.GetOrCreatePaneHub("pane")
+	if gerr != nil {
+		t.Fatal(gerr)
+	}
 	ph.mu.Lock()
 	registered := ph.clients[client]
 	ph.mu.Unlock()
