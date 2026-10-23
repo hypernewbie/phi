@@ -1215,14 +1215,13 @@ export class TabManager {
                     t.cwd || '',
                     !!t.pinned,
                     !!t.marked,
-                    ...(t.coder === 'opencode'
-                        ? ['', null, openCodePaneMode(t.opencode_mode)]
-                        : []),
+                    '',
+                    null,
+                    t.coder === 'opencode'
+                        ? openCodePaneMode(t.opencode_mode)
+                        : null,
+                    t.pi_bridge,
                 );
-                if (t.pi_bridge !== undefined) {
-                    const tab = this.tabs.get(t.id);
-                    if (tab) tab.piBridge = t.pi_bridge;
-                }
             }
             // Apply the user's drag-reorder (if any) from localStorage. Stale
             // paneIds (closed tabs, or IDs that changed during a session
@@ -3141,9 +3140,17 @@ export class TabManager {
         initialCmd = '',
         piRpcSessionPath = null,
         opencodeMode = null,
+        initialPiBridge = null,
     ) {
         // If tab already exists, just switch to it
         if (this.tabs.has(paneId)) {
+            // A reattach still carries the current HTTP bridge
+            // baseline: seed it through ordering before switching.
+            if (initialPiBridge != null)
+                this._seedHttpPiBridge(
+                    this.tabs.get(paneId),
+                    initialPiBridge,
+                );
             this.switchTab(paneId, { userInitiated: true });
             return;
         }
@@ -3781,6 +3788,11 @@ export class TabManager {
         this._setCurrentTabSocket(tabInfo, ws);
         this.tabs.set(paneId, tabInfo);
         this._placeNewTabByWorkspace(paneId);
+        // Seed the spawn/resume/restore HTTP bridge baseline before
+        // any socket callback can arrive; the fresh attach confirms
+        // or advances it through the same ordering check.
+        if (initialPiBridge != null)
+            this._seedHttpPiBridge(tabInfo, initialPiBridge);
 
         // A real scroll gesture takes ownership away from any in-flight
         // fit/reflow restore. Do not use term.onScroll for this: xterm emits
@@ -4105,16 +4117,64 @@ export class TabManager {
                 },
             );
         }
+        this.renderPiRpcStatusBar();
+    }
+
+    // _orderedPiBridgeModel returns the Pi tab's displayable model:
+    // a managed view with a model, confirmed fresh on the live
+    // socket. Anything else (absent model, stale socket, dead pane)
+    // hides the bar.
+    _orderedPiBridgeModel(tab) {
+        if (!tab || tab.coder !== 'pi' || tab.isDead) return null;
+        if (!tab.ws || tab._piBridgeFresh !== tab.ws) return null;
+        const view = tab.piBridge;
+        if (!view || view.state !== 'managed') return null;
+        if (typeof view.model !== 'string' || !view.model) return null;
+        return view.model;
+    }
+
+    // _renderPiBridgeStatusBar reuses the Pi-RPC status markup and
+    // styles for a Pi PTY tab: cwd plus the live model. Pi carries
+    // no token counts, so no meter is rendered.
+    _renderPiBridgeStatusBar(bar, tab, model) {
+        let cwdDisplay = tab.cwd || '—';
+        if (cwdDisplay && cwdDisplay !== '—') {
+            cwdDisplay = cwdDisplay
+                .replace(/^\/Users\/[^/]+/, '~')
+                .replace(/^\/home\/[^/]+/, '~');
+        }
+        bar.classList.remove('hidden');
+        const cwdEl = document.createElement('div');
+        cwdEl.className = 'pi-rpc-status-cwd';
+        cwdEl.textContent = cwdDisplay;
+        cwdEl.title = tab.cwd || cwdDisplay;
+        const mainRow = document.createElement('div');
+        mainRow.className = 'pi-rpc-status-main';
+        const rightEl = document.createElement('span');
+        rightEl.className = 'pi-rpc-status-model';
+        rightEl.textContent = model;
+        rightEl.title = model;
+        mainRow.append(rightEl);
+        bar.replaceChildren(cwdEl, mainRow);
+        this._updatePiThinkingButton();
     }
 
     renderPiRpcStatusBar() {
         const bar = this.piRpcStatusBar;
         if (!bar) return;
         const activeTab = this.getActiveTab();
-        if (activeTab?.coder !== 'pi-rpc') {
+        const piModel =
+            activeTab?.coder === 'pi'
+                ? this._orderedPiBridgeModel(activeTab)
+                : null;
+        if (activeTab?.coder !== 'pi-rpc' && piModel === null) {
             bar.classList.add('hidden');
             bar.replaceChildren();
             this._updatePiThinkingButton();
+            return;
+        }
+        if (piModel !== null) {
+            this._renderPiBridgeStatusBar(bar, activeTab, piModel);
             return;
         }
         const raw = getPiRpcStatus(activeTab.paneId);
@@ -7492,6 +7552,156 @@ export class TabManager {
     _setCurrentTabSocket(tabInfo, socket) {
         tabInfo._piTitleRevision = -1;
         tabInfo.ws = socket;
+        // A new browser socket restarts bridge ordering: never carry
+        // the old server's counter across, and hide the model until
+        // fresh current-socket state confirms it.
+        this._resetPiBridgeOrdered(tabInfo);
+        this.renderPiRpcStatusBar();
+    }
+
+    // _resetPiBridgeOrdered drops the per-tab publication floor and the
+    // current-socket freshness mark. The next valid state re-baselines.
+    _resetPiBridgeOrdered(tabInfo) {
+        if (!tabInfo) return;
+        tabInfo._piBridgeRev = null;
+        tabInfo._piBridgeFresh = null;
+    }
+
+    // _piBridgeRevValue parses a telemetry revision: a valid positive
+    // u64 decimal string yields a BigInt, anything else yields null.
+    // Never compare revisions as floats: u64 exceeds safe integers.
+    _piBridgeRevValue(raw) {
+        if (typeof raw !== 'string' || !/^\d+$/.test(raw)) return null;
+        try {
+            const value = BigInt(raw);
+            if (value <= 0n || value > 18446744073709551615n) return null;
+            return value;
+        } catch {
+            return null;
+        }
+    }
+
+    // _normalizePiBridgeView maps one HTTP or WS bridge view into the
+    // stored shape. HTTP carries booleans/arrays, WS carries strings;
+    // both land here so ordering compares one canonical form.
+    _normalizePiBridgeView(raw) {
+        if (!raw || typeof raw !== 'object') return null;
+        const view = {
+            state: typeof raw.state === 'string' ? raw.state : 'plain',
+        };
+        if (typeof raw.reason === 'string' && raw.reason)
+            view.reason = raw.reason;
+        if (typeof raw.generation === 'string' && raw.generation)
+            view.generation = raw.generation;
+        if (
+            typeof raw.telemetry_revision === 'string' &&
+            raw.telemetry_revision
+        )
+            view.telemetry_revision = raw.telemetry_revision;
+        if (typeof raw.last_run === 'string' && raw.last_run)
+            view.last_run = raw.last_run;
+        if (typeof raw.last_outcome === 'string' && raw.last_outcome)
+            view.last_outcome = raw.last_outcome;
+        if (raw.running === true || raw.running === 'true')
+            view.running = true;
+        else if (raw.running === false || raw.running === 'false')
+            view.running = false;
+        if (raw.connected === true || raw.connected === 'true')
+            view.connected = true;
+        else if (raw.connected === false || raw.connected === 'false')
+            view.connected = false;
+        if (typeof raw.model === 'string' && raw.model)
+            view.model = raw.model;
+        const caps = raw.capabilities;
+        if (typeof caps === 'string' && caps)
+            view.capabilities = caps.split(',').filter(Boolean);
+        else if (Array.isArray(caps))
+            view.capabilities = caps.filter(
+                (c) => typeof c === 'string' && c,
+            );
+        return view;
+    }
+
+    // _acceptOrderedBridgeView applies one HTTP (socket null) or WS
+    // bridge view to the per-tab ordered state. A valid positive u64
+    // baseline is accepted, then only newer revisions; an equal
+    // revision with the same model/capabilities confirms freshness on
+    // the current socket, while a conflicting equal or any older
+    // revision is rejected. Unstamped managed views never replace
+    // accepted state. Non-managed views apply only when no floor is
+    // known. HTTP seeds set the floor but never freshness: the model
+    // shows only after current-socket state confirms it.
+    _acceptOrderedBridgeView(tabInfo, raw, socket) {
+        if (!tabInfo || tabInfo.coder !== 'pi') return false;
+        if (this.tabs?.get(tabInfo.paneId) !== tabInfo) return false;
+        if (socket !== null && socket !== undefined) {
+            if (!socket || tabInfo.ws !== socket) return false;
+            if (
+                raw &&
+                typeof raw === 'object' &&
+                raw.pane_id !== undefined &&
+                raw.pane_id !== tabInfo.paneId
+            )
+                return false;
+        }
+        const view = this._normalizePiBridgeView(raw);
+        if (!view) return false;
+        if (view.state !== 'managed') {
+            if (tabInfo._piBridgeRev != null) return false;
+            tabInfo.piBridge = view;
+            if (socket) tabInfo._piBridgeFresh = socket;
+            return true;
+        }
+        const rev = this._piBridgeRevValue(view.telemetry_revision);
+        if (rev === null) return false;
+        const floor = tabInfo._piBridgeRev;
+        if (floor == null) {
+            tabInfo._piBridgeRev = rev;
+            tabInfo.piBridge = view;
+            if (socket) tabInfo._piBridgeFresh = socket;
+            return true;
+        }
+        if (rev < floor) return false;
+        if (rev === floor) {
+            const current = tabInfo.piBridge;
+            const sameModel =
+                (current?.model || '') === (view.model || '');
+            const sameCaps =
+                (current?.capabilities || []).join(',') ===
+                (view.capabilities || []).join(',');
+            if (!sameModel || !sameCaps) return false;
+            // Availability rides the retained view without a new
+            // revision: adopt a flipped connected at equal rev so
+            // peer-down still lands.
+            if (
+                current &&
+                view.connected !== undefined &&
+                current.connected !== view.connected
+            ) {
+                current.connected = view.connected;
+            }
+            if (socket) tabInfo._piBridgeFresh = socket;
+            return true;
+        }
+        tabInfo._piBridgeRev = rev;
+        tabInfo.piBridge = view;
+        if (socket) tabInfo._piBridgeFresh = socket;
+        return true;
+    }
+
+    // _seedHttpPiBridge applies one spawn/resume/restore/restart HTTP
+    // bridge baseline through the same ordering check as live frames,
+    // so a late HTTP response can never overwrite newer WS state.
+    _seedHttpPiBridge(tabInfo, httpView) {
+        if (!tabInfo || tabInfo.coder !== 'pi') return false;
+        const changed = this._acceptOrderedBridgeView(
+            tabInfo,
+            httpView,
+            null,
+        );
+        if (changed && tabInfo === this.getActiveTab())
+            this.renderPiRpcStatusBar();
+        return changed;
     }
 
     _acceptPiSessionTitle(tabInfo, control, socket = tabInfo?.ws) {
@@ -7530,7 +7740,7 @@ export class TabManager {
         if (control.type === 'session-title') {
             this._acceptPiSessionTitle(tabInfo, control, socket);
         } else if (control.type === 'pi-bridge-state') {
-            this._acceptPiBridgeState(tabInfo, control);
+            this._acceptPiBridgeState(tabInfo, control, socket);
         } else if (control.type === 'pi-bridge-settled') {
             this._acceptPiBridgeSettled(tabInfo, control);
         } else if (control.type === 'pty-exited') {
@@ -7539,6 +7749,7 @@ export class TabManager {
             tabInfo.tabEl.classList.add('dead');
             this.updateDocumentTitle();
             this._showReconnectOverlay(tabInfo);
+            this.renderPiRpcStatusBar();
         } else if (control.type === 'replay-complete') {
             // An empty replay still ends here, so drop the pending reset or
             // the next live byte would clear the terminal underneath the user.
@@ -7580,35 +7791,13 @@ export class TabManager {
     // sight of a retained run establishes a silent baseline (a new browser
     // never bells for history); only a newer run after a baseline rings a
     // catch-up bell. Aborted runs never ring.
-    _acceptPiBridgeState(tabInfo, control) {
+    _acceptPiBridgeState(tabInfo, control, socket = tabInfo?.ws) {
         if (!tabInfo || tabInfo.coder !== 'pi') return;
-        tabInfo.piBridge = {
-            state: control.state || 'plain',
-            ...(control.reason ? { reason: control.reason } : {}),
-            ...(control.generation ? { generation: control.generation } : {}),
-            ...(control.last_run ? { last_run: control.last_run } : {}),
-            ...(control.last_outcome
-                ? { last_outcome: control.last_outcome }
-                : {}),
-            ...(control.running === 'true'
-                ? { running: true }
-                : control.running === 'false'
-                  ? { running: false }
-                  : {}),
-            ...(control.model ? { model: control.model } : {}),
-            ...(control.capabilities
-                ? {
-                      capabilities: control.capabilities
-                          .split(',')
-                          .filter(Boolean),
-                  }
-                : {}),
-            ...(control.connected === 'true'
-                ? { connected: true }
-                : control.connected === 'false'
-                  ? { connected: false }
-                  : {}),
-        };
+        const viewChanged = this._acceptOrderedBridgeView(
+            tabInfo,
+            control,
+            socket,
+        );
         if (
             this._piRecall?.paneId === tabInfo.paneId &&
             (!this._piRecallEligible(tabInfo) ||
@@ -7657,6 +7846,8 @@ export class TabManager {
                 this._ringPiBridgeBell(tabInfo);
             }
         }
+        if (viewChanged && tabInfo === this.getActiveTab())
+            this.renderPiRpcStatusBar();
     }
 
     // _acceptPiBridgeSettled rings one bell per observed run. Duplicates
@@ -7894,6 +8085,7 @@ export class TabManager {
                         this.maybeAutoReconnect(tabInfo);
                         this.updateDisconnectBanner();
                     }
+                    this.renderPiRpcStatusBar();
                 },
                 () => {
                     if (tabInfo.ws !== newWs) return;
@@ -7961,6 +8153,7 @@ export class TabManager {
                     } catch (_e) {}
                     if (tabInfo.ws === newWs) tabInfo.ws = null;
                     tabInfo.isDead = true;
+                    this.renderPiRpcStatusBar();
                     if (msgEl) msgEl.innerText = 'Connection timed out';
                     if (btnEl) {
                         btnEl.disabled = false;
@@ -8044,7 +8237,10 @@ export class TabManager {
                     tabInfo.opencodeMode = openCodePaneMode(data.opencode_mode);
                 }
                 // A restart provisions a fresh lease; drop bridge state.
-                tabInfo.piBridge = data.pi_bridge;
+                // The HTTP baseline seeds below, after the new socket
+                // resets ordering.
+                tabInfo.piBridge = undefined;
+                this._resetPiBridgeOrdered(tabInfo);
                 // A restart provisions a fresh lease: drop recall state
                 // without flushing — the old pane is being reborn.
                 this._resetPiRecall();
@@ -8098,6 +8294,7 @@ export class TabManager {
                             if (restartBtn) restartBtn.disabled = false;
                             this.updateDisconnectBanner();
                         }
+                        this.renderPiRpcStatusBar();
                     },
                     () => {
                         if (tabInfo.ws !== newWs) return;
@@ -8127,6 +8324,10 @@ export class TabManager {
                     this._hotOptions(tabInfo),
                 );
                 this._setCurrentTabSocket(tabInfo, newWs);
+                if (data.pi_bridge != null)
+                    this._seedHttpPiBridge(tabInfo, data.pi_bridge);
+                else if (tabInfo === this.getActiveTab())
+                    this.renderPiRpcStatusBar();
 
                 // Sync with session list in sidebar
                 if (this.app.sessionsManager) {

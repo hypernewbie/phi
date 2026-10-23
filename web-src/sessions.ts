@@ -1162,6 +1162,8 @@ export class SessionsManager {
                 coderId,
                 workspace,
                 cwd,
+                // The trailing bridge value seeds the tab's ordered
+                // model view; explicit defaults match createTab's.
                 ...(coderId === 'opencode'
                     ? [
                           true,
@@ -1169,8 +1171,9 @@ export class SessionsManager {
                           '',
                           null,
                           openCodePaneMode(data.opencode_mode),
+                          data.pi_bridge,
                       ]
-                    : []),
+                    : [true, false, '', null, null, data.pi_bridge]),
             );
 
             this.loadSessions();
@@ -1218,6 +1221,8 @@ export class SessionsManager {
                 coderId,
                 workspace,
                 cwd,
+                // The trailing bridge value seeds the tab's ordered
+                // model view; explicit defaults match createTab's.
                 ...(coderId === 'opencode'
                     ? [
                           true,
@@ -1225,8 +1230,9 @@ export class SessionsManager {
                           '',
                           null,
                           openCodePaneMode(data.opencode_mode),
+                          data.pi_bridge,
                       ]
-                    : []),
+                    : [true, false, '', null, null, data.pi_bridge]),
             );
 
             this.highlightActiveSession(sessionId);

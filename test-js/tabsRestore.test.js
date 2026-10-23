@@ -106,9 +106,9 @@ describe('restoreTabsState rebuilds tabs from /api/terminals', () => {
 
         expect(tm.createTab).toHaveBeenCalledTimes(3);
         const calls = tm.createTab.mock.calls.map((c) => c.join('|'));
-        expect(calls[0]).toBe('p1|s1|pi:tab|pi|/w|/w|false|false');
-        expect(calls[1]).toBe('p2|s2|claude|claude|/w|/w|false|false');
-        expect(calls[2]).toBe('p3|s3|shell|bash|/w|/w|false|false');
+        expect(calls[0]).toBe('p1|s1|pi:tab|pi|/w|/w|false|false||||');
+        expect(calls[1]).toBe('p2|s2|claude|claude|/w|/w|false|false||||');
+        expect(calls[2]).toBe('p3|s3|shell|bash|/w|/w|false|false||||');
     });
 
     it.each(['tui', 'mini', 'legacy', undefined])(
@@ -129,9 +129,37 @@ describe('restoreTabsState rebuilds tabs from /api/terminals', () => {
                 '',
                 null,
                 mode === 'mini' || mode === 'tui' ? mode : 'legacy',
+                undefined,
             ]);
         },
     );
+
+    it('forwards the HTTP bridge baseline as the trailing createTab arg', async () => {
+        const { tm } = makeTm();
+        const bridge = {
+            state: 'managed',
+            telemetry_revision: '5',
+            model: 'p/m',
+        };
+        mockFetch(() => [
+            {
+                id: 'p1',
+                session_id: 's1',
+                title: 'pi',
+                coder: 'pi',
+                workspace: '/w',
+                cwd: '/w',
+                pi_bridge: bridge,
+            },
+        ]);
+        await tm.restoreTabsState();
+        expect(tm.createTab.mock.calls[0].slice(8)).toEqual([
+            '',
+            null,
+            null,
+            bridge,
+        ]);
+    });
 
     it('forwards pinned and marked flags so the tab UI renders them', async () => {
         const { tm } = makeTm();

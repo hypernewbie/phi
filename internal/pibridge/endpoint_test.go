@@ -79,14 +79,21 @@ func TestEndpointsDiffer(t *testing.T) {
 }
 
 func TestEndpointSpacesAndMultibyteRoot(t *testing.T) {
-	// Use /tmp directly: os.TempDir() on macOS is a long /var/folders path
-	// that can exceed the 100-byte socket bound before the test starts.
-	base, err := os.MkdirTemp("/tmp", "phi-pi-")
+	// The controlled OS temporary root keeps this socket contained. A
+	// long system TMPDIR (macOS /var/folders) cannot host the
+	// 100-byte bound, so skip there instead of failing: rerun with a
+	// short TMPDIR (TMPDIR=/tmp/xxx go test ./internal/pibridge/) for
+	// coverage.
+	base, err := os.MkdirTemp("", "phi-pi-")
 	if err != nil {
 		t.Fatalf("base: %v", err)
 	}
 	defer os.RemoveAll(base)
 	root := filepath.Join(base, "phi pi ☆")
+	candidate := filepath.Join(root, "phi-pi-"+strings.Repeat("f", 16), socketBasename)
+	if len(candidate) > maxSocketPathBytes || !publishableTarget(candidate) {
+		t.Skipf("controlled TMPDIR cannot host %d-byte socket %q", len(candidate), candidate)
+	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		t.Fatalf("root: %v", err)
 	}
