@@ -539,7 +539,10 @@ func (h *Hub) AttachHot(paneID string, client *Client) {
 			}
 		}
 		extra = snapshot
-	} else if ph.ckpt != nil && ph.ckpt.Through <= pos.Head {
+	} else if ph.ckpt != nil && ph.ckpt.Through <= pos.Head && ph.ckpt.Through >= pos.Oldest {
+		// A stored checkpoint below the retention floor is unusable: clients
+		// validate checkpoint.through >= oldest and close on the mismatch.
+		// Drop it here so every client sees a consistent head.
 		hdr.Ckpt = &checkpointJSON{
 			Through: ph.ckpt.Through,
 			Cols:    ph.ckpt.Cols,

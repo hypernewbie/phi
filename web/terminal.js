@@ -2475,10 +2475,22 @@ export class TabManager {
             }
         } catch (error) {
             console.warn('[term] cold history:', error);
-            // An evicted book cannot be paged. Reconnect to refresh the
-            // retention floor (a browsing view stays frozen); live output
-            // and the next history request then use current bounds.
-            if (current() && (reset || error?.historyPermanent)) pty.ws.close();
+            if (!current()) return;
+            if (reset) {
+                // The view was already cleared, so the pane needs a consistent
+                // frontier before live frames resume. Take the live state: a
+                // re-attach for a missing book only repeats the repaint.
+                const healed = await this._recoverBootstrapFromLiveState(tabInfo, pty, () => current() && tabInfo.ws === pty);
+                if (healed === null) {
+                    try { pty.ws.close(); } catch (_e) {}
+                } else {
+                    tabInfo._historyBrowsing = false;
+                }
+            } else if (error?.historyPermanent) {
+                // Nothing was repainted, so re-attaching costs no replay here.
+                // The fresh attach head carries the current retention floor.
+                try { pty.ws.close(); } catch (_e) {}
+            }
         } finally {
             if (current()) {
                 tabInfo._historyLoading = false;
@@ -2554,7 +2566,18 @@ export class TabManager {
             tabInfo.term.scrollToBottom();
         } catch (error) {
             console.warn('[term] restore latest history:', error);
-            try { pty.ws?.close(); } catch (_e) {}
+            if (!current()) return;
+            // The saved frontier is evicted: the replay cannot succeed, and it
+            // never will for this saved view. Closing here re-attached, the
+            // re-attach repainted the whole pane and kept _historyBrowsing
+            // set (only a new epoch clears it), so the next wheel event ran
+            // this again and the reader watched the history replay on repeat.
+            // Take the live state instead, and never stay in browsing mode.
+            const healed = await this._recoverBootstrapFromLiveState(tabInfo, pty, () => current() && tabInfo.ws === pty);
+            tabInfo._historyBrowsing = false;
+            if (healed === null) {
+                try { pty.ws?.close(); } catch (_e) {}
+            }
         } finally {
             if (current()) {
                 tabInfo._historyLoading = false;

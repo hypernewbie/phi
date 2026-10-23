@@ -4,6 +4,7 @@ const MAX_CHECKPOINT_BYTES = 2 << 20;
 const LIVE_SCROLLBACK_ROWS = 10000;
 const HISTORY_MIN_STEP_BYTES = 4096;
 export const HISTORY_BOOK_BYTES = 64 << 10;
+const HISTORY_READ_ATTEMPTS = 8;
 
 export const terminalHistoryMethods = {
     _updateHistoryButton(tabInfo) {
@@ -64,7 +65,11 @@ export const terminalHistoryMethods = {
 
     async _historyRead(tabInfo, read, signal) {
         let delay = 250;
-        for (;;) {
+        // A moved retention floor cannot make this span valid again, so an
+        // endless retry only hides the miss. Bound it: every attempt is
+        // identical, so the ceiling costs nothing and the caller gets a
+        // visible error instead of a permanent spinner.
+        for (let attempt = 0; attempt < HISTORY_READ_ATTEMPTS; attempt++) {
             if (signal.aborted) throw signal.reason || new Error('History request canceled');
             try {
                 const result = await read(signal);
@@ -85,6 +90,7 @@ export const terminalHistoryMethods = {
             });
             delay = Math.min(5000, delay * 2);
         }
+        throw new Error('Terminal history temporarily unavailable; the requested book was not skipped.');
     },
 
     _cancelHistoryRequest(tabInfo) {
@@ -123,6 +129,10 @@ export const terminalHistoryMethods = {
                 // Do not hold the socket while fetching/retrying. Resident
                 // live delivery remains bounded; the current view stays intact.
                 const state = await this._historyRead(tabInfo, signal => this._fetchTerminalState(tabInfo.paneId, epoch, latest ? 'latest' : from, signal), request.signal);
+                // Page from the floor the server just reported. The attach-time
+                // floor is stale by the time the reader pages again, and a
+                // range below it is already evicted.
+                if (Number.isSafeInteger(state?.oldest)) tabInfo.paneOldest = state.oldest;
                 const range = from < end ? await this._historyRead(tabInfo, signal => this._fetchRecordingRangeOnce(tabInfo.paneId, from, end, epoch, signal, state.eventCursor), request.signal) : null;
                 if (!current()) return;
                 pty = tabInfo.ws;
@@ -186,7 +196,18 @@ export const terminalHistoryMethods = {
                 if (current()) {
                     tabInfo._historyError = error.message;
                     this.app?.showToast?.(error.message, { type: 'error', title: 'Terminal history' });
-                    if (reset) { try { pty?.ws?.close(); } catch (_e) {} }
+                    // A paging miss is not a broken socket. Closing here used to
+                    // turn every miss into a re-attach, and the re-attach
+                    // repainted the whole view while leaving this tab in
+                    // browsing mode, so the next wheel event ran the same miss
+                    // again: one paging failure became a replay loop. Heal in
+                    // place instead, and never stay in browsing mode after a
+                    // failure.
+                    tabInfo._historyBrowsing = false;
+                    if (reset) {
+                        const healed = await this._recoverBootstrapFromLiveState(tabInfo, pty, () => current() && tabInfo.ws === pty);
+                        if (healed === null) { try { pty?.ws?.close(); } catch (_e) {} }
+                    }
                 }
             } finally {
                 if (tabInfo._historyRequest === request) {
