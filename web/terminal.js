@@ -4098,6 +4098,7 @@ export class TabManager {
         // and unlike them a buffer write is permanent scrollback that
         // survives every later reconnect.
         tabInfo.isDead = true;
+        this._refreshPiBridgeModels(tabInfo);
         this._updateHistoryButton(tabInfo);
         tabInfo.tabEl.classList.add('dead');
         this.updateDocumentTitle();
@@ -4117,64 +4118,16 @@ export class TabManager {
                 },
             );
         }
-        this.renderPiRpcStatusBar();
-    }
-
-    // _orderedPiBridgeModel returns the Pi tab's displayable model:
-    // a managed view with a model, confirmed fresh on the live
-    // socket. Anything else (absent model, stale socket, dead pane)
-    // hides the bar.
-    _orderedPiBridgeModel(tab) {
-        if (!tab || tab.coder !== 'pi' || tab.isDead) return null;
-        if (!tab.ws || tab._piBridgeFresh !== tab.ws) return null;
-        const view = tab.piBridge;
-        if (!view || view.state !== 'managed') return null;
-        if (typeof view.model !== 'string' || !view.model) return null;
-        return view.model;
-    }
-
-    // _renderPiBridgeStatusBar reuses the Pi-RPC status markup and
-    // styles for a Pi PTY tab: cwd plus the live model. Pi carries
-    // no token counts, so no meter is rendered.
-    _renderPiBridgeStatusBar(bar, tab, model) {
-        let cwdDisplay = tab.cwd || '—';
-        if (cwdDisplay && cwdDisplay !== '—') {
-            cwdDisplay = cwdDisplay
-                .replace(/^\/Users\/[^/]+/, '~')
-                .replace(/^\/home\/[^/]+/, '~');
-        }
-        bar.classList.remove('hidden');
-        const cwdEl = document.createElement('div');
-        cwdEl.className = 'pi-rpc-status-cwd';
-        cwdEl.textContent = cwdDisplay;
-        cwdEl.title = tab.cwd || cwdDisplay;
-        const mainRow = document.createElement('div');
-        mainRow.className = 'pi-rpc-status-main';
-        const rightEl = document.createElement('span');
-        rightEl.className = 'pi-rpc-status-model';
-        rightEl.textContent = model;
-        rightEl.title = model;
-        mainRow.append(rightEl);
-        bar.replaceChildren(cwdEl, mainRow);
-        this._updatePiThinkingButton();
     }
 
     renderPiRpcStatusBar() {
         const bar = this.piRpcStatusBar;
         if (!bar) return;
         const activeTab = this.getActiveTab();
-        const piModel =
-            activeTab?.coder === 'pi'
-                ? this._orderedPiBridgeModel(activeTab)
-                : null;
-        if (activeTab?.coder !== 'pi-rpc' && piModel === null) {
+        if (activeTab?.coder !== 'pi-rpc') {
             bar.classList.add('hidden');
             bar.replaceChildren();
             this._updatePiThinkingButton();
-            return;
-        }
-        if (piModel !== null) {
-            this._renderPiBridgeStatusBar(bar, activeTab, piModel);
             return;
         }
         const raw = getPiRpcStatus(activeTab.paneId);
@@ -4547,6 +4500,14 @@ export class TabManager {
         };
     }
 
+    // Pi PTY tabs share the Pi RPC model picker: their current model is
+    // the bridge snapshot, not RPC controls. Pi RPC tabs are unchanged.
+    _piModelStateFor(tab) {
+        if (tab?.coder === 'pi')
+            return { model: tab.piBridge?.model || '' };
+        return this._piRpcControlsFor(tab);
+    }
+
     // A cancelled or rejected Clear keeps the existing resume path; only
     // an accepted reset drops it, together with the per-chat history.
     _onPiRpcResetResult(paneId, data) {
@@ -4582,15 +4543,26 @@ export class TabManager {
     _renderPiRpcModelsDropup(preserve = false) {
         const dropup = document.getElementById('pi-rpc-model-dropup');
         const activeTab = this.getActiveTab();
-        if (!dropup || !activeTab || activeTab.coder !== 'pi-rpc') return;
+        if (
+            !dropup ||
+            !activeTab ||
+            (activeTab.coder !== 'pi-rpc' && activeTab.coder !== 'pi')
+        )
+            return;
+        if (activeTab.coder === 'pi' && !this._piBridgeModelsEligible(activeTab)) {
+            this._closePiRpcDropups(true);
+            return;
+        }
         const paneId = activeTab.paneId;
         const request = ++this._piRpcMenuRequest;
-        const state = this._piRpcControlsFor(activeTab);
+        const state = this._piModelStateFor(activeTab);
         if (!preserve) {
             this._piRpcModelQuery = '';
             this._piRpcModels = null;
             this._piRpcModelExpandedGroup = null;
             this._piRpcModelAutoOpened = false;
+            this._piBridgeModelsTruncated = false;
+            this._piBridgeModelsUnavailable = false;
             const sticky = document.createElement('div');
             sticky.className = 'pi-rpc-model-sticky';
             const header = document.createElement('div');
@@ -4645,26 +4617,45 @@ export class TabManager {
 
         let requestResult;
         try {
-            requestResult = rpcChatModels(paneId);
+            requestResult =
+                activeTab.coder === 'pi'
+                    ? this._piBridgeModelsFetch(paneId)
+                    : rpcChatModels(paneId);
         } catch (error) {
             this._piRpcError(error, 'Pi models');
             loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
             return;
         }
         Promise.resolve(requestResult)
-            .then((models) => {
+            .then((result) => {
                 if (
                     request !== this._piRpcMenuRequest ||
-                    this.getActiveTab()?.paneId !== paneId
+                    this.getActiveTab()?.paneId !== paneId ||
+                    (activeTab.coder === 'pi' &&
+                        !this._piBridgeModelsEligible(activeTab))
                 )
                     return;
-                this._piRpcModels = Array.isArray(models) ? models : [];
+                if (activeTab.coder === 'pi') {
+                    const bridge =
+                        result && typeof result === 'object' ? result : {};
+                    this._piBridgeModelsTruncated =
+                        bridge.truncated === true;
+                    this._piBridgeModelsUnavailable =
+                        bridge.unavailable === true;
+                    this._piRpcModels = Array.isArray(bridge.models)
+                        ? bridge.models
+                        : [];
+                } else {
+                    this._piRpcModels = Array.isArray(result) ? result : [];
+                }
                 this._buildPiRpcModelList();
             })
             .catch((error) => {
                 if (
                     request !== this._piRpcMenuRequest ||
-                    this.getActiveTab()?.paneId !== paneId
+                    this.getActiveTab()?.paneId !== paneId ||
+                    (activeTab.coder === 'pi' &&
+                        !this._piBridgeModelsEligible(activeTab))
                 )
                     return;
                 loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
@@ -4675,12 +4666,18 @@ export class TabManager {
     _buildPiRpcModelList() {
         const dropup = document.getElementById('pi-rpc-model-dropup');
         const activeTab = this.getActiveTab();
-        if (!dropup || !activeTab || activeTab.coder !== 'pi-rpc') return;
+        if (
+            !dropup ||
+            !activeTab ||
+            (activeTab.coder !== 'pi-rpc' && activeTab.coder !== 'pi') ||
+            (activeTab.coder === 'pi' && !this._piBridgeModelsEligible(activeTab))
+        )
+            return;
         const listContainer = dropup.querySelector(
             '.pi-rpc-model-list-container',
         );
         if (!listContainer || !Array.isArray(this._piRpcModels)) return;
-        const state = this._piRpcControlsFor(activeTab);
+        const state = this._piModelStateFor(activeTab);
         const paneId = activeTab.paneId;
         const query = this._piRpcModelQuery;
         const pending = this._piRpcModelPending?.paneId === paneId;
@@ -4693,7 +4690,10 @@ export class TabManager {
         if (models.length === 0) {
             const empty = document.createElement('div');
             empty.className = 'dropup-row pi-rpc-dropup-message';
-            empty.textContent = 'No Pi models available';
+            empty.textContent =
+                activeTab.coder === 'pi' && this._piBridgeModelsUnavailable
+                    ? 'Pi model list unavailable'
+                    : 'No Pi models available';
             listContainer.replaceChildren(empty);
             return;
         }
@@ -4716,12 +4716,17 @@ export class TabManager {
         };
         let activeModel = null;
         for (const model of models) {
-            if (model.id === state.model) {
+            // Bridge snapshots name provider/id; RPC controls name id.
+            if (
+                activeTab.coder === 'pi'
+                    ? `${model.provider}/${model.id}` === state.model
+                    : model.id === state.model
+            ) {
                 activeModel = model;
                 break;
             }
         }
-        if (!activeModel) {
+        if (!activeModel && activeTab.coder === 'pi-rpc') {
             for (const model of models) {
                 if (model.name === state.model) {
                     activeModel = model;
@@ -4761,6 +4766,13 @@ export class TabManager {
             button.disabled = pending;
             button.addEventListener('click', (event) => {
                 event.stopPropagation();
+                if (
+                    activeTab.coder === 'pi' &&
+                    (this.getActiveTab() !== activeTab ||
+                        !this._piBridgeModelsEligible(activeTab) ||
+                        !dropup.contains(button))
+                )
+                    return;
                 const operation = {
                     paneId,
                     provider: model.provider,
@@ -4770,27 +4782,35 @@ export class TabManager {
                 this._setPiRpcDropupButtonsDisabled(dropup, true);
                 let setterResult;
                 try {
-                    setterResult = rpcChatSetModel(
-                        paneId,
-                        model.provider,
-                        model.id,
-                    );
+                    setterResult =
+                        activeTab.coder === 'pi'
+                            ? this._piBridgeModelSwitch(
+                                  paneId,
+                                  model.provider,
+                                  model.id,
+                              )
+                            : rpcChatSetModel(
+                                  paneId,
+                                  model.provider,
+                                  model.id,
+                              );
                 } catch (error) {
                     setterResult = Promise.reject(error);
                 }
                 Promise.resolve(setterResult)
                     .then(() => {
-                        this._piAvailableThinking?.delete(paneId);
-                        if (this._piRpcModelPending === operation)
-                            this._piRpcModelPending = null;
+                        if (this._piRpcModelPending !== operation) return;
+                        this._piRpcModelPending = null;
+                        if (activeTab.coder === 'pi-rpc')
+                            this._piAvailableThinking?.delete(paneId);
                         if (this.getActiveTab()?.paneId === paneId) {
-                            this.renderPresets('pi-rpc');
+                            this.renderPresets(activeTab.coder);
                             this._closePiRpcDropups(true);
                         }
                     })
                     .catch((error) => {
-                        if (this._piRpcModelPending === operation)
-                            this._piRpcModelPending = null;
+                        if (this._piRpcModelPending !== operation) return;
+                        this._piRpcModelPending = null;
                         this._piRpcError(error, 'Pi model');
                         if (this.getActiveTab()?.paneId === paneId)
                             this._renderPiRpcModelsDropup(true);
@@ -4917,6 +4937,13 @@ export class TabManager {
             listContainer.replaceChildren(...nodes, noMatch);
             return;
         }
+        if (activeTab.coder === 'pi' && this._piBridgeModelsTruncated) {
+            const capped = document.createElement('div');
+            capped.className = 'dropup-row pi-rpc-dropup-message';
+            capped.textContent = 'Partial model list';
+            listContainer.replaceChildren(...nodes, capped);
+            return;
+        }
         listContainer.replaceChildren(...nodes);
     }
 
@@ -4977,6 +5004,79 @@ export class TabManager {
             // localStorage may be unavailable; UI still updates this session.
         }
         this._buildPiRpcModelList();
+    }
+
+    // Bridge catalog fetch for Pi PTY tabs. Rows arrive mapped to
+    // {provider, id} so rendering, favorites, and search stay shared
+    // with Pi RPC. Flags ride along so the caller assigns them inside
+    // the staleness fence; they drive the empty copy and the footer.
+    async _piBridgeModelsFetch(paneId) {
+        const controller = new AbortController();
+        // Bound the browser too: an HTTP request can stall before reaching Phi.
+        const timer = setTimeout(() => controller.abort(), 1000);
+        try {
+            const res = await fetch(
+                `/api/pi-bridge/models?pane=${encodeURIComponent(paneId)}`,
+                { signal: controller.signal },
+            );
+            if (!res.ok)
+                throw new Error(`Pi models unavailable (${res.status})`);
+            const body = await res.json();
+            return {
+                models: Array.isArray(body.models) ? body.models : [],
+                truncated: body.truncated === true,
+                unavailable: body.unavailable === true,
+            };
+        } catch (error) {
+            if (error?.name === 'AbortError')
+                throw new Error('Pi models unavailable (request timed out)');
+            throw error;
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    // Bridge model switch for Pi PTY tabs. A refused switch surfaces
+    // its reason; a failed round trip is explicitly unknown, never a
+    // guessed failure, since the switch may still have landed.
+    async _piBridgeModelSwitch(paneId, provider, modelId) {
+        const controller = new AbortController();
+        // Bound the browser too: an HTTP request can stall before reaching Phi.
+        const timer = setTimeout(() => controller.abort(), 1000);
+        let body;
+        try {
+            const res = await fetch('/api/pi-bridge/model', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    pane: paneId,
+                    provider,
+                    model: modelId,
+                }),
+                signal: controller.signal,
+            });
+            if (!res.ok) throw new Error('unknown');
+            body = await res.json();
+        } catch {
+            throw new Error('unknown — reopen the picker');
+        } finally {
+            clearTimeout(timer);
+        }
+        if (body.ok === true) return;
+        if (body.reason === 'no-auth')
+            throw new Error(
+                'Switch refused: provider has no credentials (no-auth)',
+            );
+        if (body.reason === 'unknown-model')
+            throw new Error(
+                'Switch refused: model is not selectable (unknown-model)',
+            );
+        // ok=false with an empty reason means the attempt errored
+        // and its outcome is unknown, like a failed round trip;
+        // anything else is an unexpected refusal shape.
+        if (body.reason === '')
+            throw new Error('unknown — reopen the picker');
+        throw new Error('Switch failed');
     }
 
     _renderPiRpcThinkingDropup() {
@@ -7553,10 +7653,10 @@ export class TabManager {
         tabInfo._piTitleRevision = -1;
         tabInfo.ws = socket;
         // A new browser socket restarts bridge ordering: never carry
-        // the old server's counter across, and hide the model until
-        // fresh current-socket state confirms it.
+        // the old server's counter across, and drop freshness until
+        // current-socket state re-confirms it.
         this._resetPiBridgeOrdered(tabInfo);
-        this.renderPiRpcStatusBar();
+        this._refreshPiBridgeModels(tabInfo);
     }
 
     // _resetPiBridgeOrdered drops the per-tab publication floor and the
@@ -7694,14 +7794,7 @@ export class TabManager {
     // so a late HTTP response can never overwrite newer WS state.
     _seedHttpPiBridge(tabInfo, httpView) {
         if (!tabInfo || tabInfo.coder !== 'pi') return false;
-        const changed = this._acceptOrderedBridgeView(
-            tabInfo,
-            httpView,
-            null,
-        );
-        if (changed && tabInfo === this.getActiveTab())
-            this.renderPiRpcStatusBar();
-        return changed;
+        return this._acceptOrderedBridgeView(tabInfo, httpView, null);
     }
 
     _acceptPiSessionTitle(tabInfo, control, socket = tabInfo?.ws) {
@@ -7749,7 +7842,6 @@ export class TabManager {
             tabInfo.tabEl.classList.add('dead');
             this.updateDocumentTitle();
             this._showReconnectOverlay(tabInfo);
-            this.renderPiRpcStatusBar();
         } else if (control.type === 'replay-complete') {
             // An empty replay still ends here, so drop the pending reset or
             // the next live byte would clear the terminal underneath the user.
@@ -7793,11 +7885,19 @@ export class TabManager {
     // catch-up bell. Aborted runs never ring.
     _acceptPiBridgeState(tabInfo, control, socket = tabInfo?.ws) {
         if (!tabInfo || tabInfo.coder !== 'pi') return;
-        const viewChanged = this._acceptOrderedBridgeView(
-            tabInfo,
-            control,
-            socket,
-        );
+        const prev = tabInfo.piBridge;
+        const prevKey = prev
+            ? `${this._piBridgeModelsEligible(tabInfo)}|${prev.state}|${prev.model || ''}|${prev.connected}|${(prev.capabilities || []).join(',')}`
+            : '';
+        this._acceptOrderedBridgeView(tabInfo, control, socket);
+        const next = tabInfo.piBridge;
+        const nextKey = next
+            ? `${this._piBridgeModelsEligible(tabInfo)}|${next.state}|${next.model || ''}|${next.connected}|${(next.capabilities || []).join(',')}`
+            : '';
+        // The models trigger rides bridge state: re-render the row
+        // only when model, availability, or capabilities moved on
+        // the visible tab. Rejected (stale) frames change nothing.
+        if (prevKey !== nextKey) this._refreshPiBridgeModels(tabInfo);
         if (
             this._piRecall?.paneId === tabInfo.paneId &&
             (!this._piRecallEligible(tabInfo) ||
@@ -7846,8 +7946,6 @@ export class TabManager {
                 this._ringPiBridgeBell(tabInfo);
             }
         }
-        if (viewChanged && tabInfo === this.getActiveTab())
-            this.renderPiRpcStatusBar();
     }
 
     // _acceptPiBridgeSettled rings one bell per observed run. Duplicates
@@ -8085,7 +8183,7 @@ export class TabManager {
                         this.maybeAutoReconnect(tabInfo);
                         this.updateDisconnectBanner();
                     }
-                    this.renderPiRpcStatusBar();
+                    this._refreshPiBridgeModels(tabInfo);
                 },
                 () => {
                     if (tabInfo.ws !== newWs) return;
@@ -8153,7 +8251,6 @@ export class TabManager {
                     } catch (_e) {}
                     if (tabInfo.ws === newWs) tabInfo.ws = null;
                     tabInfo.isDead = true;
-                    this.renderPiRpcStatusBar();
                     if (msgEl) msgEl.innerText = 'Connection timed out';
                     if (btnEl) {
                         btnEl.disabled = false;
@@ -8294,7 +8391,7 @@ export class TabManager {
                             if (restartBtn) restartBtn.disabled = false;
                             this.updateDisconnectBanner();
                         }
-                        this.renderPiRpcStatusBar();
+                        this._refreshPiBridgeModels(tabInfo);
                     },
                     () => {
                         if (tabInfo.ws !== newWs) return;
@@ -8326,8 +8423,6 @@ export class TabManager {
                 this._setCurrentTabSocket(tabInfo, newWs);
                 if (data.pi_bridge != null)
                     this._seedHttpPiBridge(tabInfo, data.pi_bridge);
-                else if (tabInfo === this.getActiveTab())
-                    this.renderPiRpcStatusBar();
 
                 // Sync with session list in sidebar
                 if (this.app.sessionsManager) {
@@ -9386,6 +9481,15 @@ export class TabManager {
             return;
         }
         if (!this.presetsContainer) return;
+        if (activeTab?.coder === 'pi' && !this._piBridgeModelsEligible(activeTab)) {
+            ++this._piRpcMenuRequest;
+            this._piRpcModels = null;
+            this._piBridgeModelsTruncated = false;
+            this._piBridgeModelsUnavailable = false;
+            if (this._piRpcModelPending?.paneId === activeTab.paneId)
+                this._piRpcModelPending = null;
+            this._closePiRpcDropups(true);
+        }
         this.presetsContainer.innerHTML = '';
 
         const defaultPresetInfo = this.app.codersPresetRegistry[coderId];
@@ -9526,7 +9630,22 @@ export class TabManager {
             !['opencode', 'claude', 'pi', 'agy', 'bash', 'pwsh'].includes(
                 modelCoder,
             );
-        if (modelCoder === 'codex') {
+        if (modelCoder === 'pi' && this._piBridgeModelsEligible(activeTab)) {
+            // Bridge-live Pi tabs share the Pi RPC model picker.
+            // Anything else falls through to the legacy static list.
+            modelsTriggerBtn.classList.add('pi-rpc-model-trigger');
+            modelsTriggerBtn.title = activeTab.piBridge?.model || '—';
+            modelsTriggerBtn.disabled =
+                this._piRpcModelPending?.paneId === activeTab.paneId;
+            modelsTriggerBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._toggleDropup(
+                    'pi-rpc-model-dropup',
+                    modelsTriggerBtn,
+                    () => this._renderPiRpcModelsDropup(),
+                );
+            });
+        } else if (modelCoder === 'codex') {
             // /model has no inline model argument. Let Codex's live,
             // account-specific picker choose the model and reasoning effort.
             modelsTriggerBtn.innerText = '🤖 Models';
@@ -9578,6 +9697,12 @@ export class TabManager {
         const dropup = document.getElementById('model-presets-dropup');
         if (dropup && !dropup.classList.contains('hidden')) {
             this.renderModelDropup();
+        }
+        if (coderId === 'pi' && this._piBridgeModelsEligible(activeTab)) {
+            const mDropup = document.getElementById('pi-rpc-model-dropup');
+            if (mDropup && !mDropup.classList.contains('hidden')) {
+                this._renderPiRpcModelsDropup(true);
+            }
         }
         const qcDropup = document.getElementById('quick-commands-dropup');
         if (qcDropup && !qcDropup.classList.contains('hidden')) {
@@ -10998,6 +11123,30 @@ export class TabManager {
             Array.isArray(tab.piBridge.capabilities) &&
             tab.piBridge.capabilities.includes('pi.history.v1')
         );
+    }
+
+    // The shared model picker needs the models capability; anything
+    // else keeps the legacy static presets exactly.
+    _piBridgeModelsEligible(tab) {
+        return (
+            tab?.coder === 'pi' && !tab.isDead &&
+            !!tab.ws && tab._piBridgeFresh === tab.ws &&
+            tab.piBridge?.state === 'managed' &&
+            tab.piBridge.connected === true &&
+            Array.isArray(tab.piBridge.capabilities) &&
+            tab.piBridge.capabilities.includes('pi.models.v1')
+        );
+    }
+
+    // Socket changes and bridge views share the same picker invalidation.
+    _refreshPiBridgeModels(tab) {
+        if (tab?.coder !== 'pi') return;
+        if (
+            this._piRpcModelPending?.paneId === tab.paneId &&
+            !this._piBridgeModelsEligible(tab)
+        )
+            this._piRpcModelPending = null;
+        if (this.getActiveTab() === tab) this.renderPresets('pi');
     }
 
     // Both replies and fallback keys belong to the original runtime/socket.

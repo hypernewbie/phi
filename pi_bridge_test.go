@@ -692,7 +692,7 @@ func answerHistoryOnce(t *testing.T, stream pibridgepb.Integration_ConnectClient
 	}
 }
 
-func dialHistoryPane(t *testing.T, b *Bridge, pane string, caps ...string) (pibridgepb.Integration_ConnectClient, context.CancelFunc) {
+func dialBridgePane(t *testing.T, b *Bridge, pane string, caps ...string) (pibridgepb.Integration_ConnectClient, context.CancelFunc) {
 	t.Helper()
 	env, _, managed := b.Provision(pane, true)
 	if !managed {
@@ -717,6 +717,60 @@ func dialHistoryPane(t *testing.T, b *Bridge, pane string, caps ...string) (pibr
 		t.Fatalf("accepted: %v", err)
 	}
 	return stream, cancel
+}
+
+// answerModelsOnce serves one ModelsRequest on a test stream with a
+// canned response, then returns. It fails the test on any stream error.
+func answerModelsOnce(t *testing.T, stream pibridgepb.Integration_ConnectClient, models []*pibridgepb.ModelRef, truncated, unavailable bool) {
+	t.Helper()
+	for {
+		msg, err := stream.Recv()
+		if err != nil {
+			t.Errorf("recv: %v", err)
+			return
+		}
+		req := msg.GetModelsRequest()
+		if req == nil {
+			continue
+		}
+		res := &pibridgepb.PiToPhi{
+			PaneId: msg.GetPaneId(), ProcessId: msg.GetProcessId(), RuntimeGeneration: msg.GetRuntimeGeneration(),
+			Payload: &pibridgepb.PiToPhi_ModelsResponse{ModelsResponse: &pibridgepb.ModelsResponse{
+				RequestId: req.GetRequestId(), Models: models, Truncated: truncated, Unavailable: unavailable,
+			}},
+		}
+		if err := stream.Send(res); err != nil {
+			t.Errorf("send response: %v", err)
+		}
+		return
+	}
+}
+
+// answerSetModelOnce serves one SetModelRequest on a test stream with
+// a canned ack, then returns. It fails the test on any stream error.
+func answerSetModelOnce(t *testing.T, stream pibridgepb.Integration_ConnectClient, ok bool, reason string) {
+	t.Helper()
+	for {
+		msg, err := stream.Recv()
+		if err != nil {
+			t.Errorf("recv: %v", err)
+			return
+		}
+		req := msg.GetSetModelRequest()
+		if req == nil {
+			continue
+		}
+		res := &pibridgepb.PiToPhi{
+			PaneId: msg.GetPaneId(), ProcessId: msg.GetProcessId(), RuntimeGeneration: msg.GetRuntimeGeneration(),
+			Payload: &pibridgepb.PiToPhi_SetModelAck{SetModelAck: &pibridgepb.SetModelAck{
+				RequestId: req.GetRequestId(), Ok: ok, Reason: reason,
+			}},
+		}
+		if err := stream.Send(res); err != nil {
+			t.Errorf("send ack: %v", err)
+		}
+		return
+	}
 }
 
 func TestBridgeRequestPaneHistory(t *testing.T) {
@@ -746,14 +800,14 @@ func TestBridgeRequestPaneHistory(t *testing.T) {
 	}
 
 	// Live peer without the history capability: never request.
-	stream, cancel := dialHistoryPane(t, b, "pane-lc", "pi.lifecycle.v1")
+	stream, cancel := dialBridgePane(t, b, "pane-lc", "pi.lifecycle.v1")
 	defer cancel()
 	if _, err := b.RequestPaneHistory(context.Background(), "pane-lc"); err == nil {
 		t.Fatal("lifecycle-only pane read succeeded")
 	}
 
 	// Live peer with the capability: entries flow newest-first.
-	stream, cancel = dialHistoryPane(t, b, "pane-h", "pi.lifecycle.v1", "pi.history.v1")
+	stream, cancel = dialBridgePane(t, b, "pane-h", "pi.lifecycle.v1", "pi.history.v1")
 	defer cancel()
 	go answerHistoryOnce(t, stream, []string{"newest", "oldest"}, false)
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
@@ -808,7 +862,7 @@ func TestHandlePiBridgeHistory(t *testing.T) {
 		t.Fatalf("unknown pane body %q, want fixed string", rec.Body.String())
 	}
 
-	stream, cancel := dialHistoryPane(t, b, "pane-http", "pi.lifecycle.v1", "pi.history.v1")
+	stream, cancel := dialBridgePane(t, b, "pane-http", "pi.lifecycle.v1", "pi.history.v1")
 	defer cancel()
 	go answerHistoryOnce(t, stream, []string{"one", "two"}, false)
 	rec := serve(http.MethodGet, "/api/pi-history?pane=pane-http")
@@ -851,6 +905,274 @@ func TestHandlePiBridgeHistory(t *testing.T) {
 	// Peer loss is also a sanitized 503.
 	cancel()
 	rec = serve(http.MethodGet, "/api/pi-history?pane=pane-http")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("dead peer code %d, want 503", rec.Code)
+	}
+}
+
+func TestBridgeRequestPaneModels(t *testing.T) {
+	b := startPiBridge(testBridgeHub())
+	if b == nil {
+		t.Fatal("bridge did not start")
+	}
+	defer b.Stop()
+
+	if _, err := b.RequestPaneModels(context.Background(), "unknown"); err == nil {
+		t.Fatal("unknown pane read succeeded")
+	}
+	var nilBridge *Bridge
+	if _, err := nilBridge.RequestPaneModels(context.Background(), "pane-1"); err == nil {
+		t.Fatal("nil bridge read succeeded")
+	}
+
+	// Managed lease, no stream: fail fast.
+	_, _, managed := b.Provision("pane-np", true)
+	if !managed {
+		t.Fatal("provision not managed")
+	}
+	b.Complete(&pty.PTYInstance{ID: "pane-np"})
+	if _, err := b.RequestPaneModels(context.Background(), "pane-np"); err == nil {
+		t.Fatal("peerless pane read succeeded")
+	}
+
+	// Live peer without the models capability: never request.
+	stream, cancel := dialBridgePane(t, b, "pane-lc", "pi.lifecycle.v1")
+	defer cancel()
+	if _, err := b.RequestPaneModels(context.Background(), "pane-lc"); err == nil {
+		t.Fatal("lifecycle-only pane read succeeded")
+	}
+
+	// Live peer with the capability: refs flow with flags.
+	stream, cancel = dialBridgePane(t, b, "pane-m", "pi.lifecycle.v1", "pi.models.v1")
+	defer cancel()
+	go answerModelsOnce(t, stream, []*pibridgepb.ModelRef{{Provider: "a", Model: "x"}}, true, false)
+	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	res, err := b.RequestPaneModels(ctx, "pane-m")
+	if err != nil {
+		t.Fatalf("models read: %v", err)
+	}
+	if res.Unavailable || !res.Truncated || len(res.Models) != 1 || res.Models[0].Provider != "a" || res.Models[0].Model != "x" {
+		t.Fatalf("result %+v, want one truncated ref", res)
+	}
+
+	// Explicit unavailable survives as a result, not an error.
+	go answerModelsOnce(t, stream, nil, false, true)
+	res, err = b.RequestPaneModels(ctx, "pane-m")
+	if err != nil {
+		t.Fatalf("unavailable read: %v", err)
+	}
+	if !res.Unavailable {
+		t.Fatalf("result %+v, want unavailable", res)
+	}
+}
+
+func TestBridgeRequestPaneSetModel(t *testing.T) {
+	b := startPiBridge(testBridgeHub())
+	if b == nil {
+		t.Fatal("bridge did not start")
+	}
+	defer b.Stop()
+
+	if _, err := b.RequestPaneSetModel(context.Background(), "unknown", "a", "x"); err == nil {
+		t.Fatal("unknown pane switch succeeded")
+	}
+	var nilBridge *Bridge
+	if _, err := nilBridge.RequestPaneSetModel(context.Background(), "pane-1", "a", "x"); err == nil {
+		t.Fatal("nil bridge switch succeeded")
+	}
+
+	stream, cancel := dialBridgePane(t, b, "pane-lc", "pi.lifecycle.v1")
+	defer cancel()
+	if _, err := b.RequestPaneSetModel(context.Background(), "pane-lc", "a", "x"); err == nil {
+		t.Fatal("lifecycle-only pane switch succeeded")
+	}
+
+	stream, cancel = dialBridgePane(t, b, "pane-s", "pi.lifecycle.v1", "pi.models.v1")
+	defer cancel()
+	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	go answerSetModelOnce(t, stream, true, "")
+	res, err := b.RequestPaneSetModel(ctx, "pane-s", "a", "x")
+	if err != nil {
+		t.Fatalf("set-model: %v", err)
+	}
+	if !res.OK || res.Reason != "" {
+		t.Fatalf("result %+v, want ok", res)
+	}
+
+	go answerSetModelOnce(t, stream, false, "no-auth")
+	res, err = b.RequestPaneSetModel(ctx, "pane-s", "a", "x")
+	if err != nil {
+		t.Fatalf("refused set-model: %v", err)
+	}
+	if res.OK || res.Reason != "no-auth" {
+		t.Fatalf("result %+v, want no-auth refusal", res)
+	}
+}
+
+func TestHandlePiBridgeModels(t *testing.T) {
+	b := startPiBridge(testBridgeHub())
+	if b == nil {
+		t.Fatal("bridge did not start")
+	}
+	defer b.Stop()
+	prev := piBridge
+	piBridge = b
+	t.Cleanup(func() { piBridge = prev })
+
+	serve := func(method, target string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, target, nil)
+		rec := httptest.NewRecorder()
+		handlePiBridgeModels(rec, req)
+		return rec
+	}
+
+	if rec := serve(http.MethodPost, "/api/pi-bridge/models?pane=x"); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST code %d, want 405", rec.Code)
+	}
+	if rec := serve(http.MethodGet, "/api/pi-bridge/models"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing pane code %d, want 400", rec.Code)
+	}
+	if rec := serve(http.MethodGet, "/api/pi-bridge/models?pane=unknown"); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unknown pane code %d, want 503", rec.Code)
+	}
+
+	stream, cancel := dialBridgePane(t, b, "pane-http", "pi.lifecycle.v1", "pi.models.v1")
+	defer cancel()
+	go answerModelsOnce(t, stream, []*pibridgepb.ModelRef{{Provider: "a", Model: "x"}}, false, false)
+	rec := serve(http.MethodGet, "/api/pi-bridge/models?pane=pane-http")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("happy code %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control %q, want no-store", got)
+	}
+	var body struct {
+		Models []struct {
+			Provider string `json:"provider"`
+			ID       string `json:"id"`
+		} `json:"models"`
+		Truncated   bool `json:"truncated"`
+		Unavailable bool `json:"unavailable"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body decode: %v", err)
+	}
+	if body.Unavailable || len(body.Models) != 1 || body.Models[0].Provider != "a" || body.Models[0].ID != "x" {
+		t.Fatalf("body %+v, want one mapped row", body)
+	}
+
+	// A withheld reply cannot hold the HTTP handler beyond its deadline.
+	timedOut := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		r := httptest.NewRecorder()
+		handlePiBridgeModels(r, httptest.NewRequest(http.MethodGet, "/api/pi-bridge/models?pane=pane-http", nil))
+		timedOut <- r
+	}()
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("withheld request: %v", err)
+	}
+	select {
+	case r := <-timedOut:
+		if r.Code != http.StatusServiceUnavailable {
+			t.Fatalf("timeout code %d, want 503", r.Code)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("models handler exceeded its timeout")
+	}
+
+	// Peer loss is also a sanitized 503.
+	cancel()
+	rec = serve(http.MethodGet, "/api/pi-bridge/models?pane=pane-http")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("dead peer code %d, want 503", rec.Code)
+	}
+}
+
+func TestHandlePiBridgeSetModel(t *testing.T) {
+	b := startPiBridge(testBridgeHub())
+	if b == nil {
+		t.Fatal("bridge did not start")
+	}
+	defer b.Stop()
+	prev := piBridge
+	piBridge = b
+	t.Cleanup(func() { piBridge = prev })
+
+	serve := func(method, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		var reader *strings.Reader
+		if body == "" {
+			reader = strings.NewReader("")
+		} else {
+			reader = strings.NewReader(body)
+		}
+		req := httptest.NewRequest(method, "/api/pi-bridge/model", reader)
+		rec := httptest.NewRecorder()
+		handlePiBridgeSetModel(rec, req)
+		return rec
+	}
+
+	if rec := serve(http.MethodGet, ""); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET code %d, want 405", rec.Code)
+	}
+	if rec := serve(http.MethodPost, "not-json"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad json code %d, want 400", rec.Code)
+	}
+	if rec := serve(http.MethodPost, `{"pane":"p","provider":"a"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty model code %d, want 400", rec.Code)
+	}
+	long := strings.Repeat("x", 257)
+	if rec := serve(http.MethodPost, `{"pane":"p","provider":"a","model":"`+long+`"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("overlong model code %d, want 400", rec.Code)
+	}
+	huge := strings.Repeat("y", 5000)
+	if rec := serve(http.MethodPost, `{"pane":"p","provider":"a","model":"`+huge+`"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized body code %d, want 400", rec.Code)
+	}
+	if rec := serve(http.MethodPost, `{"pane":"unknown","provider":"a","model":"x"}`); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unknown pane code %d, want 503", rec.Code)
+	}
+
+	stream, cancel := dialBridgePane(t, b, "pane-http", "pi.lifecycle.v1", "pi.models.v1")
+	defer cancel()
+	go answerSetModelOnce(t, stream, true, "")
+	rec := serve(http.MethodPost, `{"pane":"pane-http","provider":"a","model":"x"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("happy code %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control %q, want no-store", got)
+	}
+	var body struct {
+		OK     bool   `json:"ok"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body decode: %v", err)
+	}
+	if !body.OK || body.Reason != "" {
+		t.Fatalf("body %+v, want ok", body)
+	}
+
+	// Refusal reasons pass through verbatim.
+	go answerSetModelOnce(t, stream, false, "unknown-model")
+	rec = serve(http.MethodPost, `{"pane":"pane-http","provider":"a","model":"zzz"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("refused code %d, want 200", rec.Code)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body decode: %v", err)
+	}
+	if body.OK || body.Reason != "unknown-model" {
+		t.Fatalf("body %+v, want unknown-model refusal", body)
+	}
+
+	// Peer loss is a sanitized 503.
+	cancel()
+	rec = serve(http.MethodPost, `{"pane":"pane-http","provider":"a","model":"x"}`)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("dead peer code %d, want 503", rec.Code)
 	}

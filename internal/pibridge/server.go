@@ -30,6 +30,8 @@ type Server struct {
 	onState    func(paneID, processID string, generation, pubRev uint64, running, hasState bool, model string, caps []string)
 	onPeerDown func(paneID, processID string, generation uint64)
 	histSeq    atomic.Uint64
+	modelsSeq  atomic.Uint64
+	setSeq     atomic.Uint64
 	// pubSeq is the server-owned publication sequence behind
 	// telemetry_revision. It is allocated at lease creation and at
 	// each accepted Hello/state change, so delayed stream callbacks
@@ -604,6 +606,12 @@ func (s *Server) handleMessage(l *lease, p *peer, msg *pibridgepb.PiToPhi) error
 		return nil
 	case msg.GetHistoryResponse() != nil:
 		s.deliverHistory(l, p, msg.GetHistoryResponse())
+		return nil
+	case msg.GetModelsResponse() != nil:
+		s.deliverModels(l, p, msg.GetModelsResponse())
+		return nil
+	case msg.GetSetModelAck() != nil:
+		s.deliverSetModel(l, p, msg.GetSetModelAck())
 		return nil
 	default:
 		return status.Error(codes.InvalidArgument, "unsupported payload")

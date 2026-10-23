@@ -5,6 +5,9 @@ export const PROTOCOL_VERSION = 1;
 
 export const CAPABILITY_LIFECYCLE = 'pi.lifecycle.v1';
 export const CAPABILITY_HISTORY = 'pi.history.v1';
+export const CAPABILITY_MODELS = 'pi.models.v1';
+/** Cap on catalog entries per ModelsResponse; excess sets truncated. */
+export const MAX_MODELS_ENTRIES = 500;
 /**
  * Queue bytes history responses must leave free. History shares the
  * bounded queue with lifecycle edges, so a history frame admits only
@@ -32,7 +35,11 @@ export const METADATA_TOKEN_KEY = 'phi-pi-token';
 export const METADATA_PANE_KEY = 'phi-pi-pane';
 export const METADATA_PROCESS_KEY = 'phi-pi-process';
 
-const SUPPORTED = new Set([CAPABILITY_LIFECYCLE, CAPABILITY_HISTORY]);
+const SUPPORTED = new Set([
+    CAPABILITY_LIFECYCLE,
+    CAPABILITY_HISTORY,
+    CAPABILITY_MODELS,
+]);
 
 /** Intersect advertised names with the supported set. Unknown names are ignored. */
 export function negotiateCapabilities(advertised: readonly string[]): string[] {

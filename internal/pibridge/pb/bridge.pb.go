@@ -209,6 +209,8 @@ type PiToPhi struct {
 	//	*PiToPhi_AgentSettled
 	//	*PiToPhi_StateSnapshot
 	//	*PiToPhi_HistoryResponse
+	//	*PiToPhi_ModelsResponse
+	//	*PiToPhi_SetModelAck
 	Payload       isPiToPhi_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -317,6 +319,24 @@ func (x *PiToPhi) GetHistoryResponse() *HistoryResponse {
 	return nil
 }
 
+func (x *PiToPhi) GetModelsResponse() *ModelsResponse {
+	if x != nil {
+		if x, ok := x.Payload.(*PiToPhi_ModelsResponse); ok {
+			return x.ModelsResponse
+		}
+	}
+	return nil
+}
+
+func (x *PiToPhi) GetSetModelAck() *SetModelAck {
+	if x != nil {
+		if x, ok := x.Payload.(*PiToPhi_SetModelAck); ok {
+			return x.SetModelAck
+		}
+	}
+	return nil
+}
+
 type isPiToPhi_Payload interface {
 	isPiToPhi_Payload()
 }
@@ -341,6 +361,14 @@ type PiToPhi_HistoryResponse struct {
 	HistoryResponse *HistoryResponse `protobuf:"bytes,17,opt,name=history_response,json=historyResponse,proto3,oneof"`
 }
 
+type PiToPhi_ModelsResponse struct {
+	ModelsResponse *ModelsResponse `protobuf:"bytes,18,opt,name=models_response,json=modelsResponse,proto3,oneof"`
+}
+
+type PiToPhi_SetModelAck struct {
+	SetModelAck *SetModelAck `protobuf:"bytes,19,opt,name=set_model_ack,json=setModelAck,proto3,oneof"`
+}
+
 func (*PiToPhi_Hello) isPiToPhi_Payload() {}
 
 func (*PiToPhi_AgentStarted) isPiToPhi_Payload() {}
@@ -350,6 +378,10 @@ func (*PiToPhi_AgentSettled) isPiToPhi_Payload() {}
 func (*PiToPhi_StateSnapshot) isPiToPhi_Payload() {}
 
 func (*PiToPhi_HistoryResponse) isPiToPhi_Payload() {}
+
+func (*PiToPhi_ModelsResponse) isPiToPhi_Payload() {}
+
+func (*PiToPhi_SetModelAck) isPiToPhi_Payload() {}
 
 // Envelope for every Phi → Pi message.
 type PhiToPi struct {
@@ -362,6 +394,8 @@ type PhiToPi struct {
 	//	*PhiToPi_Accepted
 	//	*PhiToPi_ProtocolError
 	//	*PhiToPi_HistoryRequest
+	//	*PhiToPi_ModelsRequest
+	//	*PhiToPi_SetModelRequest
 	Payload       isPhiToPi_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -452,6 +486,24 @@ func (x *PhiToPi) GetHistoryRequest() *HistoryRequest {
 	return nil
 }
 
+func (x *PhiToPi) GetModelsRequest() *ModelsRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*PhiToPi_ModelsRequest); ok {
+			return x.ModelsRequest
+		}
+	}
+	return nil
+}
+
+func (x *PhiToPi) GetSetModelRequest() *SetModelRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*PhiToPi_SetModelRequest); ok {
+			return x.SetModelRequest
+		}
+	}
+	return nil
+}
+
 type isPhiToPi_Payload interface {
 	isPhiToPi_Payload()
 }
@@ -468,11 +520,23 @@ type PhiToPi_HistoryRequest struct {
 	HistoryRequest *HistoryRequest `protobuf:"bytes,14,opt,name=history_request,json=historyRequest,proto3,oneof"`
 }
 
+type PhiToPi_ModelsRequest struct {
+	ModelsRequest *ModelsRequest `protobuf:"bytes,15,opt,name=models_request,json=modelsRequest,proto3,oneof"`
+}
+
+type PhiToPi_SetModelRequest struct {
+	SetModelRequest *SetModelRequest `protobuf:"bytes,16,opt,name=set_model_request,json=setModelRequest,proto3,oneof"`
+}
+
 func (*PhiToPi_Accepted) isPhiToPi_Payload() {}
 
 func (*PhiToPi_ProtocolError) isPhiToPi_Payload() {}
 
 func (*PhiToPi_HistoryRequest) isPhiToPi_Payload() {}
+
+func (*PhiToPi_ModelsRequest) isPhiToPi_Payload() {}
+
+func (*PhiToPi_SetModelRequest) isPhiToPi_Payload() {}
 
 // Hello is the first application message on every stream. Protocol version,
 // identities, capabilities, and the replay range of the retained journal.
@@ -1083,6 +1147,311 @@ func (x *HistoryResponse) GetUnavailable() bool {
 	return false
 }
 
+// One catalog entry. provider/model matches ModelSnapshot naming; the
+// Phi UI maps model to its own id field at the edge.
+type ModelRef struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Provider      string                 `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
+	Model         string                 `protobuf:"bytes,2,opt,name=model,proto3" json:"model,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ModelRef) Reset() {
+	*x = ModelRef{}
+	mi := &file_bridge_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModelRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModelRef) ProtoMessage() {}
+
+func (x *ModelRef) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModelRef.ProtoReflect.Descriptor instead.
+func (*ModelRef) Descriptor() ([]byte, []int) {
+	return file_bridge_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ModelRef) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *ModelRef) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+// ModelsRequest asks the extension for the session's selectable models.
+// request_id correlates exactly one ModelsResponse; the extension
+// echoes it verbatim. Best-effort like history: the answer may be
+// unavailable, or never arrive, without disturbing lifecycle traffic.
+type ModelsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ModelsRequest) Reset() {
+	*x = ModelsRequest{}
+	mi := &file_bridge_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModelsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModelsRequest) ProtoMessage() {}
+
+func (x *ModelsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModelsRequest.ProtoReflect.Descriptor instead.
+func (*ModelsRequest) Descriptor() ([]byte, []int) {
+	return file_bridge_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ModelsRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+// ModelsResponse carries one model list for request_id. models honors
+// the session's scoped allowlist when scoping is configured. truncated
+// means the list hit the entry cap and is partial; unavailable means
+// the answer exceeds the message bound. Phi surfaces unavailable as
+// an in-picker row and keeps truncated lists usable with a
+// partial-list footer.
+type ModelsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Models        []*ModelRef            `protobuf:"bytes,2,rep,name=models,proto3" json:"models,omitempty"`
+	Truncated     bool                   `protobuf:"varint,3,opt,name=truncated,proto3" json:"truncated,omitempty"`
+	Unavailable   bool                   `protobuf:"varint,4,opt,name=unavailable,proto3" json:"unavailable,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ModelsResponse) Reset() {
+	*x = ModelsResponse{}
+	mi := &file_bridge_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModelsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModelsResponse) ProtoMessage() {}
+
+func (x *ModelsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModelsResponse.ProtoReflect.Descriptor instead.
+func (*ModelsResponse) Descriptor() ([]byte, []int) {
+	return file_bridge_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ModelsResponse) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ModelsResponse) GetModels() []*ModelRef {
+	if x != nil {
+		return x.Models
+	}
+	return nil
+}
+
+func (x *ModelsResponse) GetTruncated() bool {
+	if x != nil {
+		return x.Truncated
+	}
+	return false
+}
+
+func (x *ModelsResponse) GetUnavailable() bool {
+	if x != nil {
+		return x.Unavailable
+	}
+	return false
+}
+
+// SetModelRequest asks the extension to switch the session model.
+// provider/model name one catalog entry; request_id correlates
+// exactly one SetModelAck, echoed verbatim.
+type SetModelRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Provider      string                 `protobuf:"bytes,2,opt,name=provider,proto3" json:"provider,omitempty"`
+	Model         string                 `protobuf:"bytes,3,opt,name=model,proto3" json:"model,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetModelRequest) Reset() {
+	*x = SetModelRequest{}
+	mi := &file_bridge_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetModelRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetModelRequest) ProtoMessage() {}
+
+func (x *SetModelRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetModelRequest.ProtoReflect.Descriptor instead.
+func (*SetModelRequest) Descriptor() ([]byte, []int) {
+	return file_bridge_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *SetModelRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *SetModelRequest) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *SetModelRequest) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+// SetModelAck reports one switch outcome for request_id. ok means Pi
+// accepted the switch; reason is empty then. reason is 'no-auth'
+// when the provider has no configured credentials, 'unknown-model'
+// when the entry is not selectable (unknown, or outside the
+// session scope). A successful switch emits model_select, so the
+// current-model snapshot follows on its own.
+type SetModelAck struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Ok            bool                   `protobuf:"varint,2,opt,name=ok,proto3" json:"ok,omitempty"`
+	Reason        string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetModelAck) Reset() {
+	*x = SetModelAck{}
+	mi := &file_bridge_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetModelAck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetModelAck) ProtoMessage() {}
+
+func (x *SetModelAck) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetModelAck.ProtoReflect.Descriptor instead.
+func (*SetModelAck) Descriptor() ([]byte, []int) {
+	return file_bridge_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *SetModelAck) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *SetModelAck) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *SetModelAck) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 // Terminal protocol-level rejection. Ends the stream attempt.
 type ProtocolError struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1094,7 +1463,7 @@ type ProtocolError struct {
 
 func (x *ProtocolError) Reset() {
 	*x = ProtocolError{}
-	mi := &file_bridge_proto_msgTypes[11]
+	mi := &file_bridge_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1106,7 +1475,7 @@ func (x *ProtocolError) String() string {
 func (*ProtocolError) ProtoMessage() {}
 
 func (x *ProtocolError) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[11]
+	mi := &file_bridge_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1119,7 +1488,7 @@ func (x *ProtocolError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProtocolError.ProtoReflect.Descriptor instead.
 func (*ProtocolError) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{11}
+	return file_bridge_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ProtocolError) GetCode() ProtocolErrorCode {
@@ -1140,7 +1509,7 @@ var File_bridge_proto protoreflect.FileDescriptor
 
 const file_bridge_proto_rawDesc = "" +
 	"\n" +
-	"\fbridge.proto\x12\tphi.pi.v1\"\xf7\x03\n" +
+	"\fbridge.proto\x12\tphi.pi.v1\"\xfb\x04\n" +
 	"\aPiToPhi\x12\x17\n" +
 	"\apane_id\x18\x01 \x01(\tR\x06paneId\x12\x1d\n" +
 	"\n" +
@@ -1151,8 +1520,10 @@ const file_bridge_proto_rawDesc = "" +
 	"\ragent_started\x18\v \x01(\v2\x17.phi.pi.v1.AgentStartedH\x00R\fagentStarted\x12>\n" +
 	"\ragent_settled\x18\f \x01(\v2\x17.phi.pi.v1.AgentSettledH\x00R\fagentSettled\x12A\n" +
 	"\x0estate_snapshot\x18\r \x01(\v2\x18.phi.pi.v1.StateSnapshotH\x00R\rstateSnapshot\x12G\n" +
-	"\x10history_response\x18\x11 \x01(\v2\x1a.phi.pi.v1.HistoryResponseH\x00R\x0fhistoryResponseB\t\n" +
-	"\apayloadJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10J\x04\b\x10\x10\x11R\x0esummary_resultR\rcommand_errorR\x13cancel_acknowledged\"\xd6\x02\n" +
+	"\x10history_response\x18\x11 \x01(\v2\x1a.phi.pi.v1.HistoryResponseH\x00R\x0fhistoryResponse\x12D\n" +
+	"\x0fmodels_response\x18\x12 \x01(\v2\x19.phi.pi.v1.ModelsResponseH\x00R\x0emodelsResponse\x12<\n" +
+	"\rset_model_ack\x18\x13 \x01(\v2\x16.phi.pi.v1.SetModelAckH\x00R\vsetModelAckB\t\n" +
+	"\apayloadJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10J\x04\b\x10\x10\x11R\x0esummary_resultR\rcommand_errorR\x13cancel_acknowledged\"\xe3\x03\n" +
 	"\aPhiToPi\x12\x17\n" +
 	"\apane_id\x18\x01 \x01(\tR\x06paneId\x12\x1d\n" +
 	"\n" +
@@ -1161,7 +1532,9 @@ const file_bridge_proto_rawDesc = "" +
 	"\baccepted\x18\n" +
 	" \x01(\v2\x13.phi.pi.v1.AcceptedH\x00R\baccepted\x12A\n" +
 	"\x0eprotocol_error\x18\r \x01(\v2\x18.phi.pi.v1.ProtocolErrorH\x00R\rprotocolError\x12D\n" +
-	"\x0fhistory_request\x18\x0e \x01(\v2\x19.phi.pi.v1.HistoryRequestH\x00R\x0ehistoryRequestB\t\n" +
+	"\x0fhistory_request\x18\x0e \x01(\v2\x19.phi.pi.v1.HistoryRequestH\x00R\x0ehistoryRequest\x12A\n" +
+	"\x0emodels_request\x18\x0f \x01(\v2\x18.phi.pi.v1.ModelsRequestH\x00R\rmodelsRequest\x12H\n" +
+	"\x11set_model_request\x18\x10 \x01(\v2\x1a.phi.pi.v1.SetModelRequestH\x00R\x0fsetModelRequestB\t\n" +
 	"\apayloadJ\x04\b\v\x10\fJ\x04\b\f\x10\rR\tsummarizeR\x06cancel\"\xe8\x02\n" +
 	"\x05Hello\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\x1d\n" +
@@ -1211,7 +1584,29 @@ const file_bridge_proto_rawDesc = "" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x18\n" +
 	"\aentries\x18\x02 \x03(\tR\aentries\x12 \n" +
-	"\vunavailable\x18\x03 \x01(\bR\vunavailable\"d\n" +
+	"\vunavailable\x18\x03 \x01(\bR\vunavailable\"<\n" +
+	"\bModelRef\x12\x1a\n" +
+	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x14\n" +
+	"\x05model\x18\x02 \x01(\tR\x05model\".\n" +
+	"\rModelsRequest\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\"\x9c\x01\n" +
+	"\x0eModelsResponse\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12+\n" +
+	"\x06models\x18\x02 \x03(\v2\x13.phi.pi.v1.ModelRefR\x06models\x12\x1c\n" +
+	"\ttruncated\x18\x03 \x01(\bR\ttruncated\x12 \n" +
+	"\vunavailable\x18\x04 \x01(\bR\vunavailable\"b\n" +
+	"\x0fSetModelRequest\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1a\n" +
+	"\bprovider\x18\x02 \x01(\tR\bprovider\x12\x14\n" +
+	"\x05model\x18\x03 \x01(\tR\x05model\"T\n" +
+	"\vSetModelAck\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12\x0e\n" +
+	"\x02ok\x18\x02 \x01(\bR\x02ok\x12\x16\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\"d\n" +
 	"\rProtocolError\x120\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x1c.phi.pi.v1.ProtocolErrorCodeR\x04code\x12!\n" +
 	"\fsafe_message\x18\x02 \x01(\tR\vsafeMessage*t\n" +
@@ -1248,7 +1643,7 @@ func file_bridge_proto_rawDescGZIP() []byte {
 }
 
 var file_bridge_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_bridge_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_bridge_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_bridge_proto_goTypes = []any{
 	(RunOutcome)(0),         // 0: phi.pi.v1.RunOutcome
 	(LogicalState)(0),       // 1: phi.pi.v1.LogicalState
@@ -1264,7 +1659,12 @@ var file_bridge_proto_goTypes = []any{
 	(*StateSnapshot)(nil),   // 11: phi.pi.v1.StateSnapshot
 	(*HistoryRequest)(nil),  // 12: phi.pi.v1.HistoryRequest
 	(*HistoryResponse)(nil), // 13: phi.pi.v1.HistoryResponse
-	(*ProtocolError)(nil),   // 14: phi.pi.v1.ProtocolError
+	(*ModelRef)(nil),        // 14: phi.pi.v1.ModelRef
+	(*ModelsRequest)(nil),   // 15: phi.pi.v1.ModelsRequest
+	(*ModelsResponse)(nil),  // 16: phi.pi.v1.ModelsResponse
+	(*SetModelRequest)(nil), // 17: phi.pi.v1.SetModelRequest
+	(*SetModelAck)(nil),     // 18: phi.pi.v1.SetModelAck
+	(*ProtocolError)(nil),   // 19: phi.pi.v1.ProtocolError
 }
 var file_bridge_proto_depIdxs = []int32{
 	5,  // 0: phi.pi.v1.PiToPhi.hello:type_name -> phi.pi.v1.Hello
@@ -1272,23 +1672,28 @@ var file_bridge_proto_depIdxs = []int32{
 	8,  // 2: phi.pi.v1.PiToPhi.agent_settled:type_name -> phi.pi.v1.AgentSettled
 	11, // 3: phi.pi.v1.PiToPhi.state_snapshot:type_name -> phi.pi.v1.StateSnapshot
 	13, // 4: phi.pi.v1.PiToPhi.history_response:type_name -> phi.pi.v1.HistoryResponse
-	6,  // 5: phi.pi.v1.PhiToPi.accepted:type_name -> phi.pi.v1.Accepted
-	14, // 6: phi.pi.v1.PhiToPi.protocol_error:type_name -> phi.pi.v1.ProtocolError
-	12, // 7: phi.pi.v1.PhiToPi.history_request:type_name -> phi.pi.v1.HistoryRequest
-	11, // 8: phi.pi.v1.Hello.current_state:type_name -> phi.pi.v1.StateSnapshot
-	0,  // 9: phi.pi.v1.AgentSettled.outcome:type_name -> phi.pi.v1.RunOutcome
-	0,  // 10: phi.pi.v1.LifecycleRecord.outcome:type_name -> phi.pi.v1.RunOutcome
-	1,  // 11: phi.pi.v1.StateSnapshot.state:type_name -> phi.pi.v1.LogicalState
-	10, // 12: phi.pi.v1.StateSnapshot.model:type_name -> phi.pi.v1.ModelSnapshot
-	9,  // 13: phi.pi.v1.StateSnapshot.journal:type_name -> phi.pi.v1.LifecycleRecord
-	2,  // 14: phi.pi.v1.ProtocolError.code:type_name -> phi.pi.v1.ProtocolErrorCode
-	3,  // 15: phi.pi.v1.Integration.Connect:input_type -> phi.pi.v1.PiToPhi
-	4,  // 16: phi.pi.v1.Integration.Connect:output_type -> phi.pi.v1.PhiToPi
-	16, // [16:17] is the sub-list for method output_type
-	15, // [15:16] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	16, // 5: phi.pi.v1.PiToPhi.models_response:type_name -> phi.pi.v1.ModelsResponse
+	18, // 6: phi.pi.v1.PiToPhi.set_model_ack:type_name -> phi.pi.v1.SetModelAck
+	6,  // 7: phi.pi.v1.PhiToPi.accepted:type_name -> phi.pi.v1.Accepted
+	19, // 8: phi.pi.v1.PhiToPi.protocol_error:type_name -> phi.pi.v1.ProtocolError
+	12, // 9: phi.pi.v1.PhiToPi.history_request:type_name -> phi.pi.v1.HistoryRequest
+	15, // 10: phi.pi.v1.PhiToPi.models_request:type_name -> phi.pi.v1.ModelsRequest
+	17, // 11: phi.pi.v1.PhiToPi.set_model_request:type_name -> phi.pi.v1.SetModelRequest
+	11, // 12: phi.pi.v1.Hello.current_state:type_name -> phi.pi.v1.StateSnapshot
+	0,  // 13: phi.pi.v1.AgentSettled.outcome:type_name -> phi.pi.v1.RunOutcome
+	0,  // 14: phi.pi.v1.LifecycleRecord.outcome:type_name -> phi.pi.v1.RunOutcome
+	1,  // 15: phi.pi.v1.StateSnapshot.state:type_name -> phi.pi.v1.LogicalState
+	10, // 16: phi.pi.v1.StateSnapshot.model:type_name -> phi.pi.v1.ModelSnapshot
+	9,  // 17: phi.pi.v1.StateSnapshot.journal:type_name -> phi.pi.v1.LifecycleRecord
+	14, // 18: phi.pi.v1.ModelsResponse.models:type_name -> phi.pi.v1.ModelRef
+	2,  // 19: phi.pi.v1.ProtocolError.code:type_name -> phi.pi.v1.ProtocolErrorCode
+	3,  // 20: phi.pi.v1.Integration.Connect:input_type -> phi.pi.v1.PiToPhi
+	4,  // 21: phi.pi.v1.Integration.Connect:output_type -> phi.pi.v1.PhiToPi
+	21, // [21:22] is the sub-list for method output_type
+	20, // [20:21] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_bridge_proto_init() }
@@ -1302,11 +1707,15 @@ func file_bridge_proto_init() {
 		(*PiToPhi_AgentSettled)(nil),
 		(*PiToPhi_StateSnapshot)(nil),
 		(*PiToPhi_HistoryResponse)(nil),
+		(*PiToPhi_ModelsResponse)(nil),
+		(*PiToPhi_SetModelAck)(nil),
 	}
 	file_bridge_proto_msgTypes[1].OneofWrappers = []any{
 		(*PhiToPi_Accepted)(nil),
 		(*PhiToPi_ProtocolError)(nil),
 		(*PhiToPi_HistoryRequest)(nil),
+		(*PhiToPi_ModelsRequest)(nil),
+		(*PhiToPi_SetModelRequest)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1314,7 +1723,7 @@ func file_bridge_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bridge_proto_rawDesc), len(file_bridge_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   12,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

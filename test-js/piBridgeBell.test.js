@@ -9,8 +9,6 @@ function bridgeManager() {
         tabs: new Map(),
         switchTab: vi.fn(),
         updateDocumentTitle: vi.fn(),
-        getActiveTab: () => null,
-        renderPiRpcStatusBar: vi.fn(),
         triggerAttentionNotification:
             TabManager.prototype.triggerAttentionNotification,
         _piBridgeRunIsNew: TabManager.prototype._piBridgeRunIsNew,
@@ -19,11 +17,13 @@ function bridgeManager() {
         _setTabAttention: TabManager.prototype._setTabAttention,
         _acceptPiBridgeState: TabManager.prototype._acceptPiBridgeState,
         _acceptPiBridgeSettled: TabManager.prototype._acceptPiBridgeSettled,
-        _acceptOrderedBridgeView:
-            TabManager.prototype._acceptOrderedBridgeView,
-        _normalizePiBridgeView:
-            TabManager.prototype._normalizePiBridgeView,
+        _acceptOrderedBridgeView: TabManager.prototype._acceptOrderedBridgeView,
+        _normalizePiBridgeView: TabManager.prototype._normalizePiBridgeView,
         _piBridgeRevValue: TabManager.prototype._piBridgeRevValue,
+        _piBridgeModelsEligible: TabManager.prototype._piBridgeModelsEligible,
+        _refreshPiBridgeModels: TabManager.prototype._refreshPiBridgeModels,
+        getActiveTab: () => null,
+        renderPresets: vi.fn(),
     };
     return { manager, showToast };
 }

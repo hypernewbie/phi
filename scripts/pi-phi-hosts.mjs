@@ -579,7 +579,7 @@ for (const version of versions) {
         if (view.generation !== '1')
             fail(version.name, 'generation', view.generation);
         if (!view.runtimeId) fail(version.name, 'runtime id missing');
-        if ((view.caps || []).join(',') !== 'pi.lifecycle.v1') {
+        if ((view.caps || []).join(',') !== 'pi.lifecycle.v1,pi.models.v1') {
             fail(version.name, 'accepted caps', (view.caps || []).join(','));
         }
         if (view.session !== events[0]?.session)
@@ -816,7 +816,7 @@ for (const version of versions) {
                 }
                 if (
                     (tuiView.caps || []).join(',') !==
-                    'pi.history.v1,pi.lifecycle.v1'
+                    'pi.history.v1,pi.lifecycle.v1,pi.models.v1'
                 ) {
                     fail(
                         version.name,

@@ -2,7 +2,8 @@
 
 Phi's integration endpoint inside Pi. The extension reports explicit
 Pi completion to Phi's existing bell and provides read-only editor history.
-It never changes the Pi conversation: no prompts, no compaction, no context edits.
+It also lists and switches models through Phi's shared model picker.
+It never sends prompts, compacts a session, or edits context.
 
 ## Layout
 
@@ -13,7 +14,7 @@ It never changes the Pi conversation: no prompts, no compaction, no context edit
   module itself, callable through the host loader.
 - `src/extension.ts` — the factory: credential handling, process-global
   ownership, and event subscriptions.
-- `src/runtime.ts` — lifecycle mapping, history requests, journal, and reconnect.
+- `src/runtime.ts` — lifecycle mapping, history and model requests, journal, and reconnect.
 - `src/history-reader.ts` — checked access to the live TUI editor history.
 - `src/channel.ts` — bounded-queue gRPC transport.
 - `src/test-client.ts` — the synthetic peer for interop tests.
@@ -32,6 +33,15 @@ Pi editor. Alt+Up/Down continues to use Phi's local history.
 Without the bridge or history capability, the existing key behavior remains.
 An unavailable editor, failed request, or timeout also keeps that behavior.
 The reader checks a private Pi editor field, so compatibility requires a host check.
+
+## Model selection
+
+A connected Pi pane with `pi.models.v1` uses the shared Pi RPC model picker,
+including its favorites. The picker requests Pi's selectable models when it opens.
+Without the bridge or capability, Models keeps the legacy static presets.
+A lost connection closes the picker and clears its cached list.
+A failed list request shows an error inside the picker.
+A switch timeout has an unknown outcome. Reopen the picker to check the model.
 
 ## Toggles and manual install
 

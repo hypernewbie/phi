@@ -43,6 +43,10 @@ type peer struct {
 	histMu      sync.Mutex
 	histPending map[string]chan HistoryResult
 
+	modelsMu      sync.Mutex
+	modelsPending map[string]chan ModelsResult
+	setPending    map[string]chan SetModelResult
+
 	writerDone chan struct{}
 }
 
@@ -55,6 +59,12 @@ func newPeer(generation uint64, sessionID string, stream connectStream) *peer {
 		done:       make(chan struct{}),
 		histPending: make(
 			map[string]chan HistoryResult,
+		),
+		modelsPending: make(
+			map[string]chan ModelsResult,
+		),
+		setPending: make(
+			map[string]chan SetModelResult,
 		),
 		writerDone: make(chan struct{}),
 	}
@@ -70,8 +80,9 @@ func (p *peer) send(msg *pibridgepb.PhiToPi) bool {
 }
 
 // sendNonfatal enqueues one outbound message without closing the peer
-// on overflow. History requests use it: a recall attempt must never
-// end the lifecycle stream. Callers fail only their own request.
+// on overflow. On-demand requests (history, models, set-model) use it:
+// a recall attempt must never end the lifecycle stream. Callers fail
+// only their own request.
 func (p *peer) sendNonfatal(msg *pibridgepb.PhiToPi) bool {
 	return p.enqueue(msg, false)
 }

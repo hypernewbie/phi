@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     CAPABILITY_HISTORY,
     CAPABILITY_LIFECYCLE,
+    CAPABILITY_MODELS,
     isKnownCapability,
     negotiateCapabilities,
 } from './protocol.js';
@@ -22,6 +23,12 @@ describe('negotiateCapabilities', () => {
             CAPABILITY_HISTORY,
         ]);
         expect(isKnownCapability(CAPABILITY_HISTORY)).toBe(true);
+    });
+    it('accepts the models capability', () => {
+        expect(negotiateCapabilities([CAPABILITY_MODELS])).toEqual([
+            CAPABILITY_MODELS,
+        ]);
+        expect(isKnownCapability(CAPABILITY_MODELS)).toBe(true);
     });
     it('yields empty for empty', () => {
         expect(negotiateCapabilities([])).toEqual([]);

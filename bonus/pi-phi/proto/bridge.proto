@@ -37,6 +37,8 @@ message PiToPhi {
     AgentSettled agent_settled = 12;
     StateSnapshot state_snapshot = 13;
     HistoryResponse history_response = 17;
+    ModelsResponse models_response = 18;
+    SetModelAck set_model_ack = 19;
   }
 }
 
@@ -51,6 +53,8 @@ message PhiToPi {
     Accepted accepted = 10;
     ProtocolError protocol_error = 13;
     HistoryRequest history_request = 14;
+    ModelsRequest models_request = 15;
+    SetModelRequest set_model_request = 16;
   }
 }
 
@@ -166,6 +170,59 @@ message HistoryResponse {
   string request_id = 1;
   repeated string entries = 2;
   bool unavailable = 3;
+}
+
+// ---------------------------------------------------------------------------
+// On-demand model list and switching
+// ---------------------------------------------------------------------------
+
+// One catalog entry. provider/model matches ModelSnapshot naming; the
+// Phi UI maps model to its own id field at the edge.
+message ModelRef {
+  string provider = 1;
+  string model = 2;
+}
+
+// ModelsRequest asks the extension for the session's selectable models.
+// request_id correlates exactly one ModelsResponse; the extension
+// echoes it verbatim. Best-effort like history: the answer may be
+// unavailable, or never arrive, without disturbing lifecycle traffic.
+message ModelsRequest {
+  string request_id = 1;
+}
+
+// ModelsResponse carries one model list for request_id. models honors
+// the session's scoped allowlist when scoping is configured. truncated
+// means the list hit the entry cap and is partial; unavailable means
+// the answer exceeds the message bound. Phi surfaces unavailable as
+// an in-picker row and keeps truncated lists usable with a
+// partial-list footer.
+message ModelsResponse {
+  string request_id = 1;
+  repeated ModelRef models = 2;
+  bool truncated = 3;
+  bool unavailable = 4;
+}
+
+// SetModelRequest asks the extension to switch the session model.
+// provider/model name one catalog entry; request_id correlates
+// exactly one SetModelAck, echoed verbatim.
+message SetModelRequest {
+  string request_id = 1;
+  string provider = 2;
+  string model = 3;
+}
+
+// SetModelAck reports one switch outcome for request_id. ok means Pi
+// accepted the switch; reason is empty then. reason is 'no-auth'
+// when the provider has no configured credentials, 'unknown-model'
+// when the entry is not selectable (unknown, or outside the
+// session scope). A successful switch emits model_select, so the
+// current-model snapshot follows on its own.
+message SetModelAck {
+  string request_id = 1;
+  bool ok = 2;
+  string reason = 3;
 }
 
 // ---------------------------------------------------------------------------

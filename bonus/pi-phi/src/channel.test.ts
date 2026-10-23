@@ -301,7 +301,7 @@ describe('BridgeChannel history admission', () => {
             const size = encodedSize(big);
             expect(size).toBeGreaterThan(200 * 1024);
             expect(size).toBeLessThan(CAP);
-            expect(channel.sendHistory(big)).toBe(true);
+            expect(channel.sendNonfatal(big)).toBe(true);
             // The frame is held in flight; an edge plus a snapshot
             // must still enqueue without ending the stream.
             expect(channel.send(hello())).toBe(true);
@@ -316,7 +316,7 @@ describe('BridgeChannel history admission', () => {
         try {
             const tiny = historyFrame(1, 1);
             let admitted = 0;
-            while (admitted < MAX_QUEUED_MESSAGES && channel.sendHistory(tiny))
+            while (admitted < MAX_QUEUED_MESSAGES && channel.sendNonfatal(tiny))
                 admitted++;
             expect(admitted).toBe(MAX_QUEUED_MESSAGES - 2);
             expect(channel.send(hello())).toBe(true);
@@ -332,9 +332,9 @@ describe('BridgeChannel history admission', () => {
             const big = historyFrame(2400, 100);
             expect(channel.send(big)).toBe(true);
             // The queued lifecycle frame consumes most of the shared budget.
-            expect(channel.sendHistory(historyFrame(100, 100))).toBe(false);
+            expect(channel.sendNonfatal(historyFrame(100, 100))).toBe(false);
             expect(channel.send(hello())).toBe(true);
-            expect(channel.sendHistory(historyFrame(1, 1))).toBe(true);
+            expect(channel.sendNonfatal(historyFrame(1, 1))).toBe(true);
         } finally {
             channel.close();
         }
@@ -348,10 +348,10 @@ describe('BridgeChannel history admission', () => {
             // Fits the raw queue bound, but leaves no lifecycle headroom.
             expect(size).toBeGreaterThan(CAP);
             expect(size).toBeLessThan(MAX_QUEUED_BYTES);
-            expect(channel.sendHistory(tooBig)).toBe(false);
+            expect(channel.sendNonfatal(tooBig)).toBe(false);
             // Nonfatal: lifecycle and later history still send.
             expect(channel.send(hello())).toBe(true);
-            expect(channel.sendHistory(historyFrame(8, 1))).toBe(true);
+            expect(channel.sendNonfatal(historyFrame(8, 1))).toBe(true);
         } finally {
             channel.close();
         }
