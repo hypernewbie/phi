@@ -217,28 +217,10 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 		if through > from && through-from > ws.MaxCheckpointBytes {
 			through = from + ws.MaxCheckpointBytes
 		}
-		after := r.URL.Query().Get("after_event_cursor")
-		var rec ws.Recording
-		if after != "" {
-			var endCursor string
-			var cerr error
-			rec, endCursor, cerr = wsHub.RecordingAfterCursor(id, from, through, after)
-			if cerr != nil {
-				if errors.Is(cerr, ws.ErrEventCursorExpired) {
-					http.Error(w, cerr.Error(), http.StatusConflict)
-					return
-				}
-				http.Error(w, "from is beyond the pane head", http.StatusBadRequest)
-				return
-			}
-			rec.EventCursor = endCursor
-		} else {
-			var ok bool
-			rec, ok = wsHub.Recording(id, from, through)
-			if !ok {
-				http.Error(w, "from is beyond the pane head", http.StatusBadRequest)
-				return
-			}
+		rec, ok := wsHub.Recording(id, from, through)
+		if !ok {
+			http.Error(w, "from is beyond the pane head", http.StatusBadRequest)
+			return
 		}
 		if hasEpoch && rec.Epoch != wantEpoch {
 			http.Error(w, "epoch mismatch", http.StatusConflict)
@@ -258,26 +240,10 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 			if mfrom > from {
 				// Re-derive the run from the narrowed span so Start/End
 				// and markers stay consistent with the bytes sent.
-				if after != "" {
-					var endCursor string
-					var cerr error
-					rec, endCursor, cerr = wsHub.RecordingAfterCursor(id, mfrom, mthrough, after)
-					if cerr != nil {
-						if errors.Is(cerr, ws.ErrEventCursorExpired) {
-							http.Error(w, cerr.Error(), http.StatusConflict)
-							return
-						}
-						http.Error(w, "from is beyond the pane head", http.StatusBadRequest)
-						return
-					}
-					rec.EventCursor = endCursor
-				} else {
-					var ok bool
-					rec, ok = wsHub.Recording(id, mfrom, mthrough)
-					if !ok {
-						http.Error(w, "from is beyond the pane head", http.StatusBadRequest)
-						return
-					}
+				rec, ok = wsHub.Recording(id, mfrom, mthrough)
+				if !ok {
+					http.Error(w, "from is beyond the pane head", http.StatusBadRequest)
+					return
 				}
 				if hasEpoch && rec.Epoch != wantEpoch {
 					http.Error(w, "epoch mismatch", http.StatusConflict)
@@ -290,7 +256,7 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 			resizes = append(resizes, [3]uint64{m.AtSeq, uint64(m.Cols), uint64(m.Rows)})
 		}
 		hdr, _ := json.Marshal(ws.RecordingHeaderJSON{
-			Epoch: rec.Epoch, Start: rec.Start, End: rec.End, Resizes: resizes, EventCursor: rec.EventCursor,
+			Epoch: rec.Epoch, Start: rec.Start, End: rec.End, Resizes: resizes,
 		})
 		writeRecordingResponse(w, r, hdr, rec.Data)
 		return

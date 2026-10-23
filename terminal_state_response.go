@@ -40,15 +40,11 @@ func handleTerminalState(w http.ResponseWriter, r *http.Request) {
 	var data []byte
 	var cols, rows int
 	if latest {
-		switch kind {
-		case "ansi-v1":
-			pos, data, cols, rows, err = wsHub.LiveANSIState(id, epoch)
-		case "ghostty-ready-v1":
-			pos, data, cols, rows, err = wsHub.LiveGhosttyState(id, epoch)
-		default:
-			http.Error(w, "latest requires ansi-v1 or ghostty-ready-v1", http.StatusBadRequest)
+		if kind != "ansi-v1" {
+			http.Error(w, "latest requires ansi-v1", http.StatusBadRequest)
 			return
 		}
+		pos, data, cols, rows, err = wsHub.LiveANSIState(id, epoch)
 		through = pos.Head
 	} else {
 		pos, data, cols, rows, err = state(r.Context(), id, epoch, through)
@@ -57,8 +53,6 @@ func handleTerminalState(w http.ResponseWriter, r *http.Request) {
 		code := http.StatusServiceUnavailable
 		if errors.Is(err, ws.ErrStatePositionMismatch) {
 			code = http.StatusConflict
-		} else if errors.Is(err, ws.ErrStateNotFound) {
-			code = http.StatusNotFound
 		}
 		http.Error(w, err.Error(), code)
 		return
@@ -67,6 +61,6 @@ func handleTerminalState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bounded state exceeds response budget", http.StatusRequestEntityTooLarge)
 		return
 	}
-	hdr, _ := json.Marshal(wireproto.AttachHeadHeader{Epoch: pos.Epoch, Oldest: pos.Oldest, Head: pos.Head, Ckpt: &wireproto.CheckpointHeader{Kind: kind, Through: through, Cols: uint16(cols), Rows: uint16(rows), Len: len(data), EventCursor: pos.EventCursor}})
+	hdr, _ := json.Marshal(wireproto.AttachHeadHeader{Epoch: pos.Epoch, Oldest: pos.Oldest, Head: pos.Head, Ckpt: &wireproto.CheckpointHeader{Kind: kind, Through: through, Cols: uint16(cols), Rows: uint16(rows), Len: len(data)}})
 	writeRecordingResponse(w, r, hdr, data)
 }

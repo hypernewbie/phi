@@ -54,12 +54,10 @@ export const terminalHistoryMethods = {
         const c = header.ckpt;
         const bytes = body.subarray(4 + size);
         const frontier = through === 'latest' ? header.head : through;
-        const cursor = c?.event_cursor;
-        const validCursor = cursor === undefined || (typeof cursor === 'string' && cursor.length <= 128 && /^v1\.\d+\.\d+\.\d+$/.test(cursor));
         if (!Number.isSafeInteger(frontier) || frontier < 0 || header.epoch !== epoch || header.head !== frontier || !Number.isSafeInteger(header.oldest) || header.oldest < 0 || header.oldest > frontier ||
             !c || c.kind !== 'ansi-v1' || c.through !== frontier || c.len !== bytes.length || bytes.length > MAX_CHECKPOINT_BYTES ||
-            !Number.isInteger(c.cols) || c.cols <= 0 || c.cols > 65535 || !Number.isInteger(c.rows) || c.rows <= 0 || c.rows > 65535 || !validCursor) return null;
-        return { ...c, bytes, oldest: header.oldest, eventCursor: cursor };
+            !Number.isInteger(c.cols) || c.cols <= 0 || c.cols > 65535 || !Number.isInteger(c.rows) || c.rows <= 0 || c.rows > 65535) return null;
+        return { ...c, bytes, oldest: header.oldest };
     },
 
     async _historyRead(tabInfo, read, signal) {
@@ -123,7 +121,7 @@ export const terminalHistoryMethods = {
                 // Do not hold the socket while fetching/retrying. Resident
                 // live delivery remains bounded; the current view stays intact.
                 const state = await this._historyRead(tabInfo, signal => this._fetchTerminalState(tabInfo.paneId, epoch, latest ? 'latest' : from, signal), request.signal);
-                const range = from < end ? await this._historyRead(tabInfo, signal => this._fetchRecordingRangeOnce(tabInfo.paneId, from, end, epoch, signal, state.eventCursor), request.signal) : null;
+                const range = from < end ? await this._historyRead(tabInfo, signal => this._fetchRecordingRangeOnce(tabInfo.paneId, from, end, epoch, signal), request.signal) : null;
                 if (!current()) return;
                 pty = tabInfo.ws;
                 pty.hold();

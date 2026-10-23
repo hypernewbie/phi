@@ -59,8 +59,6 @@ export interface AttachCheckpoint {
     // Native ANSI state can end mid-codepoint. Only a client applying this
     // checkpoint may decode it into its ongoing stream decoder.
     bytes?: Uint8Array;
-    // Opaque resize boundary for chaining recording pages. Absent on old servers.
-    eventCursor?: string;
 }
 
 export interface AttachHeadInfo {
@@ -312,8 +310,6 @@ export class PTYWebSocket {
         this.lastFrameEnd = head;
         let ckpt: AttachCheckpoint | null = null;
         const c = parsed.hdr.ckpt as Record<string, unknown> | undefined;
-        const validCursor = (v: unknown): v is string =>
-            typeof v === 'string' && v.length <= 128 && /^v1\.\d+\.\d+\.\d+$/.test(v);
         if (
             c &&
             validSeq(c.through) &&
@@ -327,8 +323,7 @@ export class PTYWebSocket {
             Number(c.rows) > 0 &&
             Number(c.rows) <= 65535 &&
             (c.len === undefined || c.len === parsed.extra.byteLength) &&
-            (c.kind === undefined || c.kind === 'ansi-v1') &&
-            (c.event_cursor === undefined || validCursor(c.event_cursor))
+            (c.kind === undefined || c.kind === 'ansi-v1')
         ) {
             ckpt = {
                 through: c.through,
@@ -337,7 +332,6 @@ export class PTYWebSocket {
                 rows: Number(c.rows),
                 ansi: new TextDecoder().decode(parsed.extra),
                 ...(c.kind === 'ansi-v1' ? { bytes: parsed.extra } : {}),
-                ...(c.event_cursor === undefined ? {} : { eventCursor: c.event_cursor as string }),
             };
         }
         if (

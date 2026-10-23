@@ -44,9 +44,7 @@ const faults = [
             throw new DOMException('abort', 'AbortError');
         },
     ],
-    // HTTP 404 and 409 are permanent under bounded retention: the range
-    // is over, not delayed. They are covered below, not in this matrix.
-    ...[408, 425, 429, 500, 502, 503, 504].map((status) => [
+    ...[404, 408, 409, 425, 429, 500, 502, 503, 504].map((status) => [
         `HTTP ${status}`,
         () => ({ ok: false, status }),
     ]),
@@ -141,55 +139,6 @@ for (const phase of ['initial attach', 'live gap']) {
                         h.requests.length,
                         'invalid or temporary responses must not become permanent data loss',
                     ).toBeGreaterThan(1);
-                } finally {
-                    h.dispose();
-                }
-            },
-        );
-    });
-}
-
-for (const phase of ['initial attach', 'live gap']) {
-    describe(`${phase}: permanent failures end the range request`, () => {
-        it.each([404, 409])(
-            'HTTP %i is never retried and admits no bytes',
-            async (status) => {
-                vi.spyOn(console, 'error').mockImplementation(() => {});
-                const h = replayHarness(small, (request) =>
-                    request.attempt === 1 ? { ok: false, status } : null,
-                );
-                try {
-                    if (phase === 'initial attach') {
-                        h.pty.ws.head({
-                            epoch: 7,
-                            oldest: 0,
-                            head: small.length,
-                        });
-                    } else {
-                        h.pty.ws.head({ epoch: 7, oldest: 0, head: 0 });
-                        h.pty.ws.output(0, small.slice(0, 12));
-                        h.pty.ws.output(small.length - 6, small.slice(-6));
-                    }
-                    await h.settle();
-                    const ranges = h.requests.filter((r) =>
-                        r.url.includes('/recording?'),
-                    );
-                    expect(
-                        ranges.length,
-                        'a permanent range ends after one attempt',
-                    ).toBe(1);
-                    expect(
-                        h.tape.join(''),
-                        'no failed-range bytes may enter the parser',
-                    ).not.toContain('retained history');
-                    if (phase === 'initial attach') {
-                        expect(
-                            h.requests.some((r) => r.url.includes('/state?')),
-                            'the expired span recovers through the live checkpoint',
-                        ).toBe(true);
-                    }
-                    expect(h.tab._bootstrapGate).toBe(null);
-                    expect(h.pty.ws.closed).toBe(true);
                 } finally {
                     h.dispose();
                 }

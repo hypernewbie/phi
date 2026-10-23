@@ -9,13 +9,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/hypernewbie/phi/internal/termstate"
 )
 
-// stateAnchorBudget and stateAnchorCount bound legacy parser checkpoint
-// files during non-destructive legacy import. New groups use the bounded
-// base-checkpoint set owned by the retention group instead.
+const stateAnchorInterval = 2 << 20
 const stateAnchorBudget = 32 << 20
 const stateAnchorCount = 32
 const historyCheckpointRows = 1024
@@ -24,15 +25,98 @@ const historyCheckpointRows = 1024
 // a retryable recording or parser reconstruction failure.
 var ErrStatePositionMismatch = errors.New("archive position mismatch")
 
-// errStateBaseUnavailable reports a missing or unusable retained base
-// checkpoint on the live reconstruction path. Callers must not poison
-// the pane with it: restoration resumes once a valid base exists.
-var errStateBaseUnavailable = errors.New("retained base checkpoint unavailable")
-
 type stateAnchor struct {
 	through    uint64
 	compressed []byte
 	path       string
+}
+
+func (ph *PaneHub) addStateAnchorLocked() error {
+	if ph.state == nil {
+		return fmt.Errorf("live state unavailable")
+	}
+	snapshot, err := ph.state.Ready()
+	if err != nil {
+		return err
+	}
+	var buffer bytes.Buffer
+	writer, _ := gzip.NewWriterLevel(&buffer, gzip.BestSpeed)
+	if _, err = writer.Write(snapshot); err != nil {
+		return err
+	}
+	if err = writer.Close(); err != nil {
+		return err
+	}
+	if n := len(ph.stateAnchors); n > 0 && ph.stateAnchors[n-1].through == ph.stateHead {
+		ph.stateAnchorBytes -= len(ph.stateAnchors[n-1].compressed)
+		ph.stateAnchors = ph.stateAnchors[:n-1]
+	}
+	ph.stateAnchors = append(ph.stateAnchors, stateAnchor{through: ph.stateHead, compressed: append([]byte(nil), buffer.Bytes()...)})
+	ph.stateAnchorBytes += len(buffer.Bytes())
+	for len(ph.stateAnchors) > stateAnchorCount || ph.stateAnchorBytes > stateAnchorBudget {
+		ph.stateAnchorBytes -= len(ph.stateAnchors[0].compressed)
+		ph.stateAnchors[0] = stateAnchor{} // Release evicted payloads, not just the slice view.
+		ph.stateAnchors = ph.stateAnchors[1:]
+	}
+	if ph.statePath != "" {
+		_ = saveAnchorFile(filepath.Join(ph.statePath+".d", fmt.Sprintf("%020d.state", ph.stateHead)), buffer.Bytes())
+		_ = saveStateAnchors(ph.statePath, ph.stateAnchors)
+	}
+	return nil
+}
+func (ph *PaneHub) nearestStateAnchor(through uint64) (stateAnchor, bool) {
+	var best stateAnchor
+	found := false
+	for i := range ph.stateAnchors {
+		if ph.stateAnchors[i].through <= through && (!found || ph.stateAnchors[i].through > best.through) {
+			best = ph.stateAnchors[i]
+			found = true
+		}
+	}
+	if found {
+		return best, true
+	}
+	if ph.statePath == "" {
+		return stateAnchor{}, false
+	}
+	dir := ph.statePath + ".d"
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return stateAnchor{}, false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := strings.TrimSuffix(entry.Name(), ".state")
+		sequence, e := strconv.ParseUint(name, 10, 64)
+		if e == nil && sequence <= through && (!found || sequence > best.through) {
+			best = stateAnchor{through: sequence, path: filepath.Join(dir, entry.Name())}
+			found = true
+		}
+	}
+	if !found {
+		return stateAnchor{}, false
+	}
+	// Acceleration files are not source authority. Ignore corrupt/oversized
+	// entries instead of allowing a metadata file to exhaust server memory.
+	info, err := os.Stat(best.path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > stateAnchorBudget {
+		return stateAnchor{}, false
+	}
+	data, err := os.ReadFile(best.path)
+	if err != nil {
+		return stateAnchor{}, false
+	}
+	best.compressed = data
+	return best, true
+}
+func (ph *PaneHub) loadStateAnchorsLocked() {
+	if ph.stateAnchorsLoaded || ph.statePath == "" {
+		return
+	}
+	ph.stateAnchors, ph.stateAnchorBytes, _ = loadStateAnchors(ph.statePath)
+	ph.stateAnchorsLoaded = true
 }
 
 func restoreAnchor(data []byte) ([]byte, error) {
@@ -41,16 +125,26 @@ func restoreAnchor(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	defer r.Close()
-	out, err := io.ReadAll(io.LimitReader(r, (64<<20)+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(out) > 64<<20 {
-		return nil, fmt.Errorf("parser checkpoint exceeds decompressed bound")
-	}
-	return out, nil
+	return io.ReadAll(io.LimitReader(r, 64<<20))
 }
 
+func encodeStateAnchors(anchors []stateAnchor) []byte {
+	size := 8
+	for _, a := range anchors {
+		size += 12 + len(a.compressed)
+	}
+	out := make([]byte, size)
+	copy(out, "PHI1")
+	binary.LittleEndian.PutUint32(out[4:8], uint32(len(anchors)))
+	at := 8
+	for _, a := range anchors {
+		binary.LittleEndian.PutUint64(out[at:at+8], a.through)
+		binary.LittleEndian.PutUint32(out[at+8:at+12], uint32(len(a.compressed)))
+		copy(out[at+12:], a.compressed)
+		at += 12 + len(a.compressed)
+	}
+	return out
+}
 func decodeStateAnchors(data []byte) ([]stateAnchor, int, error) {
 	if len(data) < 8 || string(data[:4]) != "PHI1" {
 		return nil, 0, fmt.Errorf("invalid parser checkpoint file")
@@ -94,162 +188,144 @@ func loadStateAnchors(path string) ([]stateAnchor, int, error) {
 	}
 	return decodeStateAnchors(data)
 }
-
-// retainedBase is a usable persistent parser base: the exact parser at
-// `through` with zero historical scrollback. afterOrdinal is the ordered
-// resize boundary the base consumed: replay applies only markers with
-// higher ordinals, so same-position resizes apply exactly once.
-type retainedBase struct {
-	through      uint64
-	compressed   []byte
-	afterOrdinal uint64
+func saveAnchorFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(dir, ".phi-anchor-*")
+	if err != nil {
+		return err
+	}
+	name := file.Name()
+	defer os.Remove(name)
+	if err = file.Chmod(0600); err != nil {
+		file.Close()
+		return err
+	}
+	if _, err = file.Write(data); err != nil {
+		file.Close()
+		return err
+	}
+	if err = file.Sync(); err != nil {
+		file.Close()
+		return err
+	}
+	if err = file.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(name, path); err != nil {
+		return err
+	}
+	if d, e := os.Open(dir); e == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }
-
-// retainedBaseLocked returns the newest usable base at or below through.
-// An unreadable newer base falls back to an older retained base, never
-// to sequence zero once the prefix is gone.
-func (ph *PaneHub) retainedBaseLocked(through uint64) (*retainedBase, error) {
-	for _, idx := range ph.recording.baseCandidates(through) {
-		gz, err := ph.recording.readBase(idx)
-		if err != nil || len(gz) == 0 {
-			continue
-		}
-		// Resize ordinals are 1-based, so the base consumed everything
-		// below its segment's start ordinal. Decode rejects a zero
-		// start ordinal, so this subtraction cannot underflow.
-		return &retainedBase{through: ph.recording.segs[idx].start, compressed: gz, afterOrdinal: ph.recording.segs[idx].startOrdinal - 1}, nil
+func saveStateAnchors(path string, anchors []stateAnchor) error {
+	data := encodeStateAnchors(anchors)
+	dir := filepath.Dir(path)
+	file, err := os.CreateTemp(dir, ".phi-state-*")
+	if err != nil {
+		return err
 	}
-	if ph.recording.start == 0 {
-		// Nothing was ever evicted: a fresh parser at zero is exact.
-		return nil, nil
+	name := file.Name()
+	defer os.Remove(name)
+	if err = file.Chmod(0600); err != nil {
+		file.Close()
+		return err
 	}
-	return nil, fmt.Errorf("no retained base checkpoint at or below %d: %w", through, errStateBaseUnavailable)
-}
-
-func (ph *PaneHub) discardStateLocked() {
-	if ph.state != nil {
-		_ = ph.state.Close()
-		ph.state = nil
+	if _, err = file.Write(data); err != nil {
+		file.Close()
+		return err
 	}
-	ph.stateHead = 0
+	if err = file.Sync(); err != nil {
+		file.Close()
+		return err
+	}
+	if err = file.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(name, path); err != nil {
+		return err
+	}
+	if d, e := os.Open(dir); e == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }
 
 // prepareStateLocked parses retained bytes on the server, never on attach's
 // wire. New panes start this parser on their first output; attach sends state.
 func (ph *PaneHub) prepareStateLocked() error {
+	ph.loadStateAnchorsLocked()
 	if ph.stateErr != nil {
 		return ph.stateErr
 	}
 	if ph.state != nil && ph.stateHead == ph.total {
 		return nil
 	}
-	if ph.recording == nil || ph.recording.isClosed() {
-		if ph.total > 0 {
-			return fmt.Errorf("pane recording unavailable")
-		}
-		if ph.state == nil {
-			state, err := termstate.New(context.Background(), 80, 24)
-			if err != nil {
-				ph.stateErr = err
-				return err
-			}
-			ph.state = state
-		}
-		ph.stateHead = 0
-		return nil
-	}
-	afterOrdinal := uint64(0)
 	if ph.state == nil {
 		state, err := termstate.New(context.Background(), 80, 24)
 		if err != nil {
 			ph.stateErr = err
 			return err
 		}
-		restored := false
-		for _, idx := range ph.recording.baseCandidates(ph.total) {
-			gz, err := ph.recording.readBase(idx)
-			if err != nil || len(gz) == 0 {
-				continue
+		ph.state = state
+		ph.stateHead = 0
+		if anchor, ok := ph.nearestStateAnchor(ph.total); ok {
+			snapshot, e := restoreAnchor(anchor.compressed)
+			if e == nil {
+				e = state.Restore(snapshot)
 			}
-			snapshot, err := restoreAnchor(gz)
-			if err != nil {
-				continue
-			}
-			if err := state.Restore(snapshot); err != nil {
-				// A failed restore may leave the parser dirty;
-				// recreate it before trying an older base.
-				_ = state.Close()
-				state, err = termstate.New(context.Background(), 80, 24)
-				if err != nil {
-					ph.stateErr = err
-					return err
-				}
-				continue
-			}
-			ph.state = state
-			ph.stateHead = ph.recording.segs[idx].start
-			afterOrdinal = ph.recording.segs[idx].startOrdinal - 1
-			restored = true
-			break
-		}
-		if !restored {
-			if ph.recording.start == 0 {
-				// Nothing was ever evicted: the fresh parser is exact.
-				ph.state = state
-				ph.stateHead = 0
+			if e == nil {
+				ph.stateHead = anchor.through
 			} else {
 				_ = state.Close()
-				return fmt.Errorf("no usable retained base checkpoint: %w", errStateBaseUnavailable)
+				state, e = termstate.New(context.Background(), 80, 24)
+				if e != nil {
+					ph.stateErr = e
+					return e
+				}
+				ph.state = state
+				ph.stateAnchors = nil
+				ph.stateAnchorBytes = 0
+				ph.stateHead = 0
 			}
 		}
 	}
-	replayed := false
 	for ph.stateHead < ph.total {
 		end := min(ph.total, ph.stateHead+(256<<10))
-		data, ords, endOrdinal, err := ph.recording.readOrd(ph.stateHead, end, afterOrdinal, true)
+		data, resizes, err := ph.recording.read(ph.stateHead, end)
 		if err != nil {
-			ph.discardStateLocked()
 			return err
 		}
-		afterOrdinal = endOrdinal
 		at := ph.stateHead
-		for _, o := range ords {
-			resize := o.ResizeMarker
+		for _, resize := range resizes {
 			offset := max(at, resize.AtSeq)
 			if offset > at {
 				if err = ph.state.Feed(data[at-ph.stateHead : offset-ph.stateHead]); err != nil {
-					ph.discardStateLocked()
 					return err
 				}
 				at = offset
 			}
 			if err = ph.state.Resize(int(resize.Cols), int(resize.Rows)); err != nil {
-				ph.discardStateLocked()
 				return err
 			}
 		}
 		if err = ph.state.Feed(data[at-ph.stateHead:]); err != nil {
-			ph.discardStateLocked()
 			return err
 		}
 		ph.stateHead = end
-		replayed = true
 	}
-	if !replayed && ph.state != nil {
-		// A base at the head with no following bytes still has a
-		// marker-only span: apply resizes the base predates (for
-		// example, the resize that forced a metadata rotation, or a
-		// resize on a pane with no output yet).
-		_, ords, _, err := ph.recording.readOrd(ph.total, ph.total, afterOrdinal, true)
-		if err != nil {
-			ph.discardStateLocked()
+	if len(ph.stateAnchors) == 0 || ph.total-ph.stateAnchors[len(ph.stateAnchors)-1].through >= stateAnchorInterval {
+		if err := ph.addStateAnchorLocked(); err != nil {
 			return err
-		}
-		for _, o := range ords {
-			if err := ph.state.Resize(int(o.Cols), int(o.Rows)); err != nil {
-				ph.discardStateLocked()
-				return err
-			}
 		}
 	}
 	return nil
@@ -275,94 +351,23 @@ func (h *Hub) HistoricalANSIStateContext(ctx context.Context, paneID string, epo
 	return h.historicalStateContext(ctx, paneID, epoch, through, true)
 }
 
-// ErrStateNotFound ends state lookups for groups that do not exist or
-// cannot be opened. Callers map it to 404, never a transient retry.
-var ErrStateNotFound = errors.New("pane recording unavailable")
-
 func (h *Hub) historicalStateContext(ctx context.Context, paneID string, epoch, through uint64, ansi bool) (PanePosition, []byte, int, int, error) {
 	ph := h.recordingForRead(paneID)
 	if ph == nil {
-		return PanePosition{}, nil, 0, 0, ErrStateNotFound
+		return PanePosition{}, nil, 0, 0, fmt.Errorf("pane recording unavailable")
 	}
 	if err := ctx.Err(); err != nil {
 		return PanePosition{}, nil, 0, 0, err
 	}
-	// Capture one consistent view (base plus bounded span) under the pane
-	// lock, then replay outside it so history cannot stall live ingestion.
-	// A corrupt newer base re-captures with an older retained base, never
-	// with sequence zero once the prefix is gone.
-	var pos PanePosition
-	var base *retainedBase
-	var from uint64
-	var data []byte
-	var resizes []ResizeMarker
-	var endOrdinal uint64
-	notAfter := through
-	for attempt := 0; ; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return PanePosition{}, nil, 0, 0, err
-		}
-		ph.mu.Lock()
-		if ph.recording == nil || ph.recording.isClosed() {
-			ph.mu.Unlock()
-			return PanePosition{}, nil, 0, 0, ErrStateNotFound
-		}
-		if attempt > len(ph.recording.segs)+1 {
-			ph.mu.Unlock()
-			return pos, nil, 0, 0, fmt.Errorf("historical state unavailable: %w", ErrStatePositionMismatch)
-		}
-		pos = ph.positionLocked()
-		if epoch != pos.Epoch || through > pos.Head || through < pos.Oldest {
-			ph.mu.Unlock()
-			return pos, nil, 0, 0, ErrStatePositionMismatch
-		}
-		var err error
-		base, err = ph.retainedBaseLocked(min(through, notAfter))
-		if err != nil {
-			ph.mu.Unlock()
-			return pos, nil, 0, 0, fmt.Errorf("historical state unavailable: %w", ErrStatePositionMismatch)
-		}
-		from = 0
-		if base != nil {
-			from = base.through
-		}
-		var ords []ordResize
-		ords, endOrdinal = nil, 0
-		baseAfter := uint64(0)
-		if base != nil {
-			baseAfter = base.afterOrdinal
-		}
-		data, ords, endOrdinal, err = ph.recording.readOrd(from, through, baseAfter, true)
-		if err == nil {
-			resizes = make([]ResizeMarker, len(ords))
-			for i, o := range ords {
-				resizes[i] = o.ResizeMarker
-			}
-		}
+	ph.mu.Lock()
+	ph.loadStateAnchorsLocked()
+	pos := ph.positionLocked()
+	if epoch != pos.Epoch || through > pos.Head {
 		ph.mu.Unlock()
-		if err != nil {
-			return pos, nil, 0, 0, err
-		}
-		if base == nil {
-			break
-		}
-		snapshot, err := restoreAnchor(base.compressed)
-		if err == nil {
-			probe, err := termstate.New(ctx, 80, 24)
-			if err != nil {
-				return pos, nil, 0, 0, err
-			}
-			if err := probe.Restore(snapshot); err == nil {
-				_ = probe.Close()
-				break
-			}
-			_ = probe.Close()
-		}
-		if base.through == 0 {
-			return pos, nil, 0, 0, fmt.Errorf("historical state unavailable: %w", ErrStatePositionMismatch)
-		}
-		notAfter = base.through - 1
+		return pos, nil, 0, 0, ErrStatePositionMismatch
 	}
+	anchor, haveAnchor := ph.nearestStateAnchor(through)
+	ph.mu.Unlock()
 	state, err := termstate.New(ctx, 80, 24)
 	if err != nil {
 		return pos, nil, 0, 0, err
@@ -372,39 +377,58 @@ func (h *Hub) historicalStateContext(ctx context.Context, paneID string, epoch, 
 			_ = state.Close()
 		}
 	}()
-	if base != nil {
-		snapshot, err := restoreAnchor(base.compressed)
-		if err != nil {
-			return pos, nil, 0, 0, fmt.Errorf("historical state unavailable: %w", ErrStatePositionMismatch)
+	from := uint64(0)
+	if haveAnchor {
+		snapshot, e := restoreAnchor(anchor.compressed)
+		if e == nil {
+			e = state.Restore(snapshot)
 		}
-		if err := state.Restore(snapshot); err != nil {
-			return pos, nil, 0, 0, fmt.Errorf("historical state unavailable: %w", ErrStatePositionMismatch)
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return pos, nil, 0, 0, err
-	}
-	at := from
-	for _, r := range resizes {
-		offset := max(at, r.AtSeq)
-		if offset > at {
-			if err = state.Feed(data[at-from : offset-from]); err != nil {
+		if e == nil {
+			from = anchor.through
+		} else {
+			_ = state.Close()
+			state, err = termstate.New(ctx, 80, 24)
+			if err != nil {
 				return pos, nil, 0, 0, err
 			}
-			at = offset
+			from = 0
 		}
-		cols, rows := state.Geometry()
-		if cols != int(r.Cols) || rows != int(r.Rows) {
-			if err = state.Resize(int(r.Cols), int(r.Rows)); err != nil {
-				return pos, nil, 0, 0, err
+	}
+	for from < through {
+		if err := ctx.Err(); err != nil {
+			return pos, nil, 0, 0, err
+		}
+		end := min(through, from+(256<<10))
+		ph.mu.Lock()
+		if ph.epoch != epoch {
+			ph.mu.Unlock()
+			return pos, nil, 0, 0, ErrStatePositionMismatch
+		}
+		data, resizes, e := ph.recording.read(from, end)
+		ph.mu.Unlock()
+		if e != nil {
+			return pos, nil, 0, 0, e
+		}
+		at := from
+		for _, r := range resizes {
+			offset := max(at, r.AtSeq)
+			if offset > at {
+				if err = state.Feed(data[at-from : offset-from]); err != nil {
+					return pos, nil, 0, 0, err
+				}
+				at = offset
+			}
+			cols, rows := state.Geometry()
+			if cols != int(r.Cols) || rows != int(r.Rows) {
+				if err = state.Resize(int(r.Cols), int(r.Rows)); err != nil {
+					return pos, nil, 0, 0, err
+				}
 			}
 		}
-	}
-	if err = state.Feed(data[at-from:]); err != nil {
-		return pos, nil, 0, 0, err
-	}
-	if err := ctx.Err(); err != nil {
-		return pos, nil, 0, 0, err
+		if err = state.Feed(data[at-from:]); err != nil {
+			return pos, nil, 0, 0, err
+		}
+		from = end
 	}
 	var snapshot []byte
 	if ansi {
@@ -420,7 +444,6 @@ func (h *Hub) historicalStateContext(ctx context.Context, paneID string, epoch, 
 		return pos, nil, 0, 0, ErrStatePositionMismatch
 	}
 	pos.Head = through
-	pos.EventCursor = EncodeEventCursor(pos.Epoch, through, endOrdinal)
 	return pos, snapshot, cols, rows, err
 }
 
@@ -429,7 +452,7 @@ func (h *Hub) historicalStateContext(ctx context.Context, paneID string, epoch, 
 func (h *Hub) LiveANSIState(paneID string, epoch uint64) (PanePosition, []byte, int, int, error) {
 	ph := h.recordingForRead(paneID)
 	if ph == nil {
-		return PanePosition{}, nil, 0, 0, ErrStateNotFound
+		return PanePosition{}, nil, 0, 0, fmt.Errorf("pane recording unavailable")
 	}
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
@@ -440,59 +463,16 @@ func (h *Hub) LiveANSIState(paneID string, epoch uint64) (PanePosition, []byte, 
 	if err := ph.prepareStateLocked(); err != nil {
 		return pos, nil, 0, 0, err
 	}
-	// The live ANSI checkpoint carries the pending input suffix exactly
-	// like attach: a relay recovering mid-sequence replays the live
-	// suffix against the right parser state. The state handler budgets
-	// the combined length.
-	screen, err := ph.state.FormatVTState()
-	if err != nil {
-		return pos, nil, 0, 0, err
-	}
-	continuation, err := ph.state.Continuation()
-	if err != nil {
-		return pos, nil, 0, 0, err
-	}
-	data := append(screen, continuation...)
+	data, err := ph.state.FormatVTState()
 	cols, rows := ph.state.Geometry()
-	if ph.recording != nil && !ph.recording.isClosed() {
-		if _, _, endOrdinal, rerr := ph.recording.readOrd(pos.Head, pos.Head, 0, false); rerr == nil {
-			pos.EventCursor = EncodeEventCursor(pos.Epoch, pos.Head, endOrdinal)
-		}
-	}
 	return pos, data, cols, rows, err
-}
-
-// LiveGhosttyState returns the current parser snapshot for a native client
-// that lost its recorded prefix. It is the live Ready form, not replay.
-func (h *Hub) LiveGhosttyState(paneID string, epoch uint64) (PanePosition, []byte, int, int, error) {
-	ph := h.recordingForRead(paneID)
-	if ph == nil {
-		return PanePosition{}, nil, 0, 0, ErrStateNotFound
-	}
-	ph.mu.Lock()
-	defer ph.mu.Unlock()
-	pos := ph.positionLocked()
-	if pos.Epoch != epoch {
-		return pos, nil, 0, 0, ErrStatePositionMismatch
-	}
-	if err := ph.prepareStateLocked(); err != nil {
-		return pos, nil, 0, 0, err
-	}
-	snapshot, err := ph.state.Ready()
-	cols, rows := ph.state.Geometry()
-	if err == nil && ph.recording != nil && !ph.recording.isClosed() {
-		if _, _, endOrdinal, rerr := ph.recording.readOrd(pos.Head, pos.Head, 0, false); rerr == nil {
-			pos.EventCursor = EncodeEventCursor(pos.Epoch, pos.Head, endOrdinal)
-		}
-	}
-	return pos, snapshot, cols, rows, err
 }
 
 // State returns a bounded live snapshot, not recording bytes.
 func (h *Hub) State(paneID string) (PanePosition, []byte, int, int, error) {
 	ph := h.recordingForRead(paneID)
 	if ph == nil {
-		return PanePosition{}, nil, 0, 0, ErrStateNotFound
+		return PanePosition{}, nil, 0, 0, fmt.Errorf("pane recording unavailable")
 	}
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
@@ -501,11 +481,5 @@ func (h *Hub) State(paneID string) (PanePosition, []byte, int, int, error) {
 	}
 	snapshot, err := ph.state.Ready()
 	cols, rows := ph.state.Geometry()
-	pos := ph.positionLocked()
-	if err == nil && ph.recording != nil && !ph.recording.isClosed() {
-		if _, _, endOrdinal, rerr := ph.recording.readOrd(pos.Head, pos.Head, 0, false); rerr == nil {
-			pos.EventCursor = EncodeEventCursor(pos.Epoch, pos.Head, endOrdinal)
-		}
-	}
-	return pos, snapshot, cols, rows, err
+	return ph.positionLocked(), snapshot, cols, rows, err
 }
