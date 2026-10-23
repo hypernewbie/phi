@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -2543,8 +2544,8 @@ func TestSyncMessagesCRUD(t *testing.T) {
 func TestSyncCoordinatorConfig(t *testing.T) {
 	withTempConfig(t)
 	cfg := loadConfig()
-	if cfg.SyncCoordinator != "http://localhost:7070" {
-		t.Errorf("expected default coordinator to be http://localhost:7070, got %q", cfg.SyncCoordinator)
+	if cfg.SyncCoordinator != "" {
+		t.Errorf("expected an unset coordinator to stay empty in config, got %q", cfg.SyncCoordinator)
 	}
 
 	body, _ := json.Marshal(map[string]string{"sync_coordinator": "http://coordinator.test"})
@@ -2571,6 +2572,82 @@ func TestSyncCoordinatorConfig(t *testing.T) {
 	json.NewDecoder(wGet.Body).Decode(&resMap)
 	if val, ok := resMap["sync_coordinator"].(string); !ok || val != "http://coordinator.test" {
 		t.Errorf("GET /api/config response did not return the updated sync_coordinator, got: %v", resMap)
+	}
+}
+
+func TestSyncCoordinatorDefaultFollowsServerPort(t *testing.T) {
+	withTempConfig(t)
+	originalPort := serverPort
+	t.Cleanup(func() { serverPort = originalPort })
+
+	for _, tc := range []struct {
+		name        string
+		port        int
+		coordinator string
+		localIP     string
+		zone        string
+		want        string
+	}{
+		{"default port", 7070, "", "", "", "http://localhost:7070"},
+		{"alternate port", 17170, "", "", "", "http://localhost:17170"},
+		{"changed port", 17171, "", "", "", "http://localhost:17171"},
+		{"remote coordinator", 17170, "https://coordinator.test:7443", "192.0.2.10", "", "https://coordinator.test:7443"},
+		{"explicit localhost", 17170, "http://localhost:7070", "192.0.2.10", "", "http://localhost:7070"},
+		{"LAN-only bind", 17170, "", "192.0.2.10", "", "http://192.0.2.10:17170"},
+		{"IPv6-only bind", 17170, "", "::1", "", "http://[::1]:17170"},
+		{"scoped IPv6 bind", 17170, "", "fe80::2", "en0", "http://[fe80::2%25en0]:17170"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			serverPort = tc.port
+			cfg := loadConfig()
+			cfg.SyncCoordinator = tc.coordinator
+			saveConfig(cfg)
+			if got := loadConfig().SyncCoordinator; got != tc.coordinator {
+				t.Fatalf("saved coordinator = %q, want %q", got, tc.coordinator)
+			}
+
+			req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+			if tc.localIP != "" {
+				req = req.WithContext(context.WithValue(req.Context(), http.LocalAddrContextKey, &net.TCPAddr{
+					IP: net.ParseIP(tc.localIP), Port: tc.port, Zone: tc.zone,
+				}))
+			}
+			w := httptest.NewRecorder()
+			handleConfig(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("GET /api/config: status %d", w.Code)
+			}
+			var response struct {
+				SyncCoordinator string `json:"sync_coordinator"`
+			}
+			if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+				t.Fatal(err)
+			}
+			if response.SyncCoordinator != tc.want {
+				t.Errorf("API coordinator = %q, want %q", response.SyncCoordinator, tc.want)
+			}
+		})
+	}
+}
+
+func TestSyncCoordinatorDefaultUsesRequestListener(t *testing.T) {
+	withTempConfig(t)
+	server := httptest.NewServer(http.HandlerFunc(handleConfig))
+	defer server.Close()
+
+	response, err := server.Client().Get(server.URL + "/api/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var config struct {
+		SyncCoordinator string `json:"sync_coordinator"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&config); err != nil {
+		t.Fatal(err)
+	}
+	if config.SyncCoordinator != server.URL {
+		t.Errorf("coordinator = %q, want actual listener %q", config.SyncCoordinator, server.URL)
 	}
 }
 

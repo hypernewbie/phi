@@ -145,7 +145,7 @@ export class SyncManager {
             <div class="sync-header">
                 <div class="sync-coordinator-bar">
                     <label for="sync-coordinator-input">Coordinator:</label>
-                    <input type="text" id="sync-coordinator-input" class="sync-input" placeholder="http://localhost:7070">
+                    <input type="text" id="sync-coordinator-input" class="sync-input" placeholder="This server (leave blank)">
                 </div>
                 <div class="sync-header-actions">
                     <button id="sync-clear-btn" class="sync-btn-secondary" title="Clear all messages">Clear all</button>
@@ -196,7 +196,7 @@ export class SyncManager {
         ) as HTMLElement;
 
         // Event listeners
-        this.coordinatorInput.addEventListener('blur', () =>
+        this.coordinatorInput.addEventListener('change', () =>
             this.saveCoordinator(),
         );
         this.coordinatorInput.addEventListener('keydown', (e) => {
@@ -258,7 +258,7 @@ export class SyncManager {
 
     async getCoordinatorUrl(): Promise<string> {
         const config = this.app.sessionsManager.config;
-        return config?.sync_coordinator || 'http://localhost:7070';
+        return config?.sync_coordinator || window.location.origin;
     }
 
     async fetchWithProxy(

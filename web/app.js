@@ -26,6 +26,7 @@ import { initQuotaButton } from './quota.js';
 import { bootstrapAccessAuth } from './auth.js';
 import { openSettingsModal, broadcastConfigSync } from './settings.js';
 import { markDesktopView } from './desktop.js';
+import { formatPickedDir, mountDirectoryTree } from './path-picker.js';
 import { ACCENT_COLORS, applyThemeTokens } from './theme.js';
 export { ACCENT_COLORS };
 
@@ -1925,14 +1926,35 @@ export class App {
         submitLabel = 'Save',
     }) {
         return new Promise((resolve) => {
+            const isPathField = (field) =>
+                !field.multiline &&
+                (!field.type || field.type === 'text') &&
+                field.path !== null &&
+                typeof field.path === 'object' &&
+                !Array.isArray(field.path);
+            const pathFields = fields.filter(isPathField);
+            const hasPathFields = pathFields.length > 0;
             const existing = document.querySelector('.config-editor-overlay');
-            if (existing) existing.remove();
+            existing?.querySelector('.modal-close-btn')?.click();
+
+            const opener =
+                hasPathFields &&
+                document.activeElement instanceof HTMLElement &&
+                document.activeElement !== document.body &&
+                document.activeElement.isConnected
+                    ? document.activeElement
+                    : null;
 
             const overlay = document.createElement('div');
             overlay.className = 'modal-overlay config-editor-overlay hidden';
 
             const modal = document.createElement('div');
             modal.className = 'modal-content config-editor-modal';
+            if (hasPathFields) {
+                modal.classList.add('config-editor-path-modal');
+                modal.setAttribute('role', 'dialog');
+                modal.setAttribute('aria-modal', 'true');
+            }
 
             const header = document.createElement('div');
             header.className = 'modal-header config-editor-header';
@@ -1941,6 +1963,10 @@ export class App {
             const titleEl = document.createElement('h3');
             titleEl.textContent = title;
             headerText.appendChild(titleEl);
+            if (hasPathFields) {
+                titleEl.id = `config-editor-title-${Math.random().toString(36).slice(2)}`;
+                modal.setAttribute('aria-labelledby', titleEl.id);
+            }
             if (subtitle) {
                 const subtitleEl = document.createElement('p');
                 subtitleEl.className = 'config-editor-subtitle';
@@ -1967,15 +1993,9 @@ export class App {
             body.id = formId;
 
             const inputs = new Map();
+            const pathStates = [];
             fields.forEach((field) => {
-                const row = document.createElement('label');
-                row.className = 'config-editor-field';
-                row.htmlFor = `config-editor-${field.id}`;
-
-                const label = document.createElement('span');
-                label.textContent = field.label;
-                row.appendChild(label);
-
+                const pathMode = isPathField(field);
                 const input = field.multiline
                     ? document.createElement('textarea')
                     : document.createElement('input');
@@ -1987,10 +2007,67 @@ export class App {
                 if (!field.multiline) input.type = field.type || 'text';
                 if (field.monospace !== false)
                     input.classList.add('config-editor-mono');
-                row.appendChild(input);
+
+                if (pathMode) {
+                    const fieldRow = document.createElement('div');
+                    fieldRow.className =
+                        'config-editor-field config-editor-path-field';
+
+                    const label = document.createElement('label');
+                    label.className = 'config-editor-path-label';
+                    label.htmlFor = input.id;
+                    label.textContent = field.label;
+
+                    const inputRow = document.createElement('div');
+                    inputRow.className =
+                        'path-input-row config-editor-path-row';
+                    inputRow.appendChild(input);
+
+                    const revealBtn = document.createElement('button');
+                    revealBtn.className =
+                        'btn btn-primary config-editor-path-reveal';
+                    revealBtn.type = 'button';
+                    revealBtn.textContent = 'Reveal';
+                    inputRow.appendChild(revealBtn);
+
+                    const status = document.createElement('div');
+                    status.className = 'config-editor-path-status';
+                    status.id = `${input.id}-path-status`;
+                    status.setAttribute('role', 'status');
+                    status.setAttribute('aria-live', 'polite');
+                    input.setAttribute('aria-describedby', status.id);
+
+                    const treeHost = document.createElement('div');
+                    treeHost.className = 'config-editor-path-tree';
+
+                    fieldRow.append(label, inputRow, status, treeHost);
+                    body.appendChild(fieldRow);
+                    pathStates.push({
+                        input,
+                        revealBtn,
+                        status,
+                        treeHost,
+                        path: {
+                            startPath: field.path.startPath,
+                            relativeTo: field.path.relativeTo,
+                        },
+                        operation: 0,
+                        composing: false,
+                        controller: null,
+                    });
+                } else {
+                    const row = document.createElement('label');
+                    row.className = 'config-editor-field';
+                    row.htmlFor = input.id;
+
+                    const label = document.createElement('span');
+                    label.textContent = field.label;
+                    row.appendChild(label);
+                    row.appendChild(input);
+                    body.appendChild(row);
+                }
 
                 inputs.set(field.id, input);
-                body.appendChild(row);
             });
 
             const footer = document.createElement('div');
@@ -2020,14 +2097,134 @@ export class App {
             const cleanup = (value) => {
                 if (settled) return;
                 settled = true;
-                document.removeEventListener('keydown', onKeydown);
+                for (const state of pathStates) {
+                    state.operation++;
+                    state.controller?.destroy();
+                    state.controller = null;
+                }
+                document.removeEventListener(
+                    'keydown',
+                    onKeydown,
+                    hasPathFields,
+                );
+                if (hasPathFields) {
+                    document.removeEventListener('focusin', onFocusin, true);
+                }
                 overlay.classList.add('hidden');
                 overlay.remove();
+                if (opener?.isConnected) opener.focus({ preventScroll: true });
                 resolve(value);
             };
 
-            const onKeydown = (e) => {
-                if (e.key === 'Escape') cleanup(null);
+            const onKeydown = (event) => {
+                if (event.key === 'Escape') {
+                    if (hasPathFields) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                    }
+                    cleanup(null);
+                    return;
+                }
+                if (!hasPathFields || event.key !== 'Tab') return;
+
+                const focusable = Array.from(
+                    modal.querySelectorAll(
+                        'button, input, textarea, select, [tabindex="0"]',
+                    ),
+                ).filter(
+                    (element) =>
+                        !element.disabled &&
+                        !element.hidden &&
+                        !element.closest('[hidden], .hidden'),
+                );
+                if (focusable.length === 0) {
+                    event.preventDefault();
+                    return;
+                }
+                const first = focusable[0];
+                const last = focusable[focusable.length - 1];
+                const activeIndex = focusable.indexOf(
+                    document.activeElement,
+                );
+                if (event.shiftKey && activeIndex <= 0) {
+                    event.preventDefault();
+                    last.focus({ preventScroll: true });
+                } else if (
+                    !event.shiftKey &&
+                    (activeIndex < 0 || activeIndex === focusable.length - 1)
+                ) {
+                    event.preventDefault();
+                    first.focus({ preventScroll: true });
+                }
+            };
+
+            const onFocusin = (event) => {
+                if (
+                    settled ||
+                    overlay.classList.contains('hidden') ||
+                    !(event.target instanceof Node) ||
+                    modal.contains(event.target)
+                ) {
+                    return;
+                }
+                pathStates[0]?.input.focus({ preventScroll: true });
+            };
+
+            const relativeRevealPath = (state, draft) => {
+                if (
+                    draft.startsWith('/') ||
+                    draft.startsWith('\\\\') ||
+                    /^[A-Za-z]:[\\/]/u.test(draft) ||
+                    draft.startsWith('~')
+                ) {
+                    return draft;
+                }
+                const startPath = state.path.startPath;
+                const base = startPath.replace(/\/+$/u, '');
+                return `${base}/${draft}`;
+            };
+
+            const revealPath = async (state) => {
+                const operation = ++state.operation;
+                const draft = state.input.value.trim();
+                state.status.textContent = '';
+                const controller = state.controller;
+                if (!draft) {
+                    controller?.invalidateDraft();
+                    state.status.textContent =
+                        'Enter a directory path to reveal.';
+                    return;
+                }
+                if (!controller) return;
+
+                try {
+                    const resolved = await controller.reveal(
+                        relativeRevealPath(state, draft),
+                    );
+                    if (
+                        settled ||
+                        !overlay.isConnected ||
+                        operation !== state.operation ||
+                        resolved === null
+                    ) {
+                        return;
+                    }
+                    state.input.value = formatPickedDir(
+                        resolved,
+                        state.path.relativeTo,
+                    );
+                    state.status.textContent = '';
+                    state.input.focus({ preventScroll: true });
+                } catch {
+                    if (
+                        !settled &&
+                        overlay.isConnected &&
+                        operation === state.operation
+                    ) {
+                        state.status.textContent =
+                            'This path is not an accessible directory.';
+                    }
+                }
             };
 
             closeBtn.addEventListener('click', () => cleanup(null));
@@ -2035,8 +2232,8 @@ export class App {
             // This editor contains unsaved user input. Do not close it when
             // the user clicks the backdrop; only the explicit controls or
             // Escape should discard the draft.
-            body.addEventListener('submit', (e) => {
-                e.preventDefault();
+            body.addEventListener('submit', (event) => {
+                event.preventDefault();
                 const values = {};
                 for (const [id, input] of inputs.entries()) {
                     const value = input.value.trim();
@@ -2048,9 +2245,57 @@ export class App {
                 }
                 cleanup(values);
             });
-            document.addEventListener('keydown', onKeydown);
+            document.addEventListener('keydown', onKeydown, hasPathFields);
+            if (hasPathFields) {
+                document.addEventListener('focusin', onFocusin, true);
+            }
+
+            for (const state of pathStates) {
+                state.input.addEventListener('compositionstart', () => {
+                    state.composing = true;
+                });
+                state.input.addEventListener('compositionend', () => {
+                    state.composing = false;
+                });
+                state.input.addEventListener('input', () => {
+                    state.operation++;
+                    state.status.textContent = '';
+                    state.controller?.invalidateDraft();
+                });
+                state.input.addEventListener('keydown', (event) => {
+                    if (
+                        event.key !== 'Enter' ||
+                        state.composing ||
+                        event.isComposing ||
+                        event.keyCode === 229
+                    ) {
+                        return;
+                    }
+                    event.preventDefault();
+                    void revealPath(state);
+                });
+                state.revealBtn.addEventListener('click', () => {
+                    void revealPath(state);
+                });
+            }
+
+            for (const state of pathStates) {
+                state.controller = mountDirectoryTree(state.treeHost, {
+                    startPath: state.path.startPath,
+                    onSelect: (selected) => {
+                        if (settled || !overlay.isConnected) return;
+                        state.operation++;
+                        state.input.value = formatPickedDir(
+                            selected,
+                            state.path.relativeTo,
+                        );
+                        state.status.textContent = '';
+                    },
+                });
+            }
 
             requestAnimationFrame(() => {
+                if (settled || !overlay.isConnected) return;
                 overlay.classList.remove('hidden');
                 const firstInput = body.querySelector('input, textarea');
                 firstInput?.focus({ preventScroll: true });
