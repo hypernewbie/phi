@@ -82,6 +82,8 @@ export interface PiToPhi {
     | { $case: "agentSettled"; value: AgentSettled }
     | { $case: "stateSnapshot"; value: StateSnapshot }
     | { $case: "historyResponse"; value: HistoryResponse }
+    | { $case: "modelsResponse"; value: ModelsResponse }
+    | { $case: "setModelAck"; value: SetModelAck }
     | undefined;
 }
 
@@ -90,10 +92,13 @@ export interface PhiToPi {
   paneId: string;
   processId: string;
   runtimeGeneration: bigint;
-  payload: { $case: "accepted"; value: Accepted } | { $case: "protocolError"; value: ProtocolError } | {
-    $case: "historyRequest";
-    value: HistoryRequest;
-  } | undefined;
+  payload:
+    | { $case: "accepted"; value: Accepted }
+    | { $case: "protocolError"; value: ProtocolError }
+    | { $case: "historyRequest"; value: HistoryRequest }
+    | { $case: "modelsRequest"; value: ModelsRequest }
+    | { $case: "setModelRequest"; value: SetModelRequest }
+    | undefined;
 }
 
 /**
@@ -191,6 +196,65 @@ export interface HistoryResponse {
   unavailable: boolean;
 }
 
+/**
+ * One catalog entry. provider/model matches ModelSnapshot naming; the
+ * Phi UI maps model to its own id field at the edge.
+ */
+export interface ModelRef {
+  provider: string;
+  model: string;
+}
+
+/**
+ * ModelsRequest asks the extension for the session's selectable models.
+ * request_id correlates exactly one ModelsResponse; the extension
+ * echoes it verbatim. Best-effort like history: the answer may be
+ * unavailable, or never arrive, without disturbing lifecycle traffic.
+ */
+export interface ModelsRequest {
+  requestId: string;
+}
+
+/**
+ * ModelsResponse carries one model list for request_id. models honors
+ * the session's scoped allowlist when scoping is configured. truncated
+ * means the list hit the entry cap and is partial; unavailable means
+ * the answer exceeds the message bound. Phi surfaces unavailable as
+ * an in-picker row and keeps truncated lists usable with a
+ * partial-list footer.
+ */
+export interface ModelsResponse {
+  requestId: string;
+  models: ModelRef[];
+  truncated: boolean;
+  unavailable: boolean;
+}
+
+/**
+ * SetModelRequest asks the extension to switch the session model.
+ * provider/model name one catalog entry; request_id correlates
+ * exactly one SetModelAck, echoed verbatim.
+ */
+export interface SetModelRequest {
+  requestId: string;
+  provider: string;
+  model: string;
+}
+
+/**
+ * SetModelAck reports one switch outcome for request_id. ok means Pi
+ * accepted the switch; reason is empty then. reason is 'no-auth'
+ * when the provider has no configured credentials, 'unknown-model'
+ * when the entry is not selectable (unknown, or outside the
+ * session scope). A successful switch emits model_select, so the
+ * current-model snapshot follows on its own.
+ */
+export interface SetModelAck {
+  requestId: string;
+  ok: boolean;
+  reason: string;
+}
+
 /** Terminal protocol-level rejection. Ends the stream attempt. */
 export interface ProtocolError {
   code: ProtocolErrorCode;
@@ -230,6 +294,12 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         break;
       case "historyResponse":
         HistoryResponse.encode(message.payload.value, writer.uint32(138).fork()).join();
+        break;
+      case "modelsResponse":
+        ModelsResponse.encode(message.payload.value, writer.uint32(146).fork()).join();
+        break;
+      case "setModelAck":
+        SetModelAck.encode(message.payload.value, writer.uint32(154).fork()).join();
         break;
     }
     return writer;
@@ -312,6 +382,22 @@ export const PiToPhi: MessageFns<PiToPhi> = {
             message.payload = { $case: "historyResponse", value: HistoryResponse.decode(reader, reader.uint32()) };
             continue;
           }
+          case 18: {
+            if (tag !== 146) {
+              break;
+            }
+
+            message.payload = { $case: "modelsResponse", value: ModelsResponse.decode(reader, reader.uint32()) };
+            continue;
+          }
+          case 19: {
+            if (tag !== 154) {
+              break;
+            }
+
+            message.payload = { $case: "setModelAck", value: SetModelAck.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -365,6 +451,18 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         }
         break;
       }
+      case "modelsResponse": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "modelsResponse", value: ModelsResponse.fromPartial(object.payload.value) };
+        }
+        break;
+      }
+      case "setModelAck": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "setModelAck", value: SetModelAck.fromPartial(object.payload.value) };
+        }
+        break;
+      }
     }
     return message;
   },
@@ -397,6 +495,12 @@ export const PhiToPi: MessageFns<PhiToPi> = {
         break;
       case "historyRequest":
         HistoryRequest.encode(message.payload.value, writer.uint32(114).fork()).join();
+        break;
+      case "modelsRequest":
+        ModelsRequest.encode(message.payload.value, writer.uint32(122).fork()).join();
+        break;
+      case "setModelRequest":
+        SetModelRequest.encode(message.payload.value, writer.uint32(130).fork()).join();
         break;
     }
     return writer;
@@ -463,6 +567,22 @@ export const PhiToPi: MessageFns<PhiToPi> = {
             message.payload = { $case: "historyRequest", value: HistoryRequest.decode(reader, reader.uint32()) };
             continue;
           }
+          case 15: {
+            if (tag !== 122) {
+              break;
+            }
+
+            message.payload = { $case: "modelsRequest", value: ModelsRequest.decode(reader, reader.uint32()) };
+            continue;
+          }
+          case 16: {
+            if (tag !== 130) {
+              break;
+            }
+
+            message.payload = { $case: "setModelRequest", value: SetModelRequest.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -501,6 +621,18 @@ export const PhiToPi: MessageFns<PhiToPi> = {
       case "historyRequest": {
         if (object.payload?.value !== undefined && object.payload?.value !== null) {
           message.payload = { $case: "historyRequest", value: HistoryRequest.fromPartial(object.payload.value) };
+        }
+        break;
+      }
+      case "modelsRequest": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "modelsRequest", value: ModelsRequest.fromPartial(object.payload.value) };
+        }
+        break;
+      }
+      case "setModelRequest": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "setModelRequest", value: SetModelRequest.fromPartial(object.payload.value) };
         }
         break;
       }
@@ -1344,6 +1476,377 @@ export const HistoryResponse: MessageFns<HistoryResponse> = {
     message.requestId = object.requestId ?? "";
     message.entries = object.entries?.map((e) => e) || [];
     message.unavailable = object.unavailable ?? false;
+    return message;
+  },
+};
+
+function createBaseModelRef(): ModelRef {
+  return { provider: "", model: "" };
+}
+
+export const ModelRef: MessageFns<ModelRef> = {
+  encode(message: ModelRef, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.provider !== "") {
+      writer.uint32(10).string(message.provider);
+    }
+    if (message.model !== "") {
+      writer.uint32(18).string(message.model);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ModelRef {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseModelRef();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.provider = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.model = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<ModelRef>, I>>(base?: I): ModelRef {
+    return ModelRef.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ModelRef>, I>>(object: I): ModelRef {
+    const message = createBaseModelRef();
+    message.provider = object.provider ?? "";
+    message.model = object.model ?? "";
+    return message;
+  },
+};
+
+function createBaseModelsRequest(): ModelsRequest {
+  return { requestId: "" };
+}
+
+export const ModelsRequest: MessageFns<ModelsRequest> = {
+  encode(message: ModelsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ModelsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseModelsRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<ModelsRequest>, I>>(base?: I): ModelsRequest {
+    return ModelsRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ModelsRequest>, I>>(object: I): ModelsRequest {
+    const message = createBaseModelsRequest();
+    message.requestId = object.requestId ?? "";
+    return message;
+  },
+};
+
+function createBaseModelsResponse(): ModelsResponse {
+  return { requestId: "", models: [], truncated: false, unavailable: false };
+}
+
+export const ModelsResponse: MessageFns<ModelsResponse> = {
+  encode(message: ModelsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    for (const v of message.models) {
+      ModelRef.encode(v!, writer.uint32(18).fork()).join();
+    }
+    if (message.truncated !== false) {
+      writer.uint32(24).bool(message.truncated);
+    }
+    if (message.unavailable !== false) {
+      writer.uint32(32).bool(message.unavailable);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ModelsResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseModelsResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.models.push(ModelRef.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.truncated = reader.bool();
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.unavailable = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<ModelsResponse>, I>>(base?: I): ModelsResponse {
+    return ModelsResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ModelsResponse>, I>>(object: I): ModelsResponse {
+    const message = createBaseModelsResponse();
+    message.requestId = object.requestId ?? "";
+    message.models = object.models?.map((e) => ModelRef.fromPartial(e)) || [];
+    message.truncated = object.truncated ?? false;
+    message.unavailable = object.unavailable ?? false;
+    return message;
+  },
+};
+
+function createBaseSetModelRequest(): SetModelRequest {
+  return { requestId: "", provider: "", model: "" };
+}
+
+export const SetModelRequest: MessageFns<SetModelRequest> = {
+  encode(message: SetModelRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.provider !== "") {
+      writer.uint32(18).string(message.provider);
+    }
+    if (message.model !== "") {
+      writer.uint32(26).string(message.model);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SetModelRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSetModelRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.provider = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.model = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<SetModelRequest>, I>>(base?: I): SetModelRequest {
+    return SetModelRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SetModelRequest>, I>>(object: I): SetModelRequest {
+    const message = createBaseSetModelRequest();
+    message.requestId = object.requestId ?? "";
+    message.provider = object.provider ?? "";
+    message.model = object.model ?? "";
+    return message;
+  },
+};
+
+function createBaseSetModelAck(): SetModelAck {
+  return { requestId: "", ok: false, reason: "" };
+}
+
+export const SetModelAck: MessageFns<SetModelAck> = {
+  encode(message: SetModelAck, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.ok !== false) {
+      writer.uint32(16).bool(message.ok);
+    }
+    if (message.reason !== "") {
+      writer.uint32(26).string(message.reason);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SetModelAck {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSetModelAck();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.ok = reader.bool();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<SetModelAck>, I>>(base?: I): SetModelAck {
+    return SetModelAck.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SetModelAck>, I>>(object: I): SetModelAck {
+    const message = createBaseSetModelAck();
+    message.requestId = object.requestId ?? "";
+    message.ok = object.ok ?? false;
+    message.reason = object.reason ?? "";
     return message;
   },
 };

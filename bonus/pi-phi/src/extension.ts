@@ -71,6 +71,8 @@ function contextView(ctx: ExtensionContext): PiContextView {
         get model() {
             return ctx.model ?? undefined;
         },
+        modelRegistry: ctx.modelRegistry,
+        scopedModels: ctx.scopedModels,
         ui: ctx.ui,
     };
 }
@@ -166,7 +168,12 @@ export function createExtension(
 
     const make =
         deps.makeRuntime ??
-        ((c, g) => new Runtime({ creds: c, generation: g }));
+        ((c, g) =>
+            new Runtime({
+                creds: c,
+                generation: g,
+                setModel: (model) => pi.setModel(model),
+            }));
 
     pi.on('session_start', (_event, ctx) => {
         const slot = ownerSlot();

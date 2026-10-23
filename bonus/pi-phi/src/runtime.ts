@@ -14,8 +14,10 @@ import {
     HistoryResponse,
     LogicalState,
     ModelSnapshot,
+    ModelsResponse,
     PiToPhi,
     RunOutcome,
+    SetModelAck,
     StateSnapshot,
 } from './gen/bridge.js';
 import { BridgeChannel, type ChannelCreds } from './channel.js';
@@ -23,8 +25,10 @@ import { InvalidTargetError } from './endpoint.js';
 import { PROTOCOL_VERSION } from './protocol.js';
 import { CAPABILITY_HISTORY } from './protocol.js';
 import { CAPABILITY_LIFECYCLE } from './protocol.js';
+import { CAPABILITY_MODELS } from './protocol.js';
 import { MAX_JOURNAL_RECORDS } from './protocol.js';
 import { MAX_MESSAGE_BYTES } from './protocol.js';
+import { MAX_MODELS_ENTRIES } from './protocol.js';
 import { RECONNECT_BASE_MS } from './protocol.js';
 import { RECONNECT_MAX_MS } from './protocol.js';
 import { RECONNECT_STABLE_MS } from './protocol.js';
@@ -40,10 +44,23 @@ export interface PiSessionView {
 /** The live host model object, for provider routing. Never copied. */
 export type PiModelView = NonNullable<ExtensionContext['model']>;
 
+/** Structural Pi model-registry view; getAvailable/find suffice. */
+export type PiRegistryView = Pick<
+    ExtensionContext['modelRegistry'],
+    'getAvailable' | 'find'
+>;
+
+/** Structural scoped-model entry; the wrapped model is what matters. */
+export interface PiScopedModelView {
+    readonly model: PiModelView;
+}
+
 /** Structural Pi event-context view; satisfied by both pinned versions. */
 export interface PiContextView {
     readonly sessionManager: PiSessionView;
     readonly model?: PiModelView | undefined;
+    readonly modelRegistry?: PiRegistryView | undefined;
+    readonly scopedModels?: readonly PiScopedModelView[] | undefined;
     /**
      * Live UI surface for the history reader. Unknown-shaped by
      * design: the reader guards every access and reports
@@ -55,6 +72,8 @@ export interface PiContextView {
 export interface RuntimeOptions {
     readonly creds: ChannelCreds;
     readonly generation: bigint;
+    /** Host model switch; absent in tests that never switch. */
+    readonly setModel?: (model: PiModelView) => Promise<boolean>;
     /** Base reconnect delay; doubles per attempt up to maxBackoffMs. */
     readonly backoffBaseMs?: number;
     readonly backoffMaxMs?: number;
@@ -74,10 +93,11 @@ export interface RuntimeChannel {
     connect(hello: PiToPhi): Promise<import('./gen/bridge.js').Accepted>;
     send(msg: PiToPhi): boolean;
     /**
-     * Queue one history response. False means the frame missed
-     * admission; the caller fails only that request, never the stream.
+     * Queue one on-demand response (history, models, set-ack). False
+     * means the frame missed admission; the caller fails only that
+     * request, never the stream.
      */
-    sendHistory(msg: PiToPhi): boolean;
+    sendNonfatal(msg: PiToPhi): boolean;
     close(): void;
 }
 
@@ -114,9 +134,12 @@ export class Runtime {
     private sessionId = '';
     private leafId = '';
     private model: PiModelView | undefined;
+    private registry: PiRegistryView | undefined;
+    private scopedModels: readonly PiScopedModelView[] = [];
     /** Latest UI surface for history reads; refreshed on every event. */
     private ui: unknown;
     private historyAccepted = false;
+    private modelsAccepted = false;
     /** Final assistant stop reason of the current run, if observed. */
     private lastStopReason: string | null = null;
     /** When the current stream was accepted; null while connecting. */
@@ -321,6 +344,8 @@ export class Runtime {
             // Keep the last known leaf; never fail an event mapping.
         }
         this.model = ctx.model;
+        this.registry = ctx.modelRegistry;
+        this.scopedModels = ctx.scopedModels ?? [];
         this.ui = ctx.ui;
     }
 
@@ -364,11 +389,12 @@ export class Runtime {
      * Capabilities this runtime implements right now. History is
      * advertised only while the direct reader can reach a
      * history-shaped editor; print and RPC modes stay
-     * lifecycle-only. Re-evaluated on every Hello, so reconnects
-     * follow custom-editor changes.
+     * lifecycle-only. Models needs only the registry and the host
+     * switch call, so it is always advertised. Re-evaluated on every
+     * Hello, so reconnects follow custom-editor changes.
      */
     private capabilities(): string[] {
-        const caps = [CAPABILITY_LIFECYCLE];
+        const caps = [CAPABILITY_LIFECYCLE, CAPABILITY_MODELS];
         if (isHistoryReaderAvailable(this.ui)) caps.push(CAPABILITY_HISTORY);
         return caps;
     }
@@ -429,6 +455,7 @@ export class Runtime {
             this.opts.makeChannel ??
             ((creds, hooks) => new BridgeChannel(creds, hooks));
         this.historyAccepted = false;
+        this.modelsAccepted = false;
         const channel = make(this.opts.creds, {
             onMessage: (msg) => {
                 if (this.channel === channel && !this.shutdownRequested)
@@ -445,6 +472,8 @@ export class Runtime {
             if (this.channel === channel) {
                 this.historyAccepted =
                     accepted.capabilities.includes(CAPABILITY_HISTORY);
+                this.modelsAccepted =
+                    accepted.capabilities.includes(CAPABILITY_MODELS);
             }
         } catch (err) {
             channel.close();
@@ -477,15 +506,26 @@ export class Runtime {
     private onServerMessage(msg: import('./gen/bridge.js').PhiToPi): void {
         // Accepted is consumed by the channel; ProtocolError is
         // informational here since terminal failures arrive as the
-        // stream status. History requests are answered below.
+        // stream status. On-demand requests are answered below.
         if (
-            msg.payload?.$case === 'historyRequest' &&
-            this.historyAccepted &&
-            msg.paneId === this.opts.creds.pane &&
-            msg.processId === this.opts.creds.process &&
-            msg.runtimeGeneration === this.opts.generation
-        ) {
+            msg.paneId !== this.opts.creds.pane ||
+            msg.processId !== this.opts.creds.process ||
+            msg.runtimeGeneration !== this.opts.generation
+        )
+            return;
+        if (msg.payload?.$case === 'historyRequest' && this.historyAccepted) {
             this.onHistoryRequest(msg.payload.value.requestId);
+        } else if (
+            msg.payload?.$case === 'modelsRequest' &&
+            this.modelsAccepted
+        ) {
+            this.onModelsRequest(msg.payload.value.requestId);
+        } else if (
+            msg.payload?.$case === 'setModelRequest' &&
+            this.modelsAccepted
+        ) {
+            const req = msg.payload.value;
+            void this.onSetModelRequest(req.requestId, req.provider, req.model);
         }
     }
 
@@ -504,12 +544,14 @@ export class Runtime {
             // would present a partial history as complete.
             msg = this.historyResponse(requestId, null);
         }
-        if (!this.channel.sendHistory(msg)) {
+        if (!this.channel.sendNonfatal(msg)) {
             // Admission failure is nonfatal: when the snapshot was
             // the frame that missed, answer unavailable instead so
             // Phi falls back promptly; otherwise let Phi time out.
             if (entries !== null) {
-                this.channel.sendHistory(this.historyResponse(requestId, null));
+                this.channel.sendNonfatal(
+                    this.historyResponse(requestId, null),
+                );
             }
         }
     }
@@ -529,6 +571,165 @@ export class Runtime {
                         ? { requestId, unavailable: true }
                         : { requestId, entries, unavailable: false },
                 ),
+            },
+        };
+    }
+
+    /**
+     * Answer one models request. Best-effort like history: missing
+     * registry or oversized answers reply unavailable, and
+     * admission failure fails only the request. A configured
+     * session scope filters the catalog to selectable entries.
+     */
+    private onModelsRequest(requestId: string): void {
+        if (typeof requestId !== 'string' || requestId === '') return;
+        if (!this.channel) return;
+        let refs: { provider: string; model: string }[] | null;
+        try {
+            // Host registry calls can throw; answer unavailable
+            // rather than escaping into the stream handler.
+            refs = this.selectableModels();
+        } catch {
+            refs = null;
+        }
+        let msg = this.modelsResponse(requestId, refs);
+        if (PiToPhi.encode(msg).finish().length > MAX_MESSAGE_BYTES) {
+            // Oversized answers reply unavailable; truncation
+            // would present a partial list as complete.
+            msg = this.modelsResponse(requestId, null);
+        }
+        if (!this.channel.sendNonfatal(msg)) {
+            // Admission failure is nonfatal: when the list was
+            // the frame that missed, answer unavailable instead so
+            // Phi falls back promptly; otherwise let Phi time out.
+            const sent = msg.payload;
+            if (sent?.$case === 'modelsResponse' && !sent.value.unavailable) {
+                this.channel.sendNonfatal(this.modelsResponse(requestId, null));
+            }
+        }
+    }
+
+    /** Selectable catalog: scoped entries win when scoping is set. */
+    private selectableModels(): { provider: string; model: string }[] | null {
+        if (!this.registry) return null;
+        const source =
+            this.scopedModels.length > 0
+                ? this.scopedModels.map((entry) => entry.model)
+                : this.registry.getAvailable();
+        const refs: { provider: string; model: string }[] = [];
+        for (const m of source) {
+            if (
+                typeof m.provider !== 'string' ||
+                m.provider === '' ||
+                typeof m.id !== 'string' ||
+                m.id === ''
+            )
+                continue;
+            refs.push({ provider: m.provider, model: m.id });
+        }
+        return refs;
+    }
+
+    private modelsResponse(
+        requestId: string,
+        refs: { provider: string; model: string }[] | null,
+    ): PiToPhi {
+        return {
+            paneId: this.opts.creds.pane,
+            processId: this.opts.creds.process,
+            runtimeGeneration: this.opts.generation,
+            payload: {
+                $case: 'modelsResponse',
+                value:
+                    refs === null
+                        ? ModelsResponse.create({
+                              requestId,
+                              unavailable: true,
+                          })
+                        : ModelsResponse.create({
+                              requestId,
+                              models: refs.slice(0, MAX_MODELS_ENTRIES),
+                              truncated: refs.length > MAX_MODELS_ENTRIES,
+                              unavailable: false,
+                          }),
+            },
+        };
+    }
+
+    /**
+     * Answer one set-model request. Unknown or out-of-scope entries
+     * ack unknown-model without touching the session; an accepted
+     * switch emits model_select, so the snapshot follows on its own.
+     * Never throws: every path acks, and admission failure just
+     * lets Phi time out into its unknown-state copy.
+     */
+    private async onSetModelRequest(
+        requestId: string,
+        provider: string,
+        model: string,
+    ): Promise<void> {
+        if (typeof requestId !== 'string' || requestId === '') return;
+        const fail = (reason: string): void => {
+            this.channel?.sendNonfatal(
+                this.setModelAck(requestId, false, reason),
+            );
+        };
+        if (
+            typeof provider !== 'string' ||
+            provider === '' ||
+            typeof model !== 'string' ||
+            model === '' ||
+            !this.registry ||
+            !this.opts.setModel
+        ) {
+            fail('unknown-model');
+            return;
+        }
+        let target: PiModelView | undefined;
+        try {
+            // Host registry calls can throw; ack unknown-model
+            // rather than rejecting into the void caller.
+            if (this.scopedModels.length > 0) {
+                target = this.scopedModels
+                    .map((entry) => entry.model)
+                    .find((m) => m.provider === provider && m.id === model);
+            } else {
+                target = this.registry.find(provider, model);
+            }
+        } catch {
+            fail('unknown-model');
+            return;
+        }
+        if (!target) {
+            fail('unknown-model');
+            return;
+        }
+        let switched: boolean;
+        try {
+            switched = await this.opts.setModel(target);
+        } catch {
+            fail('');
+            return;
+        }
+        if (switched) {
+            this.channel?.sendNonfatal(this.setModelAck(requestId, true, ''));
+        } else {
+            fail('no-auth');
+        }
+    }
+
+    private setModelAck(
+        requestId: string,
+        ok: boolean,
+        reason: string,
+    ): PiToPhi {
+        return {
+            paneId: this.opts.creds.pane,
+            processId: this.opts.creds.process,
+            runtimeGeneration: this.opts.generation,
+            payload: {
+                $case: 'setModelAck',
+                value: SetModelAck.create({ requestId, ok, reason }),
             },
         };
     }

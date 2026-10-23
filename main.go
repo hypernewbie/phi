@@ -341,6 +341,8 @@ func main() {
 	http.HandleFunc("/api/prompt-history/append", handlePromptHistoryAppend)
 	http.HandleFunc("/api/prompt-history/recent", handlePromptHistoryRecent)
 	http.HandleFunc("/api/pi-history", handlePiBridgeHistory)
+	http.HandleFunc("/api/pi-bridge/models", handlePiBridgeModels)
+	http.HandleFunc("/api/pi-bridge/model", handlePiBridgeSetModel)
 	http.HandleFunc("/api/attachments", handleAttachments)
 	http.HandleFunc("/api/clipboard", handleGetClipboard)
 	http.HandleFunc("/api/system/cpu", handleSystemCPU)
@@ -842,7 +844,7 @@ func handlePromptHistoryRecent(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(s.Recent(cwd, n))
 }
 
-const piBridgeHistoryTimeout = time.Second
+const piBridgeOnDemandTimeout = time.Second
 
 // handlePiBridgeHistory uses the existing API auth gate. Errors reveal no
 // prompt text or bridge internals; successful snapshots must not be cached.
@@ -857,7 +859,7 @@ func handlePiBridgeHistory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing pane", http.StatusBadRequest)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), piBridgeHistoryTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), piBridgeOnDemandTimeout)
 	defer cancel()
 	res, err := piBridge.RequestPaneHistory(ctx, paneID)
 	if err != nil {
@@ -870,4 +872,68 @@ func handlePiBridgeHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"entries": entries, "unavailable": res.Unavailable})
+}
+
+// handlePiBridgeModels uses the existing API auth gate. Errors reveal
+// no bridge internals; successful lists must not be cached. Model is
+// mapped to id at this edge so the web UI renders bridge rows
+// exactly like Pi RPC rows.
+func handlePiBridgeModels(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	paneID := r.URL.Query().Get("pane")
+	if paneID == "" {
+		http.Error(w, "missing pane", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), piBridgeOnDemandTimeout)
+	defer cancel()
+	res, err := piBridge.RequestPaneModels(ctx, paneID)
+	if err != nil {
+		http.Error(w, "pi models unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	models := make([]map[string]string, 0, len(res.Models))
+	for _, m := range res.Models {
+		models = append(models, map[string]string{"provider": m.Provider, "id": m.Model})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"models": models, "truncated": res.Truncated, "unavailable": res.Unavailable})
+}
+
+// handlePiBridgeSetModel uses the existing API auth gate. The body
+// names one catalog entry; failures are 503 without bridge
+// internals, and the ack reason vocabulary is safe to surface.
+func handlePiBridgeSetModel(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Pane     string `json:"pane"`
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if body.Pane == "" || body.Provider == "" || body.Model == "" ||
+		len(body.Pane) > 256 || len(body.Provider) > 256 || len(body.Model) > 256 {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), piBridgeOnDemandTimeout)
+	defer cancel()
+	res, err := piBridge.RequestPaneSetModel(ctx, body.Pane, body.Provider, body.Model)
+	if err != nil {
+		http.Error(w, "pi model switch unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": res.OK, "reason": res.Reason})
 }

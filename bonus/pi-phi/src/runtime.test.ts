@@ -9,9 +9,16 @@ import {
 } from './gen/bridge.js';
 import { LIFECYCLE_HEADROOM_BYTES } from './protocol.js';
 import { CAPABILITY_HISTORY, CAPABILITY_LIFECYCLE } from './protocol.js';
+import { CAPABILITY_MODELS } from './protocol.js';
+import { MAX_MODELS_ENTRIES } from './protocol.js';
 import { InvalidTargetError } from './endpoint.js';
 import type { ChannelCreds, ChannelHooks } from './channel.js';
 import { type PiContextView, Runtime, type RuntimeChannel } from './runtime.js';
+import type {
+    PiModelView,
+    PiRegistryView,
+    PiScopedModelView,
+} from './runtime.js';
 
 const CREDS: ChannelCreds = {
     target: 'unix:/tmp/test.sock',
@@ -36,11 +43,11 @@ function ctx(over: Partial<PiContextView> = {}): PiContextView {
 interface MockChannel extends RuntimeChannel {
     hellos: PiToPhi[];
     sends: PiToPhi[];
-    historySends: PiToPhi[];
+    nonfatalSends: PiToPhi[];
     closed: number;
     hooks: ChannelHooks | null;
     sendResult: boolean;
-    historyResult: boolean;
+    nonfatalResult: boolean;
     connectError: Error | null;
 }
 
@@ -48,11 +55,11 @@ function mockChannel(): MockChannel {
     const m: MockChannel = {
         hellos: [],
         sends: [],
-        historySends: [],
+        nonfatalSends: [],
         closed: 0,
         hooks: null,
         sendResult: true,
-        historyResult: true,
+        nonfatalResult: true,
         connectError: null,
         connect: async (hello: PiToPhi) => {
             m.hellos.push(hello);
@@ -71,9 +78,9 @@ function mockChannel(): MockChannel {
             m.sends.push(msg);
             return m.sendResult;
         },
-        sendHistory: (msg: PiToPhi) => {
-            m.historySends.push(msg);
-            return m.historyResult;
+        sendNonfatal: (msg: PiToPhi) => {
+            m.nonfatalSends.push(msg);
+            return m.nonfatalResult;
         },
         close: () => {
             m.closed += 1;
@@ -143,7 +150,7 @@ function responseOf(msg: PiToPhi): {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 describe('Runtime hello', () => {
-    it('advertises lifecycle only with provisioned identity', async () => {
+    it('advertises lifecycle and models with provisioned identity', async () => {
         const ch = mockChannel();
         const rt = new Runtime({
             creds: CREDS,
@@ -160,7 +167,10 @@ describe('Runtime hello', () => {
         const payload = payloadOf(hello);
         expect(payload.$case).toBe('hello');
         if (payload.$case !== 'hello') return;
-        expect(payload.value.capabilities).toEqual([CAPABILITY_LIFECYCLE]);
+        expect(payload.value.capabilities).toEqual([
+            CAPABILITY_LIFECYCLE,
+            CAPABILITY_MODELS,
+        ]);
         expect(payload.value.sessionId).toBe('sess');
         expect(payload.value.currentState?.state).toBe(
             LogicalState.LOGICAL_STATE_IDLE,
@@ -203,11 +213,12 @@ describe('Runtime hello', () => {
         if (payload.$case !== 'hello') return;
         expect(payload.value.capabilities).toEqual([
             CAPABILITY_LIFECYCLE,
+            CAPABILITY_MODELS,
             CAPABILITY_HISTORY,
         ]);
         rt.shutdown();
     });
-    it('stays lifecycle-only when the reader is unavailable', async () => {
+    it('stays lifecycle-and-models when the reader is unavailable', async () => {
         const printUi = { setWidget: () => {} };
         const ch = mockChannel();
         const rt = new Runtime({
@@ -221,12 +232,15 @@ describe('Runtime hello', () => {
         const payload = payloadOf(ch.hellos[0]!);
         expect(payload.$case).toBe('hello');
         if (payload.$case !== 'hello') return;
-        expect(payload.value.capabilities).toEqual([CAPABILITY_LIFECYCLE]);
+        expect(payload.value.capabilities).toEqual([
+            CAPABILITY_LIFECYCLE,
+            CAPABILITY_MODELS,
+        ]);
         rt.shutdown();
     });
 });
 
-describe('Runtime history requests', () => {
+describe('Runtime models requests', () => {
     async function started(ui: unknown): Promise<{
         ch: MockChannel;
         rt: Runtime;
@@ -245,8 +259,8 @@ describe('Runtime history requests', () => {
     it('answers with the live entries and echoes the id', async () => {
         const { ch, rt } = await started(historyUi(['b', 'a']));
         ch.hooks!.onMessage(historyRequest('h7'));
-        expect(ch.historySends).toHaveLength(1);
-        expect(responseOf(ch.historySends[0]!)).toEqual({
+        expect(ch.nonfatalSends).toHaveLength(1);
+        expect(responseOf(ch.nonfatalSends[0]!)).toEqual({
             requestId: 'h7',
             entries: ['b', 'a'],
             unavailable: false,
@@ -259,8 +273,8 @@ describe('Runtime history requests', () => {
         const { ch, rt } = await started(historyUi([]));
         rt.onModelSelect(ctx({ ui: undefined }));
         ch.hooks!.onMessage(historyRequest('h1'));
-        expect(ch.historySends).toHaveLength(1);
-        const res = responseOf(ch.historySends[0]!);
+        expect(ch.nonfatalSends).toHaveLength(1);
+        const res = responseOf(ch.nonfatalSends[0]!);
         expect(res.requestId).toBe('h1');
         expect(res.unavailable).toBe(true);
         expect(ch.closed).toBe(0);
@@ -273,8 +287,8 @@ describe('Runtime history requests', () => {
             historyUi(Array.from({ length: 100 }, () => big)),
         );
         ch.hooks!.onMessage(historyRequest('h9'));
-        expect(ch.historySends).toHaveLength(1);
-        expect(responseOf(ch.historySends[0]!).unavailable).toBe(true);
+        expect(ch.nonfatalSends).toHaveLength(1);
+        expect(responseOf(ch.nonfatalSends[0]!).unavailable).toBe(true);
         expect(ch.closed).toBe(0);
         rt.shutdown();
     });
@@ -282,19 +296,19 @@ describe('Runtime history requests', () => {
     it('drops requests with an empty id', async () => {
         const { ch, rt } = await started(historyUi(['a']));
         ch.hooks!.onMessage(historyRequest(''));
-        expect(ch.historySends).toHaveLength(0);
+        expect(ch.nonfatalSends).toHaveLength(0);
         expect(ch.closed).toBe(0);
         rt.shutdown();
     });
 
     it('fails only the request when admission misses', async () => {
         const { ch, rt } = await started(historyUi(['a']));
-        ch.historyResult = false;
+        ch.nonfatalResult = false;
         ch.hooks!.onMessage(historyRequest('h3'));
         // The snapshot missed, so the runtime answers unavailable
         // instead; both attempts fail here and the stream survives.
-        expect(ch.historySends).toHaveLength(2);
-        expect(responseOf(ch.historySends[1]!).unavailable).toBe(true);
+        expect(ch.nonfatalSends).toHaveLength(2);
+        expect(responseOf(ch.nonfatalSends[1]!).unavailable).toBe(true);
         expect(ch.closed).toBe(0);
         rt.shutdown();
     });
@@ -307,7 +321,7 @@ describe('Runtime history requests', () => {
             if (field === 'runtimeGeneration') request[field] = 2n;
             else request[field] = 'wrong';
             ch.hooks!.onMessage(request);
-            expect(ch.historySends).toHaveLength(0);
+            expect(ch.nonfatalSends).toHaveLength(0);
             rt.shutdown();
         },
     );
@@ -315,11 +329,11 @@ describe('Runtime history requests', () => {
     it('drops requests when history was not negotiated', async () => {
         const { ch, rt } = await started(undefined);
         ch.hooks!.onMessage(historyRequest('h1'));
-        expect(ch.historySends).toHaveLength(0);
+        expect(ch.nonfatalSends).toHaveLength(0);
         rt.shutdown();
     });
 
-    it('ignores non-history server messages', async () => {
+    it('ignores informational server messages', async () => {
         const { ch, rt } = await started(historyUi(['a']));
         ch.hooks!.onMessage({
             paneId: 'pane',
@@ -330,9 +344,449 @@ describe('Runtime history requests', () => {
                 value: { code: 0, safeMessage: 'test' },
             },
         });
-        expect(ch.historySends).toHaveLength(0);
+        expect(ch.nonfatalSends).toHaveLength(0);
         expect(ch.sends).toHaveLength(0);
         expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+});
+
+function fakeModel(provider: string, id: string): PiModelView {
+    return { provider, id } as unknown as PiModelView;
+}
+
+function fakeRegistry(
+    entries: Array<{ provider: string; id: string }>,
+): PiRegistryView {
+    const models = entries.map((m) => fakeModel(m.provider, m.id));
+    return {
+        getAvailable: () => models,
+        find: (provider: string, modelId: string) =>
+            models.find((m) => m.provider === provider && m.id === modelId),
+    };
+}
+
+function fakeScope(
+    entries: Array<{ provider: string; id: string }>,
+): PiScopedModelView[] {
+    return entries.map((m) => ({ model: fakeModel(m.provider, m.id) }));
+}
+
+function modelsRequest(id: string): PhiToPi {
+    return {
+        paneId: 'pane',
+        processId: 'proc',
+        runtimeGeneration: 1n,
+        payload: { $case: 'modelsRequest', value: { requestId: id } },
+    };
+}
+
+function setModelRequest(id: string, provider: string, model: string): PhiToPi {
+    return {
+        paneId: 'pane',
+        processId: 'proc',
+        runtimeGeneration: 1n,
+        payload: {
+            $case: 'setModelRequest',
+            value: { requestId: id, provider, model },
+        },
+    };
+}
+
+function modelsOf(msg: PiToPhi): {
+    requestId: string;
+    models: Array<{ provider: string; model: string }>;
+    truncated: boolean;
+    unavailable: boolean;
+} {
+    const payload = payloadOf(msg);
+    if (payload.$case !== 'modelsResponse') {
+        throw new Error(`not a models response: ${payload.$case}`);
+    }
+    return payload.value;
+}
+
+function ackOf(msg: PiToPhi): {
+    requestId: string;
+    ok: boolean;
+    reason: string;
+} {
+    const payload = payloadOf(msg);
+    if (payload.$case !== 'setModelAck') {
+        throw new Error(`not a set-model ack: ${payload.$case}`);
+    }
+    return payload.value;
+}
+
+describe('Runtime models requests', () => {
+    async function started(
+        registry?: PiRegistryView,
+        scoped?: PiScopedModelView[],
+    ): Promise<{ ch: MockChannel; rt: Runtime }> {
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            makeChannel: wired(ch),
+        });
+        rt.start(ctx({ modelRegistry: registry, scopedModels: scoped }));
+        await sleep(10);
+        return { ch, rt };
+    }
+
+    it('answers with the catalog and echoes the id', async () => {
+        const { ch, rt } = await started(
+            fakeRegistry([
+                { provider: 'a', id: 'x' },
+                { provider: 'b', id: 'y' },
+            ]),
+        );
+        ch.hooks!.onMessage(modelsRequest('m7'));
+        expect(ch.nonfatalSends).toHaveLength(1);
+        expect(modelsOf(ch.nonfatalSends[0]!)).toEqual({
+            requestId: 'm7',
+            models: [
+                { provider: 'a', model: 'x' },
+                { provider: 'b', model: 'y' },
+            ],
+            truncated: false,
+            unavailable: false,
+        });
+        expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+
+    it('answers unavailable when the host registry throws', async () => {
+        const { ch, rt } = await started({
+            getAvailable: () => {
+                throw new Error('boom');
+            },
+            find: () => undefined,
+        });
+        ch.hooks!.onMessage(modelsRequest('m-throw'));
+        expect(ch.nonfatalSends).toHaveLength(1);
+        const res = modelsOf(ch.nonfatalSends[0]!);
+        expect(res.requestId).toBe('m-throw');
+        expect(res.unavailable).toBe(true);
+        expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+
+    it('filters to the session scope when scoping is set', async () => {
+        const { ch, rt } = await started(
+            fakeRegistry([
+                { provider: 'a', id: 'x' },
+                { provider: 'b', id: 'y' },
+            ]),
+            fakeScope([{ provider: 'b', id: 'y' }]),
+        );
+        ch.hooks!.onMessage(modelsRequest('m1'));
+        expect(ch.nonfatalSends).toHaveLength(1);
+        const res = modelsOf(ch.nonfatalSends[0]!);
+        expect(res.models).toEqual([{ provider: 'b', model: 'y' }]);
+        expect(res.truncated).toBe(false);
+        expect(res.unavailable).toBe(false);
+        rt.shutdown();
+    });
+
+    it('truncates at the entry cap', async () => {
+        const entries = Array.from(
+            { length: MAX_MODELS_ENTRIES + 100 },
+            (_, i) => ({
+                provider: 'p',
+                id: `m${i}`,
+            }),
+        );
+        const { ch, rt } = await started(fakeRegistry(entries));
+        ch.hooks!.onMessage(modelsRequest('m9'));
+        expect(ch.nonfatalSends).toHaveLength(1);
+        const res = modelsOf(ch.nonfatalSends[0]!);
+        expect(res.models).toHaveLength(MAX_MODELS_ENTRIES);
+        expect(res.truncated).toBe(true);
+        expect(res.unavailable).toBe(false);
+        rt.shutdown();
+    });
+
+    it('answers unavailable without a registry', async () => {
+        const { ch, rt } = await started(undefined);
+        ch.hooks!.onMessage(modelsRequest('m1'));
+        expect(ch.nonfatalSends).toHaveLength(1);
+        const res = modelsOf(ch.nonfatalSends[0]!);
+        expect(res.requestId).toBe('m1');
+        expect(res.unavailable).toBe(true);
+        expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+
+    it('answers unavailable when the list exceeds the message bound', async () => {
+        const big = 'x'.repeat(600);
+        const entries = Array.from({ length: MAX_MODELS_ENTRIES }, (_, i) => ({
+            provider: `p${i}-${big}`,
+            id: `m${i}-${big}`,
+        }));
+        const { ch, rt } = await started(fakeRegistry(entries));
+        ch.hooks!.onMessage(modelsRequest('m2'));
+        expect(ch.nonfatalSends).toHaveLength(1);
+        expect(modelsOf(ch.nonfatalSends[0]!).unavailable).toBe(true);
+        expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+
+    it('drops requests with an empty id', async () => {
+        const { ch, rt } = await started(
+            fakeRegistry([{ provider: 'a', id: 'x' }]),
+        );
+        ch.hooks!.onMessage(modelsRequest(''));
+        expect(ch.nonfatalSends).toHaveLength(0);
+        expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+
+    it.each(['paneId', 'processId', 'runtimeGeneration'] as const)(
+        'drops a request with the wrong %s',
+        async (field) => {
+            const { ch, rt } = await started(
+                fakeRegistry([{ provider: 'a', id: 'x' }]),
+            );
+            const request = modelsRequest('m1');
+            if (field === 'runtimeGeneration') request[field] = 2n;
+            else request[field] = 'wrong';
+            ch.hooks!.onMessage(request);
+            expect(ch.nonfatalSends).toHaveLength(0);
+            rt.shutdown();
+        },
+    );
+
+    it('drops requests when models were not negotiated', async () => {
+        const ch = mockChannel();
+        ch.connect = async (hello: PiToPhi) => {
+            ch.hellos.push(hello);
+            return {
+                protocolVersion: 1,
+                capabilities: [CAPABILITY_LIFECYCLE],
+                runtimeGeneration: 1n,
+                runtimeId: 'rt',
+            };
+        };
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            makeChannel: wired(ch),
+        });
+        rt.start(
+            ctx({ modelRegistry: fakeRegistry([{ provider: 'a', id: 'x' }]) }),
+        );
+        await sleep(10);
+        ch.hooks!.onMessage(modelsRequest('m1'));
+        expect(ch.nonfatalSends).toHaveLength(0);
+        rt.shutdown();
+    });
+
+    it('fails only the request when admission misses', async () => {
+        const { ch, rt } = await started(
+            fakeRegistry([{ provider: 'a', id: 'x' }]),
+        );
+        ch.nonfatalResult = false;
+        ch.hooks!.onMessage(modelsRequest('m3'));
+        expect(ch.nonfatalSends).toHaveLength(2);
+        expect(modelsOf(ch.nonfatalSends[1]!).unavailable).toBe(true);
+        expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+});
+
+describe('Runtime set-model requests', () => {
+    async function started(
+        registry: PiRegistryView | undefined,
+        setModel: (model: PiModelView) => Promise<boolean>,
+        scoped?: PiScopedModelView[],
+    ): Promise<{ ch: MockChannel; rt: Runtime }> {
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            makeChannel: wired(ch),
+            setModel,
+        });
+        rt.start(ctx({ modelRegistry: registry, scopedModels: scoped }));
+        await sleep(10);
+        return { ch, rt };
+    }
+
+    it('acks ok and switches through the host on a known entry', async () => {
+        const seen: PiModelView[] = [];
+        const { ch, rt } = await started(
+            fakeRegistry([{ provider: 'a', id: 'x' }]),
+            async (m) => {
+                seen.push(m);
+                return true;
+            },
+        );
+        ch.hooks!.onMessage(setModelRequest('s1', 'a', 'x'));
+        await sleep(10);
+        expect(ch.nonfatalSends).toHaveLength(1);
+        expect(ackOf(ch.nonfatalSends[0]!)).toEqual({
+            requestId: 's1',
+            ok: true,
+            reason: '',
+        });
+        expect(seen).toHaveLength(1);
+        expect(seen[0]!.provider).toBe('a');
+        expect(seen[0]!.id).toBe('x');
+        expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+
+    it('acks unknown-model when the registry misses', async () => {
+        let calls = 0;
+        const { ch, rt } = await started(
+            fakeRegistry([{ provider: 'a', id: 'x' }]),
+            async () => {
+                calls += 1;
+                return true;
+            },
+        );
+        ch.hooks!.onMessage(setModelRequest('s2', 'a', 'zzz'));
+        await sleep(10);
+        expect(ch.nonfatalSends).toHaveLength(1);
+        expect(ackOf(ch.nonfatalSends[0]!)).toEqual({
+            requestId: 's2',
+            ok: false,
+            reason: 'unknown-model',
+        });
+        expect(calls).toBe(0);
+        rt.shutdown();
+    });
+
+    it('acks unknown-model when the host registry throws', async () => {
+        let calls = 0;
+        const { ch, rt } = await started(
+            {
+                getAvailable: () => [],
+                find: () => {
+                    throw new Error('boom');
+                },
+            },
+            async () => {
+                calls += 1;
+                return true;
+            },
+        );
+        ch.hooks!.onMessage(setModelRequest('s-throw', 'a', 'x'));
+        await sleep(10);
+        expect(ch.nonfatalSends).toHaveLength(1);
+        expect(ackOf(ch.nonfatalSends[0]!)).toEqual({
+            requestId: 's-throw',
+            ok: false,
+            reason: 'unknown-model',
+        });
+        expect(calls).toBe(0);
+        rt.shutdown();
+    });
+
+    it('acks unknown-model for out-of-scope entries', async () => {
+        let calls = 0;
+        const { ch, rt } = await started(
+            fakeRegistry([
+                { provider: 'a', id: 'x' },
+                { provider: 'b', id: 'y' },
+            ]),
+            async () => {
+                calls += 1;
+                return true;
+            },
+            fakeScope([{ provider: 'a', id: 'x' }]),
+        );
+        ch.hooks!.onMessage(setModelRequest('s3', 'b', 'y'));
+        await sleep(10);
+        expect(ch.nonfatalSends).toHaveLength(1);
+        expect(ackOf(ch.nonfatalSends[0]!).reason).toBe('unknown-model');
+        expect(calls).toBe(0);
+        rt.shutdown();
+    });
+
+    it('acks no-auth when the host refuses', async () => {
+        const { ch, rt } = await started(
+            fakeRegistry([{ provider: 'a', id: 'x' }]),
+            async () => false,
+        );
+        ch.hooks!.onMessage(setModelRequest('s4', 'a', 'x'));
+        await sleep(10);
+        expect(ch.nonfatalSends).toHaveLength(1);
+        expect(ackOf(ch.nonfatalSends[0]!)).toEqual({
+            requestId: 's4',
+            ok: false,
+            reason: 'no-auth',
+        });
+        rt.shutdown();
+    });
+
+    it('acks empty reason when the host throws', async () => {
+        const { ch, rt } = await started(
+            fakeRegistry([{ provider: 'a', id: 'x' }]),
+            async () => {
+                throw new Error('boom');
+            },
+        );
+        ch.hooks!.onMessage(setModelRequest('s5', 'a', 'x'));
+        await sleep(10);
+        expect(ch.nonfatalSends).toHaveLength(1);
+        expect(ackOf(ch.nonfatalSends[0]!)).toEqual({
+            requestId: 's5',
+            ok: false,
+            reason: '',
+        });
+        rt.shutdown();
+    });
+
+    it('acks unknown-model on empty ids', async () => {
+        const { ch, rt } = await started(
+            fakeRegistry([{ provider: 'a', id: 'x' }]),
+            async () => true,
+        );
+        ch.hooks!.onMessage(setModelRequest('s6', '', ''));
+        await sleep(10);
+        expect(ch.nonfatalSends).toHaveLength(1);
+        expect(ackOf(ch.nonfatalSends[0]!).reason).toBe('unknown-model');
+        rt.shutdown();
+    });
+
+    it('drops requests with an empty id', async () => {
+        const { ch, rt } = await started(
+            fakeRegistry([{ provider: 'a', id: 'x' }]),
+            async () => true,
+        );
+        ch.hooks!.onMessage(setModelRequest('', 'a', 'x'));
+        await sleep(10);
+        expect(ch.nonfatalSends).toHaveLength(0);
+        expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+
+    it('drops requests when models were not negotiated', async () => {
+        const ch = mockChannel();
+        ch.connect = async (hello: PiToPhi) => {
+            ch.hellos.push(hello);
+            return {
+                protocolVersion: 1,
+                capabilities: [CAPABILITY_LIFECYCLE],
+                runtimeGeneration: 1n,
+                runtimeId: 'rt',
+            };
+        };
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            makeChannel: wired(ch),
+            setModel: async () => true,
+        });
+        rt.start(
+            ctx({ modelRegistry: fakeRegistry([{ provider: 'a', id: 'x' }]) }),
+        );
+        await sleep(10);
+        ch.hooks!.onMessage(setModelRequest('s7', 'a', 'x'));
+        await sleep(10);
+        expect(ch.nonfatalSends).toHaveLength(0);
         rt.shutdown();
     });
 });
@@ -618,10 +1072,10 @@ describe('Runtime reconnect', () => {
                 old.hooks!.onMessage(historyRequest('stale'));
                 old.hooks!.onStatus(code === null ? null : status(code));
                 expect(current.closed).toBe(0);
-                expect(old.historySends).toHaveLength(0);
+                expect(old.nonfatalSends).toHaveLength(0);
                 current.hooks!.onMessage(historyRequest('current'));
-                expect(current.historySends).toHaveLength(1);
-                expect(responseOf(current.historySends[0]!).entries).toEqual([
+                expect(current.nonfatalSends).toHaveLength(1);
+                expect(responseOf(current.nonfatalSends[0]!).entries).toEqual([
                     'current',
                 ]);
             } finally {

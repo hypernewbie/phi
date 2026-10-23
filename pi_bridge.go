@@ -357,6 +357,51 @@ func (b *Bridge) RequestPaneHistory(ctx context.Context, paneID string) (pibridg
 	return b.server.RequestHistory(ctx, processID)
 }
 
+// RequestPaneModels resolves a pane to its bridge process and reads
+// the live Pi selectable-model list. Unknown, unmanaged, and
+// peerless panes fail; the picker displays the error. The caller
+// owns the deadline: the list is best-effort and must never
+// hold an HTTP handler past its budget.
+func (b *Bridge) RequestPaneModels(ctx context.Context, paneID string) (pibridge.ModelsResult, error) {
+	if b == nil {
+		return pibridge.ModelsResult{}, fmt.Errorf("pi-bridge: disabled")
+	}
+	b.mu.Lock()
+	p, ok := b.panes[paneID]
+	var processID string
+	var managed bool
+	if ok {
+		processID, managed = p.processID, p.managed
+	}
+	b.mu.Unlock()
+	if !ok || !managed {
+		return pibridge.ModelsResult{}, fmt.Errorf("pi-bridge: pane not managed")
+	}
+	return b.server.RequestModels(ctx, processID)
+}
+
+// RequestPaneSetModel resolves a pane to its bridge process and asks
+// the live Pi session to switch models. Unknown, unmanaged, and
+// peerless panes fail; the caller owns the deadline like history
+// and models reads.
+func (b *Bridge) RequestPaneSetModel(ctx context.Context, paneID, provider, model string) (pibridge.SetModelResult, error) {
+	if b == nil {
+		return pibridge.SetModelResult{}, fmt.Errorf("pi-bridge: disabled")
+	}
+	b.mu.Lock()
+	p, ok := b.panes[paneID]
+	var processID string
+	var managed bool
+	if ok {
+		processID, managed = p.processID, p.managed
+	}
+	b.mu.Unlock()
+	if !ok || !managed {
+		return pibridge.SetModelResult{}, fmt.Errorf("pi-bridge: pane not managed")
+	}
+	return b.server.RequestSetModel(ctx, processID, provider, model)
+}
+
 // RevokePane revokes a pane's lease and drops its record. Unknown panes
 // and nil bridges are ignored. Idempotent.
 func (b *Bridge) RevokePane(paneID string) {

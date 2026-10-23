@@ -181,11 +181,12 @@ export class BridgeChannel {
     }
 
     /**
-     * Queue one history response. Returns false when the frame would
-     * breach the history byte cap; unlike send, admission failure is
-     * nonfatal and leaves the stream usable for lifecycle traffic.
+     * Queue one on-demand response (history, models, set-ack).
+     * Returns false when the frame would breach the non-lifecycle
+     * byte cap; unlike send, admission failure is nonfatal and
+     * leaves the stream usable for lifecycle traffic.
      */
-    sendHistory(msg: PiToPhi): boolean {
+    sendNonfatal(msg: PiToPhi): boolean {
         if (this.closed || this.writerError) return false;
         const byteSize = PiToPhi.encode(msg).finish().length;
         if (

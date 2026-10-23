@@ -39,9 +39,15 @@ const (
 	CapabilityLifecycle = "pi.lifecycle.v1"
 	// CapabilityHistory is the on-demand editor-history capability name.
 	CapabilityHistory = "pi.history.v1"
+	// CapabilityModels is the on-demand model-list/switch capability name.
+	CapabilityModels = "pi.models.v1"
 
 	// maxHistoryPending bounds history requests awaiting replies per
 	// peer. Excess callers fail fast into fallback; the map never
 	// grows under a wedged or silent extension.
 	maxHistoryPending = 4
+	// maxModelsPending bounds models and set-model requests awaiting
+	// replies per peer, each. Excess callers fail fast; the maps
+	// never grow under a wedged or silent extension.
+	maxModelsPending = 4
 )

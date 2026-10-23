@@ -73,6 +73,7 @@ Runtime identity binds `(generation, runtime_id, session_id)`:
 | ----------------- | ------------------------------------------------ |
 | `pi.lifecycle.v1` | Lifecycle edges, snapshots, settlement           |
 | `pi.history.v1`   | On-demand live editor-history reads              |
+| `pi.models.v1`    | On-demand model list and switching               |
 
 ## History reads
 
@@ -90,6 +91,28 @@ message slots). A history frame admits only while the queue retains that headroo
 after admission. Admission failure fails only the request — it
 never closes the stream — and Phi falls back to pre-bridge
 behavior on any failure or a 1 s timeout.
+
+## Model list and switching
+
+`pi.models.v1` is two best-effort request/response pairs over the
+shared stream, always advertised: the registry and the host switch
+call exist in every mode. Phi sends `ModelsRequest` (field 15)
+with a correlating `request_id`; the extension answers
+`ModelsResponse` (field 18) echoing the id with the selectable
+catalog — scoped entries when session scoping is configured,
+otherwise `getAvailable()` — capped at 500 entries with `truncated`,
+or `unavailable` when the answer exceeds the message bound. Phi
+sends `SetModelRequest` (field 16) naming one entry; the extension
+resolves it against the scope (when set) or the registry and
+answers `SetModelAck` (field 19): `ok` with an empty reason, or a
+refusal with `no-auth` (no provider credentials) or
+`unknown-model` (unresolvable or out of scope). `ok=false` with an
+empty reason means the switch attempt itself errored and its
+outcome is unknown. A successful switch
+emits `model_select`, so the current-model snapshot follows with no
+explicit publish. Queue, admission, drop, and timeout semantics
+match history reads; Phi surfaces list failures inside the picker
+(error/unavailable row) and keeps partial lists usable.
 
 ## Lifecycle events
 

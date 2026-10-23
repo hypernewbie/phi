@@ -24583,6 +24583,8 @@ var require_src3 = __commonJS({
 var PROTOCOL_VERSION = 1;
 var CAPABILITY_LIFECYCLE = "pi.lifecycle.v1";
 var CAPABILITY_HISTORY = "pi.history.v1";
+var CAPABILITY_MODELS = "pi.models.v1";
+var MAX_MODELS_ENTRIES = 500;
 var LIFECYCLE_HEADROOM_BYTES = 16 * 1024;
 var LIFECYCLE_HEADROOM_MESSAGES = 2;
 var MAX_MESSAGE_BYTES = 256 * 1024;
@@ -25620,6 +25622,12 @@ var PiToPhi = {
       case "historyResponse":
         HistoryResponse.encode(message.payload.value, writer.uint32(138).fork()).join();
         break;
+      case "modelsResponse":
+        ModelsResponse.encode(message.payload.value, writer.uint32(146).fork()).join();
+        break;
+      case "setModelAck":
+        SetModelAck.encode(message.payload.value, writer.uint32(154).fork()).join();
+        break;
     }
     return writer;
   },
@@ -25692,6 +25700,20 @@ var PiToPhi = {
             message.payload = { $case: "historyResponse", value: HistoryResponse.decode(reader, reader.uint32()) };
             continue;
           }
+          case 18: {
+            if (tag !== 146) {
+              break;
+            }
+            message.payload = { $case: "modelsResponse", value: ModelsResponse.decode(reader, reader.uint32()) };
+            continue;
+          }
+          case 19: {
+            if (tag !== 154) {
+              break;
+            }
+            message.payload = { $case: "setModelAck", value: SetModelAck.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -25742,6 +25764,18 @@ var PiToPhi = {
         }
         break;
       }
+      case "modelsResponse": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = { $case: "modelsResponse", value: ModelsResponse.fromPartial(object.payload.value) };
+        }
+        break;
+      }
+      case "setModelAck": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = { $case: "setModelAck", value: SetModelAck.fromPartial(object.payload.value) };
+        }
+        break;
+      }
     }
     return message;
   }
@@ -25772,6 +25806,12 @@ var PhiToPi = {
         break;
       case "historyRequest":
         HistoryRequest.encode(message.payload.value, writer.uint32(114).fork()).join();
+        break;
+      case "modelsRequest":
+        ModelsRequest.encode(message.payload.value, writer.uint32(122).fork()).join();
+        break;
+      case "setModelRequest":
+        SetModelRequest.encode(message.payload.value, writer.uint32(130).fork()).join();
         break;
     }
     return writer;
@@ -25831,6 +25871,20 @@ var PhiToPi = {
             message.payload = { $case: "historyRequest", value: HistoryRequest.decode(reader, reader.uint32()) };
             continue;
           }
+          case 15: {
+            if (tag !== 122) {
+              break;
+            }
+            message.payload = { $case: "modelsRequest", value: ModelsRequest.decode(reader, reader.uint32()) };
+            continue;
+          }
+          case 16: {
+            if (tag !== 130) {
+              break;
+            }
+            message.payload = { $case: "setModelRequest", value: SetModelRequest.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -25866,6 +25920,18 @@ var PhiToPi = {
       case "historyRequest": {
         if (object.payload?.value !== void 0 && object.payload?.value !== null) {
           message.payload = { $case: "historyRequest", value: HistoryRequest.fromPartial(object.payload.value) };
+        }
+        break;
+      }
+      case "modelsRequest": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = { $case: "modelsRequest", value: ModelsRequest.fromPartial(object.payload.value) };
+        }
+        break;
+      }
+      case "setModelRequest": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = { $case: "setModelRequest", value: SetModelRequest.fromPartial(object.payload.value) };
         }
         break;
       }
@@ -26625,6 +26691,344 @@ var HistoryResponse = {
     return message;
   }
 };
+function createBaseModelRef() {
+  return { provider: "", model: "" };
+}
+var ModelRef = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.provider !== "") {
+      writer.uint32(10).string(message.provider);
+    }
+    if (message.model !== "") {
+      writer.uint32(18).string(message.model);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseModelRef();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.provider = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+            message.model = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return ModelRef.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseModelRef();
+    message.provider = object.provider ?? "";
+    message.model = object.model ?? "";
+    return message;
+  }
+};
+function createBaseModelsRequest() {
+  return { requestId: "" };
+}
+var ModelsRequest = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseModelsRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return ModelsRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseModelsRequest();
+    message.requestId = object.requestId ?? "";
+    return message;
+  }
+};
+function createBaseModelsResponse() {
+  return { requestId: "", models: [], truncated: false, unavailable: false };
+}
+var ModelsResponse = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    for (const v of message.models) {
+      ModelRef.encode(v, writer.uint32(18).fork()).join();
+    }
+    if (message.truncated !== false) {
+      writer.uint32(24).bool(message.truncated);
+    }
+    if (message.unavailable !== false) {
+      writer.uint32(32).bool(message.unavailable);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseModelsResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+            message.models.push(ModelRef.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+            message.truncated = reader.bool();
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+            message.unavailable = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return ModelsResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseModelsResponse();
+    message.requestId = object.requestId ?? "";
+    message.models = object.models?.map((e) => ModelRef.fromPartial(e)) || [];
+    message.truncated = object.truncated ?? false;
+    message.unavailable = object.unavailable ?? false;
+    return message;
+  }
+};
+function createBaseSetModelRequest() {
+  return { requestId: "", provider: "", model: "" };
+}
+var SetModelRequest = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.provider !== "") {
+      writer.uint32(18).string(message.provider);
+    }
+    if (message.model !== "") {
+      writer.uint32(26).string(message.model);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseSetModelRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+            message.provider = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+            message.model = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return SetModelRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseSetModelRequest();
+    message.requestId = object.requestId ?? "";
+    message.provider = object.provider ?? "";
+    message.model = object.model ?? "";
+    return message;
+  }
+};
+function createBaseSetModelAck() {
+  return { requestId: "", ok: false, reason: "" };
+}
+var SetModelAck = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.ok !== false) {
+      writer.uint32(16).bool(message.ok);
+    }
+    if (message.reason !== "") {
+      writer.uint32(26).string(message.reason);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseSetModelAck();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+            message.ok = reader.bool();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return SetModelAck.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseSetModelAck();
+    message.requestId = object.requestId ?? "";
+    message.ok = object.ok ?? false;
+    message.reason = object.reason ?? "";
+    return message;
+  }
+};
 function createBaseProtocolError() {
   return { code: 0, safeMessage: "" };
 }
@@ -26810,11 +27214,12 @@ var BridgeChannel = class {
     return true;
   }
   /**
-   * Queue one history response. Returns false when the frame would
-   * breach the history byte cap; unlike send, admission failure is
-   * nonfatal and leaves the stream usable for lifecycle traffic.
+   * Queue one on-demand response (history, models, set-ack).
+   * Returns false when the frame would breach the non-lifecycle
+   * byte cap; unlike send, admission failure is nonfatal and
+   * leaves the stream usable for lifecycle traffic.
    */
-  sendHistory(msg) {
+  sendNonfatal(msg) {
     if (this.closed || this.writerError) return false;
     const byteSize = PiToPhi.encode(msg).finish().length;
     if (!this.queue.tryEnqueueWithByteCap(
@@ -27007,9 +27412,12 @@ var Runtime = class {
   sessionId = "";
   leafId = "";
   model;
+  registry;
+  scopedModels = [];
   /** Latest UI surface for history reads; refreshed on every event. */
   ui;
   historyAccepted = false;
+  modelsAccepted = false;
   /** Final assistant stop reason of the current run, if observed. */
   lastStopReason = null;
   /** When the current stream was accepted; null while connecting. */
@@ -27182,6 +27590,8 @@ var Runtime = class {
     } catch {
     }
     this.model = ctx.model;
+    this.registry = ctx.modelRegistry;
+    this.scopedModels = ctx.scopedModels ?? [];
     this.ui = ctx.ui;
   }
   nextSeq() {
@@ -27219,11 +27629,12 @@ var Runtime = class {
    * Capabilities this runtime implements right now. History is
    * advertised only while the direct reader can reach a
    * history-shaped editor; print and RPC modes stay
-   * lifecycle-only. Re-evaluated on every Hello, so reconnects
-   * follow custom-editor changes.
+   * lifecycle-only. Models needs only the registry and the host
+   * switch call, so it is always advertised. Re-evaluated on every
+   * Hello, so reconnects follow custom-editor changes.
    */
   capabilities() {
-    const caps = [CAPABILITY_LIFECYCLE];
+    const caps = [CAPABILITY_LIFECYCLE, CAPABILITY_MODELS];
     if (isHistoryReaderAvailable(this.ui)) caps.push(CAPABILITY_HISTORY);
     return caps;
   }
@@ -27271,6 +27682,7 @@ var Runtime = class {
     }
     const make = this.opts.makeChannel ?? ((creds, hooks) => new BridgeChannel(creds, hooks));
     this.historyAccepted = false;
+    this.modelsAccepted = false;
     const channel = make(this.opts.creds, {
       onMessage: (msg) => {
         if (this.channel === channel && !this.shutdownRequested)
@@ -27286,6 +27698,7 @@ var Runtime = class {
       const accepted = await channel.connect(this.hello());
       if (this.channel === channel) {
         this.historyAccepted = accepted.capabilities.includes(CAPABILITY_HISTORY);
+        this.modelsAccepted = accepted.capabilities.includes(CAPABILITY_MODELS);
       }
     } catch (err) {
       channel.close();
@@ -27305,8 +27718,15 @@ var Runtime = class {
     this.connectedAt = Date.now();
   }
   onServerMessage(msg) {
-    if (msg.payload?.$case === "historyRequest" && this.historyAccepted && msg.paneId === this.opts.creds.pane && msg.processId === this.opts.creds.process && msg.runtimeGeneration === this.opts.generation) {
+    if (msg.paneId !== this.opts.creds.pane || msg.processId !== this.opts.creds.process || msg.runtimeGeneration !== this.opts.generation)
+      return;
+    if (msg.payload?.$case === "historyRequest" && this.historyAccepted) {
       this.onHistoryRequest(msg.payload.value.requestId);
+    } else if (msg.payload?.$case === "modelsRequest" && this.modelsAccepted) {
+      this.onModelsRequest(msg.payload.value.requestId);
+    } else if (msg.payload?.$case === "setModelRequest" && this.modelsAccepted) {
+      const req = msg.payload.value;
+      void this.onSetModelRequest(req.requestId, req.provider, req.model);
     }
   }
   /**
@@ -27322,9 +27742,11 @@ var Runtime = class {
     if (PiToPhi.encode(msg).finish().length > MAX_MESSAGE_BYTES) {
       msg = this.historyResponse(requestId, null);
     }
-    if (!this.channel.sendHistory(msg)) {
+    if (!this.channel.sendNonfatal(msg)) {
       if (entries !== null) {
-        this.channel.sendHistory(this.historyResponse(requestId, null));
+        this.channel.sendNonfatal(
+          this.historyResponse(requestId, null)
+        );
       }
     }
   }
@@ -27338,6 +27760,120 @@ var Runtime = class {
         value: HistoryResponse.create(
           entries === null ? { requestId, unavailable: true } : { requestId, entries, unavailable: false }
         )
+      }
+    };
+  }
+  /**
+   * Answer one models request. Best-effort like history: missing
+   * registry or oversized answers reply unavailable, and
+   * admission failure fails only the request. A configured
+   * session scope filters the catalog to selectable entries.
+   */
+  onModelsRequest(requestId) {
+    if (typeof requestId !== "string" || requestId === "") return;
+    if (!this.channel) return;
+    let refs;
+    try {
+      refs = this.selectableModels();
+    } catch {
+      refs = null;
+    }
+    let msg = this.modelsResponse(requestId, refs);
+    if (PiToPhi.encode(msg).finish().length > MAX_MESSAGE_BYTES) {
+      msg = this.modelsResponse(requestId, null);
+    }
+    if (!this.channel.sendNonfatal(msg)) {
+      const sent = msg.payload;
+      if (sent?.$case === "modelsResponse" && !sent.value.unavailable) {
+        this.channel.sendNonfatal(this.modelsResponse(requestId, null));
+      }
+    }
+  }
+  /** Selectable catalog: scoped entries win when scoping is set. */
+  selectableModels() {
+    if (!this.registry) return null;
+    const source = this.scopedModels.length > 0 ? this.scopedModels.map((entry) => entry.model) : this.registry.getAvailable();
+    const refs = [];
+    for (const m of source) {
+      if (typeof m.provider !== "string" || m.provider === "" || typeof m.id !== "string" || m.id === "")
+        continue;
+      refs.push({ provider: m.provider, model: m.id });
+    }
+    return refs;
+  }
+  modelsResponse(requestId, refs) {
+    return {
+      paneId: this.opts.creds.pane,
+      processId: this.opts.creds.process,
+      runtimeGeneration: this.opts.generation,
+      payload: {
+        $case: "modelsResponse",
+        value: refs === null ? ModelsResponse.create({
+          requestId,
+          unavailable: true
+        }) : ModelsResponse.create({
+          requestId,
+          models: refs.slice(0, MAX_MODELS_ENTRIES),
+          truncated: refs.length > MAX_MODELS_ENTRIES,
+          unavailable: false
+        })
+      }
+    };
+  }
+  /**
+   * Answer one set-model request. Unknown or out-of-scope entries
+   * ack unknown-model without touching the session; an accepted
+   * switch emits model_select, so the snapshot follows on its own.
+   * Never throws: every path acks, and admission failure just
+   * lets Phi time out into its unknown-state copy.
+   */
+  async onSetModelRequest(requestId, provider, model) {
+    if (typeof requestId !== "string" || requestId === "") return;
+    const fail = (reason) => {
+      this.channel?.sendNonfatal(
+        this.setModelAck(requestId, false, reason)
+      );
+    };
+    if (typeof provider !== "string" || provider === "" || typeof model !== "string" || model === "" || !this.registry || !this.opts.setModel) {
+      fail("unknown-model");
+      return;
+    }
+    let target;
+    try {
+      if (this.scopedModels.length > 0) {
+        target = this.scopedModels.map((entry) => entry.model).find((m) => m.provider === provider && m.id === model);
+      } else {
+        target = this.registry.find(provider, model);
+      }
+    } catch {
+      fail("unknown-model");
+      return;
+    }
+    if (!target) {
+      fail("unknown-model");
+      return;
+    }
+    let switched;
+    try {
+      switched = await this.opts.setModel(target);
+    } catch {
+      fail("");
+      return;
+    }
+    if (switched) {
+      this.channel?.sendNonfatal(this.setModelAck(requestId, true, ""));
+    } else {
+      fail("no-auth");
+    }
+  }
+  setModelAck(requestId, ok, reason) {
+    return {
+      paneId: this.opts.creds.pane,
+      processId: this.opts.creds.process,
+      runtimeGeneration: this.opts.generation,
+      payload: {
+        $case: "setModelAck",
+        value: SetModelAck.create({ requestId, ok, reason })
       }
     };
   }
@@ -27403,6 +27939,8 @@ function contextView(ctx) {
     get model() {
       return ctx.model ?? void 0;
     },
+    modelRegistry: ctx.modelRegistry,
+    scopedModels: ctx.scopedModels,
     ui: ctx.ui
   };
 }
@@ -27441,7 +27979,11 @@ function createExtension(pi, deps = {}) {
   let runtime = null;
   let claimed = false;
   let sessionId = null;
-  const make = deps.makeRuntime ?? ((c, g) => new Runtime({ creds: c, generation: g }));
+  const make = deps.makeRuntime ?? ((c, g) => new Runtime({
+    creds: c,
+    generation: g,
+    setModel: (model) => pi.setModel(model)
+  }));
   pi.on("session_start", (_event, ctx) => {
     const slot = ownerSlot();
     if (bridgeDisabled(pi)) {

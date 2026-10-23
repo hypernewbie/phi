@@ -9,9 +9,9 @@ import (
 	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
 )
 
-// openHistoryStream registers a lease and opens an accepted stream
+// openLeaseStream registers a lease and opens an accepted stream
 // advertising caps. It returns the stream, process ID, token, and cancel.
-func openHistoryStream(t *testing.T, s *Server, sock, pane string, caps ...string) (pibridgepb.Integration_ConnectClient, string, string, context.CancelFunc) {
+func openLeaseStream(t *testing.T, s *Server, sock, pane string, caps ...string) (pibridgepb.Integration_ConnectClient, string, string, context.CancelFunc) {
 	t.Helper()
 	proc, token, err := s.RegisterPending(pane)
 	if err != nil {
@@ -69,7 +69,7 @@ func sendHistoryResponse(t *testing.T, stream pibridgepb.Integration_ConnectClie
 func TestRequestHistoryRoundTrip(t *testing.T) {
 	s, sock, cleanup := testServer(t)
 	defer cleanup()
-	stream, proc, _, cancel := openHistoryStream(t, s, sock, "pane-h1", CapabilityLifecycle, CapabilityHistory)
+	stream, proc, _, cancel := openLeaseStream(t, s, sock, "pane-h1", CapabilityLifecycle, CapabilityHistory)
 	defer cancel()
 
 	type outcome struct {
@@ -106,7 +106,7 @@ func TestRequestHistoryRoundTrip(t *testing.T) {
 func TestRequestHistoryUnavailable(t *testing.T) {
 	s, sock, cleanup := testServer(t)
 	defer cleanup()
-	stream, proc, _, cancel := openHistoryStream(t, s, sock, "pane-h2", CapabilityLifecycle, CapabilityHistory)
+	stream, proc, _, cancel := openLeaseStream(t, s, sock, "pane-h2", CapabilityLifecycle, CapabilityHistory)
 	defer cancel()
 
 	done := make(chan HistoryResult, 1)
@@ -137,7 +137,7 @@ func TestRequestHistoryNegotiation(t *testing.T) {
 	defer cleanup()
 
 	// Lifecycle-only peers never receive a request.
-	stream, proc, _, cancel := openHistoryStream(t, s, sock, "pane-h3", CapabilityLifecycle)
+	stream, proc, _, cancel := openLeaseStream(t, s, sock, "pane-h3", CapabilityLifecycle)
 	defer cancel()
 	ctx, stop := context.WithTimeout(context.Background(), 2*time.Second)
 	defer stop()
@@ -163,7 +163,7 @@ func TestRequestHistoryNegotiation(t *testing.T) {
 func TestRequestHistoryTimeoutDropsLateReply(t *testing.T) {
 	s, sock, cleanup := testServer(t)
 	defer cleanup()
-	stream, proc, _, cancel := openHistoryStream(t, s, sock, "pane-h4", CapabilityLifecycle, CapabilityHistory)
+	stream, proc, _, cancel := openLeaseStream(t, s, sock, "pane-h4", CapabilityLifecycle, CapabilityHistory)
 	defer cancel()
 
 	errCh := make(chan error, 1)
@@ -224,7 +224,7 @@ func TestRequestHistoryTimeoutDropsLateReply(t *testing.T) {
 func TestRequestHistoryIgnoresUnknownAndDuplicate(t *testing.T) {
 	s, sock, cleanup := testServer(t)
 	defer cleanup()
-	stream, proc, _, cancel := openHistoryStream(t, s, sock, "pane-h5", CapabilityLifecycle, CapabilityHistory)
+	stream, proc, _, cancel := openLeaseStream(t, s, sock, "pane-h5", CapabilityLifecycle, CapabilityHistory)
 	defer cancel()
 
 	done := make(chan HistoryResult, 1)
@@ -269,7 +269,7 @@ func TestRequestHistoryIgnoresUnknownAndDuplicate(t *testing.T) {
 func TestRequestHistoryPendingCap(t *testing.T) {
 	s, sock, cleanup := testServer(t)
 	defer cleanup()
-	stream, proc, _, cancel := openHistoryStream(t, s, sock, "pane-h6", CapabilityLifecycle, CapabilityHistory)
+	stream, proc, _, cancel := openLeaseStream(t, s, sock, "pane-h6", CapabilityLifecycle, CapabilityHistory)
 	defer cancel()
 
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
@@ -324,7 +324,7 @@ func TestRequestHistoryPendingCap(t *testing.T) {
 func TestRequestHistoryPeerLossFailsWaiters(t *testing.T) {
 	s, sock, cleanup := testServer(t)
 	defer cleanup()
-	stream, proc, _, cancel := openHistoryStream(t, s, sock, "pane-h7", CapabilityLifecycle, CapabilityHistory)
+	stream, proc, _, cancel := openLeaseStream(t, s, sock, "pane-h7", CapabilityLifecycle, CapabilityHistory)
 	defer cancel()
 
 	errCh := make(chan error, 1)
@@ -349,7 +349,7 @@ func TestRequestHistoryPeerLossFailsWaiters(t *testing.T) {
 func TestRequestHistoryReplacementFailsStaleWaiter(t *testing.T) {
 	s, sock, cleanup := testServer(t)
 	defer cleanup()
-	stream, proc, token, cancel := openHistoryStream(t, s, sock, "pane-h8", CapabilityLifecycle, CapabilityHistory)
+	stream, proc, token, cancel := openLeaseStream(t, s, sock, "pane-h8", CapabilityLifecycle, CapabilityHistory)
 	defer cancel()
 
 	errCh := make(chan error, 1)
@@ -400,7 +400,7 @@ func TestPeerDownPublishesOnDisconnect(t *testing.T) {
 	s, sock, cleanup := testServer(t)
 	defer cleanup()
 	downs := collectPeerDowns(s)
-	_, proc, _, cancel := openHistoryStream(t, s, sock, "pane-pd1", CapabilityLifecycle)
+	_, proc, _, cancel := openLeaseStream(t, s, sock, "pane-pd1", CapabilityLifecycle)
 	cancel()
 	select {
 	case d := <-downs:
@@ -421,7 +421,7 @@ func TestPeerDownSilentOnReplacement(t *testing.T) {
 	s, sock, cleanup := testServer(t)
 	defer cleanup()
 	downs := collectPeerDowns(s)
-	stream1, proc, token, cancel1 := openHistoryStream(t, s, sock, "pane-pd2", CapabilityLifecycle)
+	stream1, proc, token, cancel1 := openLeaseStream(t, s, sock, "pane-pd2", CapabilityLifecycle)
 	stream2, cancel2 := openStream(t, sock, "pane-pd2", proc, token)
 	defer cancel2()
 	hello2 := testHello("pane-pd2", proc, 2, CapabilityLifecycle)

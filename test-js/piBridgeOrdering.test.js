@@ -2,14 +2,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TabManager } from '../web/terminal.js';
 
+// Ordering coverage for the retained per-tab bridge view: HTTP seeds
+// set the revision floor, WS frames confirm freshness, and older or
+// conflicting frames never overwrite newer state. No status-bar
+// display is asserted here; the bar is pi-rpc-only.
+
 function testManager() {
     const tm = Object.create(TabManager.prototype);
     tm.tabs = new Map();
     tm.activePaneId = null;
-    tm.piRpcStatusBar = document.createElement('div');
-    tm.piRpcStatusBar.id = 'pi-rpc-status-bar';
-    tm.piRpcStatusBar.className = 'pi-rpc-status-bar hidden';
-    document.body.appendChild(tm.piRpcStatusBar);
     return tm;
 }
 
@@ -28,14 +29,6 @@ function addPiTab(tm, paneId = 'pane-1', over = {}) {
     };
     tm.tabs.set(paneId, tab);
     return tab;
-}
-
-function barText(tm) {
-    return tm.piRpcStatusBar.textContent;
-}
-
-function isBarHidden(tm) {
-    return tm.piRpcStatusBar.classList.contains('hidden');
 }
 
 const RealWebSocket = globalThis.WebSocket;
@@ -61,8 +54,8 @@ afterEach(() => {
     vi.unstubAllGlobals();
 });
 
-describe('pi bridge ordered model display', () => {
-    it('shows nothing until an equal attach confirms the HTTP baseline', () => {
+describe('pi bridge ordered views', () => {
+    it('seeds the floor from HTTP and confirms freshness on equal attach', () => {
         const tm = testManager();
         const tab = addPiTab(tm);
         tm.activePaneId = tab.paneId;
@@ -78,7 +71,8 @@ describe('pi bridge ordered model display', () => {
         expect(tab._piBridgeRev).toBe(5n);
         expect(tab.piBridge.model).toBe('provA/modelA');
         expect(tab.piBridge.capabilities).toEqual(['pi.lifecycle.v1']);
-        expect(isBarHidden(tm)).toBe(true);
+        // An HTTP seed sets the floor but never freshness.
+        expect(tab._piBridgeFresh).toBeUndefined();
 
         tm._acceptPiBridgeState(
             tab,
@@ -92,9 +86,8 @@ describe('pi bridge ordered model display', () => {
             },
             tab.ws,
         );
-        expect(isBarHidden(tm)).toBe(false);
-        expect(barText(tm)).toContain('provA/modelA');
-        expect(barText(tm)).toContain('~/work');
+        expect(tab.piBridge.model).toBe('provA/modelA');
+        expect(tab._piBridgeFresh).toBe(tab.ws);
     });
 
     it('holds the empty new-lease floor against older frames', () => {
@@ -108,7 +101,7 @@ describe('pi bridge ordered model display', () => {
                 telemetry_revision: '9',
             }),
         ).toBe(true);
-        expect(isBarHidden(tm)).toBe(true);
+        expect(tab._piBridgeFresh).toBeUndefined();
 
         tm._acceptPiBridgeState(
             tab,
@@ -123,7 +116,7 @@ describe('pi bridge ordered model display', () => {
         );
         expect(tab._piBridgeRev).toBe(9n);
         expect(tab.piBridge.model).toBeUndefined();
-        expect(isBarHidden(tm)).toBe(true);
+        expect(tab._piBridgeFresh).toBeUndefined();
 
         tm._acceptPiBridgeState(
             tab,
@@ -136,8 +129,8 @@ describe('pi bridge ordered model display', () => {
             },
             tab.ws,
         );
-        expect(isBarHidden(tm)).toBe(false);
-        expect(barText(tm)).toContain('provB/modelB');
+        expect(tab.piBridge.model).toBe('provB/modelB');
+        expect(tab._piBridgeFresh).toBe(tab.ws);
     });
 
     it('rejects delayed HTTP older than live WS state', () => {
@@ -156,14 +149,16 @@ describe('pi bridge ordered model display', () => {
             },
             tab.ws,
         );
-        expect(barText(tm)).toContain('provB/modelB');
-        expect(tm._seedHttpPiBridge(tab, {
-            state: 'managed',
-            telemetry_revision: '5',
-            model: 'provA/modelA',
-        })).toBe(false);
         expect(tab.piBridge.model).toBe('provB/modelB');
-        expect(barText(tm)).toContain('provB/modelB');
+        expect(
+            tm._seedHttpPiBridge(tab, {
+                state: 'managed',
+                telemetry_revision: '5',
+                model: 'provA/modelA',
+            }),
+        ).toBe(false);
+        expect(tab.piBridge.model).toBe('provB/modelB');
+        expect(tab._piBridgeFresh).toBe(tab.ws);
     });
 
     it('moves idle A to B on a newer revision', () => {
@@ -188,8 +183,7 @@ describe('pi bridge ordered model display', () => {
             );
         }
         expect(tab._piBridgeRev).toBe(6n);
-        expect(barText(tm)).toContain('provB/modelB');
-        expect(barText(tm)).not.toContain('provA/modelA');
+        expect(tab.piBridge.model).toBe('provB/modelB');
     });
 
     it('rejects conflicting-equal and older revisions', () => {
@@ -210,7 +204,7 @@ describe('pi bridge ordered model display', () => {
         expect(tab.piBridge.model).toBe('provB/modelB');
         tm._acceptPiBridgeState(tab, frame('5', 'provA/modelA'), tab.ws);
         expect(tab.piBridge.model).toBe('provB/modelB');
-        expect(barText(tm)).toContain('provB/modelB');
+        expect(tab._piBridgeRev).toBe(6n);
     });
 
     it('orders u64 revisions beyond float precision', () => {
@@ -236,7 +230,8 @@ describe('pi bridge ordered model display', () => {
             },
             tab.ws,
         );
-        expect(barText(tm)).toContain('provA/modelA');
+        expect(tab.piBridge.model).toBe('provA/modelA');
+        expect(tab._piBridgeFresh).toBe(tab.ws);
         // 2^53+1 differs from 2^53 only past float precision.
         tm._acceptPiBridgeState(
             tab,
@@ -250,7 +245,7 @@ describe('pi bridge ordered model display', () => {
             tab.ws,
         );
         expect(tab._piBridgeRev).toBe(9007199254740993n);
-        expect(barText(tm)).toContain('provB/modelB');
+        expect(tab.piBridge.model).toBe('provB/modelB');
         // Max u64 is a valid baseline on a fresh tab.
         const tab2 = addPiTab(tm, 'pane-2');
         expect(
@@ -282,10 +277,26 @@ describe('pi bridge ordered model display', () => {
         for (const bad of [
             { state: 'managed', model: 'provX/modelX' },
             { state: 'managed', telemetry_revision: '', model: 'provX/modelX' },
-            { state: 'managed', telemetry_revision: 'abc', model: 'provX/modelX' },
-            { state: 'managed', telemetry_revision: '0', model: 'provX/modelX' },
-            { state: 'managed', telemetry_revision: '-1', model: 'provX/modelX' },
-            { state: 'managed', telemetry_revision: '1.5', model: 'provX/modelX' },
+            {
+                state: 'managed',
+                telemetry_revision: 'abc',
+                model: 'provX/modelX',
+            },
+            {
+                state: 'managed',
+                telemetry_revision: '0',
+                model: 'provX/modelX',
+            },
+            {
+                state: 'managed',
+                telemetry_revision: '-1',
+                model: 'provX/modelX',
+            },
+            {
+                state: 'managed',
+                telemetry_revision: '1.5',
+                model: 'provX/modelX',
+            },
             { state: 'managed', telemetry_revision: 7, model: 'provX/modelX' },
             {
                 state: 'managed',
@@ -304,7 +315,7 @@ describe('pi bridge ordered model display', () => {
             expect(tab._piBridgeRev).toBe(5n);
         }
         expect(tm._seedHttpPiBridge(tab, { state: 'managed' })).toBe(false);
-        expect(barText(tm)).toContain('provA/modelA');
+        expect(tab.piBridge.model).toBe('provA/modelA');
     });
 
     it('lets a newer server revision establish a lower runtime generation', () => {
@@ -338,7 +349,6 @@ describe('pi bridge ordered model display', () => {
             tab.ws,
         );
         expect(tab.piBridge.model).toBe('provC/modelC');
-        expect(barText(tm)).toContain('provC/modelC');
     });
 
     it('rejects old-socket and wrong-pane frames', () => {
@@ -360,21 +370,33 @@ describe('pi bridge ordered model display', () => {
         );
         expect(tab.piBridge).toBeUndefined();
         expect(tab._piBridgeRev).toBeUndefined();
-        expect(isBarHidden(tm)).toBe(true);
+        expect(tab._piBridgeFresh).toBeUndefined();
 
         tm._acceptPiBridgeState(
             tab,
             {
                 type: 'pi-bridge-state',
-                pane_id: 'other-pane',
+                pane_id: 'pane-1',
                 state: 'managed',
                 telemetry_revision: '5',
                 model: 'provA/modelA',
             },
             tab.ws,
         );
-        expect(tab.piBridge).toBeUndefined();
-        expect(isBarHidden(tm)).toBe(true);
+        // Wrong-pane frame: pane_id mismatch rejects.
+        tm._acceptPiBridgeState(
+            tab,
+            {
+                type: 'pi-bridge-state',
+                pane_id: 'other-pane',
+                state: 'managed',
+                telemetry_revision: '6',
+                model: 'provB/modelB',
+            },
+            tab.ws,
+        );
+        expect(tab.piBridge.model).toBe('provA/modelA');
+        expect(tab._piBridgeRev).toBe(5n);
     });
 
     it('rejects frames for removed tabs', () => {
@@ -395,7 +417,6 @@ describe('pi bridge ordered model display', () => {
             tab.ws,
         );
         expect(tab.piBridge).toBeUndefined();
-        expect(isBarHidden(tm)).toBe(true);
     });
 
     it('resets ordering on socket replacement and re-baselines small', () => {
@@ -414,14 +435,13 @@ describe('pi bridge ordered model display', () => {
             },
             tab.ws,
         );
-        expect(barText(tm)).toContain('provB/modelB');
+        expect(tab.piBridge.model).toBe('provB/modelB');
 
-        // A new server connection never inherits the old counter.
+        // A new server connection never inherits the old counter; the
+        // retained view stays but is no longer fresh.
         tm._setCurrentTabSocket(tab, { name: 'ws2' });
         expect(tab._piBridgeRev).toBeNull();
         expect(tab._piBridgeFresh).toBeNull();
-        tm.renderPiRpcStatusBar();
-        expect(isBarHidden(tm)).toBe(true);
 
         tm._acceptPiBridgeState(
             tab,
@@ -435,7 +455,8 @@ describe('pi bridge ordered model display', () => {
             tab.ws,
         );
         expect(tab._piBridgeRev).toBe(3n);
-        expect(barText(tm)).toContain('provC/modelC');
+        expect(tab.piBridge.model).toBe('provC/modelC');
+        expect(tab._piBridgeFresh).toBe(tab.ws);
     });
 
     it('stores unavailable/plain only when no floor is known', () => {
@@ -443,12 +464,12 @@ describe('pi bridge ordered model display', () => {
         const tab = addPiTab(tm);
         tm.activePaneId = tab.paneId;
 
-        expect(tm._seedHttpPiBridge(tab, { state: 'unavailable', reason: 'x' })).toBe(
-            true,
-        );
+        expect(
+            tm._seedHttpPiBridge(tab, { state: 'unavailable', reason: 'x' }),
+        ).toBe(true);
         expect(tab.piBridge.state).toBe('unavailable');
         expect(tab._piBridgeRev).toBeUndefined();
-        expect(isBarHidden(tm)).toBe(true);
+        expect(tab._piBridgeFresh).toBeUndefined();
 
         // A managed baseline still applies afterwards.
         tm._acceptPiBridgeState(
@@ -462,7 +483,7 @@ describe('pi bridge ordered model display', () => {
             },
             tab.ws,
         );
-        expect(barText(tm)).toContain('provA/modelA');
+        expect(tab.piBridge.model).toBe('provA/modelA');
 
         // A late unavailable never clears the newer managed view.
         tm._acceptPiBridgeState(
@@ -476,123 +497,9 @@ describe('pi bridge ordered model display', () => {
             tab.ws,
         );
         expect(tab.piBridge.model).toBe('provA/modelA');
-        expect(barText(tm)).toContain('provA/modelA');
     });
 
-    it('hides for dead panes and closed sockets', () => {
-        const tm = testManager();
-        const tab = addPiTab(tm);
-        tm.activePaneId = tab.paneId;
-
-        tm._acceptPiBridgeState(
-            tab,
-            {
-                type: 'pi-bridge-state',
-                pane_id: 'pane-1',
-                state: 'managed',
-                telemetry_revision: '5',
-                model: 'provA/modelA',
-            },
-            tab.ws,
-        );
-        expect(barText(tm)).toContain('provA/modelA');
-
-        tab.isDead = true;
-        tm.renderPiRpcStatusBar();
-        expect(isBarHidden(tm)).toBe(true);
-        tab.isDead = false;
-
-        const liveWs = tab.ws;
-        tab.ws = null;
-        tm.renderPiRpcStatusBar();
-        expect(isBarHidden(tm)).toBe(true);
-        tab.ws = liveWs;
-        tm.renderPiRpcStatusBar();
-        expect(barText(tm)).toContain('provA/modelA');
-    });
-
-    it('follows the active tab across switches', () => {
-        const tm = testManager();
-        const pi = addPiTab(tm, 'pane-1');
-        const bash = {
-            paneId: 'pane-2',
-            sessionId: 's2',
-            title: 'bash',
-            coder: 'bash',
-            cwd: '/home/u/work',
-            ws: { name: 'bash-ws' },
-            isDead: false,
-            tabEl: document.createElement('div'),
-        };
-        tm.tabs.set('pane-2', bash);
-        tm._seedHttpPiBridge(pi, {
-            state: 'managed',
-            telemetry_revision: '5',
-            model: 'provA/modelA',
-        });
-        tm._acceptPiBridgeState(
-            pi,
-            {
-                type: 'pi-bridge-state',
-                pane_id: 'pane-1',
-                state: 'managed',
-                telemetry_revision: '5',
-                model: 'provA/modelA',
-            },
-            pi.ws,
-        );
-
-        tm.activePaneId = 'pane-2';
-        tm.renderPiRpcStatusBar();
-        expect(isBarHidden(tm)).toBe(true);
-
-        tm.activePaneId = 'pane-1';
-        tm.renderPiRpcStatusBar();
-        expect(isBarHidden(tm)).toBe(false);
-        expect(barText(tm)).toContain('provA/modelA');
-    });
-
-    it('hides the model when the live reconnect socket closes', () => {
-        globalThis.WebSocket = MockWS;
-        vi.useFakeTimers();
-        const tm = testManager();
-        tm.app = {};
-        tm.updateDocumentTitle = () => {};
-        tm._showReconnectOverlay = () => {};
-        tm.maybeAutoReconnect = () => {};
-        tm.updateDisconnectBanner = () => {};
-        tm._hotOptions = () => ({ hot: false });
-        tm.activateTabViewport = () => {};
-        const tab = addPiTab(tm);
-        tab.ws = { close() {} };
-        tab.termContainer = { querySelector: () => null };
-        tab.term = { refresh() {}, rows: 24 };
-        tm.activePaneId = tab.paneId;
-
-        tm.reconnectTab(tab);
-        const pty = tab.ws;
-        pty.onOpen();
-        tm._acceptPiBridgeState(
-            tab,
-            {
-                type: 'pi-bridge-state',
-                pane_id: 'pane-1',
-                state: 'managed',
-                telemetry_revision: '5',
-                model: 'provA/modelA',
-            },
-            tab.ws,
-        );
-        expect(barText(tm)).toContain('provA/modelA');
-
-        // The real close closure hides the bar itself: no
-        // test-side render call between close and assertion.
-        pty.onClose();
-        expect(tab.isDead).toBe(true);
-        expect(isBarHidden(tm)).toBe(true);
-    });
-
-    it('hides the model while a reconnect is pending', () => {
+    it('drops freshness while a reconnect is pending', () => {
         globalThis.WebSocket = MockWS;
         vi.useFakeTimers();
         const tm = testManager();
@@ -622,13 +529,13 @@ describe('pi bridge ordered model display', () => {
             },
             tab.ws,
         );
-        expect(barText(tm)).toContain('provA/modelA');
+        expect(tab.piBridge.model).toBe('provA/modelA');
+        expect(tab._piBridgeFresh).toBe(tab.ws);
 
-        // A manual refresh swaps the socket: the bar hides until
-        // fresh state on the new socket confirms the model.
+        // A manual refresh swaps the socket: freshness drops until
+        // fresh state on the new socket re-confirms the view.
         tm.reconnectTab(tab);
         expect(tab._piBridgeFresh).toBeNull();
-        expect(isBarHidden(tm)).toBe(true);
 
         tab.ws.onOpen();
         tm._acceptPiBridgeState(
@@ -642,55 +549,8 @@ describe('pi bridge ordered model display', () => {
             },
             tab.ws,
         );
-        expect(barText(tm)).toContain('provB/modelB');
-    });
-
-    it('hides the model when the restart socket closes', async () => {
-        globalThis.WebSocket = MockWS;
-        const realFetch = globalThis.fetch;
-        globalThis.fetch = async () => ({
-            ok: true,
-            json: async () => ({ pane_id: 'pane-1b', session_id: 's2' }),
-        });
-        try {
-            const tm = testManager();
-            tm.app = {};
-            tm.updateDocumentTitle = () => {};
-            tm._showReconnectOverlay = () => {};
-            tm.maybeAutoReconnect = () => {};
-            tm.updateDisconnectBanner = () => {};
-            tm._hotOptions = () => ({ hot: false });
-            tm.activateTabViewport = () => {};
-            const tab = addPiTab(tm);
-            tab.ws = { close() {} };
-            tab.termContainer = { querySelector: () => null };
-            tab.term = { reset() {}, refresh() {}, rows: 24 };
-            tm.activePaneId = tab.paneId;
-
-            tm.restartTab(tab);
-            await new Promise((r) => setTimeout(r, 0));
-            const pty = tab.ws;
-            expect(tab.paneId).toBe('pane-1b');
-            pty.onOpen();
-            tm._acceptPiBridgeState(
-                tab,
-                {
-                    type: 'pi-bridge-state',
-                    pane_id: 'pane-1b',
-                    state: 'managed',
-                    telemetry_revision: '2',
-                    model: 'provA/modelA',
-                },
-                tab.ws,
-            );
-            expect(barText(tm)).toContain('provA/modelA');
-
-            pty.onClose();
-            expect(tab.isDead).toBe(true);
-            expect(isBarHidden(tm)).toBe(true);
-        } finally {
-            globalThis.fetch = realFetch;
-        }
+        expect(tab.piBridge.model).toBe('provB/modelB');
+        expect(tab._piBridgeFresh).toBe(tab.ws);
     });
 
     it('ignores bridge seeds for non-pi tabs', () => {
@@ -716,7 +576,5 @@ describe('pi bridge ordered model display', () => {
             }),
         ).toBe(false);
         expect(bash.piBridge).toBeUndefined();
-        tm.renderPiRpcStatusBar();
-        expect(isBarHidden(tm)).toBe(true);
     });
 });
