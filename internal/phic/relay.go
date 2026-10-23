@@ -171,6 +171,9 @@ func (r *Relay) Run(ctx context.Context) error {
 		return errors.New("phic: terminal has no usable geometry")
 	}
 	r.epoch = r.header.Header.Epoch
+	if r.header.Header.Oldest != 0 {
+		return errors.New("phic: recording prefix unavailable; cannot reconstruct terminal")
+	}
 	// New processes need their startup replies. A reused pane is a display
 	// rebuild: suppress old queries, not native keys or new live queries.
 	if r.fresh {
@@ -192,9 +195,6 @@ func (r *Relay) Run(ctx context.Context) error {
 	}
 	if r.fresh {
 		seen = r.header.Header.Head
-	}
-	if err == nil && seen < r.header.Header.Oldest {
-		err = r.checkpointJump(ctx, r.pane)
 	}
 	if err == nil {
 		err = r.recoverOutput(ctx, r.pane, seen, !r.fresh)
@@ -318,11 +318,7 @@ func (r *Relay) reconnect(ctx context.Context, pane string) error {
 		if head.Header.Epoch != r.epoch {
 			return errors.New("phic: recording epoch changed; detach rather than merge different terminal states")
 		}
-		if r.written < head.Header.Oldest {
-			if err := r.checkpointJump(ctx, pane); err != nil {
-				return err
-			}
-		} else if r.written > head.Header.Head {
+		if r.written < head.Header.Oldest || r.written > head.Header.Head {
 			return errors.New("phic: written frontier is outside retained recording")
 		}
 		if err := r.recover(ctx, pane, head.Header.Head); err != nil {

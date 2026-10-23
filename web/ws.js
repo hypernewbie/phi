@@ -201,7 +201,6 @@ export class PTYWebSocket {
         this.lastFrameEnd = head;
         let ckpt = null;
         const c = parsed.hdr.ckpt;
-        const validCursor = (v) => typeof v === 'string' && v.length <= 128 && /^v1\.\d+\.\d+\.\d+$/.test(v);
         if (c &&
             validSeq(c.through) &&
             c.through >= oldest &&
@@ -214,8 +213,7 @@ export class PTYWebSocket {
             Number(c.rows) > 0 &&
             Number(c.rows) <= 65535 &&
             (c.len === undefined || c.len === parsed.extra.byteLength) &&
-            (c.kind === undefined || c.kind === 'ansi-v1') &&
-            (c.event_cursor === undefined || validCursor(c.event_cursor))) {
+            (c.kind === undefined || c.kind === 'ansi-v1')) {
             ckpt = {
                 through: c.through,
                 kind: 'ansi-v1',
@@ -223,7 +221,6 @@ export class PTYWebSocket {
                 rows: Number(c.rows),
                 ansi: new TextDecoder().decode(parsed.extra),
                 ...(c.kind === 'ansi-v1' ? { bytes: parsed.extra } : {}),
-                ...(c.event_cursor === undefined ? {} : { eventCursor: c.event_cursor }),
             };
         }
         if ((c !== undefined && c !== null && !ckpt) ||

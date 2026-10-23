@@ -21,8 +21,15 @@ func TestAdversarialColdReadAfterRestartWithoutLiveWriter(t *testing.T) {
 				first := NewHub(cache)
 				second := NewHub(cache)
 				t.Cleanup(func() {
-					_ = first.Close()
-					_ = second.Close()
+					for _, hub := range []*Hub{first, second} {
+						pane, ok := hub.LookupPane("pane")
+						if !ok {
+							pane = hub.archives["pane"]
+						}
+						if pane != nil && pane.recording != nil {
+							_ = pane.recording.file.Close()
+						}
+					}
 				})
 				if err := first.SetRecordingDirectory(dir); err != nil {
 					t.Fatal(err)
@@ -31,13 +38,12 @@ func TestAdversarialColdReadAfterRestartWithoutLiveWriter(t *testing.T) {
 				if err := first.Ingest("pane", data); err != nil {
 					t.Fatal(err)
 				}
+				ph, _ := first.LookupPane("pane")
+				if err := ph.recording.file.Sync(); err != nil {
+					t.Fatal(err)
+				}
 				if closed {
 					first.ClosePane("pane")
-				}
-				// A restart closes the first owner before the second
-				// opens the same group.
-				if err := first.Close(); err != nil {
-					t.Fatal(err)
 				}
 				if err := second.SetRecordingDirectory(dir); err != nil {
 					t.Fatal(err)
@@ -101,7 +107,11 @@ func TestAdversarialInvalidResizeCannotPoisonAllLaterReplay(t *testing.T) {
 	for _, size := range [][2]uint16{{0, 24}, {80, 0}, {0, 0}} {
 		t.Run(fmt.Sprintf("%dx%d", size[0], size[1]), func(t *testing.T) {
 			h := NewHub(8)
-			t.Cleanup(func() { _ = h.Close() })
+			defer func() {
+				if pane, ok := h.LookupPane("p"); ok && pane.recording != nil {
+					_ = pane.recording.file.Close()
+				}
+			}()
 			h.RecordResize("p", 80, 24)
 			if err := h.Ingest("p", []byte("before")); err != nil {
 				t.Fatal(err)
@@ -125,22 +135,27 @@ func TestAdversarialInvalidResizeCannotPoisonAllLaterReplay(t *testing.T) {
 
 func TestAdversarialTransientResizeJournalFailureDoesNotLoseGeometry(t *testing.T) {
 	h := NewHub(8)
-	t.Cleanup(func() { _ = h.Close() })
 	h.RecordResize("p", 80, 24)
 	if err := h.Ingest("p", []byte("before")); err != nil {
 		t.Fatal(err)
 	}
 	ph, _ := h.LookupPane("p")
-	// ReadPump has no return value to prevent the actual PTY resize. Its
-	// failure must be retained for retry, not disappear before new output.
-	ph.recording.faults.rszSync = fmt.Errorf("injected resize sync failure")
-	h.RecordResize("p", 100, 40)
-	if ph.pendingResize == nil {
-		t.Fatal("failed resize was not retained for retry")
-	}
-	if err := h.Ingest("p", []byte("output generated in 100x40")); err != nil {
+	r := ph.recording
+	if err := r.file.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// ReadPump has no return value to prevent the actual PTY resize. Its
+	// failure must be retained for retry, not disappear before new output.
+	h.RecordResize("p", 100, 40)
+	replacement, err := os.OpenFile(r.path, os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = replacement.Close() })
+	r.file = replacement
+	if err := h.Ingest("p", []byte("output generated in 100x40")); err != nil {
+		return
+	} // refusing admission is safe
 	rec, ok := h.Recording("p", 0, 1000)
 	if !ok {
 		t.Fatal("missing recording")

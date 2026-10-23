@@ -101,7 +101,7 @@ func TestColdRecordingRetainsItsStartingResize(t *testing.T) {
 	hub := NewHub(8192)
 	hub.RecordResize("p", 80, 24)
 	hub.Ingest("p", []byte("first\r\n"))
-	for i := 0; i < 600; i++ {
+	for i := 0; i < maxResizeMarkers+20; i++ {
 		hub.RecordResize("p", uint16(80+i%2), 24)
 		hub.Ingest("p", []byte("x"))
 	}

@@ -1906,30 +1906,21 @@ export class TabManager {
     }
 
     // Fetches a raw recording range from the server. Returns
-    // { text, bytes, start, end, endCursor } or null after transient
-    // failures. A permanent history failure (evicted prefix, expired
-    // cursor, epoch change, missing group, oversized state) throws an
-    // error flagged historyPermanent instead of retrying: callers end
-    // their historical request or recover through a live checkpoint.
+    // { text, bytes, start, end } or null. The caller checks start to
+    // detect ring truncation.
     //
     // Recovery reads exact source spans with their current resize metadata.
     // No negotiated cached prefix, hashes, or omitted response bodies.
-    async _fetchRecordingRange(paneId, from, through, epoch, afterCursor) {
+    async _fetchRecordingRange(paneId, from, through, epoch) {
         for (let attempt = 0; attempt < 3; attempt++) {
-            const range = await this._fetchRecordingRangeOnce(paneId, from, through, epoch, undefined, afterCursor);
+            const range = await this._fetchRecordingRangeOnce(paneId, from, through, epoch);
             if (range) return range;
             if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 25 * (attempt + 1)));
         }
         return null;
     }
 
-    _historyPermanentError(message) {
-        const error = new Error(message);
-        error.historyPermanent = true;
-        return error;
-    }
-
-    async _fetchRecordingRangeOnce(paneId, from, through, epoch, requestSignal, afterCursor) {
+    async _fetchRecordingRangeOnce(paneId, from, through, epoch, requestSignal) {
         try {
             // Bound each attempt. Failure never authorizes skipping bytes:
             // callers keep the stream held and reconnect for a fresh head.
@@ -1939,26 +1930,19 @@ export class TabManager {
             const timeout = typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(10000) : undefined;
             const signal = requestSignal && timeout && typeof AbortSignal.any === 'function'
                 ? AbortSignal.any([requestSignal, timeout]) : requestSignal || timeout;
-            const validCursor = (v) => typeof v === 'string' && v.length <= 128 && /^v1\.\d+\.\d+\.\d+$/.test(v);
             const parts = [];
             const resizes = [];
             let cursor = from;
-            let chained = afterCursor;
-            let endCursor;
             while (cursor < through) {
                 // Epoch scopes the read server-side too: a pane rebirth
                 // between our attach and this fetch must 409, never serve
                 // another lifetime's bytes into this stream.
                 const epochParam = epoch !== undefined ? `&epoch=${epoch}` : '';
-                const cursorParam = chained !== undefined ? `&after_event_cursor=${encodeURIComponent(chained)}` : '';
                 const res = await fetch(
-                    `/api/terminals/${encodeURIComponent(paneId)}/recording?from=${cursor}&through=${through}${epochParam}${cursorParam}`,
+                    `/api/terminals/${encodeURIComponent(paneId)}/recording?from=${cursor}&through=${through}${epochParam}`,
                     { cache: 'no-store', signal },
                 );
                 if (res.status === 204) return null;
-                if ([400, 404, 409, 413].includes(res.status)) {
-                    throw this._historyPermanentError(`Terminal history unavailable (${res.status}); the requested range was not skipped.`);
-                }
                 if (!res.ok) return null;
                 const buf = new Uint8Array(await res.arrayBuffer());
                 if (buf.byteLength < 4) return null;
@@ -1977,13 +1961,6 @@ export class TabManager {
                 } catch (_e) {
                     return null;
                 }
-                // An advanced start means the floor moved past the request:
-                // the prefix is evicted, not delayed. End the request. A
-                // rewound start is malformed, not expired: it falls through
-                // to the validation below and stays retryable.
-                if (hdr && Number.isSafeInteger(hdr.start) && hdr.start > cursor) {
-                    throw this._historyPermanentError('Terminal history expired; the requested prefix is no longer retained.');
-                }
                 // No skipped prefixes: validate bytes, lifetime and geometry
                 // before admitting any part into the terminal.
                 const data = buf.subarray(4 + jsonLen);
@@ -1994,7 +1971,6 @@ export class TabManager {
                     hdr.start !== cursor || hdr.start > through ||
                     hdr.end <= hdr.start || hdr.end > through ||
                     data.byteLength !== hdr.end - hdr.start ||
-                    (hdr.event_cursor !== undefined && !validCursor(hdr.event_cursor)) ||
                     (hdr.resizes !== undefined && (!Array.isArray(hdr.resizes) ||
                         hdr.resizes.some((m, i) => !Array.isArray(m) || m.length !== 3 ||
                             !seq(m[0]) || m[0] > hdr.end || (i > 0 && m[0] < hdr.resizes[i - 1][0]) || !Number.isInteger(m[1]) ||
@@ -2004,10 +1980,6 @@ export class TabManager {
                 resizes.push(...(hdr.resizes || []));
                 if (hdr.end <= cursor) return null;
                 cursor = hdr.end;
-                if (hdr.event_cursor !== undefined) {
-                    chained = hdr.event_cursor;
-                    endCursor = hdr.event_cursor;
-                }
             }
             if (cursor < through) return null;
             let byteLength = 0;
@@ -2031,13 +2003,8 @@ export class TabManager {
                 // Keep the text convenience without decoding the span twice.
                 get text() { return new TextDecoder().decode(bytes); },
                 resizes,
-                ...(endCursor === undefined ? {} : { endCursor }),
             };
-        } catch (error) {
-            // Permanent history failures propagate to the caller; anything
-            // else (timeout, transport, abort, malformed envelope) stays a
-            // transient null for the existing retry paths.
-            if (error?.historyPermanent) throw error;
+        } catch (_e) {
             return null;
         }
     }
@@ -2109,7 +2076,7 @@ export class TabManager {
             tabInfo.drainedSeq = from;
             tabInfo._forceStateRefresh = false;
             this._openTermAndViewport(tabInfo);
-            this._bootstrappedRelease(tabInfo, pty, from, info.head, info.ckpt?.eventCursor);
+            this._bootstrappedRelease(tabInfo, pty, from, info.head);
             return;
         }
 
@@ -2188,7 +2155,7 @@ export class TabManager {
                 tabInfo._historyOmitted = info.ckpt.through > info.oldest;
                 tabInfo.queuedSeq = info.ckpt.through;
                 tabInfo.drainedSeq = info.ckpt.through;
-                this._bootstrappedRelease(tabInfo, pty, info.ckpt.through, info.head, info.ckpt.eventCursor);
+                this._bootstrappedRelease(tabInfo, pty, info.ckpt.through, info.head);
                 return;
             }
             // Legacy or a visible local history book: resume without replacing
@@ -2211,12 +2178,6 @@ export class TabManager {
             tabInfo.paneEpoch = info.epoch;
             tabInfo.paneOldest = info.oldest;
             if (from >= info.oldest && from <= info.head) {
-                this._bootstrappedRelease(tabInfo, pty, from, info.head);
-            } else if (from < info.oldest) {
-                // The resume frontier is evicted. Bootstrap anyway: the
-                // delta fetch reports the expired prefix and the bootstrap
-                // recovers through the live checkpoint. Closing here would
-                // reconnect into the same evicted frontier forever.
                 this._bootstrappedRelease(tabInfo, pty, from, info.head);
             } else {
                 // A resize is not a repair for missing source bytes. Never
@@ -2257,7 +2218,7 @@ export class TabManager {
         tabInfo.queuedSeq = from;
         tabInfo.drainedSeq = from;
         tabInfo._forceStateRefresh = false;
-        this._bootstrappedRelease(tabInfo, pty, from, info.head, info.ckpt?.eventCursor);
+        this._bootstrappedRelease(tabInfo, pty, from, info.head);
     }
 
     _writeAttachCheckpoint(tabInfo, pty, checkpoint) {
@@ -2279,7 +2240,7 @@ export class TabManager {
     // into newly delivered live bytes. The release targets the attach-time socket only: a
     // reconnect swaps tabInfo.ws, and releasing a stale socket would flush
     // its orphaned frames into the new stream.
-    _bootstrappedRelease(tabInfo, pty, from, head, eventCursor) {
+    _bootstrappedRelease(tabInfo, pty, from, head) {
         // Generation counters serialize overlapping bootstraps on one
         // socket (a second head while a delta fetch is in flight): only
         // the newest generation writes or releases; older ones dissolve.
@@ -2305,7 +2266,7 @@ export class TabManager {
         const boot = (async () => {
             let complete = false;
             try {
-                complete = await this._bootstrapDelta(tabInfo, from, head, gen, releaseOnce, eventCursor);
+                complete = await this._bootstrapDelta(tabInfo, from, head, gen, releaseOnce);
             } catch (error) {
                 console.warn('[term] bootstrap failed:', error);
             }
@@ -2475,10 +2436,7 @@ export class TabManager {
             }
         } catch (error) {
             console.warn('[term] cold history:', error);
-            // An evicted book cannot be paged. Reconnect to refresh the
-            // retention floor (a browsing view stays frozen); live output
-            // and the next history request then use current bounds.
-            if (current() && (reset || error?.historyPermanent)) pty.ws.close();
+            if (reset && current()) pty.ws.close();
         } finally {
             if (current()) {
                 tabInfo._historyLoading = false;
@@ -2520,20 +2478,12 @@ export class TabManager {
             await this._drainSettled(tabInfo);
             for (let from = saved.through; from < head;) {
                 const end = Math.min(head, from + MAX_DELTA_BYTES);
-                let range;
-                try {
-                    range = await this._fetchRecordingRange(
-                        tabInfo.paneId,
-                        from,
-                        end,
-                        epoch,
-                    );
-                } catch (error) {
-                    // The saved live frontier is evicted. Restore through
-                    // the authoritative live state instead of replaying it.
-                    if (error?.historyPermanent && current()) return this._loadStateHistory(tabInfo, true);
-                    throw error;
-                }
+                const range = await this._fetchRecordingRange(
+                    tabInfo.paneId,
+                    from,
+                    end,
+                    epoch,
+                );
                 if (!current()) return;
                 if (!range) throw new Error('latest terminal output temporarily unavailable');
                 if (!await this._parseRecordingRange(tabInfo, range, current, undefined, pty)) return;
@@ -2614,39 +2564,7 @@ export class TabManager {
         return parse(range.end);
     }
 
-    // Reattaches a bootstrap through an authoritative live checkpoint when
-    // its span crossed the retention floor. Returns the adopted frontier or
-    // null when recovery is impossible (the caller fails its bootstrap).
-    async _recoverBootstrapFromLiveState(tabInfo, ws, current) {
-        const epoch = tabInfo.paneEpoch;
-        let state = null;
-        for (let attempt = 0; attempt < 3; attempt++) {
-            try {
-                state = await this._fetchTerminalState(tabInfo.paneId, epoch, 'latest');
-            } catch (error) {
-                if (error?.historyPermanent) return null;
-                state = null;
-            }
-            if (state) break;
-            if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
-        }
-        if (!state || !current()) return null;
-        const pty = tabInfo.ws;
-        this._clearHistoryAnchors(tabInfo);
-        resetTerminalState(tabInfo.term);
-        tabInfo.term.resize(state.cols, state.rows);
-        pty.decoder = new TextDecoder('utf-8');
-        tabInfo._streamDecoder = pty.decoder;
-        this._writeAttachCheckpoint(tabInfo, pty, state);
-        tabInfo.paneOldest = state.oldest;
-        const frontier = state.through;
-        tabInfo.queuedSeq = frontier;
-        tabInfo.drainedSeq = frontier;
-        if (typeof pty.adoptState === 'function') pty.adoptState(frontier);
-        return frontier;
-    }
-
-    async _bootstrapDelta(tabInfo, from, head, expectGen, onReady, eventCursor) {
+    async _bootstrapDelta(tabInfo, from, head, expectGen, onReady) {
         const ws = tabInfo.ws;
         const epoch = tabInfo.paneEpoch;
         let admitted = false;
@@ -2660,33 +2578,13 @@ export class TabManager {
             await this._drainSettled(tabInfo);
             if (!current()) return false;
         }
-        let cursor = from;
-        let target = head;
-        let chained = eventCursor;
-        while (cursor < target) {
-            const end = Math.min(target, cursor + MAX_DELTA_BYTES);
-            let d;
-            try {
-                d = await this._fetchRecordingRange(tabInfo.paneId, cursor, end, tabInfo.paneEpoch, chained);
-            } catch (error) {
-                if (!error?.historyPermanent) throw error;
-                if (!current()) return false;
-                // The span crossed the retention floor. Adopt the live
-                // checkpoint and resume from its frontier instead of
-                // replaying evicted bytes.
-                const frontier = await this._recoverBootstrapFromLiveState(tabInfo, ws, current);
-                if (frontier === null) return false;
-                admitted = true;
-                cursor = frontier;
-                target = Math.max(target, frontier);
-                chained = undefined;
-                continue;
-            }
+        for (let cursor = from; cursor < head;) {
+            const end = Math.min(head, cursor + MAX_DELTA_BYTES);
+            const d = await this._fetchRecordingRange(tabInfo.paneId, cursor, end, tabInfo.paneEpoch);
             if (!current()) return false;
             if (!d || d.start !== cursor || d.end !== end || d.byteLength !== end - cursor ||
                 (d.bytes && d.bytes.byteLength !== d.byteLength)) return false;
             admitted = true;
-            if (d.endCursor !== undefined) chained = d.endCursor;
             if (d.bytes) {
                 if (!await this._parseRecordingRange(tabInfo, d, current, undefined, ws)) return false;
             } else {
@@ -2757,21 +2655,9 @@ export class TabManager {
         const current = () => !tabInfo.finalizing && tabInfo.ws === pty && tabInfo._bootstrapGen === bootGen;
         let recovered = false;
         try {
-            let chained;
             for (let cursor = from; cursor < to;) {
                 const end = Math.min(to, cursor + MAX_DELTA_BYTES);
-                let d;
-                try {
-                    d = await this._fetchRecordingRange(tabInfo.paneId, cursor, end, tabInfo.paneEpoch, chained);
-                } catch (error) {
-                    // An evicted gap cannot be patched. Retry through a new
-                    // atomic attach, which recovers through a live checkpoint.
-                    if (error?.historyPermanent) {
-                        try { pty.ws?.close(); } catch (_e) {}
-                        return;
-                    }
-                    throw error;
-                }
+                const d = await this._fetchRecordingRange(tabInfo.paneId, cursor, end, tabInfo.paneEpoch);
                 if (tabInfo.finalizing || tabInfo.ws !== pty || tabInfo._bootstrapGen !== bootGen) return;
                 if (!d || d.start !== cursor || d.end !== end ||
                     d.byteLength !== end - cursor || d.bytes?.byteLength !== d.byteLength) {
@@ -2780,7 +2666,6 @@ export class TabManager {
                     try { pty.ws?.close(); } catch (_e) {}
                     return;
                 }
-                if (d.endCursor !== undefined) chained = d.endCursor;
                 if (tabInfo._historyBrowsing) {
                     // Gap bytes remain authoritative in the recording. Consume
                     // socket sequencing without resizing or painting this view.

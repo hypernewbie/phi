@@ -132,7 +132,7 @@ func fetchHistoryText(ctx context.Context, api *apiClient, paneID string, epoch,
 	if head > historyWindowBytes {
 		start = head - historyWindowBytes
 	}
-	h, b, err := api.recording(ctx, paneID, epoch, start, head, "")
+	h, b, err := api.recording(ctx, paneID, epoch, start, head)
 	if err != nil {
 		return "", err
 	}
@@ -175,7 +175,7 @@ func (m *tuiModel) historyPage(end uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		h, b, err := api.recording(ctx, key.ID, epoch, start, end, "")
+		h, b, err := api.recording(ctx, key.ID, epoch, start, end)
 		out := historyLoadedMsg{gen: gen, key: key, start: start, end: end, ticket: ticket, raw: b}
 		if err != nil {
 			out.err = err.Error()

@@ -215,9 +215,6 @@ func main() {
 	// failure) leaves every launch on the unmanaged path.
 	piBridge = startPiBridge(wsHub)
 	restoreSavedTabs()
-	// Expiry starts only after restoration completes so saved panes
-	// are live (and protected) before the first sweep runs.
-	wsHub.StartRetentionSweeps()
 	piTitleService = newPiTerminalTitleService(ptyManager, wsHub)
 	piTitleService.Start()
 

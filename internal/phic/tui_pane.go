@@ -95,7 +95,6 @@ type paneActor struct {
 	events                             chan<- paneEvent
 	mu                                 sync.Mutex
 	frontier, head, epoch              uint64
-	oldest                             uint64
 	epochSet                           bool
 	frame                              termemu.Frame
 	frameOK                            bool
@@ -501,16 +500,8 @@ func (p *paneActor) bootstrap(h wireAttach) error {
 		p.frameOK = false
 		p.mu.Unlock()
 	}
-	p.mu.Lock()
-	p.oldest = h.Header.Oldest
-	p.mu.Unlock()
 	if h.Header.Oldest > frontier {
-		if err := p.healFromLiveState(p.ctx); err != nil {
-			return err
-		}
-		p.mu.Lock()
-		frontier = p.frontier
-		p.mu.Unlock()
+		return fmt.Errorf("%w: recording prefix unavailable", errInvalidRecording)
 	}
 	if frontier > h.Header.Head {
 		return fmt.Errorf("%w: frontier exceeds attach head", errProtocol)
@@ -520,11 +511,7 @@ func (p *paneActor) bootstrap(h wireAttach) error {
 	p.epochSet = true
 	p.head = h.Header.Head
 	p.mu.Unlock()
-	after := ""
-	if h.Header.Ckpt != nil {
-		after = h.Header.Ckpt.EventCursor
-	}
-	if err := p.recover(p.ctx, frontier, h.Header.Head, cold && !p.spec.Fresh, after); err != nil {
+	if err := p.recover(p.ctx, frontier, h.Header.Head, cold && !p.spec.Fresh); err != nil {
 		return err
 	}
 	cols, rows := p.geometry()
@@ -614,15 +601,10 @@ func (p *paneActor) handleFrame(msg []byte) error {
 		frontier := p.frontier
 		p.mu.Unlock()
 		if start > frontier {
-			if err = p.recover(p.ctx, frontier, start, false, ""); err != nil {
+			if err = p.recover(p.ctx, frontier, start, false); err != nil {
 				return err
 			}
-			// Recovery may have healed from a live checkpoint past
-			// start: re-resolve the adopted frontier before trimming,
-			// so an older queued frame never re-feeds or regresses it.
-			p.mu.Lock()
-			frontier = p.frontier
-			p.mu.Unlock()
+			frontier = start
 		}
 		end := start + uint64(len(data))
 		if end <= frontier {
@@ -635,7 +617,7 @@ func (p *paneActor) handleFrame(msg []byte) error {
 			return err
 		}
 		p.mu.Lock()
-		p.frontier = max(p.frontier, end)
+		p.frontier = end
 		p.head = max(p.head, end)
 		p.mu.Unlock()
 	case wireproto.FrameExit:
@@ -671,34 +653,9 @@ func (p *paneActor) handleFrame(msg []byte) error {
 	return nil
 }
 
-// healFromLiveState restores the current parser snapshot when the recorded
-// prefix is gone. Only the live emulator is touched; a browsed historical
-// book stays installed.
-func (p *paneActor) healFromLiveState(ctx context.Context) error {
-	header, data, err := p.api.liveState(ctx, p.spec.Key.ID, p.epochValue(), "ghostty-ready-v1")
-	if err != nil {
-		return err
-	}
-	restorer, ok := p.emu.(interface{ RestoreReady([]byte) error })
-	if !ok {
-		return fmt.Errorf("phic: emulator cannot restore bounded terminal state")
-	}
-	if err := restorer.RestoreReady(data); err != nil {
-		return err
-	}
-	p.mu.Lock()
-	p.frontier = header.Head
-	p.head = max(p.head, header.Head)
-	p.frameOK = false
-	p.mu.Unlock()
-	p.dirty = true
-	return nil
-}
-
 // An exit/dropped notice carries no final frontier. Read until the recording
 // actually ends, rather than treating the last received live frame as its head.
 func (p *paneActor) drainExit() error {
-	after := ""
 	for {
 		p.mu.Lock()
 		from := p.frontier
@@ -706,18 +663,10 @@ func (p *paneActor) drainExit() error {
 		if from > ^uint64(0)-recordingPageBytes {
 			return errInvalidRecording
 		}
-		h, b, err := p.fetch(p.ctx, from, from+recordingPageBytes, after)
+		h, b, err := p.fetch(p.ctx, from, from+recordingPageBytes)
 		if err != nil {
-			if isRecordingExpired(err) {
-				if herr := p.healFromLiveState(p.ctx); herr != nil {
-					return herr
-				}
-				after = ""
-				continue
-			}
 			return err
 		}
-		after = h.EventCursor
 		if err = p.feedRecording(h, b, termemu.SourceLive); err != nil {
 			return err
 		}
@@ -730,27 +679,15 @@ func (p *paneActor) drainExit() error {
 		}
 	}
 }
-func (p *paneActor) recover(ctx context.Context, from, through uint64, historical bool, after string) error {
+func (p *paneActor) recover(ctx context.Context, from, through uint64, historical bool) error {
 	source := termemu.SourceLive
 	if historical {
 		source = termemu.SourceReplay
 	}
 	for from < through {
 		end := pageEnd(from, through)
-		h, b, err := p.fetch(ctx, from, end, after)
+		h, b, err := p.fetch(ctx, from, end)
 		if err != nil {
-			if isRecordingExpired(err) {
-				if herr := p.healFromLiveState(ctx); herr != nil {
-					return herr
-				}
-				p.mu.Lock()
-				frontier := p.frontier
-				p.mu.Unlock()
-				if frontier < through {
-					return fmt.Errorf("%w: checkpoint did not cover the gap", errRecordingExpired)
-				}
-				return nil
-			}
 			return err
 		}
 		if h.End != end {
@@ -763,14 +700,13 @@ func (p *paneActor) recover(ctx context.Context, from, through uint64, historica
 		p.frontier = end
 		p.head = max(p.head, end)
 		p.mu.Unlock()
-		after = h.EventCursor
 		from = end
 	}
 	return nil
 }
-func (p *paneActor) fetch(ctx context.Context, from, through uint64, after string) (wireproto.RecordingHeader, []byte, error) {
+func (p *paneActor) fetch(ctx context.Context, from, through uint64) (wireproto.RecordingHeader, []byte, error) {
 	// Requests are cancellable. Permanent/malformed responses never spin forever.
-	return p.api.recording(ctx, p.spec.Key.ID, p.epochValue(), from, through, after)
+	return p.api.recording(ctx, p.spec.Key.ID, p.epochValue(), from, through)
 }
 func (p *paneActor) feedRecording(h wireproto.RecordingHeader, b []byte, source termemu.Source) error {
 	at := h.Start
@@ -911,9 +847,9 @@ func (p *paneActor) refreshFrame() error {
 	p.mu.Lock()
 	p.frame = frame
 	p.frameOK = true
-	older := p.frontier > p.oldest
+	older := p.frontier > 0
 	if p.history != nil {
-		older = p.historyThrough > p.oldest
+		older = p.historyThrough > 0
 	}
 	p.historyView = paneHistoryView{
 		Older:    older && (!frame.Alt || p.history != nil),

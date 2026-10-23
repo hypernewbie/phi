@@ -272,10 +272,7 @@ func TestRandomEpochStaysDoubleSafe(t *testing.T) {
 func TestEpochSurvivesWireRoundTripIntoCheckpoint(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		h := NewHub(1024)
-		ph, gerr := h.GetOrCreatePaneHub("p")
-		if gerr != nil {
-			t.Fatal(gerr)
-		}
+		ph := h.GetOrCreatePaneHub("p")
 		// Simulate the JS client exactly: JSON number -> double ->
 		// decimal string -> uint64, as ws.js Number() + fetch URL do.
 		wire, err := json.Marshal(map[string]uint64{"epoch": ph.epoch})

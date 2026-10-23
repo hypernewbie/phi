@@ -33,8 +33,7 @@ func TestStateEndpointValidatesEpochAndRequestedFrontier(t *testing.T) {
 		{fmt.Sprintf("epoch=%d&through=0", pos.Epoch), http.StatusOK},
 		{fmt.Sprintf("epoch=%d&through=%d&kind=ansi-v1", pos.Epoch, pos.Head), http.StatusOK},
 		{fmt.Sprintf("epoch=%d&through=latest&kind=ansi-v1", pos.Epoch), http.StatusOK},
-		{fmt.Sprintf("epoch=%d&through=latest", pos.Epoch), http.StatusOK},
-		{fmt.Sprintf("epoch=%d&through=latest&kind=ghostty-ready-v1", pos.Epoch), http.StatusOK},
+		{fmt.Sprintf("epoch=%d&through=latest", pos.Epoch), http.StatusBadRequest},
 		{fmt.Sprintf("epoch=%d&through=latest&kind=ansi-v1", pos.Epoch+1), http.StatusConflict},
 		{fmt.Sprintf("epoch=%d&through=0&kind=wrong", pos.Epoch), http.StatusBadRequest},
 	} {
