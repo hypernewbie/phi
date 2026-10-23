@@ -880,6 +880,48 @@ export class TabManager {
         return true;
     }
 
+    // Place a newly created tab after the rightmost strip peer with the
+    // same nonempty workspace. Visible DOM order is the source of truth:
+    // restart reinserts Map keys without moving nodes, so Map order can
+    // differ from the strip. Existing tabs never move relative to each other.
+    _placeNewTabByWorkspace(paneId) {
+        if (this.restoringTabs) return;
+        const tab = this.tabs.get(paneId);
+        if (!tab) return;
+        const desired = [];
+        for (const el of this.tabsContainer.children) {
+            const id = el.dataset.paneId;
+            if (id && this.tabs.has(id)) desired.push(id);
+        }
+        if (!desired.includes(paneId)) desired.push(paneId);
+        const workspace = tab.workspace || '';
+        if (workspace !== '') {
+            let anchor = null;
+            for (const id of desired) {
+                if (
+                    id !== paneId &&
+                    (this.tabs.get(id)?.workspace || '') === workspace
+                )
+                    anchor = id;
+            }
+            if (anchor !== null) {
+                desired.splice(desired.indexOf(paneId), 1);
+                desired.splice(desired.indexOf(anchor) + 1, 0, paneId);
+            }
+        }
+        const mapOrder = Array.from(this.tabs.keys());
+        const matchesDom =
+            desired.length === this.tabsContainer.children.length &&
+            desired.every(
+                (id, i) =>
+                    this.tabsContainer.children[i].dataset.paneId === id,
+            );
+        const matchesMap =
+            desired.length === mapOrder.length &&
+            desired.every((id, i) => mapOrder[i] === id);
+        if (!matchesDom || !matchesMap) this.applyTabOrder(desired);
+    }
+
     handleTabDragStart(e, paneId) {
         // Only honor left-button drags. Touch and right-click shouldn't
         // initiate a reorder - the latter opens the context menu (if any).
@@ -3222,6 +3264,7 @@ export class TabManager {
                 tabInfo.sessionPath = piRpcSessionPath || null;
             }
             this.tabs.set(paneId, tabInfo);
+            this._placeNewTabByWorkspace(paneId);
             this.switchTab(paneId);
             if (coder === 'pi-rpc') this.savePiRpcTabs();
             return;
@@ -3725,6 +3768,7 @@ export class TabManager {
 
         this._setCurrentTabSocket(tabInfo, ws);
         this.tabs.set(paneId, tabInfo);
+        this._placeNewTabByWorkspace(paneId);
 
         // A real scroll gesture takes ownership away from any in-flight
         // fit/reflow restore. Do not use term.onScroll for this: xterm emits

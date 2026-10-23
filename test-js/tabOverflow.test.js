@@ -1050,10 +1050,12 @@ describe('_buildOverflowDropdown', () => {
 
 describe('workspace navigator lifecycle refresh', () => {
     it('refreshes a visible popup after real client-tab creation and selection', () => {
+        localStorage.clear();
         const tm = makePopupLifecycleManager({
             withTabs: ['a', 'b'],
             activePaneId: 'a',
         });
+        tm.saveTabsState = TabManager.prototype.saveTabsState;
         setTabIdentity(tm, 'a', {
             workspace: '/repo/alpha',
             cwd: '/repo/alpha',
@@ -1078,6 +1080,15 @@ describe('workspace navigator lifecycle refresh', () => {
         );
 
         expect(tm.tabs.has('panel')).toBe(true);
+        const expected = ['a', 'panel', 'b'];
+        expect(Array.from(tm.tabs.keys())).toEqual(expected);
+        expect(
+            Array.from(tm.tabsContainer.children, (tab) => tab.dataset.paneId),
+        ).toEqual(expected);
+        expect(JSON.parse(localStorage.getItem('phi_tab_order'))).toEqual(
+            expected,
+        );
+        expect(localStorage.getItem('phi_active_pane')).toBe('panel');
         expect(dropdown.classList.contains('hidden')).toBe(false);
         expect(
             dropdown.querySelectorAll('.hostname-dropdown-row'),
