@@ -142,12 +142,21 @@ func TestRetentionCloseMakesTheTailDurable(t *testing.T) {
 // The rotation always flushes: it evicts a segment, and the manifest must
 // stop naming that segment before its files are deleted.
 func TestRetentionRotationFlushesEvenUnderTheThreshold(t *testing.T) {
+	// Only a rotation may flush here, so the manifest moving proves the
+	// rotation flushed it.
+	old := retentionFlushBytes
+	retentionFlushBytes = 1 << 30
+	t.Cleanup(func() { retentionFlushBytes = old })
+
 	dir := t.TempDir()
 	h := NewHub(0)
 	t.Cleanup(func() { _ = h.Close() })
 	if err := h.SetRecordingDirectory(dir); err != nil {
 		t.Fatal(err)
 	}
+	// A resize leaves a dirty resize journal that only a flush makes
+	// durable.
+	h.RecordResize("p", 80, 24)
 	// One full segment plus a little: the rotation happens at 1 MiB.
 	chunk := bytes.Repeat([]byte("q"), 64*1024)
 	for i := 0; i < 17; i++ {
@@ -157,5 +166,64 @@ func TestRetentionRotationFlushesEvenUnderTheThreshold(t *testing.T) {
 	}
 	if got := manifestHead(t, dir); got == 0 {
 		t.Fatal("the rotation did not make the group durable")
+	}
+}
+
+// The rotation's manifest names the older segment's bytes. A commit that
+// did not flush left them in the page cache, so the rotation has to sync
+// them: a manifest that names bytes the disk does not have makes the group
+// fail closed on reopen ("committed retention bytes are missing"), and
+// nothing recreates it.
+func TestRetentionRotationSyncsTheOlderSegments(t *testing.T) {
+	old := retentionFlushBytes
+	retentionFlushBytes = 1 << 30
+	t.Cleanup(func() { retentionFlushBytes = old })
+
+	dir := t.TempDir()
+	h := NewHub(0)
+	t.Cleanup(func() { _ = h.Close() })
+	if err := h.SetRecordingDirectory(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Ingest("p", bytes.Repeat([]byte("w"), 4096)); err != nil {
+		t.Fatal(err)
+	}
+	// A resize gives the first segment a resize journal, so the flush has
+	// to sync that journal too.
+	h.RecordResize("p", 80, 24)
+	ph, _ := h.LookupPane("p")
+	// Grow the first segment to just below the rotation point, with no
+	// flush: its tail is in the page cache only.
+	chunk := bytes.Repeat([]byte("x"), 64*1024)
+	for {
+		ph.mu.Lock()
+		g := ph.recording
+		rawLen := uint64(0)
+		if g != nil && len(g.segs) > 0 {
+			rawLen = g.segs[len(g.segs)-1].rawLen
+		}
+		ph.mu.Unlock()
+		if rawLen+uint64(len(chunk)) > retentionSegRawMax {
+			break
+		}
+		if err := h.Ingest("p", chunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The next ingest rotates, and the rotation flushes.
+	ph.mu.Lock()
+	g := ph.recording
+	g.faults.rawSyncs = 0
+	g.faults.rszSyncs = 0
+	ph.mu.Unlock()
+	if err := h.Ingest("p", chunk); err != nil {
+		t.Fatal(err)
+	}
+	ph.mu.Lock()
+	raw, rsz := g.faults.rawSyncs, g.faults.rszSyncs
+	ph.mu.Unlock()
+	if raw < 2 || rsz < 2 {
+		t.Fatalf("the rotation synced %d raw and %d resize files, want both segments",
+			raw, rsz)
 	}
 }

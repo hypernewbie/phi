@@ -230,6 +230,10 @@ type retentionFaults struct {
 	manifestSync error
 	rename       error
 	dirSync      error
+	// rawSyncs and rszSyncs count the syncs that ran, so a test can
+	// assert that a flush synced every segment the manifest names.
+	rawSyncs int
+	rszSyncs int
 }
 
 type stagedKind byte
@@ -439,6 +443,8 @@ func openRetentionGroup(dir string) (*retentionGroup, error) {
 		// group gets its manifest now: a group with segments and no
 		// manifest is unreadable, and a pane that produced less than one
 		// flush window would lose its history and its group on a restart.
+		// The update clock starts here too, so a stub group still expires.
+		g.lastUpdateNs = g.now().UnixNano()
 		if err := g.persistMetadata(); err != nil {
 			g.close()
 			return nil, err
@@ -450,6 +456,7 @@ func openRetentionGroup(dir string) (*retentionGroup, error) {
 		return nil, err
 	}
 	g.head = m.head
+	g.durableHead = m.head
 	g.plain = m.plain
 	g.lastByte = m.lastByte
 	g.flags = m.flags
@@ -1082,6 +1089,12 @@ func writeFileSynced(path string, data []byte, fault *error, g *retentionGroup) 
 }
 
 func (g *retentionGroup) syncFileAs(f *os.File, fault *error) error {
+	switch fault {
+	case &g.faults.rawSync:
+		g.faults.rawSyncs++
+	case &g.faults.rszSync:
+		g.faults.rszSyncs++
+	}
 	if *fault != nil {
 		err := *fault
 		*fault = nil
@@ -1458,29 +1471,33 @@ func (g *retentionGroup) commit(st *stagedCommit, in commitInput) error {
 		g.publish(st)
 		return nil
 	}
-	// Sync every file this transaction modified. Unmodified referenced
-	// files are append-only or immutable, so their committed bytes were
-	// already synced by the commit that wrote them; every byte the new
-	// manifest references was synced at or before this commit. The new
-	// checkpoint file was already synced at creation above.
+	// Durability is batched, so a segment's tail can hold bytes that an
+	// earlier commit wrote but never synced. The manifest names every
+	// segment it lists, so the flush syncs every segment the manifest
+	// names, not only the file this commit touched. Syncing a clean file
+	// is cheap; a manifest that names bytes the disk does not have makes
+	// the group fail closed on reopen.
+	for i := range g.segs {
+		if evicted[g.segs[i].gen] {
+			continue
+		}
+		if g.segs[i].raw != nil {
+			if err := g.syncFileAs(g.segs[i].raw, &g.faults.rawSync); err != nil {
+				return fail(err)
+			}
+		}
+		if g.segs[i].rsz != nil {
+			if err := g.syncFileAs(g.segs[i].rsz, &g.faults.rszSync); err != nil {
+				return fail(err)
+			}
+		}
+	}
 	if st.rotate {
 		if err := g.syncFileAs(st.newRaw, &g.faults.rawSync); err != nil {
 			return fail(err)
 		}
 		if err := g.syncFileAs(st.newRsz, &g.faults.rszSync); err != nil {
 			return fail(err)
-		}
-	} else {
-		cur := &g.segs[len(g.segs)-1]
-		if len(in.raw) > 0 && cur.raw != nil {
-			if err := g.syncFileAs(cur.raw, &g.faults.rawSync); err != nil {
-				return fail(err)
-			}
-		}
-		if in.marker != nil && cur.rsz != nil {
-			if err := g.syncFileAs(cur.rsz, &g.faults.rszSync); err != nil {
-				return fail(err)
-			}
 		}
 	}
 	var descs []retentionSegDesc

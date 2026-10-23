@@ -2481,10 +2481,11 @@ export class TabManager {
                 // frontier before live frames resume. Take the live state: a
                 // re-attach for a missing book only repeats the repaint.
                 const healed = await this._recoverBootstrapFromLiveState(tabInfo, pty, () => current() && tabInfo.ws === pty);
+                // Never stay in browsing mode after a failure: the next
+                // wheel event would run the same miss again.
+                tabInfo._historyBrowsing = false;
                 if (healed === null) {
                     try { pty.ws.close(); } catch (_e) {}
-                } else {
-                    tabInfo._historyBrowsing = false;
                 }
             } else if (error?.historyPermanent) {
                 // Nothing was repainted, so re-attaching costs no replay here.

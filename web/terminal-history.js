@@ -38,7 +38,13 @@ export const terminalHistoryMethods = {
     // New servers own the parser. A book starts from an exact parser state,
     // never a guessed byte boundary; the recording still owns every byte.
     async _fetchTerminalState(paneId, epoch, through, signal) {
-        const response = await fetch(`/api/terminals/${encodeURIComponent(paneId)}/state?epoch=${epoch}&through=${through}&kind=ansi-v1`, { cache: 'no-store', signal });
+        // Bound each attempt like the range fetch: a hung server must not
+        // hold the reader's retry ceiling open forever.
+        const timeout = typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(10000) : undefined;
+        const requestSignal = signal && timeout && typeof AbortSignal.any === 'function'
+            ? AbortSignal.any([signal, timeout])
+            : (signal || timeout);
+        const response = await fetch(`/api/terminals/${encodeURIComponent(paneId)}/state?epoch=${epoch}&through=${through}&kind=ansi-v1`, { cache: 'no-store', signal: requestSignal });
         if (!response.ok) {
             if ([400, 404, 409, 413].includes(response.status)) {
                 const error = new Error(`Terminal history unavailable (${response.status}); the requested book was not skipped.`);
