@@ -340,6 +340,7 @@ func main() {
 	})
 	http.HandleFunc("/api/prompt-history/append", handlePromptHistoryAppend)
 	http.HandleFunc("/api/prompt-history/recent", handlePromptHistoryRecent)
+	http.HandleFunc("/api/pi-history", handlePiBridgeHistory)
 	http.HandleFunc("/api/attachments", handleAttachments)
 	http.HandleFunc("/api/clipboard", handleGetClipboard)
 	http.HandleFunc("/api/system/cpu", handleSystemCPU)
@@ -839,4 +840,34 @@ func handlePromptHistoryRecent(w http.ResponseWriter, r *http.Request) {
 	s, _ := promptHistoryLazyStore() // error ignored here; Recent on empty store returns []
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(s.Recent(cwd, n))
+}
+
+const piBridgeHistoryTimeout = time.Second
+
+// handlePiBridgeHistory uses the existing API auth gate. Errors reveal no
+// prompt text or bridge internals; successful snapshots must not be cached.
+func handlePiBridgeHistory(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	paneID := r.URL.Query().Get("pane")
+	if paneID == "" {
+		http.Error(w, "missing pane", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), piBridgeHistoryTimeout)
+	defer cancel()
+	res, err := piBridge.RequestPaneHistory(ctx, paneID)
+	if err != nil {
+		http.Error(w, "pi history unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	entries := res.Entries
+	if entries == nil {
+		entries = []string{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"entries": entries, "unavailable": res.Unavailable})
 }

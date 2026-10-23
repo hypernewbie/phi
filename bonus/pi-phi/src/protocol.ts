@@ -4,6 +4,18 @@
 export const PROTOCOL_VERSION = 1;
 
 export const CAPABILITY_LIFECYCLE = 'pi.lifecycle.v1';
+export const CAPABILITY_HISTORY = 'pi.history.v1';
+/**
+ * Queue bytes history responses must leave free. History shares the
+ * bounded queue with lifecycle edges, so a history frame admits only
+ * while the queue keeps this much headroom after admission; an
+ * admitted frame can then never starve the next lifecycle edge. At
+ * several times the largest lifecycle frame (a full-journal
+ * snapshot, well under 4 KiB), 16 KiB keeps the bound airtight while
+ * leaving history ~240 KiB of the shared queue.
+ */
+export const LIFECYCLE_HEADROOM_BYTES = 16 * 1024;
+export const LIFECYCLE_HEADROOM_MESSAGES = 2;
 
 export const MAX_MESSAGE_BYTES = 256 * 1024;
 export const MAX_QUEUED_MESSAGES = 16;
@@ -20,7 +32,7 @@ export const METADATA_TOKEN_KEY = 'phi-pi-token';
 export const METADATA_PANE_KEY = 'phi-pi-pane';
 export const METADATA_PROCESS_KEY = 'phi-pi-process';
 
-const SUPPORTED = new Set([CAPABILITY_LIFECYCLE]);
+const SUPPORTED = new Set([CAPABILITY_LIFECYCLE, CAPABILITY_HISTORY]);
 
 /** Intersect advertised names with the supported set. Unknown names are ignored. */
 export function negotiateCapabilities(advertised: readonly string[]): string[] {

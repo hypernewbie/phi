@@ -3,11 +3,16 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ServiceError } from '@grpc/grpc-js';
 import { InvalidTargetError } from './endpoint.js';
 import {
+    LIFECYCLE_HEADROOM_BYTES,
+    MAX_QUEUED_BYTES,
+    MAX_QUEUED_MESSAGES,
+} from './protocol.js';
+import {
     BridgeChannel,
     type ChannelCreds,
     type ClientFactory,
 } from './channel.js';
-import { Hello, LogicalState, type PiToPhi } from './gen/bridge.js';
+import { Hello, HistoryResponse, LogicalState, PiToPhi } from './gen/bridge.js';
 
 const CREDS: ChannelCreds = {
     target: 'unix:/tmp/phi-pi-abc/bridge.sock',
@@ -215,5 +220,140 @@ describe('BridgeChannel blocked sends', () => {
         await new Promise((r) => setTimeout(r, 0));
         expect(reported?.code).toBe(1);
         channel.close();
+    });
+});
+
+function historyFrame(entryBytes: number, count: number): PiToPhi {
+    const entry = 'e'.repeat(entryBytes);
+    return {
+        paneId: 'pane',
+        processId: 'proc',
+        runtimeGeneration: 1n,
+        payload: {
+            $case: 'historyResponse',
+            value: HistoryResponse.create({
+                requestId: 'h',
+                entries: Array.from({ length: count }, () => entry),
+                unavailable: false,
+            }),
+        },
+    };
+}
+
+const encodedSize = (msg: PiToPhi): number =>
+    PiToPhi.encode(msg).finish().length;
+
+/** Mock duplex stream: hello succeeds, later writes stay in flight. */
+class HoldingDuplex extends EventEmitter {
+    writes = 0;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    write(msg: any, cb?: () => void): boolean {
+        void msg;
+        this.writes += 1;
+        if (this.writes === 1) {
+            queueMicrotask(() => {
+                cb?.();
+                this.emit('data', {
+                    payload: {
+                        $case: 'accepted',
+                        value: {
+                            protocolVersion: 1,
+                            capabilities: [],
+                            runtimeGeneration: 1n,
+                            runtimeId: 'rt',
+                        },
+                    },
+                });
+            });
+            return true;
+        }
+        // Held in flight: the writer never settles, so the bytes
+        // stay outstanding until the test ends.
+        return true;
+    }
+    end(): void {}
+    cancel(): void {}
+}
+
+async function connectedHoldingChannel(): Promise<BridgeChannel> {
+    const duplex = new HoldingDuplex();
+    const factory: ClientFactory = () => ({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        connect: () => duplex as any,
+        close: () => {},
+    });
+    const channel = new BridgeChannel(
+        CREDS,
+        { onMessage: () => {}, onStatus: () => {} },
+        factory,
+    );
+    await channel.connect(hello());
+    return channel;
+}
+
+describe('BridgeChannel history admission', () => {
+    const CAP = MAX_QUEUED_BYTES - LIFECYCLE_HEADROOM_BYTES;
+
+    it('admits a near-limit history frame first and still sends lifecycle', async () => {
+        const channel = await connectedHoldingChannel();
+        try {
+            const big = historyFrame(2400, 100);
+            const size = encodedSize(big);
+            expect(size).toBeGreaterThan(200 * 1024);
+            expect(size).toBeLessThan(CAP);
+            expect(channel.sendHistory(big)).toBe(true);
+            // The frame is held in flight; an edge plus a snapshot
+            // must still enqueue without ending the stream.
+            expect(channel.send(hello())).toBe(true);
+            expect(channel.send(hello())).toBe(true);
+        } finally {
+            channel.close();
+        }
+    });
+
+    it('reserves message slots as well as bytes for the next edge and snapshot', async () => {
+        const channel = await connectedHoldingChannel();
+        try {
+            const tiny = historyFrame(1, 1);
+            let admitted = 0;
+            while (admitted < MAX_QUEUED_MESSAGES && channel.sendHistory(tiny))
+                admitted++;
+            expect(admitted).toBe(MAX_QUEUED_MESSAGES - 2);
+            expect(channel.send(hello())).toBe(true);
+            expect(channel.send(hello())).toBe(true);
+        } finally {
+            channel.close();
+        }
+    });
+
+    it('lifecycle-first admission retains the reservation', async () => {
+        const channel = await connectedHoldingChannel();
+        try {
+            const big = historyFrame(2400, 100);
+            expect(channel.send(big)).toBe(true);
+            // The queued lifecycle frame consumes most of the shared budget.
+            expect(channel.sendHistory(historyFrame(100, 100))).toBe(false);
+            expect(channel.send(hello())).toBe(true);
+            expect(channel.sendHistory(historyFrame(1, 1))).toBe(true);
+        } finally {
+            channel.close();
+        }
+    });
+
+    it('rejects past the reservation without poisoning the channel', async () => {
+        const channel = await connectedHoldingChannel();
+        try {
+            const tooBig = historyFrame(2500, 100);
+            const size = encodedSize(tooBig);
+            // Fits the raw queue bound, but leaves no lifecycle headroom.
+            expect(size).toBeGreaterThan(CAP);
+            expect(size).toBeLessThan(MAX_QUEUED_BYTES);
+            expect(channel.sendHistory(tooBig)).toBe(false);
+            // Nonfatal: lifecycle and later history still send.
+            expect(channel.send(hello())).toBe(true);
+            expect(channel.sendHistory(historyFrame(8, 1))).toBe(true);
+        } finally {
+            channel.close();
+        }
     });
 });

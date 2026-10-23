@@ -81,6 +81,7 @@ export interface PiToPhi {
     | { $case: "agentStarted"; value: AgentStarted }
     | { $case: "agentSettled"; value: AgentSettled }
     | { $case: "stateSnapshot"; value: StateSnapshot }
+    | { $case: "historyResponse"; value: HistoryResponse }
     | undefined;
 }
 
@@ -89,7 +90,10 @@ export interface PhiToPi {
   paneId: string;
   processId: string;
   runtimeGeneration: bigint;
-  payload: { $case: "accepted"; value: Accepted } | { $case: "protocolError"; value: ProtocolError } | undefined;
+  payload: { $case: "accepted"; value: Accepted } | { $case: "protocolError"; value: ProtocolError } | {
+    $case: "historyRequest";
+    value: HistoryRequest;
+  } | undefined;
 }
 
 /**
@@ -164,6 +168,29 @@ export interface StateSnapshot {
   stateRevision: bigint;
 }
 
+/**
+ * HistoryRequest asks the extension for the live editor history.
+ * request_id correlates exactly one HistoryResponse; the extension
+ * echoes it verbatim. Best-effort: the answer may be unavailable,
+ * or never arrive, without disturbing lifecycle traffic.
+ */
+export interface HistoryRequest {
+  requestId: string;
+}
+
+/**
+ * HistoryResponse carries one history snapshot for request_id.
+ * entries is newest-first; it is ignored when unavailable is set.
+ * unavailable means the reader cannot reach a history-shaped editor
+ * or the snapshot exceeds the message bound. Phi falls back to its
+ * pre-bridge behavior in both cases.
+ */
+export interface HistoryResponse {
+  requestId: string;
+  entries: string[];
+  unavailable: boolean;
+}
+
 /** Terminal protocol-level rejection. Ends the stream attempt. */
 export interface ProtocolError {
   code: ProtocolErrorCode;
@@ -200,6 +227,9 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         break;
       case "stateSnapshot":
         StateSnapshot.encode(message.payload.value, writer.uint32(106).fork()).join();
+        break;
+      case "historyResponse":
+        HistoryResponse.encode(message.payload.value, writer.uint32(138).fork()).join();
         break;
     }
     return writer;
@@ -274,6 +304,14 @@ export const PiToPhi: MessageFns<PiToPhi> = {
             message.payload = { $case: "stateSnapshot", value: StateSnapshot.decode(reader, reader.uint32()) };
             continue;
           }
+          case 17: {
+            if (tag !== 138) {
+              break;
+            }
+
+            message.payload = { $case: "historyResponse", value: HistoryResponse.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -321,6 +359,12 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         }
         break;
       }
+      case "historyResponse": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "historyResponse", value: HistoryResponse.fromPartial(object.payload.value) };
+        }
+        break;
+      }
     }
     return message;
   },
@@ -350,6 +394,9 @@ export const PhiToPi: MessageFns<PhiToPi> = {
         break;
       case "protocolError":
         ProtocolError.encode(message.payload.value, writer.uint32(106).fork()).join();
+        break;
+      case "historyRequest":
+        HistoryRequest.encode(message.payload.value, writer.uint32(114).fork()).join();
         break;
     }
     return writer;
@@ -408,6 +455,14 @@ export const PhiToPi: MessageFns<PhiToPi> = {
             message.payload = { $case: "protocolError", value: ProtocolError.decode(reader, reader.uint32()) };
             continue;
           }
+          case 14: {
+            if (tag !== 114) {
+              break;
+            }
+
+            message.payload = { $case: "historyRequest", value: HistoryRequest.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -440,6 +495,12 @@ export const PhiToPi: MessageFns<PhiToPi> = {
       case "protocolError": {
         if (object.payload?.value !== undefined && object.payload?.value !== null) {
           message.payload = { $case: "protocolError", value: ProtocolError.fromPartial(object.payload.value) };
+        }
+        break;
+      }
+      case "historyRequest": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "historyRequest", value: HistoryRequest.fromPartial(object.payload.value) };
         }
         break;
       }
@@ -1149,6 +1210,140 @@ export const StateSnapshot: MessageFns<StateSnapshot> = {
     message.stateRevision = (object.stateRevision !== undefined && object.stateRevision !== null)
       ? BigInt(object.stateRevision)
       : 0n;
+    return message;
+  },
+};
+
+function createBaseHistoryRequest(): HistoryRequest {
+  return { requestId: "" };
+}
+
+export const HistoryRequest: MessageFns<HistoryRequest> = {
+  encode(message: HistoryRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): HistoryRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseHistoryRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<HistoryRequest>, I>>(base?: I): HistoryRequest {
+    return HistoryRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<HistoryRequest>, I>>(object: I): HistoryRequest {
+    const message = createBaseHistoryRequest();
+    message.requestId = object.requestId ?? "";
+    return message;
+  },
+};
+
+function createBaseHistoryResponse(): HistoryResponse {
+  return { requestId: "", entries: [], unavailable: false };
+}
+
+export const HistoryResponse: MessageFns<HistoryResponse> = {
+  encode(message: HistoryResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    for (const v of message.entries) {
+      writer.uint32(18).string(v!);
+    }
+    if (message.unavailable !== false) {
+      writer.uint32(24).bool(message.unavailable);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): HistoryResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseHistoryResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.entries.push(reader.string());
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.unavailable = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<HistoryResponse>, I>>(base?: I): HistoryResponse {
+    return HistoryResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<HistoryResponse>, I>>(object: I): HistoryResponse {
+    const message = createBaseHistoryResponse();
+    message.requestId = object.requestId ?? "";
+    message.entries = object.entries?.map((e) => e) || [];
+    message.unavailable = object.unavailable ?? false;
     return message;
   },
 };

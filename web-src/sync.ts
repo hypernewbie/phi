@@ -759,6 +759,9 @@ export class SyncManager {
                         if (!cmd) return;
                         if (act.stage) {
                             if (this.app.tabManager?.inputTextArea) {
+                                this.app.tabManager._resetPiRecall?.({
+                                    flush: true,
+                                });
                                 this.app.tabManager.inputTextArea.value = cmd;
                                 this.app.tabManager.inputTextArea.focus({
                                     preventScroll: true,

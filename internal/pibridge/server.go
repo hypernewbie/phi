@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
@@ -27,6 +28,8 @@ type Server struct {
 	grpcServer *grpc.Server
 	onSettled  func(paneID, processID string, generation, runID uint64, outcome pibridgepb.RunOutcome)
 	onState    func(paneID, processID string, generation uint64, running bool, model string, caps []string)
+	onPeerDown func(paneID, processID string, generation uint64)
+	histSeq    atomic.Uint64
 }
 
 // NewServer creates a bridge server with bounded gRPC limits and no TCP
@@ -66,29 +69,38 @@ func (s *Server) SetOnState(fn func(paneID, processID string, generation uint64,
 // fireState reports one accepted snapshot to the state callback. A nil
 // snapshot (hello without state) still reports capabilities. A nil caps
 // slice (state snapshot) keeps the last negotiated set server-side; the
-// callback receives the stored set. It runs lock-free on a stream
-// goroutine and never calls back into the Server.
-func (s *Server) fireState(paneID, processID string, generation uint64, snap *pibridgepb.StateSnapshot, caps []string) {
+// callback receives the stored set. State/up and down callbacks are
+// serialized per lease, without holding the mutable-state lock.
+func (s *Server) fireState(l *lease, p *peer, snap *pibridgepb.StateSnapshot, caps []string) {
 	if s.onState == nil {
 		return
 	}
-	if caps == nil {
-		l, ok := s.reg.lookupByProcess(processID)
-		if !ok {
-			return
-		}
-		l.mu.Lock()
-		stored := make([]string, len(l.caps))
-		copy(stored, l.caps)
+	l.notifyMu.Lock()
+	defer l.notifyMu.Unlock()
+	l.mu.Lock()
+	if l.peer != p || l.state == leaseRevoked || l.maxGen != p.generation {
 		l.mu.Unlock()
-		caps = stored
+		return
 	}
+	paneID, processID, generation := l.paneID, l.processID, p.generation
+	if caps == nil {
+		caps = append([]string(nil), l.caps...)
+	}
+	l.mu.Unlock()
 	running := snap != nil && snap.GetState() == pibridgepb.LogicalState_LOGICAL_STATE_RUNNING
 	model := ""
 	if m := snap.GetModel(); m != nil {
 		model = m.GetProvider() + "/" + m.GetModel()
 	}
 	s.onState(paneID, processID, generation, running, model, caps)
+}
+
+// SetOnPeerDown registers the callback fired once when the active peer
+// of a lease disconnects. Same contract as SetOnSettled; the host uses
+// it to publish current connection availability. Replacements do not
+// fire: detaching a peer that is no longer active is a no-op.
+func (s *Server) SetOnPeerDown(fn func(paneID, processID string, generation uint64)) {
+	s.onPeerDown = fn
 }
 
 // Stop drains gracefully for shutdownDrainTimeout, then force-stops.
@@ -421,7 +433,7 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 		}
 		return status.Error(codes.Unavailable, "peer closed")
 	}
-	s.fireState(pane, proc, gen, hello.GetCurrentState(), acceptedCaps)
+	s.fireState(l, p, hello.GetCurrentState(), acceptedCaps)
 
 	for {
 		msg, err := p.recv()
@@ -455,14 +467,23 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 }
 
 // detachPeer removes p from its lease when it is still the active peer.
-// Journal and last state are preserved for reconnect.
+// Journal and last state are preserved for reconnect. Clearing the
+// active peer publishes one peer-down for current-availability
+// tracking; detaching an already-replaced peer stays silent.
 func (s *Server) detachPeer(l *lease, p *peer) {
+	l.notifyMu.Lock()
+	defer l.notifyMu.Unlock()
 	l.mu.Lock()
-	if l.peer == p {
+	cleared := l.peer == p
+	if cleared {
 		l.peer = nil
 	}
+	pane, proc, gen := l.paneID, l.processID, p.generation
 	l.mu.Unlock()
 	p.closeWith(codes.Canceled, "stream closed")
+	if cleared && s.onPeerDown != nil {
+		s.onPeerDown(pane, proc, gen)
+	}
 }
 
 // handleMessage validates and applies one Pi → Phi message. Protocol
@@ -531,10 +552,12 @@ func (s *Server) handleMessage(l *lease, p *peer, msg *pibridgepb.PiToPhi) error
 			return nil
 		}
 		l.lastState = snap
-		pane, proc, gen := l.paneID, l.processID, p.generation
 		caps := append([]string(nil), l.caps...)
 		l.mu.Unlock()
-		s.fireState(pane, proc, gen, snap, caps)
+		s.fireState(l, p, snap, caps)
+		return nil
+	case msg.GetHistoryResponse() != nil:
+		s.deliverHistory(l, p, msg.GetHistoryResponse())
 		return nil
 	default:
 		return status.Error(codes.InvalidArgument, "unsupported payload")

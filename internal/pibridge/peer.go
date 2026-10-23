@@ -40,6 +40,9 @@ type peer struct {
 	closeCode   codes.Code
 	closeMsg    string
 
+	histMu      sync.Mutex
+	histPending map[string]chan HistoryResult
+
 	writerDone chan struct{}
 }
 
@@ -50,6 +53,9 @@ func newPeer(generation uint64, sessionID string, stream connectStream) *peer {
 		stream:     stream,
 		sendCh:     make(chan *pibridgepb.PhiToPi, maxQueuedMessages),
 		done:       make(chan struct{}),
+		histPending: make(
+			map[string]chan HistoryResult,
+		),
 		writerDone: make(chan struct{}),
 	}
 }
@@ -60,6 +66,17 @@ func newPeer(generation uint64, sessionID string, stream connectStream) *peer {
 // The bound covers queued plus in-flight messages, so a blocked writer
 // cannot hide an extra message outside the queue.
 func (p *peer) send(msg *pibridgepb.PhiToPi) bool {
+	return p.enqueue(msg, true)
+}
+
+// sendNonfatal enqueues one outbound message without closing the peer
+// on overflow. History requests use it: a recall attempt must never
+// end the lifecycle stream. Callers fail only their own request.
+func (p *peer) sendNonfatal(msg *pibridgepb.PhiToPi) bool {
+	return p.enqueue(msg, false)
+}
+
+func (p *peer) enqueue(msg *pibridgepb.PhiToPi, fatalOverflow bool) bool {
 	size := proto.Size(msg)
 	p.mu.Lock()
 	if p.closed {
@@ -68,7 +85,9 @@ func (p *peer) send(msg *pibridgepb.PhiToPi) bool {
 	}
 	if p.outstanding >= maxQueuedMessages || p.queuedBytes+size > maxQueuedBytes {
 		p.mu.Unlock()
-		p.closeWith(codes.ResourceExhausted, "bounded send queue full")
+		if fatalOverflow {
+			p.closeWith(codes.ResourceExhausted, "bounded send queue full")
+		}
 		return false
 	}
 	p.outstanding++

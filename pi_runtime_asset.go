@@ -15,10 +15,10 @@ import (
 //go:embed bonus/pi-phi/dist/pi-phi-extension.cjs
 var piPhiRuntimeAsset []byte
 
-// The stamped bundle version travels alongside the runtime for the
-// stable-path gate: phi rewrites its stable copy only when this
-// version is newer than the installed one. Stamped by
-// scripts/pi-phi-build.mjs from the package version.
+// The version/hash stamp travels alongside the runtime for the
+// stable-path gate: Phi refreshes its copy when stamps differ, unless
+// the installed version is newer. scripts/pi-phi-build.mjs stamps
+// the package version and bundle hash.
 //
 //go:embed bonus/pi-phi/dist/VERSION
 var piPhiVersionAsset string

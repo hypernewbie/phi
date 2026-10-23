@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+    CAPABILITY_HISTORY,
     CAPABILITY_LIFECYCLE,
     isKnownCapability,
     negotiateCapabilities,
@@ -15,6 +16,12 @@ describe('negotiateCapabilities', () => {
         expect(
             negotiateCapabilities([CAPABILITY_LIFECYCLE, CAPABILITY_LIFECYCLE]),
         ).toEqual([CAPABILITY_LIFECYCLE]);
+    });
+    it('accepts the history capability', () => {
+        expect(negotiateCapabilities([CAPABILITY_HISTORY])).toEqual([
+            CAPABILITY_HISTORY,
+        ]);
+        expect(isKnownCapability(CAPABILITY_HISTORY)).toBe(true);
     });
     it('yields empty for empty', () => {
         expect(negotiateCapabilities([])).toEqual([]);

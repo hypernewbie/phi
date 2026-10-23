@@ -113,6 +113,26 @@ func TestPeerQueueByteBound(t *testing.T) {
 	<-p.writerDone
 }
 
+func TestPeerSendNonfatalKeepsStream(t *testing.T) {
+	bs := newBlockingStream()
+	p := newPeer(1, "sess", bs)
+	// One message larger than the whole queue overflows; the nonfatal
+	// path reports false without closing the peer, and the queue
+	// stays usable for lifecycle traffic.
+	if p.sendNonfatal(acceptedMsg(maxQueuedBytes)) {
+		t.Fatal("oversized nonfatal payload accepted")
+	}
+	if err := p.closeErr(); err != nil {
+		t.Fatalf("nonfatal overflow closed peer: %v", err)
+	}
+	if !p.send(acceptedMsg(4)) {
+		t.Fatal("send after nonfatal overflow rejected")
+	}
+	if p.sendNonfatal(acceptedMsg(4)) != true {
+		t.Fatal("nonfatal send rejected on open peer")
+	}
+}
+
 func TestPeerCloseIdempotent(t *testing.T) {
 	bs := newBlockingStream()
 	p := newPeer(1, "sess", bs)

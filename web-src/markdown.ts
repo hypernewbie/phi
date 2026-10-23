@@ -2327,6 +2327,7 @@ body..."></textarea>
             const padAfter =
                 !after.startsWith(' ') && after.length > 0 ? ' ' : '';
 
+            this.app.tabManager?._resetPiRecall?.({ flush: true });
             textarea.value = before + padBefore + insertText + padAfter + after;
 
             const newPos = start + padBefore.length + insertText.length;

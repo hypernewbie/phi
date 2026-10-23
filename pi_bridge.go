@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -74,6 +75,10 @@ type bridgePane struct {
 	lastRunning *bool
 	lastModel   string
 	lastCaps    []string
+	// lastConnected tracks current stream availability: set on every
+	// snapshot, cleared on peer-down. Nil until the first snapshot.
+	// History recall uses it; bell behavior does not.
+	lastConnected *bool
 }
 
 // startPiBridge creates the endpoint, materializes the runtime, and
@@ -110,6 +115,7 @@ func startPiBridge(hub *ws.Hub) *Bridge {
 	}
 	b.server.SetOnSettled(b.onSettled)
 	b.server.SetOnState(b.onState)
+	b.server.SetOnPeerDown(b.onPeerDown)
 	hub.SetBridgeAttach(b.encodeAttach)
 	hub.SetOnPaneExit(func(inst *pty.PTYInstance, _ int) { b.handlePaneExit(inst) })
 	go func() {
@@ -320,6 +326,29 @@ func (b *Bridge) Complete(inst *pty.PTYInstance) {
 	b.server.Complete(processID)
 }
 
+// RequestPaneHistory resolves a pane to its bridge process and reads
+// the live Pi editor history. Unknown, unmanaged, and peerless panes
+// fail; every error means "fall back to pre-bridge behavior". The
+// caller owns the deadline: history is best-effort and must never
+// hold an HTTP handler past its budget.
+func (b *Bridge) RequestPaneHistory(ctx context.Context, paneID string) (pibridge.HistoryResult, error) {
+	if b == nil {
+		return pibridge.HistoryResult{}, fmt.Errorf("pi-bridge: disabled")
+	}
+	b.mu.Lock()
+	p, ok := b.panes[paneID]
+	var processID string
+	var managed bool
+	if ok {
+		processID, managed = p.processID, p.managed
+	}
+	b.mu.Unlock()
+	if !ok || !managed {
+		return pibridge.HistoryResult{}, fmt.Errorf("pi-bridge: pane not managed")
+	}
+	return b.server.RequestHistory(ctx, processID)
+}
+
 // RevokePane revokes a pane's lease and drops its record. Unknown panes
 // and nil bridges are ignored. Idempotent.
 func (b *Bridge) RevokePane(paneID string) {
@@ -371,6 +400,7 @@ type BridgePaneState struct {
 	LastOutcome  string   `json:"last_outcome,omitempty"`
 	Model        string   `json:"model,omitempty"`
 	Capabilities []string `json:"capabilities,omitempty"`
+	Connected    *bool    `json:"connected,omitempty"`
 }
 
 // PaneSnapshot reports the bridge view for one pane. Unknown panes and
@@ -406,11 +436,15 @@ func (b *Bridge) PaneSnapshot(paneID string) BridgePaneState {
 		st.LastRun = strconv.FormatUint(view.lastRun, 10)
 		st.LastOutcome = view.lastOutcome
 	}
-	if srvView, ok := b.server.PaneState(processID); ok && srvView.HasState {
-		running := srvView.State == pibridgepb.LogicalState_LOGICAL_STATE_RUNNING
-		st.Running = &running
-		st.Model = srvView.Model
-		st.Capabilities = append(st.Capabilities, srvView.Caps...)
+	if srvView, ok := b.server.PaneState(processID); ok {
+		connected := srvView.HasPeer
+		st.Connected = &connected
+		if srvView.HasState {
+			running := srvView.State == pibridgepb.LogicalState_LOGICAL_STATE_RUNNING
+			st.Running = &running
+			st.Model = srvView.Model
+			st.Capabilities = append(st.Capabilities, srvView.Caps...)
+		}
 	}
 	return st
 }
@@ -438,6 +472,36 @@ func (b *Bridge) onState(paneID, processID string, generation uint64, running bo
 			p.lastRunning = &r
 			p.lastModel = model
 			p.lastCaps = append(p.lastCaps[:0], caps...)
+			connected := true
+			p.lastConnected = &connected
+			view = p.snapshot()
+		}
+	} else {
+		ok = false
+	}
+	b.mu.Unlock()
+	if !ok {
+		return
+	}
+	if payload := encodeBridgeState(paneID, view); payload != nil {
+		b.hub.BroadcastBridge(paneID, payload)
+	}
+}
+
+// onPeerDown publishes current unavailability after a disconnect so
+// history recall falls back without a round trip. Generation-fenced
+// like onState: a delayed down for a replaced stream never clears a
+// newer live view. Bell behavior is untouched.
+func (b *Bridge) onPeerDown(paneID, processID string, generation uint64) {
+	b.mu.Lock()
+	p, ok := b.panes[paneID]
+	var view bridgeStateView
+	if ok && p.managed && p.processID == processID {
+		if p.hasGen && generation < p.gen {
+			ok = false
+		} else {
+			connected := false
+			p.lastConnected = &connected
 			view = p.snapshot()
 		}
 	} else {
@@ -462,6 +526,7 @@ type bridgeStateView struct {
 	running     *bool
 	model       string
 	caps        []string
+	connected   *bool
 }
 
 // snapshot copies the retained view. The caller must hold b.mu. The
@@ -473,6 +538,11 @@ func (p *bridgePane) snapshot() bridgeStateView {
 		r := *p.lastRunning
 		running = &r
 	}
+	var connected *bool
+	if p.lastConnected != nil {
+		c := *p.lastConnected
+		connected = &c
+	}
 	return bridgeStateView{
 		hasGen:      p.hasGen,
 		gen:         p.gen,
@@ -482,6 +552,7 @@ func (p *bridgePane) snapshot() bridgeStateView {
 		running:     running,
 		model:       p.lastModel,
 		caps:        append([]string(nil), p.lastCaps...),
+		connected:   connected,
 	}
 }
 
@@ -497,6 +568,9 @@ func encodeBridgeState(paneID string, view bridgeStateView) []byte {
 	}
 	if view.running != nil {
 		frame["running"] = strconv.FormatBool(*view.running)
+	}
+	if view.connected != nil {
+		frame["connected"] = strconv.FormatBool(*view.connected)
 	}
 	if view.model != "" {
 		frame["model"] = view.model

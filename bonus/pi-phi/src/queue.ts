@@ -33,9 +33,21 @@ export class BoundedQueue<T extends SizedMessage> {
 
     /** Try to enqueue. Returns false on overflow without mutating. */
     tryEnqueue(msg: T): boolean {
-        if (this.outstanding >= MAX_QUEUED_MESSAGES) return false;
-        if (this.outstandingBytes + msg.byteSize > MAX_QUEUED_BYTES)
-            return false;
+        return this.tryEnqueueWithByteCap(msg, MAX_QUEUED_BYTES);
+    }
+
+    /**
+     * Try to enqueue under a tighter byte cap. History responses use
+     * this so an admitted frame always leaves lifecycle headroom.
+     * Returns false on overflow without mutating.
+     */
+    tryEnqueueWithByteCap(
+        msg: T,
+        capBytes: number,
+        capMessages = MAX_QUEUED_MESSAGES,
+    ): boolean {
+        if (this.outstanding >= capMessages) return false;
+        if (this.outstandingBytes + msg.byteSize > capBytes) return false;
         this.items.push(msg);
         this.bytes += msg.byteSize;
         return true;

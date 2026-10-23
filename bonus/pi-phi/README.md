@@ -1,8 +1,8 @@
 # @phi/pi-phi
 
 Phi's integration endpoint inside Pi. The extension reports explicit
-Pi completion to Phi's existing bell. It never changes the Pi
-conversation: no prompts, no compaction, no context edits.
+Pi completion to Phi's existing bell and provides read-only editor history.
+It never changes the Pi conversation: no prompts, no compaction, no context edits.
 
 ## Layout
 
@@ -13,7 +13,8 @@ conversation: no prompts, no compaction, no context edits.
   module itself, callable through the host loader.
 - `src/extension.ts` — the factory: credential handling, process-global
   ownership, and event subscriptions.
-- `src/runtime.ts` — lifecycle mapping, journal, and reconnect.
+- `src/runtime.ts` — lifecycle mapping, history requests, journal, and reconnect.
+- `src/history-reader.ts` — checked access to the live TUI editor history.
 - `src/channel.ts` — bounded-queue gRPC transport.
 - `src/test-client.ts` — the synthetic peer for interop tests.
 - `test/` — interop suites driven against the Go testserver.
@@ -21,6 +22,16 @@ conversation: no prompts, no compaction, no context edits.
 Only type imports reference the Pi package from the bundle, so the
 bundle carries no Pi runtime code. See `PROTOCOL.md` for the wire
 protocol, capabilities, and bounds.
+
+## History recall
+
+On a connected Pi pane with `pi.history.v1`, plain Up/Down recalls Pi editor
+history into Phi's staged-input box. The reader does not replace or edit the
+Pi editor. Alt+Up/Down continues to use Phi's local history.
+
+Without the bridge or history capability, the existing key behavior remains.
+An unavailable editor, failed request, or timeout also keeps that behavior.
+The reader checks a private Pi editor field, so compatibility requires a host check.
 
 ## Toggles and manual install
 
@@ -57,8 +68,13 @@ no completion signal at all.
 From the Phi checkout:
 
 - `pnpm build:pi-phi` — build the bundle.
-- `pnpm check:pi-phi-generated` — fail on binding drift.
+- `pnpm check:pi-phi-generated` — fail on binding, bundle, or notice drift.
 - `pnpm --filter @phi/pi-phi typecheck` — strict typecheck.
 - `pnpm --filter @phi/pi-phi test` — unit suite.
 - `pnpm test:pi-phi:integration` — interop over native IPC.
-- `pnpm test:pi-phi:hosts` — both pinned Pi versions load the bundle.
+- `pnpm test:pi-phi:hosts` — load the bundle and check real editor history on both pinned Pi versions.
+
+The host check covers Pi 1.0.1 and 1.3.0 in isolated profiles. Interactive
+history checks require `script(1)` on macOS or Linux. The command fails if
+that proof is unavailable. These checks do not establish installed-release
+behavior with an existing user profile or support for other Pi versions.

@@ -3,6 +3,8 @@
 // Each version loads the committed bundle from a module-less directory
 // whose path contains spaces, drives a hermetic print-mode run against
 // a local stub provider, and reports identities to the Go testserver.
+// Each version also drives one interactive TUI run over a pty, where a
+// probe calls the shipped history reader after real editor submissions.
 // Unprovisioned and bad-credential runs must not prevent startup,
 // input, or output. Exits nonzero with all failures.
 import { spawn, spawnSync } from 'node:child_process';
@@ -107,9 +109,102 @@ writeFileSync(
         `    }\n` +
         `};\n`,
 );
+const probeHistoryPath = join(extDir, 'probe-history.cjs');
+writeFileSync(
+    probeHistoryPath,
+    `const fs = require('node:fs');\n` +
+        `const out = process.env.HISTORY_LOG;\n` +
+        `const bundle = require('./pi-phi-extension.cjs');\n` +
+        `module.exports = function (pi) {\n` +
+        `    pi.on('session_start', (_e, ctx) => snapshot(ctx, 'start'));\n` +
+        `    for (const ev of ['agent_end', 'agent_settled']) {\n` +
+        `        pi.on(ev, (_e, ctx) => snapshot(ctx, ev));\n` +
+        `    }\n` +
+        `    function snapshot(ctx, phase) {\n` +
+        `        const rec = { phase };\n` +
+        `        try { rec.session = ctx.sessionManager.getSessionId(); } catch (_e) {}\n` +
+        `        try {\n` +
+        `            if (typeof bundle.readEditorHistory !== 'function') throw new Error('no-reader-export');\n` +
+        `            const entries = bundle.readEditorHistory(ctx.ui);\n` +
+        `            rec.available = entries !== null;\n` +
+        `            rec.count = entries === null ? -1 : entries.length;\n` +
+        `            rec.entries = entries;\n` +
+        `        } catch (err) { rec.error = String(err); }\n` +
+        `        try {\n` +
+        `            const before = observe(ctx);\n` +
+        `            bundle.readEditorHistory(ctx.ui);\n` +
+        `            const after = observe(ctx);\n` +
+        `            rec.neutral = JSON.stringify(before) === JSON.stringify(after);\n` +
+        `        } catch (err) { rec.neutral = 'observe-failed:' + err; }\n` +
+        `        fs.appendFileSync(out, JSON.stringify(rec) + '\\n');\n` +
+        `    }\n` +
+        `    function observe(ctx) {\n` +
+        `        let tui = null;\n` +
+        `        ctx.ui.setWidget('phi.probe.observe', (t) => { tui = t; return { render: () => [] }; }, { placement: 'belowEditor' });\n` +
+        `        try {\n` +
+        `            const ed = tui.getFocusedComponent();\n` +
+        `            return { text: typeof ed.getText === 'function' ? ed.getText() : null, len: Array.isArray(ed.history) ? ed.history.length : -1, idx: ed.historyIndex, draft: ed.historyDraft };\n` +
+        `        } finally { ctx.ui.setWidget('phi.probe.observe', undefined); }\n` +
+        `    }\n` +
+        `};\n`,
+);
+// Interactive prompt writer: runs outside Pi, polls the history log for
+// readiness markers, and emits prompts on stdout, which the shell pipes
+// to script(1)'s stdin. A real shell pipe is required: BSD script
+// rejects node's socket-based pipe stdin (tcgetattr ioctl error).
+// Always records its own outcome in HISTORY_WRITER_DONE, since the
+// pipeline exit status only reflects script(1), not the writer.
+const writerPath = join(tmp, 'history-writer.cjs');
+writeFileSync(
+    writerPath,
+    `const fs = require('node:fs');\n` +
+        `const LOG = process.env.HISTORY_LOG;\n` +
+        `const DONE = process.env.HISTORY_WRITER_DONE;\n` +
+        `const sleep = (ms) => new Promise((r) => setTimeout(r, ms));\n` +
+        `function recs() {\n` +
+        `    try { return fs.readFileSync(LOG, 'utf8').trim().split('\\n').filter(Boolean).map((l) => JSON.parse(l)); }\n` +
+        `    catch { return []; }\n` +
+        `}\n` +
+        `async function waitFor(pred, timeoutMs, label) {\n` +
+        `    const t0 = Date.now();\n` +
+        `    for (;;) {\n` +
+        `        if (pred(recs())) return;\n` +
+        `        if (Date.now() - t0 > timeoutMs) throw new Error('writer timeout: ' + label);\n` +
+        `        await sleep(200);\n` +
+        `    }\n` +
+        `}\n` +
+        `function settled(n) { return (rs) => rs.filter((r) => r.phase === 'agent_settled').length >= n; }\n` +
+        `async function main() {\n` +
+        `    await waitFor((rs) => rs.some((r) => r.phase === 'start'), 60000, 'start');\n` +
+        `    await sleep(1500);\n` +
+        `    process.stdout.write('say one\\r');\n` +
+        `    await waitFor(settled(1), 90000, 'settled-1');\n` +
+        `    await sleep(800);\n` +
+        `    process.stdout.write('say one\\r');\n` +
+        `    await waitFor(settled(2), 90000, 'settled-2');\n` +
+        `    await sleep(800);\n` +
+        `    process.stdout.write('!echo bang\\r');\n` +
+        `    await sleep(6000);\n` +
+        `    process.stdout.write('line1\\nline2\\r');\n` +
+        `    await waitFor(settled(3), 90000, 'settled-3');\n` +
+        `    await sleep(800);\n` +
+        `    process.stdout.write('say last\\r');\n` +
+        `    await waitFor(settled(4), 90000, 'settled-4');\n` +
+        `    await sleep(800);\n` +
+        `    fs.writeFileSync(DONE, JSON.stringify({ ok: true }));\n` +
+        `    process.stdout.write('\\x03\\x03');\n` +
+        `    await sleep(3000);\n` +
+        `}\n` +
+        `main().catch(async (err) => {\n` +
+        `    try { fs.writeFileSync(DONE, JSON.stringify({ ok: false, error: String(err && err.message || err) })); } catch {}\n` +
+        `    try { process.stdout.write('\\x03\\x03'); } catch {}\n` +
+        `    await sleep(3000);\n` +
+        `    process.exit(2);\n` +
+        `});\n`,
+);
 const extFiles = readdirSync(extDir).sort();
 if (
-    extFiles.join(',') !== 'pi-phi-extension.cjs,probe.cjs' ||
+    extFiles.join(',') !== 'pi-phi-extension.cjs,probe-history.cjs,probe.cjs' ||
     !extDir.includes(' ')
 ) {
     fail(
@@ -219,6 +314,73 @@ function spawnPi(cmd, args, env, cwd, timeoutMs = 120_000) {
     });
 }
 
+// Interactive runs drive the real TUI editor through script(1), which
+// owns the pty. Flags differ per platform; without script(1) the
+// interactive history proof cannot run.
+let scriptArgv = null;
+{
+    const found = run('sh', ['-c', 'command -v script']);
+    if (found.status === 0) {
+        if (process.platform === 'darwin') scriptArgv = ['-q', '/dev/null'];
+        else if (process.platform === 'linux') scriptArgv = ['-qec'];
+    }
+}
+const quoteArg = (a) => `'${a.replaceAll(`'`, `'\\''`)}'`;
+
+// Run one interactive Pi: writer stdout pipes into script(1) stdin,
+// script(1) hosts the pty Pi attaches to. Detached so the watchdog
+// can kill the whole pipeline group on timeout.
+function spawnInteractiveTui(
+    writerArgs,
+    piCmd,
+    piArgs,
+    env,
+    cwd,
+    timeoutMs = 240_000,
+) {
+    const piLine = [piCmd, ...piArgs].map(quoteArg).join(' ');
+    const scriptLine =
+        process.platform === 'linux'
+            ? ['script', ...scriptArgv, piLine, '/dev/null']
+                  .map(quoteArg)
+                  .join(' ')
+            : [
+                  'script',
+                  ...scriptArgv,
+                  ...[piCmd, ...piArgs].map(quoteArg),
+              ].join(' ');
+    const pipeline = `${['node', ...writerArgs].map(quoteArg).join(' ')} | ${scriptLine}`;
+    return new Promise((resolve) => {
+        const child = spawn('sh', ['-c', pipeline], {
+            cwd,
+            env,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            detached: true,
+        });
+        let out = '';
+        const keep = (c) => {
+            out += c.toString('utf8');
+            if (out.length > 60_000) out = out.slice(-60_000);
+        };
+        child.stdout.on('data', keep);
+        child.stderr.on('data', keep);
+        const timer = setTimeout(() => {
+            try {
+                process.kill(-child.pid, 'SIGKILL');
+            } catch (_e) {}
+            resolve({ code: null, out, timeout: true });
+        }, timeoutMs);
+        child.on('exit', (code) => {
+            clearTimeout(timer);
+            resolve({ code, out, timeout: false });
+        });
+        child.on('error', (err) => {
+            clearTimeout(timer);
+            resolve({ code: null, out: String(err), timeout: false });
+        });
+    });
+}
+
 const localCli = join(
     root,
     'node_modules',
@@ -295,8 +457,24 @@ for (const version of versions) {
     const sessionDir = join(tmp, `sessions-${version.name}`);
     mkdirSync(sessionDir, { recursive: true });
     const env = {
-        ...process.env,
+        // Allowlist only process-launch settings. Never pass provider keys or
+        // the operator's Pi/config paths into a test host.
+        PATH: process.env.PATH,
+        SystemRoot: process.env.SystemRoot,
+        SYSTEMROOT: process.env.SYSTEMROOT,
+        COMSPEC: process.env.COMSPEC,
+        PATHEXT: process.env.PATHEXT,
+        LANG: 'en_US.UTF-8',
+        TMPDIR: tmp,
+        TMP: tmp,
+        TEMP: tmp,
+        XDG_CONFIG_HOME: join(home, '.config'),
+        XDG_CACHE_HOME: join(home, '.cache'),
+        XDG_DATA_HOME: join(home, '.local', 'share'),
         HOME: home,
+        USERPROFILE: home,
+        APPDATA: join(home, 'AppData', 'Roaming'),
+        LOCALAPPDATA: join(home, 'AppData', 'Local'),
         PI_CODING_AGENT_DIR: agentDir,
         PROBE_LOG: probeLog,
         PHI_PI_BRIDGE_ENDPOINT: target,
@@ -497,6 +675,173 @@ for (const version of versions) {
             fail(version.name, `${label} run produced no output`);
         }
     }
+    // Interactive history proof: the real TUI editor on this host,
+    // driven over a pty. The probe loads the committed bundle and
+    // calls the shipped reader after real submissions (ordinary,
+    // consecutive duplicate, `!` bang, ctrl+j multiline). Print-mode
+    // assertions alone do not prove this access path.
+    if (scriptArgv === null) {
+        fail(
+            version.name,
+            'interactive history proof unavailable',
+            `script(1) is required on a supported macOS/Linux host (current: ${process.platform})`,
+        );
+    } else {
+        const tuiPane = `hosts-tui-${version.name}`;
+        const tuiReg = await control({ op: 'register', pane: tuiPane });
+        if (!tuiReg.ok) {
+            fail(version.name, 'interactive register failed', tuiReg.error);
+        } else {
+            await control({ op: 'complete', process: tuiReg.process });
+            const historyLog = join(tmp, `history-${version.name}.log`);
+            const writerDone = join(tmp, `writer-${version.name}.json`);
+            const tuiEnv = {
+                ...env,
+                PHI_PI_BRIDGE_PANE_ID: tuiPane,
+                PHI_PI_BRIDGE_PROCESS_ID: tuiReg.process,
+                PHI_PI_BRIDGE_TOKEN: tuiReg.token,
+                HISTORY_LOG: historyLog,
+                HISTORY_WRITER_DONE: writerDone,
+            };
+            const tuiArgs = [
+                '--no-session',
+                '--session-dir',
+                sessionDir,
+                '--model',
+                'hosts-stub/probe',
+                '--extension',
+                join(extDir, 'pi-phi-extension.cjs'),
+                '--extension',
+                probeHistoryPath,
+            ];
+            const tui = await spawnInteractiveTui(
+                [writerPath],
+                version.cmd,
+                [...version.args, ...tuiArgs],
+                tuiEnv,
+                workDir,
+            );
+            let writerOk = false;
+            let writerError = '';
+            try {
+                const done = JSON.parse(readFileSync(writerDone, 'utf8'));
+                writerOk = done.ok === true;
+                writerError = done.error || '';
+            } catch (err) {
+                writerError = `writer done file unreadable: ${err}`;
+            }
+            if (tui.timeout) {
+                fail(version.name, 'interactive run timed out', writerError);
+            } else if (!writerOk) {
+                fail(
+                    version.name,
+                    'interactive prompts not delivered',
+                    `${writerError} ${tui.out.slice(-300)}`,
+                );
+            }
+            let records = [];
+            try {
+                records = readFileSync(historyLog, 'utf8')
+                    .trim()
+                    .split('\n')
+                    .filter(Boolean)
+                    .map((line) => JSON.parse(line));
+            } catch (err) {
+                fail(version.name, 'history log unreadable', String(err));
+            }
+            const start = records.find((r) => r.phase === 'start');
+            if (!start || start.available !== true) {
+                fail(
+                    version.name,
+                    'reader unavailable at session start',
+                    JSON.stringify(start || null),
+                );
+            } else if (start.count !== 0) {
+                fail(
+                    version.name,
+                    'start history not empty',
+                    String(start.count),
+                );
+            }
+            const settled = records.filter((r) => r.phase === 'agent_settled');
+            const want = ['say last', 'line1\nline2', '!echo bang', 'say one'];
+            const last = settled[settled.length - 1];
+            if (settled.length < 4) {
+                fail(
+                    version.name,
+                    'settled snapshots',
+                    `${settled.length} want >= 4`,
+                );
+            } else if (JSON.stringify(last.entries) !== JSON.stringify(want)) {
+                fail(
+                    version.name,
+                    'editor history entries',
+                    JSON.stringify(last.entries),
+                );
+            }
+            const dup = settled[1];
+            if (
+                dup &&
+                JSON.stringify(dup.entries) !== JSON.stringify(['say one'])
+            ) {
+                fail(
+                    version.name,
+                    'duplicate collapse',
+                    JSON.stringify(dup.entries),
+                );
+            }
+            for (const r of records) {
+                if (r.available !== true || r.neutral !== true || r.error) {
+                    fail(
+                        version.name,
+                        `history snapshot ${r.phase}`,
+                        JSON.stringify(r).slice(0, 300),
+                    );
+                    break;
+                }
+            }
+            const tuiView = await control({
+                op: 'inspect',
+                process: tuiReg.process,
+            });
+            if (!tuiView.ok) {
+                fail(version.name, 'interactive inspect failed', tuiView.error);
+            } else {
+                if (tuiView.generation !== '1') {
+                    fail(
+                        version.name,
+                        'interactive generation',
+                        tuiView.generation,
+                    );
+                }
+                if (
+                    (tuiView.caps || []).join(',') !==
+                    'pi.history.v1,pi.lifecycle.v1'
+                ) {
+                    fail(
+                        version.name,
+                        'interactive accepted caps',
+                        (tuiView.caps || []).join(','),
+                    );
+                }
+                if (tuiView.session !== start?.session) {
+                    fail(
+                        version.name,
+                        'interactive bridge session',
+                        tuiView.session,
+                    );
+                }
+                if (tuiView.model !== 'hosts-stub/probe') {
+                    fail(
+                        version.name,
+                        'interactive bridge model',
+                        tuiView.model,
+                    );
+                }
+            }
+            await control({ op: 'revoke', process: tuiReg.process });
+        }
+    }
     await stop();
 }
 
@@ -509,5 +854,5 @@ if (failures.length > 0) {
 }
 rmSync(tmp, { recursive: true, force: true });
 console.log(
-    'pi-phi-hosts: both pinned hosts load, flow, and identify; inert and bad-credential runs contained',
+    'pi-phi-hosts: both pinned hosts load, flow, and identify; inert and bad-credential runs contained; interactive editor history proven',
 );
