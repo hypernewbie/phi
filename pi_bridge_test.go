@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -407,7 +409,8 @@ func TestBridgeSnapshotCopiesRunningFlag(t *testing.T) {
 	defer b.Stop()
 
 	env, _, _ := b.Provision("pane-1", true)
-	b.onState("pane-1", env[piBridgeEnvProcess], 1, true, "p/m", []string{"pi.lifecycle.v1"})
+	floor, _ := b.server.PublicationRevision(env[piBridgeEnvProcess])
+	b.onState("pane-1", env[piBridgeEnvProcess], 1, floor+1, true, true, "p/m", []string{"pi.lifecycle.v1"})
 	b.mu.Lock()
 	p := b.panes["pane-1"]
 	view := p.snapshot()
@@ -577,13 +580,14 @@ func TestBridgeGenerationScopesSettlements(t *testing.T) {
 	env, _, _ := b.Provision("pane-1", true)
 	proc := env[piBridgeEnvProcess]
 	b.Complete(&pty.PTYInstance{ID: "pane-1"})
-	b.onState("pane-1", proc, 1, false, "p/m", []string{"pi.lifecycle.v1"})
+	floor, _ := b.server.PublicationRevision(proc)
+	b.onState("pane-1", proc, 1, floor+1, false, true, "p/m", []string{"pi.lifecycle.v1"})
 	b.onSettled("pane-1", proc, 1, 5, pibridgepb.RunOutcome_RUN_OUTCOME_COMPLETED)
 	if got := b.PaneSnapshot("pane-1"); got.Generation != "1" || got.LastRun != "5" {
 		t.Fatalf("gen1 snapshot %+v, want generation 1 last_run 5", got)
 	}
 	// New runtime generation clears the old retained run.
-	b.onState("pane-1", proc, 2, false, "p/m", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", proc, 2, floor+2, false, true, "p/m", []string{"pi.lifecycle.v1"})
 	if got := b.PaneSnapshot("pane-1"); got.Generation != "2" || got.LastRun != "" {
 		t.Fatalf("gen2 idle snapshot %+v, want generation 2 no last_run", got)
 	}
@@ -598,7 +602,7 @@ func TestBridgeGenerationScopesSettlements(t *testing.T) {
 		t.Fatalf("gen2 settled snapshot %+v, want generation 2 last_run 1", got)
 	}
 	// Delayed old state must not overwrite the new view.
-	b.onState("pane-1", proc, 1, true, "old/model", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", proc, 1, floor+3, true, true, "old/model", []string{"pi.lifecycle.v1"})
 	if got := b.PaneSnapshot("pane-1"); got.Generation != "2" || got.LastRun != "1" {
 		t.Fatalf("stale state snapshot %+v, want generation 2 last_run 1", got)
 	}
@@ -849,5 +853,209 @@ func TestHandlePiBridgeHistory(t *testing.T) {
 	rec = serve(http.MethodGet, "/api/pi-history?pane=pane-http")
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("dead peer code %d, want 503", rec.Code)
+	}
+}
+
+func drainBridgeFrames(t *testing.T, client *ws.Client, want int) []map[string]string {
+	t.Helper()
+	frames := make([]map[string]string, 0, want)
+	for len(frames) < want {
+		select {
+		case frame := <-client.Send:
+			if len(frame) == 0 || frame[0] != 0x02 {
+				t.Fatalf("frame type %v, want 0x02", frame)
+			}
+			var decoded map[string]string
+			if err := json.Unmarshal(frame[1:], &decoded); err != nil {
+				t.Fatalf("frame decode: %v", err)
+			}
+			frames = append(frames, decoded)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("only %d of %d frames", len(frames), want)
+		}
+	}
+	select {
+	case frame := <-client.Send:
+		t.Fatalf("extra frame: %s", frame[1:])
+	case <-time.After(200 * time.Millisecond):
+	}
+	return frames
+}
+
+// A delayed older publication must not replace a newer retained view.
+// Duplicates and zero revisions are idempotent silence: one broadcast
+// for the accepted publication, none for the rest.
+func TestBridgeOnStateFencesPublicationOrder(t *testing.T) {
+	hub := testBridgeHub()
+	b := startPiBridge(hub)
+	if b == nil {
+		t.Fatal("bridge did not start")
+	}
+	defer b.Stop()
+
+	env, _, _ := b.Provision("pane-1", true)
+	proc := env[piBridgeEnvProcess]
+	client := &ws.Client{Send: make(chan []byte, 8)}
+	hub.AttachHot("pane-1", client)
+	<-client.Send // ATTACH_HEAD
+	floor, _ := b.server.PublicationRevision(proc)
+
+	// Newer publication lands first, then the delayed older one.
+	b.onState("pane-1", proc, 1, floor+2, false, true, "provB/modelB", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", proc, 1, floor+1, false, true, "provA/modelA", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", proc, 1, floor+2, false, true, "provB/modelB", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", proc, 1, 0, false, true, "provA/modelA", []string{"pi.lifecycle.v1"})
+
+	wantRev := strconv.FormatUint(floor+2, 10)
+	if got := b.PaneSnapshot("pane-1"); got.Model != "provB/modelB" || got.TelemetryRevision != wantRev {
+		t.Fatalf("snapshot %+v, want modelB at rev %s", got, wantRev)
+	}
+	frames := drainBridgeFrames(t, client, 1)
+	if frames[0]["model"] != "provB/modelB" || frames[0]["telemetry_revision"] != wantRev {
+		t.Fatalf("frame %+v, want modelB at rev %s", frames[0], wantRev)
+	}
+}
+
+// HTTP snapshots and attach frames carry one coherent
+// (revision, model) pair from the same retained view.
+func TestBridgeSnapshotAndAttachShareOneRevision(t *testing.T) {
+	b := startPiBridge(testBridgeHub())
+	if b == nil {
+		t.Fatal("bridge did not start")
+	}
+	defer b.Stop()
+
+	env, _, _ := b.Provision("pane-1", true)
+	proc := env[piBridgeEnvProcess]
+	floor, _ := b.server.PublicationRevision(proc)
+	b.onState("pane-1", proc, 1, floor+1, true, true, "provA/modelA", []string{"pi.lifecycle.v1"})
+
+	snap := b.PaneSnapshot("pane-1")
+	raw := b.encodeAttach(pty.PTYInstanceSnapshot{ID: "pane-1", Coder: "pi"})
+	if raw == nil {
+		t.Fatal("no attach frame")
+	}
+	var attach map[string]string
+	if err := json.Unmarshal(raw, &attach); err != nil {
+		t.Fatalf("attach decode: %v", err)
+	}
+	if snap.Model != "provA/modelA" || attach["model"] != snap.Model {
+		t.Fatalf("snapshot %+v vs attach %+v, want one model", snap, attach)
+	}
+	if snap.TelemetryRevision == "" || attach["telemetry_revision"] != snap.TelemetryRevision {
+		t.Fatalf("snapshot %+v vs attach %+v, want one revision", snap, attach)
+	}
+	if snap.Running == nil || !*snap.Running || attach["running"] != "true" {
+		t.Fatalf("snapshot %+v vs attach %+v, want running", snap, attach)
+	}
+}
+
+// A reused pane ID starts from a fresh empty baseline above every
+// publication of the prior record; delayed callbacks from the dead
+// lease can never apply.
+func TestBridgeReusedPaneStartsAboveOldPublications(t *testing.T) {
+	b := startPiBridge(testBridgeHub())
+	if b == nil {
+		t.Fatal("bridge did not start")
+	}
+	defer b.Stop()
+
+	envA, _, _ := b.Provision("pane-1", true)
+	procA := envA[piBridgeEnvProcess]
+	floorA, _ := b.server.PublicationRevision(procA)
+	if got := b.PaneSnapshot("pane-1"); got.State != piBridgeManaged ||
+		got.TelemetryRevision != strconv.FormatUint(floorA, 10) || got.Model != "" || got.Running != nil {
+		t.Fatalf("fresh baseline %+v, want managed rev floor, no model", got)
+	}
+	b.onState("pane-1", procA, 1, floorA+1, false, true, "provA/modelA", []string{"pi.lifecycle.v1"})
+
+	b.RevokePane("pane-1")
+	envB, _, managed := b.Provision("pane-1", true)
+	if !managed {
+		t.Fatal("retry provision not managed")
+	}
+	procB := envB[piBridgeEnvProcess]
+	floorB, _ := b.server.PublicationRevision(procB)
+	if floorB <= floorA {
+		t.Fatalf("floor %d not above old floor %d", floorB, floorA)
+	}
+	if got := b.PaneSnapshot("pane-1"); got.TelemetryRevision != strconv.FormatUint(floorB, 10) ||
+		got.Model != "" || got.Running != nil || got.Generation != "" {
+		t.Fatalf("reused baseline %+v, want empty rev floor", got)
+	}
+	// Delayed callback from the dead lease drops on process mismatch.
+	b.onState("pane-1", procA, 1, floorA+2, false, true, "provA/modelA", []string{"pi.lifecycle.v1"})
+	if got := b.PaneSnapshot("pane-1"); got.TelemetryRevision != strconv.FormatUint(floorB, 10) || got.Model != "" {
+		t.Fatalf("dead-lease callback applied: %+v", got)
+	}
+}
+
+// A Hello without state advances the revision floor but keeps
+// model/usage unknown; a new generation also clears the stale
+// model/usage of the old process instead of inheriting it.
+func TestBridgeStatelessHelloKeepsModelUnknown(t *testing.T) {
+	b := startPiBridge(testBridgeHub())
+	if b == nil {
+		t.Fatal("bridge did not start")
+	}
+	defer b.Stop()
+
+	env, _, _ := b.Provision("pane-1", true)
+	proc := env[piBridgeEnvProcess]
+	floor, _ := b.server.PublicationRevision(proc)
+	b.onState("pane-1", proc, 1, floor+1, false, true, "provA/modelA", []string{"pi.lifecycle.v1"})
+	if got := b.PaneSnapshot("pane-1"); got.Model != "provA/modelA" {
+		t.Fatalf("snapshot %+v, want modelA", got)
+	}
+
+	// Capabilities ride the Hello, not the snapshot: a stateless
+	// republish still updates the negotiated set.
+	b.onState("pane-1", proc, 2, floor+2, false, false, "", []string{"pi.lifecycle.v1"})
+	if got := b.PaneSnapshot("pane-1"); got.Generation != "2" ||
+		got.TelemetryRevision != strconv.FormatUint(floor+2, 10) ||
+		got.Model != "" || got.Running != nil || !slices.Equal(got.Capabilities, []string{"pi.lifecycle.v1"}) {
+		t.Fatalf("new-gen stateless %+v, want unknown model with caps at rev floor+2", got)
+	}
+
+	b.onState("pane-1", proc, 2, floor+3, false, false, "", []string{"pi.lifecycle.v1", "pi.extra.v1"})
+	if got := b.PaneSnapshot("pane-1"); got.TelemetryRevision != strconv.FormatUint(floor+3, 10) ||
+		got.Model != "" || got.Running != nil || !slices.Equal(got.Capabilities, []string{"pi.lifecycle.v1", "pi.extra.v1"}) {
+		t.Fatalf("same-gen stateless %+v, want unknown model with caps at rev floor+3", got)
+	}
+}
+
+// Publication floors are per pane: a stale callback for one pane
+// never disturbs another.
+func TestBridgePublicationFloorsArePerPane(t *testing.T) {
+	b := startPiBridge(testBridgeHub())
+	if b == nil {
+		t.Fatal("bridge did not start")
+	}
+	defer b.Stop()
+
+	env1, _, _ := b.Provision("pane-1", true)
+	env2, _, _ := b.Provision("pane-2", true)
+	proc1, proc2 := env1[piBridgeEnvProcess], env2[piBridgeEnvProcess]
+	floor1, _ := b.server.PublicationRevision(proc1)
+	floor2, _ := b.server.PublicationRevision(proc2)
+
+	b.onState("pane-2", proc2, 1, floor2+1, false, true, "provB/modelB", []string{"pi.lifecycle.v1"})
+	// Equal-to-floor and zero revisions drop for pane-1.
+	b.onState("pane-1", proc1, 1, floor1, false, true, "provA/modelA", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", proc1, 1, 0, false, true, "provA/modelA", []string{"pi.lifecycle.v1"})
+	if got := b.PaneSnapshot("pane-1"); got.TelemetryRevision != strconv.FormatUint(floor1, 10) || got.Model != "" {
+		t.Fatalf("pane-1 %+v, want empty floor", got)
+	}
+	if got := b.PaneSnapshot("pane-2"); got.Model != "provB/modelB" {
+		t.Fatalf("pane-2 %+v, want modelB", got)
+	}
+
+	b.onState("pane-1", proc1, 1, floor1+1, false, true, "provA/modelA", []string{"pi.lifecycle.v1"})
+	if got := b.PaneSnapshot("pane-1"); got.Model != "provA/modelA" {
+		t.Fatalf("pane-1 %+v, want modelA", got)
+	}
+	if got := b.PaneSnapshot("pane-2"); got.Model != "provB/modelB" ||
+		got.TelemetryRevision != strconv.FormatUint(floor2+1, 10) {
+		t.Fatalf("pane-2 %+v, want undisturbed modelB", got)
 	}
 }

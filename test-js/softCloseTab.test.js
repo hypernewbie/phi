@@ -434,6 +434,12 @@ describe('spawnNewSession - request-time context', () => {
         'shell',
         '/wsA',
         '/wsA/main',
+        true,
+        false,
+        '',
+        null,
+        null,
+        undefined,
     ];
 
     it('keeps request metadata when A closes before the POST response', async () => {

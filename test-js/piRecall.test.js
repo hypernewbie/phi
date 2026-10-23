@@ -345,6 +345,8 @@ describe('context and programmatic replacement fences', () => {
         tm._acceptPiBridgeState(tab, {
             state: 'managed',
             generation: '2',
+            telemetry_revision: '5',
+            model: 'prov/model',
             connected: 'false',
             capabilities: 'pi.lifecycle.v1,pi.history.v1',
         });

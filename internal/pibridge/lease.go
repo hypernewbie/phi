@@ -40,6 +40,7 @@ type lease struct {
 	notifyMu  sync.Mutex
 	mu        sync.Mutex
 	state     leaseState
+	pubRev    uint64   // latest publication revision (server-owned ordering)
 	maxGen    uint64   // highest accepted runtime generation
 	runtimeID string   // identity bound at maxGen
 	sessionID string   // identity bound at maxGen

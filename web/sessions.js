@@ -948,15 +948,19 @@ export class SessionsManager {
                 throw new Error(errText.trim() || 'Failed to spawn session');
             }
             const data = await res.json();
-            this.app.tabManager.createTab(data.pane_id, data.session_id, title, coderId, workspace, cwd, ...(coderId === 'opencode'
+            this.app.tabManager.createTab(data.pane_id, data.session_id, title, coderId, workspace, cwd, 
+            // The trailing bridge value seeds the tab's ordered
+            // model view; explicit defaults match createTab's.
+            ...(coderId === 'opencode'
                 ? [
                     true,
                     false,
                     '',
                     null,
                     openCodePaneMode(data.opencode_mode),
+                    data.pi_bridge,
                 ]
-                : []));
+                : [true, false, '', null, null, data.pi_bridge]));
             this.loadSessions();
             if (coderId === 'opencode') {
                 setTimeout(() => this.fetchOpenCodeServiceStatus(), 1200);
@@ -987,15 +991,19 @@ export class SessionsManager {
                 throw new Error(errText.trim() || 'Failed to connect session');
             }
             const data = await res.json();
-            this.app.tabManager.createTab(data.pane_id, data.session_id, title, coderId, workspace, cwd, ...(coderId === 'opencode'
+            this.app.tabManager.createTab(data.pane_id, data.session_id, title, coderId, workspace, cwd, 
+            // The trailing bridge value seeds the tab's ordered
+            // model view; explicit defaults match createTab's.
+            ...(coderId === 'opencode'
                 ? [
                     true,
                     false,
                     '',
                     null,
                     openCodePaneMode(data.opencode_mode),
+                    data.pi_bridge,
                 ]
-                : []));
+                : [true, false, '', null, null, data.pi_bridge]));
             this.highlightActiveSession(sessionId);
             if (coderId === 'opencode') {
                 setTimeout(() => this.fetchOpenCodeServiceStatus(), 1200);

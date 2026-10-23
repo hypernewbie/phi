@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,11 +19,12 @@ import (
 	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
 )
 
-// testServer starts a bridge Server on a native Unix socket in /tmp.
-// It returns the server, socket path, and cleanup.
+// testServer starts a bridge Server on a native Unix socket under the
+// controlled OS temporary root. It returns the server, socket path,
+// and cleanup.
 func testServer(t *testing.T) (*Server, string, func()) {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "phi-pi-test-")
+	dir, err := os.MkdirTemp("", "phi-pi-test-")
 	if err != nil {
 		t.Fatalf("tmpdir: %v", err)
 	}
@@ -92,6 +94,17 @@ func testHello(pane, proc string, gen uint64, caps ...string) *pibridgepb.PiToPh
 				},
 			},
 		},
+	}
+}
+
+func testState(pane, proc string, gen uint64, provider, model string) *pibridgepb.PiToPhi {
+	return &pibridgepb.PiToPhi{
+		PaneId: pane, ProcessId: proc, RuntimeGeneration: gen,
+		Payload: &pibridgepb.PiToPhi_StateSnapshot{StateSnapshot: &pibridgepb.StateSnapshot{
+			State:     pibridgepb.LogicalState_LOGICAL_STATE_IDLE,
+			SessionId: "sess", LeafId: "leaf",
+			Model: &pibridgepb.ModelSnapshot{Provider: provider, Model: model},
+		}},
 	}
 }
 
@@ -567,5 +580,187 @@ func TestStalePeerCannotOverwriteReplacement(t *testing.T) {
 	}
 	if settled != 1 {
 		t.Fatalf("live settlements %d, want 1", settled)
+	}
+}
+
+type stateCall struct {
+	gen, rev uint64
+	running  bool
+	hasState bool
+	model    string
+	caps     []string
+}
+
+func waitStateCalls(t *testing.T, mu *sync.Mutex, calls *[]stateCall, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		n := len(*calls)
+		mu.Unlock()
+		if n >= want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("state calls %d, want %d", n, want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A delayed same-generation callback must report the state it accepted,
+// never a newer replacement's capabilities, and the retained lease must
+// keep the newest acceptance. A's state callback is held on a barrier
+// while B reconnects; delivery is serialized, so B lands after the
+// release, and neither A's captured payload nor B's retained state
+// may disturb the other.
+func TestServerHeldCallbackReportsCapturedState(t *testing.T) {
+	s, sock, cleanup := testServer(t)
+	defer cleanup()
+	proc, token, err := s.RegisterPending("pane-race")
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	s.Complete(proc)
+
+	var mu sync.Mutex
+	var calls []stateCall
+	heldA := make(chan struct{})
+	releaseA := make(chan struct{})
+	var heldOnce sync.Once
+	s.SetOnState(func(_, _ string, gen, rev uint64, running, hasState bool, model string, caps []string) {
+		if model == "provA/modelA" {
+			heldOnce.Do(func() { close(heldA) })
+			<-releaseA
+		}
+		mu.Lock()
+		calls = append(calls, stateCall{gen: gen, rev: rev, running: running, hasState: hasState, model: model, caps: append([]string(nil), caps...)})
+		mu.Unlock()
+	})
+
+	// A connects with no capabilities and no Hello snapshot.
+	streamA, cancelA := openStream(t, sock, "pane-race", proc, token)
+	defer cancelA()
+	helloA := testHello("pane-race", proc, 1)
+	helloA.GetHello().CurrentState = nil
+	if err := streamA.Send(helloA); err != nil {
+		t.Fatalf("hello A: %v", err)
+	}
+	recvAccepted(t, streamA)
+	waitStateCalls(t, &mu, &calls, 1)
+
+	// A's state snapshot blocks in the callback.
+	if err := streamA.Send(testState("pane-race", proc, 1, "provA", "modelA")); err != nil {
+		t.Fatalf("state A: %v", err)
+	}
+	select {
+	case <-heldA:
+	case <-time.After(5 * time.Second):
+		t.Fatal("A callback never held")
+	}
+
+	// B reconnects the same generation with capabilities and state.
+	// Accepted precedes B's callback, but the callback itself
+	// cannot land until A releases: delivery is serialized per
+	// lease. B's Hello overwrites the stored caps while A is
+	// held, so the released A still proves captured-not-reread.
+	streamB, cancelB := openStream(t, sock, "pane-race", proc, token)
+	defer cancelB()
+	helloB := testHello("pane-race", proc, 1, CapabilityLifecycle)
+	helloB.GetHello().GetCurrentState().Model = &pibridgepb.ModelSnapshot{Provider: "provB", Model: "modelB"}
+	if err := streamB.Send(helloB); err != nil {
+		t.Fatalf("hello B: %v", err)
+	}
+	recvAccepted(t, streamB)
+	close(releaseA)
+	waitStateCalls(t, &mu, &calls, 3)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if calls[0].hasState || calls[0].model != "" {
+		t.Fatalf("A hello %+v, want stateless baseline", calls[0])
+	}
+	if !calls[1].hasState || calls[1].model != "provA/modelA" || len(calls[1].caps) != 0 {
+		t.Fatalf("released A %+v, want captured empty caps", calls[1])
+	}
+	if calls[2].model != "provB/modelB" || len(calls[2].caps) != 1 || calls[2].caps[0] != CapabilityLifecycle {
+		t.Fatalf("B %+v, want modelB with lifecycle caps", calls[2])
+	}
+	if calls[1].rev >= calls[2].rev {
+		t.Fatalf("A rev %d not older than B rev %d", calls[1].rev, calls[2].rev)
+	}
+	view, ok := s.InspectForTest(proc)
+	if !ok || view.Model != "provB/modelB" || view.PubRev != calls[2].rev {
+		t.Fatalf("retained %+v, want modelB at rev %d", view, calls[2].rev)
+	}
+}
+
+// A same-generation Hello without a snapshot republishes the retained
+// state; a new generation without state keeps model/usage unknown
+// instead of inheriting the old process.
+func TestServerHelloWithoutStateRepublishRules(t *testing.T) {
+	s, sock, cleanup := testServer(t)
+	defer cleanup()
+	proc, token, err := s.RegisterPending("pane-repub")
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	s.Complete(proc)
+
+	var mu sync.Mutex
+	var calls []stateCall
+	s.SetOnState(func(_, _ string, gen, rev uint64, running, hasState bool, model string, caps []string) {
+		mu.Lock()
+		calls = append(calls, stateCall{gen: gen, rev: rev, running: running, hasState: hasState, model: model, caps: append([]string(nil), caps...)})
+		mu.Unlock()
+	})
+
+	streamA, cancelA := openStream(t, sock, "pane-repub", proc, token)
+	defer cancelA()
+	helloA := testHello("pane-repub", proc, 1, CapabilityLifecycle)
+	helloA.GetHello().GetCurrentState().Model = &pibridgepb.ModelSnapshot{Provider: "provA", Model: "modelA"}
+	if err := streamA.Send(helloA); err != nil {
+		t.Fatalf("hello A: %v", err)
+	}
+	recvAccepted(t, streamA)
+	waitStateCalls(t, &mu, &calls, 1)
+
+	// Same generation, no snapshot: republish retained modelA.
+	streamB, cancelB := openStream(t, sock, "pane-repub", proc, token)
+	defer cancelB()
+	helloB := testHello("pane-repub", proc, 1, CapabilityLifecycle)
+	helloB.GetHello().CurrentState = nil
+	if err := streamB.Send(helloB); err != nil {
+		t.Fatalf("hello B: %v", err)
+	}
+	recvAccepted(t, streamB)
+	waitStateCalls(t, &mu, &calls, 2)
+
+	// New generation, no snapshot: unknown, never inherited.
+	streamC, cancelC := openStream(t, sock, "pane-repub", proc, token)
+	defer cancelC()
+	helloC := testHello("pane-repub", proc, 2, CapabilityLifecycle)
+	helloC.GetHello().RuntimeId = "rt2"
+	helloC.GetHello().CurrentState = nil
+	if err := streamC.Send(helloC); err != nil {
+		t.Fatalf("hello C: %v", err)
+	}
+	recvAccepted(t, streamC)
+	waitStateCalls(t, &mu, &calls, 3)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !calls[0].hasState || calls[0].model != "provA/modelA" {
+		t.Fatalf("A %+v, want modelA", calls[0])
+	}
+	if !calls[1].hasState || calls[1].model != "provA/modelA" || calls[1].rev <= calls[0].rev {
+		t.Fatalf("B %+v, want republished modelA at a newer revision", calls[1])
+	}
+	if calls[2].hasState || calls[2].model != "" || calls[2].rev <= calls[1].rev {
+		t.Fatalf("C %+v, want unknown state at a newer revision", calls[2])
+	}
+	view, ok := s.InspectForTest(proc)
+	if !ok || view.HasState || view.Model != "" {
+		t.Fatalf("retained %+v, want no state after gen2 hello", view)
 	}
 }

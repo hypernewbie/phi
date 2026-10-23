@@ -116,6 +116,17 @@ reconnect, and every transition. It carries the retained journal (at
 most 64 rows, oldest dropped first with `journal_gap` latched) and
 the state revision.
 
+Phi numbers every publication of that state with a server-owned
+`telemetry_revision`: a process-monotonic uint64 allocated at lease
+creation and at each accepted Hello/state change, published as a
+decimal string in HTTP/attach/WS `pi-bridge-state` views. It is not
+the Pi `state_revision` and needs no schema change. A same-generation
+Hello without a snapshot republishes the retained state at a new
+revision; a new generation without state publishes unknown
+model/usage. Consumers accept only newer revisions and treat equal
+revisions as idempotent, so delayed callbacks can never show stale
+model text.
+
 ## Bounds
 
 | Bound                        | Value                      |

@@ -6,8 +6,11 @@ function bridgeManager() {
     const showToast = vi.fn();
     const manager = {
         app: { showToast },
+        tabs: new Map(),
         switchTab: vi.fn(),
         updateDocumentTitle: vi.fn(),
+        getActiveTab: () => null,
+        renderPiRpcStatusBar: vi.fn(),
         triggerAttentionNotification:
             TabManager.prototype.triggerAttentionNotification,
         _piBridgeRunIsNew: TabManager.prototype._piBridgeRunIsNew,
@@ -16,6 +19,11 @@ function bridgeManager() {
         _setTabAttention: TabManager.prototype._setTabAttention,
         _acceptPiBridgeState: TabManager.prototype._acceptPiBridgeState,
         _acceptPiBridgeSettled: TabManager.prototype._acceptPiBridgeSettled,
+        _acceptOrderedBridgeView:
+            TabManager.prototype._acceptOrderedBridgeView,
+        _normalizePiBridgeView:
+            TabManager.prototype._normalizePiBridgeView,
+        _piBridgeRevValue: TabManager.prototype._piBridgeRevValue,
     };
     return { manager, showToast };
 }
@@ -190,11 +198,13 @@ describe('pi-bridge attach state', () => {
     it('records state and establishes a silent baseline on first sight', () => {
         const { manager, showToast } = bridgeManager();
         const tab = piTab();
+        manager.tabs.set(tab.paneId, tab);
 
         manager._acceptPiBridgeState(tab, {
             type: 'pi-bridge-state',
             pane_id: 'pane-1',
             state: 'managed',
+            telemetry_revision: '1',
             last_run: '5',
             last_outcome: 'completed',
         });

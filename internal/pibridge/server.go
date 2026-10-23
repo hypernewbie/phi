@@ -27,9 +27,14 @@ type Server struct {
 
 	grpcServer *grpc.Server
 	onSettled  func(paneID, processID string, generation, runID uint64, outcome pibridgepb.RunOutcome)
-	onState    func(paneID, processID string, generation uint64, running bool, model string, caps []string)
+	onState    func(paneID, processID string, generation, pubRev uint64, running, hasState bool, model string, caps []string)
 	onPeerDown func(paneID, processID string, generation uint64)
 	histSeq    atomic.Uint64
+	// pubSeq is the server-owned publication sequence behind
+	// telemetry_revision. It is allocated at lease creation and at
+	// each accepted Hello/state change, so delayed stream callbacks
+	// can be fenced without touching the Pi wire schema.
+	pubSeq atomic.Uint64
 }
 
 // NewServer creates a bridge server with bounded gRPC limits and no TCP
@@ -62,16 +67,22 @@ func (s *Server) SetOnSettled(fn func(paneID, processID string, generation, runI
 // SetOnState registers the callback fired after each accepted snapshot
 // (hello or state) updates the stored lease state. Same contract as
 // SetOnSettled; the callback receives copies, never shared slices.
-func (s *Server) SetOnState(fn func(paneID, processID string, generation uint64, running bool, model string, caps []string)) {
+// pubRev is the server-owned publication revision for this exact
+// acceptance; hasState is false when the runtime published no snapshot
+// (model/usage stay unknown, never invented).
+func (s *Server) SetOnState(fn func(paneID, processID string, generation, pubRev uint64, running, hasState bool, model string, caps []string)) {
 	s.onState = fn
 }
 
-// fireState reports one accepted snapshot to the state callback. A nil
-// snapshot (hello without state) still reports capabilities. A nil caps
-// slice (state snapshot) keeps the last negotiated set server-side; the
-// callback receives the stored set. State/up and down callbacks are
-// serialized per lease, without holding the mutable-state lock.
-func (s *Server) fireState(l *lease, p *peer, snap *pibridgepb.StateSnapshot, caps []string) {
+// fireState reports one acceptance to the state callback. The
+// revision, snapshot, and capabilities are captured under the lease
+// lock by the caller; fireState never re-reads them, so a delayed
+// callback reports the state it accepted, never a newer
+// replacement. A nil snapshot keeps model/usage unknown. Delivery
+// is serialized per lease with peer-down callbacks, and a
+// replaced or revoked peer is dropped, so no stale state lands
+// after its peer went down.
+func (s *Server) fireState(l *lease, p *peer, pubRev uint64, snap *pibridgepb.StateSnapshot, caps []string) {
 	if s.onState == nil {
 		return
 	}
@@ -83,16 +94,14 @@ func (s *Server) fireState(l *lease, p *peer, snap *pibridgepb.StateSnapshot, ca
 		return
 	}
 	paneID, processID, generation := l.paneID, l.processID, p.generation
-	if caps == nil {
-		caps = append([]string(nil), l.caps...)
-	}
 	l.mu.Unlock()
+	hasState := snap != nil
 	running := snap != nil && snap.GetState() == pibridgepb.LogicalState_LOGICAL_STATE_RUNNING
 	model := ""
 	if m := snap.GetModel(); m != nil {
 		model = m.GetProvider() + "/" + m.GetModel()
 	}
-	s.onState(paneID, processID, generation, running, model, caps)
+	s.onState(paneID, processID, generation, pubRev, running, hasState, model, caps)
 }
 
 // SetOnPeerDown registers the callback fired once when the active peer
@@ -128,7 +137,23 @@ func (s *Server) RegisterPending(paneID string) (processID, tokenHex string, err
 	if err != nil {
 		return "", "", err
 	}
+	l.mu.Lock()
+	l.pubRev = s.pubSeq.Add(1)
+	l.mu.Unlock()
 	return l.processID, hex.EncodeToString(l.token[:]), nil
+}
+
+// PublicationRevision reports the lease's latest publication revision:
+// the creation baseline before any Hello, or the newest accepted
+// Hello/state change. It reports false when the process has no lease.
+func (s *Server) PublicationRevision(processID string) (uint64, bool) {
+	l, ok := s.reg.lookupByProcess(processID)
+	if !ok {
+		return 0, false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.pubRev, true
 }
 
 // Complete marks a pending lease live after successful spawn.
@@ -165,6 +190,7 @@ type StateView struct {
 	HasState     bool
 	State        pibridgepb.LogicalState
 	Revision     uint64
+	PubRev       uint64
 	JournalFirst uint64
 	JournalLast  uint64
 	JournalGap   bool
@@ -182,6 +208,7 @@ func (s *Server) paneStateLocked(l *lease) StateView {
 	view := StateView{
 		HasPeer:    l.peer != nil,
 		Generation: l.maxGen,
+		PubRev:     l.pubRev,
 		RuntimeID:  l.runtimeID,
 		SessionID:  l.sessionID,
 	}
@@ -384,6 +411,20 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 		l.caps = append(l.caps, c)
 	}
 	slices.Sort(l.caps)
+	// Capture the publication under the lease lock: the revision, the
+	// negotiated capabilities, and the snapshot to publish. A
+	// same-generation Hello without a snapshot republishes the
+	// retained state; a new generation without state keeps
+	// model/usage unknown instead of inheriting the old process.
+	pubRev := s.pubSeq.Add(1)
+	l.pubRev = pubRev
+	publish := snap
+	if publish == nil && sameGen {
+		publish = l.lastState
+	}
+	// Explicit non-nil copy, like the state path: fireState never
+	// re-reads the lease.
+	publishCaps := append([]string{}, l.caps...)
 	l.mu.Unlock()
 
 	if oldPeer != nil {
@@ -433,7 +474,7 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 		}
 		return status.Error(codes.Unavailable, "peer closed")
 	}
-	s.fireState(l, p, hello.GetCurrentState(), acceptedCaps)
+	s.fireState(l, p, pubRev, publish, publishCaps)
 
 	for {
 		msg, err := p.recv()
@@ -552,9 +593,14 @@ func (s *Server) handleMessage(l *lease, p *peer, msg *pibridgepb.PiToPhi) error
 			return nil
 		}
 		l.lastState = snap
-		caps := append([]string(nil), l.caps...)
+		pubRev := s.pubSeq.Add(1)
+		l.pubRev = pubRev
+		// Explicit non-nil copy: fireState must not re-read the
+		// lease, so an empty negotiated set still arrives as an
+		// empty list rather than triggering a stored-set lookup.
+		caps := append([]string{}, l.caps...)
 		l.mu.Unlock()
-		s.fireState(l, p, snap, caps)
+		s.fireState(l, p, pubRev, snap, caps)
 		return nil
 	case msg.GetHistoryResponse() != nil:
 		s.deliverHistory(l, p, msg.GetHistoryResponse())

@@ -19,7 +19,7 @@ func TestAvailabilityCallbacksOrderSameGenerationReconnect(t *testing.T) {
 		<-release
 		events <- "down"
 	})
-	s.SetOnState(func(_, _ string, _ uint64, _ bool, _ string, _ []string) { events <- "up" })
+	s.SetOnState(func(_, _ string, _, _ uint64, _, _ bool, _ string, _ []string) { events <- "up" })
 	go func() { s.detachPeer(l, old); close(detached) }()
 	<-entered
 	l.mu.Lock()
@@ -27,7 +27,7 @@ func TestAvailabilityCallbacksOrderSameGenerationReconnect(t *testing.T) {
 	l.mu.Unlock()
 	notified := make(chan struct{})
 	go func() {
-		s.fireState(l, next, &pibridgepb.StateSnapshot{}, nil)
+		s.fireState(l, next, 1, &pibridgepb.StateSnapshot{}, nil)
 		close(notified)
 	}()
 	// A delayed down notification must finish before the reconnect's up.
@@ -49,7 +49,7 @@ func TestAvailabilityCallbacksOrderSameGenerationReconnect(t *testing.T) {
 		t.Fatalf("last event %q", got)
 	}
 	// A late state notification for the replaced peer must stay silent.
-	s.fireState(l, old, &pibridgepb.StateSnapshot{}, nil)
+	s.fireState(l, old, 2, &pibridgepb.StateSnapshot{}, nil)
 	select {
 	case got := <-events:
 		t.Fatalf("replaced peer published %q", got)
