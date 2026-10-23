@@ -1205,6 +1205,7 @@ export class DiffController {
         // the textarea per-tab, so clearing after the switch would wipe
         // the target tab's restored draft and park the consumed prefix
         // on the outgoing tab.
+        this.app.tabManager._resetPiRecall?.({ flush: true });
         this.app.tabManager.inputTextArea.value = '';
         this.app.tabManager.lastInputValue = '';
         this.app.tabManager.adjustInputHeight();
@@ -1288,6 +1289,7 @@ export class DiffController {
             : prefix
                 ? `${prefix} ${cmd.command}`
                 : cmd.command;
+        this.app.tabManager._resetPiRecall?.({ flush: true });
         this.app.tabManager.inputTextArea.value = '';
         this.app.tabManager.lastInputValue = '';
         this.app.tabManager.adjustInputHeight();
@@ -2586,6 +2588,7 @@ export class DiffController {
         const tm = this.app.tabManager;
         const inputTextArea = tm?.inputTextArea;
         if (inputTextArea) {
+            tm._resetPiRecall?.({ flush: true });
             const existing = inputTextArea.value.trim();
             inputTextArea.value = existing ? `${existing}\n\n${md}` : md;
             // Match terminal.js adjustInputHeight contract (auto +

@@ -37,4 +37,11 @@ const (
 
 	// CapabilityLifecycle is the lifecycle-event capability name.
 	CapabilityLifecycle = "pi.lifecycle.v1"
+	// CapabilityHistory is the on-demand editor-history capability name.
+	CapabilityHistory = "pi.history.v1"
+
+	// maxHistoryPending bounds history requests awaiting replies per
+	// peer. Excess callers fail fast into fallback; the map never
+	// grows under a wedged or silent extension.
+	maxHistoryPending = 4
 )

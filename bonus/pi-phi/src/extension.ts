@@ -71,6 +71,7 @@ function contextView(ctx: ExtensionContext): PiContextView {
         get model() {
             return ctx.model ?? undefined;
         },
+        ui: ctx.ui,
     };
 }
 

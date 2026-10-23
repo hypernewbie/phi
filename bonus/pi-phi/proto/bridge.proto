@@ -36,6 +36,7 @@ message PiToPhi {
     AgentStarted agent_started = 11;
     AgentSettled agent_settled = 12;
     StateSnapshot state_snapshot = 13;
+    HistoryResponse history_response = 17;
   }
 }
 
@@ -49,6 +50,7 @@ message PhiToPi {
   oneof payload {
     Accepted accepted = 10;
     ProtocolError protocol_error = 13;
+    HistoryRequest history_request = 14;
   }
 }
 
@@ -141,6 +143,29 @@ message StateSnapshot {
   uint64 state_revision = 7;
   reserved 8;
   reserved "outstanding_summaries";
+}
+
+// ---------------------------------------------------------------------------
+// On-demand history reads
+// ---------------------------------------------------------------------------
+
+// HistoryRequest asks the extension for the live editor history.
+// request_id correlates exactly one HistoryResponse; the extension
+// echoes it verbatim. Best-effort: the answer may be unavailable,
+// or never arrive, without disturbing lifecycle traffic.
+message HistoryRequest {
+  string request_id = 1;
+}
+
+// HistoryResponse carries one history snapshot for request_id.
+// entries is newest-first; it is ignored when unavailable is set.
+// unavailable means the reader cannot reach a history-shaped editor
+// or the snapshot exceeds the message bound. Phi falls back to its
+// pre-bridge behavior in both cases.
+message HistoryResponse {
+  string request_id = 1;
+  repeated string entries = 2;
+  bool unavailable = 3;
 }
 
 // ---------------------------------------------------------------------------

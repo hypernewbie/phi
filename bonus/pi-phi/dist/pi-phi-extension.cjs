@@ -24582,6 +24582,9 @@ var require_src3 = __commonJS({
 // src/protocol.ts
 var PROTOCOL_VERSION = 1;
 var CAPABILITY_LIFECYCLE = "pi.lifecycle.v1";
+var CAPABILITY_HISTORY = "pi.history.v1";
+var LIFECYCLE_HEADROOM_BYTES = 16 * 1024;
+var LIFECYCLE_HEADROOM_MESSAGES = 2;
 var MAX_MESSAGE_BYTES = 256 * 1024;
 var MAX_QUEUED_MESSAGES = 16;
 var MAX_QUEUED_BYTES = 256 * 1024;
@@ -24656,9 +24659,16 @@ var BoundedQueue = class {
   }
   /** Try to enqueue. Returns false on overflow without mutating. */
   tryEnqueue(msg) {
-    if (this.outstanding >= MAX_QUEUED_MESSAGES) return false;
-    if (this.outstandingBytes + msg.byteSize > MAX_QUEUED_BYTES)
-      return false;
+    return this.tryEnqueueWithByteCap(msg, MAX_QUEUED_BYTES);
+  }
+  /**
+   * Try to enqueue under a tighter byte cap. History responses use
+   * this so an admitted frame always leaves lifecycle headroom.
+   * Returns false on overflow without mutating.
+   */
+  tryEnqueueWithByteCap(msg, capBytes, capMessages = MAX_QUEUED_MESSAGES) {
+    if (this.outstanding >= capMessages) return false;
+    if (this.outstandingBytes + msg.byteSize > capBytes) return false;
     this.items.push(msg);
     this.bytes += msg.byteSize;
     return true;
@@ -25607,6 +25617,9 @@ var PiToPhi = {
       case "stateSnapshot":
         StateSnapshot.encode(message.payload.value, writer.uint32(106).fork()).join();
         break;
+      case "historyResponse":
+        HistoryResponse.encode(message.payload.value, writer.uint32(138).fork()).join();
+        break;
     }
     return writer;
   },
@@ -25672,6 +25685,13 @@ var PiToPhi = {
             message.payload = { $case: "stateSnapshot", value: StateSnapshot.decode(reader, reader.uint32()) };
             continue;
           }
+          case 17: {
+            if (tag !== 138) {
+              break;
+            }
+            message.payload = { $case: "historyResponse", value: HistoryResponse.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -25716,6 +25736,12 @@ var PiToPhi = {
         }
         break;
       }
+      case "historyResponse": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = { $case: "historyResponse", value: HistoryResponse.fromPartial(object.payload.value) };
+        }
+        break;
+      }
     }
     return message;
   }
@@ -25743,6 +25769,9 @@ var PhiToPi = {
         break;
       case "protocolError":
         ProtocolError.encode(message.payload.value, writer.uint32(106).fork()).join();
+        break;
+      case "historyRequest":
+        HistoryRequest.encode(message.payload.value, writer.uint32(114).fork()).join();
         break;
     }
     return writer;
@@ -25795,6 +25824,13 @@ var PhiToPi = {
             message.payload = { $case: "protocolError", value: ProtocolError.decode(reader, reader.uint32()) };
             continue;
           }
+          case 14: {
+            if (tag !== 114) {
+              break;
+            }
+            message.payload = { $case: "historyRequest", value: HistoryRequest.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -25824,6 +25860,12 @@ var PhiToPi = {
       case "protocolError": {
         if (object.payload?.value !== void 0 && object.payload?.value !== null) {
           message.payload = { $case: "protocolError", value: ProtocolError.fromPartial(object.payload.value) };
+        }
+        break;
+      }
+      case "historyRequest": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = { $case: "historyRequest", value: HistoryRequest.fromPartial(object.payload.value) };
         }
         break;
       }
@@ -26461,6 +26503,128 @@ var StateSnapshot = {
     return message;
   }
 };
+function createBaseHistoryRequest() {
+  return { requestId: "" };
+}
+var HistoryRequest = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseHistoryRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return HistoryRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseHistoryRequest();
+    message.requestId = object.requestId ?? "";
+    return message;
+  }
+};
+function createBaseHistoryResponse() {
+  return { requestId: "", entries: [], unavailable: false };
+}
+var HistoryResponse = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    for (const v of message.entries) {
+      writer.uint32(18).string(v);
+    }
+    if (message.unavailable !== false) {
+      writer.uint32(24).bool(message.unavailable);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseHistoryResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+            message.entries.push(reader.string());
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+            message.unavailable = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return HistoryResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseHistoryResponse();
+    message.requestId = object.requestId ?? "";
+    message.entries = object.entries?.map((e) => e) || [];
+    message.unavailable = object.unavailable ?? false;
+    return message;
+  }
+};
 function createBaseProtocolError() {
   return { code: 0, safeMessage: "" };
 }
@@ -26645,6 +26809,24 @@ var BridgeChannel = class {
     void this.pumpWriter();
     return true;
   }
+  /**
+   * Queue one history response. Returns false when the frame would
+   * breach the history byte cap; unlike send, admission failure is
+   * nonfatal and leaves the stream usable for lifecycle traffic.
+   */
+  sendHistory(msg) {
+    if (this.closed || this.writerError) return false;
+    const byteSize = PiToPhi.encode(msg).finish().length;
+    if (!this.queue.tryEnqueueWithByteCap(
+      { byteSize, msg },
+      MAX_QUEUED_BYTES - LIFECYCLE_HEADROOM_BYTES,
+      MAX_QUEUED_MESSAGES - LIFECYCLE_HEADROOM_MESSAGES
+    )) {
+      return false;
+    }
+    void this.pumpWriter();
+    return true;
+  }
   /** Half-close the stream and release the client. Idempotent. */
   close() {
     if (this.closed) return;
@@ -26735,6 +26917,63 @@ var BridgeChannel = class {
   }
 };
 
+// src/history-reader.ts
+var PROBE_KEY = "phi.pi-phi.history-probe";
+function asSetWidget(ui) {
+  if (typeof ui !== "object" || ui === null) return null;
+  const fn = ui.setWidget;
+  return typeof fn === "function" ? fn : null;
+}
+function readEditorHistory(ui) {
+  try {
+    return readEditorHistoryInner(ui);
+  } catch {
+    return null;
+  }
+}
+function readEditorHistoryInner(ui) {
+  const setWidget = asSetWidget(ui);
+  if (!setWidget) return null;
+  let tui = null;
+  try {
+    setWidget(
+      PROBE_KEY,
+      (captured) => {
+        tui = captured;
+        return { render: () => [] };
+      },
+      { placement: "belowEditor" }
+    );
+  } catch {
+    return null;
+  } finally {
+    try {
+      setWidget(PROBE_KEY, void 0);
+    } catch {
+    }
+  }
+  if (tui === null) return null;
+  if (typeof tui !== "object" || tui === null) return null;
+  const getFocused = tui.getFocusedComponent;
+  if (typeof getFocused !== "function") return null;
+  let focused;
+  try {
+    focused = getFocused.call(tui);
+  } catch {
+    return null;
+  }
+  if (typeof focused !== "object" || focused === null) return null;
+  const history = focused.history;
+  if (!Array.isArray(history)) return null;
+  for (const entry of history) {
+    if (typeof entry !== "string") return null;
+  }
+  return [...history];
+}
+function isHistoryReaderAvailable(ui) {
+  return readEditorHistory(ui) !== null;
+}
+
 // src/runtime.ts
 var TERMINAL_STATUS_CODES = /* @__PURE__ */ new Set([
   16,
@@ -26768,6 +27007,9 @@ var Runtime = class {
   sessionId = "";
   leafId = "";
   model;
+  /** Latest UI surface for history reads; refreshed on every event. */
+  ui;
+  historyAccepted = false;
   /** Final assistant stop reason of the current run, if observed. */
   lastStopReason = null;
   /** When the current stream was accepted; null while connecting. */
@@ -26940,6 +27182,7 @@ var Runtime = class {
     } catch {
     }
     this.model = ctx.model;
+    this.ui = ctx.ui;
   }
   nextSeq() {
     this.seq += 1n;
@@ -26972,6 +27215,18 @@ var Runtime = class {
       stateRevision: this.revision
     });
   }
+  /**
+   * Capabilities this runtime implements right now. History is
+   * advertised only while the direct reader can reach a
+   * history-shaped editor; print and RPC modes stay
+   * lifecycle-only. Re-evaluated on every Hello, so reconnects
+   * follow custom-editor changes.
+   */
+  capabilities() {
+    const caps = [CAPABILITY_LIFECYCLE];
+    if (isHistoryReaderAvailable(this.ui)) caps.push(CAPABILITY_HISTORY);
+    return caps;
+  }
   hello() {
     return {
       paneId: this.opts.creds.pane,
@@ -26983,7 +27238,7 @@ var Runtime = class {
           protocolVersion: PROTOCOL_VERSION,
           sessionId: this.sessionId,
           runtimeId: this.runtimeId,
-          capabilities: [CAPABILITY_LIFECYCLE],
+          capabilities: this.capabilities(),
           currentState: this.snapshot(
             this.running ? 2 /* LOGICAL_STATE_RUNNING */ : 1 /* LOGICAL_STATE_IDLE */
           ),
@@ -27015,13 +27270,23 @@ var Runtime = class {
       return;
     }
     const make = this.opts.makeChannel ?? ((creds, hooks) => new BridgeChannel(creds, hooks));
+    this.historyAccepted = false;
     const channel = make(this.opts.creds, {
-      onMessage: (msg) => this.onServerMessage(msg),
-      onStatus: (status) => this.onStreamEnd(status)
+      onMessage: (msg) => {
+        if (this.channel === channel && !this.shutdownRequested)
+          this.onServerMessage(msg);
+      },
+      onStatus: (status) => {
+        if (this.channel === channel && !this.shutdownRequested)
+          this.onStreamEnd(status);
+      }
     });
     this.channel = channel;
     try {
-      await channel.connect(this.hello());
+      const accepted = await channel.connect(this.hello());
+      if (this.channel === channel) {
+        this.historyAccepted = accepted.capabilities.includes(CAPABILITY_HISTORY);
+      }
     } catch (err) {
       channel.close();
       if (this.channel === channel) this.channel = null;
@@ -27039,7 +27304,42 @@ var Runtime = class {
     }
     this.connectedAt = Date.now();
   }
-  onServerMessage(_msg) {
+  onServerMessage(msg) {
+    if (msg.payload?.$case === "historyRequest" && this.historyAccepted && msg.paneId === this.opts.creds.pane && msg.processId === this.opts.creds.process && msg.runtimeGeneration === this.opts.generation) {
+      this.onHistoryRequest(msg.payload.value.requestId);
+    }
+  }
+  /**
+   * Answer one history request. Best-effort: an unreachable reader
+   * or an oversized snapshot answers unavailable, and admission
+   * failure fails only the request. Nothing here closes the stream.
+   */
+  onHistoryRequest(requestId) {
+    if (typeof requestId !== "string" || requestId === "") return;
+    if (!this.channel) return;
+    const entries = readEditorHistory(this.ui);
+    let msg = this.historyResponse(requestId, entries);
+    if (PiToPhi.encode(msg).finish().length > MAX_MESSAGE_BYTES) {
+      msg = this.historyResponse(requestId, null);
+    }
+    if (!this.channel.sendHistory(msg)) {
+      if (entries !== null) {
+        this.channel.sendHistory(this.historyResponse(requestId, null));
+      }
+    }
+  }
+  historyResponse(requestId, entries) {
+    return {
+      paneId: this.opts.creds.pane,
+      processId: this.opts.creds.process,
+      runtimeGeneration: this.opts.generation,
+      payload: {
+        $case: "historyResponse",
+        value: HistoryResponse.create(
+          entries === null ? { requestId, unavailable: true } : { requestId, entries, unavailable: false }
+        )
+      }
+    };
   }
   onStreamEnd(status) {
     this.channel?.close();
@@ -27102,7 +27402,8 @@ function contextView(ctx) {
     },
     get model() {
       return ctx.model ?? void 0;
-    }
+    },
+    ui: ctx.ui
   };
 }
 function settledAborted(event) {
@@ -27226,6 +27527,7 @@ function extension_default(pi) {
 
 // src/extension-entry.cts
 module.exports = extension_default;
+module.exports.readEditorHistory = readEditorHistory;
 /*! Bundled license information:
 
 long/umd/index.js:

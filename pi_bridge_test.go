@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -138,7 +140,7 @@ func TestBridgeNilSafe(t *testing.T) {
 }
 
 // dialBridge opens a raw client stream against a test bridge.
-func dialBridge(t *testing.T, b *Bridge, pane, process, token string) pibridgepb.Integration_ConnectClient {
+func dialBridge(t *testing.T, b *Bridge, pane, process, token string) (pibridgepb.Integration_ConnectClient, context.CancelFunc) {
 	t.Helper()
 	socket := strings.TrimPrefix(b.endpoint.Target, "unix:")
 	conn, err := grpc.NewClient("passthrough:///unused",
@@ -158,7 +160,7 @@ func dialBridge(t *testing.T, b *Bridge, pane, process, token string) pibridgepb
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	return stream
+	return stream, cancel
 }
 
 func TestBridgeSettlementNotifiesHub(t *testing.T) {
@@ -179,7 +181,7 @@ func TestBridgeSettlementNotifiesHub(t *testing.T) {
 	hub.AttachHot("pane-1", client)
 	<-client.Send // ATTACH_HEAD
 
-	stream := dialBridge(t, b, "pane-1", env[piBridgeEnvProcess], env[piBridgeEnvToken])
+	stream, _ := dialBridge(t, b, "pane-1", env[piBridgeEnvProcess], env[piBridgeEnvToken])
 	hello := &pibridgepb.PiToPhi{
 		PaneId: "pane-1", ProcessId: env[piBridgeEnvProcess], RuntimeGeneration: 1,
 		Payload: &pibridgepb.PiToPhi_Hello{Hello: &pibridgepb.Hello{
@@ -258,6 +260,85 @@ func TestBridgeSettlementNotifiesHub(t *testing.T) {
 
 	if got := b.PaneSnapshot("pane-1"); got.LastRun != "7" {
 		t.Fatalf("snapshot %+v, want last_run 7", got)
+	}
+}
+
+func TestBridgeConnectedTracksStream(t *testing.T) {
+	hub := testBridgeHub()
+	b := startPiBridge(hub)
+	if b == nil {
+		t.Fatal("bridge did not start")
+	}
+	defer b.Stop()
+
+	env, _, managed := b.Provision("pane-c", true)
+	if !managed {
+		t.Fatal("provision not managed")
+	}
+	b.Complete(&pty.PTYInstance{ID: "pane-c"})
+	// The lease exists but no stream is up: known-disconnected.
+	if got := b.PaneSnapshot("pane-c"); got.Connected == nil || *got.Connected {
+		t.Fatalf("snapshot %+v, want connected false before hello", got)
+	}
+
+	client := &ws.Client{Send: make(chan []byte, 8)}
+	hub.AttachHot("pane-c", client)
+	<-client.Send // ATTACH_HEAD
+
+	stream, cancel := dialBridge(t, b, "pane-c", env[piBridgeEnvProcess], env[piBridgeEnvToken])
+	hello := &pibridgepb.PiToPhi{
+		PaneId: "pane-c", ProcessId: env[piBridgeEnvProcess], RuntimeGeneration: 1,
+		Payload: &pibridgepb.PiToPhi_Hello{Hello: &pibridgepb.Hello{
+			ProtocolVersion: 1, SessionId: "sess", RuntimeId: "rt",
+			Capabilities: []string{"pi.lifecycle.v1", "pi.history.v1"},
+			CurrentState: &pibridgepb.StateSnapshot{
+				State: pibridgepb.LogicalState_LOGICAL_STATE_IDLE, SessionId: "sess",
+			},
+		}},
+	}
+	if err := stream.Send(hello); err != nil {
+		t.Fatalf("hello: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("accepted: %v", err)
+	}
+	select {
+	case frame := <-client.Send:
+		var state struct {
+			Type      string `json:"type"`
+			Connected string `json:"connected"`
+		}
+		if err := json.Unmarshal(frame[1:], &state); err != nil {
+			t.Fatalf("state decode: %v", err)
+		}
+		if state.Type != "pi-bridge-state" || state.Connected != "true" {
+			t.Fatalf("state %+v, want connected true", state)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no state frame")
+	}
+	if got := b.PaneSnapshot("pane-c"); got.Connected == nil || !*got.Connected {
+		t.Fatalf("snapshot %+v, want connected true", got)
+	}
+
+	cancel()
+	select {
+	case frame := <-client.Send:
+		var state struct {
+			Type      string `json:"type"`
+			Connected string `json:"connected"`
+		}
+		if err := json.Unmarshal(frame[1:], &state); err != nil {
+			t.Fatalf("down decode: %v", err)
+		}
+		if state.Type != "pi-bridge-state" || state.Connected != "false" {
+			t.Fatalf("state %+v, want connected false", state)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no peer-down frame")
+	}
+	if got := b.PaneSnapshot("pane-c"); got.Connected == nil || *got.Connected {
+		t.Fatalf("snapshot %+v, want connected false", got)
 	}
 }
 
@@ -577,5 +658,196 @@ func TestBridgeDelayedExitPreservesReplacement(t *testing.T) {
 	b.handlePaneExit(newInst)
 	if got := b.PaneSnapshot("pane-1"); got.State != piBridgePlain {
 		t.Fatalf("current exit snapshot %+v, want plain", got)
+	}
+}
+
+// answerHistoryOnce serves one HistoryRequest on a test stream with a
+// canned response, then returns. It fails the test on any stream error.
+func answerHistoryOnce(t *testing.T, stream pibridgepb.Integration_ConnectClient, entries []string, unavailable bool) {
+	t.Helper()
+	for {
+		msg, err := stream.Recv()
+		if err != nil {
+			t.Errorf("recv: %v", err)
+			return
+		}
+		req := msg.GetHistoryRequest()
+		if req == nil {
+			continue
+		}
+		res := &pibridgepb.PiToPhi{
+			PaneId: msg.GetPaneId(), ProcessId: msg.GetProcessId(), RuntimeGeneration: msg.GetRuntimeGeneration(),
+			Payload: &pibridgepb.PiToPhi_HistoryResponse{HistoryResponse: &pibridgepb.HistoryResponse{
+				RequestId: req.GetRequestId(), Entries: entries, Unavailable: unavailable,
+			}},
+		}
+		if err := stream.Send(res); err != nil {
+			t.Errorf("send response: %v", err)
+		}
+		return
+	}
+}
+
+func dialHistoryPane(t *testing.T, b *Bridge, pane string, caps ...string) (pibridgepb.Integration_ConnectClient, context.CancelFunc) {
+	t.Helper()
+	env, _, managed := b.Provision(pane, true)
+	if !managed {
+		t.Fatal("provision not managed")
+	}
+	b.Complete(&pty.PTYInstance{ID: pane})
+	stream, cancel := dialBridge(t, b, pane, env[piBridgeEnvProcess], env[piBridgeEnvToken])
+	hello := &pibridgepb.PiToPhi{
+		PaneId: pane, ProcessId: env[piBridgeEnvProcess], RuntimeGeneration: 1,
+		Payload: &pibridgepb.PiToPhi_Hello{Hello: &pibridgepb.Hello{
+			ProtocolVersion: 1, SessionId: "sess", RuntimeId: "rt",
+			Capabilities: caps,
+			CurrentState: &pibridgepb.StateSnapshot{
+				State: pibridgepb.LogicalState_LOGICAL_STATE_IDLE, SessionId: "sess",
+			},
+		}},
+	}
+	if err := stream.Send(hello); err != nil {
+		t.Fatalf("hello: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("accepted: %v", err)
+	}
+	return stream, cancel
+}
+
+func TestBridgeRequestPaneHistory(t *testing.T) {
+	b := startPiBridge(testBridgeHub())
+	if b == nil {
+		t.Fatal("bridge did not start")
+	}
+	defer b.Stop()
+
+	if _, err := b.RequestPaneHistory(context.Background(), "unknown"); err == nil {
+		t.Fatal("unknown pane read succeeded")
+	}
+	var nilBridge *Bridge
+	if _, err := nilBridge.RequestPaneHistory(context.Background(), "pane-1"); err == nil {
+		t.Fatal("nil bridge read succeeded")
+	}
+
+	// Managed lease, no stream: fail fast.
+	env, _, managed := b.Provision("pane-np", true)
+	if !managed {
+		t.Fatal("provision not managed")
+	}
+	_ = env
+	b.Complete(&pty.PTYInstance{ID: "pane-np"})
+	if _, err := b.RequestPaneHistory(context.Background(), "pane-np"); err == nil {
+		t.Fatal("peerless pane read succeeded")
+	}
+
+	// Live peer without the history capability: never request.
+	stream, cancel := dialHistoryPane(t, b, "pane-lc", "pi.lifecycle.v1")
+	defer cancel()
+	if _, err := b.RequestPaneHistory(context.Background(), "pane-lc"); err == nil {
+		t.Fatal("lifecycle-only pane read succeeded")
+	}
+
+	// Live peer with the capability: entries flow newest-first.
+	stream, cancel = dialHistoryPane(t, b, "pane-h", "pi.lifecycle.v1", "pi.history.v1")
+	defer cancel()
+	go answerHistoryOnce(t, stream, []string{"newest", "oldest"}, false)
+	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	res, err := b.RequestPaneHistory(ctx, "pane-h")
+	if err != nil {
+		t.Fatalf("history read: %v", err)
+	}
+	if res.Unavailable || len(res.Entries) != 2 || res.Entries[0] != "newest" || res.Entries[1] != "oldest" {
+		t.Fatalf("result %+v, want newest-first entries", res)
+	}
+
+	// Explicit unavailable survives as a result, not an error.
+	go answerHistoryOnce(t, stream, nil, true)
+	res, err = b.RequestPaneHistory(ctx, "pane-h")
+	if err != nil {
+		t.Fatalf("unavailable read: %v", err)
+	}
+	if !res.Unavailable {
+		t.Fatalf("result %+v, want unavailable", res)
+	}
+}
+
+func TestHandlePiBridgeHistory(t *testing.T) {
+	b := startPiBridge(testBridgeHub())
+	if b == nil {
+		t.Fatal("bridge did not start")
+	}
+	defer b.Stop()
+	prev := piBridge
+	piBridge = b
+	t.Cleanup(func() { piBridge = prev })
+
+	serve := func(method, target string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, target, nil)
+		rec := httptest.NewRecorder()
+		handlePiBridgeHistory(rec, req)
+		return rec
+	}
+
+	if rec := serve(http.MethodPost, "/api/pi-history?pane=x"); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST code %d, want 405", rec.Code)
+	}
+	if rec := serve(http.MethodGet, "/api/pi-history"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing pane code %d, want 400", rec.Code)
+	}
+	if rec := serve(http.MethodGet, "/api/pi-history?pane=unknown"); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unknown pane code %d, want 503", rec.Code)
+	}
+	if rec := serve(http.MethodGet, "/api/pi-history?pane=unknown"); !strings.Contains(rec.Body.String(), "pi history unavailable") {
+		t.Fatalf("unknown pane body %q, want fixed string", rec.Body.String())
+	}
+
+	stream, cancel := dialHistoryPane(t, b, "pane-http", "pi.lifecycle.v1", "pi.history.v1")
+	defer cancel()
+	go answerHistoryOnce(t, stream, []string{"one", "two"}, false)
+	rec := serve(http.MethodGet, "/api/pi-history?pane=pane-http")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("happy code %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control %q, want no-store", got)
+	}
+	var body struct {
+		Entries     []string `json:"entries"`
+		Unavailable bool     `json:"unavailable"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body decode: %v", err)
+	}
+	if body.Unavailable || len(body.Entries) != 2 || body.Entries[0] != "one" {
+		t.Fatalf("body %+v, want entries", body)
+	}
+
+	// A withheld reply cannot hold the HTTP handler beyond its deadline.
+	timedOut := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		r := httptest.NewRecorder()
+		handlePiBridgeHistory(r, httptest.NewRequest(http.MethodGet, "/api/pi-history?pane=pane-http", nil))
+		timedOut <- r
+	}()
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("withheld request: %v", err)
+	}
+	select {
+	case r := <-timedOut:
+		if r.Code != http.StatusServiceUnavailable {
+			t.Fatalf("timeout code %d, want 503", r.Code)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("history handler exceeded its timeout")
+	}
+
+	// Peer loss is also a sanitized 503.
+	cancel()
+	rec = serve(http.MethodGet, "/api/pi-history?pane=pane-http")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("dead peer code %d, want 503", rec.Code)
 	}
 }

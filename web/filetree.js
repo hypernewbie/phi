@@ -407,6 +407,7 @@ export class FileTreeManager {
         const after = text.substring(end, text.length);
         const padBefore = start > 0 && !before.endsWith(' ') ? ' ' : '';
         const padAfter = !after.startsWith(' ') && after.length > 0 ? ' ' : '';
+        this.app.tabManager?._resetPiRecall?.({ flush: true });
         textarea.value = before + padBefore + insertText + padAfter + after;
         const newPos = start + padBefore.length + insertText.length;
         textarea.setSelectionRange(newPos, newPos);

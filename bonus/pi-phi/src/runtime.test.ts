@@ -3,10 +3,12 @@ import type { ServiceError } from '@grpc/grpc-js';
 import {
     type AgentSettled,
     LogicalState,
-    type PiToPhi,
+    type PhiToPi,
+    PiToPhi,
     RunOutcome,
 } from './gen/bridge.js';
-import { CAPABILITY_LIFECYCLE } from './protocol.js';
+import { LIFECYCLE_HEADROOM_BYTES } from './protocol.js';
+import { CAPABILITY_HISTORY, CAPABILITY_LIFECYCLE } from './protocol.js';
 import { InvalidTargetError } from './endpoint.js';
 import type { ChannelCreds, ChannelHooks } from './channel.js';
 import { type PiContextView, Runtime, type RuntimeChannel } from './runtime.js';
@@ -34,9 +36,11 @@ function ctx(over: Partial<PiContextView> = {}): PiContextView {
 interface MockChannel extends RuntimeChannel {
     hellos: PiToPhi[];
     sends: PiToPhi[];
+    historySends: PiToPhi[];
     closed: number;
     hooks: ChannelHooks | null;
     sendResult: boolean;
+    historyResult: boolean;
     connectError: Error | null;
 }
 
@@ -44,16 +48,21 @@ function mockChannel(): MockChannel {
     const m: MockChannel = {
         hellos: [],
         sends: [],
+        historySends: [],
         closed: 0,
         hooks: null,
         sendResult: true,
+        historyResult: true,
         connectError: null,
         connect: async (hello: PiToPhi) => {
             m.hellos.push(hello);
             if (m.connectError) throw m.connectError;
             return {
                 protocolVersion: 1,
-                capabilities: [CAPABILITY_LIFECYCLE],
+                capabilities:
+                    hello.payload?.$case === 'hello'
+                        ? hello.payload.value.capabilities
+                        : [],
                 runtimeGeneration: 1n,
                 runtimeId: 'rt',
             };
@@ -61,6 +70,10 @@ function mockChannel(): MockChannel {
         send: (msg: PiToPhi) => {
             m.sends.push(msg);
             return m.sendResult;
+        },
+        sendHistory: (msg: PiToPhi) => {
+            m.historySends.push(msg);
+            return m.historyResult;
         },
         close: () => {
             m.closed += 1;
@@ -86,6 +99,45 @@ function payloadOf(msg: PiToPhi): NonNullable<PiToPhi['payload']> {
     const payload = msg.payload;
     if (!payload) throw new Error('missing payload');
     return payload;
+}
+
+function historyUi(history: unknown): unknown {
+    return {
+        setWidget: (
+            _key: string,
+            factory: ((tui: unknown, theme: unknown) => unknown) | undefined,
+        ) => {
+            if (factory !== undefined) {
+                factory(
+                    {
+                        getFocusedComponent: () => ({ history }),
+                    },
+                    {},
+                );
+            }
+        },
+    };
+}
+
+function historyRequest(id: string): PhiToPi {
+    return {
+        paneId: 'pane',
+        processId: 'proc',
+        runtimeGeneration: 1n,
+        payload: { $case: 'historyRequest', value: { requestId: id } },
+    };
+}
+
+function responseOf(msg: PiToPhi): {
+    requestId: string;
+    entries: string[];
+    unavailable: boolean;
+} {
+    const payload = payloadOf(msg);
+    if (payload.$case !== 'historyResponse') {
+        throw new Error(`not a history response: ${payload.$case}`);
+    }
+    return payload.value;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -115,6 +167,215 @@ describe('Runtime hello', () => {
         );
         expect(payload.value.currentState?.leafId).toBe('leaf');
         expect(payload.value.currentState?.model?.provider).toBe('p');
+        rt.shutdown();
+    });
+    it('advertises history only while the reader reaches an editor', async () => {
+        const editorUi = {
+            setWidget: (
+                _key: string,
+                factory:
+                    | ((tui: unknown, theme: unknown) => unknown)
+                    | undefined,
+            ) => {
+                if (factory !== undefined) {
+                    factory(
+                        {
+                            getFocusedComponent: () => ({
+                                history: ['a'],
+                            }),
+                        },
+                        {},
+                    );
+                }
+            },
+        };
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            makeChannel: wired(ch),
+        });
+        rt.start(ctx({ ui: editorUi }));
+        await sleep(10);
+        expect(ch.hellos).toHaveLength(1);
+        const payload = payloadOf(ch.hellos[0]!);
+        expect(payload.$case).toBe('hello');
+        if (payload.$case !== 'hello') return;
+        expect(payload.value.capabilities).toEqual([
+            CAPABILITY_LIFECYCLE,
+            CAPABILITY_HISTORY,
+        ]);
+        rt.shutdown();
+    });
+    it('stays lifecycle-only when the reader is unavailable', async () => {
+        const printUi = { setWidget: () => {} };
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            makeChannel: wired(ch),
+        });
+        rt.start(ctx({ ui: printUi }));
+        await sleep(10);
+        expect(ch.hellos).toHaveLength(1);
+        const payload = payloadOf(ch.hellos[0]!);
+        expect(payload.$case).toBe('hello');
+        if (payload.$case !== 'hello') return;
+        expect(payload.value.capabilities).toEqual([CAPABILITY_LIFECYCLE]);
+        rt.shutdown();
+    });
+});
+
+describe('Runtime history requests', () => {
+    async function started(ui: unknown): Promise<{
+        ch: MockChannel;
+        rt: Runtime;
+    }> {
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            makeChannel: wired(ch),
+        });
+        rt.start(ctx({ ui }));
+        await sleep(10);
+        return { ch, rt };
+    }
+
+    it('answers with the live entries and echoes the id', async () => {
+        const { ch, rt } = await started(historyUi(['b', 'a']));
+        ch.hooks!.onMessage(historyRequest('h7'));
+        expect(ch.historySends).toHaveLength(1);
+        expect(responseOf(ch.historySends[0]!)).toEqual({
+            requestId: 'h7',
+            entries: ['b', 'a'],
+            unavailable: false,
+        });
+        expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+
+    it('answers unavailable when the reader cannot reach an editor', async () => {
+        const { ch, rt } = await started(historyUi([]));
+        rt.onModelSelect(ctx({ ui: undefined }));
+        ch.hooks!.onMessage(historyRequest('h1'));
+        expect(ch.historySends).toHaveLength(1);
+        const res = responseOf(ch.historySends[0]!);
+        expect(res.requestId).toBe('h1');
+        expect(res.unavailable).toBe(true);
+        expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+
+    it('answers unavailable when the snapshot exceeds the message bound', async () => {
+        const big = 'x'.repeat(3000);
+        const { ch, rt } = await started(
+            historyUi(Array.from({ length: 100 }, () => big)),
+        );
+        ch.hooks!.onMessage(historyRequest('h9'));
+        expect(ch.historySends).toHaveLength(1);
+        expect(responseOf(ch.historySends[0]!).unavailable).toBe(true);
+        expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+
+    it('drops requests with an empty id', async () => {
+        const { ch, rt } = await started(historyUi(['a']));
+        ch.hooks!.onMessage(historyRequest(''));
+        expect(ch.historySends).toHaveLength(0);
+        expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+
+    it('fails only the request when admission misses', async () => {
+        const { ch, rt } = await started(historyUi(['a']));
+        ch.historyResult = false;
+        ch.hooks!.onMessage(historyRequest('h3'));
+        // The snapshot missed, so the runtime answers unavailable
+        // instead; both attempts fail here and the stream survives.
+        expect(ch.historySends).toHaveLength(2);
+        expect(responseOf(ch.historySends[1]!).unavailable).toBe(true);
+        expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+
+    it.each(['paneId', 'processId', 'runtimeGeneration'] as const)(
+        'drops a request with the wrong %s',
+        async (field) => {
+            const { ch, rt } = await started(historyUi(['a']));
+            const request = historyRequest('h1');
+            if (field === 'runtimeGeneration') request[field] = 2n;
+            else request[field] = 'wrong';
+            ch.hooks!.onMessage(request);
+            expect(ch.historySends).toHaveLength(0);
+            rt.shutdown();
+        },
+    );
+
+    it('drops requests when history was not negotiated', async () => {
+        const { ch, rt } = await started(undefined);
+        ch.hooks!.onMessage(historyRequest('h1'));
+        expect(ch.historySends).toHaveLength(0);
+        rt.shutdown();
+    });
+
+    it('ignores non-history server messages', async () => {
+        const { ch, rt } = await started(historyUi(['a']));
+        ch.hooks!.onMessage({
+            paneId: 'pane',
+            processId: 'proc',
+            runtimeGeneration: 1n,
+            payload: {
+                $case: 'protocolError',
+                value: { code: 0, safeMessage: 'test' },
+            },
+        });
+        expect(ch.historySends).toHaveLength(0);
+        expect(ch.sends).toHaveLength(0);
+        expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+});
+
+describe('Runtime lifecycle headroom', () => {
+    it('keeps even a full-journal snapshot under the headroom', async () => {
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            makeChannel: wired(ch),
+        });
+        const long = 's'.repeat(128);
+        const big = () =>
+            ctx({
+                sessionManager: {
+                    getSessionId: () => long,
+                    getLeafId: () => long,
+                },
+                model: {
+                    provider: long,
+                    model: long,
+                    providerId: long,
+                    id: long,
+                } as unknown as PiContextView['model'],
+            });
+        rt.start(big());
+        await sleep(10);
+        for (let i = 0; i < 70; i++) rt.onAgentStart(big());
+        const snapshots = ch.sends.filter(
+            (m) => payloadOf(m).$case === 'stateSnapshot',
+        );
+        expect(snapshots.length).toBeGreaterThan(0);
+        const last = payloadOf(snapshots[snapshots.length - 1]!);
+        if (last.$case !== 'stateSnapshot') throw new Error('unreachable');
+        // Full journal plus gap: the largest snapshot this runtime emits.
+        expect(last.value.journal).toHaveLength(64);
+        expect(last.value.journalGap).toBe(true);
+        let max = 0;
+        for (const m of [...ch.sends, ...ch.hellos]) {
+            max = Math.max(max, PiToPhi.encode(m).finish().length);
+        }
+        expect(max).toBeLessThan(LIFECYCLE_HEADROOM_BYTES);
         rt.shutdown();
     });
 });
@@ -329,6 +590,45 @@ describe('Runtime reconnect', () => {
         );
         rt.shutdown();
     });
+
+    it.each([null, 1, 14])(
+        'ignores stale channel callbacks after reconnect (status %s)',
+        async (code) => {
+            const channels: MockChannel[] = [];
+            const rt = new Runtime({
+                creds: CREDS,
+                generation: 1n,
+                backoffBaseMs: 5,
+                backoffMaxMs: 10,
+                makeChannel: (_c, hooks) => {
+                    const ch = mockChannel();
+                    ch.hooks = hooks;
+                    channels.push(ch);
+                    return ch;
+                },
+            });
+            try {
+                rt.start(ctx({ ui: historyUi(['current']) }));
+                await sleep(10);
+                const old = channels[0]!;
+                old.hooks!.onStatus(status(14));
+                await sleep(30);
+                expect(channels).toHaveLength(2);
+                const current = channels[1]!;
+                old.hooks!.onMessage(historyRequest('stale'));
+                old.hooks!.onStatus(code === null ? null : status(code));
+                expect(current.closed).toBe(0);
+                expect(old.historySends).toHaveLength(0);
+                current.hooks!.onMessage(historyRequest('current'));
+                expect(current.historySends).toHaveLength(1);
+                expect(responseOf(current.historySends[0]!).entries).toEqual([
+                    'current',
+                ]);
+            } finally {
+                rt.shutdown();
+            }
+        },
+    );
 
     it('stops on terminal statuses', async () => {
         for (const code of [16, 7, 9, 1]) {

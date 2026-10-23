@@ -34,4 +34,20 @@ describe('BoundedQueue', () => {
         q.endSend(head!);
         expect(q.tryEnqueue(msg(4))).toBe(true);
     });
+    it('admits under a tighter byte cap without mutating on miss', () => {
+        const q = new BoundedQueue();
+        expect(q.tryEnqueueWithByteCap(msg(100), 240)).toBe(true);
+        expect(q.tryEnqueueWithByteCap(msg(141), 240)).toBe(false);
+        expect(q.tryEnqueueWithByteCap(msg(140), 240)).toBe(true);
+        expect(q.outstandingBytes).toBe(240);
+    });
+    it('keeps the count bound under a tighter byte cap', () => {
+        const q = new BoundedQueue();
+        for (let i = 0; i < MAX_QUEUED_MESSAGES; i++) {
+            expect(q.tryEnqueueWithByteCap(msg(1), MAX_QUEUED_BYTES)).toBe(
+                true,
+            );
+        }
+        expect(q.tryEnqueueWithByteCap(msg(1), MAX_QUEUED_BYTES)).toBe(false);
+    });
 });

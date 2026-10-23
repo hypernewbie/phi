@@ -11,20 +11,25 @@ import {
     AgentSettled,
     AgentStarted,
     Hello,
+    HistoryResponse,
     LogicalState,
     ModelSnapshot,
-    type PiToPhi,
+    PiToPhi,
     RunOutcome,
     StateSnapshot,
 } from './gen/bridge.js';
 import { BridgeChannel, type ChannelCreds } from './channel.js';
 import { InvalidTargetError } from './endpoint.js';
 import { PROTOCOL_VERSION } from './protocol.js';
+import { CAPABILITY_HISTORY } from './protocol.js';
 import { CAPABILITY_LIFECYCLE } from './protocol.js';
 import { MAX_JOURNAL_RECORDS } from './protocol.js';
+import { MAX_MESSAGE_BYTES } from './protocol.js';
 import { RECONNECT_BASE_MS } from './protocol.js';
 import { RECONNECT_MAX_MS } from './protocol.js';
 import { RECONNECT_STABLE_MS } from './protocol.js';
+import { isHistoryReaderAvailable } from './history-reader.js';
+import { readEditorHistory } from './history-reader.js';
 
 /** Structural Pi session view; satisfied by both pinned host versions. */
 export interface PiSessionView {
@@ -39,6 +44,12 @@ export type PiModelView = NonNullable<ExtensionContext['model']>;
 export interface PiContextView {
     readonly sessionManager: PiSessionView;
     readonly model?: PiModelView | undefined;
+    /**
+     * Live UI surface for the history reader. Unknown-shaped by
+     * design: the reader guards every access and reports
+     * unavailable on hosts or modes without widget capture.
+     */
+    readonly ui?: unknown;
 }
 
 export interface RuntimeOptions {
@@ -62,6 +73,11 @@ export interface ChannelHooks {
 export interface RuntimeChannel {
     connect(hello: PiToPhi): Promise<import('./gen/bridge.js').Accepted>;
     send(msg: PiToPhi): boolean;
+    /**
+     * Queue one history response. False means the frame missed
+     * admission; the caller fails only that request, never the stream.
+     */
+    sendHistory(msg: PiToPhi): boolean;
     close(): void;
 }
 
@@ -98,6 +114,9 @@ export class Runtime {
     private sessionId = '';
     private leafId = '';
     private model: PiModelView | undefined;
+    /** Latest UI surface for history reads; refreshed on every event. */
+    private ui: unknown;
+    private historyAccepted = false;
     /** Final assistant stop reason of the current run, if observed. */
     private lastStopReason: string | null = null;
     /** When the current stream was accepted; null while connecting. */
@@ -302,6 +321,7 @@ export class Runtime {
             // Keep the last known leaf; never fail an event mapping.
         }
         this.model = ctx.model;
+        this.ui = ctx.ui;
     }
 
     private nextSeq(): bigint {
@@ -340,6 +360,19 @@ export class Runtime {
         });
     }
 
+    /**
+     * Capabilities this runtime implements right now. History is
+     * advertised only while the direct reader can reach a
+     * history-shaped editor; print and RPC modes stay
+     * lifecycle-only. Re-evaluated on every Hello, so reconnects
+     * follow custom-editor changes.
+     */
+    private capabilities(): string[] {
+        const caps = [CAPABILITY_LIFECYCLE];
+        if (isHistoryReaderAvailable(this.ui)) caps.push(CAPABILITY_HISTORY);
+        return caps;
+    }
+
     private hello(): PiToPhi {
         return {
             paneId: this.opts.creds.pane,
@@ -351,7 +384,7 @@ export class Runtime {
                     protocolVersion: PROTOCOL_VERSION,
                     sessionId: this.sessionId,
                     runtimeId: this.runtimeId,
-                    capabilities: [CAPABILITY_LIFECYCLE],
+                    capabilities: this.capabilities(),
                     currentState: this.snapshot(
                         this.running
                             ? LogicalState.LOGICAL_STATE_RUNNING
@@ -395,13 +428,24 @@ export class Runtime {
         const make =
             this.opts.makeChannel ??
             ((creds, hooks) => new BridgeChannel(creds, hooks));
+        this.historyAccepted = false;
         const channel = make(this.opts.creds, {
-            onMessage: (msg) => this.onServerMessage(msg),
-            onStatus: (status) => this.onStreamEnd(status),
+            onMessage: (msg) => {
+                if (this.channel === channel && !this.shutdownRequested)
+                    this.onServerMessage(msg);
+            },
+            onStatus: (status) => {
+                if (this.channel === channel && !this.shutdownRequested)
+                    this.onStreamEnd(status);
+            },
         });
         this.channel = channel;
         try {
-            await channel.connect(this.hello());
+            const accepted = await channel.connect(this.hello());
+            if (this.channel === channel) {
+                this.historyAccepted =
+                    accepted.capabilities.includes(CAPABILITY_HISTORY);
+            }
         } catch (err) {
             channel.close();
             if (this.channel === channel) this.channel = null;
@@ -430,10 +474,63 @@ export class Runtime {
         this.connectedAt = Date.now();
     }
 
-    private onServerMessage(_msg: import('./gen/bridge.js').PhiToPi): void {
-        // The lifecycle runtime issues no commands, so Phi sends only
-        // Accepted and ProtocolError. Terminal failures arrive as the
-        // stream status, not messages. Everything here is informational.
+    private onServerMessage(msg: import('./gen/bridge.js').PhiToPi): void {
+        // Accepted is consumed by the channel; ProtocolError is
+        // informational here since terminal failures arrive as the
+        // stream status. History requests are answered below.
+        if (
+            msg.payload?.$case === 'historyRequest' &&
+            this.historyAccepted &&
+            msg.paneId === this.opts.creds.pane &&
+            msg.processId === this.opts.creds.process &&
+            msg.runtimeGeneration === this.opts.generation
+        ) {
+            this.onHistoryRequest(msg.payload.value.requestId);
+        }
+    }
+
+    /**
+     * Answer one history request. Best-effort: an unreachable reader
+     * or an oversized snapshot answers unavailable, and admission
+     * failure fails only the request. Nothing here closes the stream.
+     */
+    private onHistoryRequest(requestId: string): void {
+        if (typeof requestId !== 'string' || requestId === '') return;
+        if (!this.channel) return;
+        const entries = readEditorHistory(this.ui);
+        let msg = this.historyResponse(requestId, entries);
+        if (PiToPhi.encode(msg).finish().length > MAX_MESSAGE_BYTES) {
+            // Oversized snapshots answer unavailable; truncation
+            // would present a partial history as complete.
+            msg = this.historyResponse(requestId, null);
+        }
+        if (!this.channel.sendHistory(msg)) {
+            // Admission failure is nonfatal: when the snapshot was
+            // the frame that missed, answer unavailable instead so
+            // Phi falls back promptly; otherwise let Phi time out.
+            if (entries !== null) {
+                this.channel.sendHistory(this.historyResponse(requestId, null));
+            }
+        }
+    }
+
+    private historyResponse(
+        requestId: string,
+        entries: string[] | null,
+    ): PiToPhi {
+        return {
+            paneId: this.opts.creds.pane,
+            processId: this.opts.creds.process,
+            runtimeGeneration: this.opts.generation,
+            payload: {
+                $case: 'historyResponse',
+                value: HistoryResponse.create(
+                    entries === null
+                        ? { requestId, unavailable: true }
+                        : { requestId, entries, unavailable: false },
+                ),
+            },
+        };
     }
 
     private onStreamEnd(status: ServiceError | null): void {

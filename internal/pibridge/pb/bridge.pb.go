@@ -208,6 +208,7 @@ type PiToPhi struct {
 	//	*PiToPhi_AgentStarted
 	//	*PiToPhi_AgentSettled
 	//	*PiToPhi_StateSnapshot
+	//	*PiToPhi_HistoryResponse
 	Payload       isPiToPhi_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -307,6 +308,15 @@ func (x *PiToPhi) GetStateSnapshot() *StateSnapshot {
 	return nil
 }
 
+func (x *PiToPhi) GetHistoryResponse() *HistoryResponse {
+	if x != nil {
+		if x, ok := x.Payload.(*PiToPhi_HistoryResponse); ok {
+			return x.HistoryResponse
+		}
+	}
+	return nil
+}
+
 type isPiToPhi_Payload interface {
 	isPiToPhi_Payload()
 }
@@ -327,6 +337,10 @@ type PiToPhi_StateSnapshot struct {
 	StateSnapshot *StateSnapshot `protobuf:"bytes,13,opt,name=state_snapshot,json=stateSnapshot,proto3,oneof"`
 }
 
+type PiToPhi_HistoryResponse struct {
+	HistoryResponse *HistoryResponse `protobuf:"bytes,17,opt,name=history_response,json=historyResponse,proto3,oneof"`
+}
+
 func (*PiToPhi_Hello) isPiToPhi_Payload() {}
 
 func (*PiToPhi_AgentStarted) isPiToPhi_Payload() {}
@@ -334,6 +348,8 @@ func (*PiToPhi_AgentStarted) isPiToPhi_Payload() {}
 func (*PiToPhi_AgentSettled) isPiToPhi_Payload() {}
 
 func (*PiToPhi_StateSnapshot) isPiToPhi_Payload() {}
+
+func (*PiToPhi_HistoryResponse) isPiToPhi_Payload() {}
 
 // Envelope for every Phi → Pi message.
 type PhiToPi struct {
@@ -345,6 +361,7 @@ type PhiToPi struct {
 	//
 	//	*PhiToPi_Accepted
 	//	*PhiToPi_ProtocolError
+	//	*PhiToPi_HistoryRequest
 	Payload       isPhiToPi_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -426,6 +443,15 @@ func (x *PhiToPi) GetProtocolError() *ProtocolError {
 	return nil
 }
 
+func (x *PhiToPi) GetHistoryRequest() *HistoryRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*PhiToPi_HistoryRequest); ok {
+			return x.HistoryRequest
+		}
+	}
+	return nil
+}
+
 type isPhiToPi_Payload interface {
 	isPhiToPi_Payload()
 }
@@ -438,9 +464,15 @@ type PhiToPi_ProtocolError struct {
 	ProtocolError *ProtocolError `protobuf:"bytes,13,opt,name=protocol_error,json=protocolError,proto3,oneof"`
 }
 
+type PhiToPi_HistoryRequest struct {
+	HistoryRequest *HistoryRequest `protobuf:"bytes,14,opt,name=history_request,json=historyRequest,proto3,oneof"`
+}
+
 func (*PhiToPi_Accepted) isPhiToPi_Payload() {}
 
 func (*PhiToPi_ProtocolError) isPhiToPi_Payload() {}
+
+func (*PhiToPi_HistoryRequest) isPhiToPi_Payload() {}
 
 // Hello is the first application message on every stream. Protocol version,
 // identities, capabilities, and the replay range of the retained journal.
@@ -938,6 +970,119 @@ func (x *StateSnapshot) GetStateRevision() uint64 {
 	return 0
 }
 
+// HistoryRequest asks the extension for the live editor history.
+// request_id correlates exactly one HistoryResponse; the extension
+// echoes it verbatim. Best-effort: the answer may be unavailable,
+// or never arrive, without disturbing lifecycle traffic.
+type HistoryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HistoryRequest) Reset() {
+	*x = HistoryRequest{}
+	mi := &file_bridge_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HistoryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HistoryRequest) ProtoMessage() {}
+
+func (x *HistoryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HistoryRequest.ProtoReflect.Descriptor instead.
+func (*HistoryRequest) Descriptor() ([]byte, []int) {
+	return file_bridge_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *HistoryRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+// HistoryResponse carries one history snapshot for request_id.
+// entries is newest-first; it is ignored when unavailable is set.
+// unavailable means the reader cannot reach a history-shaped editor
+// or the snapshot exceeds the message bound. Phi falls back to its
+// pre-bridge behavior in both cases.
+type HistoryResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Entries       []string               `protobuf:"bytes,2,rep,name=entries,proto3" json:"entries,omitempty"`
+	Unavailable   bool                   `protobuf:"varint,3,opt,name=unavailable,proto3" json:"unavailable,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HistoryResponse) Reset() {
+	*x = HistoryResponse{}
+	mi := &file_bridge_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HistoryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HistoryResponse) ProtoMessage() {}
+
+func (x *HistoryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HistoryResponse.ProtoReflect.Descriptor instead.
+func (*HistoryResponse) Descriptor() ([]byte, []int) {
+	return file_bridge_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *HistoryResponse) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *HistoryResponse) GetEntries() []string {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+func (x *HistoryResponse) GetUnavailable() bool {
+	if x != nil {
+		return x.Unavailable
+	}
+	return false
+}
+
 // Terminal protocol-level rejection. Ends the stream attempt.
 type ProtocolError struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -949,7 +1094,7 @@ type ProtocolError struct {
 
 func (x *ProtocolError) Reset() {
 	*x = ProtocolError{}
-	mi := &file_bridge_proto_msgTypes[9]
+	mi := &file_bridge_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -961,7 +1106,7 @@ func (x *ProtocolError) String() string {
 func (*ProtocolError) ProtoMessage() {}
 
 func (x *ProtocolError) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[9]
+	mi := &file_bridge_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -974,7 +1119,7 @@ func (x *ProtocolError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProtocolError.ProtoReflect.Descriptor instead.
 func (*ProtocolError) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{9}
+	return file_bridge_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ProtocolError) GetCode() ProtocolErrorCode {
@@ -995,7 +1140,7 @@ var File_bridge_proto protoreflect.FileDescriptor
 
 const file_bridge_proto_rawDesc = "" +
 	"\n" +
-	"\fbridge.proto\x12\tphi.pi.v1\"\xae\x03\n" +
+	"\fbridge.proto\x12\tphi.pi.v1\"\xf7\x03\n" +
 	"\aPiToPhi\x12\x17\n" +
 	"\apane_id\x18\x01 \x01(\tR\x06paneId\x12\x1d\n" +
 	"\n" +
@@ -1005,8 +1150,9 @@ const file_bridge_proto_rawDesc = "" +
 	" \x01(\v2\x10.phi.pi.v1.HelloH\x00R\x05hello\x12>\n" +
 	"\ragent_started\x18\v \x01(\v2\x17.phi.pi.v1.AgentStartedH\x00R\fagentStarted\x12>\n" +
 	"\ragent_settled\x18\f \x01(\v2\x17.phi.pi.v1.AgentSettledH\x00R\fagentSettled\x12A\n" +
-	"\x0estate_snapshot\x18\r \x01(\v2\x18.phi.pi.v1.StateSnapshotH\x00R\rstateSnapshotB\t\n" +
-	"\apayloadJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10J\x04\b\x10\x10\x11R\x0esummary_resultR\rcommand_errorR\x13cancel_acknowledged\"\x90\x02\n" +
+	"\x0estate_snapshot\x18\r \x01(\v2\x18.phi.pi.v1.StateSnapshotH\x00R\rstateSnapshot\x12G\n" +
+	"\x10history_response\x18\x11 \x01(\v2\x1a.phi.pi.v1.HistoryResponseH\x00R\x0fhistoryResponseB\t\n" +
+	"\apayloadJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10J\x04\b\x10\x10\x11R\x0esummary_resultR\rcommand_errorR\x13cancel_acknowledged\"\xd6\x02\n" +
 	"\aPhiToPi\x12\x17\n" +
 	"\apane_id\x18\x01 \x01(\tR\x06paneId\x12\x1d\n" +
 	"\n" +
@@ -1014,7 +1160,8 @@ const file_bridge_proto_rawDesc = "" +
 	"\x12runtime_generation\x18\x03 \x01(\x04R\x11runtimeGeneration\x121\n" +
 	"\baccepted\x18\n" +
 	" \x01(\v2\x13.phi.pi.v1.AcceptedH\x00R\baccepted\x12A\n" +
-	"\x0eprotocol_error\x18\r \x01(\v2\x18.phi.pi.v1.ProtocolErrorH\x00R\rprotocolErrorB\t\n" +
+	"\x0eprotocol_error\x18\r \x01(\v2\x18.phi.pi.v1.ProtocolErrorH\x00R\rprotocolError\x12D\n" +
+	"\x0fhistory_request\x18\x0e \x01(\v2\x19.phi.pi.v1.HistoryRequestH\x00R\x0ehistoryRequestB\t\n" +
 	"\apayloadJ\x04\b\v\x10\fJ\x04\b\f\x10\rR\tsummarizeR\x06cancel\"\xe8\x02\n" +
 	"\x05Hello\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\x1d\n" +
@@ -1056,7 +1203,15 @@ const file_bridge_proto_rawDesc = "" +
 	"\ajournal\x18\x05 \x03(\v2\x1a.phi.pi.v1.LifecycleRecordR\ajournal\x12\x1f\n" +
 	"\vjournal_gap\x18\x06 \x01(\bR\n" +
 	"journalGap\x12%\n" +
-	"\x0estate_revision\x18\a \x01(\x04R\rstateRevisionJ\x04\b\b\x10\tR\x15outstanding_summaries\"d\n" +
+	"\x0estate_revision\x18\a \x01(\x04R\rstateRevisionJ\x04\b\b\x10\tR\x15outstanding_summaries\"/\n" +
+	"\x0eHistoryRequest\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\"l\n" +
+	"\x0fHistoryResponse\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12\x18\n" +
+	"\aentries\x18\x02 \x03(\tR\aentries\x12 \n" +
+	"\vunavailable\x18\x03 \x01(\bR\vunavailable\"d\n" +
 	"\rProtocolError\x120\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x1c.phi.pi.v1.ProtocolErrorCodeR\x04code\x12!\n" +
 	"\fsafe_message\x18\x02 \x01(\tR\vsafeMessage*t\n" +
@@ -1093,7 +1248,7 @@ func file_bridge_proto_rawDescGZIP() []byte {
 }
 
 var file_bridge_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_bridge_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_bridge_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_bridge_proto_goTypes = []any{
 	(RunOutcome)(0),         // 0: phi.pi.v1.RunOutcome
 	(LogicalState)(0),       // 1: phi.pi.v1.LogicalState
@@ -1107,29 +1262,33 @@ var file_bridge_proto_goTypes = []any{
 	(*LifecycleRecord)(nil), // 9: phi.pi.v1.LifecycleRecord
 	(*ModelSnapshot)(nil),   // 10: phi.pi.v1.ModelSnapshot
 	(*StateSnapshot)(nil),   // 11: phi.pi.v1.StateSnapshot
-	(*ProtocolError)(nil),   // 12: phi.pi.v1.ProtocolError
+	(*HistoryRequest)(nil),  // 12: phi.pi.v1.HistoryRequest
+	(*HistoryResponse)(nil), // 13: phi.pi.v1.HistoryResponse
+	(*ProtocolError)(nil),   // 14: phi.pi.v1.ProtocolError
 }
 var file_bridge_proto_depIdxs = []int32{
 	5,  // 0: phi.pi.v1.PiToPhi.hello:type_name -> phi.pi.v1.Hello
 	7,  // 1: phi.pi.v1.PiToPhi.agent_started:type_name -> phi.pi.v1.AgentStarted
 	8,  // 2: phi.pi.v1.PiToPhi.agent_settled:type_name -> phi.pi.v1.AgentSettled
 	11, // 3: phi.pi.v1.PiToPhi.state_snapshot:type_name -> phi.pi.v1.StateSnapshot
-	6,  // 4: phi.pi.v1.PhiToPi.accepted:type_name -> phi.pi.v1.Accepted
-	12, // 5: phi.pi.v1.PhiToPi.protocol_error:type_name -> phi.pi.v1.ProtocolError
-	11, // 6: phi.pi.v1.Hello.current_state:type_name -> phi.pi.v1.StateSnapshot
-	0,  // 7: phi.pi.v1.AgentSettled.outcome:type_name -> phi.pi.v1.RunOutcome
-	0,  // 8: phi.pi.v1.LifecycleRecord.outcome:type_name -> phi.pi.v1.RunOutcome
-	1,  // 9: phi.pi.v1.StateSnapshot.state:type_name -> phi.pi.v1.LogicalState
-	10, // 10: phi.pi.v1.StateSnapshot.model:type_name -> phi.pi.v1.ModelSnapshot
-	9,  // 11: phi.pi.v1.StateSnapshot.journal:type_name -> phi.pi.v1.LifecycleRecord
-	2,  // 12: phi.pi.v1.ProtocolError.code:type_name -> phi.pi.v1.ProtocolErrorCode
-	3,  // 13: phi.pi.v1.Integration.Connect:input_type -> phi.pi.v1.PiToPhi
-	4,  // 14: phi.pi.v1.Integration.Connect:output_type -> phi.pi.v1.PhiToPi
-	14, // [14:15] is the sub-list for method output_type
-	13, // [13:14] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	13, // 4: phi.pi.v1.PiToPhi.history_response:type_name -> phi.pi.v1.HistoryResponse
+	6,  // 5: phi.pi.v1.PhiToPi.accepted:type_name -> phi.pi.v1.Accepted
+	14, // 6: phi.pi.v1.PhiToPi.protocol_error:type_name -> phi.pi.v1.ProtocolError
+	12, // 7: phi.pi.v1.PhiToPi.history_request:type_name -> phi.pi.v1.HistoryRequest
+	11, // 8: phi.pi.v1.Hello.current_state:type_name -> phi.pi.v1.StateSnapshot
+	0,  // 9: phi.pi.v1.AgentSettled.outcome:type_name -> phi.pi.v1.RunOutcome
+	0,  // 10: phi.pi.v1.LifecycleRecord.outcome:type_name -> phi.pi.v1.RunOutcome
+	1,  // 11: phi.pi.v1.StateSnapshot.state:type_name -> phi.pi.v1.LogicalState
+	10, // 12: phi.pi.v1.StateSnapshot.model:type_name -> phi.pi.v1.ModelSnapshot
+	9,  // 13: phi.pi.v1.StateSnapshot.journal:type_name -> phi.pi.v1.LifecycleRecord
+	2,  // 14: phi.pi.v1.ProtocolError.code:type_name -> phi.pi.v1.ProtocolErrorCode
+	3,  // 15: phi.pi.v1.Integration.Connect:input_type -> phi.pi.v1.PiToPhi
+	4,  // 16: phi.pi.v1.Integration.Connect:output_type -> phi.pi.v1.PhiToPi
+	16, // [16:17] is the sub-list for method output_type
+	15, // [15:16] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_bridge_proto_init() }
@@ -1142,10 +1301,12 @@ func file_bridge_proto_init() {
 		(*PiToPhi_AgentStarted)(nil),
 		(*PiToPhi_AgentSettled)(nil),
 		(*PiToPhi_StateSnapshot)(nil),
+		(*PiToPhi_HistoryResponse)(nil),
 	}
 	file_bridge_proto_msgTypes[1].OneofWrappers = []any{
 		(*PhiToPi_Accepted)(nil),
 		(*PhiToPi_ProtocolError)(nil),
+		(*PhiToPi_HistoryRequest)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1153,7 +1314,7 @@ func file_bridge_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bridge_proto_rawDesc), len(file_bridge_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   10,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

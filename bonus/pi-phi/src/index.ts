@@ -4,6 +4,7 @@
 
 export {
     PROTOCOL_VERSION,
+    CAPABILITY_HISTORY,
     CAPABILITY_LIFECYCLE,
     MAX_MESSAGE_BYTES,
     MAX_QUEUED_MESSAGES,
@@ -18,3 +19,7 @@ export type { IpcTargetKind, ParsedTarget } from './endpoint.js';
 export { BoundedQueue } from './queue.js';
 export type { SizedMessage } from './queue.js';
 export { createExtension, default } from './extension.js';
+export {
+    readEditorHistory,
+    isHistoryReaderAvailable,
+} from './history-reader.js';

@@ -69,9 +69,27 @@ Runtime identity binds `(generation, runtime_id, session_id)`:
 
 ## Capabilities
 
-| Name              | Meaning                                |
-| ----------------- | -------------------------------------- |
-| `pi.lifecycle.v1` | Lifecycle edges, snapshots, settlement |
+| Name              | Meaning                                          |
+| ----------------- | ------------------------------------------------ |
+| `pi.lifecycle.v1` | Lifecycle edges, snapshots, settlement           |
+| `pi.history.v1`   | On-demand live editor-history reads              |
+
+## History reads
+
+`pi.history.v1` is a best-effort request/response pair over the
+shared stream. Phi sends `HistoryRequest` (field 14) with a
+correlating `request_id`; the extension answers `HistoryResponse`
+(field 17) echoing the id with the newest-first snapshot, or
+`unavailable` when no history-shaped editor is readable or the
+snapshot exceeds the message bound. Unknown, duplicate, and late
+responses are dropped, never protocol errors.
+
+History responses share the bounded send queue with lifecycle
+edges, so admission keeps explicit lifecycle headroom (16 KiB and two
+message slots). A history frame admits only while the queue retains that headroom
+after admission. Admission failure fails only the request — it
+never closes the stream — and Phi falls back to pre-bridge
+behavior on any failure or a 1 s timeout.
 
 ## Lifecycle events
 
@@ -106,11 +124,13 @@ the state revision.
 | gRPC metadata                | 8 KiB                      |
 | Message                      | 256 KiB                    |
 | Send queue per peer          | 16 messages and 256 KiB    |
+| Pending history reads per peer | 4 (including awaiting replies) |
 | Blocked send                 | 5 s, then the stream ends  |
 | Journal rows retained        | 64, then gap latches       |
 
-Queue overflow and blocked sends end only the affected stream with an
-explicit status. Lease, journal, and last state survive for reconnect.
+Lifecycle queue overflow and blocked sends end only the affected stream
+with an explicit status. History admission failure does not end the stream.
+Lease, journal, and last state survive for reconnect.
 
 ## Status mapping
 
@@ -120,7 +140,7 @@ explicit status. Lease, journal, and last state survive for reconnect.
 | Pane or identity mismatch                        | `PermissionDenied`    |
 | Wrong protocol version, stale/conflicting runtime| `FailedPrecondition` |
 | Oversized hello                                  | `ResourceExhausted`   |
-| Queue overflow               | `ResourceExhausted`   |
+| Lifecycle queue overflow     | `ResourceExhausted`   |
 | Malformed or out-of-bound payload                | `InvalidArgument`     |
 | Revoke, replace, client cancel                   | `Cancelled`           |
 | Send failure or blocked send                     | `Unavailable`         |
@@ -133,12 +153,18 @@ Other failures retry with bounded backoff on the same generation.
 
 ## Supported hosts
 
-- Pi 1.0.1 (Phi-pinned) and Pi 1.3.0 (global): extension factory,
+- The packaged-host check covers pinned Pi 1.0.1 and 1.3.0: extension factory,
   `session_start`, `agent_start`, `agent_settled`, `session_shutdown`,
   `ReadonlySessionManager` identity readers, `ctx.model`.
 - The `aborted` bit on `agent_settled` exists on 1.3.0 only. Code must
   read it defensively and behave on 1.0.1 without it. Both hosts
   emit `agent_end` with assistant stop reasons for classification.
+- History checks use real interactive editors on both pinned hosts.
+  The reader also depends on a checked private `history` array, reached
+  through the live TUI widget factory. An incompatible editor returns
+  unavailable instead of changing Pi behavior.
+- Other Pi versions and installed-release behavior with existing user
+  profiles remain unverified.
 
 ## Installation
 

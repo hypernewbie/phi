@@ -29,7 +29,7 @@ func checkMetadataSize(md metadata.MD) error {
 // negotiateCapabilities intersects client-advertised names with the
 // server-supported set. Unknown names are ignored, never an error.
 func negotiateCapabilities(advised []string) map[string]bool {
-	supported := map[string]bool{CapabilityLifecycle: true}
+	supported := map[string]bool{CapabilityLifecycle: true, CapabilityHistory: true}
 	out := map[string]bool{}
 	for _, c := range advised {
 		if supported[c] {

@@ -19,7 +19,11 @@ import { parseTarget } from './endpoint.js';
 import {
     BLOCKED_SEND_TIMEOUT_MS,
     HELLO_DEADLINE_MS,
+    LIFECYCLE_HEADROOM_BYTES,
+    LIFECYCLE_HEADROOM_MESSAGES,
     MAX_MESSAGE_BYTES,
+    MAX_QUEUED_BYTES,
+    MAX_QUEUED_MESSAGES,
     METADATA_PANE_KEY,
     METADATA_PROCESS_KEY,
     METADATA_TOKEN_KEY,
@@ -170,6 +174,27 @@ export class BridgeChannel {
         try {
             this.enqueue(msg);
         } catch {
+            return false;
+        }
+        void this.pumpWriter();
+        return true;
+    }
+
+    /**
+     * Queue one history response. Returns false when the frame would
+     * breach the history byte cap; unlike send, admission failure is
+     * nonfatal and leaves the stream usable for lifecycle traffic.
+     */
+    sendHistory(msg: PiToPhi): boolean {
+        if (this.closed || this.writerError) return false;
+        const byteSize = PiToPhi.encode(msg).finish().length;
+        if (
+            !this.queue.tryEnqueueWithByteCap(
+                { byteSize, msg },
+                MAX_QUEUED_BYTES - LIFECYCLE_HEADROOM_BYTES,
+                MAX_QUEUED_MESSAGES - LIFECYCLE_HEADROOM_MESSAGES,
+            )
+        ) {
             return false;
         }
         void this.pumpWriter();

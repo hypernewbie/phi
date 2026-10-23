@@ -412,6 +412,8 @@ export class TabManager {
         this._historyCursor = -1; // -1 = free-form, ≥0 = showing cache[idx]
         this._historyCwd = ''; // cwd the cache was loaded for
         this._historyLoaded = false; // first Alt+Up needs a fetch
+        // One Pi snapshot per staged-box recall cycle; never persisted.
+        this._piRecall = null;
         this.selfHudEl = document.getElementById('self-hud-popover');
         this.selfHudOpen = false;
         this.selfHudCloseTimer = null;
@@ -1288,6 +1290,48 @@ export class TabManager {
             // _forwardKeyToPty, shared with the terminal-focused and mobile
             // paths; the emptiness gate is this caller's concern.
             const inputTab = this.getActiveTab();
+
+            // Recall must run before empty-input PTY forwarding. During
+            // a cycle, recalled multiline entries remain browsable.
+            if (
+                (e.key === 'ArrowUp' || e.key === 'ArrowDown') &&
+                inputTab?.coder === 'pi' &&
+                !inputTab.isDead &&
+                !e.altKey &&
+                !e.ctrlKey &&
+                !e.metaKey &&
+                !e.shiftKey &&
+                !e.isComposing &&
+                this.inputTextArea.selectionStart ===
+                    this.inputTextArea.selectionEnd &&
+                (this._piRecallCycleValid(inputTab) ||
+                    (e.key === 'ArrowUp'
+                        ? this._caretOnFirstLine()
+                        : this._caretOnLastLine())) &&
+                this._piRecallEligible(inputTab)
+            ) {
+                const recallDir = e.key === 'ArrowUp' ? 'older' : 'newer';
+                if (this._piRecall?.pending) {
+                    // Repeated keys keep their old order on a slow read.
+                    this._resetPiRecall({ flush: true });
+                } else if (this._piRecallCycleValid(inputTab)) {
+                    if (this._cyclePiRecallCached(recallDir)) {
+                        e.preventDefault();
+                        return;
+                    }
+                    // Cache walk declined ('newer' at -1): fall through.
+                } else if (
+                    recallDir === 'older' && this.inputTextArea.value === ''
+                ) {
+                    // Empty input can defer the PTY arrow until the read.
+                    e.preventDefault();
+                    this._fetchPiRecall(recallDir, inputTab, e.key);
+                    return;
+                } else if (recallDir === 'older') {
+                    // Do not suppress a native caret move we cannot replay.
+                    this._fetchPiRecall(recallDir, inputTab, null);
+                }
+            }
             if (
                 this.inputTextArea.value === '' &&
                 inputTab?.coder !== 'pi-rpc' &&
@@ -4318,6 +4362,7 @@ export class TabManager {
         this.lastInputValue = this.inputTextArea.value;
         this._historyCursor = -1;
         this._historyPreCycleValue = undefined;
+        this._resetPiRecall({ flush: true });
         tab.chatHistoryCursor = -1;
         tab.chatHistoryPreCycleValue = undefined;
         this.adjustInputHeight();
@@ -5113,6 +5158,7 @@ export class TabManager {
             return;
         }
 
+        this._resetPiRecall({ flush: true });
         // Deactivate current active tab
         const prevTab = this.getActiveTab();
         if (prevTab) {
@@ -6509,6 +6555,8 @@ export class TabManager {
     }
 
     sendInput(tabInfo, payload) {
+        // Every PTY writer passes here, including direct terminal typing.
+        this._resetPiRecall({ flush: true });
         if (!tabInfo?.ws || tabInfo.isDead) {
             this.app.showToast('Tab is disconnected — input not sent', {
                 type: 'error',
@@ -6684,6 +6732,10 @@ export class TabManager {
         // most-recent stored entry.
         this.inputTextArea.addEventListener('input', () => {
             this._historyCursor = -1;
+            // Typed input also abandons a Pi recall cycle: the draft is
+            // the user's own now, and a deferred arrow flushes to the
+            // PTY first so the keypress is never lost.
+            this._resetPiRecall({ flush: true });
             // Typed input also breaks the per-chat cycle on Pi RPC tabs.
             const typedTab = this.getActiveTab();
             if (typedTab?.coder === 'pi-rpc') {
@@ -7058,6 +7110,10 @@ export class TabManager {
         // does nothing — a confusing dead end.
         if (!val && attachments.length === 0) return;
 
+        // A send abandons Pi recall; a deferred arrow flushes first so
+        // Pi sees the keys in the order they were pressed.
+        this._resetPiRecall({ flush: true });
+
         // Compose payload: text first (if any), then one formatted
         // attachment path per line. Path formatting is per-active-tab
         // coder (claude → @path, bash → raw path).
@@ -7428,7 +7484,19 @@ export class TabManager {
                           .filter(Boolean),
                   }
                 : {}),
+            ...(control.connected === 'true'
+                ? { connected: true }
+                : control.connected === 'false'
+                  ? { connected: false }
+                  : {}),
         };
+        if (
+            this._piRecall?.paneId === tabInfo.paneId &&
+            (!this._piRecallEligible(tabInfo) ||
+                tabInfo.piBridge.generation !== this._piRecall.gen)
+        ) {
+            this._resetPiRecall({ flush: true });
+        }
         // running/last_run only arrive post-hello, so their first
         // sight proves the bridge is live (not merely provisioned).
         if (control.running !== undefined || control.last_run) {
@@ -7859,6 +7927,9 @@ export class TabManager {
                 }
                 // A restart provisions a fresh lease; drop bridge state.
                 tabInfo.piBridge = data.pi_bridge;
+                // A restart provisions a fresh lease: drop recall state
+                // without flushing — the old pane is being reborn.
+                this._resetPiRecall();
                 tabInfo._piBridgeLastRun = undefined;
                 tabInfo._piBridgeGeneration = undefined;
                 tabInfo._piBridgeLive = undefined;
@@ -10387,6 +10458,9 @@ export class TabManager {
         if (this._historyCursor === -1 && direction === 'newer') {
             return; // already at the "newest" position
         }
+        // An Alt-history cycle replaces the textarea, so it abandons
+        // any Pi recall cycle (flushing a deferred arrow first).
+        this._resetPiRecall({ flush: true });
         if (
             this._historyPreCycleValue === undefined &&
             this._historyCursor === -1
@@ -10425,6 +10499,8 @@ export class TabManager {
 
         const entry = this._historyCache[this._historyCursor];
         if (entry) {
+            // The local-history fetch may have overlapped a Pi read.
+            this._resetPiRecall({ flush: true });
             this.inputTextArea.value = entry.text;
             this._placeCursorAtEnd();
             this.adjustInputHeight();
@@ -10521,6 +10597,144 @@ export class TabManager {
             console.warn('[prompt_history] load failed', err);
             return false;
         }
+    }
+
+    _piRecallEligible(tab) {
+        return (
+            tab?.coder === 'pi' && !tab.isDead &&
+            tab.piBridge?.state === 'managed' &&
+            tab.piBridge.connected === true &&
+            Array.isArray(tab.piBridge.capabilities) &&
+            tab.piBridge.capabilities.includes('pi.history.v1')
+        );
+    }
+
+    // Both replies and fallback keys belong to the original runtime/socket.
+    _piRecallContextValid(recall) {
+        return (
+            this.tabs?.get(recall.paneId) === recall.tab &&
+            recall.tab.paneId === recall.paneId && !recall.tab.isDead &&
+            recall.tab.ws === recall.socket &&
+            recall.tab.piBridge?.generation === recall.gen
+        );
+    }
+
+    _piRecallCycleValid(tab) {
+        const recall = this._piRecall;
+        return (
+            !!recall && recall.tab === tab &&
+            this._piRecallContextValid(recall) &&
+            recall.cache?.[recall.cursor] === this.inputTextArea.value
+        );
+    }
+
+    _resetPiRecall({ flush = false } = {}) {
+        const recall = this._piRecall;
+        this._piRecall = null;
+        if (!recall?.pending) return;
+        clearTimeout(recall.pending.timer);
+        recall.pending.controller.abort();
+        if (
+            flush && recall.pending.deferKey &&
+            this._piRecallContextValid(recall)
+        ) {
+            // No toast on a system fallback, even if the socket just closed.
+            recall.socket?.sendInput(
+                recall.pending.deferKey === 'ArrowDown' ? '\x1b[B' : '\x1b[A',
+            );
+        }
+    }
+
+    // Empty input defers a PTY arrow; nonempty input keeps native movement.
+    async _fetchPiRecall(direction, tab, deferKey) {
+        this._resetPiRecall({ flush: true });
+        const controller = new AbortController();
+        const recall = {
+            tab,
+            socket: tab.ws,
+            paneId: tab.paneId,
+            gen: tab.piBridge?.generation,
+            cursor: -1,
+            preCycleValue: this.inputTextArea.value,
+            pending: { controller, deferKey, timer: null },
+        };
+        this._piRecall = recall;
+        const fail = () => {
+            if (this._piRecall === recall) this._resetPiRecall({ flush: true });
+        };
+        // Bound the browser too: an HTTP request can stall before reaching Phi.
+        recall.pending.timer = setTimeout(fail, 1000);
+        try {
+            const res = await fetch(
+                `/api/pi-history?pane=${encodeURIComponent(recall.paneId)}`,
+                { signal: controller.signal, cache: 'no-store' },
+            );
+            if (!res.ok) {
+                fail();
+                return;
+            }
+            const body = await res.json();
+            if (this._piRecall !== recall) return;
+            if (
+                body?.unavailable || !Array.isArray(body?.entries) ||
+                body.entries.length === 0 ||
+                !body.entries.every((entry) => typeof entry === 'string') ||
+                !this._piRecallContextValid(recall) ||
+                this.getActiveTab() !== tab || !this._piRecallEligible(tab) ||
+                this.inputTextArea.value !== recall.preCycleValue
+            ) {
+                fail();
+                return;
+            }
+            clearTimeout(recall.pending.timer);
+            const deferred = recall.pending.deferKey;
+            recall.pending = undefined;
+            recall.cache = body.entries;
+            if (!this._cyclePiRecallCached(direction)) {
+                // A fresh Down has no cache position to advance from.
+                recall.pending = { controller, deferKey: deferred };
+                fail();
+            }
+        } catch {
+            fail();
+        }
+    }
+
+    // _cyclePiRecallCached walks the fetched Pi snapshot. Mirrors
+    // _cycleChatHistory's cursor semantics — -1 = free-form draft,
+    // non-negative = index into the newest-first cache, the first
+    // 'older' saves the draft and 'newer' past 0 restores it — except
+    // a full exit clears the snapshot so the next cycle fetches fresh.
+    _cyclePiRecallCached(direction) {
+        const recall = this._piRecall;
+        if (!this.inputTextArea || !recall || !Array.isArray(recall.cache))
+            return false;
+        if (recall.cache.length === 0) return false;
+        if (direction === 'newer' && recall.cursor === -1) return false;
+        if (recall.preCycleValue === undefined && recall.cursor === -1) {
+            recall.preCycleValue = this.inputTextArea.value;
+        }
+        if (direction === 'older') {
+            recall.cursor = Math.min(
+                recall.cursor < 0 ? 0 : recall.cursor + 1,
+                recall.cache.length - 1,
+            );
+        } else if (recall.cursor <= 0) {
+            this.inputTextArea.value = recall.preCycleValue || '';
+            // Full exit: the next cycle fetches a fresh snapshot.
+            this._piRecall = null;
+            this._placeCursorAtEnd();
+            this.adjustInputHeight();
+            return true;
+        } else {
+            recall.cursor -= 1;
+        }
+        const entry = recall.cache[recall.cursor];
+        if (entry === undefined) return false;
+        this.inputTextArea.value = entry;
+        this._placeCursorAtEnd();
+        this.adjustInputHeight();
+        return true;
     }
 }
 

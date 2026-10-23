@@ -35,6 +35,9 @@ type lease struct {
 	processID string
 	token     [tokenBytes]byte
 
+	// Serializes state/up and down notifications, including same-generation
+	// reconnects. Acquire before mu; no lease lock is held in callbacks.
+	notifyMu  sync.Mutex
 	mu        sync.Mutex
 	state     leaseState
 	maxGen    uint64   // highest accepted runtime generation
