@@ -781,7 +781,15 @@ func (m *tuiModel) renderFooter() string {
 		hints = "Esc again: Quit dialog · any other key cancels"
 	}
 	if m.prefix {
-		hints = "prefix: 1-9 servers  b rail  s sessions  t tabs  x close  u undo  d reader  M Markdown  q quit  ? help"
+		// Prefix bar: full-bleed accent background so the pending Ctrl-]
+		// state is unmissable. Single line on purpose — the terminal
+		// geometry assumes a one-row footer.
+		text := " CTRL-] 1-9 servers b rail s sessions t tabs x close u undo d diff M markdown q quit ? help Esc cancels "
+		text = ansi.Truncate(text, max(0, m.width), "")
+		if pad := m.width - ansi.StringWidth(text); pad > 0 {
+			text += strings.Repeat(" ", pad)
+		}
+		return lg.NewStyle().Background(accent).Foreground(lg.Color("#171719")).Bold(true).Render(text)
 	}
 	right := lg.NewStyle().Foreground(accent).Render(hints + " ")
 	gap := m.width - lg.Width(left) - lg.Width(right)

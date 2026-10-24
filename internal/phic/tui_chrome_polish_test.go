@@ -135,6 +135,24 @@ func TestSidebarShortcutAndPanelDividerDragUseSameGeometry(t *testing.T) {
 		}
 	}
 }
+func TestPrefixBarReplacesFooter(t *testing.T) {
+	m := newTUIModel("test", config{}, nil, nil, -1, stubBuild)
+	defer m.closeAll()
+	m.width, m.height = 120, 36
+	if strings.Contains(ansi.Strip(m.renderFooter()), "CTRL-]") {
+		t.Fatal("normal footer should not show the prefix bar")
+	}
+	m.prefix = true
+	bar := ansi.Strip(m.renderFooter())
+	for _, want := range []string{"CTRL-]", "? help", "Esc cancels"} {
+		if !strings.Contains(bar, want) {
+			t.Fatalf("prefix bar missing %q: %q", want, bar)
+		}
+	}
+	if w := ansi.StringWidth(bar); w != m.width {
+		t.Fatalf("prefix bar width %d, want %d", w, m.width)
+	}
+}
 func TestEmptyPhiLandingAndCompactChrome(t *testing.T) {
 	m := newTUIModel("test", config{}, nil, nil, -1, stubBuild)
 	defer m.closeAll()
