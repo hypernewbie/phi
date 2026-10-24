@@ -94,22 +94,35 @@ func (m *tuiModel) renderRail() string {
 		glyph := glyphs[i]
 		if m.prefix && i < 9 {
 			// Prefix mode: show the 1-9 digit that jumps to this server
-			// so the choice needs no counting. Colors stay exactly as
-			// cached; servers past 9 keep their Greek glyph.
+			// so the choice needs no counting. Each entry keeps its own
+			// server color; servers past 9 keep their Greek glyph.
 			glyph = string(rune('1' + i))
 		}
+		// Each server keeps its own highlight color: the live theme first,
+		// then the last-seen cached theme, otherwise neutral grey. The
+		// active server is a solid slab in its own color, mirroring the
+		// prefix bar; inactive servers show their color as text.
+		chip := " " + glyph + " " + label + " "
 		if i == m.active {
-			b.WriteString(lg.NewStyle().
-				Foreground(accent).Bold(true).
-				Background(lg.Color("#1d1f27")).
-				Render(" " + glyph + " " + label + " "))
-		} else {
-			color := tuiMuted
-			if s.health != "up" {
-				color = lg.Color("#78768a")
+			bg := lg.Color("#888895")
+			if hex, ok := m.serverThemeHex(s); ok {
+				bg = lg.Color("#" + hex)
 			}
-			b.WriteString(lg.NewStyle().Foreground(color).Render(" " + glyph + " " + label + " "))
+			b.WriteString(lg.NewStyle().
+				Foreground(lg.Color("#171719")).Bold(true).
+				Background(bg).
+				Render(chip))
+			continue
 		}
+		if s.health == "down" {
+			b.WriteString(lg.NewStyle().Foreground(lg.Color("#78768a")).Render(chip))
+			continue
+		}
+		if hex, ok := m.serverThemeHex(s); ok {
+			b.WriteString(lg.NewStyle().Foreground(lg.Color("#" + hex)).Bold(true).Render(chip))
+			continue
+		}
+		b.WriteString(lg.NewStyle().Foreground(tuiMuted).Render(chip))
 	}
 	b.WriteString(lg.NewStyle().Foreground(accent).Render(" [+]"))
 	left := b.String()

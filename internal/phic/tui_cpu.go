@@ -70,11 +70,12 @@ const identityPollCooldown = 15 * time.Second
 
 const cpuPulseStep = 120 * time.Millisecond
 
-// accentHex is the brand accent as hex without '#': the server theme wins,
-// otherwise the default. accentColor renders it.
+// accentHex is the brand accent as hex without '#': the current server's
+// live theme wins, then its last-seen cached theme, otherwise the default.
+// accentColor renders it.
 func (m *tuiModel) accentHex() string {
-	if d := m.current(); d != nil {
-		if hex := phiAccents[d.identity.Theme]; hex != "" {
+	if s := m.currentServer(); s != nil {
+		if hex, ok := m.serverThemeHex(s); ok {
 			return strings.TrimPrefix(hex, "#")
 		}
 	}
@@ -226,5 +227,6 @@ func (m *tuiModel) applyIdentityResult(msg msgIdentityResult) tea.Cmd {
 	if s := m.serverForOrigin(msg.origin); s != nil {
 		s.identity = msg.identity
 	}
+	m.recordServerTheme(msg.origin, msg.identity.Theme)
 	return nil
 }

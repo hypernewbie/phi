@@ -45,8 +45,9 @@ func TestPrefixRailShowsServerDigits(t *testing.T) {
 			t.Fatalf("prefix rail still shows Greek glyph %q: %q", g, plain)
 		}
 	}
-	// The active server keeps its accent highlight background.
-	if !strings.Contains(raw, "48;2;29;31;39") {
+	// The active server keeps a solid slab highlight; with no known theme
+	// for these servers the slab is the neutral grey fallback.
+	if !strings.Contains(raw, "48;2;136;136;149") {
 		t.Fatal("prefix mode dropped the active server highlight")
 	}
 
