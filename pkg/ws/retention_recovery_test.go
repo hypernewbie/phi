@@ -379,6 +379,12 @@ func TestRetentionResizeCommitFailuresRetryWithoutDuplicates(t *testing.T) {
 		t.Run(stage.name, func(t *testing.T) {
 			h := NewHub(0)
 			t.Cleanup(func() { _ = h.Close() })
+			// A durable group: the manifest write is what the manifest,
+			// rename and directory-sync faults act on. An ephemeral group
+			// has no manifest, so it cannot fail those.
+			if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
+				t.Fatal(err)
+			}
 			h.RecordResize("p", 80, 24)
 			if err := h.Ingest("p", []byte("before")); err != nil {
 				t.Fatal(err)

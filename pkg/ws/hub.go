@@ -347,7 +347,9 @@ func (h *Hub) GetOrCreatePaneHub(paneID string) (*PaneHub, error) {
 		defer ph.mu.Unlock()
 		ph.closedAtUnixNano = 0
 		if ph.recording != nil && !ph.recording.isClosed() {
-			_ = ph.recording.markOpen()
+			if err := ph.recording.markOpen(); err != nil {
+				log.Printf("[ws] pane %s: could not record its reopening: %v", paneID, err)
+			}
 		}
 		ph.Ring = ring
 		ph.epoch = randomEpoch()
@@ -1017,7 +1019,9 @@ func (h *Hub) closePaneLocked(paneID string) {
 		if ph.recording != nil && !ph.recording.isClosed() {
 			// A failed closure persist falls back to the last-update
 			// clock, which the last commit already recorded.
-			_ = ph.recording.markClosed(closedAt)
+			if err := ph.recording.markClosed(closedAt); err != nil {
+				log.Printf("[ws] pane %s: could not record its closure: %v", paneID, err)
+			}
 		}
 		h.archives[paneID] = ph
 		ph.mu.Unlock()

@@ -676,14 +676,17 @@ func (g *retentionGroup) isClosed() bool {
 // disk before the manifest names them, so a crash always leaves the group
 // consistent at the last durable point.
 func (g *retentionGroup) flushDurable() error {
-	if g.dir == "" || g.closed {
+	if g.ephemeral || g.closed {
 		return nil
 	}
 	if g.pending != nil {
 		// A pending transaction already put its manifest on disk. The
 		// in-memory head is behind it, so rewriting the manifest here would
-		// drop the staged bytes the pending commit still owns.
-		return nil
+		// drop the staged bytes the pending commit still owns. Finish that
+		// transaction first: its manifest only misses the directory entry.
+		if err := g.resolvePendingDir(); err != nil {
+			return err
+		}
 	}
 	for i := range g.segs {
 		if g.segs[i].raw != nil {
@@ -728,7 +731,7 @@ func (g *retentionGroup) markOpen() error {
 // state. Unlike commit it carries no payload, so there is no pending
 // transaction to resolve on a directory-sync failure.
 func (g *retentionGroup) persistMetadata() error {
-	if g.dir == "" || g.closed {
+	if g.ephemeral || g.closed {
 		return nil
 	}
 	descs := make([]retentionSegDesc, len(g.segs))
@@ -1185,6 +1188,22 @@ func (g *retentionGroup) resolvePendingPayload(payload []byte) (bool, error) {
 	return true, nil
 }
 
+// resolvePendingDir makes a staged transaction durable. Its manifest is
+// already on disk and only the directory entry is missing, so a directory
+// sync finishes it and the staged state becomes the group's state.
+func (g *retentionGroup) resolvePendingDir() error {
+	if g.pending == nil {
+		return nil
+	}
+	if err := g.syncDirAs(g.dir); err != nil {
+		return err
+	}
+	p := g.pending
+	g.publish(p.staged)
+	g.pending = nil
+	return nil
+}
+
 func (g *retentionGroup) appendPayload(payload []byte, snap baseSnapshotFunc) ([]ResizeMarker, error) {
 	if g.closed {
 		return nil, fmt.Errorf("retention group closed")
@@ -1499,6 +1518,14 @@ func (g *retentionGroup) commit(st *stagedCommit, in commitInput) error {
 		if err := g.syncFileAs(st.newRsz, &g.faults.rszSync); err != nil {
 			return fail(err)
 		}
+	}
+	if g.ephemeral {
+		// An ephemeral group has no crash-recovery path: nothing reads its
+		// manifest, so writing one would only cost a write and a rename per
+		// flush. The bytes are in the segment file either way.
+		g.durableHead = st.newHead
+		g.publish(st)
+		return nil
 	}
 	var descs []retentionSegDesc
 	for i := range g.segs {
