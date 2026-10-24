@@ -258,6 +258,13 @@ type tuiModel struct {
 	// goes straight to the terminal by default; the box is opt-in.
 	compose composeState
 
+	// serverThemes is the last-seen validated theme_color per origin, loaded
+	// from the phic-owned cache file at startup and refreshed on every live
+	// identity arrival. The rail uses it when a server has no live identity
+	// (offline, not yet loaded); unknown themes fall back to neutral grey.
+	serverThemes     map[string]string
+	serverThemesPath string
+
 	// cpuTiers is the last CPU tier per server origin for the brand logo;
 	// a missing entry means unseen (first classification never pulses).
 	// cpuPulseUntil bounds the finite tier-change pulse window.
@@ -321,6 +328,8 @@ func newTUIModel(version string, cfg config, store *desktopStore, servers []*ser
 	if cfg.Dir != "" && cfg.Dir != "." {
 		m.project = cfg.Dir
 	}
+	m.serverThemesPath = serverThemeCachePath(cfg.Profiles)
+	m.serverThemes = loadServerThemes(m.serverThemesPath)
 	return m
 }
 
@@ -831,6 +840,7 @@ func (m *tuiModel) applyServerLoaded(msg serverLoadedMsg) (tea.Model, tea.Cmd) {
 		if msg.index >= 0 && msg.index < len(m.servers) && m.servers[msg.index] != nil {
 			m.servers[msg.index].identity = msg.identity
 		}
+		m.recordServerTheme(origin, msg.identity.Theme)
 	}
 	if msg.err != "" {
 		m.setStatus(msg.err, true)
