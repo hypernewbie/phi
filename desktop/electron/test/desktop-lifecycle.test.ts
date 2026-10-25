@@ -271,6 +271,7 @@ const primary = {
 describe('DesktopHost fake-Electron lifecycle', () => {
   let temp = '';
   let originalFetch: typeof fetch;
+  let previousLowMemory: string | undefined;
 
   beforeEach(() => {
     fake.reset();
@@ -278,11 +279,22 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     temp = mkdtempSync(path.join(os.tmpdir(), 'phi-desktop-lifecycle-'));
     fake.setUserData(temp);
     originalFetch = globalThis.fetch;
+    // The low-memory mode is decided by the machine's RAM, so the same
+    // test ran a different code path on a small laptop than on a CI
+    // runner. The mode is pinned here; the tests that need the embedded
+    // mode set it themselves.
+    previousLowMemory = process.env.PHI_DESKTOP_LOW_MEMORY;
+    process.env.PHI_DESKTOP_LOW_MEMORY = '0';
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
     rmSync(temp, { recursive: true, force: true });
+    if (previousLowMemory === undefined) {
+      delete process.env.PHI_DESKTOP_LOW_MEMORY;
+    } else {
+      process.env.PHI_DESKTOP_LOW_MEMORY = previousLowMemory;
+    }
   });
 
   it('pins config/workspace requests and header actions to the requested server', async () => {
@@ -622,11 +634,18 @@ describe('DesktopHost fake-Electron lifecycle', () => {
   });
 
   it('does not trigger auth in the new session when an old-session config request resolves 401 after recreation (auth generation capture)', async () => {
-    let resolveConfig: ((value: Response) => void) | undefined;
+    // One resolver PER URL: the desktop also probes a server's API
+    // capability (/api/version) when a profile is activated, and a single
+    // shared resolver let that probe steal the config request's resolver.
+    // The test resolves the request it cares about by URL.
+    const resolvers = new Map<string, (value: Response) => void>();
     globalThis.fetch = vi.fn(
-      () =>
+      (input: unknown) =>
         new Promise<Response>((resolve) => {
-          resolveConfig = resolve;
+          resolvers.set(
+            String((input as { url?: string })?.url ?? input),
+            resolve,
+          );
         }),
     );
     const host = new DesktopHost();
@@ -657,7 +676,9 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     second.webContents.emit('did-finish-load');
     await flush();
 
-    resolveConfig?.({ status: 401, ok: false } as Response);
+    const oldConfigUrl = 'https://old.example.test/api/config';
+    expect(resolvers.has(oldConfigUrl)).toBe(true);
+    resolvers.get(oldConfigUrl)?.({ status: 401, ok: false } as Response);
     await oldConfig;
     expect(
       second.webContents.sent.some(
@@ -666,6 +687,153 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     ).toBe(false);
 
     first.finishClose();
+  });
+
+  it('dismisses the prompt after a typed unlock in single-tab mode (shared embedded view)', async () => {
+    // The embedded page serves every server, so ONE view is the body for
+    // all of them. The unlock path must find that view: when it did not,
+    // a correct password left the prompt on screen and asked again.
+    const previous = process.env.PHI_DESKTOP_LOW_MEMORY;
+    process.env.PHI_DESKTOP_LOW_MEMORY = '1';
+    const salt = Buffer.from('0123456789abcdef0123456789abcdef', 'hex');
+    const saltB64 = salt.toString('base64url');
+
+    vi.stubGlobal('fetch', async (url: string | URL, init?: RequestInit) => {
+      const u = url.toString();
+      // Only the server answers: a request addressed to anything else (the
+      // embedded app's own origin, for instance) fails, so a wrong origin
+      // cannot pass by accident.
+      if (!u.startsWith('https://minerva.example.test')) {
+        return {
+          status: 404,
+          ok: false,
+          text: async () => 'not found',
+          json: async () => ({}),
+        } as Response;
+      }
+      if (u.includes('/api/auth/status')) {
+        return {
+          status: 200,
+          ok: true,
+          json: async () => ({
+            enabled: true,
+            version: 'v1',
+            algorithm: 'pbkdf2-sha256',
+            iterations: 600_000,
+            salt: saltB64,
+            challenge: 'test-challenge',
+          }),
+        } as Response;
+      }
+      if (u.includes('/api/auth/login')) {
+        return {
+          status: 200,
+          ok: true,
+          headers: new Headers({
+            'set-cookie':
+              'phi_access_session=mock-session-cookie; Path=/; HttpOnly',
+          }),
+          json: async () => ({ ok: true }),
+        } as unknown as Response;
+      }
+      if (u.includes('/api/config')) {
+        const headers = (init?.headers as Record<string, string>) ?? {};
+        const cookie = headers.Cookie || headers.cookie || '';
+        if (cookie.includes('phi_access_session')) {
+          return {
+            status: 200,
+            ok: true,
+            text: async () =>
+              JSON.stringify({
+                hostname: 'minerva',
+                workspaces: ['/Users/minerva/project'],
+                active_cwd: '/Users/minerva/project',
+              }),
+            json: async () => ({
+              hostname: 'minerva',
+              workspaces: ['/Users/minerva/project'],
+              active_cwd: '/Users/minerva/project',
+            }),
+          } as Response;
+        }
+        return {
+          status: 401,
+          ok: false,
+          text: async () => 'access authentication required',
+        } as Response;
+      }
+      return {
+        status: 200,
+        ok: true,
+        json: async () => ({}),
+      } as Response;
+    });
+
+    try {
+      const host = new DesktopHost();
+      await host.start(primary);
+      const win = fake.FakeBrowserWindow.instances[0];
+      win.webContents.emit('did-finish-load');
+      await flush();
+
+      const profile = host.controller?.add('https://minerva.example.test/');
+      if (!profile) throw new Error('controller missing');
+      host.profileViews!.addProfile(profile.id, profile.origin);
+      host.controller?.setActive(profile.id);
+      await flush();
+      expect(host.profileViews!.isSingleTab()).toBe(true);
+      // The embedded body view reports its load like the real one does.
+      const bodyViews = fake.FakeWebContentsView.instances;
+      const bodyView = bodyViews[bodyViews.length - 1];
+      bodyView.webContents.executeJavaScript = async (script: string) => {
+        if (script.includes('/api/auth/login')) return 200;
+        // The embedded page handles the switch itself (no reload).
+        if (script.includes('__phiEmbed')) return true;
+        return null;
+      };
+      bodyView.webContents.emit('did-finish-load');
+      await flush();
+
+      // The config poll answers 401: the desktop asks for the password.
+      const configHandler = fake.ipcHandlers.get('phi:server-config');
+      if (!configHandler) throw new Error('server-config handler missing');
+      await configHandler({ sender: win.webContents });
+      await flush();
+
+      const required = win.webContents.sent.filter(
+        ([channel]) => channel === 'phi:auth-required',
+      );
+      expect(required.length).toBeGreaterThan(0);
+      const requestId = (
+        required[required.length - 1][1] as { requestId: string }
+      ).requestId;
+      expect(requestId).toBeTruthy();
+
+      const unlockHandler = fake.ipcHandlers.get('phi:auth-unlock');
+      if (!unlockHandler) throw new Error('auth-unlock handler missing');
+      const result = (await unlockHandler(
+        { sender: win.webContents },
+        { requestId, password: 'a long enough password' },
+      )) as unknown as { ok: boolean; code?: string };
+      expect(result).toEqual({ ok: true, config: expect.anything() });
+
+      // The prompt is dismissed: the body is no longer obscured.
+      const obscuring = win.webContents.sent.filter(
+        ([channel]) => channel === 'phi:body-obscuring',
+      );
+      expect(obscuring).toContainEqual(['phi:body-obscuring', false]);
+      const resolved = win.webContents.sent.filter(
+        ([channel]) => channel === 'phi:auth-resolved',
+      );
+      expect(resolved.length).toBeGreaterThan(0);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.PHI_DESKTOP_LOW_MEMORY;
+      } else {
+        process.env.PHI_DESKTOP_LOW_MEMORY = previous;
+      }
+      vi.unstubAllGlobals();
+    }
   });
 
   it('rejects stale old-session main-frame senders for controller mutations and window-minimize (sender trust)', async () => {
@@ -989,6 +1157,23 @@ describe('DesktopHost fake-Electron lifecycle', () => {
   });
 
   it('successfully resolves TBAR auth for server with trailing slash when config is polled before and after body view load', async () => {
+    // The single-tab (embedded) mode and the legacy one-page-per-server
+    // mode are different code paths. The mode used to depend on the
+    // machine's RAM, so the same test covered a different path on a
+    // laptop than on a CI runner. Both modes run here.
+    for (const mode of ['0', '1']) {
+      await runTbarAuthScenario(mode);
+    }
+  });
+
+  const runTbarAuthScenario = async (mode: string): Promise<void> => {
+    fake.reset();
+    process.env.PHI_DESKTOP_LOW_MEMORY = mode;
+    // A fresh user-data directory per mode: the first run persists its
+    // settings, and the second run must not inherit them.
+    rmSync(temp, { recursive: true, force: true });
+    temp = mkdtempSync(path.join(os.tmpdir(), 'phi-desktop-lifecycle-'));
+    fake.setUserData(temp);
     const salt = Buffer.from('0123456789abcdef0123456789abcdef', 'hex');
     const verifier = Buffer.alloc(32, 0x42);
     const saltB64 = salt.toString('base64url');
@@ -1075,8 +1260,10 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     const bodyViews = fake.FakeWebContentsView.instances;
     const bodyView = bodyViews[bodyViews.length - 1];
 
+    const credentialScripts: string[] = [];
     bodyView.webContents.executeJavaScript = async (script: string) => {
       if (script.includes('phi_access_credential_v1')) {
+        credentialScripts.push(script);
         return JSON.stringify({
           version: 'v1',
           algorithm: 'pbkdf2-sha256',
@@ -1092,6 +1279,18 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     bodyView.webContents.emit('did-finish-load');
     await flush();
     await flush();
+
+    // The page and the desktop must agree on the credential key: the
+    // embedded page serves every server from one localStorage, so the key
+    // is namespaced per server there and plain in a browser tab.
+    expect(
+      credentialScripts.some((script) =>
+        mode === '1'
+          ? script.includes('phi_access_credential_v1:')
+          : script.includes('phi_access_credential_v1') &&
+            !script.includes('phi_access_credential_v1:'),
+      ),
+    ).toBe(true);
 
     // With the canonical origin and prompt resolution fix:
     // makeView's did-finish-load matches canonical origins, unlocks with verifier,
@@ -1121,5 +1320,5 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     );
 
     win.finishClose();
-  });
+  };
 });

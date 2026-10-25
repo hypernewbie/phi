@@ -305,15 +305,25 @@ const primary = {
 
 describe('fullscreen popups & context menu UX stability', () => {
   let temp = '';
+  let previousLowMemory: string | undefined;
 
   beforeEach(() => {
     fake.reset();
     temp = mkdtempSync(path.join(os.tmpdir(), 'phi-fullscreen-test-'));
     fake.setUserData(temp);
+    // The low-memory mode is decided by the machine's RAM, so this file
+    // pins it: the popout rules below are the one-view-per-server ones.
+    previousLowMemory = process.env.PHI_DESKTOP_LOW_MEMORY;
+    process.env.PHI_DESKTOP_LOW_MEMORY = '0';
   });
 
   afterEach(() => {
     rmSync(temp, { recursive: true, force: true });
+    if (previousLowMemory === undefined) {
+      delete process.env.PHI_DESKTOP_LOW_MEMORY;
+    } else {
+      process.env.PHI_DESKTOP_LOW_MEMORY = previousLowMemory;
+    }
   });
 
   it('denies internal window popouts when in fullscreen mode so the in-page modal is used', async () => {

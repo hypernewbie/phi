@@ -1904,6 +1904,7 @@ export class DesktopHost {
   async recoverFromViewLocalStorage(
     view: WebContentsView | null | undefined,
     _origin?: string,
+    profileId?: string | null,
   ): Promise<{
     verifier: Buffer;
     salt: Buffer;
@@ -1918,7 +1919,7 @@ export class DesktopHost {
       );
       const raw = (await Promise.race([
         view.webContents.executeJavaScript(
-          "localStorage.getItem('phi_access_credential_v1')",
+          `localStorage.getItem(${JSON.stringify(this.accessCredentialKey(profileId))})`,
         ),
         timeoutPromise,
       ])) as string | null;
@@ -1951,6 +1952,36 @@ export class DesktopHost {
       };
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * The localStorage key a page keeps a server's access credential under.
+   * The desktop's embedded page serves every server from one page (and
+   * one localStorage), so the key is namespaced per server there. In a
+   * plain browser tab each server has its own origin, and the plain key
+   * is the one the page wrote.
+   */
+  private accessCredentialKey(profileId?: string | null): string {
+    const base = 'phi_access_credential_v1';
+    return this.profileViews?.isSingleTab() && profileId
+      ? `${base}:${profileId}`
+      : base;
+  }
+
+  /**
+   * The server origin the active profile points at. In single-tab mode
+   * the body view's own origin is the embedded app, which is not a
+   * server: auth work must address the server the page is showing.
+   */
+  private activeServerOrigin(): string {
+    const state = this.controller?.state();
+    const profile = state?.profiles.find((p) => p.id === state.activeId);
+    if (!profile) return '';
+    try {
+      return new URL(profile.origin).origin;
+    } catch {
+      return profile.origin;
     }
   }
 
@@ -2142,11 +2173,22 @@ export class DesktopHost {
         const index = next++;
         if (index >= origins.length) return;
         if (generation !== this.sessionGeneration) return;
-        await this.tryReauthWithStoredCredential(
-          origins[index],
-          accessAuth,
-          generation,
-        );
+        const origin = origins[index];
+        // Tell the proxy an unlock is in flight for this origin: the
+        // embedded page asks the server whether it is protected as its
+        // first call, and answering "not authenticated" while the
+        // desktop is authenticating that very server is what made the
+        // page ask for a password the user had already given.
+        this.embeddedTransport?.beginAuth(origin);
+        try {
+          await this.tryReauthWithStoredCredential(
+            origin,
+            accessAuth,
+            generation,
+          );
+        } finally {
+          this.embeddedTransport?.endAuth(origin);
+        }
       }
     };
     await Promise.all(
@@ -3052,9 +3094,18 @@ export class DesktopHost {
         }
       })();
       const hasKey = raw.includes('lowMemoryMode');
+      // The RAM heuristic is machine-dependent, so a test run on a small
+      // laptop exercised a different code path than the same test on a
+      // CI runner. The environment override pins the decision.
+      const override = process.env.PHI_DESKTOP_LOW_MEMORY;
+      const forcedOn = override === '1';
+      const forcedOff = override === '0';
+      const tooSmall = totalmem() < tenGB;
+      // An explicit override wins over the stored preference and over the
+      // heuristic: it is the caller stating the mode, not a guess.
       if (
-        !hasKey &&
-        totalmem() < tenGB &&
+        !forcedOff &&
+        (forcedOn || (!hasKey && tooSmall)) &&
         !this.controller.getLowMemoryMode()
       ) {
         this.controller.setLowMemoryMode(true);
@@ -3216,7 +3267,6 @@ export class DesktopHost {
       unlockInFlight = false;
       promptSuppressedFor = null;
       armAuthCancellation();
-      void this.bootstrapStoredCredentials(accessAuth, generation);
       const sharedSession = session.defaultSession;
       this.installClipboardPermissions(sharedSession);
       const embeddedSession =
@@ -3232,8 +3282,17 @@ export class DesktopHost {
         resolveProfile: (id) =>
           this.controller?.state().profiles.find((p) => p.id === id) ?? null,
         listProfiles: () => this.controller?.state().profiles ?? [],
+        // The server capability answer is a stable fact about a server:
+        // persisting it keeps the FIRST flip to a server after a restart
+        // as fast as every flip after it.
+        compatCachePath: path.join(app.getPath('userData'), 'api-compat.json'),
       });
       this.embeddedTransport = transport;
+
+      // The stored-credential replay runs AFTER the transport exists: it
+      // marks each unlock as in flight so the embedded page waits for it
+      // instead of asking for the password the user already gave.
+      void this.bootstrapStoredCredentials(accessAuth, generation);
 
       // ONE access-auth session, shared by the main process and the
       // embedded page. The page's /api calls are proxied by this
@@ -3252,17 +3311,6 @@ export class DesktopHost {
           cookie.cookieValue,
         );
       });
-
-      // Probe every server's API capability in the background, in
-      // parallel. The answer decides embedded-vs-legacy page loading, and
-      // it costs a round trip to a possibly remote host - so the FIRST
-      // flip to a server would otherwise pay for it. Probing up front
-      // makes every flip equally fast.
-      void Promise.all(
-        (this.controller?.state().profiles ?? []).map((p) =>
-          transport.checkCompatibility(p.id).catch(() => true),
-        ),
-      ).catch(() => {});
 
       try {
         (
@@ -3574,49 +3622,58 @@ export class DesktopHost {
           void view.webContents
             .executeJavaScript(INSTALL_FILE_ACTION_SCRIPT)
             .catch(() => {});
-          const canonicalOrigin = toCanonicalAuthOrigin(origin) ?? origin;
-          void this.recoverFromViewLocalStorage(view, canonicalOrigin).then(
-            async (cred) => {
-              if (cred && isCurrent()) {
-                const verifierCopy = Buffer.from(cred.verifier);
-                try {
-                  const res = await accessAuth.tryUnlockWithVerifier(
-                    canonicalOrigin,
-                    verifierCopy,
-                  );
-                  if (res.kind === 'ok' && isCurrent()) {
-                    this.storedCredentials.set(canonicalOrigin, {
-                      version: cred.version,
-                      algorithm: cred.algorithm,
-                      iterations: cred.iterations,
-                      salt: Buffer.from(cred.salt),
-                      verifier: Buffer.from(cred.verifier),
-                    });
-                    this.saveStoredCredentials();
-                    if (
-                      pendingUnlock &&
-                      (pendingUnlock.origin === canonicalOrigin ||
-                        toCanonicalAuthOrigin(pendingUnlock.origin) ===
-                          canonicalOrigin)
-                    ) {
-                      const resolvedInfo = {
-                        requestId: pendingUnlock.requestId,
-                        origin: pendingUnlock.origin,
-                        profileId: pendingUnlock.profileId,
-                      };
-                      pendingUnlock.abort.abort();
-                      pendingUnlock = null;
-                      sendBodyObscuring(false);
-                      sendAuthResolved(resolvedInfo);
-                    }
-                    this.pushActiveServer();
+          const canonicalOrigin = (() => {
+            // The embedded view's origin is the app, not a server: the
+            // credential belongs to the server the page is showing.
+            const serverOrigin =
+              origin === EMBEDDED_ORIGIN ? this.activeServerOrigin() : origin;
+            return toCanonicalAuthOrigin(serverOrigin) ?? serverOrigin;
+          })();
+          const activeProfileId = this.controller?.state().activeId ?? null;
+          void this.recoverFromViewLocalStorage(
+            view,
+            canonicalOrigin,
+            activeProfileId,
+          ).then(async (cred) => {
+            if (cred && isCurrent()) {
+              const verifierCopy = Buffer.from(cred.verifier);
+              try {
+                const res = await accessAuth.tryUnlockWithVerifier(
+                  canonicalOrigin,
+                  verifierCopy,
+                );
+                if (res.kind === 'ok' && isCurrent()) {
+                  this.storedCredentials.set(canonicalOrigin, {
+                    version: cred.version,
+                    algorithm: cred.algorithm,
+                    iterations: cred.iterations,
+                    salt: Buffer.from(cred.salt),
+                    verifier: Buffer.from(cred.verifier),
+                  });
+                  this.saveStoredCredentials();
+                  if (
+                    pendingUnlock &&
+                    (pendingUnlock.origin === canonicalOrigin ||
+                      toCanonicalAuthOrigin(pendingUnlock.origin) ===
+                        canonicalOrigin)
+                  ) {
+                    const resolvedInfo = {
+                      requestId: pendingUnlock.requestId,
+                      origin: pendingUnlock.origin,
+                      profileId: pendingUnlock.profileId,
+                    };
+                    pendingUnlock.abort.abort();
+                    pendingUnlock = null;
+                    sendBodyObscuring(false);
+                    sendAuthResolved(resolvedInfo);
                   }
-                } finally {
-                  verifierCopy.fill(0);
+                  this.pushActiveServer();
                 }
+              } finally {
+                verifierCopy.fill(0);
               }
-            },
-          );
+            }
+          });
           // A first activation can request header config before this body has
           // populated its workspace selector. Re-push the active server after
           // load so the main header reads this server's actual selected project.
@@ -4231,7 +4288,13 @@ export class DesktopHost {
       }
       const profile =
         ctrl.state().profiles.find((p) => p.id === pending.profileId) ?? null;
-      const view = profile ? this.viewByOrigin.get(profile.origin) : null;
+      // In single-tab mode ONE embedded view serves every profile, so the
+      // profile's own origin has no view of its own: the view manager
+      // knows which view is the body for a profile.
+      const view = profile
+        ? (this.profileViews?.getView(profile.id) ??
+          this.viewByOrigin.get(profile.origin))
+        : null;
       if (!view?.webContents || view.webContents.isDestroyed()) {
         return {
           ok: false,
@@ -4489,6 +4552,7 @@ export class DesktopHost {
             const recovered = await this.recoverFromViewLocalStorage(
               bodyView,
               origin,
+              active.id,
             );
             if (recovered) {
               const verifierCopy = Buffer.from(recovered.verifier);
@@ -4635,10 +4699,15 @@ export class DesktopHost {
           > | null = null;
           if (trustMatches) {
             const verifierCopy = Buffer.from(cred.verifier);
+            // The page may be polling this origin right now. Mark the
+            // unlock as in flight so the proxy waits for it instead of
+            // answering "not authenticated" mid-unlock.
+            this.embeddedTransport?.beginAuth(origin);
             try {
               unlock = await auth.tryUnlockWithVerifier(origin, verifierCopy);
             } finally {
               verifierCopy.fill(0);
+              this.embeddedTransport?.endAuth(origin);
             }
           }
           if (!isCurrentCapture()) return null;
@@ -4835,11 +4904,19 @@ export class DesktopHost {
       if (unlockInFlight) return { ok: false, code: 'stale', message: 'busy' };
       unlockInFlight = true;
       try {
-        const result = await pending.auth.tryUnlock(
-          pending.origin,
-          password,
-          pending.abort.signal,
-        );
+        // The page polls this origin while the unlock runs; tell the
+        // proxy to wait for it instead of answering "not authenticated".
+        this.embeddedTransport?.beginAuth(pending.origin);
+        let result: Awaited<ReturnType<typeof pending.auth.tryUnlock>>;
+        try {
+          result = await pending.auth.tryUnlock(
+            pending.origin,
+            password,
+            pending.abort.signal,
+          );
+        } finally {
+          this.embeddedTransport?.endAuth(pending.origin);
+        }
         // Drop the password reference immediately — Node strings aren't
         // guaranteed to zero but we at least release the local binding.
         void password;
