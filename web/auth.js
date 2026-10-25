@@ -13,8 +13,20 @@
 import { pbkdf2Async } from './vendor/noble-hashes/pbkdf2.js';
 import { hmac } from './vendor/noble-hashes/hmac.js';
 import { sha256 } from './vendor/noble-hashes/sha2.js';
+import { serverKey } from './util.js';
 
 const CREDENTIAL_KEY = 'phi_access_credential_v1';
+
+// The desktop's embedded page serves EVERY server from one page, so one
+// localStorage holds every server's credential. A single shared key made
+// each server overwrite the previous one's credential: the next server
+// found a foreign salt, treated it as a rotation, cleared it, and asked
+// for the password again. The key is namespaced per server instead. In a
+// plain browser tab each server has its own origin (and its own
+// localStorage), so the key stays unchanged there.
+function credentialKey() {
+    return serverKey(CREDENTIAL_KEY);
+}
 const PASSWORD_MIN_LENGTH = 8;
 
 function bytesToBase64URL(bytes) {
@@ -154,7 +166,7 @@ async function deriveVerifier(password, status) {
 function storeCredential(status, verifier) {
     try {
         localStorage.setItem(
-            CREDENTIAL_KEY,
+            credentialKey(),
             JSON.stringify({
                 version: status.version,
                 algorithm: status.algorithm,
@@ -171,7 +183,7 @@ function storeCredential(status, verifier) {
 
 function clearCredential() {
     try {
-        localStorage.removeItem(CREDENTIAL_KEY);
+        localStorage.removeItem(credentialKey());
     } catch {
         /* ignored */
     }
@@ -180,7 +192,7 @@ function clearCredential() {
 function savedVerifier(status) {
     try {
         const saved = JSON.parse(
-            localStorage.getItem(CREDENTIAL_KEY) || 'null',
+            localStorage.getItem(credentialKey()) || 'null',
         );
         if (
             !saved ||
