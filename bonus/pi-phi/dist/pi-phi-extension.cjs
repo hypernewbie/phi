@@ -24590,6 +24590,10 @@ var MAX_THINKING_MODEL_ID_BYTES = 256;
 var MAX_THINKING_LEVEL_BYTES = 16;
 var CAPABILITY_CONTEXT = "pi.context.v1";
 var CAPABILITY_COMPACT = "pi.compact.v1";
+var CAPABILITY_SKILLS = "pi.skills.v1";
+var MAX_SKILL_ENTRIES = 200;
+var MAX_SKILL_NAME_BYTES = 64;
+var MAX_SKILL_DESCRIPTION_BYTES = 1024;
 var MAX_COMPACT_IDENTITY_CHARS = 256;
 var MAX_MODELS_ENTRIES = 500;
 var LIFECYCLE_HEADROOM_BYTES = 16 * 1024;
@@ -25660,6 +25664,12 @@ var PiToPhi = {
       case "compactResult":
         CompactResult.encode(message.payload.value, writer.uint32(178).fork()).join();
         break;
+      case "skillsResponse":
+        SkillsResponse.encode(message.payload.value, writer.uint32(186).fork()).join();
+        break;
+      case "invokeSkillAck":
+        InvokeSkillAck.encode(message.payload.value, writer.uint32(194).fork()).join();
+        break;
     }
     return writer;
   },
@@ -25770,6 +25780,20 @@ var PiToPhi = {
             message.payload = { $case: "compactResult", value: CompactResult.decode(reader, reader.uint32()) };
             continue;
           }
+          case 23: {
+            if (tag !== 186) {
+              break;
+            }
+            message.payload = { $case: "skillsResponse", value: SkillsResponse.decode(reader, reader.uint32()) };
+            continue;
+          }
+          case 24: {
+            if (tag !== 194) {
+              break;
+            }
+            message.payload = { $case: "invokeSkillAck", value: InvokeSkillAck.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -25853,6 +25877,18 @@ var PiToPhi = {
         }
         break;
       }
+      case "skillsResponse": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = { $case: "skillsResponse", value: SkillsResponse.fromPartial(object.payload.value) };
+        }
+        break;
+      }
+      case "invokeSkillAck": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = { $case: "invokeSkillAck", value: InvokeSkillAck.fromPartial(object.payload.value) };
+        }
+        break;
+      }
     }
     return message;
   }
@@ -25898,6 +25934,12 @@ var PhiToPi = {
         break;
       case "compactRequest":
         CompactRequest.encode(message.payload.value, writer.uint32(154).fork()).join();
+        break;
+      case "skillsRequest":
+        SkillsRequest.encode(message.payload.value, writer.uint32(162).fork()).join();
+        break;
+      case "invokeSkillRequest":
+        InvokeSkillRequest.encode(message.payload.value, writer.uint32(170).fork()).join();
         break;
     }
     return writer;
@@ -25998,6 +26040,23 @@ var PhiToPi = {
             message.payload = { $case: "compactRequest", value: CompactRequest.decode(reader, reader.uint32()) };
             continue;
           }
+          case 20: {
+            if (tag !== 162) {
+              break;
+            }
+            message.payload = { $case: "skillsRequest", value: SkillsRequest.decode(reader, reader.uint32()) };
+            continue;
+          }
+          case 21: {
+            if (tag !== 170) {
+              break;
+            }
+            message.payload = {
+              $case: "invokeSkillRequest",
+              value: InvokeSkillRequest.decode(reader, reader.uint32())
+            };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -26069,6 +26128,21 @@ var PhiToPi = {
       case "compactRequest": {
         if (object.payload?.value !== void 0 && object.payload?.value !== null) {
           message.payload = { $case: "compactRequest", value: CompactRequest.fromPartial(object.payload.value) };
+        }
+        break;
+      }
+      case "skillsRequest": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = { $case: "skillsRequest", value: SkillsRequest.fromPartial(object.payload.value) };
+        }
+        break;
+      }
+      case "invokeSkillRequest": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = {
+            $case: "invokeSkillRequest",
+            value: InvokeSkillRequest.fromPartial(object.payload.value)
+          };
         }
         break;
       }
@@ -27819,6 +27893,333 @@ var CompactResult = {
     return message;
   }
 };
+function createBaseSkillRef() {
+  return { name: "", description: "" };
+}
+var SkillRef = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.name !== "") {
+      writer.uint32(10).string(message.name);
+    }
+    if (message.description !== "") {
+      writer.uint32(18).string(message.description);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseSkillRef();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.name = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+            message.description = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return SkillRef.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseSkillRef();
+    message.name = object.name ?? "";
+    message.description = object.description ?? "";
+    return message;
+  }
+};
+function createBaseSkillsRequest() {
+  return { requestId: "" };
+}
+var SkillsRequest = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseSkillsRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return SkillsRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseSkillsRequest();
+    message.requestId = object.requestId ?? "";
+    return message;
+  }
+};
+function createBaseSkillsResponse() {
+  return { requestId: "", skills: [], truncated: false, unavailable: false };
+}
+var SkillsResponse = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    for (const v of message.skills) {
+      SkillRef.encode(v, writer.uint32(18).fork()).join();
+    }
+    if (message.truncated !== false) {
+      writer.uint32(24).bool(message.truncated);
+    }
+    if (message.unavailable !== false) {
+      writer.uint32(32).bool(message.unavailable);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseSkillsResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+            message.skills.push(SkillRef.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+            message.truncated = reader.bool();
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+            message.unavailable = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return SkillsResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseSkillsResponse();
+    message.requestId = object.requestId ?? "";
+    message.skills = object.skills?.map((e) => SkillRef.fromPartial(e)) || [];
+    message.truncated = object.truncated ?? false;
+    message.unavailable = object.unavailable ?? false;
+    return message;
+  }
+};
+function createBaseInvokeSkillRequest() {
+  return { requestId: "", name: "" };
+}
+var InvokeSkillRequest = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.name !== "") {
+      writer.uint32(18).string(message.name);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseInvokeSkillRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+            message.name = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return InvokeSkillRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseInvokeSkillRequest();
+    message.requestId = object.requestId ?? "";
+    message.name = object.name ?? "";
+    return message;
+  }
+};
+function createBaseInvokeSkillAck() {
+  return { requestId: "", ok: false, reason: "" };
+}
+var InvokeSkillAck = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.ok !== false) {
+      writer.uint32(16).bool(message.ok);
+    }
+    if (message.reason !== "") {
+      writer.uint32(26).string(message.reason);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseInvokeSkillAck();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+            message.ok = reader.bool();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return InvokeSkillAck.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseInvokeSkillAck();
+    message.requestId = object.requestId ?? "";
+    message.ok = object.ok ?? false;
+    message.reason = object.reason ?? "";
+    return message;
+  }
+};
 function createBaseProtocolError() {
   return { code: 0, safeMessage: "" };
 }
@@ -28195,6 +28596,16 @@ function isHistoryReaderAvailable(ui) {
 }
 
 // src/runtime.ts
+function representableSkill(skill) {
+  if (!skill || typeof skill.name !== "string" || skill.name === "")
+    return null;
+  if (typeof skill.description !== "string") return null;
+  if (Buffer.byteLength(skill.name, "utf8") > MAX_SKILL_NAME_BYTES)
+    return null;
+  if (Buffer.byteLength(skill.description, "utf8") > MAX_SKILL_DESCRIPTION_BYTES)
+    return null;
+  return { name: skill.name, description: skill.description };
+}
 function freshCompactLatch() {
   return { pending: null, highWater: null, active: null };
 }
@@ -28306,6 +28717,7 @@ var Runtime = class {
   modelsAccepted = false;
   thinkingAccepted = false;
   compactAccepted = false;
+  skillsAccepted = false;
   /** getContextUsage present on the latest event context. */
   contextApi = false;
   /** compact/isIdle/hasPendingMessages present on the latest context. */
@@ -28757,6 +29169,8 @@ var Runtime = class {
     if (isHistoryReaderAvailable(this.ui)) caps.push(CAPABILITY_HISTORY);
     if (this.opts.getThinkingLevel && this.opts.setThinkingLevel)
       caps.push(CAPABILITY_THINKING);
+    if (this.opts.getSkills && this.opts.invokeSkill)
+      caps.push(CAPABILITY_SKILLS);
     return caps;
   }
   hello() {
@@ -28806,6 +29220,7 @@ var Runtime = class {
     this.modelsAccepted = false;
     this.thinkingAccepted = false;
     this.compactAccepted = false;
+    this.skillsAccepted = false;
     if (this.lastCtx) this.sampleTelemetry(this.lastCtx);
     const channel = make(this.opts.creds, {
       onMessage: (msg) => {
@@ -28825,6 +29240,7 @@ var Runtime = class {
         this.modelsAccepted = accepted.capabilities.includes(CAPABILITY_MODELS);
         this.thinkingAccepted = accepted.capabilities.includes(CAPABILITY_THINKING);
         this.compactAccepted = accepted.capabilities.includes(CAPABILITY_COMPACT);
+        this.skillsAccepted = accepted.capabilities.includes(CAPABILITY_SKILLS);
       }
     } catch (err) {
       channel.close();
@@ -28859,6 +29275,13 @@ var Runtime = class {
       this.onSetThinkingRequest(msg.payload.value);
     } else if (msg.payload?.$case === "compactRequest" && this.compactAccepted) {
       this.onCompactRequest(msg.payload.value);
+    } else if (msg.payload?.$case === "skillsRequest" && this.skillsAccepted) {
+      this.onSkillsRequest(msg.payload.value.requestId);
+    } else if (msg.payload?.$case === "invokeSkillRequest" && this.skillsAccepted) {
+      this.onInvokeSkillRequest(
+        msg.payload.value.requestId,
+        msg.payload.value.name
+      );
     }
   }
   /**
@@ -29108,6 +29531,127 @@ var Runtime = class {
       payload: {
         $case: "setModelAck",
         value: SetModelAck.create({ requestId, ok, reason })
+      }
+    };
+  }
+  /**
+   * Answer one skills request with the session's live skill list.
+   * Best-effort like models: a host failure, an entry that breaks
+   * the wire bounds, or an oversized answer replies unavailable.
+   * Entries are never silently dropped, so a partial list is never
+   * shown as complete. Nothing here closes the stream.
+   */
+  onSkillsRequest(requestId) {
+    if (typeof requestId !== "string" || requestId === "") return;
+    if (!this.channel) return;
+    const getSkills = this.opts.getSkills;
+    if (!getSkills) {
+      this.channel.sendNonfatal(this.skillsResponse(requestId, null));
+      return;
+    }
+    let raw;
+    try {
+      raw = getSkills();
+    } catch {
+      this.channel.sendNonfatal(this.skillsResponse(requestId, null));
+      return;
+    }
+    if (!Array.isArray(raw)) {
+      this.channel.sendNonfatal(this.skillsResponse(requestId, null));
+      return;
+    }
+    const entries = [];
+    for (const skill of raw) {
+      const entry = representableSkill(skill);
+      if (!entry) {
+        this.channel.sendNonfatal(this.skillsResponse(requestId, null));
+        return;
+      }
+      entries.push(entry);
+    }
+    let msg = this.skillsResponse(requestId, entries);
+    if (PiToPhi.encode(msg).finish().length > MAX_MESSAGE_BYTES) {
+      msg = this.skillsResponse(requestId, null);
+    }
+    if (!this.channel.sendNonfatal(msg)) {
+      const sent = msg.payload;
+      if (sent?.$case === "skillsResponse" && !sent.value.unavailable) {
+        this.channel.sendNonfatal(this.skillsResponse(requestId, null));
+      }
+    }
+  }
+  /**
+   * Answer one skill invocation. The name must be known to the live
+   * session; an unknown name acks unknown-skill without touching
+   * the host. ok means the request was dispatched, never that the
+   * agent accepted or completed it.
+   */
+  onInvokeSkillRequest(requestId, name) {
+    if (typeof requestId !== "string" || requestId === "") return;
+    const fail = (reason) => {
+      this.channel?.sendNonfatal(
+        this.invokeSkillAck(requestId, false, reason)
+      );
+    };
+    const getSkills = this.opts.getSkills;
+    const invokeSkill = this.opts.invokeSkill;
+    if (!getSkills || !invokeSkill) {
+      fail("unavailable");
+      return;
+    }
+    if (typeof name !== "string" || name === "" || Buffer.byteLength(name, "utf8") > MAX_SKILL_NAME_BYTES) {
+      fail("unknown-skill");
+      return;
+    }
+    let known = false;
+    try {
+      const raw = getSkills();
+      known = Array.isArray(raw) && raw.some(
+        (skill) => typeof skill?.name === "string" && skill.name === name
+      );
+    } catch {
+      fail("unavailable");
+      return;
+    }
+    if (!known) {
+      fail("unknown-skill");
+      return;
+    }
+    try {
+      invokeSkill(name);
+    } catch {
+      fail("unavailable");
+      return;
+    }
+    this.channel?.sendNonfatal(this.invokeSkillAck(requestId, true, ""));
+  }
+  skillsResponse(requestId, entries) {
+    return {
+      paneId: this.opts.creds.pane,
+      processId: this.opts.creds.process,
+      runtimeGeneration: this.opts.generation,
+      payload: {
+        $case: "skillsResponse",
+        value: entries === null ? SkillsResponse.create({
+          requestId,
+          unavailable: true
+        }) : SkillsResponse.create({
+          requestId,
+          skills: entries.slice(0, MAX_SKILL_ENTRIES),
+          truncated: entries.length > MAX_SKILL_ENTRIES,
+          unavailable: false
+        })
+      }
+    };
+  }
+  invokeSkillAck(requestId, ok, reason) {
+    return {
+      paneId: this.opts.creds.pane,
+      processId: this.opts.creds.process,
+      runtimeGeneration: this.opts.generation,
+      payload: {
+        $case: "invokeSkillAck",
+        value: InvokeSkillAck.create({ requestId, ok, reason })
       }
     };
   }
@@ -29373,6 +29917,7 @@ var ENV_TARGET = "PHI_PI_BRIDGE_ENDPOINT";
 var ENV_PANE = "PHI_PI_BRIDGE_PANE_ID";
 var ENV_PROCESS = "PHI_PI_BRIDGE_PROCESS_ID";
 var ENV_TOKEN = "PHI_PI_BRIDGE_TOKEN";
+var SKILL_COMMAND_PREFIX = "skill:";
 var OWNER_KEY = /* @__PURE__ */ Symbol.for("phi.pi-phi.owner");
 function ownerSlot() {
   const existing = globalThis[OWNER_KEY];
@@ -29458,13 +30003,20 @@ function createExtension(pi, deps = {}) {
   const nativeThinking = pi;
   const getThinkingLevel = typeof nativeThinking.getThinkingLevel === "function" ? () => nativeThinking.getThinkingLevel() : void 0;
   const setThinkingLevel = typeof nativeThinking.setThinkingLevel === "function" ? (level) => nativeThinking.setThinkingLevel(level) : void 0;
+  const nativeSkills = pi;
+  const hasSkillsApi = typeof nativeSkills.getCommands === "function";
+  const hasInvokeApi = typeof nativeSkills.sendUserMessage === "function";
   const make = deps.makeRuntime ?? ((c, g, compact) => new Runtime({
     creds: c,
     generation: g,
     compactState: compact,
     setModel: (model) => pi.setModel(model),
     ...getThinkingLevel ? { getThinkingLevel } : {},
-    ...setThinkingLevel ? { setThinkingLevel } : {}
+    ...setThinkingLevel ? { setThinkingLevel } : {},
+    ...hasSkillsApi ? { getSkills: () => hostSkills(pi) } : {},
+    ...hasInvokeApi ? {
+      invokeSkill: (name) => hostInvokeSkill(pi, name)
+    } : {}
   }));
   pi.on("session_start", (_event, ctx) => {
     const slot = ownerSlot();
@@ -29549,6 +30101,29 @@ function createExtension(pi, deps = {}) {
       ownerSlot().active = false;
       claimed = false;
     }
+  });
+}
+function hostSkills(pi) {
+  const api = pi;
+  const commands = api.getCommands?.();
+  if (!Array.isArray(commands)) return [];
+  const out = [];
+  for (const command of commands) {
+    if (!command || command.source !== "skill") continue;
+    const name = typeof command.name === "string" && command.name.startsWith(SKILL_COMMAND_PREFIX) ? command.name.slice(SKILL_COMMAND_PREFIX.length) : "";
+    if (name === "") continue;
+    out.push({
+      name,
+      description: typeof command.description === "string" ? command.description : ""
+    });
+  }
+  return out;
+}
+function hostInvokeSkill(pi, name) {
+  const api = pi;
+  api.sendUserMessage?.(`/${SKILL_COMMAND_PREFIX}${name}`, {
+    expandPromptTemplates: true,
+    deliverAs: "followUp"
   });
 }
 function extension_default(pi) {

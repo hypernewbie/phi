@@ -48,6 +48,9 @@ type peer struct {
 	setPending         map[string]chan SetModelResult
 	thinkingPending    map[string]chan ThinkingLevelsResult
 	setThinkingPending map[string]chan SetThinkingResult
+	skillsMu           sync.Mutex
+	skillsPending      map[string]chan SkillsResult
+	invokeSkillPending map[string]chan InvokeSkillResult
 
 	writerDone chan struct{}
 }
@@ -70,6 +73,8 @@ func newPeer(generation uint64, sessionID string, stream connectStream) *peer {
 		),
 		thinkingPending:    make(map[string]chan ThinkingLevelsResult),
 		setThinkingPending: make(map[string]chan SetThinkingResult),
+		skillsPending:      make(map[string]chan SkillsResult),
+		invokeSkillPending: make(map[string]chan InvokeSkillResult),
 		writerDone:         make(chan struct{}),
 	}
 }

@@ -14,8 +14,11 @@ import { SHUTDOWN_DRAIN_MS } from './protocol.js';
 import { CAPABILITY_COMPACT, CAPABILITY_CONTEXT } from './protocol.js';
 import { CAPABILITY_HISTORY, CAPABILITY_LIFECYCLE } from './protocol.js';
 import { CAPABILITY_MODELS } from './protocol.js';
+import { CAPABILITY_SKILLS } from './protocol.js';
 import { CAPABILITY_THINKING } from './protocol.js';
 import { MAX_MODELS_ENTRIES } from './protocol.js';
+import { MAX_SKILL_ENTRIES } from './protocol.js';
+import { MAX_SKILL_NAME_BYTES } from './protocol.js';
 import { MAX_THINKING_LEVELS } from './protocol.js';
 import { MAX_THINKING_LEVEL_BYTES } from './protocol.js';
 import { MAX_THINKING_MODEL_ID_BYTES } from './protocol.js';
@@ -3267,6 +3270,332 @@ describe('Runtime compact dispatch', () => {
             bridgePending: true,
         });
         calls[0]!.onComplete();
+        rt.shutdown();
+    });
+});
+
+function skillsRequest(id: string): PhiToPi {
+    return {
+        paneId: 'pane',
+        processId: 'proc',
+        runtimeGeneration: 1n,
+        payload: { $case: 'skillsRequest', value: { requestId: id } },
+    };
+}
+
+function invokeSkillRequest(id: string, name: string): PhiToPi {
+    return {
+        paneId: 'pane',
+        processId: 'proc',
+        runtimeGeneration: 1n,
+        payload: {
+            $case: 'invokeSkillRequest',
+            value: { requestId: id, name },
+        },
+    };
+}
+
+function skillsOf(msg: PiToPhi): {
+    requestId: string;
+    skills: Array<{ name: string; description: string }>;
+    truncated: boolean;
+    unavailable: boolean;
+} {
+    const payload = payloadOf(msg);
+    if (payload.$case !== 'skillsResponse') {
+        throw new Error(`not a skills response: ${payload.$case}`);
+    }
+    return payload.value;
+}
+
+function invokeAckOf(msg: PiToPhi): {
+    requestId: string;
+    ok: boolean;
+    reason: string;
+} {
+    const payload = payloadOf(msg);
+    if (payload.$case !== 'invokeSkillAck') {
+        throw new Error(`not an invoke-skill ack: ${payload.$case}`);
+    }
+    return payload.value;
+}
+
+describe('Runtime skills requests', () => {
+    interface SkillHost {
+        getSkills?: () => Array<{ name: string; description: string }>;
+        invokeSkill?: (name: string) => void;
+    }
+
+    async function started(host: SkillHost): Promise<{
+        ch: MockChannel;
+        rt: Runtime;
+    }> {
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            makeChannel: wired(ch),
+            ...(host.getSkills ? { getSkills: host.getSkills } : {}),
+            ...(host.invokeSkill ? { invokeSkill: host.invokeSkill } : {}),
+        });
+        rt.start(ctx());
+        await sleep(10);
+        return { ch, rt };
+    }
+
+    function capabilitiesOf(ch: MockChannel): string[] {
+        const payload = payloadOf(ch.hellos[0]!);
+        if (payload.$case !== 'hello') throw new Error('not a hello');
+        return payload.value.capabilities;
+    }
+
+    it('advertises the capability only with both host calls', async () => {
+        const both = await started({
+            getSkills: () => [],
+            invokeSkill: () => {},
+        });
+        expect(capabilitiesOf(both.ch)).toContain(CAPABILITY_SKILLS);
+        both.rt.shutdown();
+
+        const listOnly = await started({ getSkills: () => [] });
+        expect(capabilitiesOf(listOnly.ch)).not.toContain(CAPABILITY_SKILLS);
+        listOnly.rt.shutdown();
+
+        const invokeOnly = await started({ invokeSkill: () => {} });
+        expect(capabilitiesOf(invokeOnly.ch)).not.toContain(CAPABILITY_SKILLS);
+        invokeOnly.rt.shutdown();
+    });
+
+    it('answers with the live skills and echoes the id', async () => {
+        const { ch, rt } = await started({
+            getSkills: () => [
+                { name: 'demo-skill', description: 'demo' },
+                { name: 'other-skill', description: '' },
+            ],
+            invokeSkill: () => {},
+        });
+        ch.hooks!.onMessage(skillsRequest('k1'));
+        expect(ch.nonfatalSends).toHaveLength(1);
+        expect(skillsOf(ch.nonfatalSends[0]!)).toEqual({
+            requestId: 'k1',
+            skills: [
+                { name: 'demo-skill', description: 'demo' },
+                { name: 'other-skill', description: '' },
+            ],
+            truncated: false,
+            unavailable: false,
+        });
+        expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+
+    it('answers unavailable when the host list throws', async () => {
+        const { ch, rt } = await started({
+            getSkills: () => {
+                throw new Error('boom');
+            },
+            invokeSkill: () => {},
+        });
+        ch.hooks!.onMessage(skillsRequest('k2'));
+        expect(ch.nonfatalSends).toHaveLength(1);
+        expect(skillsOf(ch.nonfatalSends[0]!).unavailable).toBe(true);
+        expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+
+    it('truncates at the entry cap', async () => {
+        const entries = Array.from(
+            { length: MAX_SKILL_ENTRIES + 50 },
+            (_, i) => ({
+                name: `skill-${i}`,
+                description: 'd',
+            }),
+        );
+        const { ch, rt } = await started({
+            getSkills: () => entries,
+            invokeSkill: () => {},
+        });
+        ch.hooks!.onMessage(skillsRequest('k3'));
+        expect(ch.nonfatalSends).toHaveLength(1);
+        const res = skillsOf(ch.nonfatalSends[0]!);
+        expect(res.skills).toHaveLength(MAX_SKILL_ENTRIES);
+        expect(res.truncated).toBe(true);
+        expect(res.unavailable).toBe(false);
+        rt.shutdown();
+    });
+
+    it('answers unavailable for a multi-byte description over the wire bound', async () => {
+        // 600 characters pass Pi's character check but are 1200 bytes.
+        const { ch, rt } = await started({
+            getSkills: () => [
+                { name: 'demo-skill', description: 'é'.repeat(600) },
+            ],
+            invokeSkill: () => {},
+        });
+        ch.hooks!.onMessage(skillsRequest('k4'));
+        expect(ch.nonfatalSends).toHaveLength(1);
+        const res = skillsOf(ch.nonfatalSends[0]!);
+        expect(res.unavailable).toBe(true);
+        expect(res.skills).toHaveLength(0);
+        expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+
+    it('answers unavailable for a warning-loaded overlong entry', async () => {
+        // Pi loads a skill whose description is too long and only warns.
+        const { ch, rt } = await started({
+            getSkills: () => [
+                { name: 'demo-skill', description: 'x'.repeat(2000) },
+            ],
+            invokeSkill: () => {},
+        });
+        ch.hooks!.onMessage(skillsRequest('k5'));
+        expect(ch.nonfatalSends).toHaveLength(1);
+        expect(skillsOf(ch.nonfatalSends[0]!).unavailable).toBe(true);
+        rt.shutdown();
+    });
+
+    it('drops requests when skills were not negotiated', async () => {
+        const { ch, rt } = await started({ getSkills: () => [] });
+        ch.hooks!.onMessage(skillsRequest('k6'));
+        expect(ch.nonfatalSends).toHaveLength(0);
+        expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+
+    it('drops requests with an empty id', async () => {
+        const { ch, rt } = await started({
+            getSkills: () => [],
+            invokeSkill: () => {},
+        });
+        ch.hooks!.onMessage(skillsRequest(''));
+        expect(ch.nonfatalSends).toHaveLength(0);
+        rt.shutdown();
+    });
+
+    it('fails only the request when admission misses', async () => {
+        const { ch, rt } = await started({
+            getSkills: () => [{ name: 'demo-skill', description: 'demo' }],
+            invokeSkill: () => {},
+        });
+        ch.nonfatalResult = false;
+        ch.hooks!.onMessage(skillsRequest('k7'));
+        expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+});
+
+describe('Runtime skill invocations', () => {
+    async function started(host: {
+        getSkills?: () => Array<{ name: string; description: string }>;
+        invokeSkill?: (name: string) => void;
+    }): Promise<{ ch: MockChannel; rt: Runtime; sent: string[] }> {
+        const ch = mockChannel();
+        const sent: string[] = [];
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            makeChannel: wired(ch),
+            ...(host.getSkills ? { getSkills: host.getSkills } : {}),
+            ...(host.invokeSkill
+                ? {
+                      invokeSkill: (name: string) => {
+                          sent.push(name);
+                          host.invokeSkill!(name);
+                      },
+                  }
+                : {}),
+        });
+        rt.start(ctx());
+        await sleep(10);
+        return { ch, rt, sent };
+    }
+
+    it('acks ok and dispatches through the host for a known skill', async () => {
+        const { ch, rt, sent } = await started({
+            getSkills: () => [{ name: 'demo-skill', description: 'demo' }],
+            invokeSkill: () => {},
+        });
+        ch.hooks!.onMessage(invokeSkillRequest('i1', 'demo-skill'));
+        expect(ch.nonfatalSends).toHaveLength(1);
+        expect(invokeAckOf(ch.nonfatalSends[0]!)).toEqual({
+            requestId: 'i1',
+            ok: true,
+            reason: '',
+        });
+        expect(sent).toEqual(['demo-skill']);
+        expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+
+    it('acks unknown-skill for a name the session does not know', async () => {
+        const { ch, rt, sent } = await started({
+            getSkills: () => [{ name: 'demo-skill', description: 'demo' }],
+            invokeSkill: () => {},
+        });
+        ch.hooks!.onMessage(invokeSkillRequest('i2', 'other-skill'));
+        expect(ch.nonfatalSends).toHaveLength(1);
+        expect(invokeAckOf(ch.nonfatalSends[0]!)).toEqual({
+            requestId: 'i2',
+            ok: false,
+            reason: 'unknown-skill',
+        });
+        expect(sent).toEqual([]);
+        rt.shutdown();
+    });
+
+    it('acks unavailable when the host call throws', async () => {
+        const { ch, rt } = await started({
+            getSkills: () => [{ name: 'demo-skill', description: 'demo' }],
+            invokeSkill: () => {
+                throw new Error('boom');
+            },
+        });
+        ch.hooks!.onMessage(invokeSkillRequest('i3', 'demo-skill'));
+        expect(ch.nonfatalSends).toHaveLength(1);
+        expect(invokeAckOf(ch.nonfatalSends[0]!)).toEqual({
+            requestId: 'i3',
+            ok: false,
+            reason: 'unavailable',
+        });
+        expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+
+    it('acks unavailable when the host list throws', async () => {
+        const { ch, rt } = await started({
+            getSkills: () => {
+                throw new Error('boom');
+            },
+            invokeSkill: () => {},
+        });
+        ch.hooks!.onMessage(invokeSkillRequest('i4', 'demo-skill'));
+        expect(ch.nonfatalSends).toHaveLength(1);
+        expect(invokeAckOf(ch.nonfatalSends[0]!).reason).toBe('unavailable');
+        rt.shutdown();
+    });
+
+    it('acks unknown-skill for an oversized name', async () => {
+        const { ch, rt, sent } = await started({
+            getSkills: () => [{ name: 'demo-skill', description: 'demo' }],
+            invokeSkill: () => {},
+        });
+        ch.hooks!.onMessage(
+            invokeSkillRequest('i5', 'x'.repeat(MAX_SKILL_NAME_BYTES + 1)),
+        );
+        expect(ch.nonfatalSends).toHaveLength(1);
+        expect(invokeAckOf(ch.nonfatalSends[0]!).reason).toBe('unknown-skill');
+        expect(sent).toEqual([]);
+        rt.shutdown();
+    });
+
+    it('drops requests when skills were not negotiated', async () => {
+        const { ch, rt } = await started({ getSkills: () => [] });
+        ch.hooks!.onMessage(invokeSkillRequest('i6', 'demo-skill'));
+        expect(ch.nonfatalSends).toHaveLength(0);
+        expect(ch.closed).toBe(0);
         rt.shutdown();
     });
 });

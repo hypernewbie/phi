@@ -47,6 +47,8 @@ const (
 	CapabilityContext = "pi.context.v1"
 	// CapabilityCompact is the native-compaction capability name.
 	CapabilityCompact = "pi.compact.v1"
+	// CapabilitySkills is the on-demand skill list/invocation capability name.
+	CapabilitySkills = "pi.skills.v1"
 
 	// maxHistoryPending bounds history requests awaiting replies per
 	// peer. Excess callers fail fast into fallback; the map never
@@ -62,4 +64,18 @@ const (
 	maxThinkingLevels  = 7
 	maxThinkingField   = 256
 	maxThinkingLevel   = 16
+
+	// maxSkillsPending bounds skill list and invocation requests per
+	// peer, each, independently. Excess callers fail fast; the maps
+	// never grow under a wedged or silent extension.
+	maxSkillsPending = 4
+	// maxSkillEntries caps one skill list; a longer list is truncated
+	// and flagged, never silently partial.
+	maxSkillEntries = 200
+	// maxSkillNameBytes and maxSkillDescriptionBytes are the wire
+	// bounds for one skill entry, in UTF-8 bytes. Pi validates
+	// character counts and only warns, so a loaded skill can exceed
+	// them.
+	maxSkillNameBytes        = 64
+	maxSkillDescriptionBytes = 1024
 )

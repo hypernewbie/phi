@@ -13,6 +13,16 @@ export const MAX_THINKING_MODEL_ID_BYTES = 256;
 export const MAX_THINKING_LEVEL_BYTES = 16;
 export const CAPABILITY_CONTEXT = 'pi.context.v1';
 export const CAPABILITY_COMPACT = 'pi.compact.v1';
+export const CAPABILITY_SKILLS = 'pi.skills.v1';
+/** Cap on skill entries per SkillsResponse; excess sets truncated. */
+export const MAX_SKILL_ENTRIES = 200;
+/**
+ * Wire bounds for one skill entry, in UTF-8 bytes. Pi validates
+ * character counts and only warns, so a loaded skill can still be
+ * unrepresentable here; such a list answers unavailable.
+ */
+export const MAX_SKILL_NAME_BYTES = 64;
+export const MAX_SKILL_DESCRIPTION_BYTES = 1024;
 /** Max chars of a Compact expected session/leaf/model identity. */
 export const MAX_COMPACT_IDENTITY_CHARS = 256;
 /** Cap on catalog entries per ModelsResponse; excess sets truncated. */
@@ -53,6 +63,7 @@ const SUPPORTED = new Set([
     CAPABILITY_THINKING,
     CAPABILITY_CONTEXT,
     CAPABILITY_COMPACT,
+    CAPABILITY_SKILLS,
 ]);
 
 /** Intersect advertised names with the supported set. Unknown names are ignored. */

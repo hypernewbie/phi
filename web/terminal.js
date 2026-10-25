@@ -598,6 +598,12 @@ export class TabManager {
         this._piRpcModelInflight = new Map();
         this._piRpcModelQuery = '';
         this._piRpcModelExpandedGroup = null;
+        this._piBridgeSkills = null;
+        this._piBridgeSkillQuery = '';
+        this._piBridgeSkillsTruncated = false;
+        this._piBridgeSkillsUnavailable = false;
+        this._piBridgeSkillsRequest = 0;
+        this._piBridgeSkillPending = null;
         this._piRpcFavorites = null;
         this._piRpcFavoritesLoaded = false;
         this._piRpcModelAutoOpened = false;
@@ -1979,6 +1985,21 @@ export class TabManager {
                     !e.target.closest('.pi-rpc-thinking-trigger')
                 ) {
                     piThinkingDropup.classList.add('hidden');
+                }
+            }
+
+            const piSkillsDropup = document.getElementById(
+                'pi-rpc-skills-dropup',
+            );
+            if (
+                piSkillsDropup &&
+                !piSkillsDropup.classList.contains('hidden')
+            ) {
+                if (
+                    !e.target.closest('#pi-rpc-skills-dropup') &&
+                    !e.target.closest('.pi-rpc-skills-trigger')
+                ) {
+                    piSkillsDropup.classList.add('hidden');
                 }
             }
 
@@ -4838,7 +4859,11 @@ export class TabManager {
 
     _closePiRpcDropups(clear = false) {
         let changed = false;
-        for (const id of ['pi-rpc-model-dropup', 'pi-rpc-thinking-dropup']) {
+        for (const id of [
+            'pi-rpc-model-dropup',
+            'pi-rpc-thinking-dropup',
+            'pi-rpc-skills-dropup',
+        ]) {
             const dropup = document.getElementById(id);
             if (!dropup) continue;
             if (!dropup.classList.contains('hidden')) changed = true;
@@ -5765,6 +5790,267 @@ export class TabManager {
         if (body.reason === '')
             throw new Error('unknown — reopen the picker');
         throw new Error('Switch failed');
+    }
+
+    // Bridge skill list for Pi PTY tabs. The list is fetched when the
+    // picker opens, like the model catalog: no per-pane cache, so a
+    // session that gained or lost a skill shows the current set.
+    async _piBridgeSkillsFetch(paneId) {
+        const controller = new AbortController();
+        // Bound the browser too: an HTTP request can stall before reaching Phi.
+        const timer = setTimeout(() => controller.abort(), 5000);
+        try {
+            const res = await fetch(
+                `/api/pi-bridge/skills?pane=${encodeURIComponent(paneId)}`,
+                { signal: controller.signal },
+            );
+            if (!res.ok)
+                throw new Error(`Pi skills unavailable (${res.status})`);
+            const body = await res.json();
+            return {
+                skills: Array.isArray(body.skills) ? body.skills : [],
+                truncated: body.truncated === true,
+                unavailable: body.unavailable === true,
+            };
+        } catch (error) {
+            if (error?.name === 'AbortError')
+                throw new Error('Pi skills unavailable (request timed out)');
+            throw error;
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    // Bridge skill invocation for Pi PTY tabs. The ack means the
+    // request was dispatched to Pi, never that the agent accepted or
+    // completed it. A failed round trip is explicitly unknown and is
+    // never retried automatically: the skill may still have landed.
+    async _piBridgeSkillInvoke(paneId, name) {
+        const controller = new AbortController();
+        // Bound the browser too: an HTTP request can stall before reaching Phi.
+        const timer = setTimeout(() => controller.abort(), 10000);
+        let body;
+        try {
+            const res = await fetch('/api/pi-bridge/skill', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pane: paneId, name }),
+                signal: controller.signal,
+            });
+            if (!res.ok) throw new Error('unknown');
+            body = await res.json();
+        } catch {
+            throw new Error('Skill send outcome unknown — open Pi to check');
+        } finally {
+            clearTimeout(timer);
+        }
+        if (body.ok === true) return;
+        if (body.reason === 'unknown-skill')
+            throw new Error('Skill refused: unknown skill (unknown-skill)');
+        if (body.reason === 'unavailable')
+            throw new Error('Skill refused: Pi is unavailable (unavailable)');
+        if (body.reason === '')
+            throw new Error('Skill send outcome unknown — open Pi to check');
+        throw new Error('Skill send failed');
+    }
+
+    _renderPiRpcSkillsDropup(preserve = false) {
+        const dropup = document.getElementById('pi-rpc-skills-dropup');
+        const activeTab = this.getActiveTab();
+        if (!dropup || !activeTab || activeTab.coder !== 'pi') return;
+        if (!this._piBridgeSkillsEligible(activeTab)) {
+            this._closePiRpcDropups(true);
+            return;
+        }
+        const paneId = activeTab.paneId;
+        const request = ++this._piBridgeSkillsRequest;
+        if (!preserve) {
+            this._piBridgeSkillQuery = '';
+            this._piBridgeSkills = null;
+            this._piBridgeSkillsTruncated = false;
+            this._piBridgeSkillsUnavailable = false;
+            const sticky = document.createElement('div');
+            sticky.className = 'pi-rpc-model-sticky';
+            const header = document.createElement('div');
+            header.className = 'dropup-header';
+            header.textContent = 'Skills';
+            const search = document.createElement('input');
+            search.type = 'search';
+            search.className = 'pi-rpc-model-search';
+            search.setAttribute('aria-label', 'Filter Pi skills');
+            search.placeholder = 'Filter skills…';
+            search.addEventListener('input', (event) => {
+                if (event.isComposing) return;
+                if (
+                    typeof event.inputType === 'string' &&
+                    event.inputType.startsWith('insertComposition')
+                )
+                    return;
+                this._piBridgeSkillQuery = search.value.toLowerCase();
+                this._buildPiRpcSkillsList();
+            });
+            search.addEventListener('compositionend', () => {
+                this._piBridgeSkillQuery = search.value.toLowerCase();
+                this._buildPiRpcSkillsList();
+            });
+            search.addEventListener('keydown', (event) => {
+                if (event.isComposing) return;
+                if (event.key === 'Escape' && search.value !== '') {
+                    search.value = '';
+                    this._piBridgeSkillQuery = '';
+                    this._buildPiRpcSkillsList();
+                    event.stopPropagation();
+                }
+            });
+            sticky.append(header, search);
+            const listContainer = document.createElement('div');
+            listContainer.className = 'pi-rpc-model-list-container';
+            dropup.replaceChildren(sticky, listContainer);
+        }
+        const listContainer = dropup.querySelector(
+            '.pi-rpc-model-list-container',
+        );
+        if (!listContainer) return;
+        const loading = document.createElement('div');
+        loading.className = 'dropup-row pi-rpc-dropup-message';
+        loading.textContent = 'Loading Pi skills…';
+        listContainer.replaceChildren(loading);
+
+        let requestResult;
+        try {
+            requestResult = this._piBridgeSkillsFetch(paneId);
+        } catch (error) {
+            this._piRpcError(error, 'Pi skills');
+            loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
+            return;
+        }
+        Promise.resolve(requestResult)
+            .then((result) => {
+                if (
+                    request !== this._piBridgeSkillsRequest ||
+                    this.getActiveTab()?.paneId !== paneId ||
+                    !this._piBridgeSkillsEligible(activeTab)
+                )
+                    return;
+                const bridge = result && typeof result === 'object' ? result : {};
+                this._piBridgeSkillsTruncated = bridge.truncated === true;
+                this._piBridgeSkillsUnavailable = bridge.unavailable === true;
+                this._piBridgeSkills = Array.isArray(bridge.skills)
+                    ? bridge.skills
+                    : [];
+                this._buildPiRpcSkillsList();
+            })
+            .catch((error) => {
+                if (
+                    request !== this._piBridgeSkillsRequest ||
+                    this.getActiveTab()?.paneId !== paneId ||
+                    !this._piBridgeSkillsEligible(activeTab)
+                )
+                    return;
+                loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
+                this._piRpcError(error, 'Pi skills');
+            });
+    }
+
+    _buildPiRpcSkillsList() {
+        const dropup = document.getElementById('pi-rpc-skills-dropup');
+        const activeTab = this.getActiveTab();
+        if (!dropup || !activeTab || activeTab.coder !== 'pi') return;
+        if (!this._piBridgeSkillsEligible(activeTab)) return;
+        const listContainer = dropup.querySelector(
+            '.pi-rpc-model-list-container',
+        );
+        if (!listContainer) return;
+        const paneId = activeTab.paneId;
+        const query = this._piBridgeSkillQuery;
+        const pending = this._piBridgeSkillPending?.paneId === paneId;
+        const skills = (this._piBridgeSkills || []).filter(
+            (skill) =>
+                skill &&
+                typeof skill.name === 'string' &&
+                skill.name !== '',
+        );
+        if (skills.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'dropup-row pi-rpc-dropup-message';
+            empty.textContent = this._piBridgeSkillsUnavailable
+                ? 'Pi skill list unavailable'
+                : 'No Pi skills available';
+            listContainer.replaceChildren(empty);
+            return;
+        }
+        const matches = (skill) => {
+            const haystack =
+                skill.name + ' ' + (skill.description || '').toLowerCase();
+            return query === '' || haystack.toLowerCase().includes(query);
+        };
+        const rows = skills.filter(matches).map((skill) => {
+            const row = document.createElement('div');
+            row.className = 'dropup-row pi-rpc-model-row';
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'dropup-model-btn';
+            button.textContent = skill.name;
+            button.title = skill.description || skill.name;
+            button.disabled = pending;
+            button.addEventListener('click', (event) => {
+                event.stopPropagation();
+                // Re-check at the point of use: the peer, the socket, or
+                // the capability can be gone while the row is on screen.
+                if (
+                    this.getActiveTab() !== activeTab ||
+                    !this._piBridgeSkillsEligible(activeTab) ||
+                    !dropup.contains(button)
+                )
+                    return;
+                const operation = { paneId, name: skill.name };
+                this._piBridgeSkillPending = operation;
+                this._setPiRpcDropupButtonsDisabled(dropup, true);
+                let invokeResult;
+                try {
+                    invokeResult = this._piBridgeSkillInvoke(
+                        paneId,
+                        skill.name,
+                    );
+                } catch (error) {
+                    invokeResult = Promise.reject(error);
+                }
+                Promise.resolve(invokeResult)
+                    .then(() => {
+                        if (this._piBridgeSkillPending !== operation) return;
+                        this._piBridgeSkillPending = null;
+                        if (this.getActiveTab()?.paneId === paneId) {
+                            this._closePiRpcDropups(true);
+                            this.app?.showToast?.(
+                                `Sent ${skill.name} to Pi`,
+                                { type: 'success', title: 'Pi skill' },
+                            );
+                        }
+                    })
+                    .catch((error) => {
+                        if (this._piBridgeSkillPending !== operation) return;
+                        this._piBridgeSkillPending = null;
+                        this._piRpcError(error, 'Pi skill');
+                        if (
+                            this.getActiveTab()?.paneId === paneId &&
+                            this._piBridgeSkillsEligible(activeTab)
+                        )
+                            this._renderPiRpcSkillsDropup(true);
+                    });
+            });
+            const meta = document.createElement('span');
+            meta.className = 'pi-rpc-dropup-meta';
+            meta.textContent = skill.description || '';
+            row.append(button, meta);
+            return row;
+        });
+        listContainer.replaceChildren(...rows);
+        if (this._piBridgeSkillsTruncated) {
+            const footer = document.createElement('div');
+            footer.className = 'dropup-row pi-rpc-dropup-message';
+            footer.textContent = 'Partial skill list';
+            listContainer.append(footer);
+        }
     }
 
     _renderPiRpcThinkingDropup() {
@@ -10655,9 +10941,11 @@ export class TabManager {
                   ? 420
                   : dropupId === 'pi-rpc-thinking-dropup'
                     ? 280
-                    : dropupId === 'keys-presets-dropup'
-                      ? 300
-                      : 320;
+                    : dropupId === 'pi-rpc-skills-dropup'
+                      ? 320
+                      : dropupId === 'keys-presets-dropup'
+                        ? 300
+                        : 320;
             left = Math.max(
                 12,
                 Math.min(left, containerRect.width - dropupWidth - 12),
@@ -10685,6 +10973,22 @@ export class TabManager {
                 const modelDropup = document.getElementById('pi-rpc-model-dropup');
                 modelDropup?.classList.add('hidden');
                 modelDropup?.replaceChildren();
+            }
+            if (!this._piBridgeSkillsEligible(activeTab)) {
+                // Drop any in-flight skill list and close the picker:
+                // a late reply must not repopulate a picker the user
+                // can no longer use.
+                ++this._piBridgeSkillsRequest;
+                this._piBridgeSkills = null;
+                this._piBridgeSkillsTruncated = false;
+                this._piBridgeSkillsUnavailable = false;
+                if (this._piBridgeSkillPending?.paneId === activeTab.paneId)
+                    this._piBridgeSkillPending = null;
+                const skillsDropup = document.getElementById(
+                    'pi-rpc-skills-dropup',
+                );
+                skillsDropup?.classList.add('hidden');
+                skillsDropup?.replaceChildren();
             }
             if (!this._piBridgeThinkingEligible(activeTab))
                 this._invalidatePiBridgeThinking(activeTab);
@@ -10878,6 +11182,41 @@ export class TabManager {
             });
         }
         this.presetsContainer.appendChild(modelsTriggerBtn);
+
+        // Skills picker: only on bridge-live Pi tabs that negotiated
+        // the skills capability. Without it the composer keeps exactly
+        // the controls it had, so a missing bridge adds no dead button.
+        if (modelCoder === 'pi' && this._piBridgeSkillsEligible(activeTab)) {
+            const skillsTriggerBtn = document.createElement('button');
+            skillsTriggerBtn.type = 'button';
+            skillsTriggerBtn.className =
+                'preset-btn model-trigger-btn pi-rpc-skills-trigger';
+            skillsTriggerBtn.textContent = 'Skills ▾';
+            skillsTriggerBtn.disabled =
+                activeTab.isDead === true ||
+                !activeTab.ws ||
+                activeTab.ws.readyState === 3;
+            skillsTriggerBtn.title = 'Send a Pi skill to the session';
+            skillsTriggerBtn.addEventListener('click', (event) => {
+                event.stopPropagation();
+                if (
+                    skillsTriggerBtn.disabled ||
+                    this.getActiveTab() !== activeTab ||
+                    this.tabs?.get(activeTab.paneId) !== activeTab
+                )
+                    return;
+                if (!this._piBridgeSkillsEligible(activeTab)) {
+                    this._closePiRpcDropups(true);
+                    return;
+                }
+                this._toggleDropup(
+                    'pi-rpc-skills-dropup',
+                    skillsTriggerBtn,
+                    () => this._renderPiRpcSkillsDropup(),
+                );
+            });
+            this.presetsContainer.appendChild(skillsTriggerBtn);
+        }
 
         if (modelCoder === 'pi') {
             const thinkingTriggerBtn = document.createElement('button');
@@ -12399,6 +12738,19 @@ export class TabManager {
             tab.piBridge.connected === true &&
             Array.isArray(tab.piBridge.capabilities) &&
             tab.piBridge.capabilities.includes('pi.thinking.v1')
+        );
+    }
+
+    // The skills picker needs the skills capability; anything else
+    // keeps the composer exactly as it was, without a dead control.
+    _piBridgeSkillsEligible(tab) {
+        return (
+            tab?.coder === 'pi' && !tab.isDead &&
+            !!tab.ws && tab._piBridgeFresh === tab.ws &&
+            tab.piBridge?.state === 'managed' &&
+            tab.piBridge.connected === true &&
+            Array.isArray(tab.piBridge.capabilities) &&
+            tab.piBridge.capabilities.includes('pi.skills.v1')
         );
     }
 

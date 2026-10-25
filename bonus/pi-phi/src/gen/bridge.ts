@@ -103,6 +103,8 @@ export interface PiToPhi {
     | { $case: "thinkingLevelsResponse"; value: ThinkingLevelsResponse }
     | { $case: "setThinkingAck"; value: SetThinkingAck }
     | { $case: "compactResult"; value: CompactResult }
+    | { $case: "skillsResponse"; value: SkillsResponse }
+    | { $case: "invokeSkillAck"; value: InvokeSkillAck }
     | undefined;
 }
 
@@ -120,6 +122,8 @@ export interface PhiToPi {
     | { $case: "thinkingLevelsRequest"; value: ThinkingLevelsRequest }
     | { $case: "setThinkingRequest"; value: SetThinkingRequest }
     | { $case: "compactRequest"; value: CompactRequest }
+    | { $case: "skillsRequest"; value: SkillsRequest }
+    | { $case: "invokeSkillRequest"; value: InvokeSkillRequest }
     | undefined;
 }
 
@@ -437,6 +441,67 @@ export interface CompactResult {
   reason: string;
 }
 
+/**
+ * One skill entry. name is the bare Pi skill name without the "skill:"
+ * command prefix. Both fields are UTF-8 byte bounds enforced by the
+ * bridge, not by Pi: name <= 64 bytes, description <= 1024 bytes. Pi
+ * validates character counts and only warns, so an entry that Pi loaded
+ * can still be unrepresentable here.
+ */
+export interface SkillRef {
+  name: string;
+  description: string;
+}
+
+/**
+ * SkillsRequest asks the extension for the skills the session knows.
+ * request_id correlates exactly one SkillsResponse; the extension echoes
+ * it verbatim. Best-effort like history and models: the answer may be
+ * unavailable, or never arrive, without disturbing lifecycle traffic.
+ */
+export interface SkillsRequest {
+  requestId: string;
+}
+
+/**
+ * SkillsResponse carries one skill list for request_id. truncated means
+ * the list hit the entry cap and is partial. unavailable means the
+ * answer cannot be represented on the wire: one entry breaks the byte
+ * bounds, or the answer exceeds the message bound. Entries are never
+ * silently omitted, so a partial list is never shown as complete.
+ */
+export interface SkillsResponse {
+  requestId: string;
+  skills: SkillRef[];
+  truncated: boolean;
+  unavailable: boolean;
+}
+
+/**
+ * InvokeSkillRequest asks the extension to send one skill to Pi. name is
+ * the bare skill name; request_id correlates exactly one InvokeSkillAck,
+ * echoed verbatim.
+ */
+export interface InvokeSkillRequest {
+  requestId: string;
+  name: string;
+}
+
+/**
+ * InvokeSkillAck reports one invocation outcome for request_id. ok means
+ * the request was dispatched to the Pi host; it never means the agent
+ * accepted or completed it. reason is empty then, or one of
+ * 'unknown-skill' when the session does not know the name,
+ * 'unavailable' when the host call is missing or failed, and 'error' for
+ * any other refused dispatch. Later Pi-side failures (no model, no
+ * credentials) are not observable here.
+ */
+export interface InvokeSkillAck {
+  requestId: string;
+  ok: boolean;
+  reason: string;
+}
+
 /** Terminal protocol-level rejection. Ends the stream attempt. */
 export interface ProtocolError {
   code: ProtocolErrorCode;
@@ -491,6 +556,12 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         break;
       case "compactResult":
         CompactResult.encode(message.payload.value, writer.uint32(178).fork()).join();
+        break;
+      case "skillsResponse":
+        SkillsResponse.encode(message.payload.value, writer.uint32(186).fork()).join();
+        break;
+      case "invokeSkillAck":
+        InvokeSkillAck.encode(message.payload.value, writer.uint32(194).fork()).join();
         break;
     }
     return writer;
@@ -616,6 +687,22 @@ export const PiToPhi: MessageFns<PiToPhi> = {
             message.payload = { $case: "compactResult", value: CompactResult.decode(reader, reader.uint32()) };
             continue;
           }
+          case 23: {
+            if (tag !== 186) {
+              break;
+            }
+
+            message.payload = { $case: "skillsResponse", value: SkillsResponse.decode(reader, reader.uint32()) };
+            continue;
+          }
+          case 24: {
+            if (tag !== 194) {
+              break;
+            }
+
+            message.payload = { $case: "invokeSkillAck", value: InvokeSkillAck.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -702,6 +789,18 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         }
         break;
       }
+      case "skillsResponse": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "skillsResponse", value: SkillsResponse.fromPartial(object.payload.value) };
+        }
+        break;
+      }
+      case "invokeSkillAck": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "invokeSkillAck", value: InvokeSkillAck.fromPartial(object.payload.value) };
+        }
+        break;
+      }
     }
     return message;
   },
@@ -749,6 +848,12 @@ export const PhiToPi: MessageFns<PhiToPi> = {
         break;
       case "compactRequest":
         CompactRequest.encode(message.payload.value, writer.uint32(154).fork()).join();
+        break;
+      case "skillsRequest":
+        SkillsRequest.encode(message.payload.value, writer.uint32(162).fork()).join();
+        break;
+      case "invokeSkillRequest":
+        InvokeSkillRequest.encode(message.payload.value, writer.uint32(170).fork()).join();
         break;
     }
     return writer;
@@ -861,6 +966,25 @@ export const PhiToPi: MessageFns<PhiToPi> = {
             message.payload = { $case: "compactRequest", value: CompactRequest.decode(reader, reader.uint32()) };
             continue;
           }
+          case 20: {
+            if (tag !== 162) {
+              break;
+            }
+
+            message.payload = { $case: "skillsRequest", value: SkillsRequest.decode(reader, reader.uint32()) };
+            continue;
+          }
+          case 21: {
+            if (tag !== 170) {
+              break;
+            }
+
+            message.payload = {
+              $case: "invokeSkillRequest",
+              value: InvokeSkillRequest.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -935,6 +1059,21 @@ export const PhiToPi: MessageFns<PhiToPi> = {
       case "compactRequest": {
         if (object.payload?.value !== undefined && object.payload?.value !== null) {
           message.payload = { $case: "compactRequest", value: CompactRequest.fromPartial(object.payload.value) };
+        }
+        break;
+      }
+      case "skillsRequest": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "skillsRequest", value: SkillsRequest.fromPartial(object.payload.value) };
+        }
+        break;
+      }
+      case "invokeSkillRequest": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = {
+            $case: "invokeSkillRequest",
+            value: InvokeSkillRequest.fromPartial(object.payload.value),
+          };
         }
         break;
       }
@@ -2869,6 +3008,365 @@ export const CompactResult: MessageFns<CompactResult> = {
     const message = createBaseCompactResult();
     message.requestId = object.requestId ?? "";
     message.outcome = object.outcome ?? 0;
+    message.reason = object.reason ?? "";
+    return message;
+  },
+};
+
+function createBaseSkillRef(): SkillRef {
+  return { name: "", description: "" };
+}
+
+export const SkillRef: MessageFns<SkillRef> = {
+  encode(message: SkillRef, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.name !== "") {
+      writer.uint32(10).string(message.name);
+    }
+    if (message.description !== "") {
+      writer.uint32(18).string(message.description);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SkillRef {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSkillRef();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.name = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.description = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<SkillRef>, I>>(base?: I): SkillRef {
+    return SkillRef.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SkillRef>, I>>(object: I): SkillRef {
+    const message = createBaseSkillRef();
+    message.name = object.name ?? "";
+    message.description = object.description ?? "";
+    return message;
+  },
+};
+
+function createBaseSkillsRequest(): SkillsRequest {
+  return { requestId: "" };
+}
+
+export const SkillsRequest: MessageFns<SkillsRequest> = {
+  encode(message: SkillsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SkillsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSkillsRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<SkillsRequest>, I>>(base?: I): SkillsRequest {
+    return SkillsRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SkillsRequest>, I>>(object: I): SkillsRequest {
+    const message = createBaseSkillsRequest();
+    message.requestId = object.requestId ?? "";
+    return message;
+  },
+};
+
+function createBaseSkillsResponse(): SkillsResponse {
+  return { requestId: "", skills: [], truncated: false, unavailable: false };
+}
+
+export const SkillsResponse: MessageFns<SkillsResponse> = {
+  encode(message: SkillsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    for (const v of message.skills) {
+      SkillRef.encode(v!, writer.uint32(18).fork()).join();
+    }
+    if (message.truncated !== false) {
+      writer.uint32(24).bool(message.truncated);
+    }
+    if (message.unavailable !== false) {
+      writer.uint32(32).bool(message.unavailable);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SkillsResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSkillsResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.skills.push(SkillRef.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.truncated = reader.bool();
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.unavailable = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<SkillsResponse>, I>>(base?: I): SkillsResponse {
+    return SkillsResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SkillsResponse>, I>>(object: I): SkillsResponse {
+    const message = createBaseSkillsResponse();
+    message.requestId = object.requestId ?? "";
+    message.skills = object.skills?.map((e) => SkillRef.fromPartial(e)) || [];
+    message.truncated = object.truncated ?? false;
+    message.unavailable = object.unavailable ?? false;
+    return message;
+  },
+};
+
+function createBaseInvokeSkillRequest(): InvokeSkillRequest {
+  return { requestId: "", name: "" };
+}
+
+export const InvokeSkillRequest: MessageFns<InvokeSkillRequest> = {
+  encode(message: InvokeSkillRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.name !== "") {
+      writer.uint32(18).string(message.name);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): InvokeSkillRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseInvokeSkillRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.name = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<InvokeSkillRequest>, I>>(base?: I): InvokeSkillRequest {
+    return InvokeSkillRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<InvokeSkillRequest>, I>>(object: I): InvokeSkillRequest {
+    const message = createBaseInvokeSkillRequest();
+    message.requestId = object.requestId ?? "";
+    message.name = object.name ?? "";
+    return message;
+  },
+};
+
+function createBaseInvokeSkillAck(): InvokeSkillAck {
+  return { requestId: "", ok: false, reason: "" };
+}
+
+export const InvokeSkillAck: MessageFns<InvokeSkillAck> = {
+  encode(message: InvokeSkillAck, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.ok !== false) {
+      writer.uint32(16).bool(message.ok);
+    }
+    if (message.reason !== "") {
+      writer.uint32(26).string(message.reason);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): InvokeSkillAck {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseInvokeSkillAck();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.ok = reader.bool();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<InvokeSkillAck>, I>>(base?: I): InvokeSkillAck {
+    return InvokeSkillAck.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<InvokeSkillAck>, I>>(object: I): InvokeSkillAck {
+    const message = createBaseInvokeSkillAck();
+    message.requestId = object.requestId ?? "";
+    message.ok = object.ok ?? false;
     message.reason = object.reason ?? "";
     return message;
   },

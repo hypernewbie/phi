@@ -389,6 +389,47 @@ func (b *Bridge) RequestPaneModels(ctx context.Context, paneID string) (pibridge
 	return b.server.RequestModels(ctx, processID)
 }
 
+// RequestPaneSkills resolves a pane to its bridge process and reads the
+// live Pi skill list. Unknown, unmanaged, and peerless panes fail; the
+// caller owns the deadline like history and models reads.
+func (b *Bridge) RequestPaneSkills(ctx context.Context, paneID string) (pibridge.SkillsResult, error) {
+	if b == nil {
+		return pibridge.SkillsResult{}, fmt.Errorf("pi-bridge: disabled")
+	}
+	b.mu.Lock()
+	p, ok := b.panes[paneID]
+	var processID string
+	var managed bool
+	if ok {
+		processID, managed = p.processID, p.managed
+	}
+	b.mu.Unlock()
+	if !ok || !managed {
+		return pibridge.SkillsResult{}, fmt.Errorf("pi-bridge: pane not managed")
+	}
+	return b.server.RequestSkills(ctx, processID)
+}
+
+// RequestPaneInvokeSkill resolves a pane to its bridge process and asks
+// the live Pi session to send one skill. The caller owns the deadline.
+func (b *Bridge) RequestPaneInvokeSkill(ctx context.Context, paneID, name string) (pibridge.InvokeSkillResult, error) {
+	if b == nil {
+		return pibridge.InvokeSkillResult{}, fmt.Errorf("pi-bridge: disabled")
+	}
+	b.mu.Lock()
+	p, ok := b.panes[paneID]
+	var processID string
+	var managed bool
+	if ok {
+		processID, managed = p.processID, p.managed
+	}
+	b.mu.Unlock()
+	if !ok || !managed {
+		return pibridge.InvokeSkillResult{}, fmt.Errorf("pi-bridge: pane not managed")
+	}
+	return b.server.RequestInvokeSkill(ctx, processID, name)
+}
+
 // RequestPaneThinkingLevels reads supported levels and rejects a result if
 // the pane was rebound to a different process while the request was in flight.
 func (b *Bridge) RequestPaneThinkingLevels(ctx context.Context, paneID string) (pibridge.ThinkingLevelsResult, error) {

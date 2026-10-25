@@ -77,6 +77,7 @@ Runtime identity binds `(generation, runtime_id, session_id)`:
 | `pi.thinking.v1`  | On-demand thinking-level reads and setting       |
 | `pi.context.v1`   | Context usage telemetry in snapshots             |
 | `pi.compact.v1`   | Native compaction on explicit user action        |
+| `pi.skills.v1`    | On-demand skill list and skill invocation        |
 
 Context and compact negotiate independently on every Hello from
 checked public API availability: `pi.context.v1` needs
@@ -143,6 +144,30 @@ to unknown downstream and never reject a snapshot. Queue, admission,
 drop, and timeout semantics match history reads; Phi surfaces list
 failures inside the picker and without the capability falls back to
 the native Pi picker.
+
+## Skill list and invocation
+
+`pi.skills.v1` is two best-effort request/response pairs over the
+shared stream, advertised only when the host exposes both the skill
+list and the skill dispatch call. Phi sends `SkillsRequest` (field
+20) with a correlating `request_id`; the extension answers
+`SkillsResponse` (field 23) echoing the id with the skills the live
+session knows - name and description only - capped at 200 entries
+with `truncated`, or `unavailable` when the answer cannot be
+represented on the wire. The bounds are the bridge's, not Pi's: name
+<= 64 UTF-8 bytes, description <= 1024 UTF-8 bytes. Pi validates
+character counts and only warns, so one entry can break the byte
+bounds; such a list answers `unavailable` as a whole, because entries
+are never silently omitted. Phi sends `InvokeSkillRequest` (field
+21) naming one skill; the extension answers `InvokeSkillAck` (field
+24): `ok` with an empty reason when the request was dispatched to the
+Pi host, or a refusal with `unknown-skill` (the session does not know
+the name), `unavailable` (the host call is missing or failed), or
+`error`. `ok=true` means dispatched, never accepted or completed:
+later Pi-side failures (no model, no credentials) are not observable
+here. Queue, admission, drop, and timeout semantics match history
+reads; Phi shows the picker only while the capability is live and
+shows nothing at all without it.
 
 ## Context telemetry
 
