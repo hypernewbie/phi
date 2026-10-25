@@ -1243,6 +1243,43 @@ func requireFailedPathsEmpty(t *testing.T, stats retentionSweepStats) {
 	}
 }
 
+// replaceWithSameSizeAndTime swaps the file for a different one that has
+// the same size and modification time, so only the file's identity
+// (device and inode) gives the replacement away.
+//
+// The replacement is written beside the file and renamed over it. Removing
+// the file and writing a new one does NOT reliably produce a different
+// inode: a Linux filesystem hands the just-freed inode number to the next
+// file it creates, so the identity check saw the same file and the sweep
+// published a stale snapshot. A rename always carries the other file's
+// inode, and that inode was allocated while the original still existed.
+func replaceWithSameSizeAndTime(t *testing.T, path string, data []byte, original os.FileInfo) {
+	t.Helper()
+	replacement := path + ".replacement"
+	if err := os.WriteFile(replacement, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, original.ModTime(), original.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	current, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(original, current) {
+		t.Fatalf("replacement kept the identity of %s", path)
+	}
+	if current.Size() != original.Size() {
+		t.Fatalf("replacement changed the size of %s", path)
+	}
+	if !current.ModTime().Equal(original.ModTime()) {
+		t.Fatalf("replacement changed the time of %s", path)
+	}
+}
+
 // poisonSameSize flips every byte in place, keeping the file size (and any
 // manifest that names it) unchanged while destroying its contents.
 func poisonSameSize(t *testing.T, path string) {
@@ -1982,15 +2019,7 @@ func TestLegacySweepSourceIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 		data := mustRead(t, journal)
-		if err := os.Remove(journal); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(journal, data, 0600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chtimes(journal, info.ModTime(), info.ModTime()); err != nil {
-			t.Fatal(err)
-		}
+		replaceWithSameSizeAndTime(t, journal, data, info)
 		stats := finalizeConversion(t, h, dir, snapshot, staging)
 		requireFailedPath(t, stats, journal)
 		if _, err := os.Lstat(groupDir(t, dir, pane)); !os.IsNotExist(err) {
@@ -2013,15 +2042,7 @@ func TestLegacySweepSourceIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 		data := mustRead(t, ckpt)
-		if err := os.Remove(ckpt); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(ckpt, data, 0600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chtimes(ckpt, info.ModTime(), info.ModTime()); err != nil {
-			t.Fatal(err)
-		}
+		replaceWithSameSizeAndTime(t, ckpt, data, info)
 		stats := finalizeConversion(t, h, dir, snapshot, staging)
 		requireFailedPath(t, stats, journal)
 		if _, err := os.Lstat(groupDir(t, dir, pane)); !os.IsNotExist(err) {
