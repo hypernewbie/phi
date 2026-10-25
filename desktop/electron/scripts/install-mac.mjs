@@ -102,11 +102,18 @@ function verify(target) {
 }
 
 /**
- * Drop duplicate Dock tiles for the app. The Dock keeps one tile per
- * entry in its recent apps, so a replaced bundle leaves a stale entry
- * behind and the user sees the app twice.
+ * Keep exactly one Dock tile for the app.
+ *
+ * The Dock shows a running app in its app section, and it also keeps
+ * the app in its recent apps. An app that is not pinned therefore shows
+ * up twice: once as the running app and once as a recent app. Replacing
+ * the bundle makes it worse, because the Dock tracks recent apps by file
+ * reference and adds a second entry instead of updating the old one.
+ *
+ * The fix is to pin the app and clear its recent app entries. A pinned
+ * app has one tile whether it runs or not.
  */
-function pruneDockTiles(bundle) {
+function ensureSingleDockTile(bundle, target, label) {
   let exported;
   try {
     exported = execFileSync('defaults', ['export', 'com.apple.dock', '-'], {
@@ -114,7 +121,11 @@ function pruneDockTiles(bundle) {
       maxBuffer: 32 * 1024 * 1024,
     });
   } catch {
-    return { removed: 0, reason: 'dock preferences unavailable' };
+    return {
+      removed: 0,
+      pinned: false,
+      reason: 'dock preferences unavailable',
+    };
   }
 
   const work = mkdtempSync(join(tmpdir(), 'phi-dock-'));
@@ -122,31 +133,32 @@ function pruneDockTiles(bundle) {
   try {
     writeFileSync(source, exported);
 
-    // The dock preferences hold archived bookmarks, which cannot
-    // round trip through JSON. Read the array as XML and edit the
-    // plist in place instead.
-    let fragment;
-    try {
-      fragment = execFileSync(
-        '/usr/bin/plutil',
-        ['-extract', 'recent-apps', 'xml1', '-o', '-', source],
-        { encoding: 'utf8' },
-      );
-    } catch {
-      return { removed: 0, reason: 'no recent apps in the dock' };
-    }
+    // The dock preferences hold archived bookmarks, which cannot round
+    // trip through JSON. Read the arrays as XML and edit the plist in
+    // place instead.
+    const entriesFor = (key) => {
+      try {
+        const fragment = execFileSync(
+          '/usr/bin/plutil',
+          ['-extract', key, 'xml1', '-o', '-', source],
+          { encoding: 'utf8' },
+        );
+        return splitArrayEntries(fragment);
+      } catch {
+        return [];
+      }
+    };
 
-    const entries = splitArrayEntries(fragment);
+    const isApp = (entry) =>
+      entry.includes('<key>bundle-identifier</key>') &&
+      entry.includes(`<string>${bundle}</string>`);
+
+    // Clear every recent app entry for the app.
+    const recents = entriesFor('recent-apps');
     const doomed = [];
-    let seen = false;
-    entries.forEach((entry, index) => {
-      if (!entry.includes(`<key>bundle-identifier</key>`)) return;
-      if (!entry.includes(`<string>${bundle}</string>`)) return;
-      if (seen) doomed.push(index);
-      else seen = true;
+    recents.forEach((entry, index) => {
+      if (isApp(entry)) doomed.push(index);
     });
-    if (doomed.length === 0) return { removed: 0 };
-
     // Delete from the end so the remaining indexes stay valid.
     for (const index of doomed.reverse()) {
       execFileSync('/usr/libexec/PlistBuddy', [
@@ -155,9 +167,60 @@ function pruneDockTiles(bundle) {
         source,
       ]);
     }
+
+    // Keep a single pinned tile.
+    const pinnedIndexes = [];
+    entriesFor('persistent-apps').forEach((entry, index) => {
+      if (isApp(entry)) pinnedIndexes.push(index);
+    });
+    for (const index of pinnedIndexes.slice(1).reverse()) {
+      execFileSync('/usr/libexec/PlistBuddy', [
+        '-c',
+        `Delete :persistent-apps:${index}`,
+        source,
+      ]);
+    }
+
     execFileSync('defaults', ['import', 'com.apple.dock', source]);
+
+    let hasTile = pinnedIndexes.length > 0;
+    if (!hasTile) {
+      const tile = [
+        '<dict>',
+        '<key>tile-data</key>',
+        '<dict>',
+        '<key>bundle-identifier</key>',
+        `<string>${bundle}</string>`,
+        '<key>dock-extra</key>',
+        '<integer>0</integer>',
+        '<key>file-data</key>',
+        '<dict>',
+        '<key>_CFURLString</key>',
+        `<string>file://${target}/</string>`,
+        '<key>_CFURLStringType</key>',
+        '<integer>15</integer>',
+        '</dict>',
+        '<key>file-label</key>',
+        `<string>${label}</string>`,
+        '<key>file-type</key>',
+        '<integer>1</integer>',
+        '</dict>',
+        '<key>tile-type</key>',
+        '<string>file-tile</string>',
+        '</dict>',
+      ].join('');
+      execFileSync('defaults', [
+        'write',
+        'com.apple.dock',
+        'persistent-apps',
+        '-array-add',
+        tile,
+      ]);
+      hasTile = true;
+    }
+
     execFileSync('/usr/bin/killall', ['Dock']);
-    return { removed: doomed.length };
+    return { removed: doomed.length, pinned: hasTile };
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
@@ -196,10 +259,11 @@ if (!opts.keepBuild) {
   rmSync(opts.app, { recursive: true, force: true });
 }
 
-const pruned = pruneDockTiles(id);
+const pruned = ensureSingleDockTile(id, opts.target, 'phi-client');
 process.stdout.write(
   `installed ${id} to ${opts.target}\n` +
-    `dock tiles removed: ${pruned.removed}${pruned.reason ? ` (${pruned.reason})` : ''}\n`,
+    `dock tiles: ${pruned.pinned ? 'one pinned tile' : 'not pinned'}` +
+    `${pruned.reason ? ` (${pruned.reason})` : ''}\n`,
 );
 if (!opts.keepBuild) {
   process.stdout.write(`removed the build copy at ${opts.app}\n`);
