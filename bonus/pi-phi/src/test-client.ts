@@ -223,14 +223,19 @@ export class BridgeTestClient {
         const queued = this.compactRequestQueue.shift();
         if (queued !== undefined) return queued;
         return new Promise<CompactRequest>((resolve, reject) => {
-            const timer = setTimeout(
-                () => reject(new Error('compact request deadline')),
-                timeoutMs,
-            );
-            this.compactRequestWaiters.push((req) => {
+            const waiter = (req: CompactRequest) => {
                 clearTimeout(timer);
                 resolve(req);
-            });
+            };
+            const timer = setTimeout(() => {
+                // An expired waiter must leave the queue: otherwise the
+                // next request resolves an already-rejected promise and
+                // is lost before its own waiter can see it.
+                const at = this.compactRequestWaiters.indexOf(waiter);
+                if (at >= 0) this.compactRequestWaiters.splice(at, 1);
+                reject(new Error('compact request deadline'));
+            }, timeoutMs);
+            this.compactRequestWaiters.push(waiter);
         });
     }
 

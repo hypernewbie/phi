@@ -410,6 +410,31 @@ describe('compact', () => {
         await client.close();
     }, 30_000);
 
+    it('keeps a later request after an expired wait', async () => {
+        const { client, process } = await makeCompactClient(
+            'pane-compact-expired-wait',
+        );
+        await client.connect();
+        const { generation, pubRev } = await compactStamps(process);
+        // Expire a wait BEFORE anything is dispatched: without dropping
+        // the dead waiter from the queue, the real request resolves that
+        // already-rejected promise and the fresh wait never sees it.
+        await expect(client.awaitCompactRequest(50)).rejects.toThrow(
+            /deadline/,
+        );
+        const call = await dispatchCompact(process, generation, pubRev, 15000);
+        const req = await client.awaitCompactRequest();
+        expect(req.requestId).toMatch(/^[1-9][0-9]*$/);
+        expect(client.receivedCompactRequests()).toBe(1);
+        client.sendCompactResult(
+            req.requestId,
+            CompactOutcome.COMPACT_OUTCOME_COMPLETED,
+        );
+        const res = await waitCompact(call);
+        expect(res.ok).toBe(true);
+        await client.close();
+    }, 30_000);
+
     it('retains pending across a caller timeout without replay', async () => {
         const { client, process } = await makeCompactClient(
             'pane-compact-timeout',

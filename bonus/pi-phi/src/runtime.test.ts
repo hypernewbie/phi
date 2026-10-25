@@ -2326,6 +2326,23 @@ describe('Runtime compact dispatch', () => {
         rt.shutdown();
     });
 
+    it('maps an AbortError to cancelled/cancelled', async () => {
+        const { ch, rt, calls } = await startedCompact();
+        ch.hooks!.onMessage(compactRequest('1'));
+        // Node's abort reason carries no "cancel" text, only the name.
+        const abort = new Error('This operation was aborted');
+        abort.name = 'AbortError';
+        calls[0]!.onError(abort);
+        expect(results(ch)).toEqual([
+            {
+                requestId: '1',
+                outcome: CompactOutcome.COMPACT_OUTCOME_CANCELLED,
+                reason: 'cancelled',
+            },
+        ]);
+        rt.shutdown();
+    });
+
     it('refuses when the host is busy', async () => {
         const { ch, rt, latch, calls } = await startedCompact({
             isIdle: () => false,

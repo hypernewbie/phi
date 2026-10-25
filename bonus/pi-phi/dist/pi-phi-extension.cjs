@@ -28254,8 +28254,10 @@ function normalizeContextUsage(value) {
 }
 function mapCompactError(error) {
   let message;
+  let aborted = false;
   try {
     message = String(error instanceof Error ? error.message : error);
+    aborted = error instanceof Error && error.name === "AbortError";
   } catch {
     message = "";
   }
@@ -28265,7 +28267,7 @@ function mapCompactError(error) {
       reason: "already-compacted"
     };
   }
-  if (/cancel/i.test(message)) {
+  if (aborted || /cancel/i.test(message)) {
     return {
       outcome: 4 /* COMPACT_OUTCOME_CANCELLED */,
       reason: "cancelled"

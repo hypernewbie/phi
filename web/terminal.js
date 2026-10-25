@@ -6512,6 +6512,10 @@ export class TabManager {
         tab.finalizing = true;
 
         this._cancelHistoryRequest?.(tab);
+        // The pending native Compact waiter is pane-keyed, so a closed
+        // pane must drop it here or a later tab on the same pane id
+        // inherits "Compacting…" from this one.
+        this._invalidatePiBridgeCompact?.(tab);
         tab._panelObserver?.disconnect();
         if (tab._panelFitRAF != null && typeof cancelAnimationFrame === 'function') {
             cancelAnimationFrame(tab._panelFitRAF);
@@ -8799,8 +8803,7 @@ export class TabManager {
     // catch-up bell. Aborted runs never ring.
     _acceptPiBridgeState(tabInfo, control, socket = tabInfo?.ws) {
         if (!tabInfo || tabInfo.coder !== 'pi') return;
-        const prev = tabInfo.piBridge;
-        const prevKey = prev ? this._piBridgeKeys(tabInfo, prev).row : '';
+        const prevKeys = this._piBridgeKeys(tabInfo);
         this._acceptOrderedBridgeView(tabInfo, control, socket);
         // A retained view that no longer supports the pending native
         // Compact waiter — runtime generation moved, peer lost, or
@@ -8827,13 +8830,15 @@ export class TabManager {
                 tabInfo.ws === pendingOp.ws &&
                     tabInfo.piBridge?.generation === pendingOp.generation,
             );
-        const next = tabInfo.piBridge;
-        const nextKey = next ? this._piBridgeKeys(tabInfo, next).row : '';
-        // The models trigger, the context meter, and the Compact
-        // controls all ride bridge state: re-render the row and the bar
-        // only when model, availability, capabilities, or telemetry
-        // moved on the visible tab. Rejected (stale) frames change nothing.
-        if (prevKey !== nextKey) this._refreshPiBridgeModels(tabInfo);
+        const nextKeys = this._piBridgeKeys(tabInfo);
+        // The models trigger, the slash presets, and the Compact
+        // controls ride the row key; context occupancy rides the bar
+        // alone, so a per-turn telemetry frame never rebuilds the row
+        // (and never takes the keyboard user's focus with it).
+        // Rejected (stale) frames move neither key.
+        if (prevKeys.row !== nextKeys.row) this._refreshPiBridgeModels(tabInfo);
+        else if (prevKeys.bar !== nextKeys.bar && this.getActiveTab() === tabInfo)
+            this.renderPiRpcStatusBar?.();
         if (
             this._piRecall?.paneId === tabInfo.paneId &&
             (!this._piRecallEligible(tabInfo) ||
@@ -9119,6 +9124,9 @@ export class TabManager {
                         this.maybeAutoReconnect(tabInfo);
                         this.updateDisconnectBanner();
                     }
+                    // Same contract as _handleTerminalDisconnect: a dead
+                    // socket orphans the pending native Compact waiter.
+                    this._invalidatePiBridgeCompact?.(tabInfo, true);
                     this._refreshPiBridgeModels(tabInfo);
                 },
                 () => {
@@ -9336,6 +9344,9 @@ export class TabManager {
                             if (restartBtn) restartBtn.disabled = false;
                             this.updateDisconnectBanner();
                         }
+                        // A dead restart socket orphans the pending native
+                        // Compact waiter, exactly like any other close.
+                        this._invalidatePiBridgeCompact?.(tabInfo, true);
                         this._refreshPiBridgeModels(tabInfo);
                     },
                     () => {
@@ -12397,6 +12408,20 @@ export class TabManager {
             return { disabled: true, title: 'Compacting…' };
         const { ready, reason } = piBridgeCompactReady(tab.piBridge);
         return { disabled: !ready, title: reason };
+    }
+
+    // _piBridgeKeys splits one retained view into the two refresh keys.
+    // The row key covers what the presets row renders (Models trigger,
+    // slash presets, Compact readiness); the bar key adds the context
+    // occupancy only the status-bar meter renders.
+    _piBridgeKeys(tab) {
+        const view = tab.piBridge;
+        if (!view) return { row: '', bar: '' };
+        const row = `${this._piBridgeModelsEligible(tab)}|${piBridgeCapable(tab, 'pi.context.v1')}|${piBridgeCapable(tab, 'pi.compact.v1')}|${view.state}|${view.model || ''}|${view.connected}|${view.running}|${(view.capabilities || []).join(',')}|${view.compact_idle}/${view.compact_queued}/${view.compact_active}/${view.compact_pending}`;
+        return {
+            row,
+            bar: `${row}|${view.context_tokens ?? ''},${view.context_window ?? ''},${view.context_percent ?? ''}`,
+        };
     }
 
     // Socket changes and bridge views share the same row/bar

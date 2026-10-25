@@ -32,6 +32,10 @@ export function snapshotTree(dir) {
             const childRel = rel ? `${rel}/${entry.name}` : entry.name;
             if (entry.isDirectory()) walk(childAbs, childRel);
             else if (entry.isFile()) out.set(childRel, readFileSync(childAbs));
+            // Regeneration writes regular files only, so a symlink or
+            // special file in a generated tree is drift by definition.
+            // Recording it keeps the file-set identity check honest.
+            else out.set(childRel, Buffer.from('<non-regular entry>'));
         }
     };
     walk(dir, '');

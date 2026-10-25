@@ -3,6 +3,29 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setupDomHarness, mockFetch, stubWebSocket } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
 
+// The reconnect and restart sockets get their own close callbacks, so
+// the lifecycle regressions below drive those real callbacks instead
+// of _handleTerminalDisconnect. Nothing else in this file constructs a
+// PTYWebSocket, so the stub stays inert for the rest of the suite.
+const socketLog = vi.hoisted(() => ({ made: [] }));
+vi.mock('../web/ws.js', () => ({
+    PTYWebSocket: class {
+        constructor(paneId, onData, onControl, onClose, onOpen, opts) {
+            Object.assign(this, {
+                paneId,
+                onData,
+                onControl,
+                onClose,
+                onOpen,
+                opts,
+            });
+            this.close = vi.fn();
+            this.sendInput = vi.fn(() => true);
+            socketLog.made.push(this);
+        }
+    },
+}));
+
 // Lane C browser coverage: bridge context meter reuse plus native
 // Compact dispatch through the shared slash path.
 //
@@ -1370,6 +1393,106 @@ describe('stale replies and finalizers', () => {
     });
 });
 
+describe('socket close and pane disposal lifecycle', () => {
+    beforeEach(() => {
+        socketLog.made.length = 0;
+    });
+
+    it('reports unknown once when a reconnect socket closes', () => {
+        const gate = deferred();
+        mockFetch(() => gate.promise);
+        const tm = makeTm();
+        const tab = makePiTab('pi-1', {
+            ws: { sendInput: vi.fn(() => true), close: vi.fn() },
+            term: { refresh: vi.fn(), reset: vi.fn(), rows: 24, cols: 80 },
+        });
+        tm.tabs.set(tab.paneId, tab);
+        tm.activePaneId = tab.paneId;
+
+        tm.reconnectTab(tab);
+        const ws = socketLog.made[0];
+        expect(ws).toBeTruthy();
+        ws.onOpen();
+        baseline(tm, tab);
+        // Dispatch on the reconnect socket, then lose that socket.
+        tm.sendSlashCommand(tab, '/compact');
+        expect(tm._piBridgeCompactPending.has(tab.paneId)).toBe(true);
+
+        ws.onClose();
+        expect(tm._piBridgeCompactPending.has(tab.paneId)).toBe(false);
+        expect(tm.app.showToast).toHaveBeenCalledWith(
+            'Compaction outcome unknown',
+            { type: 'error', title: 'Compact' },
+        );
+    });
+
+    it('reports unknown once when a restart socket closes', async () => {
+        const gate = deferred();
+        mockFetch((url) =>
+            String(url).includes('/api/pi-bridge/compact')
+                ? gate.promise
+                : { json: { pane_id: 'pi-2', session_id: 's2' } },
+        );
+        const tm = makeTm();
+        const tab = makePiTab('pi-1', {
+            ws: { sendInput: vi.fn(() => true), close: vi.fn() },
+            term: { refresh: vi.fn(), reset: vi.fn(), rows: 24, cols: 80 },
+        });
+        tm.tabs.set(tab.paneId, tab);
+        tm.activePaneId = tab.paneId;
+
+        tm.restartTab(tab);
+        await vi.waitFor(() => expect(socketLog.made).toHaveLength(1));
+        const ws = socketLog.made[0];
+        ws.onOpen();
+        baseline(tm, tab);
+        tm.sendSlashCommand(tab, '/compact');
+        expect(tm._piBridgeCompactPending.has(tab.paneId)).toBe(true);
+
+        ws.onClose();
+        expect(tm._piBridgeCompactPending.has(tab.paneId)).toBe(false);
+        expect(tm.app.showToast).toHaveBeenCalledWith(
+            'Compaction outcome unknown',
+            { type: 'error', title: 'Compact' },
+        );
+    });
+
+    it('drops the pending op when the pane is disposed', async () => {
+        const gate = deferred();
+        mockFetch(() => gate.promise);
+        const tm = makeTm();
+        const tab = makePiTab('pi-1', {
+            ws: { sendInput: vi.fn(() => true), close: vi.fn() },
+        });
+        tm.tabs.set(tab.paneId, tab);
+        tm.activePaneId = tab.paneId;
+        baseline(tm, tab);
+        tm.sendSlashCommand(tab, '/compact');
+        const op = tm._piBridgeCompactPending.get(tab.paneId);
+        expect(op).toBeTruthy();
+
+        tm.disposeTabClient(tab.paneId);
+        // The waiter is pane-keyed, so disposal must retire it: a later
+        // tab on the same pane id may not inherit it.
+        expect(tm._piBridgeCompactPending.has(tab.paneId)).toBe(false);
+        expect(op.controller.signal.aborted).toBe(true);
+
+        const reused = makePiTab('pi-1');
+        tm.tabs.set('pi-1', reused);
+        tm.activePaneId = 'pi-1';
+        gate.resolve({
+            ok: true,
+            status: 200,
+            headers: { get: () => 'application/json' },
+            json: async () => ({ outcome: 'completed' }),
+            text: async () => '{}',
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(tm.app.showToast).not.toHaveBeenCalled();
+        expect(tm._piBridgeCompactPending.has('pi-1')).toBe(false);
+    });
+});
+
 describe('compact control keyboard semantics', () => {
     it('keeps native button focus for enabled controls and skips disabled ones', () => {
         mockFetch(() => ({
@@ -1404,6 +1527,35 @@ describe('compact control keyboard semantics', () => {
         expect(busy.disabled).toBe(true);
         busy.focus();
         expect(document.activeElement).not.toBe(busy);
+    });
+
+    it('keeps preset focus across a context-only telemetry frame', () => {
+        mockFetch(() => ({ ok: true, status: 200 }));
+        const tm = makeTm();
+        const tab = makePiTab();
+        tm.tabs.set(tab.paneId, tab);
+        tm.activePaneId = tab.paneId;
+        baseline(tm, tab);
+        tm.renderPresets('pi');
+
+        const btn = desktopCompact(tm);
+        btn.focus();
+        expect(document.activeElement).toBe(btn);
+
+        // Context occupancy rides the meter alone: the row must not be
+        // rebuilt per turn, or the keyboard user loses their place.
+        tm._acceptPiBridgeState(
+            tab,
+            wsFrame(tab, {
+                telemetry_revision: '8',
+                context_tokens: '9100',
+                context_percent: '91',
+            }),
+            tab.ws,
+        );
+        expect(desktopCompact(tm)).toBe(btn);
+        expect(document.activeElement).toBe(btn);
+        expect(meter().text.textContent).toBe('9.1K / 10K');
     });
 });
 

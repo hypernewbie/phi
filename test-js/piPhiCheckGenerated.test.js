@@ -4,7 +4,13 @@
 // fixtures only; the full gate still runs via pnpm check:pi-phi-generated.
 // The second block covers actual fresh-generation file-set behavior
 // through the generator's real output-clearing step.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+    mkdirSync,
+    mkdtempSync,
+    rmSync,
+    symlinkSync,
+    writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -72,6 +78,18 @@ describe('pi-phi generated drift comparison', () => {
         const dir = join(base, 'absent');
         expect(snapshotTree(dir).size).toBe(0);
         expect(diffSnapshots(snapshotTree(dir), snapshotTree(dir))).toEqual([]);
+    });
+
+    it('fails a symlink in a generated tree', () => {
+        const dir = fixture({ 'bridge.ts': 'v1' });
+        symlinkSync(join(dir, 'bridge.ts'), join(dir, 'stray.ts'));
+        const before = snapshotTree(dir);
+        // Regeneration writes regular files only, so the link vanishes
+        // and the gate must report it instead of silently agreeing.
+        rmSync(join(dir, 'stray.ts'));
+        expect(diffSnapshots(before, snapshotTree(dir))).toEqual([
+            'only in worktree: stray.ts',
+        ]);
     });
 });
 

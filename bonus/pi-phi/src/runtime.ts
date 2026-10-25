@@ -298,11 +298,15 @@ function mapCompactError(error: unknown): {
     reason: string;
 } {
     let message: string;
+    let aborted = false;
     try {
         // Convert inside the guard: the annotation cannot promise
         // a runtime string (a message getter may return a Symbol),
         // and the regex below must never receive a non-string.
         message = String(error instanceof Error ? error.message : error);
+        // An aborted host work is a cancellation even when its message
+        // never says so (AbortError's default text is "aborted").
+        aborted = error instanceof Error && error.name === 'AbortError';
     } catch {
         message = '';
     }
@@ -312,7 +316,7 @@ function mapCompactError(error: unknown): {
             reason: 'already-compacted',
         };
     }
-    if (/cancel/i.test(message)) {
+    if (aborted || /cancel/i.test(message)) {
         return {
             outcome: CompactOutcome.COMPACT_OUTCOME_CANCELLED,
             reason: 'cancelled',
