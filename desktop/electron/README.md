@@ -20,6 +20,12 @@ Phase-1 inert scaffold + the single-instance gate and `phi://` argv routing:
   the main window's renderer and foregrounds the window
   (restore()+focus()); the primary also routes its own positional URL args
   the same way;
+- the macOS bundle sets `LSMultipleInstancesProhibited`, so macOS never
+  starts a second process for this app. That keeps the Dock at one tile for
+  the bundle (a second process leaves a second recent app entry behind) and
+  it means a `phi://` link opened while the app runs arrives on
+  `app.on('open-url')` instead of as a second launch. The forward lands on
+  the rail view, because the rail owns the server selection;
 - `phi://` deep links are parsed (`src/deeplink.ts`, mirroring the Wails
   `desktop/internal/deeplink` grammar) and dispatched on `phi:deeplink`;
 - a typed, sandboxed preload (`src/preload.ts`, CJS via

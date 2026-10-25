@@ -646,7 +646,13 @@ export class DesktopHost {
     }
     for (const payload of payloads) {
       if (payload.kind === 'server') this.activateServerUrl(payload.value);
-      else win.webContents.send(FORWARD_CHANNEL, payload);
+      else {
+        // The rail owns the server selection, so the forward belongs to
+        // the rail view. The main window page is the header and has no
+        // listener for it.
+        const target = this.railView?.webContents ?? win.webContents;
+        if (!target.isDestroyed()) target.send(FORWARD_CHANNEL, payload);
+      }
     }
   }
 

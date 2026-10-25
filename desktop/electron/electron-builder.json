@@ -15,6 +15,7 @@
     "category": "public.app-category.developer-tools",
     "extendInfo": {
       "CFBundleDisplayName": "phi-client",
+      "LSMultipleInstancesProhibited": true,
       "CFBundleURLTypes": [
         {
           "CFBundleURLName": "dev.phi.desktop",
