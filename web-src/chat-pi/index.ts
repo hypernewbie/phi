@@ -52,11 +52,87 @@ function cloneStatus(status: PiRpcStatus): PiRpcStatus {
     };
 }
 
-function mergeState(status: PiRpcStatus, state: unknown): boolean {
+const stateMetricFields = [
+    'inputTokens',
+    'outputTokens',
+    'contextUsedTokens',
+    'contextWindowTokens',
+    'cacheReadTokens',
+    'cacheWriteTokens',
+] as const;
+
+const stateOptionalFields = ['model', 'thinking', 'sessionPath'] as const;
+
+/**
+ * Canonical full State: the shape the backend publishes for a commit event or
+ * a hydrate pair, scoped to one instance SID. Only this shape can clear an
+ * omitted optional field; partial or legacy payloads merge without clearing.
+ */
+function isCanonicalState(
+    state: unknown,
+    sid: string,
+): state is Record<string, unknown> {
+    if (!state || typeof state !== 'object' || sid === '') return false;
+    const source = state as Record<string, unknown>;
+    if (source.sid !== sid) return false;
+    for (const field of ['title', 'cwd'] as const) {
+        if (typeof source[field] !== 'string') return false;
+    }
+    if (source.status !== 'live' && source.status !== 'exited') return false;
+    if (typeof source.busy !== 'boolean') return false;
+    const depth = source.queueDepth;
+    if (typeof depth !== 'number' || !Number.isFinite(depth) || depth < 0)
+        return false;
+    for (const field of stateMetricFields) {
+        if (!Object.hasOwn(source, field)) return false;
+        const value = source[field];
+        if (
+            value !== null &&
+            !(typeof value === 'number' && Number.isFinite(value))
+        )
+            return false;
+    }
+    if (!Object.hasOwn(source, 'skills')) return false;
+    const skills = source.skills;
+    if (
+        skills !== null &&
+        !(
+            Array.isArray(skills) &&
+            skills.every((item) => typeof item === 'string')
+        )
+    )
+        return false;
+    for (const field of stateOptionalFields) {
+        if (Object.hasOwn(source, field) && typeof source[field] !== 'string')
+            return false;
+    }
+    return true;
+}
+
+function mergeState(
+    status: PiRpcStatus,
+    state: unknown,
+    canonical = false,
+): boolean {
     if (!state || typeof state !== 'object') return false;
     const source = state as Record<string, unknown>;
     let changed = false;
+    // Canonical absence, or an empty optional string, means the backend no
+    // longer retains that value. The resume path is the only optional field
+    // a reset must clear, and a stale render must not re-promote it.
+    if (canonical) {
+        for (const field of stateOptionalFields) {
+            if (!status[field]) continue;
+            const value = source[field];
+            if (typeof value === 'string' && value) continue;
+            delete status[field];
+            changed = true;
+        }
+    }
     const strings = ['cwd', 'model', 'thinking'] as const;
+    // model and thinking are `omitempty` on the Go side, so a canonical
+    // snapshot never carries them as empty strings and cannot re-add a value
+    // the clear above removed.
     for (const field of strings) {
         if (Object.hasOwn(source, field) && typeof source[field] === 'string') {
             status[field] = source[field] as never;
@@ -109,7 +185,8 @@ function isSnapshot(value: unknown): value is Snapshot {
     const snapshot = value as Record<string, unknown>;
     return (
         typeof snapshot.lastSeq === 'number' &&
-        Number.isFinite(snapshot.lastSeq) &&
+        Number.isSafeInteger(snapshot.lastSeq) &&
+        snapshot.lastSeq >= 0 &&
         Array.isArray(snapshot.messages)
     );
 }
@@ -268,7 +345,8 @@ export function mountChatPi(
         });
     const applyState = (state: unknown): void => {
         const source = state as Record<string, unknown> | null;
-        const statusChanged = mergeState(localStatus, state);
+        const canonical = isCanonicalState(state, sid);
+        const statusChanged = mergeState(localStatus, state, canonical);
         let controlsChanged = statusChanged;
         if (source && typeof source === 'object') {
             if (typeof source.busy === 'boolean' && source.busy !== busy) {
@@ -301,6 +379,7 @@ export function mountChatPi(
                 controlsChanged = true;
             }
         }
+        if (canonical && source?.status === 'exited') enterExited();
         if (statusChanged) notifyStatus();
         if (controlsChanged) notifyControls();
     };
@@ -318,6 +397,8 @@ export function mountChatPi(
     let paintQueued = false;
     const flushPaint = (): void => {
         paintQueued = false;
+        // A queued paint must not republish status or controls after teardown.
+        if (destroyed) return;
         // The structured renderer reads active-turn state while it builds
         // the current window. State-only updates use this same narrow setter
         // without re-rendering the transcript.
@@ -355,6 +436,25 @@ export function mountChatPi(
         pageSize: 50,
     });
     const status = view.status!;
+    // One terminal transition shared by the rpcExited event and a canonical
+    // exited snapshot, which can arrive at a cursor that makes the event stale.
+    // Idempotent, so a duplicate or late signal cannot repeat teardown.
+    const enterExited = (): void => {
+        if (exited) return;
+        exited = true;
+        ready = false;
+        // A hydrate or control response still in flight must not restore
+        // readiness after the pane is terminal.
+        activeHydrate = null;
+        hydrateInFlight = false;
+        status.textContent = 'Pi exited';
+        lastFleet = undefined;
+        onFleetChange(undefined);
+        subagentViewer.destroy();
+        strip.destroy();
+        flushPendingSave();
+        notifyControls();
+    };
     const _origPrepend = view.prependOlder.bind(view);
     let _compactFileTried = false;
     (view as unknown as Record<string, unknown>).prependOlder = (
@@ -529,9 +629,17 @@ export function mountChatPi(
                     }
                     return;
                 }
+                // An equal cursor is valid reset/gap recovery. An older one
+                // cannot replace transcript or metadata that a newer event
+                // has already advanced past.
+                const older = data.lastSeq < buffer.getLastSeq();
+                hydrateInFlight = false;
+                if (older) {
+                    if (!wasReset) notifyControls();
+                    return;
+                }
                 buffer.applySnapshot(data);
                 applyState((data as Snapshot & { state?: unknown }).state);
-                hydrateInFlight = false;
                 paint();
                 // A hydrate replaces the authoritative settled transcript.
                 // Reset completion flushes in the next microtask; initial and
@@ -648,6 +756,9 @@ export function mountChatPi(
     const setModel = (provider: string, modelId: string): Promise<unknown> => {
         if (!sid || !ready || exited) return rejected('Pi RPC is not ready');
         const currentSid = sid;
+        // Live metadata comes from sequenced stateChanged events. The
+        // operation response carries no version, so it must not overwrite
+        // state an event has already advanced past.
         return invokeControl(
             wire,
             'setModel',
@@ -655,10 +766,7 @@ export function mountChatPi(
             { provider, modelId },
             'set-model',
             legacyResponses,
-        ).then((data: any) => {
-            if (currentSid === sid) applyState(data?.state);
-            return data;
-        });
+        );
     };
     const setThinking = (level: string): Promise<unknown> => {
         if (!sid || !ready || exited) return rejected('Pi RPC is not ready');
@@ -670,10 +778,7 @@ export function mountChatPi(
             { level },
             'set-thinking',
             legacyResponses,
-        ).then((data: any) => {
-            if (currentSid === sid) applyState(data?.state);
-            return data;
-        });
+        );
     };
     const interrupt = (): Promise<unknown> => {
         if (!sid || !ready || exited || !sessionActive)
@@ -771,7 +876,6 @@ export function mountChatPi(
         )
             .then((data) => {
                 if (currentSid === sid) {
-                    applyState(data?.state);
                     if (
                         typeof data?.stateWarning === 'string' &&
                         data.stateWarning
@@ -800,6 +904,11 @@ export function mountChatPi(
         resetInFlight = true;
         notifyControls();
         const currentSid = sid;
+        // Fallback inputs for the case where the server's canonical clear is
+        // lost or delayed. A newer accepted event advances the cursor and
+        // disables the response-only rule, even when it repeats the same path.
+        const previousPath = localStatus.sessionPath;
+        const previousCursor = buffer.getLastSeq();
         return invokeControl(
             wire,
             'newSession',
@@ -809,14 +918,15 @@ export function mountChatPi(
             legacyResponses,
         )
             .then((data: any) => {
-                if (currentSid !== sid) return data;
+                if (destroyed || currentSid !== sid) return data;
                 if (data?.cancelled === true) return data;
                 if (data?.reset !== true)
                     throw new Error('Pi reset was not accepted');
-                // Clear removed the resume identity: drop the cached
-                // status path before the reset promise resolves so a later
-                // control repaint cannot promote the old path again.
-                if (localStatus.sessionPath !== undefined) {
+                if (
+                    previousPath !== undefined &&
+                    localStatus.sessionPath === previousPath &&
+                    buffer.getLastSeq() === previousCursor
+                ) {
                     delete localStatus.sessionPath;
                     notifyStatus();
                 }
@@ -833,7 +943,7 @@ export function mountChatPi(
             })
             .finally(() => {
                 resetInFlight = false;
-                notifyControls();
+                if (!destroyed) notifyControls();
             });
     };
 
@@ -882,15 +992,7 @@ export function mountChatPi(
             applyState(env.data);
         }
         if (env.evt === 'rpcExited') {
-            exited = true;
-            ready = false;
-            status.textContent = 'Pi exited';
-            lastFleet = undefined;
-            onFleetChange(undefined);
-            subagentViewer.destroy();
-            strip.destroy();
-            flushPendingSave();
-            notifyControls();
+            enterExited();
         }
         if (env.evt === 'subagentFleet') {
             lastFleet = env.data;
@@ -1151,10 +1253,14 @@ export function mountChatPi(
                 typeof data.title === 'string' ? data.title : 'Pi RPC';
             buffer.applySnapshot(data.snapshot);
             applyState(data.state);
-            ready = true;
-            exited = false;
-            status.textContent = 'Ready';
+            // A snapshot taken at the exit cursor is terminal: bootstrap must
+            // not mark the pane ready because the queued exit event is stale.
+            if (!exited) {
+                ready = true;
+                status.textContent = 'Ready';
+            }
             notifyControls();
+            if (exited) return;
             paint();
             requestHydrate(false);
         })

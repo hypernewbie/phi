@@ -1126,3 +1126,306 @@ func TestSubagentFleetNoAliasing(t *testing.T) {
 		t.Fatalf("first fleet payload aliased the scanner buffer: %s", raw)
 	}
 }
+
+// publishResumePath points raw ownership at an existing regular file and
+// publishes it. The caller consumes the promotion event.
+func publishResumePath(t *testing.T, m *Manager, inst *Instance) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.UpdateSessionPath(inst, path)
+	m.promoteSessionPath(inst)
+	return path
+}
+
+func TestStateTransactionResetBoundaryKeepsLaterMessage(t *testing.T) {
+	m, fp, inst, sub := wireManagerFixture(t)
+	path := publishResumePath(t, m, inst)
+	if event := nextWireEvent(t, sub); event.Evt != EvtStateChanged {
+		t.Fatalf("resume path was not published: %+v", event)
+	}
+	inst.Emit(EvtMessageEnd, &Message{Role: "user", Content: json.RawMessage(`"old"`)}, nil)
+	nextWireEvent(t, sub)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, err := inst.Request(ctx, "new_session", nil)
+		result <- err
+	}()
+	var request map[string]any
+	select {
+	case request = <-fp.commands:
+	case <-ctx.Done():
+		t.Fatal("reset request was not written")
+	}
+	id, _ := request["id"].(string)
+	lines := fmt.Sprintf(`{"type":"response","id":%q,"command":"new_session","success":true,"data":{}}`, id) + "\n" +
+		`{"type":"message_end","message":{"role":"user","content":"after-reset"}}` + "\n"
+	if _, err := fp.stdoutW.Write([]byte(lines)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("reset request failed: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("reset request did not complete")
+	}
+
+	cleared := nextWireEvent(t, sub)
+	if cleared.Evt != EvtStateChanged {
+		t.Fatalf("reset did not publish the path clear: %+v", cleared)
+	}
+	if state, ok := cleared.Data.(State); !ok || state.SessionPath != "" {
+		t.Fatalf("path clear carried the wrong state: %+v", cleared.Data)
+	}
+	if event := nextWireEvent(t, sub); event.Evt != EvtTranscriptReset {
+		t.Fatalf("reset did not clear the transcript after the path: %+v", event)
+	}
+	if event := nextWireEvent(t, sub); event.Evt != EvtMessageEnd {
+		t.Fatalf("a message accepted after the boundary was not published: %+v", event)
+	}
+	select {
+	case event := <-sub.Channel():
+		t.Fatalf("reset boundary published extra state: %+v", event)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	snapshot := inst.SnapshotCopy()
+	if len(snapshot.Messages) != 1 || !strings.Contains(string(snapshot.Messages[0].Content), "after-reset") {
+		t.Fatalf("reset boundary did not preserve the later message: %+v", snapshot)
+	}
+	if state := inst.StateCopy(); state.SessionPath != "" {
+		t.Fatalf("reset kept a published resume path: %q", state.SessionPath)
+	}
+	if inst.SessionPathCopy() == path {
+		t.Fatalf("reset kept raw session ownership: %q", path)
+	}
+}
+
+func TestStateTransactionResetFailuresPreserveBoundary(t *testing.T) {
+	cases := []struct {
+		name    string
+		origin  string
+		command string
+		success bool
+		data    string
+	}{
+		{name: "cancelled", origin: "new_session", command: "new_session", success: true, data: `{"cancelled":true}`},
+		{name: "malformed", origin: "new_session", command: "new_session", success: true, data: `"oops"`},
+		{name: "type-invalid", origin: "new_session", command: "new_session", success: true, data: `{"cancelled":"yes"}`},
+		{name: "rejected", origin: "new_session", command: "new_session", success: false},
+		{name: "wrong-origin", origin: "get_state", command: "new_session", success: true, data: `{}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, fp, inst, sub := wireManagerFixture(t)
+			path := publishResumePath(t, m, inst)
+			nextWireEvent(t, sub)
+			inst.Emit(EvtMessageEnd, &Message{Role: "user", Content: json.RawMessage(`"keep"`)}, nil)
+			nextWireEvent(t, sub)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			result := make(chan error, 1)
+			go func() {
+				_, err := inst.Request(ctx, tc.origin, nil)
+				result <- err
+			}()
+			var request map[string]any
+			select {
+			case request = <-fp.commands:
+			case <-ctx.Done():
+				t.Fatal("request was not written")
+			}
+			id, _ := request["id"].(string)
+			reply := fmt.Sprintf(`{"type":"response","id":%q,"command":%q,"success":%t,"data":%s}`, id, tc.command, tc.success, tc.data)
+			if !tc.success {
+				reply = fmt.Sprintf(`{"type":"response","id":%q,"command":%q,"success":false,"error":"refused"}`, id, tc.command)
+			}
+			if _, err := fp.stdoutW.Write([]byte(reply + "\n")); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-result:
+			case <-ctx.Done():
+				t.Fatal("request did not complete")
+			}
+
+			timeout := time.After(100 * time.Millisecond)
+			for draining := true; draining; {
+				select {
+				case event := <-sub.Channel():
+					if event.Evt == EvtTranscriptReset {
+						t.Fatalf("%s cleared the transcript: %+v", tc.name, event)
+					}
+				case <-timeout:
+					draining = false
+				}
+			}
+			if state := inst.StateCopy(); state.SessionPath != path {
+				t.Fatalf("%s cleared the resume path: %q", tc.name, state.SessionPath)
+			}
+			if inst.SessionPathCopy() != path {
+				t.Fatalf("%s cleared raw ownership: %q", tc.name, inst.SessionPathCopy())
+			}
+			if messages := inst.SnapshotCopy().Messages; len(messages) != 1 {
+				t.Fatalf("%s changed the transcript: %+v", tc.name, messages)
+			}
+		})
+	}
+}
+
+func TestStateTransactionUncorrelatedResetResponsesAreIgnored(t *testing.T) {
+	m, fp, inst, sub := wireManagerFixture(t)
+	path := publishResumePath(t, m, inst)
+	nextWireEvent(t, sub)
+	inst.Emit(EvtMessageEnd, &Message{Role: "user", Content: json.RawMessage(`"keep"`)}, nil)
+	nextWireEvent(t, sub)
+
+	// A success response with no claimed waiter invalidates nothing.
+	if _, err := fp.stdoutW.Write([]byte(`{"type":"response","id":"ghost","command":"new_session","success":true,"data":{}}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, err := inst.Request(ctx, "new_session", nil)
+		result <- err
+	}()
+	var request map[string]any
+	select {
+	case request = <-fp.commands:
+	case <-ctx.Done():
+		t.Fatal("request was not written")
+	}
+	id, _ := request["id"].(string)
+	reply := fmt.Sprintf(`{"type":"response","id":%q,"command":"new_session","success":true,"data":{"cancelled":true}}`, id) + "\n"
+	if _, err := fp.stdoutW.Write([]byte(reply + reply)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-result:
+	case <-ctx.Done():
+		t.Fatal("request did not complete")
+	}
+
+	timeout := time.After(100 * time.Millisecond)
+	for draining := true; draining; {
+		select {
+		case event := <-sub.Channel():
+			if event.Evt == EvtTranscriptReset {
+				t.Fatalf("uncorrelated or duplicate response cleared the transcript: %+v", event)
+			}
+		case <-timeout:
+			draining = false
+		}
+	}
+	if state := inst.StateCopy(); state.SessionPath != path {
+		t.Fatalf("uncorrelated response cleared the resume path: %q", state.SessionPath)
+	}
+	if messages := inst.SnapshotCopy().Messages; len(messages) != 1 {
+		t.Fatalf("uncorrelated response changed the transcript: %+v", messages)
+	}
+}
+
+func TestStateTransactionPathIdentityRejectsStalePromotion(t *testing.T) {
+	m, _, inst, sub := wireManagerFixture(t)
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.jsonl")
+	if err := os.WriteFile(oldPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.UpdateSessionPath(inst, oldPath)
+	if !inst.promotePublicPath(oldPath) {
+		t.Fatal("regular raw path did not publish")
+	}
+	if event := nextWireEvent(t, sub); event.Evt != EvtStateChanged {
+		t.Fatalf("first promotion did not publish: %+v", event)
+	}
+
+	newPath := filepath.Join(dir, "new.jsonl")
+	if err := os.WriteFile(newPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.UpdateSessionPath(inst, newPath)
+	// A stat check that finished before the identity changed must not publish.
+	if inst.promotePublicPath(oldPath) {
+		t.Fatal("stale promotion published after the raw identity changed")
+	}
+	if !inst.promotePublicPath(newPath) {
+		t.Fatal("the current identity did not publish")
+	}
+	promoted := nextWireEvent(t, sub)
+	if state, ok := promoted.Data.(State); !ok || state.SessionPath != newPath {
+		t.Fatalf("promotion carried the wrong path: %+v", promoted.Data)
+	}
+
+	// Missing, non-regular, and already-published paths publish nothing.
+	m.UpdateSessionPath(inst, filepath.Join(dir, "missing.jsonl"))
+	m.promoteSessionPath(inst)
+	notAFile := filepath.Join(dir, "not-a-file")
+	if err := os.Mkdir(notAFile, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m.UpdateSessionPath(inst, notAFile)
+	m.promoteSessionPath(inst)
+	m.UpdateSessionPath(inst, newPath)
+	m.promoteSessionPath(inst)
+	select {
+	case event := <-sub.Channel():
+		t.Fatalf("a rejected promotion published: %+v", event)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if state := inst.StateCopy(); state.SessionPath != newPath {
+		t.Fatalf("rejected promotions changed the published path: %q", state.SessionPath)
+	}
+}
+
+func TestStateTransactionLifecycleNoOpsAndSettleOrder(t *testing.T) {
+	m, fp, inst, sub := wireManagerFixture(t)
+	if _, err := fp.stdoutW.Write([]byte(`{"type":"agent_start"}` + "\n" + `{"type":"agent_start"}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	started := nextWireEvent(t, sub)
+	if state, ok := started.Data.(State); !ok || !state.Busy {
+		t.Fatalf("agent_start did not publish busy: %+v", started.Data)
+	}
+	select {
+	case event := <-sub.Channel():
+		t.Fatalf("a repeated start republished state: %+v", event)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// get_state keeps the existing OR semantics for the busy flag.
+	wireResponse(t, fp, inst, "get_state", `{"isStreaming":false,"isCompacting":false}`)
+	if state, ok := nextWireEvent(t, sub).Data.(State); !ok || !state.Busy {
+		t.Fatalf("get_state cleared busy from an idle snapshot: %+v", state)
+	}
+
+	path := filepath.Join(t.TempDir(), "settle.jsonl")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.UpdateSessionPath(inst, path)
+	if _, err := fp.stdoutW.Write([]byte(`{"type":"agent_settled"}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	promotion := nextWireEvent(t, sub)
+	promotionState, ok := promotion.Data.(State)
+	if !ok || promotionState.SessionPath != path || !promotionState.Busy {
+		t.Fatalf("settled did not publish the path before idle: %+v", promotion.Data)
+	}
+	idleEvent := nextWireEvent(t, sub)
+	idleState, ok := idleEvent.Data.(State)
+	if !ok || idleState.Busy || idleState.SessionPath != path {
+		t.Fatalf("settled idle state is inconsistent: %+v", idleEvent.Data)
+	}
+}

@@ -564,3 +564,64 @@ func TestManagerDetachOverflowArmsGrace(t *testing.T) {
 	}
 	t.Fatal("overflow did not start detach grace")
 }
+
+func TestStateTransactionOverflowDetachCallback(t *testing.T) {
+	m := NewManagerWithSpawner(func(SpawnOptions) (Cmd, WriteCloser, ReadCloser, error) {
+		fp := newFakeProc()
+		return fp, fp.stdinW, fp.stdoutR, nil
+	})
+	inst, err := m.Spawn(SpawnOptions{Cwd: "/w/overflow"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(inst.Kill)
+	sub := m.Subscribe(inst)
+	if sub == nil {
+		t.Fatal("control subscription was not created")
+	}
+	if got := m.SubscriptionCount(inst); got != 1 {
+		t.Fatalf("subscription count = %d, want 1", got)
+	}
+
+	// Overflow the 256-slot channel through the real publication path: the
+	// set drops the subscriber and runs the manager's detach callback
+	// synchronously inside Broadcast's return path.
+	published := make(chan struct{})
+	go func() {
+		defer close(published)
+		for range 400 {
+			inst.updateState(func(state *State) bool {
+				state.QueueDepth++
+				return true
+			})
+		}
+	}()
+	select {
+	case <-published:
+	case <-time.After(5 * time.Second):
+		t.Fatal("state publication blocked on the subscriber callback")
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for m.SubscriptionCount(inst) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("overflow did not detach the subscriber: count=%d", m.SubscriptionCount(inst))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	for {
+		m.subMu.Lock()
+		_, armed := m.detachTimers[inst]
+		m.subMu.Unlock()
+		if armed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the detach callback did not arm the manager timer")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if state := inst.StateCopy(); state.QueueDepth != 400 {
+		t.Fatalf("state publications were lost: %+v", state)
+	}
+}

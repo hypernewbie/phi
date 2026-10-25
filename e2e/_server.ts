@@ -216,9 +216,20 @@ export async function startPhi(
                 stdio: ['ignore', 'pipe', 'pipe'],
             });
         const logPath = join(dir, 'server.log');
+        // A final chunk can arrive after 'exit' while the owned dir is already
+        // removed; only that post-teardown case is benign. Any other write
+        // failure is a fixture bug and must surface.
+        const append = (data: Buffer) => {
+            try {
+                appendFileSync(logPath, data);
+            } catch (error) {
+                const code = (error as NodeJS.ErrnoException).code;
+                if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+            }
+        };
         const capture = (child: ChildProcess) => {
-            child.stdout?.on('data', (data) => appendFileSync(logPath, data));
-            child.stderr?.on('data', (data) => appendFileSync(logPath, data));
+            child.stdout?.on('data', append);
+            child.stderr?.on('data', append);
             return child;
         };
         server = capture(launch());
