@@ -24,9 +24,7 @@ type piResponse struct {
 type getStateMetadata struct {
 	state          State
 	sessionFile    string
-	sessionID      string
 	sessionFileSet bool
-	sessionIDSet   bool
 }
 
 func parseGetState(data json.RawMessage, current State) (getStateMetadata, bool) {
@@ -74,28 +72,13 @@ func parseGetState(data json.RawMessage, current State) (getStateMetadata, bool)
 		}
 	}
 	if value.SessionFile != nil {
-		stMeta := *value.SessionFile
 		return getStateMetadata{
 			state:          st,
-			sessionFile:    stMeta,
-			sessionID:      valueString(value.SessionID),
+			sessionFile:    *value.SessionFile,
 			sessionFileSet: true,
-			sessionIDSet:   value.SessionID != nil,
 		}, true
 	}
-	return getStateMetadata{
-		state:          st,
-		sessionID:      valueString(value.SessionID),
-		sessionFileSet: false,
-		sessionIDSet:   value.SessionID != nil,
-	}, true
-}
-
-func valueString(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
+	return getStateMetadata{state: st}, true
 }
 
 func mergeStatsMetadata(inst *Instance, resp piResponse) bool {
@@ -114,19 +97,19 @@ func mergeStatsMetadata(inst *Instance, resp piResponse) bool {
 	if err := json.Unmarshal(resp.Data, &data); err != nil {
 		return false
 	}
-	st := inst.StateCopy()
-	st.InputTokens = data.Tokens.Input
-	st.OutputTokens = data.Tokens.Output
-	st.CacheReadTokens = data.Tokens.CacheRead
-	st.CacheWriteTokens = data.Tokens.CacheWrite
-	st.ContextUsedTokens = nil
-	st.ContextWindowTokens = nil
-	if data.ContextUsage != nil {
-		st.ContextUsedTokens = data.ContextUsage.Tokens
-		st.ContextWindowTokens = data.ContextUsage.ContextWindow
-	}
-	inst.SetState(st)
-	inst.Emit(EvtStateChanged, nil, st)
+	inst.updateState(func(state *State) bool {
+		state.InputTokens = data.Tokens.Input
+		state.OutputTokens = data.Tokens.Output
+		state.CacheReadTokens = data.Tokens.CacheRead
+		state.CacheWriteTokens = data.Tokens.CacheWrite
+		state.ContextUsedTokens = nil
+		state.ContextWindowTokens = nil
+		if data.ContextUsage != nil {
+			state.ContextUsedTokens = data.ContextUsage.Tokens
+			state.ContextWindowTokens = data.ContextUsage.ContextWindow
+		}
+		return true
+	})
 	return true
 }
 
@@ -152,21 +135,25 @@ func mergeCommandsMetadata(inst *Instance, resp piResponse) bool {
 		seen[command.Name] = struct{}{}
 		skills = append(skills, command.Name)
 	}
-	st := inst.StateCopy()
-	st.Skills = skills
-	inst.SetState(st)
-	inst.Emit(EvtStateChanged, nil, st)
+	inst.updateState(func(state *State) bool {
+		state.Skills = skills
+		return true
+	})
 	return true
 }
 
 func applyPiMetadata(inst *Instance, resp piResponse) getStateMetadata {
 	if resp.Command == "get_state" {
-		metadata, ok := parseGetState(resp.Data, inst.StateCopy())
-		if !ok {
-			return getStateMetadata{}
-		}
-		inst.SetState(metadata.state)
-		inst.Emit(EvtStateChanged, nil, metadata.state)
+		var metadata getStateMetadata
+		inst.updateState(func(state *State) bool {
+			parsed, ok := parseGetState(resp.Data, *state)
+			if !ok {
+				return false
+			}
+			*state = parsed.state
+			metadata = parsed
+			return true
+		})
 		return metadata
 	}
 	switch resp.Command {
@@ -178,13 +165,31 @@ func applyPiMetadata(inst *Instance, resp piResponse) getStateMetadata {
 	return getStateMetadata{}
 }
 
-// mergePiMetadata retains the package-local metadata helper used by focused
-// wire tests. Manager response handling additionally updates session ownership.
-func mergePiMetadata(inst *Instance, resp piResponse) {
-	applyPiMetadata(inst, resp)
+// DecodeNewSessionResult is the single new_session decode rule shared by the
+// read loop and the control caller: malformed or type-incompatible data and an
+// explicit cancellation keep the old boundary; valid data with a false or
+// missing flag (including {} or null) accepts.
+func DecodeNewSessionResult(data json.RawMessage) (bool, error) {
+	var result struct {
+		Cancelled bool `json:"cancelled"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return false, err
+	}
+	return result.Cancelled, nil
 }
 
-func (m *Manager) applyPiResponse(inst *Instance, resp piResponse) {
+func (m *Manager) applyPiResponse(inst *Instance, resp piResponse, origin string) {
+	// A claimed reset invalidates once here, before its waiter resumes and
+	// before the read loop accepts the next line. The originating command and
+	// the response command must both be new_session.
+	if origin == "new_session" && resp.Command == "new_session" {
+		if cancelled, err := DecodeNewSessionResult(resp.Data); err == nil && !cancelled {
+			m.UpdateSessionPath(inst, "")
+			inst.commitReset()
+			return
+		}
+	}
 	metadata := applyPiMetadata(inst, resp)
 	if resp.Command == "get_state" && metadata.sessionFileSet {
 		m.UpdateSessionPath(inst, metadata.sessionFile)
@@ -282,18 +287,19 @@ func (m *Manager) handlePiEvent(inst *Instance, line []byte, ev piEvent) {
 		if resp.Success {
 			// Correlated callers only complete after metadata and session ownership
 			// have been made visible to StateCopy/SnapshotCopy subscribers.
-			m.applyPiResponse(inst, resp)
+			m.applyPiResponse(inst, resp, waiter.command)
 		} else {
 			publishPiRejection(inst, resp)
 		}
 		waiter.result <- pendingResult{response: resp}
 	case "agent_start":
-		st := inst.StateCopy()
-		if !st.Busy {
-			st.Busy = true
-			inst.SetState(st)
-			inst.Emit(EvtStateChanged, nil, st)
-		}
+		inst.updateState(func(state *State) bool {
+			if state.Busy {
+				return false
+			}
+			state.Busy = true
+			return true
+		})
 	case "agent_end":
 		// Pi's settled event, not agent_end, owns the end of the active turn.
 	case "agent_settled":
@@ -302,24 +308,26 @@ func (m *Manager) handlePiEvent(inst *Instance, line []byte, ev piEvent) {
 		// Publish it before the idle-state update so subscribers that act on
 		// the busy=false boundary already see the resume path.
 		m.promoteSessionPath(inst)
-		st := inst.StateCopy()
-		if st.Busy {
-			st.Busy = false
-			inst.SetState(st)
-			inst.Emit(EvtStateChanged, nil, st)
-		}
+		inst.updateState(func(state *State) bool {
+			if !state.Busy {
+				return false
+			}
+			state.Busy = false
+			return true
+		})
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			_, _ = inst.Request(ctx, "get_session_stats", nil)
 		}()
 	case "compaction_start":
-		st := inst.StateCopy()
-		if !st.Busy {
-			st.Busy = true
-			inst.SetState(st)
-			inst.Emit(EvtStateChanged, nil, st)
-		}
+		inst.updateState(func(state *State) bool {
+			if state.Busy {
+				return false
+			}
+			state.Busy = true
+			return true
+		})
 	case "compaction_end":
 		// Compaction is still part of the active turn until Pi settles.
 		// Order matters: the chat-pi client uses the EvtCompactionEnd

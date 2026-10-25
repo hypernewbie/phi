@@ -89,7 +89,21 @@ func cloneMessages(messages []Message) []Message {
 	return cloned
 }
 
+func cloneInt64(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
 func cloneState(state State) State {
+	state.InputTokens = cloneInt64(state.InputTokens)
+	state.OutputTokens = cloneInt64(state.OutputTokens)
+	state.ContextUsedTokens = cloneInt64(state.ContextUsedTokens)
+	state.ContextWindowTokens = cloneInt64(state.ContextWindowTokens)
+	state.CacheReadTokens = cloneInt64(state.CacheReadTokens)
+	state.CacheWriteTokens = cloneInt64(state.CacheWriteTokens)
 	if state.Skills != nil {
 		state.Skills = append([]string{}, state.Skills...)
 	}
@@ -102,7 +116,8 @@ type pendingResult struct {
 }
 
 type pendingWaiter struct {
-	result chan pendingResult
+	command string
+	result  chan pendingResult
 }
 
 // Instance is one pi --mode rpc child. All methods are goroutine-safe.
@@ -134,8 +149,7 @@ type Instance struct {
 	snap    *Snapshot
 	subs    *SubscriberSet
 
-	state   State
-	stateMu sync.Mutex
+	state State
 
 	sessionPath   string
 	sessionPathMu sync.RWMutex
@@ -146,10 +160,7 @@ type Instance struct {
 	exitHook func()
 }
 
-// SnapshotCopy returns a deep-enough copy of the snapshot; nil-safe.
-func (i *Instance) SnapshotCopy() Snapshot {
-	i.eventMu.Lock()
-	defer i.eventMu.Unlock()
+func snapshotCopyLocked(i *Instance) Snapshot {
 	if i.snap == nil {
 		return Snapshot{}
 	}
@@ -158,11 +169,24 @@ func (i *Instance) SnapshotCopy() Snapshot {
 	return cp
 }
 
-// publish is the only event publication path. It keeps the sequence and
-// hydrate snapshot under one lock, then broadcasts while that lock is held so
-// subscribers cannot observe sequence N+1 before sequence N.
-func (i *Instance) publish(evt string, msg *Message, data any, clear bool) {
+// SnapshotCopy returns a deep-enough copy of the snapshot; nil-safe.
+func (i *Instance) SnapshotCopy() Snapshot {
 	i.eventMu.Lock()
+	defer i.eventMu.Unlock()
+	return snapshotCopyLocked(i)
+}
+
+// SnapshotStateCopy returns transcript and metadata from one event boundary.
+func (i *Instance) SnapshotStateCopy() (Snapshot, State) {
+	i.eventMu.Lock()
+	defer i.eventMu.Unlock()
+	return snapshotCopyLocked(i), cloneState(i.state)
+}
+
+// publishLocked assigns the next sequence, updates the snapshot, and
+// broadcasts while eventMu is held so subscribers cannot observe sequence
+// N+1 before sequence N.
+func (i *Instance) publishLocked(evt string, msg *Message, data any, clear bool) {
 	if i.snap == nil {
 		i.snap = &Snapshot{}
 	}
@@ -181,7 +205,12 @@ func (i *Instance) publish(evt string, msg *Message, data any, clear bool) {
 	if i.subs != nil {
 		i.subs.Broadcast(Event{Type: "evt", Evt: evt, Sid: i.ID, Seq: seq, Data: data})
 	}
-	i.eventMu.Unlock()
+}
+
+func (i *Instance) publish(evt string, msg *Message, data any, clear bool) {
+	i.eventMu.Lock()
+	defer i.eventMu.Unlock()
+	i.publishLocked(evt, msg, data, clear)
 }
 
 // Emit assigns the next seq, updates the snapshot, and broadcasts.
@@ -189,23 +218,69 @@ func (i *Instance) Emit(evt string, msg *Message, data any) {
 	i.publish(evt, msg, data, false)
 }
 
-// ResetTranscript clears stored messages and emits transcriptReset.
+// ResetTranscript clears stored messages and emits transcriptReset. After exit
+// there is no subscriber left, so a late reset must not advance the cursor a
+// later hydrate would report.
 func (i *Instance) ResetTranscript() {
-	i.publish(EvtTranscriptReset, nil, nil, true)
+	i.eventMu.Lock()
+	defer i.eventMu.Unlock()
+	if i.state.Status == "exited" {
+		return
+	}
+	i.publishLocked(EvtTranscriptReset, nil, nil, true)
 }
 
-// StateCopy returns the cached state.
+// StateCopy returns a detached copy of the cached state.
 func (i *Instance) StateCopy() State {
-	i.stateMu.Lock()
-	defer i.stateMu.Unlock()
+	i.eventMu.Lock()
+	defer i.eventMu.Unlock()
 	return cloneState(i.state)
 }
 
-// SetState replaces the cached state.
-func (i *Instance) SetState(s State) {
-	i.stateMu.Lock()
+// SetState is gone: runtime writers must use updateState so a whole-state copy
+// can never replace a newer commit. initState seeds state before publication.
+func (i *Instance) initState(s State) {
+	i.eventMu.Lock()
 	i.state = cloneState(s)
-	i.stateMu.Unlock()
+	i.eventMu.Unlock()
+}
+
+// commitReset removes the public resume path and clears the transcript under
+// one event boundary, so a paired reader cannot observe the intermediate state.
+// A reset after exit changes nothing.
+func (i *Instance) commitReset() bool {
+	i.eventMu.Lock()
+	defer i.eventMu.Unlock()
+	if i.state.Status == "exited" {
+		return false
+	}
+	if i.state.SessionPath != "" {
+		next := cloneState(i.state)
+		next.SessionPath = ""
+		i.state = next
+		i.publishLocked(EvtStateChanged, nil, cloneState(i.state), false)
+	}
+	i.publishLocked(EvtTranscriptReset, nil, nil, true)
+	return true
+}
+
+// updateState applies one current-state transaction and publishes its detached
+// result while holding the same lock as the transcript and event sequence. The
+// callback runs with that lock held and must not call back into the Instance
+// (StateCopy, Send, SetTitle, ResetTranscript): the lock is not reentrant.
+func (i *Instance) updateState(update func(*State) bool) bool {
+	i.eventMu.Lock()
+	defer i.eventMu.Unlock()
+	if i.state.Status == "exited" {
+		return false
+	}
+	next := cloneState(i.state)
+	if !update(&next) {
+		return false
+	}
+	i.state = cloneState(next)
+	i.publishLocked(EvtStateChanged, nil, cloneState(i.state), false)
+	return true
 }
 
 // IsAlive reports whether the child is still running.
@@ -228,6 +303,23 @@ func (i *Instance) setSessionPath(path string) {
 	i.sessionPathMu.Unlock()
 }
 
+// promotePublicPath publishes candidate as the resume path only while the raw
+// ownership value still matches. It takes sessionPathMu before eventMu.
+func (i *Instance) promotePublicPath(candidate string) bool {
+	i.sessionPathMu.RLock()
+	defer i.sessionPathMu.RUnlock()
+	if i.sessionPath != candidate {
+		return false
+	}
+	return i.updateState(func(state *State) bool {
+		if state.SessionPath == candidate {
+			return false
+		}
+		state.SessionPath = candidate
+		return true
+	})
+}
+
 // TitleCopy returns the current user-facing title.
 func (i *Instance) TitleCopy() string {
 	i.titleMu.RLock()
@@ -235,13 +327,15 @@ func (i *Instance) TitleCopy() string {
 	return i.Title
 }
 
-// SetTitle replaces the user-facing title under the title mutex. Callers
-// that also want subscribers to see the change must follow with SetState
-// (State.Title) and Emit(EvtStateChanged).
+// SetTitle updates both retained titles and publishes their state atomically.
 func (i *Instance) SetTitle(title string) {
-	i.titleMu.Lock()
-	i.Title = title
-	i.titleMu.Unlock()
+	i.updateState(func(state *State) bool {
+		i.titleMu.Lock()
+		i.Title = title
+		i.titleMu.Unlock()
+		state.Title = title
+		return true
+	})
 }
 
 // PromptWriteGeneration returns the generation of ordinary prompt writes.
@@ -287,7 +381,7 @@ func (i *Instance) nextCommandID() string {
 	return fmt.Sprintf("rpc-%d", n)
 }
 
-func (i *Instance) registerWaiter(id string) (*pendingWaiter, error) {
+func (i *Instance) registerWaiter(id, command string) (*pendingWaiter, error) {
 	if id == "" {
 		return nil, errors.New("empty Pi command id")
 	}
@@ -302,7 +396,7 @@ func (i *Instance) registerWaiter(id string) (*pendingWaiter, error) {
 	if i.pending == nil {
 		i.pending = make(map[string]*pendingWaiter)
 	}
-	waiter := &pendingWaiter{result: make(chan pendingResult, 1)}
+	waiter := &pendingWaiter{command: command, result: make(chan pendingResult, 1)}
 	i.pending[id] = waiter
 	return waiter, nil
 }
@@ -430,7 +524,7 @@ func (i *Instance) Request(ctx context.Context, command string, fields map[strin
 		return nil, err
 	}
 	id := i.nextCommandID()
-	waiter, err := i.registerWaiter(id)
+	waiter, err := i.registerWaiter(id, command)
 	if err != nil {
 		return nil, err
 	}
@@ -469,7 +563,7 @@ func (i *Instance) RequestAfterPromptGeneration(ctx context.Context, expected ui
 		i.writeMu.Unlock()
 		return nil, ErrPromptChanged
 	}
-	waiter, err := i.registerWaiter(id)
+	waiter, err := i.registerWaiter(id, command)
 	if err == nil {
 		err = i.writeBytesLocked(b, false)
 	}
@@ -488,13 +582,13 @@ func (i *Instance) OnExit(reason string) {
 		i.mu.Lock()
 		i.alive = false
 		i.mu.Unlock()
-		i.stateMu.Lock()
-		st := i.state
+		i.eventMu.Lock()
+		st := cloneState(i.state)
 		st.Status = "exited"
-		i.state = cloneState(st)
-		i.stateMu.Unlock()
+		i.state = st
+		i.publishLocked(EvtRpcExited, nil, map[string]any{"reason": reason}, false)
+		i.eventMu.Unlock()
 		i.failPending(ErrNotAlive)
-		i.publish(EvtRpcExited, nil, map[string]any{"reason": reason}, false)
 		if i.subs != nil {
 			i.subs.CloseAll()
 		}

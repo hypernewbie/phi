@@ -33,6 +33,7 @@ import { mountChatPi } from '../web/chat-pi/index.js';
 function fakeClient() {
     const sent = [];
     let listener = () => {};
+    let accepted = null;
     return {
         sent,
         client: {
@@ -40,6 +41,7 @@ function fakeClient() {
                 sent.push(frame);
             },
             onMessage(callback) {
+                accepted = callback;
                 listener = callback;
                 return () => {
                     listener = () => {};
@@ -50,7 +52,35 @@ function fakeClient() {
         emit(frame) {
             listener(frame);
         },
+        // Delivers even after the controller unsubscribed, to prove a late
+        // completion cannot publish after destroy.
+        emitAfterUnsubscribe(frame) {
+            accepted?.(frame);
+        },
     };
+}
+
+function canonicalState(overrides = {}) {
+    const state = {
+        sid: 's1',
+        title: 'demo',
+        cwd: '/work/demo',
+        status: 'live',
+        busy: false,
+        queueDepth: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        contextUsedTokens: null,
+        contextWindowTokens: null,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        skills: null,
+    };
+    for (const [key, value] of Object.entries(overrides)) {
+        if (value === undefined) delete state[key];
+        else state[key] = value;
+    }
+    return state;
 }
 
 describe('Pi RPC transcript controller', () => {
@@ -2418,5 +2448,310 @@ describe('Pi RPC transcript controller (compactionEnd regression pinning)', () =
         await Promise.resolve();
         await Promise.resolve();
         expect(setEphemeralError).toHaveBeenLastCalledWith(null);
+    });
+    it('keeps newer event metadata when delayed model, thinking, and compact responses arrive', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const statuses = [];
+        const chat = mountChatPi(
+            root,
+            '/work/demo',
+            wire.client,
+            undefined,
+            (status) => {
+                if (status) statuses.push(status);
+            },
+        );
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's1', snapshot: { lastSeq: 0, messages: [] } },
+        });
+        await Promise.resolve();
+        wire.emit({
+            t: 'res',
+            id: 'hyd',
+            ok: true,
+            data: {
+                lastSeq: 0,
+                messages: [],
+                state: { model: 'old-model', thinking: 'low' },
+            },
+        });
+        await Promise.resolve();
+
+        const model = chat.setModel('provider', 'event-model');
+        const thinking = chat.setThinking('max');
+        const compact = chat.compact();
+        // Sequenced events win: they describe the current server state.
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'stateChanged',
+            data: { model: 'event-model', thinking: 'max' },
+        });
+        // The unversioned responses land afterwards with an older state.
+        wire.emit({
+            t: 'res',
+            id: 'set-model',
+            ok: true,
+            data: { state: { model: 'old-model', thinking: 'low' } },
+        });
+        wire.emit({
+            t: 'res',
+            id: 'set-thinking',
+            ok: true,
+            data: { state: { model: 'old-model', thinking: 'low' } },
+        });
+        wire.emit({
+            t: 'res',
+            id: 'compact',
+            ok: true,
+            data: {
+                state: { model: 'old-model', thinking: 'low' },
+                stateWarning: 'stats refresh failed',
+            },
+        });
+        await Promise.all([model, thinking, compact]);
+        expect(statuses.at(-1)?.model).toBe('event-model');
+        expect(statuses.at(-1)?.thinking).toBe('max');
+        expect(root.textContent).toContain('stats refresh failed');
+    });
+
+    it('clears the resume path from a canonical snapshot and keeps a newer promotion', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const statuses = [];
+        const chat = mountChatPi(
+            root,
+            '/work/demo',
+            wire.client,
+            undefined,
+            (status) => {
+                if (status) statuses.push(status);
+            },
+        );
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                title: 'demo',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { sessionPath: '/w/old.jsonl' },
+            },
+        });
+        await Promise.resolve();
+        expect(statuses.at(-1)?.sessionPath).toBe('/w/old.jsonl');
+
+        // Canonical State omits sessionPath, so the reset clear is visible
+        // before any reset response can arrive.
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'stateChanged',
+            data: canonicalState({ sessionPath: undefined }),
+        });
+        expect(statuses.at(-1)?.sessionPath).toBeUndefined();
+        expect('sessionPath' in statuses.at(-1)).toBe(false);
+
+        // A path promoted by a newer event must survive the late response.
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'stateChanged',
+            data: canonicalState({ sessionPath: '/w/new.jsonl' }),
+        });
+        expect(statuses.at(-1)?.sessionPath).toBe('/w/new.jsonl');
+        const reset = chat.resetChat();
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 3,
+            evt: 'stateChanged',
+            data: canonicalState({ sessionPath: '/w/new.jsonl' }),
+        });
+        wire.emit({
+            t: 'res',
+            id: 'reset',
+            ok: true,
+            data: { cancelled: false, reset: true },
+        });
+        await reset;
+        expect(statuses.at(-1)?.sessionPath).toBe('/w/new.jsonl');
+
+        // A partial payload that omits the path clears nothing.
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 4,
+            evt: 'stateChanged',
+            data: { model: 'pi-4' },
+        });
+        expect(statuses.at(-1)?.sessionPath).toBe('/w/new.jsonl');
+    });
+
+    it('treats a canonical exited snapshot as terminal and never revives it', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const controls = [];
+        const chat = mountChatPi(
+            root,
+            '/work/demo',
+            wire.client,
+            undefined,
+            undefined,
+            (value) => {
+                if (value) controls.push(value);
+            },
+        );
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                title: 'demo',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: canonicalState({ status: 'exited' }),
+            },
+        });
+        await Promise.resolve();
+        expect(controls.at(-1)).toMatchObject({ exited: true, ready: false });
+        expect(chat.send('after exit')).toBe(false);
+
+        // The queued exit event is stale at this cursor, and a late hydrate
+        // completion must not restore readiness.
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'rpcExited',
+            data: { reason: 'done' },
+        });
+        wire.emit({
+            t: 'res',
+            id: 'hyd',
+            ok: true,
+            data: {
+                lastSeq: 1,
+                messages: [],
+                state: canonicalState({ status: 'live' }),
+            },
+        });
+        await Promise.resolve();
+        expect(controls.at(-1)).toMatchObject({ exited: true, ready: false });
+        expect(chat.send('still exited')).toBe(false);
+    });
+
+    it('ignores a hydrate older than the accepted cursor', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const statuses = [];
+        const chat = mountChatPi(
+            root,
+            '/work/demo',
+            wire.client,
+            undefined,
+            (status) => {
+                if (status) statuses.push(status);
+            },
+        );
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's1', title: 'demo', snapshot: { lastSeq: 0, messages: [] } },
+        });
+        await Promise.resolve();
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'messageEnd',
+            data: {
+                message: {
+                    role: 'user',
+                    content: [{ type: 'text', text: 'accepted turn' }],
+                },
+            },
+        });
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'stateChanged',
+            data: { model: 'newer-model' },
+        });
+        await Promise.resolve();
+        expect(root.textContent).toContain('accepted turn');
+        wire.emit({
+            t: 'res',
+            id: 'hyd',
+            ok: true,
+            data: {
+                lastSeq: 0,
+                messages: [
+                    {
+                        role: 'user',
+                        content: [{ type: 'text', text: 'older history' }],
+                    },
+                ],
+                state: { model: 'older-model' },
+            },
+        });
+        // Two microtask turns: the response handler and the queued paint.
+        await Promise.resolve();
+        await Promise.resolve();
+        // Both the transcript and the sibling metadata stay at the accepted
+        // cursor: the hydrate is older than what the events already delivered.
+        expect(root.textContent).toContain('accepted turn');
+        expect(root.textContent).not.toContain('older history');
+        expect(statuses.at(-1)?.model).toBe('newer-model');
+        expect(chat.send('next')).toBe(true);
+    });
+
+    it('publishes nothing after destroy while a reset response is in flight', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const statuses = [];
+        const controls = [];
+        const chat = mountChatPi(
+            root,
+            '/work/demo',
+            wire.client,
+            undefined,
+            (status) => statuses.push(status),
+            (value) => controls.push(value),
+        );
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's1', title: 'demo', snapshot: { lastSeq: 0, messages: [] } },
+        });
+        await Promise.resolve();
+        wire.emit({ t: 'res', id: 'hyd', ok: true, data: { lastSeq: 0, messages: [] } });
+        await Promise.resolve();
+        const reset = chat.resetChat();
+        chat.destroy();
+        expect(statuses.at(-1)).toBeNull();
+        expect(controls.at(-1)).toBeNull();
+        const statusCount = statuses.length;
+        const controlCount = controls.length;
+        wire.emitAfterUnsubscribe({
+            t: 'res',
+            id: 'reset',
+            ok: true,
+            data: { cancelled: false, reset: true },
+        });
+        await reset;
+        expect(statuses.length).toBe(statusCount);
+        expect(controls.length).toBe(controlCount);
     });
 });

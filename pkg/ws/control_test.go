@@ -1774,8 +1774,12 @@ func TestControlSetSessionNamePiRejectionSurfacesError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	before := inst.TitleCopy()
 	if got := inst.TitleCopy(); got == "Audit auth module" {
 		t.Fatalf("inst.TitleCopy unexpectedly updated to %q on Pi rejection", got)
+	}
+	if state := inst.StateCopy(); state.Title != before {
+		t.Fatalf("rejected rename changed State title from %q to %q", before, state.Title)
 	}
 }
 
@@ -1947,5 +1951,259 @@ func TestSubagentTranscriptOp(t *testing.T) {
 	})
 	if unknown.Ok == nil || *unknown.Ok || !strings.Contains(unknown.Error, "subagent run not found") {
 		t.Fatalf("unknown runId response: %+v", unknown)
+	}
+}
+
+func nextStateTransactionCommand(t *testing.T, child *controlFakeChild) map[string]any {
+	t.Helper()
+	select {
+	case command, ok := <-child.commands:
+		if !ok {
+			t.Fatal("fake Pi command stream closed")
+		}
+		return command
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Pi command")
+		return nil
+	}
+}
+
+func respondStateTransactionCommand(t *testing.T, child *controlFakeChild, command map[string]any, success bool, data any, message string) {
+	t.Helper()
+	response := map[string]any{
+		"type":    "response",
+		"id":      command["id"],
+		"command": command["type"],
+		"success": success,
+		"data":    data,
+	}
+	if message != "" {
+		response["error"] = message
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := child.stdoutW.Write(append(encoded, '\n')); err != nil {
+		t.Fatalf("write Pi response: %v", err)
+	}
+}
+
+func stateTransactionControlFixture(t *testing.T, cwd string) (*rpc.Manager, *controlFakeChild, *rpc.Instance) {
+	t.Helper()
+	child := newControlFakeChild()
+	mgr := rpc.NewManagerWithSpawner(func(rpc.SpawnOptions) (rpc.Cmd, rpc.WriteCloser, rpc.ReadCloser, error) {
+		return child, child.stdinW, child.stdoutR, nil
+	})
+	inst, err := mgr.Spawn(rpc.SpawnOptions{Cwd: cwd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(inst.Kill)
+	return mgr, child, inst
+}
+
+func stateTransactionRenameEnvelope(t *testing.T, inst *rpc.Instance, id, name string) Envelope {
+	t.Helper()
+	args, err := json.Marshal(map[string]string{"name": name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Envelope{Type: rpc.CallFrame, ID: id, Op: rpc.OpSetSessionName, Sid: inst.ID, Args: args}
+}
+
+// TestStateTransactionIndependentUpdates is integration coverage for a stats
+// refresh and a gated rename sharing one instance. It is not the lost-update
+// regression: its schedule answers the stats request before the rename ack, so
+// the old read-modify-write copy already carried the stats.
+// TestStateTransactionPublicationOrder in pkg/rpc carries that evidence.
+func TestStateTransactionIndependentUpdates(t *testing.T) {
+	mgr, child, inst := stateTransactionControlFixture(t, "/w/state-independent")
+	server := &controlServer{mgr: mgr}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	renameDone := make(chan Envelope, 1)
+	renameCall := stateTransactionRenameEnvelope(t, inst, "rename", "renamed")
+	go func() {
+		renameDone <- server.dispatch(ctx, renameCall)
+	}()
+	nameCommand := nextStateTransactionCommand(t, child)
+	if nameCommand["type"] != "set_session_name" {
+		t.Fatalf("first native command = %v, want set_session_name", nameCommand["type"])
+	}
+
+	statsDone := make(chan error, 1)
+	go func() {
+		_, err := inst.Request(ctx, "get_session_stats", nil)
+		statsDone <- err
+	}()
+	statsCommand := nextStateTransactionCommand(t, child)
+	if statsCommand["type"] != "get_session_stats" {
+		t.Fatalf("second native command = %v, want get_session_stats", statsCommand["type"])
+	}
+	stats := map[string]any{
+		"tokens":       map[string]any{"input": 7, "output": 0, "cacheRead": 2, "cacheWrite": 3},
+		"contextUsage": map[string]any{"tokens": 5, "contextWindow": 200000},
+	}
+	respondStateTransactionCommand(t, child, statsCommand, true, stats, "")
+	select {
+	case err := <-statsDone:
+		if err != nil {
+			t.Fatalf("stats request failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stats request did not complete")
+	}
+	respondStateTransactionCommand(t, child, nameCommand, true, map[string]any{}, "")
+	var renameResponse Envelope
+	select {
+	case renameResponse = <-renameDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("rename control did not complete")
+	}
+	if renameResponse.Ok == nil || !*renameResponse.Ok {
+		t.Fatalf("rename control failed: %+v", renameResponse)
+	}
+	var payload struct {
+		State rpc.State `json:"state"`
+	}
+	if err := json.Unmarshal(renameResponse.Data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	state := inst.StateCopy()
+	if state.Title != "renamed" || payload.State.Title != "renamed" {
+		t.Fatalf("rename did not commit both titles: retained=%+v response=%+v", state, payload.State)
+	}
+	if state.InputTokens == nil || *state.InputTokens != 7 || state.OutputTokens == nil || *state.OutputTokens != 0 || state.CacheReadTokens == nil || *state.CacheReadTokens != 2 || state.CacheWriteTokens == nil || *state.CacheWriteTokens != 3 || state.ContextUsedTokens == nil || *state.ContextUsedTokens != 5 || state.ContextWindowTokens == nil || *state.ContextWindowTokens != 200000 {
+		t.Fatalf("concurrent stats were lost during rename: %+v", state)
+	}
+	if payload.State.InputTokens == nil || *payload.State.InputTokens != 7 || payload.State.CacheWriteTokens == nil || *payload.State.CacheWriteTokens != 3 {
+		t.Fatalf("rename acknowledgement omitted concurrent stats: %+v", payload.State)
+	}
+}
+
+func TestStateTransactionRenameGate(t *testing.T) {
+	mgr, child, inst := stateTransactionControlFixture(t, "/w/state-rename-gate")
+	server := &controlServer{mgr: mgr}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	firstDone := make(chan Envelope, 1)
+	firstCall := stateTransactionRenameEnvelope(t, inst, "first", "first title")
+	go func() {
+		firstDone <- server.dispatch(ctx, firstCall)
+	}()
+	firstCommand := nextStateTransactionCommand(t, child)
+	if firstCommand["type"] != "set_session_name" {
+		t.Fatalf("first native command = %v, want set_session_name", firstCommand["type"])
+	}
+	secondDone := make(chan Envelope, 1)
+	secondCall := stateTransactionRenameEnvelope(t, inst, "second", "second title")
+	go func() {
+		secondDone <- server.dispatch(ctx, secondCall)
+	}()
+	respondStateTransactionCommand(t, child, firstCommand, true, map[string]any{}, "")
+	secondCommand := nextStateTransactionCommand(t, child)
+	if secondCommand["type"] != "set_session_name" {
+		t.Fatalf("second native command = %v, want set_session_name", secondCommand["type"])
+	}
+	respondStateTransactionCommand(t, child, secondCommand, true, map[string]any{}, "")
+
+	responses := make(map[string]Envelope, 2)
+	for range 2 {
+		select {
+		case response := <-firstDone:
+			responses[response.ID] = response
+			firstDone = nil
+		case response := <-secondDone:
+			responses[response.ID] = response
+			secondDone = nil
+		case <-time.After(2 * time.Second):
+			t.Fatal("serialized rename controls did not complete")
+		}
+	}
+	for id, wantTitle := range map[string]string{"first": "first title", "second": "second title"} {
+		response := responses[id]
+		if response.Ok == nil || !*response.Ok {
+			t.Fatalf("rename %s failed: %+v", id, response)
+		}
+		var payload struct {
+			State rpc.State `json:"state"`
+		}
+		if err := json.Unmarshal(response.Data, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.State.Title != wantTitle {
+			t.Fatalf("rename %s acknowledgement title = %q, want %q", id, payload.State.Title, wantTitle)
+		}
+	}
+	if title := inst.TitleCopy(); title != "second title" {
+		t.Fatalf("retained title = %q, want last gated rename", title)
+	}
+	if title := inst.StateCopy().Title; title != "second title" {
+		t.Fatalf("State title = %q, want last gated rename", title)
+	}
+}
+
+func TestStateTransactionResetKeepsMessageAcceptedAfterResponse(t *testing.T) {
+	child := newControlFakeChild()
+	writeFrame := func(frame map[string]any) {
+		encoded, _ := json.Marshal(frame)
+		_, _ = child.stdoutW.Write(append(encoded, '\n'))
+	}
+	go func() {
+		for command := range child.commands {
+			kind, _ := command["type"].(string)
+			response := map[string]any{
+				"type": "response", "id": command["id"], "command": kind, "success": true,
+			}
+			switch kind {
+			case "get_state":
+				response["data"] = map[string]any{"isStreaming": false, "isCompacting": false, "pendingMessageCount": 0}
+			case "get_session_stats", "get_commands":
+				response["data"] = map[string]any{}
+			case "new_session":
+				response["data"] = map[string]any{"cancelled": false}
+			default:
+				response["success"] = false
+				response["error"] = "unexpected command"
+			}
+			writeFrame(response)
+			if kind == "new_session" {
+				// Accepted after Pi acknowledged the reset: the server
+				// boundary must not erase it when the caller returns.
+				writeFrame(map[string]any{
+					"type":    "message_end",
+					"message": map[string]any{"role": "user", "content": "after-reset"},
+				})
+			}
+		}
+	}()
+	mgr := rpc.NewManagerWithSpawner(func(rpc.SpawnOptions) (rpc.Cmd, rpc.WriteCloser, rpc.ReadCloser, error) {
+		return child, child.stdinW, child.stdoutR, nil
+	})
+	c := helloDial(t, mgr)
+	sid := spawnControlSession(t, c, "/w/boundary")
+	inst, err := mgr.Lookup(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr.UpdateSessionPath(inst, "/sessions/old.jsonl")
+	inst.Emit(rpc.EvtMessageEnd, &rpc.Message{Role: "user", Content: json.RawMessage(`"old"`)}, nil)
+	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "boundary-reset", Op: rpc.OpNewSession, Sid: sid, Args: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	response := readResponse(t, c, "boundary-reset")
+	if response.Ok == nil || !*response.Ok {
+		t.Fatalf("reset failed: %+v", response)
+	}
+	if inst.SessionPathCopy() != "" {
+		t.Fatalf("reset kept raw session ownership: %q", inst.SessionPathCopy())
+	}
+	if state := inst.StateCopy(); state.SessionPath != "" {
+		t.Fatalf("reset kept the published resume path: %q", state.SessionPath)
+	}
+	messages := inst.SnapshotCopy().Messages
+	if len(messages) != 1 || !strings.Contains(string(messages[0].Content), "after-reset") {
+		t.Fatalf("reset erased a message accepted after its response: %+v", messages)
 	}
 }

@@ -190,7 +190,7 @@ func (m *Manager) newInstance(opts SpawnOptions, cmd Cmd, stdin WriteCloser, std
 		snap:      &Snapshot{Messages: cloneMessages(opts.InitialMessages)},
 	}
 	inst.setSessionPath(opts.SessionPath)
-	inst.SetState(State{Sid: id, Title: inst.Title, Cwd: opts.Cwd, Status: "live"})
+	inst.initState(State{Sid: id, Title: inst.Title, Cwd: opts.Cwd, Status: "live"})
 	inst.exitHook = func() { m.removeLifecycle(inst) }
 	go m.readLoop(inst)
 	return inst, nil
@@ -407,29 +407,9 @@ func (m *Manager) promoteSessionPath(inst *Instance) {
 	if info, err := os.Stat(raw); err != nil || !info.Mode().IsRegular() {
 		return
 	}
-	st := inst.StateCopy()
-	if st.SessionPath == raw {
-		return
-	}
-	st.SessionPath = raw
-	inst.SetState(st)
-	inst.Emit(EvtStateChanged, nil, st)
-}
-
-// ClearPublicSessionPath removes the published State.SessionPath resume
-// path. It must not alter the raw live-child ownership path, which Pi
-// repopulates on its next get_state response.
-func (m *Manager) ClearPublicSessionPath(inst *Instance) {
-	if inst == nil {
-		return
-	}
-	st := inst.StateCopy()
-	if st.SessionPath == "" {
-		return
-	}
-	st.SessionPath = ""
-	inst.SetState(st)
-	inst.Emit(EvtStateChanged, nil, st)
+	// The instance re-checks raw ownership while publishing, so a path
+	// replaced between stat and commit is never promoted.
+	inst.promotePublicPath(raw)
 }
 
 // subagentStep and subagentTranscript shape the op response: the run's

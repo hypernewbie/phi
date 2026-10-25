@@ -194,7 +194,7 @@ func refreshState(ctx context.Context, inst *rpc.Instance) (rpc.State, error) {
 	return inst.StateCopy(), nil
 }
 
-func resetSession(ctx context.Context, mgr *rpc.Manager, inst *rpc.Instance) (any, error) {
+func resetSession(ctx context.Context, inst *rpc.Instance) (any, error) {
 	generation := inst.PromptWriteGeneration()
 	state, err := refreshState(ctx, inst)
 	if err != nil {
@@ -207,21 +207,16 @@ func resetSession(ctx context.Context, mgr *rpc.Manager, inst *rpc.Instance) (an
 	if err != nil {
 		return nil, err
 	}
-	var result struct {
-		Cancelled bool `json:"cancelled"`
+	cancelled, decodeErr := rpc.DecodeNewSessionResult(data)
+	if decodeErr != nil {
+		return nil, fmt.Errorf("invalid Pi new_session response: %w", decodeErr)
 	}
-	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, fmt.Errorf("invalid Pi new_session response: %w", err)
-	}
-	if result.Cancelled {
+	if cancelled {
 		return map[string]any{"cancelled": true}, nil
 	}
-
-	// Pi has accepted the reset. The old path and transcript are invalid now;
-	// the subsequent get_state is allowed to repopulate only a fresh path.
-	mgr.UpdateSessionPath(inst, "")
-	mgr.ClearPublicSessionPath(inst)
-	inst.ResetTranscript()
+	// The read loop already invalidated the old path and transcript under one
+	// event boundary before this waiter resumed, so a message accepted after
+	// that boundary survives. The refresh may repopulate only a fresh path.
 	fresh, err := refreshState(ctx, inst)
 	if err != nil {
 		return map[string]any{
@@ -283,10 +278,10 @@ func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
 				break
 			}
 		}
-		snapshot := inst.SnapshotCopy()
+		snapshot, state := inst.SnapshotStateCopy()
 		payload = map[string]any{
-			"sid": inst.ID, "title": inst.TitleCopy(), "cwd": inst.Cwd,
-			"snapshot": snapshot, "state": inst.StateCopy(),
+			"sid": inst.ID, "title": state.Title, "cwd": inst.Cwd,
+			"snapshot": snapshot, "state": state,
 		}
 	case rpc.OpListSessions:
 		if err = decodeEmptyArgs(e.Args); err != nil {
@@ -294,9 +289,10 @@ func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
 		}
 		out := []map[string]any{}
 		for _, inst := range s.mgr.List() {
+			state := inst.StateCopy()
 			out = append(out, map[string]any{
-				"sid": inst.ID, "title": inst.TitleCopy(), "cwd": inst.Cwd,
-				"status": inst.StateCopy().Status,
+				"sid": inst.ID, "title": state.Title, "cwd": inst.Cwd,
+				"status": state.Status,
 			})
 		}
 		payload = out
@@ -320,10 +316,10 @@ func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
 			break
 		}
 		s.subscribeInstance(inst)
-		snapshot := inst.SnapshotCopy()
+		snapshot, state := inst.SnapshotStateCopy()
 		payload = map[string]any{
 			"messages": snapshot.Messages, "lastSeq": snapshot.LastSeq,
-			"state": inst.StateCopy(),
+			"state": state,
 		}
 	case rpc.OpGetState:
 		if err = decodeEmptyArgs(e.Args); err != nil {
@@ -493,7 +489,7 @@ func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
 			break
 		}
 		payload, err = inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
-			return resetSession(requestCtx, s.mgr, inst)
+			return resetSession(requestCtx, inst)
 		})
 	case rpc.OpAbort:
 		if err = decodeEmptyArgs(e.Args); err != nil {
@@ -554,26 +550,20 @@ func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
 			err = lookupErr
 			break
 		}
-		_, err = inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
+		result, requestErr := inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
 			if _, requestErr := inst.Request(requestCtx, "set_session_name", map[string]any{
 				"name": name,
 			}); requestErr != nil {
 				return nil, requestErr
 			}
-			return nil, nil
+			inst.SetTitle(name)
+			return inst.StateCopy(), nil
 		})
-		if err != nil {
+		if requestErr != nil {
+			err = requestErr
 			break
 		}
-		// Mirror the new name onto the live instance so listSessions and
-		// any title observers pick it up immediately; Pi writes the
-		// session_info entry itself, which the sidebar re-reads.
-		inst.SetTitle(name)
-		st := inst.StateCopy()
-		st.Title = name
-		inst.SetState(st)
-		inst.Emit(rpc.EvtStateChanged, nil, st)
-		payload = map[string]any{"state": inst.StateCopy()}
+		payload = map[string]any{"state": result}
 	default:
 		if isStubbed(e.Op) {
 			payload = map[string]any{"stubbed": true}
