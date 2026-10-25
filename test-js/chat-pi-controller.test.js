@@ -2617,11 +2617,19 @@ describe('Pi RPC transcript controller (compactionEnd regression pinning)', () =
             data: {
                 sid: 's1',
                 title: 'demo',
-                snapshot: { lastSeq: 0, messages: [] },
+                snapshot: {
+                    lastSeq: 0,
+                    messages: [
+                        { role: 'assistant', content: 'retained history' },
+                    ],
+                },
                 state: canonicalState({ status: 'exited' }),
             },
         });
         await Promise.resolve();
+        await Promise.resolve();
+        // The retained snapshot must still render; only readiness is skipped.
+        expect(root.textContent).toContain('retained history');
         expect(controls.at(-1)).toMatchObject({ exited: true, ready: false });
         expect(chat.send('after exit')).toBe(false);
 
@@ -2647,6 +2655,55 @@ describe('Pi RPC transcript controller (compactionEnd regression pinning)', () =
         await Promise.resolve();
         expect(controls.at(-1)).toMatchObject({ exited: true, ready: false });
         expect(chat.send('still exited')).toBe(false);
+    });
+
+    it('applies a reset hydrate when only metadata advanced past the reset', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/reset-cursor', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's1', snapshot: { lastSeq: 0, messages: [] } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        const initial = wire.sent.find((frame) => frame.op === 'hydrate');
+        wire.emit({
+            t: 'res',
+            id: initial.id,
+            ok: true,
+            data: {
+                lastSeq: 0,
+                messages: [{ role: 'assistant', content: 'before-reset' }],
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(root.textContent).toContain('before-reset');
+
+        // A metadata event after the reset cannot block the reset snapshot:
+        // the buffer is gapped there, so its cursor stays at the reset seq.
+        wire.emit({ t: 'evt', sid: 's1', seq: 1, evt: 'transcriptReset' });
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'stateChanged',
+            data: { model: 'newer-model' },
+        });
+        const resetHydrate = wire.sent.at(-1);
+        expect(resetHydrate).toMatchObject({ op: 'hydrate' });
+        wire.emit({
+            t: 'res',
+            id: resetHydrate.id,
+            ok: true,
+            data: { lastSeq: 1, messages: [] },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(root.textContent).not.toContain('before-reset');
     });
 
     it('ignores a hydrate older than the accepted cursor', async () => {

@@ -1260,8 +1260,10 @@ export function mountChatPi(
                 status.textContent = 'Ready';
             }
             notifyControls();
-            if (exited) return;
+            // Render the retained snapshot even when it is terminal; only the
+            // readiness and hydrate work below belongs to a live pane.
             paint();
+            if (exited) return;
             requestHydrate(false);
         })
         .catch((error: unknown) => {

@@ -1002,9 +1002,11 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
             status.textContent = 'Ready';
         }
         notifyControls();
+        // Render the retained snapshot even when it is terminal; only the
+        // readiness and hydrate work below belongs to a live pane.
+        paint();
         if (exited)
             return;
-        paint();
         requestHydrate(false);
     })
         .catch((error) => {
