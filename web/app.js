@@ -26,6 +26,7 @@ import {
     getEmbeddedBackendOrigin,
 } from './util.js';
 import { BackendScope } from './backend-scope.js';
+import { backendStores } from './backend-store.js';
 import { SyncManager } from './sync.js';
 import { initQuotaButton } from './quota.js';
 import { bootstrapAccessAuth } from './auth.js';
@@ -122,7 +123,7 @@ export class App {
         if (scope?.aborted) return;
         await this.sessionsManager.loadConfig();
         if (scope?.aborted) return;
-        await this.tabManager.restoreTabsState();
+        await this.tabManager.restoreTabsState(scope);
         if (scope?.aborted) return;
         this.startFleetPolling(scope);
         this.syncManager?.startPolling?.(scope);
@@ -678,6 +679,10 @@ export class App {
         console.log('[app] Phi initialized successfully');
     }
 
+    getActiveStore(profileId = getEmbeddedProfileId()) {
+        return backendStores.get(profileId || '__default__');
+    }
+
     switchToBackend(profileId, origin = '') {
         if (!profileId) return Promise.resolve(false);
         const seq = ++this._switchSeq;
@@ -695,6 +700,13 @@ export class App {
         if (this._fleetPollTimer) {
             clearInterval(this._fleetPollTimer);
             this._fleetPollTimer = null;
+        }
+        if (prevProfileId) {
+            const prevStore = backendStores.get(prevProfileId);
+            this.tabManager?.captureBackendState?.(prevStore);
+            if (this.sessionsManager?.activeCWD) {
+                prevStore.activeCwd = this.sessionsManager.activeCWD;
+            }
         }
         this.tabManager?.detachAll?.({
             flushBackendId: prevProfileId || undefined,
@@ -723,6 +735,10 @@ export class App {
         }
         const scope = new BackendScope(profileId, origin || '');
         this.scope = scope;
+        const nextStore = backendStores.get(profileId);
+        if (nextStore.tabs !== null) {
+            this.tabManager?.paintFromStore?.(nextStore);
+        }
         if (seq !== this._switchSeq || scope.aborted) return true;
 
         if (document.body) document.body.inert = true;
@@ -741,7 +757,9 @@ export class App {
     }
 
     forgetBackend(profileId) {
-        if (!profileId || typeof localStorage === 'undefined') return true;
+        if (!profileId) return true;
+        backendStores.delete(profileId);
+        if (typeof localStorage === 'undefined') return true;
         const suffix = `:${profileId}`;
         const keysToRemove = [];
         for (let i = 0; i < localStorage.length; i++) {

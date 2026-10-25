@@ -29,6 +29,7 @@ import {
     serverKey,
     getEmbeddedProfileId,
 } from './util.js';
+import { SNAPSHOT_SCROLLBACK_ROWS } from './backend-store.js';
 import {
     applyBrandCpuTier,
     applyTerminalActivityIndicator,
@@ -1265,19 +1266,99 @@ export class TabManager {
         }
     }
 
-    async restoreTabsState() {
+    async restoreTabsState(scope = this.app?.scope) {
         localStorage.removeItem('phi_tabs'); // Clear legacy browser storage tabs
         try {
-            const fetchFn = (this.app?.scope && typeof this.app.scope.fetch === 'function')
-                ? (url, opts) => this.app.scope.fetch(url, opts)
+            const fetchFn = (scope && typeof scope.fetch === 'function')
+                ? (url, opts) => scope.fetch(url, opts)
                 : fetch;
             const res = await fetchFn('/api/terminals');
+            if (scope?.aborted) return;
             if (!res.ok) throw new Error('Failed to load server terminal list');
             const instances = await res.json();
-            await this.syncTabs(instances, { live: true });
+            if (scope?.aborted) return;
+            const store = this.app?.getActiveStore?.();
+            if (store) store.tabs = instances;
+            await this.syncTabs(instances, { live: true, screens: store?.screens || null });
         } catch (e) {
+            if (e?.name === 'AbortError' || scope?.aborted) return;
             console.error('Failed to restore tabs from server-side state:', e);
         }
+    }
+
+    captureBackendState(store) {
+        if (!store) return;
+        const tabList = [];
+        const nextScreens = new Map();
+        for (const tab of this.tabs.values()) {
+            if (
+                tab.softClosing ||
+                tab.finalizing ||
+                tab.isKanban ||
+                tab.isReview ||
+                tab.coder === 'kanban' ||
+                tab.coder === 'review' ||
+                tab.coder === 'pi-rpc'
+            ) {
+                continue;
+            }
+            tabList.push({
+                id: tab.paneId,
+                paneId: tab.paneId,
+                session_id: tab.sessionId || '',
+                title: tab.title || tab.coder || '',
+                coder: tab.coder || '',
+                workspace: tab.workspace || '',
+                cwd: tab.cwd || '',
+                pinned: !!tab.pinned,
+                marked: !!tab.marked,
+                opencode_mode: tab.opencodeMode || null,
+                pi_bridge: tab._piBridgeState || undefined,
+            });
+
+            let captured = null;
+            if (tab.term && tab.serializeAddon) {
+                try {
+                    const encoding = tab.term._core?.mouseStateService?.activeEncoding;
+                    const mouseMode =
+                        encoding === 'SGR'
+                            ? '\x1b[?1006h'
+                            : encoding === 'SGR_PIXELS'
+                              ? '\x1b[?1016h'
+                              : '';
+                    const snap =
+                        terminalSnapshot(tab.term, tab.serializeAddon, {
+                            scrollback: SNAPSHOT_SCROLLBACK_ROWS,
+                        }) || '';
+                    const ansi = mouseMode + snap;
+                    if (ansi) {
+                        captured = {
+                            ansi,
+                            cols: tab.term.cols || 80,
+                            rows: tab.term.rows || 24,
+                        };
+                    }
+                } catch (e) {
+                    console.warn('[term] snapshot on leave failed:', e);
+                }
+            }
+            if (!captured && tab._cachedScreen) {
+                captured = tab._cachedScreen;
+            } else if (!captured && store.screens?.has(tab.paneId)) {
+                captured = store.screens.get(tab.paneId);
+            }
+            if (captured) {
+                nextScreens.set(tab.paneId, captured);
+            }
+        }
+        store.tabs = tabList;
+        store.screens = nextScreens;
+    }
+
+    paintFromStore(store) {
+        if (!store || !Array.isArray(store.tabs)) return false;
+        void this.syncTabs(store.tabs, { live: false, screens: store.screens });
+        return true;
     }
 
     setupEventListeners() {
@@ -3296,6 +3377,7 @@ export class TabManager {
 
     _connectTabSocket(tabInfo, initialCmd = '') {
         if (!tabInfo || tabInfo.isReview || tabInfo.isKanban || tabInfo.coder === 'pi-rpc') return;
+        tabInfo._cachedScreen = null;
         if (tabInfo.pinned) {
             const fetchFn = (this.app?.scope && typeof this.app.scope.fetch === 'function')
                 ? (url, opts) => this.app.scope.fetch(url, opts)
@@ -3961,6 +4043,7 @@ export class TabManager {
             tabInfo._detachedCache = true;
             tabInfo.ws = null;
             if (options.cachedScreen) {
+                tabInfo._cachedScreen = options.cachedScreen;
                 this._openTermAndViewport(tabInfo);
                 const { ansi, cols, rows } = options.cachedScreen;
                 if (cols > 0 && rows > 0) {
