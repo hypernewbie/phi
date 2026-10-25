@@ -123,16 +123,24 @@ export class App {
             if (savedTheme) {
                 this.applyAccentTheme(savedTheme);
             }
-            // These four probes are independent of each other, and a remote
-            // server's round trip is the switch's dominant cost. Awaiting
-            // them one after another made a switch cost the SUM of the
-            // round trips; running them together costs the SLOWEST one.
+            // The version and coder probes do not depend on each other and
+            // do not feed the workspace state, so they run together: a
+            // remote server's round trip is the switch's dominant cost, and
+            // awaiting them one after another made the switch cost the SUM
+            // of the round trips instead of the slowest one.
+            //
+            // The workspace config MUST land before the terminal list is
+            // restored: the restored tabs resolve their cwd and workspace
+            // against the active workspace, and a racing restore would
+            // leave the active cwd pointing at the wrong directory.
             await Promise.all([
                 this.loadVersion(scope),
                 this.fetchCoderPresets(scope),
-                this.sessionsManager.loadConfig(),
-                this.tabManager.restoreTabsState(scope),
             ]);
+            if (scope?.aborted) return;
+            await this.sessionsManager.loadConfig();
+            if (scope?.aborted) return;
+            await this.tabManager.restoreTabsState(scope);
             if (scope?.aborted) return;
             this.startFleetPolling(scope);
             this.syncManager?.startPolling?.(scope);
