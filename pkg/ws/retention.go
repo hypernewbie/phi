@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -382,6 +383,11 @@ func syncDir(path string) error {
 	d, err := os.Open(path)
 	if err != nil {
 		return err
+	}
+	if runtime.GOOS == "windows" {
+		// Windows opens directories with FILE_LIST_DIRECTORY (read-only), so
+		// FlushFileBuffers (d.Sync) returns ERROR_ACCESS_DENIED.
+		return d.Close()
 	}
 	syncErr := d.Sync()
 	closeErr := d.Close()
@@ -1086,15 +1092,19 @@ func writeFileSynced(path string, data []byte, fault *error, g *retentionGroup) 
 	if err := rejectNonRegular(path); err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		return err
-	}
-	f, err := os.Open(path)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return g.syncFileAs(f, fault)
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := g.syncFileAs(f, fault); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 func (g *retentionGroup) syncFileAs(f *os.File, fault *error) error {
