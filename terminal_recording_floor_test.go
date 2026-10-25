@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/hypernewbie/phi/pkg/ws"
@@ -53,21 +54,37 @@ func TestRecordingEndpointServesTheRetainedWindowBelowTheFloor(t *testing.T) {
 	setupHotHub(t)
 	head := writePastTheFloor(t, "pane-rot")
 
-	req := httptest.NewRequest(http.MethodGet, "/api/terminals/pane-rot/recording?from=0&through=18446744073709551615", nil)
-	w := httptest.NewRecorder()
-	handleFallback(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 for a request that starts below the floor, got %d: %s", w.Code, w.Body.String())
+	// The window is bigger than one bounded response, so a client pages it.
+	var hdr ws.RecordingHeaderJSON
+	var data []byte
+	cursor := uint64(0)
+	for cursor < head {
+		req := httptest.NewRequest(http.MethodGet, "/api/terminals/pane-rot/recording?from="+strconv.FormatUint(cursor, 10)+"&through=18446744073709551615", nil)
+		w := httptest.NewRecorder()
+		handleFallback(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 for a request that starts below the floor, got %d: %s", w.Code, w.Body.String())
+		}
+		pageHdr, page := recordingHeader(t, w)
+		if cursor == 0 {
+			hdr = pageHdr
+			if hdr.Start == 0 {
+				t.Fatal("the pane did not rotate, so the floor stayed at zero")
+			}
+		} else if pageHdr.Start != cursor {
+			t.Fatalf("page started at %d, want the previous end %d", pageHdr.Start, cursor)
+		}
+		if pageHdr.End <= pageHdr.Start {
+			t.Fatalf("page [%d,%d) carried no bytes", pageHdr.Start, pageHdr.End)
+		}
+		data = append(data, page...)
+		cursor = pageHdr.End
 	}
-	hdr, data := recordingHeader(t, w)
-	if hdr.Start == 0 {
-		t.Fatal("the pane did not rotate, so the floor stayed at zero")
+	if cursor != head {
+		t.Fatalf("retained window ended at %d, want the head %d", cursor, head)
 	}
-	if hdr.End != head {
-		t.Fatalf("answered as [%d,%d], want the retained window to end at the head %d", hdr.Start, hdr.End, head)
-	}
-	if uint64(len(data)) != hdr.End-hdr.Start {
-		t.Fatalf("answered %d bytes for a window of %d", len(data), hdr.End-hdr.Start)
+	if uint64(len(data)) != head-hdr.Start {
+		t.Fatalf("answered %d bytes for a window of %d", len(data), head-hdr.Start)
 	}
 	if !bytes.Equal(data, bytes.Repeat([]byte("x"), len(data))) {
 		t.Fatal("the served bytes are not the recorded ones")

@@ -67,6 +67,17 @@ var errLegacyImportFailed = errors.New("eligible legacy import failed")
 // the rename deterministically (no parallel ws tests swap it).
 var importRename = os.Rename
 
+// adoptConcurrentWinner drops a losing staging when a concurrent sweep
+// or importer published the destination first. It reports whether the
+// caller should resolve the published winner instead of failing.
+func adoptConcurrentWinner(final, staging string) bool {
+	if _, err := os.Stat(final); err == nil {
+		os.RemoveAll(staging)
+		return true
+	}
+	return false
+}
+
 // importLegacyGroup migrates an eligible legacy journal into a bounded
 // versioned group and publishes it as a closed archive. The legacy
 // original is only ever read: eligibility failures, corrupt data, and
@@ -123,6 +134,15 @@ func (h *Hub) importLegacyGroup(paneID string) (bool, error) {
 	h.lastStats = stats
 	h.mu.Unlock()
 	if err != nil {
+		// A concurrent sweep may have published the replacement and
+		// retired the source mid-staging. Adopt the winner instead
+		// of failing: the caller resolves the published group.
+		h.mu.RLock()
+		final := h.recordingPath(paneID)
+		h.mu.RUnlock()
+		if final != "" && adoptConcurrentWinner(final, staging) {
+			return false, nil
+		}
 		cacheFailure()
 		os.RemoveAll(staging)
 		log.Printf("[ws] legacy import of %s failed; the original is untouched: %v", legacy, err)
@@ -148,6 +168,11 @@ func (h *Hub) importLegacyGroup(paneID string) (bool, error) {
 		return false, nil
 	}
 	if cur, err := os.Lstat(legacy); err != nil || !sameSource(info.Size(), mtime, cur.Size(), cur.ModTime()) {
+		// The source may be gone because a concurrent sweep published
+		// and retired it while this staging waited on the hub lock.
+		if adoptConcurrentWinner(final, staging) {
+			return false, nil
+		}
 		os.RemoveAll(staging)
 		return false, fmt.Errorf("%w: source changed during staging", errLegacyImportFailed)
 	}
@@ -188,16 +213,24 @@ func (h *Hub) importLegacyGroup(paneID string) (bool, error) {
 // stageLegacyImport streams the legacy journal, builds a bounded
 // single-segment replacement in staging, reopens it, and compares the
 // retained bytes and current parser state. Memory stays bounded:
-// one stream window, the 1 MiB tail, the parser, and capped markers.
+// one stream window, the 4 MiB tail, the parser, and capped markers.
 func stageLegacyImport(legacy, staging string, size int64, mtime time.Time) (importStats, error) {
 	var stats importStats
 	stats.sourceBytes = size
+	// Anchors are an optimization, not a requirement: list them only from
+	// a real directory, never through a symlink, and otherwise stream the
+	// full prefix. The sweep still refuses such a source outright.
+	var anchors []uint64
+	if info, err := os.Lstat(legacy + ".state.d"); err == nil && info.IsDir() {
+		anchors = listLegacyAnchors(legacy + ".state.d")
+	} else if err != nil && !os.IsNotExist(err) {
+		return stats, err
+	}
 	f, err := os.Open(legacy)
 	if err != nil {
 		return stats, err
 	}
 	defer f.Close()
-	anchors := listLegacyAnchors(legacy + ".state.d")
 	scan, err := scanLegacyLog(f, size, anchors)
 	if err != nil {
 		return stats, err

@@ -239,7 +239,7 @@ func (h *Hub) SetRecordingDirectory(dir string) error {
 		return err
 	}
 	// Bounded retention groups live in a versioned namespace below the
-	// recording directory. Legacy journals stay untouched beside it.
+	// recording directory. The retention sweep migrates or expires legacy journals beside it.
 	if err := os.MkdirAll(filepath.Join(dir, "v2"), 0700); err != nil {
 		return err
 	}

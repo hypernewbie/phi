@@ -147,9 +147,9 @@ func TestLegacyImportBuildsBoundedGroup(t *testing.T) {
 	fc := &fakeClock{now: time.Unix(1_700_000_000, 0).UTC()}
 	h, dir := expiryTestHub(t, fc)
 	const pane = "legacy-pane"
-	chunk := bytes.Repeat([]byte("imported library line with color \x1b[31mred\x1b[0m and UTF-8 你🙂\r\n"), 2048)
+	chunk := bytes.Repeat([]byte("imported library line with color \x1b[31mred\x1b[0m and UTF-8 你🙂\r\n"), int(retentionHistoryCap)/12/len("imported library line with color \x1b[31mred\x1b[0m and UTF-8 你🙂\r\n")+1)
 	var chunks [][]byte
-	for i := 0; i < 12; i++ {
+	for i := 0; i < 14; i++ {
 		chunks = append(chunks, chunk)
 	}
 	resizes := map[int][2]uint16{0: {100, 30}, 6: {120, 40}, 9: {0, 0}}
@@ -162,26 +162,29 @@ func TestLegacyImportBuildsBoundedGroup(t *testing.T) {
 		}
 		head += uint64(len(chunks[i]))
 	}
-	anchorThrough := uint64(len(chunks[0]) * 2)
+	anchorThrough := uint64(len(chunks[0]))
 	writeLegacyAnchor(t, legacyLogPath(dir, pane), anchorThrough, source, ordered)
 	writeLegacyAnchor(t, legacyLogPath(dir, pane), 0, source, ordered)
 	stampLegacy(t, legacyLogPath(dir, pane), fc.Now())
 
-	rec, ok := h.Recording(pane, 0, uint64(len(source)))
+	start := uint64(len(source)) - retentionHistoryCap
+	rec, ok := h.Recording(pane, start, uint64(len(source)))
 	if !ok {
 		t.Fatal("eligible legacy log did not import")
 	}
-	if rec.Start != uint64(len(source))-(1<<20) || rec.End != uint64(len(source)) {
+	if rec.Start != start || rec.End <= rec.Start {
 		t.Fatalf("imported window start=%d end=%d", rec.Start, rec.End)
 	}
-	if !bytes.Equal(rec.Data, source[len(source)-(1<<20):]) {
-		t.Fatal("imported tail bytes are not the newest 1 MiB")
+	_, data, _ := readRetained(t, h, pane, start, uint64(len(source)))
+	if !bytes.Equal(data, source[len(source)-int(retentionHistoryCap):]) {
+		t.Fatal("imported tail bytes are not the newest cap")
 	}
 	if len(rec.Resizes) == 0 || rec.Resizes[0].AtSeq != rec.Start {
 		t.Fatalf("imported markers lack the in-force geometry: %+v", rec.Resizes)
 	}
-	for i := 1; i < len(rec.Resizes); i++ {
-		if rec.Resizes[i].AtSeq < rec.Resizes[i-1].AtSeq {
+	_, _, allMarkers := readRetained(t, h, pane, start, uint64(len(source)))
+	for i := 1; i < len(allMarkers); i++ {
+		if allMarkers[i].AtSeq < allMarkers[i-1].AtSeq {
 			t.Fatal("imported markers out of order")
 		}
 	}
@@ -232,15 +235,25 @@ func TestLegacyImportAnchorAtResizeBoundary(t *testing.T) {
 	fc := &fakeClock{now: time.Unix(1_700_000_000, 0).UTC()}
 	h, dir := expiryTestHub(t, fc)
 	const pane = "anchor-resize"
-	first := bytes.Repeat([]byte("before resize\r\n"), 20000)
-	second := bytes.Repeat([]byte("after resize\r\n"), 80000)
+	// Fixture sizes were chosen for a 1 MiB cap; scale with the real cap so
+	// the source still exceeds the retained window.
+	scale := int(retentionHistoryCap / (1 << 20))
+	first := bytes.Repeat([]byte("before resize\r\n"), 20000*scale)
+	second := bytes.Repeat([]byte("after resize\r\n"), 80000*scale)
 	source := writeLegacyLog(t, legacyLogPath(dir, pane), [][]byte{first, second}, map[int][2]uint16{1: {132, 45}})
 	ordered := [][3]uint64{{uint64(len(first)), 132, 45}}
 	writeLegacyAnchor(t, legacyLogPath(dir, pane), uint64(len(first)), source, ordered)
 	stampLegacy(t, legacyLogPath(dir, pane), fc.Now())
 	rec, ok := h.Recording(pane, 0, uint64(len(source)))
-	if !ok || !bytes.Equal(rec.Data, source[len(source)-(1<<20):]) {
-		t.Fatal("anchor-at-resize log did not import its newest 1 MiB")
+	if !ok {
+		t.Fatal("anchor-at-resize log did not import")
+	}
+	wantStart := uint64(len(source)) - retentionHistoryCap
+	if rec.Start > wantStart {
+		t.Fatalf("imported window starts at %d, want no later than %d", rec.Start, wantStart)
+	}
+	if _, data, _ := readRetained(t, h, pane, rec.Start, uint64(len(source))); !bytes.Equal(data, source[rec.Start:]) {
+		t.Fatal("anchor-at-resize log did not import its newest bytes")
 	}
 	wantScreen, wantContinuation, wantCols, wantRows := parseDirect(t, source, ordered)
 	_, state, cols, rows, err := h.State(pane)
@@ -376,7 +389,6 @@ func TestExpiredImportDoesNotResurrect(t *testing.T) {
 	h, dir := expiryTestHub(t, fc)
 	const pane = "aging"
 	source := writeLegacyLog(t, legacyLogPath(dir, pane), [][]byte{[]byte("aging history\r\n")}, nil)
-	before := sha256.Sum256(mustRead(t, legacyLogPath(dir, pane)))
 	legacyTime := fc.Now().Add(-6 * 24 * time.Hour)
 	if err := os.Chtimes(legacyLogPath(dir, pane), legacyTime, legacyTime); err != nil {
 		t.Fatal(err)
@@ -402,8 +414,8 @@ func TestExpiredImportDoesNotResurrect(t *testing.T) {
 	if _, ok := h2.Recording(pane, 0, 100); ok {
 		t.Fatal("expired import resurrected from the legacy original")
 	}
-	if sha256.Sum256(mustRead(t, legacyLogPath(dir, pane))) != before {
-		t.Fatal("expiry modified the legacy original")
+	if _, err := os.Lstat(legacyLogPath(dir, pane)); !os.IsNotExist(err) {
+		t.Fatalf("sweep did not retire the expired legacy original: %v", err)
 	}
 }
 

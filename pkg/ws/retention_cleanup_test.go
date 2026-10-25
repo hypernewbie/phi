@@ -45,7 +45,7 @@ func TestFailedRetentionOpenPreservesCommittedManifest(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer g.close()
-			for i := 0; i < 18; i++ {
+			for i := 0; i < int(retentionSegNominal/(64<<10))+2; i++ {
 				if _, err := g.appendPayload(bytes.Repeat([]byte("x"), 64<<10), nil); err != nil {
 					t.Fatal(err)
 				}

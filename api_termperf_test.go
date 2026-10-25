@@ -298,7 +298,7 @@ func TestRecordingEndpointCursorFiltersAnd409(t *testing.T) {
 	}
 
 	// Evict the boundary, then prove the stale cursor expires with 409.
-	if err := wsHub.Ingest(pane, bytes.Repeat([]byte("x"), 2<<20)); err != nil {
+	if err := wsHub.Ingest(pane, bytes.Repeat([]byte("x"), 5<<20)); err != nil {
 		t.Fatal(err)
 	}
 	floorProbe := get("from=0&through=999999999")

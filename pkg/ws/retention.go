@@ -22,7 +22,7 @@ import (
 
 // Bounded terminal retention.
 //
-// A retention group keeps the newest 1 MiB of raw output history per
+// A retention group keeps the newest 4 MiB of raw output history per
 // terminal in two rotating journal segments. Each segment holds separate
 // raw bytes, fixed-size resize records, and one immutable base checkpoint:
 // the exact parser at that segment's source start with zero historical
@@ -38,8 +38,8 @@ import (
 
 // Approved retention bounds. Upper bounds, not reservations.
 const (
-	retentionHistoryCap  = 1 << 20
-	retentionSegNominal  = 1 << 20
+	retentionHistoryCap  = 4 << 20
+	retentionSegNominal  = 4 << 20
 	retentionSegSlack    = 32 << 10
 	retentionSegRawMax   = retentionSegNominal + retentionSegSlack
 	retentionCkptMax     = 2 << 20
@@ -814,7 +814,7 @@ func (g *retentionGroup) closeFiles() error {
 	return errors.Join(errs...)
 }
 
-// floor is the oldest readable source sequence: the public 1 MiB window,
+// floor is the oldest readable source sequence: the public 4 MiB window,
 // or the oldest physically retained byte when resize pressure shortened
 // history before the raw cap.
 func (g *retentionGroup) floor() uint64 {

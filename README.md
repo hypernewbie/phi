@@ -170,6 +170,10 @@ State is stored in `~/.phi/`:
 
 Both are created automatically. `config.json` also holds an optional browser-derived access-password verifier; an empty value disables access protection. Set or clear it from **Config** rather than editing it by hand. Phi's access password protects casual LAN/Tailnet access, but HTTPS is still required against an active hostile-network attacker.
 
+### Terminal history retention
+
+Phi runs a retention sweep at startup and hourly: terminal histories older than seven days are deleted, except live panes and saved tabs, and each retained history keeps the newest 4 MiB of terminal output. Histories written by older Phi versions are converted into the versioned namespace on the first sweep. Converting a large legacy library can delay startup; allow a startup grace period before health checks must pass. Disk usage can exceed that window because manifests, checkpoints, and resize records also consume space. If a sweep cannot establish a durable replacement, it preserves the originals for a later retry. Before upgrading, stop older Phi binaries first: versions without the recordings-namespace lease can write beside the new server and defeat its cleanup guarantees.
+
 ### OpenCode 2 (default)
 
 Phi starts OpenCode 2's full-screen TUI with `opencode` by default. To use Mini for one launch, right-click the OpenCode sidebar or quick-launch button, **New Session**, or a saved OpenCode session, then choose **Open Mini**. This does not change the default. Both v1 and v2 use the `opencode` executable name. Install v2 on the machine that runs Phi, following the [official migration guide](https://opencode.ai/v2/docs/migrate-v1/). Phi does not install or replace either CLI.
