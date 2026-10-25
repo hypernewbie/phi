@@ -104,16 +104,17 @@ function verify(target) {
 /**
  * Keep exactly one Dock tile for the app.
  *
- * The Dock shows a running app in its app section, and it also keeps
- * the app in its recent apps. An app that is not pinned therefore shows
- * up twice: once as the running app and once as a recent app. Replacing
- * the bundle makes it worse, because the Dock tracks recent apps by file
- * reference and adds a second entry instead of updating the old one.
+ * The Dock shows a running app in its app section and it also keeps the
+ * app in its recent apps, so a pinned app that is also in the recent
+ * apps shows up twice. Replacing the bundle makes it worse: the Dock
+ * tracks recent apps by file reference, so a new inode gets a new entry
+ * and the old entry stays behind.
  *
- * The fix is to pin the app and clear its recent app entries. A pinned
- * app has one tile whether it runs or not.
+ * The rule the Dock ends up with is one tile per app. A pinned app is
+ * the tile, and its recent app entries go. An unpinned app lives in the
+ * recent apps, and only the first entry for it stays.
  */
-function ensureSingleDockTile(bundle, target, label) {
+function ensureSingleDockTile(bundle) {
   let exported;
   try {
     exported = execFileSync('defaults', ['export', 'com.apple.dock', '-'], {
@@ -153,13 +154,19 @@ function ensureSingleDockTile(bundle, target, label) {
       entry.includes('<key>bundle-identifier</key>') &&
       entry.includes(`<string>${bundle}</string>`);
 
-    // Clear every recent app entry for the app.
-    const recents = entriesFor('recent-apps');
-    const doomed = [];
-    recents.forEach((entry, index) => {
-      if (isApp(entry)) doomed.push(index);
+    // A pinned app owns the tile, so its recent app entries go.
+    const pinnedIndexes = [];
+    entriesFor('persistent-apps').forEach((entry, index) => {
+      if (isApp(entry)) pinnedIndexes.push(index);
     });
+    const pinned = pinnedIndexes.length > 0;
+
     // Delete from the end so the remaining indexes stay valid.
+    const doomed = [];
+    entriesFor('recent-apps').forEach((entry, index) => {
+      if (!isApp(entry)) return;
+      if (pinned || doomed.length > 0) doomed.push(index);
+    });
     for (const index of doomed.reverse()) {
       execFileSync('/usr/libexec/PlistBuddy', [
         '-c',
@@ -168,61 +175,26 @@ function ensureSingleDockTile(bundle, target, label) {
       ]);
     }
 
-    // Keep a single pinned tile.
-    const pinnedIndexes = [];
-    entriesFor('persistent-apps').forEach((entry, index) => {
-      if (isApp(entry)) pinnedIndexes.push(index);
-    });
-    for (const index of pinnedIndexes.slice(1).reverse()) {
-      execFileSync('/usr/libexec/PlistBuddy', [
-        '-c',
-        `Delete :persistent-apps:${index}`,
-        source,
-      ]);
-    }
-
     execFileSync('defaults', ['import', 'com.apple.dock', source]);
-
-    let hasTile = pinnedIndexes.length > 0;
-    if (!hasTile) {
-      const tile = [
-        '<dict>',
-        '<key>tile-data</key>',
-        '<dict>',
-        '<key>bundle-identifier</key>',
-        `<string>${bundle}</string>`,
-        '<key>dock-extra</key>',
-        '<integer>0</integer>',
-        '<key>file-data</key>',
-        '<dict>',
-        '<key>_CFURLString</key>',
-        `<string>file://${target}/</string>`,
-        '<key>_CFURLStringType</key>',
-        '<integer>15</integer>',
-        '</dict>',
-        '<key>file-label</key>',
-        `<string>${label}</string>`,
-        '<key>file-type</key>',
-        '<integer>1</integer>',
-        '</dict>',
-        '<key>tile-type</key>',
-        '<string>file-tile</string>',
-        '</dict>',
-      ].join('');
-      execFileSync('defaults', [
-        'write',
-        'com.apple.dock',
-        'persistent-apps',
-        '-array-add',
-        tile,
-      ]);
-      hasTile = true;
-    }
-
     execFileSync('/usr/bin/killall', ['Dock']);
-    return { removed: doomed.length, pinned: hasTile };
+    return { removed: doomed.length, pinned };
   } finally {
     rmSync(work, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Stop the running app. The Dock keeps a running app in its recent
+ * apps even when the app is pinned, so the old entry comes back until
+ * the app starts again.
+ */
+function stopRunningApp(target) {
+  try {
+    execFileSync('/usr/bin/pkill', ['-f', `${target}/Contents/MacOS/`], {
+      stdio: 'ignore',
+    });
+  } catch {
+    // Nothing was running.
   }
 }
 
@@ -252,6 +224,7 @@ if (!existsSync(opts.app)) {
   throw new Error(`no build at ${opts.app}. Run the package build first.`);
 }
 const id = bundleId(opts.app);
+stopRunningApp(opts.target);
 install(opts.app, opts.target);
 verify(opts.target);
 
@@ -259,7 +232,7 @@ if (!opts.keepBuild) {
   rmSync(opts.app, { recursive: true, force: true });
 }
 
-const pruned = ensureSingleDockTile(id, opts.target, 'phi-client');
+const pruned = ensureSingleDockTile(id);
 process.stdout.write(
   `installed ${id} to ${opts.target}\n` +
     `dock tiles: ${pruned.pinned ? 'one pinned tile' : 'not pinned'}` +
