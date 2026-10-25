@@ -63,19 +63,20 @@ type Bridge struct {
 }
 
 type bridgePane struct {
-	processID   string
-	managed     bool
-	reason      string
-	inst        *pty.PTYInstance
-	pubRev      uint64 // latest applied publication; 0 means unseeded
-	gen         uint64
-	hasGen      bool
-	lastRun     uint64
-	hasRun      bool
-	lastOutcome string
-	lastRunning *bool
-	lastModel   string
-	lastCaps    []string
+	processID         string
+	managed           bool
+	reason            string
+	inst              *pty.PTYInstance
+	pubRev            uint64 // latest applied publication; 0 means unseeded
+	gen               uint64
+	hasGen            bool
+	lastRun           uint64
+	hasRun            bool
+	lastOutcome       string
+	lastRunning       *bool
+	lastModel         string
+	lastThinkingLevel string
+	lastCaps          []string
 	// lastConnected tracks current stream availability: set on every
 	// snapshot, cleared on peer-down. Nil until the first snapshot.
 	// History recall uses it; bell behavior does not.
@@ -380,6 +381,52 @@ func (b *Bridge) RequestPaneModels(ctx context.Context, paneID string) (pibridge
 	return b.server.RequestModels(ctx, processID)
 }
 
+// RequestPaneThinkingLevels reads supported levels and rejects a result if
+// the pane was rebound to a different process while the request was in flight.
+func (b *Bridge) RequestPaneThinkingLevels(ctx context.Context, paneID string) (pibridge.ThinkingLevelsResult, error) {
+	if b == nil {
+		return pibridge.ThinkingLevelsResult{}, fmt.Errorf("pi-bridge: disabled")
+	}
+	b.mu.Lock()
+	p, ok := b.panes[paneID]
+	processID, managed := "", false
+	if ok {
+		processID, managed = p.processID, p.managed
+	}
+	b.mu.Unlock()
+	if !ok || !managed {
+		return pibridge.ThinkingLevelsResult{}, fmt.Errorf("pi-bridge: pane not managed")
+	}
+	res, err := b.server.RequestThinkingLevels(ctx, processID)
+	if err != nil {
+		return pibridge.ThinkingLevelsResult{}, err
+	}
+	b.mu.Lock()
+	current, ok := b.panes[paneID]
+	sameProcess := ok && current.managed && current.processID == processID && res.ProcessID == processID
+	b.mu.Unlock()
+	if !sameProcess {
+		return pibridge.ThinkingLevelsResult{}, fmt.Errorf("pi-bridge: pane process replaced")
+	}
+	return res, nil
+}
+
+// RequestPaneSetThinking requires the origin captured by a successful list;
+// it never resolves a replacement process or generation on the caller's behalf.
+func (b *Bridge) RequestPaneSetThinking(ctx context.Context, paneID, processID string, generation uint64, level, provider, model string) (pibridge.SetThinkingResult, error) {
+	if b == nil {
+		return pibridge.SetThinkingResult{}, fmt.Errorf("pi-bridge: disabled")
+	}
+	b.mu.Lock()
+	p, ok := b.panes[paneID]
+	sameProcess := ok && p.managed && p.processID == processID
+	b.mu.Unlock()
+	if !sameProcess {
+		return pibridge.SetThinkingResult{}, fmt.Errorf("pi-bridge: pane process changed")
+	}
+	return b.server.RequestSetThinking(ctx, processID, generation, level, provider, model)
+}
+
 // RequestPaneSetModel resolves a pane to its bridge process and asks
 // the live Pi session to switch models. Unknown, unmanaged, and
 // peerless panes fail; the caller owns the deadline like history
@@ -453,13 +500,14 @@ type BridgePaneState struct {
 	LastRun           string   `json:"last_run,omitempty"`
 	LastOutcome       string   `json:"last_outcome,omitempty"`
 	Model             string   `json:"model,omitempty"`
+	ThinkingLevel     string   `json:"thinking_level"`
 	Capabilities      []string `json:"capabilities,omitempty"`
 	Connected         *bool    `json:"connected,omitempty"`
 }
 
 // PaneSnapshot reports the bridge view for one pane. Unknown panes and
-// nil bridges report plain. Model, running, and capabilities come from
-// one retained copy under b.mu, delivered by the ordered state
+// nil bridges report plain. Model, thinking level, running, and capabilities
+// come from one retained copy under b.mu, delivered by the ordered state
 // callback, so HTTP can never mix them with a stale retained
 // revision; only connection availability reads the live peer.
 func (b *Bridge) PaneSnapshot(paneID string) BridgePaneState {
@@ -493,7 +541,7 @@ func (b *Bridge) PaneSnapshot(paneID string) BridgePaneState {
 		st.LastOutcome = view.lastOutcome
 	}
 	// Availability is live, not ordered telemetry: it reads the
-	// current peer. Model/running/caps below stay retained.
+	// current peer. Model/running/thinking/caps stay retained.
 	if srvView, ok := b.server.PaneState(processID); ok {
 		connected := srvView.HasPeer
 		st.Connected = &connected
@@ -508,19 +556,20 @@ func (b *Bridge) PaneSnapshot(paneID string) BridgePaneState {
 	if view.model != "" {
 		st.Model = view.model
 	}
+	st.ThinkingLevel = view.thinkingLevel
 	st.Capabilities = append(st.Capabilities, view.caps...)
 	return st
 }
 
 // onState pushes a fresh bridge view after each accepted snapshot so
-// browsers track running state, model, and capabilities without
+// browsers track running state, model, thinking level, and capabilities without
 // polling. Stale callbacks for revoked panes, older generations, or
 // older-or-equal publication revisions are dropped. A newer
 // generation clears the obsolete retained settlement and the stale
 // model/usage of the old process. A callback without state advances
-// the revision floor but keeps model/usage unknown. It never calls
+// the revision floor but keeps model/thinking unknown. It never calls
 // back into the Server; all live values arrive as arguments.
-func (b *Bridge) onState(paneID, processID string, generation, pubRev uint64, running, hasState bool, model string, caps []string) {
+func (b *Bridge) onState(paneID, processID string, generation, pubRev uint64, running, hasState bool, model, thinkingLevel string, caps []string) {
 	b.mu.Lock()
 	p, ok := b.panes[paneID]
 	var view bridgeStateView
@@ -540,6 +589,7 @@ func (b *Bridge) onState(paneID, processID string, generation, pubRev uint64, ru
 				p.lastOutcome = ""
 				p.lastRunning = nil
 				p.lastModel = ""
+				p.lastThinkingLevel = ""
 				p.lastCaps = nil
 			}
 			p.pubRev = pubRev
@@ -551,6 +601,7 @@ func (b *Bridge) onState(paneID, processID string, generation, pubRev uint64, ru
 				r := running
 				p.lastRunning = &r
 				p.lastModel = model
+				p.lastThinkingLevel = thinkingLevel
 			}
 			connected := true
 			p.lastConnected = &connected
@@ -598,16 +649,17 @@ func (b *Bridge) onPeerDown(paneID, processID string, generation uint64) {
 
 // bridgeStateView is a lock-free copy of one pane's retained view.
 type bridgeStateView struct {
-	pubRev      uint64
-	hasGen      bool
-	gen         uint64
-	hasRun      bool
-	lastRun     uint64
-	lastOutcome string
-	running     *bool
-	model       string
-	caps        []string
-	connected   *bool
+	pubRev        uint64
+	hasGen        bool
+	gen           uint64
+	hasRun        bool
+	lastRun       uint64
+	lastOutcome   string
+	running       *bool
+	model         string
+	thinkingLevel string
+	caps          []string
+	connected     *bool
 }
 
 // snapshot copies the retained view. The caller must hold b.mu. The
@@ -625,22 +677,23 @@ func (p *bridgePane) snapshot() bridgeStateView {
 		connected = &c
 	}
 	return bridgeStateView{
-		pubRev:      p.pubRev,
-		hasGen:      p.hasGen,
-		gen:         p.gen,
-		hasRun:      p.hasRun,
-		lastRun:     p.lastRun,
-		lastOutcome: p.lastOutcome,
-		running:     running,
-		model:       p.lastModel,
-		caps:        append([]string(nil), p.lastCaps...),
-		connected:   connected,
+		pubRev:        p.pubRev,
+		hasGen:        p.hasGen,
+		gen:           p.gen,
+		hasRun:        p.hasRun,
+		lastRun:       p.lastRun,
+		lastOutcome:   p.lastOutcome,
+		running:       running,
+		model:         p.lastModel,
+		thinkingLevel: p.lastThinkingLevel,
+		caps:          append([]string(nil), p.lastCaps...),
+		connected:     connected,
 	}
 }
 
 // encodeBridgeState renders the managed bridge view from a copy.
 func encodeBridgeState(paneID string, view bridgeStateView) []byte {
-	frame := map[string]string{"type": "pi-bridge-state", "pane_id": paneID, "state": piBridgeManaged}
+	frame := map[string]string{"type": "pi-bridge-state", "pane_id": paneID, "state": piBridgeManaged, "thinking_level": view.thinkingLevel}
 	if view.hasGen {
 		frame["generation"] = strconv.FormatUint(view.gen, 10)
 	}
@@ -683,6 +736,7 @@ func (b *Bridge) onSettled(paneID, processID string, generation, runID uint64, o
 			if !p.hasGen || generation > p.gen {
 				p.gen, p.hasGen = generation, true
 				p.hasRun = false
+				p.lastThinkingLevel = ""
 			}
 			p.lastRun, p.hasRun = runID, true
 			p.lastOutcome = outcomeName(outcome)

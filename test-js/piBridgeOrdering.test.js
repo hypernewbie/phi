@@ -191,20 +191,34 @@ describe('pi bridge ordered views', () => {
         const tab = addPiTab(tm);
         tm.activePaneId = tab.paneId;
 
-        const frame = (rev, model) => ({
+        const frame = (rev, model, thinking_level = '') => ({
             type: 'pi-bridge-state',
             pane_id: 'pane-1',
             state: 'managed',
             telemetry_revision: rev,
             model,
-            capabilities: 'pi.lifecycle.v1',
+            thinking_level,
+            capabilities: 'pi.lifecycle.v1,pi.thinking.v1',
         });
-        tm._acceptPiBridgeState(tab, frame('6', 'provB/modelB'), tab.ws);
-        tm._acceptPiBridgeState(tab, frame('6', 'provC/modelC'), tab.ws);
+        tm._acceptPiBridgeState(
+            tab,
+            frame('6', 'provB/modelB', 'high'),
+            tab.ws,
+        );
+        tm._acceptPiBridgeState(
+            tab,
+            frame('6', 'provC/modelC', 'high'),
+            tab.ws,
+        );
         expect(tab.piBridge.model).toBe('provB/modelB');
+        tm._acceptPiBridgeState(tab, frame('6', 'provB/modelB', 'low'), tab.ws);
+        expect(tab.piBridge.thinking_level).toBe('high');
+        tm._acceptPiBridgeState(tab, frame('7', 'provB/modelB', 'low'), tab.ws);
+        expect(tab.piBridge.thinking_level).toBe('low');
         tm._acceptPiBridgeState(tab, frame('5', 'provA/modelA'), tab.ws);
         expect(tab.piBridge.model).toBe('provB/modelB');
-        expect(tab._piBridgeRev).toBe(6n);
+        expect(tab.piBridge.thinking_level).toBe('low');
+        expect(tab._piBridgeRev).toBe(7n);
     });
 
     it('orders u64 revisions beyond float precision', () => {

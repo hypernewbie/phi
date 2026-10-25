@@ -25,13 +25,15 @@ type Server struct {
 
 	reg *registry
 
-	grpcServer *grpc.Server
-	onSettled  func(paneID, processID string, generation, runID uint64, outcome pibridgepb.RunOutcome)
-	onState    func(paneID, processID string, generation, pubRev uint64, running, hasState bool, model string, caps []string)
-	onPeerDown func(paneID, processID string, generation uint64)
-	histSeq    atomic.Uint64
-	modelsSeq  atomic.Uint64
-	setSeq     atomic.Uint64
+	grpcServer     *grpc.Server
+	onSettled      func(paneID, processID string, generation, runID uint64, outcome pibridgepb.RunOutcome)
+	onState        func(paneID, processID string, generation, pubRev uint64, running, hasState bool, model, thinkingLevel string, caps []string)
+	onPeerDown     func(paneID, processID string, generation uint64)
+	histSeq        atomic.Uint64
+	modelsSeq      atomic.Uint64
+	setSeq         atomic.Uint64
+	thinkingSeq    atomic.Uint64
+	setThinkingSeq atomic.Uint64
 	// pubSeq is the server-owned publication sequence behind
 	// telemetry_revision. It is allocated at lease creation and at
 	// each accepted Hello/state change, so delayed stream callbacks
@@ -71,8 +73,8 @@ func (s *Server) SetOnSettled(fn func(paneID, processID string, generation, runI
 // SetOnSettled; the callback receives copies, never shared slices.
 // pubRev is the server-owned publication revision for this exact
 // acceptance; hasState is false when the runtime published no snapshot
-// (model/usage stay unknown, never invented).
-func (s *Server) SetOnState(fn func(paneID, processID string, generation, pubRev uint64, running, hasState bool, model string, caps []string)) {
+// (model/thinking level stay unknown, never invented).
+func (s *Server) SetOnState(fn func(paneID, processID string, generation, pubRev uint64, running, hasState bool, model, thinkingLevel string, caps []string)) {
 	s.onState = fn
 }
 
@@ -99,11 +101,14 @@ func (s *Server) fireState(l *lease, p *peer, pubRev uint64, snap *pibridgepb.St
 	l.mu.Unlock()
 	hasState := snap != nil
 	running := snap != nil && snap.GetState() == pibridgepb.LogicalState_LOGICAL_STATE_RUNNING
-	model := ""
-	if m := snap.GetModel(); m != nil {
-		model = m.GetProvider() + "/" + m.GetModel()
+	model, thinkingLevel := "", ""
+	if snap != nil {
+		thinkingLevel = snap.GetThinkingLevel()
+		if m := snap.GetModel(); m != nil {
+			model = m.GetProvider() + "/" + m.GetModel()
+		}
 	}
-	s.onState(paneID, processID, generation, pubRev, running, hasState, model, caps)
+	s.onState(paneID, processID, generation, pubRev, running, hasState, model, thinkingLevel, caps)
 }
 
 // SetOnPeerDown registers the callback fired once when the active peer
@@ -185,23 +190,24 @@ func (s *Server) Stats() (activeStreams, leases int) {
 
 // StateView is the nonsecret lease inspection surface for the host and
 // tests. It carries no tokens, process nonces beyond the lookup key, or
-// payloads. Session, leaf, model, capability, and runtime identities are
+// payloads. Session, leaf, model, thinking level, capability, and runtime identities are
 // the same values published to browsers and logs.
 type StateView struct {
-	HasPeer      bool
-	HasState     bool
-	State        pibridgepb.LogicalState
-	Revision     uint64
-	PubRev       uint64
-	JournalFirst uint64
-	JournalLast  uint64
-	JournalGap   bool
-	Generation   uint64
-	RuntimeID    string
-	Caps         []string
-	SessionID    string
-	LeafID       string
-	Model        string
+	HasPeer       bool
+	HasState      bool
+	State         pibridgepb.LogicalState
+	Revision      uint64
+	PubRev        uint64
+	JournalFirst  uint64
+	JournalLast   uint64
+	JournalGap    bool
+	Generation    uint64
+	RuntimeID     string
+	Caps          []string
+	SessionID     string
+	LeafID        string
+	Model         string
+	ThinkingLevel string
 }
 
 // PaneState returns the nonsecret lease view for one process. It reports
@@ -226,6 +232,7 @@ func (s *Server) paneStateLocked(l *lease) StateView {
 		if m := l.lastState.Model; m != nil {
 			view.Model = m.Provider + "/" + m.Model
 		}
+		view.ThinkingLevel = l.lastState.GetThinkingLevel()
 	}
 	return view
 }
@@ -613,6 +620,12 @@ func (s *Server) handleMessage(l *lease, p *peer, msg *pibridgepb.PiToPhi) error
 	case msg.GetSetModelAck() != nil:
 		s.deliverSetModel(l, p, msg.GetSetModelAck())
 		return nil
+	case msg.GetThinkingLevelsResponse() != nil:
+		s.deliverThinkingLevels(l, p, msg.GetThinkingLevelsResponse())
+		return nil
+	case msg.GetSetThinkingAck() != nil:
+		s.deliverSetThinking(l, p, msg.GetSetThinkingAck())
+		return nil
 	default:
 		return status.Error(codes.InvalidArgument, "unsupported payload")
 	}
@@ -637,6 +650,12 @@ func validateSnapshot(snap *pibridgepb.StateSnapshot, sessionID string) error {
 	if len(snap.GetJournal()) > maxJournalRecords {
 		return fmt.Errorf("journal too large")
 	}
+	if len(snap.GetThinkingLevel()) > maxThinkingLevel {
+		return fmt.Errorf("thinking level too large")
+	}
+	// Unknown level names pass through and degrade to unknown downstream:
+	// a future Pi release may add a level, and that must not tear down
+	// the whole bridge.
 	return nil
 }
 

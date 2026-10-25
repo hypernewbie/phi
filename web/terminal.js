@@ -448,6 +448,7 @@ export class TabManager {
         this._piRpcThinkingPending = null;
         this._piRpcResetPending = new Set();
         this._piRpcMenuRequest = 0;
+        this._piBridgeThinkingMenuRequest = 0;
         this._piRpcModels = null;
         this._piRpcModelQuery = '';
         this._piRpcModelExpandedGroup = null;
@@ -4525,6 +4526,28 @@ export class TabManager {
     _updatePiThinkingButton() {
         if (!this.piThinkingBtn) return;
         const tab = this.getActiveTab();
+        if (tab?.coder === 'pi') {
+            const level = this._piBridgeThinkingEligible(tab)
+                ? tab.piBridge.thinking_level
+                : '';
+            const known =
+                typeof level === 'string' &&
+                ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(level);
+            const cls = known ? thinkingLevelClass(level) : '';
+            const pending = this._piRpcThinkingPending?.paneId === tab.paneId;
+            this.piThinkingBtn.className = `direct-mode-btn pi-thinking-btn${cls ? ` pi-thinking-btn--${cls}` : ''}${pending ? ' disabled' : ''}`;
+            this.piThinkingBtn.disabled =
+                !!pending || tab.isDead === true || !tab.ws || tab.ws.readyState === 3;
+            this.piThinkingBtn.title = known
+                ? `Thinking: ${level}`
+                : 'Cycle Pi Thinking level';
+            this.piThinkingBtn.setAttribute(
+                'aria-label',
+                known ? `Thinking ${level}; cycle level` : 'Cycle Pi Thinking level',
+            );
+            this.piThinkingBtn.classList.remove('hidden');
+            return;
+        }
         if (tab?.coder !== 'pi-rpc') {
             this.piThinkingBtn.classList.add('hidden');
             return;
@@ -4552,21 +4575,20 @@ export class TabManager {
         if (!tab || (tab.coder !== 'pi' && tab.coder !== 'pi-rpc')) return;
         if (!this._piThinkingLevels) this._piThinkingLevels = new Map();
         if (tab.coder === 'pi') {
-            const cur = this._piThinkingLevels.get(tab.paneId) || 'off';
-            const norm = normalizeThinkingLevel(cur);
-            let idx = PI_THINKING_ORDER.indexOf(norm);
-            if (idx === -1) idx = PI_THINKING_ORDER.indexOf('off');
-            const next =
-                PI_THINKING_ORDER[(idx + 1) % PI_THINKING_ORDER.length];
-            this._piThinkingLevels.set(tab.paneId, next);
-            this._updatePiThinkingButton();
-            try {
-                this.sendRawInput(`/thinking ${next}\r`);
-            } catch {}
-            this.app?.showToast?.(
-                `Thinking: ${next}${next === 'xhigh' ? ' (max)' : ''}`,
-                { type: 'info' },
-            );
+            if (tab.isDead || !tab.ws || tab.ws.readyState === 3) return;
+            if (this._piBridgeThinkingEligible(tab)) {
+                this._cyclePiBridgeThinking(tab);
+            } else {
+                this._forwardKeyToPty(
+                    {
+                        key: 'Tab',
+                        shiftKey: true,
+                        isComposing: false,
+                        preventDefault() {},
+                    },
+                    tab,
+                );
+            }
             return;
         }
         // pi-rpc: cycle only among Pi-advertised levels
@@ -5366,48 +5388,105 @@ export class TabManager {
 
     _renderPiRpcThinkingDropup() {
         const dropup = document.getElementById('pi-rpc-thinking-dropup');
-        const activeTab = this.getActiveTab();
-        if (!dropup || !activeTab || activeTab.coder !== 'pi-rpc') return;
-        const paneId = activeTab.paneId;
-        const request = ++this._piRpcMenuRequest;
-        const state = this._piRpcControlsFor(activeTab);
+        const tab = this.getActiveTab();
+        const bridgeTab = tab?.coder === 'pi';
+        if (
+            !dropup ||
+            (!bridgeTab && tab?.coder !== 'pi-rpc') ||
+            (bridgeTab && !this._piBridgeThinkingEligible(tab))
+        )
+            return;
+
+        const paneId = tab.paneId;
+        const context = bridgeTab ? this._piBridgeThinkingContext(tab) : null;
+        const socket = bridgeTab ? tab.ws : null;
+        const request = bridgeTab
+            ? (this._piBridgeThinkingMenuRequest || 0) + 1
+            : ++this._piRpcMenuRequest;
+        if (bridgeTab) this._piBridgeThinkingMenuRequest = request;
+        const state = bridgeTab ? null : this._piRpcControlsFor(tab);
         const header = document.createElement('div');
         header.className = 'dropup-header';
-        header.textContent = `Thinking · ${state.thinking || '—'}`;
-        dropup.replaceChildren(header);
+        header.textContent = `Thinking · ${bridgeTab ? tab.piBridge.thinking_level || '—' : state.thinking || '—'}`;
         const loading = document.createElement('div');
         loading.className = 'dropup-row pi-rpc-dropup-message';
         loading.textContent = 'Loading Pi thinking levels…';
-        dropup.appendChild(loading);
+        dropup.replaceChildren(header, loading);
+
+        const current = () =>
+            bridgeTab
+                ? request === this._piBridgeThinkingMenuRequest &&
+                  !dropup.classList.contains('hidden') &&
+                  this.getActiveTab() === tab &&
+                  this.tabs?.get(paneId) === tab &&
+                  tab.ws === socket &&
+                  this._piBridgeThinkingEligible(tab) &&
+                  (!context || this._piBridgeThinkingContextValid(context))
+                : request === this._piRpcMenuRequest &&
+                  this.getActiveTab()?.paneId === paneId;
+        const offerNativePicker = () => {
+            loading.textContent = 'Pi thinking levels unavailable';
+            const native = document.createElement('button');
+            native.type = 'button';
+            native.className = 'dropup-model-btn';
+            native.textContent = 'Open native Thinking picker';
+            native.addEventListener('click', (event) => {
+                event.stopPropagation();
+                if (current()) this.sendSlashCommand(tab, '/thinking');
+            });
+            loading.appendChild(native);
+        };
+        const showRpcError = (error) => {
+            loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
+            this._piRpcError(error, 'Pi thinking');
+        };
+
+        if (bridgeTab && !context) {
+            offerNativePicker();
+            return;
+        }
 
         let requestResult;
         try {
-            requestResult = rpcChatThinkingLevels(paneId);
+            requestResult = bridgeTab
+                ? this._piBridgeThinkingLevels(paneId)
+                : rpcChatThinkingLevels(paneId);
         } catch (error) {
-            this._piRpcError(error, 'Pi thinking');
-            loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
+            if (bridgeTab) {
+                if (current()) offerNativePicker();
+            } else {
+                showRpcError(error);
+            }
             return;
         }
         Promise.resolve(requestResult)
-            .then((levels) => {
-                if (
-                    request !== this._piRpcMenuRequest ||
-                    this.getActiveTab()?.paneId !== paneId
-                )
-                    return;
-                if (!this._piAvailableThinking)
-                    this._piAvailableThinking = new Map();
-                if (Array.isArray(levels) && levels.length > 0)
-                    this._piAvailableThinking.set(paneId, [...levels]);
-                dropup.replaceChildren(header);
+            .then((result) => {
+                if (!current()) return;
+                let levels = result;
+                if (bridgeTab) {
+                    if (!this._piBridgeThinkingOriginMatches(context, result)) {
+                        offerNativePicker();
+                        return;
+                    }
+                    levels = result.levels;
+                } else {
+                    if (!this._piAvailableThinking)
+                        this._piAvailableThinking = new Map();
+                    if (Array.isArray(levels) && levels.length > 0)
+                        this._piAvailableThinking.set(paneId, [...levels]);
+                }
                 if (!Array.isArray(levels) || levels.length === 0) {
-                    const empty = document.createElement('div');
-                    empty.className = 'dropup-row pi-rpc-dropup-message';
-                    empty.textContent = 'No Pi thinking levels available';
-                    dropup.appendChild(empty);
+                    if (bridgeTab) {
+                        offerNativePicker();
+                    } else {
+                        loading.textContent = 'No Pi thinking levels available';
+                    }
                     return;
                 }
-                const pending = this._piRpcThinkingPending?.paneId === paneId;
+
+                dropup.replaceChildren(header);
+                const pending =
+                    this._piRpcThinkingPending?.paneId === paneId;
                 for (const level of levels) {
                     if (typeof level !== 'string') continue;
                     const row = document.createElement('div');
@@ -5419,12 +5498,18 @@ export class TabManager {
                     button.disabled = pending;
                     button.addEventListener('click', (event) => {
                         event.stopPropagation();
-                        const operation = { paneId, level };
+                        if (bridgeTab && !current()) return;
+                        const operation = bridgeTab
+                            ? { paneId, context, level }
+                            : { paneId, level };
                         this._piRpcThinkingPending = operation;
+                        if (bridgeTab) this._updatePiThinkingButton();
                         this._setPiRpcDropupButtonsDisabled(dropup, true);
                         let setterResult;
                         try {
-                            setterResult = rpcChatSetThinking(paneId, level);
+                            setterResult = bridgeTab
+                                ? this._piBridgeThinkingSet(context, level, result)
+                                : rpcChatSetThinking(paneId, level);
                         } catch (error) {
                             setterResult = Promise.reject(error);
                         }
@@ -5432,7 +5517,14 @@ export class TabManager {
                             .then(() => {
                                 if (this._piRpcThinkingPending === operation)
                                     this._piRpcThinkingPending = null;
-                                if (this.getActiveTab()?.paneId === paneId) {
+                                if (bridgeTab) {
+                                    if (!this._piBridgeThinkingContextValid(context))
+                                        return;
+                                    this._updatePiThinkingButton();
+                                    if (!dropup.classList.contains('hidden')) {
+                                        this._closePiRpcDropups(true);
+                                    }
+                                } else if (this.getActiveTab()?.paneId === paneId) {
                                     this.renderPresets('pi-rpc');
                                     this._closePiRpcDropups(true);
                                 }
@@ -5440,9 +5532,17 @@ export class TabManager {
                             .catch((error) => {
                                 if (this._piRpcThinkingPending === operation)
                                     this._piRpcThinkingPending = null;
-                                this._piRpcError(error, 'Pi thinking');
-                                if (this.getActiveTab()?.paneId === paneId)
+                                if (bridgeTab) {
+                                    if (!this._piBridgeThinkingContextValid(context))
+                                        return;
+                                    this._piRpcError(error, 'Pi thinking');
+                                    this._updatePiThinkingButton();
                                     this._renderPiRpcThinkingDropup();
+                                } else {
+                                    this._piRpcError(error, 'Pi thinking');
+                                    if (this.getActiveTab()?.paneId === paneId)
+                                        this._renderPiRpcThinkingDropup();
+                                }
                             });
                     });
                     row.appendChild(button);
@@ -5450,13 +5550,9 @@ export class TabManager {
                 }
             })
             .catch((error) => {
-                if (
-                    request !== this._piRpcMenuRequest ||
-                    this.getActiveTab()?.paneId !== paneId
-                )
-                    return;
-                loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
-                this._piRpcError(error, 'Pi thinking');
+                if (!current()) return;
+                if (bridgeTab) offerNativePicker();
+                else showRpcError(error);
             });
     }
 
@@ -8080,6 +8176,8 @@ export class TabManager {
             view.connected = false;
         if (typeof raw.model === 'string' && raw.model)
             view.model = raw.model;
+        view.thinking_level =
+            typeof raw.thinking_level === 'string' ? raw.thinking_level : '';
         const caps = raw.capabilities;
         if (typeof caps === 'string' && caps)
             view.capabilities = caps.split(',').filter(Boolean);
@@ -8134,10 +8232,12 @@ export class TabManager {
             const current = tabInfo.piBridge;
             const sameModel =
                 (current?.model || '') === (view.model || '');
+            const sameThinking =
+                (current?.thinking_level || '') === view.thinking_level;
             const sameCaps =
                 (current?.capabilities || []).join(',') ===
                 (view.capabilities || []).join(',');
-            if (!sameModel || !sameCaps) return false;
+            if (!sameModel || !sameThinking || !sameCaps) return false;
             // Availability rides the retained view without a new
             // revision: adopt a flipped connected at equal rev so
             // peer-down still lands.
@@ -8255,12 +8355,12 @@ export class TabManager {
         if (!tabInfo || tabInfo.coder !== 'pi') return;
         const prev = tabInfo.piBridge;
         const prevKey = prev
-            ? `${this._piBridgeModelsEligible(tabInfo)}|${prev.state}|${prev.model || ''}|${prev.connected}|${(prev.capabilities || []).join(',')}`
+            ? `${this._piBridgeModelsEligible(tabInfo)}|${this._piBridgeThinkingEligible(tabInfo)}|${prev.state}|${prev.generation || ''}|${prev.model || ''}|${prev.thinking_level || ''}|${prev.connected}|${(prev.capabilities || []).join(',')}`
             : '';
         this._acceptOrderedBridgeView(tabInfo, control, socket);
         const next = tabInfo.piBridge;
         const nextKey = next
-            ? `${this._piBridgeModelsEligible(tabInfo)}|${next.state}|${next.model || ''}|${next.connected}|${(next.capabilities || []).join(',')}`
+            ? `${this._piBridgeModelsEligible(tabInfo)}|${this._piBridgeThinkingEligible(tabInfo)}|${next.state}|${next.generation || ''}|${next.model || ''}|${next.thinking_level || ''}|${next.connected}|${(next.capabilities || []).join(',')}`
             : '';
         // The models trigger rides bridge state: re-render the row
         // only when model, availability, or capabilities moved on
@@ -9849,14 +9949,20 @@ export class TabManager {
             return;
         }
         if (!this.presetsContainer) return;
-        if (activeTab?.coder === 'pi' && !this._piBridgeModelsEligible(activeTab)) {
-            ++this._piRpcMenuRequest;
-            this._piRpcModels = null;
-            this._piBridgeModelsTruncated = false;
-            this._piBridgeModelsUnavailable = false;
-            if (this._piRpcModelPending?.paneId === activeTab.paneId)
-                this._piRpcModelPending = null;
-            this._closePiRpcDropups(true);
+        if (activeTab?.coder === 'pi') {
+            if (!this._piBridgeModelsEligible(activeTab)) {
+                ++this._piRpcMenuRequest;
+                this._piRpcModels = null;
+                this._piBridgeModelsTruncated = false;
+                this._piBridgeModelsUnavailable = false;
+                if (this._piRpcModelPending?.paneId === activeTab.paneId)
+                    this._piRpcModelPending = null;
+                const modelDropup = document.getElementById('pi-rpc-model-dropup');
+                modelDropup?.classList.add('hidden');
+                modelDropup?.replaceChildren();
+            }
+            if (!this._piBridgeThinkingEligible(activeTab))
+                this._invalidatePiBridgeThinking(activeTab);
         }
         this.presetsContainer.innerHTML = '';
 
@@ -10043,6 +10149,40 @@ export class TabManager {
         }
         this.presetsContainer.appendChild(modelsTriggerBtn);
 
+        if (modelCoder === 'pi') {
+            const thinkingTriggerBtn = document.createElement('button');
+            thinkingTriggerBtn.type = 'button';
+            thinkingTriggerBtn.className =
+                'preset-btn model-trigger-btn pi-rpc-thinking-trigger';
+            thinkingTriggerBtn.textContent = 'Thinking ▾';
+            thinkingTriggerBtn.disabled =
+                activeTab.isDead === true ||
+                !activeTab.ws ||
+                activeTab.ws.readyState === 3;
+            thinkingTriggerBtn.title = this._piBridgeThinkingEligible(activeTab)
+                ? `Thinking · ${activeTab.piBridge.thinking_level || '—'}`
+                : 'Open Pi native Thinking picker';
+            thinkingTriggerBtn.addEventListener('click', (event) => {
+                event.stopPropagation();
+                if (
+                    thinkingTriggerBtn.disabled ||
+                    this.getActiveTab() !== activeTab ||
+                    this.tabs?.get(activeTab.paneId) !== activeTab
+                )
+                    return;
+                if (this._piBridgeThinkingEligible(activeTab)) {
+                    this._toggleDropup(
+                        'pi-rpc-thinking-dropup',
+                        thinkingTriggerBtn,
+                        () => this._renderPiRpcThinkingDropup(),
+                    );
+                } else {
+                    this.sendSlashCommand(activeTab, '/thinking');
+                }
+            });
+            this.presetsContainer.appendChild(thinkingTriggerBtn);
+        }
+
         // 4b. Render Keys trigger button (keyboard icon only)
         const keysTriggerBtn = document.createElement('button');
         keysTriggerBtn.className =
@@ -10071,6 +10211,11 @@ export class TabManager {
             if (mDropup && !mDropup.classList.contains('hidden')) {
                 this._renderPiRpcModelsDropup(true);
             }
+        }
+        if (coderId === 'pi' && this._piBridgeThinkingEligible(activeTab)) {
+            const tDropup = document.getElementById('pi-rpc-thinking-dropup');
+            if (tDropup && !tDropup.classList.contains('hidden'))
+                this._renderPiRpcThinkingDropup();
         }
         const qcDropup = document.getElementById('quick-commands-dropup');
         if (qcDropup && !qcDropup.classList.contains('hidden')) {
@@ -11506,6 +11651,187 @@ export class TabManager {
         );
     }
 
+    _piBridgeThinkingEligible(tab) {
+        return (
+            tab?.coder === 'pi' && !tab.isDead &&
+            !!tab.ws && tab._piBridgeFresh === tab.ws &&
+            tab.piBridge?.state === 'managed' &&
+            tab.piBridge.connected === true &&
+            Array.isArray(tab.piBridge.capabilities) &&
+            tab.piBridge.capabilities.includes('pi.thinking.v1')
+        );
+    }
+
+    _piBridgeThinkingContext(tab) {
+        if (!this._piBridgeThinkingEligible(tab)) return null;
+        const model = tab.piBridge.model || '';
+        const separator = model.indexOf('/');
+        if (separator <= 0 || separator === model.length - 1) return null;
+        return {
+            tab,
+            paneId: tab.paneId,
+            socket: tab.ws,
+            generation: tab.piBridge.generation,
+            model,
+            provider: model.slice(0, separator),
+            modelId: model.slice(separator + 1),
+        };
+    }
+
+    _piBridgeThinkingContextValid(context) {
+        return (
+            !!context &&
+            this.tabs?.get(context.paneId) === context.tab &&
+            this.getActiveTab() === context.tab &&
+            context.tab.ws === context.socket &&
+            context.tab.piBridge?.generation === context.generation &&
+            context.tab.piBridge?.model === context.model &&
+            this._piBridgeThinkingEligible(context.tab)
+        );
+    }
+
+    _piBridgeThinkingOriginMatches(context, result) {
+        return (
+            this._piBridgeThinkingContextValid(context) &&
+            result?.provider === context.provider &&
+            result?.model === context.modelId &&
+            result?.generation === context.generation &&
+            typeof result?.process_id === 'string' &&
+            result.process_id.length > 0 &&
+            result.unavailable !== true &&
+            Array.isArray(result.levels) &&
+            result.levels.length > 0 &&
+            result.levels.length <= 7 &&
+            result.levels.every(
+                (level, index) =>
+                    ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(level) &&
+                    result.levels.indexOf(level) === index,
+            )
+        );
+    }
+
+    async _piBridgeThinkingLevels(paneId) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 1000);
+        try {
+            const response = await fetch(
+                `/api/pi-bridge/thinking-levels?pane=${encodeURIComponent(paneId)}`,
+                { signal: controller.signal },
+            );
+            if (!response.ok)
+                throw new Error(`Pi thinking levels unavailable (${response.status})`);
+            return await response.json();
+        } catch (error) {
+            if (error?.name === 'AbortError')
+                throw new Error('Pi thinking levels unavailable (request timed out)');
+            throw error;
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    async _piBridgeThinkingSet(context, level, origin) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 1000);
+        try {
+            const response = await fetch('/api/pi-bridge/thinking', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    pane: context.paneId,
+                    level,
+                    provider: context.provider,
+                    model: context.modelId,
+                    process_id: origin.process_id,
+                    generation: origin.generation,
+                }),
+                signal: controller.signal,
+            });
+            if (!response.ok) throw new Error('unknown — reopen the picker');
+            const result = await response.json();
+            if (result?.ok === true) return;
+            if (result?.reason === 'unsupported-level')
+                throw new Error('Thinking level is no longer supported');
+            if (result?.reason === 'model-changed')
+                throw new Error('Model changed — reopen the picker');
+            throw new Error('unknown — reopen the picker');
+        } catch (error) {
+            if (error?.name === 'AbortError')
+                throw new Error('unknown — reopen the picker');
+            throw error;
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    _cyclePiBridgeThinking(tab) {
+        if (this._piRpcThinkingPending?.paneId === tab?.paneId) return;
+        const context = this._piBridgeThinkingContext(tab);
+        if (!context) {
+            this._forwardKeyToPty(
+                { key: 'Tab', shiftKey: true, isComposing: false, preventDefault() {} },
+                tab,
+            );
+            return;
+        }
+        const operation = { paneId: tab.paneId, context, cycle: true };
+        this._piRpcThinkingPending = operation;
+        this._updatePiThinkingButton();
+        Promise.resolve(this._piBridgeThinkingLevels(context.paneId))
+            .then((result) => {
+                if (
+                    this._piRpcThinkingPending !== operation ||
+                    !this._piBridgeThinkingContextValid(context)
+                )
+                    return false;
+                if (!this._piBridgeThinkingOriginMatches(context, result))
+                    throw new Error('Pi thinking levels unavailable');
+                const index = result.levels.indexOf(tab.piBridge.thinking_level);
+                if (index < 0) {
+                    this._forwardKeyToPty(
+                        { key: 'Tab', shiftKey: true, isComposing: false, preventDefault() {} },
+                        tab,
+                    );
+                    return false;
+                }
+                const level = result.levels[(index + 1) % result.levels.length];
+                operation.level = level;
+                operation.setterStarted = true;
+                return this._piBridgeThinkingSet(context, level, result);
+            })
+            .then(() => {
+                if (this._piRpcThinkingPending === operation)
+                    this._piRpcThinkingPending = null;
+                if (this._piBridgeThinkingContextValid(context))
+                    this._updatePiThinkingButton();
+            })
+            .catch((error) => {
+                if (this._piRpcThinkingPending === operation)
+                    this._piRpcThinkingPending = null;
+                if (!this._piBridgeThinkingContextValid(context)) return;
+                if (!operation.setterStarted) {
+                    this._forwardKeyToPty(
+                        { key: 'Tab', shiftKey: true, isComposing: false, preventDefault() {} },
+                        tab,
+                    );
+                } else {
+                    this._piRpcError(error, 'Pi thinking');
+                }
+                this._updatePiThinkingButton();
+            });
+    }
+
+    _invalidatePiBridgeThinking(tab) {
+        if (this._piRpcThinkingPending?.paneId === tab?.paneId)
+            this._piRpcThinkingPending = null;
+        if (this.getActiveTab() !== tab) return;
+        this._piBridgeThinkingMenuRequest =
+            (this._piBridgeThinkingMenuRequest || 0) + 1;
+        const dropup = document.getElementById('pi-rpc-thinking-dropup');
+        dropup?.classList.add('hidden');
+        dropup?.replaceChildren();
+    }
+
     // Socket changes and bridge views share the same picker invalidation.
     _refreshPiBridgeModels(tab) {
         if (tab?.coder !== 'pi') return;
@@ -11514,7 +11840,37 @@ export class TabManager {
             !this._piBridgeModelsEligible(tab)
         )
             this._piRpcModelPending = null;
+        // Thinking cleanup first so the single renderPresets below owns the
+        // open-picker re-render with settled pending state (one levels fetch).
+        this._refreshPiBridgeThinking(tab, { skipDropup: true });
         if (this.getActiveTab() === tab) this.renderPresets('pi');
+    }
+
+    _refreshPiBridgeThinking(tab, { skipDropup = false } = {}) {
+        if (tab?.coder !== 'pi') return;
+        const pending = this._piRpcThinkingPending;
+        if (
+            pending?.paneId === tab.paneId &&
+            pending.context?.tab === tab &&
+            (tab.ws !== pending.context.socket ||
+                tab.piBridge?.generation !== pending.context.generation ||
+                tab.piBridge?.model !== pending.context.model ||
+                !this._piBridgeThinkingEligible(tab))
+        )
+            this._piRpcThinkingPending = null;
+        if (!this._piBridgeThinkingEligible(tab)) {
+            this._invalidatePiBridgeThinking(tab);
+            return;
+        }
+        if (this.getActiveTab() === tab) {
+            this._updatePiThinkingButton();
+            // renderPresets above already re-rendered the open picker on
+            // this path; a second render is a second levels fetch per frame.
+            if (skipDropup) return;
+            const dropup = document.getElementById('pi-rpc-thinking-dropup');
+            if (dropup && !dropup.classList.contains('hidden'))
+                this._renderPiRpcThinkingDropup();
+        }
     }
 
     // Both replies and fallback keys belong to the original runtime/socket.

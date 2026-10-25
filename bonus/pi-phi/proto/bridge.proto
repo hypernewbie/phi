@@ -39,6 +39,8 @@ message PiToPhi {
     HistoryResponse history_response = 17;
     ModelsResponse models_response = 18;
     SetModelAck set_model_ack = 19;
+    ThinkingLevelsResponse thinking_levels_response = 20;
+    SetThinkingAck set_thinking_ack = 21;
   }
 }
 
@@ -55,6 +57,8 @@ message PhiToPi {
     HistoryRequest history_request = 14;
     ModelsRequest models_request = 15;
     SetModelRequest set_model_request = 16;
+    ThinkingLevelsRequest thinking_levels_request = 17;
+    SetThinkingRequest set_thinking_request = 18;
   }
 }
 
@@ -147,6 +151,8 @@ message StateSnapshot {
   uint64 state_revision = 7;
   reserved 8;
   reserved "outstanding_summaries";
+  // Empty means unknown; it is never inferred to mean off.
+  string thinking_level = 9;
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +226,37 @@ message SetModelRequest {
 // session scope). A successful switch emits model_select, so the
 // current-model snapshot follows on its own.
 message SetModelAck {
+  string request_id = 1;
+  bool ok = 2;
+  string reason = 3;
+}
+
+// ThinkingLevelsRequest asks for levels supported by the live session model.
+message ThinkingLevelsRequest {
+  string request_id = 1;
+}
+
+// ThinkingLevelsResponse carries the supported levels and source model.
+// unavailable means the model or native helper could not be read safely.
+message ThinkingLevelsResponse {
+  string request_id = 1;
+  repeated string levels = 2;
+  string provider = 3;
+  string model = 4;
+  bool unavailable = 5;
+}
+
+// SetThinkingRequest sets one supported level on the expected live model.
+message SetThinkingRequest {
+  string request_id = 1;
+  string level = 2;
+  string provider = 3;
+  string model = 4;
+}
+
+// SetThinkingAck reports an effective native readback. reason is only
+// unsupported-level, model-changed, or empty for an unknown outcome.
+message SetThinkingAck {
   string request_id = 1;
   bool ok = 2;
   string reason = 3;

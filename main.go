@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"log/slog"
@@ -20,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hypernewbie/phi/internal/pibridge"
 	"github.com/hypernewbie/phi/pkg/bindaddr"
 	"github.com/hypernewbie/phi/pkg/coders"
 	"github.com/hypernewbie/phi/pkg/fleet"
@@ -346,6 +348,8 @@ func main() {
 	http.HandleFunc("/api/pi-history", handlePiBridgeHistory)
 	http.HandleFunc("/api/pi-bridge/models", handlePiBridgeModels)
 	http.HandleFunc("/api/pi-bridge/model", handlePiBridgeSetModel)
+	http.HandleFunc("/api/pi-bridge/thinking-levels", handlePiBridgeThinkingLevels)
+	http.HandleFunc("/api/pi-bridge/thinking", handlePiBridgeSetThinking)
 	http.HandleFunc("/api/attachments", handleAttachments)
 	http.HandleFunc("/api/clipboard", handleGetClipboard)
 	http.HandleFunc("/api/system/cpu", handleSystemCPU)
@@ -905,6 +909,96 @@ func handlePiBridgeModels(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"models": models, "truncated": res.Truncated, "unavailable": res.Unavailable})
+}
+
+// handlePiBridgeThinkingLevels returns the supported levels and the exact
+// process generation that answered. The origin must be echoed for setters.
+func handlePiBridgeThinkingLevels(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	paneID := r.URL.Query().Get("pane")
+	if paneID == "" || len(paneID) > 256 {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), piBridgeOnDemandTimeout)
+	defer cancel()
+	res, err := piBridge.RequestPaneThinkingLevels(ctx, paneID)
+	if err != nil {
+		http.Error(w, "pi thinking unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	levels := res.Levels
+	if levels == nil {
+		levels = []string{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"levels": levels, "provider": res.Provider, "model": res.Model,
+		"unavailable": res.Unavailable, "process_id": res.ProcessID,
+		"generation": strconv.FormatUint(res.Generation, 10),
+	})
+}
+
+func parseThinkingGeneration(value string) (uint64, bool) {
+	if value == "" || len(value) > 20 {
+		return 0, false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < '0' || value[i] > '9' {
+			return 0, false
+		}
+	}
+	generation, err := strconv.ParseUint(value, 10, 64)
+	return generation, err == nil && generation != 0
+}
+
+// handlePiBridgeSetThinking requires the process/generation origin from the
+// list response. Malformed or stale origins fail before mutation.
+func handlePiBridgeSetThinking(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Pane       string `json:"pane"`
+		Level      string `json:"level"`
+		Provider   string `json:"provider"`
+		Model      string `json:"model"`
+		ProcessID  string `json:"process_id"`
+		Generation string `json:"generation"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	generation, validGeneration := parseThinkingGeneration(body.Generation)
+	if body.Pane == "" || len(body.Pane) > 256 || body.ProcessID == "" || len(body.ProcessID) > 256 ||
+		!pibridge.IsThinkingLevel(body.Level) || len(body.Level) > 16 ||
+		body.Provider == "" || len(body.Provider) > 256 || body.Model == "" || len(body.Model) > 256 || !validGeneration {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), piBridgeOnDemandTimeout)
+	defer cancel()
+	res, err := piBridge.RequestPaneSetThinking(ctx, body.Pane, body.ProcessID, generation, body.Level, body.Provider, body.Model)
+	if err != nil {
+		http.Error(w, "pi thinking unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": res.OK, "reason": res.Reason})
 }
 
 // handlePiBridgeSetModel uses the existing API auth gate. The body

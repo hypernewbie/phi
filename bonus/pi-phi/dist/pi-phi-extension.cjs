@@ -24584,6 +24584,10 @@ var PROTOCOL_VERSION = 1;
 var CAPABILITY_LIFECYCLE = "pi.lifecycle.v1";
 var CAPABILITY_HISTORY = "pi.history.v1";
 var CAPABILITY_MODELS = "pi.models.v1";
+var CAPABILITY_THINKING = "pi.thinking.v1";
+var MAX_THINKING_LEVELS = 7;
+var MAX_THINKING_MODEL_ID_BYTES = 256;
+var MAX_THINKING_LEVEL_BYTES = 16;
 var MAX_MODELS_ENTRIES = 500;
 var LIFECYCLE_HEADROOM_BYTES = 16 * 1024;
 var LIFECYCLE_HEADROOM_MESSAGES = 2;
@@ -24701,6 +24705,21 @@ var BoundedQueue = class {
 
 // src/runtime.ts
 var import_node_crypto = require("node:crypto");
+
+// ../../node_modules/.pnpm/@earendil-works+pi-ai@1.0.1_@aws-sdk+credential-provider-node@3.972.84_@smithy+signatur_63728df7274c44e9f652e9f97f4c91c5/node_modules/@earendil-works/pi-ai/dist/models.js
+var EXTENDED_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+function getSupportedThinkingLevels(model) {
+  if (!model.reasoning)
+    return ["off"];
+  return EXTENDED_THINKING_LEVELS.filter((level) => {
+    const mapped = model.thinkingLevelMap?.[level];
+    if (mapped === null)
+      return false;
+    if (level === "xhigh" || level === "max")
+      return mapped !== void 0;
+    return true;
+  });
+}
 
 // ../../node_modules/.pnpm/@bufbuild+protobuf@2.14.1/node_modules/@bufbuild/protobuf/dist/esm/wire/varint.js
 function varint64read() {
@@ -25628,6 +25647,12 @@ var PiToPhi = {
       case "setModelAck":
         SetModelAck.encode(message.payload.value, writer.uint32(154).fork()).join();
         break;
+      case "thinkingLevelsResponse":
+        ThinkingLevelsResponse.encode(message.payload.value, writer.uint32(162).fork()).join();
+        break;
+      case "setThinkingAck":
+        SetThinkingAck.encode(message.payload.value, writer.uint32(170).fork()).join();
+        break;
     }
     return writer;
   },
@@ -25714,6 +25739,23 @@ var PiToPhi = {
             message.payload = { $case: "setModelAck", value: SetModelAck.decode(reader, reader.uint32()) };
             continue;
           }
+          case 20: {
+            if (tag !== 162) {
+              break;
+            }
+            message.payload = {
+              $case: "thinkingLevelsResponse",
+              value: ThinkingLevelsResponse.decode(reader, reader.uint32())
+            };
+            continue;
+          }
+          case 21: {
+            if (tag !== 170) {
+              break;
+            }
+            message.payload = { $case: "setThinkingAck", value: SetThinkingAck.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -25776,6 +25818,21 @@ var PiToPhi = {
         }
         break;
       }
+      case "thinkingLevelsResponse": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = {
+            $case: "thinkingLevelsResponse",
+            value: ThinkingLevelsResponse.fromPartial(object.payload.value)
+          };
+        }
+        break;
+      }
+      case "setThinkingAck": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = { $case: "setThinkingAck", value: SetThinkingAck.fromPartial(object.payload.value) };
+        }
+        break;
+      }
     }
     return message;
   }
@@ -25812,6 +25869,12 @@ var PhiToPi = {
         break;
       case "setModelRequest":
         SetModelRequest.encode(message.payload.value, writer.uint32(130).fork()).join();
+        break;
+      case "thinkingLevelsRequest":
+        ThinkingLevelsRequest.encode(message.payload.value, writer.uint32(138).fork()).join();
+        break;
+      case "setThinkingRequest":
+        SetThinkingRequest.encode(message.payload.value, writer.uint32(146).fork()).join();
         break;
     }
     return writer;
@@ -25885,6 +25948,26 @@ var PhiToPi = {
             message.payload = { $case: "setModelRequest", value: SetModelRequest.decode(reader, reader.uint32()) };
             continue;
           }
+          case 17: {
+            if (tag !== 138) {
+              break;
+            }
+            message.payload = {
+              $case: "thinkingLevelsRequest",
+              value: ThinkingLevelsRequest.decode(reader, reader.uint32())
+            };
+            continue;
+          }
+          case 18: {
+            if (tag !== 146) {
+              break;
+            }
+            message.payload = {
+              $case: "setThinkingRequest",
+              value: SetThinkingRequest.decode(reader, reader.uint32())
+            };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -25932,6 +26015,24 @@ var PhiToPi = {
       case "setModelRequest": {
         if (object.payload?.value !== void 0 && object.payload?.value !== null) {
           message.payload = { $case: "setModelRequest", value: SetModelRequest.fromPartial(object.payload.value) };
+        }
+        break;
+      }
+      case "thinkingLevelsRequest": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = {
+            $case: "thinkingLevelsRequest",
+            value: ThinkingLevelsRequest.fromPartial(object.payload.value)
+          };
+        }
+        break;
+      }
+      case "setThinkingRequest": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = {
+            $case: "setThinkingRequest",
+            value: SetThinkingRequest.fromPartial(object.payload.value)
+          };
         }
         break;
       }
@@ -26451,7 +26552,16 @@ var ModelSnapshot = {
   }
 };
 function createBaseStateSnapshot() {
-  return { state: 0, sessionId: "", leafId: "", model: void 0, journal: [], journalGap: false, stateRevision: 0n };
+  return {
+    state: 0,
+    sessionId: "",
+    leafId: "",
+    model: void 0,
+    journal: [],
+    journalGap: false,
+    stateRevision: 0n,
+    thinkingLevel: ""
+  };
 }
 var StateSnapshot = {
   encode(message, writer = new BinaryWriter()) {
@@ -26478,6 +26588,9 @@ var StateSnapshot = {
         throw new globalThis.Error("value provided for field message.stateRevision of type uint64 too large");
       }
       writer.uint32(56).uint64(message.stateRevision);
+    }
+    if (message.thinkingLevel !== "") {
+      writer.uint32(74).string(message.thinkingLevel);
     }
     return writer;
   },
@@ -26543,6 +26656,13 @@ var StateSnapshot = {
             message.stateRevision = reader.uint64();
             continue;
           }
+          case 9: {
+            if (tag !== 74) {
+              break;
+            }
+            message.thinkingLevel = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -26566,6 +26686,7 @@ var StateSnapshot = {
     message.journal = object.journal?.map((e) => LifecycleRecord.fromPartial(e)) || [];
     message.journalGap = object.journalGap ?? false;
     message.stateRevision = object.stateRevision !== void 0 && object.stateRevision !== null ? BigInt(object.stateRevision) : 0n;
+    message.thinkingLevel = object.thinkingLevel ?? "";
     return message;
   }
 };
@@ -27029,6 +27150,305 @@ var SetModelAck = {
     return message;
   }
 };
+function createBaseThinkingLevelsRequest() {
+  return { requestId: "" };
+}
+var ThinkingLevelsRequest = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseThinkingLevelsRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return ThinkingLevelsRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseThinkingLevelsRequest();
+    message.requestId = object.requestId ?? "";
+    return message;
+  }
+};
+function createBaseThinkingLevelsResponse() {
+  return { requestId: "", levels: [], provider: "", model: "", unavailable: false };
+}
+var ThinkingLevelsResponse = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    for (const v of message.levels) {
+      writer.uint32(18).string(v);
+    }
+    if (message.provider !== "") {
+      writer.uint32(26).string(message.provider);
+    }
+    if (message.model !== "") {
+      writer.uint32(34).string(message.model);
+    }
+    if (message.unavailable !== false) {
+      writer.uint32(40).bool(message.unavailable);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseThinkingLevelsResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+            message.levels.push(reader.string());
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+            message.provider = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+            message.model = reader.string();
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+            message.unavailable = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return ThinkingLevelsResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseThinkingLevelsResponse();
+    message.requestId = object.requestId ?? "";
+    message.levels = object.levels?.map((e) => e) || [];
+    message.provider = object.provider ?? "";
+    message.model = object.model ?? "";
+    message.unavailable = object.unavailable ?? false;
+    return message;
+  }
+};
+function createBaseSetThinkingRequest() {
+  return { requestId: "", level: "", provider: "", model: "" };
+}
+var SetThinkingRequest = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.level !== "") {
+      writer.uint32(18).string(message.level);
+    }
+    if (message.provider !== "") {
+      writer.uint32(26).string(message.provider);
+    }
+    if (message.model !== "") {
+      writer.uint32(34).string(message.model);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseSetThinkingRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+            message.level = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+            message.provider = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+            message.model = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return SetThinkingRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseSetThinkingRequest();
+    message.requestId = object.requestId ?? "";
+    message.level = object.level ?? "";
+    message.provider = object.provider ?? "";
+    message.model = object.model ?? "";
+    return message;
+  }
+};
+function createBaseSetThinkingAck() {
+  return { requestId: "", ok: false, reason: "" };
+}
+var SetThinkingAck = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.ok !== false) {
+      writer.uint32(16).bool(message.ok);
+    }
+    if (message.reason !== "") {
+      writer.uint32(26).string(message.reason);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseSetThinkingAck();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+            message.ok = reader.bool();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return SetThinkingAck.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseSetThinkingAck();
+    message.requestId = object.requestId ?? "";
+    message.ok = object.ok ?? false;
+    message.reason = object.reason ?? "";
+    return message;
+  }
+};
 function createBaseProtocolError() {
   return { code: 0, safeMessage: "" };
 }
@@ -27412,12 +27832,14 @@ var Runtime = class {
   sessionId = "";
   leafId = "";
   model;
+  view;
   registry;
   scopedModels = [];
   /** Latest UI surface for history reads; refreshed on every event. */
   ui;
   historyAccepted = false;
   modelsAccepted = false;
+  thinkingAccepted = false;
   /** Final assistant stop reason of the current run, if observed. */
   lastStopReason = null;
   /** When the current stream was accepted; null while connecting. */
@@ -27537,6 +27959,14 @@ var Runtime = class {
       this.running ? 2 /* LOGICAL_STATE_RUNNING */ : 1 /* LOGICAL_STATE_IDLE */
     );
   }
+  /** A native thinking-level change refreshes the authoritative snapshot. */
+  onThinkingLevelSelect(ctx) {
+    if (this.shutdownRequested) return;
+    this.noteView(ctx);
+    this.sendSnapshot(
+      this.running ? 2 /* LOGICAL_STATE_RUNNING */ : 1 /* LOGICAL_STATE_IDLE */
+    );
+  }
   /** Tree navigation refreshes identities and the snapshot. */
   onSessionTree(ctx) {
     if (this.shutdownRequested) return;
@@ -27581,6 +28011,7 @@ var Runtime = class {
     this.refreshIdentities(ctx);
   }
   refreshIdentities(ctx) {
+    this.view = ctx;
     try {
       this.sessionId = ctx.sessionManager.getSessionId();
     } catch {
@@ -27605,6 +28036,49 @@ var Runtime = class {
       this.journalGap = true;
     }
   }
+  liveModel() {
+    try {
+      return this.view?.model;
+    } catch {
+      return void 0;
+    }
+  }
+  modelIdentity(model) {
+    try {
+      const provider = model?.provider;
+      const id = model?.id;
+      if (typeof provider !== "string" || provider === "" || Buffer.byteLength(provider, "utf8") > MAX_THINKING_MODEL_ID_BYTES || typeof id !== "string" || id === "" || Buffer.byteLength(id, "utf8") > MAX_THINKING_MODEL_ID_BYTES)
+        return null;
+      return { provider, model: id };
+    } catch {
+      return null;
+    }
+  }
+  supportedThinkingLevels(model) {
+    try {
+      const levels = getSupportedThinkingLevels(model);
+      if (levels.length > MAX_THINKING_LEVELS || new Set(levels).size !== levels.length || levels.some(
+        (level) => Buffer.byteLength(level, "utf8") > MAX_THINKING_LEVEL_BYTES
+      ))
+        return null;
+      return levels;
+    } catch {
+      return null;
+    }
+  }
+  currentThinkingLevel() {
+    const model = this.liveModel();
+    const identity = this.modelIdentity(model);
+    if (!model || !identity || !this.opts.getThinkingLevel) return "";
+    const levels = this.supportedThinkingLevels(model);
+    if (!levels) return "";
+    try {
+      const level = this.opts.getThinkingLevel();
+      return levels.includes(level) ? level : "";
+    } catch {
+      return "";
+    }
+  }
   snapshot(state) {
     this.revision += 1n;
     return StateSnapshot.create({
@@ -27622,7 +28096,8 @@ var Runtime = class {
         outcome: row.outcome
       })),
       journalGap: this.journalGap,
-      stateRevision: this.revision
+      stateRevision: this.revision,
+      thinkingLevel: this.currentThinkingLevel()
     });
   }
   /**
@@ -27636,6 +28111,8 @@ var Runtime = class {
   capabilities() {
     const caps = [CAPABILITY_LIFECYCLE, CAPABILITY_MODELS];
     if (isHistoryReaderAvailable(this.ui)) caps.push(CAPABILITY_HISTORY);
+    if (this.opts.getThinkingLevel && this.opts.setThinkingLevel)
+      caps.push(CAPABILITY_THINKING);
     return caps;
   }
   hello() {
@@ -27683,6 +28160,7 @@ var Runtime = class {
     const make = this.opts.makeChannel ?? ((creds, hooks) => new BridgeChannel(creds, hooks));
     this.historyAccepted = false;
     this.modelsAccepted = false;
+    this.thinkingAccepted = false;
     const channel = make(this.opts.creds, {
       onMessage: (msg) => {
         if (this.channel === channel && !this.shutdownRequested)
@@ -27699,6 +28177,7 @@ var Runtime = class {
       if (this.channel === channel) {
         this.historyAccepted = accepted.capabilities.includes(CAPABILITY_HISTORY);
         this.modelsAccepted = accepted.capabilities.includes(CAPABILITY_MODELS);
+        this.thinkingAccepted = accepted.capabilities.includes(CAPABILITY_THINKING);
       }
     } catch (err) {
       channel.close();
@@ -27727,6 +28206,10 @@ var Runtime = class {
     } else if (msg.payload?.$case === "setModelRequest" && this.modelsAccepted) {
       const req = msg.payload.value;
       void this.onSetModelRequest(req.requestId, req.provider, req.model);
+    } else if (msg.payload?.$case === "thinkingLevelsRequest" && this.thinkingAccepted) {
+      this.onThinkingLevelsRequest(msg.payload.value.requestId);
+    } else if (msg.payload?.$case === "setThinkingRequest" && this.thinkingAccepted) {
+      this.onSetThinkingRequest(msg.payload.value);
     }
   }
   /**
@@ -27787,6 +28270,108 @@ var Runtime = class {
       if (sent?.$case === "modelsResponse" && !sent.value.unavailable) {
         this.channel.sendNonfatal(this.modelsResponse(requestId, null));
       }
+    }
+  }
+  onThinkingLevelsRequest(requestId) {
+    if (typeof requestId !== "string" || requestId === "" || !this.channel)
+      return;
+    const model = this.liveModel();
+    const identity = this.modelIdentity(model);
+    const levels = model && identity ? this.supportedThinkingLevels(model) : null;
+    let msg = this.thinkingLevelsResponse(requestId, identity, levels);
+    if (PiToPhi.encode(msg).finish().length > MAX_MESSAGE_BYTES) {
+      msg = this.thinkingLevelsResponse(requestId, identity, null);
+    }
+    if (!this.channel.sendNonfatal(msg)) {
+      const sent = msg.payload;
+      if (sent?.$case === "thinkingLevelsResponse" && !sent.value.unavailable) {
+        this.channel.sendNonfatal(
+          this.thinkingLevelsResponse(requestId, identity, null)
+        );
+      }
+    }
+  }
+  thinkingLevelsResponse(requestId, identity, levels) {
+    return {
+      paneId: this.opts.creds.pane,
+      processId: this.opts.creds.process,
+      runtimeGeneration: this.opts.generation,
+      payload: {
+        $case: "thinkingLevelsResponse",
+        value: ThinkingLevelsResponse.create({
+          requestId,
+          levels: levels ?? [],
+          provider: identity?.provider ?? "",
+          model: identity?.model ?? "",
+          unavailable: levels === null
+        })
+      }
+    };
+  }
+  onSetThinkingRequest(request) {
+    const { requestId, level, provider, model } = request;
+    if (typeof requestId !== "string" || requestId === "" || !this.channel)
+      return;
+    const ack = (ok, reason) => {
+      this.channel?.sendNonfatal({
+        paneId: this.opts.creds.pane,
+        processId: this.opts.creds.process,
+        runtimeGeneration: this.opts.generation,
+        payload: {
+          $case: "setThinkingAck",
+          value: SetThinkingAck.create({ requestId, ok, reason })
+        }
+      });
+    };
+    if (typeof level !== "string" || Buffer.byteLength(level, "utf8") > MAX_THINKING_LEVEL_BYTES) {
+      ack(false, "unsupported-level");
+      return;
+    }
+    if (typeof provider !== "string" || typeof model !== "string" || Buffer.byteLength(provider, "utf8") > MAX_THINKING_MODEL_ID_BYTES || Buffer.byteLength(model, "utf8") > MAX_THINKING_MODEL_ID_BYTES) {
+      ack(false, "model-changed");
+      return;
+    }
+    const matchesExpected = (candidate) => {
+      const identity = this.modelIdentity(candidate);
+      return identity?.provider === provider && identity.model === model;
+    };
+    let current = this.liveModel();
+    if (!matchesExpected(current)) {
+      ack(false, "model-changed");
+      return;
+    }
+    let levels = this.supportedThinkingLevels(current);
+    if (!levels) {
+      ack(false, "");
+      return;
+    }
+    if (!levels.includes(level)) {
+      ack(false, "unsupported-level");
+      return;
+    }
+    current = this.liveModel();
+    if (!matchesExpected(current)) {
+      ack(false, "model-changed");
+      return;
+    }
+    levels = this.supportedThinkingLevels(current);
+    if (!levels) {
+      ack(false, "");
+      return;
+    }
+    if (!levels.includes(level)) {
+      ack(false, "unsupported-level");
+      return;
+    }
+    try {
+      if (!this.opts.getThinkingLevel || !this.opts.setThinkingLevel) {
+        ack(false, "");
+        return;
+      }
+      this.opts.setThinkingLevel(level);
+      ack(this.opts.getThinkingLevel() === level, "");
+    } catch {
+      ack(false, "");
     }
   }
   /** Selectable catalog: scoped entries win when scoping is set. */
@@ -27979,10 +28564,15 @@ function createExtension(pi, deps = {}) {
   let runtime = null;
   let claimed = false;
   let sessionId = null;
+  const nativeThinking = pi;
+  const getThinkingLevel = typeof nativeThinking.getThinkingLevel === "function" ? () => nativeThinking.getThinkingLevel() : void 0;
+  const setThinkingLevel = typeof nativeThinking.setThinkingLevel === "function" ? (level) => nativeThinking.setThinkingLevel(level) : void 0;
   const make = deps.makeRuntime ?? ((c, g) => new Runtime({
     creds: c,
     generation: g,
-    setModel: (model) => pi.setModel(model)
+    setModel: (model) => pi.setModel(model),
+    ...getThinkingLevel ? { getThinkingLevel } : {},
+    ...setThinkingLevel ? { setThinkingLevel } : {}
   }));
   pi.on("session_start", (_event, ctx) => {
     const slot = ownerSlot();
@@ -28042,6 +28632,9 @@ function createExtension(pi, deps = {}) {
   });
   pi.on("model_select", (_event, ctx) => {
     runtime?.onModelSelect(contextView(ctx));
+  });
+  pi.on("thinking_level_select", (_event, ctx) => {
+    runtime?.onThinkingLevelSelect(contextView(ctx));
   });
   pi.on("session_tree", (_event, ctx) => {
     runtime?.onSessionTree(contextView(ctx));
