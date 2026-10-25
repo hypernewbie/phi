@@ -162,6 +162,9 @@ export function getTerminalTheme(
 // Pi thinking levels — bonus/pi_themes/phi_violet.json colors:
 //  off darkGray #252525 → minimal gray #474747 → low #6d28d9 → medium #ddd6fe → high #a78bfa → xhigh white #e3e3e4
 const PI_THINKING_ORDER = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+// Bridge protocol vocabulary (includes max); PI_THINKING_ORDER above is the
+// legacy display order where max aliases to xhigh. Keep the two separate.
+const PI_BRIDGE_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 const PI_THINKING_ALIASES = {
     max: 'xhigh',
     none: 'off',
@@ -4532,7 +4535,7 @@ export class TabManager {
                 : '';
             const known =
                 typeof level === 'string' &&
-                ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(level);
+                PI_BRIDGE_THINKING_LEVELS.includes(level);
             const cls = known ? thinkingLevelClass(level) : '';
             const pending = this._piRpcThinkingPending?.paneId === tab.paneId;
             this.piThinkingBtn.className = `direct-mode-btn pi-thinking-btn${cls ? ` pi-thinking-btn--${cls}` : ''}${pending ? ' disabled' : ''}`;
@@ -4579,15 +4582,7 @@ export class TabManager {
             if (this._piBridgeThinkingEligible(tab)) {
                 this._cyclePiBridgeThinking(tab);
             } else {
-                this._forwardKeyToPty(
-                    {
-                        key: 'Tab',
-                        shiftKey: true,
-                        isComposing: false,
-                        preventDefault() {},
-                    },
-                    tab,
-                );
+                this._forwardNativeThinkingCycle(tab);
             }
             return;
         }
@@ -11704,7 +11699,7 @@ export class TabManager {
             result.levels.length <= 7 &&
             result.levels.every(
                 (level, index) =>
-                    ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(level) &&
+                    PI_BRIDGE_THINKING_LEVELS.includes(level) &&
                     result.levels.indexOf(level) === index,
             )
         );
@@ -11764,14 +11759,18 @@ export class TabManager {
         }
     }
 
+    _forwardNativeThinkingCycle(tab) {
+        this._forwardKeyToPty(
+            { key: 'Tab', shiftKey: true, isComposing: false, preventDefault() {} },
+            tab,
+        );
+    }
+
     _cyclePiBridgeThinking(tab) {
         if (this._piRpcThinkingPending?.paneId === tab?.paneId) return;
         const context = this._piBridgeThinkingContext(tab);
         if (!context) {
-            this._forwardKeyToPty(
-                { key: 'Tab', shiftKey: true, isComposing: false, preventDefault() {} },
-                tab,
-            );
+            this._forwardNativeThinkingCycle(tab);
             return;
         }
         const operation = { paneId: tab.paneId, context, cycle: true };
@@ -11788,10 +11787,7 @@ export class TabManager {
                     throw new Error('Pi thinking levels unavailable');
                 const index = result.levels.indexOf(tab.piBridge.thinking_level);
                 if (index < 0) {
-                    this._forwardKeyToPty(
-                        { key: 'Tab', shiftKey: true, isComposing: false, preventDefault() {} },
-                        tab,
-                    );
+                    this._forwardNativeThinkingCycle(tab);
                     return false;
                 }
                 const level = result.levels[(index + 1) % result.levels.length];
@@ -11810,10 +11806,7 @@ export class TabManager {
                     this._piRpcThinkingPending = null;
                 if (!this._piBridgeThinkingContextValid(context)) return;
                 if (!operation.setterStarted) {
-                    this._forwardKeyToPty(
-                        { key: 'Tab', shiftKey: true, isComposing: false, preventDefault() {} },
-                        tab,
-                    );
+                    this._forwardNativeThinkingCycle(tab);
                 } else {
                     this._piRpcError(error, 'Pi thinking');
                 }
@@ -11842,11 +11835,13 @@ export class TabManager {
             this._piRpcModelPending = null;
         // Thinking cleanup first so the single renderPresets below owns the
         // open-picker re-render with settled pending state (one levels fetch).
-        this._refreshPiBridgeThinking(tab, { skipDropup: true });
+        this._refreshPiBridgeThinking(tab);
         if (this.getActiveTab() === tab) this.renderPresets('pi');
     }
 
-    _refreshPiBridgeThinking(tab, { skipDropup = false } = {}) {
+    // Cleanup only; the open-picker re-render is owned by renderPresets
+    // (via _refreshPiBridgeModels), one levels fetch per frame.
+    _refreshPiBridgeThinking(tab) {
         if (tab?.coder !== 'pi') return;
         const pending = this._piRpcThinkingPending;
         if (
@@ -11862,15 +11857,7 @@ export class TabManager {
             this._invalidatePiBridgeThinking(tab);
             return;
         }
-        if (this.getActiveTab() === tab) {
-            this._updatePiThinkingButton();
-            // renderPresets above already re-rendered the open picker on
-            // this path; a second render is a second levels fetch per frame.
-            if (skipDropup) return;
-            const dropup = document.getElementById('pi-rpc-thinking-dropup');
-            if (dropup && !dropup.classList.contains('hidden'))
-                this._renderPiRpcThinkingDropup();
-        }
+        if (this.getActiveTab() === tab) this._updatePiThinkingButton();
     }
 
     // Both replies and fallback keys belong to the original runtime/socket.

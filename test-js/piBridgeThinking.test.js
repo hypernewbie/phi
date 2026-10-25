@@ -156,7 +156,7 @@ describe('Pi bridge Thinking controls', () => {
 
         // Telemetry arrives between setter dispatch and ack, re-rendering the
         // open picker and reassigning _piBridgeThinkingMenuRequest (BA-02).
-        tm._refreshPiBridgeThinking(tab);
+        tm._refreshPiBridgeModels(tab);
         await vi.waitFor(() =>
             expect(
                 [...dropup.querySelectorAll('.dropup-model-btn')].map(
@@ -281,7 +281,7 @@ describe('Pi bridge Thinking controls', () => {
         await vi.waitFor(() => expect(finishSet).toBeTypeOf('function'));
 
         tab.piBridge.generation = '10';
-        tm._refreshPiBridgeThinking(tab);
+        tm._refreshPiBridgeModels(tab);
         finishSet();
         await Promise.resolve();
         await Promise.resolve();
@@ -307,7 +307,7 @@ describe('Pi bridge Thinking controls', () => {
         await vi.waitFor(() => expect(finishOld).toBeTypeOf('function'));
 
         tab.piBridge.model = 'a/y';
-        tm._refreshPiBridgeThinking(tab);
+        tm._refreshPiBridgeModels(tab);
         await vi.waitFor(() => expect(call).toBe(2));
         finishOld();
         await vi.waitFor(() =>
