@@ -502,6 +502,35 @@ describe('settings disable', () => {
         expect(readCredsFromEnv()).toBeNull();
     });
 
+    it('revokes the reload capability when the disable becomes visible', () => {
+        setEnv();
+        let settings: unknown = {};
+        const { pi, handlers, sendUserMessage } = mockPiWithReload();
+        (pi as unknown as Record<string, unknown>)['getSettings'] = () =>
+            settings;
+        const rec = recordingRuntime();
+        let reload: ReloadCommand | undefined;
+        createExtension(pi, {
+            makeRuntime: (_creds, _generation, reloadCommand) => {
+                reload = reloadCommand;
+                return rec.runtime;
+            },
+        });
+        handlers.get('session_start')!({}, mockCtxWithSession('s1') as never);
+        expect(reload?.isAvailable()).toBe(true);
+        expect(reload?.dispatch()).toBe(true);
+        sendUserMessage.mockClear();
+        settings = { phiBridge: { enabled: false } };
+        handlers.get('session_start')!({}, mockCtxWithSession('s2') as never);
+        // The command stays registered in Pi, but the disabled runtime
+        // must neither advertise nor dispatch the capability.
+        expect(reload?.isAvailable()).toBe(false);
+        expect(reload?.dispatch()).toBe(false);
+        expect(sendUserMessage).not.toHaveBeenCalled();
+        expect(rec.calls).toEqual(['start', 'shutdown']);
+        expect(readCredsFromEnv()).toBeNull();
+    });
+
     it('starts when enabled, missing, or unreadable', () => {
         for (const settings of [
             { phiBridge: { enabled: true } },

@@ -15,18 +15,22 @@ func (s *Server) RequestReload(processID string) error {
 		return fmt.Errorf("pibridge: unknown process")
 	}
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	p := l.peer
 	if p == nil || l.state == leaseRevoked {
+		l.mu.Unlock()
 		return fmt.Errorf("pibridge: no live peer")
 	}
 	if !slices.Contains(l.caps, CapabilityReload) {
+		l.mu.Unlock()
 		return fmt.Errorf("pibridge: reload capability not negotiated")
 	}
+	pane, proc, gen := l.paneID, l.processID, p.generation
+	l.mu.Unlock()
+
 	msg := &pibridgepb.PhiToPi{
-		PaneId:            l.paneID,
-		ProcessId:         l.processID,
-		RuntimeGeneration: p.generation,
+		PaneId:            pane,
+		ProcessId:         proc,
+		RuntimeGeneration: gen,
 		Payload:           &pibridgepb.PhiToPi_ReloadRequest{ReloadRequest: &pibridgepb.ReloadRequest{}},
 	}
 	if !p.sendNonfatal(msg) {

@@ -1163,6 +1163,8 @@ func TestHandlePiBridgeReload(t *testing.T) {
 		`{"pane":""}`,
 		`{"pane":"` + strings.Repeat("x", 257) + `"}`,
 		`{"pane":"` + strings.Repeat("y", 2000) + `"}`,
+		// The pane is valid, so only the 1 KiB body cap rejects this.
+		`{"pane":"p"}` + strings.Repeat(" ", 2000),
 	} {
 		if rec := serve(http.MethodPost, body); rec.Code != http.StatusBadRequest {
 			t.Fatalf("body %q code %d, want 400", body, rec.Code)
