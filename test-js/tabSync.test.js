@@ -316,6 +316,28 @@ describe('TabManager syncTabs and client-side lifecycle', () => {
             expect(tm.tabs.has('pi-rpc-1')).toBe(true);
             expect(tm.tabs.has('server-live')).toBe(true);
         });
+
+        it('restores saved phi_active_pane even when createTab creates multiple tabs', async () => {
+            const tm = makeTm();
+            tm._connectTabSocket = vi.fn();
+            tm.switchTab = vi.fn((paneId) => {
+                tm.activePaneId = paneId;
+                tm.saveTabsState();
+            });
+            localStorage.setItem(serverKey('phi_active_pane'), 't1');
+
+            await tm.syncTabs(
+                [
+                    { id: 't1', coder: 'shell', title: 'First' },
+                    { id: 't2', coder: 'shell', title: 'Second' },
+                    { id: 't3', coder: 'shell', title: 'Third' },
+                ],
+                { live: true },
+            );
+
+            expect(tm.activePaneId).toBe('t1');
+            expect(localStorage.getItem(serverKey('phi_active_pane'))).toBe('t1');
+        });
     });
 
     describe('serverKey localStorage scoping', () => {

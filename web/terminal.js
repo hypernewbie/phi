@@ -1196,6 +1196,7 @@ export class TabManager {
 
     async syncTabs(instances = [], { live = true, screens = null } = {}) {
         this.restoringTabs = true;
+        const savedActive = localStorage.getItem(serverKey('phi_active_pane')) || '';
         try {
             const serverIds = new Set(instances.map((t) => t.id ?? t.paneId));
             for (const [paneId, tab] of Array.from(this.tabs.entries())) {
@@ -1250,13 +1251,18 @@ export class TabManager {
             }
             this.restorePiRpcTabs();
             this.applySavedTabOrder();
-            const savedActive = localStorage.getItem(serverKey('phi_active_pane')) || '';
             if (savedActive && this.tabs.has(savedActive)) {
                 this.switchTab(savedActive);
             } else if (instances.length > 0) {
                 this.switchTab(instances[0].id ?? instances[0].paneId);
+                if (!live && savedActive) {
+                    try { localStorage.setItem(serverKey('phi_active_pane'), savedActive); } catch {}
+                }
             } else if (this.tabs.size > 0) {
                 this.switchTab(Array.from(this.tabs.keys())[0]);
+                if (!live && savedActive) {
+                    try { localStorage.setItem(serverKey('phi_active_pane'), savedActive); } catch {}
+                }
             } else {
                 this.showEmptyState();
             }
