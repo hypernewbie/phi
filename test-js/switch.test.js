@@ -38,11 +38,14 @@ function setupVendorStubs() {
     vi.stubGlobal('WebglAddon', {
         WebglAddon: class {},
     });
-    vi.stubGlobal('Audio', class {
-        play() {
-            return Promise.resolve();
-        }
-    });
+    vi.stubGlobal(
+        'Audio',
+        class {
+            play() {
+                return Promise.resolve();
+            }
+        },
+    );
     vi.stubGlobal('Terminal', function () {
         const rootEl = document.createElement('div');
         const viewportEl = document.createElement('div');
@@ -102,7 +105,10 @@ describe('Single-Tab Embedded Backend Switching', () => {
         const fetchStub = mockFetch((url, opts) => {
             fetchCalls.push({ url, opts });
             if (url === '/api/version') {
-                return { version: '0.12.0', started_at: '2026-10-24T12:00:00Z' };
+                return {
+                    version: '0.12.0',
+                    started_at: '2026-10-24T12:00:00Z',
+                };
             }
             if (url === '/api/coders') {
                 return [];
@@ -181,11 +187,16 @@ describe('Single-Tab Embedded Backend Switching', () => {
         if (sidebar) sidebar.classList.add('drawer-open');
 
         // Perform switch to profile-beta
-        const switchPromise = window.__phiEmbed.switchTo('profile-beta', 'http://127.0.0.1:9090');
+        const switchPromise = window.__phiEmbed.switchTo(
+            'profile-beta',
+            'http://127.0.0.1:9090',
+        );
         await switchPromise;
 
         // 1. detachAll called with prevProfileId to flush old tabs
-        expect(detachSpy).toHaveBeenCalledWith({ flushBackendId: 'profile-alpha' });
+        expect(detachSpy).toHaveBeenCalledWith({
+            flushBackendId: 'profile-alpha',
+        });
 
         // 2. Active profile & origin updated
         expect(getEmbeddedProfileId()).toBe('profile-beta');
@@ -201,11 +212,14 @@ describe('Single-Tab Embedded Backend Switching', () => {
         const activeCall = fetchCalls.find((c) => c.url === '/__phi/active');
         expect(activeCall).toBeDefined();
         expect(activeCall.opts.method).toBe('POST');
-        expect(JSON.parse(activeCall.opts.body)).toEqual({ profileId: 'profile-beta' });
+        expect(JSON.parse(activeCall.opts.body)).toEqual({
+            profileId: 'profile-beta',
+        });
 
         // 5. revalidate was called with the new scope
         expect(revalidateSpy).toHaveBeenCalled();
-        const lastScope = revalidateSpy.mock.calls[revalidateSpy.mock.calls.length - 1][0];
+        const lastScope =
+            revalidateSpy.mock.calls[revalidateSpy.mock.calls.length - 1][0];
         expect(lastScope.profileId).toBe('profile-beta');
         expect(lastScope.origin).toBe('http://127.0.0.1:9090');
 
@@ -269,26 +283,40 @@ describe('Single-Tab Embedded Backend Switching', () => {
         localStorage.setItem('phi_theme_color', 'blue');
 
         // When ?profile=srv-prod is in URL
-        window.history.replaceState(null, '', '?desktop=1&embedded=1&profile=srv-prod');
+        window.history.replaceState(
+            null,
+            '',
+            '?desktop=1&embedded=1&profile=srv-prod',
+        );
         runPrepaint();
-        expect(document.documentElement.getAttribute('data-theme-color')).toBe('coral');
+        expect(document.documentElement.getAttribute('data-theme-color')).toBe(
+            'coral',
+        );
 
         // When URL has no profile, but embedded profile is set in runtime
         window.history.replaceState(null, '', '?desktop=1&embedded=1');
         setEmbeddedBackend('srv-prod', '');
         document.documentElement.removeAttribute('data-theme-color');
         runPrepaint();
-        expect(document.documentElement.getAttribute('data-theme-color')).toBe('coral');
+        expect(document.documentElement.getAttribute('data-theme-color')).toBe(
+            'coral',
+        );
 
         // When no embedded profile, falls back to global phi_theme_color
         setEmbeddedBackend('', '');
         document.documentElement.removeAttribute('data-theme-color');
         runPrepaint();
-        expect(document.documentElement.getAttribute('data-theme-color')).toBe('blue');
+        expect(document.documentElement.getAttribute('data-theme-color')).toBe(
+            'blue',
+        );
     });
 
     it('Test 6: App constructor ingests ?profile= and ?origin= from URL search', () => {
-        window.history.replaceState(null, '', '?profile=srv-boot&origin=http%3A%2F%2Fboot-host%3A9999');
+        window.history.replaceState(
+            null,
+            '',
+            '?profile=srv-boot&origin=http%3A%2F%2Fboot-host%3A9999',
+        );
         app = new App();
 
         expect(getEmbeddedProfileId()).toBe('srv-boot');
@@ -311,10 +339,14 @@ describe('Single-Tab Embedded Backend Switching', () => {
         app = new App();
 
         app.applyAccentTheme('emerald');
-        expect(localStorage.getItem('phi_theme_color:scoped-srv')).toBe('emerald');
+        expect(localStorage.getItem('phi_theme_color:scoped-srv')).toBe(
+            'emerald',
+        );
 
         await app.loadVersion(app.scope);
-        expect(localStorage.getItem('phi_server_started_at:scoped-srv')).toBe('2026-10-24T12:00:00Z');
+        expect(localStorage.getItem('phi_server_started_at:scoped-srv')).toBe(
+            '2026-10-24T12:00:00Z',
+        );
     });
 
     it('Test 9: instant cache paint before /__phi/active and reconciliation after revalidate', async () => {

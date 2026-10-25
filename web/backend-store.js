@@ -37,7 +37,9 @@ export class BackendStore {
                 text = await scope.fetchText(url);
             }
             else {
-                const fetchFn = typeof fetch !== 'undefined' ? fetch : globalThis.fetch;
+                const fetchFn = typeof fetch !== 'undefined'
+                    ? fetch
+                    : globalThis.fetch;
                 const res = await fetchFn(url);
                 if (!res.ok) {
                     const err = new Error(`HTTP ${res.status}`);

@@ -901,8 +901,7 @@ export class SessionsManager {
                 e.stopPropagation();
                 this._showSessionContextMenu(e, item, sess);
             });
-            if (hasTranscript(this.activeCoder) ||
-                hasPiRpc(this.activeCoder)) {
+            if (hasTranscript(this.activeCoder) || hasPiRpc(this.activeCoder)) {
                 const reviewBtn = item.querySelector('.review-btn');
                 if (reviewBtn) {
                     reviewBtn.addEventListener('click', (e) => {

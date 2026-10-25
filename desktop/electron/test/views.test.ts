@@ -759,7 +759,9 @@ describe('ProfileViewManager singleTab mode', () => {
     manager.addProfile('legacy', 'http://127.0.0.1:7070/');
     manager.setActive('legacy');
 
-    expect(views[0].loadURLCalls.at(-1)).toBe('http://127.0.0.1:7070/?desktop=1');
+    expect(views[0].loadURLCalls.at(-1)).toBe(
+      'http://127.0.0.1:7070/?desktop=1',
+    );
   });
 
   it('falls back to legacy loadURL when onSingleTabSwitch Promise resolves to false', async () => {
@@ -779,7 +781,9 @@ describe('ProfileViewManager singleTab mode', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(views[0].loadURLCalls.at(-1)).toBe('http://127.0.0.1:7070/?desktop=1');
+    expect(views[0].loadURLCalls.at(-1)).toBe(
+      'http://127.0.0.1:7070/?desktop=1',
+    );
   });
 
   it('executes forgetScript when a profile is removed in singleTab mode', () => {

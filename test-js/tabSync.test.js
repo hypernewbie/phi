@@ -21,9 +21,14 @@ function setupTerminalGlobals() {
     vi.stubGlobal('WebglAddon', {
         WebglAddon: class {},
     });
-    vi.stubGlobal('Audio', class {
-        play() { return Promise.resolve(); }
-    });
+    vi.stubGlobal(
+        'Audio',
+        class {
+            play() {
+                return Promise.resolve();
+            }
+        },
+    );
     vi.stubGlobal('Terminal', function () {
         const rootEl = document.createElement('div');
         const viewportEl = document.createElement('div');
@@ -200,7 +205,10 @@ describe('TabManager syncTabs and client-side lifecycle', () => {
             // Set active draft to verify saveActiveDraft runs
             tm.inputTextArea.value = 'unsaved draft text';
             localStorage.setItem(serverKey('phi_active_pane'), 'tab-normal-1');
-            localStorage.setItem(serverKey('phi_tab_order'), JSON.stringify(['tab-normal-1', 'tab-normal-2']));
+            localStorage.setItem(
+                serverKey('phi_tab_order'),
+                JSON.stringify(['tab-normal-1', 'tab-normal-2']),
+            );
 
             const normal1 = tm.tabs.get('tab-normal-1');
             const normal2 = tm.tabs.get('tab-normal-2');
@@ -232,9 +240,15 @@ describe('TabManager syncTabs and client-side lifecycle', () => {
             expect(tm.tabs.size).toBe(0);
 
             // 4. LocalStorage state for the outgoing server was preserved
-            expect(localStorage.getItem(serverKey('phi_active_pane'))).toBe('tab-normal-1');
-            expect(localStorage.getItem(serverKey('phi_tab_order'))).toBe(JSON.stringify(['tab-normal-1', 'tab-normal-2']));
-            expect(localStorage.getItem(serverKey('phi_tab_draft_tab-normal-1'))).toContain('unsaved draft text');
+            expect(localStorage.getItem(serverKey('phi_active_pane'))).toBe(
+                'tab-normal-1',
+            );
+            expect(localStorage.getItem(serverKey('phi_tab_order'))).toBe(
+                JSON.stringify(['tab-normal-1', 'tab-normal-2']),
+            );
+            expect(
+                localStorage.getItem(serverKey('phi_tab_draft_tab-normal-1')),
+            ).toContain('unsaved draft text');
 
             // 5. Host UI reset
             expect(tm.activePaneId).toBeNull();
@@ -248,7 +262,12 @@ describe('TabManager syncTabs and client-side lifecycle', () => {
             tm._connectTabSocket = vi.fn();
 
             const instances = [
-                { id: 't1', session_id: 's1', coder: 'shell', title: 'Terminal 1' },
+                {
+                    id: 't1',
+                    session_id: 's1',
+                    coder: 'shell',
+                    title: 'Terminal 1',
+                },
             ];
             const screens = {
                 t1: { ansi: 'cached output line\r\n', cols: 120, rows: 40 },
@@ -261,7 +280,9 @@ describe('TabManager syncTabs and client-side lifecycle', () => {
             expect(tab._detachedCache).toBe(true);
             expect(tab.ws).toBeNull();
             expect(tab.term.resize).toHaveBeenCalledWith(120, 40);
-            expect(tab.term.origWrite).toHaveBeenCalledWith('cached output line\r\n');
+            expect(tab.term.origWrite).toHaveBeenCalledWith(
+                'cached output line\r\n',
+            );
             expect(tm._connectTabSocket).not.toHaveBeenCalled();
         });
 
@@ -272,10 +293,15 @@ describe('TabManager syncTabs and client-side lifecycle', () => {
             });
 
             // 1. Initial sync in detached mode
-            await tm.syncTabs([{ id: 't1', title: 'Old Title', coder: 'shell' }], {
-                live: false,
-                screens: { t1: { ansi: 'cached text', cols: 80, rows: 24 } },
-            });
+            await tm.syncTabs(
+                [{ id: 't1', title: 'Old Title', coder: 'shell' }],
+                {
+                    live: false,
+                    screens: {
+                        t1: { ansi: 'cached text', cols: 80, rows: 24 },
+                    },
+                },
+            );
 
             const tab = tm.tabs.get('t1');
             expect(tab._detachedCache).toBe(true);
@@ -283,7 +309,15 @@ describe('TabManager syncTabs and client-side lifecycle', () => {
 
             // 2. Next sync in live mode with updated title and pinned
             await tm.syncTabs(
-                [{ id: 't1', title: 'New Title', coder: 'shell', pinned: true, marked: true }],
+                [
+                    {
+                        id: 't1',
+                        title: 'New Title',
+                        coder: 'shell',
+                        pinned: true,
+                        marked: true,
+                    },
+                ],
                 { live: true },
             );
 
@@ -306,7 +340,9 @@ describe('TabManager syncTabs and client-side lifecycle', () => {
             tm._connectTabSocket = vi.fn();
 
             // Server reports only 'server-live'
-            await tm.syncTabs([{ id: 'server-live', coder: 'claude' }], { live: true });
+            await tm.syncTabs([{ id: 'server-live', coder: 'claude' }], {
+                live: true,
+            });
 
             // 'server-stale' was disposed client-side
             expect(tm.tabs.has('server-stale')).toBe(false);
@@ -336,7 +372,9 @@ describe('TabManager syncTabs and client-side lifecycle', () => {
             );
 
             expect(tm.activePaneId).toBe('t1');
-            expect(localStorage.getItem(serverKey('phi_active_pane'))).toBe('t1');
+            expect(localStorage.getItem(serverKey('phi_active_pane'))).toBe(
+                't1',
+            );
         });
     });
 
@@ -349,18 +387,28 @@ describe('TabManager syncTabs and client-side lifecycle', () => {
 
             tm.activePaneId = 'pane-alpha';
             tm.saveTabsState();
-            expect(localStorage.getItem(serverKey('phi_active_pane'))).toBe('pane-alpha');
-            expect(serverKey('phi_active_pane')).toBe('phi_active_pane:srv-alpha');
+            expect(localStorage.getItem(serverKey('phi_active_pane'))).toBe(
+                'pane-alpha',
+            );
+            expect(serverKey('phi_active_pane')).toBe(
+                'phi_active_pane:srv-alpha',
+            );
             expect(localStorage.getItem('phi_active_pane')).toBeNull();
 
             tm.saveTabOrder();
-            expect(localStorage.getItem(serverKey('phi_tab_order'))).toBeDefined();
+            expect(
+                localStorage.getItem(serverKey('phi_tab_order')),
+            ).toBeDefined();
             expect(serverKey('phi_tab_order')).toBe('phi_tab_order:srv-alpha');
             expect(localStorage.getItem('phi_tab_order')).toBeNull();
 
             tm.saveTabDraft({ paneId: 'pane-alpha', draft: 'Alpha Draft' });
-            expect(localStorage.getItem(serverKey('phi_tab_draft_pane-alpha'))).toContain('Alpha Draft');
-            expect(serverKey('phi_tab_draft_pane-alpha')).toBe('phi_tab_draft_pane-alpha:srv-alpha');
+            expect(
+                localStorage.getItem(serverKey('phi_tab_draft_pane-alpha')),
+            ).toContain('Alpha Draft');
+            expect(serverKey('phi_tab_draft_pane-alpha')).toBe(
+                'phi_tab_draft_pane-alpha:srv-alpha',
+            );
             expect(localStorage.getItem('phi_tab_draft_pane-alpha')).toBeNull();
             expect(tm.loadTabDraft('pane-alpha').draft).toBe('Alpha Draft');
 
@@ -370,18 +418,30 @@ describe('TabManager syncTabs and client-side lifecycle', () => {
 
             tm.activePaneId = 'pane-beta';
             tm.saveTabsState();
-            expect(localStorage.getItem(serverKey('phi_active_pane'))).toBe('pane-beta');
-            expect(serverKey('phi_active_pane')).toBe('phi_active_pane:srv-beta');
-            expect(localStorage.getItem('phi_active_pane:srv-alpha')).toBe('pane-alpha');
+            expect(localStorage.getItem(serverKey('phi_active_pane'))).toBe(
+                'pane-beta',
+            );
+            expect(serverKey('phi_active_pane')).toBe(
+                'phi_active_pane:srv-beta',
+            );
+            expect(localStorage.getItem('phi_active_pane:srv-alpha')).toBe(
+                'pane-alpha',
+            );
 
             // 3. Reset to standalone / non-embedded
             setEmbeddedBackend(null, null);
             tm.activePaneId = 'pane-standalone';
             tm.saveTabsState();
-            expect(localStorage.getItem('phi_active_pane')).toBe('pane-standalone');
+            expect(localStorage.getItem('phi_active_pane')).toBe(
+                'pane-standalone',
+            );
             expect(serverKey('phi_active_pane')).toBe('phi_active_pane');
-            expect(localStorage.getItem('phi_active_pane:srv-alpha')).toBe('pane-alpha');
-            expect(localStorage.getItem('phi_active_pane:srv-beta')).toBe('pane-beta');
+            expect(localStorage.getItem('phi_active_pane:srv-alpha')).toBe(
+                'pane-alpha',
+            );
+            expect(localStorage.getItem('phi_active_pane:srv-beta')).toBe(
+                'pane-beta',
+            );
         });
     });
 });

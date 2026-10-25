@@ -1492,8 +1492,9 @@ export class DesktopHost {
       if (!observed || generation !== this.sessionGeneration) return null;
       const profile =
         origin === EMBEDDED_ORIGIN
-          ? (ctrl.state().profiles.find((p) => p.id === ctrl.state().activeId) ??
-            null)
+          ? (ctrl
+              .state()
+              .profiles.find((p) => p.id === ctrl.state().activeId) ?? null)
           : (ctrl.state().profiles.find((p) => p.origin === origin) ?? null);
       if (!profile) return null;
       const identity = {
@@ -3279,8 +3280,9 @@ export class DesktopHost {
           if (allowedOrigin === EMBEDDED_ORIGIN) {
             const activeOrigin = this.controller
               ?.state()
-              .profiles.find((p) => p.id === this.controller?.state().activeId)
-              ?.origin;
+              .profiles.find(
+                (p) => p.id === this.controller?.state().activeId,
+              )?.origin;
             if (activeOrigin) {
               try {
                 if (target.origin === new URL(activeOrigin).origin) {
