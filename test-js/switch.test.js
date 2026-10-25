@@ -246,6 +246,9 @@ describe('Single-Tab Embedded Backend Switching', () => {
         const pC = app.switchToBackend('profile-c');
 
         await Promise.all([pB, pC]);
+        // The switch resolves on the cached paint; the refresh runs behind
+        // it. Let the background refresh settle before asserting on it.
+        await new Promise((r) => setTimeout(r, 40));
 
         // profile-b should have been superseded and aborted before revalidation finished
         expect(revalidatedProfiles).not.toContain('profile-b');
@@ -499,6 +502,17 @@ describe('Single-Tab Embedded Backend Switching', () => {
         expect(preActiveHasWarmTab).toBe(true);
         expect(preActiveSyncState).toBe('stale');
 
+        // The switch resolves on the CACHED paint: the cached hostname is
+        // on screen and the page is marked stale (a refresh is running).
+        expect(document.getElementById('hostname-display')?.innerText).toBe(
+            'warm-host',
+        );
+        expect(app.tabManager.tabs.has('p-warm')).toBe(true);
+        expect(document.documentElement.dataset.sync).toBe('stale');
+
+        // The server is authoritative: when its answer lands it overrides
+        // the cache and the stale marker clears.
+        await new Promise((r) => setTimeout(r, 60));
         expect(document.getElementById('hostname-display')?.innerText).toBe(
             'warm-host-updated',
         );

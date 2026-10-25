@@ -926,4 +926,87 @@ describe('embedded-transport', () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
   });
+
+  describe('capability probe cache', () => {
+    it('reuses a fresh answer instead of re-probing the server', async () => {
+      mockFetch.mockResolvedValue(
+        new Response(JSON.stringify({ api: '1' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      expect(await transport.checkCompatibility('prof1')).toBe(true);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      // A second flip to the same server must not cost another round trip.
+      expect(await transport.checkCompatibility('prof1')).toBe(true);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('probes each profile separately', async () => {
+      mockFetch.mockResolvedValue(
+        new Response(JSON.stringify({ api: '1' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      await transport.checkCompatibility('prof1');
+      await transport.checkCompatibility('prof2');
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('access-session cookie bridge', () => {
+    it('seeds a profile jar from a cookie captured in the main process', async () => {
+      const ok = transport.setCookieForOrigin(
+        'http://127.0.0.1:8080',
+        'phi_access_session',
+        'session-token',
+      );
+      expect(ok).toBe(true);
+
+      // The main process can read the cookie back out of the proxy jar.
+      const cookie = transport.getCookieForOrigin('http://127.0.0.1:8080');
+      expect(cookie?.cookieName).toBe('phi_access_session');
+      expect(cookie?.cookieValue).toBe('session-token');
+    });
+
+    it('matches an origin with a trailing slash to the profile', () => {
+      const ok = transport.setCookieForOrigin(
+        'http://127.0.0.1:8080/',
+        'phi_access_session',
+        'tok',
+      );
+      expect(ok).toBe(true);
+      expect(
+        transport.getCookieForOrigin('http://127.0.0.1:8080')?.cookieValue,
+      ).toBe('tok');
+    });
+
+    it('keeps profiles separate', () => {
+      transport.setCookieForOrigin(
+        'http://127.0.0.1:8080',
+        'phi_access_session',
+        'one',
+      );
+      expect(
+        transport.getCookieForOrigin('https://backend2.example.com:8443'),
+      ).toBeNull();
+    });
+
+    it('returns null for an unknown origin', () => {
+      expect(
+        transport.setCookieForOrigin(
+          'http://unknown.example.com',
+          'phi_access_session',
+          'x',
+        ),
+      ).toBe(false);
+      expect(
+        transport.getCookieForOrigin('http://unknown.example.com'),
+      ).toBeNull();
+    });
+  });
 });

@@ -2130,10 +2130,30 @@ export class DesktopHost {
     }
     if (this.storedCredentials.size === 0) return;
     const origins = Array.from(this.storedCredentials.keys());
-    for (const origin of origins) {
-      if (generation !== this.sessionGeneration) return;
-      await this.tryReauthWithStoredCredential(origin, accessAuth, generation);
-    }
+    // Re-authenticate the origins CONCURRENTLY, with a small concurrency
+    // cap. Sequentially, every server cost a status round trip plus a
+    // login round trip before the next one started, so a server late in
+    // the list had no session yet when the user flipped to it - and the
+    // page asked for the password again.
+    const CONCURRENCY = 4;
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const index = next++;
+        if (index >= origins.length) return;
+        if (generation !== this.sessionGeneration) return;
+        await this.tryReauthWithStoredCredential(
+          origins[index],
+          accessAuth,
+          generation,
+        );
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, origins.length) }, () =>
+        worker(),
+      ),
+    );
   }
 
   /** Injects Phi's error toast into the view for a failed local file action. */
@@ -3214,6 +3234,35 @@ export class DesktopHost {
         listProfiles: () => this.controller?.state().profiles ?? [],
       });
       this.embeddedTransport = transport;
+
+      // ONE access-auth session, shared by the main process and the
+      // embedded page. The page's /api calls are proxied by this
+      // transport, so a main-process unlock that never reached the proxy
+      // left every page request unauthenticated - the page then asked for
+      // the password again on the next flip. The provider pulls a cookie
+      // the page's own login captured; the listener pushes the main
+      // process's unlock into the proxy's jar.
+      accessAuth.setCookieProvider((origin) =>
+        transport.getCookieForOrigin(origin),
+      );
+      accessAuth.setOnCookieCaptured((origin, cookie) => {
+        transport.setCookieForOrigin(
+          origin,
+          cookie.cookieName,
+          cookie.cookieValue,
+        );
+      });
+
+      // Probe every server's API capability in the background, in
+      // parallel. The answer decides embedded-vs-legacy page loading, and
+      // it costs a round trip to a possibly remote host - so the FIRST
+      // flip to a server would otherwise pay for it. Probing up front
+      // makes every flip equally fast.
+      void Promise.all(
+        (this.controller?.state().profiles ?? []).map((p) =>
+          transport.checkCompatibility(p.id).catch(() => true),
+        ),
+      ).catch(() => {});
 
       try {
         (
