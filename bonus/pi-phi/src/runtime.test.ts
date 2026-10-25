@@ -3008,6 +3008,42 @@ describe('Runtime compact dispatch', () => {
         rt.shutdown();
     });
 
+    it('refreshes readiness after a compaction no bridge callback owns', async () => {
+        // A compaction typed in the TUI has no Compact callback, so
+        // only the bounded post-event refresh can publish the cleared
+        // state; without it the control stays disabled until the next
+        // unrelated event.
+        let cleared = false;
+        const view = () => telemetryCtx({ isIdle: () => cleared });
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            makeChannel: wired(ch),
+        });
+        rt.start(view());
+        await sleep(10);
+        rt.onCompactEnd(view());
+        const snaps = ch.sends.filter(
+            (m) => payloadOf(m).$case === 'stateSnapshot',
+        );
+        expect(
+            snapshotOf(snaps[snaps.length - 1]!).compactReadiness?.idle,
+        ).toBe(false);
+        cleared = true;
+        await sleep(50);
+        const refreshed = ch.nonfatalSends.filter(
+            (m) => payloadOf(m).$case === 'stateSnapshot',
+        );
+        expect(
+            refreshed.some(
+                (m) => snapshotOf(m).compactReadiness?.idle === true,
+            ),
+        ).toBe(true);
+        rt.shutdown();
+    });
+
     it('reports bridge pending in readiness while unresolved', async () => {
         const { ch, rt, calls } = await startedCompact();
         ch.hooks!.onMessage(compactRequest('1'));

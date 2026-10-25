@@ -368,6 +368,7 @@ export class Runtime {
     private shutdownRequested = false;
     private backoffMs: number;
     private retryTimer: ReturnType<typeof setTimeout> | null = null;
+    private compactSettleTimer: ReturnType<typeof setTimeout> | null = null;
     private starting = false;
 
     constructor(private readonly opts: RuntimeOptions) {
@@ -618,6 +619,33 @@ export class Runtime {
                 ? LogicalState.LOGICAL_STATE_RUNNING
                 : LogicalState.LOGICAL_STATE_IDLE,
         );
+        this.scheduleCompactSettle();
+    }
+
+    /**
+     * Pi clears its manual-compaction state after session_compact, so
+     * the sample taken at the event can still read busy. Bridge-owned
+     * compaction refreshes from its completion callback; a compaction
+     * started anywhere else (typed in the TUI) has no callback, so
+     * publish one bounded refresh once that state has cleared. Never
+     * sends a lifecycle edge and never throws.
+     */
+    private scheduleCompactSettle(attempt = 0): void {
+        if (this.compactSettleTimer) clearTimeout(this.compactSettleTimer);
+        this.compactSettleTimer = setTimeout(
+            () => {
+                this.compactSettleTimer = null;
+                if (this.shutdownRequested) return;
+                const idleBefore = this.readinessSample?.idle === true;
+                this.refreshFromLive();
+                if (this.readinessSample?.idle === true) {
+                    if (!idleBefore) this.publishContextOnly();
+                    return;
+                }
+                if (attempt < 2) this.scheduleCompactSettle(attempt + 1);
+            },
+            attempt === 0 ? 0 : 150,
+        );
     }
 
     /** Idempotent shutdown: stop retrying and drain the stream. */
@@ -632,6 +660,10 @@ export class Runtime {
         if (this.retryTimer) {
             clearTimeout(this.retryTimer);
             this.retryTimer = null;
+        }
+        if (this.compactSettleTimer) {
+            clearTimeout(this.compactSettleTimer);
+            this.compactSettleTimer = null;
         }
         // Drain, don't drop: session_shutdown lands milliseconds
         // after agent_settled, and the settlement edge queued behind

@@ -62,3 +62,47 @@ func TestCompactPendingEvidenceSurvivesUnknown(t *testing.T) {
 		t.Fatal("explicit release after unknown telemetry left operation pending")
 	}
 }
+
+func TestCompactUnspecifiedAfterReleaseRetires(t *testing.T) {
+	s, l, p, _ := parentReviewLease(t)
+	// A waiter is attached, so the release transition is only recorded
+	// when it is observed. If the host then answers UNSPECIFIED, the
+	// native work it was reporting on is already finished: keeping the
+	// record would refuse every later compaction until a new runtime.
+	op := &compactOp{id: "1", ch: make(chan CompactResult, 1), waiter: true}
+	l.compact = op
+	for i, readiness := range []*pibridgepb.CompactReadiness{
+		{Idle: false, BridgePending: true},
+		{Idle: true, BridgePending: false},
+	} {
+		snap := idleSnapshotWithReadiness("sess", "leaf", uint64(i+2), readiness)
+		if err := s.handleMessage(l, p, &pibridgepb.PiToPhi{
+			Payload: &pibridgepb.PiToPhi_StateSnapshot{StateSnapshot: snap},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if l.compact != op {
+		t.Fatal("release with an attached waiter must still record the operation")
+	}
+	err := s.handleMessage(l, p, &pibridgepb.PiToPhi{
+		Payload: &pibridgepb.PiToPhi_CompactResult{CompactResult: &pibridgepb.CompactResult{
+			RequestId: "1",
+			Outcome:   pibridgepb.CompactOutcome_COMPACT_OUTCOME_UNSPECIFIED,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case res := <-op.ch:
+		if res.RequestID != "1" {
+			t.Fatalf("waiter got %q, want the matching request", res.RequestID)
+		}
+	default:
+		t.Fatal("waiter was never answered")
+	}
+	if l.compact != nil {
+		t.Fatal("UNSPECIFIED after observed release left the operation pending forever")
+	}
+}

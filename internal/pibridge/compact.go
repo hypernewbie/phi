@@ -334,9 +334,10 @@ func allowCompactReason(reason string) string {
 // recovery (same generation, current peer) still lands. Only the
 // matching unresolved operation consumes a result, and only its
 // still-waiting caller receives it, exactly once. A terminal result
-// releases the operation, except UNSPECIFIED: the host reports
-// uncertainty while retaining its own latch, so the broker retains
-// its record too and later callers see pending.
+// releases the operation. UNSPECIFIED keeps the record while no
+// release evidence exists, because the host retains its own latch;
+// once a pending-to-released transition was observed, the retired
+// native work cannot come back, so the record goes too.
 func (s *Server) deliverCompact(l *lease, p *peer, res *pibridgepb.CompactResult) {
 	if res.GetRequestId() == "" {
 		return
@@ -371,7 +372,7 @@ func (s *Server) deliverCompact(l *lease, p *peer, res *pibridgepb.CompactResult
 		default:
 		}
 	}
-	if res.GetOutcome() != pibridgepb.CompactOutcome_COMPACT_OUTCOME_UNSPECIFIED {
+	if res.GetOutcome() != pibridgepb.CompactOutcome_COMPACT_OUTCOME_UNSPECIFIED || op.releasedObserved {
 		l.compact = nil
 	}
 }
