@@ -26,6 +26,8 @@ import {
     TERMINAL_TARGET_COLUMNS,
     openExternalLink,
     installTerminalLinkProvider,
+    serverKey,
+    getEmbeddedProfileId,
 } from './util.js';
 import {
     applyBrandCpuTier,
@@ -587,7 +589,7 @@ export class TabManager {
 
     loadTabDraft(paneId) {
         try {
-            const raw = localStorage.getItem(`phi_tab_draft_${paneId}`);
+            const raw = localStorage.getItem(serverKey(`phi_tab_draft_${paneId}`));
             if (!raw || raw.length > 1024 * 1024) return {};
             const draft = JSON.parse(raw);
             return {
@@ -602,7 +604,7 @@ export class TabManager {
     saveTabDraft(tab) {
         if (!tab || tab.coder === 'review' || tab.coder === 'kanban') return;
         try {
-            const key = `phi_tab_draft_${tab.paneId}`;
+            const key = serverKey(`phi_tab_draft_${tab.paneId}`);
             if (!tab.draft && !tab.draftAttachments?.length) {
                 localStorage.removeItem(key);
             } else {
@@ -620,7 +622,7 @@ export class TabManager {
     }
 
     saveTabsState() {
-        localStorage.setItem('phi_active_pane', this.activePaneId || '');
+        localStorage.setItem(serverKey('phi_active_pane'), this.activePaneId || '');
         // Tab order is localStorage-only (no backend sync). Drag-reorder
         // mutates the Map; saving the Map's iteration order here keeps the
         // ordering across page reloads in the same browser.
@@ -634,7 +636,7 @@ export class TabManager {
         if (this.restoringTabs) return;
         try {
             localStorage.setItem(
-                'phi_tab_order',
+                serverKey('phi_tab_order'),
                 JSON.stringify(Array.from(this.tabs.keys())),
             );
         } catch (e) {
@@ -655,7 +657,7 @@ export class TabManager {
                     workspace: t.workspace || '',
                     sessionPath: this._piRpcStoredSessionPath(t),
                 }));
-            localStorage.setItem('phi_pi_rpc_tabs', JSON.stringify(piTabs));
+            localStorage.setItem(serverKey('phi_pi_rpc_tabs'), JSON.stringify(piTabs));
         } catch {}
     }
 
@@ -686,7 +688,7 @@ export class TabManager {
     restorePiRpcTabs() {
         let raw;
         try {
-            raw = localStorage.getItem('phi_pi_rpc_tabs');
+            raw = localStorage.getItem(serverKey('phi_pi_rpc_tabs'));
             if (!raw) return;
             const tabs = JSON.parse(raw);
             if (!Array.isArray(tabs) || tabs.length === 0) return;
@@ -818,7 +820,7 @@ export class TabManager {
     applySavedTabOrder() {
         let saved = [];
         try {
-            const raw = localStorage.getItem('phi_tab_order');
+            const raw = localStorage.getItem(serverKey('phi_tab_order'));
             if (raw) saved = JSON.parse(raw);
         } catch (_e) {
             // Corrupted entry: just ignore and fall back to API order.
@@ -1191,66 +1193,90 @@ export class TabManager {
         }
     }
 
-    async restoreTabsState() {
-        localStorage.removeItem('phi_tabs'); // Clear legacy browser storage tabs
+    async syncTabs(instances = [], { live = true, screens = null } = {}) {
         this.restoringTabs = true;
-        let restored = false;
         try {
-            const res = await fetch('/api/terminals');
-            if (!res.ok) throw new Error('Failed to load server terminal list');
-            const instances = await res.json();
-            restored = true;
-            if (!instances?.length) {
-                this.showEmptyState();
+            const serverIds = new Set(instances.map((t) => t.id ?? t.paneId));
+            for (const [paneId, tab] of Array.from(this.tabs.entries())) {
+                if (!tab.isKanban && !tab.isReview && tab.coder !== 'pi-rpc' && !tab.softClosing) {
+                    if (!serverIds.has(paneId)) {
+                        this.disposeTabClient(paneId, { preserveStorage: false });
+                    }
+                }
             }
 
-            const savedActive = localStorage.getItem('phi_active_pane') || '';
             for (const t of instances) {
-                this.createTab(
-                    t.id,
-                    t.session_id,
-                    t.title || t.coder,
-                    t.coder,
-                    t.workspace || '',
-                    t.cwd || '',
-                    !!t.pinned,
-                    !!t.marked,
-                    '',
-                    null,
-                    t.coder === 'opencode'
-                        ? openCodePaneMode(t.opencode_mode)
-                        : null,
-                    t.pi_bridge,
-                );
+                const paneId = t.id ?? t.paneId;
+                if (this.tabs.has(paneId)) {
+                    const tab = this.tabs.get(paneId);
+                    tab.sessionId = t.session_id ?? tab.sessionId;
+                    tab.workspace = t.workspace ?? tab.workspace;
+                    tab.cwd = t.cwd ?? tab.cwd;
+                    tab.pinned = !!t.pinned;
+                    tab.marked = !!t.marked;
+                    tab.tabEl?.classList?.toggle('pinned', tab.pinned);
+                    this._setTabTitle(tab, t.title || t.coder || tab.title);
+                    if (t.pi_bridge != null) {
+                        this._seedHttpPiBridge(tab, t.pi_bridge);
+                    }
+                    if (live && (tab._detachedCache || !tab.ws) && tab.coder !== 'review' && tab.coder !== 'kanban' && tab.coder !== 'pi-rpc') {
+                        tab._detachedCache = false;
+                        this._connectTabSocket(tab);
+                    }
+                } else {
+                    const cachedScreen = screens instanceof Map ? screens.get(paneId) : screens?.[paneId] ?? null;
+                    const createOpts = (!live || cachedScreen) ? [{ live, cachedScreen }] : [];
+                    this.createTab(
+                        paneId,
+                        t.session_id,
+                        t.title || t.coder,
+                        t.coder,
+                        t.workspace || '',
+                        t.cwd || '',
+                        !!t.pinned,
+                        !!t.marked,
+                        '',
+                        null,
+                        t.coder === 'opencode' ? openCodePaneMode(t.opencode_mode) : null,
+                        t.pi_bridge,
+                        ...createOpts,
+                    );
+                }
             }
-            // Apply the user's drag-reorder (if any) from localStorage. Stale
-            // paneIds (closed tabs, or IDs that changed during a session
-            // restart) are dropped; new tabs not in the saved order are
-            // appended at the end in their natural order.
-            // BUG-2 fix: the kanban tab is client-only (no server-side terminal
-            // entry), so restore it here if it was open when the page was
-            // last reloaded. createTab short-circuits if it's already there.
-            if (localStorage.getItem('phi_kanban_open') === '1') {
+
+            if (localStorage.getItem(serverKey('phi_kanban_open')) === '1' && !this.tabs.has('kanban') && this.app?.kanbanManager) {
                 await this.app.kanbanManager.openBoard();
             }
-            // pi-rpc tabs are also client-only (chat, not a PTY) – persist
-            // across F5 via phi_pi_rpc_tabs so F5 doesn't nuke the tab.
             this.restorePiRpcTabs();
             this.applySavedTabOrder();
+            const savedActive = localStorage.getItem(serverKey('phi_active_pane')) || '';
             if (savedActive && this.tabs.has(savedActive)) {
                 this.switchTab(savedActive);
             } else if (instances.length > 0) {
-                this.switchTab(instances[0].id);
+                this.switchTab(instances[0].id ?? instances[0].paneId);
             } else if (this.tabs.size > 0) {
-                // All server instances gone but client-only tabs (kanban/pi)
-                // survived – show the first survivor.
                 this.switchTab(Array.from(this.tabs.keys())[0]);
+            } else {
+                this.showEmptyState();
             }
-        } catch (e) {
-            console.error('Failed to restore tabs from server-side state:', e);
         } finally {
             this.restoringTabs = false;
-            if (restored) this.saveTabOrder();
+            this.saveTabOrder();
+        }
+    }
+
+    async restoreTabsState() {
+        localStorage.removeItem('phi_tabs'); // Clear legacy browser storage tabs
+        try {
+            const fetchFn = (this.app?.scope && typeof this.app.scope.fetch === 'function')
+                ? (url, opts) => this.app.scope.fetch(url, opts)
+                : fetch;
+            const res = await fetchFn('/api/terminals');
+            if (!res.ok) throw new Error('Failed to load server terminal list');
+            const instances = await res.json();
+            await this.syncTabs(instances, { live: true });
+        } catch (e) {
+            console.error('Failed to restore tabs from server-side state:', e);
         }
     }
 
@@ -3268,6 +3294,84 @@ export class TabManager {
         return LIVE_SCROLLBACK_ROWS;
     }
 
+    _connectTabSocket(tabInfo, initialCmd = '') {
+        if (!tabInfo || tabInfo.isReview || tabInfo.isKanban || tabInfo.coder === 'pi-rpc') return;
+        if (tabInfo.pinned) {
+            const fetchFn = (this.app?.scope && typeof this.app.scope.fetch === 'function')
+                ? (url, opts) => this.app.scope.fetch(url, opts)
+                : fetch;
+            fetchFn(`/api/terminals/${tabInfo.paneId}/pin`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pinned: true }),
+            }).catch((err) =>
+                console.error('[term] Failed to sync pin on backend:', err),
+            );
+        }
+
+        const ws = new PTYWebSocket(
+            tabInfo.paneId,
+            (data) => {
+                if (tabInfo.ws !== ws) return;
+                this._paneData(tabInfo, data);
+            },
+            (control) => {
+                if (tabInfo.ws !== ws) return;
+                this.handleControlMessage(tabInfo, control, ws);
+            },
+            () => {
+                if (tabInfo.ws !== ws) return;
+                this._handleTerminalDisconnect(tabInfo);
+            },
+            () => {
+                if (tabInfo.ws !== ws) return;
+                tabInfo._perfAttachAt = performance.now();
+                tabInfo._perfWrote = false;
+                termPerfMark('ws-open');
+                // Viewport activation waits for the hot bootstrap (or the
+                // 300ms fallback) — _openTermAndViewport runs it after open.
+                tabInfo._pendingViewport = () => {
+                    try {
+                        if (tabInfo === this.getActiveTab()) {
+                            this.activateTabViewport(tabInfo, {
+                                scrollToBottom: true,
+                                autoReconnect: false,
+                            });
+                        } else {
+                            this._fitVisibleTerminal(tabInfo);
+                            this.sendResizeToBackend(tabInfo);
+                        }
+                    } catch (e) {
+                        console.error(
+                            '[term] Fit/resize error on initial socket open:',
+                            e,
+                        );
+                    }
+                };
+                this._paneOpened(tabInfo);
+                if (initialCmd) {
+                    // Deliver startup command after terminal settles
+                    setTimeout(() => {
+                        if (
+                            initialCmd.length > 16 ||
+                            initialCmd.includes('\n')
+                        ) {
+                            this.sendInput(
+                                tabInfo,
+                                `\x1b[200~${initialCmd}\x1b[201~\r`,
+                            );
+                        } else {
+                            this.sendInput(tabInfo, `${initialCmd}\r`);
+                        }
+                    }, 1000);
+                }
+            },
+            this._hotOptions(tabInfo),
+        );
+
+        this._setCurrentTabSocket(tabInfo, ws);
+    }
+
     createTab(
         paneId,
         sessionId,
@@ -3281,6 +3385,7 @@ export class TabManager {
         piRpcSessionPath = null,
         opencodeMode = null,
         initialPiBridge = null,
+        options = {},
     ) {
         // If tab already exists, just switch to it
         if (this.tabs.has(paneId)) {
@@ -3784,9 +3889,6 @@ export class TabManager {
                 ? this.app.sessionsManager.activeCWD
                 : '');
 
-        // Setup WebSocket connection
-        // biome-ignore lint/style/useConst: ws closed over by tabInfo callbacks before assignment
-        let ws;
         const tabInfo = {
             paneId,
             sessionId,
@@ -3855,77 +3957,31 @@ export class TabManager {
             _piTitleRevision: -1,
         };
 
-        if (pinned) {
-            fetch(`/api/terminals/${paneId}/pin`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ pinned: true }),
-            }).catch((err) =>
-                console.error('[term] Failed to sync pin on backend:', err),
-            );
+        if (options.live === false) {
+            tabInfo._detachedCache = true;
+            tabInfo.ws = null;
+            if (options.cachedScreen) {
+                this._openTermAndViewport(tabInfo);
+                const { ansi, cols, rows } = options.cachedScreen;
+                if (cols > 0 && rows > 0) {
+                    try { tabInfo.term.resize(cols, rows); } catch {}
+                }
+                if (ansi) {
+                    if (tabInfo.loaderEl) {
+                        try { tabInfo.loaderEl.remove(); } catch {}
+                        tabInfo.loaderEl = null;
+                    }
+                    try {
+                        tabInfo.term.write(ansi);
+                    } catch (e) {
+                        console.error('[term] failed to write cached screen:', e);
+                    }
+                }
+            }
+        } else {
+            this._connectTabSocket(tabInfo, initialCmd);
         }
 
-        ws = new PTYWebSocket(
-            tabInfo.paneId,
-            (data) => {
-                if (tabInfo.ws !== ws) return;
-                this._paneData(tabInfo, data);
-            },
-            (control) => {
-                if (tabInfo.ws !== ws) return;
-                this.handleControlMessage(tabInfo, control, ws);
-            },
-            () => {
-                if (tabInfo.ws !== ws) return;
-                this._handleTerminalDisconnect(tabInfo);
-            },
-            () => {
-                if (tabInfo.ws !== ws) return;
-                tabInfo._perfAttachAt = performance.now();
-                tabInfo._perfWrote = false;
-                termPerfMark('ws-open');
-                // Viewport activation waits for the hot bootstrap (or the
-                // 300ms fallback) — _openTermAndViewport runs it after open.
-                tabInfo._pendingViewport = () => {
-                    try {
-                        if (tabInfo === this.getActiveTab()) {
-                            this.activateTabViewport(tabInfo, {
-                                scrollToBottom: true,
-                                autoReconnect: false,
-                            });
-                        } else {
-                            this._fitVisibleTerminal(tabInfo);
-                            this.sendResizeToBackend(tabInfo);
-                        }
-                    } catch (e) {
-                        console.error(
-                            '[term] Fit/resize error on initial socket open:',
-                            e,
-                        );
-                    }
-                };
-                this._paneOpened(tabInfo);
-                if (initialCmd) {
-                    // Deliver startup command after terminal settles
-                    setTimeout(() => {
-                        if (
-                            initialCmd.length > 16 ||
-                            initialCmd.includes('\n')
-                        ) {
-                            this.sendInput(
-                                tabInfo,
-                                `\x1b[200~${initialCmd}\x1b[201~\r`,
-                            );
-                        } else {
-                            this.sendInput(tabInfo, `${initialCmd}\r`);
-                        }
-                    }, 1000);
-                }
-            },
-            this._hotOptions(tabInfo),
-        );
-
-        this._setCurrentTabSocket(tabInfo, ws);
         this.tabs.set(paneId, tabInfo);
         this._placeNewTabByWorkspace(paneId);
         // Seed the spawn/resume/restore HTTP bridge baseline before
@@ -4180,7 +4236,7 @@ export class TabManager {
         // X10 mouse reports use byte-valued strings, not UTF-8 text.
         // Forwarding through sendInput would corrupt non-ASCII coordinates.
         term.onBinary?.((data) => {
-            if (!tabInfo.isDead && !tabInfo._historyParsing && !tabInfo._historyBrowsing) tabInfo.ws.sendBinaryInput(data);
+            if (!tabInfo.isDead && !tabInfo._historyParsing && !tabInfo._historyBrowsing && tabInfo.ws) tabInfo.ws.sendBinaryInput(data);
         });
 
         // Double click terminal → toggle direct focus mode
@@ -6087,26 +6143,38 @@ export class TabManager {
         this._refreshOverflowDropdown?.();
     }
 
-    // Actually kill the PTY, close WS, dispose term, drop from Map.
-    // Called by the grace timer, by the cap-forced finalize, or by
-    // closeTab's "user clicked × twice" path. Idempotent: a single
-    // setTimeout + cap-forced-finalize-from-the-newest-close + a
-    // double-× click can all race for the same pane; this is
-    // guarded so DELETE fires exactly once per tab.
-    finalizeCloseTab(paneId) {
+    disposeTabClient(paneId, { preserveStorage = false } = {}) {
         const tab = this.tabs.get(paneId);
         if (!tab) return;
-        // Re-entry guard: if finalization is already in progress (from
-        // another entry point), don't fire a second DELETE or run the
-        // cleanup twice. We use this flag instead of relying on
-        // tabs.delete() as the gate, because the delete happens *after*
-        // the fetch — the second caller would otherwise race the first.
-        if (tab.finalizing) return;
         tab.finalizing = true;
-        this._cancelHistoryRequest(tab);
+
+        this._cancelHistoryRequest?.(tab);
         tab._panelObserver?.disconnect();
-        if (tab._panelFitRAF != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(tab._panelFitRAF);
+        if (tab._panelFitRAF != null && typeof cancelAnimationFrame === 'function') {
+            cancelAnimationFrame(tab._panelFitRAF);
+        }
         tab._panelFitRAF = null;
+
+        if (tab._openFallbackTimer) {
+            clearTimeout(tab._openFallbackTimer);
+            tab._openFallbackTimer = null;
+        }
+        if (tab._ckptTimer) {
+            clearTimeout(tab._ckptTimer);
+            tab._ckptTimer = null;
+        }
+        if (tab._writeRetryTimer) {
+            clearTimeout(tab._writeRetryTimer);
+            tab._writeRetryTimer = null;
+        }
+        if (tab.spamInterval) {
+            clearInterval(tab.spamInterval);
+            tab.spamInterval = null;
+        }
+        if (tab.stopSpamTimeout) {
+            clearTimeout(tab.stopSpamTimeout);
+            tab.stopSpamTimeout = null;
+        }
 
         if (tab.softCloseTimer) {
             clearTimeout(tab.softCloseTimer);
@@ -6117,7 +6185,113 @@ export class TabManager {
             setTimeout(() => tab.softCloseToast?.remove(), 200);
             tab.softCloseToast = null;
         }
-        this._stopSoftCloseCountdown(tab);
+        this._stopSoftCloseCountdown?.(tab);
+
+        if (tab.coder === 'pi-rpc' && typeof destroyRpcChat === 'function') {
+            destroyRpcChat(tab.paneId);
+        }
+
+        if (tab.autoReconnectTimer) {
+            clearTimeout(tab.autoReconnectTimer);
+            tab.autoReconnectTimer = null;
+        }
+        if (tab.reconnectStableTimer) {
+            clearTimeout(tab.reconnectStableTimer);
+            tab.reconnectStableTimer = null;
+        }
+        if (tab.reconnectWatchdogTimer) {
+            clearTimeout(tab.reconnectWatchdogTimer);
+            tab.reconnectWatchdogTimer = null;
+        }
+
+        try {
+            if (tab.ws) tab.ws.close();
+        } catch (e) {
+            console.error('[tab] WS close error:', e);
+        }
+
+        try {
+            if (tab.term) tab.term.dispose();
+        } catch (e) {
+            console.error('[tab] Term dispose error:', e);
+        }
+
+        try {
+            if (tab.tabEl) tab.tabEl.remove();
+            if (tab.termContainer) tab.termContainer.remove();
+        } catch (e) {
+            console.error('[tab] DOM removal error:', e);
+        }
+
+        if (this.app?.kanbanManager && tab.isKanban) {
+            this.app.kanbanManager.cleanup?.();
+        }
+        if (this.app?.reviewManager && tab.isReview) {
+            this.app.reviewManager.cleanup?.();
+        }
+
+        if (tab.coder === 'pi-rpc' && this.activePaneId === paneId) {
+            this._piRpcResetPending?.delete(paneId);
+            this._closePiRpcDropups?.(true);
+        }
+
+        const wasPiRpc = tab.coder === 'pi-rpc';
+        this.tabs.delete(paneId);
+
+        if (!preserveStorage) {
+            try {
+                localStorage.removeItem(serverKey(`phi_tab_draft_${paneId}`));
+            } catch {}
+            this.updateDocumentTitle?.();
+            this.updateDisconnectBanner?.();
+            this.saveTabsState?.();
+            if (wasPiRpc) this.savePiRpcTabs?.();
+
+            this.updateTabOverflow?.();
+            this._refreshOverflowDropdown?.();
+            if (document.body?.classList?.contains('show-tab-shortcuts')) {
+                this.updateTabShortcutHints?.(true);
+            }
+
+            if (this.tabs.size === 0) {
+                this.activePaneId = null;
+                this._setPiRpcActionVisibility?.(null);
+                this._closePiRpcDropups?.(true);
+                this.inputBarContainer?.classList?.add('hidden');
+                this.presetsContainer?.replaceChildren?.();
+                this.presetsContainer?.classList?.add('hidden');
+                this.renderPiRpcStatusBar?.();
+                this.showEmptyState?.();
+                if (this.app?.markdownManager) {
+                    this.app.markdownManager.refreshFiles?.({ force: true });
+                }
+            } else if (this.activePaneId === paneId) {
+                const survivor = Array.from(this.tabs.values()).find(
+                    (candidate) => !candidate.softClosing,
+                );
+                if (survivor) {
+                    this.switchTab?.(survivor.paneId);
+                }
+            }
+        }
+    }
+
+    // Actually kill the PTY, close WS, dispose term, drop from Map.
+    // Called by the grace timer, by the cap-forced finalize, or by
+    // closeTab's "user clicked × twice" path. Idempotent: a single
+    // setTimeout + cap-forced-finalize-from-the-newest-close + a
+    // double-× click can all race for the same pane; this is
+    // guarded so DELETE fires exactly once per tab.
+    finalizeCloseTab(paneId, { backendId } = {}) {
+        const tab = this.tabs.get(paneId);
+        if (!tab) return;
+        // Re-entry guard: if finalization is already in progress (from
+        // another entry point), don't fire a second DELETE or run the
+        // cleanup twice. We use this flag instead of relying on
+        // tabs.delete() as the gate, because the delete happens *after*
+        // the fetch — the second caller would otherwise race the first.
+        if (tab.finalizing) return;
+        tab.finalizing = true;
 
         // Kill the server-side PTY process. We previously swallowed
         // failures with .catch(() => {}) — that hid the actual user
@@ -6126,8 +6300,12 @@ export class TabManager {
         // be alive on the server (e.g. a race with another tab close,
         // network blip, or 5xx). The 30-min detach grace timer is the
         // server-side backstop either way.
-        if (tab.coder !== 'pi-rpc')
-            fetch(`/api/terminals/${paneId}`, { method: 'DELETE' })
+        if (tab.coder !== 'pi-rpc' && !tab.isKanban && !tab.isReview) {
+            const targetBackend = backendId || getEmbeddedProfileId();
+            const init = targetBackend
+                ? { method: 'DELETE', headers: { 'X-Phi-Backend': targetBackend } }
+                : { method: 'DELETE' };
+            fetch(`/api/terminals/${paneId}`, init)
                 .then((res) => {
                     if (!res.ok && res.status !== 404) {
                         // 404 is fine — it just means another caller already
@@ -6145,88 +6323,37 @@ export class TabManager {
                         );
                     }
                 });
-
-        if (tab.coder === 'pi-rpc') destroyRpcChat(tab.paneId);
-        if (tab.autoReconnectTimer) {
-            clearTimeout(tab.autoReconnectTimer);
-            tab.autoReconnectTimer = null;
-        }
-        if (tab.reconnectStableTimer) {
-            clearTimeout(tab.reconnectStableTimer);
-            tab.reconnectStableTimer = null;
-        }
-        if (tab.reconnectWatchdogTimer) {
-            clearTimeout(tab.reconnectWatchdogTimer);
-            tab.reconnectWatchdogTimer = null;
-        }
-        try {
-            if (tab.ws) tab.ws.close();
-        } catch (e) {
-            console.error('[tab] WS close error:', e);
-        }
-        try {
-            if (tab.term) tab.term.dispose();
-        } catch (e) {
-            console.error('[tab] Term dispose error:', e);
-        }
-        try {
-            if (tab.tabEl) tab.tabEl.remove();
-            if (tab.termContainer) tab.termContainer.remove();
-        } catch (e) {
-            console.error('[tab] DOM removal error:', e);
         }
 
-        // BUG-3 fix: notify the per-coder manager so it can tear down
-        // listeners and overlays it added.
-        if (this.app.kanbanManager && tab.isKanban) {
-            this.app.kanbanManager.cleanup();
-        }
-        if (this.app.reviewManager && tab.isReview) {
-            this.app.reviewManager.cleanup?.();
-        }
+        this.disposeTabClient(paneId, { preserveStorage: false });
+    }
 
-        if (tab.coder === 'pi-rpc' && this.activePaneId === paneId) {
-            this._piRpcResetPending?.delete(paneId);
-            this._closePiRpcDropups(true);
+    flushPendingCloses(backendId) {
+        for (const tab of Array.from(this.tabs.values())) {
+            if (tab.softClosing) {
+                this.finalizeCloseTab(tab.paneId, { backendId });
+            }
         }
-        const wasPiRpc = tab.coder === 'pi-rpc';
-        this.tabs.delete(paneId);
-        try { localStorage.removeItem(`phi_tab_draft_${paneId}`); } catch {}
-        this.updateDocumentTitle();
-        this.updateDisconnectBanner();
-        this.saveTabsState();
-        if (wasPiRpc) this.savePiRpcTabs();
+    }
 
-        // Refresh the tab-list selector to reflect the removal.
-        this.updateTabOverflow();
+    detachAll({ flushBackendId } = {}) {
+        this.saveActiveDraft?.();
+        this.flushPendingCloses(flushBackendId);
+        for (const paneId of Array.from(this.tabs.keys())) {
+            this.disposeTabClient(paneId, { preserveStorage: true });
+        }
+        this.activePaneId = null;
+        this.inputBarContainer?.classList?.add('hidden');
+        this.presetsContainer?.replaceChildren?.();
+        this.presetsContainer?.classList?.add('hidden');
+        this._closePiRpcDropups?.(true);
+        syncPiSubagentStrip?.('');
+        this.renderPiRpcStatusBar?.();
+        this.updateDocumentTitle?.();
+        this.updateDisconnectBanner?.();
+        this.updateTabOverflow?.();
         this._refreshOverflowDropdown?.();
-        if (document.body.classList.contains('show-tab-shortcuts')) {
-            this.updateTabShortcutHints(true);
-        }
-
-        // If we just finalized the last tab, show the empty state now
-        if (this.tabs.size === 0) {
-            this.activePaneId = null;
-            this._setPiRpcActionVisibility(null);
-            this._closePiRpcDropups(true);
-            this.inputBarContainer.classList.add('hidden');
-            this.presetsContainer.replaceChildren();
-            this.presetsContainer.classList.add('hidden');
-            this.renderPiRpcStatusBar();
-            this.showEmptyState();
-            if (this.app.markdownManager) {
-                this.app.markdownManager.refreshFiles({ force: true });
-            }
-        } else if (this.activePaneId === paneId) {
-            // Defensive fallback for an active tab finalized without the
-            // normal soft-close handoff. Synchronize the selected survivor.
-            const survivor = Array.from(this.tabs.values()).find(
-                (candidate) => !candidate.softClosing,
-            );
-            if (survivor) {
-                this.switchTab(survivor.paneId);
-            }
-        }
+        this.showEmptyState?.();
     }
 
     // Closing-tab selection is handled immediately by _selectTabAfterClose;
