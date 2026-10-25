@@ -2596,6 +2596,59 @@ describe('Pi RPC transcript controller (compactionEnd regression pinning)', () =
         expect(statuses.at(-1)?.sessionPath).toBe('/w/new.jsonl');
     });
 
+    it('applies the resolved backend title and never clears it', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/title', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                title: 'Native name',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: canonicalState({ title: 'Native name' }),
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        const header = root.querySelector('.review-header-title');
+        expect(header.textContent).toBe('Native name');
+
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'stateChanged',
+            data: canonicalState({ title: 'Renamed natively', queueDepth: 1 }),
+        });
+        await Promise.resolve();
+        expect(header.textContent).toBe('Renamed natively');
+
+        // An empty title never clears the known one.
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'stateChanged',
+            data: canonicalState({ title: '', queueDepth: 2 }),
+        });
+        await Promise.resolve();
+        expect(header.textContent).toBe('Renamed natively');
+
+        // A whitespace-only title never clears it either.
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 3,
+            evt: 'stateChanged',
+            data: canonicalState({ title: '  \t ', queueDepth: 3 }),
+        });
+        await Promise.resolve();
+        expect(header.textContent).toBe('Renamed natively');
+    });
+
     it('treats a canonical exited snapshot as terminal and never revives it', async () => {
         const root = document.createElement('div');
         const wire = fakeClient();
@@ -2623,7 +2676,10 @@ describe('Pi RPC transcript controller (compactionEnd regression pinning)', () =
                         { role: 'assistant', content: 'retained history' },
                     ],
                 },
-                state: canonicalState({ status: 'exited' }),
+                state: canonicalState({
+                    status: 'exited',
+                    title: 'Native exited name',
+                }),
             },
         });
         await Promise.resolve();
@@ -2631,6 +2687,10 @@ describe('Pi RPC transcript controller (compactionEnd regression pinning)', () =
         // The retained snapshot must still render; only readiness is skipped.
         expect(root.textContent).toContain('retained history');
         expect(controls.at(-1)).toMatchObject({ exited: true, ready: false });
+        // The canonical title still lands in the header for a terminal pane.
+        expect(root.querySelector('.review-header-title').textContent).toBe(
+            'Native exited name',
+        );
         expect(chat.send('after exit')).toBe(false);
 
         // The queued exit event is stale at this cursor, and a late hydrate

@@ -607,6 +607,9 @@ test('M1 real offline Pi rename keeps metadata and the later hydrate coherent', 
         const spawnData = await waitForSpawn(sentFrames, receivedFrames);
         const stateBefore = requireState(spawnData.state, 'spawn response');
         expect(spawnData.title).toBe(stateBefore.title);
+        // M4: the opening title is Pi's native session name, hydrated from the
+        // first get_state, not a phi-owned label.
+        expect(stateBefore.title).toBe(fixture.initialTitle);
         const metadataBefore = stateMetadata(stateBefore);
         expect(JSON.stringify(spawnData.snapshot?.messages ?? [])).toContain(
             historyText,
@@ -667,6 +670,43 @@ test('M1 real offline Pi rename keeps metadata and the later hydrate coherent', 
         expect(ackState.title).toBe(renamedTitle);
         expect(stateMetadata(ackState)).toEqual(metadataBefore);
 
+        // M4: the label change arrives as a sequenced native state event that
+        // agrees with the control response. Publication before the response is
+        // asserted deterministically in pkg/rpc, not by frame arrival order:
+        // events and responses can travel on different sockets.
+        const hasRenameEvent = (frame: ControlFrame): boolean =>
+            frame.t === 'evt' &&
+            frame.evt === 'stateChanged' &&
+            (frame.data as StateJson | undefined)?.title === renamedTitle;
+        await expect
+            .poll(() => {
+                const frames = parseFrames(receivedFrames);
+                const event = frames.find(hasRenameEvent);
+                const ack = frames.find(
+                    (frame) => frame.t === 'res' && frame.id === renameCall.id,
+                );
+                return event && ack ? 'both' : '';
+            })
+            .toBe('both');
+        const renameEvent = requireFrame(
+            parseFrames(receivedFrames),
+            hasRenameEvent,
+            'native rename stateChanged',
+        );
+        expect(renameEvent.sid).toBe(String(spawnData.sid));
+        expect(renameEvent.seq).toEqual(expect.any(Number));
+        expect((renameEvent.data as StateJson).title).toBe(ackState.title);
+
+        // The accepted title reaches saved Pi RPC tab storage.
+        const savedTabs = await page.evaluate(() =>
+            JSON.parse(localStorage.getItem('phi_pi_rpc_tabs') ?? '[]'),
+        );
+        expect(savedTabs).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({ title: renamedTitle }),
+            ]),
+        );
+
         const sid = String(spawnData.sid);
         expect(sid).not.toBe('');
         const hydrate = await hydrateOverControl(page, fixture.phi.url, sid);
@@ -681,10 +721,27 @@ test('M1 real offline Pi rename keeps metadata and the later hydrate coherent', 
             fullPage: true,
         });
 
+        // A reload must restore the same native title from saved tab storage and
+        // the resume transcript from the session file.
+        const paneId = await tab.getAttribute('data-pane-id');
+        expect(paneId).toBeTruthy();
+        await page.reload();
+        const reloadedTab = page.locator(`.tab[data-pane-id="${paneId}"]`);
+        await expect(reloadedTab.locator('.tab-title')).toHaveText(
+            renamedTitle,
+        );
+        await expect(page.locator('.review-chat-wrapper')).toContainText(
+            historyText,
+        );
+
         summary.assertions = [
             'Open Pi RPC from the actual session list',
+            'the opening title is the native session name from get_state',
             'real offline Pi accepted correlated setSessionName',
+            'a sequenced native state event agrees with the control response',
             'tab title, response State title, numeric metadata, and final hydrate agree',
+            'the accepted title is saved in Pi RPC tab storage',
+            'a reload restores the native title and the resume transcript',
             'resume transcript remains in the paired final hydrate',
         ];
         summary.sessionId = fixture.sessionID;

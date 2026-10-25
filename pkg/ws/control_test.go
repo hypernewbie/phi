@@ -1676,6 +1676,12 @@ func newControlRenameManager(t *testing.T, rejectName string) (*rpc.Manager, *co
 			if rejectName != "" {
 				return nil, false, rejectName
 			}
+			// Pi emits the native name before the successful response.
+			name, _ := command["name"].(string)
+			encoded, _ := json.Marshal(map[string]any{
+				"type": "session_info_changed", "name": name,
+			})
+			_, _ = child.stdoutW.Write(append(encoded, '\n'))
 			return nil, true, ""
 		default:
 			return nil, false, "unexpected command"
@@ -1989,6 +1995,20 @@ func respondStateTransactionCommand(t *testing.T, child *controlFakeChild, comma
 	}
 }
 
+// respondNativeRename mirrors pi: the native session_info_changed event is
+// emitted before the successful set_session_name response.
+func respondNativeRename(t *testing.T, child *controlFakeChild, command map[string]any, name string) {
+	t.Helper()
+	encoded, err := json.Marshal(map[string]any{"type": "session_info_changed", "name": name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := child.stdoutW.Write(append(encoded, '\n')); err != nil {
+		t.Fatalf("write native name event: %v", err)
+	}
+	respondStateTransactionCommand(t, child, command, true, map[string]any{}, "")
+}
+
 func stateTransactionControlFixture(t *testing.T, cwd string) (*rpc.Manager, *controlFakeChild, *rpc.Instance) {
 	t.Helper()
 	child := newControlFakeChild()
@@ -2054,7 +2074,7 @@ func TestStateTransactionIndependentUpdates(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("stats request did not complete")
 	}
-	respondStateTransactionCommand(t, child, nameCommand, true, map[string]any{}, "")
+	respondNativeRename(t, child, nameCommand, "renamed")
 	var renameResponse Envelope
 	select {
 	case renameResponse = <-renameDone:
@@ -2101,12 +2121,12 @@ func TestStateTransactionRenameGate(t *testing.T) {
 	go func() {
 		secondDone <- server.dispatch(ctx, secondCall)
 	}()
-	respondStateTransactionCommand(t, child, firstCommand, true, map[string]any{}, "")
+	respondNativeRename(t, child, firstCommand, "first title")
 	secondCommand := nextStateTransactionCommand(t, child)
 	if secondCommand["type"] != "set_session_name" {
 		t.Fatalf("second native command = %v, want set_session_name", secondCommand["type"])
 	}
-	respondStateTransactionCommand(t, child, secondCommand, true, map[string]any{}, "")
+	respondNativeRename(t, child, secondCommand, "second title")
 
 	responses := make(map[string]Envelope, 2)
 	for range 2 {

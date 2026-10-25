@@ -556,7 +556,8 @@ func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
 			}); requestErr != nil {
 				return nil, requestErr
 			}
-			inst.SetTitle(name)
+			// Pi's native session_info_changed event owns the title; the handler
+			// must not write the requested name after the response.
 			return inst.StateCopy(), nil
 		})
 		if requestErr != nil {

@@ -94,7 +94,6 @@ func NewManagerWithSpawner(spawn func(SpawnOptions) (Cmd, WriteCloser, ReadClose
 // SpawnOptions configures child creation.
 type SpawnOptions struct {
 	Cwd             string
-	Title           string
 	PiOffline       bool
 	SessionPath     string
 	InitialMessages []Message
@@ -178,7 +177,6 @@ func (m *Manager) newInstance(opts SpawnOptions, cmd Cmd, stdin WriteCloser, std
 	inst := &Instance{
 		ID:        id,
 		Cwd:       opts.Cwd,
-		Title:     TitleFor(opts.Cwd, opts.Title),
 		CreatedAt: time.Now(),
 		cmd:       cmd,
 		stdin:     stdin,
@@ -189,6 +187,10 @@ func (m *Manager) newInstance(opts SpawnOptions, cmd Cmd, stdin WriteCloser, std
 		subs:      newSubscriberSet(),
 		snap:      &Snapshot{Messages: cloneMessages(opts.InitialMessages)},
 	}
+	// Seed the request fallback once, before the read loop can publish, and let
+	// it decide the opening title. A supplied startup label is not an alias.
+	inst.titleSrc.promptTitle = seedPromptTitle(opts.InitialMessages)
+	inst.Title = inst.titleSrc.resolve(opts.Cwd)
 	inst.setSessionPath(opts.SessionPath)
 	inst.initState(State{Sid: id, Title: inst.Title, Cwd: opts.Cwd, Status: "live"})
 	inst.exitHook = func() { m.removeLifecycle(inst) }

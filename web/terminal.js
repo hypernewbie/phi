@@ -461,6 +461,20 @@ export class TabManager {
         this._piRpcStatusUnsubscribe = subscribePiRpcStatus(
             (paneId, status) => {
                 this._promotePiRpcSessionPath(paneId, status);
+                // The backend resolves the native Pi session name, the request
+                // fallback, and the generic label into one title. Apply it to
+                // the tab and persist only on an actual change.
+                const nextTitle = status?.title;
+                if (typeof nextTitle === 'string' && nextTitle.trim()) {
+                    const tab = this.tabs.get(paneId);
+                    if (
+                        tab &&
+                        tab.coder === 'pi-rpc' &&
+                        this._setTabTitle(tab, nextTitle)
+                    ) {
+                        this.savePiRpcTabs();
+                    }
+                }
                 // Model change Invalidates thinking-level cache (different model → different set)
                 const m = status?.model ?? getPiRpcStatus(paneId)?.model ?? '';
                 const prev = this._piLastModel?.get(paneId);
@@ -6082,9 +6096,8 @@ export class TabManager {
                     // backend sync.
                     this._setTabTitle(tab, next);
                 } else if (tab.isChatRpc) {
-                    // Pi-RPC keeps its existing optimistic behavior until its
-                    // native title acknowledgment contract is reviewed.
-                    this._setTabTitle(tab, next);
+                    // Pi RPC keeps the current label until Pi's native
+                    // session_info_changed event reaches the backend.
                     rpcChatSetName(paneId, next).catch((error) =>
                         console.error(
                             '[term] Failed to rename Pi RPC session:',
