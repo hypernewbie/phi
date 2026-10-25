@@ -78,12 +78,16 @@ func NewEndpointWithRoots(roots []string) (*Endpoint, error) {
 
 // publishableTarget reports whether the socket path can be published as a
 // client target. The client accepts a literal absolute path only: no
-// percent encoding, no credentials, no authority.
+// percent encoding, no credentials, no authority, no NUL. The rules mirror
+// the client parser (bonus/pi-phi/src/endpoint.ts) so the endpoint never
+// publishes a target the client refuses to dial.
 func publishableTarget(socket string) bool {
-	return !strings.Contains(socket, "%") &&
+	return strings.HasPrefix(socket, "/") &&
+		!strings.HasPrefix(socket, "//") &&
+		!strings.Contains(socket, "\x00") &&
+		!strings.Contains(socket, "%") &&
 		!strings.Contains(socket, "@") &&
-		!strings.Contains(socket, "://") &&
-		!strings.HasPrefix(socket, "//")
+		!strings.Contains(socket, "://")
 }
 
 // Listen opens the filesystem Unix-domain socket with mode 0600. It never
