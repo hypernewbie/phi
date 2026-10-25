@@ -3467,7 +3467,7 @@ export class TabManager {
         piRpcSessionPath = null,
         opencodeMode = null,
         initialPiBridge = null,
-        options = {},
+        options = null,
     ) {
         // If tab already exists, just switch to it
         if (this.tabs.has(paneId)) {
@@ -4039,10 +4039,10 @@ export class TabManager {
             _piTitleRevision: -1,
         };
 
-        if (options.live === false) {
+        if (options?.live === false) {
             tabInfo._detachedCache = true;
             tabInfo.ws = null;
-            if (options.cachedScreen) {
+            if (options?.cachedScreen) {
                 tabInfo._cachedScreen = options.cachedScreen;
                 this._openTermAndViewport(tabInfo);
                 const { ansi, cols, rows } = options.cachedScreen;
