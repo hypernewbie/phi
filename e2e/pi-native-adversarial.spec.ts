@@ -133,6 +133,7 @@ for (const mode of ['regular', 'fullscreen'])
             test.setTimeout(90000);
             const id = '2348b9b7-23b3-4ab6-b148-ff2227ba0191';
             const phi = await startPhi({
+                env: { PI_OFFLINE: '1', PI_SKIP_VERSION_CHECK: '1' },
                 setup(dir) {
                     const cwd = realpathSync(dir);
                     const agent = join(dir, 'home', '.pi', 'agent');
