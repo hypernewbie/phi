@@ -272,6 +272,7 @@ describe('TBAR pipeline: regen + diff', () => {
       'src/appicon.ts',
       'src/shortcuts.ts',
       'src/injected.ts',
+      'src/embedded-transport.ts',
       'scripts/copy-assets.mjs',
     ];
     const bannedWrites = ['header.html', 'web/index.html'];

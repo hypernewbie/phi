@@ -1170,10 +1170,13 @@ func TestHandleGetVersion(t *testing.T) {
 		t.Fatalf("Failed to decode version response: %v", err)
 	}
 
-	for _, field := range []string{"version", "commit", "date", "build_source", "install_method"} {
+	for _, field := range []string{"api", "version", "commit", "date", "build_source", "install_method"} {
 		if _, ok := res[field]; !ok {
 			t.Errorf("Expected version response to contain %q", field)
 		}
+	}
+	if res["api"] != "1" {
+		t.Errorf("Expected api to be \"1\", got %q", res["api"])
 	}
 }
 

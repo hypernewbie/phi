@@ -5,7 +5,7 @@
   "directories": {
     "output": "out"
   },
-  "files": ["dist/**", "src/**", "web/**", "assets/**", "package.json"],
+  "files": ["dist/**", "src/**", "web/**", "embedded/**", "assets/**", "package.json"],
   "asarUnpack": ["assets/**"],
   "win": {
     "icon": "assets/icon.png"
