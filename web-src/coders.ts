@@ -223,8 +223,8 @@ seedBuiltins();
 
 // ─── Loading ────────────────────────────────────────────────────────────
 
-export async function loadCoderRegistry(): Promise<void> {
-    if (loadPromise) return loadPromise;
+export async function loadCoderRegistry(force = false): Promise<void> {
+    if (loadPromise && !force) return loadPromise;
     loadPromise = (async () => {
         try {
             const res = await fetch('/api/coders');
@@ -246,9 +246,16 @@ export async function loadCoderRegistry(): Promise<void> {
     return loadPromise;
 }
 
-function rebuildRegistry(data: unknown): void {
+export function rebuildRegistry(data: unknown): void {
     const out = new Map<string, CoderDescriptor>();
-    if (data && typeof data === 'object' && !Array.isArray(data)) {
+    if (Array.isArray(data)) {
+        for (const item of data) {
+            if (item && typeof item === 'object' && 'id' in item) {
+                const d = coerceDescriptor((item as any).id, item);
+                if (d) out.set(d.id, d);
+            }
+        }
+    } else if (data && typeof data === 'object') {
         for (const [id, raw] of Object.entries(
             data as Record<string, unknown>,
         )) {

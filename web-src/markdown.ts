@@ -364,17 +364,27 @@ export class MarkdownManager {
                 '<div class="md-list-loading">Scanning...</div>';
         }
         try {
-            const res = await fetch(
-                `/api/markdown/files?cwd=${encodeURIComponent(cwd)}`,
-            );
+            const fetchFn =
+                (this.app as any)?.scope &&
+                typeof (this.app as any).scope.fetch === 'function'
+                    ? (url: string, opts?: any) =>
+                          (this.app as any).scope.fetch(url, opts)
+                    : fetch;
+            const url = `/api/markdown/files?cwd=${encodeURIComponent(cwd)}`;
+            const res = await fetchFn(url);
             if (!res.ok) throw new Error(await res.text());
             const files = await res.json();
             if (requestId !== this.refreshRequestId) return;
+            const store = (this.app as any)?.getActiveStore?.();
+            if (store) {
+                store.responses.set(url, JSON.stringify(files));
+            }
             const key = `${cwd} ${JSON.stringify(files)}`;
             if (silent && key === this._lastRenderedKey) return;
             this._lastRenderedKey = key;
             this._renderFileList(files);
-        } catch (e) {
+        } catch (e: any) {
+            if (e?.name === 'AbortError' || (this.app as any)?.scope?.aborted) return;
             if (requestId !== this.refreshRequestId) return;
             if (!silent) {
                 this.fileListEl.innerHTML = `<div class="md-list-error">Failed to load: ${escapeHtml((e as Error).message)}</div>`;

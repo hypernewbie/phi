@@ -180,8 +180,8 @@ export function seedBuiltins() {
 // and the UI behaves correctly during the first paint.
 seedBuiltins();
 // ─── Loading ────────────────────────────────────────────────────────────
-export async function loadCoderRegistry() {
-    if (loadPromise)
+export async function loadCoderRegistry(force = false) {
+    if (loadPromise && !force)
         return loadPromise;
     loadPromise = (async () => {
         try {
@@ -202,9 +202,18 @@ export async function loadCoderRegistry() {
     })();
     return loadPromise;
 }
-function rebuildRegistry(data) {
+export function rebuildRegistry(data) {
     const out = new Map();
-    if (data && typeof data === 'object' && !Array.isArray(data)) {
+    if (Array.isArray(data)) {
+        for (const item of data) {
+            if (item && typeof item === 'object' && 'id' in item) {
+                const d = coerceDescriptor(item.id, item);
+                if (d)
+                    out.set(d.id, d);
+            }
+        }
+    }
+    else if (data && typeof data === 'object') {
         for (const [id, raw] of Object.entries(data)) {
             const d = coerceDescriptor(id, raw);
             if (d)

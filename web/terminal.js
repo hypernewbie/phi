@@ -5808,6 +5808,18 @@ export class TabManager {
             normalizePath(this.app.sessionsManager.activeCWD) !==
                 normalizePath(newTab.cwd);
 
+        if (newTab._detachedCache) {
+            if (workspaceChanged) {
+                this.app.sessionsManager.workspaceSelect.value = newTab.workspace;
+                this.app.sessionsManager.activeWorkspace = newTab.workspace;
+                this.app.sessionsManager.activeCWD = newTab.cwd;
+                this.app.sessionsManager.updateWorkspaceSelectWidth();
+            } else if (coderChanged) {
+                this.app.sessionsManager.activeCWD = newTab.cwd;
+            }
+            return false;
+        }
+
         if (workspaceChanged) {
             this.app.sessionsManager.workspaceSelect.value = newTab.workspace;
             this.app.sessionsManager.activeWorkspace = newTab.workspace;

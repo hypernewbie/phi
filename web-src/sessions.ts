@@ -410,20 +410,17 @@ export class SessionsManager {
                 this.activeWorkspace || this.workspaceSelect.value || 'Default';
     }
 
-    async loadConfig(): Promise<void> {
-        try {
-            // Load the coder registry first so renderCoderTabs /
-            // renderQuickLaunchButtons have data to work with. App.init
-            // already calls loadCoderRegistry; calling it again is a
-            // no-op via the deduped promise.
-            await loadCoderRegistry();
-            const res = await fetch('/api/config');
-            const data = await res.json();
-            this.config = data;
-            // Mirror the raw config onto the App: terminal.js reads
-            // app.config.auto_reconnect to gate automatic reconnects.
+    applyConfigData(
+        data: any,
+        _options: { stale?: boolean } = {},
+    ): void {
+        if (!data || typeof data !== 'object') return;
+        this.config = data;
+        if (this.app) {
             this.app.config = data;
+        }
 
+        if (this.workspaceSelect && Array.isArray(data.workspaces)) {
             this.workspaceSelect.innerHTML = '';
             data.workspaces.forEach((ws: string) => {
                 const opt = document.createElement('option');
@@ -433,7 +430,9 @@ export class SessionsManager {
                 this.workspaceSelect.appendChild(opt);
             });
 
-            const lastChosen = localStorage.getItem(serverKey('phi_last_chosen_project'));
+            const lastChosen = localStorage.getItem(
+                serverKey('phi_last_chosen_project'),
+            );
             if (lastChosen && data.workspaces.includes(lastChosen)) {
                 this.activeWorkspace = lastChosen;
             } else {
@@ -442,14 +441,16 @@ export class SessionsManager {
             }
             this.workspaceSelect.value = this.activeWorkspace;
             this.updateWorkspaceSelectWidth();
+        }
 
-            if (data.theme_color) {
-                // applyAccentTheme sets data-theme-color on <html>;
-                // that's what the Settings modal reads on open to
-                // pre-select the active swatch.
-                (this.app as any).applyAccentTheme(data.theme_color);
-            }
+        if (data.theme_color && this.app) {
+            // applyAccentTheme sets data-theme-color on <html>;
+            // that's what the Settings modal reads on open to
+            // pre-select the active swatch.
+            (this.app as any).applyAccentTheme?.(data.theme_color);
+        }
 
+        if (this.app) {
             // Save the model presets list, quick commands, and terminal commands, then redraw current tab presets.
             this.app.modelPresets = data.model_presets || {};
             this.app.quickCommands = data.quick_commands || [];
@@ -458,11 +459,6 @@ export class SessionsManager {
             this.app.useExistingTerminalTab = !!data.use_existing_terminal_tab;
             this.app.useHiddenTerminal = !!data.use_hidden_terminal;
             this.app.applyFastMode?.();
-            // Ingest appearance settings and apply so the Settings
-            // modal opens with the persisted values + the body shows
-            // the chosen UI font / size immediately. terminalFontFamily
-            // is read by new terminals (see terminal.js), so no live
-            // re-apply needed here.
             let ls: any = null;
             try {
                 ls = JSON.parse(
@@ -480,9 +476,6 @@ export class SessionsManager {
                     data.terminal_font_family) as string) || '';
             this.app.terminalFontSize =
                 Number(ls?.terminal_font_size ?? data.terminal_font_size) || 0;
-            // Alternate socket hostname (blank = page host). Local value
-            // wins, server is the fallback; applied to the shared default
-            // before any socket connects.
             this.app.hostnameOverride =
                 ((ls?.hostname_override ?? data.hostname_override) as string) ||
                 '';
@@ -498,45 +491,60 @@ export class SessionsManager {
                     ? ls.terminal_bg_blur
                     : 0;
             this.app.applyUIFont?.();
-            await this.app.loadCustomFont?.();
-            await this.app.loadCustomBg?.();
+            void this.app.loadCustomFont?.();
+            void this.app.loadCustomBg?.();
+        }
 
-            // Render the coder tabs / quick-launch buttons from the
-            // registry now that the workspace selector is in place.
-            // Idempotent — calling again after a registry rebuild is
-            // safe.
-            this.renderCoderTabs();
-            this.renderQuickLaunchButtons();
+        this.renderCoderTabs?.();
+        this.renderQuickLaunchButtons?.();
 
-            const activeTab = this.app.tabManager.getActiveTab();
-            if (activeTab) {
-                this.app.tabManager.renderPresets(activeTab.coder);
+        const activeTab = this.app?.tabManager?.getActiveTab?.();
+        if (activeTab) {
+            this.app.tabManager.renderPresets(activeTab.coder);
+        }
+
+        if (data.hostname && this.app) {
+            this.app.hostname = data.hostname;
+            const shown = displayHostname(data.hostname);
+            const hostEl = document.getElementById('hostname-display');
+            if (hostEl) {
+                hostEl.innerText = shown;
             }
-
-            if (data.hostname) {
-                // app.hostname keeps the server's raw value; only the rendered
-                // surfaces drop the macOS .local suffix.
-                this.app.hostname = data.hostname;
-                const shown = displayHostname(data.hostname);
-                const hostEl = document.getElementById('hostname-display');
-                if (hostEl) {
-                    hostEl.innerText = shown;
-                }
-                // TabManager owns the composable Φ / ϕ / ● title grammar
-                // and the matching header cursor. Re-render now that the
-                // hostname half of the title is known.
-                this.app.tabManager.updateDocumentTitle();
-                const emptyHostEl = document.getElementById(
-                    'empty-state-hostname',
-                );
-                if (emptyHostEl) {
-                    emptyHostEl.innerText = shown;
-                }
+            this.app.tabManager?.updateDocumentTitle?.();
+            const emptyHostEl = document.getElementById(
+                'empty-state-hostname',
+            );
+            if (emptyHostEl) {
+                emptyHostEl.innerText = shown;
             }
+        }
 
+        this.updateOpenCodeServiceVisibility?.();
+    }
+
+    async loadConfig(): Promise<void> {
+        try {
+            await loadCoderRegistry();
+            const fetchFn =
+                this.app?.scope && typeof this.app.scope.fetch === 'function'
+                    ? (url: string, opts?: any) => this.app.scope.fetch(url, opts)
+                    : fetch;
+            const res = await fetchFn('/api/config');
+            const data = await res.json();
+            const store = (this.app as any)?.getActiveStore?.();
+            if (store) {
+                store.responses.set('/api/config', JSON.stringify(data));
+            }
+            const applyConfig =
+                typeof this.applyConfigData === 'function'
+                    ? this.applyConfigData
+                    : SessionsManager.prototype.applyConfigData;
+            applyConfig.call(this, data, { stale: false });
+            await this.app?.loadCustomFont?.();
+            await this.app?.loadCustomBg?.();
             await this.loadSessions();
-            this.updateOpenCodeServiceVisibility();
-        } catch (e) {
+        } catch (e: any) {
+            if (e?.name === 'AbortError' || this.app?.scope?.aborted) return;
             console.error('[config] Failed to load workspace config:', e);
         }
     }
@@ -649,178 +657,193 @@ export class SessionsManager {
         this.sessionList.innerHTML =
             '<div style="padding: 16px; color: var(--text-muted); font-size: 13px;">Scanning git worktrees...</div>';
         try {
-            const res = await fetch(
-                `/api/git/worktrees?cwd=${encodeURIComponent(workspace)}`,
-            );
+            const fetchFn =
+                this.app?.scope && typeof this.app.scope.fetch === 'function'
+                    ? (url: string, opts?: any) => this.app.scope.fetch(url, opts)
+                    : fetch;
+            const url = `/api/git/worktrees?cwd=${encodeURIComponent(workspace)}`;
+            const res = await fetchFn(url);
             if (!isCurrentRequest()) return;
             if (!res.ok) throw new Error('Failed to scan worktrees');
 
             const worktrees = await res.json();
             if (!isCurrentRequest()) return;
-            this.sessionList.innerHTML = '';
 
-            if (!worktrees || worktrees.length === 0) {
-                this.sessionList.innerHTML =
-                    '<div style="padding: 16px; color: var(--text-muted); font-size: 13px; text-align: center;">No worktrees found</div>';
-                return;
+            const store = (this.app as any)?.getActiveStore?.();
+            if (store) {
+                store.responses.set(url, JSON.stringify(worktrees));
             }
 
-            if (this.activeCWD === startingCwd) {
-                if (targetCwd) {
-                    this.activeCWD = targetCwd;
-                } else {
-                    const hasCwd = worktrees.some(
-                        (wt: any) =>
-                            normalizePath(wt.path) ===
-                            normalizePath(startingCwd),
-                    );
-                    if (!hasCwd) {
-                        const activeWT = worktrees.find((wt: any) => wt.active);
-                        if (activeWT) {
-                            this.activeCWD = activeWT.path;
-                        } else {
-                            this.activeCWD = worktrees[0].path;
-                        }
-                    }
-                }
+            const renderWorktrees =
+                typeof this.renderWorktreesList === 'function'
+                    ? this.renderWorktreesList
+                    : SessionsManager.prototype.renderWorktreesList;
+            renderWorktrees.call(this, worktrees, workspace, targetCwd, {
+                loadSessions: true,
+                startingCwd,
+            });
+        } catch (e: any) {
+            if (e?.name === 'AbortError' || this.app?.scope?.aborted) return;
+            if (isCurrentRequest()) {
+                this.sessionList.innerHTML = `<div style="padding: 16px; color: var(--red); font-size: 13px;">Error scanning worktrees: ${escapeHtml((e as Error).message)}</div>`;
             }
+        }
+    }
 
-            localStorage.setItem(serverKey('phi_last_chosen_project'), workspace);
+    renderWorktreesList(
+        worktrees: any[],
+        workspace: string,
+        targetCwd: string | null = null,
+        {
+            loadSessions = true,
+            startingCwd,
+        }: { loadSessions?: boolean; startingCwd?: string } = {},
+    ): void {
+        this.sessionList.innerHTML = '';
 
-            // Append a faint "-- No workspace --" section for sessions with no cwd.
-            // Only relevant for agy (others don't have unworkspaced sessions).
-            // Rendered after real worktrees, collapsed by default.
-            const appendNoWorkspaceSection = () => {
-                if (this.activeCoder !== 'agy') return;
-                const nwSection = document.createElement('div');
-                nwSection.className = 'worktree-section no-workspace-section';
-                nwSection.setAttribute(
-                    'data-worktree-path',
-                    '--no-workspace--',
+        if (!worktrees || worktrees.length === 0) {
+            this.sessionList.innerHTML =
+                '<div style="padding: 16px; color: var(--text-muted); font-size: 13px; text-align: center;">No worktrees found</div>';
+            return;
+        }
+
+        const baselineCwd =
+            startingCwd !== undefined ? startingCwd : this.activeCWD;
+        if (startingCwd === undefined || this.activeCWD === startingCwd) {
+            if (targetCwd) {
+                this.activeCWD = targetCwd;
+            } else {
+                const hasCwd = worktrees.some(
+                    (wt: any) =>
+                        normalizePath(wt.path) === normalizePath(baselineCwd),
                 );
-                nwSection.innerHTML = `
-                    <div class="worktree-header">
-                        <svg class="icon chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <polyline points="9 18 15 12 9 6"></polyline>
-                        </svg>
-                        <span class="worktree-name">— no workspace —</span>
-                    </div>
-                    <div class="worktree-sessions-container"></div>
-                `;
-                const header = nwSection.querySelector(
-                    '.worktree-header',
-                ) as HTMLElement;
-                header.addEventListener('click', async () => {
-                    const isExpanded = nwSection.classList.toggle('expanded');
-                    if (isExpanded) {
-                        await this.loadWorktreeSessions(
-                            '--no-workspace--',
-                            nwSection.querySelector(
-                                '.worktree-sessions-container',
-                            )!,
-                        );
+                if (!hasCwd) {
+                    const activeWT = worktrees.find((wt: any) => wt.active);
+                    if (activeWT) {
+                        this.activeCWD = activeWT.path;
+                    } else {
+                        this.activeCWD = worktrees[0].path;
                     }
-                });
-                this.sessionList.appendChild(nwSection);
-            };
-
-            worktrees.forEach((wt: any) => {
-                const wtSection = document.createElement('div');
-                wtSection.className = 'worktree-section';
-                wtSection.setAttribute('data-worktree-path', wt.path);
-
-                const isCurrentCWD =
-                    normalizePath(wt.path) === normalizePath(this.activeCWD);
-                if (wt.expanded || isCurrentCWD) {
-                    wtSection.classList.add('expanded');
                 }
-                if (isCurrentCWD) {
-                    wtSection.classList.add('active');
+            }
+        }
+
+        localStorage.setItem(serverKey('phi_last_chosen_project'), workspace);
+
+        // Append a faint "-- No workspace --" section for sessions with no cwd.
+        // Only relevant for agy (others don't have unworkspaced sessions).
+        // Rendered after real worktrees, collapsed by default.
+        const appendNoWorkspaceSection = () => {
+            if (this.activeCoder !== 'agy') return;
+            const nwSection = document.createElement('div');
+            nwSection.className = 'worktree-section no-workspace-section';
+            nwSection.setAttribute(
+                'data-worktree-path',
+                '--no-workspace--',
+            );
+            nwSection.innerHTML = `
+                <div class="worktree-header">
+                    <svg class="icon chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="9 18 15 12 9 6"></polyline>
+                    </svg>
+                    <span class="worktree-name">— no workspace —</span>
+                </div>
+                <div class="worktree-sessions-container"></div>
+            `;
+            const header = nwSection.querySelector(
+                '.worktree-header',
+            ) as HTMLElement;
+            header.addEventListener('click', async () => {
+                const isExpanded = nwSection.classList.toggle('expanded');
+                if (isExpanded) {
+                    await this.loadWorktreeSessions(
+                        '--no-workspace--',
+                        nwSection.querySelector(
+                            '.worktree-sessions-container',
+                        )!,
+                    );
                 }
+            });
+            this.sessionList.appendChild(nwSection);
+        };
 
-                const parts = wt.path.split(/[/\\]/);
-                const baseName = parts[parts.length - 1] || wt.path;
-                // Same glyph as the tab uses for this path - lets the
-                // user visually match tabs in the strip to their
-                // worktree section in the left panel without reading
-                // anything.
-                const wtGlyph = worktreeGlyph(wt.path);
+        worktrees.forEach((wt: any) => {
+            const wtSection = document.createElement('div');
+            wtSection.className = 'worktree-section';
+            wtSection.setAttribute('data-worktree-path', wt.path);
 
-                // Cartouche (oval ring + bar) wraps the glyph when the
-                // worktree has any live/open tab. Egyptian cartouches
-                // historically framed royal names; reusing the motif
-                // here marks the worktree as "live / inscribed."
-                let hasLiveTab = false;
-                if (this.app?.tabManager?.tabs) {
-                    const wtPathNorm = normalizePath(wt.path);
-                    for (const t of this.app.tabManager.tabs.values()) {
-                        if (t.cwd && normalizePath(t.cwd) === wtPathNorm) {
-                            hasLiveTab = true;
-                            break;
+            const isCurrentCWD =
+                normalizePath(wt.path) === normalizePath(this.activeCWD);
+            if (wt.expanded || isCurrentCWD) {
+                wtSection.classList.add('expanded');
+            }
+            if (isCurrentCWD) {
+                wtSection.classList.add('active');
+            }
+
+            const parts = wt.path.split(/[/\\]/);
+            const baseName = parts[parts.length - 1] || wt.path;
+            const wtGlyph = worktreeGlyph(wt.path);
+
+            let hasLiveTab = false;
+            if (this.app?.tabManager?.tabs) {
+                const wtPathNorm = normalizePath(wt.path);
+                for (const t of this.app.tabManager.tabs.values()) {
+                    if (t.cwd && normalizePath(t.cwd) === wtPathNorm) {
+                        hasLiveTab = true;
+                        break;
+                    }
+                }
+            }
+            if (hasLiveTab) {
+                wtSection.classList.add('has-live-tab');
+            }
+
+            wtSection.innerHTML = `
+                <div class="worktree-header">
+                    <svg class="icon chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="9 18 15 12 9 6"></polyline>
+                    </svg>
+                    <span class="worktree-glyph-cell"><span class="worktree-section-glyph" aria-hidden="true" title="${wt.path}">${wtGlyph}</span></span>
+                    <span class="worktree-name" title="${wt.path}">${baseName}</span>
+                    ${wt.branch ? `<span class="worktree-branch">[${wt.branch}]</span>` : ''}
+                    <span class="worktree-dirty-indicator hidden" title="Unstaged changes" aria-hidden="true">★</span>
+                </div>
+                <div class="worktree-sessions-container">
+                    <div class="scanning-sessions">Scanning sessions...</div>
+                </div>
+            `;
+
+            const header = wtSection.querySelector(
+                '.worktree-header',
+            ) as HTMLElement;
+            header.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const isExpanded = wtSection.classList.toggle('expanded');
+
+                document
+                    .querySelectorAll('.worktree-section')
+                    .forEach((sec) => {
+                        sec.classList.remove('active');
+                        if (sec !== wtSection) {
+                            sec.classList.remove('expanded');
                         }
-                    }
+                    });
+
+                wtSection.classList.add('active');
+                this.activeCWD = wt.path;
+
+                this.app.diffController.refreshDiff();
+
+                const activeTab = this.app.tabManager.getActiveTab();
+                if (activeTab && activeTab.coder === this.activeCoder) {
+                    this.highlightActiveSession(activeTab.sessionId);
                 }
-                if (hasLiveTab) {
-                    wtSection.classList.add('has-live-tab');
-                }
 
-                wtSection.innerHTML = `
-                    <div class="worktree-header">
-                        <svg class="icon chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <polyline points="9 18 15 12 9 6"></polyline>
-                        </svg>
-                        <span class="worktree-glyph-cell"><span class="worktree-section-glyph" aria-hidden="true" title="${wt.path}">${wtGlyph}</span></span>
-                        <span class="worktree-name" title="${wt.path}">${baseName}</span>
-                        ${wt.branch ? `<span class="worktree-branch">[${wt.branch}]</span>` : ''}
-                        <span class="worktree-dirty-indicator hidden" title="Unstaged changes" aria-hidden="true">★</span>
-                    </div>
-                    <div class="worktree-sessions-container">
-                        <div class="scanning-sessions">Scanning sessions...</div>
-                    </div>
-                `;
+                await this.saveWorktreeState();
 
-                const header = wtSection.querySelector(
-                    '.worktree-header',
-                ) as HTMLElement;
-                header.addEventListener('click', async (e) => {
-                    e.stopPropagation();
-                    const isExpanded = wtSection.classList.toggle('expanded');
-
-                    document
-                        .querySelectorAll('.worktree-section')
-                        .forEach((sec) => {
-                            sec.classList.remove('active');
-                            if (sec !== wtSection) {
-                                sec.classList.remove('expanded');
-                            }
-                        });
-
-                    wtSection.classList.add('active');
-                    this.activeCWD = wt.path;
-
-                    this.app.diffController.refreshDiff();
-
-                    const activeTab = this.app.tabManager.getActiveTab();
-                    if (activeTab && activeTab.coder === this.activeCoder) {
-                        this.highlightActiveSession(activeTab.sessionId);
-                    }
-
-                    await this.saveWorktreeState();
-
-                    if (isExpanded) {
-                        await this.loadWorktreeSessions(
-                            wt.path,
-                            wtSection.querySelector(
-                                '.worktree-sessions-container',
-                            )!,
-                        );
-                    }
-                });
-
-                this.sessionList.appendChild(wtSection);
-
-                if (wt.expanded || isCurrentCWD) {
-                    this.loadWorktreeSessions(
+                if (isExpanded) {
+                    await this.loadWorktreeSessions(
                         wt.path,
                         wtSection.querySelector(
                             '.worktree-sessions-container',
@@ -829,15 +852,43 @@ export class SessionsManager {
                 }
             });
 
-            appendNoWorkspaceSection();
+            this.sessionList.appendChild(wtSection);
+
+            if (wt.expanded || isCurrentCWD) {
+                const container = wtSection.querySelector(
+                    '.worktree-sessions-container',
+                ) as HTMLElement;
+                if (container) {
+                    if (loadSessions) {
+                        this.loadWorktreeSessions(wt.path, container);
+                    } else {
+                        const store = (this.app as any)?.getActiveStore?.();
+                        const cachedKey = `/api/sessions?coder=${this.activeCoder}&cwd=${encodeURIComponent(wt.path)}`;
+                        const cachedSessions = store?.responses?.get?.(cachedKey);
+                        if (cachedSessions) {
+                            try {
+                                this.renderWorktreeSessionsList(
+                                    JSON.parse(cachedSessions),
+                                    wt.path,
+                                    container,
+                                );
+                            } catch {
+                                container.innerHTML = '';
+                            }
+                        } else {
+                            container.innerHTML = '';
+                        }
+                    }
+                }
+            }
+        });
+
+        appendNoWorkspaceSection();
+        if (loadSessions) {
             this.loadWorktreeDirtyStates(
                 workspace,
                 ++this.worktreeDirtyRequestId,
             );
-        } catch (e) {
-            if (isCurrentRequest()) {
-                this.sessionList.innerHTML = `<div style="padding: 16px; color: var(--red); font-size: 13px;">Error scanning worktrees: ${escapeHtml((e as Error).message)}</div>`;
-            }
         }
     }
 
@@ -890,24 +941,47 @@ export class SessionsManager {
         container.innerHTML =
             '<div class="scanning-sessions">Scanning sessions...</div>';
         try {
-            const res = await fetch(
-                `/api/sessions?coder=${this.activeCoder}&cwd=${encodeURIComponent(wtPath)}`,
-            );
+            const fetchFn =
+                this.app?.scope && typeof this.app.scope.fetch === 'function'
+                    ? (url: string, opts?: any) => this.app.scope.fetch(url, opts)
+                    : fetch;
+            const url = `/api/sessions?coder=${this.activeCoder}&cwd=${encodeURIComponent(wtPath)}`;
+            const res = await fetchFn(url);
             if (!res.ok) {
                 const errMsg = await res.text();
                 throw new Error(errMsg || 'Failed to scan sessions');
             }
 
             const sessions = await res.json();
-            container.innerHTML = '';
-
-            if (!sessions || sessions.length === 0) {
-                container.innerHTML =
-                    '<div class="no-sessions-found">No sessions found</div>';
-                return;
+            const store = (this.app as any)?.getActiveStore?.();
+            if (store) {
+                store.responses.set(url, JSON.stringify(sessions));
             }
+            const renderSessions =
+                typeof this.renderWorktreeSessionsList === 'function'
+                    ? this.renderWorktreeSessionsList
+                    : SessionsManager.prototype.renderWorktreeSessionsList;
+            renderSessions.call(this, sessions, wtPath, container);
+        } catch (e: any) {
+            if (e?.name === 'AbortError' || this.app?.scope?.aborted) return;
+            container.innerHTML = `<div class="error-sessions">Error: ${escapeHtml((e as Error).message)}</div>`;
+        }
+    }
 
-            sessions.forEach((sess: any) => {
+    renderWorktreeSessionsList(
+        sessions: any[],
+        wtPath: string,
+        container: HTMLElement,
+    ): void {
+        container.innerHTML = '';
+
+        if (!sessions || sessions.length === 0) {
+            container.innerHTML =
+                '<div class="no-sessions-found">No sessions found</div>';
+            return;
+        }
+
+        sessions.forEach((sess: any) => {
                 const item = document.createElement('div');
                 item.className = 'session-item';
                 item.setAttribute('data-session-id', sess.id);
@@ -1082,13 +1156,10 @@ export class SessionsManager {
                 container.appendChild(item);
             });
 
-            const activeTab = this.app.tabManager.getActiveTab();
+            const activeTab = this.app?.tabManager?.getActiveTab?.();
             if (activeTab && activeTab.coder === this.activeCoder) {
                 this.highlightActiveSession(activeTab.sessionId);
             }
-        } catch (e) {
-            container.innerHTML = `<div class="error-sessions">Error: ${escapeHtml((e as Error).message)}</div>`;
-        }
     }
 
     async saveWorktreeState(): Promise<void> {

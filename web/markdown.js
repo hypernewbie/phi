@@ -282,12 +282,21 @@ export class MarkdownManager {
                 '<div class="md-list-loading">Scanning...</div>';
         }
         try {
-            const res = await fetch(`/api/markdown/files?cwd=${encodeURIComponent(cwd)}`);
+            const fetchFn = this.app?.scope &&
+                typeof this.app.scope.fetch === 'function'
+                ? (url, opts) => this.app.scope.fetch(url, opts)
+                : fetch;
+            const url = `/api/markdown/files?cwd=${encodeURIComponent(cwd)}`;
+            const res = await fetchFn(url);
             if (!res.ok)
                 throw new Error(await res.text());
             const files = await res.json();
             if (requestId !== this.refreshRequestId)
                 return;
+            const store = this.app?.getActiveStore?.();
+            if (store) {
+                store.responses.set(url, JSON.stringify(files));
+            }
             const key = `${cwd} ${JSON.stringify(files)}`;
             if (silent && key === this._lastRenderedKey)
                 return;
@@ -295,6 +304,8 @@ export class MarkdownManager {
             this._renderFileList(files);
         }
         catch (e) {
+            if (e?.name === 'AbortError' || this.app?.scope?.aborted)
+                return;
             if (requestId !== this.refreshRequestId)
                 return;
             if (!silent) {

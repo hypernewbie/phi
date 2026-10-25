@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
-import { setupDomHarness, mockFetch } from './_dom.js';
+import { setupDomHarness, mockFetch, stubWebSocket } from './_dom.js';
 import { App } from '../web/app.js';
 import {
     serverKey,
@@ -10,6 +10,7 @@ import {
     getEmbeddedBackendOrigin,
 } from '../web/util.js';
 import { runPrepaint } from '../web/theme.js';
+import { backendStores } from '../web/backend-store.js';
 
 setupDomHarness();
 
@@ -20,6 +21,9 @@ function setupHtml() {
 }
 
 function setupVendorStubs() {
+    if (!HTMLElement.prototype.scrollIntoView) {
+        HTMLElement.prototype.scrollIntoView = () => {};
+    }
     vi.stubGlobal('FitAddon', {
         FitAddon: class {
             fit() {}
@@ -48,6 +52,7 @@ function setupVendorStubs() {
         return {
             cols: 80,
             rows: 24,
+            options: { theme: {} },
             element: rootEl,
             unicode: { activeVersion: '6' },
             buffer: {
@@ -89,6 +94,7 @@ describe('Single-Tab Embedded Backend Switching', () => {
 
     beforeEach(() => {
         setupVendorStubs();
+        stubWebSocket();
         setupHtml();
         window.history.replaceState(null, '', '/');
         setEmbeddedBackend('', '');
@@ -125,6 +131,7 @@ describe('Single-Tab Embedded Backend Switching', () => {
 
     afterEach(() => {
         setEmbeddedBackend('', '');
+        backendStores.clear();
     });
 
     it('Test 1: initOnce() is idempotent and does not register duplicate listeners', async () => {
@@ -308,5 +315,162 @@ describe('Single-Tab Embedded Backend Switching', () => {
 
         await app.loadVersion(app.scope);
         expect(localStorage.getItem('phi_server_started_at:scoped-srv')).toBe('2026-10-24T12:00:00Z');
+    });
+
+    it('Test 9: instant cache paint before /__phi/active and reconciliation after revalidate', async () => {
+        const warmStore = backendStores.get('profile-warm');
+        warmStore.responses.set(
+            '/api/version',
+            JSON.stringify({
+                version: '0.12.0',
+                started_at: '2026-10-24T12:00:00Z',
+            }),
+        );
+        warmStore.responses.set(
+            '/api/config',
+            JSON.stringify({ hostname: 'warm-host', workspaces: ['/repo'] }),
+        );
+        warmStore.responses.set(
+            '/api/git/worktrees?cwd=%2Frepo',
+            JSON.stringify([{ path: '/repo', branch: 'main', active: true }]),
+        );
+        warmStore.tabs = [
+            {
+                id: 'p-warm',
+                session_id: 's1',
+                title: 'Warm Shell',
+                coder: 'bash',
+                workspace: '/repo',
+                cwd: '/repo',
+                pinned: false,
+                marked: false,
+            },
+        ];
+        warmStore.screens.set('p-warm', {
+            ansi: 'cached prompt $ ',
+            cols: 80,
+            rows: 24,
+        });
+
+        app = new App();
+
+        let activeCalled = false;
+        let preActiveCalls = 0;
+        let preActiveHostname = '';
+        let preActiveHasWarmTab = false;
+        let preActiveSyncState = '';
+
+        const origFetch = globalThis.fetch;
+        const customFetch = vi.fn((url, opts) => {
+            const u = String(url);
+            if (u === '/__phi/active') {
+                activeCalled = true;
+                preActiveCalls = fetchCalls.length;
+                preActiveHostname =
+                    document.getElementById('hostname-display')?.innerText ||
+                    '';
+                preActiveHasWarmTab = app.tabManager.tabs.has('p-warm');
+                preActiveSyncState = document.documentElement.dataset.sync;
+                fetchCalls.push({ url: u, opts });
+                return Promise.resolve({
+                    ok: true,
+                    status: 200,
+                    headers: { get: () => 'application/json' },
+                    json: async () => ({ ok: true }),
+                    text: async () => JSON.stringify({ ok: true }),
+                });
+            }
+            if (u === '/api/config') {
+                fetchCalls.push({ url: u, opts });
+                return Promise.resolve({
+                    ok: true,
+                    status: 200,
+                    headers: { get: () => 'application/json' },
+                    json: async () => ({
+                        hostname: 'warm-host-updated',
+                        workspaces: ['/repo'],
+                    }),
+                    text: async () =>
+                        JSON.stringify({
+                            hostname: 'warm-host-updated',
+                            workspaces: ['/repo'],
+                        }),
+                });
+            }
+            if (u === '/api/terminals') {
+                fetchCalls.push({ url: u, opts });
+                return Promise.resolve({
+                    ok: true,
+                    status: 200,
+                    headers: { get: () => 'application/json' },
+                    json: async () => [
+                        {
+                            id: 'p-warm',
+                            session_id: 's1',
+                            title: 'Warm Shell',
+                            coder: 'bash',
+                            workspace: '/repo',
+                            cwd: '/repo',
+                            pinned: false,
+                            marked: false,
+                        },
+                        {
+                            id: 'p-live',
+                            session_id: 's2',
+                            title: 'Live Shell',
+                            coder: 'bash',
+                            workspace: '/repo',
+                            cwd: '/repo',
+                            pinned: false,
+                            marked: false,
+                        },
+                    ],
+                    text: async () =>
+                        JSON.stringify([
+                            {
+                                id: 'p-warm',
+                                session_id: 's1',
+                                title: 'Warm Shell',
+                                coder: 'bash',
+                                workspace: '/repo',
+                                cwd: '/repo',
+                                pinned: false,
+                                marked: false,
+                            },
+                            {
+                                id: 'p-live',
+                                session_id: 's2',
+                                title: 'Live Shell',
+                                coder: 'bash',
+                                workspace: '/repo',
+                                cwd: '/repo',
+                                pinned: false,
+                                marked: false,
+                            },
+                        ]),
+                });
+            }
+            return origFetch(url, opts);
+        });
+
+        globalThis.fetch = customFetch;
+        if (typeof window !== 'undefined') window.fetch = customFetch;
+        if (typeof global !== 'undefined') global.fetch = customFetch;
+
+        await new Promise((r) => setTimeout(r, 20));
+        fetchCalls = [];
+        await app.switchToBackend('profile-warm');
+
+        expect(activeCalled).toBe(true);
+        expect(preActiveCalls).toBe(0);
+        expect(preActiveHostname).toBe('warm-host');
+        expect(preActiveHasWarmTab).toBe(true);
+        expect(preActiveSyncState).toBe('stale');
+
+        expect(document.getElementById('hostname-display')?.innerText).toBe(
+            'warm-host-updated',
+        );
+        expect(app.tabManager.tabs.has('p-live')).toBe(true);
+        expect(document.documentElement.dataset.sync).toBeUndefined();
     });
 });

@@ -1,6 +1,6 @@
 import { TabManager } from './terminal.js';
 import { SessionsManager } from './sessions.js';
-import { loadCoderRegistry, listCoders } from './coders.js';
+import { loadCoderRegistry, listCoders, rebuildRegistry } from './coders.js';
 import { DiffController } from './diff.js';
 import { MarkdownManager } from './markdown.js';
 import { FileTreeManager } from './filetree.js';
@@ -111,22 +111,36 @@ export class App {
 
     async revalidate(scope = this.scope) {
         if (scope?.aborted) return;
-        const savedTheme =
-            localStorage.getItem(serverKey('phi_theme_color')) ||
-            localStorage.getItem('phi_theme_color');
-        if (savedTheme) {
-            this.applyAccentTheme(savedTheme);
+        if (typeof document !== 'undefined' && document.documentElement) {
+            document.documentElement.dataset.sync = 'stale';
         }
-        await this.loadVersion(scope);
-        if (scope?.aborted) return;
-        await this.fetchCoderPresets(scope);
-        if (scope?.aborted) return;
-        await this.sessionsManager.loadConfig();
-        if (scope?.aborted) return;
-        await this.tabManager.restoreTabsState(scope);
-        if (scope?.aborted) return;
-        this.startFleetPolling(scope);
-        this.syncManager?.startPolling?.(scope);
+        try {
+            const savedTheme =
+                localStorage.getItem(serverKey('phi_theme_color')) ||
+                localStorage.getItem('phi_theme_color');
+            if (savedTheme) {
+                this.applyAccentTheme(savedTheme);
+            }
+            await this.loadVersion(scope);
+            if (scope?.aborted) return;
+            await this.fetchCoderPresets(scope);
+            if (scope?.aborted) return;
+            await this.sessionsManager.loadConfig();
+            if (scope?.aborted) return;
+            await this.tabManager.restoreTabsState(scope);
+            if (scope?.aborted) return;
+            this.startFleetPolling(scope);
+            this.syncManager?.startPolling?.(scope);
+        } finally {
+            if (
+                !scope?.aborted &&
+                this.scope === scope &&
+                typeof document !== 'undefined' &&
+                document.documentElement
+            ) {
+                delete document.documentElement.dataset.sync;
+            }
+        }
     }
 
     initOnce() {
@@ -683,6 +697,63 @@ export class App {
         return backendStores.get(profileId || '__default__');
     }
 
+    paintBackendFromStore(store) {
+        if (!store) return false;
+        if (store.responses?.has('/api/version')) {
+            try {
+                const versionData = JSON.parse(store.responses.get('/api/version'));
+                this.applyVersionData(versionData, { checkUpdate: false });
+            } catch {}
+        }
+        if (store.responses?.has('/api/coders')) {
+            try {
+                const codersData = JSON.parse(store.responses.get('/api/coders'));
+                rebuildRegistry(codersData);
+                const coders = listCoders();
+                this.codersPresetRegistry = Object.fromEntries(
+                    coders.map((c) => [c.id, c]),
+                );
+            } catch {}
+        }
+        if (store.responses?.has('/api/config')) {
+            try {
+                const configData = JSON.parse(store.responses.get('/api/config'));
+                this.sessionsManager?.applyConfigData?.(configData, { stale: true });
+            } catch {}
+        }
+        if (store.activeCwd && this.sessionsManager) {
+            this.sessionsManager.activeCWD = store.activeCwd;
+        }
+        const wsKey = `/api/git/worktrees?cwd=${encodeURIComponent(this.sessionsManager?.activeWorkspace || '')}`;
+        if (store.responses?.has(wsKey)) {
+            try {
+                const worktreesData = JSON.parse(store.responses.get(wsKey));
+                this.sessionsManager?.renderWorktreesList?.(
+                    worktreesData,
+                    this.sessionsManager.activeWorkspace,
+                    store.activeCwd,
+                    { loadSessions: false },
+                );
+            } catch {}
+        }
+        if (store.tabs !== null) {
+            this.tabManager?.paintFromStore?.(store);
+        }
+        if (store.responses?.has('/api/peers/status')) {
+            try {
+                const peersData = JSON.parse(store.responses.get('/api/peers/status'));
+                this.renderFleetPanel(peersData);
+            } catch {}
+        }
+        if (store.responses?.has('/api/sync/messages')) {
+            try {
+                const syncData = JSON.parse(store.responses.get('/api/sync/messages'));
+                this.syncManager?.renderMessages?.(syncData);
+            } catch {}
+        }
+        return true;
+    }
+
     switchToBackend(profileId, origin = '') {
         if (!profileId) return Promise.resolve(false);
         const seq = ++this._switchSeq;
@@ -700,6 +771,10 @@ export class App {
         if (this._fleetPollTimer) {
             clearInterval(this._fleetPollTimer);
             this._fleetPollTimer = null;
+        }
+        if (this.syncManager?.pollInterval) {
+            clearInterval(this.syncManager.pollInterval);
+            this.syncManager.pollInterval = null;
         }
         if (prevProfileId) {
             const prevStore = backendStores.get(prevProfileId);
@@ -736,8 +811,9 @@ export class App {
         const scope = new BackendScope(profileId, origin || '');
         this.scope = scope;
         const nextStore = backendStores.get(profileId);
-        if (nextStore.tabs !== null) {
-            this.tabManager?.paintFromStore?.(nextStore);
+        this.paintBackendFromStore(nextStore);
+        if (typeof document !== 'undefined' && document.documentElement) {
+            document.documentElement.dataset.sync = 'stale';
         }
         if (seq !== this._switchSeq || scope.aborted) return true;
 
@@ -854,16 +930,25 @@ export class App {
 
     async fetchCoderPresets(scope) {
         if (scope?.aborted) return;
-        // Share one validated registry load with SessionsManager rather
-        // than fetching /api/coders twice. The terminal's preset row still
-        // expects an object keyed by coder ID; never log private profile data.
         try {
-            await loadCoderRegistry();
-            if (scope?.aborted) return;
+            const store = this.getActiveStore?.();
+            if (store && typeof store.load === 'function') {
+                await store.load('/api/coders', scope, (data) => {
+                    rebuildRegistry(data);
+                    const coders = listCoders();
+                    this.codersPresetRegistry = Object.fromEntries(
+                        coders.map((coder) => [coder.id, coder]),
+                    );
+                });
+            } else {
+                await loadCoderRegistry(true);
+                if (scope?.aborted) return;
+                const coders = listCoders();
+                this.codersPresetRegistry = Object.fromEntries(
+                    coders.map((coder) => [coder.id, coder]),
+                );
+            }
             const coders = listCoders();
-            this.codersPresetRegistry = Object.fromEntries(
-                coders.map((coder) => [coder.id, coder]),
-            );
             console.log(
                 `[app] Loaded coder registries (${coders.length}):`,
                 coders.map((coder) => coder.id),
@@ -2941,6 +3026,10 @@ export class App {
             clearInterval(this._fleetPollTimer);
             this._fleetPollTimer = null;
         }
+        if (this.syncManager?.pollInterval) {
+            clearInterval(this.syncManager.pollInterval);
+            this.syncManager.pollInterval = null;
+        }
         this._fleetPollScope = scope;
 
         const isSidebarVisible = () => {
@@ -2962,6 +3051,7 @@ export class App {
                 if (!res.ok) return;
                 const statuses = await res.json();
                 if (scope?.aborted) return;
+                this.getActiveStore?.()?.responses?.set('/api/peers/status', JSON.stringify(statuses));
                 this.renderFleetPanel(statuses);
             } catch (err) {
                 if (err?.name === 'AbortError' || scope?.aborted) return;
@@ -3048,45 +3138,59 @@ export class App {
         }
     }
 
+    applyVersionData(data, { checkUpdate = true, scope = this.scope } = {}) {
+        if (!data || typeof data !== 'object') return;
+        this.versionInfo = data;
+        // Pane IDs survive a server restart. Keep browser-local
+        // order, selection, and drafts for the restored live tabs.
+        if (data.started_at) {
+            localStorage.setItem(
+                serverKey('phi_server_started_at'),
+                data.started_at,
+            );
+        }
+        const changelogBtn =
+            document.getElementById('phi-changelog-btn');
+        if (changelogBtn) {
+            // Only overwrite the HTML default when the binary reports
+            // a real version (i.e. a stamped release build). A
+            // `go run` / `go build` without ldflags reports "dev" -
+            // in that case we keep whatever the HTML shipped, which
+            // is the most recent release tag. The button always shows
+            // something useful instead of flashing "dev".
+            const ver = data.version;
+            if (ver && ver !== 'dev') {
+                changelogBtn.textContent = ver.startsWith('v')
+                    ? ver
+                    : `v${ver}`;
+            }
+        }
+        // Once we know the install method, kick off the update check
+        // (server-side throttled; this is just the UI hookup).
+        if (checkUpdate) {
+            this.checkForUpdate(scope);
+        }
+    }
+
     async loadVersion(scope) {
         try {
-            const fetchFn =
-                scope && typeof scope.fetch === 'function'
-                    ? (url, init) => scope.fetch(url, init)
-                    : fetch;
-            const res = await fetchFn('/api/version');
-            if (scope?.aborted) return;
-            if (res.ok) {
-                const data = await res.json();
+            const store = this.getActiveStore?.();
+            if (store && typeof store.load === 'function') {
+                await store.load('/api/version', scope, (data, { stale }) => {
+                    this.applyVersionData(data, { checkUpdate: !stale, scope });
+                });
+            } else {
+                const fetchFn =
+                    scope && typeof scope.fetch === 'function'
+                        ? (url, init) => scope.fetch(url, init)
+                        : fetch;
+                const res = await fetchFn('/api/version');
                 if (scope?.aborted) return;
-                this.versionInfo = data;
-                // Pane IDs survive a server restart. Keep browser-local
-                // order, selection, and drafts for the restored live tabs.
-                if (data.started_at) {
-                    localStorage.setItem(
-                        serverKey('phi_server_started_at'),
-                        data.started_at,
-                    );
+                if (res.ok) {
+                    const data = await res.json();
+                    if (scope?.aborted) return;
+                    this.applyVersionData(data, { checkUpdate: true, scope });
                 }
-                const changelogBtn =
-                    document.getElementById('phi-changelog-btn');
-                if (changelogBtn) {
-                    // Only overwrite the HTML default when the binary reports
-                    // a real version (i.e. a stamped release build). A
-                    // `go run` / `go build` without ldflags reports "dev" -
-                    // in that case we keep whatever the HTML shipped, which
-                    // is the most recent release tag. The button always shows
-                    // something useful instead of flashing "dev".
-                    const ver = data.version;
-                    if (ver && ver !== 'dev') {
-                        changelogBtn.textContent = ver.startsWith('v')
-                            ? ver
-                            : `v${ver}`;
-                    }
-                }
-                // Once we know the install method, kick off the update check
-                // (server-side throttled; this is just the UI hookup).
-                this.checkForUpdate(scope);
             }
         } catch (err) {
             if (err?.name === 'AbortError' || scope?.aborted) return;
