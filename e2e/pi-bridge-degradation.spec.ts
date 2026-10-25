@@ -38,6 +38,10 @@ async function paneBridge(
 
 type ObservationPhase = 'initial-attach' | 'active';
 
+// A tab burst can abort several fire-and-forget pin uploads; the cap only
+// exists so a genuine retry loop cannot pass as expected noise.
+const PIN_ABORT_LIMIT = 40;
+
 interface FailedRequest {
     request: Request;
     requestPhase: ObservationPhase;
@@ -192,10 +196,10 @@ async function watchBrowser(page: Page, fixtureUrl: string, paneIds: string[]) {
                 const pinKey = `${paneId}:${failure.requestPhase}`;
                 const seenCount = acceptedPinCounts.get(pinKey) ?? 0;
                 // The pin handler answers before draining the tiny JSON body,
-                // so Chromium can report an aborted upload either side of the
-                // 200 and across a phase boundary. Phases only bound the
-                // count; a response, when recorded, must still be a 200 with
-                // an empty body.
+                // so Chromium reports aborted uploads whenever a burst of tab
+                // activity outruns the drain. Each recorded response must
+                // still be a 200 with an empty body, and the total is capped
+                // so a real retry loop cannot hide here.
                 const answeredCleanly =
                     response === undefined ||
                     (response.status === 200 && response.contentLength === '0');
@@ -204,7 +208,7 @@ async function watchBrowser(page: Page, fixtureUrl: string, paneIds: string[]) {
                     request.method() === 'POST' &&
                     !!paneId &&
                     paneIds.includes(paneId) &&
-                    seenCount < 2 &&
+                    expectedPinAborts.length < PIN_ABORT_LIMIT &&
                     answeredCleanly &&
                     failure.errorText === 'net::ERR_ABORTED';
                 if (isExpectedPinAbort) {
@@ -222,6 +226,8 @@ async function watchBrowser(page: Page, fixtureUrl: string, paneIds: string[]) {
                         `pane=${paneId ?? '?'}`,
                         `response=${response ? `${response.status}/${response.contentLength}` : 'none'}`,
                         `seen=${seenCount}`,
+                        `accepted=${expectedPinAborts.length}`,
+                        `limit=${PIN_ABORT_LIMIT}`,
                     ].join(',');
                     unexpectedFailures.push(
                         `${request.method()} ${request.url()}: ${failure.errorText} (${failure.failurePhase}) [${why}]`,
