@@ -6,19 +6,27 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/hypernewbie/phi/internal/pibridge"
 )
 
 type request struct {
-	Op      string `json:"op"`
-	Pane    string `json:"pane"`
-	Process string `json:"process"`
-	Count   int    `json:"count"`
+	Op         string `json:"op"`
+	Pane       string `json:"pane"`
+	Process    string `json:"process"`
+	Count      int    `json:"count"`
+	Generation uint64 `json:"generation"`
+	Revision   uint64 `json:"revision"`
+	TimeoutMs  int    `json:"timeoutMs"`
+	Call       string `json:"call"`
 }
 
 type response struct {
@@ -39,6 +47,11 @@ type response struct {
 	JournalGap   bool     `json:"journalGap,omitempty"`
 	Generation   string   `json:"generation,omitempty"`
 	RuntimeID    string   `json:"runtimeId,omitempty"`
+	PubRev       string   `json:"pubRev,omitempty"`
+	Call         string   `json:"call,omitempty"`
+	Outcome      string   `json:"outcome,omitempty"`
+	Reason       string   `json:"reason,omitempty"`
+	RequestID    string   `json:"requestId,omitempty"`
 	Caps         []string `json:"caps,omitempty"`
 	Session      string   `json:"session,omitempty"`
 	Leaf         string   `json:"leaf,omitempty"`
@@ -47,6 +60,41 @@ type response struct {
 
 func fail(format string, args ...any) response {
 	return response{OK: false, Error: fmt.Sprintf(format, args...)}
+}
+
+// compactCall tracks one in-flight RequestCompact. Dispatch is async
+// because the control loop is sequential: tests must issue a second
+// dispatch while the first is still held to prove pending refusal.
+type compactCall struct {
+	done chan compactOutcome
+}
+
+type compactOutcome struct {
+	result pibridge.CompactResult
+	err    error
+}
+
+func clampTimeout(ms int) time.Duration {
+	if ms <= 0 || ms > 30_000 {
+		return 5 * time.Second
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+func compactResponse(out compactOutcome) response {
+	if out.err == nil {
+		return response{OK: true, RequestID: out.result.RequestID, Outcome: out.result.Outcome.String(), Reason: out.result.Reason}
+	}
+	var refusal *pibridge.CompactRefusal
+	var unknown *pibridge.CompactUnknown
+	switch {
+	case errors.As(out.err, &refusal):
+		return response{OK: false, Error: "refusal:" + refusal.Reason}
+	case errors.As(out.err, &unknown):
+		return response{OK: false, Error: "unknown:" + unknown.RequestID, RequestID: unknown.RequestID}
+	default:
+		return response{OK: false, Error: "unavailable:" + out.err.Error()}
+	}
 }
 
 func main() {
@@ -70,6 +118,9 @@ func run() error {
 	srv := pibridge.NewServer()
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.GRPCServer().Serve(lis) }()
+	var callsMu sync.Mutex
+	calls := map[string]*compactCall{}
+	var callSeq uint64
 
 	enc := json.NewEncoder(os.Stdout)
 	// Ready line first; integration asserts the target shape.
@@ -122,8 +173,40 @@ func run() error {
 				JournalLast:  strconv.FormatUint(view.JournalLast, 10),
 				JournalGap:   view.JournalGap,
 				Generation:   strconv.FormatUint(view.Generation, 10), RuntimeID: view.RuntimeID,
-				Caps: view.Caps, Session: view.SessionID, Leaf: view.LeafID, Model: view.Model,
+				PubRev: strconv.FormatUint(view.PubRev, 10),
+				Caps:   view.Caps, Session: view.SessionID, Leaf: view.LeafID, Model: view.Model,
 			})
+		case "compact":
+			callsMu.Lock()
+			callSeq++
+			id := "c" + strconv.FormatUint(callSeq, 10)
+			call := &compactCall{done: make(chan compactOutcome, 1)}
+			calls[id] = call
+			callsMu.Unlock()
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), clampTimeout(req.TimeoutMs))
+				defer cancel()
+				res, err := srv.RequestCompact(ctx, req.Process, req.Generation, req.Revision)
+				call.done <- compactOutcome{result: res, err: err}
+			}()
+			_ = enc.Encode(response{OK: true, Call: id})
+		case "compact-wait":
+			callsMu.Lock()
+			call, ok := calls[req.Call]
+			callsMu.Unlock()
+			if !ok {
+				_ = enc.Encode(fail("unknown call %q", req.Call))
+				continue
+			}
+			select {
+			case out := <-call.done:
+				callsMu.Lock()
+				delete(calls, req.Call)
+				callsMu.Unlock()
+				_ = enc.Encode(compactResponse(out))
+			case <-time.After(clampTimeout(req.TimeoutMs)):
+				_ = enc.Encode(fail("wait-timeout"))
+			}
 		case "shutdown":
 			_ = enc.Encode(response{OK: true})
 			srv.Stop()

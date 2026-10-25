@@ -10,10 +10,12 @@ import {
     ENV_TOKEN,
     clearCredsFromEnv,
     createExtension,
+    ownerCompactState,
     readCredsFromEnv,
     resetOwnerSlotForTest,
     type FactoryRuntime,
 } from './extension.js';
+import type { CompactLatchState, PiContextView } from './runtime.js';
 
 const SAVED = { ...process.env };
 
@@ -50,6 +52,24 @@ function mockCtx(): ExtensionContext {
     } as unknown as ExtensionContext;
 }
 
+function mockCtxWithTelemetry(): ExtensionContext {
+    return {
+        sessionManager: {
+            getSessionId: () => 'sess',
+            getLeafId: () => 'leaf',
+        },
+        model: { provider: 'p', id: 'm' },
+        getContextUsage: () => ({
+            tokens: 1010,
+            contextWindow: 8192,
+            percent: 12.3,
+        }),
+        isIdle: () => true,
+        hasPendingMessages: () => false,
+        compact: () => {},
+    } as unknown as ExtensionContext;
+}
+
 function mockCtxWithSession(sessionId: string): ExtensionContext {
     return {
         sessionManager: {
@@ -69,6 +89,7 @@ function recordingRuntime(): { calls: string[]; runtime: FactoryRuntime } {
             onSessionStart: () => calls.push('session_start'),
             onAgentStart: () => calls.push('agent_start'),
             onAgentEnd: (stop) => calls.push(`agent_end:${stop}`),
+            onTurnEnd: () => calls.push('turn_end'),
             onAgentSettled: (_ctx, aborted) => calls.push(`settled:${aborted}`),
             onModelSelect: () => calls.push('model_select'),
             onThinkingLevelSelect: () => calls.push('thinking_level_select'),
@@ -138,6 +159,7 @@ describe('factory inertness', () => {
             'session_start',
             'session_tree',
             'thinking_level_select',
+            'turn_end',
         ]);
     });
 });
@@ -192,7 +214,7 @@ describe('settings disable', () => {
         const rec = recordingRuntime();
         createExtension(pi, { makeRuntime: () => rec.runtime });
         // Factory registers handlers; the gate runs at session_start.
-        expect(handlers.size).toBe(11);
+        expect(handlers.size).toBe(12);
         handlers.get('session_start')!({}, mockCtx() as never);
         expect(rec.calls).toEqual([]);
         expect(readCredsFromEnv()).toBeNull();
@@ -301,7 +323,7 @@ describe('owner guard', () => {
         const reloaded = mockPi();
         const rec2 = recordingRuntime();
         createExtension(reloaded.pi, { makeRuntime: () => rec2.runtime });
-        expect(reloaded.handlers.size).toBe(11);
+        expect(reloaded.handlers.size).toBe(12);
         reloaded.handlers.get('session_start')!({}, ctx as never);
         expect(rec2.calls).toEqual(['start']);
     });
@@ -352,6 +374,17 @@ describe('owner guard', () => {
         ]);
     });
 
+    it('forwards turn_end to the runtime for per-turn telemetry', () => {
+        setEnv();
+        const { pi, handlers } = mockPi();
+        const rec = recordingRuntime();
+        createExtension(pi, { makeRuntime: () => rec.runtime });
+        const ctx = mockCtxWithTelemetry();
+        handlers.get('session_start')!({}, ctx as never);
+        handlers.get('turn_end')!({ type: 'turn_end' }, ctx as never);
+        expect(rec.calls).toEqual(['start', 'turn_end']);
+    });
+
     it('retires the runtime on session replacement with a new generation', () => {
         setEnv();
         const { pi, handlers } = mockPi();
@@ -393,5 +426,95 @@ describe('owner guard', () => {
         handlers.get('session_start')!({}, ctx as never);
         handlers.get('session_start')!({}, ctx as never);
         expect(generations).toEqual([1n]);
+    });
+});
+
+describe('telemetry view and compaction latch', () => {
+    function capturing(): {
+        views: PiContextView[];
+        makeRuntime: (
+            _c: unknown,
+            _g: bigint,
+            _l: CompactLatchState,
+        ) => FactoryRuntime;
+    } {
+        const views: PiContextView[] = [];
+        const rec = recordingRuntime();
+        return {
+            views,
+            makeRuntime: () => ({
+                ...rec.runtime,
+                start: (view: PiContextView) => {
+                    views.push(view);
+                    rec.runtime.start(view);
+                },
+            }),
+        };
+    }
+
+    it('maps optional telemetry APIs into the runtime view', () => {
+        setEnv();
+        const { pi, handlers } = mockPi();
+        const cap = capturing();
+        createExtension(pi, { makeRuntime: cap.makeRuntime });
+        handlers.get('session_start')!({}, mockCtxWithTelemetry() as never);
+        expect(cap.views).toHaveLength(1);
+        const view = cap.views[0]!;
+        expect(typeof view.getContextUsage).toBe('function');
+        expect(view.getContextUsage!()).toEqual({
+            tokens: 1010,
+            contextWindow: 8192,
+            percent: 12.3,
+        });
+        expect(typeof view.isIdle).toBe('function');
+        expect(view.isIdle!()).toBe(true);
+        expect(typeof view.hasPendingMessages).toBe('function');
+        expect(view.hasPendingMessages!()).toBe(false);
+        expect(typeof view.compact).toBe('function');
+    });
+
+    it('leaves telemetry APIs undefined when the host lacks them', () => {
+        setEnv();
+        const { pi, handlers } = mockPi();
+        const cap = capturing();
+        createExtension(pi, { makeRuntime: cap.makeRuntime });
+        handlers.get('session_start')!({}, mockCtx() as never);
+        expect(cap.views).toHaveLength(1);
+        const view = cap.views[0]!;
+        expect(view.getContextUsage).toBeUndefined();
+        expect(view.isIdle).toBeUndefined();
+        expect(view.hasPendingMessages).toBeUndefined();
+        expect(view.compact).toBeUndefined();
+    });
+
+    it('shares one compaction latch across replacement runtimes', () => {
+        setEnv();
+        const { pi, handlers } = mockPi();
+        const latches: CompactLatchState[] = [];
+        createExtension(pi, {
+            makeRuntime: (_c, _g, compact) => {
+                latches.push(compact);
+                return recordingRuntime().runtime;
+            },
+        });
+        handlers.get('session_start')!(
+            {},
+            mockCtxWithSession('sess-a') as never,
+        );
+        handlers.get('session_start')!(
+            {},
+            mockCtxWithSession('sess-b') as never,
+        );
+        expect(latches).toHaveLength(2);
+        expect(latches[0]).toBe(latches[1]);
+        expect(latches[0]).toBe(ownerCompactState());
+    });
+
+    it('creates the latch once per process', () => {
+        const first = ownerCompactState();
+        expect(ownerCompactState()).toBe(first);
+        expect(first).toEqual({ pending: null, highWater: null, active: null });
+        resetOwnerSlotForTest();
+        expect(ownerCompactState()).not.toBe(first);
     });
 });

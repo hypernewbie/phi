@@ -43,6 +43,10 @@ const (
 	CapabilityModels = "pi.models.v1"
 	// CapabilityThinking is the native thinking read/set capability name.
 	CapabilityThinking = "pi.thinking.v1"
+	// CapabilityContext is the context-telemetry capability name.
+	CapabilityContext = "pi.context.v1"
+	// CapabilityCompact is the native-compaction capability name.
+	CapabilityCompact = "pi.compact.v1"
 
 	// maxHistoryPending bounds history requests awaiting replies per
 	// peer. Excess callers fail fast into fallback; the map never

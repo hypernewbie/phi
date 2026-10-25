@@ -24588,6 +24588,9 @@ var CAPABILITY_THINKING = "pi.thinking.v1";
 var MAX_THINKING_LEVELS = 7;
 var MAX_THINKING_MODEL_ID_BYTES = 256;
 var MAX_THINKING_LEVEL_BYTES = 16;
+var CAPABILITY_CONTEXT = "pi.context.v1";
+var CAPABILITY_COMPACT = "pi.compact.v1";
+var MAX_COMPACT_IDENTITY_CHARS = 256;
 var MAX_MODELS_ENTRIES = 500;
 var LIFECYCLE_HEADROOM_BYTES = 16 * 1024;
 var LIFECYCLE_HEADROOM_MESSAGES = 2;
@@ -24596,6 +24599,7 @@ var MAX_QUEUED_MESSAGES = 16;
 var MAX_QUEUED_BYTES = 256 * 1024;
 var BLOCKED_SEND_TIMEOUT_MS = 5e3;
 var HELLO_DEADLINE_MS = 5e3;
+var SHUTDOWN_DRAIN_MS = 500;
 var MAX_JOURNAL_RECORDS = 64;
 var RECONNECT_BASE_MS = 500;
 var RECONNECT_MAX_MS = 3e4;
@@ -25653,6 +25657,9 @@ var PiToPhi = {
       case "setThinkingAck":
         SetThinkingAck.encode(message.payload.value, writer.uint32(170).fork()).join();
         break;
+      case "compactResult":
+        CompactResult.encode(message.payload.value, writer.uint32(178).fork()).join();
+        break;
     }
     return writer;
   },
@@ -25756,6 +25763,13 @@ var PiToPhi = {
             message.payload = { $case: "setThinkingAck", value: SetThinkingAck.decode(reader, reader.uint32()) };
             continue;
           }
+          case 22: {
+            if (tag !== 178) {
+              break;
+            }
+            message.payload = { $case: "compactResult", value: CompactResult.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -25833,6 +25847,12 @@ var PiToPhi = {
         }
         break;
       }
+      case "compactResult": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = { $case: "compactResult", value: CompactResult.fromPartial(object.payload.value) };
+        }
+        break;
+      }
     }
     return message;
   }
@@ -25875,6 +25895,9 @@ var PhiToPi = {
         break;
       case "setThinkingRequest":
         SetThinkingRequest.encode(message.payload.value, writer.uint32(146).fork()).join();
+        break;
+      case "compactRequest":
+        CompactRequest.encode(message.payload.value, writer.uint32(154).fork()).join();
         break;
     }
     return writer;
@@ -25968,6 +25991,13 @@ var PhiToPi = {
             };
             continue;
           }
+          case 19: {
+            if (tag !== 154) {
+              break;
+            }
+            message.payload = { $case: "compactRequest", value: CompactRequest.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -26033,6 +26063,12 @@ var PhiToPi = {
             $case: "setThinkingRequest",
             value: SetThinkingRequest.fromPartial(object.payload.value)
           };
+        }
+        break;
+      }
+      case "compactRequest": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = { $case: "compactRequest", value: CompactRequest.fromPartial(object.payload.value) };
         }
         break;
       }
@@ -26560,7 +26596,9 @@ function createBaseStateSnapshot() {
     journal: [],
     journalGap: false,
     stateRevision: 0n,
-    thinkingLevel: ""
+    thinkingLevel: "",
+    contextUsage: void 0,
+    compactReadiness: void 0
   };
 }
 var StateSnapshot = {
@@ -26591,6 +26629,12 @@ var StateSnapshot = {
     }
     if (message.thinkingLevel !== "") {
       writer.uint32(74).string(message.thinkingLevel);
+    }
+    if (message.contextUsage !== void 0) {
+      ContextUsageSnapshot.encode(message.contextUsage, writer.uint32(82).fork()).join();
+    }
+    if (message.compactReadiness !== void 0) {
+      CompactReadiness.encode(message.compactReadiness, writer.uint32(90).fork()).join();
     }
     return writer;
   },
@@ -26663,6 +26707,20 @@ var StateSnapshot = {
             message.thinkingLevel = reader.string();
             continue;
           }
+          case 10: {
+            if (tag !== 82) {
+              break;
+            }
+            message.contextUsage = ContextUsageSnapshot.decode(reader, reader.uint32());
+            continue;
+          }
+          case 11: {
+            if (tag !== 90) {
+              break;
+            }
+            message.compactReadiness = CompactReadiness.decode(reader, reader.uint32());
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -26687,6 +26745,163 @@ var StateSnapshot = {
     message.journalGap = object.journalGap ?? false;
     message.stateRevision = object.stateRevision !== void 0 && object.stateRevision !== null ? BigInt(object.stateRevision) : 0n;
     message.thinkingLevel = object.thinkingLevel ?? "";
+    message.contextUsage = object.contextUsage !== void 0 && object.contextUsage !== null ? ContextUsageSnapshot.fromPartial(object.contextUsage) : void 0;
+    message.compactReadiness = object.compactReadiness !== void 0 && object.compactReadiness !== null ? CompactReadiness.fromPartial(object.compactReadiness) : void 0;
+    return message;
+  }
+};
+function createBaseContextUsageSnapshot() {
+  return { tokens: void 0, contextWindow: void 0, percent: void 0 };
+}
+var ContextUsageSnapshot = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.tokens !== void 0) {
+      writer.uint32(9).double(message.tokens);
+    }
+    if (message.contextWindow !== void 0) {
+      writer.uint32(17).double(message.contextWindow);
+    }
+    if (message.percent !== void 0) {
+      writer.uint32(25).double(message.percent);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseContextUsageSnapshot();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 9) {
+              break;
+            }
+            message.tokens = reader.double();
+            continue;
+          }
+          case 2: {
+            if (tag !== 17) {
+              break;
+            }
+            message.contextWindow = reader.double();
+            continue;
+          }
+          case 3: {
+            if (tag !== 25) {
+              break;
+            }
+            message.percent = reader.double();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return ContextUsageSnapshot.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseContextUsageSnapshot();
+    message.tokens = object.tokens ?? void 0;
+    message.contextWindow = object.contextWindow ?? void 0;
+    message.percent = object.percent ?? void 0;
+    return message;
+  }
+};
+function createBaseCompactReadiness() {
+  return { idle: false, hasPendingMessages: false, compactionActive: false, bridgePending: false };
+}
+var CompactReadiness = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.idle !== false) {
+      writer.uint32(8).bool(message.idle);
+    }
+    if (message.hasPendingMessages !== false) {
+      writer.uint32(16).bool(message.hasPendingMessages);
+    }
+    if (message.compactionActive !== false) {
+      writer.uint32(24).bool(message.compactionActive);
+    }
+    if (message.bridgePending !== false) {
+      writer.uint32(32).bool(message.bridgePending);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseCompactReadiness();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+            message.idle = reader.bool();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+            message.hasPendingMessages = reader.bool();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+            message.compactionActive = reader.bool();
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+            message.bridgePending = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return CompactReadiness.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseCompactReadiness();
+    message.idle = object.idle ?? false;
+    message.hasPendingMessages = object.hasPendingMessages ?? false;
+    message.compactionActive = object.compactionActive ?? false;
+    message.bridgePending = object.bridgePending ?? false;
     return message;
   }
 };
@@ -27449,6 +27664,161 @@ var SetThinkingAck = {
     return message;
   }
 };
+function createBaseCompactRequest() {
+  return { requestId: "", expectedSessionId: "", expectedLeafId: "", expectedModel: void 0 };
+}
+var CompactRequest = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.expectedSessionId !== "") {
+      writer.uint32(18).string(message.expectedSessionId);
+    }
+    if (message.expectedLeafId !== "") {
+      writer.uint32(26).string(message.expectedLeafId);
+    }
+    if (message.expectedModel !== void 0) {
+      ModelSnapshot.encode(message.expectedModel, writer.uint32(34).fork()).join();
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseCompactRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+            message.expectedSessionId = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+            message.expectedLeafId = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+            message.expectedModel = ModelSnapshot.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return CompactRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseCompactRequest();
+    message.requestId = object.requestId ?? "";
+    message.expectedSessionId = object.expectedSessionId ?? "";
+    message.expectedLeafId = object.expectedLeafId ?? "";
+    message.expectedModel = object.expectedModel !== void 0 && object.expectedModel !== null ? ModelSnapshot.fromPartial(object.expectedModel) : void 0;
+    return message;
+  }
+};
+function createBaseCompactResult() {
+  return { requestId: "", outcome: 0, reason: "" };
+}
+var CompactResult = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.outcome !== 0) {
+      writer.uint32(16).int32(message.outcome);
+    }
+    if (message.reason !== "") {
+      writer.uint32(26).string(message.reason);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseCompactResult();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+            message.outcome = reader.int32();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return CompactResult.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseCompactResult();
+    message.requestId = object.requestId ?? "";
+    message.outcome = object.outcome ?? 0;
+    message.reason = object.reason ?? "";
+    return message;
+  }
+};
 function createBaseProtocolError() {
   return { code: 0, safeMessage: "" };
 }
@@ -27533,6 +27903,7 @@ var defaultClientFactory = (target, creds, options) => (
   // compatible signatures; the assertion only narrows to the used surface.
   new IntegrationClient(target, creds, options)
 );
+var DRAIN_POLL_MS = 5;
 var BridgeChannel = class {
   constructor(creds, hooks, makeClient = defaultClientFactory) {
     this.creds = creds;
@@ -27651,6 +28022,30 @@ var BridgeChannel = class {
     }
     void this.pumpWriter();
     return true;
+  }
+  /**
+   * Best-effort bounded drain: wait until the outbound queue
+   * (queued plus in-flight) is empty or the deadline expires,
+   * then close. A dead stream or writer error closes
+   * immediately. Never rejects.
+   */
+  drainAndClose(timeoutMs) {
+    if (this.closed || this.stream === null || this.writerError) {
+      this.close();
+      return Promise.resolve();
+    }
+    const deadline = Date.now() + Math.max(0, timeoutMs);
+    return new Promise((resolve) => {
+      const tick = () => {
+        if (this.closed || this.stream === null || this.writerError || this.queue.outstanding === 0 || Date.now() >= deadline) {
+          this.close();
+          resolve();
+          return;
+        }
+        setTimeout(tick, DRAIN_POLL_MS);
+      };
+      tick();
+    });
   }
   /** Half-close the stream and release the client. Idempotent. */
   close() {
@@ -27800,6 +28195,9 @@ function isHistoryReaderAvailable(ui) {
 }
 
 // src/runtime.ts
+function freshCompactLatch() {
+  return { pending: null, highWater: null, active: null };
+}
 var TERMINAL_STATUS_CODES = /* @__PURE__ */ new Set([
   16,
   // UNAUTHENTICATED: lease revoked or never valid; retry is futile.
@@ -27814,6 +28212,71 @@ function isTerminalConnectError(err) {
   if (typeof err !== "object" || err === null) return false;
   const code = err.code;
   return typeof code === "number" && TERMINAL_STATUS_CODES.has(code);
+}
+var COMPACT_ID_PATTERN = /^[1-9][0-9]{0,19}$/;
+var MAX_UINT64 = (1n << 64n) - 1n;
+function parseCompactId(id) {
+  if (typeof id !== "string" || !COMPACT_ID_PATTERN.test(id)) return null;
+  const value = BigInt(id);
+  return value <= MAX_UINT64 ? value : null;
+}
+function isValidCompactIdentity(value) {
+  return typeof value === "string" && value.length >= 1 && value.length <= MAX_COMPACT_IDENTITY_CHARS;
+}
+var INVALID_SAMPLE = /* @__PURE__ */ Symbol("invalid");
+function usageField(value, positive) {
+  if (value === null || value === void 0) return void 0;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return INVALID_SAMPLE;
+  }
+  if (value < 0 || value > Number.MAX_SAFE_INTEGER) return INVALID_SAMPLE;
+  if (positive && value <= 0) return INVALID_SAMPLE;
+  return value;
+}
+function normalizeContextUsage(value) {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value;
+  const tokens = usageField(record["tokens"], false);
+  const contextWindow = usageField(record["contextWindow"], true);
+  const percent = usageField(record["percent"], false);
+  if (tokens === INVALID_SAMPLE || contextWindow === INVALID_SAMPLE || percent === INVALID_SAMPLE) {
+    return null;
+  }
+  const knownPercent = tokens === void 0 ? void 0 : percent;
+  if (tokens === void 0 && contextWindow === void 0 && knownPercent === void 0) {
+    return null;
+  }
+  return {
+    ...tokens !== void 0 ? { tokens } : {},
+    ...contextWindow !== void 0 ? { contextWindow } : {},
+    ...knownPercent !== void 0 ? { percent: knownPercent } : {}
+  };
+}
+function mapCompactError(error) {
+  let message;
+  let aborted = false;
+  try {
+    message = String(error instanceof Error ? error.message : error);
+    aborted = String(error?.name ?? "") === "AbortError";
+  } catch {
+    message = "";
+  }
+  if (/already compacted/i.test(message)) {
+    return {
+      outcome: 3 /* COMPACT_OUTCOME_FAILED */,
+      reason: "already-compacted"
+    };
+  }
+  if (aborted || /cancel/i.test(message)) {
+    return {
+      outcome: 4 /* COMPACT_OUTCOME_CANCELLED */,
+      reason: "cancelled"
+    };
+  }
+  return {
+    outcome: 3 /* COMPACT_OUTCOME_FAILED */,
+    reason: "error"
+  };
 }
 var Runtime = class {
   constructor(opts) {
@@ -27837,9 +28300,22 @@ var Runtime = class {
   scopedModels = [];
   /** Latest UI surface for history reads; refreshed on every event. */
   ui;
+  /** Latest event context; sampling reads live host state through it. */
+  lastCtx = null;
   historyAccepted = false;
   modelsAccepted = false;
   thinkingAccepted = false;
+  compactAccepted = false;
+  /** getContextUsage present on the latest event context. */
+  contextApi = false;
+  /** compact/isIdle/hasPendingMessages present on the latest context. */
+  compactApi = false;
+  /** Latest validated context measurement; null means none. */
+  contextSample = null;
+  /** Latest idle/queued sample; null when the trio is unavailable. */
+  readinessSample = null;
+  /** Native compaction start observed without its end. */
+  compactionActive = false;
   /** Final assistant stop reason of the current run, if observed. */
   lastStopReason = null;
   /** When the current stream was accepted; null while connecting. */
@@ -27847,11 +28323,28 @@ var Runtime = class {
   shutdownRequested = false;
   backoffMs;
   retryTimer = null;
+  compactSettleTimer = null;
   starting = false;
+  /** Process-owned compaction latch, shared across runtimes. */
+  get compact() {
+    return this.opts.compactState;
+  }
   /** Begin connecting; never throws, never blocks Pi startup. */
   start(ctx) {
     if (this.channel || this.starting || this.shutdownRequested) return;
     this.starting = true;
+    this.compact.active = {
+      runtimeId: this.runtimeId,
+      notify: () => {
+        try {
+          this.refreshFromLive();
+          this.sendSnapshot(
+            this.running ? 2 /* LOGICAL_STATE_RUNNING */ : 1 /* LOGICAL_STATE_IDLE */
+          );
+        } catch {
+        }
+      }
+    };
     this.noteView(ctx);
     void this.attempt();
   }
@@ -27896,10 +28389,53 @@ var Runtime = class {
   /**
    * Record the final assistant stop reason of the current attempt.
    * Retries overwrite; the last evidence before settlement wins.
+   * A finalized assistant message also establishes a new context
+   * measurement, published as a context-only snapshot.
    */
   onAgentEnd(stopReason) {
     if (this.shutdownRequested || !this.running) return;
     this.lastStopReason = stopReason;
+    this.publishContextOnly();
+  }
+  /**
+   * A turn ended after its assistant message and every tool
+   * result was persisted: resample and publish context-only
+   * telemetry so a multi-turn tool run refreshes context per
+   * turn. message_end is not sufficient: Pi emits it to
+   * extensions before persistence. No lifecycle edge: running
+   * state is untouched.
+   */
+  onTurnEnd(ctx) {
+    if (this.shutdownRequested) return;
+    this.noteView(ctx);
+    this.publishContextOnly();
+  }
+  /**
+   * Publish the newest sample outside a lifecycle transition.
+   * Bounded nonfatal admission: a miss keeps the newest sample
+   * for the next authoritative baseline or transition. Sends
+   * nothing when neither telemetry API is available. Never
+   * throws: a publish failure is an admission miss, so the
+   * stream receiver and event handlers stay nonthrowing.
+   */
+  publishContextOnly() {
+    if (this.lastCtx) this.sampleTelemetry(this.lastCtx);
+    if (!this.contextApi && !this.compactApi) return;
+    if (!this.channel) return;
+    try {
+      this.channel.sendNonfatal({
+        paneId: this.opts.creds.pane,
+        processId: this.opts.creds.process,
+        runtimeGeneration: this.opts.generation,
+        payload: {
+          $case: "stateSnapshot",
+          value: this.snapshot(
+            this.running ? 2 /* LOGICAL_STATE_RUNNING */ : 1 /* LOGICAL_STATE_IDLE */
+          )
+        }
+      });
+    } catch {
+    }
   }
   /**
    * Map one agent_settled edge. A settlement with no observed run is
@@ -27975,30 +28511,77 @@ var Runtime = class {
       this.running ? 2 /* LOGICAL_STATE_RUNNING */ : 1 /* LOGICAL_STATE_IDLE */
     );
   }
-  /** Compaction starts: refresh identities; the end publishes. */
+  /**
+   * Compaction starts: mark native work active, resample, and
+   * publish the active state immediately through bounded
+   * nonfatal admission. No lifecycle edge: dispatch guards and
+   * the end event read the flag.
+   */
   onCompactStart(ctx) {
     if (this.shutdownRequested) return;
+    this.compactionActive = true;
     this.noteView(ctx);
+    this.publishContextOnly();
   }
-  /** Compaction ends: publish the post-compaction snapshot. */
+  /**
+   * Compaction ends: publish the post-compaction snapshot. Pi emits
+   * session_compact before it clears its manual-compaction state,
+   * so idle here may still read busy; bridge callbacks resample
+   * again once that state has cleared.
+   */
   onCompactEnd(ctx) {
     if (this.shutdownRequested) return;
+    this.compactionActive = false;
     this.noteView(ctx);
     this.sendSnapshot(
       this.running ? 2 /* LOGICAL_STATE_RUNNING */ : 1 /* LOGICAL_STATE_IDLE */
     );
+    this.scheduleCompactSettle();
   }
-  /** Idempotent shutdown: stop retrying and release the stream. */
+  /**
+   * Pi clears its manual-compaction state after session_compact, so
+   * the sample taken at the event can still read busy. Bridge-owned
+   * compaction refreshes from its completion callback; a compaction
+   * started anywhere else (typed in the TUI) has no callback, so
+   * publish one bounded refresh once that state has cleared. Never
+   * sends a lifecycle edge and never throws.
+   */
+  scheduleCompactSettle(attempt = 0) {
+    if (this.compactSettleTimer) clearTimeout(this.compactSettleTimer);
+    this.compactSettleTimer = setTimeout(
+      () => {
+        this.compactSettleTimer = null;
+        if (this.shutdownRequested) return;
+        const idleBefore = this.readinessSample?.idle === true;
+        this.refreshFromLive();
+        if (this.readinessSample?.idle === true) {
+          if (!idleBefore) this.publishContextOnly();
+          return;
+        }
+        if (attempt < 2) this.scheduleCompactSettle(attempt + 1);
+      },
+      attempt === 0 ? 0 : 150
+    );
+  }
+  /** Idempotent shutdown: stop retrying and drain the stream. */
   shutdown() {
     if (this.shutdownRequested) return;
     this.shutdownRequested = true;
+    if (this.compact.active?.runtimeId === this.runtimeId) {
+      this.compact.active = null;
+    }
     if (this.retryTimer) {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
     }
-    this.channel?.close();
+    if (this.compactSettleTimer) {
+      clearTimeout(this.compactSettleTimer);
+      this.compactSettleTimer = null;
+    }
+    const channel = this.channel;
     this.channel = null;
     this.starting = false;
+    if (channel) void channel.drainAndClose(SHUTDOWN_DRAIN_MS);
   }
   get isRunning() {
     return this.running;
@@ -28006,9 +28589,52 @@ var Runtime = class {
   get lastSequence() {
     return this.seq;
   }
-  /** Refresh event-time identities from the live view. */
+  /** Refresh event-time identities and telemetry from the live view. */
   noteView(ctx) {
+    this.lastCtx = ctx;
     this.refreshIdentities(ctx);
+    this.sampleTelemetry(ctx);
+  }
+  /** Re-read identities and telemetry through the latest context. */
+  refreshFromLive() {
+    if (this.lastCtx) this.noteView(this.lastCtx);
+  }
+  /**
+   * Sample context and readiness from the host. Missing APIs
+   * clear their sample; throwing APIs fail closed (unknown
+   * context, not idle, messages pending). Never throws.
+   */
+  sampleTelemetry(ctx) {
+    this.contextApi = typeof ctx.getContextUsage === "function";
+    this.compactApi = typeof ctx.compact === "function" && typeof ctx.isIdle === "function" && typeof ctx.hasPendingMessages === "function";
+    if (this.contextApi) {
+      try {
+        this.contextSample = normalizeContextUsage(
+          ctx.getContextUsage()
+        );
+      } catch {
+        this.contextSample = null;
+      }
+    } else {
+      this.contextSample = null;
+    }
+    if (this.compactApi) {
+      let idle = false;
+      let hasPendingMessages = true;
+      try {
+        idle = ctx.isIdle() === true;
+      } catch {
+        idle = false;
+      }
+      try {
+        hasPendingMessages = ctx.hasPendingMessages() !== false;
+      } catch {
+        hasPendingMessages = true;
+      }
+      this.readinessSample = { idle, hasPendingMessages };
+    } else {
+      this.readinessSample = null;
+    }
   }
   refreshIdentities(ctx) {
     this.view = ctx;
@@ -28020,10 +28646,13 @@ var Runtime = class {
       this.leafId = ctx.sessionManager.getLeafId() ?? "";
     } catch {
     }
-    this.model = ctx.model;
-    this.registry = ctx.modelRegistry;
-    this.scopedModels = ctx.scopedModels ?? [];
-    this.ui = ctx.ui;
+    try {
+      this.model = ctx.model;
+      this.registry = ctx.modelRegistry;
+      this.scopedModels = ctx.scopedModels ?? [];
+      this.ui = ctx.ui;
+    } catch {
+    }
   }
   nextSeq() {
     this.seq += 1n;
@@ -28097,7 +28726,18 @@ var Runtime = class {
       })),
       journalGap: this.journalGap,
       stateRevision: this.revision,
-      thinkingLevel: this.currentThinkingLevel()
+      thinkingLevel: this.currentThinkingLevel(),
+      contextUsage: this.contextSample ? ContextUsageSnapshot.create({
+        tokens: this.contextSample.tokens ?? void 0,
+        contextWindow: this.contextSample.contextWindow ?? void 0,
+        percent: this.contextSample.percent ?? void 0
+      }) : void 0,
+      compactReadiness: this.readinessSample ? CompactReadiness.create({
+        idle: this.readinessSample.idle,
+        hasPendingMessages: this.readinessSample.hasPendingMessages,
+        compactionActive: this.compactionActive,
+        bridgePending: this.compact.pending !== null
+      }) : void 0
     });
   }
   /**
@@ -28105,11 +28745,15 @@ var Runtime = class {
    * advertised only while the direct reader can reach a
    * history-shaped editor; print and RPC modes stay
    * lifecycle-only. Models needs only the registry and the host
-   * switch call, so it is always advertised. Re-evaluated on every
-   * Hello, so reconnects follow custom-editor changes.
+   * switch call, so it is always advertised. Context needs
+   * getContextUsage; compact needs the compact/isIdle/
+   * hasPendingMessages trio; each is independent of the other.
+   * Re-evaluated on every Hello, so reconnects follow API changes.
    */
   capabilities() {
     const caps = [CAPABILITY_LIFECYCLE, CAPABILITY_MODELS];
+    if (this.contextApi) caps.push(CAPABILITY_CONTEXT);
+    if (this.compactApi) caps.push(CAPABILITY_COMPACT);
     if (isHistoryReaderAvailable(this.ui)) caps.push(CAPABILITY_HISTORY);
     if (this.opts.getThinkingLevel && this.opts.setThinkingLevel)
       caps.push(CAPABILITY_THINKING);
@@ -28161,6 +28805,8 @@ var Runtime = class {
     this.historyAccepted = false;
     this.modelsAccepted = false;
     this.thinkingAccepted = false;
+    this.compactAccepted = false;
+    if (this.lastCtx) this.sampleTelemetry(this.lastCtx);
     const channel = make(this.opts.creds, {
       onMessage: (msg) => {
         if (this.channel === channel && !this.shutdownRequested)
@@ -28178,6 +28824,7 @@ var Runtime = class {
         this.historyAccepted = accepted.capabilities.includes(CAPABILITY_HISTORY);
         this.modelsAccepted = accepted.capabilities.includes(CAPABILITY_MODELS);
         this.thinkingAccepted = accepted.capabilities.includes(CAPABILITY_THINKING);
+        this.compactAccepted = accepted.capabilities.includes(CAPABILITY_COMPACT);
       }
     } catch (err) {
       channel.close();
@@ -28210,6 +28857,8 @@ var Runtime = class {
       this.onThinkingLevelsRequest(msg.payload.value.requestId);
     } else if (msg.payload?.$case === "setThinkingRequest" && this.thinkingAccepted) {
       this.onSetThinkingRequest(msg.payload.value);
+    } else if (msg.payload?.$case === "compactRequest" && this.compactAccepted) {
+      this.onCompactRequest(msg.payload.value);
     }
   }
   /**
@@ -28462,6 +29111,237 @@ var Runtime = class {
       }
     };
   }
+  /**
+   * Answer one Compact request. Every guard runs before invoking
+   * the host; any failure refuses with a terminal result. Only a
+   * well-formed ID newer than the process high-water mark can
+   * reach the host, and every recognized ID is consumed so a
+   * refused ID cannot later replay into a mutation. Synchronous
+   * and nonblocking: the host call returns undefined at once and
+   * the callbacks below settle the operation.
+   */
+  onCompactRequest(req) {
+    const id = parseCompactId(req.requestId);
+    if (id === null || !this.channel) return;
+    const highWater = this.compact.highWater;
+    if (highWater !== null && id <= highWater) {
+      this.sendCompactResult(
+        req.requestId,
+        2 /* COMPACT_OUTCOME_REFUSED */,
+        "duplicate"
+      );
+      return;
+    }
+    this.compact.highWater = id;
+    if (this.compact.pending !== null) {
+      this.sendCompactResult(
+        req.requestId,
+        2 /* COMPACT_OUTCOME_REFUSED */,
+        "pending"
+      );
+      return;
+    }
+    if (!isValidCompactIdentity(req.expectedSessionId) || !isValidCompactIdentity(req.expectedLeafId) || req.expectedModel !== void 0 && (!isValidCompactIdentity(req.expectedModel.provider) || !isValidCompactIdentity(req.expectedModel.model))) {
+      this.sendCompactResult(
+        req.requestId,
+        2 /* COMPACT_OUTCOME_REFUSED */,
+        "stale"
+      );
+      return;
+    }
+    const ctx = this.lastCtx;
+    if (!ctx || typeof ctx.compact !== "function" || typeof ctx.isIdle !== "function" || typeof ctx.hasPendingMessages !== "function") {
+      this.sendCompactResult(
+        req.requestId,
+        2 /* COMPACT_OUTCOME_REFUSED */,
+        "unavailable"
+      );
+      return;
+    }
+    let liveSession;
+    let liveLeaf;
+    let liveHasModel;
+    let liveProvider;
+    let liveModelId;
+    try {
+      liveSession = ctx.sessionManager.getSessionId();
+      liveLeaf = ctx.sessionManager.getLeafId() ?? "";
+      const liveModel = ctx.model;
+      liveHasModel = liveModel !== void 0 && liveModel !== null;
+      liveProvider = liveModel?.provider;
+      liveModelId = liveModel?.id;
+    } catch {
+      this.sendCompactResult(
+        req.requestId,
+        2 /* COMPACT_OUTCOME_REFUSED */,
+        "stale"
+      );
+      return;
+    }
+    const modelFence = req.expectedModel !== void 0 ? liveHasModel && liveProvider === req.expectedModel.provider && liveModelId === req.expectedModel.model : !liveHasModel;
+    if (liveSession !== req.expectedSessionId || liveLeaf !== req.expectedLeafId || !modelFence) {
+      this.sendCompactResult(
+        req.requestId,
+        2 /* COMPACT_OUTCOME_REFUSED */,
+        "stale"
+      );
+      return;
+    }
+    let idle;
+    try {
+      idle = ctx.isIdle() === true;
+    } catch {
+      idle = false;
+    }
+    if (!idle) {
+      this.sendCompactResult(
+        req.requestId,
+        2 /* COMPACT_OUTCOME_REFUSED */,
+        "busy"
+      );
+      return;
+    }
+    let queued;
+    try {
+      queued = ctx.hasPendingMessages() !== false;
+    } catch {
+      queued = true;
+    }
+    if (queued) {
+      this.sendCompactResult(
+        req.requestId,
+        2 /* COMPACT_OUTCOME_REFUSED */,
+        "queued"
+      );
+      return;
+    }
+    if (this.compactionActive) {
+      this.sendCompactResult(
+        req.requestId,
+        2 /* COMPACT_OUTCOME_REFUSED */,
+        "compaction-active"
+      );
+      return;
+    }
+    const op = {
+      requestId: req.requestId,
+      runtimeId: this.runtimeId,
+      sessionId: liveSession
+    };
+    this.compact.pending = { ...op, reported: false };
+    this.publishContextOnly();
+    try {
+      ctx.compact({
+        onComplete: () => this.settleCompactCallback(
+          op,
+          1 /* COMPACT_OUTCOME_COMPLETED */,
+          ""
+        ),
+        onError: (error) => {
+          const mapped = mapCompactError(error);
+          this.settleCompactCallback(
+            op,
+            mapped.outcome,
+            mapped.reason
+          );
+        }
+      });
+    } catch {
+      const pending = this.compact.pending;
+      if (pending === null || pending.requestId !== op.requestId || pending.reported) {
+        return;
+      }
+      pending.reported = true;
+      this.refreshFromLive();
+      this.sendCompactResult(
+        op.requestId,
+        0 /* COMPACT_OUTCOME_UNSPECIFIED */,
+        "uncertain"
+      );
+      this.sendSnapshot(
+        this.running ? 2 /* LOGICAL_STATE_RUNNING */ : 1 /* LOGICAL_STATE_IDLE */
+      );
+    }
+  }
+  /**
+   * Settle one native compaction callback. Releases only the
+   * matching operation and terminates at most once; publishes the
+   * terminal result only when this runtime still owns the current
+   * session. Old callbacks never publish old-session state, but
+   * their release refreshes the active runtime's readiness using
+   * its current context. Never throws.
+   */
+  settleCompactCallback(op, outcome, reason) {
+    try {
+      const pending = this.compact.pending;
+      if (pending === null || pending.requestId !== op.requestId) {
+        return;
+      }
+      this.compact.pending = null;
+      if (pending.reported) {
+        this.refreshAfterRelease();
+        return;
+      }
+      if (this.ownsCurrentSession(op)) {
+        this.refreshFromLive();
+        this.sendCompactResult(op.requestId, outcome, reason);
+        this.sendSnapshot(
+          this.running ? 2 /* LOGICAL_STATE_RUNNING */ : 1 /* LOGICAL_STATE_IDLE */
+        );
+        return;
+      }
+      this.refreshAfterRelease();
+    } catch {
+    }
+  }
+  /**
+   * True when this runtime is still active and the live session
+   * still matches the operation. A throwing read fails closed.
+   */
+  ownsCurrentSession(op) {
+    if (this.compact.active?.runtimeId !== this.runtimeId) return false;
+    try {
+      return this.lastCtx?.sessionManager.getSessionId() === op.sessionId;
+    } catch {
+      return false;
+    }
+  }
+  /**
+   * Refresh the active runtime's readiness after a foreign
+   * release, using that runtime's current context. Never throws.
+   */
+  refreshAfterRelease() {
+    try {
+      const active = this.compact.active;
+      if (active === null) return;
+      if (active.runtimeId === this.runtimeId) {
+        this.refreshFromLive();
+        this.sendSnapshot(
+          this.running ? 2 /* LOGICAL_STATE_RUNNING */ : 1 /* LOGICAL_STATE_IDLE */
+        );
+        return;
+      }
+      active.notify();
+    } catch {
+    }
+  }
+  /**
+   * Send one terminal Compact result. Nonfatal response-class
+   * admission, like history and model answers: an admission miss
+   * lets the waiter expire into unknown instead of disturbing
+   * lifecycle traffic.
+   */
+  sendCompactResult(requestId, outcome, reason) {
+    this.channel?.sendNonfatal({
+      paneId: this.opts.creds.pane,
+      processId: this.opts.creds.process,
+      runtimeGeneration: this.opts.generation,
+      payload: {
+        $case: "compactResult",
+        value: CompactResult.create({ requestId, outcome, reason })
+      }
+    });
+  }
   onStreamEnd(status) {
     this.channel?.close();
     this.channel = null;
@@ -28501,6 +29381,11 @@ function ownerSlot() {
   globalThis[OWNER_KEY] = fresh;
   return fresh;
 }
+function ownerCompactState() {
+  const slot = ownerSlot();
+  if (!slot.compact) slot.compact = freshCompactLatch();
+  return slot.compact;
+}
 function readCredsFromEnv(env = process.env) {
   const target = env[ENV_TARGET];
   const pane = env[ENV_PANE];
@@ -28526,7 +29411,13 @@ function contextView(ctx) {
     },
     modelRegistry: ctx.modelRegistry,
     scopedModels: ctx.scopedModels,
-    ui: ctx.ui
+    ui: ctx.ui,
+    // Optional telemetry APIs, detected defensively: a host
+    // without them stays on lifecycle/history/models behavior.
+    getContextUsage: typeof ctx.getContextUsage === "function" ? () => ctx.getContextUsage() : void 0,
+    isIdle: typeof ctx.isIdle === "function" ? () => ctx.isIdle() : void 0,
+    hasPendingMessages: typeof ctx.hasPendingMessages === "function" ? () => ctx.hasPendingMessages() : void 0,
+    compact: typeof ctx.compact === "function" ? (options) => ctx.compact(options) : void 0
   };
 }
 function settledAborted(event) {
@@ -28567,9 +29458,10 @@ function createExtension(pi, deps = {}) {
   const nativeThinking = pi;
   const getThinkingLevel = typeof nativeThinking.getThinkingLevel === "function" ? () => nativeThinking.getThinkingLevel() : void 0;
   const setThinkingLevel = typeof nativeThinking.setThinkingLevel === "function" ? (level) => nativeThinking.setThinkingLevel(level) : void 0;
-  const make = deps.makeRuntime ?? ((c, g) => new Runtime({
+  const make = deps.makeRuntime ?? ((c, g, compact) => new Runtime({
     creds: c,
     generation: g,
+    compactState: compact,
     setModel: (model) => pi.setModel(model),
     ...getThinkingLevel ? { getThinkingLevel } : {},
     ...setThinkingLevel ? { setThinkingLevel } : {}
@@ -28602,7 +29494,7 @@ function createExtension(pi, deps = {}) {
       runtime.shutdown();
       slot.generation += 1n;
       sessionId = next;
-      runtime = make(slot.creds, slot.generation);
+      runtime = make(slot.creds, slot.generation, ownerCompactState());
       runtime.start(contextView(ctx));
       return;
     }
@@ -28618,7 +29510,7 @@ function createExtension(pi, deps = {}) {
     } catch {
       sessionId = null;
     }
-    runtime = make(creds, slot.generation);
+    runtime = make(creds, slot.generation, ownerCompactState());
     runtime.start(contextView(ctx));
   });
   pi.on("agent_start", (_event, ctx) => {
@@ -28626,6 +29518,9 @@ function createExtension(pi, deps = {}) {
   });
   pi.on("agent_end", (event) => {
     runtime?.onAgentEnd(agentEndStopReason(event));
+  });
+  pi.on("turn_end", (_event, ctx) => {
+    runtime?.onTurnEnd(contextView(ctx));
   });
   pi.on("agent_settled", (event, ctx) => {
     runtime?.onAgentSettled(contextView(ctx), settledAborted(event));

@@ -27,13 +27,17 @@ type Server struct {
 
 	grpcServer     *grpc.Server
 	onSettled      func(paneID, processID string, generation, runID uint64, outcome pibridgepb.RunOutcome)
-	onState        func(paneID, processID string, generation, pubRev uint64, running, hasState bool, model, thinkingLevel string, caps []string)
+	onState        func(paneID, processID string, generation, pubRev uint64, running, hasState bool, model, thinkingLevel string, caps []string, usage *ContextUsage, readiness *Readiness)
 	onPeerDown     func(paneID, processID string, generation uint64)
 	histSeq        atomic.Uint64
 	modelsSeq      atomic.Uint64
 	setSeq         atomic.Uint64
 	thinkingSeq    atomic.Uint64
 	setThinkingSeq atomic.Uint64
+	// compactSeq allocates monotonic server-side Compact request
+	// IDs. IDs are positive canonical decimal uint64 strings,
+	// never wrap, and are never reused or browser-supplied.
+	compactSeq atomic.Uint64
 	// pubSeq is the server-owned publication sequence behind
 	// telemetry_revision. It is allocated at lease creation and at
 	// each accepted Hello/state change, so delayed stream callbacks
@@ -73,8 +77,11 @@ func (s *Server) SetOnSettled(fn func(paneID, processID string, generation, runI
 // SetOnSettled; the callback receives copies, never shared slices.
 // pubRev is the server-owned publication revision for this exact
 // acceptance; hasState is false when the runtime published no snapshot
-// (model/thinking level stay unknown, never invented).
-func (s *Server) SetOnState(fn func(paneID, processID string, generation, pubRev uint64, running, hasState bool, model, thinkingLevel string, caps []string)) {
+// (model/thinking level/usage stay unknown, never invented). usage
+// and readiness are copies of the accepted telemetry, nil when the
+// snapshot carried none: unknown usage is distinct from zero and from
+// an absent capability.
+func (s *Server) SetOnState(fn func(paneID, processID string, generation, pubRev uint64, running, hasState bool, model, thinkingLevel string, caps []string, usage *ContextUsage, readiness *Readiness)) {
 	s.onState = fn
 }
 
@@ -108,7 +115,7 @@ func (s *Server) fireState(l *lease, p *peer, pubRev uint64, snap *pibridgepb.St
 			model = m.GetProvider() + "/" + m.GetModel()
 		}
 	}
-	s.onState(paneID, processID, generation, pubRev, running, hasState, model, thinkingLevel, caps)
+	s.onState(paneID, processID, generation, pubRev, running, hasState, model, thinkingLevel, caps, copyContextUsage(snap), copyReadiness(snap))
 }
 
 // SetOnPeerDown registers the callback fired once when the active peer
@@ -188,6 +195,65 @@ func (s *Server) Stats() (activeStreams, leases int) {
 	return activeStreams, leases
 }
 
+// ContextUsage is a validated copy of one context telemetry sample.
+// A nil *ContextUsage means the snapshot carried no measurement:
+// unknown usage, distinct from zero and from an absent capability.
+// Each known field preserves explicit presence: a zero token count
+// stays a present zero, never unknown.
+type ContextUsage struct {
+	Tokens     float64
+	Window     float64
+	Percent    float64
+	HasTokens  bool
+	HasWindow  bool
+	HasPercent bool
+}
+
+// Readiness is a copy of one compaction-readiness sample. A nil
+// *Readiness means the snapshot carried none (capability absent or
+// APIs missing), distinct from a present all-false sample.
+type Readiness struct {
+	Idle               bool
+	HasPendingMessages bool
+	CompactionActive   bool
+	BridgePending      bool
+}
+
+// copyContextUsage copies validated telemetry out of a snapshot. A
+// nil snapshot or absent sample yields nil (unknown), never zero.
+func copyContextUsage(snap *pibridgepb.StateSnapshot) *ContextUsage {
+	u := snap.GetContextUsage()
+	if u == nil {
+		return nil
+	}
+	out := &ContextUsage{}
+	if t := u.Tokens; t != nil {
+		out.Tokens, out.HasTokens = *t, true
+	}
+	if w := u.ContextWindow; w != nil {
+		out.Window, out.HasWindow = *w, true
+	}
+	if p := u.Percent; p != nil {
+		out.Percent, out.HasPercent = *p, true
+	}
+	return out
+}
+
+// copyReadiness copies the readiness sample out of a snapshot. A nil
+// snapshot or absent sample yields nil, never an invented sample.
+func copyReadiness(snap *pibridgepb.StateSnapshot) *Readiness {
+	r := snap.GetCompactReadiness()
+	if r == nil {
+		return nil
+	}
+	return &Readiness{
+		Idle:               r.GetIdle(),
+		HasPendingMessages: r.GetHasPendingMessages(),
+		CompactionActive:   r.GetCompactionActive(),
+		BridgePending:      r.GetBridgePending(),
+	}
+}
+
 // StateView is the nonsecret lease inspection surface for the host and
 // tests. It carries no tokens, process nonces beyond the lookup key, or
 // payloads. Session, leaf, model, thinking level, capability, and runtime identities are
@@ -208,6 +274,11 @@ type StateView struct {
 	LeafID        string
 	Model         string
 	ThinkingLevel string
+	// Context and Readiness are copies of the retained snapshot's
+	// telemetry, nil when it carried none. Unknown usage is
+	// distinct from zero and from an absent capability.
+	Context   *ContextUsage
+	Readiness *Readiness
 }
 
 // PaneState returns the nonsecret lease view for one process. It reports
@@ -233,6 +304,8 @@ func (s *Server) paneStateLocked(l *lease) StateView {
 			view.Model = m.Provider + "/" + m.Model
 		}
 		view.ThinkingLevel = l.lastState.GetThinkingLevel()
+		view.Context = copyContextUsage(l.lastState)
+		view.Readiness = copyReadiness(l.lastState)
 	}
 	return view
 }
@@ -388,6 +461,11 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 		l.runtimeID = hello.GetRuntimeId()
 		l.sessionID = hello.GetSessionId()
 		l.jrn.reset()
+		// A new generation clears request-specific Compact
+		// results: any unresolved operation belonged to the old
+		// runtime. Unresolved process-owned native work still
+		// reports through the fresh authoritative readiness.
+		l.compact = nil
 	}
 	type pendingSettlement struct {
 		runID   uint64
@@ -395,6 +473,13 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 	}
 	var pending []pendingSettlement
 	if snap != nil {
+		if sameGen {
+			// Same-generation reconnect baseline: reconcile a
+			// pending-to-released transition before the
+			// overwrite. A new generation already cleared the
+			// operation above.
+			reconcileCompactRelease(l, snap)
+		}
 		l.lastState = snap
 		// Merge the edges the runtime recorded while offline.
 		// Duplicates are ignored; only advancing sequences land. A new
@@ -601,6 +686,9 @@ func (s *Server) handleMessage(l *lease, p *peer, msg *pibridgepb.PiToPhi) error
 			l.mu.Unlock()
 			return nil
 		}
+		// Reconcile before the overwrite: the retained readiness
+		// is the pending half of a release transition.
+		reconcileCompactRelease(l, snap)
 		l.lastState = snap
 		pubRev := s.pubSeq.Add(1)
 		l.pubRev = pubRev
@@ -625,6 +713,9 @@ func (s *Server) handleMessage(l *lease, p *peer, msg *pibridgepb.PiToPhi) error
 		return nil
 	case msg.GetSetThinkingAck() != nil:
 		s.deliverSetThinking(l, p, msg.GetSetThinkingAck())
+		return nil
+	case msg.GetCompactResult() != nil:
+		s.deliverCompact(l, p, msg.GetCompactResult())
 		return nil
 	default:
 		return status.Error(codes.InvalidArgument, "unsupported payload")
@@ -656,6 +747,9 @@ func validateSnapshot(snap *pibridgepb.StateSnapshot, sessionID string) error {
 	// Unknown level names pass through and degrade to unknown downstream:
 	// a future Pi release may add a level, and that must not tear down
 	// the whole bridge.
+	if err := validateContextUsage(snap.GetContextUsage()); err != nil {
+		return err
+	}
 	return nil
 }
 

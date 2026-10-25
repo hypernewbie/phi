@@ -7,7 +7,13 @@ import { spawn } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { status as GrpcStatus } from '@grpc/grpc-js';
-import { LogicalState, RunOutcome, StateSnapshot } from '../src/gen/bridge.js';
+import {
+    CompactOutcome,
+    LogicalState,
+    RunOutcome,
+    StateSnapshot,
+} from '../src/gen/bridge.js';
+import { CAPABILITY_COMPACT, CAPABILITY_LIFECYCLE } from '../src/protocol.js';
 import { BridgeTestClient } from '../src/test-client.js';
 
 interface ControlResponse {
@@ -26,6 +32,12 @@ interface ControlResponse {
     journalFirst?: string;
     journalLast?: string;
     journalGap?: boolean;
+    generation?: string;
+    pubRev?: string;
+    call?: string;
+    outcome?: string;
+    reason?: string;
+    requestId?: string;
 }
 
 let server: ReturnType<typeof spawn>;
@@ -78,26 +90,30 @@ async function makeClient(
         capabilities?: string[];
         sessionId?: string;
         runtimeId?: string;
+        state?: StateSnapshot;
     } = {},
-): Promise<{ client: BridgeTestClient; process: string }> {
+): Promise<{ client: BridgeTestClient; process: string; token: string }> {
     const { process, token } = await registerPane(pane);
     await control({ op: 'complete', process });
+    const sessionId = opts.sessionId ?? `sess-${pane}`;
     const client = new BridgeTestClient({
         target,
         pane,
         process,
         token: opts.token ?? token,
         capabilities: opts.capabilities,
-        sessionId: opts.sessionId ?? `sess-${pane}`,
+        sessionId,
         runtimeId: opts.runtimeId ?? `rt-${pane}`,
-        state: StateSnapshot.create({
-            state: LogicalState.LOGICAL_STATE_IDLE,
-            sessionId: opts.sessionId ?? `sess-${pane}`,
-            leafId: `leaf-${pane}`,
-            stateRevision: 0n,
-        }),
+        state:
+            opts.state ??
+            StateSnapshot.create({
+                state: LogicalState.LOGICAL_STATE_IDLE,
+                sessionId,
+                leafId: `leaf-${pane}`,
+                stateRevision: 0n,
+            }),
     });
-    return { client, process };
+    return { client, process, token };
 }
 
 beforeAll(async () => {
@@ -249,6 +265,277 @@ describe('lifecycle isolation', () => {
         expect(stats.active).toBeGreaterThanOrEqual(N);
         await Promise.all(clients.map((c) => c.close()));
     }, 120_000);
+});
+
+const COMPACT_CAPABILITIES = [CAPABILITY_LIFECYCLE, CAPABILITY_COMPACT];
+
+function idleReadyState(sessionId: string, leafId: string): StateSnapshot {
+    return StateSnapshot.create({
+        state: LogicalState.LOGICAL_STATE_IDLE,
+        sessionId,
+        leafId,
+        model: { provider: 'test-provider', model: 'test-model' },
+        compactReadiness: {
+            idle: true,
+            hasPendingMessages: false,
+            compactionActive: false,
+            bridgePending: false,
+        },
+        stateRevision: 0n,
+    });
+}
+
+async function makeCompactClient(pane: string): Promise<{
+    client: BridgeTestClient;
+    process: string;
+    token: string;
+}> {
+    return makeClient(pane, {
+        capabilities: COMPACT_CAPABILITIES,
+        state: idleReadyState(`sess-${pane}`, `leaf-${pane}`),
+    });
+}
+
+async function compactStamps(
+    process: string,
+): Promise<{ generation: number; pubRev: number }> {
+    const view = await control({ op: 'inspect', process });
+    expect(view.ok, `stamps: ${view.error}`).toBe(true);
+    return {
+        generation: Number(view.generation),
+        pubRev: Number(view.pubRev),
+    };
+}
+
+// Dispatch returns immediately with a call id; the caller collects the
+// terminal/refused/unknown outcome via waitCompact. Split phases let
+// tests hold one op while issuing a second dispatch.
+async function dispatchCompact(
+    process: string,
+    generation: number,
+    pubRev: number,
+    timeoutMs = 5000,
+): Promise<string> {
+    const res = await control({
+        op: 'compact',
+        process,
+        generation,
+        revision: pubRev,
+        timeoutMs,
+    });
+    expect(res.ok, `dispatch: ${res.error}`).toBe(true);
+    return res.call!;
+}
+
+async function waitCompact(
+    call: string,
+    timeoutMs = 10000,
+): Promise<ControlResponse> {
+    return control({ op: 'compact-wait', call, timeoutMs });
+}
+
+describe('compact', () => {
+    it('refuses dispatch without the compact capability', async () => {
+        const { client, process } = await makeClient('pane-compact-nocap');
+        await client.connect();
+        const call = await dispatchCompact(process, 0, 0);
+        const res = await waitCompact(call);
+        expect(res.ok).toBe(false);
+        expect(res.error).toContain('capability not negotiated');
+        expect(client.receivedCompactRequests()).toBe(0);
+        await client.close();
+    }, 20_000);
+
+    it('correlates the server ID verbatim and releases on terminal result', async () => {
+        const pane = 'pane-compact-echo';
+        const { client, process } = await makeCompactClient(pane);
+        await client.connect();
+        const { generation, pubRev } = await compactStamps(process);
+        const call = await dispatchCompact(process, generation, pubRev, 15000);
+        const req = await client.awaitCompactRequest();
+        expect(req.requestId).toMatch(/^[1-9][0-9]*$/);
+        expect(req.expectedSessionId).toBe(`sess-${pane}`);
+        expect(req.expectedLeafId).toBe(`leaf-${pane}`);
+        expect(req.expectedModel).toMatchObject({
+            provider: 'test-provider',
+            model: 'test-model',
+        });
+        // A mistyped ID is dropped: the op stays held and a second
+        // dispatch is refused before reaching the host.
+        client.sendCompactResult(
+            '999999999999',
+            CompactOutcome.COMPACT_OUTCOME_COMPLETED,
+        );
+        await client.drain();
+        const dup = await dispatchCompact(process, generation, pubRev, 2000);
+        expect((await waitCompact(dup)).error).toBe('refusal:pending');
+        expect(client.receivedCompactRequests()).toBe(1);
+        // The verbatim echo completes the original waiter.
+        client.sendCompactResult(
+            req.requestId,
+            CompactOutcome.COMPACT_OUTCOME_COMPLETED,
+        );
+        const res = await waitCompact(call);
+        expect(res.ok).toBe(true);
+        expect(res.outcome).toBe('COMPACT_OUTCOME_COMPLETED');
+        expect(res.requestId).toBe(req.requestId);
+        // Released: a fresh dispatch is admitted (it expires unknown
+        // with no further result).
+        const again = await dispatchCompact(process, generation, pubRev, 500);
+        const againRes = await waitCompact(again);
+        expect(againRes.ok).toBe(false);
+        expect(againRes.error).toMatch(/^unknown:/);
+        expect(client.receivedCompactRequests()).toBe(2);
+        await client.close();
+    }, 30_000);
+
+    it('coerces a foreign result reason to the safe vocabulary', async () => {
+        const { client, process } = await makeCompactClient(
+            'pane-compact-reason',
+        );
+        await client.connect();
+        const { generation, pubRev } = await compactStamps(process);
+        const call = await dispatchCompact(process, generation, pubRev, 15000);
+        const req = await client.awaitCompactRequest();
+        client.sendCompactResult(
+            req.requestId,
+            CompactOutcome.COMPACT_OUTCOME_FAILED,
+            'not-in-vocab!!',
+        );
+        const res = await waitCompact(call);
+        expect(res.ok).toBe(true);
+        expect(res.outcome).toBe('COMPACT_OUTCOME_FAILED');
+        // Empty coerces to absent over the JSON control surface.
+        expect(res.reason ?? '').toBe('');
+        await client.close();
+    }, 30_000);
+
+    it('keeps a later request after an expired wait', async () => {
+        const { client, process } = await makeCompactClient(
+            'pane-compact-expired-wait',
+        );
+        await client.connect();
+        const { generation, pubRev } = await compactStamps(process);
+        // Expire a wait BEFORE anything is dispatched: without dropping
+        // the dead waiter from the queue, the real request resolves that
+        // already-rejected promise and the fresh wait never sees it.
+        await expect(client.awaitCompactRequest(50)).rejects.toThrow(
+            /deadline/,
+        );
+        const call = await dispatchCompact(process, generation, pubRev, 15000);
+        const req = await client.awaitCompactRequest();
+        expect(req.requestId).toMatch(/^[1-9][0-9]*$/);
+        expect(client.receivedCompactRequests()).toBe(1);
+        client.sendCompactResult(
+            req.requestId,
+            CompactOutcome.COMPACT_OUTCOME_COMPLETED,
+        );
+        const res = await waitCompact(call);
+        expect(res.ok).toBe(true);
+        await client.close();
+    }, 30_000);
+
+    it('retains pending across a caller timeout without replay', async () => {
+        const { client, process } = await makeCompactClient(
+            'pane-compact-timeout',
+        );
+        await client.connect();
+        const { generation, pubRev } = await compactStamps(process);
+        const call = await dispatchCompact(process, generation, pubRev, 500);
+        const res = await waitCompact(call);
+        expect(res.ok).toBe(false);
+        expect(res.error).toMatch(/^unknown:/);
+        expect(res.requestId).toMatch(/^[1-9][0-9]*$/);
+        // The op stays unresolved: a retry is refused before the host.
+        const retry = await dispatchCompact(process, generation, pubRev, 2000);
+        expect((await waitCompact(retry)).error).toBe('refusal:pending');
+        expect(client.receivedCompactRequests()).toBe(1);
+        await client.close();
+    }, 30_000);
+
+    it('retains the op across peer loss and accepts the late result on reconnect', async () => {
+        const pane = 'pane-compact-reconnect';
+        const sessionId = `sess-${pane}`;
+        const runtimeId = `rt-${pane}`;
+        const { client, process, token } = await makeCompactClient(pane);
+        await client.connect();
+        const { generation, pubRev } = await compactStamps(process);
+        const call = await dispatchCompact(process, generation, pubRev, 30000);
+        const req = await client.awaitCompactRequest();
+        await client.close();
+        // Peer loss resolves the waiter unknown...
+        const lost = await waitCompact(call);
+        expect(lost.ok).toBe(false);
+        expect(lost.error).toBe(`unknown:${req.requestId}`);
+        // ...but a same-generation reconnect keeps the generation and
+        // the op, and the server never resends the request.
+        const client2 = new BridgeTestClient({
+            target,
+            pane,
+            process,
+            token,
+            capabilities: COMPACT_CAPABILITIES,
+            sessionId,
+            runtimeId,
+            state: idleReadyState(sessionId, `leaf-${pane}`),
+        });
+        await client2.connect();
+        expect(client2.receivedCompactRequests()).toBe(0);
+        const re = await control({ op: 'inspect', process });
+        expect(re.generation).toBe('1');
+        const stamps2 = await compactStamps(process);
+        const retry = await dispatchCompact(
+            process,
+            stamps2.generation,
+            stamps2.pubRev,
+            2000,
+        );
+        expect((await waitCompact(retry)).error).toBe('refusal:pending');
+        // The late result on the new stream releases the op.
+        client2.sendCompactResult(
+            req.requestId,
+            CompactOutcome.COMPACT_OUTCOME_COMPLETED,
+        );
+        await client2.drain();
+        let admitted = false;
+        for (let i = 0; i < 25 && !admitted; i++) {
+            const probe = await dispatchCompact(
+                process,
+                stamps2.generation,
+                stamps2.pubRev,
+                200,
+            );
+            const r = await waitCompact(probe, 5000);
+            if (r.ok || r.error?.startsWith('unknown:')) admitted = true;
+            else {
+                expect(r.error).toBe('refusal:pending');
+                await new Promise((r2) => setTimeout(r2, 100));
+            }
+        }
+        expect(admitted, 'late result never released the op').toBe(true);
+        // Only the fresh probe request arrived: a new ID, never a resend.
+        expect(client2.receivedCompactRequests()).toBe(1);
+        const fresh = await client2.awaitCompactRequest();
+        expect(fresh.requestId).not.toBe(req.requestId);
+        await client2.close();
+    }, 60_000);
+
+    it('refuses a duplicate dispatch before host invocation', async () => {
+        const { client, process } = await makeCompactClient('pane-compact-dup');
+        await client.connect();
+        const { generation, pubRev } = await compactStamps(process);
+        const first = await dispatchCompact(process, generation, pubRev, 15000);
+        const req = await client.awaitCompactRequest();
+        const second = await dispatchCompact(process, generation, pubRev, 2000);
+        expect((await waitCompact(second)).error).toBe('refusal:pending');
+        expect(client.receivedCompactRequests()).toBe(1);
+        client.sendCompactResult(
+            req.requestId,
+            CompactOutcome.COMPACT_OUTCOME_COMPLETED,
+        );
+        expect((await waitCompact(first)).ok).toBe(true);
+        await client.close();
+    }, 30_000);
 });
 
 describe('slow peer', () => {
