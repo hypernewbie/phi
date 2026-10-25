@@ -262,6 +262,26 @@ test('bridge thinking levels list, set and cycle; native and absent panes stay u
             });
         expect(thinkingCalls).toHaveLength(callsBeforeNative);
 
+        // Narrow width: the picker opens, stays usable and closes on an
+        // outside click rather than needing a desktop-expanded menu.
+        await page.setViewportSize({ width: 390, height: 844 });
+        // The mobile Git Diff drawer covers the presets row; hide it with
+        // its normal control before reaching the Thinking trigger.
+        await page
+            .getByRole('button', { name: 'Toggle Git Diff Panel' })
+            .click({ timeout: 15_000 });
+        await trigger.click({ timeout: 15_000 });
+        await expect(dropup).toBeVisible({ timeout: 10_000 });
+        await expect(rows.first()).toBeVisible({ timeout: 10_000 });
+        const overflow = await page.evaluate(() => ({
+            inner: window.innerWidth,
+            scroll: document.documentElement.scrollWidth,
+        }));
+        expect(overflow.scroll).toBeLessThanOrEqual(overflow.inner);
+        await page.locator(`#term-${livePane} .xterm-screen`).click();
+        await expect(dropup).toBeHidden({ timeout: 5_000 });
+        await page.setViewportSize({ width: 1440, height: 900 });
+
         // Absent pane: no injection means native-only controls, no bridge
         // Thinking traffic, and no guessed level.
         await page.locator(`.tab[data-pane-id="${absentPane}"]`).click();
