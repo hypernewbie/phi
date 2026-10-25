@@ -214,7 +214,7 @@ describe('settings disable', () => {
         const rec = recordingRuntime();
         createExtension(pi, { makeRuntime: () => rec.runtime });
         // Factory registers handlers; the gate runs at session_start.
-        expect(handlers.size).toBe(11);
+        expect(handlers.size).toBe(12);
         handlers.get('session_start')!({}, mockCtx() as never);
         expect(rec.calls).toEqual([]);
         expect(readCredsFromEnv()).toBeNull();
@@ -323,7 +323,7 @@ describe('owner guard', () => {
         const reloaded = mockPi();
         const rec2 = recordingRuntime();
         createExtension(reloaded.pi, { makeRuntime: () => rec2.runtime });
-        expect(reloaded.handlers.size).toBe(11);
+        expect(reloaded.handlers.size).toBe(12);
         reloaded.handlers.get('session_start')!({}, ctx as never);
         expect(rec2.calls).toEqual(['start']);
     });

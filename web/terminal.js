@@ -12416,10 +12416,9 @@ export class TabManager {
     // The row key covers what the presets row renders (Models trigger,
     // slash presets, Compact readiness); the bar key adds the context
     // occupancy only the status-bar meter renders.
-    _piBridgeKeys(tab) {
-        const view = tab.piBridge;
+    _piBridgeKeys(tab, view = tab.piBridge) {
         if (!view) return { row: '', bar: '' };
-        const row = `${this._piBridgeModelsEligible(tab)}|${piBridgeCapable(tab, 'pi.context.v1')}|${piBridgeCapable(tab, 'pi.compact.v1')}|${view.state}|${view.model || ''}|${view.connected}|${view.running}|${(view.capabilities || []).join(',')}|${view.compact_idle}/${view.compact_queued}/${view.compact_active}/${view.compact_pending}`;
+        const row = `${this._piBridgeModelsEligible(tab)}|${this._piBridgeThinkingEligible(tab)}|${piBridgeCapable(tab, 'pi.context.v1')}|${piBridgeCapable(tab, 'pi.compact.v1')}|${view.state}|${view.generation || ''}|${view.model || ''}|${view.thinking_level || ''}|${view.connected}|${view.running}|${(view.capabilities || []).join(',')}|${view.compact_idle}/${view.compact_queued}/${view.compact_active}/${view.compact_pending}`;
         return {
             row,
             bar: `${row}|${view.context_tokens ?? ''},${view.context_window ?? ''},${view.context_percent ?? ''}`,

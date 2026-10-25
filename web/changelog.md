@@ -19,6 +19,7 @@ All notable changes to phi are documented here. Newest versions first.
 - **`phic` markdown `f`** (`aeeb912d`). The markdown view types the filename into the terminal.
 - **`phic` project, coder, and worktree follow the tab** (`46639120`).
 - **Development assets from disk** (`3930d747`). A `--web=DIR` flag serves fresh assets without restarting the server.
+- **Pi context meter and native compact** (`7616b7d`, `42f1517`, `b2eb40f`). Pi panes show a context meter in the status bar, and the existing `/compact` preset runs Pi's native compact through the bridge. The button stays disabled with a reason until Pi reports idle, the outcome is reported as Pi sent it (complete, cancelled, interrupted, or unknown) instead of guessed from a silent stream, and a pane without the bridge keeps typing the command to the terminal.
 
 ### Fixed
 - **Servers stay on the embedded page** (`f05c1510`). A server built before the embedded transport existed did not advertise the API marker, so the desktop loaded that server's own page on every switch — a full page load (app, styles, forty modules) each time. Four switches went from ~200 requests to none.

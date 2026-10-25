@@ -665,7 +665,14 @@ describe('reused context meter', () => {
         expect(bar.querySelector('.pi-rpc-status-model').textContent).toBe(
             'prov/model',
         );
-        expect(tm.piThinkingBtn.classList.contains('hidden')).toBe(true);
+        // No thinking capability: the chip stays generic and claims no level
+        // (a Pi pane still offers the native cycle, which is PTY-forwarded).
+        expect(tm.piThinkingBtn.title).toBe('Cycle Pi Thinking level');
+        expect(
+            [...tm.piThinkingBtn.classList].some((cls) =>
+                /^pi-thinking-btn--/.test(cls),
+            ),
+        ).toBe(false);
     });
 
     it('treats explicit zero tokens as known with a zero fill', () => {

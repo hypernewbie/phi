@@ -910,6 +910,7 @@ describe('Runtime Thinking requests', () => {
         const runtimeOptions = {
             creds: CREDS,
             generation: 1n,
+            compactState: freshCompactLatch(),
             makeChannel: wired(ch),
             getThinkingLevel: () => level,
             ...(options.omitSetter
@@ -1144,6 +1145,7 @@ describe('Runtime Thinking requests', () => {
     it('does not advertise or handle the capability without both host methods', async () => {
         const ch = mockChannel();
         const rt = new Runtime({
+            compactState: freshCompactLatch(),
             creds: CREDS,
             generation: 1n,
             getThinkingLevel: () => 'medium',
