@@ -11,6 +11,10 @@ export const CAPABILITY_THINKING = 'pi.thinking.v1';
 export const MAX_THINKING_LEVELS = 7;
 export const MAX_THINKING_MODEL_ID_BYTES = 256;
 export const MAX_THINKING_LEVEL_BYTES = 16;
+export const CAPABILITY_CONTEXT = 'pi.context.v1';
+export const CAPABILITY_COMPACT = 'pi.compact.v1';
+/** Max chars of a Compact expected session/leaf/model identity. */
+export const MAX_COMPACT_IDENTITY_CHARS = 256;
 /** Cap on catalog entries per ModelsResponse; excess sets truncated. */
 export const MAX_MODELS_ENTRIES = 500;
 /**
@@ -30,6 +34,8 @@ export const MAX_QUEUED_MESSAGES = 16;
 export const MAX_QUEUED_BYTES = 256 * 1024;
 export const BLOCKED_SEND_TIMEOUT_MS = 5_000;
 export const HELLO_DEADLINE_MS = 5_000;
+/** Shutdown waits this long for queued settlement edges to flush before closing. */
+export const SHUTDOWN_DRAIN_MS = 500;
 export const MAX_JOURNAL_RECORDS = 64;
 export const RECONNECT_BASE_MS = 500;
 export const RECONNECT_MAX_MS = 30_000;
@@ -45,6 +51,8 @@ const SUPPORTED = new Set([
     CAPABILITY_HISTORY,
     CAPABILITY_MODELS,
     CAPABILITY_THINKING,
+    CAPABILITY_CONTEXT,
+    CAPABILITY_COMPACT,
 ]);
 
 /** Intersect advertised names with the supported set. Unknown names are ignored. */

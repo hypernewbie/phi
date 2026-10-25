@@ -3,7 +3,12 @@
 Phi's integration endpoint inside Pi. The extension reports explicit
 Pi completion to Phi's existing bell and provides read-only editor history.
 It also lists and switches models through Phi's shared model picker.
-It never sends prompts, compacts a session, or edits context.
+It shows context usage as display-only telemetry. It runs a native
+compaction only on an explicit user action through the existing
+Compact control: one operation per Pi process, no queue, no automatic
+retry. An expired or interrupted wait reports unknown; native work
+may still complete, and a late result releases only its own operation.
+It never sends prompts on its own and never edits messages or files.
 
 ## Layout
 
@@ -14,7 +19,7 @@ It never sends prompts, compacts a session, or edits context.
   module itself, callable through the host loader.
 - `src/extension.ts` — the factory: credential handling, process-global
   ownership, and event subscriptions.
-- `src/runtime.ts` — lifecycle mapping, history and model requests, journal, and reconnect.
+- `src/runtime.ts` — lifecycle mapping, context and compact support, history and model requests, journal, and reconnect.
 - `src/history-reader.ts` — checked access to the live TUI editor history.
 - `src/channel.ts` — bounded-queue gRPC transport.
 - `src/test-client.ts` — the synthetic peer for interop tests.

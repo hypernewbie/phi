@@ -10,9 +10,11 @@ import type {
 } from '@earendil-works/pi-coding-agent';
 import type { ChannelCreds } from './channel.js';
 import {
+    type CompactLatchState,
     type PiContextView,
     type PiThinkingLevel,
     Runtime,
+    freshCompactLatch,
 } from './runtime.js';
 
 export const ENV_TARGET = 'PHI_PI_BRIDGE_ENDPOINT';
@@ -26,6 +28,7 @@ interface OwnerSlot {
     active: boolean;
     generation: bigint;
     creds?: ChannelCreds | undefined;
+    compact?: CompactLatchState | undefined;
 }
 
 function ownerSlot(): OwnerSlot {
@@ -36,6 +39,17 @@ function ownerSlot(): OwnerSlot {
     const fresh: OwnerSlot = { active: false, generation: 0n };
     (globalThis as Record<symbol, unknown>)[OWNER_KEY] = fresh;
     return fresh;
+}
+
+/**
+ * Process-owned compaction latch: single-flight and Compact-ID
+ * high-water protection shared by every runtime in the process.
+ * Created once; reconnect and runtime replacement keep it.
+ */
+export function ownerCompactState(): CompactLatchState {
+    const slot = ownerSlot();
+    if (!slot.compact) slot.compact = freshCompactLatch();
+    return slot.compact;
 }
 
 /** Visible for tests to reset process-global ownership. */
@@ -78,6 +92,22 @@ function contextView(ctx: ExtensionContext): PiContextView {
         modelRegistry: ctx.modelRegistry,
         scopedModels: ctx.scopedModels,
         ui: ctx.ui,
+        // Optional telemetry APIs, detected defensively: a host
+        // without them stays on lifecycle/history/models behavior.
+        getContextUsage:
+            typeof ctx.getContextUsage === 'function'
+                ? () => ctx.getContextUsage()
+                : undefined,
+        isIdle:
+            typeof ctx.isIdle === 'function' ? () => ctx.isIdle() : undefined,
+        hasPendingMessages:
+            typeof ctx.hasPendingMessages === 'function'
+                ? () => ctx.hasPendingMessages()
+                : undefined,
+        compact:
+            typeof ctx.compact === 'function'
+                ? (options) => ctx.compact(options)
+                : undefined,
     };
 }
 
@@ -142,6 +172,7 @@ export interface FactoryRuntime {
     onSessionStart(ctx: PiContextView): void;
     onAgentStart(ctx: PiContextView): void;
     onAgentEnd(stopReason: string | null): void;
+    onTurnEnd(ctx: PiContextView): void;
     onAgentSettled(ctx: PiContextView, aborted: boolean): void;
     onModelSelect(ctx: PiContextView): void;
     onThinkingLevelSelect(ctx: PiContextView): void;
@@ -152,7 +183,11 @@ export interface FactoryRuntime {
 }
 
 export interface FactoryDeps {
-    makeRuntime?: (creds: ChannelCreds, generation: bigint) => FactoryRuntime;
+    makeRuntime?: (
+        creds: ChannelCreds,
+        generation: bigint,
+        compact: CompactLatchState,
+    ) => FactoryRuntime;
 }
 
 /**
@@ -185,10 +220,11 @@ export function createExtension(
             : undefined;
     const make =
         deps.makeRuntime ??
-        ((c, g) =>
+        ((c, g, compact) =>
             new Runtime({
                 creds: c,
                 generation: g,
+                compactState: compact,
                 setModel: (model) => pi.setModel(model),
                 ...(getThinkingLevel ? { getThinkingLevel } : {}),
                 ...(setThinkingLevel ? { setThinkingLevel } : {}),
@@ -229,7 +265,7 @@ export function createExtension(
             runtime.shutdown();
             slot.generation += 1n;
             sessionId = next;
-            runtime = make(slot.creds!, slot.generation);
+            runtime = make(slot.creds!, slot.generation, ownerCompactState());
             runtime.start(contextView(ctx));
             return;
         }
@@ -245,7 +281,7 @@ export function createExtension(
         } catch {
             sessionId = null;
         }
-        runtime = make(creds, slot.generation);
+        runtime = make(creds, slot.generation, ownerCompactState());
         runtime.start(contextView(ctx));
     });
 
@@ -255,6 +291,10 @@ export function createExtension(
 
     pi.on('agent_end', (event) => {
         runtime?.onAgentEnd(agentEndStopReason(event));
+    });
+
+    pi.on('turn_end', (_event, ctx) => {
+        runtime?.onTurnEnd(contextView(ctx));
     });
 
     pi.on('agent_settled', (event, ctx) => {

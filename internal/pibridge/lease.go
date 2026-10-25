@@ -49,6 +49,11 @@ type lease struct {
 	jrn       journal
 	lastState *pibridgepb.StateSnapshot
 	peer      *peer // current active stream, replaced atomically
+	// compact is the one process-owned unresolved Compact operation,
+	// retained until its terminal host result, a new runtime
+	// generation, or lease revoke. A departed waiter never clears
+	// it: native work outlives caller timeouts and reconnects.
+	compact *compactOp
 }
 
 type leaseState int
@@ -139,6 +144,8 @@ func (r *registry) revoke(processID string) {
 	l.state = leaseRevoked
 	peer := l.peer
 	l.peer = nil
+	// Process exit releases unresolved Compact work with it.
+	l.compact = nil
 	l.mu.Unlock()
 
 	if peer != nil {

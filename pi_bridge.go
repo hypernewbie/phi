@@ -77,6 +77,12 @@ type bridgePane struct {
 	lastModel         string
 	lastThinkingLevel string
 	lastCaps          []string
+	// lastUsage and lastReadiness are the retained telemetry
+	// copies from the latest accepted snapshot, nil when it
+	// carried none. Unknown usage is distinct from zero and
+	// from an absent capability.
+	lastUsage     *pibridge.ContextUsage
+	lastReadiness *pibridge.Readiness
 	// lastConnected tracks current stream availability: set on every
 	// snapshot, cleared on peer-down. Nil until the first snapshot.
 	// History recall uses it; bell behavior does not.
@@ -449,6 +455,29 @@ func (b *Bridge) RequestPaneSetModel(ctx context.Context, paneID, provider, mode
 	return b.server.RequestSetModel(ctx, processID, provider, model)
 }
 
+// RequestPaneCompact resolves a pane to its bridge process and asks
+// the live Pi session to run one native compaction. Unknown,
+// unmanaged, and peerless panes fail; every error means the host was
+// never invoked or the outcome is unknown, never a silent fallback.
+// The caller owns the deadline: the wait must not exceed 120 seconds.
+func (b *Bridge) RequestPaneCompact(ctx context.Context, paneID string, generation, pubRev uint64) (pibridge.CompactResult, error) {
+	if b == nil {
+		return pibridge.CompactResult{}, fmt.Errorf("pi-bridge: disabled")
+	}
+	b.mu.Lock()
+	p, ok := b.panes[paneID]
+	var processID string
+	var managed bool
+	if ok {
+		processID, managed = p.processID, p.managed
+	}
+	b.mu.Unlock()
+	if !ok || !managed {
+		return pibridge.CompactResult{}, fmt.Errorf("pi-bridge: pane not managed")
+	}
+	return b.server.RequestCompact(ctx, processID, generation, pubRev)
+}
+
 // RevokePane revokes a pane's lease and drops its record. Unknown panes
 // and nil bridges are ignored. Idempotent.
 func (b *Bridge) RevokePane(paneID string) {
@@ -503,6 +532,17 @@ type BridgePaneState struct {
 	ThinkingLevel     string   `json:"thinking_level"`
 	Capabilities      []string `json:"capabilities,omitempty"`
 	Connected         *bool    `json:"connected,omitempty"`
+	// Context telemetry, omitted when unknown. Explicit zero is a
+	// present zero, never unknown. Same names as the WS frame.
+	ContextTokens  *float64 `json:"context_tokens,omitempty"`
+	ContextWindow  *float64 `json:"context_window,omitempty"`
+	ContextPercent *float64 `json:"context_percent,omitempty"`
+	// Compaction readiness, present as a group iff the snapshot
+	// carried a sample. Same names as the WS frame.
+	CompactIdle    *bool `json:"compact_idle,omitempty"`
+	CompactQueued  *bool `json:"compact_queued,omitempty"`
+	CompactActive  *bool `json:"compact_active,omitempty"`
+	CompactPending *bool `json:"compact_pending,omitempty"`
 }
 
 // PaneSnapshot reports the bridge view for one pane. Unknown panes and
@@ -558,6 +598,24 @@ func (b *Bridge) PaneSnapshot(paneID string) BridgePaneState {
 	}
 	st.ThinkingLevel = view.thinkingLevel
 	st.Capabilities = append(st.Capabilities, view.caps...)
+	if u := view.usage; u != nil {
+		if u.HasTokens {
+			t := u.Tokens
+			st.ContextTokens = &t
+		}
+		if u.HasWindow {
+			w := u.Window
+			st.ContextWindow = &w
+		}
+		if u.HasPercent {
+			p := u.Percent
+			st.ContextPercent = &p
+		}
+	}
+	if r := view.readiness; r != nil {
+		idle, queued, active, pending := r.Idle, r.HasPendingMessages, r.CompactionActive, r.BridgePending
+		st.CompactIdle, st.CompactQueued, st.CompactActive, st.CompactPending = &idle, &queued, &active, &pending
+	}
 	return st
 }
 
@@ -569,7 +627,7 @@ func (b *Bridge) PaneSnapshot(paneID string) BridgePaneState {
 // model/usage of the old process. A callback without state advances
 // the revision floor but keeps model/thinking unknown. It never calls
 // back into the Server; all live values arrive as arguments.
-func (b *Bridge) onState(paneID, processID string, generation, pubRev uint64, running, hasState bool, model, thinkingLevel string, caps []string) {
+func (b *Bridge) onState(paneID, processID string, generation, pubRev uint64, running, hasState bool, model, thinkingLevel string, caps []string, usage *pibridge.ContextUsage, readiness *pibridge.Readiness) {
 	b.mu.Lock()
 	p, ok := b.panes[paneID]
 	var view bridgeStateView
@@ -591,6 +649,10 @@ func (b *Bridge) onState(paneID, processID string, generation, pubRev uint64, ru
 				p.lastModel = ""
 				p.lastThinkingLevel = ""
 				p.lastCaps = nil
+				// A new generation clears old context and
+				// request-specific results with the old state.
+				p.lastUsage = nil
+				p.lastReadiness = nil
 			}
 			p.pubRev = pubRev
 			// Capabilities are negotiated by Hello, not by the
@@ -602,6 +664,10 @@ func (b *Bridge) onState(paneID, processID string, generation, pubRev uint64, ru
 				p.lastRunning = &r
 				p.lastModel = model
 				p.lastThinkingLevel = thinkingLevel
+				// The accepted snapshot is authoritative: absent
+				// telemetry clears to unknown, never inherits.
+				p.lastUsage = copyUsage(usage)
+				p.lastReadiness = copyReadiness(readiness)
 			}
 			connected := true
 			p.lastConnected = &connected
@@ -647,6 +713,26 @@ func (b *Bridge) onPeerDown(paneID, processID string, generation uint64) {
 	}
 }
 
+// copyUsage retains one telemetry sample by value. Nil stays nil:
+// unknown usage is never invented.
+func copyUsage(u *pibridge.ContextUsage) *pibridge.ContextUsage {
+	if u == nil {
+		return nil
+	}
+	c := *u
+	return &c
+}
+
+// copyReadiness retains one readiness sample by value. Nil stays
+// nil: absent readiness is never invented.
+func copyReadiness(r *pibridge.Readiness) *pibridge.Readiness {
+	if r == nil {
+		return nil
+	}
+	c := *r
+	return &c
+}
+
 // bridgeStateView is a lock-free copy of one pane's retained view.
 type bridgeStateView struct {
 	pubRev        uint64
@@ -660,6 +746,8 @@ type bridgeStateView struct {
 	thinkingLevel string
 	caps          []string
 	connected     *bool
+	usage         *pibridge.ContextUsage
+	readiness     *pibridge.Readiness
 }
 
 // snapshot copies the retained view. The caller must hold b.mu. The
@@ -688,6 +776,8 @@ func (p *bridgePane) snapshot() bridgeStateView {
 		thinkingLevel: p.lastThinkingLevel,
 		caps:          append([]string(nil), p.lastCaps...),
 		connected:     connected,
+		usage:         copyUsage(p.lastUsage),
+		readiness:     copyReadiness(p.lastReadiness),
 	}
 }
 
@@ -715,6 +805,25 @@ func encodeBridgeState(paneID string, view bridgeStateView) []byte {
 	}
 	if len(view.caps) > 0 {
 		frame["capabilities"] = strings.Join(view.caps, ",")
+	}
+	// Telemetry stays string-valued like every control frame.
+	// Absent fields mean unknown, never zero or false.
+	if u := view.usage; u != nil {
+		if u.HasTokens {
+			frame["context_tokens"] = strconv.FormatFloat(u.Tokens, 'f', -1, 64)
+		}
+		if u.HasWindow {
+			frame["context_window"] = strconv.FormatFloat(u.Window, 'f', -1, 64)
+		}
+		if u.HasPercent {
+			frame["context_percent"] = strconv.FormatFloat(u.Percent, 'f', -1, 64)
+		}
+	}
+	if r := view.readiness; r != nil {
+		frame["compact_idle"] = strconv.FormatBool(r.Idle)
+		frame["compact_queued"] = strconv.FormatBool(r.HasPendingMessages)
+		frame["compact_active"] = strconv.FormatBool(r.CompactionActive)
+		frame["compact_pending"] = strconv.FormatBool(r.BridgePending)
 	}
 	payload, err := json.Marshal(frame)
 	if err != nil {

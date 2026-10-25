@@ -41,6 +41,7 @@ message PiToPhi {
     SetModelAck set_model_ack = 19;
     ThinkingLevelsResponse thinking_levels_response = 20;
     SetThinkingAck set_thinking_ack = 21;
+    CompactResult compact_result = 22;
   }
 }
 
@@ -59,6 +60,7 @@ message PhiToPi {
     SetModelRequest set_model_request = 16;
     ThinkingLevelsRequest thinking_levels_request = 17;
     SetThinkingRequest set_thinking_request = 18;
+    CompactRequest compact_request = 19;
   }
 }
 
@@ -153,6 +155,47 @@ message StateSnapshot {
   reserved "outstanding_summaries";
   // Empty means unknown; it is never inferred to mean off.
   string thinking_level = 9;
+  // Optional context telemetry, sampled from the host's
+  // getContextUsage. Absent when the pi.context.v1 API is
+  // unavailable or the latest sampling was undefined/invalid.
+  // Absent never means zero usage; see ContextUsageSnapshot.
+  ContextUsageSnapshot context_usage = 10;
+  // Optional compaction readiness, sampled from the host's
+  // isIdle/hasPendingMessages plus local compaction tracking.
+  // Absent when the pi.compact.v1 APIs are unavailable.
+  CompactReadiness compact_readiness = 11;
+}
+
+// Optional context telemetry. Scalar presence is explicit: an absent
+// tokens/percent means the host reports unknown (null), never zero.
+// context_window stays present when known, including right after a
+// compaction whose token count is still unknown. Consumers must keep
+// unknown distinct from a zero measurement and from an absent
+// capability. No transcripts, prompts, summaries, or costs travel here.
+message ContextUsageSnapshot {
+  // Estimated context tokens; absent when unknown. When present it
+  // is a finite nonnegative number within the safe-integer magnitude.
+  optional double tokens = 1;
+  // Model context window; present when known. When present it is a
+  // finite positive number within the safe-integer magnitude.
+  optional double context_window = 2;
+  // Usage percent of the window; absent when tokens are unknown.
+  // When present it is a finite nonnegative number.
+  optional double percent = 3;
+}
+
+// Optional compaction readiness for the existing Compact control
+// states. All fields are a point-in-time sample, not a promise that
+// a later dispatch still passes admission.
+message CompactReadiness {
+  // The host reports idle: no agent run and no compaction active.
+  bool idle = 1;
+  // The host reports queued messages waiting.
+  bool has_pending_messages = 2;
+  // A native compaction start was observed without its end.
+  bool compaction_active = 3;
+  // This Pi process owns an unresolved bridge compaction.
+  bool bridge_pending = 4;
 }
 
 // ---------------------------------------------------------------------------
@@ -259,6 +302,75 @@ message SetThinkingRequest {
 message SetThinkingAck {
   string request_id = 1;
   bool ok = 2;
+  string reason = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Native compaction
+// ---------------------------------------------------------------------------
+
+// CompactRequest asks the extension to run one native compaction via
+// the host's public compact({ onComplete, onError }). Best-effort
+// like history: the answer may never arrive without disturbing
+// lifecycle traffic, and an expired wait means an unknown outcome,
+// never permission to replay. At most one native compaction runs per
+// Pi process; a second request while one is unresolved is refused.
+message CompactRequest {
+  // Monotonic server-allocated ID, opaque to browser consumers.
+  // Positive canonical decimal uint64 syntax: a leading digit 1-9
+  // followed by up to 19 digits (no leading zeroes, no sign, no
+  // whitespace), numeric value at most 18446744073709551615.
+  // The extension echoes it verbatim and rejects duplicate/older
+  // IDs against a process high-water mark before host invocation.
+  string request_id = 1;
+  // Expected host identity, captured from the current server lease.
+  // The extension rechecks it against a live host read immediately
+  // before invocation and refuses on any mismatch or unreadable
+  // identity. Each is at most 256 chars.
+  string expected_session_id = 2;
+  string expected_leaf_id = 3;
+  // Expected model; absent means the server expects NO model and
+  // the extension refuses when the live host holds one. A model
+  // that appears or changes after the server snapshot must not
+  // bypass the admission fence. All three fences apply at
+  // admission only; native success changes the leaf, so completion
+  // never requires the old leaf.
+  ModelSnapshot expected_model = 4;
+}
+
+// Terminal compaction outcome. UNSPECIFIED means genuinely unknown:
+// never guess success, failure, or cancellation from absent evidence.
+// REFUSED means rejected before host invocation; FAILED and CANCELLED
+// arrive only from the host completion callback after invocation.
+// Exactly one terminal result is emitted per accepted operation.
+enum CompactOutcome {
+  COMPACT_OUTCOME_UNSPECIFIED = 0;
+  COMPACT_OUTCOME_COMPLETED = 1;
+  COMPACT_OUTCOME_REFUSED = 2;
+  COMPACT_OUTCOME_FAILED = 3;
+  COMPACT_OUTCOME_CANCELLED = 4;
+}
+
+// CompactResult reports one terminal outcome for request_id, echoed
+// verbatim. reason is a fixed safe vocabulary, never raw host or
+// provider text, never a transcript or summary:
+//
+//   "" (empty)        no detail (COMPLETED, or UNSPECIFIED)
+//   "duplicate"        older/duplicate ID (REFUSED)
+//   "stale"            expected identity mismatch or unreadable (REFUSED)
+//   "busy"             host not idle (REFUSED)
+//   "queued"           pending messages queued (REFUSED)
+//   "compaction-active" native compaction already active (REFUSED)
+//   "pending"          another bridge compaction unresolved (REFUSED)
+//   "unavailable"      compact APIs missing (REFUSED, defensive)
+//   "cancelled"        host reports cancellation (CANCELLED)
+//   "already-compacted" host reports nothing to compact (FAILED)
+//   "error"            host reports failure (FAILED)
+//   "uncertain"        sync throw without a callback; the process
+//                      latch stays unresolved (UNSPECIFIED)
+message CompactResult {
+  string request_id = 1;
+  CompactOutcome outcome = 2;
   string reason = 3;
 }
 

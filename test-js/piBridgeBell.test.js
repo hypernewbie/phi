@@ -22,6 +22,7 @@ function bridgeManager() {
         _piBridgeRevValue: TabManager.prototype._piBridgeRevValue,
         _piBridgeModelsEligible: TabManager.prototype._piBridgeModelsEligible,
         _piBridgeThinkingEligible: () => false,
+        _piBridgeKeys: TabManager.prototype._piBridgeKeys,
         _refreshPiBridgeModels: TabManager.prototype._refreshPiBridgeModels,
         _refreshPiBridgeThinking: vi.fn(),
         getActiveTab: () => null,

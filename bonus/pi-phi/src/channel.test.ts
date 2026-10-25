@@ -12,7 +12,13 @@ import {
     type ChannelCreds,
     type ClientFactory,
 } from './channel.js';
-import { Hello, HistoryResponse, LogicalState, PiToPhi } from './gen/bridge.js';
+import {
+    Hello,
+    HistoryResponse,
+    LogicalState,
+    type PhiToPi,
+    PiToPhi,
+} from './gen/bridge.js';
 
 const CREDS: ChannelCreds = {
     target: 'unix:/tmp/phi-pi-abc/bridge.sock',
@@ -355,5 +361,110 @@ describe('BridgeChannel history admission', () => {
         } finally {
             channel.close();
         }
+    });
+});
+
+function acceptedData(): PhiToPi {
+    return {
+        paneId: 'pane',
+        processId: 'proc',
+        runtimeGeneration: 1n,
+        payload: {
+            $case: 'accepted',
+            value: {
+                protocolVersion: 1,
+                capabilities: [],
+                runtimeGeneration: 1n,
+                runtimeId: 'rt',
+            },
+        },
+    };
+}
+
+/** Mock duplex stream: hello succeeds, later writes ack asynchronously. */
+class DelayedDuplex extends EventEmitter {
+    order: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    write(msg: any, cb?: () => void): boolean {
+        void msg;
+        this.order.push('write');
+        if (this.order.length === 1) {
+            queueMicrotask(() => {
+                cb?.();
+                this.emit('data', acceptedData());
+            });
+        } else {
+            // Async ack: the frames are still queued or in flight
+            // when the drain starts.
+            setTimeout(() => cb?.(), 5);
+        }
+        return true;
+    }
+    end(): void {
+        this.order.push('end');
+    }
+    cancel(): void {}
+}
+
+describe('BridgeChannel shutdown drain', () => {
+    function drainedChannel(duplex: EventEmitter): {
+        channel: BridgeChannel;
+        clientCloses: () => number;
+    } {
+        let closes = 0;
+        const factory: ClientFactory = () => ({
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            connect: () => duplex as any,
+            close: () => {
+                closes += 1;
+            },
+        });
+        const channel = new BridgeChannel(
+            CREDS,
+            { onMessage: () => {}, onStatus: () => {} },
+            factory,
+        );
+        return { channel, clientCloses: () => closes };
+    }
+
+    it('flushes queued lifecycle frames before closing on a healthy stream', async () => {
+        const duplex = new DelayedDuplex();
+        const { channel, clientCloses } = drainedChannel(duplex);
+        await channel.connect(hello());
+        expect(channel.send(hello())).toBe(true);
+        expect(channel.send(hello())).toBe(true);
+        await channel.drainAndClose(500);
+        // Hello plus both queued frames landed before the half-close.
+        expect(duplex.order).toEqual(['write', 'write', 'write', 'end']);
+        expect(clientCloses()).toBe(1);
+        expect(channel.pending).toBe(0);
+    });
+
+    it('still closes by the deadline when the stream is wedged', async () => {
+        vi.useFakeTimers();
+        try {
+            const duplex = new StallingDuplex();
+            const { channel, clientCloses } = drainedChannel(duplex);
+            const accepted = channel.connect(hello());
+            await vi.advanceTimersByTimeAsync(0);
+            await accepted;
+            expect(channel.send(hello())).toBe(true);
+            const drained = channel.drainAndClose(50);
+            await vi.advanceTimersByTimeAsync(100);
+            await drained;
+            // The wedged frame never flushed, but the deadline
+            // released the stream instead of hanging shutdown.
+            expect(clientCloses()).toBe(1);
+            expect(duplex.writes).toBe(2);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('closes immediately when the stream is already gone', async () => {
+        const { channel } = drainedChannel(new EventEmitter());
+        // Never connected: no stream, so no wait.
+        await channel.drainAndClose(500);
+        expect(channel.send(hello())).toBe(false);
     });
 });

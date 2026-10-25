@@ -13,6 +13,9 @@ import {
     type Accepted,
     AgentSettled,
     AgentStarted,
+    type CompactOutcome,
+    type CompactRequest,
+    CompactResult,
     IntegrationClient,
     type PhiToPi,
     PiToPhi,
@@ -200,8 +203,63 @@ export class BridgeTestClient {
             else this.acceptedQueue.push(payload.value);
             return;
         }
+        if (payload?.$case === 'compactRequest') {
+            const waiter = this.compactRequestWaiters.shift();
+            if (waiter) waiter(payload.value);
+            else this.compactRequestQueue.push(payload.value);
+            this.compactRequestTotal += 1;
+            return;
+        }
         // ProtocolError and unknown oneofs are informational; stream status
         // carries terminal failures.
+    }
+
+    private compactRequestQueue: CompactRequest[] = [];
+    private compactRequestWaiters: Array<(r: CompactRequest) => void> = [];
+    private compactRequestTotal = 0;
+
+    /** Await the next CompactRequest dispatched by the server. */
+    async awaitCompactRequest(timeoutMs = 5_000): Promise<CompactRequest> {
+        const queued = this.compactRequestQueue.shift();
+        if (queued !== undefined) return queued;
+        return new Promise<CompactRequest>((resolve, reject) => {
+            const waiter = (req: CompactRequest) => {
+                clearTimeout(timer);
+                resolve(req);
+            };
+            const timer = setTimeout(() => {
+                // An expired waiter must leave the queue: otherwise the
+                // next request resolves an already-rejected promise and
+                // is lost before its own waiter can see it.
+                const at = this.compactRequestWaiters.indexOf(waiter);
+                if (at >= 0) this.compactRequestWaiters.splice(at, 1);
+                reject(new Error('compact request deadline'));
+            }, timeoutMs);
+            this.compactRequestWaiters.push(waiter);
+        });
+    }
+
+    /** Total CompactRequests received on this stream. Proves (non-)dispatch. */
+    receivedCompactRequests(): number {
+        return this.compactRequestTotal;
+    }
+
+    /** Report one terminal Compact outcome for requestId. */
+    sendCompactResult(
+        requestId: string,
+        outcome: CompactOutcome,
+        reason = '',
+    ): void {
+        this.enqueueFrame({
+            paneId: this.pane,
+            processId: this.process,
+            runtimeGeneration: this.generation,
+            payload: {
+                $case: 'compactResult',
+                value: CompactResult.create({ requestId, outcome, reason }),
+            },
+        });
+        void this.pumpWriter();
     }
 
     sendStarted(eventSequence: bigint, runId: bigint): void {

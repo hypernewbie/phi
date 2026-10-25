@@ -64,6 +64,9 @@ interface QueuedFrame {
     readonly msg: PiToPhi;
 }
 
+/** Drain poll cadence; far below the shutdown drain budget. */
+const DRAIN_POLL_MS = 5;
+
 /** One duplex stream attempt with a bounded writer. */
 export class BridgeChannel {
     private client: {
@@ -200,6 +203,37 @@ export class BridgeChannel {
         }
         void this.pumpWriter();
         return true;
+    }
+
+    /**
+     * Best-effort bounded drain: wait until the outbound queue
+     * (queued plus in-flight) is empty or the deadline expires,
+     * then close. A dead stream or writer error closes
+     * immediately. Never rejects.
+     */
+    drainAndClose(timeoutMs: number): Promise<void> {
+        if (this.closed || this.stream === null || this.writerError) {
+            this.close();
+            return Promise.resolve();
+        }
+        const deadline = Date.now() + Math.max(0, timeoutMs);
+        return new Promise((resolve) => {
+            const tick = (): void => {
+                if (
+                    this.closed ||
+                    this.stream === null ||
+                    this.writerError ||
+                    this.queue.outstanding === 0 ||
+                    Date.now() >= deadline
+                ) {
+                    this.close();
+                    resolve();
+                    return;
+                }
+                setTimeout(tick, DRAIN_POLL_MS);
+            };
+            tick();
+        });
     }
 
     /** Half-close the stream and release the client. Idempotent. */

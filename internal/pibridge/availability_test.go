@@ -19,7 +19,9 @@ func TestAvailabilityCallbacksOrderSameGenerationReconnect(t *testing.T) {
 		<-release
 		events <- "down"
 	})
-	s.SetOnState(func(_, _ string, _, _ uint64, _, _ bool, _, _ string, _ []string) { events <- "up" })
+	s.SetOnState(func(_, _ string, _, _ uint64, _, _ bool, _, _ string, _ []string, _ *ContextUsage, _ *Readiness) {
+		events <- "up"
+	})
 	go func() { s.detachPeer(l, old); close(detached) }()
 	<-entered
 	l.mu.Lock()

@@ -350,6 +350,7 @@ func main() {
 	http.HandleFunc("/api/pi-bridge/model", handlePiBridgeSetModel)
 	http.HandleFunc("/api/pi-bridge/thinking-levels", handlePiBridgeThinkingLevels)
 	http.HandleFunc("/api/pi-bridge/thinking", handlePiBridgeSetThinking)
+	http.HandleFunc("/api/pi-bridge/compact", handlePiBridgeCompact)
 	http.HandleFunc("/api/attachments", handleAttachments)
 	http.HandleFunc("/api/clipboard", handleGetClipboard)
 	http.HandleFunc("/api/system/cpu", handleSystemCPU)
