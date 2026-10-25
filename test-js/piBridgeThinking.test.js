@@ -95,7 +95,8 @@ function navHarness(first, second) {
 
 const otherTab = () => bridgeTab({ paneId: 'pi-pane-2' });
 
-const abortError = () => Object.assign(new Error('aborted'), { name: 'AbortError' });
+const abortError = () =>
+    Object.assign(new Error('aborted'), { name: 'AbortError' });
 
 // mockFetch ignores options.signal, so deadline tests need their own stub.
 function abortAwareFetch(handler) {
