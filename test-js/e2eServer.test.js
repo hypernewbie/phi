@@ -1,11 +1,5 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import {
-    mkdtempSync,
-    mkdirSync,
-    rmSync,
-    accessSync,
-    statSync,
-} from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, accessSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import net from 'node:net';
@@ -129,9 +123,9 @@ function serverSpawn() {
 describe('startPhi fixture isolation', () => {
     test('setup failure removes the dir and spawns nothing', async () => {
         const boom = new Error('setup boom');
-        await expect(startPhi({ setup: () => Promise.reject(boom) })).rejects.toThrow(
-            'setup boom',
-        );
+        await expect(
+            startPhi({ setup: () => Promise.reject(boom) }),
+        ).rejects.toThrow('setup boom');
         expect(spawn).not.toHaveBeenCalled();
         expect(rmSync).toHaveBeenCalledTimes(1);
         expect(rmSync).toHaveBeenCalledWith(
@@ -155,13 +149,14 @@ describe('startPhi fixture isolation', () => {
     test.skipIf(process.platform === 'win32')(
         'long temp root rejects before any spawn',
         async () => {
-        tmpdir.mockReturnValue(`/${'l'.repeat(200)}`);
-        await expect(startPhi()).rejects.toThrow(
-            /cannot host a 100-byte bridge socket/,
-        );
-        expect(spawn).not.toHaveBeenCalled();
-        expect(rmSync).toHaveBeenCalledTimes(1);
-    });
+            tmpdir.mockReturnValue(`/${'l'.repeat(200)}`);
+            await expect(startPhi()).rejects.toThrow(
+                /cannot host a 100-byte bridge socket/,
+            );
+            expect(spawn).not.toHaveBeenCalled();
+            expect(rmSync).toHaveBeenCalledTimes(1);
+        },
+    );
 
     test('windows skips POSIX mode and socket-budget checks', async () => {
         const realPlatform = process.platform;
@@ -197,11 +192,15 @@ describe('startPhi fixture isolation', () => {
     test.skipIf(process.platform === 'win32')(
         'non-private temp root rejects before any spawn',
         async () => {
-        statSync.mockReturnValue({ isDirectory: () => true, mode: 0o40755 });
-        await expect(startPhi()).rejects.toThrow(/not a private dir/);
-        expect(spawn).not.toHaveBeenCalled();
-        expect(rmSync).toHaveBeenCalledTimes(1);
-    });
+            statSync.mockReturnValue({
+                isDirectory: () => true,
+                mode: 0o40755,
+            });
+            await expect(startPhi()).rejects.toThrow(/not a private dir/);
+            expect(spawn).not.toHaveBeenCalled();
+            expect(rmSync).toHaveBeenCalledTimes(1);
+        },
+    );
 
     test('health failure reaps the child, removes the dir, returns no handle', async () => {
         vi.useFakeTimers();

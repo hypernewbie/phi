@@ -87,11 +87,7 @@ function checkRuntimeTmp(runTmp: string, dir: string): void {
     if (!st.isDirectory() || (st.mode & 0o777) !== 0o700) {
         throw new Error(`phi fixture temp ${runTmp} is not a private dir`);
     }
-    const candidate = join(
-        runTmp,
-        `phi-pi-${'f'.repeat(16)}`,
-        'bridge.sock',
-    );
+    const candidate = join(runTmp, `phi-pi-${'f'.repeat(16)}`, 'bridge.sock');
     const publishable =
         !candidate.includes('%') &&
         !candidate.includes('@') &&
