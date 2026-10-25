@@ -132,6 +132,9 @@ test('Pi bridge reports managed state and rings the bell on settlement', async (
             { data: { sync_coordinator: phi.url } },
         );
         expect(coordinator.ok()).toBe(true);
+        await page.route('**/api/proxy?*', (route) =>
+            route.fulfill({ json: [] }),
+        );
         await page.goto(phi.url);
         const piTab = page.locator(`.tab[data-pane-id="${pane.pane_id}"]`);
         await expect(piTab).toBeVisible({ timeout: 10_000 });

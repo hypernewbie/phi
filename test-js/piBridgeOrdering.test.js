@@ -207,6 +207,83 @@ describe('pi bridge ordered views', () => {
         expect(tab._piBridgeRev).toBe(6n);
     });
 
+    it('uses accepted lifecycle state when equal revision flips availability', () => {
+        const tm = testManager();
+        const tab = addPiTab(tm);
+        tm.activePaneId = tab.paneId;
+        tm._ringPiBridgeBell = vi.fn();
+        const frame = (over = {}) => ({
+            type: 'pi-bridge-state',
+            pane_id: tab.paneId,
+            state: 'managed',
+            telemetry_revision: '5',
+            generation: '1',
+            model: 'provA/modelA',
+            capabilities: 'pi.lifecycle.v1',
+            connected: true,
+            ...over,
+        });
+
+        tm._acceptPiBridgeState(tab, frame({ running: false }), tab.ws);
+        expect(tab._piBridgeLastRun).toBe('0');
+        expect(tab._piBridgeGeneration).toBe('1');
+
+        tm._acceptPiBridgeState(
+            tab,
+            frame({
+                connected: false,
+                running: true,
+                generation: '2',
+                last_run: '1',
+                last_outcome: 'completed',
+            }),
+            tab.ws,
+        );
+        expect(tab.piBridge.connected).toBe(false);
+        expect(tab.piBridge.running).toBe(false);
+        expect(tab.piBridge.generation).toBe('1');
+        expect(tab.piBridge.last_run).toBeUndefined();
+        expect(tab._piBridgeLastRun).toBe('0');
+        expect(tab._piBridgeGeneration).toBe('1');
+        expect(tm._ringPiBridgeBell).not.toHaveBeenCalled();
+    });
+
+    it('ignores lifecycle fields on rejected socket and pane frames', () => {
+        const tm = testManager();
+        const tab = addPiTab(tm);
+        tm.activePaneId = tab.paneId;
+        tm._ringPiBridgeBell = vi.fn();
+        const frame = (revision, over = {}) => ({
+            type: 'pi-bridge-state',
+            pane_id: tab.paneId,
+            state: 'managed',
+            telemetry_revision: String(revision),
+            generation: '1',
+            model: 'provA/modelA',
+            capabilities: 'pi.lifecycle.v1',
+            connected: true,
+            ...over,
+        });
+
+        tm._acceptPiBridgeState(tab, frame(5, { running: false }), tab.ws);
+        const rawRun = frame(6, {
+            running: false,
+            last_run: '1',
+            last_outcome: 'completed',
+        });
+        tm._acceptPiBridgeState(tab, rawRun, { name: 'stale-ws' });
+        tm._acceptPiBridgeState(
+            tab,
+            { ...rawRun, telemetry_revision: '7', pane_id: 'other-pane' },
+            tab.ws,
+        );
+
+        expect(tab._piBridgeLive).toBe(true);
+        expect(tab._piBridgeLastRun).toBe('0');
+        expect(tab.piBridge.last_run).toBeUndefined();
+        expect(tm._ringPiBridgeBell).not.toHaveBeenCalled();
+    });
+
     it('orders u64 revisions beyond float precision', () => {
         const tm = testManager();
         const tab = addPiTab(tm);

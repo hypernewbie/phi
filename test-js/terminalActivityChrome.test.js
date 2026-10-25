@@ -115,6 +115,8 @@ describe('terminal activity chrome rendering', () => {
             updateDocumentTitle,
             syncBackendPin: vi.fn(),
             triggerAttentionNotification: vi.fn(),
+            _piBridgeCapabilityEligible:
+                TabManager.prototype._piBridgeCapabilityEligible,
         };
 
         TabManager.prototype.pollTerminalIdleAndNotifications.call(idleManager);
@@ -142,6 +144,8 @@ describe('terminal activity chrome rendering', () => {
             syncBackendPin: vi.fn(),
             triggerAttentionNotification,
             _setTabAttention: TabManager.prototype._setTabAttention,
+            _piBridgeCapabilityEligible:
+                TabManager.prototype._piBridgeCapabilityEligible,
         };
 
         TabManager.prototype.pollTerminalIdleAndNotifications.call(doneManager);

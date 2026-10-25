@@ -40,7 +40,10 @@ A connected Pi pane with `pi.models.v1` uses the shared Pi RPC model picker,
 including its favorites. The picker requests Pi's selectable models when it opens.
 Without the bridge or capability, Models keeps the legacy static presets.
 A lost connection closes the picker and clears its cached list.
-A failed list request shows an error inside the picker.
+A partial list keeps its usable rows. A failed, timed-out, or unavailable list
+read shows a neutral row and a `Use static presets` button that opens the
+legacy picker; it never switches a model by itself, and the next open requests
+the live list again. Pi RPC chat keeps its own error row.
 A switch timeout has an unknown outcome. Reopen the picker to check the model.
 
 ## Toggles and manual install
@@ -70,8 +73,20 @@ settings, it only keeps the copy current:
 (An explicit file path loads `.cjs`; only the extensions-directory
 scan is limited to `.js`/`.ts`.) A managed pane whose bridge never
 connects — disabled in Pi, manual install missing, or a pre-hello
-crash — keeps the output heuristic, so a silent bridge never means
-no completion signal at all.
+crash — returns to the pre-bridge experience: the PTY keeps working and
+Models keeps the legacy static presets. Completion then depends on Phi's
+existing output heuristic alone. That heuristic does not recognize the
+current Pi editor, so a bridge-free native Pi pane can stay silent. The
+bridge is the only reliable completion signal for Pi; no replacement
+detector is planned.
+
+Disabling mid-session behaves the same way. `"phiBridge": { "enabled": false }`
+takes effect on the next Pi start, so run `/reload` (or restart Pi) in that
+pane: the bridge disconnects, the pane stays usable, and other Pi panes keep
+their bridge. Pi refuses `/reload` during a response or compaction, so disable
+there after the run settles. Re-enabling needs a new Pi start; the extension
+scrubs provisioned credentials on disable, so a pane restart is the reliable
+recovery path.
 
 ## Commands
 

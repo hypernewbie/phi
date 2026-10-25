@@ -9,16 +9,21 @@ afterEach(() => vi.useRealTimers());
 function makeTab(paneId = 'p1', coder = 'pi') {
     const tabEl = document.createElement('div');
     tabEl.scrollIntoView = vi.fn();
+    const ws = { sendInput: vi.fn(() => true) };
     return {
         paneId,
         coder,
         isDead: false,
         tabEl,
         termContainer: document.createElement('div'),
-        ws: { sendInput: vi.fn(() => true) },
+        ws,
+        _piBridgeFresh: ws,
+        _piBridgeRev: 1n,
         piBridge: {
             state: 'managed',
             generation: '1',
+            telemetry_revision: '1',
+            model: 'provider/model',
             connected: true,
             capabilities: ['pi.lifecycle.v1', 'pi.history.v1'],
         },
@@ -43,6 +48,7 @@ function makeTm(value = '') {
     tm._historyCursor = -1;
     tm._historyPreCycleValue = undefined;
     tm._historyLoaded = false;
+    tm.renderPresets = vi.fn();
     // Keep production textarea handlers and PTY writers, but isolate other UI.
     for (const method of [
         '_initHieroPreview',
@@ -129,6 +135,22 @@ describe('production Pi recall keyboard flow', () => {
         expect(fetch.mock.calls[0][0]).toBe('/api/pi-history?pane=p1');
         expect(tm.inputTextArea.value).toBe('newest');
         expect(writes(tm.getActiveTab())).toEqual([]);
+    });
+
+    it('keeps PTY history active until the current socket has fresh state', () => {
+        const fetch = mockFetch(() => ({ entries: ['one'] }));
+        const tm = makeTm();
+        const tab = tm.getActiveTab();
+        const oldSocket = tab.ws;
+        const replacement = { sendInput: vi.fn(() => true) };
+
+        tm._setCurrentTabSocket(tab, replacement);
+        expect(tab._piBridgeFresh).toBeNull();
+        key(tm, 'ArrowUp');
+
+        expect(fetch).not.toHaveBeenCalled();
+        expect(oldSocket.sendInput).not.toHaveBeenCalled();
+        expect(replacement.sendInput).toHaveBeenCalledWith('\x1b[A');
     });
 
     it('fresh Down keeps old behavior and does not start a cycle', () => {
@@ -336,6 +358,133 @@ describe('context and programmatic replacement fences', () => {
             expect(tm._piRecall).toBeNull();
         },
     );
+
+    it('invalidates pending recall on socket replacement without replay', async () => {
+        const pending = deferred();
+        const tm = makeTm();
+        const tab = tm.getActiveTab();
+        const original = tab.ws;
+        key(tm, 'ArrowUp');
+        const replacement = { sendInput: vi.fn(() => true) };
+
+        tm._setCurrentTabSocket(tab, replacement);
+        expect(tm._piRecall).toBeNull();
+        expect(tab._piBridgeFresh).toBeNull();
+        expect(pending.fetch.mock.calls[0][1].signal.aborted).toBe(true);
+        pending.resolve({ entries: ['late response'] });
+        await flush();
+
+        expect(tm.inputTextArea.value).toBe('');
+        expect(original.sendInput).not.toHaveBeenCalled();
+        expect(replacement.sendInput).not.toHaveBeenCalled();
+    });
+
+    it('invalidates cached recall on socket replacement', async () => {
+        const fetch = mockFetch(() => ({ entries: ['newer', 'older'] }));
+        const tm = makeTm();
+        const tab = tm.getActiveTab();
+        const original = tab.ws;
+        key(tm, 'ArrowUp');
+        await flush();
+        expect(tm.inputTextArea.value).toBe('newer');
+
+        const replacement = { sendInput: vi.fn(() => true) };
+        tm._setCurrentTabSocket(tab, replacement);
+
+        expect(tm._piRecall).toBeNull();
+        expect(tab._piBridgeFresh).toBeNull();
+        expect(key(tm, 'ArrowDown').defaultPrevented).toBe(false);
+        expect(tm.inputTextArea.value).toBe('newer');
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(original.sendInput).not.toHaveBeenCalled();
+        expect(replacement.sendInput).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        [
+            'disconnect',
+            {
+                telemetry_revision: '1',
+                connected: false,
+                capabilities: 'pi.lifecycle.v1,pi.history.v1',
+            },
+        ],
+        [
+            'history capability loss',
+            {
+                telemetry_revision: '2',
+                connected: true,
+                capabilities: 'pi.lifecycle.v1',
+            },
+        ],
+    ])('invalidates cached recall on %s', async (_name, state) => {
+        const fetch = mockFetch(() => ({ entries: ['newer', 'older'] }));
+        const tm = makeTm();
+        const tab = tm.getActiveTab();
+        key(tm, 'ArrowUp');
+        await flush();
+        expect(tm.inputTextArea.value).toBe('newer');
+        expect(tm._piRecall.cache).toEqual(['newer', 'older']);
+
+        tm._acceptPiBridgeState(tab, {
+            type: 'pi-bridge-state',
+            pane_id: tab.paneId,
+            state: 'managed',
+            generation: '1',
+            model: 'provider/model',
+            connected: true,
+            capabilities: 'pi.lifecycle.v1,pi.history.v1',
+            ...state,
+        });
+
+        expect(tm._piRecall).toBeNull();
+        expect(tm._piRecallEligible(tab)).toBe(false);
+        expect(key(tm, 'ArrowDown').defaultPrevented).toBe(false);
+        expect(tm.inputTextArea.value).toBe('newer');
+        expect(fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+        [
+            'peer-down',
+            {
+                telemetry_revision: '1',
+                connected: false,
+                capabilities: 'pi.lifecycle.v1,pi.history.v1',
+            },
+        ],
+        [
+            'history capability loss',
+            {
+                telemetry_revision: '2',
+                connected: true,
+                capabilities: 'pi.lifecycle.v1',
+            },
+        ],
+    ])('flushes pending Up once on %s', async (_name, state) => {
+        const pending = deferred();
+        const tm = makeTm();
+        const tab = tm.getActiveTab();
+        key(tm, 'ArrowUp');
+
+        tm._acceptPiBridgeState(tab, {
+            type: 'pi-bridge-state',
+            pane_id: tab.paneId,
+            state: 'managed',
+            generation: '1',
+            model: 'provider/model',
+            capabilities: 'pi.lifecycle.v1,pi.history.v1',
+            connected: true,
+            ...state,
+        });
+        expect(tm._piRecall).toBeNull();
+        expect(writes(tab)).toEqual(['\x1b[A']);
+        expect(pending.fetch.mock.calls[0][1].signal.aborted).toBe(true);
+
+        pending.resolve({ entries: ['late response'] });
+        await flush();
+        expect(writes(tab)).toEqual(['\x1b[A']);
+    });
 
     it('fences a generation replacement and a disconnected bridge', async () => {
         const pending = deferred();

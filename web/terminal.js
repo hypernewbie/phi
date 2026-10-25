@@ -4622,6 +4622,15 @@ export class TabManager {
                     ? this._piBridgeModelsFetch(paneId)
                     : rpcChatModels(paneId);
         } catch (error) {
+            if (activeTab.coder === 'pi') {
+                this._renderPiModelsFallback(
+                    listContainer,
+                    'Pi models unavailable',
+                    request,
+                    paneId,
+                );
+                return;
+            }
             this._piRpcError(error, 'Pi models');
             loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
             return;
@@ -4658,6 +4667,15 @@ export class TabManager {
                         !this._piBridgeModelsEligible(activeTab))
                 )
                     return;
+                if (activeTab.coder === 'pi') {
+                    this._renderPiModelsFallback(
+                        listContainer,
+                        'Pi models unavailable',
+                        request,
+                        paneId,
+                    );
+                    return;
+                }
                 loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
                 this._piRpcError(error, 'Pi models');
             });
@@ -4688,12 +4706,18 @@ export class TabManager {
                 typeof model.id === 'string',
         );
         if (models.length === 0) {
+            if (activeTab.coder === 'pi' && this._piBridgeModelsUnavailable) {
+                this._renderPiModelsFallback(
+                    listContainer,
+                    'Pi model list unavailable',
+                    this._piRpcMenuRequest,
+                    paneId,
+                );
+                return;
+            }
             const empty = document.createElement('div');
             empty.className = 'dropup-row pi-rpc-dropup-message';
-            empty.textContent =
-                activeTab.coder === 'pi' && this._piBridgeModelsUnavailable
-                    ? 'Pi model list unavailable'
-                    : 'No Pi models available';
+            empty.textContent = 'No Pi models available';
             listContainer.replaceChildren(empty);
             return;
         }
@@ -4945,6 +4969,39 @@ export class TabManager {
             return;
         }
         listContainer.replaceChildren(...nodes);
+    }
+
+    // A failed list read reaches the pre-bridge static picker instead of
+    // a dead end. The action is pinned to the dropup render and pane that
+    // produced it, and it never sends a model command.
+    _renderPiModelsFallback(listContainer, message, request, paneId) {
+        const note = document.createElement('div');
+        note.className = 'dropup-row pi-rpc-dropup-message';
+        note.textContent = message;
+        const row = document.createElement('div');
+        row.className = 'dropup-row';
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'dropup-model-btn pi-models-static-fallback';
+        button.textContent = 'Use static presets';
+        button.addEventListener('click', (event) => {
+            // The document click handler hides dropups for outside clicks.
+            event.stopPropagation();
+            if (
+                request !== this._piRpcMenuRequest ||
+                this.getActiveTab()?.paneId !== paneId
+            )
+                return;
+            const anchor =
+                this.presetsContainer?.querySelector('.model-trigger-btn');
+            if (!anchor) return;
+            this._closePiRpcDropups(true);
+            this._toggleDropup('model-presets-dropup', anchor, () =>
+                this.renderModelDropup(),
+            );
+        });
+        row.append(button);
+        listContainer.replaceChildren(note, row);
     }
 
     _loadPiRpcFavoritesIfNeeded() {
@@ -7650,6 +7707,8 @@ export class TabManager {
     }
 
     _setCurrentTabSocket(tabInfo, socket) {
+        if (tabInfo.ws !== socket && this._piRecall?.paneId === tabInfo.paneId)
+            this._resetPiRecall();
         tabInfo._piTitleRevision = -1;
         tabInfo.ws = socket;
         // A new browser socket restarts bridge ordering: never carry
@@ -7889,7 +7948,7 @@ export class TabManager {
         const prevKey = prev
             ? `${this._piBridgeModelsEligible(tabInfo)}|${prev.state}|${prev.model || ''}|${prev.connected}|${(prev.capabilities || []).join(',')}`
             : '';
-        this._acceptOrderedBridgeView(tabInfo, control, socket);
+        if (!this._acceptOrderedBridgeView(tabInfo, control, socket)) return;
         const next = tabInfo.piBridge;
         const nextKey = next
             ? `${this._piBridgeModelsEligible(tabInfo)}|${next.state}|${next.model || ''}|${next.connected}|${(next.capabilities || []).join(',')}`
@@ -7907,42 +7966,49 @@ export class TabManager {
         }
         // running/last_run only arrive post-hello, so their first
         // sight proves the bridge is live (not merely provisioned).
-        if (control.running !== undefined || control.last_run) {
+        if (next.running !== undefined || next.last_run) {
             tabInfo._piBridgeLive = true;
         }
         // Live state with no retained run establishes a zero baseline:
         // the tab was already observing, so a later reconnect snapshot
         // with run 1 must ring instead of silently baselining.
         if (
-            !control.last_run &&
-            control.running !== undefined &&
+            !next.last_run &&
+            next.running !== undefined &&
             !this._piBridgeHasBaseline(tabInfo)
         ) {
             tabInfo._piBridgeLastRun = '0';
             if (
-                typeof control.generation === 'string' &&
-                /^\d+$/.test(control.generation)
+                typeof next.generation === 'string' &&
+                /^\d+$/.test(next.generation)
             ) {
-                tabInfo._piBridgeGeneration = control.generation;
+                tabInfo._piBridgeGeneration = next.generation;
             }
         }
         if (
-            control.last_run &&
+            next.last_run &&
             this._piBridgeRunIsNew(
                 tabInfo,
-                control.last_run,
-                control.generation,
+                next.last_run,
+                next.generation,
             )
         ) {
             const hadBaseline = this._piBridgeHasBaseline(tabInfo);
-            tabInfo._piBridgeLastRun = control.last_run;
+            tabInfo._piBridgeLastRun = next.last_run;
             if (
-                typeof control.generation === 'string' &&
-                /^\d+$/.test(control.generation)
+                typeof next.generation === 'string' &&
+                /^\d+$/.test(next.generation)
             ) {
-                tabInfo._piBridgeGeneration = control.generation;
+                tabInfo._piBridgeGeneration = next.generation;
             }
-            if (hadBaseline && control.last_outcome !== 'aborted') {
+            if (
+                hadBaseline && next.last_outcome === 'aborted' &&
+                next.running === false
+            ) {
+                tabInfo.userTaskActive = false;
+                tabInfo.busyStartTime = null;
+                tabInfo._piBridgeHeuristicPending = null;
+            } else if (hadBaseline && next.last_outcome !== 'aborted') {
                 this._ringPiBridgeBell(tabInfo);
             }
         }
@@ -7972,7 +8038,12 @@ export class TabManager {
         }
         // A settlement ends the run, whatever the outcome.
         if (tabInfo.piBridge) tabInfo.piBridge.running = false;
-        if (control.outcome === 'aborted') return;
+        if (control.outcome === 'aborted') {
+            tabInfo.userTaskActive = false;
+            tabInfo.busyStartTime = null;
+            tabInfo._piBridgeHeuristicPending = null;
+            return;
+        }
         this._ringPiBridgeBell(tabInfo);
     }
 
@@ -8024,6 +8095,7 @@ export class TabManager {
     _ringPiBridgeBell(tabInfo) {
         tabInfo.userTaskActive = false;
         tabInfo.busyStartTime = null;
+        tabInfo._piBridgeHeuristicPending = null;
         this._setTabAttention(tabInfo, true);
         this.updateDocumentTitle();
         // Ready-at-prompt, never a success claim: the outcome may be an
@@ -10746,6 +10818,31 @@ export class TabManager {
     pollTerminalIdleAndNotifications() {
         const isTabVisible = !document.hidden;
         let statusChanged = false;
+        const notifyHeuristicCompletion = (tab, isLongTask) => {
+            const taskWasRunning =
+                tab.userTaskActive === true ||
+                (tab.userTaskActive === undefined && isLongTask);
+            if (!taskWasRunning) return false;
+
+            const bufferState = detectTerminalBufferState(tab.term);
+            if (bufferState.hasSpinner) return false;
+            const promptDetected = bufferState.hasPrompt;
+            const processExited =
+                tab.exitCode !== undefined && tab.exitCode !== null;
+            const isTestMockWithoutTerm = !tab.term?.buffer?.active;
+            if (
+                !promptDetected && !processExited &&
+                !(isTestMockWithoutTerm && isLongTask)
+            )
+                return false;
+
+            this._setTabAttention(tab, true);
+            tab.userTaskActive = false;
+            tab.busyStartTime = null;
+            tab._piBridgeHeuristicPending = null;
+            this.triggerAttentionNotification(tab, promptDetected);
+            return true;
+        };
 
         for (const tab of this.tabs.values()) {
             if (tab.isDead) continue;
@@ -10765,16 +10862,20 @@ export class TabManager {
                     if (bufferState.hasPrompt || !tab.isBusy) {
                         tab.userTaskActive = false;
                         tab.busyStartTime = null;
+                        tab._piBridgeHeuristicPending = null;
                     }
                 }
+                if (!tab.isBusy) tab._piBridgeHeuristicPending = null;
             }
 
+            let becameIdle = false;
             // Track busy-to-idle transition for active terminal connections.
             if (tab.isBusy && tab.lastOutputAt !== undefined) {
                 const idleTime = Date.now() - tab.lastOutputAt;
                 if (idleTime > 3000) {
                     // Output has stopped for 3 seconds. The PTY transitioned to idle!
                     tab.isBusy = false;
+                    becameIdle = true;
                     statusChanged = true;
 
                     // Release backend pin if NOT manually pinned by the user.
@@ -10795,58 +10896,26 @@ export class TabManager {
                         isShell(tab.coder) ||
                         tab.coder === 'bash' ||
                         tab.coder === 'pwsh';
-                    // Bridge-managed Pi panes ring only on explicit
-                    // settlements once the bridge is live: solid signal
-                    // replaces the heuristic guess. Managed-but-never-
-                    // connected panes (bridge disabled in Pi, manual
-                    // install missing, Pi crashed pre-hello) keep the
-                    // heuristic as a fallback, so a silent bridge never
-                    // means no signal at all. Unavailable panes likewise.
                     const isBridgeActive =
-                        tab.piBridge?.state === 'managed' &&
-                        tab._piBridgeLive === true;
+                        tab.coder === 'pi' &&
+                        this._piBridgeCapabilityEligible(
+                            tab,
+                            'pi.lifecycle.v1',
+                        );
+                    const taskWasRunning =
+                        tab.userTaskActive === true ||
+                        (tab.userTaskActive === undefined && isLongTask);
 
-                    if (
-                        !isActiveAndVisible &&
-                        !isShellTab &&
-                        !isBridgeActive
-                    ) {
-                        const taskWasRunning =
-                            tab.userTaskActive === true ||
-                            (tab.userTaskActive === undefined && isLongTask);
-
+                    if (!isActiveAndVisible && !isShellTab) {
+                        if (tab.coder === 'pi')
+                            tab._piBridgeHeuristicPending = null;
                         if (taskWasRunning) {
-                            const bufferState = detectTerminalBufferState(
-                                tab.term,
-                            );
-
-                            if (bufferState.hasSpinner) {
-                                // Coding agent is still spinning / actively working despite output pause!
-                                // Do not mark as done. Keep userTaskActive = true so completion can be
-                                // caught once the spinner disappears and prompt arrives.
-                            } else {
-                                const promptDetected = bufferState.hasPrompt;
-                                const processExited =
-                                    tab.exitCode !== undefined &&
-                                    tab.exitCode !== null;
-                                const isTestMockWithoutTerm =
-                                    !tab.term?.buffer?.active;
-
-                                if (
-                                    promptDetected ||
-                                    processExited ||
-                                    (isTestMockWithoutTerm && isLongTask)
-                                ) {
-                                    this._setTabAttention(tab, true);
-                                    tab.userTaskActive = false;
-                                    tab.busyStartTime = null;
-                                    statusChanged = true;
-
-                                    this.triggerAttentionNotification(
-                                        tab,
-                                        promptDetected,
-                                    );
-                                }
+                            if (isBridgeActive) {
+                                tab._piBridgeHeuristicPending = { isLongTask };
+                            } else if (
+                                notifyHeuristicCompletion(tab, isLongTask)
+                            ) {
+                                statusChanged = true;
                             }
                         }
                     }
@@ -10855,6 +10924,25 @@ export class TabManager {
                     if (!tab.userTaskActive) {
                         tab.busyStartTime = null;
                     }
+                }
+            }
+
+            if (
+                !becameIdle && !isActiveAndVisible &&
+                tab.coder === 'pi' && !tab.isBusy &&
+                tab._piBridgeHeuristicPending &&
+                !this._piBridgeCapabilityEligible(tab, 'pi.lifecycle.v1')
+            ) {
+                const pending = tab._piBridgeHeuristicPending;
+                const taskWasRunning =
+                    tab.userTaskActive === true ||
+                    (tab.userTaskActive === undefined && pending.isLongTask);
+                if (!taskWasRunning) {
+                    tab._piBridgeHeuristicPending = null;
+                } else if (
+                    notifyHeuristicCompletion(tab, pending.isLongTask)
+                ) {
+                    statusChanged = true;
                 }
             }
         }
@@ -11116,26 +11204,24 @@ export class TabManager {
     }
 
     _piRecallEligible(tab) {
-        return (
-            tab?.coder === 'pi' && !tab.isDead &&
-            tab.piBridge?.state === 'managed' &&
-            tab.piBridge.connected === true &&
-            Array.isArray(tab.piBridge.capabilities) &&
-            tab.piBridge.capabilities.includes('pi.history.v1')
-        );
+        return this._piBridgeCapabilityEligible(tab, 'pi.history.v1');
     }
 
-    // The shared model picker needs the models capability; anything
-    // else keeps the legacy static presets exactly.
-    _piBridgeModelsEligible(tab) {
+    // Bridge consumers require fresh state on the pane's current socket
+    // and the capability they use; otherwise they keep the old path.
+    _piBridgeCapabilityEligible(tab, capability) {
         return (
             tab?.coder === 'pi' && !tab.isDead &&
             !!tab.ws && tab._piBridgeFresh === tab.ws &&
             tab.piBridge?.state === 'managed' &&
             tab.piBridge.connected === true &&
             Array.isArray(tab.piBridge.capabilities) &&
-            tab.piBridge.capabilities.includes('pi.models.v1')
+            tab.piBridge.capabilities.includes(capability)
         );
+    }
+
+    _piBridgeModelsEligible(tab) {
+        return this._piBridgeCapabilityEligible(tab, 'pi.models.v1');
     }
 
     // Socket changes and bridge views share the same picker invalidation.

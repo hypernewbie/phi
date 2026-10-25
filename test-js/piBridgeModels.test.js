@@ -19,7 +19,7 @@ vi.mock('../web/chat-pi/controller.js', () => ({
 }));
 
 import { TabManager } from '../web/terminal.js';
-import { getPiRpcControls } from '../web/chat-pi/controller.js';
+import { getPiRpcControls, rpcChatModels } from '../web/chat-pi/controller.js';
 
 setupDomHarness();
 
@@ -142,6 +142,41 @@ describe('bridge models trigger', () => {
         expect(trigger.classList.contains('pi-rpc-model-trigger')).toBe(false);
         trigger.click();
         expect(tm.renderModelDropup).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('per-capability bridge eligibility', () => {
+    it('requires a live Pi socket and fresh state with the requested capability', () => {
+        const tab = bridgeTab();
+        tab.piBridge.capabilities = [
+            'pi.lifecycle.v1',
+            'pi.history.v1',
+            'pi.models.v1',
+        ];
+        const tm = Object.create(TabManager.prototype);
+
+        expect(tm._piBridgeCapabilityEligible(tab, 'pi.models.v1')).toBe(true);
+        expect(tm._piBridgeCapabilityEligible(tab, 'pi.history.v1')).toBe(true);
+        expect(tm._piBridgeModelsEligible(tab)).toBe(true);
+        expect(tm._piBridgeCapabilityEligible(tab, 'pi.unknown.v1')).toBe(
+            false,
+        );
+        for (const unavailable of [
+            { ...tab, coder: 'bash' },
+            { ...tab, isDead: true },
+            { ...tab, ws: null },
+            { ...tab, _piBridgeFresh: {} },
+            { ...tab, piBridge: { ...tab.piBridge, state: 'plain' } },
+            { ...tab, piBridge: { ...tab.piBridge, connected: false } },
+            {
+                ...tab,
+                piBridge: { ...tab.piBridge, capabilities: ['pi.history.v1'] },
+            },
+        ]) {
+            expect(
+                tm._piBridgeCapabilityEligible(unavailable, 'pi.models.v1'),
+            ).toBe(false);
+        }
     });
 });
 
@@ -313,13 +348,11 @@ describe('bridge models picker', () => {
         try {
             modelsTrigger(tm).click();
             await vi.advanceTimersByTimeAsync(1000);
-            expect(dropup.textContent).toContain(
-                'Error: Pi models unavailable (request timed out)',
-            );
-            expect(tm.app.showToast).toHaveBeenCalledWith(
-                'Pi models unavailable (request timed out)',
-                { type: 'error', title: 'Pi models' },
-            );
+            expect(dropup.textContent).toContain('Pi models unavailable');
+            expect(
+                dropup.querySelector('.pi-models-static-fallback'),
+            ).not.toBeNull();
+            expect(tm.app.showToast).not.toHaveBeenCalled();
         } finally {
             vi.useRealTimers();
         }
@@ -439,6 +472,176 @@ describe('bridge models picker', () => {
         tm._piRpcModels = [];
         tm._buildPiRpcModelList();
         expect(dropup.textContent).toContain('No Pi models available');
+    });
+});
+
+describe('bridge models list fallback', () => {
+    function fallbackHarness(tab) {
+        const { tm, dropup } = harness(tab);
+        const legacy = document.createElement('div');
+        legacy.id = 'model-presets-dropup';
+        legacy.className = 'model-presets-dropup hidden';
+        document.body.appendChild(legacy);
+        tm.renderModelDropup = vi.fn(() => legacy.classList.remove('hidden'));
+        return { tm, dropup };
+    }
+    const fallbackButton = (dropup) =>
+        dropup.querySelector('.pi-models-static-fallback');
+
+    it('offers the static picker after a failed list read', async () => {
+        const tab = bridgeTab();
+        const { tm, dropup } = fallbackHarness(tab);
+        const fetchMock = mockFetch((url) => {
+            if (String(url).includes('/api/pi-bridge/models'))
+                return { ok: false, status: 503, text: 'no bridge' };
+            return undefined;
+        });
+
+        tm.renderPresets('pi');
+        modelsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(fallbackButton(dropup)).not.toBeNull();
+        });
+        expect(dropup.textContent).toContain('Pi models unavailable');
+        expect(tm.app.showToast).not.toHaveBeenCalled();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        // A failed read says nothing about the other capabilities.
+        expect(tm._piBridgeModelsEligible(tab)).toBe(true);
+        expect(
+            modelsTrigger(tm).classList.contains('pi-rpc-model-trigger'),
+        ).toBe(true);
+
+        fallbackButton(dropup).click();
+        expect(tm.renderModelDropup).toHaveBeenCalledTimes(1);
+        expect(dropup.classList.contains('hidden')).toBe(true);
+        // Explicit fallback never switches a model by itself.
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('offers the static picker when the list request throws', () => {
+        const tab = bridgeTab();
+        const { tm, dropup } = fallbackHarness(tab);
+        mockFetch(() => undefined);
+        tm._piBridgeModelsFetch = vi.fn(() => {
+            throw new Error('boom');
+        });
+
+        tm.renderPresets('pi');
+        modelsTrigger(tm).click();
+        expect(dropup.textContent).toContain('Pi models unavailable');
+        expect(dropup.textContent).not.toContain('boom');
+        expect(fallbackButton(dropup)).not.toBeNull();
+        expect(tm.app.showToast).not.toHaveBeenCalled();
+    });
+
+    it('offers the static picker for an unavailable empty list', async () => {
+        const tab = bridgeTab();
+        const { tm, dropup } = fallbackHarness(tab);
+        mockFetch(() => ({ models: [], truncated: false, unavailable: true }));
+
+        tm.renderPresets('pi');
+        modelsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(fallbackButton(dropup)).not.toBeNull();
+        });
+        expect(dropup.textContent).toContain('Pi model list unavailable');
+    });
+
+    it('keeps a usable partial list instead of the fallback', async () => {
+        const tab = bridgeTab();
+        const { tm, dropup } = fallbackHarness(tab);
+        mockFetch(() => ({
+            models: [{ provider: 'a', id: 'x' }],
+            truncated: true,
+            unavailable: true,
+        }));
+
+        tm.renderPresets('pi');
+        modelsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.querySelector('.pi-rpc-model-row')).not.toBeNull();
+        });
+        expect(dropup.textContent).toContain('Partial model list');
+        expect(fallbackButton(dropup)).toBeNull();
+    });
+
+    it('retries the live list on a later open', async () => {
+        const tab = bridgeTab();
+        const { tm, dropup } = fallbackHarness(tab);
+        let failing = true;
+        const fetchMock = mockFetch(() =>
+            failing
+                ? { ok: false, status: 503, text: 'no bridge' }
+                : {
+                      models: [{ provider: 'a', id: 'x' }],
+                      truncated: false,
+                      unavailable: false,
+                  },
+        );
+
+        tm.renderPresets('pi');
+        modelsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(fallbackButton(dropup)).not.toBeNull();
+        });
+        failing = false;
+        dropup.classList.add('hidden');
+        modelsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.querySelector('.pi-rpc-model-row')).not.toBeNull();
+        });
+        expect(fallbackButton(dropup)).toBeNull();
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('inerts a stale fallback action after a tab switch', async () => {
+        const tab = bridgeTab();
+        const { tm, dropup } = fallbackHarness(tab);
+        mockFetch(() => ({ ok: false, status: 503, text: 'no bridge' }));
+
+        tm.renderPresets('pi');
+        modelsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(fallbackButton(dropup)).not.toBeNull();
+        });
+        const stale = fallbackButton(dropup);
+        tm.getActiveTab = vi.fn(() => ({ ...tab, paneId: 'pi-pane-2' }));
+        stale.click();
+        expect(tm.renderModelDropup).not.toHaveBeenCalled();
+        expect(dropup.classList.contains('hidden')).toBe(false);
+    });
+
+    it('inerts a stale fallback action after menu invalidation', async () => {
+        const tab = bridgeTab();
+        const { tm, dropup } = fallbackHarness(tab);
+        mockFetch(() => ({ models: [], unavailable: true }));
+
+        tm.renderPresets('pi');
+        modelsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(fallbackButton(dropup)).not.toBeNull();
+        });
+        const stale = fallbackButton(dropup);
+        ++tm._piRpcMenuRequest;
+        stale.click();
+        expect(tm.renderModelDropup).not.toHaveBeenCalled();
+        expect(dropup.classList.contains('hidden')).toBe(false);
+    });
+
+    it('keeps the Pi RPC error path unchanged', async () => {
+        const tab = bridgeTab({ coder: 'pi-rpc' });
+        const { tm, dropup } = harness(tab);
+        rpcChatModels.mockRejectedValueOnce(new Error('rpc down'));
+
+        tm._renderPiRpcModelsDropup();
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('Error: rpc down');
+        });
+        expect(tm.app.showToast).toHaveBeenCalledWith('rpc down', {
+            type: 'error',
+            title: 'Pi models',
+        });
+        expect(fallbackButton(dropup)).toBeNull();
     });
 });
 

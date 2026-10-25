@@ -111,8 +111,11 @@ empty reason means the switch attempt itself errored and its
 outcome is unknown. A successful switch
 emits `model_select`, so the current-model snapshot follows with no
 explicit publish. Queue, admission, drop, and timeout semantics
-match history reads; Phi surfaces list failures inside the picker
-(error/unavailable row) and keeps partial lists usable.
+match history reads. The bridge stays optional: a failed or
+unavailable read is a picker-row state, never a session or capability
+loss. Phi keeps usable partial rows and offers its pre-bridge static
+presets from inside the picker; Pi RPC chat keeps its error row. No
+wire field or failure shape changes for that fallback.
 
 ## Lifecycle events
 

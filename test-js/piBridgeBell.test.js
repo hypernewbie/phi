@@ -20,6 +20,8 @@ function bridgeManager() {
         _acceptOrderedBridgeView: TabManager.prototype._acceptOrderedBridgeView,
         _normalizePiBridgeView: TabManager.prototype._normalizePiBridgeView,
         _piBridgeRevValue: TabManager.prototype._piBridgeRevValue,
+        _piBridgeCapabilityEligible:
+            TabManager.prototype._piBridgeCapabilityEligible,
         _piBridgeModelsEligible: TabManager.prototype._piBridgeModelsEligible,
         _refreshPiBridgeModels: TabManager.prototype._refreshPiBridgeModels,
         getActiveTab: () => null,
@@ -33,12 +35,32 @@ function piTab(over = {}) {
         paneId: 'pane-1',
         title: 'pi',
         coder: 'pi',
+        ws: { name: 'pane-1-ws' },
         isAttention: false,
         userTaskActive: true,
         busyStartTime: Date.now(),
         tabEl: document.createElement('div'),
         ...over,
     };
+}
+
+function acceptState(manager, tab, revision, over = {}) {
+    manager.tabs.set(tab.paneId, tab);
+    return manager._acceptPiBridgeState(
+        tab,
+        {
+            type: 'pi-bridge-state',
+            pane_id: tab.paneId,
+            state: 'managed',
+            telemetry_revision: String(revision),
+            generation: '1',
+            model: 'provider/model',
+            capabilities: 'pi.lifecycle.v1',
+            connected: true,
+            ...over,
+        },
+        tab.ws,
+    );
 }
 
 beforeEach(() => {
@@ -114,20 +136,57 @@ describe('pi-bridge settled bell', () => {
         }
     });
 
-    it('never rings for aborted runs', () => {
+    it('clears fallback task state for a new aborted run without ringing', () => {
         const { manager, showToast } = bridgeManager();
-        const tab = piTab();
+        const pending = { isLongTask: true };
+        const tab = piTab({
+            _piBridgeLastRun: '2',
+            _piBridgeGeneration: '1',
+            _piBridgeHeuristicPending: pending,
+            piBridge: { running: true },
+        });
 
         manager._acceptPiBridgeSettled(tab, {
             type: 'pi-bridge-settled',
             pane_id: 'pane-1',
+            generation: '1',
             run: '3',
             outcome: 'aborted',
         });
         expect(tab.isAttention).toBe(false);
         expect(showToast).not.toHaveBeenCalled();
-        // The aborted run still advances the high-water mark.
         expect(tab._piBridgeLastRun).toBe('3');
+        expect(tab.piBridge.running).toBe(false);
+        expect(tab.userTaskActive).toBe(false);
+        expect(tab.busyStartTime).toBeNull();
+        expect(tab._piBridgeHeuristicPending).toBeNull();
+    });
+
+    it('does not let stale or duplicate aborts cancel a newer task', () => {
+        const { manager, showToast } = bridgeManager();
+        const pending = { isLongTask: true };
+        const tab = piTab({
+            _piBridgeLastRun: '5',
+            _piBridgeGeneration: '2',
+            _piBridgeHeuristicPending: pending,
+        });
+        const busyStartTime = tab.busyStartTime;
+
+        for (const run of ['4', '5']) {
+            manager._acceptPiBridgeSettled(tab, {
+                type: 'pi-bridge-settled',
+                pane_id: 'pane-1',
+                generation: '2',
+                run,
+                outcome: 'aborted',
+            });
+        }
+
+        expect(tab._piBridgeLastRun).toBe('5');
+        expect(tab.userTaskActive).toBe(true);
+        expect(tab.busyStartTime).toBe(busyStartTime);
+        expect(tab._piBridgeHeuristicPending).toBe(pending);
+        expect(showToast).not.toHaveBeenCalled();
     });
 
     it('rings for completed runs beyond the safe-number range', () => {
@@ -200,11 +259,7 @@ describe('pi-bridge attach state', () => {
         const tab = piTab();
         manager.tabs.set(tab.paneId, tab);
 
-        manager._acceptPiBridgeState(tab, {
-            type: 'pi-bridge-state',
-            pane_id: 'pane-1',
-            state: 'managed',
-            telemetry_revision: '1',
+        acceptState(manager, tab, 1, {
             last_run: '5',
             last_outcome: 'completed',
         });
@@ -218,58 +273,125 @@ describe('pi-bridge attach state', () => {
         const { manager, showToast } = bridgeManager();
         const tab = piTab();
 
-        const attach = (run, outcome) =>
-            manager._acceptPiBridgeState(tab, {
-                type: 'pi-bridge-state',
-                pane_id: 'pane-1',
-                state: 'managed',
+        const attach = (revision, run, outcome) =>
+            acceptState(manager, tab, revision, {
                 last_run: run,
                 last_outcome: outcome,
             });
-        attach('5', 'completed');
+        attach(1, '5', 'completed');
         expect(showToast).not.toHaveBeenCalled();
 
-        attach('6', 'completed');
+        attach(2, '6', 'completed');
         expect(tab.isAttention).toBe(true);
         expect(showToast).toHaveBeenCalledTimes(1);
 
         // Re-attach replays the same run without a second bell.
         tab.isAttention = false;
-        attach('6', 'completed');
+        attach(2, '6', 'completed');
         expect(showToast).toHaveBeenCalledTimes(1);
     });
 
-    it('skips catch-up for aborted retained runs', () => {
+    it('clears fallback task state for a new retained abort known to be idle', () => {
         const { manager, showToast } = bridgeManager();
-        const tab = piTab({ _piBridgeLastRun: '5' });
-        manager._acceptPiBridgeState(tab, {
-            type: 'pi-bridge-state',
-            pane_id: 'pane-1',
-            state: 'managed',
+        const pending = { isLongTask: true };
+        const tab = piTab({ _piBridgeHeuristicPending: pending });
+        acceptState(manager, tab, 1, {
+            running: 'false',
+            last_run: '5',
+            last_outcome: 'completed',
+        });
+        tab.userTaskActive = true;
+        tab.busyStartTime = 123;
+        tab._piBridgeHeuristicPending = pending;
+
+        acceptState(manager, tab, 2, {
+            running: 'false',
             last_run: '6',
             last_outcome: 'aborted',
         });
+
         expect(showToast).not.toHaveBeenCalled();
         expect(tab._piBridgeLastRun).toBe('6');
+        expect(tab.userTaskActive).toBe(false);
+        expect(tab.busyStartTime).toBeNull();
+        expect(tab._piBridgeHeuristicPending).toBeNull();
+    });
+
+    it('keeps a silent initial abort baseline from ending local task state', () => {
+        const { manager, showToast } = bridgeManager();
+        const pending = { isLongTask: true };
+        const tab = piTab({ _piBridgeHeuristicPending: pending });
+
+        acceptState(manager, tab, 1, {
+            running: 'false',
+            last_run: '5',
+            last_outcome: 'aborted',
+        });
+
+        expect(showToast).not.toHaveBeenCalled();
+        expect(tab._piBridgeLastRun).toBe('5');
+        expect(tab.userTaskActive).toBe(true);
+        expect(tab._piBridgeHeuristicPending).toBe(pending);
+    });
+
+    it('does not cancel current work for a retained previous abort while running', () => {
+        const { manager, showToast } = bridgeManager();
+        const tab = piTab();
+        acceptState(manager, tab, 1, {
+            running: 'false',
+            last_run: '5',
+            last_outcome: 'aborted',
+        });
+        const pending = { isLongTask: true };
+        tab.userTaskActive = true;
+        tab.busyStartTime = 123;
+        tab._piBridgeHeuristicPending = pending;
+
+        acceptState(manager, tab, 2, {
+            running: 'true',
+            last_run: '5',
+            last_outcome: 'aborted',
+        });
+
+        expect(showToast).not.toHaveBeenCalled();
+        expect(tab.userTaskActive).toBe(true);
+        expect(tab.busyStartTime).toBe(123);
+        expect(tab._piBridgeHeuristicPending).toBe(pending);
+    });
+
+    it('does not treat unknown retained running state as an aborted completion', () => {
+        const { manager, showToast } = bridgeManager();
+        const tab = piTab();
+        acceptState(manager, tab, 1, {
+            running: 'false',
+            last_run: '5',
+            last_outcome: 'completed',
+        });
+        const pending = { isLongTask: true };
+        tab.userTaskActive = true;
+        tab.busyStartTime = 123;
+        tab._piBridgeHeuristicPending = pending;
+
+        acceptState(manager, tab, 2, {
+            last_run: '6',
+            last_outcome: 'aborted',
+        });
+
+        expect(showToast).not.toHaveBeenCalled();
+        expect(tab._piBridgeLastRun).toBe('6');
+        expect(tab.userTaskActive).toBe(true);
+        expect(tab.busyStartTime).toBe(123);
+        expect(tab._piBridgeHeuristicPending).toBe(pending);
     });
 
     it('marks liveness only on post-hello evidence', () => {
         const { manager } = bridgeManager();
         const tab = piTab();
         // Pre-hello state carries no running/last_run: not live.
-        manager._acceptPiBridgeState(tab, {
-            type: 'pi-bridge-state',
-            pane_id: 'pane-1',
-            state: 'managed',
-        });
+        acceptState(manager, tab, 1);
         expect(tab._piBridgeLive).toBeUndefined();
         // First running sight proves the hello landed.
-        manager._acceptPiBridgeState(tab, {
-            type: 'pi-bridge-state',
-            pane_id: 'pane-1',
-            state: 'managed',
-            running: 'false',
-        });
+        acceptState(manager, tab, 2, { running: 'false' });
         expect(tab._piBridgeLive).toBe(true);
     });
 
@@ -289,32 +411,18 @@ describe('pi-bridge attach state', () => {
         const { manager, showToast } = bridgeManager();
         const tab = piTab();
         // Attached before any run: live idle establishes a zero baseline.
-        manager._acceptPiBridgeState(tab, {
-            type: 'pi-bridge-state',
-            pane_id: 'pane-1',
-            state: 'managed',
-            generation: '1',
-            running: 'false',
-        });
+        acceptState(manager, tab, 1, { running: 'false' });
         expect(showToast).not.toHaveBeenCalled();
         expect(tab._piBridgeLastRun).toBe('0');
         // Missed the settlement; the reconnect snapshot must ring once.
-        manager._acceptPiBridgeState(tab, {
-            type: 'pi-bridge-state',
-            pane_id: 'pane-1',
-            state: 'managed',
-            generation: '1',
+        acceptState(manager, tab, 2, {
             running: 'false',
             last_run: '1',
             last_outcome: 'completed',
         });
         expect(showToast).toHaveBeenCalledTimes(1);
         // Re-attach replays without a second bell.
-        manager._acceptPiBridgeState(tab, {
-            type: 'pi-bridge-state',
-            pane_id: 'pane-1',
-            state: 'managed',
-            generation: '1',
+        acceptState(manager, tab, 2, {
             running: 'false',
             last_run: '1',
             last_outcome: 'completed',
@@ -325,18 +433,10 @@ describe('pi-bridge attach state', () => {
     it('leaves pre-hello state without a baseline', () => {
         const { manager, showToast } = bridgeManager();
         const tab = piTab();
-        manager._acceptPiBridgeState(tab, {
-            type: 'pi-bridge-state',
-            pane_id: 'pane-1',
-            state: 'managed',
-        });
+        acceptState(manager, tab, 1);
         expect(tab._piBridgeLastRun).toBeUndefined();
         // First sight of retained history stays silent.
-        manager._acceptPiBridgeState(tab, {
-            type: 'pi-bridge-state',
-            pane_id: 'pane-1',
-            state: 'managed',
-            generation: '1',
+        acceptState(manager, tab, 2, {
             running: 'false',
             last_run: '5',
             last_outcome: 'completed',
@@ -386,14 +486,16 @@ describe('pi-bridge always-ring policy', () => {
 
 describe('heuristic suppression for managed panes', () => {
     function idleManager(tab) {
-        return {
-            tabs: new Map([['pane-1', tab]]),
+        const manager = Object.create(TabManager.prototype);
+        Object.assign(manager, {
+            tabs: new Map([[tab.paneId, tab]]),
             activePaneId: 'other-pane',
             syncBackendPin: vi.fn(),
-            _setTabAttention: TabManager.prototype._setTabAttention,
             updateDocumentTitle: vi.fn(),
             triggerAttentionNotification: vi.fn(),
-        };
+            renderPresets: vi.fn(),
+        });
+        return manager;
     }
 
     function quietPiTab(over = {}) {
@@ -425,6 +527,27 @@ describe('heuristic suppression for managed panes', () => {
         };
     }
 
+    function livePiTab(over = {}) {
+        const ws = { sendInput: vi.fn(() => true) };
+        const { bridge = {}, ...tabOverrides } = over;
+        return quietPiTab({
+            ws,
+            _piBridgeFresh: ws,
+            _piBridgeRev: 1n,
+            _piBridgeLive: true,
+            piBridge: {
+                state: 'managed',
+                generation: '1',
+                telemetry_revision: '1',
+                model: 'provider/model',
+                connected: true,
+                capabilities: ['pi.lifecycle.v1'],
+                ...bridge,
+            },
+            ...tabOverrides,
+        });
+    }
+
     it('rings heuristically for plain pi tabs', () => {
         const tab = quietPiTab();
         const manager = idleManager(tab);
@@ -432,12 +555,180 @@ describe('heuristic suppression for managed panes', () => {
         expect(manager.triggerAttentionNotification).toHaveBeenCalledTimes(1);
     });
 
-    it('suppresses heuristics for live managed panes', () => {
+    it('suppresses heuristics only for a fresh lifecycle-capable pane', () => {
+        const tab = livePiTab();
+        const manager = idleManager(tab);
+        TabManager.prototype.pollTerminalIdleAndNotifications.call(manager);
+        expect(manager.triggerAttentionNotification).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ['peer-down', { bridge: { connected: false } }],
+        ['missing lifecycle capability', { bridge: { capabilities: [] } }],
+        ['stale socket', { _piBridgeFresh: {} }],
+    ])('restores heuristics for a historically live %s pane', (_name, over) => {
+        const tab = livePiTab(over);
+        const manager = idleManager(tab);
+        TabManager.prototype.pollTerminalIdleAndNotifications.call(manager);
+        expect(manager.triggerAttentionNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it('reconsiders an outstanding task after peer-down follows the idle poll', () => {
+        const tab = livePiTab();
+        const manager = idleManager(tab);
+        TabManager.prototype.pollTerminalIdleAndNotifications.call(manager);
+        expect(tab.isBusy).toBe(false);
+        expect(tab.userTaskActive).toBe(true);
+        expect(manager.triggerAttentionNotification).not.toHaveBeenCalled();
+
+        manager._acceptPiBridgeState(
+            tab,
+            {
+                type: 'pi-bridge-state',
+                pane_id: tab.paneId,
+                state: 'managed',
+                telemetry_revision: '1',
+                generation: '1',
+                model: 'provider/model',
+                capabilities: 'pi.lifecycle.v1',
+                connected: false,
+            },
+            tab.ws,
+        );
+        expect(manager.triggerAttentionNotification).not.toHaveBeenCalled();
+        TabManager.prototype.pollTerminalIdleAndNotifications.call(manager);
+
+        expect(manager.triggerAttentionNotification).toHaveBeenCalledTimes(1);
+        expect(tab.userTaskActive).toBe(false);
+    });
+
+    it('does not fabricate native Pi completion without a recognized prompt', () => {
+        const lines = ['╭──────────────╮', '', '╰──────────────╯'];
         const tab = quietPiTab({
-            piBridge: { state: 'managed' },
-            _piBridgeLive: true,
+            term: {
+                buffer: {
+                    active: {
+                        length: lines.length,
+                        baseY: 0,
+                        cursorY: 1,
+                        getLine: (index) => ({
+                            translateToString: () => lines[index],
+                        }),
+                    },
+                },
+            },
         });
         const manager = idleManager(tab);
+
+        TabManager.prototype.pollTerminalIdleAndNotifications.call(manager);
+
+        expect(manager.triggerAttentionNotification).not.toHaveBeenCalled();
+        expect(tab.userTaskActive).toBe(true);
+    });
+
+    it('does not reconsider a direct aborted task after bridge loss', () => {
+        const tab = livePiTab();
+        const manager = idleManager(tab);
+        TabManager.prototype.pollTerminalIdleAndNotifications.call(manager);
+        expect(tab._piBridgeHeuristicPending).not.toBeNull();
+
+        manager._acceptPiBridgeSettled(tab, {
+            type: 'pi-bridge-settled',
+            pane_id: tab.paneId,
+            generation: '1',
+            run: '1',
+            outcome: 'aborted',
+        });
+        manager._acceptPiBridgeState(
+            tab,
+            {
+                type: 'pi-bridge-state',
+                pane_id: tab.paneId,
+                state: 'managed',
+                telemetry_revision: '1',
+                generation: '1',
+                model: 'provider/model',
+                capabilities: 'pi.lifecycle.v1',
+                connected: false,
+            },
+            tab.ws,
+        );
+        TabManager.prototype.pollTerminalIdleAndNotifications.call(manager);
+
+        expect(tab.userTaskActive).toBe(false);
+        expect(tab._piBridgeHeuristicPending).toBeNull();
+        expect(manager.triggerAttentionNotification).not.toHaveBeenCalled();
+    });
+
+    it('does not reconsider a retained aborted task after bridge loss', () => {
+        const tab = livePiTab();
+        const manager = idleManager(tab);
+        tab._piBridgeLastRun = '0';
+        tab._piBridgeGeneration = '1';
+        TabManager.prototype.pollTerminalIdleAndNotifications.call(manager);
+        expect(tab._piBridgeHeuristicPending).not.toBeNull();
+
+        manager._acceptPiBridgeState(
+            tab,
+            {
+                type: 'pi-bridge-state',
+                pane_id: tab.paneId,
+                state: 'managed',
+                telemetry_revision: '2',
+                generation: '1',
+                model: 'provider/model',
+                capabilities: 'pi.lifecycle.v1',
+                connected: true,
+                running: false,
+                last_run: '1',
+                last_outcome: 'aborted',
+            },
+            tab.ws,
+        );
+        expect(tab.userTaskActive).toBe(false);
+        expect(tab._piBridgeHeuristicPending).toBeNull();
+
+        manager._acceptPiBridgeState(
+            tab,
+            {
+                type: 'pi-bridge-state',
+                pane_id: tab.paneId,
+                state: 'managed',
+                telemetry_revision: '2',
+                generation: '1',
+                model: 'provider/model',
+                capabilities: 'pi.lifecycle.v1',
+                connected: false,
+                running: false,
+                last_run: '1',
+                last_outcome: 'aborted',
+            },
+            tab.ws,
+        );
+        TabManager.prototype.pollTerminalIdleAndNotifications.call(manager);
+
+        expect(tab.userTaskActive).toBe(false);
+        expect(tab._piBridgeHeuristicPending).toBeNull();
+        expect(manager.triggerAttentionNotification).not.toHaveBeenCalled();
+    });
+
+    it('does not create attention for bridge loss without an outstanding task', () => {
+        const tab = livePiTab({ isBusy: false, userTaskActive: false });
+        const manager = idleManager(tab);
+        manager._acceptPiBridgeState(
+            tab,
+            {
+                type: 'pi-bridge-state',
+                pane_id: tab.paneId,
+                state: 'managed',
+                telemetry_revision: '1',
+                generation: '1',
+                model: 'provider/model',
+                capabilities: 'pi.lifecycle.v1',
+                connected: false,
+            },
+            tab.ws,
+        );
         TabManager.prototype.pollTerminalIdleAndNotifications.call(manager);
         expect(manager.triggerAttentionNotification).not.toHaveBeenCalled();
     });

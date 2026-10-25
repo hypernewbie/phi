@@ -163,6 +163,8 @@ describe('pollTerminalIdleAndNotifications — done vs inactive behavior', () =>
             syncBackendPin: vi.fn(),
             triggerAttentionNotification: vi.fn(),
             _setTabAttention: TabManager.prototype._setTabAttention,
+            _piBridgeCapabilityEligible:
+                TabManager.prototype._piBridgeCapabilityEligible,
             getActiveTab() {
                 return this.tabs.get(this.activePaneId);
             },
