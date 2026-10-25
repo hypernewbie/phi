@@ -584,11 +584,12 @@ func TestStalePeerCannotOverwriteReplacement(t *testing.T) {
 }
 
 type stateCall struct {
-	gen, rev uint64
-	running  bool
-	hasState bool
-	model    string
-	caps     []string
+	gen, rev      uint64
+	running       bool
+	hasState      bool
+	model         string
+	thinkingLevel string
+	caps          []string
 }
 
 func waitStateCalls(t *testing.T, mu *sync.Mutex, calls *[]stateCall, want int) {
@@ -628,13 +629,13 @@ func TestServerHeldCallbackReportsCapturedState(t *testing.T) {
 	heldA := make(chan struct{})
 	releaseA := make(chan struct{})
 	var heldOnce sync.Once
-	s.SetOnState(func(_, _ string, gen, rev uint64, running, hasState bool, model string, caps []string) {
+	s.SetOnState(func(_, _ string, gen, rev uint64, running, hasState bool, model, thinkingLevel string, caps []string) {
 		if model == "provA/modelA" {
 			heldOnce.Do(func() { close(heldA) })
 			<-releaseA
 		}
 		mu.Lock()
-		calls = append(calls, stateCall{gen: gen, rev: rev, running: running, hasState: hasState, model: model, caps: append([]string(nil), caps...)})
+		calls = append(calls, stateCall{gen: gen, rev: rev, running: running, hasState: hasState, model: model, thinkingLevel: thinkingLevel, caps: append([]string(nil), caps...)})
 		mu.Unlock()
 	})
 
@@ -709,9 +710,9 @@ func TestServerHelloWithoutStateRepublishRules(t *testing.T) {
 
 	var mu sync.Mutex
 	var calls []stateCall
-	s.SetOnState(func(_, _ string, gen, rev uint64, running, hasState bool, model string, caps []string) {
+	s.SetOnState(func(_, _ string, gen, rev uint64, running, hasState bool, model, thinkingLevel string, caps []string) {
 		mu.Lock()
-		calls = append(calls, stateCall{gen: gen, rev: rev, running: running, hasState: hasState, model: model, caps: append([]string(nil), caps...)})
+		calls = append(calls, stateCall{gen: gen, rev: rev, running: running, hasState: hasState, model: model, thinkingLevel: thinkingLevel, caps: append([]string(nil), caps...)})
 		mu.Unlock()
 	})
 
@@ -719,6 +720,7 @@ func TestServerHelloWithoutStateRepublishRules(t *testing.T) {
 	defer cancelA()
 	helloA := testHello("pane-repub", proc, 1, CapabilityLifecycle)
 	helloA.GetHello().GetCurrentState().Model = &pibridgepb.ModelSnapshot{Provider: "provA", Model: "modelA"}
+	helloA.GetHello().GetCurrentState().ThinkingLevel = "high"
 	if err := streamA.Send(helloA); err != nil {
 		t.Fatalf("hello A: %v", err)
 	}
@@ -750,17 +752,58 @@ func TestServerHelloWithoutStateRepublishRules(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if !calls[0].hasState || calls[0].model != "provA/modelA" {
+	if !calls[0].hasState || calls[0].model != "provA/modelA" || calls[0].thinkingLevel != "high" {
 		t.Fatalf("A %+v, want modelA", calls[0])
 	}
-	if !calls[1].hasState || calls[1].model != "provA/modelA" || calls[1].rev <= calls[0].rev {
+	if !calls[1].hasState || calls[1].model != "provA/modelA" || calls[1].thinkingLevel != "high" || calls[1].rev <= calls[0].rev {
 		t.Fatalf("B %+v, want republished modelA at a newer revision", calls[1])
 	}
-	if calls[2].hasState || calls[2].model != "" || calls[2].rev <= calls[1].rev {
+	if calls[2].hasState || calls[2].model != "" || calls[2].thinkingLevel != "" || calls[2].rev <= calls[1].rev {
 		t.Fatalf("C %+v, want unknown state at a newer revision", calls[2])
 	}
 	view, ok := s.InspectForTest(proc)
-	if !ok || view.HasState || view.Model != "" {
+	if !ok || view.HasState || view.Model != "" || view.ThinkingLevel != "" {
 		t.Fatalf("retained %+v, want no state after gen2 hello", view)
+	}
+}
+
+// An unrecognized thinking level name must not reject the hello or tear
+// down the bridge: future Pi releases may add levels. The value passes
+// through bounded and degrades to unknown downstream.
+func TestServerHelloUnknownThinkingLevelAccepted(t *testing.T) {
+	s, sock, cleanup := testServer(t)
+	defer cleanup()
+	proc, token, err := s.RegisterPending("pane-future-level")
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	s.Complete(proc)
+
+	var mu sync.Mutex
+	var calls []stateCall
+	s.SetOnState(func(_, _ string, gen, rev uint64, running, hasState bool, model, thinkingLevel string, caps []string) {
+		mu.Lock()
+		calls = append(calls, stateCall{gen: gen, rev: rev, running: running, hasState: hasState, model: model, thinkingLevel: thinkingLevel, caps: append([]string(nil), caps...)})
+		mu.Unlock()
+	})
+
+	stream, cancel := openStream(t, sock, "pane-future-level", proc, token)
+	defer cancel()
+	hello := testHello("pane-future-level", proc, 1, CapabilityLifecycle, CapabilityThinking)
+	hello.GetHello().GetCurrentState().ThinkingLevel = "ultra"
+	if err := stream.Send(hello); err != nil {
+		t.Fatalf("hello: %v", err)
+	}
+	recvAccepted(t, stream)
+	waitStateCalls(t, &mu, &calls, 1)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !calls[0].hasState || calls[0].thinkingLevel != "ultra" {
+		t.Fatalf("calls %+v, want accepted state with pass-through level", calls)
+	}
+	view, ok := s.InspectForTest(proc)
+	if !ok || !view.HasState || view.ThinkingLevel != "ultra" {
+		t.Fatalf("retained %+v, want pass-through level", view)
 	}
 }

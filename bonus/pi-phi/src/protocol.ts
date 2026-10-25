@@ -6,6 +6,11 @@ export const PROTOCOL_VERSION = 1;
 export const CAPABILITY_LIFECYCLE = 'pi.lifecycle.v1';
 export const CAPABILITY_HISTORY = 'pi.history.v1';
 export const CAPABILITY_MODELS = 'pi.models.v1';
+export const CAPABILITY_THINKING = 'pi.thinking.v1';
+/** Thinking list and setter bounds shared with the bridge peer. */
+export const MAX_THINKING_LEVELS = 7;
+export const MAX_THINKING_MODEL_ID_BYTES = 256;
+export const MAX_THINKING_LEVEL_BYTES = 16;
 /** Cap on catalog entries per ModelsResponse; excess sets truncated. */
 export const MAX_MODELS_ENTRIES = 500;
 /**
@@ -39,6 +44,7 @@ const SUPPORTED = new Set([
     CAPABILITY_LIFECYCLE,
     CAPABILITY_HISTORY,
     CAPABILITY_MODELS,
+    CAPABILITY_THINKING,
 ]);
 
 /** Intersect advertised names with the supported set. Unknown names are ignored. */

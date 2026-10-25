@@ -3,6 +3,7 @@ import {
     CAPABILITY_HISTORY,
     CAPABILITY_LIFECYCLE,
     CAPABILITY_MODELS,
+    CAPABILITY_THINKING,
     isKnownCapability,
     negotiateCapabilities,
 } from './protocol.js';
@@ -29,6 +30,12 @@ describe('negotiateCapabilities', () => {
             CAPABILITY_MODELS,
         ]);
         expect(isKnownCapability(CAPABILITY_MODELS)).toBe(true);
+    });
+    it('accepts the thinking capability independently', () => {
+        expect(negotiateCapabilities([CAPABILITY_THINKING])).toEqual([
+            CAPABILITY_THINKING,
+        ]);
+        expect(isKnownCapability(CAPABILITY_THINKING)).toBe(true);
     });
     it('yields empty for empty', () => {
         expect(negotiateCapabilities([])).toEqual([]);

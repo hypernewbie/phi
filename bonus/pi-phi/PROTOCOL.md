@@ -74,6 +74,7 @@ Runtime identity binds `(generation, runtime_id, session_id)`:
 | `pi.lifecycle.v1` | Lifecycle edges, snapshots, settlement           |
 | `pi.history.v1`   | On-demand live editor-history reads              |
 | `pi.models.v1`    | On-demand model list and switching               |
+| `pi.thinking.v1`  | On-demand thinking-level reads and setting       |
 
 ## History reads
 
@@ -113,6 +114,27 @@ emits `model_select`, so the current-model snapshot follows with no
 explicit publish. Queue, admission, drop, and timeout semantics
 match history reads; Phi surfaces list failures inside the picker
 (error/unavailable row) and keeps partial lists usable.
+
+## Thinking reads and setting
+
+`pi.thinking.v1` is two best-effort request/response pairs over the
+shared stream, advertised only when the host exposes both the
+thinking-level getter and setter. Phi sends `ThinkingLevelsRequest`
+(field 17) with a correlating `request_id`; the extension answers
+`ThinkingLevelsResponse` (field 20) echoing the id with the levels
+supported by the live session model plus the source provider/model,
+or `unavailable` when the model or native helper cannot be read
+safely. Phi sends `SetThinkingRequest` (field 18) naming one level
+with the expected provider/model; the extension answers
+`SetThinkingAck` (field 21): `ok` after an effective native readback,
+`unsupported-level` (no longer supported) or `model-changed` (the
+live model moved). `ok=false` with an empty reason means the outcome
+is unknown. The current level also rides
+`StateSnapshot.thinking_level` (field 9); unrecognized names degrade
+to unknown downstream and never reject a snapshot. Queue, admission,
+drop, and timeout semantics match history reads; Phi surfaces list
+failures inside the picker and without the capability falls back to
+the native Pi picker.
 
 ## Lifecycle events
 

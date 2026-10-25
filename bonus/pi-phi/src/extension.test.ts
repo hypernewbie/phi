@@ -71,6 +71,7 @@ function recordingRuntime(): { calls: string[]; runtime: FactoryRuntime } {
             onAgentEnd: (stop) => calls.push(`agent_end:${stop}`),
             onAgentSettled: (_ctx, aborted) => calls.push(`settled:${aborted}`),
             onModelSelect: () => calls.push('model_select'),
+            onThinkingLevelSelect: () => calls.push('thinking_level_select'),
             onSessionTree: () => calls.push('session_tree'),
             onCompactStart: () => calls.push('compact_start'),
             onCompactEnd: () => calls.push('compact_end'),
@@ -136,6 +137,7 @@ describe('factory inertness', () => {
             'session_shutdown',
             'session_start',
             'session_tree',
+            'thinking_level_select',
         ]);
     });
 });
@@ -190,7 +192,7 @@ describe('settings disable', () => {
         const rec = recordingRuntime();
         createExtension(pi, { makeRuntime: () => rec.runtime });
         // Factory registers handlers; the gate runs at session_start.
-        expect(handlers.size).toBe(10);
+        expect(handlers.size).toBe(11);
         handlers.get('session_start')!({}, mockCtx() as never);
         expect(rec.calls).toEqual([]);
         expect(readCredsFromEnv()).toBeNull();
@@ -267,7 +269,13 @@ describe('owner guard', () => {
         // Only the owner forwards events.
         first.handlers.get('agent_start')!({}, ctx as never);
         second.handlers.get('agent_start')!({}, ctx as never);
-        expect(rec1.calls).toEqual(['start', 'agent_start']);
+        first.handlers.get('thinking_level_select')!({}, ctx as never);
+        second.handlers.get('thinking_level_select')!({}, ctx as never);
+        expect(rec1.calls).toEqual([
+            'start',
+            'agent_start',
+            'thinking_level_select',
+        ]);
         expect(rec2.calls).toEqual([]);
         // Only the owner releases on shutdown.
         second.handlers.get('session_shutdown')!({}, ctx as never);
@@ -293,7 +301,7 @@ describe('owner guard', () => {
         const reloaded = mockPi();
         const rec2 = recordingRuntime();
         createExtension(reloaded.pi, { makeRuntime: () => rec2.runtime });
-        expect(reloaded.handlers.size).toBe(10);
+        expect(reloaded.handlers.size).toBe(11);
         reloaded.handlers.get('session_start')!({}, ctx as never);
         expect(rec2.calls).toEqual(['start']);
     });

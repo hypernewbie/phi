@@ -9,7 +9,11 @@ import type {
     ExtensionContext,
 } from '@earendil-works/pi-coding-agent';
 import type { ChannelCreds } from './channel.js';
-import { type PiContextView, Runtime } from './runtime.js';
+import {
+    type PiContextView,
+    type PiThinkingLevel,
+    Runtime,
+} from './runtime.js';
 
 export const ENV_TARGET = 'PHI_PI_BRIDGE_ENDPOINT';
 export const ENV_PANE = 'PHI_PI_BRIDGE_PANE_ID';
@@ -140,6 +144,7 @@ export interface FactoryRuntime {
     onAgentEnd(stopReason: string | null): void;
     onAgentSettled(ctx: PiContextView, aborted: boolean): void;
     onModelSelect(ctx: PiContextView): void;
+    onThinkingLevelSelect(ctx: PiContextView): void;
     onSessionTree(ctx: PiContextView): void;
     onCompactStart(ctx: PiContextView): void;
     onCompactEnd(ctx: PiContextView): void;
@@ -166,6 +171,18 @@ export function createExtension(
     let claimed = false;
     let sessionId: string | null = null;
 
+    const nativeThinking = pi as Partial<
+        Pick<ExtensionAPI, 'getThinkingLevel' | 'setThinkingLevel'>
+    >;
+    const getThinkingLevel =
+        typeof nativeThinking.getThinkingLevel === 'function'
+            ? () => nativeThinking.getThinkingLevel!()
+            : undefined;
+    const setThinkingLevel =
+        typeof nativeThinking.setThinkingLevel === 'function'
+            ? (level: PiThinkingLevel) =>
+                  nativeThinking.setThinkingLevel!(level)
+            : undefined;
     const make =
         deps.makeRuntime ??
         ((c, g) =>
@@ -173,6 +190,8 @@ export function createExtension(
                 creds: c,
                 generation: g,
                 setModel: (model) => pi.setModel(model),
+                ...(getThinkingLevel ? { getThinkingLevel } : {}),
+                ...(setThinkingLevel ? { setThinkingLevel } : {}),
             }));
 
     pi.on('session_start', (_event, ctx) => {
@@ -244,6 +263,10 @@ export function createExtension(
 
     pi.on('model_select', (_event, ctx) => {
         runtime?.onModelSelect(contextView(ctx));
+    });
+
+    pi.on('thinking_level_select', (_event, ctx) => {
+        runtime?.onThinkingLevelSelect(contextView(ctx));
     });
 
     pi.on('session_tree', (_event, ctx) => {

@@ -41,6 +41,8 @@ const (
 	CapabilityHistory = "pi.history.v1"
 	// CapabilityModels is the on-demand model-list/switch capability name.
 	CapabilityModels = "pi.models.v1"
+	// CapabilityThinking is the native thinking read/set capability name.
+	CapabilityThinking = "pi.thinking.v1"
 
 	// maxHistoryPending bounds history requests awaiting replies per
 	// peer. Excess callers fail fast into fallback; the map never
@@ -50,4 +52,10 @@ const (
 	// replies per peer, each. Excess callers fail fast; the maps
 	// never grow under a wedged or silent extension.
 	maxModelsPending = 4
+	// maxThinkingPending bounds thinking list and set requests per peer,
+	// each, independently.
+	maxThinkingPending = 4
+	maxThinkingLevels  = 7
+	maxThinkingField   = 256
+	maxThinkingLevel   = 16
 )

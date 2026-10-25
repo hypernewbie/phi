@@ -84,6 +84,8 @@ export interface PiToPhi {
     | { $case: "historyResponse"; value: HistoryResponse }
     | { $case: "modelsResponse"; value: ModelsResponse }
     | { $case: "setModelAck"; value: SetModelAck }
+    | { $case: "thinkingLevelsResponse"; value: ThinkingLevelsResponse }
+    | { $case: "setThinkingAck"; value: SetThinkingAck }
     | undefined;
 }
 
@@ -98,6 +100,8 @@ export interface PhiToPi {
     | { $case: "historyRequest"; value: HistoryRequest }
     | { $case: "modelsRequest"; value: ModelsRequest }
     | { $case: "setModelRequest"; value: SetModelRequest }
+    | { $case: "thinkingLevelsRequest"; value: ThinkingLevelsRequest }
+    | { $case: "setThinkingRequest"; value: SetThinkingRequest }
     | undefined;
 }
 
@@ -171,6 +175,8 @@ export interface StateSnapshot {
   journal: LifecycleRecord[];
   journalGap: boolean;
   stateRevision: bigint;
+  /** Empty means unknown; it is never inferred to mean off. */
+  thinkingLevel: string;
 }
 
 /**
@@ -255,6 +261,41 @@ export interface SetModelAck {
   reason: string;
 }
 
+/** ThinkingLevelsRequest asks for levels supported by the live session model. */
+export interface ThinkingLevelsRequest {
+  requestId: string;
+}
+
+/**
+ * ThinkingLevelsResponse carries the supported levels and source model.
+ * unavailable means the model or native helper could not be read safely.
+ */
+export interface ThinkingLevelsResponse {
+  requestId: string;
+  levels: string[];
+  provider: string;
+  model: string;
+  unavailable: boolean;
+}
+
+/** SetThinkingRequest sets one supported level on the expected live model. */
+export interface SetThinkingRequest {
+  requestId: string;
+  level: string;
+  provider: string;
+  model: string;
+}
+
+/**
+ * SetThinkingAck reports an effective native readback. reason is only
+ * unsupported-level, model-changed, or empty for an unknown outcome.
+ */
+export interface SetThinkingAck {
+  requestId: string;
+  ok: boolean;
+  reason: string;
+}
+
 /** Terminal protocol-level rejection. Ends the stream attempt. */
 export interface ProtocolError {
   code: ProtocolErrorCode;
@@ -300,6 +341,12 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         break;
       case "setModelAck":
         SetModelAck.encode(message.payload.value, writer.uint32(154).fork()).join();
+        break;
+      case "thinkingLevelsResponse":
+        ThinkingLevelsResponse.encode(message.payload.value, writer.uint32(162).fork()).join();
+        break;
+      case "setThinkingAck":
+        SetThinkingAck.encode(message.payload.value, writer.uint32(170).fork()).join();
         break;
     }
     return writer;
@@ -398,6 +445,25 @@ export const PiToPhi: MessageFns<PiToPhi> = {
             message.payload = { $case: "setModelAck", value: SetModelAck.decode(reader, reader.uint32()) };
             continue;
           }
+          case 20: {
+            if (tag !== 162) {
+              break;
+            }
+
+            message.payload = {
+              $case: "thinkingLevelsResponse",
+              value: ThinkingLevelsResponse.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
+          case 21: {
+            if (tag !== 170) {
+              break;
+            }
+
+            message.payload = { $case: "setThinkingAck", value: SetThinkingAck.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -463,6 +529,21 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         }
         break;
       }
+      case "thinkingLevelsResponse": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = {
+            $case: "thinkingLevelsResponse",
+            value: ThinkingLevelsResponse.fromPartial(object.payload.value),
+          };
+        }
+        break;
+      }
+      case "setThinkingAck": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "setThinkingAck", value: SetThinkingAck.fromPartial(object.payload.value) };
+        }
+        break;
+      }
     }
     return message;
   },
@@ -501,6 +582,12 @@ export const PhiToPi: MessageFns<PhiToPi> = {
         break;
       case "setModelRequest":
         SetModelRequest.encode(message.payload.value, writer.uint32(130).fork()).join();
+        break;
+      case "thinkingLevelsRequest":
+        ThinkingLevelsRequest.encode(message.payload.value, writer.uint32(138).fork()).join();
+        break;
+      case "setThinkingRequest":
+        SetThinkingRequest.encode(message.payload.value, writer.uint32(146).fork()).join();
         break;
     }
     return writer;
@@ -583,6 +670,28 @@ export const PhiToPi: MessageFns<PhiToPi> = {
             message.payload = { $case: "setModelRequest", value: SetModelRequest.decode(reader, reader.uint32()) };
             continue;
           }
+          case 17: {
+            if (tag !== 138) {
+              break;
+            }
+
+            message.payload = {
+              $case: "thinkingLevelsRequest",
+              value: ThinkingLevelsRequest.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
+          case 18: {
+            if (tag !== 146) {
+              break;
+            }
+
+            message.payload = {
+              $case: "setThinkingRequest",
+              value: SetThinkingRequest.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -633,6 +742,24 @@ export const PhiToPi: MessageFns<PhiToPi> = {
       case "setModelRequest": {
         if (object.payload?.value !== undefined && object.payload?.value !== null) {
           message.payload = { $case: "setModelRequest", value: SetModelRequest.fromPartial(object.payload.value) };
+        }
+        break;
+      }
+      case "thinkingLevelsRequest": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = {
+            $case: "thinkingLevelsRequest",
+            value: ThinkingLevelsRequest.fromPartial(object.payload.value),
+          };
+        }
+        break;
+      }
+      case "setThinkingRequest": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = {
+            $case: "setThinkingRequest",
+            value: SetThinkingRequest.fromPartial(object.payload.value),
+          };
         }
         break;
       }
@@ -1213,7 +1340,16 @@ export const ModelSnapshot: MessageFns<ModelSnapshot> = {
 };
 
 function createBaseStateSnapshot(): StateSnapshot {
-  return { state: 0, sessionId: "", leafId: "", model: undefined, journal: [], journalGap: false, stateRevision: 0n };
+  return {
+    state: 0,
+    sessionId: "",
+    leafId: "",
+    model: undefined,
+    journal: [],
+    journalGap: false,
+    stateRevision: 0n,
+    thinkingLevel: "",
+  };
 }
 
 export const StateSnapshot: MessageFns<StateSnapshot> = {
@@ -1241,6 +1377,9 @@ export const StateSnapshot: MessageFns<StateSnapshot> = {
         throw new globalThis.Error("value provided for field message.stateRevision of type uint64 too large");
       }
       writer.uint32(56).uint64(message.stateRevision);
+    }
+    if (message.thinkingLevel !== "") {
+      writer.uint32(74).string(message.thinkingLevel);
     }
     return writer;
   },
@@ -1314,6 +1453,14 @@ export const StateSnapshot: MessageFns<StateSnapshot> = {
             message.stateRevision = reader.uint64() as bigint;
             continue;
           }
+          case 9: {
+            if (tag !== 74) {
+              break;
+            }
+
+            message.thinkingLevel = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1342,6 +1489,7 @@ export const StateSnapshot: MessageFns<StateSnapshot> = {
     message.stateRevision = (object.stateRevision !== undefined && object.stateRevision !== null)
       ? BigInt(object.stateRevision)
       : 0n;
+    message.thinkingLevel = object.thinkingLevel ?? "";
     return message;
   },
 };
@@ -1844,6 +1992,334 @@ export const SetModelAck: MessageFns<SetModelAck> = {
   },
   fromPartial<I extends Exact<DeepPartial<SetModelAck>, I>>(object: I): SetModelAck {
     const message = createBaseSetModelAck();
+    message.requestId = object.requestId ?? "";
+    message.ok = object.ok ?? false;
+    message.reason = object.reason ?? "";
+    return message;
+  },
+};
+
+function createBaseThinkingLevelsRequest(): ThinkingLevelsRequest {
+  return { requestId: "" };
+}
+
+export const ThinkingLevelsRequest: MessageFns<ThinkingLevelsRequest> = {
+  encode(message: ThinkingLevelsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ThinkingLevelsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseThinkingLevelsRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<ThinkingLevelsRequest>, I>>(base?: I): ThinkingLevelsRequest {
+    return ThinkingLevelsRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ThinkingLevelsRequest>, I>>(object: I): ThinkingLevelsRequest {
+    const message = createBaseThinkingLevelsRequest();
+    message.requestId = object.requestId ?? "";
+    return message;
+  },
+};
+
+function createBaseThinkingLevelsResponse(): ThinkingLevelsResponse {
+  return { requestId: "", levels: [], provider: "", model: "", unavailable: false };
+}
+
+export const ThinkingLevelsResponse: MessageFns<ThinkingLevelsResponse> = {
+  encode(message: ThinkingLevelsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    for (const v of message.levels) {
+      writer.uint32(18).string(v!);
+    }
+    if (message.provider !== "") {
+      writer.uint32(26).string(message.provider);
+    }
+    if (message.model !== "") {
+      writer.uint32(34).string(message.model);
+    }
+    if (message.unavailable !== false) {
+      writer.uint32(40).bool(message.unavailable);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ThinkingLevelsResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseThinkingLevelsResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.levels.push(reader.string());
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.provider = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.model = reader.string();
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.unavailable = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<ThinkingLevelsResponse>, I>>(base?: I): ThinkingLevelsResponse {
+    return ThinkingLevelsResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ThinkingLevelsResponse>, I>>(object: I): ThinkingLevelsResponse {
+    const message = createBaseThinkingLevelsResponse();
+    message.requestId = object.requestId ?? "";
+    message.levels = object.levels?.map((e) => e) || [];
+    message.provider = object.provider ?? "";
+    message.model = object.model ?? "";
+    message.unavailable = object.unavailable ?? false;
+    return message;
+  },
+};
+
+function createBaseSetThinkingRequest(): SetThinkingRequest {
+  return { requestId: "", level: "", provider: "", model: "" };
+}
+
+export const SetThinkingRequest: MessageFns<SetThinkingRequest> = {
+  encode(message: SetThinkingRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.level !== "") {
+      writer.uint32(18).string(message.level);
+    }
+    if (message.provider !== "") {
+      writer.uint32(26).string(message.provider);
+    }
+    if (message.model !== "") {
+      writer.uint32(34).string(message.model);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SetThinkingRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSetThinkingRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.level = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.provider = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.model = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<SetThinkingRequest>, I>>(base?: I): SetThinkingRequest {
+    return SetThinkingRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SetThinkingRequest>, I>>(object: I): SetThinkingRequest {
+    const message = createBaseSetThinkingRequest();
+    message.requestId = object.requestId ?? "";
+    message.level = object.level ?? "";
+    message.provider = object.provider ?? "";
+    message.model = object.model ?? "";
+    return message;
+  },
+};
+
+function createBaseSetThinkingAck(): SetThinkingAck {
+  return { requestId: "", ok: false, reason: "" };
+}
+
+export const SetThinkingAck: MessageFns<SetThinkingAck> = {
+  encode(message: SetThinkingAck, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.ok !== false) {
+      writer.uint32(16).bool(message.ok);
+    }
+    if (message.reason !== "") {
+      writer.uint32(26).string(message.reason);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SetThinkingAck {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSetThinkingAck();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.ok = reader.bool();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<SetThinkingAck>, I>>(base?: I): SetThinkingAck {
+    return SetThinkingAck.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SetThinkingAck>, I>>(object: I): SetThinkingAck {
+    const message = createBaseSetThinkingAck();
     message.requestId = object.requestId ?? "";
     message.ok = object.ok ?? false;
     message.reason = object.reason ?? "";

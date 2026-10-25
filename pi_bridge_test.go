@@ -410,7 +410,7 @@ func TestBridgeSnapshotCopiesRunningFlag(t *testing.T) {
 
 	env, _, _ := b.Provision("pane-1", true)
 	floor, _ := b.server.PublicationRevision(env[piBridgeEnvProcess])
-	b.onState("pane-1", env[piBridgeEnvProcess], 1, floor+1, true, true, "p/m", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", env[piBridgeEnvProcess], 1, floor+1, true, true, "p/m", "", []string{"pi.lifecycle.v1"})
 	b.mu.Lock()
 	p := b.panes["pane-1"]
 	view := p.snapshot()
@@ -581,13 +581,13 @@ func TestBridgeGenerationScopesSettlements(t *testing.T) {
 	proc := env[piBridgeEnvProcess]
 	b.Complete(&pty.PTYInstance{ID: "pane-1"})
 	floor, _ := b.server.PublicationRevision(proc)
-	b.onState("pane-1", proc, 1, floor+1, false, true, "p/m", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", proc, 1, floor+1, false, true, "p/m", "", []string{"pi.lifecycle.v1"})
 	b.onSettled("pane-1", proc, 1, 5, pibridgepb.RunOutcome_RUN_OUTCOME_COMPLETED)
 	if got := b.PaneSnapshot("pane-1"); got.Generation != "1" || got.LastRun != "5" {
 		t.Fatalf("gen1 snapshot %+v, want generation 1 last_run 5", got)
 	}
 	// New runtime generation clears the old retained run.
-	b.onState("pane-1", proc, 2, floor+2, false, true, "p/m", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", proc, 2, floor+2, false, true, "p/m", "", []string{"pi.lifecycle.v1"})
 	if got := b.PaneSnapshot("pane-1"); got.Generation != "2" || got.LastRun != "" {
 		t.Fatalf("gen2 idle snapshot %+v, want generation 2 no last_run", got)
 	}
@@ -602,7 +602,7 @@ func TestBridgeGenerationScopesSettlements(t *testing.T) {
 		t.Fatalf("gen2 settled snapshot %+v, want generation 2 last_run 1", got)
 	}
 	// Delayed old state must not overwrite the new view.
-	b.onState("pane-1", proc, 1, floor+3, true, true, "old/model", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", proc, 1, floor+3, true, true, "old/model", "", []string{"pi.lifecycle.v1"})
 	if got := b.PaneSnapshot("pane-1"); got.Generation != "2" || got.LastRun != "1" {
 		t.Fatalf("stale state snapshot %+v, want generation 2 last_run 1", got)
 	}
@@ -746,6 +746,45 @@ func answerModelsOnce(t *testing.T, stream pibridgepb.Integration_ConnectClient,
 	}
 }
 
+func answerThinkingLevelsOnce(t *testing.T, stream pibridgepb.Integration_ConnectClient) (process string, generation uint64) {
+	t.Helper()
+	msg, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv thinking list: %v", err)
+	}
+	req := msg.GetThinkingLevelsRequest()
+	if req == nil {
+		t.Fatalf("not a thinking-level request: %v", msg.GetPayload())
+	}
+	if err := stream.Send(&pibridgepb.PiToPhi{
+		PaneId: msg.GetPaneId(), ProcessId: msg.GetProcessId(), RuntimeGeneration: msg.GetRuntimeGeneration(),
+		Payload: &pibridgepb.PiToPhi_ThinkingLevelsResponse{ThinkingLevelsResponse: &pibridgepb.ThinkingLevelsResponse{
+			RequestId: req.GetRequestId(), Levels: []string{"off", "high", "xhigh", "max"}, Provider: "p", Model: "m",
+		}},
+	}); err != nil {
+		t.Fatalf("send thinking list: %v", err)
+	}
+	return msg.GetProcessId(), msg.GetRuntimeGeneration()
+}
+
+func answerSetThinkingOnce(t *testing.T, stream pibridgepb.Integration_ConnectClient) {
+	t.Helper()
+	msg, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv set-thinking: %v", err)
+	}
+	req := msg.GetSetThinkingRequest()
+	if req == nil {
+		t.Fatalf("not a set-thinking request: %v", msg.GetPayload())
+	}
+	if err := stream.Send(&pibridgepb.PiToPhi{
+		PaneId: msg.GetPaneId(), ProcessId: msg.GetProcessId(), RuntimeGeneration: msg.GetRuntimeGeneration(),
+		Payload: &pibridgepb.PiToPhi_SetThinkingAck{SetThinkingAck: &pibridgepb.SetThinkingAck{RequestId: req.GetRequestId(), Ok: true}},
+	}); err != nil {
+		t.Fatalf("send set-thinking ack: %v", err)
+	}
+}
+
 // answerSetModelOnce serves one SetModelRequest on a test stream with
 // a canned ack, then returns. It fails the test on any stream error.
 func answerSetModelOnce(t *testing.T, stream pibridgepb.Integration_ConnectClient, ok bool, reason string) {
@@ -770,6 +809,60 @@ func answerSetModelOnce(t *testing.T, stream pibridgepb.Integration_ConnectClien
 			t.Errorf("send ack: %v", err)
 		}
 		return
+	}
+}
+
+func TestBridgeThinkingLevelRetainedInBaselinesAndClearedOnNewGeneration(t *testing.T) {
+	b := startPiBridge(testBridgeHub())
+	if b == nil {
+		t.Fatal("bridge did not start")
+	}
+	defer b.Stop()
+	env, _, managed := b.Provision("pane-thinking-state", true)
+	if !managed {
+		t.Fatal("provision not managed")
+	}
+	b.Complete(&pty.PTYInstance{ID: "pane-thinking-state"})
+	floor, _ := b.server.PublicationRevision(env[piBridgeEnvProcess])
+	caps := []string{"pi.lifecycle.v1", "pi.thinking.v1"}
+	b.onState("pane-thinking-state", env[piBridgeEnvProcess], 1, floor+1, false, true, "p/m", "high", caps)
+	baseline := b.PaneSnapshot("pane-thinking-state")
+	if baseline.ThinkingLevel != "high" {
+		t.Fatalf("HTTP baseline thinking level %q, want high", baseline.ThinkingLevel)
+	}
+	baselineJSON, err := json.Marshal(baseline)
+	if err != nil {
+		t.Fatalf("marshal HTTP baseline: %v", err)
+	}
+	var baselineFields map[string]any
+	if err := json.Unmarshal(baselineJSON, &baselineFields); err != nil || baselineFields["thinking_level"] != "high" {
+		t.Fatalf("HTTP baseline JSON %s err=%v", baselineJSON, err)
+	}
+	var frame map[string]string
+	if err := json.Unmarshal(encodeBridgeState("pane-thinking-state", b.panes["pane-thinking-state"].snapshot()), &frame); err != nil {
+		t.Fatalf("WS frame: %v", err)
+	}
+	if frame["thinking_level"] != "high" {
+		t.Fatalf("WS thinking level %q, want high", frame["thinking_level"])
+	}
+
+	b.onState("pane-thinking-state", env[piBridgeEnvProcess], 2, floor+2, false, false, "", "", caps)
+	baseline = b.PaneSnapshot("pane-thinking-state")
+	if baseline.Generation != "2" || baseline.ThinkingLevel != "" {
+		t.Fatalf("new-generation baseline %+v, want unknown thinking level", baseline)
+	}
+	baselineJSON, err = json.Marshal(baseline)
+	if err != nil {
+		t.Fatalf("marshal cleared HTTP baseline: %v", err)
+	}
+	if err := json.Unmarshal(baselineJSON, &baselineFields); err != nil || baselineFields["thinking_level"] != "" {
+		t.Fatalf("cleared HTTP baseline JSON %s err=%v", baselineJSON, err)
+	}
+	if err := json.Unmarshal(encodeBridgeState("pane-thinking-state", b.panes["pane-thinking-state"].snapshot()), &frame); err != nil {
+		t.Fatalf("new-generation WS frame: %v", err)
+	}
+	if level, ok := frame["thinking_level"]; !ok || level != "" {
+		t.Fatalf("new-generation WS thinking level %q present=%v, want explicit unknown", level, ok)
 	}
 }
 
@@ -1011,6 +1104,152 @@ func TestBridgeRequestPaneSetModel(t *testing.T) {
 	}
 }
 
+func TestHandlePiBridgeThinkingListRejectsReusedPane(t *testing.T) {
+	b := startPiBridge(testBridgeHub())
+	if b == nil {
+		t.Fatal("bridge did not start")
+	}
+	defer b.Stop()
+	prev := piBridge
+	piBridge = b
+	t.Cleanup(func() { piBridge = prev })
+
+	stream, cancel := dialBridgePane(t, b, "pane-reused-list", "pi.lifecycle.v1", "pi.thinking.v1")
+	defer cancel()
+	result := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodGet, "/api/pi-bridge/thinking-levels?pane=pane-reused-list", nil)
+		rec := httptest.NewRecorder()
+		handlePiBridgeThinkingLevels(rec, req)
+		result <- rec
+	}()
+	msg, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv list request: %v", err)
+	}
+	req := msg.GetThinkingLevelsRequest()
+	if req == nil {
+		t.Fatalf("not a thinking-level request: %v", msg.GetPayload())
+	}
+	b.mu.Lock()
+	old := b.panes["pane-reused-list"]
+	b.panes["pane-reused-list"] = &bridgePane{processID: "replacement-process", managed: true}
+	b.mu.Unlock()
+	if err := stream.Send(&pibridgepb.PiToPhi{
+		PaneId: msg.GetPaneId(), ProcessId: msg.GetProcessId(), RuntimeGeneration: msg.GetRuntimeGeneration(),
+		Payload: &pibridgepb.PiToPhi_ThinkingLevelsResponse{ThinkingLevelsResponse: &pibridgepb.ThinkingLevelsResponse{
+			RequestId: req.GetRequestId(), Levels: []string{"off", "high"}, Provider: "p", Model: "m",
+		}},
+	}); err != nil {
+		t.Fatalf("send delayed list: %v", err)
+	}
+	rec := <-result
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "pi thinking unavailable") {
+		t.Fatalf("delayed old-process response status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	b.mu.Lock()
+	b.panes["pane-reused-list"] = old
+	b.mu.Unlock()
+}
+
+func TestHandlePiBridgeThinkingEndpoints(t *testing.T) {
+	b := startPiBridge(testBridgeHub())
+	if b == nil {
+		t.Fatal("bridge did not start")
+	}
+	defer b.Stop()
+	prev := piBridge
+	piBridge = b
+	t.Cleanup(func() { piBridge = prev })
+
+	serve := func(method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		if strings.HasPrefix(path, "/api/pi-bridge/thinking-levels") {
+			handlePiBridgeThinkingLevels(rec, req)
+		} else {
+			handlePiBridgeSetThinking(rec, req)
+		}
+		return rec
+	}
+	if rec := serve(http.MethodPost, "/api/pi-bridge/thinking-levels?pane=x", ""); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("list method %d, want 405", rec.Code)
+	}
+	if rec := serve(http.MethodGet, "/api/pi-bridge/thinking-levels", ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing pane %d, want 400", rec.Code)
+	}
+	if rec := serve(http.MethodPost, "/api/pi-bridge/thinking", "not-json"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad body %d, want 400", rec.Code)
+	}
+	for _, body := range []string{
+		`{"pane":"p","level":"high","provider":"p","model":"m"}`,
+		`{"pane":"p","level":"high","provider":"p","model":"m","process_id":"proc","generation":"0"}`,
+		`{"pane":"p","level":"high","provider":"p","model":"m","process_id":"proc","generation":"+1"}`,
+		`{"pane":"p","level":"high","provider":"p","model":"m","process_id":"proc","generation":"18446744073709551616"}`,
+		`{"pane":"p","level":"high","provider":"p","model":"m","process_id":"proc","generation":"1"} {}`,
+		`{"pane":"p","level":"xxxxxxxxxxxxxxxxx","provider":"p","model":"m","process_id":"proc","generation":"1"}`,
+		`{"pane":"p","level":"high","provider":"` + strings.Repeat("p", 257) + `","model":"m","process_id":"proc","generation":"1"}`,
+		`{"pane":"p","level":"high","provider":"p","model":"m","process_id":"` + strings.Repeat("q", 257) + `","generation":"1"}`,
+		`{"pane":"p","level":"high","provider":"p","model":"m","process_id":"proc","generation":"1"}` + strings.Repeat(" ", 4100),
+	} {
+		if rec := serve(http.MethodPost, "/api/pi-bridge/thinking", body); rec.Code != http.StatusBadRequest {
+			t.Fatalf("invalid body status %d for %q, want 400", rec.Code, body)
+		}
+	}
+
+	stream, cancel := dialBridgePane(t, b, "pane-thinking-http", "pi.lifecycle.v1", "pi.thinking.v1")
+	defer cancel()
+	listResult := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		listResult <- serve(http.MethodGet, "/api/pi-bridge/thinking-levels?pane=pane-thinking-http", "")
+	}()
+	processID, generation := answerThinkingLevelsOnce(t, stream)
+	rec := <-listResult
+	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("list response status=%d cache=%q body=%q", rec.Code, rec.Header().Get("Cache-Control"), rec.Body.String())
+	}
+	var list struct {
+		Levels      []string `json:"levels"`
+		Provider    string   `json:"provider"`
+		Model       string   `json:"model"`
+		Unavailable bool     `json:"unavailable"`
+		ProcessID   string   `json:"process_id"`
+		Generation  string   `json:"generation"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("list JSON: %v", err)
+	}
+	if list.Unavailable || len(list.Levels) != 4 || list.Provider != "p" || list.Model != "m" || list.ProcessID != processID || list.Generation != strconv.FormatUint(generation, 10) {
+		t.Fatalf("list %+v, want captured origin", list)
+	}
+
+	payload := `{"pane":"pane-thinking-http","level":"high","provider":"p","model":"m","process_id":"` + processID + `","generation":"` + strconv.FormatUint(generation, 10) + `"}`
+	setResult := make(chan *httptest.ResponseRecorder, 1)
+	go func() { setResult <- serve(http.MethodPost, "/api/pi-bridge/thinking", payload) }()
+	answerSetThinkingOnce(t, stream)
+	rec = <-setResult
+	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("set response status=%d cache=%q body=%q", rec.Code, rec.Header().Get("Cache-Control"), rec.Body.String())
+	}
+	var ack struct {
+		OK     bool   `json:"ok"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &ack); err != nil || !ack.OK || ack.Reason != "" {
+		t.Fatalf("ack %+v err=%v", ack, err)
+	}
+
+	stale := strings.Replace(payload, `"generation":"1"`, `"generation":"2"`, 1)
+	if rec = serve(http.MethodPost, "/api/pi-bridge/thinking", stale); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("stale generation status %d, want sanitized 503", rec.Code)
+	}
+	wrongProcess := strings.Replace(payload, processID, "replacement-process", 1)
+	if rec = serve(http.MethodPost, "/api/pi-bridge/thinking", wrongProcess); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("wrong process status %d, want sanitized 503", rec.Code)
+	}
+}
+
 func TestHandlePiBridgeModels(t *testing.T) {
 	b := startPiBridge(testBridgeHub())
 	if b == nil {
@@ -1223,10 +1462,10 @@ func TestBridgeOnStateFencesPublicationOrder(t *testing.T) {
 	floor, _ := b.server.PublicationRevision(proc)
 
 	// Newer publication lands first, then the delayed older one.
-	b.onState("pane-1", proc, 1, floor+2, false, true, "provB/modelB", []string{"pi.lifecycle.v1"})
-	b.onState("pane-1", proc, 1, floor+1, false, true, "provA/modelA", []string{"pi.lifecycle.v1"})
-	b.onState("pane-1", proc, 1, floor+2, false, true, "provB/modelB", []string{"pi.lifecycle.v1"})
-	b.onState("pane-1", proc, 1, 0, false, true, "provA/modelA", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", proc, 1, floor+2, false, true, "provB/modelB", "", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", proc, 1, floor+1, false, true, "provA/modelA", "", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", proc, 1, floor+2, false, true, "provB/modelB", "", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", proc, 1, 0, false, true, "provA/modelA", "", []string{"pi.lifecycle.v1"})
 
 	wantRev := strconv.FormatUint(floor+2, 10)
 	if got := b.PaneSnapshot("pane-1"); got.Model != "provB/modelB" || got.TelemetryRevision != wantRev {
@@ -1250,7 +1489,7 @@ func TestBridgeSnapshotAndAttachShareOneRevision(t *testing.T) {
 	env, _, _ := b.Provision("pane-1", true)
 	proc := env[piBridgeEnvProcess]
 	floor, _ := b.server.PublicationRevision(proc)
-	b.onState("pane-1", proc, 1, floor+1, true, true, "provA/modelA", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", proc, 1, floor+1, true, true, "provA/modelA", "", []string{"pi.lifecycle.v1"})
 
 	snap := b.PaneSnapshot("pane-1")
 	raw := b.encodeAttach(pty.PTYInstanceSnapshot{ID: "pane-1", Coder: "pi"})
@@ -1289,7 +1528,7 @@ func TestBridgeReusedPaneStartsAboveOldPublications(t *testing.T) {
 		got.TelemetryRevision != strconv.FormatUint(floorA, 10) || got.Model != "" || got.Running != nil {
 		t.Fatalf("fresh baseline %+v, want managed rev floor, no model", got)
 	}
-	b.onState("pane-1", procA, 1, floorA+1, false, true, "provA/modelA", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", procA, 1, floorA+1, false, true, "provA/modelA", "", []string{"pi.lifecycle.v1"})
 
 	b.RevokePane("pane-1")
 	envB, _, managed := b.Provision("pane-1", true)
@@ -1306,7 +1545,7 @@ func TestBridgeReusedPaneStartsAboveOldPublications(t *testing.T) {
 		t.Fatalf("reused baseline %+v, want empty rev floor", got)
 	}
 	// Delayed callback from the dead lease drops on process mismatch.
-	b.onState("pane-1", procA, 1, floorA+2, false, true, "provA/modelA", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", procA, 1, floorA+2, false, true, "provA/modelA", "", []string{"pi.lifecycle.v1"})
 	if got := b.PaneSnapshot("pane-1"); got.TelemetryRevision != strconv.FormatUint(floorB, 10) || got.Model != "" {
 		t.Fatalf("dead-lease callback applied: %+v", got)
 	}
@@ -1325,21 +1564,21 @@ func TestBridgeStatelessHelloKeepsModelUnknown(t *testing.T) {
 	env, _, _ := b.Provision("pane-1", true)
 	proc := env[piBridgeEnvProcess]
 	floor, _ := b.server.PublicationRevision(proc)
-	b.onState("pane-1", proc, 1, floor+1, false, true, "provA/modelA", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", proc, 1, floor+1, false, true, "provA/modelA", "", []string{"pi.lifecycle.v1"})
 	if got := b.PaneSnapshot("pane-1"); got.Model != "provA/modelA" {
 		t.Fatalf("snapshot %+v, want modelA", got)
 	}
 
 	// Capabilities ride the Hello, not the snapshot: a stateless
 	// republish still updates the negotiated set.
-	b.onState("pane-1", proc, 2, floor+2, false, false, "", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", proc, 2, floor+2, false, false, "", "", []string{"pi.lifecycle.v1"})
 	if got := b.PaneSnapshot("pane-1"); got.Generation != "2" ||
 		got.TelemetryRevision != strconv.FormatUint(floor+2, 10) ||
 		got.Model != "" || got.Running != nil || !slices.Equal(got.Capabilities, []string{"pi.lifecycle.v1"}) {
 		t.Fatalf("new-gen stateless %+v, want unknown model with caps at rev floor+2", got)
 	}
 
-	b.onState("pane-1", proc, 2, floor+3, false, false, "", []string{"pi.lifecycle.v1", "pi.extra.v1"})
+	b.onState("pane-1", proc, 2, floor+3, false, false, "", "", []string{"pi.lifecycle.v1", "pi.extra.v1"})
 	if got := b.PaneSnapshot("pane-1"); got.TelemetryRevision != strconv.FormatUint(floor+3, 10) ||
 		got.Model != "" || got.Running != nil || !slices.Equal(got.Capabilities, []string{"pi.lifecycle.v1", "pi.extra.v1"}) {
 		t.Fatalf("same-gen stateless %+v, want unknown model with caps at rev floor+3", got)
@@ -1361,10 +1600,10 @@ func TestBridgePublicationFloorsArePerPane(t *testing.T) {
 	floor1, _ := b.server.PublicationRevision(proc1)
 	floor2, _ := b.server.PublicationRevision(proc2)
 
-	b.onState("pane-2", proc2, 1, floor2+1, false, true, "provB/modelB", []string{"pi.lifecycle.v1"})
+	b.onState("pane-2", proc2, 1, floor2+1, false, true, "provB/modelB", "", []string{"pi.lifecycle.v1"})
 	// Equal-to-floor and zero revisions drop for pane-1.
-	b.onState("pane-1", proc1, 1, floor1, false, true, "provA/modelA", []string{"pi.lifecycle.v1"})
-	b.onState("pane-1", proc1, 1, 0, false, true, "provA/modelA", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", proc1, 1, floor1, false, true, "provA/modelA", "", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", proc1, 1, 0, false, true, "provA/modelA", "", []string{"pi.lifecycle.v1"})
 	if got := b.PaneSnapshot("pane-1"); got.TelemetryRevision != strconv.FormatUint(floor1, 10) || got.Model != "" {
 		t.Fatalf("pane-1 %+v, want empty floor", got)
 	}
@@ -1372,7 +1611,7 @@ func TestBridgePublicationFloorsArePerPane(t *testing.T) {
 		t.Fatalf("pane-2 %+v, want modelB", got)
 	}
 
-	b.onState("pane-1", proc1, 1, floor1+1, false, true, "provA/modelA", []string{"pi.lifecycle.v1"})
+	b.onState("pane-1", proc1, 1, floor1+1, false, true, "provA/modelA", "", []string{"pi.lifecycle.v1"})
 	if got := b.PaneSnapshot("pane-1"); got.Model != "provA/modelA" {
 		t.Fatalf("pane-1 %+v, want modelA", got)
 	}

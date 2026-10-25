@@ -193,14 +193,16 @@ function stagedContext(tab) {
 }
 
 describe('Pi RPC TabManager boundaries', () => {
-    it('shows the thinking button only for Pi RPC tabs', () => {
+    it('shows Thinking controls for Pi PTY and Pi RPC tabs', () => {
         const button = document.createElement('button');
         const tm = Object.create(TabManager.prototype);
         tm.piThinkingBtn = button;
         tm.getActiveTab = vi.fn(() => ({ paneId: 'pi', coder: 'pi' }));
 
         tm._updatePiThinkingButton();
-        expect(button.classList.contains('hidden')).toBe(true);
+        expect(button.classList.contains('hidden')).toBe(false);
+        expect(button.disabled).toBe(true);
+        expect(button.title).toBe('Cycle Pi Thinking level');
 
         tm.getActiveTab.mockReturnValue({
             paneId: 'pi-rpc:one',

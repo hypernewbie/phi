@@ -20,9 +20,9 @@ It never sends prompts, compacts a session, or edits context.
 - `src/test-client.ts` — the synthetic peer for interop tests.
 - `test/` — interop suites driven against the Go testserver.
 
-Only type imports reference the Pi package from the bundle, so the
-bundle carries no Pi runtime code. See `PROTOCOL.md` for the wire
-protocol, capabilities, and bounds.
+The bundle includes Pi's supported-thinking-level helper from
+`@earendil-works/pi-ai`; it does not bundle the Pi coding-agent runtime.
+See `PROTOCOL.md` for the wire protocol, capabilities, and bounds.
 
 ## History recall
 
