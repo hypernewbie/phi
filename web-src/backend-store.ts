@@ -1,6 +1,12 @@
 import type { BackendScope } from './backend-scope.js';
 
-export const MAX_BACKEND_STORES = 8;
+/** How many servers keep a cached snapshot. The registry is LRU: a server
+ *  beyond the limit loses its cache (and only then). The limit must be
+ *  above the number of servers a user actually flips between - eight was
+ *  arbitrary and silently threw away the cache of every server past the
+ *  eighth, which looked like "the cache stopped working" once more
+ *  servers came online. */
+export const MAX_BACKEND_STORES = 32;
 export const SNAPSHOT_SCROLLBACK_ROWS = 256;
 
 export interface ScreenSnapshot {
