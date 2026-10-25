@@ -3,35 +3,17 @@ package pibridge
 import (
 	"strings"
 	"testing"
-	"time"
 
 	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
 )
 
 func recvReloadRequest(t *testing.T, stream pibridgepb.Integration_ConnectClient) *pibridgepb.PhiToPi {
 	t.Helper()
-	type result struct {
-		msg *pibridgepb.PhiToPi
-		err error
+	msg := recvTestMessage(t, stream)
+	if msg.GetReloadRequest() == nil {
+		t.Fatalf("not a reload request: %v", msg.GetPayload())
 	}
-	ch := make(chan result, 1)
-	go func() {
-		msg, err := stream.Recv()
-		ch <- result{msg: msg, err: err}
-	}()
-	select {
-	case got := <-ch:
-		if got.err != nil {
-			t.Fatalf("recv reload request: %v", got.err)
-		}
-		if got.msg.GetReloadRequest() == nil {
-			t.Fatalf("not a reload request: %v", got.msg.GetPayload())
-		}
-		return got.msg
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for reload request")
-		return nil
-	}
+	return msg
 }
 
 func TestRequestReloadAdmission(t *testing.T) {

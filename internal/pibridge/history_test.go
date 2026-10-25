@@ -27,10 +27,8 @@ func openLeaseStream(t *testing.T, s *Server, sock, pane string, caps ...string)
 	return stream, proc, token, cancel
 }
 
-func recvHistoryRequest(t *testing.T, stream pibridgepb.Integration_ConnectClient) string {
+func recvTestMessage(t *testing.T, stream pibridgepb.Integration_ConnectClient) *pibridgepb.PhiToPi {
 	t.Helper()
-	streamCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	type res struct {
 		msg *pibridgepb.PhiToPi
 		err error
@@ -45,15 +43,21 @@ func recvHistoryRequest(t *testing.T, stream pibridgepb.Integration_ConnectClien
 		if r.err != nil {
 			t.Fatalf("recv request: %v", r.err)
 		}
-		req := r.msg.GetHistoryRequest()
-		if req == nil {
-			t.Fatalf("not a history request: %v", r.msg.GetPayload())
-		}
-		return req.GetRequestId()
-	case <-streamCtx.Done():
-		t.Fatalf("timed out waiting for history request")
-		return ""
+		return r.msg
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for request")
+		return nil
 	}
+}
+
+func recvHistoryRequest(t *testing.T, stream pibridgepb.Integration_ConnectClient) string {
+	t.Helper()
+	msg := recvTestMessage(t, stream)
+	req := msg.GetHistoryRequest()
+	if req == nil {
+		t.Fatalf("not a history request: %v", msg.GetPayload())
+	}
+	return req.GetRequestId()
 }
 
 func sendHistoryResponse(t *testing.T, stream pibridgepb.Integration_ConnectClient, pane, proc string, res *pibridgepb.HistoryResponse) {
