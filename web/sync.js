@@ -202,10 +202,16 @@ export class SyncManager {
             }
             const res = await this.fetchWithProxy('/api/sync/messages');
             const messages = await res.json();
+            const store = this.app?.getActiveStore?.();
+            if (store) {
+                store.responses.set('/api/sync/messages', JSON.stringify(messages));
+            }
             this.renderMessages(messages);
             this.signalDesktopAlert(messages);
         }
         catch (e) {
+            if (e?.name === 'AbortError' || this.app?.scope?.aborted)
+                return;
             console.error('[sync] Failed to refresh:', e);
             this.messagesList.innerHTML = `<div class="sync-error-state">Error: ${this.escapeHtml(e.message)}</div>`;
         }

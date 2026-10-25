@@ -145,6 +145,15 @@ html[data-phi-desktop-root] .app-header {
         opacity 0.2s ease;
 }
 
+@keyframes phi-stale-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+}
+
+html[data-sync="stale"] .brand .logo {
+    animation: phi-stale-pulse 1.2s ease-in-out infinite;
+}
+
 /* ── CPU-state classes on the phi brand ──────────────────────────────────────── */
 .logo-glow-wrapper {
     position: relative;

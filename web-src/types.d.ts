@@ -38,6 +38,8 @@ export interface AppLike {
     applyUIFont?: () => void;
     applyFastMode?: () => void;
     uiFontFamily?: string;
+    scope?: any;
+    getActiveStore?: (profileId?: string) => any;
     uiFontSize?: number;
     terminalFontFamily?: string;
     terminalFontSize?: number;
