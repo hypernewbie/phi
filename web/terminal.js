@@ -11766,6 +11766,7 @@ export class TabManager {
     async _piBridgeThinkingSet(context, level, origin) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 1000);
+        let result;
         try {
             const response = await fetch('/api/pi-bridge/thinking', {
                 method: 'POST',
@@ -11780,21 +11781,20 @@ export class TabManager {
                 }),
                 signal: controller.signal,
             });
-            if (!response.ok) throw new Error('unknown — reopen the picker');
-            const result = await response.json();
-            if (result?.ok === true) return;
-            if (result?.reason === 'unsupported-level')
-                throw new Error('Thinking level is no longer supported');
-            if (result?.reason === 'model-changed')
-                throw new Error('Model changed — reopen the picker');
+            if (!response.ok) throw new Error('unknown');
+            result = await response.json();
+        } catch {
+            // A lost or truncated reply may still have been applied by Pi.
             throw new Error('unknown — reopen the picker');
-        } catch (error) {
-            if (error?.name === 'AbortError')
-                throw new Error('unknown — reopen the picker');
-            throw error;
         } finally {
             clearTimeout(timer);
         }
+        if (result?.ok === true) return;
+        if (result?.reason === 'unsupported-level')
+            throw new Error('Thinking level is no longer supported');
+        if (result?.reason === 'model-changed')
+            throw new Error('Model changed — reopen the picker');
+        throw new Error('unknown — reopen the picker');
     }
 
     _forwardNativeThinkingCycle(tab) {
@@ -11811,7 +11811,7 @@ export class TabManager {
             this._forwardNativeThinkingCycle(tab);
             return;
         }
-        const operation = { paneId: tab.paneId, context, cycle: true };
+        const operation = { paneId: tab.paneId, context };
         this._piRpcThinkingPending = operation;
         this._updatePiThinkingButton();
         // An open picker must show the same pending lock as its rows do.

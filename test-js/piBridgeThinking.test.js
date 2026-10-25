@@ -95,6 +95,30 @@ function navHarness(first, second) {
 
 const otherTab = () => bridgeTab({ paneId: 'pi-pane-2' });
 
+const abortError = () => Object.assign(new Error('aborted'), { name: 'AbortError' });
+
+// mockFetch ignores options.signal, so deadline tests need their own stub.
+function abortAwareFetch(handler) {
+    const fn = vi.fn(
+        (url, options = {}) =>
+            new Promise((resolve, reject) => {
+                const { signal } = options;
+                const abort = () => reject(abortError());
+                if (signal?.aborted) return abort();
+                signal?.addEventListener?.('abort', abort, { once: true });
+                handler(resolve, url, options);
+            }),
+    );
+    vi.stubGlobal('fetch', fn);
+    return fn;
+}
+
+function errorToasts(tm) {
+    return tm.app.showToast.mock.calls
+        .filter(([, options]) => options?.type === 'error')
+        .map(([message]) => message);
+}
+
 const levelsResponse = (over = {}) => ({
     levels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
     provider: 'a',
@@ -465,6 +489,88 @@ describe('Pi bridge Thinking controls', () => {
             ),
         ).toEqual([]);
         clearTimeout(tab.softCloseTimer);
+    });
+
+    it('reports an unknown outcome when the setter reply is not valid JSON', async () => {
+        const { tm, tab } = harness(bridgeTab());
+        // mockFetch returns the json value as-is, so a throwing body needs a
+        // direct stub to model a truncated reply.
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async (_url, options = {}) => ({
+                ok: true,
+                json: async () => {
+                    if (options.method === 'POST')
+                        throw new SyntaxError('Unexpected end of JSON input');
+                    return levelsResponse();
+                },
+            })),
+        );
+        tm.renderPresets('pi');
+        thinkingTrigger(tm).click();
+        const dropup = document.getElementById('pi-rpc-thinking-dropup');
+        await vi.waitFor(() =>
+            expect(
+                [...dropup.querySelectorAll('.dropup-model-btn')].map(
+                    (button) => button.textContent,
+                ),
+            ).toContain('max'),
+        );
+        [...dropup.querySelectorAll('.dropup-model-btn')]
+            .find((button) => button.textContent === 'max')
+            .click();
+        await vi.waitFor(() =>
+            expect(errorToasts(tm)).toContain('unknown — reopen the picker'),
+        );
+        expect(tab.piBridge.thinking_level).toBe('high');
+        expect(tm.sendToTab).not.toHaveBeenCalled();
+    });
+
+    it('forwards one native cycle when the levels request times out', async () => {
+        vi.useFakeTimers();
+        const { tm } = harness(bridgeTab());
+        abortAwareFetch(() => {});
+        tm._updatePiThinkingButton();
+        tm.piThinkingBtn.click();
+        expect(tm.sendToTab).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(1100);
+        expect(tm.sendToTab).toHaveBeenCalledTimes(1);
+        expect(tm._piRpcThinkingPending).toBeNull();
+        // A failed list still cycles natively without alarming the user.
+        expect(errorToasts(tm)).toEqual([]);
+        vi.useRealTimers();
+    });
+
+    it('reports an unknown outcome when the setter times out', async () => {
+        vi.useFakeTimers();
+        const { tm, tab } = harness(bridgeTab());
+        abortAwareFetch((resolve, url, options) => {
+            if (options.method !== 'POST')
+                resolve({ ok: true, json: () => levelsResponse() });
+        });
+        tm.renderPresets('pi');
+        thinkingTrigger(tm).click();
+        const dropup = document.getElementById('pi-rpc-thinking-dropup');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(dropup.querySelectorAll('.dropup-model-btn')).toHaveLength(7);
+
+        [...dropup.querySelectorAll('.dropup-model-btn')]
+            .find((button) => button.textContent === 'max')
+            .click();
+        expect(tm._piRpcThinkingPending).not.toBeNull();
+        await vi.advanceTimersByTimeAsync(1100);
+
+        expect(tm._piRpcThinkingPending).toBeNull();
+        expect(tm.sendToTab).not.toHaveBeenCalled();
+        expect(tab.piBridge.thinking_level).toBe('high');
+        expect(errorToasts(tm)).toEqual(['unknown — reopen the picker']);
+        expect(
+            [...dropup.querySelectorAll('.dropup-model-btn')].every(
+                (button) => !button.disabled,
+            ),
+        ).toBe(true);
+        vi.useRealTimers();
     });
 
     it('releases a pending operation when an HTTP baseline moves the model', async () => {

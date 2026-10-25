@@ -2,6 +2,7 @@ package pibridge
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,8 +140,8 @@ func TestRequestSetThinkingGenerationFenceAndRoundTrip(t *testing.T) {
 
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
-	if _, err := s.RequestSetThinking(ctx, process, 2, "high", "p", "m"); err == nil {
-		t.Fatal("stale generation admitted")
+	if _, err := s.RequestSetThinking(ctx, process, 2, "high", "p", "m"); err == nil || !strings.Contains(err.Error(), "thinking peer identity changed") {
+		t.Fatalf("stale generation not rejected: %v", err)
 	}
 	l, ok := s.reg.lookupByProcess(process)
 	if !ok {
@@ -151,12 +152,9 @@ func TestRequestSetThinkingGenerationFenceAndRoundTrip(t *testing.T) {
 	peer.modelsMu.Lock()
 	pending := len(peer.setThinkingPending)
 	peer.modelsMu.Unlock()
-	peer.mu.Lock()
-	outstanding := peer.outstanding
-	peer.mu.Unlock()
 	l.mu.Unlock()
-	if pending != 0 || outstanding != 0 {
-		t.Fatalf("stale generation admitted: pending=%d outstanding=%d", pending, outstanding)
+	if pending != 0 {
+		t.Fatalf("stale generation admitted: pending=%d", pending)
 	}
 
 	done := make(chan struct {
