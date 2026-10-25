@@ -34,11 +34,14 @@ function setupVendorStubs() {
     vi.stubGlobal('WebglAddon', {
         WebglAddon: class {},
     });
-    vi.stubGlobal('Audio', class {
-        play() {
-            return Promise.resolve();
-        }
-    });
+    vi.stubGlobal(
+        'Audio',
+        class {
+            play() {
+                return Promise.resolve();
+            }
+        },
+    );
     vi.stubGlobal('Terminal', function () {
         const rootEl = document.createElement('div');
         const viewportEl = document.createElement('div');
@@ -108,7 +111,9 @@ describe('Half-Phase 3A: BackendStore & Terminal Snapshot Write-Through', () => 
         const result = await store.load('/api/data', scope, render);
 
         expect(result).toEqual({ value: 42 });
-        expect(store.responses.get('/api/data')).toBe(JSON.stringify({ value: 42 }));
+        expect(store.responses.get('/api/data')).toBe(
+            JSON.stringify({ value: 42 }),
+        );
         expect(render).toHaveBeenCalledTimes(1);
         expect(render).toHaveBeenCalledWith({ value: 42 }, { stale: false });
     });
@@ -143,7 +148,10 @@ describe('Half-Phase 3A: BackendStore & Terminal Snapshot Write-Through', () => 
 
         // Before fetch resolves, stale render must have fired
         expect(calls.length).toBe(1);
-        expect(calls[0]).toEqual({ data: { value: 'v1' }, meta: { stale: true } });
+        expect(calls[0]).toEqual({
+            data: { value: 'v1' },
+            meta: { stale: true },
+        });
 
         // Resolve network fetch
         resolveFetch();
@@ -151,8 +159,13 @@ describe('Half-Phase 3A: BackendStore & Terminal Snapshot Write-Through', () => 
 
         expect(result).toEqual({ value: 'v2' });
         expect(calls.length).toBe(2);
-        expect(calls[1]).toEqual({ data: { value: 'v2' }, meta: { stale: false } });
-        expect(store.responses.get('/api/data')).toBe(JSON.stringify({ value: 'v2' }));
+        expect(calls[1]).toEqual({
+            data: { value: 'v2' },
+            meta: { stale: false },
+        });
+        expect(store.responses.get('/api/data')).toBe(
+            JSON.stringify({ value: 'v2' }),
+        );
     });
 
     it('3. load() on warm store skips second render when network response text is identical to cached text', async () => {
@@ -178,7 +191,10 @@ describe('Half-Phase 3A: BackendStore & Terminal Snapshot Write-Through', () => 
         expect(result).toEqual({ value: 'same-data' });
         // Only stale: true was rendered; stale: false was skipped
         expect(calls.length).toBe(1);
-        expect(calls[0]).toEqual({ data: { value: 'same-data' }, meta: { stale: true } });
+        expect(calls[0]).toEqual({
+            data: { value: 'same-data' },
+            meta: { stale: true },
+        });
     });
 
     it('4. Aborting scope mid-revalidation does NOT overwrite store.responses and does NOT call render with fresh data', async () => {
@@ -222,7 +238,9 @@ describe('Half-Phase 3A: BackendStore & Terminal Snapshot Write-Through', () => 
         expect(result).toBeUndefined();
 
         // Cached response must remain untouched
-        expect(store.responses.get('/api/data')).toBe(JSON.stringify({ value: 'initial' }));
+        expect(store.responses.get('/api/data')).toBe(
+            JSON.stringify({ value: 'initial' }),
+        );
         expect(calls.length).toBe(1);
     });
 
@@ -243,7 +261,9 @@ describe('Half-Phase 3A: BackendStore & Terminal Snapshot Write-Through', () => 
         if (typeof window !== 'undefined') window.fetch = fetchStub;
 
         const render = vi.fn();
-        await expect(store.load('/api/secret', scope, render)).rejects.toThrow();
+        await expect(
+            store.load('/api/secret', scope, render),
+        ).rejects.toThrow();
 
         // Store contents cleared
         expect(store.responses.size).toBe(0);
@@ -344,7 +364,11 @@ describe('Half-Phase 3A: BackendStore & Terminal Snapshot Write-Through', () => 
         expect(store.screens.get('p-1').rows).toBe(30);
 
         expect(store.screens.has('p-2')).toBe(true);
-        expect(store.screens.get('p-2')).toEqual({ ansi: 'cached text', cols: 80, rows: 24 });
+        expect(store.screens.get('p-2')).toEqual({
+            ansi: 'cached text',
+            cols: 80,
+            rows: 24,
+        });
 
         // Detach all
         tm.detachAll();
@@ -355,6 +379,9 @@ describe('Half-Phase 3A: BackendStore & Terminal Snapshot Write-Through', () => 
         const painted = tm.paintFromStore(store);
 
         expect(painted).toBe(true);
-        expect(syncSpy).toHaveBeenCalledWith(store.tabs, { live: false, screens: store.screens });
+        expect(syncSpy).toHaveBeenCalledWith(store.tabs, {
+            live: false,
+            screens: store.screens,
+        });
     });
 });

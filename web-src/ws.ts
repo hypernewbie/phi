@@ -171,9 +171,7 @@ export class PTYWebSocket {
             this.holding = false;
         }
 
-        this.url = wsUrl(
-            `/ws/pane/${paneId}?term_proto=hot-v1&state=ansi-v1`,
-        );
+        this.url = wsUrl(`/ws/pane/${paneId}?term_proto=hot-v1&state=ansi-v1`);
         this.ws = new WebSocket(this.url);
         this.ws.binaryType = 'arraybuffer';
         this.decoder = new TextDecoder('utf-8');

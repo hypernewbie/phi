@@ -480,17 +480,17 @@ export class EmbeddedTransport {
 
   private handleGetActive(): Response {
     if (this.activeProfileId === null) {
-      return new Response(
-        JSON.stringify({ profileId: null, origin: null }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
+      return new Response(JSON.stringify({ profileId: null, origin: null }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
     const profile = this.resolveProfile(this.activeProfileId);
     if (!profile) {
-      return new Response(
-        JSON.stringify({ profileId: null, origin: null }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
+      return new Response(JSON.stringify({ profileId: null, origin: null }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
     return new Response(
       JSON.stringify({ profileId: profile.id, origin: profile.origin }),
@@ -621,13 +621,10 @@ export class EmbeddedTransport {
     try {
       profileOrigin = new URL(profile.origin).origin;
     } catch {
-      return new Response(
-        JSON.stringify({ error: 'invalid profile origin' }),
-        {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' },
-        },
-      );
+      return new Response(JSON.stringify({ error: 'invalid profile origin' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
 
     if (

@@ -232,7 +232,8 @@ export class ProfileViewManager {
     if (this.singleTab) {
       if (
         this.singleEntry?.view.webContents &&
-        typeof this.singleEntry.view.webContents.executeJavaScript === 'function'
+        typeof this.singleEntry.view.webContents.executeJavaScript ===
+          'function'
       ) {
         void this.singleEntry.view.webContents
           .executeJavaScript(forgetScript(id))

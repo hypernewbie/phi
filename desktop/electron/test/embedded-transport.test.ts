@@ -71,7 +71,10 @@ describe('embedded-transport', () => {
 
   describe('static file serving', () => {
     beforeEach(() => {
-      writeFileSync(path.join(tempDir, 'index.html'), '<!doctype html><title>Phi</title>');
+      writeFileSync(
+        path.join(tempDir, 'index.html'),
+        '<!doctype html><title>Phi</title>',
+      );
       writeFileSync(path.join(tempDir, 'style.css'), 'body { color: red; }');
       writeFileSync(path.join(tempDir, 'app.js'), 'console.log("phi");');
       writeFileSync(path.join(tempDir, 'manifest.json'), '{"name":"phi"}');
@@ -99,19 +102,33 @@ describe('embedded-transport', () => {
     });
 
     it('serves css, js, json, svg with correct MIME types', async () => {
-      const cssRes = await transport.handleRequest(new Request('phi-app://app/style.css'));
+      const cssRes = await transport.handleRequest(
+        new Request('phi-app://app/style.css'),
+      );
       expect(cssRes.status).toBe(200);
-      expect(cssRes.headers.get('content-type')).toBe('text/css; charset=utf-8');
+      expect(cssRes.headers.get('content-type')).toBe(
+        'text/css; charset=utf-8',
+      );
 
-      const jsRes = await transport.handleRequest(new Request('phi-app://app/app.js'));
+      const jsRes = await transport.handleRequest(
+        new Request('phi-app://app/app.js'),
+      );
       expect(jsRes.status).toBe(200);
-      expect(jsRes.headers.get('content-type')).toBe('text/javascript; charset=utf-8');
+      expect(jsRes.headers.get('content-type')).toBe(
+        'text/javascript; charset=utf-8',
+      );
 
-      const jsonRes = await transport.handleRequest(new Request('phi-app://app/manifest.json'));
+      const jsonRes = await transport.handleRequest(
+        new Request('phi-app://app/manifest.json'),
+      );
       expect(jsonRes.status).toBe(200);
-      expect(jsonRes.headers.get('content-type')).toBe('application/json; charset=utf-8');
+      expect(jsonRes.headers.get('content-type')).toBe(
+        'application/json; charset=utf-8',
+      );
 
-      const svgRes = await transport.handleRequest(new Request('phi-app://app/icon.svg'));
+      const svgRes = await transport.handleRequest(
+        new Request('phi-app://app/icon.svg'),
+      );
       expect(svgRes.status).toBe(200);
       expect(svgRes.headers.get('content-type')).toBe('image/svg+xml');
     });
@@ -136,33 +153,50 @@ describe('embedded-transport', () => {
       writeFileSync(path.join(tempDir, 'track.mp3'), 'mp3');
       writeFileSync(path.join(tempDir, 'clip.mp4'), 'mp4');
 
-      const woffRes = await transport.handleRequest(new Request('phi-app://app/font.woff'));
+      const woffRes = await transport.handleRequest(
+        new Request('phi-app://app/font.woff'),
+      );
       expect(woffRes.headers.get('content-type')).toBe('font/woff');
 
-      const woff2Res = await transport.handleRequest(new Request('phi-app://app/font.woff2'));
+      const woff2Res = await transport.handleRequest(
+        new Request('phi-app://app/font.woff2'),
+      );
       expect(woff2Res.headers.get('content-type')).toBe('font/woff2');
 
-      const ttfRes = await transport.handleRequest(new Request('phi-app://app/font.ttf'));
+      const ttfRes = await transport.handleRequest(
+        new Request('phi-app://app/font.ttf'),
+      );
       expect(ttfRes.headers.get('content-type')).toBe('font/ttf');
 
-      const pdfRes = await transport.handleRequest(new Request('phi-app://app/doc.pdf'));
+      const pdfRes = await transport.handleRequest(
+        new Request('phi-app://app/doc.pdf'),
+      );
       expect(pdfRes.headers.get('content-type')).toBe('application/pdf');
 
-      const mp3Res = await transport.handleRequest(new Request('phi-app://app/track.mp3'));
+      const mp3Res = await transport.handleRequest(
+        new Request('phi-app://app/track.mp3'),
+      );
       expect(mp3Res.headers.get('content-type')).toBe('audio/mpeg');
 
-      const mp4Res = await transport.handleRequest(new Request('phi-app://app/clip.mp4'));
+      const mp4Res = await transport.handleRequest(
+        new Request('phi-app://app/clip.mp4'),
+      );
       expect(mp4Res.headers.get('content-type')).toBe('video/mp4');
     });
 
     it('returns 404 for missing static files', async () => {
-      const res = await transport.handleRequest(new Request('phi-app://app/missing.txt'));
+      const res = await transport.handleRequest(
+        new Request('phi-app://app/missing.txt'),
+      );
       expect(res.status).toBe(404);
     });
 
     it('returns 405 for POST/PUT on static files', async () => {
       const res = await transport.handleRequest(
-        new Request('phi-app://app/index.html', { method: 'POST', body: 'abc' }),
+        new Request('phi-app://app/index.html', {
+          method: 'POST',
+          body: 'abc',
+        }),
       );
       expect(res.status).toBe(405);
     });
@@ -185,7 +219,9 @@ describe('embedded-transport', () => {
 
   describe('/__phi/active routing', () => {
     it('initially returns null active profile', async () => {
-      const res = await transport.handleRequest(new Request('phi-app://app/__phi/active'));
+      const res = await transport.handleRequest(
+        new Request('phi-app://app/__phi/active'),
+      );
       expect(res.status).toBe(200);
       const data = await res.json();
       expect(data).toEqual({ profileId: null, origin: null });
@@ -206,7 +242,9 @@ describe('embedded-transport', () => {
         origin: 'http://127.0.0.1:8080',
       });
 
-      const getRes = await transport.handleRequest(new Request('phi-app://app/__phi/active'));
+      const getRes = await transport.handleRequest(
+        new Request('phi-app://app/__phi/active'),
+      );
       expect(getRes.status).toBe(200);
       const getData = await getRes.json();
       expect(getData).toEqual({
@@ -250,7 +288,9 @@ describe('embedded-transport', () => {
         origin: null,
       });
 
-      const getRes = await transport.handleRequest(new Request('phi-app://app/__phi/active'));
+      const getRes = await transport.handleRequest(
+        new Request('phi-app://app/__phi/active'),
+      );
       expect(await getRes.json()).toEqual({ profileId: null, origin: null });
     });
 
@@ -268,7 +308,9 @@ describe('embedded-transport', () => {
 
   describe('/api/* proxy', () => {
     it('returns 404 when no active backend profile is configured and no X-Phi-Backend header is set', async () => {
-      const res = await transport.handleRequest(new Request('phi-app://app/api/config'));
+      const res = await transport.handleRequest(
+        new Request('phi-app://app/api/config'),
+      );
       expect(res.status).toBe(404);
       expect(await res.json()).toEqual({ error: 'unknown backend profile' });
     });
@@ -290,7 +332,9 @@ describe('embedded-transport', () => {
         }),
       );
 
-      const res = await transport.handleRequest(new Request('phi-app://app/api/config?extra=1'));
+      const res = await transport.handleRequest(
+        new Request('phi-app://app/api/config?extra=1'),
+      );
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({ title: 'Workspace 1' });
 
@@ -329,7 +373,9 @@ describe('embedded-transport', () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
       const [calledUrl, calledOpts] = mockFetch.mock.calls[0];
       expect(calledUrl).toBe('https://backend2.example.com:8443/api/terminals');
-      expect(calledOpts.headers.get('Origin')).toBe('https://backend2.example.com:8443');
+      expect(calledOpts.headers.get('Origin')).toBe(
+        'https://backend2.example.com:8443',
+      );
       expect(calledOpts.headers.get('x-phi-backend')).toBeNull();
     });
 
@@ -364,10 +410,10 @@ describe('embedded-transport', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Host': 'app',
-          'Origin': 'phi-app://app',
+          Host: 'app',
+          Origin: 'phi-app://app',
           'X-Custom-Header': 'keep-me',
-          'Connection': 'keep-alive',
+          Connection: 'keep-alive',
           'Content-Length': String(postBody.length),
         },
         body: postBody,
@@ -412,7 +458,9 @@ describe('embedded-transport', () => {
       // Legitimate dots / double-dots in query parameters (e.g. git rev ranges) must be allowed
       mockFetch.mockResolvedValueOnce(new Response('{}', { status: 200 }));
       const validQueryRes = await transport.handleRequest(
-        new Request('phi-app://app/api/git/raw-diff?rev=main..HEAD&file=foo%2ebar.ts'),
+        new Request(
+          'phi-app://app/api/git/raw-diff?rev=main..HEAD&file=foo%2ebar.ts',
+        ),
       );
       expect(validQueryRes.status).toBe(200);
       expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -435,7 +483,8 @@ describe('embedded-transport', () => {
           status: 200,
           headers: {
             'Content-Type': 'application/json',
-            'Set-Cookie': 'auth_token=secret123; Path=/; HttpOnly; SameSite=Strict',
+            'Set-Cookie':
+              'auth_token=secret123; Path=/; HttpOnly; SameSite=Strict',
           },
         }),
       );
@@ -455,7 +504,9 @@ describe('embedded-transport', () => {
         }),
       );
 
-      const nextRes = await transport.handleRequest(new Request('phi-app://app/api/status'));
+      const nextRes = await transport.handleRequest(
+        new Request('phi-app://app/api/status'),
+      );
       expect(nextRes.status).toBe(200);
       expect(mockFetch).toHaveBeenCalledTimes(2);
       const [, nextOpts] = mockFetch.mock.calls[1];
@@ -478,7 +529,9 @@ describe('embedded-transport', () => {
           headers: { 'X-Phi-Backend': 'prof1' },
         }),
       );
-      expect(mockFetch.mock.calls[0][1].headers.get('Cookie')).toBe('phi_sess=token_prof1');
+      expect(mockFetch.mock.calls[0][1].headers.get('Cookie')).toBe(
+        'phi_sess=token_prof1',
+      );
 
       // Request targeted to prof2
       mockFetch.mockResolvedValueOnce(new Response('{}', { status: 200 }));
@@ -487,7 +540,9 @@ describe('embedded-transport', () => {
           headers: { 'X-Phi-Backend': 'prof2' },
         }),
       );
-      expect(mockFetch.mock.calls[1][1].headers.get('Cookie')).toBe('phi_sess=token_prof2');
+      expect(mockFetch.mock.calls[1][1].headers.get('Cookie')).toBe(
+        'phi_sess=token_prof2',
+      );
     });
 
     it('deletes cookie on Max-Age=0 or negative or empty value, and supports clearCookies', () => {
@@ -497,7 +552,10 @@ describe('embedded-transport', () => {
       expect(transport.getCookieHeader('prof1')).toContain('prefs=dark');
 
       // Max-Age=0 deletion
-      transport.applySetCookieHeader('prof1', 'sess=deleted; Max-Age=0; Path=/');
+      transport.applySetCookieHeader(
+        'prof1',
+        'sess=deleted; Max-Age=0; Path=/',
+      );
       expect(transport.getCookieHeader('prof1')).toBe('prefs=dark');
 
       // Empty value deletion
@@ -577,7 +635,9 @@ describe('embedded-transport', () => {
 
     it('never throws on network error or HTTP failure, returning compatible: false', async () => {
       // 500 error
-      mockFetch.mockResolvedValueOnce(new Response('Server Error', { status: 500 }));
+      mockFetch.mockResolvedValueOnce(
+        new Response('Server Error', { status: 500 }),
+      );
       const res500 = await transport.handleRequest(
         new Request('phi-app://app/__phi/compat?id=prof1'),
       );
@@ -613,8 +673,14 @@ describe('embedded-transport', () => {
     it('rewrites Origin and injects Cookie when webContentsId and origin host match', () => {
       let listener:
         | ((
-            details: { url: string; webContentsId?: number; requestHeaders: Record<string, string> },
-            callback: (resp: { requestHeaders?: Record<string, string> }) => void,
+            details: {
+              url: string;
+              webContentsId?: number;
+              requestHeaders: Record<string, string>;
+            },
+            callback: (resp: {
+              requestHeaders?: Record<string, string>;
+            }) => void,
           ) => void)
         | undefined;
 
@@ -627,7 +693,9 @@ describe('embedded-transport', () => {
       };
 
       transport.attachWebSocketHeaderBridge(mockSession, () => 42);
-      expect(mockSession.webRequest.onBeforeSendHeaders).toHaveBeenCalledTimes(1);
+      expect(mockSession.webRequest.onBeforeSendHeaders).toHaveBeenCalledTimes(
+        1,
+      );
       expect(listener).toBeDefined();
 
       // Set cookies for prof1 and prof2
@@ -644,7 +712,7 @@ describe('embedded-transport', () => {
           url: 'ws://127.0.0.1:8080/terminals/ws/1',
           webContentsId: 42,
           requestHeaders: {
-            'origin': 'phi-app://app',
+            origin: 'phi-app://app',
             'user-agent': 'TestClient',
           },
         },
@@ -680,7 +748,7 @@ describe('embedded-transport', () => {
           url: 'ws://127.0.0.1:8080/ws',
           webContentsId: 99, // mismatch!
           requestHeaders: {
-            'origin': 'phi-app://app',
+            origin: 'phi-app://app',
           },
         },
         (resp: any) => {
@@ -709,7 +777,7 @@ describe('embedded-transport', () => {
           url: 'ws://unknown-host.example.com/ws',
           webContentsId: 42,
           requestHeaders: {
-            'origin': 'phi-app://app',
+            origin: 'phi-app://app',
           },
         },
         (resp: any) => {
@@ -740,7 +808,7 @@ describe('embedded-transport', () => {
           url: 'wss://backend2.example.com:8443/chat',
           webContentsId: 42,
           requestHeaders: {
-            'origin': 'phi-app://app',
+            origin: 'phi-app://app',
           },
         },
         (resp: any) => {
@@ -748,7 +816,9 @@ describe('embedded-transport', () => {
         },
       );
 
-      expect(resultHeaders!['Origin']).toBe('https://backend2.example.com:8443');
+      expect(resultHeaders!['Origin']).toBe(
+        'https://backend2.example.com:8443',
+      );
       expect(resultHeaders!['Cookie']).toBe('cookie2=val2');
     });
   });

@@ -37,7 +37,10 @@ describe('BackendScope', () => {
             const scope = new BackendScope('prof1');
 
             // Plain object
-            const objHeaders = scope.headers({ 'Content-Type': 'application/json', Authorization: 'Bearer token' });
+            const objHeaders = scope.headers({
+                'Content-Type': 'application/json',
+                Authorization: 'Bearer token',
+            });
             expect(objHeaders).toEqual({
                 'Content-Type': 'application/json',
                 Authorization: 'Bearer token',
@@ -54,7 +57,10 @@ describe('BackendScope', () => {
             });
 
             // Array
-            const fromArray = scope.headers([['X-Custom', 'val1'], ['X-Another', 'val2']]);
+            const fromArray = scope.headers([
+                ['X-Custom', 'val1'],
+                ['X-Another', 'val2'],
+            ]);
             expect(fromArray).toEqual({
                 'X-Custom': 'val1',
                 'X-Another': 'val2',
@@ -67,7 +73,9 @@ describe('BackendScope', () => {
             const headers = scope.headers({ 'X-Phi-Backend': 'explicit-prof' });
             expect(headers['X-Phi-Backend']).toBe('explicit-prof');
 
-            const lowerHeaders = scope.headers({ 'x-phi-backend': 'lowercase-prof' });
+            const lowerHeaders = scope.headers({
+                'x-phi-backend': 'lowercase-prof',
+            });
             expect(lowerHeaders['x-phi-backend']).toBe('lowercase-prof');
             expect(lowerHeaders['X-Phi-Backend']).toBeUndefined();
         });
@@ -76,7 +84,9 @@ describe('BackendScope', () => {
     describe('fetch & fetchText', () => {
         it('merges headers and passes signal to globalThis.fetch', async () => {
             const scope = new BackendScope('prof1');
-            const mockFetch = vi.fn().mockResolvedValue(new Response('OK', { status: 200 }));
+            const mockFetch = vi
+                .fn()
+                .mockResolvedValue(new Response('OK', { status: 200 }));
             vi.stubGlobal('fetch', mockFetch);
 
             const res = await scope.fetch('/api/test', {
@@ -100,15 +110,20 @@ describe('BackendScope', () => {
             scope.abort();
             expect(scope.aborted).toBe(true);
 
-            await expect(scope.fetch('/api/test')).rejects.toThrow('BackendScope aborted');
+            await expect(scope.fetch('/api/test')).rejects.toThrow(
+                'BackendScope aborted',
+            );
         });
 
         it('throws AbortError if aborted while fetch is in-flight', async () => {
             const scope = new BackendScope('prof1');
             let resolveFetch;
-            const mockFetch = vi.fn().mockImplementation(() => new Promise((resolve) => {
-                resolveFetch = resolve;
-            }));
+            const mockFetch = vi.fn().mockImplementation(
+                () =>
+                    new Promise((resolve) => {
+                        resolveFetch = resolve;
+                    }),
+            );
             vi.stubGlobal('fetch', mockFetch);
 
             const fetchPromise = scope.fetch('/api/test');
@@ -120,7 +135,11 @@ describe('BackendScope', () => {
 
         it('fetchText returns text on 2xx', async () => {
             const scope = new BackendScope('prof1');
-            const mockFetch = vi.fn().mockResolvedValue(new Response('Hello World', { status: 200 }));
+            const mockFetch = vi
+                .fn()
+                .mockResolvedValue(
+                    new Response('Hello World', { status: 200 }),
+                );
             vi.stubGlobal('fetch', mockFetch);
 
             const text = await scope.fetchText('/api/greet');
@@ -129,7 +148,9 @@ describe('BackendScope', () => {
 
         it('fetchText throws with .status on non-2xx', async () => {
             const scope = new BackendScope('prof1');
-            const mockFetch = vi.fn().mockResolvedValue(new Response('Not Found', { status: 404 }));
+            const mockFetch = vi
+                .fn()
+                .mockResolvedValue(new Response('Not Found', { status: 404 }));
             vi.stubGlobal('fetch', mockFetch);
 
             let caughtError;

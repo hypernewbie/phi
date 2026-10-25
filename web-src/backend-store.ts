@@ -71,7 +71,10 @@ export class BackendStore {
             if (scope && typeof (scope as any).fetchText === 'function') {
                 text = await (scope as any).fetchText(url);
             } else {
-                const fetchFn = typeof fetch !== 'undefined' ? fetch : (globalThis as any).fetch;
+                const fetchFn =
+                    typeof fetch !== 'undefined'
+                        ? fetch
+                        : (globalThis as any).fetch;
                 const res = await fetchFn(url);
                 if (!res.ok) {
                     const err: any = new Error(`HTTP ${res.status}`);

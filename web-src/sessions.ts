@@ -410,10 +410,7 @@ export class SessionsManager {
                 this.activeWorkspace || this.workspaceSelect.value || 'Default';
     }
 
-    applyConfigData(
-        data: any,
-        _options: { stale?: boolean } = {},
-    ): void {
+    applyConfigData(data: any, _options: { stale?: boolean } = {}): void {
         if (!data || typeof data !== 'object') return;
         this.config = data;
         if (this.app) {
@@ -511,9 +508,7 @@ export class SessionsManager {
                 hostEl.innerText = shown;
             }
             this.app.tabManager?.updateDocumentTitle?.();
-            const emptyHostEl = document.getElementById(
-                'empty-state-hostname',
-            );
+            const emptyHostEl = document.getElementById('empty-state-hostname');
             if (emptyHostEl) {
                 emptyHostEl.innerText = shown;
             }
@@ -527,7 +522,8 @@ export class SessionsManager {
             await loadCoderRegistry();
             const fetchFn =
                 this.app?.scope && typeof this.app.scope.fetch === 'function'
-                    ? (url: string, opts?: any) => this.app.scope.fetch(url, opts)
+                    ? (url: string, opts?: any) =>
+                          this.app.scope.fetch(url, opts)
                     : fetch;
             const res = await fetchFn('/api/config');
             const data = await res.json();
@@ -659,7 +655,8 @@ export class SessionsManager {
         try {
             const fetchFn =
                 this.app?.scope && typeof this.app.scope.fetch === 'function'
-                    ? (url: string, opts?: any) => this.app.scope.fetch(url, opts)
+                    ? (url: string, opts?: any) =>
+                          this.app.scope.fetch(url, opts)
                     : fetch;
             const url = `/api/git/worktrees?cwd=${encodeURIComponent(workspace)}`;
             const res = await fetchFn(url);
@@ -737,10 +734,7 @@ export class SessionsManager {
             if (this.activeCoder !== 'agy') return;
             const nwSection = document.createElement('div');
             nwSection.className = 'worktree-section no-workspace-section';
-            nwSection.setAttribute(
-                'data-worktree-path',
-                '--no-workspace--',
-            );
+            nwSection.setAttribute('data-worktree-path', '--no-workspace--');
             nwSection.innerHTML = `
                 <div class="worktree-header">
                     <svg class="icon chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -864,7 +858,8 @@ export class SessionsManager {
                     } else {
                         const store = (this.app as any)?.getActiveStore?.();
                         const cachedKey = `/api/sessions?coder=${this.activeCoder}&cwd=${encodeURIComponent(wt.path)}`;
-                        const cachedSessions = store?.responses?.get?.(cachedKey);
+                        const cachedSessions =
+                            store?.responses?.get?.(cachedKey);
                         if (cachedSessions) {
                             try {
                                 this.renderWorktreeSessionsList(
@@ -943,7 +938,8 @@ export class SessionsManager {
         try {
             const fetchFn =
                 this.app?.scope && typeof this.app.scope.fetch === 'function'
-                    ? (url: string, opts?: any) => this.app.scope.fetch(url, opts)
+                    ? (url: string, opts?: any) =>
+                          this.app.scope.fetch(url, opts)
                     : fetch;
             const url = `/api/sessions?coder=${this.activeCoder}&cwd=${encodeURIComponent(wtPath)}`;
             const res = await fetchFn(url);
@@ -982,64 +978,64 @@ export class SessionsManager {
         }
 
         sessions.forEach((sess: any) => {
-                const item = document.createElement('div');
-                item.className = 'session-item';
-                item.setAttribute('data-session-id', sess.id);
-                item.setAttribute('data-worktree-path', wtPath);
+            const item = document.createElement('div');
+            item.className = 'session-item';
+            item.setAttribute('data-session-id', sess.id);
+            item.setAttribute('data-worktree-path', wtPath);
 
-                const timeStr = new Date(sess.time_updated).toLocaleDateString(
-                    undefined,
-                    {
-                        month: 'short',
-                        day: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                    },
-                );
+            const timeStr = new Date(sess.time_updated).toLocaleDateString(
+                undefined,
+                {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                },
+            );
 
-                let isRunning = false;
-                let isIdleAlive = false;
-                for (const t of this.app.tabManager.tabs.values()) {
-                    if (
-                        t.sessionId === sess.id &&
-                        t.coder === this.activeCoder &&
-                        !t.isDead
-                    ) {
-                        // btop redraws the whole screen multiple times per
-                        // second; its isBusy stays true forever. Skip it so
-                        // the ankh/djed glyph doesn't pin on the row.
-                        if (t.isBusy && !t.isBtop) {
-                            isRunning = true;
-                        } else {
-                            // Tab exists and is alive, but the watcher
-                            // is just monitoring it (not generating
-                            // output). Eye of Horus = "being watched."
-                            isIdleAlive = true;
-                        }
-                        break;
+            let isRunning = false;
+            let isIdleAlive = false;
+            for (const t of this.app.tabManager.tabs.values()) {
+                if (
+                    t.sessionId === sess.id &&
+                    t.coder === this.activeCoder &&
+                    !t.isDead
+                ) {
+                    // btop redraws the whole screen multiple times per
+                    // second; its isBusy stays true forever. Skip it so
+                    // the ankh/djed glyph doesn't pin on the row.
+                    if (t.isBusy && !t.isBtop) {
+                        isRunning = true;
+                    } else {
+                        // Tab exists and is alive, but the watcher
+                        // is just monitoring it (not generating
+                        // output). Eye of Horus = "being watched."
+                        isIdleAlive = true;
                     }
+                    break;
                 }
+            }
 
-                // Three glyph states for a live session row:
-                //   ☥  ankh     — actively running, recent (< 2 min)
-                //   𓊽  djed    — running, stable (> 2 min)
-                //   𓂀  eye     — alive but idle, watcher is monitoring
-                //                   (no current output, tab still open)
-                // No glyph when there's no live tab at all.
-                let statusGlyph = '';
-                let statusClass = '';
-                if (isRunning) {
-                    const ageMs =
-                        Date.now() - new Date(sess.time_updated).getTime();
-                    const isStable = ageMs > 2 * 60 * 1000;
-                    statusGlyph = isStable ? '𓊽' : '☥';
-                    if (isStable) statusClass = 'stable';
-                } else if (isIdleAlive) {
-                    statusGlyph = '𓂀';
-                    statusClass = 'idle';
-                }
+            // Three glyph states for a live session row:
+            //   ☥  ankh     — actively running, recent (< 2 min)
+            //   𓊽  djed    — running, stable (> 2 min)
+            //   𓂀  eye     — alive but idle, watcher is monitoring
+            //                   (no current output, tab still open)
+            // No glyph when there's no live tab at all.
+            let statusGlyph = '';
+            let statusClass = '';
+            if (isRunning) {
+                const ageMs =
+                    Date.now() - new Date(sess.time_updated).getTime();
+                const isStable = ageMs > 2 * 60 * 1000;
+                statusGlyph = isStable ? '𓊽' : '☥';
+                if (isStable) statusClass = 'stable';
+            } else if (isIdleAlive) {
+                statusGlyph = '𓂀';
+                statusClass = 'idle';
+            }
 
-                item.innerHTML = `
+            item.innerHTML = `
                     <div class="session-meta-top">
                         <span class="session-title"></span>
                         ${statusGlyph ? `<span class="session-dot ${statusClass}"></span>` : ''}
@@ -1067,99 +1063,96 @@ export class SessionsManager {
                         }
                     </div>
                 `;
-                // Safe rendering for the title (R9): the server
-                // returns arbitrary session titles that include
-                // user-supplied text. textContent escapes HTML
-                // automatically; innerHTML would not.
-                const titleEl = item.querySelector('.session-title');
-                if (titleEl) titleEl.textContent = sess.title;
-                const dotEl = item.querySelector('.session-dot');
-                if (dotEl && statusGlyph) dotEl.textContent = statusGlyph;
+            // Safe rendering for the title (R9): the server
+            // returns arbitrary session titles that include
+            // user-supplied text. textContent escapes HTML
+            // automatically; innerHTML would not.
+            const titleEl = item.querySelector('.session-title');
+            if (titleEl) titleEl.textContent = sess.title;
+            const dotEl = item.querySelector('.session-dot');
+            if (dotEl && statusGlyph) dotEl.textContent = statusGlyph;
 
-                if (sess.coder === 'pi' && this.activeCoder !== 'pi') {
-                    const link = document.createElement('a');
-                    link.href = '#';
-                    link.className = 'session-action-btn';
-                    link.textContent = 'Pi chat';
-                    link.addEventListener('click', (ev) => {
-                        ev.preventDefault();
-                        ev.stopPropagation();
-                        openPiRpcChatTab(
-                            this.app.tabManager,
-                            sess.cwd ?? '',
-                            sess.session_path,
-                            sess.title,
-                        );
-                    });
-                    item.querySelector('.session-actions')?.appendChild(link);
-                }
-
-                item.addEventListener('click', (e) => {
-                    if ((e.target as Element).closest('.session-action-btn'))
-                        return;
-                    this.launchSession(sess.id, sess.title);
-
-                    const sidebar = document.getElementById('sidebar-panel');
-                    if (sidebar) {
-                        sidebar.classList.remove('drawer-open');
-                    }
+            if (sess.coder === 'pi' && this.activeCoder !== 'pi') {
+                const link = document.createElement('a');
+                link.href = '#';
+                link.className = 'session-action-btn';
+                link.textContent = 'Pi chat';
+                link.addEventListener('click', (ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    openPiRpcChatTab(
+                        this.app.tabManager,
+                        sess.cwd ?? '',
+                        sess.session_path,
+                        sess.title,
+                    );
                 });
+                item.querySelector('.session-actions')?.appendChild(link);
+            }
 
-                item.addEventListener('contextmenu', (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    this._showSessionContextMenu(e, item, sess);
-                });
+            item.addEventListener('click', (e) => {
+                if ((e.target as Element).closest('.session-action-btn'))
+                    return;
+                this.launchSession(sess.id, sess.title);
 
-                if (
-                    hasTranscript(this.activeCoder) ||
-                    hasPiRpc(this.activeCoder)
-                ) {
-                    const reviewBtn = item.querySelector('.review-btn');
-                    if (reviewBtn) {
-                        reviewBtn.addEventListener('click', (e) => {
-                            e.stopPropagation();
-                            // PiRpc capability wins when both are
-                            // advertised — Pi has both today (the
-                            // chat surface is preferred over the
-                            // legacy transcript view). Future
-                            // backends with both can flip the order.
-                            if (hasPiRpc(this.activeCoder)) {
-                                openPiRpcChatTab(
-                                    this.app.tabManager,
-                                    sess.cwd ?? wtPath,
-                                    sess.session_path,
-                                    sess.title,
-                                );
-                            } else {
-                                this.openReviewTab(sess);
-                            }
-                            const sidebar =
-                                document.getElementById('sidebar-panel');
-                            if (sidebar) {
-                                sidebar.classList.remove('drawer-open');
-                            }
-                        });
-                    }
+                const sidebar = document.getElementById('sidebar-panel');
+                if (sidebar) {
+                    sidebar.classList.remove('drawer-open');
                 }
-
-                if (hasRename(this.activeCoder)) {
-                    const renameBtn = item.querySelector('.rename-btn');
-                    if (renameBtn) {
-                        renameBtn.addEventListener('click', (e) => {
-                            e.stopPropagation();
-                            this.openInlineRenamer(item, sess.id, sess.title);
-                        });
-                    }
-                }
-
-                container.appendChild(item);
             });
 
-            const activeTab = this.app?.tabManager?.getActiveTab?.();
-            if (activeTab && activeTab.coder === this.activeCoder) {
-                this.highlightActiveSession(activeTab.sessionId);
+            item.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this._showSessionContextMenu(e, item, sess);
+            });
+
+            if (hasTranscript(this.activeCoder) || hasPiRpc(this.activeCoder)) {
+                const reviewBtn = item.querySelector('.review-btn');
+                if (reviewBtn) {
+                    reviewBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        // PiRpc capability wins when both are
+                        // advertised — Pi has both today (the
+                        // chat surface is preferred over the
+                        // legacy transcript view). Future
+                        // backends with both can flip the order.
+                        if (hasPiRpc(this.activeCoder)) {
+                            openPiRpcChatTab(
+                                this.app.tabManager,
+                                sess.cwd ?? wtPath,
+                                sess.session_path,
+                                sess.title,
+                            );
+                        } else {
+                            this.openReviewTab(sess);
+                        }
+                        const sidebar =
+                            document.getElementById('sidebar-panel');
+                        if (sidebar) {
+                            sidebar.classList.remove('drawer-open');
+                        }
+                    });
+                }
             }
+
+            if (hasRename(this.activeCoder)) {
+                const renameBtn = item.querySelector('.rename-btn');
+                if (renameBtn) {
+                    renameBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        this.openInlineRenamer(item, sess.id, sess.title);
+                    });
+                }
+            }
+
+            container.appendChild(item);
+        });
+
+        const activeTab = this.app?.tabManager?.getActiveTab?.();
+        if (activeTab && activeTab.coder === this.activeCoder) {
+            this.highlightActiveSession(activeTab.sessionId);
+        }
     }
 
     async saveWorktreeState(): Promise<void> {

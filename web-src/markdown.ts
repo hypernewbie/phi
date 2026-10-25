@@ -384,7 +384,8 @@ export class MarkdownManager {
             this._lastRenderedKey = key;
             this._renderFileList(files);
         } catch (e: any) {
-            if (e?.name === 'AbortError' || (this.app as any)?.scope?.aborted) return;
+            if (e?.name === 'AbortError' || (this.app as any)?.scope?.aborted)
+                return;
             if (requestId !== this.refreshRequestId) return;
             if (!silent) {
                 this.fileListEl.innerHTML = `<div class="md-list-error">Failed to load: ${escapeHtml((e as Error).message)}</div>`;
