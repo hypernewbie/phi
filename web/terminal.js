@@ -5119,20 +5119,19 @@ export class TabManager {
         } finally {
             clearTimeout(timer);
         }
-        if (body.ok === true) return;
-        if (body.reason === 'no-auth')
+        if (body?.ok === true) return;
+        if (body?.reason === 'no-auth')
             throw new Error(
                 'Switch refused: provider has no credentials (no-auth)',
             );
-        if (body.reason === 'unknown-model')
+        if (body?.reason === 'unknown-model')
             throw new Error(
                 'Switch refused: model is not selectable (unknown-model)',
             );
         // ok=false with an empty reason means the attempt errored
         // and its outcome is unknown, like a failed round trip;
         // anything else is an unexpected refusal shape.
-        if (body.reason === '')
-            throw new Error('unknown — reopen the picker');
+        if (!body?.reason) throw new Error('unknown — reopen the picker');
         throw new Error('Switch failed');
     }
 
@@ -7731,13 +7730,9 @@ export class TabManager {
     // Never compare revisions as floats: u64 exceeds safe integers.
     _piBridgeRevValue(raw) {
         if (typeof raw !== 'string' || !/^\d+$/.test(raw)) return null;
-        try {
-            const value = BigInt(raw);
-            if (value <= 0n || value > 18446744073709551615n) return null;
-            return value;
-        } catch {
-            return null;
-        }
+        const value = BigInt(raw);
+        if (value <= 0n || value > 18446744073709551615n) return null;
+        return value;
     }
 
     // _normalizePiBridgeView maps one HTTP or WS bridge view into the
@@ -7894,7 +7889,7 @@ export class TabManager {
         } else if (control.type === 'pi-bridge-state') {
             this._acceptPiBridgeState(tabInfo, control, socket);
         } else if (control.type === 'pi-bridge-settled') {
-            this._acceptPiBridgeSettled(tabInfo, control);
+            this._acceptPiBridgeSettled(tabInfo, control, socket);
         } else if (control.type === 'pty-exited') {
             tabInfo.exitCode = control.code;
             tabInfo.isDead = true;
@@ -7964,11 +7959,6 @@ export class TabManager {
         ) {
             this._resetPiRecall({ flush: true });
         }
-        // running/last_run only arrive post-hello, so their first
-        // sight proves the bridge is live (not merely provisioned).
-        if (next.running !== undefined || next.last_run) {
-            tabInfo._piBridgeLive = true;
-        }
         // Live state with no retained run establishes a zero baseline:
         // the tab was already observing, so a later reconnect snapshot
         // with run 1 must ring instead of silently baselining.
@@ -8016,11 +8006,15 @@ export class TabManager {
 
     // _acceptPiBridgeSettled rings one bell per observed run. Duplicates
     // and aborted runs update the high-water mark without ringing.
-    _acceptPiBridgeSettled(tabInfo, control) {
-        if (!tabInfo || tabInfo.coder !== 'pi') return;
+    _acceptPiBridgeSettled(tabInfo, control, socket = tabInfo?.ws) {
+        if (
+            !tabInfo || tabInfo.coder !== 'pi' || !socket ||
+            tabInfo.ws !== socket ||
+            this.tabs.get(tabInfo.paneId) !== tabInfo ||
+            control?.pane_id !== tabInfo.paneId
+        )
+            return;
         if (!control.run) return;
-        // Settled frames only arrive post-hello: proof of liveness.
-        tabInfo._piBridgeLive = true;
         if (
             !this._piBridgeRunIsNew(
                 tabInfo,
@@ -8063,20 +8057,12 @@ export class TabManager {
             typeof seenGen === 'string' &&
             /^\d+$/.test(seenGen)
         ) {
-            try {
-                const gen = BigInt(generation);
-                const prev = BigInt(seenGen);
-                if (gen > prev) return true;
-                if (gen < prev) return false;
-            } catch (_e) {
-                // Fall through to the run comparison.
-            }
+            const gen = BigInt(generation);
+            const prev = BigInt(seenGen);
+            if (gen > prev) return true;
+            if (gen < prev) return false;
         }
-        try {
-            return BigInt(run) > BigInt(seen);
-        } catch (_e) {
-            return run !== seen;
-        }
+        return BigInt(run) > BigInt(seen);
     }
 
     // _piBridgeHasBaseline reports whether this tab has observed bridge
@@ -8415,7 +8401,6 @@ export class TabManager {
                 this._resetPiRecall();
                 tabInfo._piBridgeLastRun = undefined;
                 tabInfo._piBridgeGeneration = undefined;
-                tabInfo._piBridgeLive = undefined;
 
                 // Update DOM element references to synchronise new IDs
                 tabInfo.tabEl.setAttribute('data-pane-id', data.pane_id);

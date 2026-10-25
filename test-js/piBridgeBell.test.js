@@ -30,6 +30,11 @@ function bridgeManager() {
     return { manager, showToast };
 }
 
+function settle(manager, tab, control) {
+    manager.tabs.set(tab.paneId, tab);
+    return manager._acceptPiBridgeSettled(tab, control);
+}
+
 function piTab(over = {}) {
     return {
         paneId: 'pane-1',
@@ -83,7 +88,7 @@ describe('pi-bridge settled bell', () => {
         const { manager, showToast } = bridgeManager();
         const tab = piTab();
 
-        manager._acceptPiBridgeSettled(tab, {
+        settle(manager, tab, {
             type: 'pi-bridge-settled',
             pane_id: 'pane-1',
             run: '7',
@@ -93,7 +98,7 @@ describe('pi-bridge settled bell', () => {
         expect(tab.userTaskActive).toBe(false);
         expect(showToast).toHaveBeenCalledTimes(1);
 
-        manager._acceptPiBridgeSettled(tab, {
+        settle(manager, tab, {
             type: 'pi-bridge-settled',
             pane_id: 'pane-1',
             run: '7',
@@ -106,7 +111,7 @@ describe('pi-bridge settled bell', () => {
         const { manager } = bridgeManager();
         manager.triggerAttentionNotification = vi.fn();
         const tab = piTab();
-        manager._acceptPiBridgeSettled(tab, {
+        settle(manager, tab, {
             type: 'pi-bridge-settled',
             pane_id: 'pane-1',
             run: '7',
@@ -123,7 +128,7 @@ describe('pi-bridge settled bell', () => {
         manager.triggerAttentionNotification = vi.fn();
         for (const outcome of ['error', 'unknown']) {
             const tab = piTab();
-            manager._acceptPiBridgeSettled(tab, {
+            settle(manager, tab, {
                 type: 'pi-bridge-settled',
                 pane_id: 'pane-1',
                 run: '7',
@@ -146,7 +151,7 @@ describe('pi-bridge settled bell', () => {
             piBridge: { running: true },
         });
 
-        manager._acceptPiBridgeSettled(tab, {
+        settle(manager, tab, {
             type: 'pi-bridge-settled',
             pane_id: 'pane-1',
             generation: '1',
@@ -173,7 +178,7 @@ describe('pi-bridge settled bell', () => {
         const busyStartTime = tab.busyStartTime;
 
         for (const run of ['4', '5']) {
-            manager._acceptPiBridgeSettled(tab, {
+            settle(manager, tab, {
                 type: 'pi-bridge-settled',
                 pane_id: 'pane-1',
                 generation: '2',
@@ -193,7 +198,7 @@ describe('pi-bridge settled bell', () => {
         const { manager, showToast } = bridgeManager();
         const tab = piTab({ _piBridgeLastRun: '9007199254740993' });
 
-        manager._acceptPiBridgeSettled(tab, {
+        settle(manager, tab, {
             type: 'pi-bridge-settled',
             pane_id: 'pane-1',
             run: '9007199254740994',
@@ -205,14 +210,14 @@ describe('pi-bridge settled bell', () => {
     it('ignores non-pi tabs and malformed runs', () => {
         const { manager, showToast } = bridgeManager();
         const shell = piTab({ coder: 'bash' });
-        manager._acceptPiBridgeSettled(shell, {
+        settle(manager, shell, {
             type: 'pi-bridge-settled',
             pane_id: 'pane-1',
             run: '1',
             outcome: 'completed',
         });
         const tab = piTab();
-        manager._acceptPiBridgeSettled(tab, {
+        settle(manager, tab, {
             type: 'pi-bridge-settled',
             pane_id: 'pane-1',
             outcome: 'completed',
@@ -226,7 +231,7 @@ describe('pi-bridge settled bell', () => {
         const { manager, showToast } = bridgeManager();
         const tab = piTab();
         const settled = (generation, run) =>
-            manager._acceptPiBridgeSettled(tab, {
+            settle(manager, tab, {
                 type: 'pi-bridge-settled',
                 pane_id: 'pane-1',
                 generation,
@@ -384,27 +389,29 @@ describe('pi-bridge attach state', () => {
         expect(tab._piBridgeHeuristicPending).toBe(pending);
     });
 
-    it('marks liveness only on post-hello evidence', () => {
-        const { manager } = bridgeManager();
+    it('ignores settled frames from another pane or a stale socket', () => {
+        const { manager, showToast } = bridgeManager();
         const tab = piTab();
-        // Pre-hello state carries no running/last_run: not live.
-        acceptState(manager, tab, 1);
-        expect(tab._piBridgeLive).toBeUndefined();
-        // First running sight proves the hello landed.
-        acceptState(manager, tab, 2, { running: 'false' });
-        expect(tab._piBridgeLive).toBe(true);
-    });
-
-    it('marks liveness on settled frames', () => {
-        const { manager } = bridgeManager();
-        const tab = piTab();
-        manager._acceptPiBridgeSettled(tab, {
-            type: 'pi-bridge-settled',
-            pane_id: 'pane-1',
-            run: '1',
-            outcome: 'completed',
-        });
-        expect(tab._piBridgeLive).toBe(true);
+        manager.tabs.set(tab.paneId, tab);
+        manager._acceptPiBridgeSettled(
+            tab,
+            { type: 'pi-bridge-settled', pane_id: 'other-pane', run: '1' },
+            tab.ws,
+        );
+        manager._acceptPiBridgeSettled(
+            tab,
+            { type: 'pi-bridge-settled', pane_id: tab.paneId, run: '1' },
+            { name: 'replaced-ws' },
+        );
+        // Removed from the tab map: the pane is gone, so nothing rings.
+        manager.tabs.delete(tab.paneId);
+        manager._acceptPiBridgeSettled(
+            tab,
+            { type: 'pi-bridge-settled', pane_id: tab.paneId, run: '1' },
+            tab.ws,
+        );
+        expect(showToast).not.toHaveBeenCalled();
+        expect(tab._piBridgeLastRun).toBeUndefined();
     });
 
     it('rings reconnect catch-up after a live idle baseline', () => {
@@ -452,7 +459,7 @@ describe('pi-bridge always-ring policy', () => {
         manager.activePaneId = 'pane-1';
         const tab = piTab();
 
-        manager._acceptPiBridgeSettled(tab, {
+        settle(manager, tab, {
             type: 'pi-bridge-settled',
             pane_id: 'pane-1',
             run: '7',
@@ -470,7 +477,7 @@ describe('pi-bridge always-ring policy', () => {
         vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
         try {
             const tab = piTab();
-            manager._acceptPiBridgeSettled(tab, {
+            settle(manager, tab, {
                 type: 'pi-bridge-settled',
                 pane_id: 'pane-1',
                 run: '7',
@@ -534,7 +541,6 @@ describe('heuristic suppression for managed panes', () => {
             ws,
             _piBridgeFresh: ws,
             _piBridgeRev: 1n,
-            _piBridgeLive: true,
             piBridge: {
                 state: 'managed',
                 generation: '1',
@@ -632,7 +638,7 @@ describe('heuristic suppression for managed panes', () => {
         TabManager.prototype.pollTerminalIdleAndNotifications.call(manager);
         expect(tab._piBridgeHeuristicPending).not.toBeNull();
 
-        manager._acceptPiBridgeSettled(tab, {
+        settle(manager, tab, {
             type: 'pi-bridge-settled',
             pane_id: tab.paneId,
             generation: '1',

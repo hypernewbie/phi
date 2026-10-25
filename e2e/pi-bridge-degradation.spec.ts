@@ -170,15 +170,16 @@ async function watchBrowser(page: Page, fixtureUrl: string, paneIds: string[]) {
                 paneId: string;
                 phase: ObservationPhase;
                 method: string;
-                responseStatus: number;
+                responseStatus: number | null;
                 contentLength: string | undefined;
                 errorText: string;
             }> = [];
             const unexpectedFailures: string[] = [];
             // Fire-and-forget pin posts can lose their connection after the
-            // 200 lands. Callers never read that response, so one abort per
-            // pane and phase is accounted here instead of failing the run.
-            const acceptedPinKeys = new Set<string>();
+            // 200 lands. Callers never read that response, so up to two aborts
+            // per pane and phase are accounted here instead of failing the
+            // run; a third would mean a retry loop.
+            const acceptedPinCounts = new Map<string, number>();
 
             for (const failure of failedRequests) {
                 const request = failure.request;
@@ -189,30 +190,41 @@ async function watchBrowser(page: Page, fixtureUrl: string, paneIds: string[]) {
                 const response = responses.get(request);
                 const paneId = pin?.[1];
                 const pinKey = `${paneId}:${failure.requestPhase}`;
+                const seenCount = acceptedPinCounts.get(pinKey) ?? 0;
+                // The pin handler answers before draining the tiny JSON body,
+                // so Chromium can report an aborted upload either side of the
+                // 200 and across a phase boundary. Phases only bound the
+                // count; a response, when recorded, must still be a 200 with
+                // an empty body.
+                const answeredCleanly =
+                    response === undefined ||
+                    (response.status === 200 && response.contentLength === '0');
                 const isExpectedPinAbort =
                     url.origin === origin &&
                     request.method() === 'POST' &&
                     !!paneId &&
                     paneIds.includes(paneId) &&
-                    !acceptedPinKeys.has(pinKey) &&
-                    failure.requestPhase === failure.failurePhase &&
-                    response?.phase === failure.requestPhase &&
-                    response.status === 200 &&
-                    response.contentLength === '0' &&
+                    seenCount < 2 &&
+                    answeredCleanly &&
                     failure.errorText === 'net::ERR_ABORTED';
                 if (isExpectedPinAbort) {
-                    acceptedPinKeys.add(pinKey);
+                    acceptedPinCounts.set(pinKey, seenCount + 1);
                     expectedPinAborts.push({
                         paneId,
                         phase: failure.requestPhase,
                         method: request.method(),
-                        responseStatus: response.status,
-                        contentLength: response.contentLength,
+                        responseStatus: response?.status ?? null,
+                        contentLength: response?.contentLength,
                         errorText: failure.errorText,
                     });
                 } else {
+                    const why = [
+                        `pane=${paneId ?? '?'}`,
+                        `response=${response ? `${response.status}/${response.contentLength}` : 'none'}`,
+                        `seen=${seenCount}`,
+                    ].join(',');
                     unexpectedFailures.push(
-                        `${request.method()} ${request.url()}: ${failure.errorText} (${failure.failurePhase})`,
+                        `${request.method()} ${request.url()}: ${failure.errorText} (${failure.failurePhase}) [${why}]`,
                     );
                 }
             }

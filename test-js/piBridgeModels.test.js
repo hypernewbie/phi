@@ -446,6 +446,14 @@ describe('bridge models picker', () => {
         ).rejects.toThrow('unknown — reopen the picker');
     });
 
+    it('reports an unknown switch outcome for a null 200 body', async () => {
+        const { tm } = harness(bridgeTab());
+        mockFetch(() => ({ json: null }));
+        await expect(
+            tm._piBridgeModelSwitch('pi-pane-1', 'b', 'y'),
+        ).rejects.toThrow('unknown — reopen the picker');
+    });
+
     it('shows the truncation footer and the unavailable copy', async () => {
         const tab = bridgeTab();
         const { tm, dropup } = harness(tab);

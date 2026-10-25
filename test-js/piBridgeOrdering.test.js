@@ -278,7 +278,6 @@ describe('pi bridge ordered views', () => {
             tab.ws,
         );
 
-        expect(tab._piBridgeLive).toBe(true);
         expect(tab._piBridgeLastRun).toBe('0');
         expect(tab.piBridge.last_run).toBeUndefined();
         expect(tm._ringPiBridgeBell).not.toHaveBeenCalled();
