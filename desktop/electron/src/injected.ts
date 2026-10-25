@@ -329,3 +329,33 @@ export const WAKE_PAGE_SCRIPT = `(() => {
     window.dispatchEvent(new Event('focus'));
   } catch {}
 })()`;
+
+/**
+ * Dispatches __phiEmbed.switchTo(profileId, origin) into an embedded page.
+ * Returns the result (or false if the page does not expose __phiEmbed).
+ */
+export function switchToScript(profileId: string, origin = ''): string {
+  return `(() => {
+    const id = ${JSON.stringify(profileId)};
+    const origin = ${JSON.stringify(origin)};
+    if (window.__phiEmbed && typeof window.__phiEmbed.switchTo === 'function') {
+      return window.__phiEmbed.switchTo(id, origin);
+    }
+    return false;
+  })()`;
+}
+
+/**
+ * Dispatches __phiEmbed.forget(profileId) into an embedded page on profile removal.
+ * Returns true if handled, false otherwise.
+ */
+export function forgetScript(profileId: string): string {
+  return `(() => {
+    const id = ${JSON.stringify(profileId)};
+    if (window.__phiEmbed && typeof window.__phiEmbed.forget === 'function') {
+      window.__phiEmbed.forget(id);
+      return true;
+    }
+    return false;
+  })()`;
+}

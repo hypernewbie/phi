@@ -14,6 +14,52 @@ export function setServerHostOverride(label: string | null | undefined): void {
     defaultServerHostOverride = label || '';
 }
 
+let embeddedProfileId = '';
+let embeddedBackendOrigin = '';
+
+if (typeof window !== 'undefined' && window.location?.search) {
+    try {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('embedded') === '1') {
+            embeddedProfileId = (params.get('profile') || '').trim();
+            embeddedBackendOrigin = (params.get('origin') || '').trim();
+        }
+    } catch {
+        /* ignore parse errors */
+    }
+}
+
+export function setEmbeddedBackend(
+    profileId: string | null | undefined,
+    origin?: string | null | undefined,
+): void {
+    embeddedProfileId = (profileId || '').trim();
+    if (origin !== undefined) {
+        embeddedBackendOrigin = (origin || '').trim();
+    }
+}
+
+export function getEmbeddedProfileId(): string {
+    return embeddedProfileId;
+}
+
+export function getEmbeddedBackendOrigin(): string {
+    return embeddedBackendOrigin;
+}
+
+export function wsUrl(path: string): string {
+    const base =
+        embeddedBackendOrigin ||
+        (typeof window !== 'undefined' && window.location?.origin
+            ? window.location.origin
+            : 'http://localhost');
+    return new URL(path, base).href;
+}
+
+export function serverKey(key: string): string {
+    return embeddedProfileId ? `${key}:${embeddedProfileId}` : key;
+}
+
 // A Vikunja kanban bucket shape. The runtime narrows `is_done` with
 // `bucket.is_done === true` rather than a truthy check, so the field
 // can be unknown (string, number, bool at the wire). We type it as

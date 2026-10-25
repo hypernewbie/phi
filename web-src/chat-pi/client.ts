@@ -1,4 +1,5 @@
 import { PROTOCOL_VERSION } from './constants.js';
+import { wsUrl } from '../util.js';
 
 export const ControlCallTimeout = 35_000;
 
@@ -42,9 +43,7 @@ function controlError(message: string): Error {
 
 /** Opens /ws/control, performs the hello handshake, and correlates calls. */
 export function connectControl(): ControlClient {
-    const ws = new WebSocket(
-        new URL('/ws/control', window.location.origin).href,
-    );
+    const ws = new WebSocket(wsUrl('/ws/control'));
     const listeners: Array<(env: any) => void> = [];
     const outbox: OutboxFrame[] = [];
     const pending = new Map<string, PendingCall>();

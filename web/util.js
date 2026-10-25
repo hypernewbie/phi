@@ -11,6 +11,42 @@ let defaultServerHostOverride = '';
 export function setServerHostOverride(label) {
     defaultServerHostOverride = label || '';
 }
+let embeddedProfileId = '';
+let embeddedBackendOrigin = '';
+if (typeof window !== 'undefined' && window.location?.search) {
+    try {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('embedded') === '1') {
+            embeddedProfileId = (params.get('profile') || '').trim();
+            embeddedBackendOrigin = (params.get('origin') || '').trim();
+        }
+    }
+    catch {
+        /* ignore parse errors */
+    }
+}
+export function setEmbeddedBackend(profileId, origin) {
+    embeddedProfileId = (profileId || '').trim();
+    if (origin !== undefined) {
+        embeddedBackendOrigin = (origin || '').trim();
+    }
+}
+export function getEmbeddedProfileId() {
+    return embeddedProfileId;
+}
+export function getEmbeddedBackendOrigin() {
+    return embeddedBackendOrigin;
+}
+export function wsUrl(path) {
+    const base = embeddedBackendOrigin ||
+        (typeof window !== 'undefined' && window.location?.origin
+            ? window.location.origin
+            : 'http://localhost');
+    return new URL(path, base).href;
+}
+export function serverKey(key) {
+    return embeddedProfileId ? `${key}:${embeddedProfileId}` : key;
+}
 // projectWorktreeLabel renders a short "project/worktree" label from a cwd.
 // Pure: no DOM, no `this`. Handles mixed \ and / separators, drops empty
 // segments, and falls back to the em-dash sentinel for empty input.

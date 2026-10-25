@@ -140,6 +140,60 @@ export class EmbeddedTransport {
     return this.activeProfileId;
   }
 
+  setActiveProfile(id: string | null): void {
+    if (id === null || id === '') {
+      this.activeProfileId = null;
+      return;
+    }
+    const profile = this.resolveProfile(id);
+    if (profile) {
+      this.activeProfileId = profile.id;
+    }
+  }
+
+  async checkCompatibility(profileId: string): Promise<boolean> {
+    const profile = this.resolveProfile(profileId);
+    if (!profile) return false;
+
+    try {
+      const versionUrl = new URL('/api/version', profile.origin);
+      const headers: Record<string, string> = {
+        Accept: 'application/json',
+      };
+      const cookie = this.getCookieHeader(profile.id);
+      if (cookie) {
+        headers['Cookie'] = cookie;
+      }
+
+      const res = await this.fetchImpl(versionUrl.toString(), {
+        method: 'GET',
+        headers,
+      });
+
+      // Locked behind access-auth: stay in embedded mode so normal auth flow handles it.
+      if (res.status === 401) {
+        return true;
+      }
+
+      // If res.ok (200), check data?.api === '1'.
+      // If it is 200 but doesn't have api === '1', it is an older incompatible server.
+      if (res.ok) {
+        try {
+          const data = (await res.json()) as { api?: unknown };
+          return data?.api === '1';
+        } catch {
+          return false;
+        }
+      }
+
+      // Other non-ok statuses or offline: stay in embedded mode.
+      return true;
+    } catch {
+      // Network error (server still starting/unreachable): stay in embedded mode.
+      return true;
+    }
+  }
+
   // --- Cookie Jar Methods ---
 
   setCookie(profileId: string, name: string, value: string): void {

@@ -48,7 +48,12 @@ import {
   installZoomShortcuts,
   type ZoomAction,
 } from './zoom.js';
-import { WAKE_PAGE_SCRIPT, lowPowerApplyScript } from './injected.js';
+import {
+  WAKE_PAGE_SCRIPT,
+  lowPowerApplyScript,
+  switchToScript,
+  forgetScript,
+} from './injected.js';
 
 /** Electron Rectangle (bounds). */
 export interface ViewBounds {
@@ -81,6 +86,15 @@ export interface ProfileViewManagerOptions {
   onFullscreenToggle?: (nextFullscreen: boolean) => void;
   /** Diagnostics logger (defaults to a no-op). */
   log?: (s: string) => void;
+  /** Enables single-tab embedded mode (one reusable WebContentsView). */
+  singleTab?: boolean;
+  /** The embedded origin prefix. Defaults to 'phi-app://app'. */
+  embeddedOrigin?: string;
+  /** Hook fired when switching profiles in single-tab mode. Return false (or Promise<false>) if incompatible. */
+  onSingleTabSwitch?: (
+    id: string,
+    origin: string,
+  ) => void | boolean | Promise<boolean>;
 }
 
 /** One registered (not yet necessarily materialized) profile. */
@@ -121,6 +135,14 @@ export class ProfileViewManager {
   private readonly profiles = new Map<string, RegisteredProfile>();
   private readonly views = new Map<string, ViewEntry>();
   private activeId: string | null = null;
+  private singleTab: boolean;
+  private readonly embeddedOrigin: string;
+  private readonly onSingleTabSwitch?: (
+    id: string,
+    origin: string,
+  ) => void | boolean | Promise<boolean>;
+  private singleEntry: ViewEntry | null = null;
+  private singleEntryMode: 'embedded' | 'legacy' | null = null;
 
   constructor(opts: ProfileViewManagerOptions) {
     this.win = opts.win;
@@ -132,6 +154,58 @@ export class ProfileViewManager {
     this.onZoomAction = opts.onZoomAction;
     this.onFullscreenToggle = opts.onFullscreenToggle;
     this.log = opts.log ?? (() => {});
+    this.singleTab = opts.singleTab ?? false;
+    this.embeddedOrigin = opts.embeddedOrigin ?? 'phi-app://app';
+    this.onSingleTabSwitch = opts.onSingleTabSwitch;
+  }
+
+  isSingleTab(): boolean {
+    return this.singleTab;
+  }
+
+  setSingleTab(enabled: boolean): void {
+    if (this.singleTab === enabled) return;
+    this.singleTab = enabled;
+    if (enabled) {
+      for (const entry of this.views.values()) {
+        try {
+          this.teardownView(entry);
+        } catch (err) {
+          this.log(`views: setSingleTab teardown: ${String(err)}`);
+        }
+      }
+      this.views.clear();
+      if (this.activeId !== null) {
+        const prev = this.activeId;
+        this.activeId = null;
+        this.setActive(prev);
+      }
+    } else {
+      if (this.singleEntry) {
+        try {
+          this.teardownView(this.singleEntry);
+        } catch (err) {
+          this.log(`views: setSingleTab teardown single: ${String(err)}`);
+        }
+        this.singleEntry = null;
+        this.singleEntryMode = null;
+      }
+      if (this.activeId !== null) {
+        const prev = this.activeId;
+        this.activeId = null;
+        this.setActive(prev);
+      }
+    }
+  }
+
+  private buildEmbeddedUrl(id: string, origin: string): string {
+    return `${this.embeddedOrigin}/index.html?desktop=1&embedded=1&profile=${encodeURIComponent(id)}&origin=${encodeURIComponent(origin)}`;
+  }
+
+  private buildLegacyUrl(origin: string): string {
+    const rootUrl = new URL(origin);
+    rootUrl.searchParams.set('desktop', '1');
+    return rootUrl.toString();
   }
 
   /**
@@ -155,6 +229,28 @@ export class ProfileViewManager {
    * is cleared when the removed profile was active.
    */
   removeProfile(id: string): void {
+    if (this.singleTab) {
+      if (
+        this.singleEntry?.view.webContents &&
+        typeof this.singleEntry.view.webContents.executeJavaScript === 'function'
+      ) {
+        void this.singleEntry.view.webContents
+          .executeJavaScript(forgetScript(id))
+          .catch(() => {});
+      }
+      this.profiles.delete(id);
+      if (this.activeId === id) {
+        this.singleEntry?.view.setVisible(false);
+        this.activeId = null;
+      }
+      if (this.profiles.size === 0 && this.singleEntry) {
+        this.teardownView(this.singleEntry);
+        this.singleEntry = null;
+        this.singleEntryMode = null;
+      }
+      this.log(`views: removed profile ${id} (single-tab mode)`);
+      return;
+    }
     const entry = this.views.get(id);
     if (entry) {
       this.teardownView(entry);
@@ -173,6 +269,52 @@ export class ProfileViewManager {
    */
   setActive(id: string | null): void {
     const target = id ?? '';
+    if (this.singleTab) {
+      if (target === '') {
+        if (this.singleEntry) this.singleEntry.view.setVisible(false);
+        this.activeId = null;
+        this.log('views: setActive(null) — active view hidden');
+        return;
+      }
+      if (target === this.activeId) return; // already active
+      const profile = this.profiles.get(target);
+      if (!profile) {
+        this.log(`views: setActive(${target}) — unknown profile, no-op`);
+        return;
+      }
+      this.activeId = target;
+      if (!this.singleEntry) {
+        this.ensureSingleView(target, profile.origin);
+      } else {
+        const bounds = this.defaultBounds();
+        this.singleEntry.view.setBounds(bounds);
+        this.singleEntry.lastBounds = bounds;
+        applyContentZoom(
+          this.singleEntry.view.webContents,
+          this.getContentZoomPercent(),
+        );
+        if (this.singleEntry.loaded && !this.singleEntry.obscured) {
+          this.singleEntry.view.setVisible(true);
+        }
+        if (
+          this.singleEntry.view.webContents &&
+          !this.singleEntry.view.webContents.isDestroyed()
+        ) {
+          this.singleEntry.view.webContents.focus();
+          if (
+            typeof this.singleEntry.view.webContents.executeJavaScript ===
+            'function'
+          ) {
+            void this.singleEntry.view.webContents
+              .executeJavaScript(WAKE_PAGE_SCRIPT)
+              .catch(() => {});
+          }
+        }
+        this.activateInSingleView(target, profile.origin, false);
+      }
+      return;
+    }
+
     if (target === '') {
       this.hideActiveView();
       this.activeId = null;
@@ -219,6 +361,13 @@ export class ProfileViewManager {
    * they are re-bounded on next activation). */
   onWindowResize(): void {
     if (this.activeId === null) return;
+    if (this.singleTab) {
+      if (!this.singleEntry) return;
+      const bounds = this.defaultBounds();
+      this.singleEntry.view.setBounds(bounds);
+      this.singleEntry.lastBounds = bounds;
+      return;
+    }
     const entry = this.views.get(this.activeId);
     if (!entry) return;
     const bounds = this.defaultBounds();
@@ -233,6 +382,11 @@ export class ProfileViewManager {
 
   /** The retained view for a profile id, or null when none exists yet. */
   getView(id: string): WebContentsView | null {
+    if (this.singleTab) {
+      return this.singleEntry && this.profiles.has(id)
+        ? this.singleEntry.view
+        : null;
+    }
     return this.views.get(id)?.view ?? null;
   }
 
@@ -242,6 +396,12 @@ export class ProfileViewManager {
    * re-activation never shows an unzoomed frame first).
    */
   setContentZoomPercent(percent: number): void {
+    if (this.singleTab) {
+      if (this.singleEntry) {
+        applyContentZoom(this.singleEntry.view.webContents, percent);
+      }
+      return;
+    }
     for (const entry of this.views.values()) {
       applyContentZoom(entry.view.webContents, percent);
     }
@@ -249,7 +409,7 @@ export class ProfileViewManager {
 
   /** The count of retained (created) views — the smoke-payload surface. */
   viewsCreated(): number {
-    return this.views.size;
+    return this.singleTab ? (this.singleEntry ? 1 : 0) : this.views.size;
   }
 
   /**
@@ -264,6 +424,21 @@ export class ProfileViewManager {
    */
   setObscured(obscured: boolean): void {
     if (this.activeId === null) return;
+    if (this.singleTab) {
+      if (!this.singleEntry) return;
+      this.singleEntry.obscured = obscured;
+      if (obscured && this.singleEntry.loaded) {
+        this.singleEntry.view.setVisible(false);
+      }
+      if (!obscured && this.singleEntry.loaded) {
+        this.singleEntry.view.setVisible(true);
+        applyContentZoom(
+          this.singleEntry.view.webContents,
+          this.getContentZoomPercent(),
+        );
+      }
+      return;
+    }
     const entry = this.views.get(this.activeId);
     if (!entry) return;
     entry.obscured = obscured;
@@ -279,6 +454,22 @@ export class ProfileViewManager {
    * Used on Alt+F5 / Cmd+Alt+R or rail "Reload all servers".
    */
   reloadAll(ignoringCache = false): void {
+    if (this.singleTab) {
+      if (
+        this.singleEntry?.view.webContents &&
+        !this.singleEntry.view.webContents.isDestroyed()
+      ) {
+        if (ignoringCache) {
+          this.singleEntry.view.webContents.reloadIgnoringCache();
+        } else {
+          this.singleEntry.view.webContents.reload();
+        }
+        this.log(
+          `views: reloadAll (single-tab) — reloaded view (ignoringCache=${ignoringCache})`,
+        );
+      }
+      return;
+    }
     for (const [id, entry] of this.views.entries()) {
       if (entry.view.webContents && !entry.view.webContents.isDestroyed()) {
         if (ignoringCache) {
@@ -297,6 +488,22 @@ export class ProfileViewManager {
    * Reloads the active profile view, or a specific profile view by id.
    */
   reloadActive(targetId?: string, ignoringCache = false): void {
+    if (this.singleTab) {
+      if (
+        this.singleEntry?.view.webContents &&
+        !this.singleEntry.view.webContents.isDestroyed()
+      ) {
+        if (ignoringCache) {
+          this.singleEntry.view.webContents.reloadIgnoringCache();
+        } else {
+          this.singleEntry.view.webContents.reload();
+        }
+        this.log(
+          `views: reloadActive (single-tab) — reloaded view (ignoringCache=${ignoringCache})`,
+        );
+      }
+      return;
+    }
     const id = targetId ?? this.activeId;
     if (!id) return;
     const entry = this.views.get(id);
@@ -314,6 +521,9 @@ export class ProfileViewManager {
 
   /** The active retained view's webContents, or null when none. */
   getActiveView(): WebContentsView | null {
+    if (this.singleTab) {
+      return this.singleEntry && this.activeId ? this.singleEntry.view : null;
+    }
     if (!this.activeId) return null;
     return this.views.get(this.activeId)?.view ?? null;
   }
@@ -324,6 +534,15 @@ export class ProfileViewManager {
    * and the teardown continues.
    */
   async destroyAll(): Promise<void> {
+    if (this.singleTab && this.singleEntry) {
+      try {
+        this.teardownView(this.singleEntry);
+      } catch (err) {
+        this.log(`views: destroyAll single: ${String(err)}`);
+      }
+      this.singleEntry = null;
+      this.singleEntryMode = null;
+    }
     for (const entry of [...this.views.values()]) {
       try {
         this.teardownView(entry);
@@ -348,6 +567,10 @@ export class ProfileViewManager {
 
   /** Low memory mode: destroy every inactive retained view, keep only keepId (massively aggro, 1 tab). */
   hibernateInactive(keepId: string): void {
+    if (this.singleTab) {
+      this.log('views: hibernateInactive (single-tab) — no-op');
+      return;
+    }
     for (const [id, entry] of [...this.views.entries()]) {
       if (id === keepId) continue;
       try {
@@ -377,6 +600,21 @@ export class ProfileViewManager {
    */
   applyLowPowerToViews(enabled: boolean): void {
     const script = lowPowerApplyScript(enabled);
+    if (this.singleTab) {
+      if (
+        this.singleEntry?.loaded &&
+        typeof this.singleEntry.view.webContents.executeJavaScript ===
+          'function'
+      ) {
+        void this.singleEntry.view.webContents
+          .executeJavaScript(script)
+          .catch(() => {});
+      }
+      this.log(
+        `views: applyLowPowerToViews(${enabled}) (single-tab) — applied to single view`,
+      );
+      return;
+    }
     for (const [id, entry] of [...this.views.entries()]) {
       if (!entry.loaded) continue;
       try {
@@ -396,6 +634,158 @@ export class ProfileViewManager {
     if (this.activeId === null) return;
     const prev = this.views.get(this.activeId);
     if (prev) prev.view.setVisible(false);
+  }
+
+  private ensureSingleView(id: string, origin: string): ViewEntry {
+    const view = this.makeView(this.embeddedOrigin);
+    const entry: ViewEntry = { view, loaded: false, obscured: false };
+    this.singleEntry = entry;
+    this.win.contentView.addChildView(view);
+    view.setVisible(false);
+    const bounds = this.defaultBounds();
+    view.setBounds(bounds);
+    entry.lastBounds = bounds;
+    applyContentZoom(view.webContents, this.getContentZoomPercent());
+
+    view.webContents.on('did-finish-load', () => {
+      if (this.singleEntry?.view !== view) return;
+      const fresh = this.defaultBounds();
+      view.setBounds(fresh);
+      entry.lastBounds = fresh;
+      applyContentZoom(view.webContents, this.getContentZoomPercent());
+      if (typeof view.webContents.executeJavaScript === 'function') {
+        void view.webContents
+          .executeJavaScript(lowPowerApplyScript(this.getLowPowerMode()))
+          .catch(() => {});
+      }
+      entry.loaded = true;
+      if (this.activeId !== null && !entry.obscured) {
+        view.setVisible(true);
+        applyContentZoom(view.webContents, this.getContentZoomPercent());
+        if (!view.webContents.isDestroyed()) {
+          view.webContents.focus();
+          if (typeof view.webContents.executeJavaScript === 'function') {
+            void view.webContents
+              .executeJavaScript(WAKE_PAGE_SCRIPT)
+              .catch(() => {});
+          }
+        }
+      }
+    });
+
+    installFullscreenToggle(
+      view.webContents,
+      this.win,
+      this.onFullscreenToggle,
+    );
+    if (this.onFullscreenToggle) {
+      const onToggle = this.onFullscreenToggle;
+      view.webContents.on('enter-html-full-screen', () => onToggle(true));
+      view.webContents.on('leave-html-full-screen', () => onToggle(false));
+    }
+    installReloadShortcut(view.webContents, undefined, (ignoringCache) =>
+      this.reloadAll(ignoringCache),
+    );
+    installZoomShortcuts(view.webContents, (action) =>
+      this.onZoomAction(action),
+    );
+
+    this.activateInSingleView(id, origin, true);
+    return entry;
+  }
+
+  private activateInSingleView(
+    id: string,
+    origin: string,
+    isInitialCreate: boolean,
+  ): void {
+    if (!this.singleEntry) return;
+    const view = this.singleEntry.view;
+    const switchResult = this.onSingleTabSwitch?.(id, origin);
+
+    if (switchResult === false) {
+      this.singleEntryMode = 'legacy';
+      view.webContents.loadURL(this.buildLegacyUrl(origin));
+      return;
+    }
+
+    if (switchResult instanceof Promise) {
+      if (isInitialCreate) {
+        this.singleEntryMode = 'embedded';
+        view.webContents.loadURL(this.buildEmbeddedUrl(id, origin));
+        void switchResult.then((compat) => {
+          if (!compat && this.activeId === id) {
+            this.singleEntryMode = 'legacy';
+            view.webContents.loadURL(this.buildLegacyUrl(origin));
+          }
+        });
+      } else {
+        void switchResult.then(async (compat) => {
+          if (this.activeId !== id) return;
+          if (!compat) {
+            this.singleEntryMode = 'legacy';
+            view.webContents.loadURL(this.buildLegacyUrl(origin));
+          } else if (this.singleEntryMode === 'legacy') {
+            this.singleEntryMode = 'embedded';
+            view.webContents.loadURL(this.buildEmbeddedUrl(id, origin));
+          } else {
+            let switched = false;
+            if (typeof view.webContents.executeJavaScript === 'function') {
+              try {
+                switched = Boolean(
+                  await view.webContents.executeJavaScript(
+                    switchToScript(id, origin),
+                  ),
+                );
+              } catch {
+                switched = false;
+              }
+            }
+            if (!switched) {
+              this.singleEntryMode = 'embedded';
+              view.webContents.loadURL(this.buildEmbeddedUrl(id, origin));
+            }
+          }
+        });
+      }
+      return;
+    }
+
+    // Synchronous true or undefined
+    if (isInitialCreate || this.singleEntryMode === 'legacy') {
+      this.singleEntryMode = 'embedded';
+      view.webContents.loadURL(this.buildEmbeddedUrl(id, origin));
+    } else {
+      let switched = false;
+      if (typeof view.webContents.executeJavaScript === 'function') {
+        try {
+          const res = view.webContents.executeJavaScript(
+            switchToScript(id, origin),
+          );
+          if (res instanceof Promise) {
+            void res
+              .then((handled) => {
+                if (!handled) {
+                  this.singleEntryMode = 'embedded';
+                  view.webContents.loadURL(this.buildEmbeddedUrl(id, origin));
+                }
+              })
+              .catch(() => {
+                this.singleEntryMode = 'embedded';
+                view.webContents.loadURL(this.buildEmbeddedUrl(id, origin));
+              });
+            return;
+          }
+          switched = Boolean(res);
+        } catch {
+          switched = false;
+        }
+      }
+      if (!switched) {
+        this.singleEntryMode = 'embedded';
+        view.webContents.loadURL(this.buildEmbeddedUrl(id, origin));
+      }
+    }
   }
 
   /**

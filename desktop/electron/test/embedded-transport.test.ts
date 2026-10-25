@@ -752,4 +752,108 @@ describe('embedded-transport', () => {
       expect(resultHeaders!['Cookie']).toBe('cookie2=val2');
     });
   });
+
+  describe('setActiveProfile & getActiveProfileId', () => {
+    it('sets and retrieves active profile id directly', () => {
+      expect(transport.getActiveProfileId()).toBeNull();
+      transport.setActiveProfile('prof1');
+      expect(transport.getActiveProfileId()).toBe('prof1');
+      transport.setActiveProfile(null);
+      expect(transport.getActiveProfileId()).toBeNull();
+      transport.setActiveProfile('prof2');
+      expect(transport.getActiveProfileId()).toBe('prof2');
+      transport.setActiveProfile('');
+      expect(transport.getActiveProfileId()).toBeNull();
+    });
+
+    it('ignores unknown profile ids when setting', () => {
+      transport.setActiveProfile('prof1');
+      transport.setActiveProfile('unknown-id');
+      expect(transport.getActiveProfileId()).toBe('prof1');
+    });
+  });
+
+  describe('checkCompatibility', () => {
+    it('returns true when /api/version returns 200 with api: "1"', async () => {
+      transport.setCookie('prof1', 'phi_session', 'secret123');
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ version: '0.24.0', api: '1' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      const compatible = await transport.checkCompatibility('prof1');
+      expect(compatible).toBe(true);
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://127.0.0.1:8080/api/version',
+        {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            Cookie: 'phi_session=secret123',
+          },
+        },
+      );
+    });
+
+    it('returns false when /api/version returns 200 without api: "1"', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ version: '0.23.0' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      const compatible = await transport.checkCompatibility('prof1');
+      expect(compatible).toBe(false);
+    });
+
+    it('returns false when /api/version returns 200 with different api version', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ api: '2' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      const compatible = await transport.checkCompatibility('prof1');
+      expect(compatible).toBe(false);
+    });
+
+    it('returns false when /api/version returns 200 with non-JSON body', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response('not-json', {
+          status: 200,
+        }),
+      );
+
+      const compatible = await transport.checkCompatibility('prof1');
+      expect(compatible).toBe(false);
+    });
+
+    it('returns true when /api/version returns 401 (auth-locked server)', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response('Unauthorized', {
+          status: 401,
+        }),
+      );
+
+      const compatible = await transport.checkCompatibility('prof1');
+      expect(compatible).toBe(true);
+    });
+
+    it('returns true when network error occurs during fetch', async () => {
+      mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+
+      const compatible = await transport.checkCompatibility('prof1');
+      expect(compatible).toBe(true);
+    });
+
+    it('returns false when profile cannot be resolved', async () => {
+      const compatible = await transport.checkCompatibility('nonexistent');
+      expect(compatible).toBe(false);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+  });
 });

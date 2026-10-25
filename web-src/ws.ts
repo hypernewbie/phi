@@ -1,5 +1,7 @@
 /* Φ phi — Binary WebSocket Client */
 
+import { wsUrl } from './util.js';
+
 // A loose shape for inbound control JSON. The wire schema is small
 // but not formally typed on the server; consumers pattern-match
 // against msg.type to discriminate ('pty-exited', 'server-shutdown',
@@ -169,14 +171,9 @@ export class PTYWebSocket {
             this.holding = false;
         }
 
-        const origin =
-            typeof window !== 'undefined' && window.location?.origin
-                ? window.location.origin
-                : '';
-        this.url = new URL(
+        this.url = wsUrl(
             `/ws/pane/${paneId}?term_proto=hot-v1&state=ansi-v1`,
-            origin,
-        ).href;
+        );
         this.ws = new WebSocket(this.url);
         this.ws.binaryType = 'arraybuffer';
         this.decoder = new TextDecoder('utf-8');
