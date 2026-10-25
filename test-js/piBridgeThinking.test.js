@@ -467,6 +467,69 @@ describe('Pi bridge Thinking controls', () => {
         clearTimeout(tab.softCloseTimer);
     });
 
+    it('releases a pending operation when an HTTP baseline moves the model', async () => {
+        const { tm, tab } = harness(bridgeTab());
+        let failLevels;
+        mockFetch(
+            () =>
+                new Promise((_resolve, reject) => {
+                    failLevels = () => reject(new Error('request timed out'));
+                }),
+        );
+        tm._updatePiThinkingButton();
+        tm.piThinkingBtn.click();
+        await vi.waitFor(() => expect(failLevels).toBeTypeOf('function'));
+
+        const baseline = {
+            pane_id: tab.paneId,
+            state: 'managed',
+            generation: '9',
+            telemetry_revision: '13',
+            model: 'b/y',
+            thinking_level: 'high',
+            connected: true,
+            capabilities: ['pi.lifecycle.v1', 'pi.thinking.v1'],
+        };
+        expect(tm._seedHttpPiBridge(tab, baseline)).toBe(true);
+        expect(tm._piRpcThinkingPending).toBeNull();
+        // An equal-revision confirmation keeps the baseline, and a newer frame
+        // that returns to the old model must not revive the released owner.
+        tm._acceptPiBridgeState(tab, baseline);
+        expect(tm._piRpcThinkingPending).toBeNull();
+        tm._acceptPiBridgeState(tab, {
+            ...baseline,
+            telemetry_revision: '14',
+            model: 'a/x',
+        });
+        failLevels();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(tm.sendToTab).not.toHaveBeenCalled();
+        expect(tm.app.showToast).not.toHaveBeenCalled();
+    });
+
+    it('releases a pending operation before a restart swaps the pane id', async () => {
+        const ws = { readyState: 1, close: vi.fn() };
+        const { tm, tab } = navHarness(bridgeTab({ ws, _piBridgeFresh: ws }));
+        let failLevels;
+        mockFetch((_url, options) =>
+            options?.method === 'POST'
+                ? new Promise(() => {})
+                : new Promise((_resolve, reject) => {
+                      failLevels = () => reject(new Error('request timed out'));
+                  }),
+        );
+        tm._updatePiThinkingButton();
+        tm.piThinkingBtn.click();
+        await vi.waitFor(() => expect(failLevels).toBeTypeOf('function'));
+
+        tm.restartTab(tab);
+        expect(tm._piRpcThinkingPending).toBeNull();
+        expect(tab.paneId).toBe('pi-pane-1');
+        failLevels();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(tm.sendToTab).not.toHaveBeenCalled();
+    });
+
     it('revokes a pending operation when a Pi tab is disposed', async () => {
         const ws = { readyState: 1, close: vi.fn() };
         const { tm, tab } = navHarness(bridgeTab({ ws, _piBridgeFresh: ws }));

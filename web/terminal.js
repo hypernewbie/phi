@@ -8282,7 +8282,15 @@ export class TabManager {
     // so a late HTTP response can never overwrite newer WS state.
     _seedHttpPiBridge(tabInfo, httpView) {
         if (!tabInfo || tabInfo.coder !== 'pi') return false;
-        return this._acceptOrderedBridgeView(tabInfo, httpView, null);
+        const accepted = this._acceptOrderedBridgeView(
+            tabInfo,
+            httpView,
+            null,
+        );
+        // A baseline can move model or availability like a live frame, but it
+        // never reaches _acceptPiBridgeState, so clean up Thinking here.
+        if (accepted) this._refreshPiBridgeModels(tabInfo);
+        return accepted;
     }
 
     _acceptPiSessionTitle(tabInfo, control, socket = tabInfo?.ws) {
@@ -8766,6 +8774,9 @@ export class TabManager {
 
     restartTab(tabInfo) {
         if (tabInfo.coder === 'pi-rpc') return;
+        // Restart drops the old pane: release Thinking ownership while the
+        // pending operation still carries this pane id.
+        if (tabInfo.coder === 'pi') this._invalidatePiBridgeThinking(tabInfo);
         const overlay =
             tabInfo.termContainer.querySelector('.reconnect-overlay');
         const msgEl = overlay?.querySelector('.reconnect-msg');
@@ -8826,8 +8837,6 @@ export class TabManager {
                 // resets ordering.
                 tabInfo.piBridge = undefined;
                 this._resetPiBridgeOrdered(tabInfo);
-                // The restart swaps the pane id; drop Thinking ownership.
-                this._invalidatePiBridgeThinking(tabInfo);
                 // A restart provisions a fresh lease: drop recall state
                 // without flushing — the old pane is being reborn.
                 this._resetPiRecall();
