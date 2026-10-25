@@ -370,7 +370,12 @@ function thinkingModel(
     reasoning: boolean,
     thinkingLevelMap?: Record<string, string | null>,
 ): PiModelView {
-    return { provider, id, reasoning, thinkingLevelMap } as unknown as PiModelView;
+    return {
+        provider,
+        id,
+        reasoning,
+        thinkingLevelMap,
+    } as unknown as PiModelView;
 }
 
 function fakeRegistry(
@@ -926,9 +931,9 @@ describe('Runtime Thinking requests', () => {
             model: 'm',
             unavailable: false,
         });
-        expect(thinkingLevelsOf(ch.nonfatalSends[0]!).levels.length).toBeLessThanOrEqual(
-            MAX_THINKING_LEVELS,
-        );
+        expect(
+            thinkingLevelsOf(ch.nonfatalSends[0]!).levels.length,
+        ).toBeLessThanOrEqual(MAX_THINKING_LEVELS);
         rt.shutdown();
     });
 
@@ -977,7 +982,11 @@ describe('Runtime Thinking requests', () => {
         const broken = Object.defineProperty(
             { provider: 'p', id: 'broken' },
             'reasoning',
-            { get: () => { throw new Error('helper read failed'); } },
+            {
+                get: () => {
+                    throw new Error('helper read failed');
+                },
+            },
         ) as PiModelView;
         const failed = await started(broken);
         failed.ch.hooks!.onMessage(thinkingLevelsRequest('t-failed'));
@@ -1050,15 +1059,24 @@ describe('Runtime Thinking requests', () => {
     });
 
     it('rejects changed models and unsupported or oversized levels without mutation', async () => {
-        const { ch, rt, setCalls } = await started(thinkingModel('p', 'm', true));
-        ch.hooks!.onMessage(setThinkingRequest('t-model', 'high', 'p', 'other'));
-        expect(thinkingAckOf(ch.nonfatalSends[0]!).reason).toBe('model-changed');
+        const { ch, rt, setCalls } = await started(
+            thinkingModel('p', 'm', true),
+        );
+        ch.hooks!.onMessage(
+            setThinkingRequest('t-model', 'high', 'p', 'other'),
+        );
+        expect(thinkingAckOf(ch.nonfatalSends[0]!).reason).toBe(
+            'model-changed',
+        );
         ch.hooks!.onMessage(setThinkingRequest('t-level', 'max'));
         expect(thinkingAckOf(ch.nonfatalSends[1]!).reason).toBe(
             'unsupported-level',
         );
         ch.hooks!.onMessage(
-            setThinkingRequest('t-long', 'x'.repeat(MAX_THINKING_LEVEL_BYTES + 1)),
+            setThinkingRequest(
+                't-long',
+                'x'.repeat(MAX_THINKING_LEVEL_BYTES + 1),
+            ),
         );
         expect(thinkingAckOf(ch.nonfatalSends[2]!).reason).toBe(
             'unsupported-level',
@@ -1071,7 +1089,9 @@ describe('Runtime Thinking requests', () => {
                 'm',
             ),
         );
-        expect(thinkingAckOf(ch.nonfatalSends[3]!).reason).toBe('model-changed');
+        expect(thinkingAckOf(ch.nonfatalSends[3]!).reason).toBe(
+            'model-changed',
+        );
         expect(setCalls).toEqual([]);
         rt.shutdown();
     });
@@ -1123,7 +1143,8 @@ describe('Runtime Thinking requests', () => {
         setNativeLevel('high');
         rt.onThinkingLevelSelect(ctx({ model }));
         const snapshot = ch.sends.at(-1)!.payload;
-        if (snapshot?.$case !== 'stateSnapshot') throw new Error('missing snapshot');
+        if (snapshot?.$case !== 'stateSnapshot')
+            throw new Error('missing snapshot');
         expect(snapshot.value.thinkingLevel).toBe('high');
         rt.shutdown();
     });

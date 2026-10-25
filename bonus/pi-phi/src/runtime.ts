@@ -721,9 +721,8 @@ export class Runtime {
             return;
         const model = this.liveModel();
         const identity = this.modelIdentity(model);
-        const levels = model && identity
-            ? this.supportedThinkingLevels(model)
-            : null;
+        const levels =
+            model && identity ? this.supportedThinkingLevels(model) : null;
         let msg = this.thinkingLevelsResponse(requestId, identity, levels);
         if (PiToPhi.encode(msg).finish().length > MAX_MESSAGE_BYTES) {
             msg = this.thinkingLevelsResponse(requestId, identity, null);
@@ -796,11 +795,11 @@ export class Runtime {
             ack(false, 'model-changed');
             return;
         }
-        const matchesExpected = (candidate: PiModelView | undefined): boolean => {
+        const matchesExpected = (
+            candidate: PiModelView | undefined,
+        ): boolean => {
             const identity = this.modelIdentity(candidate);
-            return (
-                identity?.provider === provider && identity.model === model
-            );
+            return identity?.provider === provider && identity.model === model;
         };
         let current = this.liveModel();
         if (!matchesExpected(current)) {
