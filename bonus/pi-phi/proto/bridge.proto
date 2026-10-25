@@ -55,6 +55,7 @@ message PhiToPi {
     HistoryRequest history_request = 14;
     ModelsRequest models_request = 15;
     SetModelRequest set_model_request = 16;
+    ReloadRequest reload_request = 17;
   }
 }
 
@@ -224,6 +225,10 @@ message SetModelAck {
   bool ok = 2;
   string reason = 3;
 }
+
+// ReloadRequest asks Pi to invoke its native reload command. It has no reply:
+// the command replaces the runtime that would send one.
+message ReloadRequest {}
 
 // ---------------------------------------------------------------------------
 // Protocol failures

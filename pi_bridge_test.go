@@ -967,6 +967,49 @@ func TestBridgeRequestPaneModels(t *testing.T) {
 	}
 }
 
+func TestBridgeRequestPaneReload(t *testing.T) {
+	b := startPiBridge(testBridgeHub())
+	if b == nil {
+		t.Fatal("bridge did not start")
+	}
+	defer b.Stop()
+
+	if err := b.RequestPaneReload("unknown"); err == nil {
+		t.Fatal("unknown pane reload succeeded")
+	}
+	var nilBridge *Bridge
+	if err := nilBridge.RequestPaneReload("pane"); err == nil {
+		t.Fatal("nil bridge reload succeeded")
+	}
+
+	if _, _, managed := b.Provision("pane-rp", true); !managed {
+		t.Fatal("provision not managed")
+	}
+	b.Complete(&pty.PTYInstance{ID: "pane-rp"})
+	if err := b.RequestPaneReload("pane-rp"); err == nil {
+		t.Fatal("peerless pane reload succeeded")
+	}
+
+	_, cancel := dialBridgePane(t, b, "pane-rc", "pi.lifecycle.v1")
+	defer cancel()
+	if err := b.RequestPaneReload("pane-rc"); err == nil {
+		t.Fatal("pane without reload capability succeeded")
+	}
+
+	stream, cancel := dialBridgePane(t, b, "pane-rd", "pi.lifecycle.v1", "pi.reload.v1")
+	defer cancel()
+	if err := b.RequestPaneReload("pane-rd"); err != nil {
+		t.Fatalf("RequestPaneReload: %v", err)
+	}
+	msg, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv reload: %v", err)
+	}
+	if msg.GetReloadRequest() == nil || msg.GetPaneId() != "pane-rd" || msg.GetRuntimeGeneration() != 1 {
+		t.Fatalf("reload request %+v", msg)
+	}
+}
+
 func TestBridgeRequestPaneSetModel(t *testing.T) {
 	b := startPiBridge(testBridgeHub())
 	if b == nil {
@@ -1088,6 +1131,68 @@ func TestHandlePiBridgeModels(t *testing.T) {
 	rec = serve(http.MethodGet, "/api/pi-bridge/models?pane=pane-http")
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("dead peer code %d, want 503", rec.Code)
+	}
+}
+
+func TestHandlePiBridgeReload(t *testing.T) {
+	b := startPiBridge(testBridgeHub())
+	if b == nil {
+		t.Fatal("bridge did not start")
+	}
+	defer b.Stop()
+	prev := piBridge
+	piBridge = b
+	t.Cleanup(func() { piBridge = prev })
+
+	serve := func(method, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, "/api/pi-bridge/reload", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		handlePiBridgeReload(rec, req)
+		return rec
+	}
+
+	if rec := serve(http.MethodGet, ""); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET code %d, want 405", rec.Code)
+	}
+	for _, body := range []string{
+		"",
+		"not-json",
+		`{"pane":"p","command":"/anything"}`,
+		`{"pane":"p"} {"pane":"q"}`,
+		`{"pane":""}`,
+		`{"pane":"` + strings.Repeat("x", 257) + `"}`,
+		`{"pane":"` + strings.Repeat("y", 2000) + `"}`,
+	} {
+		if rec := serve(http.MethodPost, body); rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %q code %d, want 400", body, rec.Code)
+		}
+	}
+	if rec := serve(http.MethodPost, `{"pane":"unknown"}`); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unknown pane code %d, want 503", rec.Code)
+	}
+
+	_, cancel := dialBridgePane(t, b, "pane-reload-no-cap", "pi.lifecycle.v1")
+	defer cancel()
+	if rec := serve(http.MethodPost, `{"pane":"pane-reload-no-cap"}`); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("missing capability code %d, want 503", rec.Code)
+	}
+
+	stream, cancel := dialBridgePane(t, b, "pane-reload-http", "pi.lifecycle.v1", "pi.reload.v1")
+	defer cancel()
+	rec := serve(http.MethodPost, `{"pane":"pane-reload-http"}`)
+	if rec.Code != http.StatusAccepted || rec.Body.Len() != 0 {
+		t.Fatalf("happy response code=%d body=%q, want empty 202", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control %q, want no-store", got)
+	}
+	msg, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv reload request: %v", err)
+	}
+	if msg.GetReloadRequest() == nil || msg.GetPaneId() != "pane-reload-http" {
+		t.Fatalf("not pane-bound reload: %+v", msg)
 	}
 }
 

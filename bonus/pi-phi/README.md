@@ -2,8 +2,9 @@
 
 Phi's integration endpoint inside Pi. The extension reports explicit
 Pi completion to Phi's existing bell and provides read-only editor history.
-It also lists and switches models through Phi's shared model picker.
-It never sends prompts, compacts a session, or edits context.
+It also lists and switches models through Phi's shared model picker,
+and dispatches Pi's native reload command when the reload capability is
+negotiated. It never sends prompts, compacts a session, or edits context.
 
 ## Layout
 

@@ -19,8 +19,8 @@ func TestMetadataSizeBound(t *testing.T) {
 }
 
 func TestNegotiateCapabilities(t *testing.T) {
-	got := negotiateCapabilities([]string{CapabilityLifecycle, "unknown.future.v9"})
-	if !got[CapabilityLifecycle] {
+	got := negotiateCapabilities([]string{CapabilityLifecycle, CapabilityReload, "unknown.future.v9"})
+	if !got[CapabilityLifecycle] || !got[CapabilityReload] {
 		t.Fatalf("known caps dropped: %v", got)
 	}
 	if got["unknown.future.v9"] {

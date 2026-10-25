@@ -6,6 +6,7 @@ export const PROTOCOL_VERSION = 1;
 export const CAPABILITY_LIFECYCLE = 'pi.lifecycle.v1';
 export const CAPABILITY_HISTORY = 'pi.history.v1';
 export const CAPABILITY_MODELS = 'pi.models.v1';
+export const CAPABILITY_RELOAD = 'pi.reload.v1';
 /** Cap on catalog entries per ModelsResponse; excess sets truncated. */
 export const MAX_MODELS_ENTRIES = 500;
 /**
@@ -39,6 +40,7 @@ const SUPPORTED = new Set([
     CAPABILITY_LIFECYCLE,
     CAPABILITY_HISTORY,
     CAPABILITY_MODELS,
+    CAPABILITY_RELOAD,
 ]);
 
 /** Intersect advertised names with the supported set. Unknown names are ignored. */

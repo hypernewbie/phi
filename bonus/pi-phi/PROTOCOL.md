@@ -74,6 +74,7 @@ Runtime identity binds `(generation, runtime_id, session_id)`:
 | `pi.lifecycle.v1` | Lifecycle edges, snapshots, settlement           |
 | `pi.history.v1`   | On-demand live editor-history reads              |
 | `pi.models.v1`    | On-demand model list and switching               |
+| `pi.reload.v1`    | One-way native Pi reload command                 |
 
 ## History reads
 
@@ -113,6 +114,18 @@ emits `model_select`, so the current-model snapshot follows with no
 explicit publish. Queue, admission, drop, and timeout semantics
 match history reads; Phi surfaces list failures inside the picker
 (error/unavailable row) and keeps partial lists usable.
+
+## Native reload
+
+`pi.reload.v1` is advertised only when the owned namespaced extension
+command and Pi command-dispatch APIs are available. Phi sends the empty
+`ReloadRequest` (field 17) as a one-way control. The extension checks
+command ownership again, then dispatches it with explicit command
+expansion into `ExtensionCommandContext.reload()`. There is no reply:
+reload replaces the runtime that would send one. Nonfatal bounded queue
+admission never closes the lifecycle stream. The authenticated HTTP
+route returns 202 for queue acceptance only; stream loss after admission
+can still lose the action. Phi does not retry accepted reloads.
 
 ## Lifecycle events
 

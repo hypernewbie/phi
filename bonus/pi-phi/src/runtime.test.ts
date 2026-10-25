@@ -10,6 +10,7 @@ import {
 import { LIFECYCLE_HEADROOM_BYTES } from './protocol.js';
 import { CAPABILITY_HISTORY, CAPABILITY_LIFECYCLE } from './protocol.js';
 import { CAPABILITY_MODELS } from './protocol.js';
+import { CAPABILITY_RELOAD } from './protocol.js';
 import { MAX_MODELS_ENTRIES } from './protocol.js';
 import { InvalidTargetError } from './endpoint.js';
 import type { ChannelCreds, ChannelHooks } from './channel.js';
@@ -178,6 +179,45 @@ describe('Runtime hello', () => {
         expect(payload.value.currentState?.leafId).toBe('leaf');
         expect(payload.value.currentState?.model?.provider).toBe('p');
         rt.shutdown();
+    });
+    it('advertises reload only when the owned command is available', async () => {
+        const ch = mockChannel();
+        let available = true;
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            makeChannel: wired(ch),
+            reloadCommand: {
+                isAvailable: () => available,
+                dispatch: () => true,
+            },
+        });
+        rt.start(ctx());
+        await sleep(10);
+        const hello = payloadOf(ch.hellos[0]!);
+        if (hello.$case !== 'hello') throw new Error('missing hello');
+        expect(hello.value.capabilities).toContain(CAPABILITY_RELOAD);
+        rt.shutdown();
+
+        available = false;
+        const withoutReload = mockChannel();
+        const other = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            makeChannel: wired(withoutReload),
+            reloadCommand: {
+                isAvailable: () => available,
+                dispatch: () => true,
+            },
+        });
+        other.start(ctx());
+        await sleep(10);
+        const noReloadHello = payloadOf(withoutReload.hellos[0]!);
+        if (noReloadHello.$case !== 'hello') throw new Error('missing hello');
+        expect(noReloadHello.value.capabilities).not.toContain(
+            CAPABILITY_RELOAD,
+        );
+        other.shutdown();
     });
     it('advertises history only while the reader reaches an editor', async () => {
         const editorUi = {
@@ -378,6 +418,15 @@ function modelsRequest(id: string): PhiToPi {
         processId: 'proc',
         runtimeGeneration: 1n,
         payload: { $case: 'modelsRequest', value: { requestId: id } },
+    };
+}
+
+function reloadRequest(): PhiToPi {
+    return {
+        paneId: 'pane',
+        processId: 'proc',
+        runtimeGeneration: 1n,
+        payload: { $case: 'reloadRequest', value: {} },
     };
 }
 
@@ -591,6 +640,68 @@ describe('Runtime models requests', () => {
         expect(ch.nonfatalSends).toHaveLength(2);
         expect(modelsOf(ch.nonfatalSends[1]!).unavailable).toBe(true);
         expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+});
+
+describe('Runtime reload requests', () => {
+    it('dispatches one identity-matched request after capability negotiation', async () => {
+        const ch = mockChannel();
+        let dispatches = 0;
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            makeChannel: wired(ch),
+            reloadCommand: {
+                isAvailable: () => true,
+                dispatch: () => {
+                    dispatches += 1;
+                    return true;
+                },
+            },
+        });
+        rt.start(ctx());
+        await sleep(10);
+        ch.hooks!.onMessage(reloadRequest());
+        expect(dispatches).toBe(1);
+        const wrongPane = reloadRequest();
+        wrongPane.paneId = 'other';
+        ch.hooks!.onMessage(wrongPane);
+        const wrongGeneration = reloadRequest();
+        wrongGeneration.runtimeGeneration = 2n;
+        ch.hooks!.onMessage(wrongGeneration);
+        expect(dispatches).toBe(1);
+        rt.shutdown();
+    });
+
+    it('does not dispatch when the server did not accept reload capability', async () => {
+        const ch = mockChannel();
+        ch.connect = async (hello: PiToPhi) => {
+            ch.hellos.push(hello);
+            return {
+                protocolVersion: 1,
+                capabilities: [CAPABILITY_LIFECYCLE],
+                runtimeGeneration: 1n,
+                runtimeId: 'rt',
+            };
+        };
+        let dispatches = 0;
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            makeChannel: wired(ch),
+            reloadCommand: {
+                isAvailable: () => true,
+                dispatch: () => {
+                    dispatches += 1;
+                    return true;
+                },
+            },
+        });
+        rt.start(ctx());
+        await sleep(10);
+        ch.hooks!.onMessage(reloadRequest());
+        expect(dispatches).toBe(0);
         rt.shutdown();
     });
 });

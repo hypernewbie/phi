@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"log/slog"
@@ -346,6 +347,7 @@ func main() {
 	http.HandleFunc("/api/pi-history", handlePiBridgeHistory)
 	http.HandleFunc("/api/pi-bridge/models", handlePiBridgeModels)
 	http.HandleFunc("/api/pi-bridge/model", handlePiBridgeSetModel)
+	http.HandleFunc("/api/pi-bridge/reload", handlePiBridgeReload)
 	http.HandleFunc("/api/attachments", handleAttachments)
 	http.HandleFunc("/api/clipboard", handleGetClipboard)
 	http.HandleFunc("/api/system/cpu", handleSystemCPU)
@@ -905,6 +907,39 @@ func handlePiBridgeModels(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"models": models, "truncated": res.Truncated, "unavailable": res.Unavailable})
+}
+
+// handlePiBridgeReload uses the existing API auth gate. The body
+// accepts only a pane identifier; 202 reports queue admission, not
+// native completion.
+func handlePiBridgeReload(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Pane string `json:"pane"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if body.Pane == "" || len(body.Pane) > 256 {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if err := piBridge.RequestPaneReload(body.Pane); err != nil {
+		http.Error(w, "pi reload unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // handlePiBridgeSetModel uses the existing API auth gate. The body

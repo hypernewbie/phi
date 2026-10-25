@@ -26,6 +26,7 @@ import { PROTOCOL_VERSION } from './protocol.js';
 import { CAPABILITY_HISTORY } from './protocol.js';
 import { CAPABILITY_LIFECYCLE } from './protocol.js';
 import { CAPABILITY_MODELS } from './protocol.js';
+import { CAPABILITY_RELOAD } from './protocol.js';
 import { MAX_JOURNAL_RECORDS } from './protocol.js';
 import { MAX_MESSAGE_BYTES } from './protocol.js';
 import { MAX_MODELS_ENTRIES } from './protocol.js';
@@ -69,11 +70,17 @@ export interface PiContextView {
     readonly ui?: unknown;
 }
 
+export interface ReloadCommand {
+    isAvailable(): boolean;
+    dispatch(): boolean;
+}
+
 export interface RuntimeOptions {
     readonly creds: ChannelCreds;
     readonly generation: bigint;
     /** Host model switch; absent in tests that never switch. */
     readonly setModel?: (model: PiModelView) => Promise<boolean>;
+    readonly reloadCommand?: ReloadCommand;
     /** Base reconnect delay; doubles per attempt up to maxBackoffMs. */
     readonly backoffBaseMs?: number;
     readonly backoffMaxMs?: number;
@@ -140,6 +147,7 @@ export class Runtime {
     private ui: unknown;
     private historyAccepted = false;
     private modelsAccepted = false;
+    private reloadAccepted = false;
     /** Final assistant stop reason of the current run, if observed. */
     private lastStopReason: string | null = null;
     /** When the current stream was accepted; null while connecting. */
@@ -396,6 +404,8 @@ export class Runtime {
     private capabilities(): string[] {
         const caps = [CAPABILITY_LIFECYCLE, CAPABILITY_MODELS];
         if (isHistoryReaderAvailable(this.ui)) caps.push(CAPABILITY_HISTORY);
+        if (this.opts.reloadCommand?.isAvailable())
+            caps.push(CAPABILITY_RELOAD);
         return caps;
     }
 
@@ -456,6 +466,11 @@ export class Runtime {
             ((creds, hooks) => new BridgeChannel(creds, hooks));
         this.historyAccepted = false;
         this.modelsAccepted = false;
+        this.reloadAccepted = false;
+        const hello = this.hello();
+        this.reloadAccepted =
+            hello.payload?.$case === 'hello' &&
+            hello.payload.value.capabilities.includes(CAPABILITY_RELOAD);
         const channel = make(this.opts.creds, {
             onMessage: (msg) => {
                 if (this.channel === channel && !this.shutdownRequested)
@@ -468,12 +483,14 @@ export class Runtime {
         });
         this.channel = channel;
         try {
-            const accepted = await channel.connect(this.hello());
+            const accepted = await channel.connect(hello);
             if (this.channel === channel) {
                 this.historyAccepted =
                     accepted.capabilities.includes(CAPABILITY_HISTORY);
                 this.modelsAccepted =
                     accepted.capabilities.includes(CAPABILITY_MODELS);
+                this.reloadAccepted =
+                    accepted.capabilities.includes(CAPABILITY_RELOAD);
             }
         } catch (err) {
             channel.close();
@@ -526,6 +543,11 @@ export class Runtime {
         ) {
             const req = msg.payload.value;
             void this.onSetModelRequest(req.requestId, req.provider, req.model);
+        } else if (
+            msg.payload?.$case === 'reloadRequest' &&
+            this.reloadAccepted
+        ) {
+            this.opts.reloadCommand?.dispatch();
         }
     }
 

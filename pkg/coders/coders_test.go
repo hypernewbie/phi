@@ -47,6 +47,25 @@ func TestRegistryPresets(t *testing.T) {
 // Manager
 // ─────────────────────────────────────────────────────────────────────────
 
+func TestPiReloadPreset(t *testing.T) {
+	presets := DefaultRegistry()["pi"].Presets
+	want := []Preset{
+		{Name: "/quit", Value: "/quit\r"},
+		{Name: "/resume", Value: "/resume\r"},
+		{Name: "/reload", Value: "/reload\r"},
+		{Name: "/compact", Value: "/compact\r"},
+		{Name: "/copy", Value: "/copy\r"},
+	}
+	if len(presets) < len(want) || !reflect.DeepEqual(presets[:len(want)], want) {
+		t.Fatalf("Pi preset prefix: got %v, want %v", presets, want)
+	}
+	for _, preset := range presets {
+		if preset.Name == "/model" || preset.Value == "/model\r" {
+			t.Fatal("Pi must not retain the standalone /model preset")
+		}
+	}
+}
+
 func TestManagerSnapshotIsDeepCopy(t *testing.T) {
 	m := NewManager()
 	c, ok := m.Get("opencode")

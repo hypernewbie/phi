@@ -192,7 +192,7 @@ func DefaultRegistry() map[string]Coder {
 			Presets: []Preset{
 				{Name: "/quit", Value: "/quit\r"},
 				{Name: "/resume", Value: "/resume\r"},
-				{Name: "/model", Value: "/model\r"},
+				{Name: "/reload", Value: "/reload\r"},
 				{Name: "/compact", Value: "/compact\r"},
 				{Name: "/copy", Value: "/copy\r"},
 				{Name: "ctrl+c", Value: "\x03"},

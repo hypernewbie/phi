@@ -94,7 +94,7 @@ function makeTm() {
             pi: {
                 presets: [
                     { name: '/quit', value: '/quit\r' },
-                    { name: '/model', value: '/model\r' },
+                    { name: '/reload', value: '/reload\r' },
                 ],
             },
             claude: { presets: [{ name: '/compact', value: '/compact\r' }] },
@@ -407,29 +407,315 @@ describe('opencode picker chain + pi model dropdown — tabInfo captured at clic
     });
 });
 
-describe('opencode/pi preset chip (desktop + mobile renderSlashDropup)', () => {
-    it('pi coder, paste-eligible preset: atomic sendSlashCommand', () => {
+describe('Pi /reload preset', () => {
+    it('uses the current reload-capable socket without sending PTY input', async () => {
         const tm = makeTm();
-        const tabA = makeTab('pi-A', 'pi');
-        const tabB = makeTab('pi-B', 'pi');
-        tm.tabs.set(tabA.paneId, tabA);
-        tm.tabs.set(tabB.paneId, tabB);
-        tm.activePaneId = tabA.paneId;
+        const tab = makeTab('pi-native', 'pi');
+        tab.piBridge = {
+            state: 'managed',
+            connected: true,
+            capabilities: ['pi.reload.v1'],
+        };
+        tab._piBridgeFresh = tab.ws;
+        tm.tabs.set(tab.paneId, tab);
+        tm.activePaneId = tab.paneId;
+        const response = {
+            status: 202,
+            arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(0)),
+        };
+        const fetchMock = vi.fn().mockResolvedValue(response);
+        vi.stubGlobal('fetch', fetchMock);
 
-        tm.renderPresets('pi');
-        const chips = Array.from(
-            tm.presetsContainer.querySelectorAll('.preset-btn'),
+        expect(tm.sendSlashCommand(tab, '/reload')).toBe(true);
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/api/pi-bridge/reload',
+            expect.objectContaining({
+                method: 'POST',
+                body: JSON.stringify({ pane: tab.paneId }),
+                cache: 'no-store',
+            }),
         );
-        const modelChip = chips.find((b) => b.innerText === '/model');
-        expect(modelChip).toBeDefined();
-        modelChip.click();
+        expect(tab.sendInputCalls).toHaveLength(0);
+        expect(tm.focusActiveTerminal).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(response.arrayBuffer).toHaveBeenCalledOnce();
+        expect(tab.sendInputCalls).toHaveLength(0);
+    });
 
-        tm.activePaneId = tabB.paneId;
-        vi.advanceTimersByTime(2000);
+    it('does not fall back after 202 if consuming the response body fails', async () => {
+        const tm = makeTm();
+        const tab = makeTab('pi-native', 'pi');
+        tab.piBridge = {
+            state: 'managed',
+            connected: true,
+            capabilities: ['pi.reload.v1'],
+        };
+        tab._piBridgeFresh = tab.ws;
+        tm.tabs.set(tab.paneId, tab);
+        tm.activePaneId = tab.paneId;
+        const response = {
+            status: 202,
+            arrayBuffer: vi
+                .fn()
+                .mockRejectedValue(new Error('body read failed')),
+        };
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
 
-        expect(tabA.sendInputCalls.length).toBe(1);
-        expect(tabA.sendInputCalls[0][0]).toBe('\x1b[200~/model\x1b[201~\r');
-        expect(tabB.sendInputCalls.length).toBe(0);
+        tm.sendSlashCommand(tab, '/reload');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(response.arrayBuffer).toHaveBeenCalledOnce();
+        expect(tab.sendInputCalls).toHaveLength(0);
+    });
+
+    it('falls back once to the original pane when bridge admission fails', async () => {
+        const tm = makeTm();
+        const target = makeTab('pi-native', 'pi');
+        target.piBridge = {
+            state: 'managed',
+            connected: true,
+            capabilities: ['pi.reload.v1'],
+        };
+        target._piBridgeFresh = target.ws;
+        const other = makeTab('pi-other', 'pi');
+        tm.tabs.set(target.paneId, target);
+        tm.tabs.set(other.paneId, other);
+        tm.activePaneId = target.paneId;
+        const response = {
+            status: 503,
+            arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(0)),
+        };
+        const fetchMock = vi.fn().mockResolvedValue(response);
+        vi.stubGlobal('fetch', fetchMock);
+
+        expect(tm.sendSlashCommand(target, '/reload')).toBe(true);
+        tm.activePaneId = other.paneId;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(response.arrayBuffer).toHaveBeenCalledOnce();
+        expect(target.sendInputCalls).toEqual([
+            ['\x1b[200~/reload\x1b[201~\r'],
+        ]);
+        expect(other.sendInputCalls).toHaveLength(0);
+        expect(tm.focusActiveTerminal).toHaveBeenCalledOnce();
+    });
+
+    it('falls back once on a request exception without retrying accepted work', async () => {
+        const tm = makeTm();
+        const tab = makeTab('pi-native', 'pi');
+        tab.piBridge = {
+            state: 'managed',
+            connected: true,
+            capabilities: ['pi.reload.v1'],
+        };
+        tab._piBridgeFresh = tab.ws;
+        tm.tabs.set(tab.paneId, tab);
+        tm.activePaneId = tab.paneId;
+        vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+
+        tm.sendSlashCommand(tab, '/reload');
+        await Promise.resolve();
+        expect(tab.sendInputCalls).toEqual([['\x1b[200~/reload\x1b[201~\r']]);
+    });
+
+    describe.each([
+        [
+            'live',
+            {
+                state: 'managed',
+                connected: true,
+                capabilities: ['pi.models.v1'],
+            },
+        ],
+        ['absent at startup', undefined],
+        ['unavailable', { state: 'unavailable', connected: false }],
+        ['disabled', { state: 'plain', connected: false }],
+        ['disconnected', { state: 'managed', connected: false }],
+        [
+            'missing capabilities',
+            { state: 'managed', connected: true, capabilities: [] },
+        ],
+        [
+            'reconnected',
+            {
+                state: 'managed',
+                connected: true,
+                generation: '2',
+                capabilities: ['pi.models.v1'],
+            },
+        ],
+    ])('bridge %s', (_name, bridge) => {
+        it.each([1440, 390])('sends one atomic command at %ipx', (width) => {
+            vi.stubGlobal('innerWidth', width);
+            const fetchMock = vi.fn();
+            vi.stubGlobal('fetch', fetchMock);
+            const tm = makeTm();
+            const tabA = makeTab('pi-A', 'pi');
+            const tabB = makeTab('pi-B', 'pi');
+            tabA.piBridge = bridge;
+            tabA._piBridgeFresh = tabA.ws;
+            tm.tabs.set(tabA.paneId, tabA);
+            tm.tabs.set(tabB.paneId, tabB);
+            tm.activePaneId = tabA.paneId;
+            const slashDropup = document.createElement('div');
+            slashDropup.id = 'slash-presets-dropup';
+            slashDropup.className = 'model-presets-dropup hidden';
+            document.body.appendChild(slashDropup);
+
+            tm.renderPresets('pi');
+            let buttons = [...tm.presetsContainer.querySelectorAll('button')];
+            if (width === 390) {
+                buttons.find((button) => button.innerText === '/ ▾').click();
+                expect(slashDropup.classList.contains('hidden')).toBe(false);
+                buttons = [...slashDropup.querySelectorAll('button')];
+            }
+            const reload = buttons.find(
+                (button) => button.innerText === '/reload',
+            );
+            expect(reload).toBeDefined();
+            expect(reload.disabled).toBe(false);
+            expect(
+                buttons.some((button) => button.innerText === '/model'),
+            ).toBe(false);
+            reload.click();
+            if (width === 390) {
+                expect(slashDropup.classList.contains('hidden')).toBe(true);
+            }
+
+            tm.activePaneId = tabB.paneId;
+            vi.advanceTimersByTime(2000);
+            expect(tabA.sendInputCalls).toEqual([
+                ['\x1b[200~/reload\x1b[201~\r'],
+            ]);
+            expect(tabB.sendInputCalls).toHaveLength(0);
+            expect(fetchMock).not.toHaveBeenCalled();
+            expect(tm.app.showToast).not.toHaveBeenCalled();
+        });
+    });
+
+    it('routes reload-capable live → disconnected → reconnected on the same pane', async () => {
+        const tm = makeTm();
+        const tab = makeTab('pi-A', 'pi');
+        tm.tabs.set(tab.paneId, tab);
+        tm.activePaneId = tab.paneId;
+        tab._piBridgeFresh = tab.ws;
+        const response = {
+            status: 202,
+            arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(0)),
+        };
+        const fetchMock = vi.fn().mockResolvedValue(response);
+        vi.stubGlobal('fetch', fetchMock);
+        const clickReload = () => {
+            tm.renderPresets('pi');
+            const reload = [
+                ...tm.presetsContainer.querySelectorAll('button'),
+            ].find((button) => button.innerText === '/reload');
+            expect(reload.disabled).toBe(false);
+            reload.click();
+        };
+        // Live reload-capable pane: HTTP 202, no PTY input.
+        tab.piBridge = {
+            state: 'managed',
+            connected: true,
+            capabilities: ['pi.reload.v1'],
+        };
+        clickReload();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/api/pi-bridge/reload',
+            expect.objectContaining({
+                method: 'POST',
+                body: JSON.stringify({ pane: tab.paneId }),
+            }),
+        );
+        expect(tab.ws.sendInput.mock.calls).toHaveLength(0);
+        // Disconnected pane: one PTY payload, no HTTP.
+        fetchMock.mockClear();
+        tab.ws.sendInput.mockClear();
+        tab.piBridge = {
+            state: 'managed',
+            connected: false,
+            capabilities: ['pi.reload.v1'],
+        };
+        clickReload();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(tab.ws.sendInput.mock.calls).toEqual([
+            ['\x1b[200~/reload\x1b[201~\r'],
+        ]);
+        // Reload-capable reconnected pane: HTTP 202, no PTY.
+        fetchMock.mockClear();
+        tab.ws.sendInput.mockClear();
+        tab.piBridge = {
+            state: 'managed',
+            connected: true,
+            generation: '2',
+            capabilities: ['pi.reload.v1'],
+        };
+        clickReload();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(tab.ws.sendInput.mock.calls).toHaveLength(0);
+        expect(tm.app.showToast).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ['a replaced socket', {}],
+        ['dropped freshness', null],
+    ])('ignores reload capability confirmed on %s', (_name, fresh) => {
+        const tm = makeTm();
+        const tab = makeTab('pi-A', 'pi');
+        tab.piBridge = {
+            state: 'managed',
+            connected: true,
+            capabilities: ['pi.reload.v1'],
+        };
+        tab._piBridgeFresh = fresh;
+        tm.tabs.set(tab.paneId, tab);
+        tm.activePaneId = tab.paneId;
+        const fetchMock = vi.fn();
+        vi.stubGlobal('fetch', fetchMock);
+        tm.renderPresets('pi');
+        const reload = [...tm.presetsContainer.querySelectorAll('button')].find(
+            (button) => button.innerText === '/reload',
+        );
+        expect(reload.disabled).toBe(false);
+        reload.click();
+        expect(tab.sendInputCalls).toEqual([['\x1b[200~/reload\x1b[201~\r']]);
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(tm.app.showToast).not.toHaveBeenCalled();
+    });
+
+    it('a hanging bridge request times out into one fallback pinned to the original pane', async () => {
+        const tm = makeTm();
+        const target = makeTab('pi-native', 'pi');
+        target.piBridge = {
+            state: 'managed',
+            connected: true,
+            capabilities: ['pi.reload.v1'],
+        };
+        target._piBridgeFresh = target.ws;
+        const other = makeTab('pi-other', 'pi');
+        tm.tabs.set(target.paneId, target);
+        tm.tabs.set(other.paneId, other);
+        tm.activePaneId = target.paneId;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn().mockImplementation(
+                (_url, options) =>
+                    new Promise((_resolve, reject) => {
+                        options.signal.addEventListener('abort', () =>
+                            reject(new Error('aborted')),
+                        );
+                    }),
+            ),
+        );
+        expect(tm.sendSlashCommand(target, '/reload')).toBe(true);
+        tm.activePaneId = other.paneId;
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(target.sendInputCalls).toEqual([
+            ['\x1b[200~/reload\x1b[201~\r'],
+        ]);
+        expect(other.sendInputCalls).toHaveLength(0);
     });
 
     it('non-paste-eligible preset (e.g. /quit for pi): sendRawInput unchanged', () => {
@@ -531,26 +817,6 @@ describe('pi /model picker sequence', () => {
         expect(tabA.sendInputCalls).toHaveLength(3);
     });
 
-    it('pi coder preset button: single sendSlashCommand', () => {
-        const tm = makeTm();
-        const tabA = makeTab('pi-A', 'pi');
-        tm.tabs.set(tabA.paneId, tabA);
-        tm.activePaneId = tabA.paneId;
-
-        tm.renderPresets('pi');
-        const chips = Array.from(
-            tm.presetsContainer.querySelectorAll('.preset-btn'),
-        );
-        const modelChip = chips.find((b) => b.innerText === '/model');
-        modelChip.click();
-
-        expect(tabA.sendInputCalls.length).toBe(1);
-        expect(tabA.sendInputCalls[0][0]).toBe('\x1b[200~/model\x1b[201~\r');
-
-        vi.advanceTimersByTime(2000);
-        expect(tabA.sendInputCalls.length).toBe(1);
-    });
-
     it('slash preset for non-paste-eligible coders: sendRawInput unchanged', () => {
         // Verifies commit 2 doesn't touch the else branch. The esc
         // chip (value '\x1b') is non-paste-eligible and still goes
@@ -572,27 +838,6 @@ describe('pi /model picker sequence', () => {
 
         expect(tabA.sendInputCalls.length).toBe(1);
         expect(tabA.sendInputCalls[0][0]).toBe('\x1b');
-    });
-
-    it('mobile renderSlashDropup path: also atomic', () => {
-        // Mobile render method should produce the same atomic form.
-        const tm = makeTm();
-        const tabA = makeTab('pi-A', 'pi');
-        tm.tabs.set(tabA.paneId, tabA);
-        tm.activePaneId = tabA.paneId;
-
-        // The mobile render drops into #presets-container too
-        // (it's the same code path; the architectural difference is
-        // mobile-vs-desktop styling). Drive via renderPresets.
-        tm.renderPresets('pi');
-        const chips = Array.from(
-            tm.presetsContainer.querySelectorAll('.preset-btn'),
-        );
-        const modelChip = chips.find((b) => b.innerText === '/model');
-        modelChip.click();
-
-        expect(tabA.sendInputCalls.length).toBe(1);
-        expect(tabA.sendInputCalls[0][0]).toBe('\x1b[200~/model\x1b[201~\r');
     });
 
     it('opencode waits for the paste to settle before sending Enter', () => {

@@ -98,6 +98,7 @@ export interface PhiToPi {
     | { $case: "historyRequest"; value: HistoryRequest }
     | { $case: "modelsRequest"; value: ModelsRequest }
     | { $case: "setModelRequest"; value: SetModelRequest }
+    | { $case: "reloadRequest"; value: ReloadRequest }
     | undefined;
 }
 
@@ -253,6 +254,13 @@ export interface SetModelAck {
   requestId: string;
   ok: boolean;
   reason: string;
+}
+
+/**
+ * ReloadRequest asks Pi to invoke its native reload command. It has no reply:
+ * the command replaces the runtime that would send one.
+ */
+export interface ReloadRequest {
 }
 
 /** Terminal protocol-level rejection. Ends the stream attempt. */
@@ -502,6 +510,9 @@ export const PhiToPi: MessageFns<PhiToPi> = {
       case "setModelRequest":
         SetModelRequest.encode(message.payload.value, writer.uint32(130).fork()).join();
         break;
+      case "reloadRequest":
+        ReloadRequest.encode(message.payload.value, writer.uint32(138).fork()).join();
+        break;
     }
     return writer;
   },
@@ -583,6 +594,14 @@ export const PhiToPi: MessageFns<PhiToPi> = {
             message.payload = { $case: "setModelRequest", value: SetModelRequest.decode(reader, reader.uint32()) };
             continue;
           }
+          case 17: {
+            if (tag !== 138) {
+              break;
+            }
+
+            message.payload = { $case: "reloadRequest", value: ReloadRequest.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -633,6 +652,12 @@ export const PhiToPi: MessageFns<PhiToPi> = {
       case "setModelRequest": {
         if (object.payload?.value !== undefined && object.payload?.value !== null) {
           message.payload = { $case: "setModelRequest", value: SetModelRequest.fromPartial(object.payload.value) };
+        }
+        break;
+      }
+      case "reloadRequest": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "reloadRequest", value: ReloadRequest.fromPartial(object.payload.value) };
         }
         break;
       }
@@ -1847,6 +1872,49 @@ export const SetModelAck: MessageFns<SetModelAck> = {
     message.requestId = object.requestId ?? "";
     message.ok = object.ok ?? false;
     message.reason = object.reason ?? "";
+    return message;
+  },
+};
+
+function createBaseReloadRequest(): ReloadRequest {
+  return {};
+}
+
+export const ReloadRequest: MessageFns<ReloadRequest> = {
+  encode(_: ReloadRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ReloadRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseReloadRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<ReloadRequest>, I>>(base?: I): ReloadRequest {
+    return ReloadRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ReloadRequest>, I>>(_: I): ReloadRequest {
+    const message = createBaseReloadRequest();
     return message;
   },
 };

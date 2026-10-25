@@ -4,12 +4,13 @@
 // loads stay inert. Credentials are stashed in the process owner slot and
 // removed from process.env so agent-spawned tools cannot inherit them.
 
+import { basename } from 'node:path';
 import type {
     ExtensionAPI,
     ExtensionContext,
 } from '@earendil-works/pi-coding-agent';
 import type { ChannelCreds } from './channel.js';
-import { type PiContextView, Runtime } from './runtime.js';
+import { type PiContextView, type ReloadCommand, Runtime } from './runtime.js';
 
 export const ENV_TARGET = 'PHI_PI_BRIDGE_ENDPOINT';
 export const ENV_PANE = 'PHI_PI_BRIDGE_PANE_ID';
@@ -17,6 +18,44 @@ export const ENV_PROCESS = 'PHI_PI_BRIDGE_PROCESS_ID';
 export const ENV_TOKEN = 'PHI_PI_BRIDGE_TOKEN';
 
 const OWNER_KEY = Symbol.for('phi.pi-phi.owner');
+const RELOAD_COMMAND = 'phi-bridge-reload';
+const RELOAD_BUNDLE = 'pi-phi-extension.cjs';
+
+type ReloadPiApi = Pick<
+    ExtensionAPI,
+    'getCommands' | 'registerCommand' | 'sendUserMessage'
+>;
+
+function reloadApi(pi: ExtensionAPI): Partial<ReloadPiApi> {
+    // SAFETY: Older Pi hosts may omit APIs present in the pinned TypeScript surface.
+    return pi as unknown as Partial<ReloadPiApi>;
+}
+
+function hasReloadApis(pi: ExtensionAPI): boolean {
+    const api = reloadApi(pi);
+    return (
+        typeof api.getCommands === 'function' &&
+        typeof api.registerCommand === 'function' &&
+        typeof api.sendUserMessage === 'function'
+    );
+}
+
+function hasOwnedReloadCommand(pi: ExtensionAPI): boolean {
+    try {
+        const api = reloadApi(pi);
+        if (typeof api.getCommands !== 'function') return false;
+        const matches = api
+            .getCommands()
+            .filter((command) => command.name === RELOAD_COMMAND);
+        return (
+            matches.length === 1 &&
+            matches[0]?.source === 'extension' &&
+            basename(matches[0].sourceInfo.path) === RELOAD_BUNDLE
+        );
+    } catch {
+        return false;
+    }
+}
 
 interface OwnerSlot {
     active: boolean;
@@ -147,7 +186,11 @@ export interface FactoryRuntime {
 }
 
 export interface FactoryDeps {
-    makeRuntime?: (creds: ChannelCreds, generation: bigint) => FactoryRuntime;
+    makeRuntime?: (
+        creds: ChannelCreds,
+        generation: bigint,
+        reloadCommand: ReloadCommand,
+    ) => FactoryRuntime;
 }
 
 /**
@@ -165,14 +208,57 @@ export function createExtension(
     let runtime: FactoryRuntime | null = null;
     let claimed = false;
     let sessionId: string | null = null;
+    let reloadRegistered = false;
+    const reloadPi = reloadApi(pi);
+    // Only the claimed runtime owner registers, at claim time. Pi
+    // renames duplicate command names to name:1/name:2, so registering
+    // from every loaded copy before ownership is resolved would leave
+    // no unsuffixed owned command and lose reload capability.
+    const registerReloadCommand = (): void => {
+        if (reloadRegistered || !hasReloadApis(pi)) return;
+        try {
+            reloadPi.registerCommand!(RELOAD_COMMAND, {
+                description: 'Native Pi reload from Phi',
+                handler: async (_args, ctx) => {
+                    if (
+                        !claimed ||
+                        !hasOwnedReloadCommand(pi) ||
+                        typeof ctx.reload !== 'function'
+                    )
+                        return;
+                    await ctx.reload();
+                },
+            });
+            reloadRegistered = true;
+        } catch {
+            // Unsupported hosts keep the existing PTY fallback.
+        }
+    };
+    const reloadCommand: ReloadCommand = {
+        isAvailable: () =>
+            claimed && reloadRegistered && hasOwnedReloadCommand(pi),
+        dispatch: () => {
+            if (!claimed || !reloadRegistered || !hasOwnedReloadCommand(pi))
+                return false;
+            try {
+                reloadPi.sendUserMessage!(`/${RELOAD_COMMAND}`, {
+                    expandPromptTemplates: true,
+                });
+                return true;
+            } catch {
+                return false;
+            }
+        },
+    };
 
     const make =
         deps.makeRuntime ??
-        ((c, g) =>
+        ((c, g, reload) =>
             new Runtime({
                 creds: c,
                 generation: g,
                 setModel: (model) => pi.setModel(model),
+                reloadCommand: reload,
             }));
 
     pi.on('session_start', (_event, ctx) => {
@@ -210,7 +296,7 @@ export function createExtension(
             runtime.shutdown();
             slot.generation += 1n;
             sessionId = next;
-            runtime = make(slot.creds!, slot.generation);
+            runtime = make(slot.creds!, slot.generation, reloadCommand);
             runtime.start(contextView(ctx));
             return;
         }
@@ -221,12 +307,13 @@ export function createExtension(
         slot.active = true;
         slot.generation += 1n;
         claimed = true;
+        registerReloadCommand();
         try {
             sessionId = ctx.sessionManager.getSessionId();
         } catch {
             sessionId = null;
         }
-        runtime = make(creds, slot.generation);
+        runtime = make(creds, slot.generation, reloadCommand);
         runtime.start(contextView(ctx));
     });
 

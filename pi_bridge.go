@@ -402,6 +402,26 @@ func (b *Bridge) RequestPaneSetModel(ctx context.Context, paneID, provider, mode
 	return b.server.RequestSetModel(ctx, processID, provider, model)
 }
 
+// RequestPaneReload resolves a pane to its managed process and admits
+// one one-way native reload request to its current capable peer.
+func (b *Bridge) RequestPaneReload(paneID string) error {
+	if b == nil {
+		return fmt.Errorf("pi-bridge: disabled")
+	}
+	b.mu.Lock()
+	p, ok := b.panes[paneID]
+	var processID string
+	var managed bool
+	if ok {
+		processID, managed = p.processID, p.managed
+	}
+	b.mu.Unlock()
+	if !ok || !managed {
+		return fmt.Errorf("pi-bridge: pane not managed")
+	}
+	return b.server.RequestReload(processID)
+}
+
 // RevokePane revokes a pane's lease and drops its record. Unknown panes
 // and nil bridges are ignored. Idempotent.
 func (b *Bridge) RevokePane(paneID string) {

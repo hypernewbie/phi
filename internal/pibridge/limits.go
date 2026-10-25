@@ -41,6 +41,8 @@ const (
 	CapabilityHistory = "pi.history.v1"
 	// CapabilityModels is the on-demand model-list/switch capability name.
 	CapabilityModels = "pi.models.v1"
+	// CapabilityReload is the one-way native-reload capability name.
+	CapabilityReload = "pi.reload.v1"
 
 	// maxHistoryPending bounds history requests awaiting replies per
 	// peer. Excess callers fail fast into fallback; the map never

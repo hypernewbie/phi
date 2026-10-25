@@ -7718,8 +7718,21 @@ export class TabManager {
      * Keep its 200ms gap pinned to the clicked tab. V2 Mini queues Enter
      * behind a pending paste, so it uses the atomic form, like Pi.
      */
-    sendSlashCommand(tabInfo, cmd, { focusInputOnMobile = true } = {}) {
+    sendSlashCommand(
+        tabInfo,
+        cmd,
+        { focusInputOnMobile = true, bridgeFallback = false } = {},
+    ) {
         if (tabInfo?.coder === 'pi-rpc') return false;
+        if (
+            !bridgeFallback && tabInfo?.coder === 'pi' && cmd === '/reload'
+        ) {
+            if (this._piBridgeReloadEligible(tabInfo)) {
+                void this._requestPiBridgeReload(tabInfo, focusInputOnMobile);
+                this._focusSlashCommand(tabInfo, focusInputOnMobile);
+                return true;
+            }
+        }
         const paste = `\x1b[200~${cmd}\x1b[201~`;
         const legacyOpenCode = tabInfo.coder === 'opencode' && !isOpenCodeMini(tabInfo);
         const sent = this.sendToTab(
@@ -7732,8 +7745,13 @@ export class TabManager {
                 this.sendToTab(tabInfo, '\r');
             }, 200);
         }
-        const isMobile = prefersInputBarFocus();
-        if (isMobile) {
+        if (!bridgeFallback)
+            this._focusSlashCommand(tabInfo, focusInputOnMobile);
+        return true;
+    }
+
+    _focusSlashCommand(tabInfo, focusInputOnMobile) {
+        if (prefersInputBarFocus()) {
             if (focusInputOnMobile && !tabInfo.directMode && this.inputTextArea) {
                 this.inputTextArea.focus({ preventScroll: true });
             } else {
@@ -7742,7 +7760,33 @@ export class TabManager {
         } else {
             this.focusActiveTerminal();
         }
-        return true;
+    }
+
+    async _requestPiBridgeReload(tabInfo, focusInputOnMobile) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 1000);
+        let accepted = false;
+        try {
+            const res = await fetch('/api/pi-bridge/reload', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pane: tabInfo.paneId }),
+                signal: controller.signal,
+                cache: 'no-store',
+            });
+            accepted = res.status === 202;
+            await res.arrayBuffer();
+        } catch {
+            // The original PTY action remains the best-effort fallback.
+        } finally {
+            clearTimeout(timer);
+        }
+        if (!accepted) {
+            this.sendSlashCommand(tabInfo, '/reload', {
+                focusInputOnMobile,
+                bridgeFallback: true,
+            });
+        }
     }
 
     _showReconnectOverlay(tabInfo) {
@@ -9724,7 +9768,7 @@ export class TabManager {
         }
 
         // 2b. Pi-specific shortcut chip: lives in the presets row alongside
-        // /quit /resume /model /compact, with the same flat preset-btn
+        // /quit /resume /reload /compact, with the same flat preset-btn
         // shape (no kbd-key caps / glow, no extra id, no title, label
         // matches the existing binding convention — lowercase, no
         // separator, no action-verb suffix). Visible only when the
@@ -11262,6 +11306,18 @@ export class TabManager {
             tab.piBridge.connected === true &&
             Array.isArray(tab.piBridge.capabilities) &&
             tab.piBridge.capabilities.includes('pi.history.v1')
+        );
+    }
+
+    _piBridgeReloadEligible(tab) {
+        return (
+            tab?.coder === 'pi' && !tab.isDead &&
+            this.tabs?.get(tab.paneId) === tab && !!tab.ws &&
+            tab._piBridgeFresh === tab.ws &&
+            tab.piBridge?.state === 'managed' &&
+            tab.piBridge.connected === true &&
+            Array.isArray(tab.piBridge.capabilities) &&
+            tab.piBridge.capabilities.includes('pi.reload.v1')
         );
     }
 

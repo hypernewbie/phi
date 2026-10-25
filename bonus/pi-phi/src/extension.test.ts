@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
     ExtensionAPI,
+    ExtensionCommandContext,
     ExtensionContext,
 } from '@earendil-works/pi-coding-agent';
 import {
@@ -14,6 +15,7 @@ import {
     resetOwnerSlotForTest,
     type FactoryRuntime,
 } from './extension.js';
+import type { ReloadCommand } from './runtime.js';
 
 const SAVED = { ...process.env };
 
@@ -41,6 +43,138 @@ function mockPi(): {
         },
     } as unknown as ExtensionAPI;
     return { pi, handlers };
+}
+
+function mockPiWithReload(): {
+    pi: ExtensionAPI;
+    handlers: Map<string, (event: unknown, ctx: never) => unknown>;
+    commands: Array<{
+        name: string;
+        source: string;
+        sourceInfo: { path: string };
+    }>;
+    commandHandlers: Map<
+        string,
+        (args: string, ctx: ExtensionCommandContext) => Promise<void>
+    >;
+    sendUserMessage: ReturnType<typeof vi.fn>;
+} {
+    const { pi, handlers } = mockPi();
+    const commands: Array<{
+        name: string;
+        source: string;
+        sourceInfo: { path: string };
+    }> = [];
+    const commandHandlers = new Map<
+        string,
+        (args: string, ctx: ExtensionCommandContext) => Promise<void>
+    >();
+    const sendUserMessage = vi.fn();
+    Object.assign(pi, {
+        registerCommand: (
+            name: string,
+            options: {
+                handler: (
+                    args: string,
+                    ctx: ExtensionCommandContext,
+                ) => Promise<void>;
+            },
+        ) => {
+            commandHandlers.set(name, options.handler);
+            commands.push({
+                name,
+                source: 'extension',
+                sourceInfo: {
+                    path: '/tmp/pi-phi-extension.cjs',
+                },
+            });
+        },
+        getCommands: () => commands,
+        sendUserMessage,
+    });
+    return { pi, handlers, commands, commandHandlers, sendUserMessage };
+}
+
+/**
+ * Two extension hosts sharing one Pi command registry. Models pinned
+ * Pi 1.0.1: each loaded copy keeps its own commands, the runner
+ * aggregates them in load order, duplicate names become name:1/name:2,
+ * and getCommands reports the invocation name as the command name
+ * (dist/core/extensions/runner.js resolveRegisteredCommands,
+ * dist/core/agent-session.js getCommands). The per-name occurrence
+ * suffixing is the behavior that matters here; Pi's extra
+ * taken-name collision pass has no trigger in this suite.
+ */
+function mockPiPairWithSharedRegistry(): {
+    first: {
+        pi: ExtensionAPI;
+        handlers: Map<string, (event: unknown, ctx: never) => unknown>;
+        sendUserMessage: ReturnType<typeof vi.fn>;
+    };
+    second: {
+        pi: ExtensionAPI;
+        handlers: Map<string, (event: unknown, ctx: never) => unknown>;
+        sendUserMessage: ReturnType<typeof vi.fn>;
+    };
+    registered: Array<{
+        name: string;
+        handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+    }>;
+} {
+    const registered: Array<{
+        name: string;
+        handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+    }> = [];
+    const resolveCommands = (): Array<{
+        name: string;
+        source: string;
+        sourceInfo: { path: string };
+    }> => {
+        const counts = new Map<string, number>();
+        for (const entry of registered)
+            counts.set(entry.name, (counts.get(entry.name) ?? 0) + 1);
+        const seen = new Map<string, number>();
+        return registered.map((entry) => {
+            const occurrence = (seen.get(entry.name) ?? 0) + 1;
+            seen.set(entry.name, occurrence);
+            const invocationName =
+                (counts.get(entry.name) ?? 0) > 1
+                    ? `${entry.name}:${occurrence}`
+                    : entry.name;
+            return {
+                name: invocationName,
+                source: 'extension',
+                sourceInfo: {
+                    path: '/tmp/pi-phi-extension.cjs',
+                },
+            };
+        });
+    };
+    const side = (): {
+        pi: ExtensionAPI;
+        handlers: Map<string, (event: unknown, ctx: never) => unknown>;
+        sendUserMessage: ReturnType<typeof vi.fn>;
+    } => {
+        const { pi, handlers } = mockPi();
+        const sendUserMessage = vi.fn();
+        Object.assign(pi, {
+            registerCommand: (
+                name: string,
+                options: {
+                    handler: (
+                        args: string,
+                        ctx: ExtensionCommandContext,
+                    ) => Promise<void>;
+                },
+            ) => {
+                registered.push({ name, handler: options.handler });
+            },
+            getCommands: resolveCommands,
+            sendUserMessage,
+        });
+        return { pi, handlers, sendUserMessage };
+    };
+    return { first: side(), second: side(), registered };
 }
 
 function mockCtx(): ExtensionContext {
@@ -137,6 +271,153 @@ describe('factory inertness', () => {
             'session_start',
             'session_tree',
         ]);
+    });
+});
+
+describe('native reload command', () => {
+    it('advertises only an owned command and dispatches with expansion enabled', async () => {
+        setEnv();
+        const { pi, handlers, commands, commandHandlers, sendUserMessage } =
+            mockPiWithReload();
+        let reloadCommand: ReloadCommand | undefined;
+        createExtension(pi, {
+            makeRuntime: (_creds, _generation, reload) => {
+                reloadCommand = reload;
+                return recordingRuntime().runtime;
+            },
+        });
+        // Only the claimed owner registers: nothing at factory time.
+        expect(commands).toEqual([]);
+        expect(reloadCommand).toBeUndefined();
+        handlers.get('session_start')!({}, mockCtx() as never);
+        expect(commands.map((command) => command.name)).toEqual([
+            'phi-bridge-reload',
+        ]);
+        expect(reloadCommand?.isAvailable()).toBe(true);
+        expect(reloadCommand?.dispatch()).toBe(true);
+        expect(sendUserMessage).toHaveBeenCalledWith('/phi-bridge-reload', {
+            expandPromptTemplates: true,
+        });
+
+        const reload = vi.fn(async () => {});
+        await commandHandlers.get('phi-bridge-reload')!('', {
+            ...mockCtx(),
+            reload,
+        } as unknown as ExtensionCommandContext);
+        expect(reload).toHaveBeenCalledOnce();
+
+        commands.length = 0;
+        expect(reloadCommand?.isAvailable()).toBe(false);
+        expect(reloadCommand?.dispatch()).toBe(false);
+        expect(sendUserMessage).toHaveBeenCalledOnce();
+        await commandHandlers.get('phi-bridge-reload')!('', {
+            ...mockCtx(),
+            reload,
+        } as unknown as ExtensionCommandContext);
+        expect(reload).toHaveBeenCalledOnce();
+    });
+
+    it('does not register or advertise reload when host APIs are missing', () => {
+        setEnv();
+        const { pi, handlers } = mockPi();
+        let reloadCommand: ReloadCommand | undefined;
+        createExtension(pi, {
+            makeRuntime: (_creds, _generation, reload) => {
+                reloadCommand = reload;
+                return recordingRuntime().runtime;
+            },
+        });
+        handlers.get('session_start')!({}, mockCtx() as never);
+        expect(reloadCommand?.isAvailable()).toBe(false);
+    });
+
+    it('shared registry models Pi duplicate renaming', () => {
+        const pair = mockPiPairWithSharedRegistry();
+        const noop = async (): Promise<void> => {};
+        interface ReloadSurface {
+            registerCommand(
+                name: string,
+                options: { handler: typeof noop },
+            ): void;
+            getCommands(): Array<{ name: string }>;
+        }
+        const first = pair.first.pi as unknown as ReloadSurface;
+        const second = pair.second.pi as unknown as ReloadSurface;
+        first.registerCommand('phi-bridge-reload', { handler: noop });
+        second.registerCommand('phi-bridge-reload', { handler: noop });
+        expect(second.getCommands().map((command) => command.name)).toEqual([
+            'phi-bridge-reload:1',
+            'phi-bridge-reload:2',
+        ]);
+    });
+
+    it('duplicate loads keep one unsuffixed owned command', async () => {
+        setEnv();
+        const pair = mockPiPairWithSharedRegistry();
+        let firstReload: ReloadCommand | undefined;
+        let secondReload: ReloadCommand | undefined;
+        createExtension(pair.first.pi, {
+            makeRuntime: (_creds, _generation, reload) => {
+                firstReload = reload;
+                return recordingRuntime().runtime;
+            },
+        });
+        createExtension(pair.second.pi, {
+            makeRuntime: (_creds, _generation, reload) => {
+                secondReload = reload;
+                return recordingRuntime().runtime;
+            },
+        });
+        // Neither copy registers before ownership is resolved.
+        expect(pair.registered).toEqual([]);
+        pair.first.handlers.get('session_start')!({}, mockCtx() as never);
+        pair.second.handlers.get('session_start')!({}, mockCtx() as never);
+        // Only the claimed owner registered, so Pi leaves the name
+        // unsuffixed and the owned command stays available.
+        expect(pair.registered.map((entry) => entry.name)).toEqual([
+            'phi-bridge-reload',
+        ]);
+        expect(secondReload).toBeUndefined();
+        expect(firstReload?.isAvailable()).toBe(true);
+        expect(firstReload?.dispatch()).toBe(true);
+        expect(pair.first.sendUserMessage).toHaveBeenCalledWith(
+            '/phi-bridge-reload',
+            { expandPromptTemplates: true },
+        );
+        expect(pair.second.sendUserMessage).not.toHaveBeenCalled();
+        const reload = vi.fn(async () => {});
+        await pair.registered[0]!.handler('', {
+            ...mockCtx(),
+            reload,
+        } as unknown as ExtensionCommandContext);
+        expect(reload).toHaveBeenCalledOnce();
+    });
+
+    it('dispatch refusal never throws into the stream handler', () => {
+        setEnv();
+        const { pi, handlers, sendUserMessage } = mockPiWithReload();
+        sendUserMessage.mockImplementation(() => {
+            throw new Error('host rejected');
+        });
+        let reloadCommand: ReloadCommand | undefined;
+        createExtension(pi, {
+            makeRuntime: (_creds, _generation, reload) => {
+                reloadCommand = reload;
+                return recordingRuntime().runtime;
+            },
+        });
+        handlers.get('session_start')!({}, mockCtx() as never);
+        expect(reloadCommand?.isAvailable()).toBe(true);
+        let result: boolean | undefined;
+        expect(() => {
+            result = reloadCommand?.dispatch();
+        }).not.toThrow();
+        expect(result).toBe(false);
+        // One attempt, no retry: the PTY fallback owns recovery.
+        expect(sendUserMessage).toHaveBeenCalledTimes(1);
+        expect(sendUserMessage).toHaveBeenCalledWith('/phi-bridge-reload', {
+            expandPromptTemplates: true,
+        });
     });
 });
 
