@@ -1,6 +1,11 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import {
+    expect,
+    test,
+    type APIRequestContext,
+    type Page,
+} from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
 
 // Output stops between bursts so each click exercises a known retained
@@ -114,7 +119,7 @@ async function recordingWindowText(
         ) as { end: number };
         const data = body.subarray(4 + headerLength);
         chunks.push(data.toString('utf8'));
-        if (data.length < (2 << 20) || header.end <= cursor) break;
+        if (data.length < 2 << 20 || header.end <= cursor) break;
         cursor = header.end;
     }
     return chunks.join('');
@@ -194,10 +199,7 @@ for (const width of [1280, 560]) {
         // Wait for the initial burst before attaching: the compact checkpoint
         // omits known older bytes and enables the existing history control.
         await expect
-            .poll(
-                () => recordingWindowText(request, pane),
-                { timeout: 30_000 },
-            )
+            .poll(() => recordingWindowText(request, pane), { timeout: 30_000 })
             .toContain('FLOOR INITIAL READY');
 
         let paneSockets = 0;
@@ -235,10 +237,7 @@ for (const width of [1280, 560]) {
         );
         expect(advanced.ok()).toBe(true);
         await expect
-            .poll(
-                () => recordingWindowText(request, pane),
-                { timeout: 30_000 },
-            )
+            .poll(() => recordingWindowText(request, pane), { timeout: 30_000 })
             .toContain('FLOOR LATEST AFTER ROTATION');
         expect(await recordingFloor(page, pane)).toBeGreaterThan(
             oldFloor + (1 << 20),
