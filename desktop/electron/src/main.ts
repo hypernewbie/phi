@@ -15,7 +15,7 @@
  *   - local pages load via `loadFile`; remote profile origins are
  *     sandboxed WebContentsView children with no preload bridge.
  */
-import { app, ipcMain } from 'electron';
+import { app, ipcMain, protocol } from 'electron';
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,6 +28,7 @@ import {
   uninstallProtocol,
   realPlatform,
 } from './protocol.js';
+import { registerEmbeddedScheme } from './embedded-transport.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -96,6 +97,8 @@ if (bootArgs.registerProtocol) {
     app.exit(1);
   }
 }
+
+registerEmbeddedScheme(protocol);
 
 if (process.env.PHI_DESKTOP_SMOKE === '1') {
   app.setPath(

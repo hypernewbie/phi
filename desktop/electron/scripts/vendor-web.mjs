@@ -15,9 +15,11 @@
 // Run as part of the desktop build (pnpm run build), before tsc.
 import {
   copyFileSync,
+  cpSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -27,6 +29,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const electronRoot = path.join(here, '..');
 const webRoot = path.join(electronRoot, '..', '..', 'web');
 const outDir = path.join(electronRoot, 'web');
+const embeddedDir = path.join(electronRoot, 'embedded');
 
 /** Browser Phi JS modules the main view page imports (app.js's module
  *  graph, copied byte-identical so the header runs the browser code).
@@ -224,3 +227,9 @@ for (const entry of readdirSync(path.join(webRoot, 'vendor', 'fonts'))) {
     );
   }
 }
+
+// Verbatim copy of repo-root web/ into desktop/electron/embedded/ for the
+// single-tab embedded Phi transport.
+rmSync(embeddedDir, { recursive: true, force: true });
+cpSync(webRoot, embeddedDir, { recursive: true });
+console.log('vendored repo-root web/ -> desktop/electron/embedded/');

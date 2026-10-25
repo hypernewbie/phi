@@ -55,6 +55,14 @@ describe('src/main.ts + src/desktop.ts (phase-1 Electron entry)', () => {
     expect(desktopSource).toContain('new BrowserWindow(');
   });
 
+  it('registers the phi-app embedded privileged scheme before whenReady', () => {
+    expect(mainSource).toContain('registerEmbeddedScheme(protocol)');
+    const regIdx = mainSource.indexOf('registerEmbeddedScheme(protocol)');
+    const readyIdx = mainSource.indexOf('app.whenReady()');
+    expect(regIdx).toBeGreaterThan(-1);
+    expect(regIdx).toBeLessThan(readyIdx);
+  });
+
   it('keeps the documented security defaults (regression guard against dropping sandboxing)', () => {
     expect(desktopSource).toContain('nodeIntegration: false');
     expect(desktopSource).toContain('contextIsolation: true');
