@@ -2,6 +2,43 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.26.0 — 2026-10-25
+
+### Added
+- **Single-tab desktop mode** (`611ef0c7`, `9f6d3142`). The desktop now serves one reusable page from its own bundle (`phi-app://app/`) instead of a separate web view per server, so switching servers reuses a single renderer. A server capability marker (`/api/version`) decides whether a profile can use the embedded page.
+- **Backend-scoped web runtime** (`0912ad33`, `938421da`). Requests, timers, and listeners are scoped to the active backend and aborted on switch; `__phiEmbed.switchTo()` flips the backend in place without a page reload.
+- **Backend cache with instant paint** (`c11aff1a`, `120bf2d8`). Each server keeps a bounded cache of its responses plus terminal snapshots, so a server you have visited before paints from cache immediately and the live server overrides it when it answers.
+- **Tabs grouped by workspace** (`dd939096`). Open tabs cluster per workspace, with a tree navigator for the whole set.
+- **Needs-attention cues** (`815ecd8b`). A persistent cue marks tabs that want attention on the strip, the overflow tree, and the hostname list; lists can sort unread first.
+- **New tabs land next to their workspace** (`8ec123d4`). A new tab opens right after the rightmost tab of the same workspace instead of at the end.
+- **Pi model list and switch** (`70f59dba`, `a835ecd8b`). The bottom-bar status shows the live Pi PTY model, and the model list can be pulled and switched from Phi.
+- **Pi editor history in the Phi input** (`e95a8f77`).
+- **Live Pi lifecycle bridge** (`c43da487`).
+- **Low power mode** (`4855fe25`, `3d18e2b3`). A this-machine GPU preference moved out of per-server config into browser storage, with a desktop-wide tray switch that also paces terminal rendering.
+- **`phic` per-server rail colors** (`b93f11d1`). Every server in the rail uses its own theme color, unknown themes fall back to neutral grey, and the last-seen color is cached so an offline server keeps its color.
+- **`phic` markdown `f`** (`aeeb912d`). The markdown view types the filename into the terminal.
+- **`phic` project, coder, and worktree follow the tab** (`46639120`).
+- **Development assets from disk** (`3930d747`). A `--web=DIR` flag serves fresh assets without restarting the server.
+
+### Fixed
+- **Server switching no longer waits for the server** (`d0f87755`). The switch resolves on the cached paint and the refresh runs behind it. Measured on a 410 ms remote link: 2.9 s to about 60 ms.
+- **No more repeated sign-in prompts** (`d0f87755`). The main process and the embedded page now share one access-auth session, so unlocking a server authenticates the page's proxied requests too, and the stored credentials are replayed for every server at once at startup.
+- **Server capability probe cached** (`d0f87755`). The per-server API probe is remembered and all servers are probed in parallel at startup, so the first flip to a server is as fast as the rest.
+- **Full-bleed `Ctrl-]` prefix bar** (`c56a8fb1`). The prefix mode now takes over the whole footer line instead of a hint swap, so it cannot be missed.
+- **Bounded terminal recordings recovered** (`703db144`). Recordings are restored within their retention window without losing frames.
+- **`phic` identity polling scoped** (`1fad8de2`). The identity poll is rate-limited, deduplicated, and limited to the active server.
+- **`phic` keeps its server identity** (`747ed5f4`). Identity and highlight color survive a refresh.
+- **Tab restore reads the saved pane first** (`d03f3bbf`, `39d037a6`).
+- **Frozen installs pass** (`07488ef4`). The `@bufbuild/buf` install hook is denied.
+- **Native session titles sync across tabs** (`aebcf299`).
+- **Unified terminal tab controls** (`64fdea38`).
+- **Path picker reuse and Sync defaults** (`133cfccb`).
+
+### Performance
+- **Concurrent refresh probes** (`d0f87755`). The four independent refresh requests now cost the slowest round trip instead of the sum of them.
+- **Terminal rendering paced in low power mode** (`3d18e2b3`).
+- **Hidden parser geometry preserved** (`2a235479`).
+
 ## v0.25.0 — 2026-10-08
 
 ### Added
