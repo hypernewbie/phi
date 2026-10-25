@@ -48,6 +48,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ProfileViewManager } from './views.js';
+import {
+  EMBEDDED_ORIGIN,
+  EMBEDDED_PARTITION,
+  EMBEDDED_SCHEME,
+  EmbeddedTransport,
+} from './embedded-transport.js';
 import { AccessAuth } from './access-auth.js';
 import { toCanonicalAuthOrigin } from './access-auth.js';
 import type {
@@ -106,6 +112,7 @@ import {
   bodyAuthLoginScript,
   WAKE_PAGE_SCRIPT,
   lowPowerApplyScript,
+  switchToScript,
 } from './injected.js';
 import type { FileAction, Dividers } from './injected.js';
 import { installFullscreenToggle } from './fullscreen.js';
@@ -430,6 +437,7 @@ export class DesktopHost {
   fileActionInterval: ReturnType<typeof setInterval> | null = null;
   // The retained per-profile view manager + the rail child view.
   profileViews: ProfileViewManager | null = null;
+  embeddedTransport: EmbeddedTransport | null = null;
   railView: WebContentsView | null = null;
   hooks: DesktopHooksManager | null = null;
   private fullscreenOverride: boolean | null = null;
@@ -1172,6 +1180,7 @@ export class DesktopHost {
       (mgr as { restoreAll: () => void }).restoreAll();
       console.log('phi-desktop: low-memory OFF — hibernation disabled');
     }
+    (mgr as ProfileViewManager).setSingleTab?.(enabled);
     this.trayHandle?.rebuildMenu();
   }
 
@@ -1482,7 +1491,10 @@ export class DesktopHost {
       } | null;
       if (!observed || generation !== this.sessionGeneration) return null;
       const profile =
-        ctrl.state().profiles.find((p) => p.origin === origin) ?? null;
+        origin === EMBEDDED_ORIGIN
+          ? (ctrl.state().profiles.find((p) => p.id === ctrl.state().activeId) ??
+            null)
+          : (ctrl.state().profiles.find((p) => p.origin === origin) ?? null);
       if (!profile) return null;
       const identity = {
         hostname:
@@ -1751,9 +1763,11 @@ export class DesktopHost {
       for (const [origin, view] of this.viewByOrigin) {
         if (view.webContents !== contents) continue;
         try {
-          return new URL(requestingUrl).origin === new URL(origin).origin;
+          if (new URL(requestingUrl).origin === new URL(origin).origin) {
+            return true;
+          }
         } catch {
-          return false;
+          // ignore
         }
       }
       return false;
@@ -2333,7 +2347,10 @@ export class DesktopHost {
     const ctrl = this.controller;
     if (!ctrl) return;
     const profile =
-      ctrl.state().profiles.find((p) => p.origin === origin) ?? null;
+      origin === EMBEDDED_ORIGIN
+        ? (ctrl.state().profiles.find((p) => p.id === ctrl.state().activeId) ??
+          null)
+        : (ctrl.state().profiles.find((p) => p.origin === origin) ?? null);
     if (!profile) return;
     this.observedTitle.set(profile.id, title);
     this.refreshWindowTitle();
@@ -3181,6 +3198,43 @@ export class DesktopHost {
       void this.bootstrapStoredCredentials(accessAuth, generation);
       const sharedSession = session.defaultSession;
       this.installClipboardPermissions(sharedSession);
+      const embeddedSession = session.fromPartition(EMBEDDED_PARTITION);
+      this.installClipboardPermissions(embeddedSession);
+
+      const transport = new EmbeddedTransport({
+        embeddedDir: path.join(here, '..', 'embedded'),
+        resolveProfile: (id) =>
+          this.controller?.state().profiles.find((p) => p.id === id) ?? null,
+        listProfiles: () => this.controller?.state().profiles ?? [],
+      });
+      this.embeddedTransport = transport;
+
+      try {
+        (
+          embeddedSession.protocol as unknown as {
+            unhandle?: (s: string) => void;
+          }
+        )?.unhandle?.(EMBEDDED_SCHEME);
+      } catch {}
+
+      try {
+        (
+          embeddedSession.protocol as unknown as {
+            handle?: (
+              s: string,
+              h: (req: Request) => Promise<Response>,
+            ) => void;
+          }
+        )?.handle?.(EMBEDDED_SCHEME, (req) => transport.handleRequest(req));
+      } catch {}
+
+      transport.attachWebSocketHeaderBridge(
+        embeddedSession as unknown as Parameters<
+          typeof transport.attachWebSocketHeaderBridge
+        >[0],
+        () => this.profileViews?.getActiveView()?.webContents?.id ?? null,
+      );
+
       const makeView = (origin: string): WebContentsView => {
         const view = new WebContentsView({
           webPreferences: {
@@ -3188,7 +3242,8 @@ export class DesktopHost {
             contextIsolation: true,
             nodeIntegration: false,
             webSecurity: true,
-            session: sharedSession,
+            session:
+              origin === EMBEDDED_ORIGIN ? embeddedSession : sharedSession,
           },
         });
         // Obsidian blank so reloads don't flashbang white for 1 frame
@@ -3216,6 +3271,19 @@ export class DesktopHost {
           allowedOrigin: string,
         ): boolean => {
           if (target.origin === allowedOrigin) return true;
+          if (allowedOrigin === EMBEDDED_ORIGIN) {
+            const activeOrigin = this.controller
+              ?.state()
+              .profiles.find((p) => p.id === this.controller?.state().activeId)
+              ?.origin;
+            if (activeOrigin) {
+              try {
+                if (target.origin === new URL(activeOrigin).origin) {
+                  return true;
+                }
+              } catch {}
+            }
+          }
           const allowed = new URL(allowedOrigin);
           const isLoopback = (host: string): boolean =>
             host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
@@ -3274,7 +3342,10 @@ export class DesktopHost {
                       contextIsolation: true,
                       nodeIntegration: false,
                       webSecurity: true,
-                      session: sharedSession,
+                      session:
+                        origin === EMBEDDED_ORIGIN
+                          ? embeddedSession
+                          : sharedSession,
                     },
                   });
                   child.once('ready-to-show', () => {
@@ -3498,6 +3569,7 @@ export class DesktopHost {
             (profile) => profile.id === state.activeId,
           );
           if (
+            origin === EMBEDDED_ORIGIN ||
             active?.origin === origin ||
             (active && toCanonicalAuthOrigin(active.origin) === canonicalOrigin)
           ) {
@@ -3535,6 +3607,21 @@ export class DesktopHost {
         onZoomAction: (action) => this.requestContentZoom(action),
         onFullscreenToggle: (next) => this.notifyFullscreen(next),
         log: (msg) => console.log(`phi-desktop: views: ${msg}`),
+        singleTab: this.controller?.getLowMemoryMode() ?? false,
+        embeddedOrigin: EMBEDDED_ORIGIN,
+        onSingleTabSwitch: (id, origin) => {
+          transport.setActiveProfile(id);
+          const v = this.profileViews?.getView(id);
+          if (v) {
+            for (const [k, existing] of this.viewByOrigin.entries()) {
+              if (existing === v && k !== EMBEDDED_ORIGIN && k !== origin) {
+                this.viewByOrigin.delete(k);
+              }
+            }
+            this.viewByOrigin.set(origin, v);
+          }
+          return transport.checkCompatibility(id);
+        },
       });
       // Sync every persisted profile into the view manager so setActive
       // can find the origin to loadURL. Without this, setActive returns
@@ -4162,12 +4249,24 @@ export class DesktopHost {
       ) {
         return { ok: false, code: 'stale', message: 'Prompt expired.' };
       }
-      if (!(await waitForBodyLoad(view, true))) {
-        return {
-          ok: false,
-          code: 'unavailable',
-          message: 'The authenticated server view did not reload.',
-        };
+      let inPageHandled = false;
+      if (this.profileViews?.isSingleTab()) {
+        inPageHandled = Boolean(
+          await view.webContents
+            .executeJavaScript(
+              switchToScript(pending.profileId, pending.origin),
+            )
+            .catch(() => false),
+        );
+      }
+      if (!inPageHandled) {
+        if (!(await waitForBodyLoad(view, true))) {
+          return {
+            ok: false,
+            code: 'unavailable',
+            message: 'The authenticated server view did not reload.',
+          };
+        }
       }
       if (
         (pendingUnlock !== null && pendingUnlock !== pending) ||

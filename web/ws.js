@@ -1,4 +1,5 @@
 /* Φ phi — Binary WebSocket Client */
+import { wsUrl } from './util.js';
 // Parses a framed header [u32 jsonLen BE][json bytes][extra bytes].
 // Returns null when the frame is too short or the JSON is malformed.
 function parseFramedHeader(payload) {
@@ -70,10 +71,7 @@ export class PTYWebSocket {
             this.mode = 'legacy';
             this.holding = false;
         }
-        const origin = typeof window !== 'undefined' && window.location?.origin
-            ? window.location.origin
-            : '';
-        this.url = new URL(`/ws/pane/${paneId}?term_proto=hot-v1&state=ansi-v1`, origin).href;
+        this.url = wsUrl(`/ws/pane/${paneId}?term_proto=hot-v1&state=ansi-v1`);
         this.ws = new WebSocket(this.url);
         this.ws.binaryType = 'arraybuffer';
         this.decoder = new TextDecoder('utf-8');

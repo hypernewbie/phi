@@ -45,6 +45,8 @@ interface RecordingView {
   webContentsDestroyed: boolean;
   reloadCalls: number;
   reloadIgnoringCacheCalls: number;
+  executeJavaScriptCalls: string[];
+  executeJavaScriptResult?: any;
 }
 
 function makeFakeView(): RecordingView {
@@ -57,6 +59,7 @@ function makeFakeView(): RecordingView {
   const eventListeners = new Map<string, Array<() => void>>();
   const zoomModes: string[] = [];
   const zoomFactors: number[] = [];
+  const executeJavaScriptCalls: string[] = [];
   const webContentsDestroyed = false;
   const rec: RecordingView = {
     view: {
@@ -88,6 +91,10 @@ function makeFakeView(): RecordingView {
         focus: () => {
           rec.focusCalls += 1;
         },
+        executeJavaScript: (code: string) => {
+          rec.executeJavaScriptCalls.push(code);
+          return Promise.resolve(rec.executeJavaScriptResult ?? true);
+        },
         setZoomMode: (mode: string) => {
           zoomModes.push(mode);
         },
@@ -111,6 +118,7 @@ function makeFakeView(): RecordingView {
     webContentsDestroyed,
     reloadCalls: 0,
     reloadIgnoringCacheCalls: 0,
+    executeJavaScriptCalls,
   };
   return rec;
 }
@@ -165,6 +173,12 @@ function makeManager(opts?: {
   contentZoomPercent?: number;
   onZoomAction?: (action: ZoomAction) => void;
   onFullscreenToggle?: (nextFullscreen: boolean) => void;
+  singleTab?: boolean;
+  embeddedOrigin?: string;
+  onSingleTabSwitch?: (
+    id: string,
+    origin: string,
+  ) => void | boolean | Promise<boolean>;
 }): ManagerHarness & {
   zoomActions: ZoomAction[];
   fullscreenToggles: boolean[];
@@ -194,6 +208,9 @@ function makeManager(opts?: {
         fullscreenToggles.push(next);
       }),
     log: () => {},
+    singleTab: opts?.singleTab,
+    embeddedOrigin: opts?.embeddedOrigin,
+    onSingleTabSwitch: opts?.onSingleTabSwitch,
   });
   return { manager, win, views, zoomActions, fullscreenToggles };
 }
@@ -691,5 +708,115 @@ describe('ProfileViewManager low-power fan-out (tray global -> every server)', (
     expect(p2).toHaveLength(2);
     expect(p2[0]).toContain('const enabled = true;');
     expect(p2[1]).toContain('const enabled = false;');
+  });
+});
+
+describe('ProfileViewManager singleTab mode', () => {
+  it('maintains exactly 1 view across multiple profiles (3 profiles -> 1 view)', () => {
+    const { manager, views } = makeManager({ singleTab: true });
+    manager.addProfile('p1', 'http://127.0.0.1:7070/');
+    manager.addProfile('p2', 'http://127.0.0.1:8080/');
+    manager.addProfile('p3', 'http://127.0.0.1:9090/');
+
+    expect(manager.viewsCreated()).toBe(0);
+
+    manager.setActive('p1');
+    expect(manager.viewsCreated()).toBe(1);
+    expect(views).toHaveLength(1);
+    expect(views[0].loadURLCalls[0]).toContain(
+      'phi-app://app/index.html?desktop=1&embedded=1&profile=p1',
+    );
+
+    manager.setActive('p2');
+    expect(manager.viewsCreated()).toBe(1);
+    expect(views).toHaveLength(1);
+
+    manager.setActive('p3');
+    expect(manager.viewsCreated()).toBe(1);
+    expect(views).toHaveLength(1);
+  });
+
+  it('invokes switchToScript on subsequent switches', () => {
+    const { manager, views } = makeManager({ singleTab: true });
+    manager.addProfile('p1', 'http://127.0.0.1:7070/');
+    manager.addProfile('p2', 'http://127.0.0.1:8080/');
+
+    manager.setActive('p1');
+    manager.setActive('p2');
+
+    const switchScripts = views[0].executeJavaScriptCalls.filter((s) =>
+      s.includes('__phiEmbed.switchTo'),
+    );
+    expect(switchScripts).toHaveLength(1);
+    expect(switchScripts[0]).toContain('"p2"');
+  });
+
+  it('falls back to legacy loadURL when onSingleTabSwitch returns false', () => {
+    const { manager, views } = makeManager({
+      singleTab: true,
+      onSingleTabSwitch: () => false,
+    });
+    manager.addProfile('legacy', 'http://127.0.0.1:7070/');
+    manager.setActive('legacy');
+
+    expect(views[0].loadURLCalls.at(-1)).toBe('http://127.0.0.1:7070/?desktop=1');
+  });
+
+  it('falls back to legacy loadURL when onSingleTabSwitch Promise resolves to false', async () => {
+    let resolveCompat!: (v: boolean) => void;
+    const compatPromise = new Promise<boolean>((resolve) => {
+      resolveCompat = resolve;
+    });
+    const { manager, views } = makeManager({
+      singleTab: true,
+      onSingleTabSwitch: () => compatPromise,
+    });
+    manager.addProfile('p1', 'http://127.0.0.1:7070/');
+    manager.setActive('p1');
+
+    expect(views[0].loadURLCalls[0]).toContain('phi-app://app/index.html');
+    resolveCompat(false);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(views[0].loadURLCalls.at(-1)).toBe('http://127.0.0.1:7070/?desktop=1');
+  });
+
+  it('executes forgetScript when a profile is removed in singleTab mode', () => {
+    const { manager, views } = makeManager({ singleTab: true });
+    manager.addProfile('p1', 'http://127.0.0.1:7070/');
+    manager.setActive('p1');
+
+    manager.removeProfile('p1');
+    const forgetScripts = views[0].executeJavaScriptCalls.filter((s) =>
+      s.includes('__phiEmbed.forget'),
+    );
+    expect(forgetScripts).toHaveLength(1);
+    expect(forgetScripts[0]).toContain('"p1"');
+  });
+
+  it('supports runtime toggling via setSingleTab(true/false)', () => {
+    const { manager } = makeManager({ singleTab: true });
+    expect(manager.isSingleTab()).toBe(true);
+
+    manager.addProfile('p1', 'http://127.0.0.1:7070/');
+    manager.addProfile('p2', 'http://127.0.0.1:8080/');
+    manager.setActive('p1');
+    expect(manager.viewsCreated()).toBe(1);
+
+    // Toggle to multi-view mode (singleTab = false)
+    manager.setSingleTab(false);
+    expect(manager.isSingleTab()).toBe(false);
+    // Reactivates active profile in multi-view mode
+    expect(manager.viewsCreated()).toBe(1);
+
+    manager.setActive('p2');
+    expect(manager.viewsCreated()).toBe(2);
+
+    // Toggle back to singleTab = true
+    manager.setSingleTab(true);
+    expect(manager.isSingleTab()).toBe(true);
+    // Views cleared, re-activates active profile (p2) in single-tab mode
+    expect(manager.viewsCreated()).toBe(1);
   });
 });
