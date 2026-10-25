@@ -123,13 +123,16 @@ export class App {
             if (savedTheme) {
                 this.applyAccentTheme(savedTheme);
             }
-            await this.loadVersion(scope);
-            if (scope?.aborted) return;
-            await this.fetchCoderPresets(scope);
-            if (scope?.aborted) return;
-            await this.sessionsManager.loadConfig();
-            if (scope?.aborted) return;
-            await this.tabManager.restoreTabsState(scope);
+            // These four probes are independent of each other, and a remote
+            // server's round trip is the switch's dominant cost. Awaiting
+            // them one after another made a switch cost the SUM of the
+            // round trips; running them together costs the SLOWEST one.
+            await Promise.all([
+                this.loadVersion(scope),
+                this.fetchCoderPresets(scope),
+                this.sessionsManager.loadConfig(),
+                this.tabManager.restoreTabsState(scope),
+            ]);
             if (scope?.aborted) return;
             this.startFleetPolling(scope);
             this.syncManager?.startPolling?.(scope);
@@ -830,7 +833,13 @@ export class App {
             if (document.body) document.body.inert = false;
         }
         if (seq !== this._switchSeq || scope.aborted) return true;
-        await this.revalidate(scope);
+        // The cached paint above IS the switch: it is already on screen.
+        // The server refresh runs behind it and overrides the cache when it
+        // answers. The switch resolves now, so the shell never waits a
+        // remote round trip (and never falls back to a page reload) for
+        // fresh data. A superseded switch aborts its own scope, and the
+        // background refresh stops at its next await boundary.
+        void this.revalidate(scope).catch(() => {});
         return true;
     }
 

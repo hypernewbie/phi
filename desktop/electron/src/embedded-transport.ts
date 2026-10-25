@@ -13,6 +13,14 @@ import { readSetCookieHeaders } from './access-auth.js';
 export const EMBEDDED_SCHEME = 'phi-app';
 export const EMBEDDED_HOST = 'app';
 export const EMBEDDED_ORIGIN = 'phi-app://app';
+
+/** How long a positive capability answer is reused. */
+const COMPAT_CACHE_TTL_MS = 10 * 60 * 1000;
+/** How long a negative capability answer is reused (short: the server may
+ *  be upgraded to the current API at any time). */
+const COMPAT_NEGATIVE_TTL_MS = 60 * 1000;
+/** The access-auth session cookie the phi server issues. */
+const ACCESS_SESSION_COOKIE = 'phi_access_session';
 export const EMBEDDED_PARTITION = 'persist:phi-embedded';
 
 export interface EmbeddedProfile {
@@ -128,6 +136,11 @@ export class EmbeddedTransport {
   private readonly fetchImpl: typeof fetch;
   private activeProfileId: string | null = null;
   private readonly cookieJars = new Map<string, Map<string, string>>();
+  /** Cached server-capability answers, keyed by profile id. */
+  private readonly compatCache = new Map<
+    string,
+    { compatible: boolean; at: number }
+  >();
 
   constructor(options: EmbeddedTransportOptions) {
     this.embeddedDir = path.resolve(options.embeddedDir);
@@ -155,6 +168,26 @@ export class EmbeddedTransport {
     const profile = this.resolveProfile(profileId);
     if (!profile) return false;
 
+    // The capability probe is a one-time fact about a server, but it costs
+    // a full round trip - and a remote server's round trip is the switch's
+    // dominant cost. A fresh answer is reused instead of re-probing on
+    // every flip. A negative answer expires quickly so a server that is
+    // upgraded to the current API is picked up soon.
+    const cached = this.compatCache.get(profileId);
+    if (cached) {
+      const ttl = cached.compatible
+        ? COMPAT_CACHE_TTL_MS
+        : COMPAT_NEGATIVE_TTL_MS;
+      if (Date.now() - cached.at < ttl) return cached.compatible;
+      this.compatCache.delete(profileId);
+    }
+
+    const compatible = await this.probeCompatibility(profile);
+    this.compatCache.set(profileId, { compatible, at: Date.now() });
+    return compatible;
+  }
+
+  private async probeCompatibility(profile: EmbeddedProfile): Promise<boolean> {
     try {
       const versionUrl = new URL('/api/version', profile.origin);
       const headers: Record<string, string> = {
@@ -259,6 +292,74 @@ export class EmbeddedTransport {
     return Array.from(jar.entries())
       .map(([k, v]) => `${k}=${v}`)
       .join('; ');
+  }
+
+  /** Finds the profile whose origin matches `origin` (canonical compare:
+   *  the profile may store a trailing slash the cookie does not). */
+  private findProfileByOrigin(origin: string): EmbeddedProfile | null {
+    let canonical: string;
+    try {
+      canonical = new URL(origin).origin;
+    } catch {
+      return null;
+    }
+    const candidates: EmbeddedProfile[] = [];
+    const active = this.activeProfileId
+      ? this.resolveProfile(this.activeProfileId)
+      : null;
+    if (active) candidates.push(active);
+    for (const p of this.listProfiles?.() ?? []) candidates.push(p);
+    for (const p of candidates) {
+      try {
+        if (new URL(p.origin).origin === canonical) return p;
+      } catch {
+        /* malformed profile origin */
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Seeds a profile's cookie jar from a cookie captured elsewhere (the
+   * main process's access-auth handshake). Without this the main process
+   * and the embedded page hold SEPARATE sessions: the main process knew
+   * the server was unlocked while every proxied page request still went
+   * out unauthenticated, so the page asked for the password again.
+   */
+  setCookieForOrigin(origin: string, name: string, value: string): boolean {
+    const profile = this.findProfileByOrigin(origin);
+    if (!profile) return false;
+    this.setCookie(profile.id, name, value);
+    return true;
+  }
+
+  /** Reads a profile's access-session cookie for the main process. */
+  getCookieForOrigin(origin: string): {
+    cookieName: string;
+    cookieValue: string;
+    httpOnly: boolean;
+    path: string;
+    origin: string;
+  } | null {
+    const profile = this.findProfileByOrigin(origin);
+    if (!profile) return null;
+    const jar = this.cookieJars.get(profile.id);
+    if (!jar) return null;
+    const value = jar.get(ACCESS_SESSION_COOKIE);
+    if (!value) return null;
+    let canonical = profile.origin;
+    try {
+      canonical = new URL(profile.origin).origin;
+    } catch {
+      /* keep the raw origin */
+    }
+    return {
+      cookieName: ACCESS_SESSION_COOKIE,
+      cookieValue: value,
+      httpOnly: true,
+      path: '/',
+      origin: canonical,
+    };
   }
 
   clearCookies(profileId: string): void {
