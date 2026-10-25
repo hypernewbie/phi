@@ -2723,7 +2723,11 @@ describe('Pi RPC transcript controller (compactionEnd regression pinning)', () =
             t: 'res',
             id: 'sp',
             ok: true,
-            data: { sid: 's1', title: 'demo', snapshot: { lastSeq: 0, messages: [] } },
+            data: {
+                sid: 's1',
+                title: 'demo',
+                snapshot: { lastSeq: 0, messages: [] },
+            },
         });
         await Promise.resolve();
         wire.emit({
@@ -2790,10 +2794,19 @@ describe('Pi RPC transcript controller (compactionEnd regression pinning)', () =
             t: 'res',
             id: 'sp',
             ok: true,
-            data: { sid: 's1', title: 'demo', snapshot: { lastSeq: 0, messages: [] } },
+            data: {
+                sid: 's1',
+                title: 'demo',
+                snapshot: { lastSeq: 0, messages: [] },
+            },
         });
         await Promise.resolve();
-        wire.emit({ t: 'res', id: 'hyd', ok: true, data: { lastSeq: 0, messages: [] } });
+        wire.emit({
+            t: 'res',
+            id: 'hyd',
+            ok: true,
+            data: { lastSeq: 0, messages: [] },
+        });
         await Promise.resolve();
         const reset = chat.resetChat();
         chat.destroy();
