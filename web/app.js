@@ -26,7 +26,7 @@ import {
     getEmbeddedBackendOrigin,
 } from './util.js';
 import { BackendScope } from './backend-scope.js';
-import { backendStores } from './backend-store.js';
+import { BackendStore, backendStores } from './backend-store.js';
 import { SyncManager } from './sync.js';
 import { initQuotaButton } from './quota.js';
 import { bootstrapAccessAuth } from './auth.js';
@@ -52,6 +52,7 @@ export class App {
             getEmbeddedProfileId() || '',
             getEmbeddedBackendOrigin() || '',
         );
+        this._defaultStore = new BackendStore('__default__');
         this._initializedOnce = false;
         this._switchSeq = 0;
         this._switchChain = Promise.resolve(true);
@@ -106,6 +107,7 @@ export class App {
 
         await this.revalidate(this.scope);
 
+        // Wire one-time DOM listeners (initResizers, initGlobalShortcuts, etc.).
         this.initOnce();
     }
 
@@ -694,7 +696,7 @@ export class App {
     }
 
     getActiveStore(profileId = getEmbeddedProfileId()) {
-        return backendStores.get(profileId || '__default__');
+        return profileId ? backendStores.get(profileId) : this._defaultStore;
     }
 
     paintBackendFromStore(store) {
