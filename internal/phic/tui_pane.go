@@ -391,6 +391,9 @@ func (p *paneActor) dial(ctx context.Context) (*websocket.Conn, wireAttach, erro
 	}
 	if err == nil {
 		h.Header, err = ParseAttachHead(msg)
+		if err != nil {
+			err = fmt.Errorf("%w: invalid attach: %v", errProtocol, err)
+		}
 	}
 	if err != nil {
 		closeWithCode(conn, closeCodeForReadError(err), "invalid attach")
@@ -479,7 +482,7 @@ func (p *paneActor) attachAndRun() error {
 		if p.ctx.Err() != nil {
 			return p.ctx.Err()
 		}
-		if permanent(err) || errors.Is(err, errInvalidRecording) || errors.Is(err, errProtocol) {
+		if permanent(err) || errors.Is(err, errInvalidRecording) {
 			return err
 		}
 		p.sendEvent(paneEvent{Key: p.spec.Key, Kind: paneStatus, Status: "reconnecting: " + err.Error()})
@@ -615,6 +618,9 @@ func (p *paneActor) consume(reads <-chan paneRead) error {
 				return r.err
 			}
 			if err := p.handleFrame(r.bytes); err != nil {
+				if errors.Is(err, errProtocol) || errors.Is(err, wireproto.ErrMessageTooLarge) {
+					closeWithCode(p.getConn(), closeCodeForReadError(err), "invalid terminal frame")
+				}
 				return err
 			}
 		case in := <-p.inbox:
@@ -645,11 +651,11 @@ func (p *paneActor) consume(reads <-chan paneRead) error {
 }
 func (p *paneActor) handleFrame(msg []byte) error {
 	if len(msg) == 0 {
-		return nil
+		return fmt.Errorf("%w: empty terminal frame", errProtocol)
 	}
 	frame, err := wireproto.DecodeServerFrame(msg)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: malformed terminal frame: %v", errProtocol, err)
 	}
 	switch payload := frame.GetPayload().(type) {
 	case *wspb.TerminalServerFrame_Output:
@@ -686,14 +692,13 @@ func (p *paneActor) handleFrame(msg []byte) error {
 		p.head = max(p.head, end)
 		p.mu.Unlock()
 	case *wspb.TerminalServerFrame_Exit:
-		exit := payload.Exit
-		if exit == nil {
-			return fmt.Errorf("%w: invalid exit frame", errProtocol)
+		code, err := terminalExitCode(payload.Exit)
+		if err != nil {
+			return err
 		}
 		if err := p.drainExit(); err != nil {
 			return err
 		}
-		code := int(exit.GetCode())
 		p.mu.Lock()
 		p.exited = true
 		p.exitCode = code

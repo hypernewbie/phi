@@ -56,12 +56,22 @@ func ParseLiveOutput(frame []byte) (start uint64, payload []byte, err error) {
 // outputSpan validates one decoded output payload. Live loops decode once
 // for dispatch and share these checks instead of parsing twice.
 func outputSpan(out *wspb.TerminalOutput) (uint64, []byte, error) {
-	if out == nil {
-		return 0, nil, fmt.Errorf("phic: not an output frame")
+	if out == nil || out.Start == nil {
+		return 0, nil, fmt.Errorf("%w: output start is missing", errProtocol)
 	}
 	start, payload := out.GetStart(), out.GetData()
-	if len(payload) > MaxNativePayloadBytes || start > ^uint64(0)-uint64(len(payload)) {
-		return 0, nil, fmt.Errorf("phic: invalid live span")
+	if len(payload) > MaxNativePayloadBytes {
+		return 0, nil, fmt.Errorf("%w: native output exceeds bound", wireproto.ErrMessageTooLarge)
+	}
+	if start > ^uint64(0)-uint64(len(payload)) {
+		return 0, nil, fmt.Errorf("%w: invalid live span", errProtocol)
 	}
 	return start, payload, nil
+}
+
+func terminalExitCode(exit *wspb.TerminalExit) (int, error) {
+	if exit == nil || exit.Code == nil {
+		return 0, fmt.Errorf("%w: exit code is missing", errProtocol)
+	}
+	return int(exit.GetCode()), nil
 }

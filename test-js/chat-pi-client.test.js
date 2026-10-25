@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connectControl, ControlCallTimeout } from '../web/chat-pi/client.js';
+import { MaxControlMessageBytes } from '../web/chat-pi/control-wire.js';
 import {
     ControlClientFrame,
     ControlServerFrame,
@@ -335,6 +336,65 @@ describe('Pi RPC ControlClient', () => {
         expect(socket.sent).toHaveLength(1);
         expect(socket.sent[0].payload.$case).toBe('hello');
         expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('reports unexpected close or error while idle, but not intentional close', () => {
+        vi.stubGlobal('WebSocket', FakeWebSocket);
+        const report = vi.fn();
+
+        connectControl(report);
+        const remoteSocket = FakeWebSocket.instances[0];
+        remoteSocket.open();
+        remoteSocket.close();
+        expect(report).toHaveBeenCalledTimes(1);
+        expect(report).toHaveBeenLastCalledWith('control socket closed');
+
+        connectControl(report);
+        const failedSocket = FakeWebSocket.instances[1];
+        failedSocket.open();
+        failedSocket.fail();
+        expect(report).toHaveBeenCalledTimes(2);
+        expect(report).toHaveBeenLastCalledWith('control socket error');
+        expect(failedSocket.closed).toBe(true);
+
+        connectControl(report).close();
+        expect(report).toHaveBeenCalledTimes(2);
+    });
+
+    it('rejects oversized outbound calls without closing the shared stream', async () => {
+        vi.useFakeTimers();
+        vi.stubGlobal('WebSocket', FakeWebSocket);
+        const client = connectControl();
+        const socket = FakeWebSocket.instances[0];
+        socket.open();
+
+        const oversized = client.call(
+            'prompt',
+            'sid-1',
+            { message: 'x'.repeat(MaxControlMessageBytes) },
+            { timeoutMs: 1 },
+        );
+        const result = oversized.then(
+            () => null,
+            (error) => error,
+        );
+        const sentBeforeTimeout = socket.sent.length;
+        await vi.advanceTimersByTimeAsync(1);
+        const error = await result;
+        expect(sentBeforeTimeout).toBe(1);
+        expect(error).toBeInstanceOf(Error);
+        expect(error.message).toMatch(/message limit/);
+        expect(socket.closed).toBe(false);
+
+        const next = client.call('getState', 'sid-1', {});
+        socket.receive(
+            response('c2', {
+                $case: 'getState',
+                value: { state: stateFields({ sid: 'sid-1', model: 'fresh' }) },
+            }),
+        );
+        await expect(next).resolves.toMatchObject({ model: 'fresh' });
+        client.close();
     });
 
     it('rejects close-before-open and socket-close pending calls', async () => {

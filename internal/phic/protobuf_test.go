@@ -249,6 +249,23 @@ func TestWebSocketProtobufNativeCodec(t *testing.T) {
 			if frame.GetExit() == nil || frame.GetExit().GetCode() != code {
 				t.Fatalf("exit = %+v, want code %d", frame.GetPayload(), code)
 			}
+			if got, err := terminalExitCode(frame.GetExit()); err != nil || got != int(code) {
+				t.Fatalf("exit code = %d, %v; want %d", got, err, code)
+			}
+		}
+
+		missing, err := proto.Marshal(&wspb.TerminalServerFrame{Payload: &wspb.TerminalServerFrame_Exit{
+			Exit: &wspb.TerminalExit{},
+		}})
+		if err != nil {
+			t.Fatalf("marshal missing code: %v", err)
+		}
+		frame, err := wireproto.DecodeServerFrame(missing)
+		if err != nil {
+			t.Fatalf("decode missing code: %v", err)
+		}
+		if _, err := terminalExitCode(frame.GetExit()); !errors.Is(err, errProtocol) {
+			t.Fatalf("absent exit code error = %v, want protocol error", err)
 		}
 	})
 
@@ -270,6 +287,26 @@ func TestWebSocketProtobufNativeCodec(t *testing.T) {
 			if _, _, err := ParseLiveOutput(raw); err == nil {
 				t.Fatalf("garbage output %q accepted", raw)
 			}
+		}
+	})
+
+	t.Run("required scalar presence", func(t *testing.T) {
+		missingStart, err := proto.Marshal(&wspb.TerminalServerFrame{Payload: &wspb.TerminalServerFrame_Output{
+			Output: &wspb.TerminalOutput{Data: []byte("x")},
+		}})
+		if err != nil {
+			t.Fatalf("marshal missing start: %v", err)
+		}
+		if _, _, err := ParseLiveOutput(missingStart); !errors.Is(err, errProtocol) {
+			t.Fatalf("absent output start error = %v, want protocol error", err)
+		}
+
+		zeroStart, err := wireproto.EncodeOutputFrame(0, []byte("x"))
+		if err != nil {
+			t.Fatalf("encode zero start: %v", err)
+		}
+		if start, _, err := ParseLiveOutput(zeroStart); err != nil || start != 0 {
+			t.Fatalf("explicit zero start = %d, %v", start, err)
 		}
 	})
 }
@@ -502,4 +539,116 @@ func TestNativePaneClosesOversizedCompressedStreamWith1009(t *testing.T) {
 		t.Fatal("peer never observed a close frame")
 	}
 	<-done
+}
+
+func TestNativePaneClosesMalformedProtobufStreamWith1002(t *testing.T) {
+	closeCodes := make(chan int, 1)
+	up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, testAttach(t, 1, 0)); err != nil {
+			return
+		}
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{0xff}); err != nil {
+			return
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		for {
+			if _, _, readErr := conn.ReadMessage(); readErr != nil {
+				code := websocket.CloseAbnormalClosure
+				var closeErr *websocket.CloseError
+				if errors.As(readErr, &closeErr) {
+					code = closeErr.Code
+				}
+				closeCodes <- code
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	p := &paneActor{
+		api:  mustAPI(t, srv.URL),
+		spec: paneSpec{Key: paneKey{ID: "p"}},
+		ctx:  ctx,
+	}
+	conn, _, err := p.dial(ctx)
+	if err != nil {
+		cancel()
+		t.Fatalf("dial: %v", err)
+	}
+	p.setConn(conn)
+	reads := make(chan paneRead, 4)
+	done := make(chan struct{})
+	go p.readLoop(ctx, conn, reads, done)
+	consumeErr := p.consume(reads)
+	cancel()
+	_ = conn.Close()
+	<-done
+
+	select {
+	case code := <-closeCodes:
+		if code != websocket.CloseProtocolError {
+			t.Fatalf("close code = %d, want %d", code, websocket.CloseProtocolError)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("peer never observed a close frame")
+	}
+	if !errors.Is(consumeErr, errProtocol) {
+		t.Fatalf("consume error = %v, want protocol error", consumeErr)
+	}
+}
+
+func TestNativePaneDoesNotRetryMalformedInitialAttach(t *testing.T) {
+	upgrades := make(chan struct{}, 32)
+	closeCodes := make(chan int, 32)
+	up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		upgrades <- struct{}{}
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{0xff}); err != nil {
+			return
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, _, err := conn.ReadMessage(); err != nil {
+			code := websocket.CloseAbnormalClosure
+			var closeErr *websocket.CloseError
+			if errors.As(err, &closeErr) {
+				code = closeErr.Code
+			}
+			closeCodes <- code
+		}
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	p := &paneActor{
+		api:  mustAPI(t, srv.URL),
+		spec: paneSpec{Key: paneKey{ID: "p"}},
+		ctx:  ctx,
+	}
+	if err := p.attachAndRun(); !errors.Is(err, errProtocol) {
+		t.Fatalf("attach error = %v, want permanent protocol error", err)
+	}
+	if got := len(upgrades); got != 1 {
+		t.Fatalf("server received %d attach attempts, want 1", got)
+	}
+	select {
+	case code := <-closeCodes:
+		if code != websocket.CloseProtocolError {
+			t.Fatalf("close code = %d, want %d", code, websocket.CloseProtocolError)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("peer never observed a close frame")
+	}
 }

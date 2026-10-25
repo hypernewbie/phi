@@ -13,6 +13,7 @@ import {
     encodeCall,
     encodeHello,
     eventFromWire,
+    MaxControlMessageBytes,
     resultFromWire,
 } from './control-wire.js';
 import type { WireEvent } from './control-wire.js';
@@ -90,12 +91,17 @@ export function connectControl(
 
     // A conversion or send failure ends this stream: pending calls are
     // rejected through the existing callbacks instead of hanging.
+    const reportStreamFailure = (reason: Error): void => {
+        if (closed) return;
+        closed = true;
+        try {
+            onStreamFailure?.(reason.message);
+        } catch (_error) {}
+    };
+
     const failStream = (reason: Error): void => {
         rejectAll(reason);
-        if (!closed) {
-            closed = true;
-            onStreamFailure?.(reason.message);
-        }
+        reportStreamFailure(reason);
         try {
             ws.close();
         } catch (_error) {}
@@ -139,11 +145,12 @@ export function connectControl(
             }
         }
     };
-    ws.onerror = () => rejectAll(controlError('control socket error'));
+    ws.onerror = () => failStream(controlError('control socket error'));
     ws.onclose = () => {
         opened = false;
-        closed = true;
-        rejectAll(controlError('control socket closed'));
+        const reason = controlError('control socket closed');
+        rejectAll(reason);
+        reportStreamFailure(reason);
     };
     ws.onmessage = (ev) => {
         if (closed) return;
@@ -220,6 +227,10 @@ export function connectControl(
             // A call that cannot be encoded never reaches the outbox.
             return Promise.reject(error);
         }
+        if (raw.byteLength > MaxControlMessageBytes)
+            return Promise.reject(
+                controlError('control request exceeds message limit'),
+            );
         return new Promise<T>((resolve, reject) => {
             const timer = setTimeout(() => {
                 if (!pending.delete(id)) return;

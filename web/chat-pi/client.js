@@ -5,7 +5,7 @@
    operation. Results and sequenced events are converted back to the plain
    shapes the chat UI consumes. */
 import { PROTOCOL_VERSION } from './constants.js';
-import { buildCall, ControlConversionError, decodeServerFrame, encodeCall, encodeHello, eventFromWire, resultFromWire, } from './control-wire.js';
+import { buildCall, ControlConversionError, decodeServerFrame, encodeCall, encodeHello, eventFromWire, MaxControlMessageBytes, resultFromWire, } from './control-wire.js';
 import { controlSubprotocol } from '../ws-protocols.js';
 export const ControlCallTimeout = 35_000;
 // Compaction runs a summary LLM call; Pi answers only when it finishes. The
@@ -41,12 +41,18 @@ export function connectControl(onStreamFailure) {
     };
     // A conversion or send failure ends this stream: pending calls are
     // rejected through the existing callbacks instead of hanging.
-    const failStream = (reason) => {
-        rejectAll(reason);
-        if (!closed) {
-            closed = true;
+    const reportStreamFailure = (reason) => {
+        if (closed)
+            return;
+        closed = true;
+        try {
             onStreamFailure?.(reason.message);
         }
+        catch (_error) { }
+    };
+    const failStream = (reason) => {
+        rejectAll(reason);
+        reportStreamFailure(reason);
         try {
             ws.close();
         }
@@ -95,11 +101,12 @@ export function connectControl(onStreamFailure) {
             }
         }
     };
-    ws.onerror = () => rejectAll(controlError('control socket error'));
+    ws.onerror = () => failStream(controlError('control socket error'));
     ws.onclose = () => {
         opened = false;
-        closed = true;
-        rejectAll(controlError('control socket closed'));
+        const reason = controlError('control socket closed');
+        rejectAll(reason);
+        reportStreamFailure(reason);
     };
     ws.onmessage = (ev) => {
         if (closed)
@@ -179,6 +186,8 @@ export function connectControl(onStreamFailure) {
             // A call that cannot be encoded never reaches the outbox.
             return Promise.reject(error);
         }
+        if (raw.byteLength > MaxControlMessageBytes)
+            return Promise.reject(controlError('control request exceeds message limit'));
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
                 if (!pending.delete(id))

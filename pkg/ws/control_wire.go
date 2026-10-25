@@ -263,6 +263,27 @@ func stateChangedToWire(data any) *wspb.StateChangedEvent {
 }
 
 func messageStartToWire(data any) (*wspb.MessageStartEvent, error) {
+	if fields, isRaw, err := rawEventFields(data); isRaw {
+		if err != nil {
+			return nil, err
+		}
+		message, ok := fields["message"]
+		if !ok {
+			return &wspb.MessageStartEvent{}, nil
+		}
+		record, err := rawObjectFields(message)
+		if err != nil {
+			return nil, err
+		}
+		external, err := externalFromJSON(message)
+		if err != nil {
+			return nil, err
+		}
+		return &wspb.MessageStartEvent{
+			Role:    optionalString(rawFieldString(record, "role")),
+			Message: external,
+		}, nil
+	}
 	raw, err := rawRecord(data)
 	if err != nil {
 		return nil, err
@@ -427,6 +448,26 @@ func retryEndToWire(data any) (*wspb.AutoRetryEndEvent, error) {
 }
 
 func compactionEndToWire(data any) (*wspb.CompactionEndEvent, error) {
+	if fields, isRaw, err := rawEventFields(data); isRaw {
+		if err != nil {
+			return nil, err
+		}
+		out := &wspb.CompactionEndEvent{
+			Reason:       optionalString(rawFieldString(fields, "reason")),
+			ErrorMessage: optionalString(rawFieldString(fields, "errorMessage")),
+		}
+		if aborted, ok := rawFieldBool(fields, "aborted"); ok {
+			out.Aborted = proto.Bool(aborted)
+		}
+		if result, ok := fields["result"]; ok {
+			external, err := externalFromJSON(result)
+			if err != nil {
+				return nil, err
+			}
+			out.Result = external
+		}
+		return out, nil
+	}
 	raw, err := rawRecord(data)
 	if err != nil {
 		return nil, err
@@ -460,6 +501,15 @@ func rawJSONValue(data any) ([]byte, bool) {
 		return value, true
 	}
 	return nil, false
+}
+
+func rawEventFields(data any) (map[string]json.RawMessage, bool, error) {
+	body, ok := rawJSONValue(data)
+	if !ok {
+		return nil, false, nil
+	}
+	fields, err := rawObjectFields(body)
+	return fields, true, err
 }
 
 // rawObjectFields splits one JSON object into its fields' raw bytes and

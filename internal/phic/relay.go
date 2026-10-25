@@ -292,6 +292,7 @@ func (r *Relay) live(ctx context.Context, pane string) error {
 		case *wspb.TerminalServerFrame_Output:
 			start, data, err := outputSpan(payload.Output)
 			if err != nil {
+				closeWithCode(conn, closeCodeForReadError(err), "invalid terminal output")
 				return err
 			}
 			if start > r.written {
@@ -309,15 +310,16 @@ func (r *Relay) live(ctx context.Context, pane string) error {
 			}
 		case *wspb.TerminalServerFrame_Exit:
 			// Drain retained output before reporting the backend status.
-			exit := payload.Exit
-			if exit == nil {
-				return fmt.Errorf("%w: invalid exit frame", errProtocol)
+			code, err := terminalExitCode(payload.Exit)
+			if err != nil {
+				closeWithCode(conn, closeCodeForReadError(err), "invalid terminal exit")
+				return err
 			}
 			if err := r.drainExit(ctx, pane); err != nil {
 				return err
 			}
-			if code := exit.GetCode(); code != 0 {
-				return &ExitError{Code: int(code)}
+			if code != 0 {
+				return &ExitError{Code: code}
 			}
 			return nil
 		case *wspb.TerminalServerFrame_Pong: // keepalive
@@ -372,7 +374,7 @@ func (r *Relay) reconnect(ctx context.Context, pane string) error {
 	}
 }
 func permanent(err error) bool {
-	if errors.Is(err, errProtocol) {
+	if errors.Is(err, errProtocol) || errors.Is(err, wireproto.ErrMessageTooLarge) {
 		return true
 	}
 	var e *apiError

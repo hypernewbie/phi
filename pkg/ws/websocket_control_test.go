@@ -601,6 +601,59 @@ func TestWebSocketProtobufControlEvents(t *testing.T) {
 		}
 	})
 
+	t.Run("raw_external_event_values", func(t *testing.T) {
+		start, err := eventToWire(rpc.Event{
+			Evt:  rpc.EvtMessageStart,
+			Data: json.RawMessage(`{"type":"message_start","message":{"role":"assistant","content":{"text":"started"}}}`),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		message := start.GetMessageStart()
+		if message.GetRole() != "assistant" || externalToAny(t, message.GetMessage()).(map[string]any)["content"].(map[string]any)["text"] != "started" {
+			t.Fatalf("messageStart = %+v", message)
+		}
+
+		compaction, err := eventToWire(rpc.Event{
+			Evt:  rpc.EvtCompactionEnd,
+			Data: json.RawMessage(`{"type":"compaction_end","aborted":false,"result":{"summary":"complete"}}`),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if compaction.GetCompactionEnd().Aborted == nil || compaction.GetCompactionEnd().GetAborted() {
+			t.Fatalf("aborted=false was lost: %+v", compaction.GetCompactionEnd())
+		}
+		if got := externalToAny(t, compaction.GetCompactionEnd().GetResult()).(map[string]any)["summary"]; got != "complete" {
+			t.Fatalf("compaction result = %#v", got)
+		}
+	})
+
+	t.Run("raw_external_events_reject_duplicate_keys", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			evt  string
+			data json.RawMessage
+		}{
+			{
+				name: "message_start",
+				evt:  rpc.EvtMessageStart,
+				data: json.RawMessage(`{"type":"message_start","message":{"role":"assistant","content":{"x":1,"x":2}}}`),
+			},
+			{
+				name: "compaction_end",
+				evt:  rpc.EvtCompactionEnd,
+				data: json.RawMessage(`{"type":"compaction_end","result":{"x":1,"x":2}}`),
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				if _, err := eventToWire(rpc.Event{Evt: tc.evt, Data: tc.data}); err == nil {
+					t.Fatal("duplicate external keys must be rejected")
+				}
+			})
+		}
+	})
+
 	// Live events carry the same presence rules as the stored snapshot: an
 	// omitted details key stays absent, an explicit null stays a null.
 	t.Run("message_details_presence", func(t *testing.T) {
