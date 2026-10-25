@@ -130,12 +130,12 @@ func TestRetentionGiantPayloadRetryUsesAdmissionIdentity(t *testing.T) {
 	if ph.recording.head != wantHead {
 		t.Fatalf("head = %d, want %d", ph.recording.head, wantHead)
 	}
-	floor := wantHead - (1 << 20)
+	floor := wantHead - retentionHistoryCap
 	data, _, err := ph.recording.read(floor, wantHead)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(data, giant[len(giant)-1<<20:]) {
+	if !bytes.Equal(data, giant[len(giant)-int(retentionHistoryCap):]) {
 		t.Fatal("giant retry kept the wrong suffix")
 	}
 	// Presenting only the retained suffix must not resolve it.
@@ -422,7 +422,7 @@ func TestRetentionRotationCheckpointSyncFailureRetriesCleanly(t *testing.T) {
 	if err := h.SetRecordingDirectory(dir); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 32; i++ {
+	for i := 0; i < int(retentionSegNominal/(32*1024)); i++ {
 		if err := h.Ingest("p", bytes.Repeat([]byte("r"), 32*1024)); err != nil {
 			t.Fatal(err)
 		}
@@ -435,7 +435,7 @@ func TestRetentionRotationCheckpointSyncFailureRetriesCleanly(t *testing.T) {
 	ph.mu.Lock()
 	segs, head := len(ph.recording.segs), ph.recording.head
 	ph.mu.Unlock()
-	if segs != 1 || head != 1<<20 {
+	if segs != 1 || head != retentionSegNominal {
 		t.Fatalf("failed rotation published segs=%d head=%d", segs, head)
 	}
 	if err := h.Ingest("p", []byte("Z")); err != nil {
@@ -445,13 +445,12 @@ func TestRetentionRotationCheckpointSyncFailureRetriesCleanly(t *testing.T) {
 	segs, head = len(ph.recording.segs), ph.recording.head
 	ckptLen := ph.recording.segs[1].ckptLen
 	ph.mu.Unlock()
-	if segs != 2 || head != (1<<20)+1 || ckptLen == 0 {
+	if segs != 2 || head != retentionSegNominal+1 || ckptLen == 0 {
 		t.Fatalf("rotation retry segs=%d head=%d ckpt=%d", segs, head, ckptLen)
 	}
-	rec, ok := h.Recording("p", 0, head)
-	want := append(bytes.Repeat([]byte("r"), (1<<20)-1), 'Z')
-	if !ok || rec.Start != 1 || !bytes.Equal(rec.Data, want) {
-		t.Fatalf("rotation retry start=%d bytes=%d ok=%t", rec.Start, len(rec.Data), ok)
+	want := append(bytes.Repeat([]byte("r"), int(retentionSegNominal)-1), 'Z')
+	if start, data, _ := readRetained(t, h, "p", 0, head); start != 1 || !bytes.Equal(data, want) {
+		t.Fatalf("rotation retry start=%d bytes=%d", start, len(data))
 	}
 	var files []string
 	if err := filepath.WalkDir(h.recordingPath("p"), func(path string, entry os.DirEntry, err error) error {
@@ -487,7 +486,8 @@ func TestRetentionOversizedBaseKeepsLiveOutputAndFailsRestorationExplicitly(t *t
 		t.Fatal(err)
 	}
 	chunk := bytes.Repeat([]byte("live output continues\r\n"), 1600)
-	for i := 0; i < 32; i++ {
+	segment := int(retentionSegNominal / (32 * 1024))
+	for i := 0; i < segment; i++ {
 		if err := h.Ingest("p", chunk[:32*1024]); err != nil {
 			t.Fatal(err)
 		}
@@ -496,7 +496,7 @@ func TestRetentionOversizedBaseKeepsLiveOutputAndFailsRestorationExplicitly(t *t
 	// Shrink the checkpoint cap so the next rotation cannot store its
 	// base. Live output must continue regardless.
 	ph.recording.ckptMax = 64
-	for i := 0; i < 32; i++ {
+	for i := 0; i < segment; i++ {
 		if err := h.Ingest("p", chunk[:32*1024]); err != nil {
 			t.Fatalf("oversized base stalled live output: %v", err)
 		}
@@ -716,7 +716,7 @@ func TestRetentionOpenFailsClosedOnShortOrCorruptState(t *testing.T) {
 		if err := h.SetRecordingDirectory(dir); err != nil {
 			t.Fatal(err)
 		}
-		for i := 0; i < 33; i++ {
+		for i := 0; i < int(retentionSegNominal/(32*1024))+1; i++ {
 			if err := h.Ingest("p", bytes.Repeat([]byte("r"), 32*1024)); err != nil {
 				t.Fatal(err)
 			}

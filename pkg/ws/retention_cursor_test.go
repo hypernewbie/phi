@@ -171,7 +171,7 @@ func TestRetentionExpiredEventCursorFails(t *testing.T) {
 	epoch := retentionPos(t, h, pane).Epoch
 	stale := EncodeEventCursor(epoch, 65536, 0)
 	// Evict the first segment with its resize boundary.
-	ingestTo(t, h, pane, 2<<20)
+	ingestTo(t, h, pane, int(2*retentionSegNominal))
 	oldest, head := retentionFloor(t, h, pane)
 	if oldest == 0 {
 		t.Fatal("expected eviction before expiry check")
@@ -203,7 +203,7 @@ func TestRetentionOrdinalBehindCursorAtRetainedPositionStaysValid(t *testing.T) 
 	epoch := retentionPos(t, h, pane).Epoch
 	// Evict the only resize: its ordinal is spent, but a cursor at a
 	// retained frontier never needed it.
-	ingestTo(t, h, pane, 2<<20)
+	ingestTo(t, h, pane, int(2*retentionSegNominal))
 	oldest, head := retentionFloor(t, h, pane)
 	if oldest == 0 {
 		t.Fatal("expected eviction before the validity check")
@@ -213,8 +213,8 @@ func TestRetentionOrdinalBehindCursorAtRetainedPositionStaysValid(t *testing.T) 
 	if err != nil {
 		t.Fatalf("retained-position cursor err = %v, want nil", err)
 	}
-	if uint64(len(rec.Data)) != head-oldest {
-		t.Fatalf("cursor page bytes = %d, want %d", len(rec.Data), head-oldest)
+	if rec.Start != oldest || rec.End <= rec.Start || uint64(len(rec.Data)) != rec.End-rec.Start {
+		t.Fatalf("cursor page = [%d,%d) %d bytes, want a retained page from %d", rec.Start, rec.End, len(rec.Data), oldest)
 	}
 }
 
@@ -278,7 +278,7 @@ func TestRetentionEvictionTracksMaxMarkerSeq(t *testing.T) {
 	ingestTo(t, h, pane, 65536)
 	h.RecordResize(pane, 80, 24)
 	// Byte rotation evicts the segment holding the only marker.
-	ingestTo(t, h, pane, 2<<20)
+	ingestTo(t, h, pane, int(2*retentionSegNominal))
 	ph, _ := h.LookupPane(pane)
 	if got := ph.recording.maxEvictedMarkerSeq; got != 65536 {
 		t.Fatalf("maxEvictedMarkerSeq = %d, want 65536", got)

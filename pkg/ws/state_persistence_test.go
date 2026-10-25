@@ -80,15 +80,17 @@ func TestRetentionMetadataRotationReopenAppliesTriggerResize(t *testing.T) {
 }
 
 func TestPersistentBaseCheckpointsMakeRestartAttachIndependentOfHistoryLength(t *testing.T) {
-	const capacity = 1 << 20
+	capacity := uint64(retentionHistoryCap)
 	dir := t.TempDir()
 	first := NewHub(4096)
 	if err := first.SetRecordingDirectory(dir); err != nil {
 		t.Fatal(err)
 	}
 	var source []byte
-	for i := 0; i < 80; i++ {
-		chunk := bytes.Repeat([]byte("retained library page with Unicode 你🙂\r\n"), 2048)
+	chunk := bytes.Repeat([]byte("retained library page with Unicode 你🙂\r\n"), 2048)
+	// Past two rotations: the zero-prefix segment is evicted, so every
+	// retained segment carries a base checkpoint.
+	for i := 0; i < 2*int(retentionSegNominal)/len(chunk)+2; i++ {
 		source = append(source, chunk...)
 		if err := first.Ingest("long-session", chunk); err != nil {
 			t.Fatal(err)
@@ -121,7 +123,7 @@ func TestPersistentBaseCheckpointsMakeRestartAttachIndependentOfHistoryLength(t 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if groupBytes > 6.25*1024*1024 {
+	if groupBytes > int64(2*retentionSegRawMax+2*retentionCkptMax+256<<10) {
 		t.Fatalf("retained group grew with transcript: %d bytes in %d files", groupBytes, groupFiles)
 	}
 
@@ -195,13 +197,13 @@ func TestPersistentBaseCheckpointsMakeRestartAttachIndependentOfHistoryLength(t 
 	if newPos.Oldest != newPos.Head-capacity {
 		t.Fatalf("restart floor oldest=%d head=%d", newPos.Oldest, newPos.Head)
 	}
-	want := source[len(source)-capacity:]
-	got, ok := second.Recording("long-session", newPos.Oldest, newPos.Head)
-	if !ok || !bytes.Equal(got.Data, want) {
+	want := source[len(source)-int(capacity):]
+	start, got, _ := readRetained(t, second, "long-session", newPos.Oldest, newPos.Head)
+	if start != newPos.Oldest || !bytes.Equal(got, want) {
 		t.Fatal("restart lost the retained suffix")
 	}
-	clamped, ok := second.Recording("long-session", 0, newPos.Head)
-	if !ok || clamped.Start != newPos.Oldest || !bytes.Equal(clamped.Data, want) {
+	clampedStart, clamped, _ := readRetained(t, second, "long-session", 0, newPos.Head)
+	if clampedStart != newPos.Oldest || !bytes.Equal(clamped, want) {
 		t.Fatal("evicted prefix did not clamp to the retained floor")
 	}
 
@@ -261,8 +263,7 @@ func TestPersistentBaseCheckpointsMakeRestartAttachIndependentOfHistoryLength(t 
 	if !bytes.Equal(oldScreen, replayedScreen) || !bytes.Equal(oldContinuation, replayedContinuation) {
 		t.Fatal("bad newest base damaged recoverable terminal state")
 	}
-	got, ok = third.Recording("long-session", newPos.Oldest, newPos.Head)
-	if !ok || !bytes.Equal(got.Data, want) {
+	if start, got, _ = readRetained(t, third, "long-session", newPos.Oldest, newPos.Head); start != newPos.Oldest || !bytes.Equal(got, want) {
 		t.Fatal("corrupt base altered the source recording")
 	}
 	if err := third.Close(); err != nil {

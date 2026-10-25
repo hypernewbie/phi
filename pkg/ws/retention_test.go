@@ -10,8 +10,8 @@ import (
 )
 
 // These tests define the accepted retention policy before the storage
-// change: the newest 1 MiB of raw history per terminal survives,
-// older bytes are evicted, and disk use stays bounded.
+// change: the newest retentionHistoryCap of raw history per terminal
+// survives, older bytes are evicted, and disk use stays bounded.
 
 // retentionTestSource builds deterministic output with line structure so
 // suffix comparisons detect any dropped, duplicated, or reordered byte.
@@ -40,6 +40,45 @@ func ingestChunks(t *testing.T, h *Hub, pane string, source []byte, chunk int) {
 	}
 }
 
+// readRetained pages a window the way a client does: every response is
+// bounded by the server's per-read cap, so a full-cap window takes several
+// requests. It fails on a hole rather than returning short data.
+func readRetained(t *testing.T, h *Hub, pane string, from, end uint64) (uint64, []byte, []ResizeMarker) {
+	t.Helper()
+	var out []byte
+	var markers []ResizeMarker
+	start := from
+	for cursor := from; cursor < end; {
+		rec, ok := h.Recording(pane, cursor, end)
+		if !ok {
+			t.Fatalf("retained page [%d,%d) refused", cursor, end)
+		}
+		// A first page may advance the start when the request began below
+		// the floor; every later page must continue exactly where the last
+		// one stopped.
+		if cursor == from {
+			start = rec.Start
+		} else if rec.Start != cursor {
+			t.Fatalf("retained page [%d,%d) answered [%d,%d)", cursor, end, rec.Start, rec.End)
+		}
+		if rec.End == rec.Start {
+			// The server clamps a cursor at the head to an empty page
+			// there; the window is complete.
+			break
+		}
+		out = append(out, rec.Data...)
+		for _, marker := range rec.Resizes {
+			// A page restates the marker in force at its start; keep it once.
+			if len(markers) > 0 && markers[len(markers)-1] == marker {
+				continue
+			}
+			markers = append(markers, marker)
+		}
+		cursor = rec.End
+	}
+	return start, out, markers
+}
+
 func retentionFloor(t *testing.T, h *Hub, pane string) (uint64, uint64) {
 	t.Helper()
 	ph, ok := h.LookupPane(pane)
@@ -64,13 +103,13 @@ func TestParseRetentionSegFileRejectsShortNames(t *testing.T) {
 	}
 }
 
-func TestRetentionKeepsNewest1MiBAcrossWraps(t *testing.T) {
-	const capacity = 1 << 20
+func TestRetentionKeepsNewestCapAcrossWraps(t *testing.T) {
+	capacity := uint64(retentionHistoryCap)
 	h := NewHub(4096)
 	if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	source := retentionTestSource(t, 2*capacity+600*1024)
+	source := retentionTestSource(t, int(2*capacity+600*1024))
 	ingestChunks(t, h, "p", source, 32*1024)
 
 	oldest, head := retentionFloor(t, h, "p")
@@ -80,34 +119,32 @@ func TestRetentionKeepsNewest1MiBAcrossWraps(t *testing.T) {
 	if oldest != head-capacity {
 		t.Fatalf("oldest=%d want head-cap=%d", oldest, head-capacity)
 	}
-	want := source[len(source)-capacity:]
-	rec, ok := h.Recording("p", oldest, head)
-	if !ok || rec.Start != oldest || rec.End != head || !bytes.Equal(rec.Data, want) {
-		t.Fatalf("retained window: ok=%t span=[%d,%d) bytes=%d want [%d,%d) exact newest 1 MiB",
-			ok, rec.Start, rec.End, len(rec.Data), oldest, head)
+	want := source[len(source)-int(capacity):]
+	start, data, _ := readRetained(t, h, "p", oldest, head)
+	if start != oldest || !bytes.Equal(data, want) {
+		t.Fatalf("retained window: start=%d bytes=%d want start=%d %d bytes", start, len(data), oldest, len(want))
 	}
 	// A request starting in evicted history clamps to the real floor and
 	// reports the advanced start; it never fabricates the missing prefix.
-	clamped, ok := h.Recording("p", 0, head)
-	if !ok || clamped.Start != oldest || !bytes.Equal(clamped.Data, want) {
-		t.Fatalf("evicted-prefix read: ok=%t start=%d bytes=%d want start=%d with newest 1 MiB",
-			ok, clamped.Start, len(clamped.Data), oldest)
+	clampedStart, clamped, _ := readRetained(t, h, "p", 0, head)
+	if clampedStart != oldest || !bytes.Equal(clamped, want) {
+		t.Fatalf("evicted-prefix read: start=%d bytes=%d want start=%d with newest cap",
+			clampedStart, len(clamped), oldest)
 	}
 }
 
 func TestRetentionExactCapacityBoundary(t *testing.T) {
-	const capacity = 1 << 20
+	capacity := uint64(retentionHistoryCap)
 	h := NewHub(0)
 	if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	source := retentionTestSource(t, capacity)
+	source := retentionTestSource(t, int(capacity))
 	ingestChunks(t, h, "p", source, 32*1024)
 	if oldest, head := retentionFloor(t, h, "p"); oldest != 0 || head != capacity {
 		t.Fatalf("exact capacity: oldest=%d head=%d want 0/%d", oldest, head, capacity)
 	}
-	rec, ok := h.Recording("p", 0, capacity)
-	if !ok || !bytes.Equal(rec.Data, source) {
+	if start, data, _ := readRetained(t, h, "p", 0, capacity); start != 0 || !bytes.Equal(data, source) {
 		t.Fatal("exact-capacity history was truncated")
 	}
 	if err := h.Ingest("p", []byte("Z")); err != nil {
@@ -116,21 +153,20 @@ func TestRetentionExactCapacityBoundary(t *testing.T) {
 	if oldest, head := retentionFloor(t, h, "p"); oldest != 1 || head != capacity+1 {
 		t.Fatalf("capacity+1: oldest=%d head=%d want 1/%d", oldest, head, capacity+1)
 	}
-	rec, ok = h.Recording("p", 0, capacity+1)
-	if !ok || rec.Start != 1 || !bytes.Equal(rec.Data, append(source[1:], 'Z')) {
-		t.Fatalf("capacity+1 read: ok=%t start=%d bytes=%d", ok, rec.Start, len(rec.Data))
+	if start, data, _ := readRetained(t, h, "p", 0, capacity+1); start != 1 || !bytes.Equal(data, append(source[1:], 'Z')) {
+		t.Fatalf("capacity+1 read: start=%d bytes=%d", start, len(data))
 	}
 }
 
 func TestRetentionDirectPayloadsKeepCombinedSuffix(t *testing.T) {
-	const capacity = 1 << 20
-	for _, size := range []int{64 * 1024, capacity - 1, capacity + 1} {
+	capacity := uint64(retentionHistoryCap)
+	for _, size := range []int{64 * 1024, int(capacity) - 1, int(capacity) + 1} {
 		t.Run("", func(t *testing.T) {
 			h := NewHub(0)
 			if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
 				t.Fatal(err)
 			}
-			prefix := retentionTestSource(t, capacity+4096)
+			prefix := retentionTestSource(t, int(capacity)+4096)
 			ingestChunks(t, h, "p", prefix, 32*1024)
 			payload := retentionTestSource(t, size)
 			// Make the payload distinguishable from the prefix window.
@@ -142,14 +178,18 @@ func TestRetentionDirectPayloadsKeepCombinedSuffix(t *testing.T) {
 			}
 			combined := append(append([]byte(nil), prefix...), payload...)
 			head := uint64(len(combined))
-			want := combined[len(combined)-capacity:]
+			want := combined[len(combined)-int(capacity):]
 			oldest, gotHead := retentionFloor(t, h, "p")
 			if gotHead != head || oldest != head-capacity {
 				t.Fatalf("size %d: oldest=%d head=%d want %d/%d", size, oldest, gotHead, head-capacity, head)
 			}
 			rec, ok := h.Recording("p", oldest, head)
-			if !ok || !bytes.Equal(rec.Data, want) {
-				t.Fatalf("size %d: ok=%t bytes=%d want exact newest 1 MiB of prefix+payload", size, ok, len(rec.Data))
+			if !ok || rec.Start != oldest {
+				t.Fatalf("size %d: retained range refused", size)
+			}
+			_, data, _ := readRetained(t, h, "p", oldest, head)
+			if !bytes.Equal(data, want) {
+				t.Fatalf("size %d: bytes=%d want exact newest cap of prefix+payload", size, len(data))
 			}
 		})
 	}
@@ -170,13 +210,13 @@ func TestRetentionOneByteBatchesDoNotEvictEarly(t *testing.T) {
 }
 
 func TestRetentionBoundsDiskUsage(t *testing.T) {
-	const steadyMax = 6.25 * 1024 * 1024
+	steadyMax := int64(2*retentionSegRawMax + 2*retentionCkptMax + 256<<10)
 	h := NewHub(4096)
 	dir := t.TempDir()
 	if err := h.SetRecordingDirectory(dir); err != nil {
 		t.Fatal(err)
 	}
-	source := retentionTestSource(t, 8<<20)
+	source := retentionTestSource(t, 16<<20)
 	ingestChunks(t, h, "p", source, 64*1024)
 	var total int64
 	var files int
@@ -197,11 +237,11 @@ func TestRetentionBoundsDiskUsage(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if total > int64(steadyMax) {
-		t.Fatalf("group files use %d bytes across %d files, want at most %.0f", total, files, steadyMax)
+	if total > steadyMax {
+		t.Fatalf("group files use %d bytes across %d files, want at most %d", total, files, steadyMax)
 	}
-	if oldest, head := retentionFloor(t, h, "p"); oldest != head-(1<<20) {
-		t.Fatalf("floor=%d head=%d after 8 MiB", oldest, head)
+	if oldest, head := retentionFloor(t, h, "p"); oldest != head-retentionHistoryCap {
+		t.Fatalf("floor=%d head=%d after wrap", oldest, head)
 	}
 }
 
@@ -212,7 +252,7 @@ func TestRetentionBaseCheckpointsStayBounded(t *testing.T) {
 	if err := h.SetRecordingDirectory(dir); err != nil {
 		t.Fatal(err)
 	}
-	source := retentionTestSource(t, 3.5*1024*1024)
+	source := retentionTestSource(t, int(3*retentionSegNominal)+512<<10)
 	ingestChunks(t, h, "p", source, 64*1024)
 	ph, _ := h.LookupPane("p")
 	ph.mu.Lock()
@@ -257,7 +297,7 @@ func TestRetentionNearFullSegmentRotatesBeforeBreachingRawMax(t *testing.T) {
 	if err := first.Ingest("p", fill); err != nil {
 		t.Fatal(err)
 	}
-	tail := bytes.Repeat([]byte("t"), 64<<10)
+	tail := bytes.Repeat([]byte("t"), int(retentionHistoryCap))
 	if err := first.Ingest("p", tail); err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +305,7 @@ func TestRetentionNearFullSegmentRotatesBeforeBreachingRawMax(t *testing.T) {
 	if n := len(ph.recording.segs); n != 2 {
 		t.Fatalf("segments = %d, want 2 (rotation before breach)", n)
 	}
-	head := uint64(retentionSegNominal - 1 + 64<<10)
+	head := uint64(retentionSegNominal - 1 + retentionHistoryCap)
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -275,21 +315,20 @@ func TestRetentionNearFullSegmentRotatesBeforeBreachingRawMax(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := append(append([]byte{}, fill...), tail...)
-	floor := head - (1 << 20)
-	rec, ok := second.Recording("p", 0, head)
-	if !ok || rec.Start != floor || !bytes.Equal(rec.Data, source[floor:]) {
-		t.Fatal("reopen lost the retained suffix after near-full rotation")
+	floor := head - retentionHistoryCap
+	if start, data, _ := readRetained(t, second, "p", 0, head); start != floor || !bytes.Equal(data, source[floor:]) {
+		t.Fatalf("reopen lost the retained suffix after near-full rotation: start=%d bytes=%d want %d", start, len(data), floor)
 	}
 }
 
 func TestRetentionRestartPreservesSuffixScreenAndPermissions(t *testing.T) {
-	const capacity = 1 << 20
+	capacity := uint64(retentionHistoryCap)
 	dir := t.TempDir()
 	first := NewHub(4096)
 	if err := first.SetRecordingDirectory(dir); err != nil {
 		t.Fatal(err)
 	}
-	source := retentionTestSource(t, 2*capacity+12345)
+	source := retentionTestSource(t, int(2*capacity)+12345)
 	ingestChunks(t, first, "p", source, 32*1024)
 	oldPos, oldState, _, _, err := first.State("p")
 	if err != nil {
@@ -340,9 +379,8 @@ func TestRetentionRestartPreservesSuffixScreenAndPermissions(t *testing.T) {
 	if !bytes.Equal(oldScreen, newScreen) || !bytes.Equal(oldContinuation, newContinuation) {
 		t.Fatal("restart changed the visible screen or parser continuation")
 	}
-	want := source[len(source)-capacity:]
-	rec, ok := second.Recording("p", newPos.Oldest, newPos.Head)
-	if !ok || !bytes.Equal(rec.Data, want) {
+	want := source[len(source)-int(capacity):]
+	if start, data, _ := readRetained(t, second, "p", newPos.Oldest, newPos.Head); start != newPos.Oldest || !bytes.Equal(data, want) {
 		t.Fatal("restart lost the retained suffix")
 	}
 	if err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {

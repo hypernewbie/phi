@@ -13,7 +13,8 @@ import (
 
 func TestBoundedStateRetainsRequestedBooks(t *testing.T) {
 	h := NewHub(4096)
-	source := bytes.Repeat([]byte("\x1b[32mBOOK 你🙂\x1b[0m\r\n"), 100000)
+	line := []byte("\x1b[32mBOOK 你🙂\x1b[0m\r\n")
+	source := bytes.Repeat(line, int(2*retentionHistoryCap)/len(line))
 	if err := h.Ingest("books", source); err != nil {
 		t.Fatal(err)
 	}
@@ -45,8 +46,8 @@ func TestBoundedStateRetainsRequestedBooks(t *testing.T) {
 	// wholly below it has no bytes left, so it answers as the empty span
 	// at the floor. Its start is above the requested position, which is
 	// the expired-prefix signal the clients read.
-	clamped, ok := h.Recording("books", 0, uint64(len(source)))
-	if !ok || clamped.Start != uint64(floor) || !bytes.Equal(clamped.Data, source[floor:]) {
+	clampedStart, clamped, _ := readRetained(t, h, "books", 0, uint64(len(source)))
+	if clampedStart != uint64(floor) || !bytes.Equal(clamped, source[floor:]) {
 		t.Fatal("evicted prefix did not clamp to the retained floor")
 	}
 	empty, ok := h.Recording("books", 0, 1024)
@@ -79,8 +80,8 @@ func TestBoundedStateRetainsRequestedBooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if localRows > 512 {
-		t.Fatalf("initial local history exceeds the page-rounded budget: %d rows", localRows)
+	if localRows > historyCheckpointRows {
+		t.Fatalf("initial local history exceeds the checkpoint row budget: %d rows", localRows)
 	}
 	if err := h.Ingest("books", []byte("NEWEST")); err != nil {
 		t.Fatal(err)

@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
 
 // Output stops between bursts so each click exercises a known retained
@@ -12,7 +12,7 @@ def write(data):
     while data:
         data = data[os.write(1, data):]
 def burst(label):
-    for i in range(60000):
+    for i in range(120000):
         write(('%s %06d %s\\r\\n' % (label, i, 'X' * 44)).encode())
 burst('FLOOR OLD')
 write(b'FLOOR INITIAL READY\\r\\n')
@@ -94,6 +94,32 @@ async function view(page: Page, pane: string): Promise<string> {
     }, pane);
 }
 
+// The retained window spans multiple 2 MiB responses, so head markers are
+// only reachable by following the response cursors.
+async function recordingWindowText(
+    request: APIRequestContext,
+    pane: string,
+): Promise<string> {
+    const chunks: string[] = [];
+    let cursor = 0;
+    for (let attempt = 0; attempt < 8; attempt++) {
+        const response = await request.get(
+            `${phi.url}/api/terminals/${encodeURIComponent(pane)}/recording?from=${cursor}&through=18446744073709551615`,
+        );
+        if (!response.ok()) return '';
+        const body = await response.body();
+        const headerLength = body.readUInt32BE(0);
+        const header = JSON.parse(
+            body.subarray(4, 4 + headerLength).toString('utf8'),
+        ) as { end: number };
+        const data = body.subarray(4 + headerLength);
+        chunks.push(data.toString('utf8'));
+        if (data.length < (2 << 20) || header.end <= cursor) break;
+        cursor = header.end;
+    }
+    return chunks.join('');
+}
+
 async function recordingFloor(page: Page, pane: string): Promise<number> {
     return page.evaluate(async (id) => {
         const response = await fetch(
@@ -169,14 +195,7 @@ for (const width of [1280, 560]) {
         // omits known older bytes and enables the existing history control.
         await expect
             .poll(
-                async () => {
-                    const response = await request.get(
-                        `${phi.url}/api/terminals/${pane}/recording?from=0&through=18446744073709551615`,
-                    );
-                    return response.ok()
-                        ? (await response.body()).toString('utf8')
-                        : '';
-                },
+                () => recordingWindowText(request, pane),
                 { timeout: 30_000 },
             )
             .toContain('FLOOR INITIAL READY');
@@ -217,14 +236,7 @@ for (const width of [1280, 560]) {
         expect(advanced.ok()).toBe(true);
         await expect
             .poll(
-                async () => {
-                    const response = await request.get(
-                        `${phi.url}/api/terminals/${pane}/recording?from=0&through=18446744073709551615`,
-                    );
-                    return response.ok()
-                        ? (await response.body()).toString('utf8')
-                        : '';
-                },
+                () => recordingWindowText(request, pane),
                 { timeout: 30_000 },
             )
             .toContain('FLOOR LATEST AFTER ROTATION');

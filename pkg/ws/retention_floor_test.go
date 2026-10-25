@@ -78,18 +78,12 @@ func assertWindowAddressable(t *testing.T, h *Hub, pane string, rng *rand.Rand) 
 	}
 	for i := 0; i < 4 && head > oldest; i++ {
 		from := oldest + uint64(rng.Int63n(int64(head-oldest)+1))
-		rec, ok := h.Recording(pane, from, head)
-		if !ok {
+		start, data, _ := readRetained(t, h, pane, from, head)
+		if start != from {
 			t.Fatalf("retained range [%d,%d] refused (floor %d head %d)", from, head, oldest, head)
 		}
-		// The floor moves the start and the head moves the end. The answer
-		// always reports what it served, which is how the client detects an
-		// evicted prefix.
-		if rec.Start != from || rec.End != head {
-			t.Fatalf("range [%d,%d] answered as [%d,%d]", from, head, rec.Start, rec.End)
-		}
-		if uint64(len(rec.Data)) != head-from {
-			t.Fatalf("range [%d,%d] returned %d bytes", from, head, len(rec.Data))
+		if uint64(len(data)) != head-from {
+			t.Fatalf("range [%d,%d] returned %d bytes", from, head, len(data))
 		}
 	}
 	// A window the floor already passed must never answer with bytes: it is
