@@ -2,6 +2,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { setupDomHarness } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
+import { terminalSubprotocol } from '../web/ws.js';
+import { TerminalServerFrame } from '../web/proto/terminal.js';
 
 // Comprehensive regression test suite for terminal history retention,
 // scroll stability, and performance benchmarking.
@@ -22,6 +24,7 @@ class FakeWebSocket {
         this.url = url;
         this.binaryType = '';
         this.readyState = 1;
+        this.protocol = terminalSubprotocol;
         this.sent = [];
     }
     send(b) {
@@ -36,23 +39,56 @@ class FakeWebSocket {
         if (this.onmessage) this.onmessage({ data: buf });
     }
     emitHot(startSeq, text) {
-        const bytes = new TextEncoder().encode(text);
-        const payload = new ArrayBuffer(8 + bytes.byteLength);
-        const view = new DataView(payload);
-        view.setBigUint64(0, BigInt(startSeq), false);
-        new Uint8Array(payload, 8).set(bytes);
-        this.emit(0x09, new Uint8Array(payload));
+        const bytes =
+            typeof text === 'string' ? new TextEncoder().encode(text) : text;
+        const frame = TerminalServerFrame.encode(
+            TerminalServerFrame.fromPartial({
+                payload: {
+                    $case: 'output',
+                    value: { start: BigInt(startSeq), data: bytes },
+                },
+            }),
+        ).finish();
+        if (this.onmessage)
+            this.onmessage({ data: new Uint8Array(frame).buffer });
     }
     emitAttachHead(hdr, extra) {
-        const json = new TextEncoder().encode(JSON.stringify(hdr));
-        const payload = new ArrayBuffer(
-            4 + json.byteLength + (extra?.byteLength || 0),
-        );
-        const view = new DataView(payload);
-        view.setUint32(0, json.byteLength, false);
-        new Uint8Array(payload, 4).set(json);
-        if (extra) new Uint8Array(payload, 4 + json.byteLength).set(extra);
-        this.emit(0x08, new Uint8Array(payload));
+        const ckpt = hdr.ckpt
+            ? {
+                  ...(hdr.ckpt.kind !== undefined
+                      ? { kind: hdr.ckpt.kind }
+                      : {}),
+                  through: BigInt(hdr.ckpt.through ?? 0),
+                  cols: hdr.ckpt.cols ?? 0,
+                  rows: hdr.ckpt.rows ?? 0,
+                  data:
+                      extra ??
+                      (hdr.ckpt.ansi
+                          ? new TextEncoder().encode(hdr.ckpt.ansi)
+                          : new Uint8Array()),
+                  ...(hdr.ckpt.eventCursor
+                      ? { eventCursor: hdr.ckpt.eventCursor }
+                      : {}),
+              }
+            : undefined;
+        const frame = TerminalServerFrame.encode(
+            TerminalServerFrame.fromPartial({
+                payload: {
+                    $case: 'attach',
+                    value: {
+                        epoch: BigInt(hdr.epoch ?? 0),
+                        oldest: BigInt(hdr.oldest ?? 0),
+                        head: BigInt(hdr.head ?? 0),
+                        ...(ckpt ? { checkpoint: ckpt } : {}),
+                        ...(hdr.replay_from !== undefined
+                            ? { replayFrom: BigInt(hdr.replay_from) }
+                            : {}),
+                    },
+                },
+            }),
+        ).finish();
+        if (this.onmessage)
+            this.onmessage({ data: new Uint8Array(frame).buffer });
     }
 }
 

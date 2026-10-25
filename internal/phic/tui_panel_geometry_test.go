@@ -55,7 +55,7 @@ func TestPanelLayoutChangesSendFinalWidgetGeometry(t *testing.T) {
 				}
 				select {
 				case sent := <-p.outbox:
-					want := wireproto.EncodeResizeFrame(uint16(cols), uint16(rows))
+					want := testResize(t, uint32(cols), uint32(rows))
 					if string(sent.bytes) != string(want) {
 						t.Fatalf("wire size %v, want %v", sent.bytes, want)
 					}
@@ -127,7 +127,7 @@ func TestReplayGeometryCannotSuppressPanelResize(t *testing.T) {
 	if frame.Cols != cols || frame.Rows != rows || !p.dirty {
 		t.Fatal("same desired dimensions suppressed the actual emulator resize")
 	}
-	if string((<-p.outbox).bytes) != string(wireproto.EncodeResizeFrame(uint16(cols), uint16(rows))) {
+	if string((<-p.outbox).bytes) != string(testResize(t, uint32(cols), uint32(rows))) {
 		t.Fatal("backend grid differs from panel")
 	}
 }
@@ -151,7 +151,7 @@ func TestRefusedResizeRequiresRecoveryInsteadOfClaimingSuccessfulSizing(t *testi
 	if err := p.handleInput(paneInput{Kind: paneInputResize, Cols: 95, Rows: 24, ForceResize: true}); err != nil {
 		t.Fatal(err)
 	}
-	if string((<-p.outbox).bytes) != string(wireproto.EncodeResizeFrame(95, 24)) {
+	if string((<-p.outbox).bytes) != string(testResize(t, 95, 24)) {
 		t.Fatal("retry did not synchronize desired geometry")
 	}
 }
@@ -183,7 +183,7 @@ func TestLatestResizeSurvivesInputBacklogAndRetainsForce(t *testing.T) {
 	}
 	select {
 	case sent := <-p.outbox:
-		if string(sent.bytes) != string(wireproto.EncodeResizeFrame(120, 30)) {
+		if string(sent.bytes) != string(testResize(t, 120, 30)) {
 			t.Fatal("wire size differs from widget")
 		}
 	default:

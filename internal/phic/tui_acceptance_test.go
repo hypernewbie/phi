@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/hypernewbie/phi/internal/termemu"
 	"github.com/hypernewbie/phi/internal/termemu/stub"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
@@ -42,8 +43,11 @@ func TestTUIBackendFocusReceivesControlKeys(t *testing.T) {
 			if err != nil {
 				return
 			}
-			if len(msg) > 0 && msg[0] == wireproto.FrameInput {
-				inputs <- string(msg[1:])
+			decoded, derr := wireproto.DecodeClientFrame(msg)
+			if derr == nil {
+				if in, ok := decoded.GetPayload().(*wspb.TerminalClientFrame_Input); ok {
+					inputs <- string(in.Input)
+				}
 			}
 		}
 	}))

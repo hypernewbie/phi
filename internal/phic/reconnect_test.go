@@ -28,7 +28,7 @@ func TestReconnectRecoversMissedBytesWithoutDuplicatesAndDrainsExit(t *testing.T
 			source := append(append(append(append([]byte{}, prefix...), first...), missed...), last...)
 			var connections atomic.Int64
 			var unavailable atomic.Bool
-			up := websocket.Upgrader{}
+			up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/ws/pane/p" {
 					ws, err := up.Upgrade(w, r, nil)
@@ -41,14 +41,14 @@ func TestReconnectRecoversMissedBytesWithoutDuplicatesAndDrainsExit(t *testing.T
 					if n > 1 {
 						head += len(first) + len(missed)
 					}
-					_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7, Head: uint64(head)}, nil))
+					_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, uint64(head)))
 					if n == 1 {
-						_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeLiveOutputFrame(uint64(head), first))
+						_ = ws.WriteMessage(websocket.BinaryMessage, testOutput(t, uint64(head), first))
 						_ = ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(1001, "offline"), time.Now().Add(time.Second))
 					} else {
 						// Overlap replay's written boundary; duplicate bytes must not repaint.
-						_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeLiveOutputFrame(uint64(head-2), source[head-2:]))
-						_ = ws.WriteMessage(websocket.BinaryMessage, []byte{4, exitCode})
+						_ = ws.WriteMessage(websocket.BinaryMessage, testOutput(t, uint64(head-2), source[head-2:]))
+						_ = ws.WriteMessage(websocket.BinaryMessage, testExit(t, int32(exitCode)))
 					}
 					for {
 						if _, _, err := ws.ReadMessage(); err != nil {

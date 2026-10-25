@@ -3,7 +3,6 @@ package ws
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,22 +14,21 @@ import (
 	"github.com/hypernewbie/phi/pkg/pty"
 
 	"github.com/gorilla/websocket"
+	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
-func TestEncodeSessionTitleControl(t *testing.T) {
-	payload := EncodeSessionTitleControl("pane-1", "native-id", "Native title", 7)
-	var control struct {
-		Type      string `json:"type"`
-		PaneID    string `json:"pane_id"`
-		SessionID string `json:"session_id"`
-		Title     string `json:"title"`
-		Revision  uint64 `json:"revision"`
-	}
-	if err := json.Unmarshal(payload, &control); err != nil {
+func TestEncodeTitleFrame(t *testing.T) {
+	frame, err := wireproto.EncodeTitleFrame("pane-1", "native-id", "Native title", 7)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if control.Type != "session-title" || control.PaneID != "pane-1" || control.SessionID != "native-id" || control.Title != "Native title" || control.Revision != 7 {
-		t.Fatalf("encoded session title control=%+v", control)
+	server, err := wireproto.DecodeServerFrame(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	title := server.GetTitle()
+	if title == nil || title.GetPaneId() != "pane-1" || title.GetSessionId() != "native-id" || title.GetTitle() != "Native title" || title.GetRevision() != 7 {
+		t.Fatalf("encoded title frame=%+v", title)
 	}
 }
 
@@ -43,24 +41,16 @@ func TestPiTitleAttachSnapshotFollowsAttachHeadAndNeverBlocks(t *testing.T) {
 		t.Fatal("Pi title attach snapshot was not queued")
 	}
 	first, second := <-client.Send, <-client.Send
-	if len(first) == 0 || first[0] != 0x08 {
-		t.Fatalf("first hot attach frame type=%v, want ATTACH_HEAD 0x08", first)
+	if server, err := wireproto.DecodeServerFrame(first); err != nil || server.GetAttach() == nil {
+		t.Fatalf("first attach frame = %+v err=%v, want an attach", server, err)
 	}
-	if len(second) == 0 || second[0] != 0x02 {
-		t.Fatalf("second attach frame type=%v, want session-title 0x02", second)
+	secondFrame, err := wireproto.DecodeServerFrame(second)
+	if err != nil || secondFrame.GetTitle() == nil {
+		t.Fatalf("second attach frame = %+v err=%v, want a title", secondFrame, err)
 	}
-	var control struct {
-		Type      string `json:"type"`
-		PaneID    string `json:"pane_id"`
-		SessionID string `json:"session_id"`
-		Title     string `json:"title"`
-		Revision  uint64 `json:"revision"`
-	}
-	if err := json.Unmarshal(second[1:], &control); err != nil {
-		t.Fatal(err)
-	}
-	if control.Type != "session-title" || control.PaneID != snapshot.ID || control.SessionID != snapshot.SessionID || control.Title != snapshot.Title || control.Revision != snapshot.TitleRevision {
-		t.Fatalf("attach title snapshot=%+v", control)
+	title := secondFrame.GetTitle()
+	if title.GetPaneId() != snapshot.ID || title.GetSessionId() != snapshot.SessionID || title.GetTitle() != snapshot.Title || title.GetRevision() != snapshot.TitleRevision {
+		t.Fatalf("attach title snapshot=%+v", title)
 	}
 
 	fullHub := NewHub(0)
@@ -100,35 +90,44 @@ func TestHandleWSQueuesCurrentPiTitleAfterHotAttach(t *testing.T) {
 	}))
 	defer server.Close()
 
-	url := "ws" + strings.TrimPrefix(server.URL, "http") + "/?term_proto=hot-v1"
-	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	url := "ws" + strings.TrimPrefix(server.URL, "http")
+	dialer := websocket.Dialer{Subprotocols: []string{wireproto.TerminalSubprotocol}}
+	conn, _, err := dialer.Dial(url, nil)
 	if err != nil {
-		t.Fatalf("dial hot attach: %v", err)
+		t.Fatalf("dial attach: %v", err)
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	for index, wantType := range []byte{0x08, 0x02} {
+	messageType, first, err := conn.ReadMessage()
+	if err != nil {
+		_ = conn.Close()
+		t.Fatalf("read attach frame: %v", err)
+	}
+	if messageType != websocket.BinaryMessage {
+		_ = conn.Close()
+		t.Fatalf("attach frame type=%d, want binary", messageType)
+	}
+	if server, err := wireproto.DecodeServerFrame(first); err != nil || server.GetAttach() == nil {
+		_ = conn.Close()
+		t.Fatalf("first frame = %+v err=%v, want an attach", server, err)
+	}
+	{
 		messageType, frame, err := conn.ReadMessage()
 		if err != nil {
 			_ = conn.Close()
-			t.Fatalf("read attach frame %d: %v", index, err)
+			t.Fatalf("read title frame: %v", err)
 		}
-		if messageType != websocket.BinaryMessage || len(frame) == 0 || frame[0] != wantType {
+		if messageType != websocket.BinaryMessage || len(frame) == 0 {
 			_ = conn.Close()
-			t.Fatalf("attach frame %d type=%d first byte=%v, want 0x%02x", index, messageType, frame, wantType)
+			t.Fatalf("title frame type=%d length=%d, want binary", messageType, len(frame))
 		}
-		if index == 1 {
-			var title struct {
-				Type      string `json:"type"`
-				PaneID    string `json:"pane_id"`
-				SessionID string `json:"session_id"`
-				Title     string `json:"title"`
-				Revision  uint64 `json:"revision"`
-			}
-			if err := json.Unmarshal(frame[1:], &title); err != nil {
+		{
+			server, err := wireproto.DecodeServerFrame(frame)
+			if err != nil || server.GetTitle() == nil {
 				_ = conn.Close()
-				t.Fatal(err)
+				t.Fatalf("title frame = %+v err=%v, want a title", server, err)
 			}
-			if title.Type != "session-title" || title.PaneID != instance.ID || title.SessionID != "native-id" || title.Title != "Native title" || title.Revision != 1 {
+			title := server.GetTitle()
+			if title.GetPaneId() != instance.ID || title.GetSessionId() != "native-id" || title.GetTitle() != "Native title" || title.GetRevision() != 1 {
 				_ = conn.Close()
 				t.Fatalf("current attach title=%+v", title)
 			}
@@ -380,7 +379,8 @@ func TestHandleWS_DiedInPlaceReportsRealExitCode(t *testing.T) {
 	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	conn, _, err := (&websocket.Dialer{}).Dial(wsURL, nil)
+	dialer := websocket.Dialer{Subprotocols: []string{wireproto.TerminalSubprotocol}}
+	conn, _, err := dialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -388,36 +388,26 @@ func TestHandleWS_DiedInPlaceReportsRealExitCode(t *testing.T) {
 
 	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 
-	// AttachWithReplay always sends a 0x06 replay-complete frame first
-	// (even against an empty/never-ingested ring), followed by the 0x04
-	// pty-exited frame once the dead-Pty branch runs. Skip past 0x06.
-	var message []byte
-	for i := 0; i < 5; i++ {
-		mt, msg, readErr := conn.ReadMessage()
-		if readErr != nil {
-			t.Fatalf("expected a 0x04 pty-exited frame, got read error: %v", readErr)
-		}
-		if mt != websocket.BinaryMessage || len(msg) < 1 {
-			t.Fatalf("unexpected message: type=%d len=%d", mt, len(msg))
-		}
-		if msg[0] == 0x06 {
-			continue
-		}
-		message = msg
-		break
+	// The dead-Pty branch sends the attach frame, then the exit frame
+	// with the real exit code.
+	_, attachRaw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read attach: %v", err)
 	}
-	if message == nil {
-		t.Fatal("never received a non-0x06 frame")
+	attachFrame, err := wireproto.DecodeServerFrame(attachRaw)
+	if err != nil || attachFrame.GetAttach() == nil {
+		t.Fatalf("first frame = %+v err=%v, want an attach", attachFrame, err)
 	}
-	if message[0] != 0x04 {
-		t.Fatalf("expected frame type 0x04 (pty-exited), got 0x%02x", message[0])
+	_, exitRaw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("expected an exit frame, got read error: %v", err)
 	}
-	payload := string(message[1:])
-	if strings.Contains(payload, `"code":-1`) {
-		t.Errorf("died-in-place PTY should report its real exit code, not the ghost sentinel -1; got payload %q", payload)
+	exitFrame, err := wireproto.DecodeServerFrame(exitRaw)
+	if err != nil || exitFrame.GetExit() == nil {
+		t.Fatalf("second frame = %+v err=%v, want an exit", exitFrame, err)
 	}
-	if !strings.Contains(payload, `"code":0`) {
-		t.Errorf("expected exit code 0 (clean 'exit' command), got payload %q", payload)
+	if code := exitFrame.GetExit().GetCode(); code != 0 {
+		t.Errorf("died-in-place PTY should report its real exit code 0 (clean 'exit' command), not the ghost sentinel -1; got %d", code)
 	}
 }
 
@@ -444,17 +434,18 @@ func TestHandleWS_LoggerCarriesCompAndPane(t *testing.T) {
 	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	conn, _, err := (&websocket.Dialer{}).Dial(wsURL, nil)
+	dialer := websocket.Dialer{Subprotocols: []string{wireproto.TerminalSubprotocol}}
+	conn, _, err := dialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
 	defer conn.Close()
 
 	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	// Drain the 0x06 replay-complete frame; WritePump's debug frame trace
+	// Drain the attach frame; WritePump's debug frame trace
 	// on the way out carries this connection's comp+pane attrs.
 	if _, _, err := conn.ReadMessage(); err != nil {
-		t.Fatalf("read replay-complete frame: %v", err)
+		t.Fatalf("read attach frame: %v", err)
 	}
 
 	var found bool

@@ -11,17 +11,33 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/gorilla/websocket"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
+	"google.golang.org/protobuf/proto"
 )
 
-func wsUpgrader() websocket.Upgrader { return websocket.Upgrader{} }
+func wsUpgrader() websocket.Upgrader {
+	return websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
+}
 
 func attachHeadFrame(epoch, head uint64) []byte {
-	return wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: epoch, Head: head}, nil)
+	raw, err := wireproto.EncodeAttachFrame(&wspb.TerminalAttach{
+		Epoch:  proto.Uint64(epoch),
+		Oldest: proto.Uint64(0),
+		Head:   proto.Uint64(head),
+	})
+	if err != nil {
+		panic(err)
+	}
+	return raw
 }
 
 func liveFrame(start uint64, data []byte) []byte {
-	return wireproto.EncodeLiveOutputFrame(start, data)
+	raw, err := wireproto.EncodeOutputFrame(start, data)
+	if err != nil {
+		panic(err)
+	}
+	return raw
 }
 
 func timeAfter() <-chan time.Time { return time.After(5 * time.Second) }
@@ -80,8 +96,11 @@ func TestTUIKeyRoutingTerminalVersusChrome(t *testing.T) {
 			if err != nil {
 				return
 			}
-			if len(msg) > 0 && msg[0] == 1 {
-				inputs <- string(msg[1:])
+			frame, err := wireproto.DecodeClientFrame(msg)
+			if err == nil {
+				if in, ok := frame.GetPayload().(*wspb.TerminalClientFrame_Input); ok {
+					inputs <- string(in.Input)
+				}
 			}
 		}
 	}))

@@ -38,7 +38,7 @@ func TestReviewRelayRecoversPrefixAndGapAndStopsOnIdleCancel(t *testing.T) {
 	}
 	tape := startPtyReader(master)
 	connected := make(chan *websocket.Conn, 1)
-	up := websocket.Upgrader{}
+	up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 	var requests atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path == "/ws/pane/p" {
@@ -48,8 +48,8 @@ func TestReviewRelayRecoversPrefixAndGapAndStopsOnIdleCancel(t *testing.T) {
 			}
 			connected <- ws
 			defer ws.Close()
-			_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7, Head: uint64(len(prefix))}, nil))
-			_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeLiveOutputFrame(uint64(len(prefix)+len(gap)), live))
+			_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, uint64(len(prefix))))
+			_ = ws.WriteMessage(websocket.BinaryMessage, testOutput(t, uint64(len(prefix)+len(gap)), live))
 			for {
 				if _, _, err := ws.ReadMessage(); err != nil {
 					return

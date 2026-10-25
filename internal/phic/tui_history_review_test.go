@@ -6,7 +6,9 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/hypernewbie/phi/internal/termemu"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
+	"google.golang.org/protobuf/proto"
 )
 
 type reviewHistoryTerminal struct {
@@ -72,7 +74,7 @@ func TestNewEpochDisposesOldHistoricalPage(t *testing.T) {
 	live := historyReviewTerminal(t)
 	p := &paneActor{ctx: t.Context(), emu: live, history: old, historyPending: true, historyGen: 5, epoch: 7, epochSet: true, cols: 80, rows: 24, emuCols: 80, emuRows: 24, build: stubBuild, conn: &websocket.Conn{}, outbox: make(chan paneWrite, 1)}
 	defer func() { _ = p.emu.Close() }()
-	if err := p.bootstrap(wireAttach{Header: wireproto.AttachHeadHeader{Epoch: 8}}); err != nil {
+	if err := p.bootstrap(wireAttach{Header: &wspb.TerminalAttach{Epoch: proto.Uint64(8)}}); err != nil {
 		t.Fatal(err)
 	}
 	if p.history != nil || p.historyPending || p.historyGen <= 5 || old.closed != 1 {

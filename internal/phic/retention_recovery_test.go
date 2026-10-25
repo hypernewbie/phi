@@ -16,7 +16,9 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/hypernewbie/phi/internal/termemu"
 	"github.com/hypernewbie/phi/internal/termstate"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
+	"google.golang.org/protobuf/proto"
 )
 
 func writeFramed(t *testing.T, w http.ResponseWriter, header any, payload []byte) {
@@ -128,7 +130,7 @@ func TestRelayReconnectAcrossFloorJumpsToLiveState(t *testing.T) {
 	prefix := []byte("PREFIX\r\n")
 	screen := []byte("\x1b[2J\x1b[HLIVE SCREEN")
 	var connections atomic.Int64
-	up := websocket.Upgrader{}
+	up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/ws/pane/p" {
 			ws, err := up.Upgrade(w, r, nil)
@@ -138,13 +140,13 @@ func TestRelayReconnectAcrossFloorJumpsToLiveState(t *testing.T) {
 			defer ws.Close()
 			n := connections.Add(1)
 			if n == 1 {
-				_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7, Head: uint64(len(prefix))}, nil))
-				_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeLiveOutputFrame(uint64(len(prefix)), []byte("FIRST\r\n")))
+				_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, uint64(len(prefix))))
+				_ = ws.WriteMessage(websocket.BinaryMessage, testOutput(t, uint64(len(prefix)), []byte("FIRST\r\n")))
 				_ = ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(1001, "offline"), time.Now().Add(time.Second))
 			} else {
 				// The first connection's frontier is evicted on reattach.
-				_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7, Oldest: 50, Head: 100}, nil))
-				_ = ws.WriteMessage(websocket.BinaryMessage, []byte{4, 0})
+				_ = ws.WriteMessage(websocket.BinaryMessage, testAttachOldest(t, 7, 50, 100))
+				_ = ws.WriteMessage(websocket.BinaryMessage, testExit(t, 0))
 			}
 			for {
 				if _, _, err := ws.ReadMessage(); err != nil {
@@ -241,7 +243,7 @@ func TestTUIBootstrapAcrossFloorUsesAttachEpochAndLatestState(t *testing.T) {
 				conn: &websocket.Conn{}, outbox: make(chan paneWrite, 4),
 			}
 			defer func() { _ = p.emu.Close() }()
-			if err := p.bootstrap(wireAttach{Header: wireproto.AttachHeadHeader{Epoch: 7, Oldest: 50, Head: 100}}); err != nil {
+			if err := p.bootstrap(wireAttach{Header: &wspb.TerminalAttach{Epoch: proto.Uint64(7), Oldest: proto.Uint64(50), Head: proto.Uint64(100)}}); err != nil {
 				t.Fatalf("bootstrap across floor: %v", err)
 			}
 			if p.frontier != 110 || p.head != 110 || p.epoch != 7 {
@@ -256,7 +258,7 @@ func TestTUIBootstrapAcrossFloorUsesAttachEpochAndLatestState(t *testing.T) {
 
 func TestTUIBootstrapRejectsUnexplainedFrontierRegression(t *testing.T) {
 	p := &paneActor{epoch: 7, epochSet: true, frontier: 110}
-	if err := p.bootstrap(wireAttach{Header: wireproto.AttachHeadHeader{Epoch: 7, Oldest: 50, Head: 100}}); !errors.Is(err, errProtocol) {
+	if err := p.bootstrap(wireAttach{Header: &wspb.TerminalAttach{Epoch: proto.Uint64(7), Oldest: proto.Uint64(50), Head: proto.Uint64(100)}}); !errors.Is(err, errProtocol) {
 		t.Fatalf("bootstrap with regressed head = %v, want errProtocol", err)
 	}
 }
@@ -329,7 +331,7 @@ func TestTUIFrameHealDoesNotRefeedAdoptedCheckpoint(t *testing.T) {
 	p := &paneActor{emu: live, api: mustAPI(t, srv.URL), spec: paneSpec{Key: paneKey{ID: "p"}}, ctx: ctx, epoch: 7, epochSet: true, frontier: 5}
 	// The gap heals to head 100, ahead of this queued frame: the frame
 	// must drop without re-feeding or moving the frontier backward.
-	if err := p.handleFrame(wireproto.EncodeLiveOutputFrame(90, []byte("QQQQQ"))); err != nil {
+	if err := p.handleFrame(testOutput(t, 90, []byte("QQQQQ"))); err != nil {
 		t.Fatalf("handleFrame across heal: %v", err)
 	}
 	p.mu.Lock()

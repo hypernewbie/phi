@@ -2,8 +2,6 @@ package ws
 
 import (
 	"context"
-	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -13,6 +11,8 @@ import (
 	"fmt"
 	"github.com/hypernewbie/phi/pkg/obs"
 	"github.com/hypernewbie/phi/pkg/pty"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
+	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 	"strings"
 
 	"github.com/gorilla/websocket"
@@ -107,29 +107,39 @@ func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub,
 	// races with tests that restore it after defer. Snapshot once.
 	pongTimeout := pongWait
 
+	// SetReadLimit bounds the compressed wire; ReadBoundedMessage bounds
+	// the decompressed body before protobuf decoding.
+	c.Ws.SetReadLimit(wireproto.MaxTerminalMessageBytes)
 	_ = c.Ws.SetReadDeadline(time.Now().Add(pongTimeout))
 	c.Ws.SetPongHandler(func(string) error {
 		_ = c.Ws.SetReadDeadline(time.Now().Add(pongTimeout))
 		return nil
 	})
 	for {
-		mt, message, err := c.Ws.ReadMessage()
+		mt, message, err := wireproto.ReadBoundedMessage(c.Ws, wireproto.MaxTerminalMessageBytes)
 		if err != nil {
+			if errors.Is(err, wireproto.ErrMessageTooLarge) {
+				c.closeWithCode(websocket.CloseMessageTooBig, "message too large")
+			}
 			break
 		}
 		_ = c.Ws.SetReadDeadline(time.Now().Add(pongTimeout))
-		if mt != websocket.BinaryMessage || len(message) == 0 {
-			continue
+		if mt != websocket.BinaryMessage {
+			c.closeWithCode(websocket.CloseProtocolError, "binary messages only")
+			break
+		}
+		frame, err := wireproto.DecodeClientFrame(message)
+		if err != nil {
+			logger.Warn("ws malformed client frame, closing connection", "err", err)
+			c.closeWithCode(websocket.CloseProtocolError, "malformed frame")
+			break
 		}
 
-		msgType := message[0]
-		payload := message[1:]
-
-		switch msgType {
-		case 0x01: // PTY stdin data
+		switch payload := frame.GetPayload().(type) {
+		case *wspb.TerminalClientFrame_Input: // PTY stdin data
 			inst.UpdateInput()
 			if inst.Pty != nil {
-				_, writeErr := inst.Pty.Write(payload)
+				_, writeErr := inst.Pty.Write(payload.Input)
 				if writeErr != nil {
 					logger.Error("ws pty write error", "err", writeErr)
 					errMsg := writeErr.Error()
@@ -137,21 +147,26 @@ func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub,
 						return
 					}
 				} else if slog.Default().Enabled(context.Background(), slog.LevelDebug) {
-					logger.Debug("frame", "dir", "client->pty", "bytes", len(payload))
+					logger.Debug("frame", "dir", "client->pty", "bytes", len(payload.Input))
 				}
 			}
-		case 0x02: // Resize
-			if len(payload) >= 4 && inst.Pty != nil {
-				cols := binary.BigEndian.Uint16(payload[0:2])
-				rows := binary.BigEndian.Uint16(payload[2:4])
-				if cols == 0 || rows == 0 {
-					return
-				}
+		case *wspb.TerminalClientFrame_Resize:
+			rs := payload.Resize
+			if rs == nil || rs.Cols == nil || rs.Rows == nil {
+				c.closeWithCode(websocket.CloseProtocolError, "resize needs cols and rows")
+				return
+			}
+			cols, rows := rs.GetCols(), rs.GetRows()
+			if cols == 0 || rows == 0 || cols > 65535 || rows > 65535 {
+				c.closeWithCode(websocket.CloseProtocolError, "resize out of range")
+				return
+			}
+			if inst.Pty != nil {
 				// Record the resize marker at the pane's current output head
 				// so archive replay can order it against output.
 				// Recorded before the PTY takes the new size: bytes after the
 				// marker were produced under it.
-				resizeErr := inst.Pty.ResizeRecorded(cols, rows, func() { hub.RecordResize(inst.ID, cols, rows) })
+				resizeErr := inst.Pty.ResizeRecorded(uint16(cols), uint16(rows), func() { hub.RecordResize(inst.ID, uint16(cols), uint16(rows)) })
 				if resizeErr != nil {
 					logger.Error("ws pty resize error", "err", resizeErr)
 					// A refused geometry/refresh is not success. Reattach with
@@ -159,10 +174,26 @@ func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub,
 					return
 				}
 			}
-		case 0x03: // Ping
-			c.Send <- []byte{0x03} // Pong
+		case *wspb.TerminalClientFrame_Ping:
+			pong, err := wireproto.EncodePongFrame()
+			if err != nil {
+				logger.Error("ws pong encode failed", "err", err)
+				continue
+			}
+			c.Send <- pong
+		default:
+			c.closeWithCode(websocket.CloseProtocolError, "unsupported payload")
+			return
 		}
 	}
+}
+
+// closeWithCode sends a bounded WebSocket close control. WriteControl is
+// safe alongside the write pump's data writer, and it carries its own
+// deadline so the pump's deadlines are left alone.
+func (c *Client) closeWithCode(code int, reason string) {
+	_ = c.Ws.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(code, reason), time.Now().Add(writeWait))
 }
 
 func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
@@ -211,30 +242,6 @@ func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
 	}()
 }
 
-type sessionTitleControlJSON struct {
-	Type      string `json:"type"`
-	PaneID    string `json:"pane_id"`
-	SessionID string `json:"session_id"`
-	Title     string `json:"title"`
-	Revision  uint64 `json:"revision"`
-}
-
-// EncodeSessionTitleControl produces the JSON payload for the existing 0x02
-// control channel. The caller supplies the frame byte when sending it.
-func EncodeSessionTitleControl(paneID, sessionID, title string, revision uint64) []byte {
-	payload, err := json.Marshal(sessionTitleControlJSON{
-		Type:      "session-title",
-		PaneID:    paneID,
-		SessionID: sessionID,
-		Title:     title,
-		Revision:  revision,
-	})
-	if err != nil {
-		return nil
-	}
-	return payload
-}
-
 // enqueueBridgeSnapshot appends the Pi-bridge attach snapshot after the
 // normal attach frames. A full client is closed instead of dropping the
 // frame: the client reconnects and retries the attach, so bridge state is
@@ -243,15 +250,18 @@ func (h *Hub) enqueueBridgeSnapshot(snapshot pty.PTYInstanceSnapshot, client *Cl
 	if h.bridgeAttach == nil || client == nil {
 		return false
 	}
-	payload := h.bridgeAttach(snapshot)
-	if payload == nil {
+	state := h.bridgeAttach(snapshot)
+	if state == nil {
 		return false
 	}
 	ph, ok := h.LookupPane(snapshot.ID)
 	if !ok {
 		return false
 	}
-	frame := append([]byte{0x02}, payload...)
+	frame, err := wireproto.EncodeBridgeStateFrame(state)
+	if err != nil {
+		return false
+	}
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
 	if !ph.clients[client] {
@@ -283,11 +293,10 @@ func (h *Hub) enqueuePiTitleSnapshot(snapshot pty.PTYInstanceSnapshot, client *C
 	if !ok {
 		return false
 	}
-	payload := EncodeSessionTitleControl(snapshot.ID, snapshot.SessionID, snapshot.Title, snapshot.TitleRevision)
-	if payload == nil {
+	frame, err := wireproto.EncodeTitleFrame(snapshot.ID, snapshot.SessionID, snapshot.Title, snapshot.TitleRevision)
+	if err != nil {
 		return false
 	}
-	frame := append([]byte{0x02}, payload...)
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
 	if !ph.clients[client] {
@@ -310,7 +319,16 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 	// upgrade request.
 	logger := componentLogger().With("pane", inst.ID)
 
-	conn, err := Upgrader.Upgrade(w, r, nil)
+	if !wireproto.ClientRequestedSubprotocol(r, wireproto.TerminalSubprotocol) {
+		logger.Error("ws terminal subprotocol mismatch")
+		http.Error(w, "expected WebSocket subprotocol "+wireproto.TerminalSubprotocol, http.StatusUpgradeRequired)
+		return
+	}
+	// Copy the shared upgrader: concurrent upgrades for other endpoints
+	// must not observe this endpoint's subprotocol selection.
+	upgrader := Upgrader
+	upgrader.Subprotocols = []string{wireproto.TerminalSubprotocol}
+	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		logger.Error("ws upgrade error", "err", err)
 		return
@@ -327,14 +345,10 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 	manager.RegisterWS(inst.ID, fmt.Sprintf("%p", client))
 	client.NativeState = r.URL.Query().Get("state") == "ghostty-ready-v1"
 	client.AnsiState = r.URL.Query().Get("state") == "ansi-v1"
-	if r.URL.Query().Get("term_proto") == "hot-v1" {
-		// Live-only attach: no replay enters the live terminal. The
-		// client bootstraps its screen from the opaque checkpoint in
-		// ATTACH_HEAD plus a bounded recording delta fetched over HTTP.
-		hub.AttachHot(inst.ID, client)
-	} else {
-		hub.AttachWithReplay(inst.ID, client)
-	}
+	// Live-only attach: no replay enters the live terminal. The client
+	// bootstraps its screen from the opaque checkpoint in the attach
+	// frame plus a bounded recording delta fetched over HTTP.
+	hub.AttachHot(inst.ID, client)
 	// Snapshot manager state only; the asynchronous title service supplies a
 	// later push after any cold file read completes. ATTACH_HEAD remains first.
 	hub.enqueuePiTitleSnapshot(inst.Snapshot(), client)
@@ -348,8 +362,12 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 		if inst.Pty != nil {
 			code = inst.Pty.ExitCode()
 		}
-		payload := []byte(fmt.Sprintf(`{"code":%d}`, code))
-		hub.Broadcast(inst.ID, 0x04, payload)
+		exitMsg, err := wireproto.EncodeExitFrame(int32(code))
+		if err != nil {
+			logger.Error("ws exit encode failed", "err", err)
+		} else {
+			hub.BroadcastFrame(inst.ID, exitMsg)
+		}
 		go func() {
 			time.Sleep(100 * time.Millisecond)
 			hub.Unregister(inst.ID, client)

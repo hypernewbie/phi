@@ -1,5 +1,15 @@
 import { expect, test } from '@playwright/test';
+import { TerminalServerFrame } from '../web/proto/terminal.js';
+import type {
+    MessageFns,
+    TerminalServerFrame as TerminalServerMessage,
+} from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+
+// The served bundle carries no types; bind its runtime codec to the
+// generated declarations so spec-side encoding is fully checked.
+const ServerCodec: MessageFns<TerminalServerMessage> =
+    TerminalServerFrame as unknown as MessageFns<TerminalServerMessage>;
 
 let phi: PhiServer;
 
@@ -77,22 +87,44 @@ test('real browser xterm recovers a gap and overlaps across a split UTF-8 bootst
         });
     });
     await page.routeWebSocket('**/ws/pane/recovery-test?*', (route) => {
-        const json = Buffer.from(
-            JSON.stringify({ epoch: 7, oldest: 0, head: 1 }),
+        route.send(
+            Buffer.from(
+                ServerCodec.encode(
+                    ServerCodec.fromPartial({
+                        payload: {
+                            $case: 'attach',
+                            value: {
+                                epoch: BigInt(7),
+                                oldest: BigInt(0),
+                                head: BigInt(1),
+                            },
+                        },
+                    }),
+                ).finish(),
+            ),
         );
-        const header = Buffer.alloc(5);
-        header[0] = 0x08;
-        header.writeUInt32BE(json.length, 1);
-        route.send(Buffer.concat([header, json]));
         for (const [start, end] of [
             [1, 25],
             [20, 40],
             [45, bytes.length],
         ]) {
-            const frame = Buffer.alloc(9);
-            frame[0] = 0x09;
-            frame.writeBigUInt64BE(BigInt(start), 1);
-            route.send(Buffer.concat([frame, bytes.subarray(start, end)]));
+            route.send(
+                Buffer.from(
+                    ServerCodec.encode(
+                        ServerCodec.fromPartial({
+                            payload: {
+                                $case: 'output',
+                                value: {
+                                    start: BigInt(start),
+                                    data: new Uint8Array(
+                                        bytes.subarray(start, end),
+                                    ),
+                                },
+                            },
+                        }),
+                    ).finish(),
+                ),
+            );
         }
     });
     await page.goto(phi.url);

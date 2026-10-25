@@ -67,7 +67,7 @@ test('Codex launches safely and Models sends only the native picker command', as
     const pane = await reply.json();
     await expect.poll(launchArgs).toBe('--no-alt-screen\n');
     await expect(page.locator(`#term-${pane.pane_id} .xterm`)).toBeVisible();
-    // hot-v1 attaches live-only. Startup output can precede attachment,
+    // Pane sockets attach live-only. Startup output can precede attachment,
     // so check the authoritative recording instead of racing the socket.
     await expect
         .poll(async () => {

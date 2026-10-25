@@ -3,7 +3,6 @@ package ws
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"runtime"
 	"strings"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hypernewbie/phi/pkg/pty"
+	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
 // A replay-memory cap is an optimization, not permission to delete recording
@@ -56,7 +56,7 @@ func TestProcessExitDoesNotEraseColdRecording(t *testing.T) {
 	for {
 		select {
 		case frame := <-client.Send:
-			if len(frame) > 0 && frame[0] == 0x04 {
+			if server, err := wireproto.DecodeServerFrame(frame); err == nil && server.GetExit() != nil {
 				goto exited
 			}
 		case <-deadline:
@@ -82,18 +82,12 @@ exited:
 
 func TestHotDropWarningUsesTheClientsActualControlEnvelope(t *testing.T) {
 	hub := NewHub(64)
-	client := &Client{Hot: true, Send: make(chan []byte, 1)}
+	client := &Client{Send: make(chan []byte, 1)}
 	hub.injectDropWarning(client, time.Now())
 	msg := <-client.Send
-	if msg[0] != 0x02 {
-		t.Fatalf("type=%x", msg[0])
-	}
-	var control map[string]string
-	if err := json.Unmarshal(msg[1:], &control); err != nil {
-		t.Fatalf("browser cannot decode drop control, so quiet tail losses remain invisible: %v", err)
-	}
-	if control["type"] != "output-dropped" {
-		t.Fatalf("control=%v", control)
+	server, err := wireproto.DecodeServerFrame(msg)
+	if err != nil || server.GetDropNotice() == nil {
+		t.Fatalf("browser cannot decode drop notice, so quiet tail losses remain invisible: %+v err=%v", server, err)
 	}
 }
 

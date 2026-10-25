@@ -1,5 +1,19 @@
 import { expect, test, type Page } from '@playwright/test';
+import { TerminalClientFrame } from '../web/proto/terminal.js';
+import { TerminalServerFrame } from '../web/proto/terminal.js';
+import type {
+    MessageFns,
+    TerminalClientFrame as TerminalClientMessage,
+    TerminalServerFrame as TerminalServerMessage,
+} from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+
+// The served bundle carries no types; bind its runtime codecs to the
+// generated declarations so spec-side encoding is fully checked.
+const ServerCodec: MessageFns<TerminalServerMessage> =
+    TerminalServerFrame as unknown as MessageFns<TerminalServerMessage>;
+const ClientCodec: MessageFns<TerminalClientMessage> =
+    TerminalClientFrame as unknown as MessageFns<TerminalClientMessage>;
 
 let phi: PhiServer;
 test.beforeAll(async () => {
@@ -104,21 +118,29 @@ for (const surface of surfaces) {
                 const connection = connectionCounts.get(id)! + 1;
                 connectionCounts.set(id, connection);
                 socket.onMessage((message) => {
-                    if (
-                        Buffer.isBuffer(message) &&
-                        message.length === 5 &&
-                        message[0] === 0x02
-                    ) {
+                    if (!Buffer.isBuffer(message)) return;
+                    const payload = ClientCodec.decode(
+                        new Uint8Array(message),
+                    ).payload;
+                    if (payload?.$case === 'resize')
                         resizedConnections.add(`${id}:${connection}`);
-                    }
                 });
-                const header = Buffer.from(
-                    JSON.stringify({ epoch: 7, oldest: 0, head: 0 }),
+                socket.send(
+                    Buffer.from(
+                        ServerCodec.encode(
+                            ServerCodec.fromPartial({
+                                payload: {
+                                    $case: 'attach',
+                                    value: {
+                                        epoch: BigInt(7),
+                                        oldest: BigInt(0),
+                                        head: BigInt(0),
+                                    },
+                                },
+                            }),
+                        ).finish(),
+                    ),
                 );
-                const frame = Buffer.alloc(5);
-                frame[0] = 0x08;
-                frame.writeUInt32BE(header.length, 1);
-                socket.send(Buffer.concat([frame, header]));
             });
 
             await page.goto(phi.url);

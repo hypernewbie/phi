@@ -2,12 +2,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { setupDomHarness } from './_dom.js';
 import { PTYWebSocket } from '../web/ws.js';
+import { TerminalServerFrame } from '../web/proto/terminal.js';
 
-// Milestone 4: the 0x07 md-changed frame case in ws.js's binary frame
-// switch. Mirrors the existing 0x04/0x05 handling — decode UTF-8 JSON
-// payload, spread it onto {type:'md-changed', ...} and forward to
-// onControl. Backward-compat for unknown frame types is untouched (no
-// default case), so this only needs to prove the new case decodes.
+// M2: the notification case in ws.js's protobuf frame switch. The
+// server wraps the shared Notification in a TerminalServerFrame;
+// markdown changes decode into onControl({type:'md-changed', dir}).
 
 setupDomHarness();
 
@@ -28,28 +27,30 @@ FakeWebSocket.OPEN = 1;
 FakeWebSocket.CLOSING = 2;
 FakeWebSocket.CLOSED = 3;
 
-function sendFrame(pty, msgType, jsonPayload) {
-    const payloadBytes =
-        jsonPayload === undefined
-            ? new Uint8Array(0)
-            : new TextEncoder().encode(JSON.stringify(jsonPayload));
-    const buffer = new ArrayBuffer(1 + payloadBytes.length);
-    const view = new Uint8Array(buffer);
-    view[0] = msgType;
-    view.set(payloadBytes, 1);
-    pty.ws.onmessage({ data: buffer });
+function sendNotification(pty, kind) {
+    const frame = TerminalServerFrame.encode(
+        TerminalServerFrame.fromPartial({
+            payload: { $case: 'notification', value: kind },
+        }),
+    ).finish();
+    pty.ws.onmessage({ data: new Uint8Array(frame).buffer });
 }
 
-describe('PTYWebSocket 0x07 md-changed frame', () => {
+describe('PTYWebSocket markdown notification', () => {
     beforeEach(() => {
         vi.stubGlobal('WebSocket', FakeWebSocket);
     });
 
-    it('decodes the JSON payload into onControl({type: "md-changed", ...})', () => {
+    it('decodes into onControl({type: "md-changed", dir})', () => {
         const onControl = vi.fn();
         const pty = new PTYWebSocket('pane-1', () => {}, onControl);
 
-        sendFrame(pty, 0x07, { dir: '/w/research' });
+        sendNotification(pty, {
+            kind: {
+                $case: 'markdownChanged',
+                value: { dir: '/w/research' },
+            },
+        });
 
         expect(onControl).toHaveBeenCalledTimes(1);
         expect(onControl).toHaveBeenCalledWith({
@@ -58,18 +59,30 @@ describe('PTYWebSocket 0x07 md-changed frame', () => {
         });
     });
 
-    it('a malformed 0x07 payload logs and does not throw or call onControl', () => {
+    it('undecodable bytes close the socket without calling onControl', () => {
         const onControl = vi.fn();
         const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
         const pty = new PTYWebSocket('pane-1', () => {}, onControl);
+        const close = vi.spyOn(pty.ws, 'close');
 
-        const buffer = new ArrayBuffer(1 + 3);
-        const view = new Uint8Array(buffer);
-        view[0] = 0x07;
-        view.set(new TextEncoder().encode('{{{'), 1); // invalid JSON
-
-        expect(() => pty.ws.onmessage({ data: buffer })).not.toThrow();
+        expect(() =>
+            pty.ws.onmessage({
+                data: new Uint8Array([0x82, 0xff, 0xfe]).buffer,
+            }),
+        ).not.toThrow();
         expect(onControl).not.toHaveBeenCalled();
-        expect(errSpy).toHaveBeenCalled();
+        expect(close).toHaveBeenCalled();
+        errSpy.mockRestore();
+    });
+
+    it('an empty notification is ignored without closing', () => {
+        const onControl = vi.fn();
+        const pty = new PTYWebSocket('pane-1', () => {}, onControl);
+        const close = vi.spyOn(pty.ws, 'close');
+
+        sendNotification(pty, {});
+
+        expect(onControl).not.toHaveBeenCalled();
+        expect(close).not.toHaveBeenCalled();
     });
 });

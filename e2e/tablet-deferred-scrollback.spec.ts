@@ -1,5 +1,15 @@
 import { expect, test } from '@playwright/test';
+import { TerminalServerFrame } from '../web/proto/terminal.js';
+import type {
+    MessageFns,
+    TerminalServerFrame as TerminalServerMessage,
+} from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+
+// The served bundle carries no types; bind its runtime codec to the
+// generated declarations so spec-side encoding is fully checked.
+const ServerCodec: MessageFns<TerminalServerMessage> =
+    TerminalServerFrame as unknown as MessageFns<TerminalServerMessage>;
 
 let phi: PhiServer;
 test.beforeAll(async () => {
@@ -163,43 +173,40 @@ for (const checkpoint of [false, true]) {
             },
         );
         await page.routeWebSocket('**/ws/pane/tablet-deferred?*', (socket) => {
-            const header = {
-                epoch: 7,
-                oldest: 0,
-                head: bytes.length,
-                // Same certificate as the real journal: this fixture is ASCII
-                // CRLF text, with far more than a live buffer after this reset.
-                ...(!checkpoint
-                    ? {
-                          replay_from:
-                              bytes.indexOf(
-                                  '\r\n',
-                                  bytes.length -
-                                      (HISTORY_BUDGET_BYTES - 128 * 1024),
-                              ) + 2,
-                      }
-                    : {}),
-                ...(checkpoint
-                    ? {
-                          ckpt: {
-                              through: bytes.length,
-                              cols: 80,
-                              rows: 24,
-                              len: checkpointBytes.length,
-                          },
-                      }
-                    : {}),
-            };
-            const hdr = Buffer.from(JSON.stringify(header));
-            const frame = Buffer.alloc(5);
-            frame[0] = 0x08;
-            frame.writeUInt32BE(hdr.length, 1);
+            // Same certificate as the real journal: this fixture is ASCII
+            // CRLF text, with far more than a live buffer after this reset.
+            const replayFrom =
+                bytes.indexOf(
+                    '\r\n',
+                    bytes.length - (HISTORY_BUDGET_BYTES - 128 * 1024),
+                ) + 2;
             socket.send(
-                Buffer.concat([
-                    frame,
-                    hdr,
-                    checkpoint ? checkpointBytes : Buffer.alloc(0),
-                ]),
+                Buffer.from(
+                    ServerCodec.encode(
+                        ServerCodec.fromPartial({
+                            payload: {
+                                $case: 'attach',
+                                value: {
+                                    epoch: BigInt(7),
+                                    oldest: BigInt(0),
+                                    head: BigInt(bytes.length),
+                                    ...(!checkpoint
+                                        ? { replayFrom: BigInt(replayFrom) }
+                                        : {
+                                              checkpoint: {
+                                                  through: BigInt(bytes.length),
+                                                  cols: 80,
+                                                  rows: 24,
+                                                  data: new Uint8Array(
+                                                      checkpointBytes,
+                                                  ),
+                                              },
+                                          }),
+                                },
+                            },
+                        }),
+                    ).finish(),
+                ),
             );
         });
         const stats = () =>

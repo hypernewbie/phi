@@ -17,6 +17,9 @@ node_modules/
 # MacOS
 .DS_store
 
+# Local WebSocket protobuf generator plugin.
+.tools/websocket/
+
 # TypeScript build cache (one per tsconfig.build.json invocation).
 *.tsbuildinfo
 *.vsix

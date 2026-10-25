@@ -11,7 +11,6 @@ import (
 
 	"github.com/hypernewbie/phi/internal/termemu"
 	"github.com/hypernewbie/phi/internal/termemu/stub"
-	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
 type countedSnapshots struct {
@@ -110,7 +109,7 @@ func TestPanePaintSleepsAndPreservesEveryByte(t *testing.T) {
 		var frontier uint64
 		for i := 0; i < 100; i++ {
 			data := []byte("line\r\n")
-			reads <- paneRead{bytes: wireproto.EncodeLiveOutputFrame(frontier, data)}
+			reads <- paneRead{bytes: testOutput(t, frontier, data)}
 			frontier += uint64(len(data))
 		}
 		synctest.Wait()
@@ -156,7 +155,7 @@ func TestWatchingInputAdvancesPendingPaint(t *testing.T) {
 		reads := make(chan paneRead)
 		done := make(chan error, 1)
 		go func() { done <- p.consume(reads) }()
-		reads <- paneRead{bytes: wireproto.EncodeLiveOutputFrame(0, []byte("hello"))}
+		reads <- paneRead{bytes: testOutput(t, 0, []byte("hello"))}
 		synctest.Wait()
 		time.Sleep(paneInteractiveInterval)
 		synctest.Wait()

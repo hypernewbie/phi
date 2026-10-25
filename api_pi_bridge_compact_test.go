@@ -160,15 +160,11 @@ func TestBridgeCompactTelemetryViews(t *testing.T) {
 	if frame == nil {
 		t.Fatal("no WS frame")
 	}
-	var ws map[string]string
-	if err := json.Unmarshal(frame, &ws); err != nil {
-		t.Fatalf("decode frame: %v", err)
+	if frame.ContextTokens == nil || frame.GetContextTokens() != 1500.5 || frame.ContextWindow == nil || frame.GetContextWindow() != 128000 || frame.ContextPercent == nil || frame.GetContextPercent() != 12.5 {
+		t.Fatalf("WS context %+v", frame)
 	}
-	if ws["context_tokens"] != "1500.5" || ws["context_window"] != "128000" || ws["context_percent"] != "12.5" {
-		t.Fatalf("WS context %v", ws)
-	}
-	if ws["compact_idle"] != "true" || ws["compact_queued"] != "false" || ws["compact_active"] != "false" || ws["compact_pending"] != "false" {
-		t.Fatalf("WS readiness %v", ws)
+	if frame.CompactIdle == nil || !frame.GetCompactIdle() || frame.CompactQueued == nil || frame.GetCompactQueued() || frame.CompactActive == nil || frame.GetCompactActive() || frame.CompactPending == nil || frame.GetCompactPending() {
+		t.Fatalf("WS readiness %+v", frame)
 	}
 	// Mutating views must not touch retained state.
 	*st.ContextTokens = -1

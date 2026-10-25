@@ -4,7 +4,7 @@ import { setupDomHarness, mockFetch } from './_dom.js';
 
 // Covers the manual "Restart phi" affordance: a sidebar ↻ button that opens
 // a confirm modal, then POSTs /api/restart on confirm. The actual restart
-// is handled by api_restart.go + the WS 0x05 frame -> handleServerShutdown
+// is handled by api_restart.go + the WS shutdown notification -> handleServerShutdown
 // -> page reload; this test stays at the UI layer.
 
 setupDomHarness();
@@ -115,7 +115,7 @@ describe('Restart phi button', () => {
         const [url, opts] = fetch.mock.calls[0];
         expect(url).toBe('/api/restart');
         expect(opts.method).toBe('POST');
-        // On success the WS 0x05 path handles the toast + reload; we shouldn't
+        // On success the WS shutdown path handles the toast + reload; we shouldn't
         // double-toast here.
         expect(app.showToast).not.toHaveBeenCalled();
     });

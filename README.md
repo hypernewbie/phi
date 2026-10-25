@@ -119,7 +119,8 @@ make dev-server
 Open <http://localhost:7070>. This target compiles TypeScript once, then serves `web/` from disk on loopback.
 Refresh the browser after an asset edit. No Go rebuild or Phi restart is necessary.
 For TypeScript edits, run `pnpm watch:web` in another terminal to compile `web-src/` into `web/`.
-This workflow does not automatically reload the browser.
+This workflow does not automatically reload the browser. The watcher does not rebuild or overwrite the generated browser codecs in `web/proto/`.
+For a WebSocket schema change, run `pnpm gen:websocket` and then `pnpm build:web`; run `pnpm check:websocket-generated` to verify generated files. This terminal-only state is not deployable: the completed migration requires coordinated server/frontend builds, a server restart, frontend reload, and a matching `phic` binary.
 
 To serve a checkout's frontend from another workspace, use an absolute directory:
 

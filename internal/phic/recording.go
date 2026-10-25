@@ -260,15 +260,3 @@ func (r *Relay) drainExit(ctx context.Context, pane string) error {
 		}
 	}
 }
-func (r *Relay) control(ctx context.Context, pane string, data []byte) error {
-	var v struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(data, &v); err != nil {
-		return fmt.Errorf("phic: invalid control message: %w", err)
-	}
-	if v.Type == "output-dropped" {
-		return r.drainExit(ctx, pane)
-	}
-	return nil
-}

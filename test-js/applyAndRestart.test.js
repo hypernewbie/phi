@@ -5,7 +5,7 @@ import { MarkdownManager } from '../web/markdown.js';
 
 // Phase 9 T3: 'Apply & restart now' chains Phase 8 apply + Phase 9
 // restart. Polls /api/update/progress until phase==done, then POSTs
-// /api/restart. The 0x05 frame handler arms the reload poller; we
+// /api/restart. The shutdown notification handler arms the reload poller; we
 // also fire a hard reload as backup.
 
 setupDomHarness();

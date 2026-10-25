@@ -1,5 +1,12 @@
+/* Φ phi — chat control transport (phi.websocket.control.v1).
+
+   One binary generated frame per message. Calls are encoded and checked
+   before they enter the outbox, then correlated by id against the pending
+   operation. Results and sequenced events are converted back to the plain
+   shapes the chat UI consumes. */
 import { PROTOCOL_VERSION } from './constants.js';
-import { wsUrl } from '../util.js';
+import { buildCall, ControlConversionError, decodeServerFrame, encodeCall, encodeHello, eventFromWire, resultFromWire, } from './control-wire.js';
+import { controlSubprotocol } from '../ws-protocols.js';
 export const ControlCallTimeout = 35_000;
 // Compaction runs a summary LLM call; Pi answers only when it finishes. The
 // client stays awake slightly past the server's CompactOperationTimeout so
@@ -8,9 +15,16 @@ export const CompactCallTimeout = 605_000;
 function controlError(message) {
     return new Error(message || 'control call failed');
 }
-/** Opens /ws/control, performs the hello handshake, and correlates calls. */
-export function connectControl() {
-    const ws = new WebSocket(wsUrl('/ws/control'));
+/**
+ * Opens /ws/control, performs the hello handshake, and correlates calls.
+ *
+ * `onStreamFailure` reports a refused stream even when no call is pending:
+ * during streamed output the chat has nothing to reject, and without this
+ * callback the view would keep claiming it is ready after delivery stopped.
+ */
+export function connectControl(onStreamFailure) {
+    const ws = new WebSocket(new URL('/ws/control', window.location.origin).href, controlSubprotocol);
+    ws.binaryType = 'arraybuffer';
     const listeners = [];
     const outbox = [];
     const pending = new Map();
@@ -25,13 +39,32 @@ export function connectControl() {
         }
         outbox.length = 0;
     };
+    // A conversion or send failure ends this stream: pending calls are
+    // rejected through the existing callbacks instead of hanging.
+    const failStream = (reason) => {
+        rejectAll(reason);
+        if (!closed) {
+            closed = true;
+            onStreamFailure?.(reason.message);
+        }
+        try {
+            ws.close();
+        }
+        catch (_error) { }
+    };
     const transmit = (raw, id) => {
         if (closed)
             return;
-        if (opened)
-            ws.send(raw);
-        else
+        if (!opened) {
             outbox.push({ id, raw });
+            return;
+        }
+        try {
+            ws.send(raw);
+        }
+        catch (_error) {
+            failStream(controlError('control socket error'));
+        }
     };
     const removeOutboxCall = (id) => {
         for (let index = outbox.length - 1; index >= 0; index--) {
@@ -43,11 +76,23 @@ export function connectControl() {
         if (closed)
             return;
         opened = true;
-        ws.send(JSON.stringify({ t: 'hello', v: PROTOCOL_VERSION }));
+        try {
+            ws.send(encodeHello(PROTOCOL_VERSION));
+        }
+        catch (_error) {
+            failStream(controlError('control socket error'));
+            return;
+        }
         for (const frame of outbox.splice(0)) {
             if (frame.id !== undefined && !pending.has(frame.id))
                 continue;
-            ws.send(frame.raw);
+            try {
+                ws.send(frame.raw);
+            }
+            catch (_error) {
+                failStream(controlError('control socket error'));
+                return;
+            }
         }
     };
     ws.onerror = () => rejectAll(controlError('control socket error'));
@@ -57,39 +102,83 @@ export function connectControl() {
         rejectAll(controlError('control socket closed'));
     };
     ws.onmessage = (ev) => {
-        let env;
-        try {
-            env = JSON.parse(ev.data);
-        }
-        catch {
+        if (closed)
+            return;
+        const data = ev.data;
+        if (!(data instanceof ArrayBuffer)) {
+            failStream(controlError('control frame is not binary'));
             return;
         }
-        if (env?.t === 'res' && typeof env.id === 'string') {
-            const call = pending.get(env.id);
+        // Only the server->client direction reaches this reader. The 16 MiB
+        // bound in the plan caps one inbound call; a legitimate aggregate
+        // hydrate may be larger, so it must not be refused here.
+        if (data.byteLength === 0) {
+            failStream(controlError('control frame is empty'));
+            return;
+        }
+        let frame;
+        try {
+            frame = decodeServerFrame(new Uint8Array(data));
+        }
+        catch (_error) {
+            failStream(controlError('control frame is malformed'));
+            return;
+        }
+        const payload = frame.payload;
+        if (payload === undefined) {
+            failStream(controlError('control frame has no payload'));
+            return;
+        }
+        if (payload.$case === 'welcome')
+            return;
+        if (payload.$case === 'response') {
+            const response = payload.value;
+            const call = pending.get(response.id);
+            // A late response for an expired or unknown id is ignored.
             if (!call)
                 return;
-            pending.delete(env.id);
+            let value;
+            try {
+                value = resultFromWire(call.op, response);
+            }
+            catch (error) {
+                pending.delete(response.id);
+                clearTimeout(call.timer);
+                call.reject(error);
+                // A server ControlError rejects this call only; a wrong
+                // variant or malformed result ends the whole stream.
+                if (error instanceof ControlConversionError)
+                    failStream(error);
+                return;
+            }
+            pending.delete(response.id);
             clearTimeout(call.timer);
-            if (env.ok)
-                call.resolve(env.data);
-            else
-                call.reject(controlError(String(env.error ?? 'control call failed')));
+            call.resolve(value);
             return;
         }
-        if (env?.t !== 'evt')
+        let envelope;
+        try {
+            envelope = eventFromWire(payload.value);
+        }
+        catch (_error) {
+            failStream(controlError('control event is malformed'));
             return;
+        }
         for (const cb of [...listeners])
-            cb(env);
+            cb(envelope);
     };
     const call = (op, sid, args, opts) => {
         if (closed)
             return Promise.reject(controlError('control socket closed'));
         const id = `c${nextId++}`;
-        const frame = { t: 'call', id, op };
-        if (sid !== undefined)
-            frame.sid = sid;
-        if (args !== undefined)
-            frame.args = args;
+        let raw;
+        try {
+            raw = encodeCall(buildCall(id, op, sid, args));
+        }
+        catch (error) {
+            // A call that cannot be encoded never reaches the outbox.
+            return Promise.reject(error);
+        }
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
                 if (!pending.delete(id))
@@ -97,17 +186,12 @@ export function connectControl() {
                 removeOutboxCall(id);
                 reject(controlError('control call timeout'));
             }, opts?.timeoutMs ?? ControlCallTimeout);
-            pending.set(id, { timer, resolve, reject });
-            transmit(JSON.stringify(frame), id);
+            pending.set(id, { timer, resolve, reject, op });
+            transmit(raw, id);
         });
     };
     return {
         call,
-        send: (frame) => {
-            if (closed)
-                return;
-            transmit(JSON.stringify(frame));
-        },
         close: () => {
             if (closed)
                 return;

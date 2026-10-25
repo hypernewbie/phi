@@ -2,16 +2,17 @@ package phic
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/hypernewbie/phi/internal/termemu"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
@@ -160,7 +161,7 @@ func (p *paneActor) newTerminal(cols, rows int) (termemu.Terminal, error) {
 				p.markUncertain("terminal reply buffer overflowed")
 				return
 			}
-			p.enqueue(EncodeInputFrame(b))
+			p.enqueueInput(b)
 		},
 		OnTitle: func(s string) { p.sendEvent(paneEvent{Key: p.spec.Key, Kind: paneMetadata, Title: s}) },
 		OnPWD:   func(s string) { p.sendEvent(paneEvent{Key: p.spec.Key, Kind: paneMetadata, PWD: s}) },
@@ -205,6 +206,33 @@ func (p *paneActor) enqueue(b []byte) bool {
 		p.markUncertain("input queue full; input was not sent")
 		return false
 	}
+}
+func (p *paneActor) enqueueInput(b []byte) {
+	for _, chunk := range wireproto.ChunkInput(b) {
+		frame, err := wireproto.EncodeInputFrame(chunk)
+		if err != nil {
+			p.markUncertain("input encode failed; input was not sent")
+			return
+		}
+		if !p.enqueue(frame) {
+			return
+		}
+	}
+}
+
+// enqueueResize encodes one resize request. Out-of-range geometry is
+// refused here instead of closing the stream server-side.
+func (p *paneActor) enqueueResize(cols, rows int) bool {
+	if cols <= 0 || rows <= 0 || cols > 65535 || rows > 65535 {
+		p.markUncertain("resize out of range; resize was not sent")
+		return false
+	}
+	frame, err := wireproto.EncodeResizeFrame(uint32(cols), uint32(rows))
+	if err != nil {
+		p.markUncertain("resize encode failed; resize was not sent")
+		return false
+	}
+	return p.enqueue(frame)
 }
 func (p *paneActor) writeLoop() {
 	defer close(p.writerDone)
@@ -338,11 +366,11 @@ func (p *paneActor) mouseOwned() bool {
 }
 
 func (p *paneActor) dial(ctx context.Context) (*websocket.Conn, wireAttach, error) {
-	u, err := mustWebsocketURL(p.api.base.String() + "/ws/pane/" + url.PathEscape(p.spec.Key.ID) + "?term_proto=hot-v1&state=ghostty-ready-v1")
+	u, err := mustWebsocketURL(p.api.base.String() + "/ws/pane/" + url.PathEscape(p.spec.Key.ID) + "?state=ghostty-ready-v1")
 	if err != nil {
 		return nil, wireAttach{}, err
 	}
-	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second, Jar: p.api.http.Jar, EnableCompression: true}
+	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second, Jar: p.api.http.Jar, EnableCompression: true, Subprotocols: []string{wireproto.TerminalSubprotocol}}
 	conn, resp, err := dialer.DialContext(ctx, u, nil)
 	if err != nil {
 		if resp != nil {
@@ -350,18 +378,22 @@ func (p *paneActor) dial(ctx context.Context) (*websocket.Conn, wireAttach, erro
 		}
 		return nil, wireAttach{}, err
 	}
-	conn.SetReadLimit(4 << 20)
+	if conn.Subprotocol() != wireproto.TerminalSubprotocol {
+		_ = conn.Close()
+		return nil, wireAttach{}, fmt.Errorf("%w: server did not select the terminal subprotocol", errProtocol)
+	}
+	conn.SetReadLimit(wireproto.MaxTerminalMessageBytes)
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	mt, msg, err := conn.ReadMessage()
+	mt, msg, err := wireproto.ReadBoundedMessage(conn, wireproto.MaxTerminalMessageBytes)
 	var h wireAttach
 	if err == nil && mt != websocket.BinaryMessage {
 		err = fmt.Errorf("%w: attach is not binary", errProtocol)
 	}
 	if err == nil {
-		h.Header, h.Checkpoint, err = ParseAttachHead(msg)
+		h.Header, err = ParseAttachHead(msg)
 	}
 	if err != nil {
-		_ = conn.Close()
+		closeWithCode(conn, closeCodeForReadError(err), "invalid attach")
 		return nil, h, err
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(paneReadTimeout))
@@ -374,12 +406,17 @@ func (p *paneActor) dial(ctx context.Context) (*websocket.Conn, wireAttach, erro
 func (p *paneActor) readLoop(ctx context.Context, conn *websocket.Conn, reads chan<- paneRead, done chan<- struct{}) {
 	defer close(done)
 	for {
-		mt, b, err := conn.ReadMessage()
+		mt, b, err := wireproto.ReadBoundedMessage(conn, wireproto.MaxTerminalMessageBytes)
 		if err == nil {
 			_ = conn.SetReadDeadline(time.Now().Add(paneReadTimeout))
 			if mt != websocket.BinaryMessage {
 				err = fmt.Errorf("%w: nonbinary pane frame", errProtocol)
 			}
+		}
+		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, net.ErrClosed) {
+			// Bounded close codes keep the server and the native peer in
+			// agreement about why the stream stopped.
+			closeWithCode(conn, closeCodeForReadError(err), "pane stream failed")
 		}
 		select {
 		case reads <- paneRead{bytes: b, err: err}:
@@ -466,7 +503,7 @@ func (p *paneActor) bootstrap(h wireAttach) error {
 		return errPaneExited
 	}
 	cold := !attached
-	if attached && epoch != h.Header.Epoch {
+	if attached && epoch != h.Header.GetEpoch() {
 		p.returnLive() // Historical views and in-flight pages belong to the old epoch.
 		cols, rows := p.geometry()
 		emu, err := p.newTerminal(cols, rows)
@@ -483,30 +520,31 @@ func (p *paneActor) bootstrap(h wireAttach) error {
 		p.frameOK = false
 		p.mu.Unlock()
 	}
-	if h.Header.Ckpt != nil && h.Header.Ckpt.Kind == "ghostty-ready-v1" {
+	ckpt := h.Header.GetCheckpoint()
+	if ckpt != nil && ckpt.GetKind() == "ghostty-ready-v1" {
 		restorer, ok := p.emu.(interface{ RestoreReady([]byte) error })
 		if !ok {
 			return fmt.Errorf("phic: emulator cannot restore bounded terminal state")
 		}
-		if err := restorer.RestoreReady(h.Checkpoint); err != nil {
+		if err := restorer.RestoreReady(ckpt.GetData()); err != nil {
 			return err
 		}
-		p.emuCols, p.emuRows = int(h.Header.Ckpt.Cols), int(h.Header.Ckpt.Rows)
+		p.emuCols, p.emuRows = int(ckpt.GetCols()), int(ckpt.GetRows())
 		if p.history == nil {
 			p.historyOffset = 0
 		}
-		frontier = h.Header.Ckpt.Through
+		frontier = ckpt.GetThrough()
 		p.mu.Lock()
 		p.frontier = frontier
 		p.frameOK = false
 		p.mu.Unlock()
 	}
 	p.mu.Lock()
-	p.oldest = h.Header.Oldest
-	p.epoch = h.Header.Epoch
+	p.oldest = h.Header.GetOldest()
+	p.epoch = h.Header.GetEpoch()
 	p.mu.Unlock()
-	head := h.Header.Head
-	if h.Header.Oldest > frontier {
+	head := h.Header.GetHead()
+	if h.Header.GetOldest() > frontier {
 		if err := p.healFromLiveState(p.ctx); err != nil {
 			return err
 		}
@@ -524,8 +562,8 @@ func (p *paneActor) bootstrap(h wireAttach) error {
 	p.head = head
 	p.mu.Unlock()
 	after := ""
-	if h.Header.Ckpt != nil {
-		after = h.Header.Ckpt.EventCursor
+	if ckpt := h.Header.GetCheckpoint(); ckpt != nil {
+		after = ckpt.GetEventCursor()
 	}
 	if err := p.recover(p.ctx, frontier, head, cold && !p.spec.Fresh, after); err != nil {
 		return err
@@ -534,7 +572,7 @@ func (p *paneActor) bootstrap(h wireAttach) error {
 	if err := p.resizeEmulator(cols, rows); err != nil {
 		return err
 	}
-	if !p.enqueue(wireproto.EncodeResizeFrame(uint16(cols), uint16(rows))) {
+	if !p.enqueueResize(cols, rows) {
 		return errPaneResize
 	}
 	p.dirty = true
@@ -599,7 +637,9 @@ func (p *paneActor) consume(reads <-chan paneRead) error {
 				}
 			}
 		case <-ping.C:
-			p.enqueue([]byte{wireproto.FramePing})
+			if ping, err := wireproto.EncodePingFrame(); err == nil {
+				p.enqueue(ping)
+			}
 		}
 	}
 }
@@ -607,9 +647,13 @@ func (p *paneActor) handleFrame(msg []byte) error {
 	if len(msg) == 0 {
 		return nil
 	}
-	switch msg[0] {
-	case wireproto.FrameLiveOutput:
-		start, data, err := ParseLiveOutput(msg)
+	frame, err := wireproto.DecodeServerFrame(msg)
+	if err != nil {
+		return err
+	}
+	switch payload := frame.GetPayload().(type) {
+	case *wspb.TerminalServerFrame_Output:
+		start, data, err := outputSpan(payload.Output)
 		if err != nil {
 			return err
 		}
@@ -641,35 +685,35 @@ func (p *paneActor) handleFrame(msg []byte) error {
 		p.frontier = max(p.frontier, end)
 		p.head = max(p.head, end)
 		p.mu.Unlock()
-	case wireproto.FrameExit:
-		if len(msg) != 2 {
+	case *wspb.TerminalServerFrame_Exit:
+		exit := payload.Exit
+		if exit == nil {
 			return fmt.Errorf("%w: invalid exit frame", errProtocol)
 		}
 		if err := p.drainExit(); err != nil {
 			return err
 		}
+		code := int(exit.GetCode())
 		p.mu.Lock()
 		p.exited = true
-		p.exitCode = int(msg[1])
+		p.exitCode = code
 		p.mu.Unlock()
 		// Exit remains authoritative even if the final screen copy fails.
 		_ = p.refreshFrame()
-		p.sendEvent(paneEvent{Key: p.spec.Key, Kind: paneExited, Code: int(msg[1])})
+		p.sendEvent(paneEvent{Key: p.spec.Key, Kind: paneExited, Code: code})
 		return errPaneExited
-	case 0x02:
-		var v struct {
-			Type string `json:"type"`
-		}
-		if err := json.Unmarshal(msg[1:], &v); err != nil {
-			return err
-		}
-		if v.Type == "output-dropped" {
-			return p.drainExit()
-		}
-	case wireproto.FramePong:
+	case *wspb.TerminalServerFrame_Pong:
 		return nil
-	case wireproto.FrameAttachHead, wireproto.FrameInput:
-		return fmt.Errorf("%w: unexpected frame", errProtocol)
+	case *wspb.TerminalServerFrame_DropNotice:
+		return p.drainExit()
+	case *wspb.TerminalServerFrame_Title,
+		*wspb.TerminalServerFrame_BridgeState,
+		*wspb.TerminalServerFrame_Settlement,
+		*wspb.TerminalServerFrame_Notification:
+		// Browser UI hints; no terminal output, no sequence impact.
+		return nil
+	default:
+		return fmt.Errorf("%w: unexpected terminal payload", errProtocol)
 	}
 	return nil
 }
@@ -831,7 +875,7 @@ func (p *paneActor) handleInput(in paneInput) error {
 			return err
 		}
 		if !same || localChange || in.ForceResize {
-			if !p.enqueue(wireproto.EncodeResizeFrame(uint16(in.Cols), uint16(in.Rows))) {
+			if !p.enqueueResize(in.Cols, in.Rows) {
 				return errPaneResize
 			}
 		}
@@ -877,7 +921,7 @@ func (p *paneActor) handleInput(in paneInput) error {
 	switch in.Kind {
 	case paneInputRaw:
 		if len(in.Raw) > 0 {
-			p.enqueue(EncodeInputFrame(in.Raw))
+			p.enqueueInput(in.Raw)
 		}
 		return nil
 	case paneInputKey:
@@ -895,7 +939,7 @@ func (p *paneActor) handleInput(in paneInput) error {
 		return err
 	}
 	if len(b) > 0 {
-		p.enqueue(EncodeInputFrame(b))
+		p.enqueueInput(b)
 	}
 	return nil
 }

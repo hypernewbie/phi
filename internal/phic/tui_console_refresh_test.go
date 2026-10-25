@@ -49,12 +49,12 @@ func TestExplicitRefreshClosesAllClientsAndRebuildsEachOriginWithoutDeletingPane
 				http.NotFound(w, r)
 				return
 			}
-			conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+			conn, err := (&websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}).Upgrade(w, r, nil)
 			if err != nil {
 				return
 			}
 			defer conn.Close()
-			_ = conn.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7, Head: uint64(len(state)), Ckpt: &wireproto.CheckpointHeader{Kind: "ansi-v1", Through: uint64(len(state)), Cols: 80, Rows: 20, Len: len(state)}}, state))
+			_ = conn.WriteMessage(websocket.BinaryMessage, testAttachCkpt(t, 7, uint64(len(state)), "ansi-v1", uint64(len(state)), 80, 20, state))
 			for {
 				if _, _, err := conn.ReadMessage(); err != nil {
 					closed <- label

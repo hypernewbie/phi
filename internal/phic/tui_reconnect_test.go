@@ -19,7 +19,7 @@ func TestPaneActorReconnectRetainsCore(t *testing.T) {
 	first := []byte("one\n")
 	second := []byte("two\n")
 	var conns atomic.Int32
-	up := websocket.Upgrader{}
+	up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/ws/pane/p" {
 			http.NotFound(w, r)
@@ -32,13 +32,13 @@ func TestPaneActorReconnectRetainsCore(t *testing.T) {
 		defer ws.Close()
 		n := conns.Add(1)
 		if n == 1 {
-			_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7, Head: 0}, nil))
-			_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeLiveOutputFrame(0, first))
+			_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, 0))
+			_ = ws.WriteMessage(websocket.BinaryMessage, testOutput(t, 0, first))
 			time.Sleep(50 * time.Millisecond)
 			return
 		}
-		_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7, Head: uint64(len(first))}, nil))
-		_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeLiveOutputFrame(uint64(len(first)), second))
+		_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, uint64(len(first))))
+		_ = ws.WriteMessage(websocket.BinaryMessage, testOutput(t, uint64(len(first)), second))
 		for {
 			if _, _, err := ws.ReadMessage(); err != nil {
 				return
@@ -73,7 +73,7 @@ func TestPaneActorReconnectRetainsCore(t *testing.T) {
 // emulator instead of merging two terminal states.
 func TestPaneActorEpochChangeRebuilds(t *testing.T) {
 	var conns atomic.Int32
-	up := websocket.Upgrader{}
+	up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/ws/pane/p" {
 			http.NotFound(w, r)
@@ -85,13 +85,13 @@ func TestPaneActorEpochChangeRebuilds(t *testing.T) {
 		}
 		defer ws.Close()
 		if conns.Add(1) == 1 {
-			_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7, Head: 0}, nil))
-			_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeLiveOutputFrame(0, []byte("old epoch\n")))
+			_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, 0))
+			_ = ws.WriteMessage(websocket.BinaryMessage, testOutput(t, 0, []byte("old epoch\n")))
 			time.Sleep(50 * time.Millisecond)
 			return
 		}
-		_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 8, Head: 0}, nil))
-		_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeLiveOutputFrame(0, []byte("new epoch\n")))
+		_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 8, 0))
+		_ = ws.WriteMessage(websocket.BinaryMessage, testOutput(t, 0, []byte("new epoch\n")))
 		for {
 			if _, _, err := ws.ReadMessage(); err != nil {
 				return
