@@ -287,6 +287,20 @@ The package commands also work from `desktop/electron` for local iteration.
 The install downloads the pinned Electron binary; its postinstall is approved
 in the root `pnpm-workspace.yaml`.
 
+### Installing the macOS build
+
+```sh
+cd desktop/electron
+pnpm exec electron-builder --mac --arm64 --dir
+node scripts/install-mac.mjs
+```
+
+The script copies the bundle over `/Applications/phi-client.app`, drops the
+build copy so the machine holds one app bundle, and prunes the Dock tile
+that a replaced bundle leaves behind. Replacing the bundle gives it a new
+inode, and the Dock keeps its recent apps by file reference, so the app
+shows up twice in the Dock until the stale tile is removed.
+
 Order matters for the e2e smoke test: it spawns the built bundle, so run
 `pnpm run build` before `pnpm test` / `pnpm run smoke` (CI does the same).
 In headless Linux environments (no `DISPLAY`/`WAYLAND_DISPLAY`, or a
