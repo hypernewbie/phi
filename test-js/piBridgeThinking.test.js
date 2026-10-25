@@ -319,4 +319,92 @@ describe('Pi bridge Thinking controls', () => {
         );
         expect(dropup.textContent).not.toContain('max');
     });
+
+    it('accepts a provider identity that itself contains a slash', async () => {
+        const { tm } = harness(
+            bridgeTab({
+                piBridge: {
+                    ...bridgeTab().piBridge,
+                    model: 'team/a/x',
+                },
+            }),
+        );
+        mockFetch(() => levelsResponse({ provider: 'team/a', model: 'x' }));
+        tm.renderPresets('pi');
+        thinkingTrigger(tm).click();
+        const dropup = document.getElementById('pi-rpc-thinking-dropup');
+        await vi.waitFor(() =>
+            expect(
+                [...dropup.querySelectorAll('.dropup-model-btn')].map(
+                    (button) => button.textContent,
+                ),
+            ).toContain('max'),
+        );
+        expect(dropup.textContent).not.toContain('unavailable');
+    });
+
+    it('never sends native input from a superseded cycle', async () => {
+        const { tm, tab } = harness(bridgeTab());
+        let failLevels;
+        mockFetch(
+            () =>
+                new Promise((_resolve, reject) => {
+                    failLevels = () => reject(new Error('request timed out'));
+                }),
+        );
+        tm._updatePiThinkingButton();
+        tm.piThinkingBtn.click();
+        await vi.waitFor(() => expect(failLevels).toBeTypeOf('function'));
+
+        // Another pane's operation takes the singleton pending slot.
+        tm._piRpcThinkingPending = { paneId: 'other-pane', level: 'low' };
+        failLevels();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(tm.sendToTab).not.toHaveBeenCalled();
+        expect(tm.app.showToast).not.toHaveBeenCalled();
+        expect(tm._piRpcThinkingPending).toEqual({
+            paneId: 'other-pane',
+            level: 'low',
+        });
+    });
+
+    it('does not let a superseded setter completion close a newer picker', async () => {
+        const { tm, tab } = harness(bridgeTab());
+        let finishSet;
+        mockFetch((_url, options) =>
+            options?.method === 'POST'
+                ? new Promise((resolve) => {
+                      finishSet = () =>
+                          resolve({ ok: true, json: { ok: true, reason: '' } });
+                  })
+                : levelsResponse(),
+        );
+        tm.renderPresets('pi');
+        thinkingTrigger(tm).click();
+        const dropup = document.getElementById('pi-rpc-thinking-dropup');
+        await vi.waitFor(() =>
+            expect(
+                [...dropup.querySelectorAll('.dropup-model-btn')].map(
+                    (button) => button.textContent,
+                ),
+            ).toContain('max'),
+        );
+        [...dropup.querySelectorAll('.dropup-model-btn')]
+            .find((button) => button.textContent === 'max')
+            .click();
+        await vi.waitFor(() => expect(finishSet).toBeTypeOf('function'));
+
+        // A newer operation for another pane replaces this one.
+        const newer = { paneId: 'other-pane', level: 'low' };
+        tm._piRpcThinkingPending = newer;
+        await vi.waitFor(() =>
+            expect(dropup.classList.contains('hidden')).toBe(false),
+        );
+        finishSet();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(dropup.classList.contains('hidden')).toBe(false);
+        expect(tm._piRpcThinkingPending).toBe(newer);
+        expect(tab.piBridge.thinking_level).toBe('high');
+        expect(tm.app.showToast).not.toHaveBeenCalled();
+    });
 });

@@ -5510,6 +5510,13 @@ export class TabManager {
                         }
                         Promise.resolve(setterResult)
                             .then(() => {
+                                // A superseded operation owns nothing, so it
+                                // cannot close or re-render a newer picker.
+                                if (
+                                    bridgeTab &&
+                                    this._piRpcThinkingPending !== operation
+                                )
+                                    return;
                                 if (this._piRpcThinkingPending === operation)
                                     this._piRpcThinkingPending = null;
                                 if (bridgeTab) {
@@ -5525,6 +5532,11 @@ export class TabManager {
                                 }
                             })
                             .catch((error) => {
+                                if (
+                                    bridgeTab &&
+                                    this._piRpcThinkingPending !== operation
+                                )
+                                    return;
                                 if (this._piRpcThinkingPending === operation)
                                     this._piRpcThinkingPending = null;
                                 if (bridgeTab) {
@@ -8171,8 +8183,11 @@ export class TabManager {
             view.connected = false;
         if (typeof raw.model === 'string' && raw.model)
             view.model = raw.model;
-        view.thinking_level =
-            typeof raw.thinking_level === 'string' ? raw.thinking_level : '';
+        view.thinking_level = PI_BRIDGE_THINKING_LEVELS.includes(
+            raw.thinking_level,
+        )
+            ? raw.thinking_level
+            : '';
         const caps = raw.capabilities;
         if (typeof caps === 'string' && caps)
             view.capabilities = caps.split(',').filter(Boolean);
@@ -11659,17 +11674,16 @@ export class TabManager {
 
     _piBridgeThinkingContext(tab) {
         if (!this._piBridgeThinkingEligible(tab)) return null;
+        // The display model stays the comparison key; provider and model are
+        // never split here because either identity may contain '/'.
         const model = tab.piBridge.model || '';
-        const separator = model.indexOf('/');
-        if (separator <= 0 || separator === model.length - 1) return null;
+        if (!model) return null;
         return {
             tab,
             paneId: tab.paneId,
             socket: tab.ws,
             generation: tab.piBridge.generation,
             model,
-            provider: model.slice(0, separator),
-            modelId: model.slice(separator + 1),
         };
     }
 
@@ -11688,8 +11702,11 @@ export class TabManager {
     _piBridgeThinkingOriginMatches(context, result) {
         return (
             this._piBridgeThinkingContextValid(context) &&
-            result?.provider === context.provider &&
-            result?.model === context.modelId &&
+            typeof result?.provider === 'string' &&
+            result.provider.length > 0 &&
+            typeof result?.model === 'string' &&
+            result.model.length > 0 &&
+            `${result.provider}/${result.model}` === context.model &&
             result?.generation === context.generation &&
             typeof result?.process_id === 'string' &&
             result.process_id.length > 0 &&
@@ -11735,8 +11752,8 @@ export class TabManager {
                 body: JSON.stringify({
                     pane: context.paneId,
                     level,
-                    provider: context.provider,
-                    model: context.modelId,
+                    provider: origin.provider,
+                    model: origin.model,
                     process_id: origin.process_id,
                     generation: origin.generation,
                 }),
@@ -11796,14 +11813,16 @@ export class TabManager {
                 return this._piBridgeThinkingSet(context, level, result);
             })
             .then(() => {
-                if (this._piRpcThinkingPending === operation)
-                    this._piRpcThinkingPending = null;
+                // Ownership first: a superseded cycle owns no state and must
+                // never fall back to native input.
+                if (this._piRpcThinkingPending !== operation) return;
+                this._piRpcThinkingPending = null;
                 if (this._piBridgeThinkingContextValid(context))
                     this._updatePiThinkingButton();
             })
             .catch((error) => {
-                if (this._piRpcThinkingPending === operation)
-                    this._piRpcThinkingPending = null;
+                if (this._piRpcThinkingPending !== operation) return;
+                this._piRpcThinkingPending = null;
                 if (!this._piBridgeThinkingContextValid(context)) return;
                 if (!operation.setterStarted) {
                     this._forwardNativeThinkingCycle(tab);

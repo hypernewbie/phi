@@ -219,6 +219,13 @@ describe('pi bridge ordered views', () => {
         expect(tab.piBridge.model).toBe('provB/modelB');
         expect(tab.piBridge.thinking_level).toBe('low');
         expect(tab._piBridgeRev).toBe(7n);
+        // An unrecognized level name never becomes confirmed UI state.
+        tm._acceptPiBridgeState(
+            tab,
+            frame('8', 'provB/modelB', 'ultra'),
+            tab.ws,
+        );
+        expect(tab.piBridge.thinking_level).toBe('');
     });
 
     it('orders u64 revisions beyond float precision', () => {
