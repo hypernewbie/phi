@@ -13,6 +13,9 @@ import {
     type Accepted,
     AgentSettled,
     AgentStarted,
+    CompactOutcome,
+    type CompactRequest,
+    CompactResult,
     IntegrationClient,
     type PhiToPi,
     PiToPhi,
@@ -200,8 +203,58 @@ export class BridgeTestClient {
             else this.acceptedQueue.push(payload.value);
             return;
         }
+        if (payload?.$case === 'compactRequest') {
+            const waiter = this.compactRequestWaiters.shift();
+            if (waiter) waiter(payload.value);
+            else this.compactRequestQueue.push(payload.value);
+            this.compactRequestTotal += 1;
+            return;
+        }
         // ProtocolError and unknown oneofs are informational; stream status
         // carries terminal failures.
+    }
+
+    private compactRequestQueue: CompactRequest[] = [];
+    private compactRequestWaiters: Array<(r: CompactRequest) => void> = [];
+    private compactRequestTotal = 0;
+
+    /** Await the next CompactRequest dispatched by the server. */
+    async awaitCompactRequest(timeoutMs = 5_000): Promise<CompactRequest> {
+        const queued = this.compactRequestQueue.shift();
+        if (queued !== undefined) return queued;
+        return new Promise<CompactRequest>((resolve, reject) => {
+            const timer = setTimeout(
+                () => reject(new Error('compact request deadline')),
+                timeoutMs,
+            );
+            this.compactRequestWaiters.push((req) => {
+                clearTimeout(timer);
+                resolve(req);
+            });
+        });
+    }
+
+    /** Total CompactRequests received on this stream. Proves (non-)dispatch. */
+    receivedCompactRequests(): number {
+        return this.compactRequestTotal;
+    }
+
+    /** Report one terminal Compact outcome for requestId. */
+    sendCompactResult(
+        requestId: string,
+        outcome: CompactOutcome,
+        reason = '',
+    ): void {
+        this.enqueueFrame({
+            paneId: this.pane,
+            processId: this.process,
+            runtimeGeneration: this.generation,
+            payload: {
+                $case: 'compactResult',
+                value: CompactResult.create({ requestId, outcome, reason }),
+            },
+        });
+        void this.pumpWriter();
     }
 
     sendStarted(eventSequence: bigint, runId: bigint): void {

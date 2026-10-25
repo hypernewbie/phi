@@ -183,6 +183,104 @@ function thinkingLevelClass(level) {
     return PI_THINKING_ORDER.includes(n) ? n : 'off';
 }
 
+// Native Compact waits at most 125s in the browser against the
+// server's 120s bound. Expiry reports unknown; it never cancels
+// native provider work and never permits a replay.
+const PI_BRIDGE_COMPACT_TIMEOUT_MS = 125_000;
+
+// Fixed Compact reason vocabulary shared with the Go/wire contract.
+// Only these words may reach the toast; anything else (including
+// word-shaped provider text) is dropped, never rendered.
+const PI_BRIDGE_COMPACT_REASONS = new Set([
+    'duplicate',
+    'stale',
+    'busy',
+    'queued',
+    'compaction-active',
+    'pending',
+    'unavailable',
+    'cancelled',
+    'already-compacted',
+    'error',
+    'uncertain',
+]);
+
+// piBridgeContextNumber parses one context telemetry field: HTTP
+// numbers and WS decimal strings land here. Missing, empty, null,
+// boolean, or unparsable input is unknown (null), never zero.
+function piBridgeContextNumber(raw) {
+    if (typeof raw === 'number')
+        return Number.isFinite(raw) ? raw : null;
+    if (
+        typeof raw === 'string' &&
+        raw !== '' &&
+        /^\d+(\.\d+)?$/.test(raw)
+    ) {
+        const value = Number(raw);
+        return Number.isFinite(value) ? value : null;
+    }
+    return null;
+}
+
+// piBridgeReadinessBool parses one readiness field: HTTP booleans
+// and WS true/false strings land here. Anything else is unknown.
+function piBridgeReadinessBool(raw) {
+    if (raw === true || raw === 'true') return true;
+    if (raw === false || raw === 'false') return false;
+    return null;
+}
+
+// piBridgeCapable feature-detects one bridge capability at the
+// point of use: Pi PTY, live tab, current socket confirmed fresh,
+// managed lease, connected peer, negotiated capability. Never
+// sticky, never cached across reconnects. Module-level so the
+// ordered-view key can use it without new prototype surface.
+function piBridgeCapable(tab, capability) {
+    return (
+        tab?.coder === 'pi' && !tab.isDead &&
+        !!tab.ws && tab._piBridgeFresh === tab.ws &&
+        tab.piBridge?.state === 'managed' &&
+        tab.piBridge.connected === true &&
+        Array.isArray(tab.piBridge.capabilities) &&
+        tab.piBridge.capabilities.includes(capability)
+    );
+}
+
+// piBridgeEqualRevAgrees compares the retained publication fields:
+// an equal revision must agree on identity and telemetry, while
+// connected alone may flip to propagate peer-down. Lifecycle fields
+// (running, last_run, last_outcome) are deliberately NOT compared:
+// the settled path mutates them without advancing the publication
+// revision, so a same-revision peer-down carrying newer settlement
+// metadata must still adopt availability.
+function piBridgeEqualRevAgrees(current, view) {
+    const text = (record, key) =>
+        typeof record?.[key] === 'string' ? record[key] : '';
+    const count = (record, key) =>
+        typeof record?.[key] === 'number' ? record[key] : null;
+    const flag = (record, key) =>
+        typeof record?.[key] === 'boolean' ? record[key] : null;
+    const caps = (record) => (record?.capabilities || []).join(',');
+    return (
+        text(current, 'generation') === text(view, 'generation') &&
+        text(current, 'model') === text(view, 'model') &&
+        text(current, 'thinking_level') === text(view, 'thinking_level') &&
+        caps(current) === caps(view) &&
+        count(current, 'context_tokens') ===
+            count(view, 'context_tokens') &&
+        count(current, 'context_window') ===
+            count(view, 'context_window') &&
+        count(current, 'context_percent') ===
+            count(view, 'context_percent') &&
+        flag(current, 'compact_idle') === flag(view, 'compact_idle') &&
+        flag(current, 'compact_queued') ===
+            flag(view, 'compact_queued') &&
+        flag(current, 'compact_active') ===
+            flag(view, 'compact_active') &&
+        flag(current, 'compact_pending') === flag(view, 'compact_pending')
+    );
+}
+
 // Shared "session done" chime. Constructing a new Audio per chime
 // re-fetches bell.wav; one object per page is enough.
 let doneChimeAudio = null;
@@ -4388,6 +4486,9 @@ export class TabManager {
         // survives every later reconnect.
         tabInfo.isDead = true;
         this._refreshPiBridgeModels(tabInfo);
+        // A dead socket orphans the pending native Compact waiter:
+        // drop it and report unknown once for the still-current tab.
+        this._invalidatePiBridgeCompact?.(tabInfo, true);
         this._updateHistoryButton(tabInfo);
         tabInfo.tabEl.classList.add('dead');
         this.updateDocumentTitle();
@@ -4413,13 +4514,23 @@ export class TabManager {
         const bar = this.piRpcStatusBar;
         if (!bar) return;
         const activeTab = this.getActiveTab();
-        if (activeTab?.coder !== 'pi-rpc') {
+        let raw = null;
+        if (activeTab?.coder === 'pi-rpc') {
+            raw = getPiRpcStatus(activeTab.paneId);
+        } else if (
+            activeTab?.coder === 'pi' &&
+            this._piBridgeContextEligible(activeTab)
+        ) {
+            // Capable Pi PTY tabs reuse the same meter, formatting,
+            // thresholds, and progressbar semantics; only real
+            // cwd/model/tokens/window are adapted in.
+            raw = this._piBridgeStatusFor(activeTab);
+        } else {
             bar.classList.add('hidden');
             bar.replaceChildren();
             this._updatePiThinkingButton();
             return;
         }
-        const raw = getPiRpcStatus(activeTab.paneId);
         const display = formatPiRpcStatus(raw);
         // CWD: ~/code/ae style — replace home with ~, truncate gracefully
         let cwdDisplay = display.cwd;
@@ -8061,6 +8172,33 @@ export class TabManager {
      */
     sendSlashCommand(tabInfo, cmd, { focusInputOnMobile = true } = {}) {
         if (tabInfo?.coder === 'pi-rpc') return false;
+        // An obsolete exact-Compact target dispatches nowhere: the tab
+        // object is no longer the pane's current session, so neither
+        // the native API nor the legacy PTY paste may fire from it.
+        // (sendInput never checks map membership, so merely failing
+        // eligibility would still PTY-send.) Other commands and
+        // backends keep legacy behavior.
+        if (
+            cmd === '/compact' &&
+            tabInfo?.coder === 'pi' &&
+            this.tabs &&
+            this.tabs.get(tabInfo.paneId) !== tabInfo
+        )
+            return true;
+        // Exact /compact on a capable ordinary Pi tab takes the native
+        // bridge path; anything incapable keeps the legacy paste+Enter.
+        // Eligibility precedes every native guard, so a later click
+        // while disconnected still reaches the legacy PTY action even
+        // when an old HTTP request is still pending.
+        if (
+            cmd === '/compact' &&
+            tabInfo?.coder === 'pi' &&
+            this._piBridgeCompactEligible(tabInfo)
+        ) {
+            return this._sendPiBridgeCompact(tabInfo, {
+                focusInputOnMobile,
+            });
+        }
         const paste = `\x1b[200~${cmd}\x1b[201~`;
         const legacyOpenCode = tabInfo.coder === 'opencode' && !isOpenCodeMini(tabInfo);
         const sent = this.sendToTab(
@@ -8073,6 +8211,14 @@ export class TabManager {
                 this.sendToTab(tabInfo, '\r');
             }, 200);
         }
+        this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
+        return true;
+    }
+
+    // _focusAfterSlashCommand keeps one focus tail for the legacy and
+    // native slash paths: mobile honors the caller's focus option and
+    // desktop returns to the terminal.
+    _focusAfterSlashCommand(tabInfo, focusInputOnMobile) {
         const isMobile = prefersInputBarFocus();
         if (isMobile) {
             if (focusInputOnMobile && !tabInfo.directMode && this.inputTextArea) {
@@ -8083,7 +8229,201 @@ export class TabManager {
         } else {
             this.focusActiveTerminal();
         }
+    }
+
+    // _sendPiBridgeCompact runs the native bridge path for an exact
+    // /compact on a capable Pi PTY tab. Always handled (true): guards
+    // swallow without PTY fallback, and a dispatch never replays on
+    // refusal, error, timeout, or disconnect. Draft and attachments
+    // are never touched here; focus matches the legacy slash path.
+    _sendPiBridgeCompact(tabInfo, { focusInputOnMobile = true } = {}) {
+        const paneId = tabInfo.paneId;
+        // One native request per pane; a duplicate desktop/mobile
+        // click while one is pending is swallowed, never replayed.
+        if (this._piBridgeCompactPending?.get(paneId)) return true;
+        const view = tabInfo.piBridge;
+        const stampsValid =
+            typeof view?.generation === 'string' &&
+            view.generation !== '' &&
+            typeof view?.telemetry_revision === 'string' &&
+            view.telemetry_revision !== '';
+        const ready =
+            view?.compact_idle === true &&
+            view?.compact_queued === false &&
+            view?.compact_active === false &&
+            view?.compact_pending === false &&
+            // A sampled idle flag does not override a logically
+            // running runtime; an unknown (absent) running stays ready.
+            view?.running !== true;
+        // Eligible but busy or unknown: send NEITHER api nor PTY.
+        if (!stampsValid || !ready) return true;
+        const controller = new AbortController();
+        const op = {
+            tab: tabInfo,
+            ws: tabInfo.ws,
+            generation: view.generation,
+            paneId,
+            controller,
+            timer: null,
+        };
+        if (!this._piBridgeCompactPending)
+            this._piBridgeCompactPending = new Map();
+        this._piBridgeCompactPending.set(paneId, op);
+        // The timer finalizes directly: a dropped response still
+        // reports unknown even when fetch ignores the abort signal.
+        op.timer = setTimeout(() => {
+            controller.abort();
+            this._finalizePiBridgeCompact(op, { kind: 'unknown' });
+        }, PI_BRIDGE_COMPACT_TIMEOUT_MS);
+        let request;
+        try {
+            request = fetch('/api/pi-bridge/compact', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    pane: paneId,
+                    generation: view.generation,
+                    telemetry_revision: view.telemetry_revision,
+                }),
+                signal: controller.signal,
+                cache: 'no-store',
+            });
+        } catch (error) {
+            request = Promise.reject(error);
+        }
+        Promise.resolve(request).then(
+            (res) => {
+                let parsed = null;
+                try {
+                    parsed =
+                        typeof res?.json === 'function' ? res.json() : null;
+                } catch {
+                    parsed = null;
+                }
+                return Promise.resolve(parsed)
+                    .catch(() => null)
+                    .then((json) => ({ res, json }));
+            },
+            () => ({ res: null, json: null }),
+        ).then(({ res, json }) =>
+            this._finalizePiBridgeCompact(
+                op,
+                this._piBridgeCompactOutcome(res, json),
+            ),
+        );
+        this._refreshPiBridgeModels(tabInfo);
+        this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
         return true;
+    }
+
+    // _piBridgeCompactOutcome maps one Compact HTTP round trip to a
+    // safe outcome. Only the exact server vocabulary passes: success
+    // needs exactly HTTP 200 with completed (a 202 acceptance is
+    // still unknown), refusal needs 409/503, failure 502. Anything
+    // else — network failure, unparsable body, wrong status — is
+    // unknown, never a silent success and never a PTY replay.
+    _piBridgeCompactOutcome(res, json) {
+        const outcome =
+            json && typeof json === 'object' ? json.outcome : null;
+        if (res?.status === 200 && outcome === 'completed')
+            return { kind: 'completed' };
+        if (
+            outcome === 'rejected-before-start' &&
+            (res?.status === 409 || res?.status === 503)
+        )
+            return {
+                kind: 'refused',
+                unavailable: res.status === 503,
+                reason: json.reason,
+            };
+        if (outcome === 'failed' && res?.status === 502)
+            return { kind: 'failed', reason: json.reason };
+        return { kind: 'unknown' };
+    }
+
+    // _finalizePiBridgeCompact settles one native Compact op. A late
+    // response for a superseded op, a replaced tab, or a closed pane
+    // changes nothing, and a same-tab socket swap or runtime
+    // generation move since dispatch also settles silently: the
+    // waiter no longer belongs to the live session. Telemetry
+    // revision is deliberately NOT fenced — a successful compaction
+    // advances it. Only the current op clears itself, and UI updates
+    // land only on its live tab. Never PTY-falls back.
+    _finalizePiBridgeCompact(op, result) {
+        if (op.timer) clearTimeout(op.timer);
+        if (this._piBridgeCompactPending?.get(op.paneId) !== op) return;
+        this._piBridgeCompactPending.delete(op.paneId);
+        if (this.tabs?.get(op.paneId) !== op.tab) return;
+        if (op.tab.ws !== op.ws) return;
+        if (op.tab.piBridge?.generation !== op.generation) return;
+        this._refreshPiBridgeModels(op.tab);
+        if (!this.app || typeof this.app.showToast !== 'function') return;
+        // The reason must be one fixed vocabulary word; an empty or
+        // foreign reason renders the bare message. Word-shaped
+        // provider text never reaches the toast.
+        const reason =
+            typeof result?.reason === 'string' &&
+            PI_BRIDGE_COMPACT_REASONS.has(result.reason)
+                ? result.reason
+                : '';
+        const suffix = reason ? `: ${reason}` : '';
+        if (result?.kind === 'completed') {
+            this.app.showToast('Compaction complete', {
+                type: 'success',
+                title: 'Compact',
+            });
+        } else if (result?.kind === 'refused') {
+            this.app.showToast(
+                result.unavailable
+                    ? 'Compaction unavailable'
+                    : `Compaction refused${suffix}`,
+                { type: 'info', title: 'Compact' },
+            );
+        } else if (result?.kind === 'failed') {
+            this.app.showToast(`Compaction failed${suffix}`, {
+                type: 'error',
+                title: 'Compact',
+            });
+        } else {
+            this.app.showToast('Compaction outcome unknown', {
+                type: 'error',
+                title: 'Compact',
+            });
+        }
+    }
+
+    // _invalidatePiBridgeCompact drops the pane's pending native
+    // Compact waiter when its dispatch identity no longer holds:
+    // socket swapped, runtime generation moved, tab exited, lease
+    // restarted, peer lost, or capability revoked. Only the matching
+    // waiter is cleared — its timer is cancelled and the HTTP wait
+    // aborted, which never cancels accepted server work and never
+    // replays or touches a newer op; the aborted wait's late reply
+    // finalizes silently. A still-current tab reports the outcome as
+    // unknown exactly once when asked (the disconnect path); closed
+    // or replaced identities stay silent.
+    _invalidatePiBridgeCompact(tabInfo, reportUnknown = false) {
+        const paneId = tabInfo?.paneId;
+        if (paneId == null) return;
+        const op = this._piBridgeCompactPending?.get(paneId);
+        if (!op || op.tab !== tabInfo) return;
+        if (op.timer) clearTimeout(op.timer);
+        op.timer = null;
+        this._piBridgeCompactPending.delete(paneId);
+        try {
+            op.controller?.abort();
+        } catch (_abortError) {}
+        if (!reportUnknown) {
+            this._refreshPiBridgeModels(tabInfo);
+            return;
+        }
+        if (this.tabs?.get(paneId) !== tabInfo) return;
+        this._refreshPiBridgeModels(tabInfo);
+        if (!this.app || typeof this.app.showToast !== 'function') return;
+        this.app.showToast('Compaction outcome unknown', {
+            type: 'error',
+            title: 'Compact',
+        });
     }
 
     _showReconnectOverlay(tabInfo) {
@@ -8137,6 +8477,15 @@ export class TabManager {
         // the old server's counter across, and drop freshness until
         // current-socket state re-confirms it.
         this._resetPiBridgeOrdered(tabInfo);
+        // A swapped socket orphans the pending native Compact waiter:
+        // drop it and report unknown once for the still-current tab.
+        const pendingOp = this._piBridgeCompactPending?.get(tabInfo.paneId);
+        if (
+            pendingOp &&
+            pendingOp.tab === tabInfo &&
+            pendingOp.ws !== tabInfo.ws
+        )
+            this._invalidatePiBridgeCompact?.(tabInfo, true);
         this._refreshPiBridgeModels(tabInfo);
     }
 
@@ -8205,16 +8554,56 @@ export class TabManager {
             view.capabilities = caps.filter(
                 (c) => typeof c === 'string' && c,
             );
+        // Context telemetry: finite nonnegative safe magnitudes, a
+        // positive window, and percent only with known tokens. Absent
+        // or invalid fields stay unknown; nothing coerces to zero.
+        const contextTokens = piBridgeContextNumber(raw.context_tokens);
+        const contextWindow = piBridgeContextNumber(raw.context_window);
+        const contextPercent = piBridgeContextNumber(raw.context_percent);
+        const tokensKnown =
+            contextTokens !== null &&
+            contextTokens >= 0 &&
+            contextTokens <= 9007199254740991;
+        const windowKnown =
+            contextWindow !== null &&
+            contextWindow > 0 &&
+            contextWindow <= 9007199254740991;
+        if (tokensKnown) view.context_tokens = contextTokens;
+        if (windowKnown) view.context_window = contextWindow;
+        if (
+            tokensKnown &&
+            contextPercent !== null &&
+            contextPercent >= 0 &&
+            contextPercent <= 9007199254740991
+        )
+            view.context_percent = contextPercent;
+        // Compaction readiness arrives as a group: any missing or
+        // invalid member leaves the whole sample unknown.
+        const compactIdle = piBridgeReadinessBool(raw.compact_idle);
+        const compactQueued = piBridgeReadinessBool(raw.compact_queued);
+        const compactActive = piBridgeReadinessBool(raw.compact_active);
+        const compactPending = piBridgeReadinessBool(raw.compact_pending);
+        if (
+            compactIdle !== null &&
+            compactQueued !== null &&
+            compactActive !== null &&
+            compactPending !== null
+        ) {
+            view.compact_idle = compactIdle;
+            view.compact_queued = compactQueued;
+            view.compact_active = compactActive;
+            view.compact_pending = compactPending;
+        }
         return view;
     }
 
     // _acceptOrderedBridgeView applies one HTTP (socket null) or WS
     // bridge view to the per-tab ordered state. A valid positive u64
     // baseline is accepted, then only newer revisions; an equal
-    // revision with the same model/capabilities confirms freshness on
-    // the current socket, while a conflicting equal or any older
-    // revision is rejected. Unstamped managed views never replace
-    // accepted state. Non-managed views apply only when no floor is
+    // revision agreeing on every retained identity/state field
+    // confirms freshness on the current socket, while a conflicting
+    // equal or any older revision is rejected. Unstamped managed
+    // views never replace accepted state. Non-managed views apply only when no floor is
     // known. HTTP seeds set the floor but never freshness: the model
     // shows only after current-socket state confirms it.
     _acceptOrderedBridgeView(tabInfo, raw, socket) {
@@ -8249,15 +8638,11 @@ export class TabManager {
         }
         if (rev < floor) return false;
         if (rev === floor) {
+            // An equal revision must agree on every retained
+            // identity/state field, including the new telemetry; a
+            // conflicting equal revision refreshes nothing.
+            if (!piBridgeEqualRevAgrees(tabInfo.piBridge, view)) return false;
             const current = tabInfo.piBridge;
-            const sameModel =
-                (current?.model || '') === (view.model || '');
-            const sameThinking =
-                (current?.thinking_level || '') === view.thinking_level;
-            const sameCaps =
-                (current?.capabilities || []).join(',') ===
-                (view.capabilities || []).join(',');
-            if (!sameModel || !sameThinking || !sameCaps) return false;
             // Availability rides the retained view without a new
             // revision: adopt a flipped connected at equal rev so
             // peer-down still lands.
@@ -8338,6 +8723,11 @@ export class TabManager {
             tabInfo.tabEl.classList.add('dead');
             this.updateDocumentTitle();
             this._showReconnectOverlay(tabInfo);
+            // An exit revokes point-of-use eligibility: hide the meter
+            // and restore the legacy Compact controls on this tab.
+            this._refreshPiBridgeModels(tabInfo);
+            // An exit also orphans the pending native Compact waiter.
+            this._invalidatePiBridgeCompact?.(tabInfo);
         } else if (control.type === 'replay-complete') {
             // An empty replay still ends here, so drop the pending reset or
             // the next live byte would clear the terminal underneath the user.
@@ -8382,17 +8772,39 @@ export class TabManager {
     _acceptPiBridgeState(tabInfo, control, socket = tabInfo?.ws) {
         if (!tabInfo || tabInfo.coder !== 'pi') return;
         const prev = tabInfo.piBridge;
-        const prevKey = prev
-            ? `${this._piBridgeModelsEligible(tabInfo)}|${this._piBridgeThinkingEligible(tabInfo)}|${prev.state}|${prev.generation || ''}|${prev.model || ''}|${prev.thinking_level || ''}|${prev.connected}|${(prev.capabilities || []).join(',')}`
-            : '';
+        const prevKey = prev ? this._piBridgeKeys(tabInfo, prev).row : '';
         this._acceptOrderedBridgeView(tabInfo, control, socket);
+        // A retained view that no longer supports the pending native
+        // Compact waiter — runtime generation moved, peer lost, or
+        // capability revoked — orphans it silently; the late HTTP
+        // reply then finalizes silently too. Inline reads only, so
+        // partial harnesses without the waiter surface still pass.
+        const pendingOp = this._piBridgeCompactPending?.get(tabInfo.paneId);
+        if (
+            pendingOp &&
+            pendingOp.tab === tabInfo &&
+            (tabInfo.ws !== pendingOp.ws ||
+                tabInfo.piBridge?.generation !== pendingOp.generation ||
+                tabInfo.piBridge?.connected !== true ||
+                !(tabInfo.piBridge?.capabilities || []).includes(
+                    'pi.compact.v1',
+                ))
+        )
+            // Peer-down or capability loss on the still-current
+            // socket/runtime reports unknown once for the live
+            // operation; a swapped socket or moved generation is a
+            // stale waiter and stays silent.
+            this._invalidatePiBridgeCompact?.(
+                tabInfo,
+                tabInfo.ws === pendingOp.ws &&
+                    tabInfo.piBridge?.generation === pendingOp.generation,
+            );
         const next = tabInfo.piBridge;
-        const nextKey = next
-            ? `${this._piBridgeModelsEligible(tabInfo)}|${this._piBridgeThinkingEligible(tabInfo)}|${next.state}|${next.generation || ''}|${next.model || ''}|${next.thinking_level || ''}|${next.connected}|${(next.capabilities || []).join(',')}`
-            : '';
-        // The models trigger rides bridge state: re-render the row
-        // only when model, availability, or capabilities moved on
-        // the visible tab. Rejected (stale) frames change nothing.
+        const nextKey = next ? this._piBridgeKeys(tabInfo, next).row : '';
+        // The models trigger, the context meter, and the Compact
+        // controls all ride bridge state: re-render the row and the bar
+        // only when model, availability, capabilities, or telemetry
+        // moved on the visible tab. Rejected (stale) frames change nothing.
         if (prevKey !== nextKey) this._refreshPiBridgeModels(tabInfo);
         if (
             this._piRecall?.paneId === tabInfo.paneId &&
@@ -8805,6 +9217,9 @@ export class TabManager {
             } catch (_e) {}
             tabInfo.ws = null;
         }
+        // A restart orphans the pending native Compact waiter for the
+        // old pane before the new lease is provisioned.
+        this._invalidatePiBridgeCompact?.(tabInfo);
 
         fetch('/api/terminals', {
             method: 'POST',
@@ -8843,6 +9258,9 @@ export class TabManager {
                 tabInfo._piBridgeLastRun = undefined;
                 tabInfo._piBridgeGeneration = undefined;
                 tabInfo._piBridgeLive = undefined;
+                // The old lease is gone: hide its meter and controls now,
+                // before the new socket re-baselines.
+                this._refreshPiBridgeModels(tabInfo);
 
                 // Update DOM element references to synchronise new IDs
                 tabInfo.tabEl.setAttribute('data-pane-id', data.pane_id);
@@ -10058,6 +10476,13 @@ export class TabManager {
                     const btn = document.createElement('button');
                     btn.className = 'preset-btn';
                     btn.innerText = p.name;
+                    if (p.value === '/compact\r' && activeTab?.coder === 'pi') {
+                        const compactState =
+                            this._piBridgeCompactControlState(activeTab);
+                        btn.disabled = compactState.disabled;
+                        if (compactState.title)
+                            btn.title = compactState.title;
+                    }
                     btn.addEventListener('click', () => {
                         const activeTab = this.getActiveTab();
                         if (
@@ -10318,6 +10743,16 @@ export class TabManager {
             const btn = document.createElement('button');
             btn.className = 'dropup-model-btn';
             btn.innerText = p.name;
+            if (
+                p.value === '/compact\r' &&
+                this.getActiveTab()?.coder === 'pi'
+            ) {
+                const compactState = this._piBridgeCompactControlState(
+                    this.getActiveTab(),
+                );
+                btn.disabled = compactState.disabled;
+                if (compactState.title) btn.title = compactState.title;
+            }
             btn.addEventListener('click', () => {
                 const activeTab = this.getActiveTab();
                 if (
@@ -11878,6 +12313,94 @@ export class TabManager {
     }
 
     // Socket changes and bridge views share the same picker invalidation.
+
+    // _piBridgeCapable delegates to the module predicate: point-of-use
+    // capability checks stay identical between renders and the
+    // ordered-view refresh key.
+    _piBridgeCapable(tab, capability) {
+        return piBridgeCapable(tab, capability);
+    }
+
+    _piBridgeContextEligible(tab) {
+        return this._piBridgeCapable(tab, 'pi.context.v1');
+    }
+
+    _piBridgeCompactEligible(tab) {
+        return this._piBridgeCapable(tab, 'pi.compact.v1');
+    }
+
+    // _piBridgeStatusFor adapts bridge context telemetry into the
+    // shared status-bar input. Only real cwd/model/tokens/window are
+    // carried; RPC totals, cache, cost, and thinking stay unknown.
+    _piBridgeStatusFor(tab) {
+        const view = tab?.piBridge;
+        return {
+            cwd: typeof tab?.cwd === 'string' ? tab.cwd : '',
+            model: typeof view?.model === 'string' ? view.model : null,
+            thinking: null,
+            inputTokens: null,
+            outputTokens: null,
+            contextUsedTokens:
+                typeof view?.context_tokens === 'number'
+                    ? view.context_tokens
+                    : null,
+            contextWindowTokens:
+                typeof view?.context_window === 'number'
+                    ? view.context_window
+                    : null,
+            cacheReadTokens: null,
+            cacheWriteTokens: null,
+            skills: null,
+        };
+    }
+
+    // _piBridgeCompactControlState disables the existing /compact
+    // controls only for capable Pi PTY tabs: while a native request
+    // is pending, while readiness is unknown, or while Pi reports
+    // busy/queued/active/pending. Incapable tabs keep legacy buttons.
+    _piBridgeCompactControlState(tab) {
+        if (!this._piBridgeCompactEligible(tab))
+            return { disabled: false, title: '' };
+        if (this._piBridgeCompactPending?.get(tab.paneId))
+            return { disabled: true, title: 'Compacting…' };
+        const view = tab.piBridge;
+        const known =
+            typeof view?.compact_idle === 'boolean' &&
+            typeof view?.compact_queued === 'boolean' &&
+            typeof view?.compact_active === 'boolean' &&
+            typeof view?.compact_pending === 'boolean' &&
+            typeof view?.generation === 'string' &&
+            view.generation !== '' &&
+            typeof view?.telemetry_revision === 'string' &&
+            view.telemetry_revision !== '';
+        if (!known)
+            return {
+                disabled: true,
+                title: 'Compact unavailable: unknown Pi state',
+            };
+        if (view.compact_idle !== true || view.running === true)
+            return { disabled: true, title: 'Compact unavailable: Pi is busy' };
+        if (view.compact_queued === true)
+            return {
+                disabled: true,
+                title: 'Compact unavailable: messages queued',
+            };
+        if (view.compact_active === true)
+            return {
+                disabled: true,
+                title: 'Compact unavailable: compaction active',
+            };
+        if (view.compact_pending === true)
+            return {
+                disabled: true,
+                title: 'Compact unavailable: compaction pending',
+            };
+        return { disabled: false, title: 'Compact via bridge' };
+    }
+
+    // Socket changes and bridge views share the same row/bar
+    // invalidation: the models picker, the context meter, and the
+    // Compact controls all re-derive from the retained view.
     _refreshPiBridgeModels(tab) {
         if (tab?.coder !== 'pi') return;
         if (
@@ -11889,6 +12412,11 @@ export class TabManager {
         // open-picker re-render with settled pending state (one levels fetch).
         this._refreshPiBridgeThinking(tab);
         if (this.getActiveTab() === tab) this.renderPresets('pi');
+        if (
+            this.getActiveTab() === tab &&
+            typeof this.renderPiRpcStatusBar === 'function'
+        )
+            this.renderPiRpcStatusBar();
     }
 
     // Cleanup only; the open-picker re-render is owned by renderPresets

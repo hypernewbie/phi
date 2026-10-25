@@ -58,6 +58,22 @@ export enum LogicalState {
   UNRECOGNIZED = -1,
 }
 
+/**
+ * Terminal compaction outcome. UNSPECIFIED means genuinely unknown:
+ * never guess success, failure, or cancellation from absent evidence.
+ * REFUSED means rejected before host invocation; FAILED and CANCELLED
+ * arrive only from the host completion callback after invocation.
+ * Exactly one terminal result is emitted per accepted operation.
+ */
+export enum CompactOutcome {
+  COMPACT_OUTCOME_UNSPECIFIED = 0,
+  COMPACT_OUTCOME_COMPLETED = 1,
+  COMPACT_OUTCOME_REFUSED = 2,
+  COMPACT_OUTCOME_FAILED = 3,
+  COMPACT_OUTCOME_CANCELLED = 4,
+  UNRECOGNIZED = -1,
+}
+
 export enum ProtocolErrorCode {
   PROTOCOL_ERROR_UNSPECIFIED = 0,
   PROTOCOL_ERROR_UNSUPPORTED_VERSION = 1,
@@ -86,6 +102,7 @@ export interface PiToPhi {
     | { $case: "setModelAck"; value: SetModelAck }
     | { $case: "thinkingLevelsResponse"; value: ThinkingLevelsResponse }
     | { $case: "setThinkingAck"; value: SetThinkingAck }
+    | { $case: "compactResult"; value: CompactResult }
     | undefined;
 }
 
@@ -102,6 +119,7 @@ export interface PhiToPi {
     | { $case: "setModelRequest"; value: SetModelRequest }
     | { $case: "thinkingLevelsRequest"; value: ThinkingLevelsRequest }
     | { $case: "setThinkingRequest"; value: SetThinkingRequest }
+    | { $case: "compactRequest"; value: CompactRequest }
     | undefined;
 }
 
@@ -177,6 +195,67 @@ export interface StateSnapshot {
   stateRevision: bigint;
   /** Empty means unknown; it is never inferred to mean off. */
   thinkingLevel: string;
+  /**
+   * Optional context telemetry, sampled from the host's
+   * getContextUsage. Absent when the pi.context.v1 API is
+   * unavailable or the latest sampling was undefined/invalid.
+   * Absent never means zero usage; see ContextUsageSnapshot.
+   */
+  contextUsage:
+    | ContextUsageSnapshot
+    | undefined;
+  /**
+   * Optional compaction readiness, sampled from the host's
+   * isIdle/hasPendingMessages plus local compaction tracking.
+   * Absent when the pi.compact.v1 APIs are unavailable.
+   */
+  compactReadiness: CompactReadiness | undefined;
+}
+
+/**
+ * Optional context telemetry. Scalar presence is explicit: an absent
+ * tokens/percent means the host reports unknown (null), never zero.
+ * context_window stays present when known, including right after a
+ * compaction whose token count is still unknown. Consumers must keep
+ * unknown distinct from a zero measurement and from an absent
+ * capability. No transcripts, prompts, summaries, or costs travel here.
+ */
+export interface ContextUsageSnapshot {
+  /**
+   * Estimated context tokens; absent when unknown. When present it
+   * is a finite nonnegative number within the safe-integer magnitude.
+   */
+  tokens?:
+    | number
+    | undefined;
+  /**
+   * Model context window; present when known. When present it is a
+   * finite positive number within the safe-integer magnitude.
+   */
+  contextWindow?:
+    | number
+    | undefined;
+  /**
+   * Usage percent of the window; absent when tokens are unknown.
+   * When present it is a finite nonnegative number.
+   */
+  percent?: number | undefined;
+}
+
+/**
+ * Optional compaction readiness for the existing Compact control
+ * states. All fields are a point-in-time sample, not a promise that
+ * a later dispatch still passes admission.
+ */
+export interface CompactReadiness {
+  /** The host reports idle: no agent run and no compaction active. */
+  idle: boolean;
+  /** The host reports queued messages waiting. */
+  hasPendingMessages: boolean;
+  /** A native compaction start was observed without its end. */
+  compactionActive: boolean;
+  /** This Pi process owns an unresolved bridge compaction. */
+  bridgePending: boolean;
 }
 
 /**
@@ -296,6 +375,68 @@ export interface SetThinkingAck {
   reason: string;
 }
 
+/**
+ * CompactRequest asks the extension to run one native compaction via
+ * the host's public compact({ onComplete, onError }). Best-effort
+ * like history: the answer may never arrive without disturbing
+ * lifecycle traffic, and an expired wait means an unknown outcome,
+ * never permission to replay. At most one native compaction runs per
+ * Pi process; a second request while one is unresolved is refused.
+ */
+export interface CompactRequest {
+  /**
+   * Monotonic server-allocated ID, opaque to browser consumers.
+   * Positive canonical decimal uint64 syntax: a leading digit 1-9
+   * followed by up to 19 digits (no leading zeroes, no sign, no
+   * whitespace), numeric value at most 18446744073709551615.
+   * The extension echoes it verbatim and rejects duplicate/older
+   * IDs against a process high-water mark before host invocation.
+   */
+  requestId: string;
+  /**
+   * Expected host identity, captured from the current server lease.
+   * The extension rechecks it against a live host read immediately
+   * before invocation and refuses on any mismatch or unreadable
+   * identity. Each is at most 256 chars.
+   */
+  expectedSessionId: string;
+  expectedLeafId: string;
+  /**
+   * Expected model; absent means the server expects NO model and
+   * the extension refuses when the live host holds one. A model
+   * that appears or changes after the server snapshot must not
+   * bypass the admission fence. All three fences apply at
+   * admission only; native success changes the leaf, so completion
+   * never requires the old leaf.
+   */
+  expectedModel: ModelSnapshot | undefined;
+}
+
+/**
+ * CompactResult reports one terminal outcome for request_id, echoed
+ * verbatim. reason is a fixed safe vocabulary, never raw host or
+ * provider text, never a transcript or summary:
+ *
+ *   "" (empty)        no detail (COMPLETED, or UNSPECIFIED)
+ *   "duplicate"        older/duplicate ID (REFUSED)
+ *   "stale"            expected identity mismatch or unreadable (REFUSED)
+ *   "busy"             host not idle (REFUSED)
+ *   "queued"           pending messages queued (REFUSED)
+ *   "compaction-active" native compaction already active (REFUSED)
+ *   "pending"          another bridge compaction unresolved (REFUSED)
+ *   "unavailable"      compact APIs missing (REFUSED, defensive)
+ *   "cancelled"        host reports cancellation (CANCELLED)
+ *   "already-compacted" host reports nothing to compact (FAILED)
+ *   "error"            host reports failure (FAILED)
+ *   "uncertain"        sync throw without a callback; the process
+ *                      latch stays unresolved (UNSPECIFIED)
+ */
+export interface CompactResult {
+  requestId: string;
+  outcome: CompactOutcome;
+  reason: string;
+}
+
 /** Terminal protocol-level rejection. Ends the stream attempt. */
 export interface ProtocolError {
   code: ProtocolErrorCode;
@@ -347,6 +488,9 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         break;
       case "setThinkingAck":
         SetThinkingAck.encode(message.payload.value, writer.uint32(170).fork()).join();
+        break;
+      case "compactResult":
+        CompactResult.encode(message.payload.value, writer.uint32(178).fork()).join();
         break;
     }
     return writer;
@@ -464,6 +608,14 @@ export const PiToPhi: MessageFns<PiToPhi> = {
             message.payload = { $case: "setThinkingAck", value: SetThinkingAck.decode(reader, reader.uint32()) };
             continue;
           }
+          case 22: {
+            if (tag !== 178) {
+              break;
+            }
+
+            message.payload = { $case: "compactResult", value: CompactResult.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -544,6 +696,12 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         }
         break;
       }
+      case "compactResult": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "compactResult", value: CompactResult.fromPartial(object.payload.value) };
+        }
+        break;
+      }
     }
     return message;
   },
@@ -588,6 +746,9 @@ export const PhiToPi: MessageFns<PhiToPi> = {
         break;
       case "setThinkingRequest":
         SetThinkingRequest.encode(message.payload.value, writer.uint32(146).fork()).join();
+        break;
+      case "compactRequest":
+        CompactRequest.encode(message.payload.value, writer.uint32(154).fork()).join();
         break;
     }
     return writer;
@@ -692,6 +853,14 @@ export const PhiToPi: MessageFns<PhiToPi> = {
             };
             continue;
           }
+          case 19: {
+            if (tag !== 154) {
+              break;
+            }
+
+            message.payload = { $case: "compactRequest", value: CompactRequest.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -760,6 +929,12 @@ export const PhiToPi: MessageFns<PhiToPi> = {
             $case: "setThinkingRequest",
             value: SetThinkingRequest.fromPartial(object.payload.value),
           };
+        }
+        break;
+      }
+      case "compactRequest": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "compactRequest", value: CompactRequest.fromPartial(object.payload.value) };
         }
         break;
       }
@@ -1349,6 +1524,8 @@ function createBaseStateSnapshot(): StateSnapshot {
     journalGap: false,
     stateRevision: 0n,
     thinkingLevel: "",
+    contextUsage: undefined,
+    compactReadiness: undefined,
   };
 }
 
@@ -1380,6 +1557,12 @@ export const StateSnapshot: MessageFns<StateSnapshot> = {
     }
     if (message.thinkingLevel !== "") {
       writer.uint32(74).string(message.thinkingLevel);
+    }
+    if (message.contextUsage !== undefined) {
+      ContextUsageSnapshot.encode(message.contextUsage, writer.uint32(82).fork()).join();
+    }
+    if (message.compactReadiness !== undefined) {
+      CompactReadiness.encode(message.compactReadiness, writer.uint32(90).fork()).join();
     }
     return writer;
   },
@@ -1461,6 +1644,22 @@ export const StateSnapshot: MessageFns<StateSnapshot> = {
             message.thinkingLevel = reader.string();
             continue;
           }
+          case 10: {
+            if (tag !== 82) {
+              break;
+            }
+
+            message.contextUsage = ContextUsageSnapshot.decode(reader, reader.uint32());
+            continue;
+          }
+          case 11: {
+            if (tag !== 90) {
+              break;
+            }
+
+            message.compactReadiness = CompactReadiness.decode(reader, reader.uint32());
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1490,6 +1689,182 @@ export const StateSnapshot: MessageFns<StateSnapshot> = {
       ? BigInt(object.stateRevision)
       : 0n;
     message.thinkingLevel = object.thinkingLevel ?? "";
+    message.contextUsage = (object.contextUsage !== undefined && object.contextUsage !== null)
+      ? ContextUsageSnapshot.fromPartial(object.contextUsage)
+      : undefined;
+    message.compactReadiness = (object.compactReadiness !== undefined && object.compactReadiness !== null)
+      ? CompactReadiness.fromPartial(object.compactReadiness)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseContextUsageSnapshot(): ContextUsageSnapshot {
+  return { tokens: undefined, contextWindow: undefined, percent: undefined };
+}
+
+export const ContextUsageSnapshot: MessageFns<ContextUsageSnapshot> = {
+  encode(message: ContextUsageSnapshot, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.tokens !== undefined) {
+      writer.uint32(9).double(message.tokens);
+    }
+    if (message.contextWindow !== undefined) {
+      writer.uint32(17).double(message.contextWindow);
+    }
+    if (message.percent !== undefined) {
+      writer.uint32(25).double(message.percent);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ContextUsageSnapshot {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseContextUsageSnapshot();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 9) {
+              break;
+            }
+
+            message.tokens = reader.double();
+            continue;
+          }
+          case 2: {
+            if (tag !== 17) {
+              break;
+            }
+
+            message.contextWindow = reader.double();
+            continue;
+          }
+          case 3: {
+            if (tag !== 25) {
+              break;
+            }
+
+            message.percent = reader.double();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<ContextUsageSnapshot>, I>>(base?: I): ContextUsageSnapshot {
+    return ContextUsageSnapshot.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ContextUsageSnapshot>, I>>(object: I): ContextUsageSnapshot {
+    const message = createBaseContextUsageSnapshot();
+    message.tokens = object.tokens ?? undefined;
+    message.contextWindow = object.contextWindow ?? undefined;
+    message.percent = object.percent ?? undefined;
+    return message;
+  },
+};
+
+function createBaseCompactReadiness(): CompactReadiness {
+  return { idle: false, hasPendingMessages: false, compactionActive: false, bridgePending: false };
+}
+
+export const CompactReadiness: MessageFns<CompactReadiness> = {
+  encode(message: CompactReadiness, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.idle !== false) {
+      writer.uint32(8).bool(message.idle);
+    }
+    if (message.hasPendingMessages !== false) {
+      writer.uint32(16).bool(message.hasPendingMessages);
+    }
+    if (message.compactionActive !== false) {
+      writer.uint32(24).bool(message.compactionActive);
+    }
+    if (message.bridgePending !== false) {
+      writer.uint32(32).bool(message.bridgePending);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): CompactReadiness {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseCompactReadiness();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.idle = reader.bool();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.hasPendingMessages = reader.bool();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.compactionActive = reader.bool();
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.bridgePending = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<CompactReadiness>, I>>(base?: I): CompactReadiness {
+    return CompactReadiness.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<CompactReadiness>, I>>(object: I): CompactReadiness {
+    const message = createBaseCompactReadiness();
+    message.idle = object.idle ?? false;
+    message.hasPendingMessages = object.hasPendingMessages ?? false;
+    message.compactionActive = object.compactionActive ?? false;
+    message.bridgePending = object.bridgePending ?? false;
     return message;
   },
 };
@@ -2322,6 +2697,178 @@ export const SetThinkingAck: MessageFns<SetThinkingAck> = {
     const message = createBaseSetThinkingAck();
     message.requestId = object.requestId ?? "";
     message.ok = object.ok ?? false;
+    message.reason = object.reason ?? "";
+    return message;
+  },
+};
+
+function createBaseCompactRequest(): CompactRequest {
+  return { requestId: "", expectedSessionId: "", expectedLeafId: "", expectedModel: undefined };
+}
+
+export const CompactRequest: MessageFns<CompactRequest> = {
+  encode(message: CompactRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.expectedSessionId !== "") {
+      writer.uint32(18).string(message.expectedSessionId);
+    }
+    if (message.expectedLeafId !== "") {
+      writer.uint32(26).string(message.expectedLeafId);
+    }
+    if (message.expectedModel !== undefined) {
+      ModelSnapshot.encode(message.expectedModel, writer.uint32(34).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): CompactRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseCompactRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.expectedSessionId = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.expectedLeafId = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.expectedModel = ModelSnapshot.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<CompactRequest>, I>>(base?: I): CompactRequest {
+    return CompactRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<CompactRequest>, I>>(object: I): CompactRequest {
+    const message = createBaseCompactRequest();
+    message.requestId = object.requestId ?? "";
+    message.expectedSessionId = object.expectedSessionId ?? "";
+    message.expectedLeafId = object.expectedLeafId ?? "";
+    message.expectedModel = (object.expectedModel !== undefined && object.expectedModel !== null)
+      ? ModelSnapshot.fromPartial(object.expectedModel)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseCompactResult(): CompactResult {
+  return { requestId: "", outcome: 0, reason: "" };
+}
+
+export const CompactResult: MessageFns<CompactResult> = {
+  encode(message: CompactResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.outcome !== 0) {
+      writer.uint32(16).int32(message.outcome);
+    }
+    if (message.reason !== "") {
+      writer.uint32(26).string(message.reason);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): CompactResult {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseCompactResult();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.outcome = reader.int32() as any;
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<CompactResult>, I>>(base?: I): CompactResult {
+    return CompactResult.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<CompactResult>, I>>(object: I): CompactResult {
+    const message = createBaseCompactResult();
+    message.requestId = object.requestId ?? "";
+    message.outcome = object.outcome ?? 0;
     message.reason = object.reason ?? "";
     return message;
   },

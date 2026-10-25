@@ -75,6 +75,14 @@ Runtime identity binds `(generation, runtime_id, session_id)`:
 | `pi.history.v1`   | On-demand live editor-history reads              |
 | `pi.models.v1`    | On-demand model list and switching               |
 | `pi.thinking.v1`  | On-demand thinking-level reads and setting       |
+| `pi.context.v1`   | Context usage telemetry in snapshots             |
+| `pi.compact.v1`   | Native compaction on explicit user action        |
+
+Context and compact negotiate independently on every Hello from
+checked public API availability: `pi.context.v1` needs
+`getContextUsage`; `pi.compact.v1` needs the
+`compact`/`isIdle`/`hasPendingMessages` trio. Either may be absent
+without disabling lifecycle, models, or history.
 
 ## History reads
 
@@ -136,6 +144,68 @@ drop, and timeout semantics match history reads; Phi surfaces list
 failures inside the picker and without the capability falls back to
 the native Pi picker.
 
+## Context telemetry
+
+`pi.context.v1` carries `ContextUsageSnapshot` (field 10) inside
+`StateSnapshot`: `tokens`, `context_window`, `percent`, each with
+explicit presence. Absent tokens/percent means the host reports
+unknown, never zero; the window stays present when known, including
+right after a compaction whose token count is still unknown. An
+explicit zero stays a present zero. Percent without a token count
+is rejected, as are nonfinite, negative, over-magnitude, or
+nonpositive-window fields. Sampling is event-driven — baseline and
+reconnect, completed assistant messages, settlement, model, session
+and tree changes, compaction outcome — never per token. Context-only
+updates use bounded nonfatal admission; the next authoritative
+snapshot carries the latest measurement when one cannot enter.
+
+Phi republishes telemetry in terminal HTTP views, attach snapshots,
+and `pi-bridge-state` frames under the same names:
+`context_tokens`, `context_window`, `context_percent`. Absent
+fields mean unknown. Consumers fence on generation and
+`telemetry_revision`; equal revisions compare the telemetry fields
+and conflicting equal revisions never refresh stale data.
+
+## Native Compact
+
+`pi.compact.v1` runs one native compaction per Pi process with no
+waiting queue, only on an explicit user action through the existing
+control. Phi sends `CompactRequest` (field 19) with a server-
+allocated monotonic decimal ID (opaque to browsers) and the
+expected session/leaf/model captured from the lease under the
+admission fence. Server admission needs a live peer, the negotiated
+capability, matching generation/publication stamps, and a snapshot
+showing an idle host with no queued messages, no active compaction,
+and no unresolved bridge work. Anything else is refused before
+start or unavailable, and the host is never invoked.
+
+The extension rechecks live identity, idleness, queued messages,
+and local compaction state immediately before invocation, and
+rejects duplicate or older IDs against a process high-water mark.
+Invocation uses the public `compact({ onComplete, onError })`
+without summary overrides. Only the completion callback
+establishes success. The extension answers `CompactResult`
+(field 22) echoing the ID verbatim with one terminal outcome —
+`COMPLETED`, `REFUSED`, `FAILED`, `CANCELLED`, `UNSPECIFIED` — and
+a fixed safe reason: empty, `duplicate`, `stale`, `busy`, `queued`,
+`compaction-active`, `pending`, `unavailable`, `cancelled`,
+`already-compacted`, `error`, or `uncertain`. Foreign reasons
+coerce to empty. Results with an empty, unknown, unsolicited,
+duplicate, or old-generation ID are dropped, never protocol
+errors.
+
+Uncertainty never replays. A caller wait that expires or aborts, a
+peer disconnect, or a runtime replacement leaves the process-owned
+operation unresolved: no second invocation starts while native work
+may still run, and reconnects never resend the request. A late
+callback releases only its matching operation. `UNSPECIFIED` keeps
+the latch on both sides. A new generation clears request state;
+unresolved native work still reports through the fresh authoritative
+readiness, and a pending-to-released readiness transition on the
+current runtime retires the record. After dispatch, an expired or
+interrupted wait reports unknown, never success and never a
+terminal-command retry.
+
 ## Lifecycle events
 
 The extension maps Pi events to bridge edges with a monotonic
@@ -181,6 +251,8 @@ model text.
 | Message                      | 256 KiB                    |
 | Send queue per peer          | 16 messages and 256 KiB    |
 | Pending history reads per peer | 4 (including awaiting replies) |
+| Pending compact per process    | 1, no waiting queue            |
+| Compact caller wait            | 120 s server, 125 s browser; expiry reports unknown |
 | Blocked send                 | 5 s, then the stream ends  |
 | Journal rows retained        | 64, then gap latches       |
 
@@ -219,6 +291,10 @@ Other failures retry with bounded backoff on the same generation.
   The reader also depends on a checked private `history` array, reached
   through the live TUI widget factory. An incompatible editor returns
   unavailable instead of changing Pi behavior.
+- Both pinned hosts expose the context and compact host APIs in print
+  and interactive modes: print runs advertise `pi.compact.v1`,
+  `pi.context.v1`, `pi.lifecycle.v1`, `pi.models.v1`; interactive runs
+  add `pi.history.v1`.
 - Other Pi versions and installed-release behavior with existing user
   profiles remain unverified.
 
