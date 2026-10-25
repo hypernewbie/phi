@@ -20,7 +20,12 @@ import {
     openExternalLink,
     resolveLowPowerEnabled,
     writeLowPowerLocal,
+    serverKey,
+    setEmbeddedBackend,
+    getEmbeddedProfileId,
+    getEmbeddedBackendOrigin,
 } from './util.js';
+import { BackendScope } from './backend-scope.js';
 import { SyncManager } from './sync.js';
 import { initQuotaButton } from './quota.js';
 import { bootstrapAccessAuth } from './auth.js';
@@ -34,6 +39,28 @@ markDesktopView();
 
 export class App {
     constructor() {
+        if (typeof window !== 'undefined' && window.location?.search) {
+            const params = new URLSearchParams(window.location.search);
+            const profileId = params.get('profile');
+            const origin = params.get('origin');
+            if (profileId) {
+                setEmbeddedBackend(profileId, origin || '');
+            }
+        }
+        this.scope = new BackendScope(
+            getEmbeddedProfileId() || '',
+            getEmbeddedBackendOrigin() || '',
+        );
+        this._initializedOnce = false;
+        this._switchSeq = 0;
+        this._switchChain = Promise.resolve(true);
+        if (typeof window !== 'undefined') {
+            window.__phiEmbed = {
+                switchTo: (id, origin = '') => this.switchToBackend(id, origin),
+                forget: (id) => this.forgetBackend(id),
+            };
+        }
+
         this.codersPresetRegistry = {};
         // Browser chrome state is independent from the in-app CPU logo state.
         // The TabManager toggles this only when live PTY output starts/stops.
@@ -75,29 +102,41 @@ export class App {
         // only show static blur), then re-apply on breakpoint crossings
         // (phone rotation, window resize).
         this.applyFastMode();
+
+        await this.revalidate(this.scope);
+
+        this.initOnce();
+    }
+
+    async revalidate(scope = this.scope) {
+        if (scope?.aborted) return;
+        const savedTheme =
+            localStorage.getItem(serverKey('phi_theme_color')) ||
+            localStorage.getItem('phi_theme_color');
+        if (savedTheme) {
+            this.applyAccentTheme(savedTheme);
+        }
+        await this.loadVersion(scope);
+        if (scope?.aborted) return;
+        await this.fetchCoderPresets(scope);
+        if (scope?.aborted) return;
+        await this.sessionsManager.loadConfig();
+        if (scope?.aborted) return;
+        await this.tabManager.restoreTabsState();
+        if (scope?.aborted) return;
+        this.startFleetPolling(scope);
+        this.syncManager?.startPolling?.(scope);
+    }
+
+    initOnce() {
+        if (this._initializedOnce) return;
+        this._initializedOnce = true;
+
         if (typeof window.matchMedia === 'function') {
             window
                 .matchMedia(COMPACT_VIEWPORT_QUERY)
                 .addEventListener('change', () => this.applyFastMode());
         }
-
-        // 0. Load version details
-        await this.loadVersion();
-
-        // 1. Fetch coder templates & presets from API
-        await this.fetchCoderPresets();
-
-        // 2. Load workspace selector and configurations FIRST. This
-        // resolves hostname_override before any tab socket opens —
-        // otherwise restored tabs use the page host and only newly
-        // created tabs pick up the override, so a config like
-        // `EUROPA:7070` works for the second tab but the first tab
-        // dials europa:7070 anyway because it was already up. Putting
-        // this ahead of restoreTabsState keeps every socket consistent.
-        await this.sessionsManager.loadConfig();
-
-        // 3. Restore tabs (sockets dial the resolved host).
-        await this.tabManager.restoreTabsState();
 
         // 4. Setup panel resize handles
         this.initResizers();
@@ -127,11 +166,6 @@ export class App {
 
         // 6.2 Listen for cross-window settings/theme sync (e.g. from standalone /config.html)
         this.initCrossWindowConfigSync();
-
-        // 6.5 Start fleet poller (plan §3.4). Polls every 15s while the
-        // sidebar is visible. Renders peer rows; hides panel when no
-        // peers configured. Cheap, no-ops when no fleet config.
-        this.startFleetPolling();
 
         // 7. Setup mobile sidebar drawer toggle
         const mobileSidebarToggle = document.getElementById(
@@ -644,6 +678,84 @@ export class App {
         console.log('[app] Phi initialized successfully');
     }
 
+    switchToBackend(profileId, origin = '') {
+        if (!profileId) return Promise.resolve(false);
+        const seq = ++this._switchSeq;
+        this.scope?.abort?.();
+        this._switchChain = this._switchChain
+            .catch(() => {})
+            .then(() => this._performSwitch(profileId, origin, seq));
+        return this._switchChain;
+    }
+
+    async _performSwitch(profileId, origin, seq) {
+        this.initOnce();
+        const prevProfileId = getEmbeddedProfileId();
+        this.scope?.abort?.();
+        if (this._fleetPollTimer) {
+            clearInterval(this._fleetPollTimer);
+            this._fleetPollTimer = null;
+        }
+        this.tabManager?.detachAll?.({
+            flushBackendId: prevProfileId || undefined,
+        });
+        document.querySelector('.settings-overlay')?.remove();
+        this.sessionsManager?.closeWorkspaceModal?.();
+        this.markdownManager?.closeModal?.();
+        this.markdownManager?.closeViewer?.();
+        this.markdownManager?.closeDiagModal?.();
+        this.kanbanManager?.cleanup?.();
+        document
+            .getElementById('sidebar-panel')
+            ?.classList.remove('drawer-open');
+        this.tabManager?._closeSelfHudNow?.();
+        setServerHostOverride('');
+        const fp = document.getElementById('fleet-panel');
+        if (fp) fp.style.display = 'none';
+
+        setEmbeddedBackend(profileId, origin || '');
+        if (typeof window !== 'undefined' && window.history?.replaceState) {
+            window.history.replaceState(
+                null,
+                '',
+                `?desktop=1&embedded=1&profile=${encodeURIComponent(profileId)}&origin=${encodeURIComponent(origin || '')}`,
+            );
+        }
+        const scope = new BackendScope(profileId, origin || '');
+        this.scope = scope;
+        if (seq !== this._switchSeq || scope.aborted) return true;
+
+        if (document.body) document.body.inert = true;
+        try {
+            await fetch('/__phi/active', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ profileId }),
+            });
+        } catch {} finally {
+            if (document.body) document.body.inert = false;
+        }
+        if (seq !== this._switchSeq || scope.aborted) return true;
+        await this.revalidate(scope);
+        return true;
+    }
+
+    forgetBackend(profileId) {
+        if (!profileId || typeof localStorage === 'undefined') return true;
+        const suffix = `:${profileId}`;
+        const keysToRemove = [];
+        for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && k.endsWith(suffix)) {
+                keysToRemove.push(k);
+            }
+        }
+        for (const k of keysToRemove) {
+            localStorage.removeItem(k);
+        }
+        return true;
+    }
+
     setupMobileGestures() {
         let touchStartX = 0;
         let touchStartY = 0;
@@ -722,12 +834,14 @@ export class App {
         );
     }
 
-    async fetchCoderPresets() {
+    async fetchCoderPresets(scope) {
+        if (scope?.aborted) return;
         // Share one validated registry load with SessionsManager rather
         // than fetching /api/coders twice. The terminal's preset row still
         // expects an object keyed by coder ID; never log private profile data.
         try {
             await loadCoderRegistry();
+            if (scope?.aborted) return;
             const coders = listCoders();
             this.codersPresetRegistry = Object.fromEntries(
                 coders.map((coder) => [coder.id, coder]),
@@ -737,6 +851,7 @@ export class App {
                 coders.map((coder) => coder.id),
             );
         } catch (e) {
+            if (e?.name === 'AbortError' || scope?.aborted) return;
             console.error('[app] Failed to fetch coder presets:', e);
         }
     }
@@ -1309,7 +1424,7 @@ export class App {
 
     applyAccentTheme(colorKey) {
         const theme = applyThemeTokens(colorKey);
-        localStorage.setItem('phi_theme_color', colorKey);
+        localStorage.setItem(serverKey('phi_theme_color'), colorKey);
 
         if (this.tabManager) {
             this.tabManager.applyThemeToAllActiveTerminals(theme.accent);
@@ -2801,8 +2916,14 @@ export class App {
     // client just renders the cached snapshot and skips HTTP round-trips
     // when the user isn't looking. This protects sleepy laptops from a
     // 2 GETs/15s/peer heartbeat (risk R9).
-    startFleetPolling() {
-        if (this._fleetPollTimer) return; // idempotent
+    startFleetPolling(scope = this.scope) {
+        if (this._fleetPollTimer && this._fleetPollScope === scope) return; // idempotent
+
+        if (this._fleetPollTimer) {
+            clearInterval(this._fleetPollTimer);
+            this._fleetPollTimer = null;
+        }
+        this._fleetPollScope = scope;
 
         const isSidebarVisible = () => {
             const sidebar = document.getElementById('sidebar-panel');
@@ -2811,19 +2932,29 @@ export class App {
         };
 
         const poll = async () => {
+            if (scope?.aborted) return;
             if (!isSidebarVisible()) return;
             try {
-                const res = await fetch('/api/peers/status');
+                const fetchFn =
+                    scope && typeof scope.fetch === 'function'
+                        ? (url, init) => scope.fetch(url, init)
+                        : fetch;
+                const res = await fetchFn('/api/peers/status');
+                if (scope?.aborted) return;
                 if (!res.ok) return;
                 const statuses = await res.json();
+                if (scope?.aborted) return;
                 this.renderFleetPanel(statuses);
             } catch (err) {
+                if (err?.name === 'AbortError' || scope?.aborted) return;
                 console.warn('[fleet] poll failed:', err);
             }
         };
 
         poll(); // immediate first poll
-        this._fleetPollTimer = setInterval(poll, 15000);
+        this._fleetPollTimer = scope?.interval
+            ? scope.interval(poll, 15000)
+            : setInterval(poll, 15000);
     }
 
     renderFleetPanel(statuses) {
@@ -2899,16 +3030,25 @@ export class App {
         }
     }
 
-    async loadVersion() {
+    async loadVersion(scope) {
         try {
-            const res = await fetch('/api/version');
+            const fetchFn =
+                scope && typeof scope.fetch === 'function'
+                    ? (url, init) => scope.fetch(url, init)
+                    : fetch;
+            const res = await fetchFn('/api/version');
+            if (scope?.aborted) return;
             if (res.ok) {
                 const data = await res.json();
+                if (scope?.aborted) return;
                 this.versionInfo = data;
                 // Pane IDs survive a server restart. Keep browser-local
                 // order, selection, and drafts for the restored live tabs.
                 if (data.started_at) {
-                    localStorage.setItem('phi_server_started_at', data.started_at);
+                    localStorage.setItem(
+                        serverKey('phi_server_started_at'),
+                        data.started_at,
+                    );
                 }
                 const changelogBtn =
                     document.getElementById('phi-changelog-btn');
@@ -2928,9 +3068,10 @@ export class App {
                 }
                 // Once we know the install method, kick off the update check
                 // (server-side throttled; this is just the UI hookup).
-                this.checkForUpdate();
+                this.checkForUpdate(scope);
             }
         } catch (err) {
+            if (err?.name === 'AbortError' || scope?.aborted) return;
             console.error('Failed to load version:', err);
         }
     }
@@ -2939,14 +3080,21 @@ export class App {
     // if update_available, adds a subtle dot to the version pill + stashes
     // the full status on this.updateStatus for the popup. Throttled by
     // the server (24h ticker + 6h floor) so this is cheap to call.
-    async checkForUpdate() {
+    async checkForUpdate(scope) {
         try {
-            const res = await fetch('/api/update/status');
+            const fetchFn =
+                scope && typeof scope.fetch === 'function'
+                    ? (url, init) => scope.fetch(url, init)
+                    : fetch;
+            const res = await fetchFn('/api/update/status');
+            if (scope?.aborted) return;
             if (!res.ok) return;
             const data = await res.json();
+            if (scope?.aborted) return;
             this.updateStatus = data;
             this.renderUpdateBadge(data);
         } catch (err) {
+            if (err?.name === 'AbortError' || scope?.aborted) return;
             console.warn('[update] check failed:', err);
         }
     }

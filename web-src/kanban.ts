@@ -6,6 +6,7 @@ import {
     extractVikunjaError,
     safeHexColor,
     toVikunjaId,
+    serverKey,
 } from './util.js';
 import {
     buildFeatures,
@@ -94,7 +95,7 @@ export class KanbanManager {
         const activeCWD = this.app.sessionsManager.activeCWD || '';
 
         // BUG-2 fix: mark the tab as open so restoreTabsState reopens it on reload.
-        localStorage.setItem('phi_kanban_open', '1');
+        localStorage.setItem(serverKey('phi_kanban_open'), '1');
 
         this.app.tabManager.createTab(
             paneId,
@@ -138,7 +139,7 @@ export class KanbanManager {
         this.selectedNoteId = null;
         this._notesEditorState = null;
         this.boardContainer = null;
-        localStorage.removeItem('phi_kanban_open');
+        localStorage.removeItem(serverKey('phi_kanban_open'));
     }
 
     async initTabContainer(
