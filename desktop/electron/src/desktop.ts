@@ -3198,8 +3198,13 @@ export class DesktopHost {
       void this.bootstrapStoredCredentials(accessAuth, generation);
       const sharedSession = session.defaultSession;
       this.installClipboardPermissions(sharedSession);
-      const embeddedSession = session.fromPartition(EMBEDDED_PARTITION);
-      this.installClipboardPermissions(embeddedSession);
+      const embeddedSession =
+        typeof session.fromPartition === 'function'
+          ? session.fromPartition(EMBEDDED_PARTITION)
+          : sharedSession;
+      if (embeddedSession !== sharedSession) {
+        this.installClipboardPermissions(embeddedSession);
+      }
 
       const transport = new EmbeddedTransport({
         embeddedDir: path.join(here, '..', 'embedded'),
