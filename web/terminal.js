@@ -6259,6 +6259,9 @@ export class TabManager {
         // No visible survivor remains. Leave the closing tabs recoverable in
         // the dropdown, but show the normal empty state during the grace.
         const tab = this.tabs.get(paneId);
+        // Soft-close keeps socket and bridge state alive for Undo, so revoke
+        // the pending Thinking operation or it still owns the restored context.
+        if (tab?.coder === 'pi') this._invalidatePiBridgeThinking(tab);
         tab?.tabEl?.classList.remove('active');
         tab?.termContainer?.classList.remove('active');
         this.activePaneId = null;
@@ -11890,6 +11893,9 @@ export class TabManager {
             this._piRpcThinkingPending = null;
         if (!this._piBridgeThinkingEligible(tab)) {
             this._invalidatePiBridgeThinking(tab);
+            // Direct mode returns from renderPresets before its button update,
+            // so repaint here or the native fallback stays disabled.
+            if (this.getActiveTab() === tab) this._updatePiThinkingButton();
             return;
         }
         if (this.getActiveTab() === tab) this._updatePiThinkingButton();

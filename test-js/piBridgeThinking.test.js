@@ -67,8 +67,9 @@ function thinkingTrigger(tm) {
 // Real switchTab navigation with the viewport/session glue stubbed out.
 function navHarness(first, second) {
     const { tm, tab } = harness(first);
-    tm.tabs.set(second.paneId, second);
-    for (const each of [first, second]) {
+    const all = second ? [first, second] : [first];
+    if (second) tm.tabs.set(second.paneId, second);
+    for (const each of all) {
         each.tabEl = document.createElement('div');
         each.tabEl.scrollIntoView = vi.fn();
         each.termContainer = document.createElement('div');
@@ -427,10 +428,69 @@ describe('Pi bridge Thinking controls', () => {
         await vi.waitFor(() =>
             expect(
                 [...dropup.querySelectorAll('.dropup-model-btn')].every(
-                    (button) => button.disabled,
+                    (button) => !button.disabled,
                 ),
-            ).toBe(false),
+            ).toBe(true),
         );
+    });
+
+    it('revokes a pending operation when the last tab is closed and undone', async () => {
+        const { tm, tab } = navHarness(bridgeTab());
+        tm._startSoftCloseCountdown = vi.fn();
+        tm.app.showToast.mockReturnValue(document.createElement('div'));
+        let failLevels;
+        let call = 0;
+        mockFetch(() => {
+            call++;
+            if (call === 1)
+                return new Promise((_resolve, reject) => {
+                    failLevels = () => reject(new Error('request timed out'));
+                });
+            return levelsResponse();
+        });
+        tm._updatePiThinkingButton();
+        tm.piThinkingBtn.click();
+        await vi.waitFor(() => expect(failLevels).toBeTypeOf('function'));
+
+        tm.softCloseTab('pi-pane-1');
+        expect(tm.activePaneId).toBeNull();
+        tm.undoCloseTab('pi-pane-1');
+        expect(tm.getActiveTab()).toBe(tab);
+        failLevels();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(tm.sendToTab).not.toHaveBeenCalled();
+        expect(
+            tm.app.showToast.mock.calls.filter(
+                ([, options]) => options?.type === 'error',
+            ),
+        ).toEqual([]);
+        clearTimeout(tab.softCloseTimer);
+    });
+
+    it('repaints the cycle button when the bridge drops in direct mode', async () => {
+        const { tm, tab } = harness(bridgeTab({ directMode: true }));
+        let failLevels;
+        mockFetch(
+            () =>
+                new Promise((_resolve, reject) => {
+                    failLevels = () => reject(new Error('request timed out'));
+                }),
+        );
+        tm._updatePiThinkingButton();
+        tm.piThinkingBtn.click();
+        await vi.waitFor(() => expect(failLevels).toBeTypeOf('function'));
+        expect(tm.piThinkingBtn.disabled).toBe(true);
+
+        tab.piBridge.state = 'plain';
+        tm._refreshPiBridgeThinking(tab);
+        expect(tm._piRpcThinkingPending).toBeNull();
+        expect(tm.piThinkingBtn.disabled).toBe(false);
+
+        failLevels();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(tm.sendToTab).not.toHaveBeenCalled();
+        tm.piThinkingBtn.click();
+        expect(tm.sendToTab).toHaveBeenCalled();
     });
 
     it('discards a list response after the tab model changes', async () => {
