@@ -243,17 +243,31 @@ export class SyncManager {
         }
     }
 
-    startPolling(): void {
-        if (this.pollInterval) clearInterval(this.pollInterval);
+    startPolling(scope?: any): void {
+        if (this.pollInterval) {
+            clearInterval(this.pollInterval);
+            this.pollInterval = null;
+        }
+
+        this._fileExistCache.clear();
+        this._handledToastKeys.clear();
 
         this.refreshMessages();
 
-        this.pollInterval = setInterval(() => {
+        const activeScope = scope || (this.app as any)?.scope;
+        const tick = () => {
+            if (activeScope?.aborted) return;
             const diffCtrl = this.app.diffController;
             if (diffCtrl?.isPanelOpen && diffCtrl.activeTab === 'sync') {
                 this.refreshMessages();
             }
-        }, 15000);
+        };
+
+        if (activeScope && typeof activeScope.interval === 'function') {
+            this.pollInterval = activeScope.interval(tick, 15000);
+        } else {
+            this.pollInterval = setInterval(tick, 15000);
+        }
     }
 
     async getCoordinatorUrl(): Promise<string> {

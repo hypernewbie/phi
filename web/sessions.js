@@ -1,5 +1,5 @@
 import { mountDirectoryTree, } from './path-picker.js';
-import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname, isCompactViewport, setServerHostOverride, } from './util.js';
+import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname, isCompactViewport, setServerHostOverride, serverKey, } from './util.js';
 import { openPiRpcChatTab } from './chat-pi/tab.js';
 import { createReviewTranscriptView } from './review-transcript.js';
 import { loadCoderRegistry, openCodePaneMode, visibleCoders, getCoder, hasTranscript, hasPiRpc, hasRename, isShell, renderLogo, RESERVED_CODER_IDS, } from './coders.js';
@@ -233,7 +233,7 @@ export class SessionsManager {
         // Workspace Toggle and Auto-Width Formatter
         this.workspaceSelect.addEventListener('change', () => {
             this.activeWorkspace = this.workspaceSelect.value;
-            localStorage.setItem('phi_last_chosen_project', this.activeWorkspace);
+            localStorage.setItem(serverKey('phi_last_chosen_project'), this.activeWorkspace);
             this.updateWorkspaceSelectWidth();
             this.loadWorktrees();
             // Refresh diff on current active worktree (which is updated inside loadWorktrees)
@@ -342,7 +342,7 @@ export class SessionsManager {
                 opt.title = ws;
                 this.workspaceSelect.appendChild(opt);
             });
-            const lastChosen = localStorage.getItem('phi_last_chosen_project');
+            const lastChosen = localStorage.getItem(serverKey('phi_last_chosen_project'));
             if (lastChosen && data.workspaces.includes(lastChosen)) {
                 this.activeWorkspace = lastChosen;
             }
@@ -570,7 +570,7 @@ export class SessionsManager {
                     }
                 }
             }
-            localStorage.setItem('phi_last_chosen_project', workspace);
+            localStorage.setItem(serverKey('phi_last_chosen_project'), workspace);
             // Append a faint "-- No workspace --" section for sessions with no cwd.
             // Only relevant for agy (others don't have unworkspaced sessions).
             // Rendered after real worktrees, collapsed by default.

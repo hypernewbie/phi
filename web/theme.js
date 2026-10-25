@@ -1,5 +1,7 @@
 /* Φ phi — Accent Theme & Prepaint Utilities */
 
+import { serverKey } from './util.js';
+
 export const ACCENT_COLORS = {
     purple: {
         accent: '#7c6af7',
@@ -228,7 +230,17 @@ export function applyPrepaintFavicon(accent, accentDim) {
 
 export function runPrepaint() {
     try {
-        const colorKey = localStorage.getItem('phi_theme_color') || 'purple';
+        const urlProfile =
+            typeof window !== 'undefined' && window.location?.search
+                ? new URLSearchParams(window.location.search).get('profile')
+                : null;
+        const scopedKey = urlProfile
+            ? `phi_theme_color:${urlProfile}`
+            : serverKey('phi_theme_color');
+        const colorKey =
+            localStorage.getItem(scopedKey) ||
+            localStorage.getItem('phi_theme_color') ||
+            'purple';
         const theme = applyThemeTokens(colorKey);
         applyPrepaintFavicon(theme.accent, theme.accentDim);
     } catch {

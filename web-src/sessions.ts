@@ -11,6 +11,7 @@ import {
     displayHostname,
     isCompactViewport,
     setServerHostOverride,
+    serverKey,
 } from './util.js';
 import { openPiRpcChatTab } from './chat-pi/tab.js';
 import { createReviewTranscriptView } from './review-transcript.js';
@@ -299,7 +300,7 @@ export class SessionsManager {
         this.workspaceSelect.addEventListener('change', () => {
             this.activeWorkspace = this.workspaceSelect.value;
             localStorage.setItem(
-                'phi_last_chosen_project',
+                serverKey('phi_last_chosen_project'),
                 this.activeWorkspace,
             );
             this.updateWorkspaceSelectWidth();
@@ -432,7 +433,7 @@ export class SessionsManager {
                 this.workspaceSelect.appendChild(opt);
             });
 
-            const lastChosen = localStorage.getItem('phi_last_chosen_project');
+            const lastChosen = localStorage.getItem(serverKey('phi_last_chosen_project'));
             if (lastChosen && data.workspaces.includes(lastChosen)) {
                 this.activeWorkspace = lastChosen;
             } else {
@@ -684,7 +685,7 @@ export class SessionsManager {
                 }
             }
 
-            localStorage.setItem('phi_last_chosen_project', workspace);
+            localStorage.setItem(serverKey('phi_last_chosen_project'), workspace);
 
             // Append a faint "-- No workspace --" section for sessions with no cwd.
             // Only relevant for agy (others don't have unworkspaced sessions).

@@ -1,4 +1,4 @@
-import { escapeHtml as escapeHtmlUtil, priorityMeta, isDoneBucket as bucketIsDone, extractVikunjaError, safeHexColor, toVikunjaId, } from './util.js';
+import { escapeHtml as escapeHtmlUtil, priorityMeta, isDoneBucket as bucketIsDone, extractVikunjaError, safeHexColor, toVikunjaId, serverKey, } from './util.js';
 import { buildFeatures, featureProgress, featureStats, featureTimeline, cumulativeTimeline, taskStats, } from './kanban-features.js';
 import { sanitizeHtml } from './md-render.js';
 export class KanbanManager {
@@ -64,7 +64,7 @@ export class KanbanManager {
         const activeWorkspace = this.app.sessionsManager.activeWorkspace || '';
         const activeCWD = this.app.sessionsManager.activeCWD || '';
         // BUG-2 fix: mark the tab as open so restoreTabsState reopens it on reload.
-        localStorage.setItem('phi_kanban_open', '1');
+        localStorage.setItem(serverKey('phi_kanban_open'), '1');
         this.app.tabManager.createTab(paneId, sessionId, title, coder, activeWorkspace, activeCWD);
         const tab = this.app.tabManager.tabs.get(paneId);
         if (!tab)
@@ -97,7 +97,7 @@ export class KanbanManager {
         this.selectedNoteId = null;
         this._notesEditorState = null;
         this.boardContainer = null;
-        localStorage.removeItem('phi_kanban_open');
+        localStorage.removeItem(serverKey('phi_kanban_open'));
     }
     async initTabContainer(container, isAutoRetry = false) {
         container.innerHTML = '';
