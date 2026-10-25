@@ -65,6 +65,8 @@ const WEB_JS_MODULES = [
   'prepaint.js',
   'file-viewer.js',
   'vscode.js',
+  'backend-scope.js',
+  'backend-store.js',
 ];
 
 /** Browser vendor subdirectory the module graph imports (auth.js imports

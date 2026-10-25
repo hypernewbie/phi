@@ -271,6 +271,7 @@ export class EmbeddedTransport {
     session: WebSocketBridgeSession,
     getEmbeddedWebContentsId: () => number | null,
   ): void {
+    if (typeof session?.webRequest?.onBeforeSendHeaders !== 'function') return;
     session.webRequest.onBeforeSendHeaders(
       { urls: ['ws://*/*', 'wss://*/*'] },
       (details, callback) => {
