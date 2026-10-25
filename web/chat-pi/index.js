@@ -82,6 +82,10 @@ function mergeState(status, state, canonical = false) {
             changed = true;
         }
     }
+    if (typeof source.title === 'string' && source.title.trim()) {
+        status.title = source.title;
+        changed = true;
+    }
     const strings = ['cwd', 'model', 'thinking'];
     // model and thinking are `omitempty` on the Go side, so a canonical
     // snapshot never carries them as empty strings and cannot re-add a value
@@ -240,6 +244,12 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
         const source = state;
         const canonical = isCanonicalState(state, sid);
         const statusChanged = mergeState(localStatus, state, canonical);
+        if (statusChanged &&
+            typeof localStatus.title === 'string' &&
+            localStatus.title &&
+            view.title.textContent !== localStatus.title) {
+            view.title.textContent = localStatus.title;
+        }
         let controlsChanged = statusChanged;
         if (source && typeof source === 'object') {
             if (typeof source.busy === 'boolean' && source.busy !== busy) {

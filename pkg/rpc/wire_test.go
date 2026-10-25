@@ -1013,10 +1013,17 @@ func TestSubagentFleetForwardsSnapshot(t *testing.T) {
 		t.Fatalf("first event must be messageEnd, got %+v", first)
 	}
 	second := nextWireEvent(t, sub)
-	if second.Evt != EvtSubagentFleet {
-		t.Fatalf("second event must be subagentFleet, got %+v", second)
+	if second.Evt != EvtStateChanged {
+		t.Fatalf("second event must publish the user turn's request fallback, got %+v", second)
 	}
-	raw, ok := second.Data.(json.RawMessage)
+	if state, ok := second.Data.(State); !ok || state.Title != "a" {
+		t.Fatalf("fallback title = %+v, want \"a\"", second.Data)
+	}
+	third := nextWireEvent(t, sub)
+	if third.Evt != EvtSubagentFleet {
+		t.Fatalf("third event must be subagentFleet, got %+v", third)
+	}
+	raw, ok := third.Data.(json.RawMessage)
 	if !ok {
 		t.Fatalf("subagentFleet data type = %T, want json.RawMessage", second.Data)
 	}
@@ -1189,6 +1196,11 @@ func TestStateTransactionResetBoundaryKeepsLaterMessage(t *testing.T) {
 	}
 	if event := nextWireEvent(t, sub); event.Evt != EvtMessageEnd {
 		t.Fatalf("a message accepted after the boundary was not published: %+v", event)
+	}
+	// The reset cleared the sources, so the later user turn publishes its own
+	// fallback title. Nothing else may follow it.
+	if event := nextWireEvent(t, sub); event.Evt != EvtStateChanged {
+		t.Fatalf("a user turn after reset must publish its fallback title: %+v", event)
 	}
 	select {
 	case event := <-sub.Channel():

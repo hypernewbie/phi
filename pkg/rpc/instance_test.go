@@ -586,16 +586,16 @@ func TestStateTransactionTitleAfterExit(t *testing.T) {
 	i := &Instance{ID: "exited", Title: "before", subs: newSubscriberSet()}
 	i.initState(State{Title: "before", Status: "live"})
 	i.OnExit("test")
-	i.SetTitle("late rename")
+	i.SetNativeName("late rename")
 	if got := i.TitleCopy(); got != "before" {
-		t.Fatalf("late SetTitle changed retained title: %q", got)
+		t.Fatalf("late SetNativeName changed retained title: %q", got)
 	}
 	state := i.StateCopy()
 	if state.Title != "before" || state.Status != "exited" {
-		t.Fatalf("late SetTitle changed exited State: %+v", state)
+		t.Fatalf("late SetNativeName changed exited State: %+v", state)
 	}
 	if snapshot := i.SnapshotCopy(); snapshot.LastSeq != 1 {
-		t.Fatalf("late SetTitle published after exit: snapshot=%+v", snapshot)
+		t.Fatalf("late SetNativeName published after exit: snapshot=%+v", snapshot)
 	}
 }
 
@@ -614,7 +614,7 @@ func TestStateTransactionConcurrentExitIsTerminal(t *testing.T) {
 	for _, title := range titles {
 		go func(title string) {
 			<-start
-			i.SetTitle(title)
+			i.SetNativeName(title)
 			returned <- struct{}{}
 		}(title)
 	}
@@ -671,7 +671,7 @@ func TestStateTransactionConcurrentExitIsTerminal(t *testing.T) {
 	}) {
 		t.Fatal("state transaction was accepted after exit")
 	}
-	i.SetTitle("revived")
+	i.SetNativeName("revived")
 	if after := i.SnapshotCopy().LastSeq; after != sequence {
 		t.Fatalf("a late transaction published after exit: %d came after %d", after, sequence)
 	}
