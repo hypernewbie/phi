@@ -168,6 +168,14 @@ function desktopCompact(tm) {
     );
 }
 
+// Every Compact toast that reports an unknown outcome, so a lifecycle
+// test can prove exactly-once reporting rather than a bare call.
+function compactUnknownToasts(tm) {
+    return tm.app.showToast.mock.calls.filter(
+        ([message]) => message === 'Compaction outcome unknown',
+    );
+}
+
 function slashDropup() {
     let dropup = document.getElementById('slash-presets-dropup');
     if (!dropup) {
@@ -965,6 +973,44 @@ describe('native compact dispatch', () => {
         }
     });
 
+    it('renders every allowed reason word and drops the rest', async () => {
+        const reasons = [
+            'duplicate',
+            'stale',
+            'busy',
+            'queued',
+            'compaction-active',
+            'pending',
+            'unavailable',
+            'cancelled',
+            'already-compacted',
+            'error',
+            'uncertain',
+        ];
+        let index = 0;
+        for (const reason of reasons) {
+            document.body.innerHTML = '';
+            mockFetch(() => ({
+                ok: false,
+                status: 502,
+                json: { outcome: 'failed', reason },
+            }));
+            const tm = makeTm();
+            const tab = makePiTab(`pi-reason-${index++}`);
+            tm.tabs.set(tab.paneId, tab);
+            tm.activePaneId = tab.paneId;
+            baseline(tm, tab);
+            tm.sendSlashCommand(tab, '/compact');
+            await vi.waitFor(() =>
+                expect(tm.app.showToast).toHaveBeenCalledWith(
+                    `Compaction failed: ${reason}`,
+                    { type: 'error', title: 'Compact' },
+                ),
+            );
+            vi.unstubAllGlobals();
+        }
+    });
+
     it('drops rogue reason text instead of rendering provider errors', async () => {
         mockFetch(() => ({
             ok: false,
@@ -1371,9 +1417,7 @@ describe('stale replies and finalizers', () => {
         first.resolve({
             ok: true,
             status: 200,
-            headers: { get: () => 'application/json' },
-            json: async () => ({ outcome: 'completed' }),
-            text: async () => '{}',
+            json: { outcome: 'completed' },
         });
         await vi.advanceTimersByTimeAsync(10);
         // The late first reply changes nothing about the second op.
@@ -1383,9 +1427,7 @@ describe('stale replies and finalizers', () => {
         second.resolve({
             ok: true,
             status: 200,
-            headers: { get: () => 'application/json' },
-            json: async () => ({ outcome: 'completed' }),
-            text: async () => '{}',
+            json: { outcome: 'completed' },
         });
         await vi.advanceTimersByTimeAsync(10);
         expect(tm.app.showToast).toHaveBeenCalledTimes(2);
@@ -1424,6 +1466,7 @@ describe('socket close and pane disposal lifecycle', () => {
             'Compaction outcome unknown',
             { type: 'error', title: 'Compact' },
         );
+        expect(compactUnknownToasts(tm)).toHaveLength(1);
     });
 
     it('reports unknown once when a restart socket closes', async () => {
@@ -1455,31 +1498,45 @@ describe('socket close and pane disposal lifecycle', () => {
             'Compaction outcome unknown',
             { type: 'error', title: 'Compact' },
         );
+        expect(compactUnknownToasts(tm)).toHaveLength(1);
     });
 
-    it('drops the pending op when the pane is disposed', async () => {
-        const gate = deferred();
-        mockFetch(() => gate.promise);
+    it('reports unknown once when the initial socket disconnects', () => {
+        mockFetch(() => deferred().promise);
         const tm = makeTm();
-        const tab = makePiTab('pi-1', {
-            ws: { sendInput: vi.fn(() => true), close: vi.fn() },
-        });
+        const tab = makePiTab();
         tm.tabs.set(tab.paneId, tab);
         tm.activePaneId = tab.paneId;
         baseline(tm, tab);
         tm.sendSlashCommand(tab, '/compact');
-        const op = tm._piBridgeCompactPending.get(tab.paneId);
-        expect(op).toBeTruthy();
+        expect(tm._piBridgeCompactPending.has(tab.paneId)).toBe(true);
 
-        tm.disposeTabClient(tab.paneId);
-        // The waiter is pane-keyed, so disposal must retire it: a later
-        // tab on the same pane id may not inherit it.
+        tm._handleTerminalDisconnect(tab);
         expect(tm._piBridgeCompactPending.has(tab.paneId)).toBe(false);
-        expect(op.controller.signal.aborted).toBe(true);
+        expect(compactUnknownToasts(tm)).toHaveLength(1);
 
-        const reused = makePiTab('pi-1');
-        tm.tabs.set('pi-1', reused);
-        tm.activePaneId = 'pi-1';
+        // A repeated close (socket plus pane death) reports nothing new.
+        tm._handleTerminalDisconnect(tab);
+        expect(compactUnknownToasts(tm)).toHaveLength(1);
+    });
+
+    it('reports unknown once when a PTY exit orphans the pending op', async () => {
+        const gate = deferred();
+        mockFetch(() => gate.promise);
+        const tm = makeTm();
+        const tab = makePiTab();
+        tm.tabs.set(tab.paneId, tab);
+        tm.activePaneId = tab.paneId;
+        baseline(tm, tab);
+        tm.sendSlashCommand(tab, '/compact');
+        expect(tm._piBridgeCompactPending.has(tab.paneId)).toBe(true);
+
+        tm.handleControlMessage(tab, { type: 'pty-exited', code: 0 }, tab.ws);
+        expect(tm._piBridgeCompactPending.has(tab.paneId)).toBe(false);
+        expect(compactUnknownToasts(tm)).toHaveLength(1);
+
+        // The disconnect and the late HTTP reply that follow add none.
+        tm._handleTerminalDisconnect(tab);
         gate.resolve({
             ok: true,
             status: 200,
@@ -1488,8 +1545,69 @@ describe('socket close and pane disposal lifecycle', () => {
             text: async () => '{}',
         });
         await new Promise((resolve) => setTimeout(resolve, 0));
-        expect(tm.app.showToast).not.toHaveBeenCalled();
+        expect(compactUnknownToasts(tm)).toHaveLength(1);
+        expect(tab.ws.sendInput).not.toHaveBeenCalled();
+    });
+
+    it('does not leak a pending op into a reused pane id after a close', async () => {
+        const first = deferred();
+        const second = deferred();
+        let compacts = 0;
+        mockFetch((url) => {
+            if (!String(url).includes('/api/pi-bridge/compact'))
+                return { json: {} };
+            return compacts++ === 0 ? first.promise : second.promise;
+        });
+        const tm = makeTm();
+        const tab = makePiTab('pi-1', {
+            ws: { sendInput: vi.fn(() => true), close: vi.fn() },
+        });
+        tm.tabs.set(tab.paneId, tab);
+        tm.activePaneId = tab.paneId;
+        baseline(tm, tab);
+        tm.sendSlashCommand(tab, '/compact');
+        const op = tm._piBridgeCompactPending.get('pi-1');
+        expect(op).toBeTruthy();
+
+        // Real close path: finalizeCloseTab -> DELETE + disposeTabClient.
+        tm.finalizeCloseTab('pi-1');
         expect(tm._piBridgeCompactPending.has('pi-1')).toBe(false);
+        expect(op.controller.signal.aborted).toBe(true);
+
+        // The pane id comes back (a backend switch to A and back) and
+        // must be usable immediately, not wedged behind the dead op.
+        const reused = makePiTab('pi-1', {
+            ws: { sendInput: vi.fn(() => true), close: vi.fn() },
+        });
+        tm.tabs.set('pi-1', reused);
+        tm.activePaneId = 'pi-1';
+        baseline(tm, reused);
+        expect(desktopCompact(tm).disabled).toBe(false);
+        expect(tm.sendSlashCommand(reused, '/compact')).toBe(true);
+        expect(compacts).toBe(2);
+
+        // The stale reply settles nothing: no toast, no cleared op.
+        first.resolve({
+            ok: true,
+            status: 200,
+            json: { outcome: 'completed' },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(tm._piBridgeCompactPending.has('pi-1')).toBe(true);
+        expect(tm.app.showToast).not.toHaveBeenCalled();
+        expect(reused.ws.sendInput).not.toHaveBeenCalled();
+
+        second.resolve({
+            ok: true,
+            status: 200,
+            json: { outcome: 'completed' },
+        });
+        await vi.waitFor(() =>
+            expect(tm.app.showToast).toHaveBeenCalledWith(
+                'Compaction complete',
+                { type: 'success', title: 'Compact' },
+            ),
+        );
     });
 });
 

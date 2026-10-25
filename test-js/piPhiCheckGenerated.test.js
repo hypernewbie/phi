@@ -91,6 +91,21 @@ describe('pi-phi generated drift comparison', () => {
             'only in worktree: stray.ts',
         ]);
     });
+
+    it('fails a generated root that is itself a symlink', () => {
+        const base = mkdtempSync(join(tmpdir(), 'phi-gen-check-'));
+        owned.push(base);
+        const real = join(base, 'real');
+        mkdirSync(real);
+        writeFileSync(join(real, 'bridge.ts'), 'v1');
+        const linked = join(base, 'gen');
+        symlinkSync(real, linked);
+        // Read through the link the file set looks identical to the
+        // regeneration, so the root entry itself must carry the drift.
+        expect(diffSnapshots(snapshotTree(linked), snapshotTree(real))).toEqual(
+            ['only after regeneration: bridge.ts', 'only in worktree: .'],
+        );
+    });
 });
 
 // Canonical bytes stand in for buf's deterministic generation. The

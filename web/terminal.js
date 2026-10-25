@@ -8758,8 +8758,10 @@ export class TabManager {
             // An exit revokes point-of-use eligibility: hide the meter
             // and restore the legacy Compact controls on this tab.
             this._refreshPiBridgeModels(tabInfo);
-            // An exit also orphans the pending native Compact waiter.
-            this._invalidatePiBridgeCompact?.(tabInfo);
+            // An exit also orphans the pending native Compact waiter:
+            // like any other interrupted wait it reports unknown once
+            // (PROTOCOL.md), never a silent drop and never a retry.
+            this._invalidatePiBridgeCompact?.(tabInfo, true);
         } else if (control.type === 'replay-complete') {
             // An empty replay still ends here, so drop the pending reset or
             // the next live byte would clear the terminal underneath the user.

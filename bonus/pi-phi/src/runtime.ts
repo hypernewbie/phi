@@ -305,8 +305,12 @@ function mapCompactError(error: unknown): {
         // and the regex below must never receive a non-string.
         message = String(error instanceof Error ? error.message : error);
         // An aborted host work is a cancellation even when its message
-        // never says so (AbortError's default text is "aborted").
-        aborted = error instanceof Error && error.name === 'AbortError';
+        // never says so (Node's abort text is "aborted"). The name is
+        // read without an instanceof test so a plain or foreign-realm
+        // abort shape classifies the same way.
+        aborted =
+            String((error as { name?: unknown } | null)?.name ?? '') ===
+            'AbortError';
     } catch {
         message = '';
     }

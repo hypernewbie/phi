@@ -2343,6 +2343,77 @@ describe('Runtime compact dispatch', () => {
         rt.shutdown();
     });
 
+    it('classifies abort shapes by name, not by message', async () => {
+        const cases: Array<{
+            label: string;
+            error: unknown;
+            outcome: CompactOutcome;
+            reason: string;
+        }> = [
+            {
+                label: 'DOMException AbortError',
+                error: new DOMException(
+                    'This operation was aborted',
+                    'AbortError',
+                ),
+                outcome: CompactOutcome.COMPACT_OUTCOME_CANCELLED,
+                reason: 'cancelled',
+            },
+            {
+                label: 'plain abort shape',
+                error: {
+                    name: 'AbortError',
+                    message: 'This operation was aborted',
+                },
+                outcome: CompactOutcome.COMPACT_OUTCOME_CANCELLED,
+                reason: 'cancelled',
+            },
+            {
+                label: 'cancel text only',
+                error: new Error('Compaction cancelled'),
+                outcome: CompactOutcome.COMPACT_OUTCOME_CANCELLED,
+                reason: 'cancelled',
+            },
+            {
+                // Abort wording without the name stays a failure: a
+                // provider error may say "aborted" too.
+                label: 'abort text without the name',
+                error: new Error('stream aborted'),
+                outcome: CompactOutcome.COMPACT_OUTCOME_FAILED,
+                reason: 'error',
+            },
+            {
+                label: 'hostile name getter',
+                error: Object.defineProperty({}, 'name', {
+                    get() {
+                        throw new Error('nope');
+                    },
+                }),
+                outcome: CompactOutcome.COMPACT_OUTCOME_FAILED,
+                reason: 'error',
+            },
+        ];
+        for (const testCase of cases) {
+            const { ch, rt, calls } = await startedCompact();
+            ch.hooks!.onMessage(compactRequest('1'));
+            expect(calls).toHaveLength(1);
+            // The host type promises Error; hostile shapes still reach
+            // this callback at runtime, which is the point of the table.
+            calls[0]!.onError(testCase.error as Error);
+            expect([testCase.label, results(ch)]).toEqual([
+                testCase.label,
+                [
+                    {
+                        requestId: '1',
+                        outcome: testCase.outcome,
+                        reason: testCase.reason,
+                    },
+                ],
+            ]);
+            rt.shutdown();
+        }
+    });
+
     it('refuses when the host is busy', async () => {
         const { ch, rt, latch, calls } = await startedCompact({
             isIdle: () => false,

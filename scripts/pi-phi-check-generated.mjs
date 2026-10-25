@@ -5,7 +5,13 @@
 // never Git status, so consistent uncommitted outputs pass. Importing
 // this module is side-effect free; the check runs only when executed.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import {
+    lstatSync,
+    mkdtempSync,
+    readFileSync,
+    readdirSync,
+    rmSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +26,17 @@ const GEN_DIRS = ['internal/pibridge/pb', 'bonus/pi-phi/src/gen'];
  */
 export function snapshotTree(dir) {
     const out = new Map();
+    try {
+        // A root that is itself a symlink (or any non-directory) would
+        // otherwise be followed silently: readdirSync resolves it, so a
+        // regenerated real tree would compare as identical.
+        if (!lstatSync(dir).isDirectory()) {
+            out.set('.', Buffer.from('<non-regular entry>'));
+            return out;
+        }
+    } catch {
+        return out;
+    }
     const walk = (abs, rel) => {
         let entries;
         try {

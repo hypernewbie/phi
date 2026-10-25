@@ -28257,7 +28257,7 @@ function mapCompactError(error) {
   let aborted = false;
   try {
     message = String(error instanceof Error ? error.message : error);
-    aborted = error instanceof Error && error.name === "AbortError";
+    aborted = String(error?.name ?? "") === "AbortError";
   } catch {
     message = "";
   }
