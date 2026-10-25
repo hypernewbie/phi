@@ -13,7 +13,7 @@ import {
     type Accepted,
     AgentSettled,
     AgentStarted,
-    CompactOutcome,
+    type CompactOutcome,
     type CompactRequest,
     CompactResult,
     IntegrationClient,
