@@ -6,7 +6,13 @@
  * `/__phi/active` profile switching, `/__phi/compat` compatibility probing,
  * and the scoped WebSocket origin/cookie header bridge.
  */
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import { readSetCookieHeaders } from './access-auth.js';
 
@@ -21,6 +27,8 @@ const COMPAT_CACHE_TTL_MS = 10 * 60 * 1000;
 const COMPAT_NEGATIVE_TTL_MS = 60 * 1000;
 /** The access-auth session cookie the phi server issues. */
 const ACCESS_SESSION_COOKIE = 'phi_access_session';
+/** How long a proxied request waits for an in-flight unlock. */
+const AUTH_WAIT_CAP_MS = 3_000;
 export const EMBEDDED_PARTITION = 'persist:phi-embedded';
 
 export interface EmbeddedProfile {
@@ -33,6 +41,8 @@ export interface EmbeddedTransportOptions {
   resolveProfile: (id: string) => EmbeddedProfile | null;
   listProfiles?: () => ReadonlyArray<EmbeddedProfile>;
   fetchImpl?: typeof fetch;
+  /** Optional path for the persisted server-capability cache. */
+  compatCachePath?: string;
 }
 
 export interface WebRequestFilter {
@@ -141,12 +151,126 @@ export class EmbeddedTransport {
     string,
     { compatible: boolean; at: number }
   >();
+  /** Where the capability answers are persisted between sessions. */
+  private readonly compatCachePath?: string;
+  /** In-flight access-auth attempts, keyed by canonical origin. */
+  private readonly pendingAuth = new Map<
+    string,
+    { done: Promise<void>; release: () => void; holders: number }
+  >();
 
   constructor(options: EmbeddedTransportOptions) {
     this.embeddedDir = path.resolve(options.embeddedDir);
     this.resolveProfile = options.resolveProfile;
     this.listProfiles = options.listProfiles;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
+    this.compatCachePath = options.compatCachePath;
+    this.loadPersistedCompat();
+  }
+
+  /**
+   * Loads the persisted capability answers. Only POSITIVE answers are
+   * kept: a server that speaks the current API keeps speaking it, so the
+   * probe never has to run again. A negative answer is never persisted
+   * (the server may be upgraded at any time).
+   */
+  private loadPersistedCompat(): void {
+    if (!this.compatCachePath) return;
+    try {
+      const raw = JSON.parse(
+        readFileSync(this.compatCachePath, 'utf8'),
+      ) as Record<string, unknown> | null;
+      if (!raw || typeof raw !== 'object') return;
+      for (const [origin, value] of Object.entries(raw)) {
+        if (!origin || value !== '1') continue;
+        const profile = this.findProfileByOrigin(origin);
+        if (!profile) continue;
+        this.compatCache.set(profile.id, {
+          compatible: true,
+          at: Date.now(),
+        });
+      }
+    } catch {
+      /* no cache, or an unreadable one: probe normally */
+    }
+  }
+
+  /**
+   * Marks an access-auth attempt as in flight for an origin. Requests for
+   * that origin wait for it instead of racing it: the embedded page asks
+   * the server whether it is protected as its FIRST call, and answering
+   * "yes, and you are not logged in" before the desktop has finished its
+   * own unlock made the page show a password prompt the user had already
+   * answered elsewhere.
+   */
+  beginAuth(origin: string): void {
+    const key = this.authKey(origin);
+    if (!key) return;
+    const existing = this.pendingAuth.get(key);
+    if (existing) {
+      // A second unlock for the same origin joins the first one.
+      existing.holders += 1;
+      return;
+    }
+    let release!: () => void;
+    const done = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.pendingAuth.set(key, { done, release, holders: 1 });
+  }
+
+  /** Ends an in-flight access-auth attempt and lets waiting requests go. */
+  endAuth(origin: string): void {
+    const key = this.authKey(origin);
+    if (!key) return;
+    const pending = this.pendingAuth.get(key);
+    if (!pending) return;
+    pending.holders -= 1;
+    if (pending.holders > 0) return;
+    this.pendingAuth.delete(key);
+    pending.release();
+  }
+
+  /** Waits (briefly) for an in-flight unlock of this origin to finish. */
+  private async waitForAuth(origin: string): Promise<void> {
+    const key = this.authKey(origin);
+    if (!key) return;
+    const pending = this.pendingAuth.get(key);
+    if (!pending) return;
+    // Bounded: a stuck unlock must never wedge the page.
+    await Promise.race([
+      pending.done,
+      new Promise<void>((resolve) => setTimeout(resolve, AUTH_WAIT_CAP_MS)),
+    ]);
+  }
+
+  private authKey(origin: string): string {
+    try {
+      return new URL(origin).origin;
+    } catch {
+      return '';
+    }
+  }
+
+  /** Persists a positive capability answer for next time. */
+  private persistCompat(profile: EmbeddedProfile): void {
+    if (!this.compatCachePath) return;
+    let next: Record<string, unknown> = {};
+    try {
+      const raw = JSON.parse(
+        readFileSync(this.compatCachePath, 'utf8'),
+      ) as Record<string, unknown> | null;
+      if (raw && typeof raw === 'object') next = raw;
+    } catch {
+      /* no cache yet: start from an empty one */
+    }
+    next[profile.origin] = '1';
+    try {
+      mkdirSync(path.dirname(this.compatCachePath), { recursive: true });
+      writeFileSync(this.compatCachePath, JSON.stringify(next), 'utf8');
+    } catch {
+      /* best effort: the in-memory cache still works */
+    }
   }
 
   getActiveProfileId(): string | null {
@@ -184,6 +308,7 @@ export class EmbeddedTransport {
 
     const compatible = await this.probeCompatibility(profile);
     this.compatCache.set(profileId, { compatible, at: Date.now() });
+    if (compatible) this.persistCompat(profile);
     return compatible;
   }
 
@@ -201,6 +326,7 @@ export class EmbeddedTransport {
       const res = await this.fetchImpl(versionUrl.toString(), {
         method: 'GET',
         headers,
+        signal: AbortSignal.timeout(4000),
       });
 
       // Locked behind access-auth: stay in embedded mode so normal auth flow handles it.
@@ -208,14 +334,24 @@ export class EmbeddedTransport {
         return true;
       }
 
-      // If res.ok (200), check data?.api === '1'.
-      // If it is 200 but doesn't have api === '1', it is an older incompatible server.
+      // If res.ok (200), check the api marker.
       if (res.ok) {
         try {
           const data = (await res.json()) as { api?: unknown };
-          return data?.api === '1';
+          // A server that does not advertise the marker PREDATES it: the
+          // embedded page is the same web app the server itself serves, so
+          // it works against that server. Only a server that advertises a
+          // DIFFERENT api version is incompatible.
+          //
+          // Treating "no marker" as incompatible was expensive: the
+          // fallback loads the server's own page, and in single-tab mode
+          // that is a FULL page load on every switch. With a handful of
+          // servers that is fine; with ten it made every switch crawl.
+          if (typeof data?.api !== 'string') return true;
+          return data.api === '1';
         } catch {
-          return false;
+          // A body we cannot read is not evidence of incompatibility.
+          return true;
         }
       }
 
@@ -683,6 +819,11 @@ export class EmbeddedTransport {
         },
       );
     }
+
+    // An unlock for this origin may be in flight. Let it finish before
+    // answering, so the page never sees "not authenticated" for a server
+    // the desktop is authenticating right now.
+    await this.waitForAuth(profile.origin);
 
     const rawUrl = typeof req.url === 'string' ? req.url : '';
     const qIdx = rawUrl.indexOf('?');

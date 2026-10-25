@@ -863,11 +863,19 @@ describe('embedded-transport', () => {
             Accept: 'application/json',
             Cookie: 'phi_session=secret123',
           },
+          // The probe never hangs: an unreachable server must not stall a
+          // switch.
+          signal: expect.anything(),
         },
       );
     });
 
-    it('returns false when /api/version returns 200 without api: "1"', async () => {
+    it('returns true when /api/version has no api marker (a server from before the marker)', async () => {
+      // The marker only exists on servers built after the embedded
+      // transport. An older server still serves the same web app, so the
+      // embedded page works against it. Falling back to the server's own
+      // page costs a FULL page load on every switch, which made a fleet
+      // of servers crawl.
       mockFetch.mockResolvedValueOnce(
         new Response(JSON.stringify({ version: '0.23.0' }), {
           status: 200,
@@ -876,7 +884,7 @@ describe('embedded-transport', () => {
       );
 
       const compatible = await transport.checkCompatibility('prof1');
-      expect(compatible).toBe(false);
+      expect(compatible).toBe(true);
     });
 
     it('returns false when /api/version returns 200 with different api version', async () => {
@@ -891,7 +899,8 @@ describe('embedded-transport', () => {
       expect(compatible).toBe(false);
     });
 
-    it('returns false when /api/version returns 200 with non-JSON body', async () => {
+    it('returns true when /api/version returns 200 with a body it cannot read', async () => {
+      // An unreadable body is not evidence of incompatibility.
       mockFetch.mockResolvedValueOnce(
         new Response('not-json', {
           status: 200,
@@ -899,7 +908,7 @@ describe('embedded-transport', () => {
       );
 
       const compatible = await transport.checkCompatibility('prof1');
-      expect(compatible).toBe(false);
+      expect(compatible).toBe(true);
     });
 
     it('returns true when /api/version returns 401 (auth-locked server)', async () => {
@@ -944,6 +953,37 @@ describe('embedded-transport', () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
+    it('persists a positive answer and reuses it in a new session', async () => {
+      const compatPath = path.join(tempDir, 'api-compat.json');
+      mockFetch.mockResolvedValue(
+        new Response(JSON.stringify({ api: '1' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      const first = new EmbeddedTransport({
+        embeddedDir: tempDir,
+        resolveProfile: (id) => profiles.get(id) ?? null,
+        listProfiles: () => Array.from(profiles.values()),
+        fetchImpl: mockFetch as unknown as typeof fetch,
+        compatCachePath: compatPath,
+      });
+      expect(await first.checkCompatibility('prof1')).toBe(true);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      // A new session (new transport) must not probe again.
+      const second = new EmbeddedTransport({
+        embeddedDir: tempDir,
+        resolveProfile: (id) => profiles.get(id) ?? null,
+        listProfiles: () => Array.from(profiles.values()),
+        fetchImpl: mockFetch as unknown as typeof fetch,
+        compatCachePath: compatPath,
+      });
+      expect(await second.checkCompatibility('prof1')).toBe(true);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
     it('probes each profile separately', async () => {
       mockFetch.mockResolvedValue(
         new Response(JSON.stringify({ api: '1' }), {
@@ -955,6 +995,69 @@ describe('embedded-transport', () => {
       await transport.checkCompatibility('prof1');
       await transport.checkCompatibility('prof2');
       expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('in-flight unlock barrier', () => {
+    it('holds proxied requests while an unlock is in flight', async () => {
+      // The upstream answers with a session cookie once the unlock lands.
+      mockFetch.mockImplementation(async () => {
+        await new Promise((r) => setTimeout(r, 30));
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+      transport.beginAuth('http://127.0.0.1:8080');
+      const pending = transport.handleRequest(
+        new Request('phi-app://app/api/config', {
+          headers: { 'X-Phi-Backend': 'prof1' },
+        }),
+      );
+
+      // The request must not have been proxied yet.
+      expect(mockFetch).not.toHaveBeenCalled();
+
+      transport.endAuth('http://127.0.0.1:8080');
+      const res = await pending;
+      expect(res.status).toBe(200);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not hold requests for a different origin', async () => {
+      mockFetch.mockResolvedValue(
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      transport.beginAuth('https://backend2.example.com:8443');
+      const res = await transport.handleRequest(
+        new Request('phi-app://app/api/config', {
+          headers: { 'X-Phi-Backend': 'prof1' },
+        }),
+      );
+      expect(res.status).toBe(200);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('releases waiters when the unlock ends', async () => {
+      mockFetch.mockResolvedValue(
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+      transport.beginAuth('http://127.0.0.1:8080/');
+      transport.endAuth('http://127.0.0.1:8080');
+      const res = await transport.handleRequest(
+        new Request('phi-app://app/api/config', {
+          headers: { 'X-Phi-Backend': 'prof1' },
+        }),
+      );
+      expect(res.status).toBe(200);
     });
   });
 
