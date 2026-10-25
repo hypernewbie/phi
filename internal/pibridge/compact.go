@@ -63,6 +63,11 @@ func (e *CompactUnknown) Error() string {
 // native work may still run. Only a matching terminal host result, a
 // confirmed pending-to-released readiness transition, a new runtime
 // generation, or lease revoke releases it.
+//
+// shortcut: a request whose send was admitted but never reached the
+// host (peer died before the writer flushed it) leaves no pending
+// evidence to reconcile, so the pane reports pending until Pi restarts.
+// Upgrade only with a host-side acknowledgement for admission.
 type compactOp struct {
 	id string
 	// ch carries the terminal result to the waiter exactly once. It

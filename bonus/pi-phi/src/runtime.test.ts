@@ -3044,6 +3044,77 @@ describe('Runtime compact dispatch', () => {
         rt.shutdown();
     });
 
+    it('bounds the post-event readiness refresh attempts', async () => {
+        // The ladder exists for a compaction with no callback. It must
+        // publish once on busy-to-idle, then stop; a busy host must not
+        // be resampled forever.
+        let cleared = false;
+        let idleReads = 0;
+        const view = () =>
+            telemetryCtx({
+                isIdle: () => {
+                    idleReads += 1;
+                    return cleared;
+                },
+            });
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            makeChannel: wired(ch),
+        });
+        const published = () =>
+            ch.nonfatalSends.filter(
+                (m) => payloadOf(m).$case === 'stateSnapshot',
+            ).length;
+        rt.start(view());
+        await sleep(10);
+        rt.onCompactEnd(view());
+        // Still busy at the first attempt: no publish yet.
+        await sleep(60);
+        expect(published()).toBe(0);
+        cleared = true;
+        await sleep(200);
+        expect(published()).toBe(1);
+        const readsAfterFlip = idleReads;
+        await sleep(500);
+        expect(published()).toBe(1);
+        expect(idleReads).toBe(readsAfterFlip);
+        rt.shutdown();
+
+        // A host that never clears manual-compaction state stops after
+        // the bounded attempts instead of resampling forever.
+        const ch2 = mockChannel();
+        let reads2 = 0;
+        const busyView = () =>
+            telemetryCtx({
+                isIdle: () => {
+                    reads2 += 1;
+                    return false;
+                },
+            });
+        const rt2 = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            makeChannel: wired(ch2),
+        });
+        rt2.start(busyView());
+        await sleep(10);
+        rt2.onCompactEnd(busyView());
+        await sleep(900);
+        const readsAtCap = reads2;
+        await sleep(400);
+        expect(reads2).toBe(readsAtCap);
+        expect(
+            ch2.nonfatalSends.filter(
+                (m) => payloadOf(m).$case === 'stateSnapshot',
+            ),
+        ).toHaveLength(0);
+        rt2.shutdown();
+    });
+
     it('reports bridge pending in readiness while unresolved', async () => {
         const { ch, rt, calls } = await startedCompact();
         ch.hooks!.onMessage(compactRequest('1'));

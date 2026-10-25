@@ -246,6 +246,47 @@ function piBridgeCapable(tab, capability) {
     );
 }
 
+// piBridgeCompactReady is the one readiness predicate behind both the
+// Compact control and the dispatch guard, so an enabled button and a
+// dispatched request can never disagree. The reason is the control's
+// title when it is not ready.
+function piBridgeCompactReady(view) {
+    const known =
+        typeof view?.generation === 'string' &&
+        view.generation !== '' &&
+        typeof view?.telemetry_revision === 'string' &&
+        view.telemetry_revision !== '' &&
+        typeof view?.compact_idle === 'boolean' &&
+        typeof view?.compact_queued === 'boolean' &&
+        typeof view?.compact_active === 'boolean' &&
+        typeof view?.compact_pending === 'boolean';
+    if (!known)
+        return {
+            ready: false,
+            reason: 'Compact unavailable: unknown Pi state',
+        };
+    // A sampled idle flag does not override a logically running
+    // runtime; an unknown (absent) running flag stays ready.
+    if (view.compact_idle !== true || view.running === true)
+        return { ready: false, reason: 'Compact unavailable: Pi is busy' };
+    if (view.compact_queued === true)
+        return {
+            ready: false,
+            reason: 'Compact unavailable: messages queued',
+        };
+    if (view.compact_active === true)
+        return {
+            ready: false,
+            reason: 'Compact unavailable: compaction active',
+        };
+    if (view.compact_pending === true)
+        return {
+            ready: false,
+            reason: 'Compact unavailable: compaction pending',
+        };
+    return { ready: true, reason: 'Compact via bridge' };
+}
+
 // piBridgeEqualRevAgrees compares the retained publication fields:
 // an equal revision must agree on identity and telemetry, while
 // connected alone may flip to propagate peer-down. Lifecycle fields
@@ -8242,21 +8283,8 @@ export class TabManager {
         // click while one is pending is swallowed, never replayed.
         if (this._piBridgeCompactPending?.get(paneId)) return true;
         const view = tabInfo.piBridge;
-        const stampsValid =
-            typeof view?.generation === 'string' &&
-            view.generation !== '' &&
-            typeof view?.telemetry_revision === 'string' &&
-            view.telemetry_revision !== '';
-        const ready =
-            view?.compact_idle === true &&
-            view?.compact_queued === false &&
-            view?.compact_active === false &&
-            view?.compact_pending === false &&
-            // A sampled idle flag does not override a logically
-            // running runtime; an unknown (absent) running stays ready.
-            view?.running !== true;
         // Eligible but busy or unknown: send NEITHER api nor PTY.
-        if (!stampsValid || !ready) return true;
+        if (!piBridgeCompactReady(view).ready) return true;
         const controller = new AbortController();
         const op = {
             tab: tabInfo,
@@ -12321,12 +12349,16 @@ export class TabManager {
         return piBridgeCapable(tab, capability);
     }
 
+
+    // Point-of-use capability checks read the module predicate
+    // directly, so renders and the ordered-view refresh key cannot
+    // disagree about a pane's capabilities.
     _piBridgeContextEligible(tab) {
-        return this._piBridgeCapable(tab, 'pi.context.v1');
+        return piBridgeCapable(tab, 'pi.context.v1');
     }
 
     _piBridgeCompactEligible(tab) {
-        return this._piBridgeCapable(tab, 'pi.compact.v1');
+        return piBridgeCapable(tab, 'pi.compact.v1');
     }
 
     // _piBridgeStatusFor adapts bridge context telemetry into the
@@ -12363,39 +12395,8 @@ export class TabManager {
             return { disabled: false, title: '' };
         if (this._piBridgeCompactPending?.get(tab.paneId))
             return { disabled: true, title: 'Compacting…' };
-        const view = tab.piBridge;
-        const known =
-            typeof view?.compact_idle === 'boolean' &&
-            typeof view?.compact_queued === 'boolean' &&
-            typeof view?.compact_active === 'boolean' &&
-            typeof view?.compact_pending === 'boolean' &&
-            typeof view?.generation === 'string' &&
-            view.generation !== '' &&
-            typeof view?.telemetry_revision === 'string' &&
-            view.telemetry_revision !== '';
-        if (!known)
-            return {
-                disabled: true,
-                title: 'Compact unavailable: unknown Pi state',
-            };
-        if (view.compact_idle !== true || view.running === true)
-            return { disabled: true, title: 'Compact unavailable: Pi is busy' };
-        if (view.compact_queued === true)
-            return {
-                disabled: true,
-                title: 'Compact unavailable: messages queued',
-            };
-        if (view.compact_active === true)
-            return {
-                disabled: true,
-                title: 'Compact unavailable: compaction active',
-            };
-        if (view.compact_pending === true)
-            return {
-                disabled: true,
-                title: 'Compact unavailable: compaction pending',
-            };
-        return { disabled: false, title: 'Compact via bridge' };
+        const { ready, reason } = piBridgeCompactReady(tab.piBridge);
+        return { disabled: !ready, title: reason };
     }
 
     // Socket changes and bridge views share the same row/bar
