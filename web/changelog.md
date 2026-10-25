@@ -21,6 +21,10 @@ All notable changes to phi are documented here. Newest versions first.
 - **Development assets from disk** (`3930d747`). A `--web=DIR` flag serves fresh assets without restarting the server.
 
 ### Fixed
+- **Servers stay on the embedded page** (`f05c1510`). A server built before the embedded transport existed did not advertise the API marker, so the desktop loaded that server's own page on every switch — a full page load (app, styles, forty modules) each time. Four switches went from ~200 requests to none.
+- **Typing the password takes** (`edfca1af`). The embedded page serves every server from one page, so each server overwrote the previous one's stored credential and the next server asked for the password again. Credentials are now kept per server, the page's re-login addresses the server it is showing, and the unlock finds the page that belongs to it.
+- **Every server keeps its cache** (`e5f88614`). The page's per-server cache held eight servers and dropped the oldest beyond that, so with more servers online the cache appeared to run out. It now holds 32.
+- **Restored tabs point at the right workspace** (`9831926c`). The workspace configuration now lands before the terminals are restored, so a tab comes back in the directory it was left in.
 - **Server switching no longer waits for the server** (`d0f87755`). The switch resolves on the cached paint and the refresh runs behind it. Measured on a 410 ms remote link: 2.9 s to about 60 ms.
 - **No more repeated sign-in prompts** (`d0f87755`). The main process and the embedded page now share one access-auth session, so unlocking a server authenticates the page's proxied requests too, and the stored credentials are replayed for every server at once at startup.
 - **Server capability probe cached** (`d0f87755`). The per-server API probe is remembered and all servers are probed in parallel at startup, so the first flip to a server is as fast as the rest.
