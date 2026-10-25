@@ -1,10 +1,13 @@
 package rpc
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"strings"
 	"time"
+
+	"github.com/hypernewbie/phi/pkg/session"
 )
 
 // piEvent is the shape of every pi stdout line (subset).
@@ -25,9 +28,18 @@ type getStateMetadata struct {
 	state          State
 	sessionFile    string
 	sessionFileSet bool
+	// nativeName is Pi's current session name, trimmed. An empty value covers a
+	// missing, null, or blank field.
+	nativeName string
 }
 
 func parseGetState(data json.RawMessage, current State) (getStateMetadata, bool) {
+	// A JSON null or any non-object unmarshals into a zero struct without an
+	// error, so reject it here: only a real object may seed the native name.
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return getStateMetadata{}, false
+	}
 	var value struct {
 		Model *struct {
 			Name string `json:"name"`
@@ -39,11 +51,16 @@ func parseGetState(data json.RawMessage, current State) (getStateMetadata, bool)
 		PendingMessageCount *int    `json:"pendingMessageCount"`
 		SessionFile         *string `json:"sessionFile"`
 		SessionID           *string `json:"sessionId"`
+		SessionName         *string `json:"sessionName"`
 	}
 	if err := json.Unmarshal(data, &value); err != nil {
 		return getStateMetadata{}, false
 	}
 	st := current
+	var nativeName string
+	if value.SessionName != nil {
+		nativeName = strings.TrimSpace(*value.SessionName)
+	}
 	if value.Model != nil {
 		if value.Model.Name != "" {
 			st.Model = value.Model.Name
@@ -76,9 +93,10 @@ func parseGetState(data json.RawMessage, current State) (getStateMetadata, bool)
 			state:          st,
 			sessionFile:    *value.SessionFile,
 			sessionFileSet: true,
+			nativeName:     nativeName,
 		}, true
 	}
-	return getStateMetadata{state: st}, true
+	return getStateMetadata{state: st, nativeName: nativeName}, true
 }
 
 func mergeStatsMetadata(inst *Instance, resp piResponse) bool {
@@ -152,6 +170,21 @@ func applyPiMetadata(inst *Instance, resp piResponse) getStateMetadata {
 			}
 			*state = parsed.state
 			metadata = parsed
+			// Initialization-only hydration: the first valid snapshot seeds the
+			// native name. Later snapshots update ordinary metadata only, so a
+			// stale one cannot restore a name Pi already cleared, and a stale
+			// seed persists until the next native event.
+			//
+			// shortcut: a name changed outside Phi's control gate can land after
+			// a newer native event; upgrade when upstream serializes JSONL
+			// commands in rpc-mode.js handleInputLine.
+			inst.applyTitleLocked(state, func(src *titleSources) {
+				if src.seeded {
+					return
+				}
+				src.nativeName = parsed.nativeName
+				src.seeded = true
+			})
 			return true
 		})
 		return metadata
@@ -275,6 +308,34 @@ func (m *Manager) handlePiEvent(inst *Instance, line []byte, ev piEvent) {
 		}
 		// Data carries the authoritative message (rpc.md: message_end.message).
 		inst.Emit(EvtMessageEnd, &msg, map[string]any{"message": ev.Message})
+		// A user turn can fill an empty fallback once, after the authoritative
+		// message publication. Later turns cannot replace a useful fallback.
+		if probe.Role == "user" {
+			if title := session.PiPromptTitle(probe.Content); title != "" {
+				inst.updateState(func(state *State) bool {
+					return inst.applyTitleLocked(state, func(src *titleSources) {
+						if src.promptTitle == "" {
+							src.promptTitle = title
+						}
+					})
+				})
+			}
+		}
+	case "session_info_changed":
+		// Pi emits the native name before the matching command response. A
+		// missing or null name is Pi's explicit clear; a malformed one changes
+		// neither the name nor the seeded flag.
+		var info struct {
+			Name *string `json:"name"`
+		}
+		if err := json.Unmarshal(line, &info); err != nil {
+			return
+		}
+		if info.Name == nil {
+			inst.SetNativeName("")
+			return
+		}
+		inst.SetNativeName(strings.TrimSpace(*info.Name))
 	case "response":
 		var resp piResponse
 		if err := json.Unmarshal(line, &resp); err != nil || resp.ID == "" {

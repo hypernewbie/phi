@@ -154,7 +154,8 @@ type Instance struct {
 	sessionPath   string
 	sessionPathMu sync.RWMutex
 
-	titleMu sync.RWMutex
+	titleMu  sync.RWMutex
+	titleSrc titleSources
 
 	exitOnce sync.Once
 	exitHook func()
@@ -254,10 +255,16 @@ func (i *Instance) commitReset() bool {
 	if i.state.Status == "exited" {
 		return false
 	}
-	if i.state.SessionPath != "" {
-		next := cloneState(i.state)
-		next.SessionPath = ""
-		i.state = next
+	next := cloneState(i.state)
+	changed := next.SessionPath != ""
+	next.SessionPath = ""
+	if i.applyTitleLocked(&next, func(src *titleSources) {
+		*src = titleSources{seeded: true}
+	}) {
+		changed = true
+	}
+	if changed {
+		i.state = cloneState(next)
 		i.publishLocked(EvtStateChanged, nil, cloneState(i.state), false)
 	}
 	i.publishLocked(EvtTranscriptReset, nil, nil, true)
@@ -327,15 +334,34 @@ func (i *Instance) TitleCopy() string {
 	return i.Title
 }
 
-// SetTitle updates both retained titles and publishes their state atomically.
-func (i *Instance) SetTitle(title string) {
+// SetNativeName records a native name observed on the RPC read loop and
+// publishes the resolved title. An empty name means Pi cleared it, so the
+// request fallback, then the generic label, takes over.
+func (i *Instance) SetNativeName(name string) {
 	i.updateState(func(state *State) bool {
-		i.titleMu.Lock()
-		i.Title = title
-		i.titleMu.Unlock()
-		state.Title = title
-		return true
+		return i.applyTitleLocked(state, func(src *titleSources) {
+			src.nativeName = name
+			src.seeded = true
+		})
 	})
+}
+
+// applyTitleLocked mutates the guarded title sources and writes the resolved
+// title to both mirrors. It returns true only when the displayed title changed,
+// so an equal repeat publishes nothing. Callers hold eventMu through an
+// updateState or commitReset callback, which keeps the eventMu -> titleMu order.
+func (i *Instance) applyTitleLocked(state *State, change func(*titleSources)) bool {
+	i.titleMu.Lock()
+	change(&i.titleSrc)
+	resolved := i.titleSrc.resolve(i.Cwd)
+	changed := i.Title != resolved
+	i.Title = resolved
+	i.titleMu.Unlock()
+	if !changed {
+		return false
+	}
+	state.Title = resolved
+	return true
 }
 
 // PromptWriteGeneration returns the generation of ordinary prompt writes.

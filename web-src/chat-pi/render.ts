@@ -6,6 +6,9 @@ import { extractToolCallId } from './message-buffer.js';
 
 export interface PiRpcStatus {
     cwd: string;
+    /** Resolved backend title: native Pi session name, request fallback, or
+     * the generic label. Empty or absent never clears a known title. */
+    title?: string | null;
     model?: string | null;
     thinking?: string | null;
     inputTokens?: number | null;
