@@ -1378,11 +1378,11 @@ export class TabManager {
                 ) {
                     // Empty input can defer the PTY arrow until the read.
                     e.preventDefault();
-                    this._fetchPiRecall(recallDir, inputTab, e.key);
+                    this._fetchPiRecall(inputTab, e.key);
                     return;
                 } else if (recallDir === 'older') {
                     // Do not suppress a native caret move we cannot replay.
-                    this._fetchPiRecall(recallDir, inputTab, null);
+                    this._fetchPiRecall(inputTab, null);
                 }
             }
             if (
@@ -11257,7 +11257,7 @@ export class TabManager {
     }
 
     // Empty input defers a PTY arrow; nonempty input keeps native movement.
-    async _fetchPiRecall(direction, tab, deferKey) {
+    async _fetchPiRecall(tab, deferKey) {
         this._resetPiRecall({ flush: true });
         const controller = new AbortController();
         const recall = {
@@ -11298,14 +11298,10 @@ export class TabManager {
                 return;
             }
             clearTimeout(recall.pending.timer);
-            const deferred = recall.pending.deferKey;
             recall.pending = undefined;
             recall.cache = body.entries;
-            if (!this._cyclePiRecallCached(direction)) {
-                // A fresh Down has no cache position to advance from.
-                recall.pending = { controller, deferKey: deferred };
-                fail();
-            }
+            // A fetched snapshot always has a newest entry to land on.
+            this._cyclePiRecallCached('older');
         } catch {
             fail();
         }
