@@ -417,12 +417,14 @@ describe('src/desktop.ts (step-5 controller receiver + global hotkey)', () => {
     expect(desktopSource).toContain('ctrl.add(raw)');
     expect(desktopSource).toContain('ctrl.setActive(profile.id)');
     // The primary's own launch loop routes server payloads to the helper;
-    // deep links keep the forward channel.
+    // deep links keep the forward channel. The forward goes to the rail
+    // view, because the rail owns the server selection.
     expect(desktopSource).toContain("payload.kind === 'server'");
     expect(desktopSource).toContain('activateServerUrl(payload.value)');
     expect(desktopSource).toContain(
-      'win.webContents.send(FORWARD_CHANNEL, payload)',
+      'this.railView?.webContents ?? win.webContents',
     );
+    expect(desktopSource).toContain('target.send(FORWARD_CHANNEL, payload)');
   });
 
   it('registers the global hotkey after the tray and unregisters every registration on before-quit', () => {
@@ -1866,6 +1868,17 @@ describe('electron-builder.json (native branding)', () => {
       files?: string[];
     };
     expect(builder.files).toContain('assets/**');
+  });
+
+  it('marks the bundle singleton so macOS never starts a second process', () => {
+    // A second process makes the Dock log a second recent app entry for
+    // the bundle, so the app shows up twice in the Dock.
+    const builder = JSON.parse(
+      readFileSync(path.join(here, '..', 'electron-builder.json'), 'utf8'),
+    ) as {
+      mac?: { extendInfo?: Record<string, unknown> };
+    };
+    expect(builder.mac?.extendInfo?.LSMultipleInstancesProhibited).toBe(true);
   });
 
   it('points win.icon at the generated 256px icon asset without adding build targets', () => {

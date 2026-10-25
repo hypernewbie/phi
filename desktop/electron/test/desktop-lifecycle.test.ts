@@ -268,6 +268,19 @@ const primary = {
   installListener: vi.fn(),
 };
 
+/**
+ * The rail view owns the server selection, so a launch forward lands
+ * there and not on the main window page.
+ */
+function railSent(host: unknown): unknown[][] {
+  const rail = (
+    host as {
+      railView: { webContents: { sent: unknown[][] } } | null;
+    }
+  ).railView;
+  return rail?.webContents.sent ?? [];
+}
+
 describe('DesktopHost fake-Electron lifecycle', () => {
   let temp = '';
   let originalFetch: typeof fetch;
@@ -480,7 +493,7 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     );
     const second = fake.FakeBrowserWindow.instances[2];
     expect(second).toBeDefined();
-    expect(second.webContents.sent).not.toContainEqual([
+    expect(railSent(host)).not.toContainEqual([
       FORWARD_CHANNEL,
       { kind: 'deep-link', value: 'phi://profile/new' },
     ]);
@@ -496,7 +509,7 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     const profileViewsBefore = (host as unknown as { profileViews: unknown })
       .profileViews;
     const railViewBefore = (host as unknown as { railView: unknown }).railView;
-    const sentBeforeLate = second.webContents.sent.length;
+    const sentBeforeLate = railSent(host).length;
     const firstSentBefore = first.webContents.sent.length;
     first.finishClose();
     host.handleLaunch([{ kind: 'deep-link', value: 'phi://profile/late' }]);
@@ -513,8 +526,8 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     // And the replacement still receives the subsequent launch payload
     // (without the stale-closed guard the dispose would nullify profileViews
     // and drainLaunchPayloads would no-op).
-    expect(second.webContents.sent.length).toBeGreaterThan(sentBeforeLate);
-    expect(second.webContents.sent).toContainEqual([
+    expect(railSent(host).length).toBeGreaterThan(sentBeforeLate);
+    expect(railSent(host)).toContainEqual([
       FORWARD_CHANNEL,
       { kind: 'deep-link', value: 'phi://profile/late' },
     ]);
@@ -606,14 +619,14 @@ describe('DesktopHost fake-Electron lifecycle', () => {
 
     const second = fake.FakeBrowserWindow.instances[1];
     expect(second).toBeDefined();
-    expect(second.webContents.sent).not.toContainEqual([
+    expect(railSent(host)).not.toContainEqual([
       FORWARD_CHANNEL,
       { kind: 'deep-link', value: 'phi://profile/new' },
     ]);
 
     second.webContents.emit('did-finish-load');
     await flush();
-    expect(second.webContents.sent).toContainEqual([
+    expect(railSent(host)).toContainEqual([
       FORWARD_CHANNEL,
       { kind: 'deep-link', value: 'phi://profile/new' },
     ]);
@@ -623,7 +636,7 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     // Server activation runs before the following deep-link delivery in the
     // queued payload order; the controller's active id is the direct server
     // side effect and the renderer receives the deep link only afterward.
-    const deepLinkPush = second.webContents.sent.findIndex(
+    const deepLinkPush = railSent(host).findIndex(
       ([channel, payload]) =>
         channel === FORWARD_CHANNEL &&
         (payload as { value?: string }).value === 'phi://profile/new',

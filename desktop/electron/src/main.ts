@@ -176,6 +176,18 @@ if (!singleInstance.primary) {
   singleInstance.acquire(bootArgs.positional);
 }
 
+// The bundle sets LSMultipleInstancesProhibited, so macOS never starts a
+// second process for this app. A phi:// link opened while the app runs
+// arrives here instead of as a second launch. Register before the app
+// is ready: macOS sends the link as soon as it launches the app.
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  const parsed = parseDeepLink(url);
+  if (parsed.ok) {
+    host.handleLaunch([{ kind: 'deep-link', value: url }]);
+  }
+});
+
 // Renderer-encountered phi:// strings come back to the main process on
 // 'phi:deeplink'; they are parsed and dispatched to every window on the
 // same channel.

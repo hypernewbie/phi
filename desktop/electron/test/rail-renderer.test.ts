@@ -323,6 +323,49 @@ describe('renderer module (src/renderer.ts)', () => {
       delete (window as { electron?: unknown }).electron;
     }
   });
+
+  it('a forwarded deep link selects the profile it names', () => {
+    const stateCbs: Array<(state: RailState) => void> = [];
+    const forwards: Array<(payload: { kind: string; value: string }) => void> =
+      [];
+    const selected: string[] = [];
+    (
+      window as {
+        electron?: {
+          onRailState(cb: (state: RailState) => void): () => void;
+          onForwardPayload(
+            cb: (payload: { kind: string; value: string }) => void,
+          ): () => void;
+          postSelectProfile(id: string): void;
+        };
+      }
+    ).electron = {
+      onRailState: (cb) => {
+        stateCbs.push(cb);
+        return () => {};
+      },
+      onForwardPayload: (cb) => {
+        forwards.push(cb);
+        return () => {};
+      },
+      postSelectProfile: (id) => selected.push(id),
+    };
+    try {
+      withPage(htmlSource, () => {
+        boot();
+        expect(forwards).toHaveLength(1);
+        forwards[0]({ kind: 'deep-link', value: 'phi://profile/nix-7070' });
+        expect(selected).toEqual(['nix-7070']);
+        // A server payload and a link without a profile change nothing.
+        forwards[0]({ kind: 'server', value: 'http://charon:7070' });
+        forwards[0]({ kind: 'deep-link', value: 'phi://profile' });
+        forwards[0]({ kind: 'deep-link', value: 'not a link' });
+        expect(selected).toEqual(['nix-7070']);
+      });
+    } finally {
+      delete (window as { electron?: unknown }).electron;
+    }
+  });
 });
 
 describe('rail identity and accent (src/renderer.ts)', () => {

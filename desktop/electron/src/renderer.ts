@@ -1,4 +1,5 @@
 import type { RailProfile, RailState } from './electron.js';
+import { parseDeepLink } from './deeplink.js';
 
 /** Uppercased observed hostname with .local, scheme and explicit port stripped (IPv6 colons kept). */
 export function canonicalHostname(raw: string): string {
@@ -341,6 +342,17 @@ export function boot(): void {
   window.electron.onRailState(render);
   if (typeof window.electron.onRailShortcuts === 'function') {
     window.electron.onRailShortcuts(setShortcutHints);
+  }
+  // A phi:// deep link, or a second launch that carried a URL, lands
+  // here. The shell owns the server selection, so the link selects the
+  // profile it names.
+  if (typeof window.electron.onForwardPayload === 'function') {
+    window.electron.onForwardPayload((payload) => {
+      if (payload?.kind !== 'deep-link') return;
+      const link = parseDeepLink(payload.value);
+      if (!link.ok || link.kind !== 'profile' || !link.profileId) return;
+      window.electron.postSelectProfile(link.profileId);
+    });
   }
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Control') setShortcutHints(true);
