@@ -64,6 +64,36 @@ function thinkingTrigger(tm) {
     return tm.presetsContainer.querySelector('.pi-rpc-thinking-trigger');
 }
 
+// Real switchTab navigation with the viewport/session glue stubbed out.
+function navHarness(first, second) {
+    const { tm, tab } = harness(first);
+    tm.tabs.set(second.paneId, second);
+    for (const each of [first, second]) {
+        each.tabEl = document.createElement('div');
+        each.tabEl.scrollIntoView = vi.fn();
+        each.termContainer = document.createElement('div');
+    }
+    tm.getActiveTab = vi.fn(() => tm.tabs.get(tm.activePaneId));
+    tm._closePiRpcDropups = vi.fn();
+    tm._resetPiRecall = vi.fn();
+    tm.saveTabDraft = vi.fn();
+    tm._setPiRpcActionVisibility = vi.fn();
+    tm.renderPiRpcStatusBar = vi.fn();
+    tm.updateDirectModeUI = vi.fn();
+    tm._renderAttachmentStrip = vi.fn();
+    tm.adjustInputHeight = vi.fn();
+    tm.updateDocumentTitle = vi.fn();
+    tm.saveTabsState = vi.fn();
+    tm.activateTabViewport = vi.fn();
+    tm._syncProjectForTab = vi.fn(() => true);
+    tm.inputBarContainer = document.createElement('div');
+    tm.stagedAttachments = [];
+    tm.lastInputValue = '';
+    return { tm, tab };
+}
+
+const otherTab = () => bridgeTab({ paneId: 'pi-pane-2' });
+
 const levelsResponse = (over = {}) => ({
     levels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
     provider: 'a',
@@ -282,11 +312,125 @@ describe('Pi bridge Thinking controls', () => {
 
         tab.piBridge.generation = '10';
         tm._refreshPiBridgeModels(tab);
+        // The context looks valid again (a reconnect can restore the same
+        // numbers), so only the revoked owner keeps the stale ack inert.
+        tab.piBridge.generation = '9';
+        tm._refreshPiBridgeModels(tab);
+        // Finish inside the setter's 1s deadline so the ack really arrives.
         finishSet();
-        await Promise.resolve();
-        await Promise.resolve();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(dropup.classList.contains('hidden')).toBe(false);
+        expect(tm._piRpcThinkingPending).toBeNull();
         expect(tab.piBridge.thinking_level).toBe('high');
         expect(tm.app.showToast).not.toHaveBeenCalled();
+    });
+
+    it('revokes a pending operation when the user navigates away and back', async () => {
+        const { tm, tab } = navHarness(bridgeTab(), otherTab());
+        let failLevels;
+        let call = 0;
+        mockFetch(() => {
+            call++;
+            if (call === 1)
+                return new Promise((_resolve, reject) => {
+                    failLevels = () => reject(new Error('request timed out'));
+                });
+            return levelsResponse();
+        });
+        tm._updatePiThinkingButton();
+        tm.piThinkingBtn.click();
+        await vi.waitFor(() => expect(failLevels).toBeTypeOf('function'));
+
+        tm.switchTab('pi-pane-2');
+        tm.switchTab('pi-pane-1');
+        expect(tm.getActiveTab()).toBe(tab);
+        failLevels();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(tm.sendToTab).not.toHaveBeenCalled();
+        expect(tm.app.showToast).not.toHaveBeenCalled();
+    });
+
+    it('revokes a pending setter when the user navigates away', async () => {
+        const { tm } = navHarness(bridgeTab(), otherTab());
+        let finishSet;
+        mockFetch((_url, options) =>
+            options?.method === 'POST'
+                ? new Promise((resolve) => {
+                      finishSet = () =>
+                          resolve({ ok: true, json: { ok: true, reason: '' } });
+                  })
+                : levelsResponse(),
+        );
+        tm.renderPresets('pi');
+        thinkingTrigger(tm).click();
+        const dropup = document.getElementById('pi-rpc-thinking-dropup');
+        await vi.waitFor(() =>
+            expect(
+                [...dropup.querySelectorAll('.dropup-model-btn')].map(
+                    (button) => button.textContent,
+                ),
+            ).toContain('max'),
+        );
+        [...dropup.querySelectorAll('.dropup-model-btn')]
+            .find((button) => button.textContent === 'max')
+            .click();
+        await vi.waitFor(() => expect(finishSet).toBeTypeOf('function'));
+
+        tm.switchTab('pi-pane-2');
+        tm.switchTab('pi-pane-1');
+        // Reopening the picker proves the stale ack cannot close it.
+        thinkingTrigger(tm).click();
+        await vi.waitFor(() =>
+            expect(
+                [...dropup.querySelectorAll('.dropup-model-btn')].map(
+                    (button) => button.textContent,
+                ),
+            ).toContain('max'),
+        );
+        finishSet();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(dropup.classList.contains('hidden')).toBe(false);
+        expect(tm._piRpcThinkingPending).toBeNull();
+        expect(tm.app.showToast).not.toHaveBeenCalled();
+    });
+
+    it('locks and releases the open picker around a bridge cycle', async () => {
+        const { tm } = harness(bridgeTab());
+        let finishSet;
+        mockFetch((_url, options) =>
+            options?.method === 'POST'
+                ? new Promise((resolve) => {
+                      finishSet = () =>
+                          resolve({ ok: true, json: { ok: true, reason: '' } });
+                  })
+                : levelsResponse(),
+        );
+        tm.renderPresets('pi');
+        thinkingTrigger(tm).click();
+        const dropup = document.getElementById('pi-rpc-thinking-dropup');
+        await vi.waitFor(() =>
+            expect(
+                [...dropup.querySelectorAll('.dropup-model-btn')].map(
+                    (button) => button.textContent,
+                ),
+            ).toContain('max'),
+        );
+
+        tm.piThinkingBtn.click();
+        await vi.waitFor(() => expect(finishSet).toBeTypeOf('function'));
+        expect(
+            [...dropup.querySelectorAll('.dropup-model-btn')].every(
+                (button) => button.disabled,
+            ),
+        ).toBe(true);
+        finishSet();
+        await vi.waitFor(() =>
+            expect(
+                [...dropup.querySelectorAll('.dropup-model-btn')].every(
+                    (button) => button.disabled,
+                ),
+            ).toBe(false),
+        );
     });
 
     it('discards a list response after the tab model changes', async () => {

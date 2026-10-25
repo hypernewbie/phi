@@ -5786,6 +5786,10 @@ export class TabManager {
             }
             prevTab.tabEl.classList.remove('active');
             prevTab.termContainer.classList.remove('active');
+            // Leaving a Pi tab revokes its pending Thinking operation so a
+            // late reply cannot act after the user navigates back.
+            if (prevTab.coder === 'pi')
+                this._invalidatePiBridgeThinking(prevTab);
         }
 
         // Set new active tab
@@ -11793,6 +11797,16 @@ export class TabManager {
         const operation = { paneId: tab.paneId, context, cycle: true };
         this._piRpcThinkingPending = operation;
         this._updatePiThinkingButton();
+        // An open picker must show the same pending lock as its rows do.
+        const thinkingDropup = document.getElementById(
+            'pi-rpc-thinking-dropup',
+        );
+        const syncPickerPending = (disabled) => {
+            if (!thinkingDropup || thinkingDropup.classList.contains('hidden'))
+                return;
+            this._setPiRpcDropupButtonsDisabled(thinkingDropup, disabled);
+        };
+        syncPickerPending(true);
         Promise.resolve(this._piBridgeThinkingLevels(context.paneId))
             .then((result) => {
                 if (
@@ -11817,12 +11831,14 @@ export class TabManager {
                 // never fall back to native input.
                 if (this._piRpcThinkingPending !== operation) return;
                 this._piRpcThinkingPending = null;
+                syncPickerPending(false);
                 if (this._piBridgeThinkingContextValid(context))
                     this._updatePiThinkingButton();
             })
             .catch((error) => {
                 if (this._piRpcThinkingPending !== operation) return;
                 this._piRpcThinkingPending = null;
+                syncPickerPending(false);
                 if (!this._piBridgeThinkingContextValid(context)) return;
                 if (!operation.setterStarted) {
                     this._forwardNativeThinkingCycle(tab);
