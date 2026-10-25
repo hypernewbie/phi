@@ -129,7 +129,7 @@ func TestEndpointSkipsRootTheClientWouldReject(t *testing.T) {
 	// The client accepts a literal absolute path only. A root that
 	// forces a rejected shape must make the endpoint unavailable
 	// rather than publish a target the client refuses to dial.
-	for _, bad := range []string{"percent%20dir", "user@host", "x://y"} {
+	for _, bad := range []string{"percent%20dir", "user@host"} {
 		root := filepath.Join(t.TempDir(), bad)
 		if err := os.MkdirAll(root, 0o700); err != nil {
 			t.Fatalf("seed root %q: %v", root, err)
@@ -139,6 +139,16 @@ func TestEndpointSkipsRootTheClientWouldReject(t *testing.T) {
 			ep.Cleanup()
 			t.Fatalf("root %q: err=%v, want ErrEndpointUnavailable", root, err)
 		}
+	}
+	// A relative root yields a relative socket path, which the client
+	// refuses to dial. The shape is checked before anything is created,
+	// so this leaves nothing behind.
+	ep, err := NewEndpointWithRoots([]string{"relative/root"})
+	if err != ErrEndpointUnavailable {
+		if ep != nil {
+			ep.Cleanup()
+		}
+		t.Fatalf("relative root: err=%v, want ErrEndpointUnavailable", err)
 	}
 }
 
