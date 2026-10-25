@@ -211,6 +211,8 @@ type PiToPhi struct {
 	//	*PiToPhi_HistoryResponse
 	//	*PiToPhi_ModelsResponse
 	//	*PiToPhi_SetModelAck
+	//	*PiToPhi_ThinkingLevelsResponse
+	//	*PiToPhi_SetThinkingAck
 	Payload       isPiToPhi_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -337,6 +339,24 @@ func (x *PiToPhi) GetSetModelAck() *SetModelAck {
 	return nil
 }
 
+func (x *PiToPhi) GetThinkingLevelsResponse() *ThinkingLevelsResponse {
+	if x != nil {
+		if x, ok := x.Payload.(*PiToPhi_ThinkingLevelsResponse); ok {
+			return x.ThinkingLevelsResponse
+		}
+	}
+	return nil
+}
+
+func (x *PiToPhi) GetSetThinkingAck() *SetThinkingAck {
+	if x != nil {
+		if x, ok := x.Payload.(*PiToPhi_SetThinkingAck); ok {
+			return x.SetThinkingAck
+		}
+	}
+	return nil
+}
+
 type isPiToPhi_Payload interface {
 	isPiToPhi_Payload()
 }
@@ -369,6 +389,14 @@ type PiToPhi_SetModelAck struct {
 	SetModelAck *SetModelAck `protobuf:"bytes,19,opt,name=set_model_ack,json=setModelAck,proto3,oneof"`
 }
 
+type PiToPhi_ThinkingLevelsResponse struct {
+	ThinkingLevelsResponse *ThinkingLevelsResponse `protobuf:"bytes,20,opt,name=thinking_levels_response,json=thinkingLevelsResponse,proto3,oneof"`
+}
+
+type PiToPhi_SetThinkingAck struct {
+	SetThinkingAck *SetThinkingAck `protobuf:"bytes,21,opt,name=set_thinking_ack,json=setThinkingAck,proto3,oneof"`
+}
+
 func (*PiToPhi_Hello) isPiToPhi_Payload() {}
 
 func (*PiToPhi_AgentStarted) isPiToPhi_Payload() {}
@@ -383,6 +411,10 @@ func (*PiToPhi_ModelsResponse) isPiToPhi_Payload() {}
 
 func (*PiToPhi_SetModelAck) isPiToPhi_Payload() {}
 
+func (*PiToPhi_ThinkingLevelsResponse) isPiToPhi_Payload() {}
+
+func (*PiToPhi_SetThinkingAck) isPiToPhi_Payload() {}
+
 // Envelope for every Phi → Pi message.
 type PhiToPi struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
@@ -396,6 +428,8 @@ type PhiToPi struct {
 	//	*PhiToPi_HistoryRequest
 	//	*PhiToPi_ModelsRequest
 	//	*PhiToPi_SetModelRequest
+	//	*PhiToPi_ThinkingLevelsRequest
+	//	*PhiToPi_SetThinkingRequest
 	Payload       isPhiToPi_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -504,6 +538,24 @@ func (x *PhiToPi) GetSetModelRequest() *SetModelRequest {
 	return nil
 }
 
+func (x *PhiToPi) GetThinkingLevelsRequest() *ThinkingLevelsRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*PhiToPi_ThinkingLevelsRequest); ok {
+			return x.ThinkingLevelsRequest
+		}
+	}
+	return nil
+}
+
+func (x *PhiToPi) GetSetThinkingRequest() *SetThinkingRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*PhiToPi_SetThinkingRequest); ok {
+			return x.SetThinkingRequest
+		}
+	}
+	return nil
+}
+
 type isPhiToPi_Payload interface {
 	isPhiToPi_Payload()
 }
@@ -528,6 +580,14 @@ type PhiToPi_SetModelRequest struct {
 	SetModelRequest *SetModelRequest `protobuf:"bytes,16,opt,name=set_model_request,json=setModelRequest,proto3,oneof"`
 }
 
+type PhiToPi_ThinkingLevelsRequest struct {
+	ThinkingLevelsRequest *ThinkingLevelsRequest `protobuf:"bytes,17,opt,name=thinking_levels_request,json=thinkingLevelsRequest,proto3,oneof"`
+}
+
+type PhiToPi_SetThinkingRequest struct {
+	SetThinkingRequest *SetThinkingRequest `protobuf:"bytes,18,opt,name=set_thinking_request,json=setThinkingRequest,proto3,oneof"`
+}
+
 func (*PhiToPi_Accepted) isPhiToPi_Payload() {}
 
 func (*PhiToPi_ProtocolError) isPhiToPi_Payload() {}
@@ -537,6 +597,10 @@ func (*PhiToPi_HistoryRequest) isPhiToPi_Payload() {}
 func (*PhiToPi_ModelsRequest) isPhiToPi_Payload() {}
 
 func (*PhiToPi_SetModelRequest) isPhiToPi_Payload() {}
+
+func (*PhiToPi_ThinkingLevelsRequest) isPhiToPi_Payload() {}
+
+func (*PhiToPi_SetThinkingRequest) isPhiToPi_Payload() {}
 
 // Hello is the first application message on every stream. Protocol version,
 // identities, capabilities, and the replay range of the retained journal.
@@ -951,6 +1015,8 @@ type StateSnapshot struct {
 	Journal       []*LifecycleRecord     `protobuf:"bytes,5,rep,name=journal,proto3" json:"journal,omitempty"`
 	JournalGap    bool                   `protobuf:"varint,6,opt,name=journal_gap,json=journalGap,proto3" json:"journal_gap,omitempty"`
 	StateRevision uint64                 `protobuf:"varint,7,opt,name=state_revision,json=stateRevision,proto3" json:"state_revision,omitempty"`
+	// Empty means unknown; it is never inferred to mean off.
+	ThinkingLevel string `protobuf:"bytes,9,opt,name=thinking_level,json=thinkingLevel,proto3" json:"thinking_level,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1032,6 +1098,13 @@ func (x *StateSnapshot) GetStateRevision() uint64 {
 		return x.StateRevision
 	}
 	return 0
+}
+
+func (x *StateSnapshot) GetThinkingLevel() string {
+	if x != nil {
+		return x.ThinkingLevel
+	}
+	return ""
 }
 
 // HistoryRequest asks the extension for the live editor history.
@@ -1452,6 +1525,260 @@ func (x *SetModelAck) GetReason() string {
 	return ""
 }
 
+// ThinkingLevelsRequest asks for levels supported by the live session model.
+type ThinkingLevelsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ThinkingLevelsRequest) Reset() {
+	*x = ThinkingLevelsRequest{}
+	mi := &file_bridge_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ThinkingLevelsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ThinkingLevelsRequest) ProtoMessage() {}
+
+func (x *ThinkingLevelsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ThinkingLevelsRequest.ProtoReflect.Descriptor instead.
+func (*ThinkingLevelsRequest) Descriptor() ([]byte, []int) {
+	return file_bridge_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ThinkingLevelsRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+// ThinkingLevelsResponse carries the supported levels and source model.
+// unavailable means the model or native helper could not be read safely.
+type ThinkingLevelsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Levels        []string               `protobuf:"bytes,2,rep,name=levels,proto3" json:"levels,omitempty"`
+	Provider      string                 `protobuf:"bytes,3,opt,name=provider,proto3" json:"provider,omitempty"`
+	Model         string                 `protobuf:"bytes,4,opt,name=model,proto3" json:"model,omitempty"`
+	Unavailable   bool                   `protobuf:"varint,5,opt,name=unavailable,proto3" json:"unavailable,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ThinkingLevelsResponse) Reset() {
+	*x = ThinkingLevelsResponse{}
+	mi := &file_bridge_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ThinkingLevelsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ThinkingLevelsResponse) ProtoMessage() {}
+
+func (x *ThinkingLevelsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ThinkingLevelsResponse.ProtoReflect.Descriptor instead.
+func (*ThinkingLevelsResponse) Descriptor() ([]byte, []int) {
+	return file_bridge_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *ThinkingLevelsResponse) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ThinkingLevelsResponse) GetLevels() []string {
+	if x != nil {
+		return x.Levels
+	}
+	return nil
+}
+
+func (x *ThinkingLevelsResponse) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *ThinkingLevelsResponse) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *ThinkingLevelsResponse) GetUnavailable() bool {
+	if x != nil {
+		return x.Unavailable
+	}
+	return false
+}
+
+// SetThinkingRequest sets one supported level on the expected live model.
+type SetThinkingRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Level         string                 `protobuf:"bytes,2,opt,name=level,proto3" json:"level,omitempty"`
+	Provider      string                 `protobuf:"bytes,3,opt,name=provider,proto3" json:"provider,omitempty"`
+	Model         string                 `protobuf:"bytes,4,opt,name=model,proto3" json:"model,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetThinkingRequest) Reset() {
+	*x = SetThinkingRequest{}
+	mi := &file_bridge_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetThinkingRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetThinkingRequest) ProtoMessage() {}
+
+func (x *SetThinkingRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetThinkingRequest.ProtoReflect.Descriptor instead.
+func (*SetThinkingRequest) Descriptor() ([]byte, []int) {
+	return file_bridge_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *SetThinkingRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *SetThinkingRequest) GetLevel() string {
+	if x != nil {
+		return x.Level
+	}
+	return ""
+}
+
+func (x *SetThinkingRequest) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *SetThinkingRequest) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+// SetThinkingAck reports an effective native readback. reason is only
+// unsupported-level, model-changed, or empty for an unknown outcome.
+type SetThinkingAck struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Ok            bool                   `protobuf:"varint,2,opt,name=ok,proto3" json:"ok,omitempty"`
+	Reason        string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetThinkingAck) Reset() {
+	*x = SetThinkingAck{}
+	mi := &file_bridge_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetThinkingAck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetThinkingAck) ProtoMessage() {}
+
+func (x *SetThinkingAck) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetThinkingAck.ProtoReflect.Descriptor instead.
+func (*SetThinkingAck) Descriptor() ([]byte, []int) {
+	return file_bridge_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *SetThinkingAck) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *SetThinkingAck) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *SetThinkingAck) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 // Terminal protocol-level rejection. Ends the stream attempt.
 type ProtocolError struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1463,7 +1790,7 @@ type ProtocolError struct {
 
 func (x *ProtocolError) Reset() {
 	*x = ProtocolError{}
-	mi := &file_bridge_proto_msgTypes[16]
+	mi := &file_bridge_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1475,7 +1802,7 @@ func (x *ProtocolError) String() string {
 func (*ProtocolError) ProtoMessage() {}
 
 func (x *ProtocolError) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[16]
+	mi := &file_bridge_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1488,7 +1815,7 @@ func (x *ProtocolError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProtocolError.ProtoReflect.Descriptor instead.
 func (*ProtocolError) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{16}
+	return file_bridge_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ProtocolError) GetCode() ProtocolErrorCode {
@@ -1509,7 +1836,7 @@ var File_bridge_proto protoreflect.FileDescriptor
 
 const file_bridge_proto_rawDesc = "" +
 	"\n" +
-	"\fbridge.proto\x12\tphi.pi.v1\"\xfb\x04\n" +
+	"\fbridge.proto\x12\tphi.pi.v1\"\xa1\x06\n" +
 	"\aPiToPhi\x12\x17\n" +
 	"\apane_id\x18\x01 \x01(\tR\x06paneId\x12\x1d\n" +
 	"\n" +
@@ -1522,8 +1849,10 @@ const file_bridge_proto_rawDesc = "" +
 	"\x0estate_snapshot\x18\r \x01(\v2\x18.phi.pi.v1.StateSnapshotH\x00R\rstateSnapshot\x12G\n" +
 	"\x10history_response\x18\x11 \x01(\v2\x1a.phi.pi.v1.HistoryResponseH\x00R\x0fhistoryResponse\x12D\n" +
 	"\x0fmodels_response\x18\x12 \x01(\v2\x19.phi.pi.v1.ModelsResponseH\x00R\x0emodelsResponse\x12<\n" +
-	"\rset_model_ack\x18\x13 \x01(\v2\x16.phi.pi.v1.SetModelAckH\x00R\vsetModelAckB\t\n" +
-	"\apayloadJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10J\x04\b\x10\x10\x11R\x0esummary_resultR\rcommand_errorR\x13cancel_acknowledged\"\xe3\x03\n" +
+	"\rset_model_ack\x18\x13 \x01(\v2\x16.phi.pi.v1.SetModelAckH\x00R\vsetModelAck\x12]\n" +
+	"\x18thinking_levels_response\x18\x14 \x01(\v2!.phi.pi.v1.ThinkingLevelsResponseH\x00R\x16thinkingLevelsResponse\x12E\n" +
+	"\x10set_thinking_ack\x18\x15 \x01(\v2\x19.phi.pi.v1.SetThinkingAckH\x00R\x0esetThinkingAckB\t\n" +
+	"\apayloadJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10J\x04\b\x10\x10\x11R\x0esummary_resultR\rcommand_errorR\x13cancel_acknowledged\"\x92\x05\n" +
 	"\aPhiToPi\x12\x17\n" +
 	"\apane_id\x18\x01 \x01(\tR\x06paneId\x12\x1d\n" +
 	"\n" +
@@ -1534,7 +1863,9 @@ const file_bridge_proto_rawDesc = "" +
 	"\x0eprotocol_error\x18\r \x01(\v2\x18.phi.pi.v1.ProtocolErrorH\x00R\rprotocolError\x12D\n" +
 	"\x0fhistory_request\x18\x0e \x01(\v2\x19.phi.pi.v1.HistoryRequestH\x00R\x0ehistoryRequest\x12A\n" +
 	"\x0emodels_request\x18\x0f \x01(\v2\x18.phi.pi.v1.ModelsRequestH\x00R\rmodelsRequest\x12H\n" +
-	"\x11set_model_request\x18\x10 \x01(\v2\x1a.phi.pi.v1.SetModelRequestH\x00R\x0fsetModelRequestB\t\n" +
+	"\x11set_model_request\x18\x10 \x01(\v2\x1a.phi.pi.v1.SetModelRequestH\x00R\x0fsetModelRequest\x12Z\n" +
+	"\x17thinking_levels_request\x18\x11 \x01(\v2 .phi.pi.v1.ThinkingLevelsRequestH\x00R\x15thinkingLevelsRequest\x12Q\n" +
+	"\x14set_thinking_request\x18\x12 \x01(\v2\x1d.phi.pi.v1.SetThinkingRequestH\x00R\x12setThinkingRequestB\t\n" +
 	"\apayloadJ\x04\b\v\x10\fJ\x04\b\f\x10\rR\tsummarizeR\x06cancel\"\xe8\x02\n" +
 	"\x05Hello\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\x1d\n" +
@@ -1566,7 +1897,7 @@ const file_bridge_proto_rawDesc = "" +
 	"\aoutcome\x18\x04 \x01(\x0e2\x15.phi.pi.v1.RunOutcomeR\aoutcome\"A\n" +
 	"\rModelSnapshot\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x14\n" +
-	"\x05model\x18\x02 \x01(\tR\x05model\"\xc1\x02\n" +
+	"\x05model\x18\x02 \x01(\tR\x05model\"\xe8\x02\n" +
 	"\rStateSnapshot\x12-\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x17.phi.pi.v1.LogicalStateR\x05state\x12\x1d\n" +
 	"\n" +
@@ -1576,7 +1907,8 @@ const file_bridge_proto_rawDesc = "" +
 	"\ajournal\x18\x05 \x03(\v2\x1a.phi.pi.v1.LifecycleRecordR\ajournal\x12\x1f\n" +
 	"\vjournal_gap\x18\x06 \x01(\bR\n" +
 	"journalGap\x12%\n" +
-	"\x0estate_revision\x18\a \x01(\x04R\rstateRevisionJ\x04\b\b\x10\tR\x15outstanding_summaries\"/\n" +
+	"\x0estate_revision\x18\a \x01(\x04R\rstateRevision\x12%\n" +
+	"\x0ethinking_level\x18\t \x01(\tR\rthinkingLevelJ\x04\b\b\x10\tR\x15outstanding_summaries\"/\n" +
 	"\x0eHistoryRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\"l\n" +
@@ -1603,6 +1935,27 @@ const file_bridge_proto_rawDesc = "" +
 	"\bprovider\x18\x02 \x01(\tR\bprovider\x12\x14\n" +
 	"\x05model\x18\x03 \x01(\tR\x05model\"T\n" +
 	"\vSetModelAck\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12\x0e\n" +
+	"\x02ok\x18\x02 \x01(\bR\x02ok\x12\x16\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\"6\n" +
+	"\x15ThinkingLevelsRequest\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\"\xa3\x01\n" +
+	"\x16ThinkingLevelsResponse\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12\x16\n" +
+	"\x06levels\x18\x02 \x03(\tR\x06levels\x12\x1a\n" +
+	"\bprovider\x18\x03 \x01(\tR\bprovider\x12\x14\n" +
+	"\x05model\x18\x04 \x01(\tR\x05model\x12 \n" +
+	"\vunavailable\x18\x05 \x01(\bR\vunavailable\"{\n" +
+	"\x12SetThinkingRequest\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12\x14\n" +
+	"\x05level\x18\x02 \x01(\tR\x05level\x12\x1a\n" +
+	"\bprovider\x18\x03 \x01(\tR\bprovider\x12\x14\n" +
+	"\x05model\x18\x04 \x01(\tR\x05model\"W\n" +
+	"\x0eSetThinkingAck\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x0e\n" +
 	"\x02ok\x18\x02 \x01(\bR\x02ok\x12\x16\n" +
@@ -1643,28 +1996,32 @@ func file_bridge_proto_rawDescGZIP() []byte {
 }
 
 var file_bridge_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_bridge_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_bridge_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_bridge_proto_goTypes = []any{
-	(RunOutcome)(0),         // 0: phi.pi.v1.RunOutcome
-	(LogicalState)(0),       // 1: phi.pi.v1.LogicalState
-	(ProtocolErrorCode)(0),  // 2: phi.pi.v1.ProtocolErrorCode
-	(*PiToPhi)(nil),         // 3: phi.pi.v1.PiToPhi
-	(*PhiToPi)(nil),         // 4: phi.pi.v1.PhiToPi
-	(*Hello)(nil),           // 5: phi.pi.v1.Hello
-	(*Accepted)(nil),        // 6: phi.pi.v1.Accepted
-	(*AgentStarted)(nil),    // 7: phi.pi.v1.AgentStarted
-	(*AgentSettled)(nil),    // 8: phi.pi.v1.AgentSettled
-	(*LifecycleRecord)(nil), // 9: phi.pi.v1.LifecycleRecord
-	(*ModelSnapshot)(nil),   // 10: phi.pi.v1.ModelSnapshot
-	(*StateSnapshot)(nil),   // 11: phi.pi.v1.StateSnapshot
-	(*HistoryRequest)(nil),  // 12: phi.pi.v1.HistoryRequest
-	(*HistoryResponse)(nil), // 13: phi.pi.v1.HistoryResponse
-	(*ModelRef)(nil),        // 14: phi.pi.v1.ModelRef
-	(*ModelsRequest)(nil),   // 15: phi.pi.v1.ModelsRequest
-	(*ModelsResponse)(nil),  // 16: phi.pi.v1.ModelsResponse
-	(*SetModelRequest)(nil), // 17: phi.pi.v1.SetModelRequest
-	(*SetModelAck)(nil),     // 18: phi.pi.v1.SetModelAck
-	(*ProtocolError)(nil),   // 19: phi.pi.v1.ProtocolError
+	(RunOutcome)(0),                // 0: phi.pi.v1.RunOutcome
+	(LogicalState)(0),              // 1: phi.pi.v1.LogicalState
+	(ProtocolErrorCode)(0),         // 2: phi.pi.v1.ProtocolErrorCode
+	(*PiToPhi)(nil),                // 3: phi.pi.v1.PiToPhi
+	(*PhiToPi)(nil),                // 4: phi.pi.v1.PhiToPi
+	(*Hello)(nil),                  // 5: phi.pi.v1.Hello
+	(*Accepted)(nil),               // 6: phi.pi.v1.Accepted
+	(*AgentStarted)(nil),           // 7: phi.pi.v1.AgentStarted
+	(*AgentSettled)(nil),           // 8: phi.pi.v1.AgentSettled
+	(*LifecycleRecord)(nil),        // 9: phi.pi.v1.LifecycleRecord
+	(*ModelSnapshot)(nil),          // 10: phi.pi.v1.ModelSnapshot
+	(*StateSnapshot)(nil),          // 11: phi.pi.v1.StateSnapshot
+	(*HistoryRequest)(nil),         // 12: phi.pi.v1.HistoryRequest
+	(*HistoryResponse)(nil),        // 13: phi.pi.v1.HistoryResponse
+	(*ModelRef)(nil),               // 14: phi.pi.v1.ModelRef
+	(*ModelsRequest)(nil),          // 15: phi.pi.v1.ModelsRequest
+	(*ModelsResponse)(nil),         // 16: phi.pi.v1.ModelsResponse
+	(*SetModelRequest)(nil),        // 17: phi.pi.v1.SetModelRequest
+	(*SetModelAck)(nil),            // 18: phi.pi.v1.SetModelAck
+	(*ThinkingLevelsRequest)(nil),  // 19: phi.pi.v1.ThinkingLevelsRequest
+	(*ThinkingLevelsResponse)(nil), // 20: phi.pi.v1.ThinkingLevelsResponse
+	(*SetThinkingRequest)(nil),     // 21: phi.pi.v1.SetThinkingRequest
+	(*SetThinkingAck)(nil),         // 22: phi.pi.v1.SetThinkingAck
+	(*ProtocolError)(nil),          // 23: phi.pi.v1.ProtocolError
 }
 var file_bridge_proto_depIdxs = []int32{
 	5,  // 0: phi.pi.v1.PiToPhi.hello:type_name -> phi.pi.v1.Hello
@@ -1674,26 +2031,30 @@ var file_bridge_proto_depIdxs = []int32{
 	13, // 4: phi.pi.v1.PiToPhi.history_response:type_name -> phi.pi.v1.HistoryResponse
 	16, // 5: phi.pi.v1.PiToPhi.models_response:type_name -> phi.pi.v1.ModelsResponse
 	18, // 6: phi.pi.v1.PiToPhi.set_model_ack:type_name -> phi.pi.v1.SetModelAck
-	6,  // 7: phi.pi.v1.PhiToPi.accepted:type_name -> phi.pi.v1.Accepted
-	19, // 8: phi.pi.v1.PhiToPi.protocol_error:type_name -> phi.pi.v1.ProtocolError
-	12, // 9: phi.pi.v1.PhiToPi.history_request:type_name -> phi.pi.v1.HistoryRequest
-	15, // 10: phi.pi.v1.PhiToPi.models_request:type_name -> phi.pi.v1.ModelsRequest
-	17, // 11: phi.pi.v1.PhiToPi.set_model_request:type_name -> phi.pi.v1.SetModelRequest
-	11, // 12: phi.pi.v1.Hello.current_state:type_name -> phi.pi.v1.StateSnapshot
-	0,  // 13: phi.pi.v1.AgentSettled.outcome:type_name -> phi.pi.v1.RunOutcome
-	0,  // 14: phi.pi.v1.LifecycleRecord.outcome:type_name -> phi.pi.v1.RunOutcome
-	1,  // 15: phi.pi.v1.StateSnapshot.state:type_name -> phi.pi.v1.LogicalState
-	10, // 16: phi.pi.v1.StateSnapshot.model:type_name -> phi.pi.v1.ModelSnapshot
-	9,  // 17: phi.pi.v1.StateSnapshot.journal:type_name -> phi.pi.v1.LifecycleRecord
-	14, // 18: phi.pi.v1.ModelsResponse.models:type_name -> phi.pi.v1.ModelRef
-	2,  // 19: phi.pi.v1.ProtocolError.code:type_name -> phi.pi.v1.ProtocolErrorCode
-	3,  // 20: phi.pi.v1.Integration.Connect:input_type -> phi.pi.v1.PiToPhi
-	4,  // 21: phi.pi.v1.Integration.Connect:output_type -> phi.pi.v1.PhiToPi
-	21, // [21:22] is the sub-list for method output_type
-	20, // [20:21] is the sub-list for method input_type
-	20, // [20:20] is the sub-list for extension type_name
-	20, // [20:20] is the sub-list for extension extendee
-	0,  // [0:20] is the sub-list for field type_name
+	20, // 7: phi.pi.v1.PiToPhi.thinking_levels_response:type_name -> phi.pi.v1.ThinkingLevelsResponse
+	22, // 8: phi.pi.v1.PiToPhi.set_thinking_ack:type_name -> phi.pi.v1.SetThinkingAck
+	6,  // 9: phi.pi.v1.PhiToPi.accepted:type_name -> phi.pi.v1.Accepted
+	23, // 10: phi.pi.v1.PhiToPi.protocol_error:type_name -> phi.pi.v1.ProtocolError
+	12, // 11: phi.pi.v1.PhiToPi.history_request:type_name -> phi.pi.v1.HistoryRequest
+	15, // 12: phi.pi.v1.PhiToPi.models_request:type_name -> phi.pi.v1.ModelsRequest
+	17, // 13: phi.pi.v1.PhiToPi.set_model_request:type_name -> phi.pi.v1.SetModelRequest
+	19, // 14: phi.pi.v1.PhiToPi.thinking_levels_request:type_name -> phi.pi.v1.ThinkingLevelsRequest
+	21, // 15: phi.pi.v1.PhiToPi.set_thinking_request:type_name -> phi.pi.v1.SetThinkingRequest
+	11, // 16: phi.pi.v1.Hello.current_state:type_name -> phi.pi.v1.StateSnapshot
+	0,  // 17: phi.pi.v1.AgentSettled.outcome:type_name -> phi.pi.v1.RunOutcome
+	0,  // 18: phi.pi.v1.LifecycleRecord.outcome:type_name -> phi.pi.v1.RunOutcome
+	1,  // 19: phi.pi.v1.StateSnapshot.state:type_name -> phi.pi.v1.LogicalState
+	10, // 20: phi.pi.v1.StateSnapshot.model:type_name -> phi.pi.v1.ModelSnapshot
+	9,  // 21: phi.pi.v1.StateSnapshot.journal:type_name -> phi.pi.v1.LifecycleRecord
+	14, // 22: phi.pi.v1.ModelsResponse.models:type_name -> phi.pi.v1.ModelRef
+	2,  // 23: phi.pi.v1.ProtocolError.code:type_name -> phi.pi.v1.ProtocolErrorCode
+	3,  // 24: phi.pi.v1.Integration.Connect:input_type -> phi.pi.v1.PiToPhi
+	4,  // 25: phi.pi.v1.Integration.Connect:output_type -> phi.pi.v1.PhiToPi
+	25, // [25:26] is the sub-list for method output_type
+	24, // [24:25] is the sub-list for method input_type
+	24, // [24:24] is the sub-list for extension type_name
+	24, // [24:24] is the sub-list for extension extendee
+	0,  // [0:24] is the sub-list for field type_name
 }
 
 func init() { file_bridge_proto_init() }
@@ -1709,6 +2070,8 @@ func file_bridge_proto_init() {
 		(*PiToPhi_HistoryResponse)(nil),
 		(*PiToPhi_ModelsResponse)(nil),
 		(*PiToPhi_SetModelAck)(nil),
+		(*PiToPhi_ThinkingLevelsResponse)(nil),
+		(*PiToPhi_SetThinkingAck)(nil),
 	}
 	file_bridge_proto_msgTypes[1].OneofWrappers = []any{
 		(*PhiToPi_Accepted)(nil),
@@ -1716,6 +2079,8 @@ func file_bridge_proto_init() {
 		(*PhiToPi_HistoryRequest)(nil),
 		(*PhiToPi_ModelsRequest)(nil),
 		(*PhiToPi_SetModelRequest)(nil),
+		(*PhiToPi_ThinkingLevelsRequest)(nil),
+		(*PhiToPi_SetThinkingRequest)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1723,7 +2088,7 @@ func file_bridge_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bridge_proto_rawDesc), len(file_bridge_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   17,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

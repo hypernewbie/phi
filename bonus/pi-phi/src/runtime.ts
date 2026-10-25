@@ -7,6 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ServiceError } from '@grpc/grpc-js';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { getSupportedThinkingLevels } from '@earendil-works/pi-ai/models';
 import {
     AgentSettled,
     AgentStarted,
@@ -19,6 +20,8 @@ import {
     RunOutcome,
     SetModelAck,
     StateSnapshot,
+    ThinkingLevelsResponse,
+    SetThinkingAck,
 } from './gen/bridge.js';
 import { BridgeChannel, type ChannelCreds } from './channel.js';
 import { InvalidTargetError } from './endpoint.js';
@@ -26,9 +29,13 @@ import { PROTOCOL_VERSION } from './protocol.js';
 import { CAPABILITY_HISTORY } from './protocol.js';
 import { CAPABILITY_LIFECYCLE } from './protocol.js';
 import { CAPABILITY_MODELS } from './protocol.js';
+import { CAPABILITY_THINKING } from './protocol.js';
 import { MAX_JOURNAL_RECORDS } from './protocol.js';
 import { MAX_MESSAGE_BYTES } from './protocol.js';
 import { MAX_MODELS_ENTRIES } from './protocol.js';
+import { MAX_THINKING_LEVELS } from './protocol.js';
+import { MAX_THINKING_LEVEL_BYTES } from './protocol.js';
+import { MAX_THINKING_MODEL_ID_BYTES } from './protocol.js';
 import { RECONNECT_BASE_MS } from './protocol.js';
 import { RECONNECT_MAX_MS } from './protocol.js';
 import { RECONNECT_STABLE_MS } from './protocol.js';
@@ -69,11 +76,16 @@ export interface PiContextView {
     readonly ui?: unknown;
 }
 
+export type PiThinkingLevel = NonNullable<ExtensionContext['thinkingLevel']>;
+
 export interface RuntimeOptions {
     readonly creds: ChannelCreds;
     readonly generation: bigint;
     /** Host model switch; absent in tests that never switch. */
     readonly setModel?: (model: PiModelView) => Promise<boolean>;
+    /** Native thinking APIs; both are required to advertise the capability. */
+    readonly getThinkingLevel?: () => PiThinkingLevel;
+    readonly setThinkingLevel?: (level: PiThinkingLevel) => void;
     /** Base reconnect delay; doubles per attempt up to maxBackoffMs. */
     readonly backoffBaseMs?: number;
     readonly backoffMaxMs?: number;
@@ -134,12 +146,14 @@ export class Runtime {
     private sessionId = '';
     private leafId = '';
     private model: PiModelView | undefined;
+    private view: PiContextView | undefined;
     private registry: PiRegistryView | undefined;
     private scopedModels: readonly PiScopedModelView[] = [];
     /** Latest UI surface for history reads; refreshed on every event. */
     private ui: unknown;
     private historyAccepted = false;
     private modelsAccepted = false;
+    private thinkingAccepted = false;
     /** Final assistant stop reason of the current run, if observed. */
     private lastStopReason: string | null = null;
     /** When the current stream was accepted; null while connecting. */
@@ -278,6 +292,17 @@ export class Runtime {
         );
     }
 
+    /** A native thinking-level change refreshes the authoritative snapshot. */
+    onThinkingLevelSelect(ctx: PiContextView): void {
+        if (this.shutdownRequested) return;
+        this.noteView(ctx);
+        this.sendSnapshot(
+            this.running
+                ? LogicalState.LOGICAL_STATE_RUNNING
+                : LogicalState.LOGICAL_STATE_IDLE,
+        );
+    }
+
     /** Tree navigation refreshes identities and the snapshot. */
     onSessionTree(ctx: PiContextView): void {
         if (this.shutdownRequested) return;
@@ -333,6 +358,7 @@ export class Runtime {
     }
 
     private refreshIdentities(ctx: PiContextView): void {
+        this.view = ctx;
         try {
             this.sessionId = ctx.sessionManager.getSessionId();
         } catch {
@@ -362,6 +388,71 @@ export class Runtime {
         }
     }
 
+    private liveModel(): PiModelView | undefined {
+        try {
+            return this.view?.model;
+        } catch {
+            return undefined;
+        }
+    }
+
+    private modelIdentity(
+        model: PiModelView | undefined,
+    ): { provider: string; model: string } | null {
+        try {
+            const provider = model?.provider;
+            const id = model?.id;
+            if (
+                typeof provider !== 'string' ||
+                provider === '' ||
+                Buffer.byteLength(provider, 'utf8') >
+                    MAX_THINKING_MODEL_ID_BYTES ||
+                typeof id !== 'string' ||
+                id === '' ||
+                Buffer.byteLength(id, 'utf8') > MAX_THINKING_MODEL_ID_BYTES
+            )
+                return null;
+            return { provider, model: id };
+        } catch {
+            return null;
+        }
+    }
+
+    private supportedThinkingLevels(
+        model: PiModelView,
+    ): PiThinkingLevel[] | null {
+        try {
+            const levels = getSupportedThinkingLevels(model);
+            if (
+                levels.length > MAX_THINKING_LEVELS ||
+                new Set(levels).size !== levels.length ||
+                levels.some(
+                    (level) =>
+                        Buffer.byteLength(level, 'utf8') >
+                        MAX_THINKING_LEVEL_BYTES,
+                )
+            )
+                return null;
+            return levels as PiThinkingLevel[];
+        } catch {
+            return null;
+        }
+    }
+
+    private currentThinkingLevel(): string {
+        const model = this.liveModel();
+        const identity = this.modelIdentity(model);
+        if (!model || !identity || !this.opts.getThinkingLevel) return '';
+        const levels = this.supportedThinkingLevels(model);
+        if (!levels) return '';
+        try {
+            const level = this.opts.getThinkingLevel();
+            return levels.includes(level) ? level : '';
+        } catch {
+            return '';
+        }
+    }
+
     private snapshot(state: LogicalState): StateSnapshot {
         this.revision += 1n;
         return StateSnapshot.create({
@@ -382,6 +473,7 @@ export class Runtime {
             })),
             journalGap: this.journalGap,
             stateRevision: this.revision,
+            thinkingLevel: this.currentThinkingLevel(),
         });
     }
 
@@ -396,6 +488,8 @@ export class Runtime {
     private capabilities(): string[] {
         const caps = [CAPABILITY_LIFECYCLE, CAPABILITY_MODELS];
         if (isHistoryReaderAvailable(this.ui)) caps.push(CAPABILITY_HISTORY);
+        if (this.opts.getThinkingLevel && this.opts.setThinkingLevel)
+            caps.push(CAPABILITY_THINKING);
         return caps;
     }
 
@@ -456,6 +550,7 @@ export class Runtime {
             ((creds, hooks) => new BridgeChannel(creds, hooks));
         this.historyAccepted = false;
         this.modelsAccepted = false;
+        this.thinkingAccepted = false;
         const channel = make(this.opts.creds, {
             onMessage: (msg) => {
                 if (this.channel === channel && !this.shutdownRequested)
@@ -474,6 +569,8 @@ export class Runtime {
                     accepted.capabilities.includes(CAPABILITY_HISTORY);
                 this.modelsAccepted =
                     accepted.capabilities.includes(CAPABILITY_MODELS);
+                this.thinkingAccepted =
+                    accepted.capabilities.includes(CAPABILITY_THINKING);
             }
         } catch (err) {
             channel.close();
@@ -526,6 +623,16 @@ export class Runtime {
         ) {
             const req = msg.payload.value;
             void this.onSetModelRequest(req.requestId, req.provider, req.model);
+        } else if (
+            msg.payload?.$case === 'thinkingLevelsRequest' &&
+            this.thinkingAccepted
+        ) {
+            this.onThinkingLevelsRequest(msg.payload.value.requestId);
+        } else if (
+            msg.payload?.$case === 'setThinkingRequest' &&
+            this.thinkingAccepted
+        ) {
+            this.onSetThinkingRequest(msg.payload.value);
         }
     }
 
@@ -606,6 +713,132 @@ export class Runtime {
             if (sent?.$case === 'modelsResponse' && !sent.value.unavailable) {
                 this.channel.sendNonfatal(this.modelsResponse(requestId, null));
             }
+        }
+    }
+
+    private onThinkingLevelsRequest(requestId: string): void {
+        if (typeof requestId !== 'string' || requestId === '' || !this.channel)
+            return;
+        const model = this.liveModel();
+        const identity = this.modelIdentity(model);
+        const levels =
+            model && identity ? this.supportedThinkingLevels(model) : null;
+        let msg = this.thinkingLevelsResponse(requestId, identity, levels);
+        if (PiToPhi.encode(msg).finish().length > MAX_MESSAGE_BYTES) {
+            msg = this.thinkingLevelsResponse(requestId, identity, null);
+        }
+        if (!this.channel.sendNonfatal(msg)) {
+            const sent = msg.payload;
+            if (
+                sent?.$case === 'thinkingLevelsResponse' &&
+                !sent.value.unavailable
+            ) {
+                this.channel.sendNonfatal(
+                    this.thinkingLevelsResponse(requestId, identity, null),
+                );
+            }
+        }
+    }
+
+    private thinkingLevelsResponse(
+        requestId: string,
+        identity: { provider: string; model: string } | null,
+        levels: PiThinkingLevel[] | null,
+    ): PiToPhi {
+        return {
+            paneId: this.opts.creds.pane,
+            processId: this.opts.creds.process,
+            runtimeGeneration: this.opts.generation,
+            payload: {
+                $case: 'thinkingLevelsResponse',
+                value: ThinkingLevelsResponse.create({
+                    requestId,
+                    levels: levels ?? [],
+                    provider: identity?.provider ?? '',
+                    model: identity?.model ?? '',
+                    unavailable: levels === null,
+                }),
+            },
+        };
+    }
+
+    private onSetThinkingRequest(
+        request: import('./gen/bridge.js').SetThinkingRequest,
+    ): void {
+        const { requestId, level, provider, model } = request;
+        if (typeof requestId !== 'string' || requestId === '' || !this.channel)
+            return;
+        const ack = (ok: boolean, reason: string): void => {
+            this.channel?.sendNonfatal({
+                paneId: this.opts.creds.pane,
+                processId: this.opts.creds.process,
+                runtimeGeneration: this.opts.generation,
+                payload: {
+                    $case: 'setThinkingAck',
+                    value: SetThinkingAck.create({ requestId, ok, reason }),
+                },
+            });
+        };
+        if (
+            typeof level !== 'string' ||
+            Buffer.byteLength(level, 'utf8') > MAX_THINKING_LEVEL_BYTES
+        ) {
+            ack(false, 'unsupported-level');
+            return;
+        }
+        if (
+            typeof provider !== 'string' ||
+            typeof model !== 'string' ||
+            Buffer.byteLength(provider, 'utf8') > MAX_THINKING_MODEL_ID_BYTES ||
+            Buffer.byteLength(model, 'utf8') > MAX_THINKING_MODEL_ID_BYTES
+        ) {
+            ack(false, 'model-changed');
+            return;
+        }
+        const matchesExpected = (
+            candidate: PiModelView | undefined,
+        ): boolean => {
+            const identity = this.modelIdentity(candidate);
+            return identity?.provider === provider && identity.model === model;
+        };
+        let current = this.liveModel();
+        if (!matchesExpected(current)) {
+            ack(false, 'model-changed');
+            return;
+        }
+        let levels = this.supportedThinkingLevels(current!);
+        if (!levels) {
+            ack(false, '');
+            return;
+        }
+        if (!levels.includes(level as PiThinkingLevel)) {
+            ack(false, 'unsupported-level');
+            return;
+        }
+        current = this.liveModel();
+        if (!matchesExpected(current)) {
+            ack(false, 'model-changed');
+            return;
+        }
+        // Re-read support on the live model immediately before the native setter.
+        levels = this.supportedThinkingLevels(current!);
+        if (!levels) {
+            ack(false, '');
+            return;
+        }
+        if (!levels.includes(level as PiThinkingLevel)) {
+            ack(false, 'unsupported-level');
+            return;
+        }
+        try {
+            if (!this.opts.getThinkingLevel || !this.opts.setThinkingLevel) {
+                ack(false, '');
+                return;
+            }
+            this.opts.setThinkingLevel(level as PiThinkingLevel);
+            ack(this.opts.getThinkingLevel() === level, '');
+        } catch {
+            ack(false, '');
         }
     }
 

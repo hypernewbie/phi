@@ -21,7 +21,9 @@ function bridgeManager() {
         _normalizePiBridgeView: TabManager.prototype._normalizePiBridgeView,
         _piBridgeRevValue: TabManager.prototype._piBridgeRevValue,
         _piBridgeModelsEligible: TabManager.prototype._piBridgeModelsEligible,
+        _piBridgeThinkingEligible: () => false,
         _refreshPiBridgeModels: TabManager.prototype._refreshPiBridgeModels,
+        _refreshPiBridgeThinking: vi.fn(),
         getActiveTab: () => null,
         renderPresets: vi.fn(),
     };

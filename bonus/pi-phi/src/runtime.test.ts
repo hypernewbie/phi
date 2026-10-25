@@ -10,10 +10,19 @@ import {
 import { LIFECYCLE_HEADROOM_BYTES } from './protocol.js';
 import { CAPABILITY_HISTORY, CAPABILITY_LIFECYCLE } from './protocol.js';
 import { CAPABILITY_MODELS } from './protocol.js';
+import { CAPABILITY_THINKING } from './protocol.js';
 import { MAX_MODELS_ENTRIES } from './protocol.js';
+import { MAX_THINKING_LEVELS } from './protocol.js';
+import { MAX_THINKING_LEVEL_BYTES } from './protocol.js';
+import { MAX_THINKING_MODEL_ID_BYTES } from './protocol.js';
 import { InvalidTargetError } from './endpoint.js';
 import type { ChannelCreds, ChannelHooks } from './channel.js';
-import { type PiContextView, Runtime, type RuntimeChannel } from './runtime.js';
+import {
+    type PiContextView,
+    type PiThinkingLevel,
+    Runtime,
+    type RuntimeChannel,
+} from './runtime.js';
 import type {
     PiModelView,
     PiRegistryView,
@@ -355,6 +364,20 @@ function fakeModel(provider: string, id: string): PiModelView {
     return { provider, id } as unknown as PiModelView;
 }
 
+function thinkingModel(
+    provider: string,
+    id: string,
+    reasoning: boolean,
+    thinkingLevelMap?: Record<string, string | null>,
+): PiModelView {
+    return {
+        provider,
+        id,
+        reasoning,
+        thinkingLevelMap,
+    } as unknown as PiModelView;
+}
+
 function fakeRegistry(
     entries: Array<{ provider: string; id: string }>,
 ): PiRegistryView {
@@ -391,6 +414,58 @@ function setModelRequest(id: string, provider: string, model: string): PhiToPi {
             value: { requestId: id, provider, model },
         },
     };
+}
+
+function thinkingLevelsRequest(id: string): PhiToPi {
+    return {
+        paneId: 'pane',
+        processId: 'proc',
+        runtimeGeneration: 1n,
+        payload: { $case: 'thinkingLevelsRequest', value: { requestId: id } },
+    };
+}
+
+function setThinkingRequest(
+    id: string,
+    level: string,
+    provider = 'p',
+    model = 'm',
+): PhiToPi {
+    return {
+        paneId: 'pane',
+        processId: 'proc',
+        runtimeGeneration: 1n,
+        payload: {
+            $case: 'setThinkingRequest',
+            value: { requestId: id, level, provider, model },
+        },
+    };
+}
+
+function thinkingLevelsOf(msg: PiToPhi): {
+    requestId: string;
+    levels: string[];
+    provider: string;
+    model: string;
+    unavailable: boolean;
+} {
+    const payload = payloadOf(msg);
+    if (payload.$case !== 'thinkingLevelsResponse') {
+        throw new Error(`not a thinking-level response: ${payload.$case}`);
+    }
+    return payload.value;
+}
+
+function thinkingAckOf(msg: PiToPhi): {
+    requestId: string;
+    ok: boolean;
+    reason: string;
+} {
+    const payload = payloadOf(msg);
+    if (payload.$case !== 'setThinkingAck') {
+        throw new Error(`not a set-thinking ack: ${payload.$case}`);
+    }
+    return payload.value;
 }
 
 function modelsOf(msg: PiToPhi): {
@@ -787,6 +862,290 @@ describe('Runtime set-model requests', () => {
         ch.hooks!.onMessage(setModelRequest('s7', 'a', 'x'));
         await sleep(10);
         expect(ch.nonfatalSends).toHaveLength(0);
+        rt.shutdown();
+    });
+});
+
+describe('Runtime Thinking requests', () => {
+    async function started(
+        model: PiModelView | undefined,
+        options: {
+            initialLevel?: PiThinkingLevel;
+            setLevel?: (level: PiThinkingLevel) => void;
+            omitSetter?: boolean;
+        } = {},
+    ): Promise<{
+        ch: MockChannel;
+        rt: Runtime;
+        level: () => PiThinkingLevel;
+        setNativeLevel: (level: PiThinkingLevel) => void;
+        setCalls: PiThinkingLevel[];
+    }> {
+        const ch = mockChannel();
+        const setCalls: PiThinkingLevel[] = [];
+        let level = options.initialLevel ?? 'medium';
+        const runtimeOptions = {
+            creds: CREDS,
+            generation: 1n,
+            makeChannel: wired(ch),
+            getThinkingLevel: () => level,
+            ...(options.omitSetter
+                ? {}
+                : {
+                      setThinkingLevel: (next: PiThinkingLevel) => {
+                          setCalls.push(next);
+                          if (options.setLevel) options.setLevel(next);
+                          else level = next;
+                      },
+                  }),
+        };
+        const rt = new Runtime(runtimeOptions);
+        rt.start(ctx({ model }));
+        await sleep(10);
+        return {
+            ch,
+            rt,
+            level: () => level,
+            setNativeLevel: (next) => {
+                level = next;
+            },
+            setCalls,
+        };
+    }
+
+    it('advertises the capability and reports exact helper-supported levels', async () => {
+        const model = thinkingModel('p', 'm', true, {
+            xhigh: 'xhigh-native',
+            max: 'max-native',
+        });
+        const { ch, rt } = await started(model);
+        const hello = payloadOf(ch.hellos[0]!);
+        if (hello.$case !== 'hello') throw new Error('missing hello');
+        expect(hello.value.capabilities).toContain(CAPABILITY_THINKING);
+        expect(hello.value.currentState?.thinkingLevel).toBe('medium');
+        ch.hooks!.onMessage(thinkingLevelsRequest('t1'));
+        expect(thinkingLevelsOf(ch.nonfatalSends[0]!)).toEqual({
+            requestId: 't1',
+            levels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+            provider: 'p',
+            model: 'm',
+            unavailable: false,
+        });
+        expect(
+            thinkingLevelsOf(ch.nonfatalSends[0]!).levels.length,
+        ).toBeLessThanOrEqual(MAX_THINKING_LEVELS);
+        rt.shutdown();
+    });
+
+    it('preserves off-only models and helper exclusions including xhigh and max', async () => {
+        const offOnly = await started(thinkingModel('p', 'off', false));
+        offOnly.ch.hooks!.onMessage(thinkingLevelsRequest('t-off'));
+        expect(thinkingLevelsOf(offOnly.ch.nonfatalSends[0]!).levels).toEqual([
+            'off',
+        ]);
+        offOnly.rt.shutdown();
+
+        const excluded = await started(
+            thinkingModel('p', 'excluded', true, {
+                low: null,
+                xhigh: 'xhigh-native',
+                max: 'max-native',
+            }),
+        );
+        excluded.ch.hooks!.onMessage(thinkingLevelsRequest('t-excluded'));
+        expect(thinkingLevelsOf(excluded.ch.nonfatalSends[0]!).levels).toEqual([
+            'off',
+            'minimal',
+            'medium',
+            'high',
+            'xhigh',
+            'max',
+        ]);
+        excluded.rt.shutdown();
+    });
+
+    it('returns unavailable for missing models and failed helper reads', async () => {
+        const missing = await started(undefined);
+        const hello = payloadOf(missing.ch.hellos[0]!);
+        if (hello.$case !== 'hello') throw new Error('missing hello');
+        expect(hello.value.currentState?.thinkingLevel).toBe('');
+        missing.ch.hooks!.onMessage(thinkingLevelsRequest('t-missing'));
+        expect(thinkingLevelsOf(missing.ch.nonfatalSends[0]!)).toEqual({
+            requestId: 't-missing',
+            levels: [],
+            provider: '',
+            model: '',
+            unavailable: true,
+        });
+        missing.rt.shutdown();
+
+        const broken = Object.defineProperty(
+            { provider: 'p', id: 'broken' },
+            'reasoning',
+            {
+                get: () => {
+                    throw new Error('helper read failed');
+                },
+            },
+        ) as PiModelView;
+        const failed = await started(broken);
+        failed.ch.hooks!.onMessage(thinkingLevelsRequest('t-failed'));
+        expect(thinkingLevelsOf(failed.ch.nonfatalSends[0]!)).toMatchObject({
+            provider: 'p',
+            model: 'broken',
+            unavailable: true,
+        });
+        failed.ch.hooks!.onMessage(
+            setThinkingRequest('t-fail-set', 'high', 'p', 'broken'),
+        );
+        expect(thinkingAckOf(failed.ch.nonfatalSends[1]!)).toEqual({
+            requestId: 't-fail-set',
+            ok: false,
+            reason: '',
+        });
+        expect(failed.setCalls).toEqual([]);
+        failed.rt.shutdown();
+
+        const oversized = await started(
+            thinkingModel(
+                'p'.repeat(MAX_THINKING_MODEL_ID_BYTES + 1),
+                'm',
+                true,
+            ),
+        );
+        oversized.ch.hooks!.onMessage(thinkingLevelsRequest('t-oversized'));
+        expect(thinkingLevelsOf(oversized.ch.nonfatalSends[0]!)).toMatchObject({
+            levels: [],
+            provider: '',
+            model: '',
+            unavailable: true,
+        });
+        oversized.rt.shutdown();
+    });
+
+    it('sets only a supported level on the matching live model and acks readback', async () => {
+        const { ch, rt, level, setCalls } = await started(
+            thinkingModel('p', 'm', true),
+        );
+        ch.hooks!.onMessage(setThinkingRequest('t-set', 'high'));
+        expect(thinkingAckOf(ch.nonfatalSends[0]!)).toEqual({
+            requestId: 't-set',
+            ok: true,
+            reason: '',
+        });
+        expect(level()).toBe('high');
+        expect(setCalls).toEqual(['high']);
+
+        // Same-level setters need no thinking_level_select event to succeed.
+        ch.hooks!.onMessage(setThinkingRequest('t-same', 'high'));
+        expect(thinkingAckOf(ch.nonfatalSends[1]!)).toEqual({
+            requestId: 't-same',
+            ok: true,
+            reason: '',
+        });
+        rt.shutdown();
+
+        const mismatch = await started(thinkingModel('p', 'm', true), {
+            setLevel: () => {},
+        });
+        mismatch.ch.hooks!.onMessage(setThinkingRequest('t-readback', 'high'));
+        expect(thinkingAckOf(mismatch.ch.nonfatalSends[0]!)).toEqual({
+            requestId: 't-readback',
+            ok: false,
+            reason: '',
+        });
+        expect(mismatch.level()).toBe('medium');
+        mismatch.rt.shutdown();
+    });
+
+    it('rejects changed models and unsupported or oversized levels without mutation', async () => {
+        const { ch, rt, setCalls } = await started(
+            thinkingModel('p', 'm', true),
+        );
+        ch.hooks!.onMessage(
+            setThinkingRequest('t-model', 'high', 'p', 'other'),
+        );
+        expect(thinkingAckOf(ch.nonfatalSends[0]!).reason).toBe(
+            'model-changed',
+        );
+        ch.hooks!.onMessage(setThinkingRequest('t-level', 'max'));
+        expect(thinkingAckOf(ch.nonfatalSends[1]!).reason).toBe(
+            'unsupported-level',
+        );
+        ch.hooks!.onMessage(
+            setThinkingRequest(
+                't-long',
+                'x'.repeat(MAX_THINKING_LEVEL_BYTES + 1),
+            ),
+        );
+        expect(thinkingAckOf(ch.nonfatalSends[2]!).reason).toBe(
+            'unsupported-level',
+        );
+        ch.hooks!.onMessage(
+            setThinkingRequest(
+                't-long-model',
+                'high',
+                'p'.repeat(MAX_THINKING_MODEL_ID_BYTES + 1),
+                'm',
+            ),
+        );
+        expect(thinkingAckOf(ch.nonfatalSends[3]!).reason).toBe(
+            'model-changed',
+        );
+        expect(setCalls).toEqual([]);
+        rt.shutdown();
+    });
+
+    it('rechecks live supported levels immediately before setting', async () => {
+        let reads = 0;
+        const changing = Object.defineProperty(
+            {
+                provider: 'p',
+                id: 'm',
+                thinkingLevelMap: { xhigh: 'x', max: 'm' },
+            },
+            'reasoning',
+            { get: () => ++reads < 3 },
+        ) as PiModelView;
+        const { ch, rt, setCalls } = await started(changing);
+        ch.hooks!.onMessage(setThinkingRequest('t-race', 'high'));
+        expect(thinkingAckOf(ch.nonfatalSends[0]!)).toEqual({
+            requestId: 't-race',
+            ok: false,
+            reason: 'unsupported-level',
+        });
+        expect(setCalls).toEqual([]);
+        rt.shutdown();
+    });
+
+    it('does not advertise or handle the capability without both host methods', async () => {
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            getThinkingLevel: () => 'medium',
+            makeChannel: wired(ch),
+        });
+        rt.start(ctx({ model: thinkingModel('p', 'm', true) }));
+        await sleep(10);
+        const hello = payloadOf(ch.hellos[0]!);
+        if (hello.$case !== 'hello') throw new Error('missing hello');
+        expect(hello.value.capabilities).not.toContain(CAPABILITY_THINKING);
+        ch.hooks!.onMessage(thinkingLevelsRequest('t-unnegotiated'));
+        expect(ch.nonfatalSends).toEqual([]);
+        rt.shutdown();
+    });
+
+    it('publishes native changes using the effective readback', async () => {
+        const model = thinkingModel('p', 'm', true);
+        const { ch, rt, setNativeLevel } = await started(model);
+        // A native terminal event reads back its effective level into the snapshot.
+        setNativeLevel('high');
+        rt.onThinkingLevelSelect(ctx({ model }));
+        const snapshot = ch.sends.at(-1)!.payload;
+        if (snapshot?.$case !== 'stateSnapshot')
+            throw new Error('missing snapshot');
+        expect(snapshot.value.thinkingLevel).toBe('high');
         rt.shutdown();
     });
 });
