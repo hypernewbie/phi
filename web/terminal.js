@@ -6447,6 +6447,9 @@ export class TabManager {
         }
 
         const wasPiRpc = tab.coder === 'pi-rpc';
+        // The pane is leaving the map, so bridge Thinking ownership goes with
+        // it; a stuck pending would block the Thinking controls elsewhere.
+        this._invalidatePiBridgeThinking(tab);
         this.tabs.delete(paneId);
 
         if (!preserveStorage) {
@@ -8823,6 +8826,8 @@ export class TabManager {
                 // resets ordering.
                 tabInfo.piBridge = undefined;
                 this._resetPiBridgeOrdered(tabInfo);
+                // The restart swaps the pane id; drop Thinking ownership.
+                this._invalidatePiBridgeThinking(tabInfo);
                 // A restart provisions a fresh lease: drop recall state
                 // without flushing — the old pane is being reborn.
                 this._resetPiRecall();

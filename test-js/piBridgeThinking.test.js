@@ -467,6 +467,29 @@ describe('Pi bridge Thinking controls', () => {
         clearTimeout(tab.softCloseTimer);
     });
 
+    it('revokes a pending operation when a Pi tab is disposed', async () => {
+        const ws = { readyState: 1, close: vi.fn() };
+        const { tm, tab } = navHarness(bridgeTab({ ws, _piBridgeFresh: ws }));
+        tab.term = { dispose: vi.fn() };
+        let failLevels;
+        mockFetch(
+            () =>
+                new Promise((_resolve, reject) => {
+                    failLevels = () => reject(new Error('request timed out'));
+                }),
+        );
+        tm._updatePiThinkingButton();
+        tm.piThinkingBtn.click();
+        await vi.waitFor(() => expect(failLevels).toBeTypeOf('function'));
+        expect(tm._piRpcThinkingPending).not.toBeNull();
+
+        tm.disposeTabClient('pi-pane-1', { preserveStorage: true });
+        expect(tm._piRpcThinkingPending).toBeNull();
+        failLevels();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(tm.sendToTab).not.toHaveBeenCalled();
+    });
+
     it('repaints the cycle button when the bridge drops in direct mode', async () => {
         const { tm, tab } = harness(bridgeTab({ directMode: true }));
         let failLevels;
