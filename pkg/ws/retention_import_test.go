@@ -584,3 +584,39 @@ func TestSameSourceComparesIdentity(t *testing.T) {
 		t.Fatal("source identity comparison is wrong")
 	}
 }
+
+// TestLegacyImportTailIsBoundedByTheSegmentCeiling covers the state the wider
+// window introduced: when the cap is larger than one physical segment, an
+// import keeps the newest segment, not the whole public window.
+func TestLegacyImportTailIsBoundedByTheSegmentCeiling(t *testing.T) {
+	setRetentionBounds(8<<20, 1<<20)
+	defer setRetentionBounds(testRetentionCap, testRetentionSegment)
+	if retentionSegRawMax >= retentionHistoryCap {
+		t.Fatalf("fixture needs a cap above one segment: cap=%d max=%d", retentionHistoryCap, retentionSegRawMax)
+	}
+	fc := &fakeClock{now: time.Unix(1_700_000_000, 0).UTC()}
+	h, dir := expiryTestHub(t, fc)
+	const pane = "legacy-ceiling"
+	chunk := bytes.Repeat([]byte("imported legacy line with UTF-8 \xe4\xbd\xa0\xf0\x9f\x99\x82\r\n"), 2000)
+	var chunks [][]byte
+	for i := 0; i < 48; i++ {
+		chunks = append(chunks, chunk)
+	}
+	source := writeLegacyLog(t, legacyLogPath(dir, pane), chunks, nil)
+	stampLegacy(t, legacyLogPath(dir, pane), fc.Now())
+	if uint64(len(source)) <= retentionSegRawMax*2 {
+		t.Fatalf("fixture is too short to clamp: %d bytes", len(source))
+	}
+
+	start := uint64(len(source)) - retentionSegRawMax
+	rec, ok := h.Recording(pane, start, uint64(len(source)))
+	if !ok {
+		t.Fatal("eligible legacy log did not import")
+	}
+	if rec.Start != start {
+		t.Fatalf("imported window start=%d want %d (one segment, not the %d-byte window)", rec.Start, start, retentionHistoryCap)
+	}
+	if _, data, _ := readRetained(t, h, pane, start, uint64(len(source))); !bytes.Equal(data, source[start:]) {
+		t.Fatal("imported tail is not the newest segment")
+	}
+}
