@@ -1264,7 +1264,11 @@ func TestHandlePiBridgeModels(t *testing.T) {
 
 	stream, cancel := dialBridgePane(t, b, "pane-http", "pi.lifecycle.v1", "pi.models.v1")
 	defer cancel()
-	go answerModelsOnce(t, stream, []*pibridgepb.ModelRef{{Provider: "a", Model: "x"}}, false, false)
+	// A slow native host must survive the former one-second deadline.
+	go func() {
+		time.Sleep(1200 * time.Millisecond)
+		answerModelsOnce(t, stream, []*pibridgepb.ModelRef{{Provider: "a", Model: "x"}}, false, false)
+	}()
 	rec := serve(http.MethodGet, "/api/pi-bridge/models?pane=pane-http")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("happy code %d, want 200", rec.Code)
@@ -1291,7 +1295,9 @@ func TestHandlePiBridgeModels(t *testing.T) {
 	timedOut := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		r := httptest.NewRecorder()
-		handlePiBridgeModels(r, httptest.NewRequest(http.MethodGet, "/api/pi-bridge/models?pane=pane-http", nil))
+		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+		defer cancel()
+		handlePiBridgeModels(r, httptest.NewRequest(http.MethodGet, "/api/pi-bridge/models?pane=pane-http", nil).WithContext(ctx))
 		timedOut <- r
 	}()
 	if _, err := stream.Recv(); err != nil {
@@ -1361,7 +1367,10 @@ func TestHandlePiBridgeSetModel(t *testing.T) {
 
 	stream, cancel := dialBridgePane(t, b, "pane-http", "pi.lifecycle.v1", "pi.models.v1")
 	defer cancel()
-	go answerSetModelOnce(t, stream, true, "")
+	go func() {
+		time.Sleep(1200 * time.Millisecond)
+		answerSetModelOnce(t, stream, true, "")
+	}()
 	rec := serve(http.MethodPost, `{"pane":"pane-http","provider":"a","model":"x"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("happy code %d, want 200", rec.Code)

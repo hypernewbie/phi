@@ -120,9 +120,13 @@ refusal with `no-auth` (no provider credentials) or
 empty reason means the switch attempt itself errored and its
 outcome is unknown. A successful switch
 emits `model_select`, so the current-model snapshot follows with no
-explicit publish. Queue, admission, drop, and timeout semantics
-match history reads; Phi surfaces list failures inside the picker
-(error/unavailable row) and keeps partial lists usable.
+explicit publish. Queue, admission, and drop semantics match history
+reads. Model HTTP handlers allow 30 seconds for local IPC, while the
+browser allows 45 seconds including network and offline queue time.
+The browser retries only catalog reads, never dispatched model changes;
+a change picked offline is held and sent after its session is rechecked.
+Phi renders the last good catalog while a refresh runs, surfaces refresh
+failures as an in-picker note, and keeps partial lists usable.
 
 ## Thinking reads and setting
 

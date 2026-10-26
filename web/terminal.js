@@ -1,6 +1,7 @@
 /* Φ phi — Terminal & Tab Manager */
 
 import { PTYWebSocket } from './ws.js';
+import { modelRequestJson } from './model-request.js';
 import { terminalSnapshot, resetTerminalState } from './terminal-state.js';
 import { terminalHistoryMethods } from './terminal-history.js';
 import { normalizePath } from './sessions.js';
@@ -5089,6 +5090,7 @@ export class TabManager {
             });
             return;
         }
+        const tab = this.tabs?.get(paneId);
         const operation = { paneId, provider, modelId };
         this._piRpcModelInflight.set(paneId, operation);
         this._piRpcModelPending = operation;
@@ -5096,7 +5098,14 @@ export class TabManager {
         try {
             setterResult =
                 coder === 'pi'
-                    ? this._piBridgeModelSwitch(paneId, provider, modelId)
+                    ? this._piBridgeModelSwitch(
+                          paneId,
+                          provider,
+                          modelId,
+                          () =>
+                              this._piRpcModelInflight?.get(paneId) ===
+                                  operation && this.tabs?.get(paneId) === tab,
+                      )
                     : rpcChatSetModel(paneId, provider, modelId);
         } catch (error) {
             setterResult = Promise.reject(error);
@@ -5616,72 +5625,74 @@ export class TabManager {
     // with Pi RPC. Flags ride along so the caller assigns them inside
     // the staleness fence; they drive the empty copy and the footer.
     async _piBridgeModelsFetch(paneId) {
-        const controller = new AbortController();
-        // Bound the browser too, but generously: the caller renders from
-        // local state, so a slow link only delays the refresh.
-        const timer = setTimeout(() => controller.abort(), 15000);
         try {
-            const res = await fetch(
+            const body = await modelRequestJson(
                 `/api/pi-bridge/models?pane=${encodeURIComponent(paneId)}`,
-                { signal: controller.signal },
             );
-            if (!res.ok)
-                throw new Error(`Pi models unavailable (${res.status})`);
-            const body = await res.json();
             return {
-                models: Array.isArray(body.models) ? body.models : [],
-                truncated: body.truncated === true,
-                unavailable: body.unavailable === true,
+                models: Array.isArray(body?.models) ? body.models : [],
+                truncated: body?.truncated === true,
+                unavailable: body?.unavailable === true,
             };
         } catch (error) {
             if (error?.name === 'AbortError')
                 throw new Error('Pi models unavailable (request timed out)');
             throw error;
-        } finally {
-            clearTimeout(timer);
         }
     }
 
     // Bridge model switch for Pi PTY tabs. A refused switch surfaces
     // its reason; a failed round trip is explicitly unknown, never a
     // guessed failure, since the switch may still have landed.
-    async _piBridgeModelSwitch(paneId, provider, modelId) {
-        const controller = new AbortController();
-        // Bound the browser too, but generously: the caller renders from
-        // local state, so a slow link only delays the refresh.
-        const timer = setTimeout(() => controller.abort(), 15000);
+    async _piBridgeModelSwitch(paneId, provider, modelId, canSend) {
         let body;
+        let dispatched = false;
         try {
-            const res = await fetch('/api/pi-bridge/model', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    pane: paneId,
-                    provider,
-                    model: modelId,
-                }),
-                signal: controller.signal,
-            });
-            if (!res.ok) throw new Error('unknown');
-            body = await res.json();
+            body = await modelRequestJson(
+                '/api/pi-bridge/model',
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        pane: paneId,
+                        provider,
+                        model: modelId,
+                    }),
+                },
+                {
+                    canSend,
+                    // A pick made offline is held, never silently dropped.
+                    // The menu is already closed: say so once.
+                    onQueued: () =>
+                        this.app?.showToast?.(
+                            'Offline — model change queued; waiting for connection…',
+                            { type: 'info', title: 'Pi model' },
+                        ),
+                    onDispatch: () => {
+                        dispatched = true;
+                    },
+                },
+            );
         } catch {
-            throw new Error('unknown — reopen the picker');
-        } finally {
-            clearTimeout(timer);
+            throw new Error(
+                dispatched
+                    ? 'unknown — reopen the picker'
+                    : 'Model change not sent — check your connection and try again',
+            );
         }
-        if (body.ok === true) return;
-        if (body.reason === 'no-auth')
+        if (body?.ok === true) return;
+        if (body?.reason === 'no-auth')
             throw new Error(
                 'Switch refused: provider has no credentials (no-auth)',
             );
-        if (body.reason === 'unknown-model')
+        if (body?.reason === 'unknown-model')
             throw new Error(
                 'Switch refused: model is not selectable (unknown-model)',
             );
         // ok=false with an empty reason means the attempt errored
         // and its outcome is unknown, like a failed round trip;
         // anything else is an unexpected refusal shape.
-        if (body.reason === '')
+        if (!body || body.reason === '')
             throw new Error('unknown — reopen the picker');
         throw new Error('Switch failed');
     }

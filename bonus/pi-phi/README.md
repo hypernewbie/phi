@@ -44,9 +44,15 @@ The reader checks a private Pi editor field, so compatibility requires a host ch
 A connected Pi pane with `pi.models.v1` uses the shared Pi RPC model picker,
 including its favorites. The picker requests Pi's selectable models when it opens.
 Without the bridge or capability, Models keeps the legacy static presets.
-A lost connection closes the picker and clears its cached list.
-A failed list request shows an error inside the picker.
-A switch timeout has an unknown outcome. Reopen the picker to check the model.
+A lost terminal connection closes the picker; an in-flight model change is
+not cancelled. The last successful catalog renders immediately while a fresh
+list loads. A failed refresh adds a short note and keeps the rows usable.
+The browser allows 45 seconds for a model request, including time queued
+while offline; Phi allows 30 seconds for the local Pi operation. A change
+picked offline is held, announced, and sent once the browser is online,
+after rechecking that its session is still current. Catalog reads may retry;
+a dispatched change is never automatically replayed. A switch timeout has an
+unknown outcome. Reopen the picker to check the model.
 
 ## Skills
 
