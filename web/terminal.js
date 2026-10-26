@@ -161,6 +161,13 @@ export function getTerminalTheme(
 
 // Pi thinking levels — bonus/pi_themes/phi_violet.json colors:
 //  off darkGray #252525 → minimal gray #474747 → low #6d28d9 → medium #ddd6fe → high #a78bfa → xhigh white #e3e3e4
+const MOVED_PRESET_VALUES = new Set([
+    '/quit\r',
+    '/exit\r',
+    '/resume\r',
+    '/sessions\r',
+]);
+
 const PI_THINKING_ORDER = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'];
 // Bridge protocol vocabulary (includes max); PI_THINKING_ORDER above is the
 // legacy display order where max aliases to xhigh. Keep the two separate.
@@ -11224,13 +11231,12 @@ export class TabManager {
         }
         this.presetsContainer.innerHTML = '';
 
-        const defaultPresetInfo = this.app.codersPresetRegistry[coderId];
-        const miniPresets = getCoder(coderId)?.opencode_mini_presets;
-        const coderPresetInfo = isOpenCodeMini(activeTab) && miniPresets?.length
-            ? { ...defaultPresetInfo, presets: miniPresets }
-            : defaultPresetInfo;
-        const hasCoderPresets =
-            coderPresetInfo?.presets && coderPresetInfo.presets.length > 0;
+        const coderPresetInfo = this._getCoderPresetInfo(coderId, activeTab);
+        const presets = coderPresetInfo?.presets || [];
+        const visiblePresets = presets.filter(
+            (p) => !MOVED_PRESET_VALUES.has(p.value),
+        );
+        const hasCoderPresets = visiblePresets.length > 0;
 
         // If direct mode, do not render presets
         if (activeTab?.directMode) {
@@ -11246,10 +11252,10 @@ export class TabManager {
         if (hasCoderPresets) {
             if (isMobile) {
                 // Separate slash commands from utility shortcuts
-                const slashPresets = coderPresetInfo.presets.filter((p) =>
+                const slashPresets = visiblePresets.filter((p) =>
                     p.value.startsWith('/'),
                 );
-                const utilityPresets = coderPresetInfo.presets.filter(
+                const utilityPresets = visiblePresets.filter(
                     (p) => !p.value.startsWith('/'),
                 );
 
@@ -11281,7 +11287,7 @@ export class TabManager {
                 });
             } else {
                 // Desktop: Render everything horizontally as before
-                coderPresetInfo.presets.forEach((p) => {
+                visiblePresets.forEach((p) => {
                     const btn = document.createElement('button');
                     btn.className = 'preset-btn';
                     btn.innerText = p.name;
@@ -11293,22 +11299,7 @@ export class TabManager {
                             btn.title = compactState.title;
                     }
                     btn.addEventListener('click', () => {
-                        const activeTab = this.getActiveTab();
-                        if (
-                            activeTab &&
-                            (activeTab.coder === 'opencode' ||
-                                activeTab.coder === 'pi' ||
-                                activeTab.coder === 'codex') &&
-                            p.value.startsWith('/') &&
-                            p.value.endsWith('\r')
-                        ) {
-                            const cmd = p.value.slice(0, -1);
-                            // OpenCode delays Enter after the paste; Pi accepts
-                            // the atomic paste+Enter form.
-                            this.sendSlashCommand(activeTab, cmd);
-                        } else {
-                            this.sendRawInput(p.value);
-                        }
+                        this._sendCoderPreset(p.value);
                     });
                     this.presetsContainer.appendChild(btn);
                 });
@@ -11525,10 +11516,9 @@ export class TabManager {
         }
         const slashDropup = document.getElementById('slash-presets-dropup');
         if (slashDropup && !slashDropup.classList.contains('hidden')) {
-            const slashPresets = coderPresetInfo
-                ? coderPresetInfo.presets.filter((p) => p.value.startsWith('/'))
-                : [];
-            this.renderSlashDropup(slashPresets);
+            this.renderSlashDropup(
+                visiblePresets.filter((p) => p.value.startsWith('/')),
+            );
         }
 
         // 5. Render mobile virtual navigation keys (arrows) to compensate for touch keyboard limits
@@ -11555,6 +11545,49 @@ export class TabManager {
             });
         }
         this._updatePiThinkingButton();
+    }
+
+    _getCoderPresetInfo(coderId, activeTab = this.getActiveTab()) {
+        const defaultPresetInfo = this.app?.codersPresetRegistry?.[coderId];
+        const miniPresets = getCoder(coderId)?.opencode_mini_presets;
+        return isOpenCodeMini(activeTab) && miniPresets?.length
+            ? { ...defaultPresetInfo, presets: miniPresets }
+            : defaultPresetInfo;
+    }
+
+    _sendCoderPreset(value, { focusInputOnMobile = true } = {}) {
+        const activeTab = this.getActiveTab();
+        if (!activeTab || activeTab.directMode || activeTab.coder === 'pi-rpc')
+            return;
+
+        const options = focusInputOnMobile
+            ? undefined
+            : { focusInputOnMobile: false };
+        if (
+            ['opencode', 'pi', 'codex'].includes(activeTab.coder) &&
+            value.startsWith('/') &&
+            value.endsWith('\r')
+        ) {
+            const command = value.slice(0, -1);
+            if (options) this.sendSlashCommand(activeTab, command, options);
+            else this.sendSlashCommand(activeTab, command);
+        } else if (options) {
+            this.sendRawInput(value, options);
+        } else {
+            this.sendRawInput(value);
+        }
+    }
+
+    _sendBuiltInPreset(value, options) {
+        const activeTab = this.getActiveTab();
+        if (!activeTab || activeTab.directMode || activeTab.coder === 'pi-rpc')
+            return;
+        const preset = this._getCoderPresetInfo(
+            activeTab.coder,
+            activeTab,
+        )?.presets?.find((p) => p.value === value);
+        if (preset && MOVED_PRESET_VALUES.has(preset.value))
+            this._sendCoderPreset(preset.value, options);
     }
 
     renderSlashDropup(slashPresets) {
@@ -11596,21 +11629,9 @@ export class TabManager {
                 if (compactState.title) btn.title = compactState.title;
             }
             btn.addEventListener('click', () => {
-                const activeTab = this.getActiveTab();
-                if (
-                    activeTab &&
-                    (activeTab.coder === 'opencode' ||
-                        activeTab.coder === 'pi' ||
-                        activeTab.coder === 'codex') &&
-                    p.value.startsWith('/') &&
-                    p.value.endsWith('\r')
-                ) {
-                    const cmd = p.value.slice(0, -1);
-                    // OpenCode delays Enter after the paste; Pi stays atomic.
-                    this.sendSlashCommand(activeTab, cmd, { focusInputOnMobile: false });
-                } else {
-                    this.sendRawInput(p.value, { focusInputOnMobile: false });
-                }
+                this._sendCoderPreset(p.value, {
+                    focusInputOnMobile: false,
+                });
                 dropup.classList.add('hidden');
             });
             row.appendChild(btn);
@@ -12175,6 +12196,35 @@ export class TabManager {
         dropup.innerHTML = '';
 
         const quickCmds = this.app.quickCommands || [];
+        const activeTab = this.getActiveTab();
+        const builtInPresets =
+            activeTab && !activeTab.directMode && activeTab.coder !== 'pi-rpc'
+                ? (this._getCoderPresetInfo(activeTab.coder, activeTab)?.presets ||
+                      []).filter((p) => MOVED_PRESET_VALUES.has(p.value))
+                : [];
+
+        if (builtInPresets.length > 0) {
+            const builtInHeader = document.createElement('div');
+            builtInHeader.className = 'dropup-header';
+            builtInHeader.innerText = 'Built-in Commands';
+            dropup.appendChild(builtInHeader);
+
+            builtInPresets.forEach((preset) => {
+                const row = document.createElement('div');
+                row.className = 'dropup-row';
+                const btn = document.createElement('button');
+                btn.className = 'dropup-model-btn';
+                btn.innerText = preset.name;
+                btn.addEventListener('click', () => {
+                    this._sendBuiltInPreset(preset.value, {
+                        focusInputOnMobile: false,
+                    });
+                    dropup.classList.add('hidden');
+                });
+                row.appendChild(btn);
+                dropup.appendChild(row);
+            });
+        }
 
         const header = document.createElement('div');
         header.className = 'dropup-header';
