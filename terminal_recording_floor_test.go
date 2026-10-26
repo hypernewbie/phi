@@ -20,14 +20,15 @@ func writePastTheFloor(t *testing.T, pane string) uint64 {
 		t.Fatal(err)
 	}
 	chunk := bytes.Repeat([]byte("x"), 64*1024)
-	// More than the floor plus the 2MiB response bound, so a request that
-	// starts at zero used to invert into an empty window.
-	for i := 0; i < 80; i++ {
+	// Past the whole retention window plus the 2MiB response bound, so a
+	// request that starts at zero used to invert into an empty window.
+	pages := (ws.RetentionWindowBytes + 1<<20) / len(chunk)
+	for i := 0; i < pages; i++ {
 		if err := wsHub.Ingest(pane, chunk); err != nil {
 			t.Fatal(err)
 		}
 	}
-	return 80 * 64 * 1024
+	return uint64(pages * len(chunk))
 }
 
 func recordingHeader(t *testing.T, w *httptest.ResponseRecorder) (ws.RecordingHeaderJSON, []byte) {

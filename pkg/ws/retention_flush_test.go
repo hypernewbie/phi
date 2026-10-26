@@ -209,7 +209,7 @@ func TestRetentionRotationFlushesEvenUnderTheThreshold(t *testing.T) {
 	h.RecordResize("p", 80, 24)
 	// A full segment plus a little: the rotation happens at the segment size.
 	chunk := bytes.Repeat([]byte("q"), 64*1024)
-	for i := 0; i < int(retentionSegNominal/len(chunk))+1; i++ {
+	for i := 0; i < int(retentionSegNominal)/len(chunk)+1; i++ {
 		if err := h.Ingest("p", chunk); err != nil {
 			t.Fatal(err)
 		}

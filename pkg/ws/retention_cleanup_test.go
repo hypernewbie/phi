@@ -88,7 +88,7 @@ func TestFailedRetentionOpenPreservesCommittedManifest(t *testing.T) {
 			}
 			defer reopened.close()
 			data, _, err := reopened.read(reopened.floor(), reopened.head)
-			if err != nil || !bytes.Equal(data, bytes.Repeat([]byte("x"), retentionHistoryCap)) {
+			if err != nil || !bytes.Equal(data, bytes.Repeat([]byte("x"), int(retentionHistoryCap))) {
 				t.Fatalf("restored history differs: bytes=%d err=%v", len(data), err)
 			}
 		})

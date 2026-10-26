@@ -23,8 +23,8 @@ import (
 
 // Bounded terminal retention.
 //
-// A retention group keeps the newest 4 MiB of raw output history per
-// terminal in two rotating journal segments. Each segment holds separate
+// A retention group keeps the newest 32 MiB of raw output history per
+// terminal in nine rotating journal segments. Each segment holds separate
 // raw bytes, fixed-size resize records, and one immutable base checkpoint:
 // the exact parser at that segment's source start with zero historical
 // scrollback. Older bytes are evicted permanently once a rotation commits.
@@ -37,18 +37,29 @@ import (
 // The group has no internal mutex. Every method must run under the owning
 // PaneHub's mutex, exactly like the legacy journal it replaces.
 
-// Approved retention bounds. Upper bounds, not reservations.
+// RetentionWindowBytes is the newest raw output history Phi keeps per
+// terminal. Older bytes are evicted as output continues.
+const RetentionWindowBytes = 32 << 20
+
+// Approved retention bounds. Upper bounds, not reservations. The four
+// bound variables are variables rather than constants so tests can run the
+// same eviction paths on small fixtures; production never reassigns them.
+var (
+	retentionHistoryCap uint64 = RetentionWindowBytes
+	retentionSegNominal uint64 = 4 << 20
+	retentionSegRawMax  uint64 = retentionSegNominal + retentionSegSlack
+	// Eviction drops one segment per rotation, so the reachable window is
+	// (segsKept-1)*segNominal: eight full segments must cover the cap.
+	retentionSegsKept = int(retentionHistoryCap/retentionSegNominal) + 1
+)
+
 const (
-	retentionHistoryCap  = 4 << 20
-	retentionSegNominal  = 4 << 20
-	retentionSegSlack    = 32 << 10
-	retentionSegRawMax   = retentionSegNominal + retentionSegSlack
-	retentionCkptMax     = 2 << 20
-	retentionRszRecLen   = 12
-	retentionRszMaxCount = 4096
-	retentionRszMaxBytes = 64 << 10
-	retentionManifestMax = 64 << 10
-	retentionSegsKept    = 2
+	retentionSegSlack    uint64 = 32 << 10
+	retentionCkptMax            = 2 << 20
+	retentionRszRecLen          = 12
+	retentionRszMaxCount        = 4096
+	retentionRszMaxBytes        = 64 << 10
+	retentionManifestMax        = 64 << 10
 )
 
 var errPendingTransaction = errors.New("unresolved retention transaction")
@@ -820,7 +831,7 @@ func (g *retentionGroup) closeFiles() error {
 	return errors.Join(errs...)
 }
 
-// floor is the oldest readable source sequence: the public 4 MiB window,
+// floor is the oldest readable source sequence: the public 32 MiB window,
 // or the oldest physically retained byte when resize pressure shortened
 // history before the raw cap.
 func (g *retentionGroup) floor() uint64 {
@@ -1283,10 +1294,14 @@ func (g *retentionGroup) appendPayload(payload []byte, snap baseSnapshotFunc) ([
 // prefix through a scratch clone of the live snapshot in bounded chunks,
 // without another payload-sized copy. The live parser stays untouched
 // until the hub publishes after a successful commit.
+//
+// shortcut: a giant payload keeps only its newest segment, so that pane's
+// reachable window drops to retentionSegRawMax instead of the full cap.
+// Upgrade to spanning segments if such writes become common.
 func (g *retentionGroup) stageGiantPayload(payload []byte, snap baseSnapshotFunc) (*stagedCommit, commitInput, error) {
 	newHead := g.head + uint64(len(payload))
 	base := newHead - retentionSegRawMax
-	dropped := payload[:len(payload)-retentionSegRawMax]
+	dropped := payload[:len(payload)-int(retentionSegRawMax)]
 	var ckpt []byte
 	if snap != nil {
 		if live, err := snap(); err == nil && len(live) > 0 {
@@ -1311,7 +1326,7 @@ func (g *retentionGroup) stageGiantPayload(payload []byte, snap baseSnapshotFunc
 	for i := range g.segs {
 		st.evict = append(st.evict, g.segs[i].gen)
 	}
-	return st, commitInput{raw: payload[len(payload)-retentionSegRawMax:], ckpt: ckpt}, nil
+	return st, commitInput{raw: payload[len(payload)-int(retentionSegRawMax):], ckpt: ckpt}, nil
 }
 
 func (g *retentionGroup) buildGiantBase(liveGz, dropped []byte) []byte {

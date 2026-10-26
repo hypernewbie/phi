@@ -1377,7 +1377,7 @@ func seedSmallLegacy(t *testing.T, dir, pane string, mtime time.Time) (string, [
 // counts document.
 func rotationChunk() []byte {
 	const line = "rotation filler line 0123456789abcdef\r\n"
-	size := int(retentionSegNominal)/4 - 64<<10
+	size := int(retentionSegNominal) / 4
 	return bytes.Repeat([]byte(line), size/len(line))
 }
 
