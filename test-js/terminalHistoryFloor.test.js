@@ -119,15 +119,18 @@ it('a paging failure that cannot heal still leaves browsing mode', async () => {
 });
 
 it('pages from the floor the server just reported, not the attach-time floor', async () => {
+    // Longer than one history book, so the page still starts above the floor
+    // the server reports and the stale attach-time floor is the only one that
+    // would clamp it lower.
     const source = encode(
-        Array.from({ length: 60000 }, (_, i) => `R${i}\r\n`).join(''),
+        Array.from({ length: 300000 }, (_, i) => `R${i}\r\n`).join(''),
     );
     const h = replayHarness(source);
     const head = source.length;
     try {
         h.pty.ws.head({ epoch: 7, oldest: 0, head });
         await h.settle();
-        const floor = head - 200000; // the window rotated since the attach
+        const floor = head - 1200000; // the window rotated since the attach
         const inner = h.fetcher;
         vi.stubGlobal(
             'fetch',

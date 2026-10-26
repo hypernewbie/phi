@@ -3,7 +3,11 @@ import { resetTerminalState } from './terminal-state.js';
 const MAX_CHECKPOINT_BYTES = 2 << 20;
 const LIVE_SCROLLBACK_ROWS = 10000;
 const HISTORY_MIN_STEP_BYTES = 4096;
-export const HISTORY_BOOK_BYTES = 64 << 10;
+// One click steps back one book: the exact parser state at `from` plus the
+// recording bytes up to `end`. 64 KiB made the reader walk the 32 MiB
+// retention window in ~500 clicks; 1 MiB keeps every fetch, and every
+// request the tablet budget spec measures, well under 2 MiB per action.
+export const HISTORY_BOOK_BYTES = 1 << 20;
 const HISTORY_READ_ATTEMPTS = 8;
 
 export const terminalHistoryMethods = {
