@@ -135,23 +135,21 @@ async function recordingWindowText(
     return chunks.join('');
 }
 
-async function recordingFloor(page: Page, pane: string): Promise<number> {
-    return page.evaluate(async (id) => {
-        const response = await fetch(
-            `/api/terminals/${encodeURIComponent(id)}/recording?from=0&through=18446744073709551615`,
-        );
-        if (!response.ok) return -1;
-        const body = new Uint8Array(await response.arrayBuffer());
-        const size = new DataView(
-            body.buffer,
-            body.byteOffset,
-            body.byteLength,
-        ).getUint32(0);
-        const header = JSON.parse(
-            new TextDecoder().decode(body.subarray(4, 4 + size)),
-        );
-        return Number(header.start);
-    }, pane);
+// The floor is one byte wide, so polling it costs a header, not a window.
+async function retainedFloor(
+    request: APIRequestContext,
+    pane: string,
+): Promise<number> {
+    const response = await request.get(
+        `${phi.url}/api/terminals/${encodeURIComponent(pane)}/recording?from=0&through=1`,
+    );
+    if (!response.ok()) return -1;
+    const body = await response.body();
+    const headerLength = body.readUInt32BE(0);
+    const header = JSON.parse(
+        body.subarray(4, 4 + headerLength).toString('utf8'),
+    ) as { start: number };
+    return header.start;
 }
 
 for (const width of [1280, 560]) {
@@ -212,11 +210,14 @@ for (const width of [1280, 560]) {
         // Wait for the initial burst before attaching: the compact checkpoint
         // omits known older bytes and enables the existing history control.
         await expect
-            .poll(() => recordingWindowText(request, pane), {
+            .poll(() => retainedFloor(request, pane), {
                 timeout: 180_000,
                 intervals: [5_000],
             })
-            .toContain('FLOOR INITIAL READY');
+            .toBeGreaterThan(1 << 20);
+        expect(await recordingWindowText(request, pane)).toContain(
+            'FLOOR INITIAL READY',
+        );
 
         let paneSockets = 0;
         page.on('websocket', (socket) => {
@@ -232,7 +233,7 @@ for (const width of [1280, 560]) {
         await expect
             .poll(() => view(page, pane))
             .toContain('FLOOR INITIAL READY');
-        expect(await recordingFloor(page, pane)).toBeGreaterThan(1 << 20);
+        expect(await retainedFloor(request, pane)).toBeGreaterThan(1 << 20);
         const historyButton = page.locator(`#term-${pane} .load-history-btn`);
         await page.locator(`#term-${pane} .xterm-screen`).hover();
         await page.mouse.wheel(0, -4000);
@@ -243,7 +244,7 @@ for (const width of [1280, 560]) {
         await expect.poll(() => view(page, pane)).toContain('FLOOR OLD');
         await expect(historyButton).toBeEnabled();
         const historicalView = await view(page, pane);
-        const oldFloor = await recordingFloor(page, pane);
+        const oldFloor = await retainedFloor(request, pane);
 
         // The reader is frozen on loaded history while live output keeps
         // arriving. The view must not move, and the floor must advance.
@@ -253,13 +254,13 @@ for (const width of [1280, 560]) {
         );
         expect(advanced.ok()).toBe(true);
         await expect
-            .poll(() => recordingWindowText(request, pane), {
+            .poll(() => retainedFloor(request, pane), {
                 timeout: 60_000,
                 intervals: [2_000],
             })
-            .toContain('FLOOR LATEST AFTER ROTATION');
-        expect(await recordingFloor(page, pane)).toBeGreaterThan(
-            oldFloor + (1 << 20),
+            .toBeGreaterThan(oldFloor + (1 << 20));
+        expect(await recordingWindowText(request, pane)).toContain(
+            'FLOOR LATEST AFTER ROTATION',
         );
         expect(await view(page, pane)).toBe(historicalView);
         await page.waitForTimeout(2000);
