@@ -3474,6 +3474,23 @@ body.has-terminal-bg
     line-height: 1.4;
     padding: 6px 10px;
 }
+#pi-rpc-model-dropup .dropup-model-btn {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    padding-right: 0;
+}
+
+#pi-rpc-model-dropup .pi-model-name-full {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#pi-rpc-model-dropup .pi-model-name-compact {
+    display: none;
+}
+
 #pi-rpc-model-dropup .pi-rpc-dropup-meta {
     font-size: 10px;
     font-weight: 400;
@@ -5668,7 +5685,24 @@ html[data-phi-config-page] .settings-modal {
     /* Variable-aware cap survives on-screen keyboard collapse
        (--vv-height is set from visualViewport; see web/app.js:477-518). */
     #pi-rpc-model-dropup {
-        max-height: min(42vh, calc(var(--vv-height, 100dvh) * 0.42));
+        width: min(480px, calc(100% - 24px)) !important;
+        max-width: calc(100vw - 24px);
+        max-height: min(68vh, calc(var(--vv-height, 100dvh) * 0.68));
+        overflow: hidden;
+    }
+
+    #pi-rpc-model-dropup .pi-rpc-model-sticky {
+        flex-shrink: 0;
+    }
+
+    #pi-rpc-model-dropup .dropup-header {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    #pi-rpc-model-dropup .pi-rpc-model-search {
+        font-size: 16px; /* Prevent iOS focus zoom. */
     }
 
     #pi-rpc-skills-dropup {
@@ -5676,6 +5710,10 @@ html[data-phi-config-page] .settings-modal {
     }
 
     #pi-rpc-model-dropup .pi-rpc-model-list-container {
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
         touch-action: pan-y;
     }
 
@@ -5683,8 +5721,33 @@ html[data-phi-config-page] .settings-modal {
         touch-action: pan-y;
     }
 
+    #pi-rpc-model-dropup .pi-model-name-full,
+    #pi-rpc-model-dropup .pi-rpc-dropup-meta {
+        display: none;
+    }
+
+    #pi-rpc-model-dropup .pi-model-name-compact {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
     #pi-rpc-model-dropup .dropup-model-btn {
+        align-self: stretch;
         min-height: 44px;
+        padding: 10px 12px;
+        font-size: 13px;
+    }
+
+    #pi-rpc-model-dropup .pi-rpc-model-star {
+        flex-shrink: 0;
+        min-width: 44px;
+        min-height: 44px;
+    }
+
+    #pi-rpc-model-dropup .pi-rpc-model-group-toggle {
+        min-height: 44px;
+        font-size: 11px;
     }
 
     #pi-rpc-skills-dropup .dropup-model-btn {

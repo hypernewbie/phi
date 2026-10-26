@@ -672,7 +672,9 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(dropup.textContent).toContain('remote/model-id');
         expect(dropup.textContent).toContain('fallback-id');
         const choice = [...dropup.querySelectorAll('.dropup-model-btn')].find(
-            (button) => button.textContent === 'Friendly model',
+            (button) =>
+                button.querySelector('.pi-model-name-full')?.textContent ===
+                'Friendly model',
         );
         choice.click();
         expect(rpcChatSetModel).toHaveBeenCalledWith(
