@@ -333,10 +333,11 @@ describe('Pi RPC ControlClient', () => {
         const client = connectControl();
         const pending = client.call('hydrate', 'sid-1', {});
         // Offline is not a failure: the frame waits in the outbox, so its
-        // deadline only starts when it reaches a socket. The advance stays
-        // below the dial watchdog, so this is still the first handshake.
-        vi.advanceTimersByTime(5_000);
-        const socket = FakeWebSocket.instances[0];
+        // deadline only starts when it reaches a socket.
+        vi.advanceTimersByTime(ControlCallTimeout * 2);
+        // The watchdog recycled the handshake that never opened; the call is
+        // still queued, not failed.
+        const socket = FakeWebSocket.instances.at(-1);
         socket.open();
         expect(socket.sent).toHaveLength(2);
         expect(socket.sent[0].payload.$case).toBe('hello');

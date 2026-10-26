@@ -5318,13 +5318,16 @@ export class TabManager {
     // would otherwise accumulate until they use up the quota every other
     // write needs. The oldest are dropped first.
     _prunePiRpcModelCaches(keep = 20) {
-        const storage = window.localStorage;
-        if (!storage) return;
-        const entries = [];
         try {
+            const storage = window.localStorage;
+            if (!storage) return;
+            const entries = [];
             for (let index = 0; index < storage.length; index++) {
                 const key = storage.key(index);
-                if (typeof key !== 'string' || !key.startsWith('phi.piRpc.models.'))
+                if (
+                    typeof key !== 'string' ||
+                    !key.startsWith('phi.piRpc.models.')
+                )
                     continue;
                 let at = 0;
                 try {
@@ -5334,17 +5337,15 @@ export class TabManager {
                 }
                 entries.push({ key, at });
             }
-        } catch (_error) {
-            return;
-        }
-        if (entries.length <= keep) return;
-        entries.sort((left, right) => left.at - right.at);
-        for (const entry of entries.slice(0, entries.length - keep)) {
-            try {
+            if (entries.length <= keep) return;
+            entries.sort((left, right) => left.at - right.at);
+            for (const entry of entries.slice(0, entries.length - keep)) {
                 storage.removeItem(entry.key);
-            } catch (_error) {
-                /* storage unavailable */
             }
+        } catch (_error) {
+            // Storage that throws on access (restricted browsing, quota
+            // probing) must not turn a successful refresh into an error: the
+            // memory copy already serves this session.
         }
     }
 

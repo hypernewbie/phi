@@ -560,6 +560,34 @@ describe('bridge models picker', () => {
             name.startsWith('phi.piRpc.models.'),
         );
         expect(keys.length).toBeLessThanOrEqual(20);
+
+        // Restricted storage throws on access: the refresh still succeeds in
+        // memory instead of surfacing an error the user cannot act on.
+        const descriptor = Object.getOwnPropertyDescriptor(
+            window,
+            'localStorage',
+        );
+        Object.defineProperty(window, 'localStorage', {
+            configurable: true,
+            get() {
+                throw new DOMException('denied', 'SecurityError');
+            },
+        });
+        try {
+            expect(
+                tm._savePiRpcModelCache('pi', 'restricted', [
+                    { provider: 'b', id: 'z' },
+                ]),
+            ).toBeUndefined();
+            expect(tm._loadPiRpcModelCache('pi', 'restricted')).toEqual({
+                models: [{ provider: 'b', id: 'z' }],
+                truncated: false,
+            });
+        } finally {
+            if (descriptor)
+                Object.defineProperty(window, 'localStorage', descriptor);
+            else delete window.localStorage;
+        }
     });
 
     it('keeps the last list when a refresh fails', async () => {
