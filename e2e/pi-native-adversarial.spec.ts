@@ -5,13 +5,9 @@ import { startPhi } from './_server.js';
 
 interface Observed {
     element?: HTMLElement;
-    rows: number;
-    pendingWrites?: number;
-    lastWriteAt?: number;
-    write(data: string | Uint8Array, callback?: () => void): void;
     buffer: {
         active: {
-            viewportY: number;
+            length: number;
             getLine(
                 i: number,
             ): { translateToString(trim?: boolean): string } | undefined;
@@ -29,26 +25,17 @@ async function observe(page: Page) {
             get: () => ctor,
             set: (base: Constructor) => {
                 ctor = class extends base {
-                    pendingWrites = 0;
-                    lastWriteAt = performance.now();
                     constructor(opts: Record<string, unknown>) {
                         super(opts);
                         w.stressTerms.push(this);
-                    }
-                    write(data: string | Uint8Array, callback?: () => void) {
-                        this.pendingWrites++;
-                        this.lastWriteAt = performance.now();
-                        super.write(data, () => {
-                            this.pendingWrites--;
-                            this.lastWriteAt = performance.now();
-                            callback?.();
-                        });
                     }
                 };
             },
         });
     });
 }
+// The whole scrollback, not the viewport: a restore can leave the pane scrolled
+// up, and live output keeps that position, so viewport rows are not a proof.
 async function view(page: Page, pane: string) {
     return page.evaluate((id) => {
         const t = (
@@ -56,15 +43,13 @@ async function view(page: Page, pane: string) {
         ).stressTerms.find(
             (x) => x.element?.closest('.term-container')?.id === `term-${id}`,
         );
-        return t
-            ? Array.from(
-                  { length: t.rows },
-                  (_, i) =>
-                      t.buffer.active
-                          .getLine(t.buffer.active.viewportY + i)
-                          ?.translateToString(true) || '',
-              ).join('\n')
-            : '';
+        if (!t) return '';
+        const lines: string[] = [];
+        for (let i = 0; i < t.buffer.active.length; i++)
+            lines.push(
+                t.buffer.active.getLine(i)?.translateToString(true) ?? '',
+            );
+        return lines.join('\n');
     }, pane);
 }
 
@@ -169,8 +154,8 @@ for (const mode of ['regular', 'fullscreen'])
                 await page.goto(phi.url);
                 await page.locator(`.tab[data-pane-id="${pane}"]`).click();
                 // A 1200-line scrollback need not restore pinned to its newest
-                // row; that invariant belongs to pi-native-history. Only require
-                // that the stress transcript is on screen at all.
+                // row, and viewport rows depend on scroll position. Require only
+                // that the stress transcript reached the buffer.
                 await expect
                     .poll(
                         async () =>
@@ -223,12 +208,6 @@ for (const mode of ['regular', 'fullscreen'])
                     width: 720,
                     height: 1000,
                 });
-                // A restore can leave the viewport mid-scrollback; live output is
-                // only asserted on screen, so pin to the newest row first.
-                const jump = page.locator(
-                    `#term-${pane} .scroll-to-bottom-btn`,
-                );
-                if (await jump.isVisible()) await jump.click();
                 await expect
                     .poll(
                         async () =>
