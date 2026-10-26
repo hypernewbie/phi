@@ -3456,6 +3456,19 @@ describe('Runtime skills requests', () => {
         rt.shutdown();
     });
 
+    it('answers unavailable for a name that cannot address one skill', async () => {
+        // Pi only warns about a name with a space, but "/skill:<name>"
+        // would split at the first space and expand another skill.
+        const { ch, rt } = await started({
+            getSkills: () => [{ name: 'demo skill', description: 'demo' }],
+            invokeSkill: () => {},
+        });
+        ch.hooks!.onMessage(skillsRequest('k8'));
+        expect(ch.nonfatalSends).toHaveLength(1);
+        expect(skillsOf(ch.nonfatalSends[0]!).unavailable).toBe(true);
+        rt.shutdown();
+    });
+
     it('drops requests when skills were not negotiated', async () => {
         const { ch, rt } = await started({ getSkills: () => [] });
         ch.hooks!.onMessage(skillsRequest('k6'));
@@ -3587,6 +3600,18 @@ describe('Runtime skill invocations', () => {
         );
         expect(ch.nonfatalSends).toHaveLength(1);
         expect(invokeAckOf(ch.nonfatalSends[0]!).reason).toBe('unknown-skill');
+        expect(sent).toEqual([]);
+        rt.shutdown();
+    });
+
+    it('acks unavailable for a name that cannot address one skill', async () => {
+        const { ch, rt, sent } = await started({
+            getSkills: () => [{ name: 'demo skill', description: 'demo' }],
+            invokeSkill: () => {},
+        });
+        ch.hooks!.onMessage(invokeSkillRequest('i7', 'demo skill'));
+        expect(ch.nonfatalSends).toHaveLength(1);
+        expect(invokeAckOf(ch.nonfatalSends[0]!).reason).toBe('unavailable');
         expect(sent).toEqual([]);
         rt.shutdown();
     });

@@ -1072,7 +1072,14 @@ func handlePiBridgeInvokeSkill(w http.ResponseWriter, r *http.Request) {
 		ProcessID  string `json:"process_id"`
 		Generation string `json:"generation"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}

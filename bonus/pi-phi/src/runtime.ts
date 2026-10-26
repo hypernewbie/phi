@@ -50,6 +50,7 @@ import { MAX_MODELS_ENTRIES } from './protocol.js';
 import { MAX_SKILL_DESCRIPTION_BYTES } from './protocol.js';
 import { MAX_SKILL_ENTRIES } from './protocol.js';
 import { MAX_SKILL_NAME_BYTES } from './protocol.js';
+import { isAddressableSkillName } from './protocol.js';
 import { MAX_THINKING_LEVELS } from './protocol.js';
 import { MAX_THINKING_LEVEL_BYTES } from './protocol.js';
 import { MAX_THINKING_MODEL_ID_BYTES } from './protocol.js';
@@ -101,6 +102,7 @@ function representableSkill(
 ): { name: string; description: string } | null {
     if (!skill || typeof skill.name !== 'string' || skill.name === '')
         return null;
+    if (!isAddressableSkillName(skill.name)) return null;
     if (typeof skill.description !== 'string') return null;
     if (Buffer.byteLength(skill.name, 'utf8') > MAX_SKILL_NAME_BYTES)
         return null;
@@ -1542,6 +1544,12 @@ export class Runtime {
             Buffer.byteLength(name, 'utf8') > MAX_SKILL_NAME_BYTES
         ) {
             fail('unknown-skill');
+            return;
+        }
+        if (!isAddressableSkillName(name)) {
+            // The name cannot address one skill: "/skill:<name>"
+            // would split at the first space and expand another one.
+            fail('unavailable');
             return;
         }
         let known = false;

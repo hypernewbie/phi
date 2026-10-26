@@ -108,6 +108,36 @@ func expectNoPeerRequest(t *testing.T, stream pibridgepb.Integration_ConnectClie
 	}
 }
 
+// expectNoInvokeSkillRequest fails when the peer receives an invoke
+// request within a short window. Other lifecycle traffic is ignored:
+// only the skill request itself is the fault.
+func expectNoInvokeSkillRequest(t *testing.T, stream pibridgepb.Integration_ConnectClient) {
+	t.Helper()
+	deadline := time.After(300 * time.Millisecond)
+	for {
+		type res struct {
+			msg *pibridgepb.PhiToPi
+			err error
+		}
+		ch := make(chan res, 1)
+		go func() {
+			m, e := stream.Recv()
+			ch <- res{msg: m, err: e}
+		}()
+		select {
+		case r := <-ch:
+			if r.err != nil {
+				return
+			}
+			if r.msg.GetInvokeSkillRequest() != nil {
+				t.Fatalf("peer received an invoke request")
+			}
+		case <-deadline:
+			return
+		}
+	}
+}
+
 func TestRequestSkillsRoundTrip(t *testing.T) {
 	s, sock, cleanup := testServer(t)
 	defer cleanup()
@@ -219,6 +249,44 @@ func TestRequestSkillsOverlongEntryIsUnavailable(t *testing.T) {
 	}
 }
 
+// A name that cannot address one skill makes the whole list
+// unavailable: the bridge never shows a partial list as the session's
+// complete skill set.
+func TestRequestSkillsUnaddressableEntryIsUnavailable(t *testing.T) {
+	s, sock, cleanup := testServer(t)
+	defer cleanup()
+	stream, proc, _, cancel := openLeaseStream(t, s, sock, "pane-k14", CapabilityLifecycle, CapabilitySkills)
+	defer cancel()
+
+	done := make(chan SkillsResult, 1)
+	go func() {
+		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		res, err := s.RequestSkills(ctx, proc)
+		if err != nil {
+			t.Errorf("RequestSkills: %v", err)
+			return
+		}
+		done <- res
+	}()
+	id := recvSkillsRequest(t, stream)
+	sendSkillsResponse(t, stream, "pane-k14", proc, &pibridgepb.SkillsResponse{
+		RequestId: id,
+		Skills: []*pibridgepb.SkillRef{
+			{Name: "demo-skill", Description: "demo"},
+			{Name: "demo skill", Description: "demo"},
+		},
+	})
+	select {
+	case res := <-done:
+		if !res.Unavailable || len(res.Skills) != 0 {
+			t.Fatalf("result %+v", res)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RequestSkills hung")
+	}
+}
+
 func TestRequestSkillsNegotiation(t *testing.T) {
 	s, sock, cleanup := testServer(t)
 	defer cleanup()
@@ -318,6 +386,23 @@ func TestRequestSkillsReplacementFailsStaleWaiter(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("stale waiter hung after replacement")
 	}
+}
+
+// A name that cannot address one skill is refused before dispatch:
+// "/skill:<name>" would split at the first space.
+func TestRequestInvokeSkillRejectsUnaddressableName(t *testing.T) {
+	s, sock, cleanup := testServer(t)
+	defer cleanup()
+	stream, proc, _, cancel := openLeaseStream(t, s, sock, "pane-k15", CapabilityLifecycle, CapabilitySkills)
+	defer cancel()
+
+	ctx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stop()
+	if _, err := s.RequestInvokeSkill(ctx, proc, 1, "demo skill"); err == nil {
+		t.Fatal("expected invalid-name error")
+	}
+	// No request was queued for the peer.
+	expectNoPeerRequest(t, stream)
 }
 
 func TestRequestInvokeSkillRoundTrip(t *testing.T) {
@@ -457,4 +542,32 @@ func TestRequestInvokeSkillRejectsStaleOrigin(t *testing.T) {
 	}
 	// The skill never reached the peer.
 	expectNoPeerRequest(t, stream)
+}
+
+// The runtime can move on between the list and the click. The origin
+// the list carried is then stale, so the click is refused before the
+// replacement peer sees it.
+func TestRequestInvokeSkillRejectsReplacedRuntime(t *testing.T) {
+	s, sock, cleanup := testServer(t)
+	defer cleanup()
+	_, proc, token, cancel := openLeaseStream(t, s, sock, "pane-k13", CapabilityLifecycle, CapabilitySkills)
+	defer cancel()
+
+	// The session moves on: a new runtime takes the lease at
+	// generation 2 after the list was served by generation 1.
+	next, cancelNext := openStream(t, sock, "pane-k13", proc, token)
+	defer cancelNext()
+	if err := next.Send(testHello("pane-k13", proc, 2, CapabilityLifecycle, CapabilitySkills)); err != nil {
+		t.Fatalf("hello gen 2: %v", err)
+	}
+	recvAccepted(t, next)
+
+	ctx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stop()
+	// The click still carries the origin of the generation-1 list.
+	if _, err := s.RequestInvokeSkill(ctx, proc, 1, "demo-skill"); !errors.Is(err, ErrSkillOriginStale) {
+		t.Fatalf("err %v, want stale origin", err)
+	}
+	// The replacement peer never received the skill.
+	expectNoInvokeSkillRequest(t, next)
 }

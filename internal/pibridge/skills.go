@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
+	"unicode"
 
 	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
 )
@@ -56,7 +58,15 @@ type InvokeSkillResult struct {
 // wire and addressed to the host. The HTTP layer uses it to reject an
 // unusable name before any peer contact.
 func IsSkillName(name string) bool {
-	return name != "" && len(name) <= maxSkillNameBytes
+	return name != "" && len(name) <= maxSkillNameBytes && isAddressableSkillName(name)
+}
+
+// isAddressableSkillName reports whether a name addresses exactly one
+// skill in Pi. Pi expands "/skill:<name>" by splitting the name at the
+// first space, so a name with whitespace would expand a different
+// skill. Mirrors isAddressableSkillName in bonus/pi-phi/src/protocol.ts.
+func isAddressableSkillName(name string) bool {
+	return name != "" && strings.IndexFunc(name, unicode.IsSpace) < 0
 }
 
 // RequestSkills asks the live peer for the session's skills and waits
@@ -320,7 +330,7 @@ func (s *Server) deliverInvokeSkill(l *lease, p *peer, ack *pibridgepb.InvokeSki
 // bounds. The bounds are UTF-8 byte limits, and Go string length is
 // the UTF-8 byte count.
 func representableSkill(name, description string) bool {
-	if name == "" || len(name) > maxSkillNameBytes {
+	if name == "" || len(name) > maxSkillNameBytes || !isAddressableSkillName(name) {
 		return false
 	}
 	return len(description) <= maxSkillDescriptionBytes

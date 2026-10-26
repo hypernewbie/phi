@@ -23,6 +23,15 @@ export const MAX_SKILL_ENTRIES = 200;
  */
 export const MAX_SKILL_NAME_BYTES = 64;
 export const MAX_SKILL_DESCRIPTION_BYTES = 1024;
+/**
+ * True when a skill name is one whitespace-free token. Pi addresses a
+ * skill with "/skill:<name>" and splits that name at the first space,
+ * so a name with whitespace would expand a different skill. Mirrors
+ * isAddressableSkillName in internal/pibridge/skills.go.
+ */
+export function isAddressableSkillName(name: string): boolean {
+    return name !== '' && !/\s/.test(name);
+}
 /** Max chars of a Compact expected session/leaf/model identity. */
 export const MAX_COMPACT_IDENTITY_CHARS = 256;
 /** Cap on catalog entries per ModelsResponse; excess sets truncated. */

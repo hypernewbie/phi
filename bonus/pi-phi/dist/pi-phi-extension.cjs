@@ -24594,6 +24594,9 @@ var CAPABILITY_SKILLS = "pi.skills.v1";
 var MAX_SKILL_ENTRIES = 200;
 var MAX_SKILL_NAME_BYTES = 64;
 var MAX_SKILL_DESCRIPTION_BYTES = 1024;
+function isAddressableSkillName(name) {
+  return name !== "" && !/\s/.test(name);
+}
 var MAX_COMPACT_IDENTITY_CHARS = 256;
 var MAX_MODELS_ENTRIES = 500;
 var LIFECYCLE_HEADROOM_BYTES = 16 * 1024;
@@ -28599,6 +28602,7 @@ function isHistoryReaderAvailable(ui) {
 function representableSkill(skill) {
   if (!skill || typeof skill.name !== "string" || skill.name === "")
     return null;
+  if (!isAddressableSkillName(skill.name)) return null;
   if (typeof skill.description !== "string") return null;
   if (Buffer.byteLength(skill.name, "utf8") > MAX_SKILL_NAME_BYTES)
     return null;
@@ -29601,6 +29605,10 @@ var Runtime = class {
     }
     if (typeof name !== "string" || name === "" || Buffer.byteLength(name, "utf8") > MAX_SKILL_NAME_BYTES) {
       fail("unknown-skill");
+      return;
+    }
+    if (!isAddressableSkillName(name)) {
+      fail("unavailable");
       return;
     }
     let known = false;
