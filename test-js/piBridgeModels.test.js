@@ -25,6 +25,8 @@ setupDomHarness();
 
 afterEach(() => {
     vi.clearAllMocks();
+    // Each test is a fresh browser: no cached model list carries over.
+    window.localStorage.clear();
 });
 
 function bridgeTab(over = {}) {
@@ -212,7 +214,7 @@ describe('bridge models picker', () => {
         expect(tm.app.showToast).not.toHaveBeenCalled();
     });
 
-    it('surfaces the refusal reason and stays open', async () => {
+    it('closes the picker on a pick and reports the refusal as a toast', async () => {
         const tab = bridgeTab();
         const { tm, dropup } = harness(tab);
         mockFetch((_url, options) => {
@@ -231,13 +233,17 @@ describe('bridge models picker', () => {
             expect(dropup.querySelector('.dropup-model-btn')).not.toBeNull();
         });
         dropup.querySelector('.dropup-model-btn').click();
+        // The pick is local: the menu closes on the click, not on the reply.
+        expect(dropup.classList.contains('hidden')).toBe(true);
         await vi.waitFor(() => {
             expect(tm.app.showToast).toHaveBeenCalledWith(
                 'Switch refused: provider has no credentials (no-auth)',
                 { type: 'error', title: 'Pi model' },
             );
         });
-        expect(dropup.classList.contains('hidden')).toBe(false);
+        expect(dropup.textContent).not.toContain(
+            'Switch refused: provider has no credentials (no-auth)',
+        );
     });
 
     it('reports unknown state when the switch round trip fails', async () => {
@@ -264,7 +270,7 @@ describe('bridge models picker', () => {
                 { type: 'error', title: 'Pi model' },
             );
         });
-        expect(dropup.classList.contains('hidden')).toBe(false);
+        expect(dropup.classList.contains('hidden')).toBe(true);
     });
 
     it('reports unknown state when the switch errors without a reason', async () => {
@@ -292,29 +298,48 @@ describe('bridge models picker', () => {
                 { type: 'error', title: 'Pi model' },
             );
         });
-        expect(dropup.classList.contains('hidden')).toBe(false);
+        expect(dropup.classList.contains('hidden')).toBe(true);
     });
 
-    it('times out a stalled list fetch after one second', async () => {
+    it('keeps the last list when a refresh fails', async () => {
         const tab = bridgeTab();
         const { tm, dropup } = harness(tab);
+        let fail = false;
         mockFetch((url, options) => {
-            if (String(url).includes('/api/pi-bridge/models'))
-                return new Promise((_resolve, reject) => {
-                    options.signal?.addEventListener('abort', () =>
-                        reject(new DOMException('Aborted', 'AbortError')),
-                    );
-                });
+            if (String(url).includes('/api/pi-bridge/models')) {
+                if (fail)
+                    return new Promise((_resolve, reject) => {
+                        options.signal?.addEventListener('abort', () =>
+                            reject(new DOMException('Aborted', 'AbortError')),
+                        );
+                    });
+                return {
+                    models: [{ provider: 'b', id: 'y' }],
+                    truncated: false,
+                    unavailable: false,
+                };
+            }
             return undefined;
         });
 
         tm.renderPresets('pi');
+        modelsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.querySelector('.dropup-model-btn')).not.toBeNull();
+        });
+
+        fail = true;
+        dropup.classList.add('hidden');
         vi.useFakeTimers();
         try {
+            // Reopen: the cached rows render at once, then the stalled
+            // refresh aborts. The list must not empty itself.
             modelsTrigger(tm).click();
-            await vi.advanceTimersByTimeAsync(1000);
+            expect(dropup.querySelector('.dropup-model-btn')).not.toBeNull();
+            await vi.advanceTimersByTimeAsync(15000);
+            expect(dropup.querySelector('.dropup-model-btn')).not.toBeNull();
             expect(dropup.textContent).toContain(
-                'Error: Pi models unavailable (request timed out)',
+                'Could not refresh: Pi models unavailable (request timed out)',
             );
             expect(tm.app.showToast).toHaveBeenCalledWith(
                 'Pi models unavailable (request timed out)',
@@ -325,7 +350,7 @@ describe('bridge models picker', () => {
         }
     });
 
-    it('bounds a stalled switch request to one second', async () => {
+    it('bounds a stalled switch request to fifteen seconds', async () => {
         const tab = bridgeTab();
         const { tm, dropup } = harness(tab);
         mockFetch((_url, options) => {
@@ -350,13 +375,13 @@ describe('bridge models picker', () => {
         vi.useFakeTimers();
         try {
             dropup.querySelector('.dropup-model-btn').click();
-            await vi.advanceTimersByTimeAsync(1000);
+            await vi.advanceTimersByTimeAsync(15000);
             expect(tm.app.showToast).toHaveBeenCalledWith(
                 'unknown — reopen the picker',
                 { type: 'error', title: 'Pi model' },
             );
             expect(tm._piRpcModelPending).toBeNull();
-            expect(dropup.classList.contains('hidden')).toBe(false);
+            expect(dropup.classList.contains('hidden')).toBe(true);
         } finally {
             vi.useRealTimers();
         }
@@ -396,7 +421,7 @@ describe('bridge models picker', () => {
                 await vi.advanceTimersByTimeAsync(0);
                 expect(readBody).toHaveBeenCalledTimes(1);
                 expect(vi.getTimerCount()).toBe(1);
-                await vi.advanceTimersByTimeAsync(1000);
+                await vi.advanceTimersByTimeAsync(15000);
                 await rejected;
                 expect(vi.getTimerCount()).toBe(0);
             } finally {

@@ -592,6 +592,7 @@ export class TabManager {
         this._piRpcMenuRequest = 0;
         this._piBridgeThinkingMenuRequest = 0;
         this._piRpcModels = null;
+        this._piRpcModelsNote = null;
         this._piRpcModelQuery = '';
         this._piRpcModelExpandedGroup = null;
         this._piRpcFavorites = null;
@@ -5062,10 +5063,19 @@ export class TabManager {
             '.pi-rpc-model-list-container',
         );
         if (!listContainer) return;
+        // Cache first: the menu never waits for the catalog. A cached list
+        // renders immediately and the refresh replaces it in place.
+        this._piRpcModelsNote = null;
+        const cached = this._loadPiRpcModelCache(activeTab.coder);
         const loading = document.createElement('div');
         loading.className = 'dropup-row pi-rpc-dropup-message';
-        loading.textContent = 'Loading Pi models…';
-        listContainer.replaceChildren(loading);
+        if (cached) {
+            this._piRpcModels = cached;
+            this._buildPiRpcModelList();
+        } else {
+            loading.textContent = 'Loading Pi models…';
+            listContainer.replaceChildren(loading);
+        }
 
         let requestResult;
         try {
@@ -5074,8 +5084,10 @@ export class TabManager {
                     ? this._piBridgeModelsFetch(paneId)
                     : rpcChatModels(paneId);
         } catch (error) {
-            this._piRpcError(error, 'Pi models');
-            loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
+            this._piRpcModelsNote = `Could not refresh: ${
+                error instanceof Error ? error.message : String(error)
+            }`;
+            this._buildPiRpcModelList();
             return;
         }
         Promise.resolve(requestResult)
@@ -5100,6 +5112,11 @@ export class TabManager {
                 } else {
                     this._piRpcModels = Array.isArray(result) ? result : [];
                 }
+                this._piRpcModelsNote = null;
+                this._savePiRpcModelCache(
+                    activeTab.coder,
+                    this._piRpcModels,
+                );
                 this._buildPiRpcModelList();
             })
             .catch((error) => {
@@ -5110,9 +5127,61 @@ export class TabManager {
                         !this._piBridgeModelsEligible(activeTab))
                 )
                     return;
-                loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
+                // Keep whatever is rendered. A failed refresh is a note,
+                // never a menu that empties itself.
+                this._piRpcModelsNote = `Could not refresh: ${
+                    error instanceof Error ? error.message : String(error)
+                }`;
+                this._buildPiRpcModelList();
                 this._piRpcError(error, 'Pi models');
             });
+    }
+
+    _piRpcModelCacheKey(coder) {
+        return coder === 'pi'
+            ? 'phi.piRpc.models.pi'
+            : 'phi.piRpc.models.pi-rpc';
+    }
+
+    _loadPiRpcModelCache(coder) {
+        try {
+            const raw = window.localStorage?.getItem(
+                this._piRpcModelCacheKey(coder),
+            );
+            if (typeof raw !== 'string' || !raw) return null;
+            const parsed = JSON.parse(raw);
+            if (!Array.isArray(parsed?.models)) return null;
+            const models = parsed.models.filter(
+                (model) =>
+                    model &&
+                    typeof model.provider === 'string' &&
+                    typeof model.id === 'string',
+            );
+            return models.length > 0 ? models : null;
+        } catch (_error) {
+            return null;
+        }
+    }
+
+    _savePiRpcModelCache(coder, models) {
+        if (!Array.isArray(models) || models.length === 0) return;
+        try {
+            window.localStorage?.setItem(
+                this._piRpcModelCacheKey(coder),
+                JSON.stringify({
+                    at: Date.now(),
+                    truncated: this._piBridgeModelsTruncated === true,
+                    models: models.filter(
+                        (model) =>
+                            model &&
+                            typeof model.provider === 'string' &&
+                            typeof model.id === 'string',
+                    ),
+                }),
+            );
+        } catch (_error) {
+            // localStorage may be unavailable; the in-memory copy is enough.
+        }
     }
 
     _buildPiRpcModelList() {
@@ -5128,11 +5197,20 @@ export class TabManager {
         const listContainer = dropup.querySelector(
             '.pi-rpc-model-list-container',
         );
-        if (!listContainer || !Array.isArray(this._piRpcModels)) return;
+        if (!listContainer) return;
+        if (!Array.isArray(this._piRpcModels)) {
+            // No list yet: a failed load still says so instead of leaving the
+            // loading row up forever.
+            if (!this._piRpcModelsNote) return;
+            const note = document.createElement('div');
+            note.className = 'dropup-row pi-rpc-dropup-message';
+            note.textContent = this._piRpcModelsNote;
+            listContainer.replaceChildren(note);
+            return;
+        }
         const state = this._piModelStateFor(activeTab);
         const paneId = activeTab.paneId;
         const query = this._piRpcModelQuery;
-        const pending = this._piRpcModelPending?.paneId === paneId;
         const models = this._piRpcModels.filter(
             (model) =>
                 model &&
@@ -5205,7 +5283,6 @@ export class TabManager {
             star.title = isFavorite
                 ? 'Remove from Favorites'
                 : 'Add to Favorites';
-            star.disabled = pending;
             star.addEventListener('click', (event) => {
                 event.stopPropagation();
                 this._togglePiRpcFavorite(model);
@@ -5215,7 +5292,9 @@ export class TabManager {
             button.className = 'dropup-model-btn';
             button.textContent = model.name || model.id;
             button.title = `${model.provider}/${model.id}`;
-            button.disabled = pending;
+            // A pick is local feedback: the row stays enabled while its
+            // request is in flight, and the newest pick wins.
+            button.disabled = false;
             button.addEventListener('click', (event) => {
                 event.stopPropagation();
                 if (
@@ -5231,7 +5310,10 @@ export class TabManager {
                     modelId: model.id,
                 };
                 this._piRpcModelPending = operation;
-                this._setPiRpcDropupButtonsDisabled(dropup, true);
+                // The pick is local feedback: close the menu now and let the
+                // state event (or the error toast) reconcile it. A slow link
+                // must not freeze the menu for the length of a round trip.
+                this._closePiRpcDropups(true);
                 let setterResult;
                 try {
                     setterResult =
@@ -5264,8 +5346,6 @@ export class TabManager {
                         if (this._piRpcModelPending !== operation) return;
                         this._piRpcModelPending = null;
                         this._piRpcError(error, 'Pi model');
-                        if (this.getActiveTab()?.paneId === paneId)
-                            this._renderPiRpcModelsDropup(true);
                     });
             });
             const meta = document.createElement('span');
@@ -5296,7 +5376,7 @@ export class TabManager {
                 toggle.disabled = true;
                 toggle.setAttribute('aria-disabled', 'true');
             } else {
-                toggle.disabled = pending;
+                toggle.disabled = false;
                 toggle.addEventListener('click', (event) => {
                     event.stopPropagation();
                     this._piRpcModelExpandedGroup =
@@ -5377,6 +5457,7 @@ export class TabManager {
                 : null;
         const nodes = [];
         let totalMatches = 0;
+        const notes = [];
         for (const section of sections) {
             const { node, matchCount } = renderGroup(section, firstMatchGroup);
             totalMatches += matchCount;
@@ -5389,12 +5470,14 @@ export class TabManager {
             listContainer.replaceChildren(...nodes, noMatch);
             return;
         }
-        if (activeTab.coder === 'pi' && this._piBridgeModelsTruncated) {
-            const capped = document.createElement('div');
-            capped.className = 'dropup-row pi-rpc-dropup-message';
-            capped.textContent = 'Partial model list';
-            listContainer.replaceChildren(...nodes, capped);
-            return;
+        if (activeTab.coder === 'pi' && this._piBridgeModelsTruncated)
+            notes.push('Partial model list');
+        if (this._piRpcModelsNote) notes.push(this._piRpcModelsNote);
+        for (const text of notes) {
+            const note = document.createElement('div');
+            note.className = 'dropup-row pi-rpc-dropup-message';
+            note.textContent = text;
+            nodes.push(note);
         }
         listContainer.replaceChildren(...nodes);
     }
@@ -5464,8 +5547,9 @@ export class TabManager {
     // the staleness fence; they drive the empty copy and the footer.
     async _piBridgeModelsFetch(paneId) {
         const controller = new AbortController();
-        // Bound the browser too: an HTTP request can stall before reaching Phi.
-        const timer = setTimeout(() => controller.abort(), 1000);
+        // Bound the browser too, but generously: the caller renders from
+        // local state, so a slow link only delays the refresh.
+        const timer = setTimeout(() => controller.abort(), 15000);
         try {
             const res = await fetch(
                 `/api/pi-bridge/models?pane=${encodeURIComponent(paneId)}`,
@@ -5493,8 +5577,9 @@ export class TabManager {
     // guessed failure, since the switch may still have landed.
     async _piBridgeModelSwitch(paneId, provider, modelId) {
         const controller = new AbortController();
-        // Bound the browser too: an HTTP request can stall before reaching Phi.
-        const timer = setTimeout(() => controller.abort(), 1000);
+        // Bound the browser too, but generously: the caller renders from
+        // local state, so a slow link only delays the refresh.
+        const timer = setTimeout(() => controller.abort(), 15000);
         let body;
         try {
             const res = await fetch('/api/pi-bridge/model', {
@@ -5847,8 +5932,7 @@ export class TabManager {
             'preset-btn model-trigger-btn pi-rpc-model-trigger';
         modelButton.textContent = '🤖 Models ▾';
         modelButton.title = state.model || '—';
-        modelButton.disabled =
-            menuDisabled || this._piRpcModelPending?.paneId === paneId;
+        modelButton.disabled = menuDisabled;
         modelButton.addEventListener('click', (event) => {
             event.stopPropagation();
             this._toggleDropup('pi-rpc-model-dropup', modelButton, () =>
@@ -10603,8 +10687,6 @@ export class TabManager {
             // Anything else falls through to the legacy static list.
             modelsTriggerBtn.classList.add('pi-rpc-model-trigger');
             modelsTriggerBtn.title = activeTab.piBridge?.model || '—';
-            modelsTriggerBtn.disabled =
-                this._piRpcModelPending?.paneId === activeTab.paneId;
             modelsTriggerBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 this._toggleDropup(
@@ -12218,6 +12300,8 @@ export class TabManager {
 
     async _piBridgeThinkingLevels(paneId) {
         const controller = new AbortController();
+        // Short by design: failure falls back to Pi's own /thinking picker,
+        // which is local and works offline.
         const timer = setTimeout(() => controller.abort(), 1000);
         try {
             const response = await fetch(
@@ -12238,7 +12322,8 @@ export class TabManager {
 
     async _piBridgeThinkingSet(context, level, origin) {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 1000);
+        // The menu closes on click; this only bounds the reconciliation.
+        const timer = setTimeout(() => controller.abort(), 15000);
         let result;
         try {
             const response = await fetch('/api/pi-bridge/thinking', {

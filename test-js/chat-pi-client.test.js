@@ -324,41 +324,51 @@ describe('Pi RPC ControlClient', () => {
         expect(socket.closed).toBe(false);
     });
 
-    it('times out a queued call and leaves no outbox timer or pending promise', async () => {
+    it('keeps a call queued while the socket is down and times out only once it is written', async () => {
         vi.useFakeTimers();
         vi.stubGlobal('WebSocket', FakeWebSocket);
         const client = connectControl();
         const pending = client.call('hydrate', 'sid-1', {});
-        vi.advanceTimersByTime(ControlCallTimeout);
-        await expect(pending).rejects.toThrow('control call timeout');
+        // Offline is not a failure: the frame waits in the outbox, so its
+        // deadline only starts when it reaches a socket.
+        vi.advanceTimersByTime(ControlCallTimeout * 2);
         const socket = FakeWebSocket.instances[0];
         socket.open();
-        expect(socket.sent).toHaveLength(1);
+        expect(socket.sent).toHaveLength(2);
         expect(socket.sent[0].payload.$case).toBe('hello');
+        vi.advanceTimersByTime(ControlCallTimeout);
+        await expect(pending).rejects.toThrow('control call timeout');
         expect(vi.getTimerCount()).toBe(0);
+        client.close();
     });
 
-    it('reports unexpected close or error while idle, but not intentional close', () => {
+    it('redials a dropped socket and reports only protocol faults', () => {
+        vi.useFakeTimers();
         vi.stubGlobal('WebSocket', FakeWebSocket);
         const report = vi.fn();
+        const client = connectControl(report);
+        const socket = FakeWebSocket.instances[0];
+        const states = [];
+        client.onState((connected) => states.push(connected));
+        socket.open();
 
-        connectControl(report);
-        const remoteSocket = FakeWebSocket.instances[0];
-        remoteSocket.open();
-        remoteSocket.close();
+        // A dropped link is expected: report the state, then redial.
+        socket.close();
+        expect(report).not.toHaveBeenCalled();
+        expect(states).toEqual([true, false]);
+        vi.advanceTimersByTime(20_000);
+        expect(FakeWebSocket.instances).toHaveLength(2);
+        client.close();
+        expect(report).not.toHaveBeenCalled();
+
+        // A protocol fault is not fixed by redialing, so it is reported.
+        const broken = connectControl(report);
+        const brokenSocket = FakeWebSocket.instances.at(-1);
+        brokenSocket.open();
+        brokenSocket.receiveRaw(new ArrayBuffer(0));
         expect(report).toHaveBeenCalledTimes(1);
-        expect(report).toHaveBeenLastCalledWith('control socket closed');
-
-        connectControl(report);
-        const failedSocket = FakeWebSocket.instances[1];
-        failedSocket.open();
-        failedSocket.fail();
-        expect(report).toHaveBeenCalledTimes(2);
-        expect(report).toHaveBeenLastCalledWith('control socket error');
-        expect(failedSocket.closed).toBe(true);
-
-        connectControl(report).close();
-        expect(report).toHaveBeenCalledTimes(2);
+        expect(report).toHaveBeenLastCalledWith('control frame is empty');
+        broken.close();
     });
 
     it('rejects oversized outbound calls without closing the shared stream', async () => {
@@ -397,7 +407,8 @@ describe('Pi RPC ControlClient', () => {
         client.close();
     });
 
-    it('rejects close-before-open and socket-close pending calls', async () => {
+    it('rejects written calls on a drop, keeps queued work, and replays it after the redial', async () => {
+        vi.useFakeTimers();
         vi.stubGlobal('WebSocket', FakeWebSocket);
         const first = connectControl();
         const firstSocket = FakeWebSocket.instances[0];
@@ -409,9 +420,29 @@ describe('Pi RPC ControlClient', () => {
 
         const second = connectControl();
         const secondSocket = FakeWebSocket.instances[1];
-        const pending = second.call('prompt', 'sid-2', { message: 'wait' });
         secondSocket.open();
+        const written = second.call('prompt', 'sid-2', { message: 'wait' });
         secondSocket.close();
-        await expect(pending).rejects.toThrow('control socket closed');
+        // Written before the drop: its outcome is unknown, never replayed.
+        await expect(written).rejects.toMatchObject({ transport: true });
+
+        const later = second.call('prompt', 'sid-2', { message: 'later' });
+        vi.advanceTimersByTime(20_000);
+        const redialed = FakeWebSocket.instances[2];
+        redialed.open();
+        expect(redialed.sent).toHaveLength(2);
+        const replayed = redialed.sent[1].payload.value;
+        expect(replayed.call).toEqual({
+            $case: 'prompt',
+            value: { sid: 'sid-2', message: 'later' },
+        });
+        redialed.receive(
+            response(replayed.id, {
+                $case: 'prompt',
+                value: { accepted: true },
+            }),
+        );
+        await expect(later).resolves.toEqual({ accepted: true });
+        second.close();
     });
 });

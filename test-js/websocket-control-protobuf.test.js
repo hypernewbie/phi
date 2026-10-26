@@ -1022,7 +1022,7 @@ class FakeWebSocket {
 }
 
 describe('control transport failures', () => {
-    it('cleans up pending calls and timers when a send throws', async () => {
+    it('requeues a call whose write throws and replays it after a redial', async () => {
         vi.useFakeTimers();
         vi.stubGlobal('WebSocket', FakeWebSocket);
         const client = connectControl();
@@ -1030,12 +1030,22 @@ describe('control transport failures', () => {
         socket.open();
         socket.throwOnSend = true;
         const pending = client.call('getState', 'sid-1', {});
-        await expect(pending).rejects.toThrow('control socket error');
-        expect(vi.getTimerCount()).toBe(0);
+        // The write never landed, so the socket is dropped and the frame
+        // waits for the next one instead of failing the call.
         expect(socket.closed).toBe(true);
+        await vi.advanceTimersByTimeAsync(20_000);
+        const redialed = FakeWebSocket.instances[1];
+        redialed.open();
+        expect(redialed.sent.map((frame) => frame.payload.$case)).toEqual([
+            'hello',
+            'call',
+        ]);
+        expect(redialed.sent[1].payload.value.call.$case).toBe('getState');
+        client.close();
+        await expect(pending).rejects.toThrow('control client closed');
     });
 
-    it('cleans up queued frames when a flush send throws', async () => {
+    it('requeues a flush frame whose write throws', async () => {
         vi.useFakeTimers();
         vi.stubGlobal('WebSocket', FakeWebSocket);
         const client = connectControl();
@@ -1043,9 +1053,16 @@ describe('control transport failures', () => {
         const pending = client.call('getState', 'sid-1', {});
         socket.throwOnSend = true;
         socket.open();
-        await expect(pending).rejects.toThrow('control socket error');
-        expect(vi.getTimerCount()).toBe(0);
         expect(socket.closed).toBe(true);
+        await vi.advanceTimersByTimeAsync(20_000);
+        const redialed = FakeWebSocket.instances[1];
+        redialed.open();
+        expect(redialed.sent.map((frame) => frame.payload.$case)).toEqual([
+            'hello',
+            'call',
+        ]);
+        client.close();
+        await expect(pending).rejects.toThrow('control client closed');
     });
 
     it('closes the stream on a malformed live event and rejects pending calls', async () => {

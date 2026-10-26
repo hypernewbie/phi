@@ -259,6 +259,9 @@ export function mountChatPi(
     let busy = false;
     let queueDepth = 0;
     let exited = false;
+    // Bootstrap ended without a session. No sid will ever arrive, so input
+    // must stay in the composer instead of queueing into a dead pane.
+    let bootstrapFailed = false;
     let resetInFlight = false;
     let compactInFlight = false;
     let compactSnapshot: {
@@ -275,10 +278,11 @@ export function mountChatPi(
         kept: number | null;
     } | null = null;
     let sessionActive = false;
+    type PromptState = 'queued' | 'sending' | 'sent' | 'unconfirmed';
     type OutgoingPrompt = {
         id: string;
         text: string;
-        state: 'sending' | 'sent';
+        state: PromptState;
     };
     let outgoingSeq = 0;
     const outgoing: OutgoingPrompt[] = [];
@@ -288,7 +292,7 @@ export function mountChatPi(
     let activePrompt: {
         id: string;
         text: string;
-        state: 'sending' | 'sent';
+        state: PromptState;
         origin: 'optimistic' | number;
     } | null = null;
     let abortInFlight = false;
@@ -365,6 +369,7 @@ export function mountChatPi(
         sid = '';
         ready = false;
         exited = false;
+        bootstrapFailed = true;
         status.textContent = `Error: ${String(message ?? 'unknown')}`;
         notifyControls();
     };
@@ -491,20 +496,26 @@ export function mountChatPi(
     // swap its label. Cleared by auto_retry_end (success or failure)
     // and by the applyState busy→false transition (gap-loss guard).
     let retryState: { attempt: number; maxAttempts: number } | null = null;
+    const promptLabel = (state: PromptState): string =>
+        state === 'queued'
+            ? 'Queued'
+            : state === 'unconfirmed'
+              ? 'Not confirmed'
+              : state === 'sending'
+                ? 'Sending'
+                : 'Sent to Pi';
     const syncActiveTurn = (): void => {
         const base: ActiveTurnState | null = activePrompt
             ? {
-                  active: true,
+                  // A queued prompt has not reached Pi yet: it must not show
+                  // the working row or the interrupt hint.
+                  active: activePrompt.state !== 'queued',
                   promptText: activePrompt.text,
                   promptOrigin: activePrompt.origin,
-                  stateLabel:
-                      activePrompt.state === 'sending'
-                          ? 'Sending'
-                          : 'Sent to Pi',
+                  stateLabel: promptLabel(activePrompt.state),
                   outgoing: outgoing.map((item) => ({
                       text: item.text,
-                      stateLabel:
-                          item.state === 'sending' ? 'Sending' : 'Sent to Pi',
+                      stateLabel: promptLabel(item.state),
                   })),
               }
             : null;
@@ -527,11 +538,6 @@ export function mountChatPi(
                 ? { ...base, ...(retryState ? { retry: retryState } : {}) }
                 : null,
         );
-    };
-
-    const removeTurnPrompt = (prompt: OutgoingPrompt): void => {
-        const index = turnPrompts.indexOf(prompt);
-        if (index >= 0) turnPrompts.splice(index, 1);
     };
 
     const cancelPendingSave = (): void => {
@@ -630,22 +636,24 @@ export function mountChatPi(
             });
     };
 
-    const send = (text: string): boolean => {
-        if (!sid || !ready || exited || subagentViewer.isOpen()) return false;
-        const dispatch = dispatchComposer(text);
-        if (dispatch.kind === 'rejected') {
-            status.textContent = dispatch.reason;
-            return false;
-        }
+    // Delivers one outgoing record. A prompt that never reached a socket stays
+    // queued and replays on reconnect; one written before a drop may still
+    // have landed, so it stays on screen as unconfirmed and is never resent
+    // silently.
+    const deliverPrompt = (local: OutgoingPrompt): void => {
         const currentSid = sid;
-        const local: OutgoingPrompt = {
-            id: `out-${++outgoingSeq}`,
-            text: dispatch.message,
-            state: 'sending' as const,
-        };
-        outgoing.push(local);
-        turnPrompts.push(local);
-        activePrompt = { ...local, origin: 'optimistic' };
+        if (destroyed || exited || !currentSid || !ready) {
+            local.state = 'queued';
+            return;
+        }
+        const dispatch = dispatchComposer(local.text);
+        if (dispatch.kind === 'rejected') {
+            local.state = 'unconfirmed';
+            status.textContent = dispatch.reason;
+            syncActiveTurn();
+            return;
+        }
+        local.state = 'sending';
         syncActiveTurn();
         void invokeControl(wire, 'prompt', currentSid, {
             message: dispatch.message,
@@ -654,40 +662,53 @@ export function mountChatPi(
                 : {}),
         })
             .then((data: any) => {
-                const index = outgoing.indexOf(local);
-                if (data?.accepted !== true) {
-                    if (index >= 0) outgoing.splice(index, 1);
-                    removeTurnPrompt(local);
-                    if (activePrompt?.id === local.id)
-                        activePrompt = outgoing.at(-1)
-                            ? { ...outgoing.at(-1)!, origin: 'optimistic' }
-                            : null;
-                    if (!destroyed && currentSid === sid)
-                        status.textContent = 'Error: prompt was not accepted';
-                } else if (index >= 0) {
-                    local.state = 'sent';
-                    if (activePrompt?.id === local.id)
-                        activePrompt.state = 'sent';
-                } else if (activePrompt?.id === local.id) {
-                    // Pi may reconcile the outgoing record before the
-                    // prompt response arrives. Keep the retained marker's
-                    // state in sync with the accepted response.
-                    activePrompt.state = 'sent';
-                }
+                if (destroyed) return;
+                local.state = data?.accepted === true ? 'sent' : 'unconfirmed';
+                if (local.state === 'unconfirmed' && currentSid === sid)
+                    status.textContent = 'Error: prompt was not accepted';
+                if (activePrompt?.id === local.id)
+                    activePrompt.state = local.state;
                 syncActiveTurn();
             })
             .catch((error: unknown) => {
-                const index = outgoing.indexOf(local);
-                if (index >= 0) outgoing.splice(index, 1);
-                removeTurnPrompt(local);
+                if (destroyed) return;
+                // Keep the text visible in both cases. A transport drop may
+                // have delivered it; hydrate reconciles the transcript.
+                local.state = 'unconfirmed';
+                if (currentSid === sid)
+                    status.textContent = `Not confirmed: ${String(error)}`;
                 if (activePrompt?.id === local.id)
-                    activePrompt = outgoing.at(-1)
-                        ? { ...outgoing.at(-1)!, origin: 'optimistic' }
-                        : null;
-                if (!destroyed && currentSid === sid)
-                    status.textContent = `Error: ${String(error)}`;
+                    activePrompt.state = local.state;
                 syncActiveTurn();
             });
+    };
+
+    const flushQueue = (): void => {
+        if (destroyed || exited || !sid || !ready) return;
+        for (const item of [...outgoing]) {
+            if (item.state === 'queued') deliverPrompt(item);
+        }
+    };
+
+    const send = (text: string): boolean => {
+        // No sid will ever arrive for a failed bootstrap, so keep the draft in
+        // the composer instead of queueing it into a dead pane.
+        if (exited || bootstrapFailed || subagentViewer.isOpen()) return false;
+        const dispatch = dispatchComposer(text);
+        if (dispatch.kind === 'rejected') {
+            status.textContent = dispatch.reason;
+            return false;
+        }
+        const local: OutgoingPrompt = {
+            id: `out-${++outgoingSeq}`,
+            text: dispatch.message,
+            state: sid && ready ? 'sending' : 'queued',
+        };
+        outgoing.push(local);
+        turnPrompts.push(local);
+        activePrompt = { ...local, origin: 'optimistic' };
+        syncActiveTurn();
+        deliverPrompt(local);
         return true;
     };
 
@@ -1166,11 +1187,44 @@ export function mountChatPi(
             // readiness and hydrate work below belongs to a live pane.
             paint();
             if (exited) return;
+            flushQueue();
             requestHydrate(false);
         })
         .catch((error: unknown) => {
-            if (!destroyed) failBootstrap(error);
+            if (destroyed) return;
+            // The spawn frame was written before the drop, so Pi may already
+            // be running for this pane. Re-spawning would start a second
+            // process, so this pane stays closed instead.
+            const transport = (error as { transport?: unknown })?.transport;
+            failBootstrap(
+                transport
+                    ? 'Pi connection lost before the session opened — reopen the tab'
+                    : error,
+            );
         });
+
+    // Reconnect: adopt whatever the dropped stream missed, then release any
+    // prompt queued while the session was unavailable.
+    const offState =
+        typeof client.onState === 'function'
+            ? client.onState((connected) => {
+                  if (destroyed || exited) return;
+                  if (!connected) {
+                      status.textContent = 'Reconnecting…';
+                      return;
+                  }
+                  if (!sid || bootstrapFailed) return;
+                  // A failed hydrate during the outage cleared readiness; the
+                  // retained snapshot is still valid authority to accept input.
+                  if (!ready) {
+                      ready = true;
+                      notifyControls();
+                  }
+                  status.textContent = 'Ready';
+                  requestHydrate(false);
+                  flushQueue();
+              })
+            : () => {};
 
     return {
         destroy: (): void => {
@@ -1178,6 +1232,7 @@ export function mountChatPi(
             flushPendingSave();
             destroyed = true;
             off();
+            offState();
             client.close();
             subagentViewer.destroy();
             strip.destroy();

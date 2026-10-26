@@ -72,8 +72,8 @@ export interface ActiveTurnState {
     active: boolean;
     promptText: string;
     promptOrigin: 'optimistic' | number;
-    stateLabel: 'Sending' | 'Sent to Pi';
-    outgoing?: Array<{ text: string; stateLabel: 'Sending' | 'Sent to Pi' }>;
+    stateLabel: string;
+    outgoing?: Array<{ text: string; stateLabel: string }>;
     /**
      * Provider-level retry indicator (pi's auto_retry_start). When set
      * the working row swaps to "Retrying · attempt N of M". The
@@ -845,7 +845,15 @@ export function createReviewTranscriptView(
         )) {
             block.remove();
         }
-        if (!activeTurn?.active) return;
+        // A queued prompt renders its optimistic row without claiming an
+        // active turn, so the gate is on pending prompt content, not `active`.
+        if (
+            !activeTurn ||
+            (!activeTurn.active &&
+                !activeTurn.promptText &&
+                (activeTurn.outgoing?.length ?? 0) === 0)
+        )
+            return;
         if (typeof activeTurn.promptOrigin === 'number') {
             const block = transcript.querySelector<HTMLElement>(
                 `[data-pi-message-index="${activeTurn.promptOrigin}"]`,

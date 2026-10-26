@@ -41,6 +41,7 @@ function fakeClient() {
     let accepted = null;
     let hydrateSeq = 0;
     let promptSeq = 0;
+    const stateListeners = new Set();
     const legacyId = (op) => {
         switch (op) {
             case 'hydrate':
@@ -86,6 +87,10 @@ function fakeClient() {
                     listener = () => {};
                 };
             },
+            onState(callback) {
+                stateListeners.add(callback);
+                return () => stateListeners.delete(callback);
+            },
             close() {},
         },
         emit(frame) {
@@ -99,6 +104,9 @@ function fakeClient() {
                 }
             }
             listener(frame);
+        },
+        setConnected(connected) {
+            for (const callback of [...stateListeners]) callback(connected);
         },
         // Delivers even after the controller unsubscribed, to prove a late
         // completion cannot publish after destroy.
@@ -145,12 +153,14 @@ describe('Pi RPC transcript controller', () => {
         const root = document.createElement('div');
         const wire = fakeClient();
         const chat = mountChatPi(root, '/work/demo', wire.client);
-        expect(chat.send('before bootstrap')).toBe(false);
+        expect(chat.send('before bootstrap')).toBe(true);
         expect(wire.sent[0]).toMatchObject({
             op: 'spawn',
             args: { cwd: '/work/demo' },
         });
         expect(wire.sent[0].args.sessionPath).toBeUndefined();
+        // Queued locally: no prompt frame exists before the sid does.
+        expect(wire.sent.some((frame) => frame.op === 'prompt')).toBe(false);
         wire.emit({
             t: 'res',
             id: 'sp',
@@ -761,14 +771,17 @@ describe('Pi RPC transcript controller', () => {
         const chat = mountChatPi(root, '/work/demo', wire.client);
         wire.emit({ t: 'res', id: 'sp', ok: true, data: { sid: 's1' } });
         await Promise.resolve();
+        await Promise.resolve();
 
+        // No sid will ever arrive, so the draft stays in the composer rather
+        // than queueing into a dead pane.
         expect(chat.send('blocked')).toBe(false);
         expect(root.textContent).toContain(
             'bootstrap snapshot missing or malformed',
         );
     });
 
-    it('stops accepting sends after rpcExited', () => {
+    it('stops accepting sends after rpcExited', async () => {
         const root = document.createElement('div');
         const wire = fakeClient();
         const chat = mountChatPi(root, '/work/demo', wire.client);
@@ -778,8 +791,69 @@ describe('Pi RPC transcript controller', () => {
             ok: true,
             data: { sid: 's1', snapshot: { lastSeq: 0, messages: [] } },
         });
+        await Promise.resolve();
+        await Promise.resolve();
         wire.emit({ t: 'evt', sid: 's1', seq: 1, evt: 'rpcExited', data: {} });
         expect(chat.send('after exit')).toBe(false);
+    });
+
+    it('queues a prompt until the session exists, then flushes it in order', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/demo', wire.client);
+        expect(chat.send('first')).toBe(true);
+        expect(chat.send('second')).toBe(true);
+        // Nothing was written: no sid exists yet, so both wait locally.
+        expect(wire.sent.filter((frame) => frame.op === 'prompt')).toHaveLength(
+            0,
+        );
+        expect(root.textContent).toContain('Queued: first');
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's1', snapshot: { lastSeq: 0, messages: [] } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(
+            wire.sent
+                .filter((frame) => frame.op === 'prompt')
+                .map((frame) => frame.args.message),
+        ).toEqual(['first', 'second']);
+    });
+
+    it('resyncs after a reconnect and reports the outage in the status line', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/demo', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's1', snapshot: { lastSeq: 0, messages: [] } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        wire.emit({
+            t: 'res',
+            id: 'hyd',
+            ok: true,
+            data: { lastSeq: 0, messages: [] },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        const hydrates = wire.sent.filter(
+            (frame) => frame.op === 'hydrate',
+        ).length;
+
+        wire.setConnected(false);
+        expect(root.textContent).toContain('Reconnecting…');
+        wire.setConnected(true);
+        // The dropped span is adopted from the server on every reconnect.
+        expect(wire.sent.filter((frame) => frame.op === 'hydrate').length).toBe(
+            hydrates + 1,
+        );
     });
 
     it('keeps a rejected setter/reset on the ready sid and still sends the next prompt', async () => {
@@ -2008,7 +2082,8 @@ describe('Pi RPC transcript controller', () => {
         await Promise.resolve();
         await Promise.resolve();
         expect(root.textContent).toContain('Error: prompt was not accepted');
-        expect(root.textContent).not.toContain('rejected prompt');
+        // A refused prompt keeps its text on screen; it is never dropped.
+        expect(root.textContent).toContain('rejected prompt');
         expect(setStructuredMessages).not.toHaveBeenCalled();
         expect(replaceChildren).not.toHaveBeenCalled();
     });

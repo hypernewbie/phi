@@ -617,7 +617,12 @@ export function createReviewTranscriptView(root, options) {
         for (const block of transcript.querySelectorAll('[data-pi-optimistic-message]')) {
             block.remove();
         }
-        if (!activeTurn?.active)
+        // A queued prompt renders its optimistic row without claiming an
+        // active turn, so the gate is on pending prompt content, not `active`.
+        if (!activeTurn ||
+            (!activeTurn.active &&
+                !activeTurn.promptText &&
+                (activeTurn.outgoing?.length ?? 0) === 0))
             return;
         if (typeof activeTurn.promptOrigin === 'number') {
             const block = transcript.querySelector(`[data-pi-message-index="${activeTurn.promptOrigin}"]`);
