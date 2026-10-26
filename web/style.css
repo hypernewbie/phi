@@ -3389,6 +3389,15 @@ body.has-terminal-bg
     overscroll-behavior: contain;
 }
 
+/* Skills list: same bounded, scrollable menu as the other pickers, so
+   a long list keeps its header and stays reachable. */
+#pi-rpc-skills-dropup {
+    max-width: min(320px, calc(100vw - 16px));
+    max-height: 42vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
 .model-presets-dropup {
     position: absolute;
     bottom: 40px; /* sits right above presets bar */
@@ -3501,7 +3510,13 @@ body.has-terminal-bg
 #pi-rpc-skills-dropup .pi-rpc-dropup-meta {
     font-size: 10px;
     font-weight: 400;
-    white-space: normal;
+    /* A description can be long: it shrinks and truncates so the
+       skill name keeps its width. The full text stays in the title. */
+    flex-shrink: 1;
+    max-width: 55%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 #pi-rpc-model-dropup .pi-rpc-dropup-message,
 #pi-rpc-thinking-dropup .pi-rpc-dropup-message,
@@ -5654,7 +5669,8 @@ html[data-phi-config-page] .settings-modal {
     #keys-presets-dropup,
     #slash-presets-dropup,
     #pi-rpc-model-dropup,
-    #pi-rpc-thinking-dropup {
+    #pi-rpc-thinking-dropup,
+    #pi-rpc-skills-dropup {
         width: min(280px, calc(100vw - 24px)) !important;
         max-height: 42vh;
         overflow-y: auto;
