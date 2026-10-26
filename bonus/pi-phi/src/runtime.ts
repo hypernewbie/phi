@@ -21,12 +21,14 @@ import {
     ContextUsageSnapshot,
     Hello,
     HistoryResponse,
+    InvokeSkillAck,
     LogicalState,
     ModelSnapshot,
     ModelsResponse,
     PiToPhi,
     RunOutcome,
     SetModelAck,
+    SkillsResponse,
     StateSnapshot,
     ThinkingLevelsResponse,
     SetThinkingAck,
@@ -39,11 +41,16 @@ import { CAPABILITY_CONTEXT } from './protocol.js';
 import { CAPABILITY_HISTORY } from './protocol.js';
 import { CAPABILITY_LIFECYCLE } from './protocol.js';
 import { CAPABILITY_MODELS } from './protocol.js';
+import { CAPABILITY_SKILLS } from './protocol.js';
 import { CAPABILITY_THINKING } from './protocol.js';
 import { MAX_COMPACT_IDENTITY_CHARS } from './protocol.js';
 import { MAX_JOURNAL_RECORDS } from './protocol.js';
 import { MAX_MESSAGE_BYTES } from './protocol.js';
 import { MAX_MODELS_ENTRIES } from './protocol.js';
+import { MAX_SKILL_DESCRIPTION_BYTES } from './protocol.js';
+import { MAX_SKILL_ENTRIES } from './protocol.js';
+import { MAX_SKILL_NAME_BYTES } from './protocol.js';
+import { isAddressableSkillName } from './protocol.js';
 import { MAX_THINKING_LEVELS } from './protocol.js';
 import { MAX_THINKING_LEVEL_BYTES } from './protocol.js';
 import { MAX_THINKING_MODEL_ID_BYTES } from './protocol.js';
@@ -72,6 +79,38 @@ export type PiRegistryView = Pick<
 /** Structural scoped-model entry; the wrapped model is what matters. */
 export interface PiScopedModelView {
     readonly model: PiModelView;
+}
+
+/**
+ * One skill the host session knows. name is the bare skill name
+ * without the "skill:" command prefix; description is the host's
+ * frontmatter text. The host may hand out entries that break the
+ * bridge wire bounds, so both sides validate.
+ */
+export interface PiSkillView {
+    readonly name: string;
+    readonly description: string;
+}
+
+/**
+ * One skill entry when it fits the wire bounds, else null. The bounds
+ * are UTF-8 byte limits: Pi checks character counts and only warns, so
+ * a loaded skill can be unrepresentable here.
+ */
+function representableSkill(
+    skill: PiSkillView | undefined,
+): { name: string; description: string } | null {
+    if (!skill || typeof skill.name !== 'string') return null;
+    if (!isAddressableSkillName(skill.name)) return null;
+    if (typeof skill.description !== 'string') return null;
+    if (Buffer.byteLength(skill.name, 'utf8') > MAX_SKILL_NAME_BYTES)
+        return null;
+    if (
+        Buffer.byteLength(skill.description, 'utf8') >
+        MAX_SKILL_DESCRIPTION_BYTES
+    )
+        return null;
+    return { name: skill.name, description: skill.description };
 }
 
 /** Structural Pi event-context view; satisfied by both pinned versions. */
@@ -156,6 +195,18 @@ export interface RuntimeOptions {
     /** Native thinking APIs; both are required to advertise the capability. */
     readonly getThinkingLevel?: () => PiThinkingLevel;
     readonly setThinkingLevel?: (level: PiThinkingLevel) => void;
+    /**
+     * Live skill list from the host session. Present only when the
+     * host exposes it; the capability needs this and invokeSkill
+     * together.
+     */
+    readonly getSkills?: (() => readonly PiSkillView[]) | undefined;
+    /**
+     * Host skill invocation. Present only when the host exposes it.
+     * Fire-and-forget: a later host-side failure is not observable
+     * through the bridge.
+     */
+    readonly invokeSkill?: ((name: string) => void) | undefined;
     /** Base reconnect delay; doubles per attempt up to maxBackoffMs. */
     readonly backoffBaseMs?: number;
     readonly backoffMaxMs?: number;
@@ -356,6 +407,7 @@ export class Runtime {
     private modelsAccepted = false;
     private thinkingAccepted = false;
     private compactAccepted = false;
+    private skillsAccepted = false;
     /** getContextUsage present on the latest event context. */
     private contextApi = false;
     /** compact/isIdle/hasPendingMessages present on the latest context. */
@@ -906,6 +958,9 @@ export class Runtime {
         if (isHistoryReaderAvailable(this.ui)) caps.push(CAPABILITY_HISTORY);
         if (this.opts.getThinkingLevel && this.opts.setThinkingLevel)
             caps.push(CAPABILITY_THINKING);
+        // Skills need both host calls: the list and the invocation.
+        if (this.opts.getSkills && this.opts.invokeSkill)
+            caps.push(CAPABILITY_SKILLS);
         return caps;
     }
 
@@ -968,6 +1023,7 @@ export class Runtime {
         this.modelsAccepted = false;
         this.thinkingAccepted = false;
         this.compactAccepted = false;
+        this.skillsAccepted = false;
         // Reconnect carries a fresh baseline: resample through the
         // latest context so the Hello never replays a stale reading.
         if (this.lastCtx) this.sampleTelemetry(this.lastCtx);
@@ -993,6 +1049,8 @@ export class Runtime {
                     accepted.capabilities.includes(CAPABILITY_THINKING);
                 this.compactAccepted =
                     accepted.capabilities.includes(CAPABILITY_COMPACT);
+                this.skillsAccepted =
+                    accepted.capabilities.includes(CAPABILITY_SKILLS);
             }
         } catch (err) {
             channel.close();
@@ -1060,6 +1118,19 @@ export class Runtime {
             this.compactAccepted
         ) {
             this.onCompactRequest(msg.payload.value);
+        } else if (
+            msg.payload?.$case === 'skillsRequest' &&
+            this.skillsAccepted
+        ) {
+            this.onSkillsRequest(msg.payload.value.requestId);
+        } else if (
+            msg.payload?.$case === 'invokeSkillRequest' &&
+            this.skillsAccepted
+        ) {
+            this.onInvokeSkillRequest(
+                msg.payload.value.requestId,
+                msg.payload.value.name,
+            );
         }
     }
 
@@ -1390,6 +1461,162 @@ export class Runtime {
             payload: {
                 $case: 'setModelAck',
                 value: SetModelAck.create({ requestId, ok, reason }),
+            },
+        };
+    }
+
+    /**
+     * Answer one skills request with the session's live skill list.
+     * Best-effort like models: a host failure, an entry that breaks
+     * the wire bounds, or an oversized answer replies unavailable.
+     * Entries are never silently dropped, so a partial list is never
+     * shown as complete. Nothing here closes the stream.
+     */
+    private onSkillsRequest(requestId: string): void {
+        if (typeof requestId !== 'string' || requestId === '') return;
+        if (!this.channel) return;
+        const getSkills = this.opts.getSkills;
+        if (!getSkills) {
+            this.channel.sendNonfatal(this.skillsResponse(requestId, null));
+            return;
+        }
+        let raw: readonly PiSkillView[];
+        try {
+            raw = getSkills();
+        } catch {
+            this.channel.sendNonfatal(this.skillsResponse(requestId, null));
+            return;
+        }
+        if (!Array.isArray(raw)) {
+            this.channel.sendNonfatal(this.skillsResponse(requestId, null));
+            return;
+        }
+        const entries: { name: string; description: string }[] = [];
+        for (const skill of raw) {
+            const entry = representableSkill(skill);
+            if (!entry) {
+                // One unrepresentable entry makes the whole list
+                // unavailable; omitting it would show a partial list
+                // as the session's complete skill set.
+                this.channel.sendNonfatal(this.skillsResponse(requestId, null));
+                return;
+            }
+            entries.push(entry);
+        }
+        let msg = this.skillsResponse(requestId, entries);
+        if (PiToPhi.encode(msg).finish().length > MAX_MESSAGE_BYTES) {
+            msg = this.skillsResponse(requestId, null);
+        }
+        if (!this.channel.sendNonfatal(msg)) {
+            // Admission failure is nonfatal: answer unavailable so
+            // Phi falls back promptly instead of waiting for a
+            // reply that will never come.
+            const sent = msg.payload;
+            if (sent?.$case === 'skillsResponse' && !sent.value.unavailable) {
+                this.channel.sendNonfatal(this.skillsResponse(requestId, null));
+            }
+        }
+    }
+
+    /**
+     * Answer one skill invocation. The name must be known to the live
+     * session; an unknown name acks unknown-skill without touching
+     * the host. ok means the request was dispatched, never that the
+     * agent accepted or completed it.
+     */
+    private onInvokeSkillRequest(requestId: string, name: string): void {
+        if (typeof requestId !== 'string' || requestId === '') return;
+        const fail = (reason: string): void => {
+            this.channel?.sendNonfatal(
+                this.invokeSkillAck(requestId, false, reason),
+            );
+        };
+        const getSkills = this.opts.getSkills;
+        const invokeSkill = this.opts.invokeSkill;
+        if (!getSkills || !invokeSkill) {
+            fail('unavailable');
+            return;
+        }
+        if (
+            typeof name !== 'string' ||
+            name === '' ||
+            Buffer.byteLength(name, 'utf8') > MAX_SKILL_NAME_BYTES
+        ) {
+            fail('unknown-skill');
+            return;
+        }
+        if (!isAddressableSkillName(name)) {
+            // The name cannot address one skill: "/skill:<name>"
+            // would split at the first space and expand another one.
+            fail('unavailable');
+            return;
+        }
+        let known = false;
+        try {
+            const raw = getSkills();
+            known =
+                Array.isArray(raw) &&
+                raw.some(
+                    (skill) =>
+                        typeof skill?.name === 'string' && skill.name === name,
+                );
+        } catch {
+            fail('unavailable');
+            return;
+        }
+        if (!known) {
+            fail('unknown-skill');
+            return;
+        }
+        try {
+            invokeSkill(name);
+        } catch {
+            // A synchronous host failure is a refusal; a later
+            // asynchronous host failure stays outside this ack.
+            fail('unavailable');
+            return;
+        }
+        this.channel?.sendNonfatal(this.invokeSkillAck(requestId, true, ''));
+    }
+
+    private skillsResponse(
+        requestId: string,
+        entries: { name: string; description: string }[] | null,
+    ): PiToPhi {
+        return {
+            paneId: this.opts.creds.pane,
+            processId: this.opts.creds.process,
+            runtimeGeneration: this.opts.generation,
+            payload: {
+                $case: 'skillsResponse',
+                value:
+                    entries === null
+                        ? SkillsResponse.create({
+                              requestId,
+                              unavailable: true,
+                          })
+                        : SkillsResponse.create({
+                              requestId,
+                              skills: entries.slice(0, MAX_SKILL_ENTRIES),
+                              truncated: entries.length > MAX_SKILL_ENTRIES,
+                              unavailable: false,
+                          }),
+            },
+        };
+    }
+
+    private invokeSkillAck(
+        requestId: string,
+        ok: boolean,
+        reason: string,
+    ): PiToPhi {
+        return {
+            paneId: this.opts.creds.pane,
+            processId: this.opts.creds.process,
+            runtimeGeneration: this.opts.generation,
+            payload: {
+                $case: 'invokeSkillAck',
+                value: InvokeSkillAck.create({ requestId, ok, reason }),
             },
         };
     }

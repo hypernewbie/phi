@@ -389,6 +389,52 @@ func (b *Bridge) RequestPaneModels(ctx context.Context, paneID string) (pibridge
 	return b.server.RequestModels(ctx, processID)
 }
 
+// RequestPaneSkills resolves a pane to its bridge process and reads the
+// live Pi skill list. Unknown, unmanaged, and peerless panes fail; the
+// caller owns the deadline like history and models reads.
+func (b *Bridge) RequestPaneSkills(ctx context.Context, paneID string) (pibridge.SkillsResult, error) {
+	if b == nil {
+		return pibridge.SkillsResult{}, fmt.Errorf("pi-bridge: disabled")
+	}
+	b.mu.Lock()
+	p, ok := b.panes[paneID]
+	var processID string
+	var managed bool
+	if ok {
+		processID, managed = p.processID, p.managed
+	}
+	b.mu.Unlock()
+	if !ok || !managed {
+		return pibridge.SkillsResult{}, fmt.Errorf("pi-bridge: pane not managed")
+	}
+	return b.server.RequestSkills(ctx, processID)
+}
+
+// RequestPaneInvokeSkill requires the origin captured by the list that
+// produced the row: it never resolves a replacement process or
+// generation on the caller's behalf. A stale origin is refused before
+// any dispatch, so the caller learns the skill never left Phi.
+func (b *Bridge) RequestPaneInvokeSkill(ctx context.Context, paneID, originProcessID string, generation uint64, name string) (pibridge.InvokeSkillResult, error) {
+	if b == nil {
+		return pibridge.InvokeSkillResult{}, fmt.Errorf("pi-bridge: disabled")
+	}
+	b.mu.Lock()
+	p, ok := b.panes[paneID]
+	var processID string
+	var managed bool
+	if ok {
+		processID, managed = p.processID, p.managed
+	}
+	b.mu.Unlock()
+	if !ok || !managed {
+		return pibridge.InvokeSkillResult{}, fmt.Errorf("pi-bridge: pane not managed")
+	}
+	if processID != originProcessID {
+		return pibridge.InvokeSkillResult{}, pibridge.ErrSkillOriginStale
+	}
+	return b.server.RequestInvokeSkill(ctx, originProcessID, generation, name)
+}
+
 // RequestPaneThinkingLevels reads supported levels and rejects a result if
 // the pane was rebound to a different process while the request was in flight.
 func (b *Bridge) RequestPaneThinkingLevels(ctx context.Context, paneID string) (pibridge.ThinkingLevelsResult, error) {

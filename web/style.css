@@ -3265,6 +3265,7 @@ body.has-terminal-bg
 
 .presets-container > .pi-rpc-model-trigger,
 .presets-container > .pi-rpc-thinking-trigger,
+.presets-container > .pi-rpc-skills-trigger,
 .presets-container > .pi-rpc-compact-btn,
 .presets-container > .pi-rpc-reset-btn {
     font-size: 11px;
@@ -3388,6 +3389,15 @@ body.has-terminal-bg
     overscroll-behavior: contain;
 }
 
+/* Skills list: same bounded, scrollable menu as the other pickers, so
+   a long list keeps its header and stays reachable. */
+#pi-rpc-skills-dropup {
+    max-width: min(320px, calc(100vw - 16px));
+    max-height: 42vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
 .model-presets-dropup {
     position: absolute;
     bottom: 40px; /* sits right above presets bar */
@@ -3481,8 +3491,13 @@ body.has-terminal-bg
     font-size: 10px;
     font-weight: 600;
 }
+#pi-rpc-skills-dropup .dropup-header {
+    font-size: 10px;
+    font-weight: 600;
+}
 #pi-rpc-model-dropup .dropup-model-btn,
-#pi-rpc-thinking-dropup .dropup-model-btn {
+#pi-rpc-thinking-dropup .dropup-model-btn,
+#pi-rpc-skills-dropup .dropup-model-btn {
     font-size: 11px;
     font-weight: 400;
     line-height: 1.4;
@@ -3492,8 +3507,20 @@ body.has-terminal-bg
     font-size: 10px;
     font-weight: 400;
 }
+#pi-rpc-skills-dropup .pi-rpc-dropup-meta {
+    font-size: 10px;
+    font-weight: 400;
+    /* A description can be long: it shrinks and truncates so the
+       skill name keeps its width. The full text stays in the title. */
+    flex-shrink: 1;
+    max-width: 55%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 #pi-rpc-model-dropup .pi-rpc-dropup-message,
-#pi-rpc-thinking-dropup .pi-rpc-dropup-message {
+#pi-rpc-thinking-dropup .pi-rpc-dropup-message,
+#pi-rpc-skills-dropup .pi-rpc-dropup-message {
     font-size: 11px;
     font-weight: 400;
 }
@@ -3514,14 +3541,16 @@ body.has-terminal-bg
 /* Pi RPC model picker: grouped + searchable (see research
    2025-01-20-pi-rpc-model-picker-grouped.md). Id-scoped so these
    overrides beat the shared .dropup-* class rules. */
-#pi-rpc-model-dropup .pi-rpc-model-sticky {
+#pi-rpc-model-dropup .pi-rpc-model-sticky,
+#pi-rpc-skills-dropup .pi-rpc-model-sticky {
     position: sticky;
     top: 0;
     z-index: 2;
     background-color: var(--bg-elevated);
 }
 
-#pi-rpc-model-dropup .pi-rpc-model-search {
+#pi-rpc-model-dropup .pi-rpc-model-search,
+#pi-rpc-skills-dropup .pi-rpc-model-search {
     appearance: none;
     -webkit-appearance: none;
     display: block;
@@ -3540,7 +3569,8 @@ body.has-terminal-bg
         box-shadow 0.15s;
 }
 
-#pi-rpc-model-dropup .pi-rpc-model-search:focus {
+#pi-rpc-model-dropup .pi-rpc-model-search:focus,
+#pi-rpc-skills-dropup .pi-rpc-model-search:focus {
     border-color: var(--accent);
     box-shadow:
         0 0 0 1px var(--accent-edge),
@@ -5639,7 +5669,8 @@ html[data-phi-config-page] .settings-modal {
     #keys-presets-dropup,
     #slash-presets-dropup,
     #pi-rpc-model-dropup,
-    #pi-rpc-thinking-dropup {
+    #pi-rpc-thinking-dropup,
+    #pi-rpc-skills-dropup {
         width: min(280px, calc(100vw - 24px)) !important;
         max-height: 42vh;
         overflow-y: auto;
@@ -5663,11 +5694,23 @@ html[data-phi-config-page] .settings-modal {
         max-height: min(42vh, calc(var(--vv-height, 100dvh) * 0.42));
     }
 
+    #pi-rpc-skills-dropup {
+        max-height: min(42vh, calc(var(--vv-height, 100dvh) * 0.42));
+    }
+
     #pi-rpc-model-dropup .pi-rpc-model-list-container {
         touch-action: pan-y;
     }
 
+    #pi-rpc-skills-dropup .pi-rpc-model-list-container {
+        touch-action: pan-y;
+    }
+
     #pi-rpc-model-dropup .dropup-model-btn {
+        min-height: 44px;
+    }
+
+    #pi-rpc-skills-dropup .dropup-model-btn {
         min-height: 44px;
     }
 
@@ -8483,6 +8526,7 @@ html[data-phi-config-page] .settings-modal {
 
     .presets-container > .pi-rpc-model-trigger,
     .presets-container > .pi-rpc-thinking-trigger,
+    .presets-container > .pi-rpc-skills-trigger,
     .presets-container > .pi-rpc-compact-btn,
     .presets-container > .pi-rpc-reset-btn {
         font-size: inherit !important;

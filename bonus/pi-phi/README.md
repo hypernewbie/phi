@@ -48,6 +48,17 @@ A lost connection closes the picker and clears its cached list.
 A failed list request shows an error inside the picker.
 A switch timeout has an unknown outcome. Reopen the picker to check the model.
 
+## Skills
+
+A connected Pi pane with `pi.skills.v1` shows a Skills control in the composer.
+Opening it lists the skills the live Pi session knows. Clicking one sends that
+skill to Pi, which expands it into the request.
+Without the bridge or capability, no control appears and nothing changes.
+A refused invocation shows its reason. A failed send has an unknown outcome:
+reopen Pi to check. The skill is sent to Pi, not run by Phi.
+The last known list stays on screen while the picker refreshes; a failed
+refresh keeps it and says it may be out of date.
+
 ## Toggles and manual install
 
 Two switches, one per side. Defaults bridge every phi-spawned Pi.
