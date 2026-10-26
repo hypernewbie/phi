@@ -5,6 +5,8 @@ package phic
 import (
 	"bytes"
 	"context"
+	"errors"
+	"os"
 	"reflect"
 	"strconv"
 	"testing"
@@ -56,13 +58,34 @@ func TestTTYOwnsDuplicateRestoresRealTermiosAndKeyboardStack(t *testing.T) {
 	if !reflect.DeepEqual(before, after) {
 		t.Fatalf("real termios not restored:\nbefore=%+v\nafter=%+v", before, after)
 	}
-	buf := make([]byte, 512)
-	n, err := master.Read(buf)
+	// On Darwin, creack/pty's master is a blocking non-poller fd; deadlines need a nonblocking duplicate.
+	dupFD, err := unix.Dup(int(master.Fd()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(buf[:n], []byte("\x1b[<2u")) {
-		t.Fatalf("caller keyboard stack not restored: %q", buf[:n])
+	if err := unix.SetNonblock(dupFD, true); err != nil {
+		_ = unix.Close(dupFD)
+		t.Fatal(err)
+	}
+	pollable := os.NewFile(uintptr(dupFD), "pty-master")
+	defer pollable.Close()
+	if err := pollable.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set keyboard-stack read deadline: %v", err)
+	}
+	buf := make([]byte, 512)
+	var output []byte
+	for !bytes.Contains(output, []byte("\x1b[<2u")) {
+		n, err := pollable.Read(buf)
+		output = append(output, buf[:n]...)
+		if err != nil {
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				break
+			}
+			t.Fatalf("read caller keyboard stack: %v; output=%q", err, output)
+		}
+	}
+	if !bytes.Contains(output, []byte("\x1b[<2u")) {
+		t.Fatalf("caller keyboard stack not restored: %q", output)
 	}
 }
 func TestTTYIdleReadHonorsContextWithoutClosingDescriptor(t *testing.T) {
