@@ -314,6 +314,7 @@ func main() {
 	http.HandleFunc("/api/config/import-cmds", handleConfigImportCmds)
 	http.HandleFunc("/api/config/workspaces", handleWorkspaceToggle)
 	http.HandleFunc("/api/config/models", handleModelPresets)
+	http.HandleFunc("/api/config/thinking-presets", handleThinkingPresets)
 	http.HandleFunc("/api/fs/autocomplete", handleFSAutocomplete)
 	http.HandleFunc("/api/fs/list", handleFSList)
 	http.HandleFunc("/api/fs/browse", handleFSBrowse)

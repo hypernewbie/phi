@@ -202,8 +202,9 @@ test('bridge thinking levels list, set and cycle; native and absent panes stay u
         const trigger = page.locator(
             '#presets-container button.pi-rpc-thinking-trigger',
         );
-        const cycle = page.locator('#pi-thinking-btn');
+        const duplicate = page.locator('#pi-thinking-btn');
         await expect(trigger).toContainText('Thinking', { timeout: 10_000 });
+        await expect(duplicate).toHaveCount(0);
 
         // The shared picker renders exactly the supported levels.
         await trigger.click();
@@ -233,21 +234,6 @@ test('bridge thinking levels list, set and cycle; native and absent panes stay u
         await expect(trigger).toHaveAttribute('title', `Thinking · ${target}`);
 
         // The cycle icon uses the advertised order and one setter call.
-        const nextIndex =
-            (catalog.levels.indexOf(target as string) + 1) %
-            catalog.levels.length;
-        const expectedNext = catalog.levels[nextIndex];
-        const callsBeforeCycle = thinkingCalls.length;
-        await cycle.click();
-        await expect
-            .poll(() => paneBridge(request, phi.url, livePane), {
-                timeout: 10_000,
-            })
-            .toMatchObject({ thinking_level: expectedNext });
-        expect(
-            thinkingCalls.slice(callsBeforeCycle).filter((c) => c === 'set'),
-        ).toHaveLength(1);
-
         // A real native cycle reaches Phi through telemetry only.
         await page.locator(`#term-${livePane} .xterm-screen`).click();
         const beforeNative = await paneBridge(request, phi.url, livePane);
@@ -290,17 +276,17 @@ test('bridge thinking levels list, set and cycle; native and absent panes stay u
         );
         await expect(absentTrigger).toHaveAttribute(
             'title',
-            'Open Pi native Thinking picker',
+            'Thinking · saved options',
             { timeout: 10_000 },
         );
         const callsBeforeAbsent = thinkingCalls.length;
         await absentTrigger.click();
-        await expect(dropup).toBeHidden();
-        await expect(cycle).toHaveAttribute(
-            'aria-label',
-            'Cycle Pi Thinking level',
-        );
-        await cycle.click();
+        // The absent pane shows its own saved-option menu and sends nothing.
+        await expect(dropup).toBeVisible();
+        await expect(
+            dropup.locator('.pi-thinking-native-picker'),
+        ).toBeVisible();
+        await expect(page.locator('#pi-thinking-btn')).toHaveCount(0);
         await page.waitForTimeout(1_000);
         expect(
             thinkingCalls

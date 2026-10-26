@@ -163,6 +163,36 @@ describe('openConfigEditor', () => {
         const result = await settleOr(promise, 80);
         expect(result).toBe('__timeout__'); // stayed open, no resolution
     });
+
+    it('permits padded pattern input and returns its trimmed value', async () => {
+        const promise = openFields([
+            {
+                id: 'level',
+                label: 'Thinking level',
+                pattern: '\\s*(?:off|high)\\s*',
+            },
+        ]);
+        const input = document.getElementById('config-editor-level');
+        input.value = ' high ';
+        document.querySelector('.config-editor-footer .btn-accent').click();
+        await expect(promise).resolves.toEqual({ level: 'high' });
+    });
+
+    it('keeps a pattern-invalid draft open for correction', async () => {
+        const promise = openFields([
+            {
+                id: 'level',
+                label: 'Thinking level',
+                pattern: '\\s*(?:off|high)\\s*',
+            },
+        ]);
+        const input = document.getElementById('config-editor-level');
+        input.value = ' turbo ';
+        document.querySelector('.config-editor-footer .btn-accent').click();
+        expect(await settleOr(promise, 40)).toBe('__timeout__');
+        expect(input.value).toBe(' turbo ');
+        expect(document.querySelector('.config-editor-overlay')).toBeTruthy();
+    });
 });
 
 describe('openConfigEditor path fields', () => {

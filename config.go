@@ -45,6 +45,7 @@ type Config struct {
 	ExpandedWorktrees map[string]bool   `json:"expanded_worktrees"`
 	ActiveWorktrees   map[string]string `json:"active_worktrees"`
 	ModelPresets      ModelPresetsMap   `json:"model_presets"`
+	ThinkingPresets   []string          `json:"thinking_presets"`
 	QuickCommands     []QuickCommand    `json:"quick_commands"`
 	TerminalCommands  []QuickCommand    `json:"terminal_commands"`
 	MarkdownDirs      []string          `json:"markdown_dirs"`
@@ -296,6 +297,9 @@ func loadConfig() Config {
 		cfg.ActiveWorktrees = make(map[string]string)
 	}
 	cfg.ModelPresets = ensureModelPresetDefaults(cfg.ModelPresets)
+	if cfg.ThinkingPresets == nil {
+		cfg.ThinkingPresets = []string{}
+	}
 	if cfg.QuickCommands == nil {
 		cfg.QuickCommands = []QuickCommand{
 			{Name: "status", Command: "git status"},
@@ -392,16 +396,59 @@ func saveConfig(cfg Config) {
 	configMu.Lock()
 	defer configMu.Unlock()
 
+	// Legacy callers hold a full snapshot from loadConfig, which may be
+	// older than disk. Thinking presets are owned by their own endpoint,
+	// so always keep the latest persisted list instead of overwriting it
+	// with this snapshot. An unreadable or malformed file is not a safe
+	// base: skip the write rather than destroy it.
+	latest, err := readConfigLocked()
+	if err != nil {
+		return
+	}
+	cfg.ThinkingPresets = latest.ThinkingPresets
+
 	// Defense in depth: never persist a workspace whose path looks
 	// like a test scratch dir (e.g. /tmp/phi-test-alpha). This guards
 	// against the earlier poisoning incident where a test wrote three
 	// fake workspaces into the live ~/.phi/config.json.
-	cfg.Workspaces = filterOutTestPaths(cfg.Workspaces)
+	_ = writeConfigLocked(cfg)
+}
 
+// readConfigLocked reads the raw config file without taking configMu.
+// Callers must hold it. A missing file is an empty config, not an error,
+// so first-run callers behave as before; malformed JSON is reported.
+func readConfigLocked() (Config, error) {
+	var cfg Config
+	cfg.CompressionEnabled = true
+	b, err := os.ReadFile(configFilePath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return cfg, nil
+		}
+		return cfg, err
+	}
+	if len(b) == 0 || strings.TrimSpace(string(b)) == "" {
+		return cfg, nil
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+// writeConfigLocked persists cfg without taking configMu. Callers must
+// hold it.
+func writeConfigLocked(cfg Config) error {
+	cfg.Workspaces = filterOutTestPaths(cfg.Workspaces)
 	path := configFilePath()
-	_ = os.MkdirAll(filepath.Dir(path), 0755)
-	b, _ := json.MarshalIndent(cfg, "", "  ")
-	_ = system.WriteFileAtomic(path, b, 0644)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return system.WriteFileAtomic(path, b, 0644)
 }
 
 // looksLikeTestArtifact returns true if `path` looks like a scratch

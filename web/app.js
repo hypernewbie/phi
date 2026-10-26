@@ -823,6 +823,7 @@ export class App {
         }
         const scope = new BackendScope(profileId, origin || '');
         this.scope = scope;
+        this.tabManager?._bindThinkingPresetStore?.(scope);
         const nextStore = backendStores.get(profileId);
         this.paintBackendFromStore(nextStore);
         if (typeof document !== 'undefined' && document.documentElement) {
@@ -2242,6 +2243,9 @@ export class App {
                 input.placeholder = field.placeholder || '';
                 input.required = field.required !== false;
                 if (!field.multiline) input.type = field.type || 'text';
+                // Optional narrowing pattern; the submit handler checks it
+                // against the trimmed value so a padded token still fails.
+                if (field.pattern) input.pattern = field.pattern;
                 if (field.monospace !== false)
                     input.classList.add('config-editor-mono');
 
@@ -2478,6 +2482,15 @@ export class App {
                         input.focus();
                         return;
                     }
+                    if (
+                        input.pattern &&
+                        !new RegExp(`^(?:${input.pattern})$`, 'u').test(value)
+                    ) {
+                        input.focus();
+                        input.setAttribute('aria-invalid', 'true');
+                        return;
+                    }
+                    input.removeAttribute('aria-invalid');
                     values[id] = value;
                 }
                 cleanup(values);
