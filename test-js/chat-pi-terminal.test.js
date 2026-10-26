@@ -733,9 +733,12 @@ describe('Pi RPC TabManager boundaries', () => {
             'remote',
             'model-id',
         );
-        expect(choice.disabled).toBe(true);
+        // The pick is local feedback: the menu closes at once and nothing in
+        // it is left disabled while the request is in flight.
+        expect(choice.disabled).toBe(false);
+        expect(dropup.classList.contains('hidden')).toBe(true);
         tm.renderPresets('pi-rpc');
-        expect(row.querySelector('.pi-rpc-model-trigger').disabled).toBe(true);
+        expect(row.querySelector('.pi-rpc-model-trigger').disabled).toBe(false);
         resolveSetter();
         await Promise.resolve();
         expect(dropup.classList.contains('hidden')).toBe(true);

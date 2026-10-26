@@ -560,7 +560,7 @@ describe('Pi bridge Thinking controls', () => {
             .find((button) => button.textContent === 'max')
             .click();
         expect(tm._piRpcThinkingPending).not.toBeNull();
-        await vi.advanceTimersByTimeAsync(1100);
+        await vi.advanceTimersByTimeAsync(15100);
 
         expect(tm._piRpcThinkingPending).toBeNull();
         expect(tm.sendToTab).not.toHaveBeenCalled();

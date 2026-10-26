@@ -72,8 +72,8 @@ export interface ActiveTurnState {
     active: boolean;
     promptText: string;
     promptOrigin: 'optimistic' | number;
-    stateLabel: 'Sending' | 'Sent to Pi';
-    outgoing?: Array<{ text: string; stateLabel: 'Sending' | 'Sent to Pi' }>;
+    stateLabel: string;
+    outgoing?: Array<{ text: string; stateLabel: string }>;
     /**
      * Provider-level retry indicator (pi's auto_retry_start). When set
      * the working row swaps to "Retrying · attempt N of M". The
@@ -845,23 +845,24 @@ export function createReviewTranscriptView(
         )) {
             block.remove();
         }
-        if (!activeTurn?.active) return;
-        if (typeof activeTurn.promptOrigin === 'number') {
-            const block = transcript.querySelector<HTMLElement>(
-                `[data-pi-message-index="${activeTurn.promptOrigin}"]`,
-            );
-            if (block)
-                block.dataset.piActivePromptIndex = String(
-                    activeTurn.promptOrigin,
-                );
-            return;
-        }
-        const pending = activeTurn.outgoing ?? [
-            {
-                text: activeTurn.promptText,
-                stateLabel: activeTurn.stateLabel,
-            },
-        ];
+        // A queued prompt renders its optimistic row without claiming an
+        // active turn, so the gate is on pending prompt content, not `active`.
+        if (!activeTurn) return;
+        // Rows for prompts still awaiting confirmation are drawn whatever the
+        // active prompt resolved to: once the newest prompt reconciles to a
+        // transcript index, an older unconfirmed one must stay on screen.
+        // An empty list is authoritative — the fallback only covers a state
+        // that carries prompt text and no list at all.
+        const pending: readonly { text: string; stateLabel: string }[] =
+            activeTurn.outgoing ??
+            (activeTurn.promptOrigin === 'optimistic' && activeTurn.promptText
+                ? [
+                      {
+                          text: activeTurn.promptText,
+                          stateLabel: activeTurn.stateLabel,
+                      },
+                  ]
+                : []);
         for (const item of pending) {
             const optimistic = buildUserMessageBlock(
                 [
@@ -877,6 +878,15 @@ export function createReviewTranscriptView(
                 optimistic.dataset.piOptimisticPrompt = 'true';
             transcript.appendChild(optimistic);
         }
+        if (typeof activeTurn.promptOrigin === 'number') {
+            const block = transcript.querySelector<HTMLElement>(
+                `[data-pi-message-index="${activeTurn.promptOrigin}"]`,
+            );
+            if (block)
+                block.dataset.piActivePromptIndex = String(
+                    activeTurn.promptOrigin,
+                );
+        }
     }
 
     function syncActiveTurn(): void {
@@ -888,8 +898,13 @@ export function createReviewTranscriptView(
         // bookkeeping.
         const showHeader = !!state?.active || !!state?.retry;
         activeHeader.classList.toggle('hidden', !showHeader);
+        // Empty the overlays as they hide: a stale copy left in a hidden
+        // sibling still reads as chat text to assistive tech and to any
+        // consumer of textContent.
         activeTop.classList.add('hidden');
         activeBottom.classList.add('hidden');
+        activeTop.replaceChildren();
+        activeBottom.replaceChildren();
         // Retry indicator swaps the working label to
         // "Retrying · attempt N of M"; dots + Esc hint stay unchanged.
         // The label is updated BEFORE the active-only early return so
