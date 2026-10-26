@@ -6719,7 +6719,9 @@ export class TabManager {
         modelButton.type = 'button';
         modelButton.className =
             'preset-btn model-trigger-btn pi-rpc-model-trigger';
-        modelButton.textContent = `Model: ${state.model || '—'} ▾`;
+        modelButton.textContent = isCompactViewport()
+            ? '🤖 Models ▾'
+            : `Model: ${state.model || '—'} ▾`;
         modelButton.title = 'Change the model for this session';
         modelButton.disabled = menuDisabled;
         modelButton.addEventListener('click', (event) => {
@@ -6733,7 +6735,9 @@ export class TabManager {
         thinkingButton.type = 'button';
         thinkingButton.className =
             'preset-btn model-trigger-btn pi-rpc-thinking-trigger';
-        thinkingButton.textContent = `Thinking: ${state.thinking || '—'} ▾`;
+        thinkingButton.textContent = isCompactViewport()
+            ? 'Thinking ▾'
+            : `Thinking: ${state.thinking || '—'} ▾`;
         thinkingButton.title = 'Change the thinking level';
         thinkingButton.disabled =
             menuDisabled || this._piRpcThinkingPending?.paneId === paneId;
@@ -11502,7 +11506,10 @@ export class TabManager {
             // Bridge-live Pi tabs share the Pi RPC model picker.
             // Anything else falls through to the legacy static list.
             modelsTriggerBtn.classList.add('pi-rpc-model-trigger');
-            modelsTriggerBtn.innerText = `Model: ${activeTab.piBridge?.model || '—'} ▾`;
+            // The compact strip is width-bound: short label there.
+            modelsTriggerBtn.innerText = isCompactViewport()
+                ? '🤖 Models ▾'
+                : `Model: ${activeTab.piBridge?.model || '—'} ▾`;
             modelsTriggerBtn.title = 'Change the model for this session';
             modelsTriggerBtn.addEventListener('click', (e) => {
                 e.stopPropagation();

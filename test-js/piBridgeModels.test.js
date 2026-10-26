@@ -109,6 +109,44 @@ describe('bridge models trigger', () => {
         expect(dropup.textContent).toContain('b/y');
     });
 
+    it('drops the live model slug from the label on a compact viewport', () => {
+        const tab = bridgeTab({
+            piBridge: {
+                state: 'managed',
+                connected: true,
+                model: 'a/x',
+                thinking_level: 'high',
+                capabilities: [
+                    'pi.lifecycle.v1',
+                    'pi.models.v1',
+                    'pi.thinking.v1',
+                ],
+            },
+        });
+        const { tm } = harness(tab);
+        mockFetch(() => undefined);
+        const innerWidth = window.innerWidth;
+        Object.defineProperty(window, 'innerWidth', {
+            configurable: true,
+            value: 390,
+        });
+        try {
+            tm.renderPresets('pi');
+            const label = (selector) => {
+                const el = tm.presetsContainer.querySelector(selector);
+                // jsdom has no innerText: fall back to the expando.
+                return el.textContent || el.innerText;
+            };
+            expect(label('.pi-rpc-model-trigger')).toBe('🤖 Models ▾');
+            expect(label('.pi-rpc-thinking-trigger')).toBe('Thinking ▾');
+        } finally {
+            Object.defineProperty(window, 'innerWidth', {
+                configurable: true,
+                value: innerWidth,
+            });
+        }
+    });
+
     it('keeps the legacy static list when the bridge is absent', () => {
         const tab = bridgeTab({ piBridge: { state: 'plain' } });
         const { tm } = harness(tab);

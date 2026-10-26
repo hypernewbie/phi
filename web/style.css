@@ -3684,6 +3684,8 @@ body.has-terminal-bg
 .preset-btn.model-trigger-btn {
     border-color: var(--accent);
     color: var(--accent-bright);
+    /* Pickers carry the live value; do not clip it with the chip cap. */
+    max-width: 320px;
 }
 
 .preset-btn.model-trigger-btn:hover {
