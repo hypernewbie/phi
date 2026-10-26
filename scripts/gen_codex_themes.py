@@ -11,7 +11,7 @@ import plistlib
 
 PALETTES = [
     ('amber', 'Phi Amber', '#fbbf24', '#fcd34d', '#b45309', '#fde68a'),
-    ('arc', 'Phi Arc', '#00d4ff', '#66e0ff', '#0080c0', '#99ebff'),
+    ('arc', 'Phi Arc', '#2952ff', '#708cff', '#1433b8', '#b8c7ff'),
     ('ash', 'Phi Ash', '#a8a29e', '#d6d3d1', '#78716c', '#e7e5e4'),
     ('blue', 'Phi Blue', '#38bdf8', '#7dd3fc', '#0284c7', '#bae6fd'),
     ('canary', 'Phi Canary', '#ffee10', '#ffff66', '#b8aa00', '#ffffaa'),
@@ -29,7 +29,7 @@ PALETTES = [
     ('indigo', 'Phi Indigo', '#6366f1', '#818cf8', '#4338ca', '#a5b4fc'),
     ('lime', 'Phi Lime', '#84cc16', '#a3e635', '#4d7c0f', '#d9f99d'),
     ('mint', 'Phi Mint', '#2ed573', '#7bed9f', '#1e8449', '#b8f5cd'),
-    ('neon', 'Phi Neon', '#00f0ff', '#70f8ff', '#008b99', '#b3fcff'),
+    ('neon', 'Phi Neon', '#1a79ff', '#70acff', '#004ab2', '#b2d2ff'),
     ('orange', 'Phi Orange', '#f97316', '#fdba74', '#c2410c', '#fed7aa'),
     ('pine', 'Phi Pine', '#84a59d', '#a8c2bc', '#5b7065', '#c8dad5'),
     ('pink', 'Phi Pink', '#ec4899', '#f472b6', '#be185d', '#fbcfe8'),

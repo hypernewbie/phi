@@ -100,10 +100,10 @@ export const ACCENT_COLORS = {
         accentBright: '#34d399',
     },
     neon: {
-        accent: '#00f0ff',
-        accentGlow: 'rgba(0, 240, 255, 0.15)',
-        accentDim: '#008b99',
-        accentBright: '#70f8ff',
+        accent: '#1a79ff',
+        accentGlow: 'rgba(26, 121, 255, 0.16)',
+        accentDim: '#004ab2',
+        accentBright: '#70acff',
     },
     coral: {
         accent: '#e07a5f',
@@ -136,10 +136,10 @@ export const ACCENT_COLORS = {
         accentBright: '#7bed9f',
     },
     arc: {
-        accent: '#00d4ff',
-        accentGlow: 'rgba(0, 212, 255, 0.18)',
-        accentDim: '#0080c0',
-        accentBright: '#66e0ff',
+        accent: '#2952ff',
+        accentGlow: 'rgba(41, 82, 255, 0.18)',
+        accentDim: '#1433b8',
+        accentBright: '#708cff',
     },
     ember: {
         accent: '#ff4500',
