@@ -326,7 +326,9 @@ describe('bridge skills loss and reconnect', () => {
 });
 
 describe('bridge skills runtime fencing', () => {
-    function invokeMock() {
+    // The list carries the origin of the peer that served it, so the
+    // mock follows the runtime the browser currently sees.
+    function invokeMock(tab) {
         let release;
         const fetchMock = mockFetch((url) => {
             if (
@@ -336,7 +338,7 @@ describe('bridge skills runtime fencing', () => {
                 return new Promise((resolve) => {
                     release = () => resolve({ ok: false, status: 503 });
                 });
-            return skillList();
+            return skillList({ generation: tab.piBridge.generation });
         });
         return {
             fetchMock,
@@ -354,9 +356,9 @@ describe('bridge skills runtime fencing', () => {
     }
 
     it('reports an unknown outcome once when the peer is lost mid-dispatch', async () => {
-        const io = invokeMock();
-        global.fetch = io.fetchMock;
         const tab = bridgeTab();
+        const io = invokeMock(tab);
+        global.fetch = io.fetchMock;
         const { tm, dropup } = harness(tab);
         tm.renderPresets('pi');
         skillsTrigger(tm).click();
@@ -385,9 +387,9 @@ describe('bridge skills runtime fencing', () => {
     });
 
     it('reports an unknown outcome once when the socket is replaced mid-dispatch', async () => {
-        const io = invokeMock();
-        global.fetch = io.fetchMock;
         const tab = bridgeTab();
+        const io = invokeMock(tab);
+        global.fetch = io.fetchMock;
         const { tm, dropup } = harness(tab);
         tm.renderPresets('pi');
         skillsTrigger(tm).click();
@@ -497,10 +499,45 @@ describe('bridge skills runtime fencing', () => {
         expect(invokes).toHaveLength(1);
     });
 
-    it('does not lock the rows of a replacement runtime', async () => {
-        const io = invokeMock();
-        global.fetch = io.fetchMock;
+    it('keeps the rows when the browser view lags the answering runtime', async () => {
         const tab = bridgeTab();
+        const fetchMock = mockFetch((url, options) => {
+            if (
+                url.includes('/api/pi-bridge/skill') &&
+                !url.includes('/api/pi-bridge/skills?')
+            )
+                return { json: { ok: true, reason: '' } };
+            // The peer moved on: the answer names generation 2 while
+            // the browser still shows generation 1.
+            return skillList({ generation: '2' });
+        });
+        global.fetch = fetchMock;
+        const { tm, dropup } = harness(tab);
+        tm.renderPresets('pi');
+        skillsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('demo-skill');
+        });
+        dropup.querySelector('.dropup-model-btn').click();
+        await vi.waitFor(() => {
+            expect(tm.app.showToast).toHaveBeenCalled();
+        });
+        // The click carries the origin of the answer, not the browser's
+        // lagging view.
+        const invoke = fetchMock.mock.calls.find((call) => {
+            const url = String(call[0]);
+            return (
+                url.includes('/api/pi-bridge/skill') &&
+                !url.includes('/api/pi-bridge/skills?')
+            );
+        });
+        expect(JSON.parse(invoke[1].body).generation).toBe('2');
+    });
+
+    it('does not lock the rows of a replacement runtime', async () => {
+        const tab = bridgeTab();
+        const io = invokeMock(tab);
+        global.fetch = io.fetchMock;
         const { tm, dropup } = harness(tab);
         tm.renderPresets('pi');
         skillsTrigger(tm).click();

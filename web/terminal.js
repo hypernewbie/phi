@@ -5865,12 +5865,17 @@ export class TabManager {
         } finally {
             clearTimeout(timer);
         }
+        if (!body || typeof body !== 'object' || typeof body.ok !== 'boolean')
+            // An ack without a verdict does not say whether the skill
+            // landed, so the outcome is unknown.
+            throw new Error('Skill send outcome unknown — open Pi to check');
         if (body.ok === true) return;
-        if (body.reason === 'unknown-skill')
+        const reason = typeof body.reason === 'string' ? body.reason : '';
+        if (reason === 'unknown-skill')
             throw new Error('Skill refused: unknown skill (unknown-skill)');
-        if (body.reason === 'unavailable')
+        if (reason === 'unavailable')
             throw new Error('Skill refused: Pi is unavailable (unavailable)');
-        if (body.reason === '')
+        if (reason === '')
             throw new Error('Skill send outcome unknown — open Pi to check');
         throw new Error('Skill send failed');
     }
@@ -5953,18 +5958,20 @@ export class TabManager {
             .then((result) => {
                 if (
                     request !== this._piBridgeSkillsRequest ||
-                    this.getActiveTab()?.paneId !== paneId ||
-                    !this._piBridgeSkillsContextValid(context)
+                    this.getActiveTab()?.paneId !== paneId
                 )
                     return;
                 const bridge = result && typeof result === 'object' ? result : {};
-                this._piBridgeSkillsTruncated = bridge.truncated === true;
-                this._piBridgeSkillsUnavailable = bridge.unavailable === true;
                 // The origin belongs to the runtime that answered.
                 context.origin = {
                     processId: bridge.processId || '',
                     generation: bridge.generation || '',
                 };
+                // The answer is checked against the browser's view: a
+                // list from a runtime the browser already left is stale.
+                if (!this._piBridgeSkillsContextValid(context)) return;
+                this._piBridgeSkillsTruncated = bridge.truncated === true;
+                this._piBridgeSkillsUnavailable = bridge.unavailable === true;
                 this._piBridgeSkills = Array.isArray(bridge.skills)
                     ? bridge.skills
                     : [];
@@ -5996,12 +6003,13 @@ export class TabManager {
         // The rows belong to the runtime that produced the list.
         const context = this._piBridgeSkillsContext;
         if (!this._piBridgeSkillsContextValid(context)) return;
-        // Only a dispatch that still belongs to this runtime may lock
-        // the rows: an older runtime's request must not disable the
-        // current picker.
+        // Only a dispatch that belongs to the runtime which produced
+        // this list may lock the rows: an older runtime's request must
+        // not disable the current picker.
         const pendingOp = this._piBridgeSkillPending?.get(paneId);
         const pending =
-            !!pendingOp && this._piBridgeSkillsRuntimeCurrent(pendingOp);
+            !!pendingOp &&
+            this._piBridgeSkillsOriginMatches(pendingOp, context);
         const skills = (this._piBridgeSkills || []).filter(
             (skill) =>
                 skill &&
@@ -6053,7 +6061,10 @@ export class TabManager {
                     name: skill.name,
                     tab: activeTab,
                     socket: activeTab.ws,
-                    generation: activeTab.piBridge?.generation,
+                    // The answering runtime owns this dispatch, not the
+                    // browser's view of the generation: the view can
+                    // lag behind the runtime that served the list.
+                    origin: { ...origin },
                 };
                 this._piBridgeSkillPending.set(paneId, operation);
                 this._setPiRpcDropupButtonsDisabled(dropup, true);
@@ -12821,39 +12832,66 @@ export class TabManager {
     }
 
     // _piBridgeSkillsContext pins a skills request to the runtime that
-    // owns it: the pane, its socket, and the bridge generation. A
-    // reply, a row, or a completion that belongs to a replaced peer
-    // is stale and never touches the live picker.
+    // owns it: the pane and its socket. The answer names the peer that
+    // served it, and the browser's generation view only decides
+    // staleness: a view that moved on drops the retained rows.
     _piBridgeSkillsContextFor(tab) {
         if (!this._piBridgeSkillsEligible(tab)) return null;
         return {
             paneId: tab.paneId,
             tab,
             socket: tab.ws,
-            generation: tab.piBridge?.generation,
+            // The browser's view when the list was asked for.
+            seen: tab.piBridge?.generation ?? '',
+            origin: null,
         };
     }
 
     _piBridgeSkillsContextValid(context) {
+        if (
+            !context ||
+            this.tabs?.get(context.paneId) !== context.tab ||
+            context.tab.ws !== context.socket ||
+            !this._piBridgeSkillsEligible(context.tab)
+        )
+            return false;
+        const view = context.tab.piBridge?.generation ?? '';
+        if (view === context.seen) return true;
+        // The view moved on. The rows stay usable only when the answer
+        // already belongs to the runtime the browser now sees: the
+        // view can lag behind the answer, and a generation counter
+        // alone cannot tell one lease from the next.
+        return !!context.origin && context.origin.generation === view;
+    }
+
+    // _piBridgeSkillsOriginMatches reports whether a dispatch and a
+    // list belong to the same runtime. The server's answer owns the
+    // identity: the browser's generation view can lag behind it, so
+    // the view must not decide who owns a pending dispatch.
+    _piBridgeSkillsOriginMatches(operation, context) {
+        const sent = operation?.origin;
+        const listed = context?.origin;
         return (
-            !!context &&
-            this.tabs?.get(context.paneId) === context.tab &&
-            context.tab.ws === context.socket &&
-            context.tab.piBridge?.generation === context.generation &&
-            this._piBridgeSkillsEligible(context.tab)
+            !!sent &&
+            !!listed &&
+            sent.processId === listed.processId &&
+            sent.generation === listed.generation
         );
     }
 
     // _piBridgeSkillsRuntimeCurrent reports whether a started
     // invocation still belongs to the runtime that received it. A
-    // swapped socket or a moved generation makes the waiter stale; a
-    // lost peer does not, because the dispatch may still have landed
-    // in the session that is gone.
+    // swapped socket or a different answering runtime makes the waiter
+    // stale; a lost peer does not, because the dispatch may still have
+    // landed in the session that is gone.
     _piBridgeSkillsRuntimeCurrent(operation) {
         return (
             !!operation &&
             operation.tab?.ws === operation.socket &&
-            operation.tab?.piBridge?.generation === operation.generation
+            this._piBridgeSkillsOriginMatches(
+                operation,
+                this._piBridgeSkillsContext,
+            )
         );
     }
 
