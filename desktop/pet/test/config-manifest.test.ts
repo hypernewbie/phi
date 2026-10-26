@@ -22,7 +22,7 @@ describe("pet config manifest", () => {
       .filter((f) => f.endsWith(".webm"))
       .map((f) => f.replace(/\.webm$/, ""))
       .sort();
-    expect(files).toHaveLength(91);
+    expect(files).toHaveLength(106);
     expect([...referenced].sort()).toEqual(files);
   });
 
