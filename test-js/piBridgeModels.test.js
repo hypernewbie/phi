@@ -253,12 +253,18 @@ describe('bridge models picker', () => {
         await vi.waitFor(() => {
             expect(
                 [...dropup.querySelectorAll('.dropup-model-btn')].some(
-                    (button) => button.textContent === 'z',
+                    (button) =>
+                        button.querySelector('.pi-model-name-full')
+                            ?.textContent === 'z',
                 ),
             ).toBe(true);
         });
         [...dropup.querySelectorAll('.dropup-model-btn')]
-            .find((button) => button.textContent === 'z')
+            .find(
+                (button) =>
+                    button.querySelector('.pi-model-name-full')?.textContent ===
+                    'z',
+            )
             .click();
         // The second pick waits its turn instead of racing the first.
         expect(posted).toEqual(['y']);

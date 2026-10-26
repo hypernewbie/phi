@@ -4897,6 +4897,17 @@ export class TabManager {
             button.disabled = disabled;
     }
 
+    _piModelPickerHeader(header, model) {
+        const full = document.createElement('span');
+        full.className = 'pi-model-name-full';
+        full.textContent = `Model · ${model || '—'}`;
+        const compact = document.createElement('span');
+        compact.className = 'pi-model-name-compact';
+        compact.textContent = `Model · ${model?.split('/').pop() || '—'}`;
+        header.title = model || '';
+        header.replaceChildren(full, compact);
+    }
+
     _renderPiRpcModelsDropup(preserve = false) {
         const dropup = document.getElementById('pi-rpc-model-dropup');
         const activeTab = this.getActiveTab();
@@ -4924,7 +4935,7 @@ export class TabManager {
             sticky.className = 'pi-rpc-model-sticky';
             const header = document.createElement('div');
             header.className = 'dropup-header';
-            header.textContent = `Model · ${state.model || '—'}`;
+            this._piModelPickerHeader(header, state.model);
             const search = document.createElement('input');
             search.type = 'search';
             search.className = 'pi-rpc-model-search';
@@ -4961,7 +4972,7 @@ export class TabManager {
             const header = dropup.querySelector(
                 '.pi-rpc-model-sticky .dropup-header',
             );
-            if (header) header.textContent = `Model · ${state.model || '—'}`;
+            if (header) this._piModelPickerHeader(header, state.model);
         }
         const listContainer = dropup.querySelector(
             '.pi-rpc-model-list-container',
@@ -5373,7 +5384,13 @@ export class TabManager {
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'dropup-model-btn';
-            button.textContent = model.name || model.id;
+            const name = document.createElement('span');
+            name.className = 'pi-model-name-full';
+            name.textContent = model.name || model.id;
+            const compactName = document.createElement('span');
+            compactName.className = 'pi-model-name-compact';
+            compactName.textContent = (model.name || model.id).split('/').pop();
+            button.append(name, compactName);
             button.title = `${model.provider}/${model.id}`;
             // A pick is local feedback: the row stays enabled while its
             // request is in flight, and the newest pick wins.
@@ -5401,7 +5418,10 @@ export class TabManager {
             const meta = document.createElement('span');
             meta.className = 'pi-rpc-dropup-meta';
             meta.textContent = `${model.provider}/${model.id}`;
-            row.append(star, button, meta);
+            // Keep the identity inside the selection button: the entire row
+            // except the independent favorite control is a single tap target.
+            button.append(meta);
+            row.append(star, button);
             return row;
         };
         const renderGroup = (group, firstMatchGroup) => {
@@ -11331,7 +11351,11 @@ export class TabManager {
             };
             let left = btnRect.left - containerRect.left;
             const dropupWidth = isCompactViewport()
-                ? Math.min(280, window.innerWidth - 24)
+                ? Math.min(
+                      dropupId === 'pi-rpc-model-dropup' ? 480 : 280,
+                      containerRect.width - 24,
+                      window.innerWidth - 24,
+                  )
                 : dropupId === 'pi-rpc-model-dropup'
                   ? 420
                   : dropupId === 'pi-rpc-thinking-dropup'
