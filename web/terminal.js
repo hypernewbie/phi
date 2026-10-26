@@ -6069,39 +6069,47 @@ export class TabManager {
                 }
                 Promise.resolve(invokeResult)
                     .then(() => {
-                        if (this._piBridgeSkillPending?.get(paneId) !== operation)
-                            return;
-                        this._piBridgeSkillPending.delete(paneId);
-                        // A closed pane reports nothing, and a moved
-                        // socket or runtime makes the waiter stale.
+                        // A newer dispatch for the same pane keeps the
+                        // slot; the settled one never touches it.
+                        if (this._piBridgeSkillPending?.get(paneId) === operation)
+                            this._piBridgeSkillPending.delete(paneId);
+                        // A closed pane reports nothing.
                         if (this.tabs?.get(operation.paneId) !== operation.tab)
                             return;
-                        if (!this._piBridgeSkillsRuntimeCurrent(operation))
-                            return;
+                        // The dispatch is confirmed whatever happened to
+                        // the socket or the runtime meanwhile.
                         if (this.getActiveTab()?.paneId === paneId) {
-                            this._closePiRpcDropups(true);
                             this.app?.showToast?.(
                                 `Sent ${skill.name} to Pi`,
                                 { type: 'success', title: 'Pi skill' },
                             );
                         }
+                        // Only the runtime that received the dispatch
+                        // may close the picker; a replacement runtime
+                        // keeps its own state.
+                        if (
+                            this._piBridgeSkillsRuntimeCurrent(operation) &&
+                            this.getActiveTab()?.paneId === paneId
+                        )
+                            this._closePiRpcDropups(true);
                     })
                     .catch((error) => {
-                        if (this._piBridgeSkillPending?.get(paneId) !== operation)
-                            return;
-                        this._piBridgeSkillPending.delete(paneId);
-                        // A closed pane reports nothing, and a moved
-                        // socket or runtime makes the waiter stale. A
-                        // still-current pane reports the interrupted
-                        // dispatch as unknown exactly once: the skill
-                        // may still have landed, and it is never resent.
+                        if (this._piBridgeSkillPending?.get(paneId) === operation)
+                            this._piBridgeSkillPending.delete(paneId);
+                        // A closed pane reports nothing.
                         if (this.tabs?.get(operation.paneId) !== operation.tab)
                             return;
-                        if (!this._piBridgeSkillsRuntimeCurrent(operation))
-                            return;
+                        // The dispatch may still have landed: the
+                        // outcome is unknown whatever happened to the
+                        // socket or the runtime meanwhile, so the user
+                        // learns it exactly once and it is never resent.
                         this._piRpcError(error, 'Pi skill');
+                        // Only the runtime that received the dispatch
+                        // may re-open the picker; a replacement runtime
+                        // keeps its own state.
                         const current = this.getActiveTab();
                         if (
+                            this._piBridgeSkillsRuntimeCurrent(operation) &&
                             current?.paneId === paneId &&
                             this._piBridgeSkillsEligible(current)
                         )
@@ -11011,11 +11019,9 @@ export class TabManager {
                   ? 420
                   : dropupId === 'pi-rpc-thinking-dropup'
                     ? 280
-                    : dropupId === 'pi-rpc-skills-dropup'
-                      ? 320
-                      : dropupId === 'keys-presets-dropup'
-                        ? 300
-                        : 320;
+                    : dropupId === 'keys-presets-dropup'
+                      ? 300
+                      : 320;
             left = Math.max(
                 12,
                 Math.min(left, containerRect.width - dropupWidth - 12),

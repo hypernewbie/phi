@@ -384,7 +384,7 @@ describe('bridge skills runtime fencing', () => {
         expect(io.invokes()).toHaveLength(1);
     });
 
-    it('stays silent when the socket is replaced mid-dispatch', async () => {
+    it('reports an unknown outcome once when the socket is replaced mid-dispatch', async () => {
         const io = invokeMock();
         global.fetch = io.fetchMock;
         const tab = bridgeTab();
@@ -400,12 +400,16 @@ describe('bridge skills runtime fencing', () => {
         });
 
         // A new browser socket replaces the runtime that received the
-        // dispatch: the waiter is stale and settles silently.
+        // dispatch. The dispatch may still have landed, so the outcome
+        // is unknown and the user learns it exactly once.
         tab.ws = {};
         tab._piBridgeFresh = tab.ws;
         io.release();
-        await new Promise((r) => setTimeout(r, 10));
-        expect(tm.app.showToast).not.toHaveBeenCalled();
+        await vi.waitFor(() => {
+            expect(tm.app.showToast).toHaveBeenCalled();
+        });
+        expect(tm.app.showToast.mock.calls.at(-1)[0]).toContain('unknown');
+        // An uncertain dispatch is never resent.
         expect(io.invokes()).toHaveLength(1);
     });
 
