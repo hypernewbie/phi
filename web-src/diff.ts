@@ -148,6 +148,10 @@ export class DiffController {
     // responses (after a project switch or commit change) no longer
     // match and must be discarded without touching the rendered DOM.
     _richDiffRequestToken: number = 0;
+    // Same idea for the streaming terminal path. A late `/api/diff`
+    // response must not adopt its socket or paint its checkpoint into a
+    // panel the user has already switched away from.
+    _diffStreamToken: number = 0;
     // Diff review comment state. The map keys are the row's logical
     // identity (file + both line numbers) so switching between unified
     // and side-by-side panes preserves the user's notes; localStorage
@@ -1644,6 +1648,8 @@ export class DiffController {
     async refreshDiff(skipLoadCommits: boolean = false): Promise<void> {
         if (!this.isPanelOpen || !this.term) return;
 
+        const streamToken = ++this._diffStreamToken;
+
         if (this.activeTab === 'markdown') {
             this._setPanel('markdown');
             this.app.markdownManager.refreshFiles();
@@ -1750,29 +1756,57 @@ export class DiffController {
 
             const data = await res.json();
 
+            // A newer refresh (tab switch, worktree switch, second
+            // click) owns the panel now. Adopting this socket would
+            // overwrite the current view with this one's checkpoint.
+            if (streamToken !== this._diffStreamToken || !this.isPanelOpen)
+                return;
+
             // Streaming endpoint signals non-repo via JSON flag rather
             // than by spawning a PTY that immediately exits with the
             // fatal stderr.
             if (data?.notGitRepo) return notAGitRepo('this view');
 
-            // Connect and stream diff/log output
-            this.currentWs = new PTYWebSocket(
+            // Connect and stream diff/log output. The PTY holds output
+            // until the checkpoint is rendered and release() runs.
+            const ws = new PTYWebSocket(
                 data.pane_id,
-                (text) => {
-                    this.term.write(text);
-                },
+                (text) => this.term.write(text),
                 null,
-                () => {
-                    // Closed natively on git exit
-                    console.log(`[diff] Stream finished for ${this.activeTab}`);
-                },
+                () =>
+                    console.log(`[diff] Stream finished for ${this.activeTab}`),
                 null,
+                {
+                    onAttachHead: (info) => {
+                        if (this.currentWs !== ws) return;
+                        if (!info.ckpt) {
+                            this.fitTerminal();
+                            ws.release();
+                            return;
+                        }
+                        try {
+                            this.term.resize(info.ckpt.cols, info.ckpt.rows);
+                        } catch {}
+                        this.term.write(
+                            // Decode through the socket's own decoder: a
+                            // checkpoint can end mid-codepoint, and only
+                            // the stream decoder carries the split bytes
+                            // into the next live frame.
+                            info.ckpt.bytes
+                                ? ws.decodeOutput(info.ckpt.bytes)
+                                : info.ckpt.ansi,
+                            () => {
+                                if (this.currentWs === ws) this.fitTerminal();
+                            },
+                        );
+                        ws.release();
+                    },
+                },
             );
-
-            // Send initial resize structure after socket gets active
-            setTimeout(() => {
-                this.fitTerminal();
-            }, 100);
+            this.currentWs = ws;
+            // Fit now: geometry must not depend on the attach frame.
+            // The checkpoint resize above corrects it when it arrives.
+            this.fitTerminal();
         } catch (e) {
             this.term.write(
                 `\x1b[31mFailed to load: ${(e as Error).message}\x1b[0m\r\n`,
