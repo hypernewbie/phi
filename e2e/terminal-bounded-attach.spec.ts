@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import type { WebSocketRoute } from '@playwright/test';
+import { HISTORY_BOOK_BYTES } from '../web/terminal-history.js';
 import { TerminalClientFrame } from '../web/proto/terminal.js';
 import { TerminalServerFrame } from '../web/proto/terminal.js';
 import type {
@@ -320,7 +321,7 @@ test('long archive attaches from bounded state and fetches older books only on a
     expect(pageRequest.from).toBeGreaterThanOrEqual(0);
     expect(pageRequest.through).toBe(archive.length);
     expect(pageRequest.through - pageRequest.from).toBeLessThanOrEqual(
-        (2 << 20) / 20,
+        HISTORY_BOOK_BYTES,
     );
     await expect
         .poll(() =>
