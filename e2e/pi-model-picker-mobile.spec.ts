@@ -7,6 +7,49 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => phi.stop());
 
+test('mobile Models and Cmds chips have matching metrics for terminal and RPC tabs', async ({
+    browser,
+}) => {
+    const context = await browser.newContext({
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+    });
+    try {
+        const page = await context.newPage();
+        for (const coder of ['pi', 'pi-rpc']) {
+            await page.route('**/picker-fixture', (route) =>
+                route.fulfill({
+                    contentType: 'text/html',
+                    body: fixture.replace("coder: 'pi'", `coder: '${coder}'`),
+                }),
+            );
+            await page.goto(`${phi.url}/picker-fixture`);
+            const models = page.locator('.pi-rpc-model-trigger');
+            const cmds = page
+                .locator('.model-trigger-btn')
+                .filter({ hasText: 'Cmds' });
+            await expect(models).toBeVisible();
+            const metrics = (el: Element) => {
+                const style = getComputedStyle(el);
+                return {
+                    height: el.getBoundingClientRect().height,
+                    fontSize: style.fontSize,
+                    lineHeight: style.lineHeight,
+                    padding: style.padding,
+                };
+            };
+            expect(await models.evaluate(metrics)).toEqual(
+                await cmds.evaluate(metrics),
+            );
+            expect((await models.boundingBox())!.height).toBe(24);
+            await page.unroute('**/picker-fixture');
+        }
+    } finally {
+        await context.close();
+    }
+});
+
 // Real picker code and stylesheet; synthetic catalog, no provider calls.
 const fixture = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
