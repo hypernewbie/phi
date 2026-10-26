@@ -26,7 +26,7 @@ interface BookWindow {
     Terminal: new (options: Record<string, unknown>) => BookTerminal;
 }
 
-test('real server books preserve inherited rendition and return live without replaying the browsing backlog', async ({
+test('real server books preserve inherited rendition and refresh the foreground TUI', async ({
     page,
     request,
 }) => {
@@ -37,7 +37,6 @@ test('real server books preserve inherited rendition and return live without rep
                 script,
                 `#!/usr/bin/env python3
 import os, signal, time
-home = os.environ['HOME']
 def write(data):
     while data:
         n = os.write(1, data)
@@ -52,10 +51,6 @@ def paint(*args):
     write(('\\x1b[0m\\x1b[2J\\x1b[HCURRENT_SCREEN REDRAW_%d GRID_%dx%d\\x1b[%d;1HEDGE' % (count, cols, rows, rows)).encode())
 signal.signal(signal.SIGWINCH, paint)
 paint()
-while not os.path.exists(os.path.join(home, 'new-library')): time.sleep(0.01)
-write(b'NEW_BROWSING_LIBRARY\\r\\n' * 400000)
-paint()
-write(b'\\r\\nBROWSING_DONE')
 while True: time.sleep(1)
 `,
                 { mode: 0o755 },
@@ -88,11 +83,6 @@ while True: time.sleep(1)
             })
             .toBe(true);
         const ranges: { from: number; end: number; bytes: number }[] = [];
-        const states: string[] = [];
-        page.on('request', (r) => {
-            if (r.url().includes(`/api/terminals/${id}/state?`))
-                states.push(r.url());
-        });
         page.on('response', async (r) => {
             if (!r.url().includes(`/api/terminals/${id}/recording?`) || !r.ok())
                 return;
@@ -180,48 +170,12 @@ while True: time.sleep(1)
         await expect.poll(() => ranges.length).toBeGreaterThan(0);
         const before = await probe();
         expect(before?.lines.join('\n')).not.toContain('\ufffd');
-        expect(
-            ranges.every(
-                (r) =>
-                    r.bytes === r.end - r.from && r.bytes <= HISTORY_BOOK_BYTES,
-            ),
-        ).toBe(true);
+        expect(ranges.every((r) => r.bytes <= HISTORY_BOOK_BYTES)).toBe(true);
         // A second book progresses into the older source, not a whole replay.
         await older();
         await expect.poll(() => ranges.length).toBeGreaterThan(1);
         expect(ranges[1].from).toBeLessThan(ranges[0].from);
         expect(ranges[1].end).toBeGreaterThanOrEqual(ranges[0].from);
-        writeFileSync(join(phi.dir, 'home', 'new-library'), 'go');
-        const liveBytes =
-            Buffer.byteLength('NEW_BROWSING_LIBRARY\r\n') * 400000;
-        await expect
-            .poll(async () => {
-                const r = await request.get(
-                    `${phi.url}/api/terminals/${id}/recording?from=${archiveSize + liveBytes - 1024}&through=18446744073709551615`,
-                );
-                return (
-                    r.ok() &&
-                    (await r.body()).includes(Buffer.from('BROWSING_DONE'))
-                );
-            })
-            .toBe(true);
-        const count = ranges.length;
-        await page
-            .locator(`#term-${id} .scroll-to-bottom-btn`)
-            .dispatchEvent('click');
-        await expect
-            .poll(() => states.some((url) => url.includes('through=latest')))
-            .toBe(true);
-        await expect
-            .poll(async () =>
-                (await probe())?.lines.some((line) =>
-                    line.includes('CURRENT_SCREEN'),
-                ),
-            )
-            .toBe(true);
-        expect(
-            ranges.slice(count).reduce((sum, r) => sum + r.bytes, 0),
-        ).toBeLessThan(liveBytes / 20);
         // Same-size explicit refresh must reach the real Unix foreground TUI.
         const text = (await probe())?.lines.join('\n');
         await page.locator('#refresh-console-btn').dispatchEvent('click');

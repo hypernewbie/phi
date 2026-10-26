@@ -275,9 +275,10 @@ done
                 timeout: 10_000,
             })
             .toBe('Offline native update');
-        await page.locator(`#term-${freshPane.pane_id} .reconnect-btn`).click();
+        // The client auto-reconnects on its own backoff, so the overlay only
+        // offers a manual retry for a while. Wait for the automatic path.
         await expect(freshLabel).toHaveText('Offline native update', {
-            timeout: 10_000,
+            timeout: 30_000,
         });
 
         // Enter delivers one backend request; the label stays native until
