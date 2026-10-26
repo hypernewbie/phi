@@ -12,6 +12,7 @@ import type { ChannelCreds } from './channel.js';
 import {
     type CompactLatchState,
     type PiContextView,
+    type PiSkillView,
     type PiThinkingLevel,
     Runtime,
     freshCompactLatch,
@@ -21,6 +22,9 @@ export const ENV_TARGET = 'PHI_PI_BRIDGE_ENDPOINT';
 export const ENV_PANE = 'PHI_PI_BRIDGE_PANE_ID';
 export const ENV_PROCESS = 'PHI_PI_BRIDGE_PROCESS_ID';
 export const ENV_TOKEN = 'PHI_PI_BRIDGE_TOKEN';
+
+/** Pi exposes every skill as a slash command with this prefix. */
+const SKILL_COMMAND_PREFIX = 'skill:';
 
 const OWNER_KEY = Symbol.for('phi.pi-phi.owner');
 
@@ -218,6 +222,14 @@ export function createExtension(
             ? (level: PiThinkingLevel) =>
                   nativeThinking.setThinkingLevel!(level)
             : undefined;
+    // Skills need both host calls: the command registry lists them and
+    // sendUserMessage delivers one. Either one missing keeps the
+    // capability off.
+    const nativeSkills = pi as Partial<
+        Pick<ExtensionAPI, 'getCommands' | 'sendUserMessage'>
+    >;
+    const hasSkillsApi = typeof nativeSkills.getCommands === 'function';
+    const hasInvokeApi = typeof nativeSkills.sendUserMessage === 'function';
     const make =
         deps.makeRuntime ??
         ((c, g, compact) =>
@@ -228,6 +240,13 @@ export function createExtension(
                 setModel: (model) => pi.setModel(model),
                 ...(getThinkingLevel ? { getThinkingLevel } : {}),
                 ...(setThinkingLevel ? { setThinkingLevel } : {}),
+                ...(hasSkillsApi ? { getSkills: () => hostSkills(pi) } : {}),
+                ...(hasInvokeApi
+                    ? {
+                          invokeSkill: (name: string) =>
+                              hostInvokeSkill(pi, name),
+                      }
+                    : {}),
             }));
 
     pi.on('session_start', (_event, ctx) => {
@@ -330,6 +349,49 @@ export function createExtension(
             ownerSlot().active = false;
             claimed = false;
         }
+    });
+}
+
+/**
+ * Live skill list from the host command registry. Only commands the
+ * host reports with source "skill" are skills; the "skill:" prefix is
+ * stripped so the wire carries the bare name. A command without that
+ * prefix is not a skill and is skipped.
+ */
+export function hostSkills(pi: ExtensionAPI): PiSkillView[] {
+    const api = pi as Partial<Pick<ExtensionAPI, 'getCommands'>>;
+    const commands = api.getCommands?.();
+    if (!Array.isArray(commands)) return [];
+    const out: PiSkillView[] = [];
+    for (const command of commands) {
+        if (!command || command.source !== 'skill') continue;
+        const name =
+            typeof command.name === 'string' &&
+            command.name.startsWith(SKILL_COMMAND_PREFIX)
+                ? command.name.slice(SKILL_COMMAND_PREFIX.length)
+                : '';
+        if (name === '') continue;
+        out.push({
+            name,
+            description:
+                typeof command.description === 'string'
+                    ? command.description
+                    : '',
+        });
+    }
+    return out;
+}
+
+/**
+ * Send one skill to the host session. The host expands the command
+ * into the skill body; the call is fire-and-forget, so a later
+ * host-side failure is not observable here.
+ */
+export function hostInvokeSkill(pi: ExtensionAPI, name: string): void {
+    const api = pi as Partial<Pick<ExtensionAPI, 'sendUserMessage'>>;
+    api.sendUserMessage?.(`/${SKILL_COMMAND_PREFIX}${name}`, {
+        expandPromptTemplates: true,
+        deliverAs: 'followUp',
     });
 }
 

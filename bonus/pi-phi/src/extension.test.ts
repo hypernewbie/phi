@@ -10,6 +10,8 @@ import {
     ENV_TOKEN,
     clearCredsFromEnv,
     createExtension,
+    hostInvokeSkill,
+    hostSkills,
     ownerCompactState,
     readCredsFromEnv,
     resetOwnerSlotForTest,
@@ -516,5 +518,75 @@ describe('telemetry view and compaction latch', () => {
         expect(first).toEqual({ pending: null, highWater: null, active: null });
         resetOwnerSlotForTest();
         expect(ownerCompactState()).not.toBe(first);
+    });
+});
+
+describe('host skill wiring', () => {
+    function piWith(api: Record<string, unknown>): ExtensionAPI {
+        return { ...api } as unknown as ExtensionAPI;
+    }
+
+    it('lists only skill commands with the bare name', () => {
+        const pi = piWith({
+            getCommands: () => [
+                {
+                    name: 'skill:demo-skill',
+                    description: 'demo',
+                    source: 'skill',
+                    sourceInfo: {},
+                },
+                {
+                    name: 'skill:other',
+                    description: undefined,
+                    source: 'skill',
+                    sourceInfo: {},
+                },
+                {
+                    name: 'help',
+                    description: 'h',
+                    source: 'extension',
+                    sourceInfo: {},
+                },
+                {
+                    name: 'template',
+                    description: 't',
+                    source: 'prompt',
+                    sourceInfo: {},
+                },
+                {
+                    name: 'not-prefixed',
+                    description: 'n',
+                    source: 'skill',
+                    sourceInfo: {},
+                },
+            ],
+        });
+        expect(hostSkills(pi)).toEqual([
+            { name: 'demo-skill', description: 'demo' },
+            { name: 'other', description: '' },
+        ]);
+    });
+
+    it('returns an empty list without a command registry', () => {
+        expect(hostSkills(piWith({}))).toEqual([]);
+    });
+
+    it('sends the skill command with expansion and follow-up delivery', () => {
+        const calls: Array<{ content: string; options: unknown }> = [];
+        const pi = piWith({
+            sendUserMessage: (content: string, options: unknown) => {
+                calls.push({ content, options });
+            },
+        });
+        hostInvokeSkill(pi, 'demo-skill');
+        expect(calls).toEqual([
+            {
+                content: '/skill:demo-skill',
+                options: {
+                    expandPromptTemplates: true,
+                    deliverAs: 'followUp',
+                },
+            },
+        ]);
     });
 });

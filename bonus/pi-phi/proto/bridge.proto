@@ -42,6 +42,8 @@ message PiToPhi {
     ThinkingLevelsResponse thinking_levels_response = 20;
     SetThinkingAck set_thinking_ack = 21;
     CompactResult compact_result = 22;
+    SkillsResponse skills_response = 23;
+    InvokeSkillAck invoke_skill_ack = 24;
   }
 }
 
@@ -61,6 +63,8 @@ message PhiToPi {
     ThinkingLevelsRequest thinking_levels_request = 17;
     SetThinkingRequest set_thinking_request = 18;
     CompactRequest compact_request = 19;
+    SkillsRequest skills_request = 20;
+    InvokeSkillRequest invoke_skill_request = 21;
   }
 }
 
@@ -371,6 +375,61 @@ enum CompactOutcome {
 message CompactResult {
   string request_id = 1;
   CompactOutcome outcome = 2;
+  string reason = 3;
+}
+
+// ---------------------------------------------------------------------------
+// On-demand skill list and invocation
+// ---------------------------------------------------------------------------
+
+// One skill entry. name is the bare Pi skill name without the "skill:"
+// command prefix. Both fields are UTF-8 byte bounds enforced by the
+// bridge, not by Pi: name <= 64 bytes, description <= 1024 bytes. Pi
+// validates character counts and only warns, so an entry that Pi loaded
+// can still be unrepresentable here.
+message SkillRef {
+  string name = 1;
+  string description = 2;
+}
+
+// SkillsRequest asks the extension for the skills the session knows.
+// request_id correlates exactly one SkillsResponse; the extension echoes
+// it verbatim. Best-effort like history and models: the answer may be
+// unavailable, or never arrive, without disturbing lifecycle traffic.
+message SkillsRequest {
+  string request_id = 1;
+}
+
+// SkillsResponse carries one skill list for request_id. truncated means
+// the list hit the entry cap and is partial. unavailable means the
+// answer cannot be represented on the wire: one entry breaks the byte
+// bounds, or the answer exceeds the message bound. Entries are never
+// silently omitted, so a partial list is never shown as complete.
+message SkillsResponse {
+  string request_id = 1;
+  repeated SkillRef skills = 2;
+  bool truncated = 3;
+  bool unavailable = 4;
+}
+
+// InvokeSkillRequest asks the extension to send one skill to Pi. name is
+// the bare skill name; request_id correlates exactly one InvokeSkillAck,
+// echoed verbatim.
+message InvokeSkillRequest {
+  string request_id = 1;
+  string name = 2;
+}
+
+// InvokeSkillAck reports one invocation outcome for request_id. ok means
+// the request was dispatched to the Pi host; it never means the agent
+// accepted or completed it. reason is empty then, or one of
+// 'unknown-skill' when the session does not know the name,
+// 'unavailable' when the host call is missing or failed, and 'error' for
+// any other refused dispatch. Later Pi-side failures (no model, no
+// credentials) are not observable here.
+message InvokeSkillAck {
+  string request_id = 1;
+  bool ok = 2;
   string reason = 3;
 }
 

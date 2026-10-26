@@ -1597,3 +1597,278 @@ func TestBridgePublicationFloorsArePerPane(t *testing.T) {
 		t.Fatalf("pane-2 %+v, want undisturbed modelB", got)
 	}
 }
+
+// answerSkillsOnce serves one SkillsRequest on a test stream with a
+// canned response, then returns.
+// paneProcessID reports the bridge process that owns one pane, so a
+// test can echo the origin that the pane's answers carry.
+func paneProcessID(t *testing.T, b *Bridge, pane string) string {
+	t.Helper()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	p, ok := b.panes[pane]
+	if !ok {
+		t.Fatalf("pane %s is not registered", pane)
+	}
+	return p.processID
+}
+
+func answerSkillsOnce(t *testing.T, stream pibridgepb.Integration_ConnectClient, skills []*pibridgepb.SkillRef, truncated, unavailable bool) {
+	t.Helper()
+	for {
+		msg, err := stream.Recv()
+		if err != nil {
+			t.Errorf("recv: %v", err)
+			return
+		}
+		req := msg.GetSkillsRequest()
+		if req == nil {
+			continue
+		}
+		res := &pibridgepb.PiToPhi{
+			PaneId: msg.GetPaneId(), ProcessId: msg.GetProcessId(), RuntimeGeneration: msg.GetRuntimeGeneration(),
+			Payload: &pibridgepb.PiToPhi_SkillsResponse{SkillsResponse: &pibridgepb.SkillsResponse{
+				RequestId: req.GetRequestId(), Skills: skills, Truncated: truncated, Unavailable: unavailable,
+			}},
+		}
+		if err := stream.Send(res); err != nil {
+			t.Errorf("send response: %v", err)
+		}
+		return
+	}
+}
+
+// answerInvokeSkillOnce serves one InvokeSkillRequest on a test stream
+// with a canned ack, then returns.
+func answerInvokeSkillOnce(t *testing.T, stream pibridgepb.Integration_ConnectClient, ok bool, reason string) {
+	t.Helper()
+	for {
+		msg, err := stream.Recv()
+		if err != nil {
+			t.Errorf("recv: %v", err)
+			return
+		}
+		req := msg.GetInvokeSkillRequest()
+		if req == nil {
+			continue
+		}
+		res := &pibridgepb.PiToPhi{
+			PaneId: msg.GetPaneId(), ProcessId: msg.GetProcessId(), RuntimeGeneration: msg.GetRuntimeGeneration(),
+			Payload: &pibridgepb.PiToPhi_InvokeSkillAck{InvokeSkillAck: &pibridgepb.InvokeSkillAck{
+				RequestId: req.GetRequestId(), Ok: ok, Reason: reason,
+			}},
+		}
+		if err := stream.Send(res); err != nil {
+			t.Errorf("send ack: %v", err)
+		}
+		return
+	}
+}
+
+func TestHandlePiBridgeSkills(t *testing.T) {
+	b := startPiBridge(testBridgeHub())
+	if b == nil {
+		t.Fatal("bridge did not start")
+	}
+	defer b.Stop()
+	prev := piBridge
+	piBridge = b
+	t.Cleanup(func() { piBridge = prev })
+
+	serve := func(method, target string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, target, nil)
+		rec := httptest.NewRecorder()
+		handlePiBridgeSkills(rec, req)
+		return rec
+	}
+
+	if rec := serve(http.MethodPost, "/api/pi-bridge/skills?pane=x"); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST code %d, want 405", rec.Code)
+	}
+	if rec := serve(http.MethodGet, "/api/pi-bridge/skills"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing pane code %d, want 400", rec.Code)
+	}
+	if rec := serve(http.MethodGet, "/api/pi-bridge/skills?pane=unknown"); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unknown pane code %d, want 503", rec.Code)
+	}
+
+	stream, cancel := dialBridgePane(t, b, "pane-http", "pi.lifecycle.v1", "pi.skills.v1")
+	defer cancel()
+	go answerSkillsOnce(t, stream, []*pibridgepb.SkillRef{
+		{Name: "demo-skill", Description: "demo"},
+	}, false, false)
+	rec := serve(http.MethodGet, "/api/pi-bridge/skills?pane=pane-http")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("happy code %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control %q, want no-store", got)
+	}
+	var body struct {
+		Skills []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		} `json:"skills"`
+		Truncated   bool   `json:"truncated"`
+		Unavailable bool   `json:"unavailable"`
+		ProcessID   string `json:"process_id"`
+		Generation  string `json:"generation"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body decode: %v", err)
+	}
+	if body.Unavailable || len(body.Skills) != 1 || body.Skills[0].Name != "demo-skill" {
+		t.Fatalf("body %+v, want one skill row", body)
+	}
+	// The answer names the peer that served it, so a click can be
+	// fenced to that runtime.
+	if body.ProcessID == "" || body.Generation != "1" {
+		t.Fatalf("body %+v, want the answering origin", body)
+	}
+
+	// A withheld reply cannot hold the HTTP handler beyond its deadline.
+	timedOut := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		r := httptest.NewRecorder()
+		handlePiBridgeSkills(r, httptest.NewRequest(http.MethodGet, "/api/pi-bridge/skills?pane=pane-http", nil))
+		timedOut <- r
+	}()
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("withheld request: %v", err)
+	}
+	select {
+	case r := <-timedOut:
+		if r.Code != http.StatusServiceUnavailable {
+			t.Fatalf("timeout code %d, want 503", r.Code)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("skills handler exceeded its timeout")
+	}
+
+	// Peer loss is also a sanitized 503.
+	cancel()
+	rec = serve(http.MethodGet, "/api/pi-bridge/skills?pane=pane-http")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("dead peer code %d, want 503", rec.Code)
+	}
+}
+
+func TestHandlePiBridgeInvokeSkill(t *testing.T) {
+	b := startPiBridge(testBridgeHub())
+	if b == nil {
+		t.Fatal("bridge did not start")
+	}
+	defer b.Stop()
+	prev := piBridge
+	piBridge = b
+	t.Cleanup(func() { piBridge = prev })
+
+	serve := func(method, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, "/api/pi-bridge/skill", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		handlePiBridgeInvokeSkill(rec, req)
+		return rec
+	}
+
+	if rec := serve(http.MethodGet, ""); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET code %d, want 405", rec.Code)
+	}
+	if rec := serve(http.MethodPost, `{"name":"demo-skill"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing pane code %d, want 400", rec.Code)
+	}
+	if rec := serve(http.MethodPost, `{"pane":"p1"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing name code %d, want 400", rec.Code)
+	}
+	// The origin of the list that produced the row must be echoed.
+	if rec := serve(http.MethodPost, `{"pane":"p1","name":"demo-skill"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing origin code %d, want 400", rec.Code)
+	}
+	if rec := serve(http.MethodPost, `{"pane":"p1","name":"demo-skill","process_id":"proc"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing generation code %d, want 400", rec.Code)
+	}
+	if rec := serve(http.MethodPost, `{"pane":"p1","name":"demo-skill","process_id":"proc","generation":"x"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("malformed generation code %d, want 400", rec.Code)
+	}
+	// The body must be one JSON object: trailing content is a client
+	// error and never reaches the peer.
+	if rec := serve(http.MethodPost, `{"pane":"p1","name":"demo-skill","process_id":"proc","generation":"1"} {}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("trailing object code %d, want 400", rec.Code)
+	}
+	if rec := serve(http.MethodPost, `{"pane":"p1","name":"demo-skill","process_id":"proc","generation":"1"}`+strings.Repeat(" ", 4100)); rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized trailing code %d, want 400", rec.Code)
+	}
+	// A name that cannot be carried on the wire is a client error and
+	// never reaches the peer.
+	if rec := serve(http.MethodPost, `{"pane":"p1","name":"`+strings.Repeat("x", 65)+`"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized name code %d, want 400", rec.Code)
+	}
+	if rec := serve(http.MethodPost, `{"pane":"p1","name":"`+strings.Repeat("x", 5000)+`"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized body code %d, want 400", rec.Code)
+	}
+	if rec := serve(http.MethodPost, `{"pane":"unknown","name":"demo-skill","process_id":"proc","generation":"1"}`); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unknown pane code %d, want 503", rec.Code)
+	}
+
+	stream, cancel := dialBridgePane(t, b, "pane-http", "pi.lifecycle.v1", "pi.skills.v1")
+	defer cancel()
+	processID := paneProcessID(t, b, "pane-http")
+	origin := `{"pane":"pane-http","name":"demo-skill","process_id":"` + processID + `","generation":"1"}`
+	go answerInvokeSkillOnce(t, stream, true, "")
+	rec := serve(http.MethodPost, origin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("happy code %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control %q, want no-store", got)
+	}
+	var body struct {
+		OK     bool   `json:"ok"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body decode: %v", err)
+	}
+	if !body.OK || body.Reason != "" {
+		t.Fatalf("body %+v, want dispatched", body)
+	}
+
+	// An unknown skill is a refusal, not an error.
+	go answerInvokeSkillOnce(t, stream, false, "unknown-skill")
+	rec = serve(http.MethodPost, strings.Replace(origin, "demo-skill", "other-skill", 1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("refusal code %d, want 200", rec.Code)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body decode: %v", err)
+	}
+	if body.OK || body.Reason != "unknown-skill" {
+		t.Fatalf("body %+v, want unknown-skill refusal", body)
+	}
+
+	// A runtime that moved on refuses the click before any dispatch:
+	// the outcome is known, so it is a refusal and not an unknown one.
+	for name, stale := range map[string]string{
+		"stale generation": strings.Replace(origin, `"generation":"1"`, `"generation":"2"`, 1),
+		"wrong process":    strings.Replace(origin, processID, "replacement-process", 1),
+	} {
+		rec = serve(http.MethodPost, stale)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s code %d, want 200", name, rec.Code)
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("body decode: %v", err)
+		}
+		if body.OK || body.Reason != "unavailable" {
+			t.Fatalf("%s body %+v, want an unavailable refusal", name, body)
+		}
+	}
+
+	// Peer loss is a sanitized 503.
+	cancel()
+	rec = serve(http.MethodPost, origin)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("dead peer code %d, want 503", rec.Code)
+	}
+}

@@ -34,6 +34,8 @@ type Server struct {
 	setSeq         atomic.Uint64
 	thinkingSeq    atomic.Uint64
 	setThinkingSeq atomic.Uint64
+	skillsSeq      atomic.Uint64
+	invokeSkillSeq atomic.Uint64
 	// compactSeq allocates monotonic server-side Compact request
 	// IDs. IDs are positive canonical decimal uint64 strings,
 	// never wrap, and are never reused or browser-supplied.
@@ -716,6 +718,12 @@ func (s *Server) handleMessage(l *lease, p *peer, msg *pibridgepb.PiToPhi) error
 		return nil
 	case msg.GetCompactResult() != nil:
 		s.deliverCompact(l, p, msg.GetCompactResult())
+		return nil
+	case msg.GetSkillsResponse() != nil:
+		s.deliverSkills(l, p, msg.GetSkillsResponse())
+		return nil
+	case msg.GetInvokeSkillAck() != nil:
+		s.deliverInvokeSkill(l, p, msg.GetInvokeSkillAck())
 		return nil
 	default:
 		return status.Error(codes.InvalidArgument, "unsupported payload")

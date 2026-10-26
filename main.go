@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -357,6 +358,8 @@ func main() {
 	http.HandleFunc("/api/pi-bridge/thinking-levels", handlePiBridgeThinkingLevels)
 	http.HandleFunc("/api/pi-bridge/thinking", handlePiBridgeSetThinking)
 	http.HandleFunc("/api/pi-bridge/compact", handlePiBridgeCompact)
+	http.HandleFunc("/api/pi-bridge/skills", handlePiBridgeSkills)
+	http.HandleFunc("/api/pi-bridge/skill", handlePiBridgeInvokeSkill)
 	http.HandleFunc("/api/attachments", handleAttachments)
 	http.HandleFunc("/api/clipboard", handleGetClipboard)
 	http.HandleFunc("/api/system/cpu", handleSystemCPU)
@@ -963,7 +966,7 @@ func handlePiBridgeThinkingLevels(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func parseThinkingGeneration(value string) (uint64, bool) {
+func parseBridgeGeneration(value string) (uint64, bool) {
 	if value == "" || len(value) > 20 {
 		return 0, false
 	}
@@ -1003,7 +1006,7 @@ func handlePiBridgeSetThinking(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	generation, validGeneration := parseThinkingGeneration(body.Generation)
+	generation, validGeneration := parseBridgeGeneration(body.Generation)
 	if body.Pane == "" || len(body.Pane) > 256 || body.ProcessID == "" || len(body.ProcessID) > 256 ||
 		!pibridge.IsThinkingLevel(body.Level) || len(body.Level) > 16 ||
 		body.Provider == "" || len(body.Provider) > 256 || body.Model == "" || len(body.Model) > 256 || !validGeneration {
@@ -1015,6 +1018,89 @@ func handlePiBridgeSetThinking(w http.ResponseWriter, r *http.Request) {
 	res, err := piBridge.RequestPaneSetThinking(ctx, body.Pane, body.ProcessID, generation, body.Level, body.Provider, body.Model)
 	if err != nil {
 		http.Error(w, "pi thinking unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": res.OK, "reason": res.Reason})
+}
+
+// handlePiBridgeSkills uses the existing API auth gate. Errors reveal
+// no bridge internals; successful lists must not be cached.
+func handlePiBridgeSkills(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	paneID := r.URL.Query().Get("pane")
+	if paneID == "" || len(paneID) > 256 {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), piBridgeOnDemandTimeout)
+	defer cancel()
+	res, err := piBridge.RequestPaneSkills(ctx, paneID)
+	if err != nil {
+		http.Error(w, "pi skills unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	skills := make([]map[string]string, 0, len(res.Skills))
+	for _, s := range res.Skills {
+		skills = append(skills, map[string]string{"name": s.Name, "description": s.Description})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"skills": skills, "truncated": res.Truncated, "unavailable": res.Unavailable,
+		"process_id": res.ProcessID, "generation": strconv.FormatUint(res.Generation, 10),
+	})
+}
+
+// handlePiBridgeInvokeSkill sends one skill to the live Pi session. The
+// ack means the request was dispatched, never that the agent accepted or
+// completed it; the reason vocabulary is safe to surface. The origin of
+// the list that produced the row must be echoed: a session that moved on
+// refuses the request instead of receiving the skill.
+func handlePiBridgeInvokeSkill(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Pane       string `json:"pane"`
+		Name       string `json:"name"`
+		ProcessID  string `json:"process_id"`
+		Generation string `json:"generation"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	generation, validGeneration := parseBridgeGeneration(body.Generation)
+	if body.Pane == "" || len(body.Pane) > 256 || !pibridge.IsSkillName(body.Name) ||
+		body.ProcessID == "" || len(body.ProcessID) > 256 || !validGeneration {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), piBridgeOnDemandTimeout)
+	defer cancel()
+	res, err := piBridge.RequestPaneInvokeSkill(ctx, body.Pane, body.ProcessID, generation, body.Name)
+	if err != nil {
+		if errors.Is(err, pibridge.ErrSkillOriginStale) {
+			// The runtime that produced the list is gone: the
+			// request was never dispatched, so it is a refusal.
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "reason": "unavailable"})
+			return
+		}
+		http.Error(w, "pi skill unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
