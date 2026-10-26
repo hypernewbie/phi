@@ -27,7 +27,8 @@ const RECONNECT_MAX_MS = 15_000;
 const RECONNECT_STABLE_MS = 10_000;
 // A WebSocket handshake that has not completed by now is treated as a dead
 // link, so a stuck CONNECTING socket cannot hold the stream down for good.
-const DIAL_TIMEOUT_MS = 15_000;
+// The bound is generous: a slow link still gets its handshake.
+const DIAL_TIMEOUT_MS = 30_000;
 // Close codes the Phi server sends when this stream cannot work at all:
 // 1002 protocol error, 1009 message too big, 1011 event conversion/encoding
 // failure. See pkg/ws/control.go.

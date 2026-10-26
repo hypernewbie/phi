@@ -2272,6 +2272,69 @@ describe('Pi RPC transcript controller', () => {
         ).not.toBeNull();
     });
 
+    it('keeps a pending prompt visible across a transcript reset and re-anchors it', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/reset-pending', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: {
+                    lastSeq: 0,
+                    messages: [{ role: 'user', content: 'old history' }],
+                },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(chat.send('still pending')).toBe(true);
+        const prompt = wire.sent
+            .filter((frame) => frame.op === 'prompt')
+            .at(-1);
+        wire.emit({
+            t: 'res',
+            id: prompt.id,
+            ok: false,
+            error: 'control connection lost',
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(root.textContent).toContain('Not confirmed: still pending');
+
+        // The reset clears the transcript; the text stays, and its anchor
+        // restarts at the empty history.
+        wire.emit({ t: 'evt', sid: 's1', seq: 1, evt: 'transcriptReset' });
+        const resetHydrate = wire.sent.at(-1);
+        expect(resetHydrate).toMatchObject({ op: 'hydrate' });
+        wire.emit({
+            t: 'res',
+            id: resetHydrate.id,
+            ok: true,
+            data: { lastSeq: 1, messages: [] },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(root.textContent).toContain('Not confirmed: still pending');
+
+        // A row in the new transcript proves it landed after all.
+        wire.emit({ t: 'evt', sid: 's1', seq: 2, evt: 'hydrate' });
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 3,
+            evt: 'messageEnd',
+            data: { message: { role: 'user', content: 'still pending' } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(root.textContent).not.toContain('Not confirmed');
+    });
+
     it('does not request reset hydrate for a stale transcriptReset event', async () => {
         const root = document.createElement('div');
         const wire = fakeClient();

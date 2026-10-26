@@ -1251,6 +1251,10 @@ export function mountChatPi(
                 view as unknown as { clearCompactSnapshot?: () => void }
             ).clearCompactSnapshot?.();
             compactSnapshot = null;
+            // The transcript starts over, so every pending prompt now counts
+            // as newer than an empty history. Without this a record kept from
+            // before the reset could never reconcile against the new rows.
+            for (const item of outgoing) item.baseline = 0;
             requestHydrate(true);
         } else {
             // Hot-path branching on the render disposition avoids full

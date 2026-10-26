@@ -6838,7 +6838,9 @@ export class TabManager {
         // it; a stuck pending would block the Thinking controls elsewhere.
         this._invalidatePiBridgeThinking(tab);
         this._clearPiRpcModelPending(tab.paneId);
-        this._forgetPiRpcModelCache(tab.coder, tab.paneId);
+        // A detach keeps the pane and its catalog for the reconnect; only a
+        // real close drops the entry.
+        if (!preserveStorage) this._forgetPiRpcModelCache(tab.coder, tab.paneId);
         this.tabs.delete(paneId);
 
         if (!preserveStorage) {

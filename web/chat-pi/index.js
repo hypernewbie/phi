@@ -1047,6 +1047,11 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
         if (env.evt === 'transcriptReset') {
             view.clearCompactSnapshot?.();
             compactSnapshot = null;
+            // The transcript starts over, so every pending prompt now counts
+            // as newer than an empty history. Without this a record kept from
+            // before the reset could never reconcile against the new rows.
+            for (const item of outgoing)
+                item.baseline = 0;
             requestHydrate(true);
         }
         else {
