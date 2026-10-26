@@ -33,11 +33,13 @@ func ParseAttachHead(frame []byte) (*wspb.TerminalAttach, error) {
 	}
 	if ckpt := h.GetCheckpoint(); ckpt != nil {
 		// The protobuf field is uint32; keep the uint16 geometry the native
-		// console can actually render and still reject zero.
+		// console can actually render and still reject zero. An empty
+		// checkpoint is not a restorable screen, so it stays a protocol
+		// error instead of a repaint that never arrives.
 		if ckpt.GetThrough() < h.GetOldest() || ckpt.GetThrough() > h.GetHead() ||
 			ckpt.GetCols() == 0 || ckpt.GetCols() > math.MaxUint16 ||
 			ckpt.GetRows() == 0 || ckpt.GetRows() > math.MaxUint16 ||
-			len(ckpt.GetData()) > MaxNativePayloadBytes {
+			len(ckpt.GetData()) == 0 || len(ckpt.GetData()) > MaxNativePayloadBytes {
 			return nil, fmt.Errorf("phic: invalid checkpoint")
 		}
 	}

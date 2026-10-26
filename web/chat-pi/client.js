@@ -7,6 +7,7 @@
 import { PROTOCOL_VERSION } from './constants.js';
 import { buildCall, ControlConversionError, decodeServerFrame, encodeCall, encodeHello, eventFromWire, MaxControlMessageBytes, resultFromWire, } from './control-wire.js';
 import { controlSubprotocol } from '../ws-protocols.js';
+import { wsUrl } from '../util.js';
 export const ControlCallTimeout = 35_000;
 // Compaction runs a summary LLM call; Pi answers only when it finishes. The
 // client stays awake slightly past the server's CompactOperationTimeout so
@@ -23,7 +24,7 @@ function controlError(message) {
  * callback the view would keep claiming it is ready after delivery stopped.
  */
 export function connectControl(onStreamFailure) {
-    const ws = new WebSocket(new URL('/ws/control', window.location.origin).href, controlSubprotocol);
+    const ws = new WebSocket(wsUrl('/ws/control'), controlSubprotocol);
     ws.binaryType = 'arraybuffer';
     const listeners = [];
     const outbox = [];

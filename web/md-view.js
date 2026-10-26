@@ -4,7 +4,7 @@
    Imports only pure helpers — no app singletons. Importing this module
    has no side effects; md.html calls initMdView() explicitly. */
 import { renderMarkdownSafe, rewriteRelativeImages, highlightCodeIn, } from './md-render.js';
-import { escapeHtml, getLastFolderName } from './util.js';
+import { escapeHtml, getLastFolderName, wsUrl } from './util.js';
 import { eventsSubprotocol } from './ws-protocols.js';
 import { Notification } from './proto/events.js';
 // --- pure helpers (exported for tests) ---
@@ -118,7 +118,7 @@ export function initMdView() {
         }
     }
     function connect() {
-        const ws = new WebSocket(new URL('/ws/md-events', window.location.origin).href, eventsSubprotocol);
+        const ws = new WebSocket(wsUrl('/ws/md-events'), eventsSubprotocol);
         ws.binaryType = 'arraybuffer';
         // Refresh on open too: content may have changed while disconnected.
         ws.onopen = () => {

@@ -1,6 +1,7 @@
 /* Φ phi — Binary WebSocket Client */
 import { TerminalClientFrame, TerminalServerFrame } from './proto/terminal.js';
 import { terminalSubprotocol } from './ws-protocols.js';
+import { wsUrl } from './util.js';
 export { terminalSubprotocol };
 // Inbound whole-message bound, matching the server and native limits.
 // The browser allocates the ArrayBuffer before this check runs, so it
@@ -89,10 +90,7 @@ export class PTYWebSocket {
         this.onOpen = onOpen;
         this.onAttachHead = opts?.onAttachHead;
         this.onGap = opts?.onGap;
-        const origin = typeof window !== 'undefined' && window.location?.origin
-            ? window.location.origin
-            : '';
-        this.url = new URL(`/ws/pane/${paneId}?state=ansi-v1`, origin).href;
+        this.url = wsUrl(`/ws/pane/${paneId}?state=ansi-v1`);
         this.ws = new WebSocket(this.url, terminalSubprotocol);
         this.ws.binaryType = 'arraybuffer';
         this.decoder = new TextDecoder('utf-8');

@@ -14,6 +14,7 @@ import type {
     SyncMessageState,
 } from './proto/events.js';
 import { terminalSubprotocol } from './ws-protocols.js';
+import { wsUrl } from './util.js';
 
 export { terminalSubprotocol };
 
@@ -183,11 +184,7 @@ export class PTYWebSocket {
         this.onAttachHead = opts?.onAttachHead;
         this.onGap = opts?.onGap;
 
-        const origin =
-            typeof window !== 'undefined' && window.location?.origin
-                ? window.location.origin
-                : '';
-        this.url = new URL(`/ws/pane/${paneId}?state=ansi-v1`, origin).href;
+        this.url = wsUrl(`/ws/pane/${paneId}?state=ansi-v1`);
         this.ws = new WebSocket(this.url, terminalSubprotocol);
         this.ws.binaryType = 'arraybuffer';
         this.decoder = new TextDecoder('utf-8');
