@@ -6022,12 +6022,18 @@ export class TabManager {
                 }
                 if (reused) {
                     // The list stays: a failed refresh never empties
-                    // it. The rows are rebuilt with the note that says
-                    // they may be out of date. The note is state, not a
-                    // one-off element, so a later filter rebuild keeps
-                    // it.
+                    // it. The note says the list may be out of date.
+                    // The rows are not rebuilt, so a row that holds the
+                    // keyboard focus keeps it. The note is state, so a
+                    // later filter rebuild keeps it too.
+                    const wasStale = this._piBridgeSkillsStale;
                     this._piBridgeSkillsStale = true;
-                    this._buildPiRpcSkillsList();
+                    if (!wasStale) {
+                        this._showPiRpcSkillsNote(
+                            listContainer,
+                            'Refresh failed — showing the last known skills',
+                        );
+                    }
                     return;
                 }
                 loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;

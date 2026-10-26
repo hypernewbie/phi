@@ -783,6 +783,39 @@ describe('bridge skills offline behavior', () => {
         expect(dropup.textContent).toContain('No Pi skills available');
     });
 
+    it('keeps the keyboard focus on a row when the refresh fails', async () => {
+        let calls = 0;
+        const fetchMock = mockFetch((url) => {
+            if (!url.includes('/api/pi-bridge/skills?')) return skillList();
+            calls += 1;
+            // The first answer lands; the refresh that follows fails.
+            if (calls === 1) return skillList();
+            return { ok: false, status: 503 };
+        });
+        global.fetch = fetchMock;
+        const tab = bridgeTab();
+        const { tm, dropup } = harness(tab);
+        tm.renderPresets('pi');
+        skillsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('demo-skill');
+        });
+        tm._closePiRpcDropups(true);
+
+        // Reopening shows the retained rows at once. The user moves
+        // the focus onto a row before the refresh answers.
+        skillsTrigger(tm).click();
+        const button = dropup.querySelector('.dropup-model-btn');
+        button.focus();
+        expect(document.activeElement).toBe(button);
+
+        // The failed refresh must not take the focus away.
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('Refresh failed');
+        });
+        expect(document.activeElement).toBe(button);
+    });
+
     it('does not carry the stale warning into another pane', async () => {
         let calls = 0;
         const fetchMock = mockFetch((url) => {
