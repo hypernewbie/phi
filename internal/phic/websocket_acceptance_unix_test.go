@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -18,6 +19,10 @@ import (
 
 	"github.com/creack/pty"
 )
+
+// csiPattern matches the CSI and OSC control sequences a shell emits inline
+// with its output, so an output line can be compared to its text content.
+var csiPattern = regexp.MustCompile("\\x1b\\[[0-9;?]*[ -/]*[@-~]|\\x1b\\][^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)")
 
 // Live M1 acceptance: real shell panes on the fixture server, driven
 // through the actual cmd/phic console under a PTY and through the relay
@@ -322,7 +327,9 @@ func runAcceptanceRelay(t *testing.T, url, pane string) {
 	lines := bytes.Split(tty.snapshot(), []byte("\n"))
 	exact := 0
 	for _, line := range lines {
-		if strings.TrimSuffix(string(line), "\r") == "RELAY-MARKER-1" {
+		// The PTY tape is raw bytes: bash writes its bracketed-paste
+		// toggles inline, so a mode switch can share the output line.
+		if strings.Trim(csiPattern.ReplaceAllString(string(line), ""), "\r") == "RELAY-MARKER-1" {
 			exact++
 		}
 	}
