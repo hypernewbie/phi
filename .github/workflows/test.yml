@@ -76,6 +76,12 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v5
 
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
 
@@ -102,6 +108,9 @@ jobs:
 
       - name: Build Emitted JS
         run: pnpm run build:web
+
+      - name: Verify WebSocket protobuf generated assets
+        run: pnpm run check:websocket-generated
 
       # Drift guard. If web-src/*.ts sources are out of sync with
       # committed web/*.js artifacts, this fails the build. The

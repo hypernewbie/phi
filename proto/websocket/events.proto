@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package phi.websocket.events.v1;
+
+option go_package = "github.com/hypernewbie/phi/pkg/ws/pb;wspb";
+
+// Notification is the listen-only events endpoint's whole message. One
+// WebSocket binary message on /ws/md-events carries one Notification.
+// Pane clients receive the same message wrapped in
+// TerminalServerFrame.notification, so both endpoints share the payload
+// type without sharing an envelope.
+message Notification {
+  oneof kind {
+    MarkdownChanged markdown_changed = 32;
+    SyncChanged sync_changed = 33;
+    ServerShutdown shutdown = 34;
+  }
+}
+
+// MarkdownChanged fires when a watched markdown directory changes on
+// disk. An absent or empty dir refreshes anyway (one cheap fetch).
+message MarkdownChanged {
+  optional string dir = 1;
+}
+
+// SyncChanged fires when a sync-board message is upserted or deleted.
+// Action keeps the existing "upsert"/"delete" values. The embedded
+// message preserves key, value, and millisecond timestamps; deletes
+// carry no message.
+message SyncChanged {
+  optional string action = 1;
+  optional string key = 2;
+  SyncMessageState msg = 3;
+}
+
+message SyncMessageState {
+  optional string key = 1;
+  optional string value = 2;
+  optional int64 created_at_unix_ms = 3;
+  optional int64 updated_at_unix_ms = 4;
+}
+
+// ServerShutdown announces restart/update/shutdown. An absent or empty
+// reason means a plain shutdown.
+message ServerShutdown {
+  optional string reason = 1;
+}

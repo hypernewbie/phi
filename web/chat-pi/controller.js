@@ -42,7 +42,11 @@ function missingPane(paneId) {
 }
 export function mountRpcChat(paneId, container, cwd, sessionPath) {
     destroyRpcChat(paneId);
-    const chat = mountChatPi(container, cwd, connectControl(), sessionPath, (status) => setPiRpcStatus(paneId, status), (state) => setPiRpcControls(paneId, state), (snapshot) => lastFleetSnapshots.set(paneId, snapshot));
+    // The transport can refuse the stream while no call is pending; report
+    // that to the mounted chat instead of leaving it looking ready.
+    let reportStreamFailure = null;
+    const chat = mountChatPi(container, cwd, connectControl((message) => reportStreamFailure?.(message)), sessionPath, (status) => setPiRpcStatus(paneId, status), (state) => setPiRpcControls(paneId, state), (snapshot) => lastFleetSnapshots.set(paneId, snapshot));
+    reportStreamFailure = (message) => chat.streamFailed(message);
     chats.set(paneId, chat);
 }
 /** Repaint the shared subagent strip for the active tab: replay the

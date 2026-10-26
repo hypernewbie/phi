@@ -25,6 +25,7 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
@@ -107,7 +108,7 @@ func TestCLIAuthenticatedFreshPaneRawReplayAndDetach(t *testing.T) {
 			var mu sync.Mutex
 			var spawn SpawnRequest
 			var applicationInput []byte
-			up := websocket.Upgrader{}
+			up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/api/auth/status" && r.URL.Path != "/api/auth/login" {
 					cookie, err := r.Cookie("phi_access_session")
@@ -151,17 +152,20 @@ func TestCLIAuthenticatedFreshPaneRawReplayAndDetach(t *testing.T) {
 						return
 					}
 					defer ws.Close()
-					_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: epoch, Head: uint64(prefixLen)}, nil))
-					_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeLiveOutputFrame(uint64(prefixLen), source[prefixLen:]))
+					_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, epoch, uint64(prefixLen)))
+					_ = ws.WriteMessage(websocket.BinaryMessage, testOutput(t, uint64(prefixLen), source[prefixLen:]))
 					for {
 						_, msg, err := ws.ReadMessage()
 						if err != nil {
 							return
 						}
-						if len(msg) > 0 && msg[0] == 1 {
-							mu.Lock()
-							applicationInput = append(applicationInput, msg[1:]...)
-							mu.Unlock()
+						frame, err := wireproto.DecodeClientFrame(msg)
+						if err == nil {
+							if in, ok := frame.GetPayload().(*wspb.TerminalClientFrame_Input); ok {
+								mu.Lock()
+								applicationInput = append(applicationInput, in.Input...)
+								mu.Unlock()
+							}
 						}
 					}
 				case "/api/terminals/p/recording":

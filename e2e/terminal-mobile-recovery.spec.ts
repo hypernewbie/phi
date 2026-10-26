@@ -1,5 +1,19 @@
 import { expect, test, type WebSocketRoute } from '@playwright/test';
+import { TerminalClientFrame } from '../web/proto/terminal.js';
+import { TerminalServerFrame } from '../web/proto/terminal.js';
+import type {
+    MessageFns,
+    TerminalClientFrame as TerminalClientMessage,
+    TerminalServerFrame as TerminalServerMessage,
+} from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+
+// The served bundle carries no types; bind its runtime codecs to the
+// generated declarations so spec-side encoding is fully checked.
+const ServerCodec: MessageFns<TerminalServerMessage> =
+    TerminalServerFrame as unknown as MessageFns<TerminalServerMessage>;
+const ClientCodec: MessageFns<TerminalClientMessage> =
+    TerminalClientFrame as unknown as MessageFns<TerminalClientMessage>;
 
 let phi: PhiServer;
 test.beforeAll(async () => {
@@ -130,48 +144,61 @@ for (const alternate of [false, true]) {
                 const index = sockets.length;
                 sockets.push(socket);
                 socket.onMessage((message) => {
-                    if (
-                        Buffer.isBuffer(message) &&
-                        message.length === 5 &&
-                        message[0] === 0x02
-                    )
-                        sizedSockets.add(index);
+                    if (!Buffer.isBuffer(message)) return;
+                    const payload = ClientCodec.decode(
+                        new Uint8Array(message),
+                    ).payload;
+                    if (payload?.$case === 'resize') sizedSockets.add(index);
                 });
-                const header = Buffer.from(
-                    JSON.stringify({
-                        epoch: 7,
-                        oldest: 0,
-                        head,
-                        ...(checkpoint
-                            ? {
-                                  ckpt: {
-                                      ...checkpoint,
-                                      len: Buffer.byteLength(checkpoint.ansi),
-                                  },
-                              }
-                            : {}),
-                    }),
-                );
-                const size = Buffer.alloc(5);
-                size[0] = 0x08;
-                size.writeUInt32BE(header.length, 1);
                 socket.send(
-                    Buffer.concat([
-                        size,
-                        header,
-                        checkpoint
-                            ? Buffer.from(checkpoint.ansi)
-                            : Buffer.alloc(0),
-                    ]),
+                    Buffer.from(
+                        ServerCodec.encode(
+                            ServerCodec.fromPartial({
+                                payload: {
+                                    $case: 'attach',
+                                    value: {
+                                        epoch: BigInt(7),
+                                        oldest: BigInt(0),
+                                        head: BigInt(head),
+                                        ...(checkpoint
+                                            ? {
+                                                  checkpoint: {
+                                                      through: BigInt(
+                                                          checkpoint.through,
+                                                      ),
+                                                      cols: checkpoint.cols,
+                                                      rows: checkpoint.rows,
+                                                      data: new TextEncoder().encode(
+                                                          checkpoint.ansi,
+                                                      ),
+                                                  },
+                                              }
+                                            : {}),
+                                    },
+                                },
+                            }),
+                        ).finish(),
+                    ),
                 );
             });
             const output = (start: number, end: number) => {
                 head = end;
-                const frame = Buffer.alloc(9);
-                frame[0] = 0x09;
-                frame.writeBigUInt64BE(BigInt(start), 1);
                 sockets[sockets.length - 1].send(
-                    Buffer.concat([frame, bytes.subarray(start, end)]),
+                    Buffer.from(
+                        ServerCodec.encode(
+                            ServerCodec.fromPartial({
+                                payload: {
+                                    $case: 'output',
+                                    value: {
+                                        start: BigInt(start),
+                                        data: new Uint8Array(
+                                            bytes.subarray(start, end),
+                                        ),
+                                    },
+                                },
+                            }),
+                        ).finish(),
+                    ),
                 );
             };
             const line = () =>

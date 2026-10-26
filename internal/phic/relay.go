@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
@@ -24,8 +25,7 @@ type recordingCursor struct {
 }
 
 type wireAttach struct {
-	Header     wireproto.AttachHeadHeader
-	Checkpoint []byte
+	Header *wspb.TerminalAttach
 }
 
 type relayTerminal interface {
@@ -63,12 +63,12 @@ func (r *Relay) Connect(ctx context.Context, pane string) (wireAttach, error) {
 	if already {
 		return wireAttach{}, errors.New("phic: relay already connected")
 	}
-	u := r.api.base.String() + "/ws/pane/" + url.PathEscape(pane) + "?term_proto=hot-v1"
+	u := r.api.base.String() + "/ws/pane/" + url.PathEscape(pane)
 	wsURL, err := mustWebsocketURL(u)
 	if err != nil {
 		return wireAttach{}, err
 	}
-	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second, Jar: r.api.http.Jar}
+	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second, Jar: r.api.http.Jar, Subprotocols: []string{wireproto.TerminalSubprotocol}}
 	conn, resp, err := dialer.DialContext(ctx, wsURL, nil)
 	if err != nil {
 		if resp != nil {
@@ -81,21 +81,25 @@ func (r *Relay) Connect(ctx context.Context, pane string) (wireAttach, error) {
 	}
 	stopCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stopCancel()
-	conn.SetReadLimit(4 << 20)
+	if conn.Subprotocol() != wireproto.TerminalSubprotocol {
+		_ = conn.Close()
+		return wireAttach{}, fmt.Errorf("%w: server did not select the terminal subprotocol", errProtocol)
+	}
+	conn.SetReadLimit(wireproto.MaxTerminalMessageBytes)
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	mt, msg, err := conn.ReadMessage()
+	mt, msg, err := wireproto.ReadBoundedMessage(conn, wireproto.MaxTerminalMessageBytes)
 	if err == nil && mt != websocket.BinaryMessage {
 		err = fmt.Errorf("%w: attach is not binary", errProtocol)
 	}
 	var head wireAttach
 	if err == nil {
-		head.Header, head.Checkpoint, err = ParseAttachHead(msg)
+		head.Header, err = ParseAttachHead(msg)
 		if err != nil {
 			err = fmt.Errorf("%w: %v", errProtocol, err)
 		}
 	}
 	if err != nil {
-		_ = conn.Close()
+		closeWithCode(conn, closeCodeForReadError(err), "invalid attach")
 		return wireAttach{}, err
 	}
 	// Only the socket reader touches read deadlines. Input cannot poison reads.
@@ -120,6 +124,20 @@ func (r *Relay) send(frame []byte) error {
 	}
 	_ = r.conn.SetWriteDeadline(time.Now().Add(paneWriteTimeout))
 	return r.conn.WriteMessage(websocket.BinaryMessage, frame)
+}
+
+// sendResize encodes one resize request. Geometry comes from the local
+// terminal; values outside the server's 1..65535 range are refused here
+// instead of closing the stream.
+func (r *Relay) sendResize(cols, rows int) error {
+	if cols <= 0 || rows <= 0 || cols > 65535 || rows > 65535 {
+		return fmt.Errorf("%w: resize out of range", errProtocol)
+	}
+	frame, err := wireproto.EncodeResizeFrame(uint32(cols), uint32(rows))
+	if err != nil {
+		return err
+	}
+	return r.send(frame)
 }
 func (r *Relay) Close() {
 	r.mu.Lock()
@@ -170,7 +188,7 @@ func (r *Relay) Run(ctx context.Context) error {
 	if err != nil || cols <= 0 || rows <= 0 || cols > 65535 || rows > 65535 {
 		return errors.New("phic: terminal has no usable geometry")
 	}
-	r.epoch = r.header.Header.Epoch
+	r.epoch = r.header.Header.GetEpoch()
 	// New processes need their startup replies. A reused pane is a display
 	// rebuild: suppress old queries, not native keys or new live queries.
 	if r.fresh {
@@ -178,22 +196,22 @@ func (r *Relay) Run(ctx context.Context) error {
 	} else {
 		r.repaint = &repaintFilter{}
 	}
-	err = r.send(wireproto.EncodeResizeFrame(uint16(cols), uint16(rows)))
-	seen := r.header.Header.Head
+	err = r.sendResize(cols, rows)
+	seen := r.header.Header.GetHead()
 	if r.previous != nil {
 		if r.previous.epoch != r.epoch {
 			seen = 0
 		} else {
 			seen = r.previous.through
-			if seen > r.header.Header.Head {
+			if seen > r.header.Header.GetHead() {
 				err = fmt.Errorf("%w: remembered frontier exceeds head", errProtocol)
 			}
 		}
 	}
 	if r.fresh {
-		seen = r.header.Header.Head
+		seen = r.header.Header.GetHead()
 	}
-	if err == nil && seen < r.header.Header.Oldest {
+	if err == nil && seen < r.header.Header.GetOldest() {
 		err = r.checkpointJump(ctx, r.pane)
 	}
 	if err == nil {
@@ -212,7 +230,7 @@ func (r *Relay) Run(ctx context.Context) error {
 	// Bytes emitted while the view was open have never reached this native
 	// terminal. Process them as live, with input enabled for new query replies.
 	if err == nil {
-		err = r.recoverOutput(ctx, r.pane, r.header.Header.Head, false)
+		err = r.recoverOutput(ctx, r.pane, r.header.Header.GetHead(), false)
 	}
 	if err == nil {
 		err = r.live(ctx, r.pane)
@@ -244,10 +262,16 @@ func (r *Relay) live(ctx context.Context, pane string) error {
 		if conn == nil {
 			return ctx.Err()
 		}
-		mt, msg, err := conn.ReadMessage()
+		mt, msg, err := wireproto.ReadBoundedMessage(conn, wireproto.MaxTerminalMessageBytes)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			// A size violation is a protocol fault, not a transient drop:
+			// answer with the bounded close code and stop instead of looping.
+			if errors.Is(err, wireproto.ErrMessageTooLarge) {
+				closeWithCode(conn, closeCodeForReadError(err), "terminal message too large")
+				return err
 			}
 			r.disconnect()
 			if err := r.reconnect(ctx, pane); err != nil {
@@ -256,12 +280,19 @@ func (r *Relay) live(ctx context.Context, pane string) error {
 			continue
 		}
 		if mt != websocket.BinaryMessage || len(msg) == 0 {
+			closeWithCode(conn, websocket.CloseProtocolError, "malformed terminal frame")
 			return errors.New("phic: malformed terminal frame")
 		}
-		switch msg[0] {
-		case wireproto.FrameLiveOutput:
-			start, data, err := ParseLiveOutput(msg)
+		frame, err := wireproto.DecodeServerFrame(msg)
+		if err != nil {
+			closeWithCode(conn, websocket.CloseProtocolError, "malformed terminal frame")
+			return err
+		}
+		switch payload := frame.GetPayload().(type) {
+		case *wspb.TerminalServerFrame_Output:
+			start, data, err := outputSpan(payload.Output)
 			if err != nil {
+				closeWithCode(conn, closeCodeForReadError(err), "invalid terminal output")
 				return err
 			}
 			if start > r.written {
@@ -277,26 +308,33 @@ func (r *Relay) live(ctx context.Context, pane string) error {
 			if err := r.output(ctx, data, false); err != nil {
 				return err
 			}
-		case wireproto.FrameExit:
+		case *wspb.TerminalServerFrame_Exit:
 			// Drain retained output before reporting the backend status.
-			if len(msg) != 2 {
-				return fmt.Errorf("%w: invalid exit frame", errProtocol)
+			code, err := terminalExitCode(payload.Exit)
+			if err != nil {
+				closeWithCode(conn, closeCodeForReadError(err), "invalid terminal exit")
+				return err
 			}
 			if err := r.drainExit(ctx, pane); err != nil {
 				return err
 			}
-			if msg[1] != 0 {
-				return &ExitError{Code: int(msg[1])}
+			if code != 0 {
+				return &ExitError{Code: code}
 			}
 			return nil
-		case 0x02: // JSON control. No terminal output; gaps are caught by sequence.
-			if err := r.control(ctx, pane, msg[1:]); err != nil {
+		case *wspb.TerminalServerFrame_Pong: // keepalive
+		case *wspb.TerminalServerFrame_DropNotice:
+			// Drain retained output before reporting the backend status.
+			if err := r.drainExit(ctx, pane); err != nil {
 				return err
 			}
-		case 0x03: // keepalive
-		case 0x01, 0x08:
-			return errors.New("phic: unsequenced output or repeated attach head")
-		default: // notifications are not terminal bytes
+		case *wspb.TerminalServerFrame_Title,
+			*wspb.TerminalServerFrame_BridgeState,
+			*wspb.TerminalServerFrame_Settlement,
+			*wspb.TerminalServerFrame_Notification:
+			// Browser UI hints; no terminal output, no sequence impact.
+		default:
+			return errors.New("phic: unexpected terminal payload")
 		}
 	}
 }
@@ -315,28 +353,28 @@ func (r *Relay) reconnect(ctx context.Context, pane string) error {
 			}
 			continue
 		}
-		if head.Header.Epoch != r.epoch {
+		if head.Header.GetEpoch() != r.epoch {
 			return errors.New("phic: recording epoch changed; detach rather than merge different terminal states")
 		}
-		if r.written < head.Header.Oldest {
+		if r.written < head.Header.GetOldest() {
 			if err := r.checkpointJump(ctx, pane); err != nil {
 				return err
 			}
-		} else if r.written > head.Header.Head {
+		} else if r.written > head.Header.GetHead() {
 			return errors.New("phic: written frontier is outside retained recording")
 		}
-		if err := r.recover(ctx, pane, head.Header.Head); err != nil {
+		if err := r.recover(ctx, pane, head.Header.GetHead()); err != nil {
 			return err
 		}
 		cols, rows, err := r.tty.Size()
 		if err != nil {
 			return err
 		}
-		return r.send(wireproto.EncodeResizeFrame(uint16(cols), uint16(rows)))
+		return r.sendResize(cols, rows)
 	}
 }
 func permanent(err error) bool {
-	if errors.Is(err, errProtocol) {
+	if errors.Is(err, errProtocol) || errors.Is(err, wireproto.ErrMessageTooLarge) {
 		return true
 	}
 	var e *apiError
@@ -377,7 +415,7 @@ func (r *Relay) runInput(ctx context.Context) error {
 		select {
 		case size := <-r.tty.Resizes():
 			if size.Cols != 0 && size.Rows != 0 {
-				if err := r.send(wireproto.EncodeResizeFrame(size.Cols, size.Rows)); err != nil {
+				if err := r.sendResize(int(size.Cols), int(size.Rows)); err != nil {
 					return err
 				}
 			}
@@ -395,8 +433,14 @@ func (r *Relay) runInput(ctx context.Context) error {
 			out = append(out, parser.FlushEscape()...)
 		}
 		if len(out) != 0 {
-			if err := r.send(EncodeInputFrame(out)); err != nil {
-				return err
+			for _, chunk := range wireproto.ChunkInput(out) {
+				frame, err := wireproto.EncodeInputFrame(chunk)
+				if err != nil {
+					return err
+				}
+				if err := r.send(frame); err != nil {
+					return err
+				}
 			}
 		}
 		if commandErr != nil {

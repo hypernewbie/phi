@@ -49,7 +49,7 @@ func TestReviewEmptyFramesNeverPanic(t *testing.T) {
 			t.Errorf("empty wire frame panicked: %v", r)
 		}
 	}()
-	if _, _, err := ParseAttachHead(nil); err == nil {
+	if _, err := ParseAttachHead(nil); err == nil {
 		t.Error("empty attach accepted")
 	}
 	if _, _, err := ParseLiveOutput(nil); err == nil {

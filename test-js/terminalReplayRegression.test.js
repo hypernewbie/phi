@@ -3,7 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { setupDomHarness } from './_dom.js';
 import { createHeadlessSandbox } from './_xtermHeadless.js';
 import { TabManager } from '../web/terminal.js';
-import { PTYWebSocket } from '../web/ws.js';
+import { PTYWebSocket, terminalSubprotocol } from '../web/ws.js';
+import { TerminalServerFrame } from '../web/proto/terminal.js';
 
 setupDomHarness();
 const { Terminal } = createHeadlessSandbox();
@@ -12,6 +13,7 @@ const encode = (s) => new TextEncoder().encode(s);
 class WireSocket {
     constructor() {
         this.readyState = 1;
+        this.protocol = terminalSubprotocol;
     }
     send() {}
     close() {
@@ -24,17 +26,30 @@ class WireSocket {
         this.onmessage({ data: frame.buffer });
     }
     head(head = 0) {
-        const json = encode(JSON.stringify({ epoch: 7, oldest: 0, head }));
-        const payload = new Uint8Array(4 + json.length);
-        new DataView(payload.buffer).setUint32(0, json.length, false);
-        payload.set(json, 4);
-        this.emit(0x08, payload);
+        const frame = TerminalServerFrame.encode(
+            TerminalServerFrame.fromPartial({
+                payload: {
+                    $case: 'attach',
+                    value: {
+                        epoch: BigInt(7),
+                        oldest: BigInt(0),
+                        head: BigInt(head),
+                    },
+                },
+            }),
+        ).finish();
+        this.onmessage({ data: new Uint8Array(frame).buffer });
     }
     output(start, bytes) {
-        const payload = new Uint8Array(8 + bytes.length);
-        new DataView(payload.buffer).setBigUint64(0, BigInt(start), false);
-        payload.set(bytes, 8);
-        this.emit(0x09, payload);
+        const frame = TerminalServerFrame.encode(
+            TerminalServerFrame.fromPartial({
+                payload: {
+                    $case: 'output',
+                    value: { start: BigInt(start), data: bytes },
+                },
+            }),
+        ).finish();
+        this.onmessage({ data: new Uint8Array(frame).buffer });
     }
 }
 

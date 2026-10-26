@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/hypernewbie/phi/internal/termemu"
-	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
 // Opt-in wall-clock experiment: same 60Hz input, real native emulator and
@@ -52,7 +51,7 @@ func TestConsolePowerProfile(t *testing.T) {
 	for {
 		select {
 		case <-feed.C:
-			reads <- paneRead{bytes: wireproto.EncodeLiveOutputFrame(frontier, data)}
+			reads <- paneRead{bytes: testOutput(t, frontier, data)}
 			frontier += uint64(len(data))
 		case <-events:
 			m.View()

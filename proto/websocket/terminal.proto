@@ -1,0 +1,111 @@
+syntax = "proto3";
+
+package phi.websocket.terminal.v1;
+
+import "events.proto";
+
+option go_package = "github.com/hypernewbie/phi/pkg/ws/pb;wspb";
+
+message TerminalClientFrame {
+  oneof payload {
+    bytes input = 1;
+    TerminalResize resize = 2;
+    TerminalPing ping = 3;
+  }
+}
+
+message TerminalResize {
+  optional uint32 cols = 1;
+  optional uint32 rows = 2;
+}
+
+message TerminalPing {}
+
+message TerminalServerFrame {
+  oneof payload {
+    TerminalAttach attach = 16;
+    TerminalOutput output = 17;
+    TerminalPong pong = 18;
+    TerminalExit exit = 19;
+    TerminalDropNotice drop_notice = 20;
+    TerminalTitle title = 21;
+    TerminalBridgeState bridge_state = 22;
+    TerminalSettlement settlement = 23;
+    phi.websocket.events.v1.Notification notification = 24;
+  }
+}
+
+message TerminalAttach {
+  optional uint64 epoch = 1;
+  optional uint64 oldest = 2;
+  optional uint64 head = 3;
+  TerminalCheckpoint checkpoint = 4;
+  optional uint64 replay_from = 5;
+}
+
+message TerminalCheckpoint {
+  optional string kind = 1;
+  optional uint64 through = 2;
+  optional uint32 cols = 3;
+  optional uint32 rows = 4;
+  bytes data = 5;
+  optional string event_cursor = 6;
+}
+
+message TerminalOutput {
+  optional uint64 start = 1;
+  bytes data = 2;
+}
+
+message TerminalPong {}
+
+message TerminalExit {
+  optional sint32 code = 1;
+}
+
+// TerminalDropNotice is the slow-client warning. It renders beside the
+// byte stream, so sequence accounting is untouched.
+message TerminalDropNotice {}
+
+// TerminalTitle carries one Pi session-title push. Revision is capped
+// server-side below 2^53, so it always fits a safe JS integer.
+message TerminalTitle {
+  optional string pane_id = 1;
+  optional string session_id = 2;
+  optional string title = 3;
+  optional uint64 revision = 4;
+}
+
+// TerminalBridgeState is one Pi-bridge view push. Absent booleans differ
+// from false: the UI adopts a flipped value only when the key arrives.
+// Identifiers stay exact uint64 on the wire; the UI keeps decimal
+// strings, so adapters convert at the boundary.
+message TerminalBridgeState {
+  optional string state = 1;
+  optional string reason = 2;
+  optional uint64 generation = 3;
+  optional uint64 telemetry_revision = 4;
+  optional uint64 last_run = 5;
+  optional string last_outcome = 6;
+  optional bool running = 7;
+  optional bool connected = 8;
+  optional string model = 9;
+  repeated string capabilities = 10;
+  optional string pane_id = 11;
+  optional string thinking_level = 12;
+  optional double context_tokens = 13;
+  optional double context_window = 14;
+  optional double context_percent = 15;
+  optional bool compact_idle = 16;
+  optional bool compact_queued = 17;
+  optional bool compact_active = 18;
+  optional bool compact_pending = 19;
+}
+
+// TerminalSettlement reports one observed Pi run outcome.
+message TerminalSettlement {
+  optional uint64 generation = 1;
+  optional uint64 run = 2;
+  optional string outcome = 3;
+  optional string pane_id = 4;
+}

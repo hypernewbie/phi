@@ -20,6 +20,7 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
@@ -38,7 +39,7 @@ func TestCLIInlineViewsReplayOutputAndSwitchPaneWithoutInputLoss(t *testing.T) {
 	inputs := map[string][]byte{}
 	connections := map[string]int{}
 	active := map[string]int{}
-	upgrader := websocket.Upgrader{}
+	upgrader := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/auth/status":
@@ -78,16 +79,19 @@ func TestCLIInlineViewsReplayOutputAndSwitchPaneWithoutInputLoss(t *testing.T) {
 				head := len(source[pane])
 				mu.Unlock()
 				defer func() { mu.Lock(); active[pane]--; mu.Unlock() }()
-				_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7, Head: uint64(head)}, nil))
+				_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, uint64(head)))
 				for {
 					_, data, err := ws.ReadMessage()
 					if err != nil {
 						return
 					}
-					if len(data) > 0 && data[0] == 1 {
-						mu.Lock()
-						inputs[pane] = append(inputs[pane], data[1:]...)
-						mu.Unlock()
+					frame, err := wireproto.DecodeClientFrame(data)
+					if err == nil {
+						if in, ok := frame.GetPayload().(*wspb.TerminalClientFrame_Input); ok {
+							mu.Lock()
+							inputs[pane] = append(inputs[pane], in.Input...)
+							mu.Unlock()
+						}
 					}
 				}
 			} else if r.URL.Path == "/api/terminals/"+pane+"/recording" {

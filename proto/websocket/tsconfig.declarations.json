@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "skipLibCheck": true,
+    "types": [],
+    "rootDir": "./gen-ts",
+    "outDir": "../../web-src/proto",
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "sourceMap": false,
+    "newLine": "lf"
+  },
+  "include": ["./gen-ts/**/*.ts"]
+}

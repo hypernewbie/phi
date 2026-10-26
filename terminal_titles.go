@@ -12,6 +12,7 @@ import (
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/session"
 	"github.com/hypernewbie/phi/pkg/ws"
+	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
 const piTitleRecoveryInterval = 15 * time.Second
@@ -411,9 +412,8 @@ func (s *piTerminalTitleService) publish(tracks []*piTitleTrack, title string) {
 			continue
 		}
 		if s.hub != nil {
-			payload := ws.EncodeSessionTitleControl(track.paneID, track.sessionID, title, revision)
-			if payload != nil {
-				s.hub.Broadcast(track.paneID, 0x02, payload)
+			if frame, err := wireproto.EncodeTitleFrame(track.paneID, track.sessionID, title, revision); err == nil {
+				s.hub.BroadcastFrame(track.paneID, frame)
 			}
 		}
 	}

@@ -1,26 +1,53 @@
 import { describe, it, expect } from 'vitest';
-import { decodeEventFrame, mdEventMatchesPath } from '../web/md-view.js';
+import { decodeNotificationDir, mdEventMatchesPath } from '../web/md-view.js';
+import { Notification } from '../web/proto/events.js';
 
 // Pure helpers of the standalone markdown viewer (web-src/md-view.ts).
 // No DOM needed: importing md-view.js is side-effect-free by design
 // (initMdView is only called from md.html).
 
-describe('decodeEventFrame', () => {
-    it('splits a 0x07 frame into type and JSON payload (round-trip)', () => {
-        const payload = JSON.stringify({ dir: '/tmp/docs' });
-        const bytes = new Uint8Array([
-            0x07,
-            ...new TextEncoder().encode(payload),
-        ]);
-        const frame = decodeEventFrame(bytes);
-        expect(frame.type).toBe(0x07);
-        expect(JSON.parse(frame.payload)).toEqual({ dir: '/tmp/docs' });
+function encodeNotification(kind) {
+    return Notification.encode(
+        Notification.fromPartial(kind === undefined ? {} : { kind }),
+    ).finish();
+}
+
+describe('decodeNotificationDir', () => {
+    it('returns the dir of a markdown notification (round-trip)', () => {
+        const bytes = encodeNotification({
+            $case: 'markdownChanged',
+            value: { dir: '/tmp/docs' },
+        });
+        expect(decodeNotificationDir(bytes)).toBe('/tmp/docs');
     });
 
-    it('handles an empty payload', () => {
-        const frame = decodeEventFrame(new Uint8Array([0x05]));
-        expect(frame.type).toBe(0x05);
-        expect(frame.payload).toBe('');
+    it('returns null for other notification kinds', () => {
+        const sync = encodeNotification({
+            $case: 'syncChanged',
+            value: { action: 'upsert', key: 'k' },
+        });
+        expect(decodeNotificationDir(sync)).toBeNull();
+        const shutdown = encodeNotification({
+            $case: 'shutdown',
+            value: { reason: 'restart' },
+        });
+        expect(decodeNotificationDir(shutdown)).toBeNull();
+    });
+
+    it('decodes and ignores a large sync notification', () => {
+        // Sync values can exceed the server's inbound 4 KiB events cap. The
+        // viewer must keep ignoring them without treating the frame as fatal.
+        const sync = encodeNotification({
+            $case: 'syncChanged',
+            value: { action: 'upsert', key: 'k'.repeat(8 * 1024) },
+        });
+        expect(sync.byteLength).toBeGreaterThan(4096);
+        expect(decodeNotificationDir(sync)).toBeNull();
+    });
+
+    it('returns null for empty and undecodable payloads', () => {
+        expect(decodeNotificationDir(encodeNotification(undefined))).toBeNull();
+        expect(decodeNotificationDir(new Uint8Array([0x82, 0xff]))).toBeNull();
     });
 });
 

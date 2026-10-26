@@ -2,82 +2,76 @@
 package phic
 
 import (
-	"encoding/binary"
-	"encoding/json"
-	"errors"
 	"fmt"
+	"math"
 
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
-// ErrShortFrame is returned when a frame is truncated mid-header.
-var ErrShortFrame = errors.New("phic: short frame")
+// MaxNativePayloadBytes caps one decoded attach checkpoint or live-output
+// span, matching the server's 2 MiB checkpoint bound.
+const MaxNativePayloadBytes = 2 << 20
 
-// ParseAttachHead decodes a 0x08 ATTACH_HEAD frame.
-func ParseAttachHead(frame []byte) (wireproto.AttachHeadHeader, []byte, error) {
-	if len(frame) == 0 {
-		return wireproto.AttachHeadHeader{}, nil, ErrShortFrame
+// ParseAttachHead decodes an attach server frame and validates its span.
+// Unknown fields are accepted; a missing/wrong payload or an
+// out-of-window span or checkpoint is rejected.
+func ParseAttachHead(frame []byte) (*wspb.TerminalAttach, error) {
+	server, err := wireproto.DecodeServerFrame(frame)
+	if err != nil {
+		return nil, err
 	}
-	if frame[0] != wireproto.FrameAttachHead {
-		return wireproto.AttachHeadHeader{}, nil, fmt.Errorf("phic: bad attach type 0x%x", frame[0])
+	h := server.GetAttach()
+	if h == nil {
+		return nil, fmt.Errorf("phic: not an attach frame")
 	}
-	if len(frame) < 5 {
-		return wireproto.AttachHeadHeader{}, nil, ErrShortFrame
+	if h.GetEpoch() == 0 || h.GetOldest() > h.GetHead() {
+		return nil, fmt.Errorf("phic: invalid attach span")
 	}
-	n := binary.BigEndian.Uint32(frame[1:5])
-	if n > 2<<20 || uint64(n)+5 > uint64(len(frame)) {
-		return wireproto.AttachHeadHeader{}, nil, ErrShortFrame
+	if rf := h.GetReplayFrom(); rf != 0 && (rf < h.GetOldest() || rf > h.GetHead()) {
+		return nil, fmt.Errorf("phic: invalid attach span")
 	}
-	var h wireproto.AttachHeadHeader
-	if err := json.Unmarshal(frame[5:5+n], &h); err != nil {
-		return wireproto.AttachHeadHeader{}, nil, fmt.Errorf("phic: bad attach head: %w", err)
-	}
-	extra := frame[5+n:]
-	if h.Epoch == 0 || h.Oldest > h.Head || (h.ReplayFrom != 0 && (h.ReplayFrom < h.Oldest || h.ReplayFrom > h.Head)) {
-		return h, nil, fmt.Errorf("phic: invalid attach span")
-	}
-	if h.Ckpt != nil {
-		if h.Ckpt.Through < h.Oldest || h.Ckpt.Through > h.Head || h.Ckpt.Cols == 0 || h.Ckpt.Rows == 0 || h.Ckpt.Len <= 0 || h.Ckpt.Len > 2<<20 || h.Ckpt.Len != len(extra) {
-			return h, nil, fmt.Errorf("phic: invalid checkpoint")
+	if ckpt := h.GetCheckpoint(); ckpt != nil {
+		// The protobuf field is uint32; keep the uint16 geometry the native
+		// console can actually render and still reject zero.
+		if ckpt.GetThrough() < h.GetOldest() || ckpt.GetThrough() > h.GetHead() ||
+			ckpt.GetCols() == 0 || ckpt.GetCols() > math.MaxUint16 ||
+			ckpt.GetRows() == 0 || ckpt.GetRows() > math.MaxUint16 ||
+			len(ckpt.GetData()) > MaxNativePayloadBytes {
+			return nil, fmt.Errorf("phic: invalid checkpoint")
 		}
-	} else if len(extra) != 0 {
-		return h, nil, fmt.Errorf("phic: unannounced checkpoint bytes")
 	}
-	return h, extra, nil
+	return h, nil
 }
 
-// ParseLiveOutput decodes a 0x09 LIVE_OUTPUT frame.
+// ParseLiveOutput decodes an output server frame and validates its span.
 func ParseLiveOutput(frame []byte) (start uint64, payload []byte, err error) {
-	if len(frame) == 0 {
-		return 0, nil, ErrShortFrame
+	server, err := wireproto.DecodeServerFrame(frame)
+	if err != nil {
+		return 0, nil, err
 	}
-	if frame[0] != wireproto.FrameLiveOutput {
-		return 0, nil, fmt.Errorf("phic: bad live type 0x%x", frame[0])
-	}
-	if len(frame) < 9 {
-		return 0, nil, ErrShortFrame
-	}
-	start = binary.BigEndian.Uint64(frame[1:9])
-	if len(frame)-9 > 2<<20 || start > ^uint64(0)-uint64(len(frame)-9) {
-		return 0, nil, fmt.Errorf("phic: invalid live span")
-	}
-	return start, frame[9:], nil
+	return outputSpan(server.GetOutput())
 }
 
-// FrameType reports the leading byte of a WebSocket binary
-// message. Reserved types are ignored by the client.
-func FrameType(frame []byte) byte {
-	if len(frame) == 0 {
-		return 0
+// outputSpan validates one decoded output payload. Live loops decode once
+// for dispatch and share these checks instead of parsing twice.
+func outputSpan(out *wspb.TerminalOutput) (uint64, []byte, error) {
+	if out == nil || out.Start == nil {
+		return 0, nil, fmt.Errorf("%w: output start is missing", errProtocol)
 	}
-	return frame[0]
+	start, payload := out.GetStart(), out.GetData()
+	if len(payload) > MaxNativePayloadBytes {
+		return 0, nil, fmt.Errorf("%w: native output exceeds bound", wireproto.ErrMessageTooLarge)
+	}
+	if start > ^uint64(0)-uint64(len(payload)) {
+		return 0, nil, fmt.Errorf("%w: invalid live span", errProtocol)
+	}
+	return start, payload, nil
 }
 
-// EncodeInputFrame prefixes the raw PTY input with the input
-// frame type.
-func EncodeInputFrame(p []byte) []byte {
-	out := make([]byte, 1+len(p))
-	out[0] = wireproto.FrameInput
-	copy(out[1:], p)
-	return out
+func terminalExitCode(exit *wspb.TerminalExit) (int, error) {
+	if exit == nil || exit.Code == nil {
+		return 0, fmt.Errorf("%w: exit code is missing", errProtocol)
+	}
+	return int(exit.GetCode()), nil
 }

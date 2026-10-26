@@ -14,6 +14,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/hypernewbie/phi/internal/termemu"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
@@ -38,7 +39,7 @@ func serveReviewRecording(w http.ResponseWriter, r *http.Request, b []byte, resi
 func TestReviewNativeExitDrainsUnannouncedFinalBytes(t *testing.T) {
 	first := []byte("first\r\n")
 	all := append(append([]byte{}, first...), []byte("LAST-RETAINED\r\n")...)
-	up := websocket.Upgrader{}
+	up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/recording") {
 			serveReviewRecording(w, r, all, nil)
@@ -49,9 +50,9 @@ func TestReviewNativeExitDrainsUnannouncedFinalBytes(t *testing.T) {
 			return
 		}
 		defer ws.Close()
-		_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7}, nil))
-		_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeLiveOutputFrame(0, first))
-		_ = ws.WriteMessage(websocket.BinaryMessage, []byte{wireproto.FrameExit, 3})
+		_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, 0))
+		_ = ws.WriteMessage(websocket.BinaryMessage, testOutput(t, 0, first))
+		_ = ws.WriteMessage(websocket.BinaryMessage, testExit(t, 3))
 		for {
 			if _, _, err = ws.ReadMessage(); err != nil {
 				return
@@ -78,7 +79,7 @@ func TestReviewNativeReplayUsesRecordedGeometryAndFreshReplies(t *testing.T) {
 	b := []byte("\x1b[3;1HNEW\x1b[6n")
 	all := append(append([]byte{}, a...), b...)
 	sizes := [][3]uint64{{0, 8, 4}, {uint64(len(a)), 12, 6}}
-	up := websocket.Upgrader{}
+	up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 	inputs := make(chan string, 64)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/recording") {
@@ -90,14 +91,17 @@ func TestReviewNativeReplayUsesRecordedGeometryAndFreshReplies(t *testing.T) {
 			return
 		}
 		defer ws.Close()
-		_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7, Head: uint64(len(all))}, nil))
+		_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, uint64(len(all))))
 		for {
 			_, data, err := ws.ReadMessage()
 			if err != nil {
 				return
 			}
-			if len(data) > 0 && data[0] == wireproto.FrameInput {
-				inputs <- string(data[1:])
+			frame, err := wireproto.DecodeClientFrame(data)
+			if err == nil {
+				if in, ok := frame.GetPayload().(*wspb.TerminalClientFrame_Input); ok {
+					inputs <- string(in.Input)
+				}
 			}
 		}
 	}))

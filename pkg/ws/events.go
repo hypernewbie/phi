@@ -1,8 +1,12 @@
 package ws
 
 import (
+	"errors"
 	"net/http"
 	"time"
+
+	"github.com/gorilla/websocket"
+	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
 // EventsPaneID is the synthetic hub key for listen-only browser clients
@@ -13,11 +17,19 @@ import (
 const EventsPaneID = "@events"
 
 // HandleEventsWS serves a listen-only client that receives hub-wide
-// BroadcastAll frames (0x07 md-changed, 0x05 shutdown) without a PTY.
-// Inbound messages are drained and ignored.
+// notifications without a PTY. Inbound messages are drained and ignored.
 func HandleEventsWS(w http.ResponseWriter, r *http.Request, hub *Hub) {
 	logger := componentLogger().With("pane", EventsPaneID)
-	conn, err := Upgrader.Upgrade(w, r, nil)
+	if !wireproto.ClientRequestedSubprotocol(r, wireproto.EventsSubprotocol) {
+		logger.Error("ws events subprotocol mismatch")
+		http.Error(w, "expected WebSocket subprotocol "+wireproto.EventsSubprotocol, http.StatusUpgradeRequired)
+		return
+	}
+	// Copy the shared upgrader: concurrent upgrades for other endpoints
+	// must not observe this endpoint's subprotocol selection.
+	upgrader := Upgrader
+	upgrader.Subprotocols = []string{wireproto.EventsSubprotocol}
+	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		logger.Error("ws upgrade error", "err", err)
 		return
@@ -30,13 +42,22 @@ func HandleEventsWS(w http.ResponseWriter, r *http.Request, hub *Hub) {
 	// that restore it. See the matching comment in ReadPump.
 	pongTimeout := pongWait
 
+	// SetReadLimit bounds the compressed wire; ReadBoundedMessage bounds
+	// the decompressed body before it is discarded.
+	conn.SetReadLimit(wireproto.MaxEventsMessageBytes)
 	_ = conn.SetReadDeadline(time.Now().Add(pongTimeout))
 	conn.SetPongHandler(func(string) error {
 		_ = conn.SetReadDeadline(time.Now().Add(pongTimeout))
 		return nil
 	})
 	for {
-		if _, _, err := conn.ReadMessage(); err != nil {
+		// Listen-only: drain and ignore inbound traffic, bounded so a
+		// misbehaving client cannot grow server memory without limit.
+		// An oversize message closes the stream with code 1009.
+		if _, _, err := wireproto.ReadBoundedMessage(conn, wireproto.MaxEventsMessageBytes); err != nil {
+			if errors.Is(err, wireproto.ErrMessageTooLarge) {
+				client.closeWithCode(websocket.CloseMessageTooBig, "message too large")
+			}
 			break
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(pongTimeout))

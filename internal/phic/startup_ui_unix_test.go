@@ -22,6 +22,7 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
@@ -56,7 +57,7 @@ func TestCLIBareStartupShowsServersBeforeAuthAndCanConnectWithoutProfiles(t *tes
 			}
 			var authCalls, menuInputs atomic.Int32
 			data := []byte("CONNECTED WITHOUT LOCALHOST\r\n")
-			upgrade := websocket.Upgrader{}
+			upgrade := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/healthz":
@@ -74,14 +75,17 @@ func TestCLIBareStartupShowsServersBeforeAuthAndCanConnectWithoutProfiles(t *tes
 						return
 					}
 					defer ws.Close()
-					ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7, Head: uint64(len(data))}, nil))
+					ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, uint64(len(data))))
 					for {
 						_, input, err := ws.ReadMessage()
 						if err != nil {
 							return
 						}
-						if len(input) > 0 && input[0] == 1 {
-							menuInputs.Add(int32(len(input) - 1))
+						frame, err := wireproto.DecodeClientFrame(input)
+						if err == nil {
+							if in, ok := frame.GetPayload().(*wspb.TerminalClientFrame_Input); ok {
+								menuInputs.Add(int32(len(in.Input)))
+							}
 						}
 					}
 				case "/api/terminals/startup/recording":

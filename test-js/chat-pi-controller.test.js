@@ -21,6 +21,7 @@ import { createReviewTranscriptView } from '../web/review-transcript.js';
 import { savePersisted } from '../web/chat-pi/persist.js';
 import {
     destroyRpcChat,
+    getPiRpcControls,
     getPiRpcStatus,
     mountRpcChat,
     rpcChatInterrupt,
@@ -30,15 +31,53 @@ import {
 } from '../web/chat-pi/controller.js';
 import { mountChatPi } from '../web/chat-pi/index.js';
 
+// Test double for the control transport. Production is call()-only; this
+// fake keeps the frame-shaped assertions the suite already makes by mapping
+// each operation to the id the old transport used.
 function fakeClient() {
     const sent = [];
+    const pending = new Map();
     let listener = () => {};
     let accepted = null;
+    let hydrateSeq = 0;
+    let promptSeq = 0;
+    const legacyId = (op) => {
+        switch (op) {
+            case 'hydrate':
+                return hydrateSeq++ === 0 ? 'hyd' : `hyd-${hydrateSeq - 1}`;
+            case 'prompt':
+                return `p${++promptSeq}`;
+            case 'spawn':
+                return 'sp';
+            case 'newSession':
+                return 'reset';
+            case 'setModel':
+                return 'set-model';
+            case 'setThinking':
+                return 'set-thinking';
+            case 'setSessionName':
+                return 'snm';
+            case 'abort':
+                return 'abort';
+            case 'compact':
+                return 'compact';
+            case 'getAvailableModels':
+                return 'models';
+            case 'getAvailableThinkingLevels':
+                return 'thinking';
+            default:
+                return op;
+        }
+    };
     return {
         sent,
         client: {
-            send(frame) {
-                sent.push(frame);
+            call(op, sid, args) {
+                const id = legacyId(op);
+                sent.push({ t: 'call', id, op, sid, args });
+                return new Promise((resolve, reject) => {
+                    pending.set(id, { resolve, reject });
+                });
             },
             onMessage(callback) {
                 accepted = callback;
@@ -50,11 +89,29 @@ function fakeClient() {
             close() {},
         },
         emit(frame) {
+            if (frame?.t === 'res') {
+                const call = pending.get(frame.id);
+                if (call) {
+                    pending.delete(frame.id);
+                    if (frame.ok) call.resolve(frame.data);
+                    else call.reject(new Error(String(frame.error)));
+                    return;
+                }
+            }
             listener(frame);
         },
         // Delivers even after the controller unsubscribed, to prove a late
         // completion cannot publish after destroy.
         emitAfterUnsubscribe(frame) {
+            if (frame?.t === 'res') {
+                const call = pending.get(frame.id);
+                if (call) {
+                    pending.delete(frame.id);
+                    if (frame.ok) call.resolve(frame.data);
+                    else call.reject(new Error(String(frame.error)));
+                    return;
+                }
+            }
             accepted?.(frame);
         },
     };
@@ -833,6 +890,27 @@ describe('Pi RPC transcript controller', () => {
         await Promise.resolve(); // drain hydrate paint()
         expect(root.textContent).toContain('latest hydrate');
         expect(root.textContent).not.toContain('old hydrate');
+    });
+
+    it('reports a refused stream even when no call is pending', () => {
+        // Streaming output leaves nothing pending, so a rejection alone would
+        // not tell the view that delivery stopped.
+        let reportStreamFailure = null;
+        const wire = fakeClient();
+        connectControl.mockImplementationOnce((callback) => {
+            reportStreamFailure = callback;
+            return wire.client;
+        });
+        const root = document.createElement('div');
+        mountRpcChat('pane-1', root, '/work/fail');
+        expect(typeof reportStreamFailure).toBe('function');
+        expect(getPiRpcControls('pane-1')).toMatchObject({ ready: false });
+
+        reportStreamFailure('control event is malformed');
+
+        expect(root.textContent).toContain('control event is malformed');
+        expect(getPiRpcControls('pane-1')).toMatchObject({ ready: false });
+        destroyRpcChat('pane-1');
     });
 
     it('keeps independent pane status and removes it before destroy notification', async () => {

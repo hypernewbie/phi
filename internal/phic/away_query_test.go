@@ -24,7 +24,7 @@ func TestReturningDeliversQueriesIssuedWhileAwayButNotSeenQueries(t *testing.T) 
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			source := []byte(tc.old + tc.fresh)
-			up := websocket.Upgrader{}
+			up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/ws/pane/p" {
 					ws, err := up.Upgrade(w, r, nil)
@@ -32,8 +32,8 @@ func TestReturningDeliversQueriesIssuedWhileAwayButNotSeenQueries(t *testing.T) 
 						return
 					}
 					defer ws.Close()
-					_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7, Head: uint64(len(source))}, nil))
-					_ = ws.WriteMessage(websocket.BinaryMessage, []byte{4, 0})
+					_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, uint64(len(source))))
+					_ = ws.WriteMessage(websocket.BinaryMessage, testExit(t, 0))
 					for {
 						if _, _, err := ws.ReadMessage(); err != nil {
 							return

@@ -52,7 +52,7 @@ func TestConsoleRelaunchKeepsLoginWithoutKeychainOrPasswordFile(t *testing.T) {
 	proof := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 	cookie := rememberCookie()
 	var logins atomic.Int32
-	upgrade := websocket.Upgrader{}
+	upgrade := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/healthz":
@@ -87,7 +87,7 @@ func TestConsoleRelaunchKeepsLoginWithoutKeychainOrPasswordFile(t *testing.T) {
 				return
 			}
 			defer ws.Close()
-			ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7, Head: 0}, nil))
+			ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, 0))
 			for {
 				if _, _, err = ws.ReadMessage(); err != nil {
 					return

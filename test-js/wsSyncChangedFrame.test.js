@@ -3,6 +3,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { setupDomHarness } from './_dom.js';
 import { PTYWebSocket } from '../web/ws.js';
 import { TabManager } from '../web/terminal.js';
+import { TerminalServerFrame } from '../web/proto/terminal.js';
+
+// M2: sync changes arrive as a TerminalServerFrame notification. The
+// adapter decodes into onControl({type:'sync-changed', ...}) with the
+// message rendered as the JSON shape the old payload carried.
 
 setupDomHarness();
 
@@ -20,34 +25,70 @@ FakeWebSocket.OPEN = 1;
 FakeWebSocket.CLOSING = 2;
 FakeWebSocket.CLOSED = 3;
 
-function sendFrame(pty, msgType, jsonPayload) {
-    const payloadBytes =
-        jsonPayload === undefined
-            ? new Uint8Array(0)
-            : new TextEncoder().encode(JSON.stringify(jsonPayload));
-    const buffer = new ArrayBuffer(1 + payloadBytes.length);
-    const view = new Uint8Array(buffer);
-    view[0] = msgType;
-    view.set(payloadBytes, 1);
-    pty.ws.onmessage({ data: buffer });
+function sendNotification(pty, kind) {
+    const frame = TerminalServerFrame.encode(
+        TerminalServerFrame.fromPartial({
+            payload: { $case: 'notification', value: kind },
+        }),
+    ).finish();
+    pty.ws.onmessage({ data: new Uint8Array(frame).buffer });
 }
 
-describe('PTYWebSocket 0x0a sync-changed frame', () => {
+describe('PTYWebSocket sync notification', () => {
     beforeEach(() => {
         vi.stubGlobal('WebSocket', FakeWebSocket);
     });
 
-    it('decodes the JSON payload into onControl({type: "sync-changed", ...})', () => {
+    it('decodes into onControl({type: "sync-changed", ...})', () => {
         const onControl = vi.fn();
         const pty = new PTYWebSocket('pane-1', () => {}, onControl);
 
-        sendFrame(pty, 0x0a, { action: 'upsert', key: 'feature:preview' });
+        sendNotification(pty, {
+            kind: {
+                $case: 'syncChanged',
+                value: {
+                    action: 'upsert',
+                    key: 'feature:preview',
+                    msg: {
+                        key: 'feature:preview',
+                        value: 'hello',
+                        createdAtUnixMs: BigInt(1700000000000),
+                        updatedAtUnixMs: BigInt(1700000001000),
+                    },
+                },
+            },
+        });
 
         expect(onControl).toHaveBeenCalledTimes(1);
         expect(onControl).toHaveBeenCalledWith({
             type: 'sync-changed',
             action: 'upsert',
             key: 'feature:preview',
+            msg: {
+                key: 'feature:preview',
+                value: 'hello',
+                created_at: '2023-11-14T22:13:20.000Z',
+                updated_at: '2023-11-14T22:13:21.000Z',
+            },
+        });
+    });
+
+    it('a delete carries no msg', () => {
+        const onControl = vi.fn();
+        const pty = new PTYWebSocket('pane-1', () => {}, onControl);
+
+        sendNotification(pty, {
+            kind: {
+                $case: 'syncChanged',
+                value: { action: 'delete', key: 'card-1' },
+            },
+        });
+
+        expect(onControl).toHaveBeenCalledTimes(1);
+        expect(onControl).toHaveBeenCalledWith({
+            type: 'sync-changed',
+            action: 'delete',
+            key: 'card-1',
         });
     });
 

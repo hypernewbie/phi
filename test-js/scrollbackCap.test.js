@@ -48,16 +48,23 @@ describe('live scrollback restored', () => {
         }
     });
 
-    it('hot clients never receive the legacy replay path in PTYWebSocket', () => {
+    it('pane sockets negotiate the protobuf subprotocol in PTYWebSocket', () => {
+        const protocols = readFileSync(
+            join(process.cwd(), 'web', 'ws-protocols.js'),
+            'utf8',
+        );
         const ws = readFileSync(join(process.cwd(), 'web', 'ws.js'), 'utf8');
-        // The URL negotiates hot-v1 explicitly.
-        expect(ws).toContain('term_proto=hot-v1');
+        // The shared tokens module carries the versioned subprotocol
+        // and the pane socket imports it; the query string no longer
+        // carries protocol selection.
+        expect(protocols).toContain('phi.terminal.protobuf.v1');
+        expect(ws).toContain('ws-protocols.js');
+        expect(ws).not.toContain('term_proto');
     });
 
-    it('legacy replay behavior (reset-on-first-byte) is still present for old servers', () => {
-        // _paneData's legacy branch keeps the awaitingReplay reset so a
-        // legacy server reconnect cannot double the scrollback.
-        expect(src).toContain("pty.mode === 'legacy'");
-        expect(src).toMatch(/awaitingReplay = false/);
+    it('no legacy wire-mode branch remains in the pane data path', () => {
+        // Old servers fail the subprotocol check instead of delivering
+        // legacy frames, so the legacy mode branch is gone.
+        expect(src).not.toContain("pty.mode === 'legacy'");
     });
 });

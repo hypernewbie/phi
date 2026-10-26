@@ -1,10 +1,10 @@
 package ws
 
-// Hot-v1 protocol invariants. These tests pin the
+// Terminal protocol invariants. These tests pin the
 // server contracts the plan calls non-negotiable.
 //
-//   - attach is atomic: a hot client gets ATTACH_HEAD with the head H and
-//     then only LIVE_OUTPUT frames with startSeq >= H (no gap, no dupes);
+//   - attach is atomic: a client gets an attach frame with the head H and
+//     then only output frames with start >= H (no gap, no dupes);
 //   - seq accounting is exact across ring wraparound;
 //   - the recording endpoint view matches the bytes the live stream
 //     carried, including resize marker ordering;
@@ -12,10 +12,12 @@ package ws
 
 import (
 	"bytes"
-	"encoding/binary"
 	"encoding/json"
 	"testing"
 	"time"
+
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
+	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
 func drainOne(ch chan []byte) []byte {
@@ -34,17 +36,33 @@ func mustNotArrive(t *testing.T, ch chan []byte) {
 	}
 }
 
-func parseAttachHead(t *testing.T, frame []byte) (attachHeadJSON, []byte) {
+// parseAttach decodes one server frame and returns its attach payload.
+// Checkpoint bytes ride inside the message now, so there is no separate
+// trailing span to return.
+func parseAttach(t *testing.T, frame []byte) *wspb.TerminalAttach {
 	t.Helper()
-	if len(frame) < 5 || frame[0] != 0x08 {
-		t.Fatalf("not an ATTACH_HEAD frame: %v", frame)
+	server, err := wireproto.DecodeServerFrame(frame)
+	if err != nil {
+		t.Fatalf("decode server frame: %v", err)
 	}
-	n := binary.BigEndian.Uint32(frame[1:5])
-	var hdr attachHeadJSON
-	if err := json.Unmarshal(frame[5:5+n], &hdr); err != nil {
-		t.Fatalf("bad ATTACH_HEAD json: %v", err)
+	attach := server.GetAttach()
+	if attach == nil {
+		t.Fatalf("not an attach frame: %v", server.GetPayload())
 	}
-	return hdr, frame[5+n:]
+	return attach
+}
+
+func parseOutput(t *testing.T, frame []byte) *wspb.TerminalOutput {
+	t.Helper()
+	server, err := wireproto.DecodeServerFrame(frame)
+	if err != nil {
+		t.Fatalf("decode server frame: %v", err)
+	}
+	out := server.GetOutput()
+	if out == nil {
+		t.Fatalf("not an output frame: %v", server.GetPayload())
+	}
+	return out
 }
 
 func TestAttachHotIsAtomicAndLiveOnly(t *testing.T) {
@@ -54,34 +72,27 @@ func TestAttachHotIsAtomicAndLiveOnly(t *testing.T) {
 	c := &Client{Send: make(chan []byte, 8)}
 	h.AttachHot("p", c)
 
-	frame := drainOne(c.Send)
-	hdr, extra := parseAttachHead(t, frame)
-	if hdr.Head != 5 || hdr.Oldest != 0 || hdr.Ckpt != nil {
-		t.Fatalf("bad head position: %+v", hdr)
+	attach := parseAttach(t, drainOne(c.Send))
+	if attach.GetHead() != 5 || attach.GetOldest() != 0 || attach.GetCheckpoint() != nil {
+		t.Fatalf("bad head position: %+v", attach)
 	}
-	if len(extra) != 0 {
-		t.Fatalf("no checkpoint expected, got %d extra bytes", len(extra))
-	}
-	mustNotArrive(t, c.Send) // no replay, no 0x06
+	mustNotArrive(t, c.Send) // live-only: no replay frames
 
 	// Live output after attach must start exactly at head.
 	h.Ingest("p", []byte(" world"))
-	live := drainOne(c.Send)
-	if live == nil || live[0] != 0x09 {
-		t.Fatalf("expected 0x09 LIVE_OUTPUT, got %v", live)
+	live := parseOutput(t, drainOne(c.Send))
+	if live.GetStart() != 5 {
+		t.Fatalf("live start = %d, want 5", live.GetStart())
 	}
-	if got := binary.BigEndian.Uint64(live[1:9]); got != 5 {
-		t.Fatalf("live startSeq = %d, want 5", got)
-	}
-	if string(live[9:]) != " world" {
-		t.Fatalf("live payload = %q", live[9:])
+	if string(live.GetData()) != " world" {
+		t.Fatalf("live payload = %q", live.GetData())
 	}
 
 	// Second ingest continues contiguously.
 	h.Ingest("p", []byte("!"))
-	live2 := drainOne(c.Send)
-	if got := binary.BigEndian.Uint64(live2[1:9]); got != 11 {
-		t.Fatalf("second live startSeq = %d, want 11", got)
+	live2 := parseOutput(t, drainOne(c.Send))
+	if live2.GetStart() != 11 {
+		t.Fatalf("second live start = %d, want 11", live2.GetStart())
 	}
 	mustNotArrive(t, c.Send)
 }
@@ -111,29 +122,6 @@ func TestSeqAccountingAcrossWraparound(t *testing.T) {
 	// from beyond head is an error.
 	if _, ok := h.Recording("p", 16, 20); ok {
 		t.Fatal("recording from beyond head must fail")
-	}
-}
-
-func TestRecordingMatchesLegacyReplay(t *testing.T) {
-	h := NewHub(1024)
-	payload := bytes.Repeat([]byte("x"), 100)
-	h.Ingest("p", payload)
-
-	legacy := &Client{Send: make(chan []byte, 16)}
-	h.AttachWithReplay("p", legacy)
-	var replay bytes.Buffer
-	for {
-		m := drainOne(legacy.Send)
-		if m == nil {
-			break
-		}
-		if m[0] == 0x01 {
-			replay.Write(m[1:])
-		}
-	}
-	rec, _ := h.Recording("p", 0, 1<<62)
-	if !bytes.Equal(replay.Bytes(), rec.Data) {
-		t.Fatalf("recording %d bytes != legacy replay %d bytes", len(rec.Data), replay.Len())
 	}
 }
 
@@ -197,12 +185,12 @@ func TestStoreCheckpointRules(t *testing.T) {
 	// AttachHot must hand the newest snapshot through, verbatim.
 	c := &Client{Send: make(chan []byte, 4)}
 	h.AttachHot("p", c)
-	hdr, extra := parseAttachHead(t, drainOne(c.Send))
-	if hdr.Ckpt == nil || hdr.Ckpt.Through != 3 || hdr.Ckpt.Len != len("snap-old") {
-		t.Fatalf("ckpt header = %+v", hdr.Ckpt)
+	ckpt := parseAttach(t, drainOne(c.Send)).GetCheckpoint()
+	if ckpt == nil || ckpt.GetThrough() != 3 || len(ckpt.GetData()) != len("snap-old") {
+		t.Fatalf("ckpt = %+v", ckpt)
 	}
-	if string(extra) != "snap-old" {
-		t.Fatalf("ckpt ansi = %q", extra)
+	if string(ckpt.GetData()) != "snap-old" {
+		t.Fatalf("ckpt ansi = %q", ckpt.GetData())
 	}
 }
 
@@ -235,21 +223,18 @@ func TestAttachHeadDropsCheckpointBelowRetentionFloor(t *testing.T) {
 	}
 	c := &Client{Send: make(chan []byte, 4)}
 	h.AttachHot("p", c)
-	hdr, extra := parseAttachHead(t, drainOne(c.Send))
-	if hdr.Ckpt != nil {
-		t.Fatalf("attach advertised checkpoint %+v below floor %d", hdr.Ckpt, hdr.Oldest)
+	attach := parseAttach(t, drainOne(c.Send))
+	if attach.GetCheckpoint() != nil {
+		t.Fatalf("attach advertised checkpoint %+v below floor %d", attach.GetCheckpoint(), attach.GetOldest())
 	}
-	if hdr.Oldest != pos.Oldest || hdr.Head != pos.Head {
-		t.Fatalf("attach head %+v != position %+v", hdr, pos)
-	}
-	if len(extra) != 0 {
-		t.Fatalf("snapshot bytes %q sent without a checkpoint", extra)
+	if attach.GetOldest() != pos.Oldest || attach.GetHead() != pos.Head {
+		t.Fatalf("attach %+v != position %+v", attach, pos)
 	}
 	ph.mu.Lock()
 	replayFrom := ph.recording.replayStart()
 	ph.mu.Unlock()
-	if replayFrom != hdr.ReplayFrom {
-		t.Fatalf("ReplayFrom = %d, want %d", hdr.ReplayFrom, replayFrom)
+	if replayFrom != attach.GetReplayFrom() {
+		t.Fatalf("ReplayFrom = %d, want %d", attach.GetReplayFrom(), replayFrom)
 	}
 }
 
@@ -276,25 +261,15 @@ func TestHotDropWarningIsControlNotStream(t *testing.T) {
 	// The warning injection is reached only when the send channel cannot
 	// be reclaimed after 100 drops; that state is racy to construct via
 	// Ingest, so call the extracted injection directly and pin the frame
-	// type each client mode must receive.
-	hot := &Client{Send: make(chan []byte, 1)}
-	hot.Hot = true
-	legacy := &Client{Send: make(chan []byte, 1)}
+	// type the client must receive: a drop notice beside the byte
+	// stream, never bytes inside it.
+	client := &Client{Send: make(chan []byte, 1)}
 
-	h.injectDropWarning(hot, time.Now())
-	m := drainOne(hot.Send)
-	if m == nil || m[0] != 0x02 {
-		t.Fatalf("hot client warning must be a 0x02 control frame, got %v", m)
-	}
-	var v map[string]string
-	if err := json.Unmarshal(m[1:], &v); err != nil || v["type"] != "output-dropped" {
-		t.Fatalf("hot warning payload = %q err=%v", m[1:], err)
-	}
-
-	h.injectDropWarning(legacy, time.Now())
-	m = drainOne(legacy.Send)
-	if m == nil || m[0] != 0x01 || !bytes.Contains(m, []byte("output dropped")) {
-		t.Fatalf("legacy client warning must stay inline 0x01 text, got %v", m)
+	h.injectDropWarning(client, time.Now())
+	m := drainOne(client.Send)
+	server, err := wireproto.DecodeServerFrame(m)
+	if err != nil || server.GetDropNotice() == nil {
+		t.Fatalf("client warning must be a drop notice, got %+v err=%v", server, err)
 	}
 }
 

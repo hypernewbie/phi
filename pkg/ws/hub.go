@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -17,7 +16,9 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/hypernewbie/phi/internal/termstate"
 	"github.com/hypernewbie/phi/pkg/pty"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
+	"google.golang.org/protobuf/proto"
 )
 
 // componentLogger returns the "ws" component-tagged base logger, derived
@@ -39,11 +40,8 @@ type Client struct {
 	LastDropWarning time.Time
 	FullSince       time.Time
 
-	// Hot marks a hot-v1 terminal-protocol attachment (term_proto=hot-v1
-	// on /ws/pane). Hot clients receive 0x08 ATTACH_HEAD at attach and
-	// 0x09 LIVE_OUTPUT frames thereafter, instead of the legacy 1 MiB
-	// replay + 0x01 frames.
-	Hot         bool
+	// Every pane attachment is live-only protobuf: an attach frame at
+	// attach, then sequenced output frames.
 	NativeState bool
 	AnsiState   bool
 
@@ -131,7 +129,7 @@ type Hub struct {
 	// bridgeAttach encodes an optional Pi-bridge snapshot control frame
 	// for an attaching client. bridgeExit observes pane death with the
 	// exit code. Both are set once before serving; nil disables them.
-	bridgeAttach func(snapshot pty.PTYInstanceSnapshot) []byte
+	bridgeAttach func(snapshot pty.PTYInstanceSnapshot) *wspb.TerminalBridgeState
 	onPaneExit   func(inst *pty.PTYInstance, code int)
 	// paneOwners tracks the current read-loop owner per pane ID. A restore
 	// retry reuses the same ID with a new instance pointer; the delayed old
@@ -165,9 +163,9 @@ func NewHub(replayBufferBytes int) *Hub {
 }
 
 // SetBridgeAttach registers the Pi-bridge attach snapshot encoder.
-// HandleWS sends one encoded frame per attach; nil payload sends nothing.
+// HandleWS sends one encoded frame per attach; nil state sends nothing.
 // Set once before serving.
-func (h *Hub) SetBridgeAttach(fn func(snapshot pty.PTYInstanceSnapshot) []byte) {
+func (h *Hub) SetBridgeAttach(fn func(snapshot pty.PTYInstanceSnapshot) *wspb.TerminalBridgeState) {
 	h.bridgeAttach = fn
 }
 
@@ -450,37 +448,15 @@ func (ph *PaneHub) positionLocked() PanePosition {
 	return PanePosition{Epoch: ph.epoch, Oldest: oldest, Head: ph.total}
 }
 
-// attachHeadJSON is the JSON header carried by the 0x08 ATTACH_HEAD frame
-// and by the /recording HTTP response. In ATTACH_HEAD, Checkpoint is nil
-// unless a usable client snapshot exists, in which case the raw ANSI bytes
-// follow the JSON header in the same frame.
-type attachHeadJSON = wireproto.AttachHeadHeader
-
-type checkpointJSON = wireproto.CheckpointHeader
-
 // RecordingHeaderJSON is the header of the /recording HTTP response; raw
-// bytes follow it in the body, exactly as with ATTACH_HEAD.
+// bytes follow it in the body.
 type RecordingHeaderJSON = wireproto.RecordingHeader
 
-// frameFramedJSON builds [msgType][u32 jsonLen BE][json bytes][extra bytes].
-func frameFramedJSON(msgType byte, v any, extra []byte) []byte {
-	j, err := json.Marshal(v)
-	if err != nil {
-		return nil
-	}
-	frame := make([]byte, 1+4+len(j)+len(extra))
-	frame[0] = msgType
-	binary.BigEndian.PutUint32(frame[1:5], uint32(len(j)))
-	copy(frame[5:], j)
-	copy(frame[5+len(j):], extra)
-	return frame
-}
-
-// AttachHot registers a hot-v1 client and enqueues its 0x08 ATTACH_HEAD
-// frame. Registration and the head capture happen under the pane lock, so
-// the client is guaranteed to receive every 0x09 LIVE_OUTPUT frame with
-// startSeq >= Head: the boundary is atomic, no gap, no duplication.
-// Nothing from before Head is pushed — history stays off the live path.
+// AttachHot registers a protobuf client and enqueues its attach frame.
+// Registration and the head capture happen under the pane lock, so the
+// client is guaranteed to receive every output frame with start >= Head:
+// the boundary is atomic, no gap, no duplication. Nothing from before
+// Head is pushed — history stays off the live path.
 func (h *Hub) AttachHot(paneID string, client *Client) {
 	ph, err := h.GetOrCreatePaneHub(paneID)
 	if err != nil {
@@ -493,8 +469,11 @@ func (h *Hub) AttachHot(paneID string, client *Client) {
 	ph.mu.Lock()
 	pos := ph.positionLocked()
 
-	hdr := attachHeadJSON{Epoch: pos.Epoch, Oldest: pos.Oldest, Head: pos.Head}
-	var extra []byte
+	attach := &wspb.TerminalAttach{
+		Epoch:  proto.Uint64(pos.Epoch),
+		Oldest: proto.Uint64(pos.Oldest),
+		Head:   proto.Uint64(pos.Head),
+	}
 	if client.NativeState || client.AnsiState {
 		if err := ph.prepareStateLocked(); err != nil {
 			ph.mu.Unlock()
@@ -534,37 +513,44 @@ func (h *Hub) AttachHot(paneID string, client *Client) {
 			}
 			return
 		}
-		hdr.Ckpt = &checkpointJSON{Through: pos.Head, Cols: uint16(cols), Rows: uint16(rows), Len: len(snapshot), Kind: kind}
+		ckpt := &wspb.TerminalCheckpoint{
+			Through: proto.Uint64(pos.Head),
+			Cols:    proto.Uint32(uint32(cols)),
+			Rows:    proto.Uint32(uint32(rows)),
+			Data:    snapshot,
+			Kind:    proto.String(kind),
+		}
 		if ph.recording != nil && !ph.recording.isClosed() {
 			if _, _, endOrdinal, rerr := ph.recording.readOrd(pos.Head, pos.Head, 0, false); rerr == nil {
-				hdr.Ckpt.EventCursor = EncodeEventCursor(pos.Epoch, pos.Head, endOrdinal)
+				ckpt.EventCursor = proto.String(EncodeEventCursor(pos.Epoch, pos.Head, endOrdinal))
 			}
 		}
-		extra = snapshot
+		attach.Checkpoint = ckpt
 	} else if ph.ckpt != nil && ph.ckpt.Through <= pos.Head && ph.ckpt.Through >= pos.Oldest {
 		// A stored checkpoint below the retention floor is unusable: clients
 		// validate checkpoint.through >= oldest and close on the mismatch.
 		// Drop it here so every client sees a consistent head.
-		hdr.Ckpt = &checkpointJSON{
-			Through: ph.ckpt.Through,
-			Cols:    ph.ckpt.Cols,
-			Rows:    ph.ckpt.Rows,
-			Len:     len(ph.ckpt.Ansi),
+		attach.Checkpoint = &wspb.TerminalCheckpoint{
+			Through: proto.Uint64(ph.ckpt.Through),
+			Cols:    proto.Uint32(uint32(ph.ckpt.Cols)),
+			Rows:    proto.Uint32(uint32(ph.ckpt.Rows)),
+			Data:    ph.ckpt.Ansi,
 		}
-		extra = ph.ckpt.Ansi
 	}
-	if hdr.Ckpt == nil && ph.recording != nil && !ph.recording.isClosed() {
-		hdr.ReplayFrom = ph.recording.replayStart()
+	if attach.Checkpoint == nil && ph.recording != nil && !ph.recording.isClosed() {
+		if rf := ph.recording.replayStart(); rf != 0 {
+			attach.ReplayFrom = proto.Uint64(rf)
+		}
 	}
-	frame := frameFramedJSON(0x08, hdr, extra)
-	if frame != nil {
+	if frame, err := wireproto.EncodeAttachFrame(attach); err != nil {
+		log.Printf("[ws] attach pane %s: encode error: %v", paneID, err)
+	} else {
 		client.Send <- frame
 	}
 
-	client.Hot = true
 	ph.clients[client] = true
 	ph.mu.Unlock()
-	log.Printf("[ws] Registered hot-v1 client for pane %s (epoch %d, head %d, live-only)", paneID, pos.Epoch, pos.Head)
+	log.Printf("[ws] Registered protobuf client for pane %s (epoch %d, head %d, live-only)", paneID, pos.Epoch, pos.Head)
 }
 
 // RecordResize notes a backend resize at the pane's current head seq.
@@ -872,45 +858,6 @@ func (h *Hub) StoreCheckpoint(paneID string, up CheckpointUpload) bool {
 	return true
 }
 
-func (h *Hub) AttachWithReplay(paneID string, client *Client) {
-	ph, err := h.GetOrCreatePaneHub(paneID)
-	if err != nil {
-		log.Printf("[ws] attach pane %s: %v", paneID, err)
-		if client.Ws != nil {
-			_ = client.Ws.Close()
-		}
-		return
-	}
-	ph.mu.Lock()
-	defer ph.mu.Unlock()
-
-	// 1. Snapshot and replay history
-	if ph.Ring != nil {
-		snap := ph.Ring.Snapshot()
-		if len(snap) > 0 {
-			const chunkSize = 32 * 1024
-			for i := 0; i < len(snap); i += chunkSize {
-				end := i + chunkSize
-				if end > len(snap) {
-					end = len(snap)
-				}
-				chunk := snap[i:end]
-				frame := make([]byte, len(chunk)+1)
-				frame[0] = 0x01 // PTY Output Stdout
-				copy(frame[1:], chunk)
-				client.Send <- frame
-			}
-		}
-	}
-
-	// 2. Send 0x06 replay-complete frame
-	client.Send <- []byte{0x06}
-
-	// 3. Register for live updates
-	ph.clients[client] = true
-	log.Printf("[ws] Registered client for pane %s (with history replay)", paneID)
-}
-
 func (h *Hub) Unregister(paneID string, client *Client) {
 	h.mu.RLock()
 	ph, exists := h.panes[paneID]
@@ -1065,15 +1012,18 @@ func (h *Hub) exitPaneForOwner(inst *pty.PTYInstance, code int) bool {
 	}
 	delete(h.paneOwners, inst.ID)
 	if ph := h.panes[inst.ID]; ph != nil {
-		payload := []byte(fmt.Sprintf(`{"code":%d}`, code))
-		msg := make([]byte, len(payload)+1)
-		msg[0] = 0x04
-		copy(msg[1:], payload)
-		ph.mu.Lock()
-		for client := range ph.clients {
-			h.deliverPaneFrame(ph, client, msg)
+		// Marshal before locking: a failure skips the broadcast, but the
+		// pane below still closes and the hook still fires.
+		msg, err := wireproto.EncodeExitFrame(int32(code))
+		if err != nil {
+			log.Printf("[ws] pane %s: exit encode error: %v", inst.ID, err)
+		} else {
+			ph.mu.Lock()
+			for client := range ph.clients {
+				h.deliverPaneFrame(ph, client, msg)
+			}
+			ph.mu.Unlock()
 		}
-		ph.mu.Unlock()
 	}
 	h.closePaneLocked(inst.ID)
 	h.mu.Unlock()
@@ -1146,33 +1096,20 @@ func (h *Hub) deliverOrDrop(client *Client, msg []byte) {
 	h.injectDropWarning(client, now)
 }
 
-// injectDropWarning delivers the rate-limited slow-client notice. Hot
-// clients account for every byte by seq, so injecting warning text into
-// the 0x09 stream would corrupt that accounting — they get a 0x02
-// control frame the client renders itself, off the byte stream. Legacy
-// clients keep the historical inline 0x01 text.
+// injectDropWarning delivers the rate-limited slow-client notice as a
+// protobuf drop frame. It renders beside the byte stream, so sequence
+// accounting is untouched.
 func (h *Hub) injectDropWarning(client *Client, now time.Time) {
 	if now.Sub(client.LastDropWarning) <= 5*time.Second {
 		return
 	}
 	client.LastDropWarning = now
-	if client.Hot {
-		payload, _ := json.Marshal(map[string]string{"type": "output-dropped"})
-		warnCtl := append([]byte{0x02}, payload...)
-		if warnCtl != nil {
-			select {
-			case client.Send <- warnCtl:
-			default:
-			}
-		}
+	warn, err := wireproto.EncodeDropNoticeFrame()
+	if err != nil {
 		return
 	}
-	warningStr := "\r\n\x1b[33m[phi: output dropped — slow client]\x1b[0m\r\n"
-	warningMsg := make([]byte, 1+len(warningStr))
-	warningMsg[0] = 0x01
-	copy(warningMsg[1:], warningStr)
 	select {
-	case client.Send <- warningMsg:
+	case client.Send <- warn:
 	default:
 	}
 }
@@ -1250,27 +1187,20 @@ func (h *Hub) Ingest(paneID string, payload []byte) error {
 	}
 	ph.total = ph.recording.head
 
-	// 2. Broadcast to clients. Hot clients receive 0x09 LIVE_OUTPUT frames
-	// with the seq prefix; legacy clients keep the bare 0x01 replay framing
-	// so old cached pages keep working during migration.
-	var legacyMsg, hotMsg []byte
+	// 2. Broadcast to clients as one sequenced protobuf output frame. The
+	// bytes above are already committed: an encode failure must not become
+	// a durability error that retries them, so live clients miss this span
+	// and recover it through the recording on reattach.
+	var outMsg []byte
 	for client := range ph.clients {
-		if client.Hot {
-			if hotMsg == nil {
-				hotMsg = make([]byte, 9+len(payload))
-				hotMsg[0] = 0x09
-				binary.BigEndian.PutUint64(hotMsg[1:9], start)
-				copy(hotMsg[9:], payload)
+		if outMsg == nil {
+			var err error
+			if outMsg, err = wireproto.EncodeOutputFrame(start, payload); err != nil {
+				componentLogger().With("pane", paneID).Error("terminal output encode failed; live clients must reattach", "err", err)
+				return nil
 			}
-			h.deliverPaneFrame(ph, client, hotMsg)
-		} else {
-			if legacyMsg == nil {
-				legacyMsg = make([]byte, len(payload)+1)
-				legacyMsg[0] = 0x01
-				copy(legacyMsg[1:], payload)
-			}
-			h.deliverPaneFrame(ph, client, legacyMsg)
 		}
+		h.deliverPaneFrame(ph, client, outMsg)
 	}
 	return nil
 }
@@ -1286,7 +1216,12 @@ func (h *Hub) deliverPaneFrame(ph *PaneHub, client *Client, msg []byte) {
 	h.deliverOrDrop(client, msg)
 }
 
-func (h *Hub) Broadcast(paneID string, msgType byte, payload []byte) {
+// BroadcastFrame pushes one pre-encoded frame to every client of a pane
+// through the standard pane delivery policy (close-on-full for
+// bridge-managed panes, drop-oldest otherwise). Terminal core paths use
+// it for protobuf frames; the M2 notification cutover moves the
+// remaining byte-prefix producers here.
+func (h *Hub) BroadcastFrame(paneID string, msg []byte) {
 	h.mu.RLock()
 	ph, exists := h.panes[paneID]
 	h.mu.RUnlock()
@@ -1294,10 +1229,6 @@ func (h *Hub) Broadcast(paneID string, msgType byte, payload []byte) {
 	if !exists {
 		return
 	}
-
-	msg := make([]byte, len(payload)+1)
-	msg[0] = msgType
-	copy(msg[1:], payload)
 
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
@@ -1307,12 +1238,12 @@ func (h *Hub) Broadcast(paneID string, msgType byte, payload []byte) {
 	}
 }
 
-// BroadcastBridge pushes one Pi-bridge control frame (0x02) to every
-// client of a pane. Unlike Broadcast, a full client is closed instead
-// of evicting queued frames: the client reconnects and the bridge
-// attach snapshot replays the latest settlement, so a qualifying
-// observed settlement is never silently lost to congestion.
-func (h *Hub) BroadcastBridge(paneID string, payload []byte) {
+// BroadcastBridgeFrame pushes one pre-encoded Pi-bridge frame to every
+// client of a pane. A full client is closed instead of evicting queued
+// frames: the client reconnects and the bridge attach snapshot replays
+// the latest view, so a qualifying observed settlement is never silently
+// lost to congestion.
+func (h *Hub) BroadcastBridgeFrame(paneID string, msg []byte) {
 	h.mu.RLock()
 	ph, exists := h.panes[paneID]
 	h.mu.RUnlock()
@@ -1320,10 +1251,6 @@ func (h *Hub) BroadcastBridge(paneID string, payload []byte) {
 	if !exists {
 		return
 	}
-
-	msg := make([]byte, len(payload)+1)
-	msg[0] = 0x02
-	copy(msg[1:], payload)
 
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
@@ -1333,18 +1260,32 @@ func (h *Hub) BroadcastBridge(paneID string, payload []byte) {
 	}
 }
 
-// BroadcastAll pushes a typed frame to every client of every pane.
-// Best-effort: full client send channels drop the frame rather than
-// block (same contract as BroadcastShutdown, which now delegates here).
-func (h *Hub) BroadcastAll(msgType byte, payload []byte) {
-	msg := make([]byte, 1+len(payload))
-	msg[0] = msgType
-	copy(msg[1:], payload)
+// BroadcastNotification pushes one shared notification to every client
+// of every pane. Each required envelope is encoded once: the synthetic
+// @events group receives the bare Notification, every other group
+// receives the TerminalServerFrame wrapper. Best-effort: full client
+// send channels drop the frame rather than block (same contract as
+// BroadcastShutdown, which now delegates here).
+func (h *Hub) BroadcastNotification(n *wspb.Notification) {
+	eventsMsg, err := wireproto.EncodeNotification(n)
+	if err != nil {
+		componentLogger().Error("notification encode failed", "err", err)
+		return
+	}
+	paneMsg, err := wireproto.EncodeNotificationFrame(n)
+	if err != nil {
+		componentLogger().Error("notification frame encode failed", "err", err)
+		return
+	}
 
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
-	for _, ph := range h.panes {
+	for paneID, ph := range h.panes {
+		msg := paneMsg
+		if paneID == EventsPaneID {
+			msg = eventsMsg
+		}
 		ph.mu.Lock()
 		for client := range ph.clients {
 			select {
@@ -1357,17 +1298,20 @@ func (h *Hub) BroadcastAll(msgType byte, payload []byte) {
 }
 
 // BroadcastShutdown announces server shutdown to every connected client.
-// The payload is the JSON envelope {"reason":"restart"|"update"|"shutdown"}
-// per WS protocol v2 §3.1, so the UI can render a distinct state and arm
-// the post-restart auto-reload poller. Best-effort: if a client's send
-// channel is full the message is dropped silently rather than blocking
-// the shutdown path.
+// The payload is the Notification.shutdown envelope with reason
+// "restart"|"update"|"shutdown" per WS protocol v2 §3.1, so the UI can
+// render a distinct state and arm the post-restart auto-reload poller.
+// Best-effort: if a client's send channel is full the message is dropped
+// silently rather than blocking the shutdown path.
 func (h *Hub) BroadcastShutdown(reason string) {
 	if reason == "" {
 		reason = "shutdown"
 	}
-	payload := []byte(fmt.Sprintf(`{"reason":%q}`, reason))
-	h.BroadcastAll(0x05, payload)
+	h.BroadcastNotification(&wspb.Notification{
+		Kind: &wspb.Notification_Shutdown{Shutdown: &wspb.ServerShutdown{
+			Reason: proto.String(reason),
+		}},
+	})
 }
 
 // PaneStats returns (client count, ring bytes used, ring capacity) for

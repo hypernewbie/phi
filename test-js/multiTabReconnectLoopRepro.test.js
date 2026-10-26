@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TabManager } from '../web/terminal.js';
-import { PTYWebSocket } from '../web/ws.js';
 
 describe('multi-tab reconnect failure loop reproduction', () => {
     beforeEach(() => {
@@ -102,7 +101,7 @@ describe('multi-tab reconnect failure loop reproduction', () => {
         c.updateDocumentTitle = vi.fn();
         c._showReconnectOverlay = vi.fn();
         c.updateDisconnectBanner = vi.fn();
-        c._hotOptions = vi.fn(() => ({ hot: false }));
+        c._hotOptions = vi.fn(() => ({}));
 
         const tab = {
             paneId: 'p1',
@@ -256,7 +255,7 @@ describe('multi-tab reconnect failure loop reproduction', () => {
         c.updateDocumentTitle = vi.fn();
         c._showReconnectOverlay = vi.fn();
         c.updateDisconnectBanner = vi.fn();
-        c._hotOptions = vi.fn(() => ({ hot: false }));
+        c._hotOptions = vi.fn(() => ({}));
 
         const tab = {
             paneId: 'p1',
@@ -303,7 +302,7 @@ describe('multi-tab reconnect failure loop reproduction', () => {
         c.updateDocumentTitle = vi.fn();
         c._showReconnectOverlay = vi.fn();
         c.updateDisconnectBanner = vi.fn();
-        c._hotOptions = vi.fn(() => ({ hot: false }));
+        c._hotOptions = vi.fn(() => ({}));
 
         const msgEl = document.createElement('div');
         msgEl.className = 'reconnect-msg';

@@ -19,17 +19,17 @@ func TestAttachCertifiesRawTailOnlyForPlainCRLFHistory(t *testing.T) {
 			}
 			c := &Client{Send: make(chan []byte, 8)}
 			h.AttachHot("p", c)
-			header, _ := parseAttachHead(t, drainOne(c.Send))
+			header := parseAttach(t, drainOne(c.Send))
 			if prefix != "" {
-				if header.ReplayFrom != 0 {
-					t.Fatalf("unsafe prefix certified at %d", header.ReplayFrom)
+				if header.GetReplayFrom() != 0 {
+					t.Fatalf("unsafe prefix certified at %d", header.GetReplayFrom())
 				}
 				return
 			}
-			if header.ReplayFrom == 0 || header.Head-header.ReplayFrom > 2*1024*1024 {
+			if header.GetReplayFrom() == 0 || header.GetHead()-header.GetReplayFrom() > 2*1024*1024 {
 				t.Fatalf("plain tail must be bounded and certified: %+v", header)
 			}
-			if !bytes.Equal(data[header.ReplayFrom-2:header.ReplayFrom], []byte("\r\n")) {
+			if !bytes.Equal(data[header.GetReplayFrom()-2:header.GetReplayFrom()], []byte("\r\n")) {
 				t.Fatal("raw tail does not begin after a line reset")
 			}
 			if err := h.Close(); err != nil {
@@ -44,8 +44,8 @@ func TestAttachCertifiesRawTailOnlyForPlainCRLFHistory(t *testing.T) {
 			if cold == nil || cold.recording == nil {
 				t.Fatal("restart lost the retained group")
 			}
-			if got := cold.recording.replayStart(); got != header.ReplayFrom {
-				t.Fatalf("restart changed the prefix certificate: %d != %d", got, header.ReplayFrom)
+			if got := cold.recording.replayStart(); got != header.GetReplayFrom() {
+				t.Fatalf("restart changed the prefix certificate: %d != %d", got, header.GetReplayFrom())
 			}
 		})
 	}

@@ -529,7 +529,7 @@ describe('pi bridge ordered views', () => {
         tm._showReconnectOverlay = () => {};
         tm.maybeAutoReconnect = () => {};
         tm.updateDisconnectBanner = () => {};
-        tm._hotOptions = () => ({ hot: false });
+        tm._hotOptions = () => ({});
         tm.activateTabViewport = () => {};
         const tab = addPiTab(tm);
         tab.ws = { close() {} };

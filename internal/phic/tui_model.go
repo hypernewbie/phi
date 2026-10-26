@@ -1106,7 +1106,7 @@ func (m *tuiModel) handlePaneEvent(ev paneEvent) tea.Cmd {
 			if tab.startupInput != "" && tab.actor != nil {
 				input := tab.startupInput
 				tab.startupInput = ""
-				tab.actor.enqueue(EncodeInputFrame([]byte(input)))
+				tab.actor.enqueueInput([]byte(input))
 			}
 		}
 	case paneError:

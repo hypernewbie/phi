@@ -414,17 +414,17 @@ func (m *Manager) promoteSessionPath(inst *Instance) {
 	inst.promotePublicPath(raw)
 }
 
-// subagentStep and subagentTranscript shape the op response: the run's
+// SubagentStep and SubagentTranscript shape the op response: the run's
 // steps with their fork-session transcripts merged in message order.
-type subagentStep struct {
+type SubagentStep struct {
 	Label       string                 `json:"label"`
 	SessionFile string                 `json:"sessionFile"`
 	Messages    []session.PiRPCMessage `json:"messages"`
 }
 
-type subagentTranscript struct {
+type SubagentTranscript struct {
 	RunId string         `json:"runId"`
-	Steps []subagentStep `json:"steps"`
+	Steps []SubagentStep `json:"steps"`
 }
 
 // SubagentTranscript resolves a subagent run to its transcript
@@ -458,7 +458,7 @@ func (m *Manager) SubagentTranscript(runId string) (any, error) {
 		if err := json.Unmarshal(raw, &st); err != nil || st.RunId != runId {
 			continue
 		}
-		steps := make([]subagentStep, 0, len(st.Steps))
+		steps := make([]SubagentStep, 0, len(st.Steps))
 		seen := make(map[string]bool, len(st.Steps))
 		for _, step := range st.Steps {
 			if step.SessionFile == "" || seen[step.SessionFile] {
@@ -470,13 +470,13 @@ func (m *Manager) SubagentTranscript(runId string) (any, error) {
 				// A partially failed workflow still shows its completed steps.
 				continue
 			}
-			steps = append(steps, subagentStep{
+			steps = append(steps, SubagentStep{
 				Label:       step.Label,
 				SessionFile: step.SessionFile,
 				Messages:    messages,
 			})
 		}
-		return subagentTranscript{RunId: st.RunId, Steps: steps}, nil
+		return SubagentTranscript{RunId: st.RunId, Steps: steps}, nil
 	}
 	return nil, fmt.Errorf("subagent run not found: %s", runId)
 }

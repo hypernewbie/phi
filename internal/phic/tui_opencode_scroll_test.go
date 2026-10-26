@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/gorilla/websocket"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
@@ -62,7 +63,7 @@ type paneInputFrame struct {
 func newScrollFixture(t *testing.T) *scrollFixture {
 	t.Helper()
 	fx := &scrollFixture{spawns: make(chan SpawnRequest, 4), inputs: make(chan paneInputFrame, 16)}
-	upgrade := websocket.Upgrader{}
+	upgrade := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 	fx.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/terminals" && r.Method == http.MethodPost {
 			var req SpawnRequest
@@ -82,14 +83,17 @@ func newScrollFixture(t *testing.T) *scrollFixture {
 				return
 			}
 			defer ws.Close()
-			_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7, Head: 0}, nil))
+			_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, 0))
 			for {
 				_, frame, err := ws.ReadMessage()
 				if err != nil {
 					return
 				}
-				if len(frame) > 0 && frame[0] == wireproto.FrameInput {
-					fx.inputs <- paneInputFrame{pane: id, input: string(frame[1:])}
+				decoded, derr := wireproto.DecodeClientFrame(frame)
+				if derr == nil {
+					if in, ok := decoded.GetPayload().(*wspb.TerminalClientFrame_Input); ok {
+						fx.inputs <- paneInputFrame{pane: id, input: string(in.Input)}
+					}
 				}
 			}
 		}

@@ -20,13 +20,16 @@ describe('transport cannot silently strand a terminal', () => {
 
     it.each([
         ['missing head', { epoch: 7, oldest: 0 }],
-        ['negative oldest', { epoch: 7, oldest: -1, head: 1 }],
+        // A hostile -1 arrives as the max-uint64 varint, never a
+        // negative: still outside every safe-integer window.
+        ['negative oldest', { epoch: 7, oldest: 2n ** 64n - 1n, head: 1 }],
         ['oldest after head', { epoch: 7, oldest: 2, head: 1 }],
         [
             'unsafe head integer',
             { epoch: 7, oldest: 0, head: Number.MAX_SAFE_INTEGER + 1 },
         ],
-        ['fractional epoch', { epoch: 1.5, oldest: 0, head: 1 }],
+        // No fractional-epoch row: varints are integers, so that JSON-only
+        // hazard has no protobuf encoding. Undecodable bytes are pinned below.
     ])('does not pin the stream to an invalid frontier: %s', (_name, head) => {
         vi.stubGlobal('WebSocket', ReplayWire);
         const pty = new PTYWebSocket('p', vi.fn());
@@ -35,5 +38,13 @@ describe('transport cannot silently strand a terminal', () => {
             pty.ws.closed,
             'invalid frontiers must not poison sequence accounting permanently',
         ).toBe(true);
+    });
+
+    it('does not pin the stream to undecodable bytes', () => {
+        vi.stubGlobal('WebSocket', ReplayWire);
+        const pty = new PTYWebSocket('p', vi.fn());
+        pty.ws.onmessage({ data: new Uint8Array([0xff, 0xff]).buffer });
+        expect(pty.ws.closed).toBe(true);
+        expect(pty.mode).toBe('unknown');
     });
 });

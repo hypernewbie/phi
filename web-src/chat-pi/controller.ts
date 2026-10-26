@@ -57,15 +57,19 @@ export function mountRpcChat(
     sessionPath?: string,
 ): void {
     destroyRpcChat(paneId);
+    // The transport can refuse the stream while no call is pending; report
+    // that to the mounted chat instead of leaving it looking ready.
+    let reportStreamFailure: ((message: string) => void) | null = null;
     const chat = mountChatPi(
         container,
         cwd,
-        connectControl(),
+        connectControl((message) => reportStreamFailure?.(message)),
         sessionPath,
         (status) => setPiRpcStatus(paneId, status),
         (state) => setPiRpcControls(paneId, state),
         (snapshot) => lastFleetSnapshots.set(paneId, snapshot),
     );
+    reportStreamFailure = (message) => chat.streamFailed(message);
     chats.set(paneId, chat);
 }
 

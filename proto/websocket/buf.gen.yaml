@@ -1,0 +1,17 @@
+version: v2
+inputs:
+  - directory: .
+plugins:
+  - local: protoc-gen-go
+    out: ../../pkg/ws/pb
+    opt: paths=source_relative
+  - local: protoc-gen-ts_proto
+    out: gen-ts
+    opt:
+      - paths=source_relative
+      - outputServices=none
+      - env=browser
+      - importSuffix=.js
+      - oneof=unions-value
+      - forceLong=bigint
+      - outputJsonMethods=false

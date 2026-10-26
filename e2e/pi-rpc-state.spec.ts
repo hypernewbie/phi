@@ -14,7 +14,25 @@ import {
     type Page,
     type TestInfo,
 } from '@playwright/test';
+import {
+    ControlClientFrame,
+    ControlServerFrame,
+} from '../web/proto/control.js';
+import { resultFromWire, stateFromWire } from '../web/chat-pi/control-wire.js';
+import type {
+    ControlClientFrame as ControlClientMessage,
+    ControlServerFrame as ControlServerMessage,
+    MessageFns,
+    StateChangedEvent,
+} from '../web-src/proto/control.js';
 import { startPhi, type PhiServer } from './_server.js';
+
+// The served codec carries no types; bind its runtime decoders to the
+// generated declarations so spec-side decoding is fully checked.
+const ClientCodec: MessageFns<ControlClientMessage> =
+    ControlClientFrame as unknown as MessageFns<ControlClientMessage>;
+const ServerCodec: MessageFns<ControlServerMessage> =
+    ControlServerFrame as unknown as MessageFns<ControlServerMessage>;
 
 const historyText = 'Known synthetic M1 history entry';
 const renamedTitle = 'M1 atomic rename';
@@ -167,20 +185,84 @@ function requireState(state: StateJson | undefined, label: string): StateJson {
     return state;
 }
 
-function websocketText(payload: string | Buffer): string {
-    return typeof payload === 'string' ? payload : payload.toString('utf8');
+type WirePayload = string | Buffer;
+
+function frameBytes(payload: WirePayload): Uint8Array {
+    return new Uint8Array(
+        typeof payload === 'string' ? Buffer.from(payload) : payload,
+    );
 }
 
-function parseFrames(frames: string[]): ControlFrame[] {
-    return frames.flatMap((frame) => {
-        try {
-            const value: unknown = JSON.parse(frame);
-            return value && typeof value === 'object' && !Array.isArray(value)
-                ? [value as ControlFrame]
-                : [];
-        } catch {
-            return [];
+// Typed frames decoded from the generated control codec, projected onto the
+// flat view the assertions below read. The JSON envelope is gone from the
+// wire, so this projection exists only in this spec.
+function clientFrames(frames: WirePayload[]): ControlFrame[] {
+    return frames.flatMap((payload): ControlFrame[] => {
+        const frame = ClientCodec.decode(frameBytes(payload));
+        const body = frame.payload;
+        if (body?.$case !== 'call') return [];
+        const call = body.value;
+        const variant = call.call;
+        if (!variant) return [];
+        return [
+            {
+                t: 'call',
+                id: call.id,
+                op: variant.$case,
+                args: { ...(variant.value as JsonObject) },
+            },
+        ];
+    });
+}
+
+function serverFrames(frames: WirePayload[]): ControlFrame[] {
+    return frames.flatMap((payload): ControlFrame[] => {
+        const frame = ServerCodec.decode(frameBytes(payload));
+        const body = frame.payload;
+        if (body?.$case === 'response') {
+            const response = body.value;
+            const result = response.result;
+            if (!result) return [];
+            if (result.$case === 'error')
+                return [
+                    {
+                        t: 'res',
+                        id: response.id,
+                        ok: false,
+                        error: result.value.reason,
+                    },
+                ];
+            return [
+                {
+                    t: 'res',
+                    id: response.id,
+                    ok: true,
+                    data: resultFromWire(result.$case, response),
+                },
+            ];
         }
+        if (body?.$case === 'event') {
+            const event = body.value;
+            const variant = event.event;
+            if (!variant) return [];
+            const change =
+                variant.$case === 'stateChanged'
+                    ? (variant.value as StateChangedEvent).change
+                    : undefined;
+            return [
+                {
+                    t: 'evt',
+                    sid: event.sid,
+                    seq: Number(event.seq),
+                    evt: variant.$case,
+                    data:
+                        change?.$case === 'state'
+                            ? stateFromWire(change.value)
+                            : variant.value,
+                },
+            ];
+        }
+        return [];
     });
 }
 
@@ -219,9 +301,22 @@ async function callControl(
     args: JsonObject,
 ): Promise<ControlResult> {
     return page.evaluate(
-        ({ socketUrl, opName, sessionSid, callArgs }) =>
-            new Promise<ControlResult>((resolve, reject) => {
-                const socket = new WebSocket(socketUrl);
+        async ({ socketUrl, opName, sessionSid, callArgs }) => {
+            // The page loads the served modules, so this supplemental client
+            // speaks exactly the wire the UI speaks. The specifiers stay in
+            // variables so the compiler does not resolve them as files.
+            const codecUrl: string = '/proto/control.js';
+            const wireUrl: string = '/chat-pi/control-wire.js';
+            const { ControlClientFrame, ControlServerFrame } = await import(
+                codecUrl
+            );
+            const { resultFromWire } = await import(wireUrl);
+            return await new Promise<ControlResult>((resolve, reject) => {
+                const socket = new WebSocket(
+                    socketUrl,
+                    'phi.control.protobuf.v1',
+                );
+                socket.binaryType = 'arraybuffer';
                 const id = `m2-${opName}`;
                 const timer = window.setTimeout(() => {
                     socket.close();
@@ -240,30 +335,57 @@ async function callControl(
                 socket.onerror = () =>
                     finish(new Error(`${opName} WebSocket failed`));
                 socket.onopen = () =>
-                    socket.send(JSON.stringify({ t: 'hello', v: 1 }));
+                    socket.send(
+                        ControlClientFrame.encode({
+                            payload: { $case: 'hello', value: { version: 1 } },
+                        }).finish(),
+                    );
                 socket.onmessage = (event) => {
-                    const frame = JSON.parse(
-                        String(event.data),
-                    ) as ControlFrame;
-                    if (frame.t === 'welcome') {
+                    const frame = ControlServerFrame.decode(
+                        new Uint8Array(event.data as ArrayBuffer),
+                    );
+                    if (frame.payload?.$case === 'welcome') {
                         socket.send(
-                            JSON.stringify({
-                                t: 'call',
-                                id,
-                                op: opName,
-                                sid: sessionSid,
-                                args: callArgs,
-                            }),
+                            ControlClientFrame.encode({
+                                payload: {
+                                    $case: 'call',
+                                    value: {
+                                        id,
+                                        call: {
+                                            $case: opName as never,
+                                            value: {
+                                                ...callArgs,
+                                                sid: sessionSid,
+                                            },
+                                        },
+                                    },
+                                },
+                            }).finish(),
                         );
-                    } else if (frame.t === 'res' && frame.id === id) {
-                        finish(null, {
-                            ok: frame.ok === true,
-                            error: frame.error,
-                            data: frame.data,
-                        });
+                        return;
                     }
+                    if (frame.payload?.$case !== 'response') return;
+                    const response = frame.payload.value;
+                    if (response.id !== id) return;
+                    const result = response.result;
+                    if (!result) {
+                        finish(new Error(`${opName} returned no result`));
+                        return;
+                    }
+                    if (result.$case === 'error') {
+                        finish(null, { ok: false, error: result.value.reason });
+                        return;
+                    }
+                    finish(null, {
+                        ok: true,
+                        data: resultFromWire(
+                            result.$case,
+                            response,
+                        ) as ControlResult['data'],
+                    });
                 };
-            }),
+            });
+        },
         {
             socketUrl: controlSocketUrl(url),
             opName: op,
@@ -430,13 +552,13 @@ async function openPiSession(page: Page, fixture: Fixture): Promise<Locator> {
 }
 
 async function waitForSpawn(
-    sentFrames: string[],
-    receivedFrames: string[],
+    sentFrames: WirePayload[],
+    receivedFrames: WirePayload[],
 ): Promise<SpawnData> {
     await expect
         .poll(() => {
-            const calls = parseFrames(sentFrames);
-            const responses = parseFrames(receivedFrames);
+            const calls = clientFrames(sentFrames);
+            const responses = serverFrames(receivedFrames);
             const spawn = calls.find(
                 (frame) => frame.t === 'call' && frame.op === 'spawn',
             );
@@ -449,10 +571,10 @@ async function waitForSpawn(
                 : '';
         })
         .toBe('spawn response observed');
-    const spawnCall = parseFrames(sentFrames)
+    const spawnCall = clientFrames(sentFrames)
         .filter((frame) => frame.t === 'call' && frame.op === 'spawn')
         .at(-1);
-    const spawnResponse = parseFrames(receivedFrames).find(
+    const spawnResponse = serverFrames(receivedFrames).find(
         (frame) => frame.t === 'res' && frame.id === spawnCall?.id && frame.ok,
     );
     if (!spawnResponse)
@@ -524,8 +646,8 @@ test('M1 real offline Pi rename keeps metadata and the later hydrate coherent', 
     request,
 }, testInfo) => {
     test.setTimeout(180_000);
-    const sentFrames: string[] = [];
-    const receivedFrames: string[] = [];
+    const sentFrames: WirePayload[] = [];
+    const receivedFrames: WirePayload[] = [];
     const browserErrors: JsonObject & {
         consoleErrors: string[];
         pageErrors: string[];
@@ -552,11 +674,9 @@ test('M1 real offline Pi rename keeps metadata and the later hydrate coherent', 
         expect(updatedEnv.ok()).toBe(true);
         page.on('websocket', (socket) => {
             if (new URL(socket.url()).pathname !== '/ws/control') return;
-            socket.on('framesent', (event) =>
-                sentFrames.push(websocketText(event.payload)),
-            );
+            socket.on('framesent', (event) => sentFrames.push(event.payload));
             socket.on('framereceived', (event) =>
-                receivedFrames.push(websocketText(event.payload)),
+                receivedFrames.push(event.payload),
             );
         });
         page.on('console', (message) => {
@@ -626,7 +746,7 @@ test('M1 real offline Pi rename keeps metadata and the later hydrate coherent', 
 
         await expect
             .poll(() => {
-                const calls = parseFrames(sentFrames.slice(sentBeforeRename));
+                const calls = clientFrames(sentFrames.slice(sentBeforeRename));
                 return (
                     calls.find(
                         (frame) =>
@@ -638,7 +758,7 @@ test('M1 real offline Pi rename keeps metadata and the later hydrate coherent', 
             })
             .not.toBe('');
         const renameCall = requireFrame(
-            parseFrames(sentFrames.slice(sentBeforeRename)),
+            clientFrames(sentFrames.slice(sentBeforeRename)),
             (frame) =>
                 frame.t === 'call' &&
                 frame.op === 'setSessionName' &&
@@ -647,7 +767,7 @@ test('M1 real offline Pi rename keeps metadata and the later hydrate coherent', 
         );
         await expect
             .poll(() => {
-                const response = parseFrames(receivedFrames).find(
+                const response = serverFrames(receivedFrames).find(
                     (frame) => frame.t === 'res' && frame.id === renameCall.id,
                 );
                 return response
@@ -658,7 +778,7 @@ test('M1 real offline Pi rename keeps metadata and the later hydrate coherent', 
             })
             .toBe(renamedTitle);
         const renameAck = requireFrame(
-            parseFrames(receivedFrames),
+            serverFrames(receivedFrames),
             (frame) => frame.t === 'res' && frame.id === renameCall.id,
             'setSessionName acknowledgement',
         );
@@ -680,7 +800,7 @@ test('M1 real offline Pi rename keeps metadata and the later hydrate coherent', 
             (frame.data as StateJson | undefined)?.title === renamedTitle;
         await expect
             .poll(() => {
-                const frames = parseFrames(receivedFrames);
+                const frames = serverFrames(receivedFrames);
                 const event = frames.find(hasRenameEvent);
                 const ack = frames.find(
                     (frame) => frame.t === 'res' && frame.id === renameCall.id,
@@ -689,7 +809,7 @@ test('M1 real offline Pi rename keeps metadata and the later hydrate coherent', 
             })
             .toBe('both');
         const renameEvent = requireFrame(
-            parseFrames(receivedFrames),
+            serverFrames(receivedFrames),
             hasRenameEvent,
             'native rename stateChanged',
         );
@@ -765,8 +885,8 @@ test('M2 real offline Pi reset invalidates the old boundary exactly once', async
     request,
 }, testInfo) => {
     test.setTimeout(180_000);
-    const sentFrames: string[] = [];
-    const receivedFrames: string[] = [];
+    const sentFrames: WirePayload[] = [];
+    const receivedFrames: WirePayload[] = [];
     const browserErrors: JsonObject & {
         consoleErrors: string[];
         pageErrors: string[];
@@ -793,11 +913,9 @@ test('M2 real offline Pi reset invalidates the old boundary exactly once', async
         expect(updatedEnv.ok()).toBe(true);
         page.on('websocket', (socket) => {
             if (new URL(socket.url()).pathname !== '/ws/control') return;
-            socket.on('framesent', (event) =>
-                sentFrames.push(websocketText(event.payload)),
-            );
+            socket.on('framesent', (event) => sentFrames.push(event.payload));
             socket.on('framereceived', (event) =>
-                receivedFrames.push(websocketText(event.payload)),
+                receivedFrames.push(event.payload),
             );
         });
         page.on('console', (message) => {
@@ -872,7 +990,7 @@ test('M2 real offline Pi reset invalidates the old boundary exactly once', async
         expect(JSON.stringify(after.messages ?? [])).not.toContain(historyText);
         expect(after.state?.sessionPath ?? '').toBe('');
 
-        const resetEvents = parseFrames(receivedFrames).filter(
+        const resetEvents = serverFrames(receivedFrames).filter(
             (frame) =>
                 frame.t === 'evt' &&
                 frame.sid === sid &&
@@ -912,8 +1030,8 @@ test('M3 real offline Pi UI reset clears the transcript, keeps narrow and keyboa
     request,
 }, testInfo) => {
     test.setTimeout(180_000);
-    const sentFrames: string[] = [];
-    const receivedFrames: string[] = [];
+    const sentFrames: WirePayload[] = [];
+    const receivedFrames: WirePayload[] = [];
     const browserErrors: JsonObject & {
         consoleErrors: string[];
         pageErrors: string[];
@@ -940,11 +1058,9 @@ test('M3 real offline Pi UI reset clears the transcript, keeps narrow and keyboa
         expect(updatedEnv.ok()).toBe(true);
         page.on('websocket', (socket) => {
             if (new URL(socket.url()).pathname !== '/ws/control') return;
-            socket.on('framesent', (event) =>
-                sentFrames.push(websocketText(event.payload)),
-            );
+            socket.on('framesent', (event) => sentFrames.push(event.payload));
             socket.on('framereceived', (event) =>
-                receivedFrames.push(websocketText(event.payload)),
+                receivedFrames.push(event.payload),
             );
         });
         page.on('console', (message) => {
@@ -1005,7 +1121,7 @@ test('M3 real offline Pi UI reset clears the transcript, keeps narrow and keyboa
             fixture.initialTitle,
         );
         expect(
-            parseFrames(sentFrames).filter(
+            clientFrames(sentFrames).filter(
                 (frame) =>
                     frame.t === 'call' &&
                     frame.op === 'setSessionName' &&
@@ -1033,7 +1149,7 @@ test('M3 real offline Pi UI reset clears the transcript, keeps narrow and keyboa
         page.once('dialog', (dialog) => {
             void dialog.accept();
         });
-        const resetCallBefore = parseFrames(sentFrames).filter(
+        const resetCallBefore = clientFrames(sentFrames).filter(
             (frame) => frame.op === 'newSession',
         ).length;
         await resetButton.click();
@@ -1041,7 +1157,7 @@ test('M3 real offline Pi UI reset clears the transcript, keeps narrow and keyboa
         await expect
             .poll(
                 () =>
-                    parseFrames(sentFrames).filter(
+                    clientFrames(sentFrames).filter(
                         (frame) => frame.op === 'newSession',
                     ).length,
             )

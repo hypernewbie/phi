@@ -11,7 +11,6 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
@@ -156,8 +155,6 @@ func (t *TTY) Write(p []byte) (int, error) {
 	}
 	return n, err
 }
-func (t *TTY) EncodeResize(r Resize) []byte { return wireproto.EncodeResizeFrame(r.Cols, r.Rows) }
-
 func (t *TTY) Close() error {
 	t.once.Do(func() {
 		if t.winCh != nil {

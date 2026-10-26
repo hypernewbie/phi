@@ -18,9 +18,12 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/hypernewbie/phi/internal/pibridge"
 	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/ws"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
+	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
 func testBridgeHub() *ws.Hub {
@@ -119,8 +122,8 @@ func TestBridgeMissingArtifactProvisionsUnavailable(t *testing.T) {
 		t.Fatalf("missing artifact snapshot %+v, want unavailable with reason", got)
 	}
 	frame := b.encodeAttach(pty.PTYInstanceSnapshot{ID: "pane-1", Coder: "pi"})
-	if frame == nil || !strings.Contains(string(frame), piBridgeUnavailable) {
-		t.Fatalf("missing artifact attach %q, want unavailable state", frame)
+	if frame == nil || frame.GetState() != piBridgeUnavailable || frame.GetReason() == "" {
+		t.Fatalf("missing artifact attach %+v, want unavailable state with reason", frame)
 	}
 }
 
@@ -202,18 +205,13 @@ func TestBridgeSettlementNotifiesHub(t *testing.T) {
 	}
 	// Hello pushes a fresh bridge view before any settlement.
 	select {
-	case frame := <-client.Send:
-		var state struct {
-			Type         string `json:"type"`
-			State        string `json:"state"`
-			Running      string `json:"running"`
-			Capabilities string `json:"capabilities"`
+	case raw := <-client.Send:
+		server, err := wireproto.DecodeServerFrame(raw)
+		if err != nil || server.GetBridgeState() == nil {
+			t.Fatalf("state decode: %+v err=%v", server, err)
 		}
-		if err := json.Unmarshal(frame[1:], &state); err != nil {
-			t.Fatalf("state decode: %v", err)
-		}
-		if state.Type != "pi-bridge-state" || state.State != "managed" ||
-			state.Running != "false" || state.Capabilities != "pi.lifecycle.v1" {
+		state := server.GetBridgeState()
+		if state.GetState() != "managed" || state.Running == nil || *state.Running != false || !slices.Equal(state.GetCapabilities(), []string{"pi.lifecycle.v1"}) {
 			t.Fatalf("state %+v", state)
 		}
 	case <-time.After(5 * time.Second):
@@ -230,20 +228,12 @@ func TestBridgeSettlementNotifiesHub(t *testing.T) {
 	}
 
 	select {
-	case frame := <-client.Send:
-		if len(frame) == 0 || frame[0] != 0x02 {
-			t.Fatalf("frame type %v, want 0x02", frame)
+	case raw := <-client.Send:
+		server, err := wireproto.DecodeServerFrame(raw)
+		if err != nil || server.GetSettlement() == nil {
+			t.Fatalf("control decode: %+v err=%v", server, err)
 		}
-		var control struct {
-			Type    string `json:"type"`
-			PaneID  string `json:"pane_id"`
-			Run     string `json:"run"`
-			Outcome string `json:"outcome"`
-		}
-		if err := json.Unmarshal(frame[1:], &control); err != nil {
-			t.Fatalf("control decode: %v", err)
-		}
-		if control.Type != "pi-bridge-settled" || control.PaneID != "pane-1" || control.Run != "7" || control.Outcome != "completed" {
+		if control := server.GetSettlement(); control.GetPaneId() != "pane-1" || control.GetRun() != 7 || control.GetOutcome() != "completed" {
 			t.Fatalf("control %+v", control)
 		}
 	case <-time.After(5 * time.Second):
@@ -255,8 +245,8 @@ func TestBridgeSettlementNotifiesHub(t *testing.T) {
 		t.Fatalf("duplicate settled: %v", err)
 	}
 	select {
-	case frame := <-client.Send:
-		t.Fatalf("duplicate settlement notified: %s", frame[1:])
+	case raw := <-client.Send:
+		t.Fatalf("duplicate settlement notified: %x", raw)
 	case <-time.After(200 * time.Millisecond):
 	}
 
@@ -305,15 +295,13 @@ func TestBridgeConnectedTracksStream(t *testing.T) {
 		t.Fatalf("accepted: %v", err)
 	}
 	select {
-	case frame := <-client.Send:
-		var state struct {
-			Type      string `json:"type"`
-			Connected string `json:"connected"`
+	case raw := <-client.Send:
+		server, err := wireproto.DecodeServerFrame(raw)
+		if err != nil || server.GetBridgeState() == nil {
+			t.Fatalf("state decode: %+v err=%v", server, err)
 		}
-		if err := json.Unmarshal(frame[1:], &state); err != nil {
-			t.Fatalf("state decode: %v", err)
-		}
-		if state.Type != "pi-bridge-state" || state.Connected != "true" {
+		state := server.GetBridgeState()
+		if state.GetState() != "managed" || state.Connected == nil || !*state.Connected {
 			t.Fatalf("state %+v, want connected true", state)
 		}
 	case <-time.After(5 * time.Second):
@@ -325,15 +313,13 @@ func TestBridgeConnectedTracksStream(t *testing.T) {
 
 	cancel()
 	select {
-	case frame := <-client.Send:
-		var state struct {
-			Type      string `json:"type"`
-			Connected string `json:"connected"`
+	case raw := <-client.Send:
+		server, err := wireproto.DecodeServerFrame(raw)
+		if err != nil || server.GetBridgeState() == nil {
+			t.Fatalf("down decode: %+v err=%v", server, err)
 		}
-		if err := json.Unmarshal(frame[1:], &state); err != nil {
-			t.Fatalf("down decode: %v", err)
-		}
-		if state.Type != "pi-bridge-state" || state.Connected != "false" {
+		state := server.GetBridgeState()
+		if state.GetState() != "managed" || state.Connected == nil || *state.Connected {
 			t.Fatalf("state %+v, want connected false", state)
 		}
 	case <-time.After(5 * time.Second):
@@ -361,7 +347,7 @@ func TestBridgeStaleSettlementDropped(t *testing.T) {
 	b.onSettled("pane-1", env[piBridgeEnvProcess], 1, 3, pibridgepb.RunOutcome_RUN_OUTCOME_COMPLETED)
 	select {
 	case frame := <-client.Send:
-		t.Fatalf("stale settlement notified: %s", frame[1:])
+		t.Fatalf("stale settlement notified: %x", frame)
 	case <-time.After(200 * time.Millisecond):
 	}
 }
@@ -375,28 +361,20 @@ func TestBridgeAttachEncoding(t *testing.T) {
 	defer b.Stop()
 
 	if got := b.encodeAttach(pty.PTYInstanceSnapshot{ID: "pane-1", Coder: "bash"}); got != nil {
-		t.Fatalf("non-pi attach encoded: %s", got)
+		t.Fatalf("non-pi attach encoded: %+v", got)
 	}
 	if got := b.encodeAttach(pty.PTYInstanceSnapshot{ID: "unknown", Coder: "pi"}); got != nil {
-		t.Fatalf("unknown pane attach encoded: %s", got)
+		t.Fatalf("unknown pane attach encoded: %+v", got)
 	}
 	env, _, _ := b.Provision("pane-1", true)
-	payload := b.encodeAttach(pty.PTYInstanceSnapshot{ID: "pane-1", Coder: "pi"})
-	var view map[string]string
-	if err := json.Unmarshal(payload, &view); err != nil {
-		t.Fatalf("attach decode: %v", err)
-	}
-	if view["type"] != "pi-bridge-state" || view["state"] != piBridgeManaged {
-		t.Fatalf("attach %+v", view)
+	state := b.encodeAttach(pty.PTYInstanceSnapshot{ID: "pane-1", Coder: "pi"})
+	if state == nil || state.GetState() != piBridgeManaged {
+		t.Fatalf("attach %+v", state)
 	}
 	b.onSettled("pane-1", env[piBridgeEnvProcess], 1, 11, pibridgepb.RunOutcome_RUN_OUTCOME_ABORTED)
-	payload = b.encodeAttach(pty.PTYInstanceSnapshot{ID: "pane-1", Coder: "pi"})
-	view = nil
-	if err := json.Unmarshal(payload, &view); err != nil {
-		t.Fatalf("attach decode: %v", err)
-	}
-	if view["last_run"] != "11" {
-		t.Fatalf("attach catch-up %+v", view)
+	state = b.encodeAttach(pty.PTYInstanceSnapshot{ID: "pane-1", Coder: "pi"})
+	if state.GetLastRun() != 11 {
+		t.Fatalf("attach catch-up %+v", state)
 	}
 }
 
@@ -825,7 +803,9 @@ func TestBridgeThinkingLevelRetainedInBaselinesAndClearedOnNewGeneration(t *test
 	b.Complete(&pty.PTYInstance{ID: "pane-thinking-state"})
 	floor, _ := b.server.PublicationRevision(env[piBridgeEnvProcess])
 	caps := []string{"pi.lifecycle.v1", "pi.thinking.v1"}
-	b.onState("pane-thinking-state", env[piBridgeEnvProcess], 1, floor+1, false, true, "p/m", "high", caps, nil, nil)
+	usage := &pibridge.ContextUsage{Tokens: 0, Window: 200000, Percent: 0, HasTokens: true, HasWindow: true, HasPercent: true}
+	readiness := &pibridge.Readiness{Idle: false, HasPendingMessages: true}
+	b.onState("pane-thinking-state", env[piBridgeEnvProcess], 1, floor+1, false, true, "p/m", "high", caps, usage, readiness)
 	baseline := b.PaneSnapshot("pane-thinking-state")
 	if baseline.ThinkingLevel != "high" {
 		t.Fatalf("HTTP baseline thinking level %q, want high", baseline.ThinkingLevel)
@@ -838,12 +818,15 @@ func TestBridgeThinkingLevelRetainedInBaselinesAndClearedOnNewGeneration(t *test
 	if err := json.Unmarshal(baselineJSON, &baselineFields); err != nil || baselineFields["thinking_level"] != "high" {
 		t.Fatalf("HTTP baseline JSON %s err=%v", baselineJSON, err)
 	}
-	var frame map[string]string
-	if err := json.Unmarshal(encodeBridgeState("pane-thinking-state", b.panes["pane-thinking-state"].snapshot()), &frame); err != nil {
-		t.Fatalf("WS frame: %v", err)
+	frame := encodeBridgeState("pane-thinking-state", b.panes["pane-thinking-state"].snapshot())
+	if frame.GetThinkingLevel() != "high" {
+		t.Fatalf("WS thinking level %q, want high", frame.GetThinkingLevel())
 	}
-	if frame["thinking_level"] != "high" {
-		t.Fatalf("WS thinking level %q, want high", frame["thinking_level"])
+	if frame.ContextTokens == nil || frame.GetContextTokens() != 0 || frame.ContextWindow == nil || frame.GetContextWindow() != 200000 || frame.ContextPercent == nil || frame.GetContextPercent() != 0 {
+		t.Fatalf("WS context telemetry lost explicit values: %+v", frame)
+	}
+	if frame.CompactIdle == nil || frame.GetCompactIdle() || frame.CompactQueued == nil || !frame.GetCompactQueued() {
+		t.Fatalf("WS readiness lost explicit booleans: %+v", frame)
 	}
 
 	b.onState("pane-thinking-state", env[piBridgeEnvProcess], 2, floor+2, false, false, "", "", caps, nil, nil)
@@ -858,11 +841,12 @@ func TestBridgeThinkingLevelRetainedInBaselinesAndClearedOnNewGeneration(t *test
 	if err := json.Unmarshal(baselineJSON, &baselineFields); err != nil || baselineFields["thinking_level"] != "" {
 		t.Fatalf("cleared HTTP baseline JSON %s err=%v", baselineJSON, err)
 	}
-	if err := json.Unmarshal(encodeBridgeState("pane-thinking-state", b.panes["pane-thinking-state"].snapshot()), &frame); err != nil {
-		t.Fatalf("new-generation WS frame: %v", err)
+	frame = encodeBridgeState("pane-thinking-state", b.panes["pane-thinking-state"].snapshot())
+	if frame.ThinkingLevel == nil || frame.GetThinkingLevel() != "" {
+		t.Fatalf("new-generation WS thinking level %q present=%v, want explicit unknown", frame.GetThinkingLevel(), frame.ThinkingLevel != nil)
 	}
-	if level, ok := frame["thinking_level"]; !ok || level != "" {
-		t.Fatalf("new-generation WS thinking level %q present=%v, want explicit unknown", level, ok)
+	if frame.ContextTokens != nil || frame.CompactIdle != nil {
+		t.Fatalf("unknown new-generation telemetry must remain absent: %+v", frame)
 	}
 }
 
@@ -1417,27 +1401,24 @@ func TestHandlePiBridgeSetModel(t *testing.T) {
 	}
 }
 
-func drainBridgeFrames(t *testing.T, client *ws.Client, want int) []map[string]string {
+func drainBridgeFrames(t *testing.T, client *ws.Client, want int) []*wspb.TerminalBridgeState {
 	t.Helper()
-	frames := make([]map[string]string, 0, want)
+	frames := make([]*wspb.TerminalBridgeState, 0, want)
 	for len(frames) < want {
 		select {
-		case frame := <-client.Send:
-			if len(frame) == 0 || frame[0] != 0x02 {
-				t.Fatalf("frame type %v, want 0x02", frame)
+		case raw := <-client.Send:
+			server, err := wireproto.DecodeServerFrame(raw)
+			if err != nil || server.GetBridgeState() == nil {
+				t.Fatalf("frame = %+v err=%v, want a bridge state", server, err)
 			}
-			var decoded map[string]string
-			if err := json.Unmarshal(frame[1:], &decoded); err != nil {
-				t.Fatalf("frame decode: %v", err)
-			}
-			frames = append(frames, decoded)
+			frames = append(frames, server.GetBridgeState())
 		case <-time.After(5 * time.Second):
 			t.Fatalf("only %d of %d frames", len(frames), want)
 		}
 	}
 	select {
-	case frame := <-client.Send:
-		t.Fatalf("extra frame: %s", frame[1:])
+	case raw := <-client.Send:
+		t.Fatalf("extra frame: %x", raw)
 	case <-time.After(200 * time.Millisecond):
 	}
 	return frames
@@ -1472,7 +1453,7 @@ func TestBridgeOnStateFencesPublicationOrder(t *testing.T) {
 		t.Fatalf("snapshot %+v, want modelB at rev %s", got, wantRev)
 	}
 	frames := drainBridgeFrames(t, client, 1)
-	if frames[0]["model"] != "provB/modelB" || frames[0]["telemetry_revision"] != wantRev {
+	if frames[0].GetModel() != "provB/modelB" || strconv.FormatUint(frames[0].GetTelemetryRevision(), 10) != wantRev {
 		t.Fatalf("frame %+v, want modelB at rev %s", frames[0], wantRev)
 	}
 }
@@ -1492,21 +1473,17 @@ func TestBridgeSnapshotAndAttachShareOneRevision(t *testing.T) {
 	b.onState("pane-1", proc, 1, floor+1, true, true, "provA/modelA", "", []string{"pi.lifecycle.v1"}, nil, nil)
 
 	snap := b.PaneSnapshot("pane-1")
-	raw := b.encodeAttach(pty.PTYInstanceSnapshot{ID: "pane-1", Coder: "pi"})
-	if raw == nil {
+	attach := b.encodeAttach(pty.PTYInstanceSnapshot{ID: "pane-1", Coder: "pi"})
+	if attach == nil {
 		t.Fatal("no attach frame")
 	}
-	var attach map[string]string
-	if err := json.Unmarshal(raw, &attach); err != nil {
-		t.Fatalf("attach decode: %v", err)
-	}
-	if snap.Model != "provA/modelA" || attach["model"] != snap.Model {
+	if snap.Model != "provA/modelA" || attach.GetModel() != snap.Model {
 		t.Fatalf("snapshot %+v vs attach %+v, want one model", snap, attach)
 	}
-	if snap.TelemetryRevision == "" || attach["telemetry_revision"] != snap.TelemetryRevision {
+	if snap.TelemetryRevision == "" || strconv.FormatUint(attach.GetTelemetryRevision(), 10) != snap.TelemetryRevision {
 		t.Fatalf("snapshot %+v vs attach %+v, want one revision", snap, attach)
 	}
-	if snap.Running == nil || !*snap.Running || attach["running"] != "true" {
+	if snap.Running == nil || !*snap.Running || attach.Running == nil || !*attach.Running {
 		t.Fatalf("snapshot %+v vs attach %+v, want running", snap, attach)
 	}
 }

@@ -241,7 +241,7 @@ describe('_onLiveGap', () => {
 
 describe('output-dropped control', () => {
     it('renders a local banner without touching seq accounting', () => {
-        // The server sends this 0x02 off the byte stream precisely so a
+        // The server sends this drop notice off the byte stream precisely so a
         // slow-client warning never perturbs liveSeq / watermarks.
         const c = Object.create(TabManager.prototype);
         c.writeToTerminal = vi.fn();

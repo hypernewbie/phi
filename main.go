@@ -34,6 +34,8 @@ import (
 	"github.com/hypernewbie/phi/pkg/system"
 	"github.com/hypernewbie/phi/pkg/update"
 	"github.com/hypernewbie/phi/pkg/ws"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -224,12 +226,16 @@ func main() {
 	piTitleService.Start()
 
 	// Markdown watcher: fswatch over the resolved markdownDirs of every
-	// live pane cwd. Fires 0x07 md-changed so open UIs can silently
-	// refresh the md file list. Watch set follows panes, not browsers:
-	// a worktree nobody has a pane in is not covered (accepted edge).
+	// live pane cwd. Fires a markdown-changed Notification so open UIs
+	// can silently refresh the md file list. Watch set follows panes, not
+	// browsers: a worktree nobody has a pane in is not covered (accepted
+	// edge).
 	mdWatcher, err = fswatch.New(markdownWatchDirs, func(dir string) {
-		payload, _ := json.Marshal(map[string]string{"dir": dir})
-		wsHub.BroadcastAll(0x07, payload) // 0x07: md-changed
+		wsHub.BroadcastNotification(&wspb.Notification{
+			Kind: &wspb.Notification_MarkdownChanged{MarkdownChanged: &wspb.MarkdownChanged{
+				Dir: proto.String(dir),
+			}},
+		})
 	})
 	if err != nil {
 		slog.Warn("fswatch unavailable; markdown panel won't live-update", "err", err)

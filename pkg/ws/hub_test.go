@@ -6,6 +6,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
+	"github.com/hypernewbie/phi/pkg/ws/wireproto"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestHub_RegisterAndUnregister(t *testing.T) {
@@ -90,7 +94,7 @@ func TestHubCloseAllClientsPreservesPaneState(t *testing.T) {
 	}
 }
 
-func TestHub_Broadcast(t *testing.T) {
+func TestHub_BroadcastFrame(t *testing.T) {
 	h := NewHub(0)
 
 	client := &Client{
@@ -99,49 +103,72 @@ func TestHub_Broadcast(t *testing.T) {
 	paneID := "pane-test-2"
 	h.Register(paneID, client)
 
-	payload := []byte("hello world")
-	msgType := byte(1)
-	h.Broadcast(paneID, msgType, payload)
+	frame, err := wireproto.EncodeTitleFrame(paneID, "native-id", "Native title", 7)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	h.BroadcastFrame(paneID, frame)
 
 	select {
 	case msg := <-client.Send:
-		if len(msg) != len(payload)+1 {
-			t.Fatalf("Expected msg length %d, got %d", len(payload)+1, len(msg))
+		if !bytes.Equal(msg, frame) {
+			t.Fatalf("Expected the pre-encoded frame %d bytes, got %d", len(frame), len(msg))
 		}
-		if msg[0] != msgType {
-			t.Errorf("Expected message type %d, got %d", msgType, msg[0])
+		decoded, err := wireproto.DecodeServerFrame(msg)
+		if err != nil {
+			t.Fatalf("decode: %v", err)
 		}
-		if !bytes.Equal(msg[1:], payload) {
-			t.Errorf("Expected payload %q, got %q", payload, msg[1:])
+		if title := decoded.GetTitle(); title == nil || title.GetTitle() != "Native title" || title.GetRevision() != 7 {
+			t.Fatalf("title = %+v", title)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("Timeout waiting for broadcast message")
 	}
 }
 
-func TestBroadcastAll(t *testing.T) {
+func TestBroadcastNotification(t *testing.T) {
 	h := NewHub(0)
 
 	client1 := &Client{Send: make(chan []byte, 10)}
 	client2 := &Client{Send: make(chan []byte, 10)}
+	events := &Client{Send: make(chan []byte, 10)}
 	h.Register("pane-a", client1)
 	h.Register("pane-b", client2)
+	h.Register(EventsPaneID, events)
 
-	payload := []byte(`{"dir":"/x"}`)
-	h.BroadcastAll(0x07, payload)
+	h.BroadcastNotification(&wspb.Notification{
+		Kind: &wspb.Notification_MarkdownChanged{MarkdownChanged: &wspb.MarkdownChanged{
+			Dir: proto.String("/x"),
+		}},
+	})
 
+	// Pane clients receive the TerminalServerFrame wrapper.
 	for _, c := range []*Client{client1, client2} {
 		select {
 		case msg := <-c.Send:
-			if msg[0] != 0x07 {
-				t.Errorf("expected first byte 0x07, got %#x", msg[0])
+			frame, err := wireproto.DecodeServerFrame(msg)
+			if err != nil {
+				t.Fatalf("decode: %v", err)
 			}
-			if !bytes.Equal(msg[1:], payload) {
-				t.Errorf("expected payload %q, got %q", payload, msg[1:])
+			if md := frame.GetNotification().GetMarkdownChanged(); md == nil || md.GetDir() != "/x" {
+				t.Fatalf("wrapped notification = %+v", frame.GetNotification())
 			}
 		case <-time.After(100 * time.Millisecond):
-			t.Fatal("Timeout waiting for BroadcastAll message")
+			t.Fatal("Timeout waiting for BroadcastNotification message")
 		}
+	}
+	// The events group receives the bare Notification.
+	select {
+	case msg := <-events.Send:
+		notif, err := wireproto.DecodeNotification(msg)
+		if err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if md := notif.GetMarkdownChanged(); md == nil || md.GetDir() != "/x" {
+			t.Fatalf("notification = %+v", notif)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Timeout waiting for BroadcastNotification message")
 	}
 }
 
@@ -152,6 +179,10 @@ func TestHub_ConcurrentAccess(t *testing.T) {
 	var wg sync.WaitGroup
 	workers := 20
 	clientsPerWorker := 10
+	hello, err := wireproto.EncodeOutputFrame(0, []byte("concurrent hello"))
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
 
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
@@ -167,7 +198,7 @@ func TestHub_ConcurrentAccess(t *testing.T) {
 			}
 
 			// Broadcast messages
-			h.Broadcast(paneID, 1, []byte("concurrent hello"))
+			h.BroadcastFrame(paneID, hello)
 
 			// Unregister clients
 			for _, client := range clients {
@@ -201,9 +232,16 @@ func TestHub_BroadcastOverflow(t *testing.T) {
 	h.Register(paneID, client)
 
 	// Send 3 messages. The channel capacity is 2, so the 3rd will trigger overflow/dropping oldest.
-	h.Broadcast(paneID, 1, []byte("msg1"))
-	h.Broadcast(paneID, 1, []byte("msg2"))
-	h.Broadcast(paneID, 1, []byte("msg3"))
+	msg := func(data string) []byte {
+		frame, err := wireproto.EncodeOutputFrame(0, []byte(data))
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+		return frame
+	}
+	h.BroadcastFrame(paneID, msg("msg1"))
+	h.BroadcastFrame(paneID, msg("msg2"))
+	h.BroadcastFrame(paneID, msg("msg3"))
 
 	// Since msg1 is the oldest, it should have been dropped, and the channel should contain msg2 and msg3.
 	if len(client.Send) != 2 {

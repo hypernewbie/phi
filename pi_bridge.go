@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -18,6 +17,9 @@ import (
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/system"
 	"github.com/hypernewbie/phi/pkg/ws"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
+	"github.com/hypernewbie/phi/pkg/ws/wireproto"
+	"google.golang.org/protobuf/proto"
 )
 
 // Child environment keys for Pi bridge provisioning. The extension reads
@@ -680,8 +682,8 @@ func (b *Bridge) onState(paneID, processID string, generation, pubRev uint64, ru
 	if !ok {
 		return
 	}
-	if payload := encodeBridgeState(paneID, view); payload != nil {
-		b.hub.BroadcastBridge(paneID, payload)
+	if frame, err := wireproto.EncodeBridgeStateFrame(encodeBridgeState(paneID, view)); err == nil {
+		b.hub.BroadcastBridgeFrame(paneID, frame)
 	}
 }
 
@@ -708,8 +710,8 @@ func (b *Bridge) onPeerDown(paneID, processID string, generation uint64) {
 	if !ok {
 		return
 	}
-	if payload := encodeBridgeState(paneID, view); payload != nil {
-		b.hub.BroadcastBridge(paneID, payload)
+	if frame, err := wireproto.EncodeBridgeStateFrame(encodeBridgeState(paneID, view)); err == nil {
+		b.hub.BroadcastBridgeFrame(paneID, frame)
 	}
 }
 
@@ -782,54 +784,53 @@ func (p *bridgePane) snapshot() bridgeStateView {
 }
 
 // encodeBridgeState renders the managed bridge view from a copy.
-func encodeBridgeState(paneID string, view bridgeStateView) []byte {
-	frame := map[string]string{"type": "pi-bridge-state", "pane_id": paneID, "state": piBridgeManaged, "thinking_level": view.thinkingLevel}
+func encodeBridgeState(paneID string, view bridgeStateView) *wspb.TerminalBridgeState {
+	state := &wspb.TerminalBridgeState{
+		PaneId:        proto.String(paneID),
+		State:         proto.String(piBridgeManaged),
+		ThinkingLevel: proto.String(view.thinkingLevel),
+	}
 	if view.hasGen {
-		frame["generation"] = strconv.FormatUint(view.gen, 10)
+		state.Generation = proto.Uint64(view.gen)
 	}
 	if view.pubRev != 0 {
-		frame["telemetry_revision"] = strconv.FormatUint(view.pubRev, 10)
+		state.TelemetryRevision = proto.Uint64(view.pubRev)
 	}
 	if view.hasRun {
-		frame["last_run"] = strconv.FormatUint(view.lastRun, 10)
-		frame["last_outcome"] = view.lastOutcome
+		state.LastRun = proto.Uint64(view.lastRun)
+		state.LastOutcome = proto.String(view.lastOutcome)
 	}
 	if view.running != nil {
-		frame["running"] = strconv.FormatBool(*view.running)
+		state.Running = proto.Bool(*view.running)
 	}
 	if view.connected != nil {
-		frame["connected"] = strconv.FormatBool(*view.connected)
+		state.Connected = proto.Bool(*view.connected)
 	}
 	if view.model != "" {
-		frame["model"] = view.model
+		state.Model = proto.String(view.model)
 	}
 	if len(view.caps) > 0 {
-		frame["capabilities"] = strings.Join(view.caps, ",")
+		state.Capabilities = append([]string(nil), view.caps...)
 	}
-	// Telemetry stays string-valued like every control frame.
-	// Absent fields mean unknown, never zero or false.
+	// Absent telemetry fields remain unknown rather than becoming zero/false.
 	if u := view.usage; u != nil {
 		if u.HasTokens {
-			frame["context_tokens"] = strconv.FormatFloat(u.Tokens, 'f', -1, 64)
+			state.ContextTokens = proto.Float64(u.Tokens)
 		}
 		if u.HasWindow {
-			frame["context_window"] = strconv.FormatFloat(u.Window, 'f', -1, 64)
+			state.ContextWindow = proto.Float64(u.Window)
 		}
 		if u.HasPercent {
-			frame["context_percent"] = strconv.FormatFloat(u.Percent, 'f', -1, 64)
+			state.ContextPercent = proto.Float64(u.Percent)
 		}
 	}
 	if r := view.readiness; r != nil {
-		frame["compact_idle"] = strconv.FormatBool(r.Idle)
-		frame["compact_queued"] = strconv.FormatBool(r.HasPendingMessages)
-		frame["compact_active"] = strconv.FormatBool(r.CompactionActive)
-		frame["compact_pending"] = strconv.FormatBool(r.BridgePending)
+		state.CompactIdle = proto.Bool(r.Idle)
+		state.CompactQueued = proto.Bool(r.HasPendingMessages)
+		state.CompactActive = proto.Bool(r.CompactionActive)
+		state.CompactPending = proto.Bool(r.BridgePending)
 	}
-	payload, err := json.Marshal(frame)
-	if err != nil {
-		return nil
-	}
-	return payload
+	return state
 }
 
 // onSettled retains the latest settlement per pane and notifies
@@ -857,17 +858,9 @@ func (b *Bridge) onSettled(paneID, processID string, generation, runID uint64, o
 	if !ok {
 		return
 	}
-	payload, err := json.Marshal(map[string]string{
-		"type":       "pi-bridge-settled",
-		"pane_id":    paneID,
-		"generation": strconv.FormatUint(generation, 10),
-		"run":        strconv.FormatUint(runID, 10),
-		"outcome":    outcomeName(outcome),
-	})
-	if err != nil {
-		return
+	if frame, err := wireproto.EncodeSettlementFrame(paneID, generation, runID, outcomeName(outcome)); err == nil {
+		b.hub.BroadcastBridgeFrame(paneID, frame)
 	}
-	b.hub.BroadcastBridge(paneID, payload)
 }
 
 func outcomeName(outcome pibridgepb.RunOutcome) string {
@@ -886,7 +879,7 @@ func outcomeName(outcome pibridgepb.RunOutcome) string {
 // encodeAttach renders the bridge attach snapshot for pi panes with a
 // bridge record. Other panes get no frame. The retained last run lets
 // a reconnecting browser catch up on a settlement it never saw.
-func (b *Bridge) encodeAttach(snapshot pty.PTYInstanceSnapshot) []byte {
+func (b *Bridge) encodeAttach(snapshot pty.PTYInstanceSnapshot) *wspb.TerminalBridgeState {
 	if b == nil || !piBridgeForCoder(snapshot.Coder) {
 		return nil
 	}
@@ -906,17 +899,15 @@ func (b *Bridge) encodeAttach(snapshot pty.PTYInstanceSnapshot) []byte {
 	if !ok {
 		return nil
 	}
-	frame := map[string]string{"type": "pi-bridge-state", "pane_id": snapshot.ID}
 	if !managed {
-		frame["state"] = piBridgeUnavailable
+		state := &wspb.TerminalBridgeState{
+			PaneId: proto.String(snapshot.ID),
+			State:  proto.String(piBridgeUnavailable),
+		}
 		if reason != "" {
-			frame["reason"] = reason
+			state.Reason = proto.String(reason)
 		}
-		payload, err := json.Marshal(frame)
-		if err != nil {
-			return nil
-		}
-		return payload
+		return state
 	}
 	return encodeBridgeState(snapshot.ID, view)
 }

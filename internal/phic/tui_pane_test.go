@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/hypernewbie/phi/internal/termemu"
 	"github.com/hypernewbie/phi/internal/termemu/stub"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
@@ -72,7 +73,7 @@ func waitPaneEvent(t *testing.T, events <-chan paneEvent, kind paneEventKind) pa
 // lifecycle: attach head, live output, encoded input, and exit drain.
 func TestPaneActorAttachLiveInputExit(t *testing.T) {
 	source := []byte("hello pane\n")
-	up := websocket.Upgrader{}
+	up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 	inputs := make(chan string, 16)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/terminals/p/recording" {
@@ -91,20 +92,25 @@ func TestPaneActorAttachLiveInputExit(t *testing.T) {
 			return
 		}
 		defer ws.Close()
-		_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7, Head: 0}, nil))
-		_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeLiveOutputFrame(0, source))
+		_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, 0))
+		_ = ws.WriteMessage(websocket.BinaryMessage, testOutput(t, 0, source))
 		for {
 			_, msg, err := ws.ReadMessage()
 			if err != nil {
 				return
 			}
-			if len(msg) == 0 || msg[0] != wireproto.FrameInput {
+			frame, err := wireproto.DecodeClientFrame(msg)
+			if err != nil {
 				continue
 			}
-			payload := string(msg[1:])
+			in, ok := frame.GetPayload().(*wspb.TerminalClientFrame_Input)
+			if !ok {
+				continue
+			}
+			payload := string(in.Input)
 			inputs <- payload
 			if payload == "a" {
-				_ = ws.WriteMessage(websocket.BinaryMessage, []byte{wireproto.FrameExit, 0})
+				_ = ws.WriteMessage(websocket.BinaryMessage, testExit(t, 0))
 			}
 		}
 	}))
@@ -148,7 +154,7 @@ func TestPaneActorAttachLiveInputExit(t *testing.T) {
 // TestPaneActorEncodesInputOnOwnerGoroutine scripts the stub encoder so the
 // exact bytes prove encoding happens inside the actor, not the UI.
 func TestPaneActorEncodesInputOnOwnerGoroutine(t *testing.T) {
-	up := websocket.Upgrader{}
+	up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 	var mu sync.Mutex
 	var frames [][]byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -161,7 +167,7 @@ func TestPaneActorEncodesInputOnOwnerGoroutine(t *testing.T) {
 			return
 		}
 		defer ws.Close()
-		_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7, Head: 0}, nil))
+		_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, 0))
 		for {
 			_, msg, err := ws.ReadMessage()
 			if err != nil {
@@ -213,12 +219,13 @@ func TestPaneActorEncodesInputOnOwnerGoroutine(t *testing.T) {
 		defer mu.Unlock()
 		var key, paste, mouse, resize bool
 		for _, f := range frames {
-			if len(f) == 0 {
+			frame, err := wireproto.DecodeClientFrame(f)
+			if err != nil {
 				continue
 			}
-			payload := string(f[1:])
-			switch f[0] {
-			case wireproto.FrameInput:
+			switch p := frame.GetPayload().(type) {
+			case *wspb.TerminalClientFrame_Input:
+				payload := string(p.Input)
 				switch {
 				case payload == "Kq":
 					key = true
@@ -227,8 +234,8 @@ func TestPaneActorEncodesInputOnOwnerGoroutine(t *testing.T) {
 				case len(payload) == 4 && payload[0] == byte(termemu.MousePress) && payload[1] == byte(termemu.MouseLeft) && payload[2] == 3 && payload[3] == 2:
 					mouse = true
 				}
-			case wireproto.FrameResize:
-				resize = len(f) >= 5
+			case *wspb.TerminalClientFrame_Resize:
+				resize = p.Resize.GetCols() == 60 && p.Resize.GetRows() == 20
 			}
 		}
 		return key && paste && mouse && resize
@@ -238,7 +245,7 @@ func TestPaneActorEncodesInputOnOwnerGoroutine(t *testing.T) {
 // TestPaneActorMouseOwnershipCache proves the UI-visible mouse flag comes from
 // a cached owner snapshot and never queries the emulator off-owner.
 func TestPaneActorMouseOwnershipCache(t *testing.T) {
-	up := websocket.Upgrader{}
+	up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/ws/pane/p" {
 			http.NotFound(w, r)
@@ -249,8 +256,8 @@ func TestPaneActorMouseOwnershipCache(t *testing.T) {
 			return
 		}
 		defer ws.Close()
-		_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7, Head: 0}, nil))
-		_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeLiveOutputFrame(0, []byte("m")))
+		_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, 0))
+		_ = ws.WriteMessage(websocket.BinaryMessage, testOutput(t, 0, []byte("m")))
 		for {
 			if _, _, err := ws.ReadMessage(); err != nil {
 				return

@@ -2136,22 +2136,6 @@ export class TabManager {
     // independent of session age.
     _paneData(tabInfo, data) {
         const pty = tabInfo.ws;
-        if (pty && pty.mode === 'legacy') {
-            // Legacy server: open immediately if the hot bootstrap never
-            // happened — replayed bytes parse fine pre-open, but the tests'
-            // DOM and any legacy-visible behavior must not wait 300ms.
-            if (!tabInfo._termOpened) this._openTermAndViewport(tabInfo);
-            // Legacy server: keep the reset-on-first-replayed-byte dance so
-            // reconnects don't double the scrollback.
-            if (tabInfo.awaitingReplay) {
-                tabInfo.awaitingReplay = false;
-                try {
-                    tabInfo.term.reset();
-                } catch (e) {
-                    console.error('[term] reset on replay failed:', e);
-                }
-            }
-        }
         // While the user reads a bounded older window, bytes continue to be
         // retained and sequenced by the backend but do not overwrite that view.
         // Jumping back to latest restores the saved live checkpoint and replays

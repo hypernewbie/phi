@@ -11,13 +11,14 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gorilla/websocket"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
 func TestBtopMatchesWebsiteFreshShellThenInputOnce(t *testing.T) {
 	requests := make(chan SpawnRequest, 2)
 	inputs := make(chan string, 4)
-	upgrade := websocket.Upgrader{}
+	upgrade := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/terminals":
@@ -31,14 +32,17 @@ func TestBtopMatchesWebsiteFreshShellThenInputOnce(t *testing.T) {
 				return
 			}
 			defer ws.Close()
-			ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7, Head: 0}, nil))
+			ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, 0))
 			for {
 				_, frame, err := ws.ReadMessage()
 				if err != nil {
 					return
 				}
-				if len(frame) > 0 && frame[0] == 1 {
-					inputs <- string(frame[1:])
+				decoded, derr := wireproto.DecodeClientFrame(frame)
+				if derr == nil {
+					if in, ok := decoded.GetPayload().(*wspb.TerminalClientFrame_Input); ok {
+						inputs <- string(in.Input)
+					}
 				}
 			}
 		default:

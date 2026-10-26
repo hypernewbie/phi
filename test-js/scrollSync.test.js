@@ -2,6 +2,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { setupDomHarness, stubWebSocket } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
+import { TerminalClientFrame } from '../web/proto/terminal.js';
 
 // Scroll-area desync fixes (2026-07-24):
 // (1) writeToTerminal must force xterm's DOM scroll area back in sync after
@@ -212,11 +213,15 @@ describe('Pi full-screen input is independent of staged prompt mode', () => {
         window.WebSocket.OPEN = 1;
         tab.ws.ws.readyState = 1;
         const wireSend = vi.spyOn(tab.ws.ws, 'send');
-        const mouse = '\x1b[M' + String.fromCharCode(96, 180, 210);
+        const mouse = `\x1b[M${String.fromCharCode(96, 180, 210)}`;
         tab.term.emitBinary(mouse);
         expect(wireSend).toHaveBeenCalledOnce();
-        expect(Array.from(new Uint8Array(wireSend.mock.calls[0][0]))).toEqual([
-            1, 27, 91, 77, 96, 180, 210,
+        const frame = TerminalClientFrame.decode(
+            new Uint8Array(wireSend.mock.calls[0][0]),
+        );
+        expect(frame.payload.$case).toBe('input');
+        expect(Array.from(frame.payload.value)).toEqual([
+            27, 91, 77, 96, 180, 210,
         ]);
         expect(tab.directMode).toBe(false);
     });

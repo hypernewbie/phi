@@ -1,13 +1,13 @@
 package phic
 
 import (
-	"encoding/binary"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
 
 	"github.com/gorilla/websocket"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
@@ -15,22 +15,27 @@ func TestPaneReconnectSendsResizeEvenWithoutDeltaOrGeometryChange(t *testing.T) 
 	var mu sync.Mutex
 	var sizes [][2]uint16
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		conn, err := (&websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}).Upgrade(w, r, nil)
 		if err != nil {
 			return
 		}
 		defer conn.Close()
-		_ = conn.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7}, nil))
+		_ = conn.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, 0))
 		for {
 			_, frame, err := conn.ReadMessage()
 			if err != nil {
 				return
 			}
-			if len(frame) != 5 || frame[0] != wireproto.FrameResize {
+			decoded, derr := wireproto.DecodeClientFrame(frame)
+			if derr != nil {
+				continue
+			}
+			rs, ok := decoded.GetPayload().(*wspb.TerminalClientFrame_Resize)
+			if !ok || rs.Resize == nil {
 				continue
 			}
 			mu.Lock()
-			sizes = append(sizes, [2]uint16{binary.BigEndian.Uint16(frame[1:3]), binary.BigEndian.Uint16(frame[3:5])})
+			sizes = append(sizes, [2]uint16{uint16(rs.Resize.GetCols()), uint16(rs.Resize.GetRows())})
 			first := len(sizes) == 1
 			mu.Unlock()
 			if first {

@@ -1,5 +1,19 @@
 import { expect, test } from '@playwright/test';
+import { TerminalClientFrame } from '../web/proto/terminal.js';
+import { TerminalServerFrame } from '../web/proto/terminal.js';
+import type {
+    MessageFns,
+    TerminalClientFrame as TerminalClientMessage,
+    TerminalServerFrame as TerminalServerMessage,
+} from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+
+// The served bundle carries no types; bind its runtime codecs to the
+// generated declarations so spec-side encoding is fully checked.
+const ServerCodec: MessageFns<TerminalServerMessage> =
+    TerminalServerFrame as unknown as MessageFns<TerminalServerMessage>;
+const ClientCodec: MessageFns<TerminalClientMessage> =
+    TerminalClientFrame as unknown as MessageFns<TerminalClientMessage>;
 
 let phi: PhiServer;
 test.beforeAll(async () => {
@@ -118,26 +132,28 @@ test('actual panel CSS resize, tab activation and refresh synchronize backend di
     await page.routeWebSocket('**/ws/pane/panel-*?*', (socket) => {
         const id = new URL(socket.url()).pathname.split('/').at(-1)!;
         connections.set(id, connections.get(id)! + 1);
-        const header = Buffer.from(
-            JSON.stringify({
-                epoch: 7,
-                oldest: 0,
-                head: recordings.get(id)!.length,
-            }),
+        socket.send(
+            Buffer.from(
+                ServerCodec.encode(
+                    ServerCodec.fromPartial({
+                        payload: {
+                            $case: 'attach',
+                            value: {
+                                epoch: BigInt(7),
+                                oldest: BigInt(0),
+                                head: BigInt(recordings.get(id)!.length),
+                            },
+                        },
+                    }),
+                ).finish(),
+            ),
         );
-        const size = Buffer.alloc(5);
-        size[0] = 0x08;
-        size.writeUInt32BE(header.length, 1);
-        socket.send(Buffer.concat([size, header]));
         socket.onMessage((message) => {
-            if (
-                !Buffer.isBuffer(message) ||
-                message.length !== 5 ||
-                message[0] !== 0x02
-            )
-                return;
-            const cols = message.readUInt16BE(1),
-                rows = message.readUInt16BE(3);
+            if (!Buffer.isBuffer(message)) return;
+            const payload = ClientCodec.decode(new Uint8Array(message)).payload;
+            if (payload?.$case !== 'resize') return;
+            const { cols, rows } = payload.value;
+            if (cols === undefined || rows === undefined) return;
             sizes.get(id)!.push({ cols, rows });
             // Backend redraw depends on the received PTY dimensions, not browser
             // knowledge. Wrong or missing resize leaves an observable stale grid.
@@ -146,10 +162,21 @@ test('actual panel CSS resize, tab activation and refresh synchronize backend di
             );
             const before = recordings.get(id)!;
             recordings.set(id, Buffer.concat([before, paint]));
-            const frame = Buffer.alloc(9);
-            frame[0] = 0x09;
-            frame.writeBigUInt64BE(BigInt(before.length), 1);
-            socket.send(Buffer.concat([frame, paint]));
+            socket.send(
+                Buffer.from(
+                    ServerCodec.encode(
+                        ServerCodec.fromPartial({
+                            payload: {
+                                $case: 'output',
+                                value: {
+                                    start: BigInt(before.length),
+                                    data: new Uint8Array(paint),
+                                },
+                            },
+                        }),
+                    ).finish(),
+                ),
+            );
         });
     });
     const probe = () =>

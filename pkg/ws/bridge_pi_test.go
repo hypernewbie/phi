@@ -1,8 +1,6 @@
 package ws
 
 import (
-	"bytes"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +9,9 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/hypernewbie/phi/pkg/pty"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
+	"github.com/hypernewbie/phi/pkg/ws/wireproto"
+	"google.golang.org/protobuf/proto"
 )
 
 // drainFrames empties a client queue without blocking.
@@ -26,31 +27,44 @@ func drainFrames(ch chan []byte) [][]byte {
 	}
 }
 
-func TestBroadcastBridgeDeliversControlFrame(t *testing.T) {
+func bridgeTestState(id string) *wspb.TerminalBridgeState {
+	return &wspb.TerminalBridgeState{
+		PaneId: proto.String(id),
+		State:  proto.String("managed"),
+	}
+}
+
+func TestBroadcastBridgeFrameDelivers(t *testing.T) {
 	hub := NewHub(0)
 	client := &Client{Send: make(chan []byte, 8)}
 	hub.AttachHot("pane-1", client)
 	<-client.Send // ATTACH_HEAD
-	hub.BroadcastBridge("pane-1", []byte(`{"type":"pi-bridge-settled"}`))
+	frame, err := wireproto.EncodeSettlementFrame("pane-1", 3, 9, "completed")
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	hub.BroadcastBridgeFrame("pane-1", frame)
 	select {
-	case frame := <-client.Send:
-		if len(frame) == 0 || frame[0] != 0x02 {
-			t.Fatalf("frame type=%v, want 0x02", frame)
+	case got := <-client.Send:
+		server, err := wireproto.DecodeServerFrame(got)
+		if err != nil || server.GetSettlement() == nil {
+			t.Fatalf("frame = %+v err=%v, want a settlement", server, err)
 		}
-		var control struct {
-			Type string `json:"type"`
-		}
-		if err := json.Unmarshal(frame[1:], &control); err != nil || control.Type != "pi-bridge-settled" {
-			t.Fatalf("payload=%s err=%v", frame[1:], err)
+		if settled := server.GetSettlement(); settled.GetPaneId() != "pane-1" || settled.GetGeneration() != 3 || settled.GetRun() != 9 || settled.GetOutcome() != "completed" {
+			t.Fatalf("settlement=%+v", settled)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("bridge frame not delivered")
 	}
 }
 
-func TestBroadcastBridgeUnknownPaneIsNoop(t *testing.T) {
+func TestBroadcastBridgeFrameUnknownPaneIsNoop(t *testing.T) {
 	hub := NewHub(0)
-	hub.BroadcastBridge("no-such-pane", []byte(`{}`))
+	frame, err := wireproto.EncodeDropNoticeFrame()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	hub.BroadcastBridgeFrame("no-such-pane", frame)
 }
 
 func TestBroadcastBridgeFullClientClosesForReconnect(t *testing.T) {
@@ -67,7 +81,12 @@ func TestBroadcastBridgeFullClientClosesForReconnect(t *testing.T) {
 		for i := 0; i < 4; i++ {
 			client.Send <- []byte{0x01}
 		}
-		hub.BroadcastBridge("pane-1", []byte(`{"type":"pi-bridge-settled"}`))
+		frame, err := wireproto.EncodeSettlementFrame("pane-1", 3, 9, "completed")
+		if err != nil {
+			t.Errorf("encode: %v", err)
+			return
+		}
+		hub.BroadcastBridgeFrame("pane-1", frame)
 	}))
 	defer server.Close()
 
@@ -89,8 +108,8 @@ func TestBroadcastBridgeFullClientClosesForReconnect(t *testing.T) {
 // is refused so the client reconnects and retries the attach.
 func TestBridgeAttachSnapshotFullQueueIsRefused(t *testing.T) {
 	hub := NewHub(0)
-	hub.SetBridgeAttach(func(pty.PTYInstanceSnapshot) []byte {
-		return []byte(`{"type":"pi-bridge-state"}`)
+	hub.SetBridgeAttach(func(pty.PTYInstanceSnapshot) *wspb.TerminalBridgeState {
+		return bridgeTestState("pane-1")
 	})
 	client := &Client{Send: make(chan []byte, 1)}
 	hub.Register("pane-1", client)
@@ -109,8 +128,8 @@ func TestBridgeAttachSnapshotFullQueueIsRefused(t *testing.T) {
 // after the reconnect.
 func TestManagedPaneOutputClosesFullClientInsteadOfEvicting(t *testing.T) {
 	hub := NewHub(0)
-	hub.SetBridgeAttach(func(pty.PTYInstanceSnapshot) []byte {
-		return []byte(`{"type":"pi-bridge-state"}`)
+	hub.SetBridgeAttach(func(pty.PTYInstanceSnapshot) *wspb.TerminalBridgeState {
+		return bridgeTestState("pane-1")
 	})
 	client := &Client{Send: make(chan []byte, 3)}
 	hub.Register("pane-1", client)
@@ -130,11 +149,11 @@ func TestManagedPaneOutputClosesFullClientInsteadOfEvicting(t *testing.T) {
 	if len(frames) != 3 {
 		t.Fatalf("queued frames=%d, want 3 (nothing evicted)", len(frames))
 	}
-	if frames[0][0] != 0x02 {
-		t.Fatalf("queued control evicted by output: %v", frames[0])
+	if server, err := wireproto.DecodeServerFrame(frames[0]); err != nil || server.GetBridgeState() == nil {
+		t.Fatalf("queued control evicted by output: %+v err=%v", server, err)
 	}
 	for _, f := range frames {
-		if bytes.Equal(f, []byte{0x01, 'o', 'u', 't', 'p', 'u', 't'}) {
+		if server, err := wireproto.DecodeServerFrame(f); err == nil && server.GetOutput() != nil {
 			t.Fatal("output queued on a managed pane")
 		}
 	}
@@ -153,21 +172,28 @@ func TestUnmanagedPaneOutputKeepsDropPolicy(t *testing.T) {
 	}
 	frames := drainFrames(client.Send)
 	for _, f := range frames {
-		if bytes.Equal(f, []byte{0x01, 'o', 'u', 't', 'p', 'u', 't'}) {
+		if server, err := wireproto.DecodeServerFrame(f); err == nil && server.GetOutput() != nil {
+			if string(server.GetOutput().GetData()) != "output" {
+				t.Fatalf("queued output data = %q", server.GetOutput().GetData())
+			}
 			return
 		}
 	}
 	t.Fatalf("output not queued on an unmanaged pane: %v", frames)
 }
 
-func TestBroadcastBridgeLeavesQueuedFramesUndisturbed(t *testing.T) {
+func TestBroadcastBridgeFrameLeavesQueuedFramesUndisturbed(t *testing.T) {
 	hub := NewHub(0)
 	client := &Client{Send: make(chan []byte, 8)}
 	hub.AttachHot("pane-1", client)
 	<-client.Send // ATTACH_HEAD
 	queued := []byte{0x01, 'o', 'u', 't'}
 	client.Send <- queued
-	hub.BroadcastBridge("pane-1", []byte(`{}`))
+	frame, err := wireproto.EncodeDropNoticeFrame()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	hub.BroadcastBridgeFrame("pane-1", frame)
 	first := <-client.Send
 	if len(first) == 0 || first[0] != 0x01 {
 		t.Fatalf("queued output disturbed: %v", first)
@@ -176,8 +202,8 @@ func TestBroadcastBridgeLeavesQueuedFramesUndisturbed(t *testing.T) {
 
 func TestBridgeAttachSnapshotFollowsTitleAndNeverBlocks(t *testing.T) {
 	hub := NewHub(0)
-	hub.SetBridgeAttach(func(snapshot pty.PTYInstanceSnapshot) []byte {
-		return []byte(`{"type":"pi-bridge-state","pane_id":"` + snapshot.ID + `"}`)
+	hub.SetBridgeAttach(func(snapshot pty.PTYInstanceSnapshot) *wspb.TerminalBridgeState {
+		return bridgeTestState(snapshot.ID)
 	})
 	client := &Client{Send: make(chan []byte, 8)}
 	hub.AttachHot("pane-1", client)
@@ -189,21 +215,26 @@ func TestBridgeAttachSnapshotFollowsTitleAndNeverBlocks(t *testing.T) {
 		t.Fatal("bridge snapshot not queued")
 	}
 	frames := [][]byte{<-client.Send, <-client.Send, <-client.Send}
-	if frames[0][0] != 0x08 || frames[1][0] != 0x02 || frames[2][0] != 0x02 {
-		t.Fatalf("attach order wrong: %v %v %v", frames[0][0], frames[1][0], frames[2][0])
+	attach, err := wireproto.DecodeServerFrame(frames[0])
+	if err != nil || attach.GetAttach() == nil {
+		t.Fatalf("first frame = %+v err=%v, want an attach", attach, err)
 	}
-	var control struct {
-		Type   string `json:"type"`
-		PaneID string `json:"pane_id"`
+	title, err := wireproto.DecodeServerFrame(frames[1])
+	if err != nil || title.GetTitle() == nil {
+		t.Fatalf("second frame = %+v err=%v, want a title", title, err)
 	}
-	if err := json.Unmarshal(frames[2][1:], &control); err != nil || control.Type != "pi-bridge-state" {
-		t.Fatalf("bridge payload=%s err=%v", frames[2][1:], err)
+	bridge, err := wireproto.DecodeServerFrame(frames[2])
+	if err != nil || bridge.GetBridgeState() == nil {
+		t.Fatalf("third frame = %+v err=%v, want a bridge state", bridge, err)
+	}
+	if state := bridge.GetBridgeState(); state.GetPaneId() != "pane-1" || state.GetState() != "managed" {
+		t.Fatalf("bridge state=%+v", state)
 	}
 }
 
 func TestBridgeAttachSnapshotNilSendsNothing(t *testing.T) {
 	hub := NewHub(0)
-	hub.SetBridgeAttach(func(pty.PTYInstanceSnapshot) []byte { return nil })
+	hub.SetBridgeAttach(func(pty.PTYInstanceSnapshot) *wspb.TerminalBridgeState { return nil })
 	client := &Client{Send: make(chan []byte, 8)}
 	hub.AttachHot("pane-1", client)
 	if hub.enqueueBridgeSnapshot(pty.PTYInstanceSnapshot{ID: "pane-1"}, client) {
@@ -273,8 +304,9 @@ func TestStaleExitPreservesReplacementPane(t *testing.T) {
 	}
 	select {
 	case frame := <-newClient.Send:
-		if len(frame) == 0 || frame[0] != 0x01 {
-			t.Fatalf("expected output frame, got %v", frame)
+		out, err := wireproto.DecodeServerFrame(frame)
+		if err != nil || out.GetOutput() == nil || string(out.GetOutput().GetData()) != "after stale" {
+			t.Fatalf("expected output frame, got %+v err=%v", out, err)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("new client missed output after stale exit")
@@ -295,10 +327,10 @@ func TestStaleExitPreservesReplacementPane(t *testing.T) {
 		if !ok {
 			break
 		}
-		if len(frame) > 0 && frame[0] == 0x04 {
+		if server, err := wireproto.DecodeServerFrame(frame); err == nil && server.GetExit() != nil {
 			foundExit = true
-			if !strings.Contains(string(frame[1:]), `"code":0`) {
-				t.Fatalf("exit payload %s", frame[1:])
+			if code := server.GetExit().GetCode(); code != 0 {
+				t.Fatalf("exit code = %d, want 0", code)
 			}
 		}
 	}

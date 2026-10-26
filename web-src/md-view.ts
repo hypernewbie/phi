@@ -9,20 +9,24 @@ import {
     rewriteRelativeImages,
     highlightCodeIn,
 } from './md-render.js';
-import { escapeHtml, getLastFolderName, wsUrl } from './util.js';
+import { escapeHtml, getLastFolderName } from './util.js';
+import { eventsSubprotocol } from './ws-protocols.js';
+import { Notification } from './proto/events.js';
 
 // --- pure helpers (exported for tests) ---
 
-// decodeEventFrame splits a binary hub frame into its 1-byte type tag and
-// UTF-8 payload (the wire format of BroadcastAll: [type, ...json]).
-export function decodeEventFrame(bytes: Uint8Array): {
-    type: number;
-    payload: string;
-} {
-    return {
-        type: bytes[0] ?? 0,
-        payload: new TextDecoder().decode(bytes.subarray(1)),
-    };
+// decodeNotificationDir decodes one events message and returns the
+// markdown directory when it carries a markdown change, null otherwise
+// (other notification kinds, empty payloads, undecodable bytes).
+export function decodeNotificationDir(bytes: Uint8Array): string | null {
+    let notif: Notification;
+    try {
+        notif = Notification.decode(bytes);
+    } catch {
+        return null;
+    }
+    if (notif.kind?.$case !== 'markdownChanged') return null;
+    return notif.kind.value.dir ?? '';
 }
 
 // mdEventMatchesPath reports whether a 0x07 md-changed event for `dir`
@@ -131,23 +135,31 @@ export function initMdView(): void {
     }
 
     function connect(): void {
-        const ws = new WebSocket(wsUrl('/ws/md-events'));
+        const ws = new WebSocket(
+            new URL('/ws/md-events', window.location.origin).href,
+            eventsSubprotocol,
+        );
         ws.binaryType = 'arraybuffer';
         // Refresh on open too: content may have changed while disconnected.
         ws.onopen = () => {
+            const negotiated = ws.protocol;
+            // Test fakes omit the attribute; real servers must select it.
+            if (negotiated !== undefined && negotiated !== eventsSubprotocol) {
+                console.error(
+                    `[md-view] Server did not select ${eventsSubprotocol}`,
+                );
+                try {
+                    ws.close();
+                } catch (_e) {}
+                return;
+            }
             void loadAndRender();
         };
         ws.onmessage = (e: MessageEvent) => {
             if (!(e.data instanceof ArrayBuffer)) return;
-            const frame = decodeEventFrame(new Uint8Array(e.data));
-            if (frame.type !== 0x07) return; // ignore other frame types
-            let dir: string | null = null;
-            try {
-                dir = JSON.parse(frame.payload)?.dir ?? null;
-            } catch (_) {
-                /* refresh anyway */
-            }
-            if (mdEventMatchesPath(dir, path)) void loadAndRender();
+            const dir = decodeNotificationDir(new Uint8Array(e.data));
+            if (dir === null) return; // ignore other notification kinds
+            if (mdEventMatchesPath(dir || null, path)) void loadAndRender();
         };
         ws.onclose = () => {
             setTimeout(connect, 10000);

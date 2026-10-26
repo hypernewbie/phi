@@ -42,25 +42,22 @@ func assertClientConsistent(t *testing.T, h *Hub, pane string) {
 	}
 	c := &Client{Send: make(chan []byte, 4)}
 	h.AttachHot(pane, c)
-	hdr, extra := parseAttachHead(t, drainOne(c.Send))
-	if !NumberIsSafeUint(hdr.Oldest) || !NumberIsSafeUint(hdr.Head) {
-		t.Fatalf("head carries a non-integer frontier: %+v", hdr)
+	attach := parseAttach(t, drainOne(c.Send))
+	if !NumberIsSafeUint(attach.GetOldest()) || !NumberIsSafeUint(attach.GetHead()) {
+		t.Fatalf("head carries a non-integer frontier: %+v", attach)
 	}
-	if hdr.Oldest > hdr.Head {
-		t.Fatalf("oldest %d above head %d", hdr.Oldest, hdr.Head)
+	if attach.GetOldest() > attach.GetHead() {
+		t.Fatalf("oldest %d above head %d", attach.GetOldest(), attach.GetHead())
 	}
-	if hdr.Ckpt == nil {
-		if len(extra) != 0 {
-			t.Fatalf("snapshot bytes %d sent without a checkpoint", len(extra))
-		}
+	ckpt := attach.GetCheckpoint()
+	if ckpt == nil {
+		// Snapshot bytes ride inside the checkpoint message; an absent
+		// checkpoint means no snapshot bytes by construction.
 		return
 	}
 	// web-src/ws.ts closes the socket unless oldest <= ckpt.through <= head.
-	if hdr.Ckpt.Through < hdr.Oldest || hdr.Ckpt.Through > hdr.Head {
-		t.Fatalf("checkpoint %d outside the retained window [%d,%d]", hdr.Ckpt.Through, hdr.Oldest, hdr.Head)
-	}
-	if hdr.Ckpt.Len != len(extra) {
-		t.Fatalf("checkpoint len %d, snapshot %d bytes", hdr.Ckpt.Len, len(extra))
+	if ckpt.GetThrough() < attach.GetOldest() || ckpt.GetThrough() > attach.GetHead() {
+		t.Fatalf("checkpoint %d outside the retained window [%d,%d]", ckpt.GetThrough(), attach.GetOldest(), attach.GetHead())
 	}
 }
 

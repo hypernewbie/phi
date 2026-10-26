@@ -11,7 +11,9 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/hypernewbie/phi/internal/termemu"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestNativeReconnectMatchesUninterruptedByteStream(t *testing.T) {
@@ -41,7 +43,7 @@ func TestNativeReconnectMatchesUninterruptedByteStream(t *testing.T) {
 			for i := range source {
 				// One missing byte recovered per attachment, including every UTF-8
 				// and escape-sequence boundary. No scheduler sleeps or screen polling.
-				if err := p.bootstrap(wireAttach{Header: wireproto.AttachHeadHeader{Epoch: 7, Head: uint64(i + 1)}}); err != nil {
+				if err := p.bootstrap(wireAttach{Header: &wspb.TerminalAttach{Epoch: proto.Uint64(7), Head: proto.Uint64(uint64(i + 1))}}); err != nil {
 					t.Fatal(err)
 				}
 				<-p.outbox // Every bootstrap must admit its final sizing.
@@ -64,7 +66,7 @@ func TestNativeReconnectMatchesUninterruptedByteStream(t *testing.T) {
 				}
 			}
 			// A duplicate/overlap can never repaint the accepted prefix.
-			if err := p.handleFrame(wireproto.EncodeLiveOutputFrame(0, source)); err != nil {
+			if err := p.handleFrame(testOutput(t, 0, source)); err != nil {
 				t.Fatal(err)
 			}
 			got, _ := p.emu.Snapshot()
@@ -97,7 +99,7 @@ func TestNativeReplayGridIsRestoredToPanelEvenWhenDesiredSizeDidNotChange(t *tes
 	if frame.Cols != 20 || frame.Rows != 4 {
 		t.Fatal("replayed geometry bypassed panel fit")
 	}
-	if string((<-p.outbox).bytes) != string(wireproto.EncodeResizeFrame(20, 4)) {
+	if string((<-p.outbox).bytes) != string(testResize(t, 20, 4)) {
 		t.Fatal("backend retained replay geometry")
 	}
 }
@@ -113,14 +115,14 @@ func TestNativeZeroEpochReplacementStartsANewParser(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = p.emu.Close() }()
-	if err := p.bootstrap(wireAttach{Header: wireproto.AttachHeadHeader{Epoch: 0}}); err != nil {
+	if err := p.bootstrap(wireAttach{Header: &wspb.TerminalAttach{}}); err != nil {
 		t.Fatal(err)
 	}
 	<-p.outbox
-	if err := p.handleFrame(wireproto.EncodeLiveOutputFrame(0, []byte("OLD"))); err != nil {
+	if err := p.handleFrame(testOutput(t, 0, []byte("OLD"))); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.bootstrap(wireAttach{Header: wireproto.AttachHeadHeader{Epoch: 7, Head: 3}}); err != nil {
+	if err := p.bootstrap(wireAttach{Header: &wspb.TerminalAttach{Epoch: proto.Uint64(7), Head: proto.Uint64(3)}}); err != nil {
 		t.Fatal(err)
 	}
 	<-p.outbox
@@ -138,14 +140,14 @@ func TestPaneDialNegotiatesNativeDeflateAndPreservesRawFrame(t *testing.T) {
 	negotiated := make(chan bool, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		negotiated <- bytes.Contains([]byte(r.Header.Get("Sec-WebSocket-Extensions")), []byte("permessage-deflate"))
-		up := websocket.Upgrader{EnableCompression: true}
+		up := websocket.Upgrader{EnableCompression: true, Subprotocols: []string{wireproto.TerminalSubprotocol}}
 		conn, err := up.Upgrade(w, r, nil)
 		if err != nil {
 			return
 		}
 		defer conn.Close()
-		_ = conn.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7}, nil))
-		_ = conn.WriteMessage(websocket.BinaryMessage, wireproto.EncodeLiveOutputFrame(0, source))
+		_ = conn.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, 0))
+		_ = conn.WriteMessage(websocket.BinaryMessage, testOutput(t, 0, source))
 		_, _, _ = conn.ReadMessage()
 	}))
 	defer srv.Close()

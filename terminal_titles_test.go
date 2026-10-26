@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -20,6 +19,7 @@ import (
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/session"
 	"github.com/hypernewbie/phi/pkg/ws"
+	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
 type observedSessionTitle struct {
@@ -107,15 +107,19 @@ func waitForPiTitleControl(t *testing.T, client *ws.Client, paneID, sessionID, w
 			if !ok {
 				t.Fatal("title observer queue closed before update")
 			}
-			if len(frame) == 0 || frame[0] != 0x02 {
+			server, err := wireproto.DecodeServerFrame(frame)
+			if err != nil || server.GetTitle() == nil {
 				continue
 			}
-			var update observedSessionTitle
-			if err := json.Unmarshal(frame[1:], &update); err != nil {
-				t.Fatalf("decode title control: %v", err)
-			}
-			if update.Type == "session-title" && update.PaneID == paneID && update.SessionID == sessionID && update.Title == want {
-				return update
+			title := server.GetTitle()
+			if title.GetPaneId() == paneID && title.GetSessionId() == sessionID && title.GetTitle() == want {
+				return observedSessionTitle{
+					Type:      "session-title",
+					PaneID:    title.GetPaneId(),
+					SessionID: title.GetSessionId(),
+					Title:     title.GetTitle(),
+					Revision:  title.GetRevision(),
+				}
 			}
 		case <-deadline:
 			t.Fatalf("pane %s did not receive title control %q", paneID, want)
@@ -399,7 +403,7 @@ func TestPiTitleWorkerStepIsFairAndDoesNotBlockPTYOrHTTP(t *testing.T) {
 			if !ok {
 				t.Fatal("PTY output client queue closed")
 			}
-			if len(frame) > 1 && strings.Contains(string(frame[1:]), outputMarker) {
+			if server, err := wireproto.DecodeServerFrame(frame); err == nil && strings.Contains(string(server.GetOutput().GetData()), outputMarker) {
 				goto outputReceived
 			}
 		case <-outputDeadline:

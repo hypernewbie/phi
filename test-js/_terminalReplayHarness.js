@@ -1,15 +1,22 @@
 import { vi } from 'vitest';
 import { createHeadlessSandbox } from './_xtermHeadless.js';
 import { TabManager } from '../web/terminal.js';
-import { PTYWebSocket } from '../web/ws.js';
+import { PTYWebSocket, terminalSubprotocol } from '../web/ws.js';
+import { TerminalServerFrame } from '../web/proto/terminal.js';
 
 const { Terminal } = createHeadlessSandbox();
 export const encode = (text) => new TextEncoder().encode(text);
+
+// A 64-bit field the caller omits stays absent on the wire, so the
+// client under test sees a genuinely missing field. Bigint inputs
+// pass through for hostile-range frontiers; fractional inputs throw
+// here because no server can encode them.
 
 export class ReplayWire {
     static OPEN = 1;
     constructor() {
         this.readyState = 1;
+        this.protocol = terminalSubprotocol;
     }
     send() {}
     close() {
@@ -22,21 +29,71 @@ export class ReplayWire {
         this.onmessage?.({ data: frame.buffer });
     }
     head(info, checkpointBytes) {
-        const json = encode(JSON.stringify(info));
-        const extra =
-            checkpointBytes ??
-            (info.ckpt?.ansi ? encode(info.ckpt.ansi) : new Uint8Array());
-        const payload = new Uint8Array(4 + json.length + extra.length);
-        new DataView(payload.buffer).setUint32(0, json.length);
-        payload.set(json, 4);
-        payload.set(extra, 4 + json.length);
-        this.emit(0x08, payload);
+        const big = (v) => (v === undefined ? undefined : BigInt(v));
+        const epoch = big(info.epoch);
+        const oldest = big(info.oldest);
+        const head = big(info.head);
+        const through = info.ckpt ? big(info.ckpt.through) : undefined;
+        const ckpt = info.ckpt
+            ? {
+                  // Mirrors the old header shape: kind rides only when
+                  // the caller sets it, so existing fixtures keep the
+                  // string path instead of flipping to byte decoding.
+                  ...(info.ckpt.kind !== undefined
+                      ? { kind: info.ckpt.kind }
+                      : {}),
+                  ...(through !== undefined ? { through } : {}),
+                  ...(info.ckpt.cols !== undefined
+                      ? { cols: info.ckpt.cols }
+                      : {}),
+                  ...(info.ckpt.rows !== undefined
+                      ? { rows: info.ckpt.rows }
+                      : {}),
+                  data:
+                      checkpointBytes ??
+                      (info.ckpt.ansi
+                          ? encode(info.ckpt.ansi)
+                          : new Uint8Array()),
+                  ...(info.ckpt.eventCursor
+                      ? { eventCursor: info.ckpt.eventCursor }
+                      : {}),
+              }
+            : undefined;
+        const replayFrom = big(info.replay_from);
+        const frame = TerminalServerFrame.encode(
+            TerminalServerFrame.fromPartial({
+                payload: {
+                    $case: 'attach',
+                    value: {
+                        ...(epoch !== undefined ? { epoch } : {}),
+                        ...(oldest !== undefined ? { oldest } : {}),
+                        ...(head !== undefined ? { head } : {}),
+                        ...(ckpt ? { checkpoint: ckpt } : {}),
+                        ...(replayFrom !== undefined ? { replayFrom } : {}),
+                    },
+                },
+            }),
+        ).finish();
+        this.onmessage?.({ data: new Uint8Array(frame).buffer });
     }
     output(start, bytes) {
-        const payload = new Uint8Array(8 + bytes.length);
-        new DataView(payload.buffer).setBigUint64(0, BigInt(start));
-        payload.set(bytes, 8);
-        this.emit(0x09, payload);
+        const frame = TerminalServerFrame.encode(
+            TerminalServerFrame.fromPartial({
+                payload: {
+                    $case: 'output',
+                    value: { start: BigInt(start), data: bytes },
+                },
+            }),
+        ).finish();
+        this.onmessage?.({ data: new Uint8Array(frame).buffer });
+    }
+    exit(code) {
+        const frame = TerminalServerFrame.encode(
+            TerminalServerFrame.fromPartial({
+                payload: { $case: 'exit', value: { code } },
+            }),
+        ).finish();
+        this.onmessage?.({ data: new Uint8Array(frame).buffer });
     }
 }
 
