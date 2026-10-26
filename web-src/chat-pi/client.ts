@@ -18,6 +18,7 @@ import {
 } from './control-wire.js';
 import type { WireEvent } from './control-wire.js';
 import { controlSubprotocol } from '../ws-protocols.js';
+import { wsUrl } from '../util.js';
 
 export const ControlCallTimeout = 35_000;
 
@@ -68,10 +69,7 @@ function controlError(message: string): Error {
 export function connectControl(
     onStreamFailure?: (message: string) => void,
 ): ControlClient {
-    const ws = new WebSocket(
-        new URL('/ws/control', window.location.origin).href,
-        controlSubprotocol,
-    );
+    const ws = new WebSocket(wsUrl('/ws/control'), controlSubprotocol);
     ws.binaryType = 'arraybuffer';
     const listeners: Array<(env: WireEvent) => void> = [];
     const outbox: OutboxFrame[] = [];
