@@ -188,8 +188,20 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
     let busy = false;
     let queueDepth = 0;
     let exited = false;
+    // Bootstrap ended without a session. No sid will ever arrive, so input
+    // must stay in the composer instead of queueing into a dead pane.
+    let bootstrapFailed = false;
+    // The control stream failed a protocol check. Redialing cannot fix it, so
+    // the pane stays read-only instead of accepting prompts it can never send.
+    let streamBroken = false;
     let resetInFlight = false;
     let compactInFlight = false;
+    // A prompt may only claim a transcript row once the authoritative history
+    // is known: before that, a row that looks new may be history.
+    let hydrated = false;
+    // Rows already owned by a prompt record. Persisting this across hydrates
+    // keeps one row from confirming two prompts.
+    const deliveryRows = new Set();
     let compactSnapshot = null;
     let _lastCompaction = null;
     let sessionActive = false;
@@ -232,9 +244,16 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
                 sessionActive = busy;
                 controlsChanged = true;
                 if (!busy) {
-                    outgoing.length = 0;
-                    turnPrompts.length = 0;
-                    activePrompt = null;
+                    // A turn boundary retires in-flight and accepted records.
+                    // Queued and unconfirmed ones are input Pi may never have
+                    // seen: they stay until the transcript reconciles them.
+                    const kept = outgoing.filter((item) => item.state === 'queued' ||
+                        item.state === 'unconfirmed');
+                    outgoing.splice(0, outgoing.length, ...kept);
+                    turnPrompts.splice(0, turnPrompts.length, ...kept);
+                    activePrompt = kept.at(-1)
+                        ? { ...kept.at(-1), origin: 'optimistic' }
+                        : null;
                     // Milestone 4: guard against a stranded retry state
                     // when the busy→false transition lands in a hydrate
                     // window that dropped the auto_retry_end event (the
@@ -266,6 +285,7 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
         sid = '';
         ready = false;
         exited = false;
+        bootstrapFailed = true;
         status.textContent = `Error: ${String(message ?? 'unknown')}`;
         notifyControls();
     };
@@ -371,18 +391,27 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
     // swap its label. Cleared by auto_retry_end (success or failure)
     // and by the applyState busy→false transition (gap-loss guard).
     let retryState = null;
+    const promptLabel = (state) => state === 'queued'
+        ? 'Queued'
+        : state === 'unconfirmed'
+            ? 'Not confirmed'
+            : state === 'sending'
+                ? 'Sending'
+                : 'Sent to Pi';
+    // A row claims the working state only when Pi is actually working on it: a
+    // prompt still queued here, or an unconfirmed one the idle session never
+    // took, must not show "Pi is working" or the interrupt hint.
+    const promptIsWorking = (state) => state === 'sending' || (state !== 'queued' && sessionActive);
     const syncActiveTurn = () => {
         const base = activePrompt
             ? {
-                active: true,
+                active: promptIsWorking(activePrompt.state),
                 promptText: activePrompt.text,
                 promptOrigin: activePrompt.origin,
-                stateLabel: activePrompt.state === 'sending'
-                    ? 'Sending'
-                    : 'Sent to Pi',
+                stateLabel: promptLabel(activePrompt.state),
                 outgoing: outgoing.map((item) => ({
                     text: item.text,
-                    stateLabel: item.state === 'sending' ? 'Sending' : 'Sent to Pi',
+                    stateLabel: promptLabel(item.state),
                 })),
             }
             : null;
@@ -403,11 +432,6 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
         view.setActiveTurn(base
             ? { ...base, ...(retryState ? { retry: retryState } : {}) }
             : null);
-    };
-    const removeTurnPrompt = (prompt) => {
-        const index = turnPrompts.indexOf(prompt);
-        if (index >= 0)
-            turnPrompts.splice(index, 1);
     };
     const cancelPendingSave = () => {
         if (pendingSaveTimer !== null)
@@ -487,7 +511,20 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
                 return;
             }
             buffer.applySnapshot(data);
+            hydrated = true;
+            // A snapshot that replaced the transcript rebases every record:
+            // the rows it counted are gone. Then reconcile the new rows
+            // before state retires the records they belong to.
+            rebaseOutgoing();
+            reconcileOutgoing();
             applyState(data.state);
+            // A snapshot that lands unblocks anything queued while the
+            // history was unknown (a reset clears readiness for it).
+            flushQueue();
+            // A hydrate that lands proves the stream is alive again, so a
+            // stale error line from the drop must not stay in the header.
+            if (ready && !exited)
+                status.textContent = 'Ready';
             paint();
             // A hydrate replaces the authoritative settled transcript.
             // Reset completion flushes in the next microtask; initial and
@@ -510,24 +547,119 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
             }
         });
     };
-    const send = (text) => {
-        if (!sid || !ready || exited || subagentViewer.isOpen())
-            return false;
-        const dispatch = dispatchComposer(text);
-        if (dispatch.kind === 'rejected') {
-            status.textContent = dispatch.reason;
-            return false;
+    // A hydrate that replaced the transcript invalidates old row ownership: a
+    // pending record whose boundary no longer exists starts over, and rows the
+    // new transcript does not have cannot be owned any more (an empty
+    // transcript after a compaction reset owns nothing).
+    const rebaseOutgoing = () => {
+        const length = buffer.getMessages().length;
+        const replaced = outgoing.some((item) => item.baseline !== null && item.baseline > length);
+        if (replaced) {
+            deliveryRows.clear();
+            for (const item of outgoing) {
+                if (item.baseline !== null)
+                    item.baseline = 0;
+            }
+            return;
         }
-        const currentSid = sid;
-        const local = {
-            id: `out-${++outgoingSeq}`,
-            text: dispatch.message,
-            state: 'sending',
-        };
-        outgoing.push(local);
-        turnPrompts.push(local);
-        activePrompt = { ...local, origin: 'optimistic' };
+        for (const row of deliveryRows) {
+            if (row >= length)
+                deliveryRows.delete(row);
+        }
+    };
+    // Hydrate is authoritative: a record that was written and is already a
+    // user message in the snapshot landed, so its local row must go. The
+    // record only owns rows at or after where the transcript stood when it was
+    // dispatched, so an identical text from history can never retire a prompt
+    // that did not land; a row already claimed stays claimed, so it cannot
+    // confirm a second prompt. A record that never reached a socket owns
+    // nothing: no snapshot can contain it.
+    const reconcileOutgoing = () => {
+        if (outgoing.length === 0)
+            return;
+        const messages = buffer.getMessages();
+        const kept = [];
+        let changed = false;
+        for (const item of outgoing) {
+            if (item.state === 'queued' || item.baseline === null) {
+                kept.push(item);
+                continue;
+            }
+            const text = renderedUserText(item.text);
+            let index = -1;
+            for (let position = item.baseline; position < messages.length; position++) {
+                const message = messages[position];
+                if (!deliveryRows.has(position) &&
+                    message?.role === 'user' &&
+                    renderedUserText(message.content) === text) {
+                    index = position;
+                    break;
+                }
+            }
+            if (index < 0) {
+                kept.push(item);
+                continue;
+            }
+            deliveryRows.add(index);
+            item.delivered = true;
+            changed = true;
+            // Keep the turn marker on the transcript row it now belongs to.
+            if (activePrompt?.id === item.id)
+                activePrompt = { ...item, state: 'sent', origin: index };
+        }
+        if (!changed)
+            return;
+        outgoing.splice(0, outgoing.length, ...kept);
+        // turnPrompts keeps its own copy for interrupt restoration: a prompt
+        // that left this list may still be the text the user wants back.
         syncActiveTurn();
+    };
+    // Delivers one outgoing record. A prompt that never reached a socket stays
+    // queued and replays on reconnect; one written before a drop may still
+    // have landed, so it stays on screen as unconfirmed and is never resent
+    // silently.
+    const deliverPrompt = (local) => {
+        const currentSid = sid;
+        if (destroyed || exited || streamBroken || !currentSid || !ready) {
+            local.state = 'queued';
+            return;
+        }
+        const dispatch = dispatchComposer(local.text);
+        if (dispatch.kind === 'rejected') {
+            local.state = 'unconfirmed';
+            status.textContent = dispatch.reason;
+            syncActiveTurn();
+            return;
+        }
+        local.state = 'sending';
+        // The row boundary belongs to the dispatch, not to typing: a prompt
+        // queued before the transcript was known must not treat old history
+        // as its own delivery.
+        local.baseline = buffer.getMessages().length;
+        syncActiveTurn();
+        // A row retired at the turn boundary may still be unacknowledged. If
+        // Pi did not clearly take it, put it back so the text is never lost.
+        // Returns false when the transcript already proved delivery: that
+        // record must not be relabelled, re-rendered, or doubted in the status
+        // line.
+        const retain = (state) => {
+            if (local.delivered)
+                return false;
+            local.state = state;
+            if (!outgoing.includes(local) && state !== 'sent') {
+                outgoing.push(local);
+                turnPrompts.push(local);
+            }
+            if (activePrompt?.id === local.id) {
+                activePrompt = { ...activePrompt, state };
+            }
+            else if (!activePrompt && outgoing.includes(local)) {
+                // The turn boundary retired this record before the failure
+                // landed, so nothing would render the text we just retained.
+                activePrompt = { ...local, origin: 'optimistic' };
+            }
+            return true;
+        };
         void invokeControl(wire, 'prompt', currentSid, {
             message: dispatch.message,
             ...(dispatch.streamingBehavior
@@ -535,44 +667,75 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
                 : {}),
         })
             .then((data) => {
-            const index = outgoing.indexOf(local);
-            if (data?.accepted !== true) {
-                if (index >= 0)
-                    outgoing.splice(index, 1);
-                removeTurnPrompt(local);
-                if (activePrompt?.id === local.id)
-                    activePrompt = outgoing.at(-1)
-                        ? { ...outgoing.at(-1), origin: 'optimistic' }
-                        : null;
-                if (!destroyed && currentSid === sid)
-                    status.textContent = 'Error: prompt was not accepted';
+            if (destroyed)
+                return;
+            if (data?.accepted === true) {
+                retain('sent');
             }
-            else if (index >= 0) {
-                local.state = 'sent';
-                if (activePrompt?.id === local.id)
-                    activePrompt.state = 'sent';
-            }
-            else if (activePrompt?.id === local.id) {
-                // Pi may reconcile the outgoing record before the
-                // prompt response arrives. Keep the retained marker's
-                // state in sync with the accepted response.
-                activePrompt.state = 'sent';
+            else if (retain('unconfirmed') && currentSid === sid) {
+                status.textContent = 'Error: prompt was not accepted';
             }
             syncActiveTurn();
+            flushQueue();
         })
             .catch((error) => {
-            const index = outgoing.indexOf(local);
-            if (index >= 0)
-                outgoing.splice(index, 1);
-            removeTurnPrompt(local);
-            if (activePrompt?.id === local.id)
-                activePrompt = outgoing.at(-1)
-                    ? { ...outgoing.at(-1), origin: 'optimistic' }
-                    : null;
-            if (!destroyed && currentSid === sid)
-                status.textContent = `Error: ${String(error)}`;
+            if (destroyed)
+                return;
+            // Keep the text visible in both cases. A transport drop may
+            // have delivered it; hydrate reconciles the transcript.
+            if (retain('unconfirmed') && currentSid === sid)
+                status.textContent = `Not confirmed: ${String(error)}`;
             syncActiveTurn();
+            flushQueue();
         });
+    };
+    const flushQueue = () => {
+        if (destroyed || exited || streamBroken || !sid || !ready)
+            return;
+        if (!hydrated) {
+            // A prompt may not own a transcript row before the history is
+            // known. Only a failed reset hydrate leaves that unknown while
+            // the session is live, so ask once more instead of stalling the
+            // queue until the next reconnect.
+            if (!hydrateInFlight)
+                requestHydrate(false);
+            return;
+        }
+        // One at a time: the server runs each call in its own goroutine, so a
+        // batch would not keep the user's order.
+        if (outgoing.some((item) => item.state === 'sending'))
+            return;
+        const next = outgoing.find((item) => item.state === 'queued');
+        if (next)
+            deliverPrompt(next);
+    };
+    const send = (text) => {
+        // No sid will ever arrive for a failed bootstrap, and a stream that
+        // failed a protocol check cannot send at all: keep the draft in the
+        // composer instead of queueing it into a dead pane.
+        if (exited ||
+            bootstrapFailed ||
+            streamBroken ||
+            subagentViewer.isOpen())
+            return false;
+        const dispatch = dispatchComposer(text);
+        if (dispatch.kind === 'rejected') {
+            status.textContent = dispatch.reason;
+            return false;
+        }
+        const local = {
+            id: `out-${++outgoingSeq}`,
+            text: dispatch.message,
+            state: 'queued',
+            baseline: null,
+        };
+        outgoing.push(local);
+        turnPrompts.push(local);
+        activePrompt = { ...local, origin: 'optimistic' };
+        syncActiveTurn();
+        // Every prompt goes through one ordered queue, so two quick sends
+        // reach Pi in the order they were typed.
+        flushQueue();
         return true;
     };
     const getModels = () => {
@@ -911,13 +1074,20 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
         }
         if (env.evt === 'messageEnd' && env.data?.message?.role === 'user') {
             const text = renderedUserText(env.data.message.content);
-            const match = outgoing.find((item) => renderedUserText(item.text) === text);
+            const position = result.messages.length - 1;
+            const match = outgoing.find((item) => item.baseline !== null &&
+                position >= item.baseline &&
+                !deliveryRows.has(position) &&
+                renderedUserText(item.text) === text);
             if (match) {
+                deliveryRows.add(position);
+                match.delivered = true;
                 outgoing.splice(outgoing.indexOf(match), 1);
                 if (activePrompt?.id === match.id) {
                     activePrompt = {
                         ...match,
-                        origin: result.messages.length - 1,
+                        state: 'sent',
+                        origin: position,
                     };
                 }
             }
@@ -925,6 +1095,16 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
         if (env.evt === 'transcriptReset') {
             view.clearCompactSnapshot?.();
             compactSnapshot = null;
+            // The transcript starts over, so every pending prompt now counts
+            // as newer than an empty history and the old row ledger is void.
+            // Without this a record kept from before the reset could never
+            // reconcile against the new rows, or could claim a reused index.
+            hydrated = false;
+            deliveryRows.clear();
+            for (const item of outgoing) {
+                if (item.baseline !== null)
+                    item.baseline = 0;
+            }
             requestHydrate(true);
         }
         else {
@@ -969,6 +1149,9 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
         view.title.textContent =
             typeof data.title === 'string' ? data.title : 'Pi RPC';
         buffer.applySnapshot(data.snapshot);
+        // Bootstrap installs the authoritative history the first queued
+        // prompt is measured against.
+        hydrated = true;
         applyState(data.state);
         // A snapshot taken at the exit cursor is terminal: bootstrap must
         // not mark the pane ready because the queued exit event is stale.
@@ -982,12 +1165,43 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
         paint();
         if (exited)
             return;
+        flushQueue();
         requestHydrate(false);
     })
         .catch((error) => {
-        if (!destroyed)
-            failBootstrap(error);
+        if (destroyed)
+            return;
+        // The spawn frame was written before the drop, so Pi may already
+        // be running for this pane. Re-spawning would start a second
+        // process, so this pane stays closed instead.
+        const transport = error?.transport;
+        failBootstrap(transport
+            ? 'Pi connection lost before the session opened — reopen the tab'
+            : error);
     });
+    // Reconnect: adopt whatever the dropped stream missed, then release any
+    // prompt queued while the session was unavailable.
+    const offState = typeof client.onState === 'function'
+        ? client.onState((connected) => {
+            if (destroyed || exited)
+                return;
+            if (!connected) {
+                status.textContent = 'Reconnecting…';
+                return;
+            }
+            if (!sid || bootstrapFailed)
+                return;
+            // A failed hydrate during the outage cleared readiness; the
+            // retained snapshot is still valid authority to accept input.
+            if (!ready) {
+                ready = true;
+                notifyControls();
+            }
+            status.textContent = 'Ready';
+            requestHydrate(false);
+            flushQueue();
+        })
+        : () => { };
     return {
         destroy: () => {
             if (destroyed)
@@ -995,6 +1209,7 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
             flushPendingSave();
             destroyed = true;
             off();
+            offState();
             client.close();
             subagentViewer.destroy();
             strip.destroy();
@@ -1007,6 +1222,7 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
                 return;
             // Keep the transcript that already rendered; only the ability to
             // send is withdrawn, and the status says why.
+            streamBroken = true;
             ready = false;
             status.textContent = `Error: ${message}`;
             notifyControls();

@@ -41,6 +41,7 @@ function fakeClient() {
     let accepted = null;
     let hydrateSeq = 0;
     let promptSeq = 0;
+    const stateListeners = new Set();
     const legacyId = (op) => {
         switch (op) {
             case 'hydrate':
@@ -86,6 +87,10 @@ function fakeClient() {
                     listener = () => {};
                 };
             },
+            onState(callback) {
+                stateListeners.add(callback);
+                return () => stateListeners.delete(callback);
+            },
             close() {},
         },
         emit(frame) {
@@ -99,6 +104,9 @@ function fakeClient() {
                 }
             }
             listener(frame);
+        },
+        setConnected(connected) {
+            for (const callback of [...stateListeners]) callback(connected);
         },
         // Delivers even after the controller unsubscribed, to prove a late
         // completion cannot publish after destroy.
@@ -145,12 +153,14 @@ describe('Pi RPC transcript controller', () => {
         const root = document.createElement('div');
         const wire = fakeClient();
         const chat = mountChatPi(root, '/work/demo', wire.client);
-        expect(chat.send('before bootstrap')).toBe(false);
+        expect(chat.send('before bootstrap')).toBe(true);
         expect(wire.sent[0]).toMatchObject({
             op: 'spawn',
             args: { cwd: '/work/demo' },
         });
         expect(wire.sent[0].args.sessionPath).toBeUndefined();
+        // Queued locally: no prompt frame exists before the sid does.
+        expect(wire.sent.some((frame) => frame.op === 'prompt')).toBe(false);
         wire.emit({
             t: 'res',
             id: 'sp',
@@ -177,6 +187,19 @@ describe('Pi RPC transcript controller', () => {
         expect(root.querySelector('.user-message')?.textContent).toContain(
             'saved text',
         );
+        // The prompt typed before bootstrap went out as soon as the sid
+        // arrived; drain its ack so the one-at-a-time queue is free.
+        const queuedPrompt = wire.sent.find((frame) => frame.op === 'prompt');
+        expect(queuedPrompt.args.message).toBe('before bootstrap');
+        wire.emit({
+            t: 'res',
+            id: queuedPrompt.id,
+            ok: true,
+            data: { accepted: true },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
         expect(chat.send('/clear')).toBe(true);
         expect(wire.sent.at(-1)).toMatchObject({
             op: 'prompt',
@@ -184,6 +207,15 @@ describe('Pi RPC transcript controller', () => {
             args: { message: '/clear' },
         });
         expect(wire.sent.at(-1).args.streamingBehavior).toBeUndefined();
+        // Prompts go out one at a time, so the next one waits for this ack.
+        wire.emit({
+            t: 'res',
+            id: wire.sent.at(-1).id,
+            ok: true,
+            data: { accepted: true },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
 
         expect(chat.send('hello')).toBe(true);
         expect(wire.sent.at(-1)).toMatchObject({
@@ -309,8 +341,10 @@ describe('Pi RPC transcript controller', () => {
             data: { message: { role: 'user', content: 'event first' } },
         });
         await Promise.resolve();
+        // The transcript row is proof the prompt landed, so the turn reads as
+        // sent even before the control ack arrives.
         expect(setActiveTurn).toHaveBeenLastCalledWith(
-            expect.objectContaining({ stateLabel: 'Sending' }),
+            expect.objectContaining({ stateLabel: 'Sent to Pi' }),
         );
         wire.emit({
             t: 'res',
@@ -761,14 +795,17 @@ describe('Pi RPC transcript controller', () => {
         const chat = mountChatPi(root, '/work/demo', wire.client);
         wire.emit({ t: 'res', id: 'sp', ok: true, data: { sid: 's1' } });
         await Promise.resolve();
+        await Promise.resolve();
 
+        // No sid will ever arrive, so the draft stays in the composer rather
+        // than queueing into a dead pane.
         expect(chat.send('blocked')).toBe(false);
         expect(root.textContent).toContain(
             'bootstrap snapshot missing or malformed',
         );
     });
 
-    it('stops accepting sends after rpcExited', () => {
+    it('stops accepting sends after rpcExited', async () => {
         const root = document.createElement('div');
         const wire = fakeClient();
         const chat = mountChatPi(root, '/work/demo', wire.client);
@@ -778,8 +815,79 @@ describe('Pi RPC transcript controller', () => {
             ok: true,
             data: { sid: 's1', snapshot: { lastSeq: 0, messages: [] } },
         });
+        await Promise.resolve();
+        await Promise.resolve();
         wire.emit({ t: 'evt', sid: 's1', seq: 1, evt: 'rpcExited', data: {} });
         expect(chat.send('after exit')).toBe(false);
+    });
+
+    it('queues a prompt until the session exists, then delivers it in order', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/demo', wire.client);
+        expect(chat.send('first')).toBe(true);
+        expect(chat.send('second')).toBe(true);
+        // Nothing was written: no sid exists yet, so both wait locally.
+        const prompts = () =>
+            wire.sent
+                .filter((frame) => frame.op === 'prompt')
+                .map((frame) => frame.args.message);
+        expect(prompts()).toEqual([]);
+        expect(root.textContent).toContain('Queued: first');
+
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's1', snapshot: { lastSeq: 0, messages: [] } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        // One at a time: the server runs calls in separate goroutines, so the
+        // second prompt waits for the first acknowledgement.
+        expect(prompts()).toEqual(['first']);
+        wire.emit({
+            t: 'res',
+            id: wire.sent.filter((frame) => frame.op === 'prompt').at(-1).id,
+            ok: true,
+            data: { accepted: true },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(prompts()).toEqual(['first', 'second']);
+    });
+
+    it('resyncs after a reconnect and reports the outage in the status line', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/demo', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's1', snapshot: { lastSeq: 0, messages: [] } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        wire.emit({
+            t: 'res',
+            id: 'hyd',
+            ok: true,
+            data: { lastSeq: 0, messages: [] },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        const hydrates = wire.sent.filter(
+            (frame) => frame.op === 'hydrate',
+        ).length;
+
+        wire.setConnected(false);
+        expect(root.textContent).toContain('Reconnecting…');
+        wire.setConnected(true);
+        // The dropped span is adopted from the server on every reconnect.
+        expect(wire.sent.filter((frame) => frame.op === 'hydrate').length).toBe(
+            hydrates + 1,
+        );
     });
 
     it('keeps a rejected setter/reset on the ready sid and still sends the next prompt', async () => {
@@ -1222,7 +1330,7 @@ describe('Pi RPC transcript controller', () => {
         await expect(rejected).rejects.toThrow('name not allowed');
     });
 
-    it('non-accepted prompt response removes only the matching optimistic record, surfaces an error, and falls back to the next one', async () => {
+    it('keeps a refused prompt visible and still delivers the one queued behind it', async () => {
         const root = document.createElement('div');
         const wire = fakeClient();
         const chat = mountChatPi(root, '/work/reject', wire.client);
@@ -1241,9 +1349,10 @@ describe('Pi RPC transcript controller', () => {
 
         expect(chat.send('first')).toBe(true);
         expect(chat.send('second')).toBe(true);
+        // One at a time: only the first prompt is on the wire.
         const prompts = wire.sent.filter((frame) => frame.op === 'prompt');
-        expect(prompts).toHaveLength(2);
-        const [firstPrompt, secondPrompt] = prompts;
+        expect(prompts).toHaveLength(1);
+        const [firstPrompt] = prompts;
 
         wire.emit({
             t: 'res',
@@ -1255,8 +1364,13 @@ describe('Pi RPC transcript controller', () => {
         await Promise.resolve();
 
         expect(root.textContent).toContain('Error: prompt was not accepted');
-        // The first prompt was rejected, the second is still in flight.
-        // A second user event for the surviving prompt must still reconcile.
+        // The refused text stays on screen, and the queue moves on.
+        expect(root.textContent).toContain('Not confirmed: first');
+        const secondPrompt = wire.sent
+            .filter((frame) => frame.op === 'prompt')
+            .at(-1);
+        expect(secondPrompt.args.message).toBe('second');
+
         wire.emit({
             t: 'res',
             id: secondPrompt.id,
@@ -1275,10 +1389,638 @@ describe('Pi RPC transcript controller', () => {
         await Promise.resolve();
         await Promise.resolve();
         expect(root.textContent).toContain('second');
-        // And after the second prompt reconciles, no optimistic marker remains.
+        // The delivered prompt reconciled; the refused one is still shown.
+        const optimistics = root.querySelectorAll(
+            '[data-pi-optimistic-message="true"]',
+        );
+        expect(optimistics).toHaveLength(1);
+        expect(optimistics[0].textContent).toContain('Not confirmed: first');
+    });
+
+    it('keeps the text of a prompt that fails after the turn already settled', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/late-fail', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(chat.send('late text')).toBe(true);
+        const prompt = wire.sent
+            .filter((frame) => frame.op === 'prompt')
+            .at(-1);
+        // The turn settles before the prompt is acknowledged.
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'stateChanged',
+            data: { busy: false },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        wire.emit({
+            t: 'res',
+            id: prompt.id,
+            ok: false,
+            error: 'control connection lost',
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // The failure arrives after the boundary retired the record; its text
+        // must come back rather than vanish.
+        expect(root.textContent).toContain('Not confirmed: late text');
+    });
+
+    it('retires an unconfirmed prompt once the transcript contains it', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/unconfirmed', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(chat.send('may have landed')).toBe(true);
+        const prompt = wire.sent
+            .filter((frame) => frame.op === 'prompt')
+            .at(-1);
+        // A transport drop leaves the prompt written but unacknowledged.
+        wire.emit({
+            t: 'res',
+            id: prompt.id,
+            ok: false,
+            error: 'control connection lost',
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(root.textContent).toContain('Not confirmed: may have landed');
+
+        // The authoritative transcript proves it landed; the row goes.
+        wire.emit({
+            t: 'res',
+            id: 'hyd',
+            ok: true,
+            data: {
+                lastSeq: 1,
+                messages: [{ role: 'user', content: 'may have landed' }],
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        // The transcript (not the pinned prompt marker) must show the row once.
+        const transcript = root.querySelector('.review-chat-wrapper');
+        expect(transcript.textContent).not.toContain('Not confirmed');
+        expect(transcript.textContent).toContain('may have landed');
+    });
+
+    it('renders one row per confirmed prompt, with no optimistic duplicate', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/one-row', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(chat.send('only once')).toBe(true);
+        const prompt = wire.sent
+            .filter((frame) => frame.op === 'prompt')
+            .at(-1);
+        wire.emit({
+            t: 'res',
+            id: prompt.id,
+            ok: true,
+            data: { accepted: true },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'messageEnd',
+            data: { message: { role: 'user', content: 'only once' } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const rows = [...root.querySelectorAll('.user-message')].filter(
+            (node) =>
+                (node.textContent ?? '').includes('only once') &&
+                node.closest('.review-chat-wrapper') !== null,
+        );
+        expect(rows).toHaveLength(1);
+    });
+
+    it('does not retire a new prompt against an identical row from history', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/history-match', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: {
+                    lastSeq: 0,
+                    messages: [{ role: 'user', content: 'retry' }],
+                },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(chat.send('retry')).toBe(true);
+        const prompt = wire.sent
+            .filter((frame) => frame.op === 'prompt')
+            .at(-1);
+        wire.emit({
+            t: 'res',
+            id: prompt.id,
+            ok: false,
+            error: 'control connection lost',
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // The same text exists in history, but it was already there before
+        // this prompt was typed, so it proves nothing about delivery.
+        wire.emit({
+            t: 'res',
+            id: 'hyd',
+            ok: true,
+            data: {
+                lastSeq: 1,
+                messages: [{ role: 'user', content: 'retry' }],
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(root.textContent).toContain('Not confirmed: retry');
+    });
+
+    it('does not confirm a pre-bootstrap prompt with history it never wrote', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/pre-bootstrap', wire.client);
+
+        // Typed before the session exists: nothing about the transcript is
+        // known yet, so its history must never count as this prompt landing.
+        expect(chat.send('retry')).toBe(true);
+        expect(wire.sent.some((frame) => frame.op === 'prompt')).toBe(false);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: {
+                    lastSeq: 0,
+                    messages: [{ role: 'user', content: 'retry' }],
+                },
+                state: { busy: false },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        const prompt = wire.sent.find((frame) => frame.op === 'prompt');
+        wire.emit({
+            t: 'res',
+            id: prompt.id,
+            ok: false,
+            error: 'control connection lost',
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        wire.emit({
+            t: 'res',
+            id: 'hyd',
+            ok: true,
+            data: {
+                lastSeq: 1,
+                messages: [{ role: 'user', content: 'retry' }],
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(root.textContent).toContain('Not confirmed: retry');
+    });
+
+    it('does not let one transcript row confirm two identical prompts', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/two-identical', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // Both are typed before either is acknowledged, so both are queued
+        // behind the same empty transcript.
+        expect(chat.send('again')).toBe(true);
+        expect(chat.send('again')).toBe(true);
+        const first = wire.sent.filter((frame) => frame.op === 'prompt')[0];
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'messageEnd',
+            data: { message: { role: 'user', content: 'again' } },
+        });
+        wire.emit({
+            t: 'res',
+            id: first.id,
+            ok: true,
+            data: { accepted: true },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        const second = wire.sent.filter((frame) => frame.op === 'prompt')[1];
+        wire.emit({
+            t: 'res',
+            id: second.id,
+            ok: false,
+            error: 'control connection lost',
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // The transcript still holds only the first prompt's row.
+        wire.emit({
+            t: 'res',
+            id: 'hyd',
+            ok: true,
+            data: {
+                lastSeq: 2,
+                messages: [{ role: 'user', content: 'again' }],
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(root.textContent).toContain('Not confirmed: again');
+    });
+
+    it('rebases pending prompts when a reconnect snapshot replaced the transcript', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/replaced', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: {
+                    lastSeq: 0,
+                    messages: [
+                        { role: 'user', content: 'old one' },
+                        { role: 'user', content: 'old two' },
+                    ],
+                },
+                state: { busy: false },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(chat.send('kept')).toBe(true);
+        const prompt = wire.sent.find((frame) => frame.op === 'prompt');
+        wire.emit({
+            t: 'res',
+            id: prompt.id,
+            ok: false,
+            error: 'control connection lost',
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // Compaction reset the transcript while the stream was down: the
+        // reset event never arrived, and the reconnect snapshot is shorter
+        // than the boundary the pending record recorded.
+        wire.emit({
+            t: 'res',
+            id: 'hyd',
+            ok: true,
+            data: {
+                lastSeq: 3,
+                messages: [{ role: 'user', content: 'kept' }],
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(root.textContent).not.toContain('Not confirmed: kept');
+    });
+
+    it('dispatches a prompt queued during a reset hydrate as soon as it lands', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/reset-queue', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: false },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // The transcript is about to be replaced, so its history is unknown
+        // until the reset hydrate lands.
+        wire.emit({ t: 'evt', sid: 's1', seq: 1, evt: 'transcriptReset' });
+        await Promise.resolve();
+        expect(chat.send('after reset')).toBe(true);
+        expect(wire.sent.some((frame) => frame.op === 'prompt')).toBe(false);
+
+        wire.emit({
+            t: 'res',
+            id: 'hyd-1',
+            ok: true,
+            data: {
+                lastSeq: 2,
+                messages: [],
+                state: { busy: false },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        const prompt = wire.sent.find((frame) => frame.op === 'prompt');
+        expect(prompt.args.message).toBe('after reset');
+    });
+
+    it('retries the hydrate a failed reset left behind', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/reset-failed', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: false },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        wire.emit({ t: 'evt', sid: 's1', seq: 1, evt: 'transcriptReset' });
+        await Promise.resolve();
+        wire.emit({
+            t: 'res',
+            id: 'hyd-1',
+            ok: false,
+            error: 'control call timeout',
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // Sending into an unknown transcript must ask for it again rather
+        // than park the prompt until the next reconnect.
+        expect(chat.send('retry hydrate')).toBe(true);
+        await Promise.resolve();
         expect(
-            root.querySelector('[data-pi-optimistic-prompt="true"]'),
-        ).toBeNull();
+            wire.sent.filter((frame) => frame.op === 'hydrate'),
+        ).toHaveLength(3);
+        wire.emit({
+            t: 'res',
+            id: 'hyd-2',
+            ok: true,
+            data: {
+                lastSeq: 3,
+                messages: [],
+                state: { busy: false },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(
+            wire.sent.find((frame) => frame.op === 'prompt')?.args.message,
+        ).toBe('retry hydrate');
+    });
+
+    it('forgets row ownership when a reconnect replaced the transcript', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/empty-outgoing', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: {
+                    lastSeq: 0,
+                    messages: [],
+                },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // The first prompt is delivered, so no record remains to carry a
+        // boundary, but its row is still owned by the ledger.
+        expect(chat.send('first')).toBe(true);
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'messageEnd',
+            data: { message: { role: 'user', content: 'first' } },
+        });
+        const first = wire.sent.find((frame) => frame.op === 'prompt');
+        wire.emit({
+            t: 'res',
+            id: first.id,
+            ok: true,
+            data: { accepted: true },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // Compaction reset the transcript while the stream was down.
+        wire.emit({
+            t: 'res',
+            id: 'hyd',
+            ok: true,
+            data: {
+                lastSeq: 4,
+                messages: [],
+                state: { busy: false },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(chat.send('second')).toBe(true);
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 5,
+            evt: 'messageEnd',
+            data: { message: { role: 'user', content: 'second' } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        const wrapper = root.querySelector('.review-chat-wrapper');
+        expect(
+            [...wrapper.querySelectorAll('.user-message')].filter((node) =>
+                (node.textContent ?? '').includes('second'),
+            ),
+        ).toHaveLength(1);
+        expect(root.textContent).not.toContain('secondsecond');
+    });
+
+    it('does not resurrect a prompt its own idle hydrate retired', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/idle-hydrate', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(chat.send('settled')).toBe(true);
+        const prompt = wire.sent.find((frame) => frame.op === 'prompt');
+        // The snapshot proves the prompt landed and that the turn is over.
+        wire.emit({
+            t: 'res',
+            id: 'hyd',
+            ok: true,
+            data: {
+                lastSeq: 2,
+                messages: [{ role: 'user', content: 'settled' }],
+                state: { busy: false },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        wire.emit({
+            t: 'res',
+            id: prompt.id,
+            ok: false,
+            error: 'control connection lost',
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(root.textContent).not.toContain('Not confirmed');
+        const wrapper = root.querySelector('.review-chat-wrapper');
+        expect(
+            [...wrapper.querySelectorAll('.user-message')].filter((node) =>
+                (node.textContent ?? '').includes('settled'),
+            ),
+        ).toHaveLength(1);
+    });
+
+    it('does not resurrect a delivered prompt when its ack fails late', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/delivered', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(chat.send('already there')).toBe(true);
+        const prompt = wire.sent
+            .filter((frame) => frame.op === 'prompt')
+            .at(-1);
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'messageEnd',
+            data: { message: { role: 'user', content: 'already there' } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'stateChanged',
+            data: { busy: false },
+        });
+        await Promise.resolve();
+        // The rejected request lands after the transcript already has the
+        // prompt: it may not add a second, doubting row.
+        wire.emit({
+            t: 'res',
+            id: prompt.id,
+            ok: false,
+            error: 'control connection lost',
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const transcript = root.querySelector('.review-chat-wrapper');
+        expect(transcript.textContent).not.toContain('Not confirmed');
+        expect(transcript.textContent).not.toContain('Sent to Pi');
+        expect(
+            [...transcript.querySelectorAll('.user-message')].filter((node) =>
+                (node.textContent ?? '').includes('already there'),
+            ),
+        ).toHaveLength(1);
     });
 
     it('non-matching authoritative user text leaves the optimistic record; identical texts reconcile via renderedUserText', async () => {
@@ -1398,11 +2140,14 @@ describe('Pi RPC transcript controller', () => {
         const transcript = transcriptEl;
         const transcriptOptimisticCount = () =>
             [...transcript.querySelectorAll('.user-message')].filter((node) =>
-                /^(Sending|Sent to Pi): /u.test(node.textContent ?? ''),
+                /^(Sending|Sent to Pi|Queued|Not confirmed): /u.test(
+                    node.textContent ?? '',
+                ),
             ).length;
         expect(transcriptOptimisticCount()).toBe(2);
-        // Busy transitions to false (agent_settled). The chat must clear
-        // ALL stranded optimistic records; both prefixes disappear.
+        // Busy transitions to false (agent_settled). The written record is
+        // retired; the queued one never left the browser, so the turn
+        // boundary must not erase text the user still expects to send.
         settledWire.emit({
             t: 'evt',
             sid: 's1',
@@ -1412,7 +2157,9 @@ describe('Pi RPC transcript controller', () => {
         });
         await Promise.resolve();
         await Promise.resolve();
-        expect(transcriptOptimisticCount()).toBe(0);
+        expect(transcriptOptimisticCount()).toBe(1);
+        expect(transcript.textContent).toContain('Queued: beta');
+        expect(transcript.textContent).not.toContain('alpha');
         // sessionActive is now false — interrupt() rejects.
         await expect(settledChat.interrupt()).rejects.toThrow(
             'Pi RPC is not active',
@@ -1444,8 +2191,10 @@ describe('Pi RPC transcript controller', () => {
         await Promise.resolve();
         await Promise.resolve();
         const prompts = failWire.sent.filter((frame) => frame.op === 'prompt');
-        const [firstPrompt, secondPrompt] = prompts;
-        // Reject the first prompt; the second must remain optimistic.
+        const [firstPrompt] = prompts;
+        // One at a time: the second is still queued locally.
+        expect(prompts).toHaveLength(1);
+        // Reject the first prompt; the queued second one goes out next.
         failWire.emit({
             t: 'res',
             id: firstPrompt.id,
@@ -1457,14 +2206,20 @@ describe('Pi RPC transcript controller', () => {
         expect(failRoot.textContent).toContain(
             'Error: control connection closed',
         );
-        // Exactly one optimistic record is left: the surviving "beta".
+        const secondPrompt = failWire.sent
+            .filter((frame) => frame.op === 'prompt')
+            .at(-1);
+        expect(secondPrompt.args.message).toBe('beta');
+        // The unconfirmed "alpha" and the in-flight "beta" both stay on
+        // screen until the transcript reconciles them.
         const failTranscript = failRoot.querySelector('.review-chat-wrapper');
         const optimistics = failTranscript.querySelectorAll(
-            '[data-pi-optimistic-prompt="true"]',
+            '[data-pi-optimistic-message="true"]',
         );
-        expect(optimistics).toHaveLength(1);
-        expect(optimistics[0].textContent).toContain('beta');
-        expect(optimistics[0].textContent).not.toContain('alpha');
+        expect(optimistics).toHaveLength(2);
+        const labels = [...optimistics].map((node) => node.textContent ?? '');
+        expect(labels.some((text) => text.includes('alpha'))).toBe(true);
+        expect(labels.some((text) => text.includes('beta'))).toBe(true);
         // And the second prompt can still reconcile via renderedUserText.
         failWire.emit({
             t: 'res',
@@ -1893,6 +2648,69 @@ describe('Pi RPC transcript controller', () => {
         ).not.toBeNull();
     });
 
+    it('keeps a pending prompt visible across a transcript reset and re-anchors it', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/reset-pending', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: {
+                    lastSeq: 0,
+                    messages: [{ role: 'user', content: 'old history' }],
+                },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(chat.send('still pending')).toBe(true);
+        const prompt = wire.sent
+            .filter((frame) => frame.op === 'prompt')
+            .at(-1);
+        wire.emit({
+            t: 'res',
+            id: prompt.id,
+            ok: false,
+            error: 'control connection lost',
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(root.textContent).toContain('Not confirmed: still pending');
+
+        // The reset clears the transcript; the text stays, and its anchor
+        // restarts at the empty history.
+        wire.emit({ t: 'evt', sid: 's1', seq: 1, evt: 'transcriptReset' });
+        const resetHydrate = wire.sent.at(-1);
+        expect(resetHydrate).toMatchObject({ op: 'hydrate' });
+        wire.emit({
+            t: 'res',
+            id: resetHydrate.id,
+            ok: true,
+            data: { lastSeq: 1, messages: [] },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(root.textContent).toContain('Not confirmed: still pending');
+
+        // A row in the new transcript proves it landed after all.
+        wire.emit({ t: 'evt', sid: 's1', seq: 2, evt: 'hydrate' });
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 3,
+            evt: 'messageEnd',
+            data: { message: { role: 'user', content: 'still pending' } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(root.textContent).not.toContain('Not confirmed');
+    });
+
     it('does not request reset hydrate for a stale transcriptReset event', async () => {
         const root = document.createElement('div');
         const wire = fakeClient();
@@ -2008,7 +2826,8 @@ describe('Pi RPC transcript controller', () => {
         await Promise.resolve();
         await Promise.resolve();
         expect(root.textContent).toContain('Error: prompt was not accepted');
-        expect(root.textContent).not.toContain('rejected prompt');
+        // A refused prompt keeps its text on screen; it is never dropped.
+        expect(root.textContent).toContain('rejected prompt');
         expect(setStructuredMessages).not.toHaveBeenCalled();
         expect(replaceChildren).not.toHaveBeenCalled();
     });
