@@ -8605,10 +8605,10 @@ html[data-phi-config-page] .settings-modal {
     .presets-container > .pi-rpc-skills-trigger,
     .presets-container > .pi-rpc-compact-btn,
     .presets-container > .pi-rpc-reset-btn {
-        font-size: inherit !important;
+        font-size: 10px !important;
         min-height: 24px;
-        height: auto !important;
-        line-height: normal !important;
+        height: 24px !important;
+        line-height: 22px !important;
     }
 
     .presets-container > .pi-rpc-context-meter {
