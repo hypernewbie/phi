@@ -150,23 +150,6 @@ func TestTTYMakeRawIsReversible(t *testing.T) {
 	}
 }
 
-// TestTTYEncodeResizeFrame pins the 0x02 frame the relay
-// sends. The plan's "SIGWINCH sends the current dimensions to
-// Phi" line depends on the wire shape matching the server.
-func TestTTYEncodeResizeFrame(t *testing.T) {
-	tty := &TTY{}
-	frame := tty.EncodeResize(Resize{Cols: 80, Rows: 24})
-	if len(frame) != 5 || frame[0] != 0x02 {
-		t.Fatalf("frame shape: %v", frame)
-	}
-	if frame[1] != 0 || frame[2] != 80 {
-		t.Fatalf("cols: %d", int(frame[1])<<8|int(frame[2]))
-	}
-	if frame[3] != 0 || frame[4] != 24 {
-		t.Fatalf("rows: %d", int(frame[3])<<8|int(frame[4]))
-	}
-}
-
 // TestPTYStartSetsUpSlave verifies the PTY round-trip works
 // end-to-end. The child writes "READY" then reads stdin and
 // echoes it. The test asserts the master sees "READY" then a

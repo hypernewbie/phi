@@ -2,21 +2,26 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { setupDomHarness } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
-import { PTYWebSocket } from '../web/ws.js';
+import { PTYWebSocket, terminalSubprotocol } from '../web/ws.js';
+import {
+    TerminalClientFrame,
+    TerminalServerFrame,
+} from '../web/proto/terminal.js';
 
-// Hot-v1 client contract (see temp/SUPERHIGHWAY.md). These tests pin the
+// Hot terminal client contract (see temp/SUPERHIGHWAY.md). These tests pin the
 // e2e behavior: fresh attach with checkpoint queues the snapshot and a
 // bounded delta BEFORE open, reconnects resume from the drain watermark
-// without resetting, gap repairs flush in order, and the legacy replay
-// path is preserved for old servers.
+// without resetting, and gap repairs flush in order.
 
 setupDomHarness();
 
 class FakeWebSocket {
+    static OPEN = 1;
     constructor(url) {
         this.url = url;
         this.binaryType = '';
         this.readyState = 1;
+        this.protocol = terminalSubprotocol;
         this.sent = [];
     }
     send(b) {
@@ -30,24 +35,60 @@ class FakeWebSocket {
         u8.set(payload, 1);
         this.onmessage({ data: buf });
     }
+    emitFrame(bytes) {
+        this.onmessage({ data: new Uint8Array(bytes).buffer });
+    }
     emitHot(startSeq, text) {
-        const bytes = new TextEncoder().encode(text);
-        const payload = new ArrayBuffer(8 + bytes.byteLength);
-        const view = new DataView(payload);
-        view.setBigUint64(0, BigInt(startSeq), false);
-        new Uint8Array(payload, 8).set(bytes);
-        this.emit(0x09, new Uint8Array(payload));
+        const bytes =
+            typeof text === 'string' ? new TextEncoder().encode(text) : text;
+        this.emitFrame(
+            TerminalServerFrame.encode(
+                TerminalServerFrame.fromPartial({
+                    payload: {
+                        $case: 'output',
+                        value: { start: BigInt(startSeq), data: bytes },
+                    },
+                }),
+            ).finish(),
+        );
     }
     emitAttachHead(hdr, extra) {
-        const json = new TextEncoder().encode(JSON.stringify(hdr));
-        const payload = new ArrayBuffer(
-            4 + json.byteLength + (extra?.byteLength || 0),
+        const ckpt = hdr.ckpt
+            ? {
+                  ...(hdr.ckpt.kind !== undefined
+                      ? { kind: hdr.ckpt.kind }
+                      : {}),
+                  through: BigInt(hdr.ckpt.through ?? 0),
+                  cols: hdr.ckpt.cols ?? 0,
+                  rows: hdr.ckpt.rows ?? 0,
+                  data:
+                      extra ??
+                      (hdr.ckpt.ansi
+                          ? new TextEncoder().encode(hdr.ckpt.ansi)
+                          : new Uint8Array()),
+                  ...(hdr.ckpt.eventCursor
+                      ? { eventCursor: hdr.ckpt.eventCursor }
+                      : {}),
+              }
+            : undefined;
+        this.emitFrame(
+            TerminalServerFrame.encode(
+                TerminalServerFrame.fromPartial({
+                    payload: {
+                        $case: 'attach',
+                        value: {
+                            epoch: BigInt(hdr.epoch ?? 0),
+                            oldest: BigInt(hdr.oldest ?? 0),
+                            head: BigInt(hdr.head ?? 0),
+                            ...(ckpt ? { checkpoint: ckpt } : {}),
+                            ...(hdr.replay_from !== undefined
+                                ? { replayFrom: BigInt(hdr.replay_from) }
+                                : {}),
+                        },
+                    },
+                }),
+            ).finish(),
         );
-        const view = new DataView(payload);
-        view.setUint32(0, json.byteLength, false);
-        new Uint8Array(payload, 4).set(json);
-        if (extra) new Uint8Array(payload, 4 + json.byteLength).set(extra);
-        this.emit(0x08, new Uint8Array(payload));
     }
 }
 
@@ -133,7 +174,7 @@ beforeEach(() => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
 });
 
-describe('PTYWebSocket hot-v1 framing', () => {
+describe('PTYWebSocket hot framing', () => {
     it('parses ATTACH_HEAD and holds live frames until release', () => {
         const data = vi.fn();
         const onAttachHead = vi.fn();
@@ -286,9 +327,10 @@ describe('PTYWebSocket hot-v1 framing', () => {
 
     it('preserves max-safe-integer epochs exactly (server masks to doublesafe)', () => {
         // Companion to the Go epoch-range gate: the wire carries epochs
-        // as JSON numbers, so the client must not lose low bits on the
-        // way in. MAX_SAFE_INTEGER has every low bit set — the critical
-        // shape. Anything above it is a server bug, not a client one.
+        // as 64-bit integers decoded to bigint, so the client must not
+        // lose low bits on the way in. MAX_SAFE_INTEGER has every low
+        // bit set — the critical shape. Anything above it is a server
+        // bug, not a client one.
         const data = vi.fn();
         let seen = null;
         const pty = new PTYWebSocket('p', data, null, null, null, {
@@ -310,7 +352,7 @@ describe('PTYWebSocket hot-v1 framing', () => {
         const onClose = vi.fn();
         const pty = new PTYWebSocket('p', data, null, onClose, null, {});
         const closeSpy = vi.spyOn(pty.ws, 'close');
-        pty.ws.emit(0x08, new Uint8Array(2)); // < 4-byte header: malformed
+        pty.ws.onmessage({ data: new Uint8Array([0xff, 0xff]).buffer }); // not a frame: malformed
         expect(closeSpy).toHaveBeenCalled();
         expect(pty.mode).toBe('unknown'); // never entered hot on garbage
         // The close event reaches the host, which owns reconnect/backoff.
@@ -318,15 +360,68 @@ describe('PTYWebSocket hot-v1 framing', () => {
         expect(onClose).toHaveBeenCalled();
     });
 
-    it('legacy frames flip the mode and deliver like the old protocol', () => {
+    it('superseded leading-byte frames close the socket instead of delivering', () => {
+        // Old leading-byte terminal frames are not valid protobuf: an
+        // old server fails closed so the host reconnect path (against
+        // a matching server) can redial.
         const data = vi.fn();
         const onControl = vi.fn();
         const pty = new PTYWebSocket('p', data, onControl);
+        const closeSpy = vi.spyOn(pty.ws, 'close');
         pty.ws.emit(0x01, new TextEncoder().encode('replay'));
-        expect(pty.mode).toBe('legacy');
-        expect(data).toHaveBeenCalledWith('replay');
+        expect(closeSpy).toHaveBeenCalled();
+        expect(pty.mode).toBe('unknown');
+        expect(data).not.toHaveBeenCalled();
         pty.ws.emit(0x06, new Uint8Array(0));
-        expect(onControl).toHaveBeenCalledWith({ type: 'replay-complete' });
+        expect(onControl).not.toHaveBeenCalled();
+    });
+
+    it('encodes input, resize, and chunked pastes as generated frames', () => {
+        const pty = new PTYWebSocket('p', () => {});
+        const frames = () =>
+            pty.ws.sent.map((b) =>
+                TerminalClientFrame.decode(new Uint8Array(b)),
+            );
+
+        expect(pty.sendInput('hi')).toBe(true);
+        expect(pty.sendResize(120, 40)).toBe(true);
+        expect(pty.sendResize(0, 40)).toBe(false);
+        expect(pty.sendResize(120, 70000)).toBe(false);
+        let decoded = frames();
+        expect(decoded).toHaveLength(2);
+        expect(decoded[0].payload.$case).toBe('input');
+        expect(Array.from(decoded[0].payload.value)).toEqual([
+            ...new TextEncoder().encode('hi'),
+        ]);
+        expect(decoded[1].payload).toEqual({
+            $case: 'resize',
+            value: { cols: 120, rows: 40 },
+        });
+
+        // A paste larger than the chunk span goes out ordered and
+        // byte-exact, with a multi-byte sequence straddling a boundary.
+        const span = 1 * 1024 * 1024;
+        const prefix = 'a'.repeat(span - 1);
+        const paste = `${prefix}é${'b'.repeat(10)}`;
+        pty.ws.sent.length = 0;
+        expect(pty.sendInput(paste)).toBe(true);
+        decoded = frames();
+        expect(decoded.length).toBeGreaterThan(1);
+        const total = decoded.reduce(
+            (n, f) => n + f.payload.value.byteLength,
+            0,
+        );
+        const joined = new Uint8Array(total);
+        let at = 0;
+        for (const f of decoded) {
+            joined.set(f.payload.value, at);
+            at += f.payload.value.byteLength;
+        }
+        expect(new TextDecoder().decode(joined)).toBe(paste);
+        for (const f of decoded) {
+            expect(f.payload.$case).toBe('input');
+            expect(f.payload.value.byteLength).toBeLessThanOrEqual(span);
+        }
     });
 });
 
@@ -620,18 +715,18 @@ describe('TabManager hot attach bootstrap', () => {
         expect(tab.term.writes).toEqual(['fresh']);
     });
 
-    it('legacy replay keeps the reset-on-first-byte behavior', () => {
+    it('live output without attach closes instead of delivering', () => {
+        // Without the atomic attach frontier no live byte is safe to
+        // deliver: close so the host redials for an authoritative head.
         stubTerminalGlobal();
         const tm = makeTm();
         tm.createTab('p6', 's6', 'T', 'bash', '', '', false);
         const tab = tm.tabs.get('p6');
-
-        // Server ignores term_proto: legacy frames only.
+        const closeSpy = vi.spyOn(tab.ws.ws, 'close');
         tab.awaitingReplay = true; // reconnectTab sets this
-        tab.ws.ws.emit(0x01, new TextEncoder().encode('full replay'));
-        expect(tab.term.resetCount).toBe(1);
-        expect(tab.term.writes).toEqual(['full replay']);
-        expect(tab.term.opened).toBe(true);
+        tab.ws.ws.emitHot(0, 'full replay');
+        expect(closeSpy).toHaveBeenCalled();
+        expect(tab.term.writes).toEqual([]);
     });
 });
 

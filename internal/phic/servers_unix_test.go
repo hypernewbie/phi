@@ -23,6 +23,7 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
@@ -40,7 +41,7 @@ func TestCLIDesktopProfilesColoredServerSwitchOriginIsolationAndRememberedPane(t
 		_, _ = mac.Write([]byte(name))
 		proof := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 		source := []byte("\x1b[?1049hSOURCE_" + name + "\r\n")
-		upgrade := websocket.Upgrader{}
+		upgrade := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			cookie, cookieErr := r.Cookie("phi_access_session")
 			if cookieErr == nil && cookie.Value != name {
@@ -97,16 +98,19 @@ func TestCLIDesktopProfilesColoredServerSwitchOriginIsolationAndRememberedPane(t
 				mu.Lock()
 				connects[name]++
 				mu.Unlock()
-				_ = ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7, Head: uint64(len(source))}, nil))
+				_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, uint64(len(source))))
 				for {
 					_, data, err := ws.ReadMessage()
 					if err != nil {
 						return
 					}
-					if len(data) > 0 && data[0] == 1 {
-						mu.Lock()
-						inputs[name] = append(inputs[name], data[1:]...)
-						mu.Unlock()
+					frame, err := wireproto.DecodeClientFrame(data)
+					if err == nil {
+						if in, ok := frame.GetPayload().(*wspb.TerminalClientFrame_Input); ok {
+							mu.Lock()
+							inputs[name] = append(inputs[name], in.Input...)
+							mu.Unlock()
+						}
 					}
 				}
 			case "/api/terminals/same/recording":

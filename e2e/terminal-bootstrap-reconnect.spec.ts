@@ -1,6 +1,16 @@
 import { createHash } from 'node:crypto';
 import { expect, test, type WebSocketRoute } from '@playwright/test';
+import { TerminalServerFrame } from '../web/proto/terminal.js';
+import type {
+    MessageFns,
+    TerminalServerFrame as TerminalServerMessage,
+} from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+
+// The served bundle carries no types; bind its runtime codec to the
+// generated declarations so spec-side encoding is fully checked.
+const ServerCodec: MessageFns<TerminalServerMessage> =
+    TerminalServerFrame as unknown as MessageFns<TerminalServerMessage>;
 let phi: PhiServer;
 test.beforeAll(async () => {
     phi = await startPhi();
@@ -173,17 +183,22 @@ for (const pauseBatch of [1, 3]) {
             (socket) => {
                 connections++;
                 if (!firstSocket) firstSocket = socket;
-                const hdr = Buffer.from(
-                    JSON.stringify({
-                        epoch: 7,
-                        oldest: 0,
-                        head: source.length,
-                    }),
+                socket.send(
+                    Buffer.from(
+                        ServerCodec.encode(
+                            ServerCodec.fromPartial({
+                                payload: {
+                                    $case: 'attach',
+                                    value: {
+                                        epoch: BigInt(7),
+                                        oldest: BigInt(0),
+                                        head: BigInt(source.length),
+                                    },
+                                },
+                            }),
+                        ).finish(),
+                    ),
                 );
-                const frame = Buffer.alloc(5);
-                frame[0] = 0x08;
-                frame.writeUInt32BE(hdr.length, 1);
-                socket.send(Buffer.concat([frame, hdr]));
             },
         );
         await page.goto(phi.url);
@@ -199,7 +214,7 @@ for (const pauseBatch of [1, 3]) {
             .toBe(true);
         if (!firstSocket) throw new Error('attach socket was not created');
         firstSocket.close();
-        // The route sends ATTACH_HEAD as soon as the second socket opens.
+        // The route sends the attach frame as soon as the second socket opens.
         // Yield to the browser so its handler starts while the old xterm
         // callback is still deliberately held.
         await expect.poll(() => connections).toBeGreaterThanOrEqual(2);

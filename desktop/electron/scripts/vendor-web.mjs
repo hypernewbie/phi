@@ -42,6 +42,7 @@ const WEB_JS_MODULES = [
   'terminal-state.js',
   'terminal-history.js',
   'ws.js',
+  'ws-protocols.js',
   'sessions.js',
   'path-picker.js',
   'util.js',
@@ -103,7 +104,7 @@ function copyDirRecursive(src, dest) {
 }
 
 /** Browser app subdirectories the module graph imports. */
-const WEB_JS_MODULE_DIRS = ['chat-pi'];
+const WEB_JS_MODULE_DIRS = ['chat-pi', 'proto'];
 
 /** The main-view-page placeholder the vendored header is inlined into. */
 const HEADER_PLACEHOLDER = '<!--VENDORED_HEADER-->';

@@ -1,0 +1,453 @@
+syntax = "proto3";
+
+package phi.websocket.control.v1;
+
+option go_package = "github.com/hypernewbie/phi/pkg/ws/pb;wspb";
+
+// Control is the chat endpoint. One WebSocket binary message carries one
+// ControlClientFrame or one ControlServerFrame. Request ids and session ids
+// stay inside the typed call/response/event payloads.
+message ControlClientFrame {
+  oneof payload {
+    ControlHello hello = 64;
+    ControlCall call = 65;
+  }
+}
+
+message ControlServerFrame {
+  oneof payload {
+    ControlWelcome welcome = 80;
+    ControlResponse response = 81;
+    ControlEvent event = 82;
+  }
+}
+
+message ControlHello {
+  uint32 version = 1;
+}
+
+message ControlWelcome {
+  uint32 version = 1;
+}
+
+// ControlCall is one request. The variant names the operation, so the server
+// checks the expected result variant against the pending call instead of a
+// generic success flag.
+message ControlCall {
+  string id = 1;
+  oneof call {
+    SpawnCall spawn = 10;
+    ListSessionsCall list_sessions = 11;
+    GetStateCall get_state = 12;
+    HydrateCall hydrate = 13;
+    GetMessagesCall get_messages = 14;
+    PromptCall prompt = 15;
+    GetAvailableModelsCall get_available_models = 16;
+    SetModelCall set_model = 17;
+    GetAvailableThinkingLevelsCall get_available_thinking_levels = 18;
+    SetThinkingCall set_thinking = 19;
+    NewSessionCall new_session = 20;
+    AbortCall abort = 21;
+    CompactCall compact = 22;
+    SetSessionNameCall set_session_name = 23;
+    SubagentTranscriptCall subagent_transcript = 24;
+    ViewReadyCall view_ready = 25;
+    SetCapabilitiesCall set_capabilities = 26;
+    WaitViewReadyCall wait_view_ready = 27;
+    DlgCall dlg = 28;
+    DlgClosedCall dlg_closed = 29;
+    ActivateTabCall activate_tab = 30;
+  }
+}
+
+// ControlResponse correlates one reply with one call id. Exactly one result
+// variant is set; error carries a fixed reason without source payloads.
+message ControlResponse {
+  string id = 1;
+  oneof result {
+    ControlError error = 40;
+    SpawnResult spawn = 10;
+    ListSessionsResult list_sessions = 11;
+    StateResult get_state = 12;
+    TranscriptResult hydrate = 13;
+    TranscriptResult get_messages = 14;
+    PromptResult prompt = 15;
+    ModelsResult get_available_models = 16;
+    StateResult set_model = 17;
+    ThinkingLevelsResult get_available_thinking_levels = 18;
+    StateResult set_thinking = 19;
+    NewSessionResult new_session = 20;
+    AbortResult abort = 21;
+    CompactResult compact = 22;
+    StateResult set_session_name = 23;
+    SubagentTranscriptResult subagent_transcript = 24;
+    StubResult view_ready = 25;
+    StubResult set_capabilities = 26;
+    StubResult wait_view_ready = 27;
+    StubResult dlg = 28;
+    StubResult dlg_closed = 29;
+    StubResult activate_tab = 30;
+  }
+}
+
+message ControlError {
+  string reason = 1;
+}
+
+// ControlEvent is one sequenced session event. A gap in seq forces rehydrate.
+message ControlEvent {
+  string sid = 1;
+  uint64 seq = 2;
+  oneof event {
+    StateChangedEvent state_changed = 10;
+    MessageStartEvent message_start = 11;
+    MessageUpdateEvent message_update = 12;
+    MessageEndEvent message_end = 13;
+    TranscriptResetEvent transcript_reset = 14;
+    RpcExitedEvent rpc_exited = 15;
+    SubagentFleetEvent subagent_fleet = 16;
+    AutoRetryStartEvent auto_retry_start = 17;
+    AutoRetryEndEvent auto_retry_end = 18;
+    SummarizationRetryScheduledEvent summarization_retry_scheduled = 19;
+    SummarizationRetryFinishedEvent summarization_retry_finished = 20;
+    CompactionEndEvent compaction_end = 21;
+    ExtensionErrorEvent extension_error = 22;
+  }
+}
+
+// ControlState is the known Phi-owned session state. Nullable counters stay
+// optional: an absent counter maps to the UI's null, not to zero. Status
+// keeps the existing "live"/"exited" values. session_path is the published
+// resume path and must not be erased by an update that omits it.
+message ControlState {
+  string sid = 1;
+  string title = 2;
+  string cwd = 3;
+  optional string model = 4;
+  optional string thinking = 5;
+  optional int64 input_tokens = 6;
+  optional int64 output_tokens = 7;
+  optional int64 context_used_tokens = 8;
+  optional int64 context_window_tokens = 9;
+  optional int64 cache_read_tokens = 10;
+  optional int64 cache_write_tokens = 11;
+  repeated string skills = 12;
+  bool busy = 13;
+  string status = 14;
+  uint32 queue_depth = 15;
+  optional string session_path = 16;
+}
+
+// Message is one transcript entry. message_end carries the authoritative
+// copy. Content and details are external Pi data; the remaining fields are
+// Phi-owned pairing and status metadata.
+message Message {
+  string role = 1;
+  ExternalValue content = 2;
+  ExternalValue details = 3;
+  optional string tool_call_id = 4;
+  optional string tool_name = 5;
+  optional bool is_error = 6;
+  optional int64 ts = 7;
+  optional string stop_reason = 8;
+  optional string error_message = 9;
+}
+
+message SessionSummary {
+  string sid = 1;
+  string title = 2;
+  string cwd = 3;
+  string status = 4;
+}
+
+message TranscriptSnapshot {
+  repeated Message messages = 1;
+  uint64 last_seq = 2;
+  ControlState state = 3;
+}
+
+// ---- call arguments ----
+
+// sid scopes one call to one live session. Operations that resolve a session
+// by identity (spawn, listSessions, subagentTranscript) do not carry one.
+message SpawnCall {
+  optional string cwd = 1;
+  optional string session_path = 2;
+}
+
+message ListSessionsCall {}
+
+message GetStateCall {
+  string sid = 1;
+}
+
+message HydrateCall {
+  string sid = 1;
+}
+
+message GetMessagesCall {
+  string sid = 1;
+}
+
+message PromptCall {
+  string sid = 1;
+  string message = 2;
+  optional string streaming_behavior = 3;
+}
+
+message GetAvailableModelsCall {
+  string sid = 1;
+}
+
+message SetModelCall {
+  string sid = 1;
+  string provider = 2;
+  string model_id = 3;
+}
+
+message GetAvailableThinkingLevelsCall {
+  string sid = 1;
+}
+
+message SetThinkingCall {
+  string sid = 1;
+  string level = 2;
+}
+
+message NewSessionCall {
+  string sid = 1;
+}
+
+message AbortCall {
+  string sid = 1;
+}
+
+message CompactCall {
+  string sid = 1;
+}
+
+message SetSessionNameCall {
+  string sid = 1;
+  string name = 2;
+}
+
+message SubagentTranscriptCall {
+  string run_id = 1;
+}
+
+// The six accepted no-ops keep explicit variants instead of an untyped tunnel.
+message ViewReadyCall {
+  optional string sid = 1;
+}
+
+message SetCapabilitiesCall {
+  optional string sid = 1;
+}
+
+message WaitViewReadyCall {
+  optional string sid = 1;
+}
+
+message DlgCall {
+  optional string sid = 1;
+}
+
+message DlgClosedCall {
+  optional string sid = 1;
+}
+
+message ActivateTabCall {
+  optional string sid = 1;
+}
+
+// ---- results ----
+
+message SpawnResult {
+  string sid = 1;
+  string title = 2;
+  string cwd = 3;
+  TranscriptSnapshot session = 4;
+  ControlState state = 5;
+}
+
+message ListSessionsResult {
+  repeated SessionSummary sessions = 1;
+}
+
+message StateResult {
+  ControlState state = 1;
+}
+
+message TranscriptResult {
+  TranscriptSnapshot session = 1;
+}
+
+message PromptResult {
+  bool accepted = 1;
+}
+
+message ModelInfo {
+  string provider = 1;
+  string id = 2;
+  optional string name = 3;
+}
+
+message ModelsResult {
+  repeated ModelInfo models = 1;
+}
+
+message ThinkingLevelsResult {
+  repeated string levels = 1;
+}
+
+// NewSessionResult splits the cancelled case from the reset case. state is
+// absent when the refresh after a reset failed; state_warning then carries
+// the reason and the reset itself still counts as complete.
+message NewSessionResult {
+  bool cancelled = 1;
+  optional bool reset = 2;
+  optional ControlState state = 3;
+  optional string state_warning = 4;
+}
+
+message AbortResult {
+  bool aborted = 1;
+}
+
+// CompactResult keeps a completed compaction visible even when the state
+// refresh failed: state_warning explains the stale view.
+message CompactResult {
+  ControlState state = 1;
+  optional string state_warning = 2;
+}
+
+message SubagentRunStep {
+  string label = 1;
+  string session_file = 2;
+  repeated Message messages = 3;
+}
+
+message SubagentTranscriptResult {
+  string run_id = 1;
+  repeated SubagentRunStep steps = 2;
+}
+
+message StubResult {
+  bool stubbed = 1;
+}
+
+// ---- events ----
+
+// StateChangedEvent carries either a complete state or an error-only update.
+// An error-only update must not reset model, busy state, counters, title, or
+// the published session path.
+message StateChangedEvent {
+  oneof change {
+    ControlState state = 1;
+    ControlError error = 2;
+  }
+}
+
+// MessageStartEvent announces a Pi message that is still streaming. Pi's
+// message object is external; the role is the field the UI reads from it.
+message MessageStartEvent {
+  optional string role = 1;
+  optional ExternalValue message = 2;
+}
+
+// MessageUpdateEvent is one assistant delta. type is Pi's value, for example
+// "text_delta"; only that type appends to the visible partial text.
+message MessageUpdateEvent {
+  optional string type = 1;
+  optional int64 content_index = 2;
+  optional string delta = 3;
+}
+
+message MessageEndEvent {
+  Message message = 1;
+}
+
+message TranscriptResetEvent {}
+
+message RpcExitedEvent {
+  optional string reason = 1;
+}
+
+// SubagentFleetEvent carries the extension's open-ended fleet data. An empty
+// event clears the fleet widget.
+message SubagentFleetEvent {
+  optional ExternalValue fleet = 1;
+}
+
+message AutoRetryStartEvent {
+  optional int64 attempt = 1;
+  optional int64 max_attempts = 2;
+  optional int64 delay_ms = 3;
+  optional string error_message = 4;
+}
+
+message AutoRetryEndEvent {
+  optional bool success = 1;
+  optional int64 attempt = 2;
+  optional string final_error = 3;
+}
+
+message SummarizationRetryScheduledEvent {
+  optional int64 attempt = 1;
+  optional int64 max_attempts = 2;
+  optional int64 delay_ms = 3;
+  optional string error_message = 4;
+}
+
+message SummarizationRetryFinishedEvent {
+  optional bool success = 1;
+  optional int64 attempt = 2;
+  optional string final_error = 3;
+}
+
+// CompactionEndEvent reports a finished or cancelled compaction. reason keeps
+// the existing "manual"/automatic values; result is Pi's compaction summary
+// data when present.
+message CompactionEndEvent {
+  optional bool aborted = 1;
+  optional string reason = 2;
+  optional string error_message = 3;
+  optional ExternalValue result = 4;
+}
+
+message ExtensionErrorEvent {
+  optional string error = 1;
+}
+
+// ---- external data ----
+
+// ExternalValue represents open-ended Pi, tool, provider, or extension data.
+// Objects use repeated key/value entries rather than a protobuf map so
+// arbitrary keys, including reserved ones such as __proto__, survive a
+// round trip with their original order.
+message ExternalValue {
+  oneof kind {
+    ExternalNull null_value = 1;
+    bool bool_value = 2;
+    double number_value = 3;
+    int64 int_value = 4;
+    string string_value = 5;
+    ExternalList list_value = 6;
+    ExternalObject object_value = 7;
+  }
+}
+
+message ExternalNull {}
+
+message ExternalList {
+  repeated ExternalValue values = 1;
+}
+
+message ExternalObject {
+  repeated ExternalEntry entries = 1;
+}
+
+message ExternalEntry {
+  string key = 1;
+  ExternalValue value = 2;
+}

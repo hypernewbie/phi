@@ -1,7 +1,17 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
+import { TerminalServerFrame } from '../web/proto/terminal.js';
+import type {
+    MessageFns,
+    TerminalServerFrame as TerminalServerMessage,
+} from '../web-src/proto/terminal.js';
 import { startPhi } from './_server.js';
+
+// The served bundle carries no types; bind its runtime codec to the
+// generated declarations so spec-side decoding is fully checked.
+const ServerCodec: MessageFns<TerminalServerMessage> =
+    TerminalServerFrame as unknown as MessageFns<TerminalServerMessage>;
 
 interface StateTerminal {
     element?: HTMLElement;
@@ -93,7 +103,9 @@ while True: time.sleep(1)
         page.on('websocket', (socket) => {
             if (!socket.url().includes(`/ws/pane/${pane}?`)) return;
             socket.on('framereceived', ({ payload }) => {
-                if (Buffer.isBuffer(payload) && payload[0] === 0x08)
+                if (!Buffer.isBuffer(payload)) return;
+                const decoded = ServerCodec.decode(new Uint8Array(payload));
+                if (decoded.payload?.$case === 'attach')
                     attachSizes.push(payload.length);
             });
         });

@@ -8,7 +8,17 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { TerminalClientFrame } from '../web/proto/terminal.js';
+import type {
+    MessageFns,
+    TerminalClientFrame as TerminalClientMessage,
+} from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+
+// The served bundle carries no types; bind its runtime codec to the
+// generated declarations so spec-side decoding is fully checked.
+const ClientCodec: MessageFns<TerminalClientMessage> =
+    TerminalClientFrame as unknown as MessageFns<TerminalClientMessage>;
 
 test.skip(
     process.platform === 'win32',
@@ -129,8 +139,15 @@ for (const mode of ['tui', 'mini', 'legacy']) {
         await page.routeWebSocket('**/ws/pane/**', (socket) => {
             const backend = socket.connectToServer();
             socket.onMessage((message) => {
-                if (Buffer.isBuffer(message) && message[0] === 0x01)
-                    inputs.push(message.subarray(1).toString('utf8'));
+                if (Buffer.isBuffer(message)) {
+                    const payload = ClientCodec.decode(
+                        new Uint8Array(message),
+                    ).payload;
+                    if (payload?.$case === 'input')
+                        inputs.push(
+                            Buffer.from(payload.value).toString('utf8'),
+                        );
+                }
                 backend.send(message);
             });
         });

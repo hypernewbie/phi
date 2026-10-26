@@ -2,8 +2,6 @@ package ws
 
 import (
 	"bytes"
-	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -57,15 +55,12 @@ func TestBoundedStateRetainsRequestedBooks(t *testing.T) {
 	client := &Client{NativeState: true, Send: make(chan []byte, 4)}
 	h.AttachHot("books", client)
 	frame := <-client.Send
-	if frame[0] != wireproto.FrameAttachHead || len(frame) > len(source)/20 {
+	server, err := wireproto.DecodeServerFrame(frame)
+	if err != nil || server.GetAttach() == nil || len(frame) > len(source)/20 {
 		t.Fatal("attach sent the library")
 	}
-	headerBytes := int(binary.BigEndian.Uint32(frame[1:5]))
-	var attach wireproto.AttachHeadHeader
-	if err := json.Unmarshal(frame[5:5+headerBytes], &attach); err != nil {
-		t.Fatal(err)
-	}
-	if attach.Ckpt == nil || attach.Ckpt.Through != pos.Head {
+	attach := server.GetAttach()
+	if attach.GetCheckpoint() == nil || attach.GetCheckpoint().GetThrough() != pos.Head {
 		t.Fatal("attach checkpoint lost its source frontier")
 	}
 	local, err := termstate.New(t.Context(), 80, 24)
@@ -73,7 +68,7 @@ func TestBoundedStateRetainsRequestedBooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer local.Close()
-	if err = local.Restore(frame[5+headerBytes:]); err != nil {
+	if err = local.Restore(attach.GetCheckpoint().GetData()); err != nil {
 		t.Fatal(err)
 	}
 	localRows, err := local.HistoryRows()
@@ -86,8 +81,9 @@ func TestBoundedStateRetainsRequestedBooks(t *testing.T) {
 	if err := h.Ingest("books", []byte("NEWEST")); err != nil {
 		t.Fatal(err)
 	}
-	live := <-client.Send
-	if live[0] != wireproto.FrameLiveOutput || !bytes.HasSuffix(live, []byte("NEWEST")) {
+	liveRaw := <-client.Send
+	live, err := wireproto.DecodeServerFrame(liveRaw)
+	if err != nil || live.GetOutput() == nil || !bytes.HasSuffix(live.GetOutput().GetData(), []byte("NEWEST")) {
 		t.Fatal("live update lost after bounded attach")
 	}
 }
@@ -114,14 +110,15 @@ func TestAttachSendsBoundedANSIStateAndPreservesParserContinuation(t *testing.T)
 	client := &Client{AnsiState: true, Send: make(chan []byte, 2)}
 	h.AttachHot("ansi", client)
 	frame := <-client.Send
-	var header wireproto.AttachHeadHeader
-	if err := json.Unmarshal(frame[5:5+binary.BigEndian.Uint32(frame[1:5])], &header); err != nil {
-		t.Fatal(err)
+	server, err := wireproto.DecodeServerFrame(frame)
+	if err != nil || server.GetAttach() == nil {
+		t.Fatalf("decode attach: %v", err)
 	}
-	state := frame[5+binary.BigEndian.Uint32(frame[1:5]):]
-	if header.Ckpt == nil || header.Ckpt.Kind != "ansi-v1" || header.Ckpt.Through != uint64(len(source)) {
+	header := server.GetAttach()
+	if header.GetCheckpoint() == nil || header.GetCheckpoint().GetKind() != "ansi-v1" || header.GetCheckpoint().GetThrough() != uint64(len(source)) {
 		t.Fatal("ANSI attach checkpoint frontier mismatch")
 	}
+	state := header.GetCheckpoint().GetData()
 	if len(state) > len(source)/10 || !bytes.Contains(state, []byte("current library line")) {
 		t.Fatal("attach did not send a bounded current screen")
 	}
@@ -132,7 +129,9 @@ func TestAttachSendsBoundedANSIStateAndPreservesParserContinuation(t *testing.T)
 	if err := h.Ingest("ansi", suffix); err != nil {
 		t.Fatal(err)
 	}
-	if live := <-client.Send; !bytes.HasSuffix(live, suffix) {
+	liveRaw := <-client.Send
+	live, err := wireproto.DecodeServerFrame(liveRaw)
+	if err != nil || live.GetOutput() == nil || !bytes.HasSuffix(live.GetOutput().GetData(), suffix) {
 		t.Fatal("live suffix was lost after parser-state transfer")
 	}
 }

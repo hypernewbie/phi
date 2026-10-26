@@ -11,12 +11,13 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/gorilla/websocket"
 	"github.com/hypernewbie/phi/internal/termemu"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
 func TestTinyConsoleAttachesAndForwardsNormalInputWithoutRecoveryMode(t *testing.T) {
 	input := make(chan string, 20)
-	upgrade := websocket.Upgrader{}
+	upgrade := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/ws/pane/p":
@@ -25,14 +26,17 @@ func TestTinyConsoleAttachesAndForwardsNormalInputWithoutRecoveryMode(t *testing
 				return
 			}
 			defer ws.Close()
-			ws.WriteMessage(websocket.BinaryMessage, wireproto.EncodeAttachHeadFrame(wireproto.AttachHeadHeader{Epoch: 7, Head: 0}, nil))
+			ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, 0))
 			for {
 				_, b, err := ws.ReadMessage()
 				if err != nil {
 					return
 				}
-				if len(b) > 0 && b[0] == 1 {
-					input <- string(b[1:])
+				frame, err := wireproto.DecodeClientFrame(b)
+				if err == nil {
+					if in, ok := frame.GetPayload().(*wspb.TerminalClientFrame_Input); ok {
+						input <- string(in.Input)
+					}
 				}
 			}
 		case "/api/terminals":

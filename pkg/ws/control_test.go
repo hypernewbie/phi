@@ -3,7 +3,6 @@ package ws
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,8 +14,11 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/hypernewbie/phi/pkg/rpc"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
+	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
 func dial(t *testing.T, h http.HandlerFunc) *websocket.Conn {
@@ -24,7 +26,8 @@ func dial(t *testing.T, h http.HandlerFunc) *websocket.Conn {
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	url := "ws" + strings.TrimPrefix(srv.URL, "http")
-	c, _, err := websocket.DefaultDialer.Dial(url, nil)
+	dialer := websocket.Dialer{Subprotocols: []string{wireproto.ControlSubprotocol}}
+	c, _, err := dialer.Dial(url, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,31 +35,102 @@ func dial(t *testing.T, h http.HandlerFunc) *websocket.Conn {
 	return c
 }
 
+func writeFrame(t *testing.T, c *websocket.Conn, frame *wspb.ControlClientFrame) {
+	t.Helper()
+	raw, err := proto.Marshal(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.WriteMessage(websocket.BinaryMessage, raw); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readFrame(t *testing.T, c *websocket.Conn) *wspb.ControlServerFrame {
+	t.Helper()
+	_, raw, err := wireproto.ReadBoundedMessage(c, wireproto.MaxControlMessageBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := &wspb.ControlServerFrame{}
+	if err := proto.Unmarshal(raw, frame); err != nil {
+		t.Fatal(err)
+	}
+	return frame
+}
+
 func helloDial(t *testing.T, mgr *rpc.Manager) *websocket.Conn {
 	c := dial(t, HandleControl(mgr, func() string { return "" }))
-	if err := c.WriteJSON(Envelope{Type: "hello", V: 1}); err != nil {
-		t.Fatal(err)
-	}
-	var welcome Envelope
-	if err := c.ReadJSON(&welcome); err != nil {
-		t.Fatal(err)
-	}
-	if welcome.Type != "welcome" {
-		t.Fatalf("want welcome, got %+v", welcome)
+	writeFrame(t, c, &wspb.ControlClientFrame{Payload: &wspb.ControlClientFrame_Hello{
+		Hello: &wspb.ControlHello{Version: uint32(rpc.ProtocolVersion)},
+	}})
+	welcome := readFrame(t, c).GetWelcome()
+	if welcome == nil || welcome.GetVersion() != uint32(rpc.ProtocolVersion) {
+		t.Fatalf("want welcome v%d, got %+v", rpc.ProtocolVersion, welcome)
 	}
 	return c
 }
 
-func call(t *testing.T, c *websocket.Conn, id, op string) Envelope {
+func sendCall(t *testing.T, c *websocket.Conn, call *wspb.ControlCall) {
 	t.Helper()
-	if err := c.WriteJSON(Envelope{Type: "call", ID: id, Op: op}); err != nil {
-		t.Fatal(err)
+	writeFrame(t, c, &wspb.ControlClientFrame{
+		Payload: &wspb.ControlClientFrame_Call{Call: call},
+	})
+}
+
+func readResponse(t *testing.T, c *websocket.Conn, id string) *wspb.ControlResponse {
+	t.Helper()
+	for {
+		frame := readFrame(t, c)
+		if res := frame.GetResponse(); res != nil && res.GetId() == id {
+			return res
+		}
 	}
-	var res Envelope
-	if err := c.ReadJSON(&res); err != nil {
-		t.Fatal(err)
+}
+
+// mustCall sends one typed call and fails the test when the server answers
+// with an error variant.
+func mustCall(t *testing.T, c *websocket.Conn, call *wspb.ControlCall) *wspb.ControlResponse {
+	t.Helper()
+	sendCall(t, c, call)
+	res := readResponse(t, c, call.GetId())
+	if err := res.GetError(); err != nil {
+		t.Fatalf("call %s failed: %s", call.GetId(), err.GetReason())
 	}
 	return res
+}
+
+// expectError sends one typed call and asserts the server answers with an
+// error variant whose reason contains want (empty want skips that check).
+func expectError(t *testing.T, c *websocket.Conn, call *wspb.ControlCall, want string) *wspb.ControlResponse {
+	t.Helper()
+	sendCall(t, c, call)
+	res := readResponse(t, c, call.GetId())
+	reason := res.GetError().GetReason()
+	if reason == "" {
+		t.Fatalf("call %s unexpectedly succeeded: %+v", call.GetId(), res)
+	}
+	if want != "" && !strings.Contains(reason, want) {
+		t.Fatalf("call %s reason = %q, want it to contain %q", call.GetId(), reason, want)
+	}
+	return res
+}
+
+func spawnedSid(t *testing.T, res *wspb.ControlResponse) string {
+	t.Helper()
+	spawn := res.GetSpawn()
+	if spawn == nil || spawn.GetSid() == "" {
+		t.Fatalf("spawn response missing sid: %+v", res)
+	}
+	return spawn.GetSid()
+}
+
+func spawnControlSession(t *testing.T, c *websocket.Conn, cwd string) string {
+	t.Helper()
+	return spawnedSid(t, mustCall(t, c, &wspb.ControlCall{
+		Id:   "spawn-session",
+		Call: &wspb.ControlCall_Spawn{Spawn: &wspb.SpawnCall{Cwd: proto.String(cwd)}},
+	}))
 }
 
 type controlFakeChild struct {
@@ -111,44 +185,6 @@ func respondControlCommands(child *controlFakeChild, respond func(map[string]any
 	}()
 }
 
-func readResponse(t *testing.T, c *websocket.Conn, id string) Envelope {
-	t.Helper()
-	for {
-		var frame Envelope
-		if err := c.ReadJSON(&frame); err != nil {
-			t.Fatal(err)
-		}
-		if frame.Type == rpc.ResFrame && frame.ID == id {
-			return frame
-		}
-	}
-}
-
-func spawnControlSession(t *testing.T, c *websocket.Conn, cwd string) string {
-	t.Helper()
-	args, err := json.Marshal(map[string]string{"cwd": cwd})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "spawn-session", Op: rpc.OpSpawn, Args: args}); err != nil {
-		t.Fatal(err)
-	}
-	response := readResponse(t, c, "spawn-session")
-	if response.Ok == nil || !*response.Ok {
-		t.Fatalf("spawn failed: %+v", response)
-	}
-	var payload struct {
-		Sid string `json:"sid"`
-	}
-	if err := json.Unmarshal(response.Data, &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload.Sid == "" {
-		t.Fatalf("spawn response missing sid: %s", response.Data)
-	}
-	return payload.Sid
-}
-
 func setupPiControlFixture(t *testing.T, cwd, name string, records ...string) string {
 	t.Helper()
 	home := t.TempDir()
@@ -183,7 +219,7 @@ func piControlHeader(id, cwd string) string {
 	return string(encoded)
 }
 
-func TestControlAbortSuccessErrorAndValidation(t *testing.T) {
+func TestControlAbortSuccessAndValidation(t *testing.T) {
 	child := newControlFakeChild()
 	respondControlCommands(child, func(command map[string]any) (any, bool, string) {
 		if command["type"] != "abort" {
@@ -201,27 +237,19 @@ func TestControlAbortSuccessErrorAndValidation(t *testing.T) {
 	t.Cleanup(func() { inst.Kill() })
 	c := helloDial(t, mgr)
 
-	if err := c.WriteJSON(Envelope{
-		Type: rpc.CallFrame, ID: "abort-ok", Op: rpc.OpAbort, Sid: inst.ID,
-		Args: json.RawMessage(`{}`),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	success := readResponse(t, c, "abort-ok")
-	if success.Ok == nil || !*success.Ok || string(success.Data) != `{"aborted":true}` {
+	success := mustCall(t, c, &wspb.ControlCall{
+		Id:   "abort-ok",
+		Call: &wspb.ControlCall_Abort{Abort: &wspb.AbortCall{Sid: inst.ID}},
+	})
+	if !success.GetAbort().GetAborted() {
 		t.Fatalf("abort success response: %+v", success)
 	}
 
-	if err := c.WriteJSON(Envelope{
-		Type: rpc.CallFrame, ID: "abort-invalid", Op: rpc.OpAbort, Sid: inst.ID,
-		Args: json.RawMessage(`{"extra":true}`),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	invalid := readResponse(t, c, "abort-invalid")
-	if invalid.Ok == nil || *invalid.Ok {
-		t.Fatalf("abort validation unexpectedly succeeded: %+v", invalid)
-	}
+	// Validation runs before the Pi lookup, so an empty sid never reaches Pi.
+	expectError(t, c, &wspb.ControlCall{
+		Id:   "abort-invalid",
+		Call: &wspb.ControlCall_Abort{Abort: &wspb.AbortCall{}},
+	}, "sid is required")
 }
 
 func TestControlAbortPropagatesPiError(t *testing.T) {
@@ -238,16 +266,10 @@ func TestControlAbortPropagatesPiError(t *testing.T) {
 	}
 	t.Cleanup(func() { inst.Kill() })
 	c := helloDial(t, mgr)
-	if err := c.WriteJSON(Envelope{
-		Type: rpc.CallFrame, ID: "abort-error", Op: rpc.OpAbort, Sid: inst.ID,
-		Args: json.RawMessage(`{}`),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	response := readResponse(t, c, "abort-error")
-	if response.Ok == nil || *response.Ok || !strings.Contains(string(response.Error), "abort rejected") {
-		t.Fatalf("abort error was not propagated: %+v", response)
-	}
+	expectError(t, c, &wspb.ControlCall{
+		Id:   "abort-error",
+		Call: &wspb.ControlCall_Abort{Abort: &wspb.AbortCall{Sid: inst.ID}},
+	}, "abort rejected")
 }
 
 func TestControlAbortUnknownSidReturnsError(t *testing.T) {
@@ -265,16 +287,10 @@ func TestControlAbortUnknownSidReturnsError(t *testing.T) {
 	}
 	t.Cleanup(func() { inst.Kill() })
 	c := helloDial(t, mgr)
-	if err := c.WriteJSON(Envelope{
-		Type: rpc.CallFrame, ID: "abort-unknown", Op: rpc.OpAbort, Sid: "missing-sid",
-		Args: json.RawMessage(`{}`),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	response := readResponse(t, c, "abort-unknown")
-	if response.Ok == nil || *response.Ok || !strings.Contains(string(response.Error), "missing-sid") {
-		t.Fatalf("unknown sid abort did not surface lookup error: %+v", response)
-	}
+	expectError(t, c, &wspb.ControlCall{
+		Id:   "abort-unknown",
+		Call: &wspb.ControlCall_Abort{Abort: &wspb.AbortCall{Sid: "missing-sid"}},
+	}, "missing-sid")
 }
 
 func TestControlAbortContextCancellationSurfacesAsError(t *testing.T) {
@@ -304,11 +320,11 @@ func TestControlAbortContextCancellationSurfacesAsError(t *testing.T) {
 	}()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan Envelope, 1)
+	done := make(chan *wspb.ControlResponse, 1)
 	go func() {
-		done <- server.dispatch(ctx, Envelope{
-			Type: rpc.CallFrame, ID: "abort-cancel", Op: rpc.OpAbort, Sid: inst.ID,
-			Args: json.RawMessage(`{}`),
+		done <- server.dispatch(ctx, &wspb.ControlCall{
+			Id:   "abort-cancel",
+			Call: &wspb.ControlCall_Abort{Abort: &wspb.AbortCall{Sid: inst.ID}},
 		})
 	}()
 	select {
@@ -319,11 +335,12 @@ func TestControlAbortContextCancellationSurfacesAsError(t *testing.T) {
 	cancel()
 	select {
 	case response := <-done:
-		if response.Ok == nil || *response.Ok {
+		reason := response.GetError().GetReason()
+		if reason == "" {
 			t.Fatalf("context cancellation did not fail abort: %+v", response)
 		}
-		if !strings.Contains(response.Error, "control connection closed") {
-			t.Fatalf("abort error did not surface context cancellation: %+v", response)
+		if !strings.Contains(reason, "control connection closed") {
+			t.Fatalf("abort error did not surface context cancellation: %q", reason)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("abort operation did not return after context cancel")
@@ -451,79 +468,88 @@ func TestPiSpawnOptionsPreservesStructuredToolHistory(t *testing.T) {
 
 func TestControlHelloWelcomeListSessions(t *testing.T) {
 	c := helloDial(t, rpc.NewManager())
-	res := call(t, c, "c1", "listSessions")
-	if res.ID != "c1" || res.Ok == nil || !*res.Ok {
+	res := mustCall(t, c, &wspb.ControlCall{
+		Id:   "c1",
+		Call: &wspb.ControlCall_ListSessions{ListSessions: &wspb.ListSessionsCall{}},
+	})
+	if res.GetId() != "c1" || res.GetListSessions() == nil {
 		t.Fatalf("bad res %+v", res)
 	}
 }
 
 func TestControlRejectsMissingHello(t *testing.T) {
 	c := dial(t, HandleControl(rpc.NewManager(), nil))
-	_ = c.WriteJSON(Envelope{Type: "call", ID: "x", Op: "listSessions"})
-	var res Envelope
-	if err := c.ReadJSON(&res); err != nil {
-		t.Fatal(err)
-	}
-	if res.Ok != nil && *res.Ok {
-		t.Fatal("call before hello must fail")
+	sendCall(t, c, &wspb.ControlCall{
+		Id:   "x",
+		Call: &wspb.ControlCall_ListSessions{ListSessions: &wspb.ListSessionsCall{}},
+	})
+	// The endpoint refuses the call and closes before any welcome, so the
+	// next read must fail instead of returning a response frame.
+	if _, _, err := wireproto.ReadBoundedMessage(c, wireproto.MaxControlMessageBytes); err == nil {
+		t.Fatal("call before hello must not be answered")
 	}
 }
 
 func TestControlHydrateUnknownSid(t *testing.T) {
 	c := helloDial(t, rpc.NewManager())
-	if err := c.WriteJSON(Envelope{Type: "call", ID: "h", Op: "hydrate", Sid: "nope"}); err != nil {
-		t.Fatal(err)
-	}
-	var res Envelope
-	if err := c.ReadJSON(&res); err != nil {
-		t.Fatal(err)
-	}
-	if res.Ok != nil && *res.Ok {
-		t.Fatal("unknown sid must fail")
-	}
+	expectError(t, c, &wspb.ControlCall{
+		Id:   "h",
+		Call: &wspb.ControlCall_Hydrate{Hydrate: &wspb.HydrateCall{Sid: "nope"}},
+	}, "nope")
 }
 
-func TestControlNewOperationsStrictDecodeAndUnknownSid(t *testing.T) {
+func TestControlNewOperationsValidationAndUnknownSid(t *testing.T) {
 	c := helloDial(t, rpc.NewManager())
 	cases := []struct {
-		name string
-		op   string
-		sid  string
-		args string
+		name   string
+		call   *wspb.ControlCall
+		reason string
 	}{
-		{"models-unknown-field", rpc.OpGetAvailableModels, "missing", `{"extra":true}`},
-		{"models-null-args", rpc.OpGetAvailableModels, "missing", `null`},
-		{"model-wrong-type", rpc.OpSetModel, "missing", `{"provider":1,"modelId":"m"}`},
-		{"model-unknown-field", rpc.OpSetModel, "missing", `{"provider":"p","modelId":"m","extra":true}`},
-		{"model-empty-provider", rpc.OpSetModel, "missing", `{"provider":"","modelId":"m"}`},
-		{"thinking-list-unknown-sid", rpc.OpGetAvailableThinkingLevels, "missing", `{}`},
-		{"thinking-wrong-type", rpc.OpSetThinking, "missing", `{"level":1}`},
-		{"thinking-empty", rpc.OpSetThinking, "missing", `{"level":""}`},
-		{"thinking-unknown-field", rpc.OpSetThinking, "missing", `{"level":"high","extra":true}`},
-		{"reset-unknown-field", rpc.OpNewSession, "missing", `{"extra":true}`},
-		{"reset-unknown-sid", rpc.OpNewSession, "missing", `{}`},
+		{"models-unknown-sid", &wspb.ControlCall{Id: "v0",
+			Call: &wspb.ControlCall_GetAvailableModels{GetAvailableModels: &wspb.GetAvailableModelsCall{Sid: "missing"}}}, "missing"},
+		{"model-empty-provider", &wspb.ControlCall{Id: "v1",
+			Call: &wspb.ControlCall_SetModel{SetModel: &wspb.SetModelCall{Sid: "missing", Provider: "", ModelId: "m"}}},
+			"provider and modelId are required"},
+		{"model-empty-id", &wspb.ControlCall{Id: "v2",
+			Call: &wspb.ControlCall_SetModel{SetModel: &wspb.SetModelCall{Sid: "missing", Provider: "p", ModelId: ""}}},
+			"provider and modelId are required"},
+		{"thinking-levels-unknown-sid", &wspb.ControlCall{Id: "v3",
+			Call: &wspb.ControlCall_GetAvailableThinkingLevels{GetAvailableThinkingLevels: &wspb.GetAvailableThinkingLevelsCall{Sid: "missing"}}},
+			"missing"},
+		{"thinking-empty-level", &wspb.ControlCall{Id: "v4",
+			Call: &wspb.ControlCall_SetThinking{SetThinking: &wspb.SetThinkingCall{Sid: "missing", Level: ""}}},
+			"level is required"},
+		{"reset-unknown-sid", &wspb.ControlCall{Id: "v5",
+			Call: &wspb.ControlCall_NewSession{NewSession: &wspb.NewSessionCall{Sid: "missing"}}}, "missing"},
 	}
-	for index, testCase := range cases {
-		if err := c.WriteJSON(Envelope{
-			Type: rpc.CallFrame, ID: fmt.Sprintf("strict-%d", index), Op: testCase.op,
-			Sid: testCase.sid, Args: json.RawMessage(testCase.args),
-		}); err != nil {
-			t.Fatal(err)
-		}
-		response := readResponse(t, c, fmt.Sprintf("strict-%d", index))
-		if response.Ok == nil || *response.Ok {
-			t.Fatalf("%s unexpectedly succeeded: %+v", testCase.name, response)
-		}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			expectError(t, c, testCase.call, testCase.reason)
+		})
 	}
 }
 
-func TestDecodeStrictRejectsMalformedJSONAndTrailingValues(t *testing.T) {
-	var args struct{}
-	for _, raw := range []json.RawMessage{json.RawMessage(`{`), json.RawMessage(`{} {}`)} {
-		if err := decodeStrict(raw, &args, true); err == nil {
-			t.Fatalf("malformed/trailed args unexpectedly decoded: %s", raw)
+// Typed frames carry no unknown fields, so the old strict-JSON rejection
+// class is gone. What still must hold is that a malformed frame never
+// reaches dispatch: the frame decoder fails closed and the connection ends.
+func TestControlRejectsMalformedFrames(t *testing.T) {
+	mgr := rpc.NewManager()
+	t.Run("garbage-binary", func(t *testing.T) {
+		c := helloDial(t, mgr)
+		if err := c.WriteMessage(websocket.BinaryMessage, []byte{0xff, 0xfe, 0xfd}); err != nil {
+			t.Fatal(err)
 		}
-	}
+		if _, _, err := wireproto.ReadBoundedMessage(c, wireproto.MaxControlMessageBytes); err == nil {
+			t.Fatal("undecodable frame was accepted")
+		}
+	})
+	t.Run("missing-call", func(t *testing.T) {
+		c := helloDial(t, mgr)
+		writeFrame(t, c, &wspb.ControlClientFrame{})
+		if _, _, err := wireproto.ReadBoundedMessage(c, wireproto.MaxControlMessageBytes); err == nil {
+			t.Fatal("frame without a call was accepted")
+		}
+	})
 }
 
 func TestControlHydrateFenceFlushesEventAfterLatestHydrate(t *testing.T) {
@@ -542,41 +568,32 @@ func TestControlHydrateFenceFlushesEventAfterLatestHydrate(t *testing.T) {
 		inst.Emit(rpc.EvtMessageEnd, &rpc.Message{Role: "assistant", Content: json.RawMessage(`"seed"`)}, nil)
 	}
 	c := helloDial(t, mgr)
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "h1", Op: rpc.OpHydrate, Sid: inst.ID, Args: json.RawMessage(`{}`)}); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "h2", Op: rpc.OpHydrate, Sid: inst.ID, Args: json.RawMessage(`{}`)}); err != nil {
-		t.Fatal(err)
-	}
+	sendCall(t, c, &wspb.ControlCall{Id: "h1",
+		Call: &wspb.ControlCall_Hydrate{Hydrate: &wspb.HydrateCall{Sid: inst.ID}}})
+	sendCall(t, c, &wspb.ControlCall{Id: "h2",
+		Call: &wspb.ControlCall_Hydrate{Hydrate: &wspb.HydrateCall{Sid: inst.ID}}})
 	time.Sleep(20 * time.Millisecond)
-	inst.Emit(rpc.EvtStateChanged, nil, map[string]any{"fenced": true})
+	inst.Emit(rpc.EvtStateChanged, nil, map[string]any{"model": map[string]any{"name": "fenced"}})
 	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
 	order := make([]string, 0, 3)
 	seen := map[string]bool{}
 	for len(order) < 3 {
-		var frame Envelope
-		if err := c.ReadJSON(&frame); err != nil {
-			t.Fatal(err)
-		}
-		if frame.Type == rpc.ResFrame && (frame.ID == "h1" || frame.ID == "h2") {
-			if frame.Ok == nil || !*frame.Ok {
-				t.Fatalf("hydrate failed: %+v", frame)
+		frame := readFrame(t, c)
+		if res := frame.GetResponse(); res != nil {
+			if err := res.GetError(); err != nil {
+				t.Fatalf("hydrate failed: %s", err.GetReason())
 			}
-			if !seen[frame.ID] {
-				seen[frame.ID] = true
-				order = append(order, frame.ID)
+			id := res.GetId()
+			if (id == "h1" || id == "h2") && !seen[id] {
+				seen[id] = true
+				order = append(order, id)
 			}
 			continue
 		}
-		if frame.Type == "evt" && frame.Evt == rpc.EvtStateChanged && frame.Sid == inst.ID {
-			var data map[string]any
-			if err := json.Unmarshal(frame.Data, &data); err != nil {
-				t.Fatal(err)
-			}
-			if data["fenced"] == true && !seen["fenced"] {
-				seen["fenced"] = true
-				order = append(order, "fenced")
-			}
+		ev := frame.GetEvent()
+		if ev != nil && ev.GetSid() == inst.ID && ev.GetStateChanged() != nil && !seen["fenced"] {
+			seen["fenced"] = true
+			order = append(order, "fenced")
 		}
 	}
 	if len(order) != 3 || order[2] != "fenced" {
@@ -602,77 +619,51 @@ func TestControlSpawnSnapshotBoundaryKeepsFollowingEvent(t *testing.T) {
 
 	c := helloDial(t, mgr)
 	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
-	if err := c.WriteJSON(Envelope{Type: "call", ID: "hyd", Op: "hydrate", Sid: inst.ID}); err != nil {
-		t.Fatal(err)
-	}
-	for {
-		var frame Envelope
-		if err := c.ReadJSON(&frame); err != nil {
-			t.Fatal(err)
-		}
-		if frame.Type == rpc.ResFrame && frame.ID == "hyd" {
-			if frame.Ok == nil || !*frame.Ok {
-				t.Fatalf("hydrate failed: %+v", frame)
-			}
-			break
-		}
-	}
+	mustCall(t, c, &wspb.ControlCall{
+		Id:   "hyd",
+		Call: &wspb.ControlCall_Hydrate{Hydrate: &wspb.HydrateCall{Sid: inst.ID}},
+	})
 
 	// Hydrate is the deterministic subscription barrier. The next spawn reuses
 	// this live instance, so the event below is after subscribe and before its
 	// spawn snapshot is copied without relying on a scheduler timing window.
 	inst.Emit(rpc.EvtMessageEnd, &rpc.Message{Role: "assistant", Content: []byte(`"boundary"`)}, nil)
-	args, err := json.Marshal(map[string]string{"cwd": cwd, "sessionPath": sessionPath})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := c.WriteJSON(Envelope{Type: "call", ID: "sp", Op: "spawn", Args: args}); err != nil {
-		t.Fatal(err)
-	}
+	sendCall(t, c, &wspb.ControlCall{Id: "sp",
+		Call: &wspb.ControlCall_Spawn{Spawn: &wspb.SpawnCall{Cwd: proto.String(cwd), SessionPath: proto.String(sessionPath)}}})
 
-	var spawn Envelope
-	var events []Envelope
-	for spawn.ID == "" {
-		var frame Envelope
-		if err := c.ReadJSON(&frame); err != nil {
-			t.Fatal(err)
+	var spawn *wspb.ControlResponse
+	var events []*wspb.ControlEvent
+	for spawn == nil {
+		frame := readFrame(t, c)
+		if ev := frame.GetEvent(); ev != nil && ev.GetSid() == inst.ID {
+			events = append(events, ev)
 		}
-		if frame.Type == "evt" && frame.Sid == inst.ID {
-			events = append(events, frame)
-		}
-		if frame.Type == rpc.ResFrame && frame.ID == "sp" {
-			spawn = frame
+		if res := frame.GetResponse(); res != nil && res.GetId() == "sp" {
+			spawn = res
 		}
 	}
-	if spawn.Ok == nil || !*spawn.Ok {
-		t.Fatalf("spawn failed: %+v", spawn)
+	if err := spawn.GetError(); err != nil {
+		t.Fatalf("spawn failed: %s", err.GetReason())
 	}
-	var payload struct {
-		Sid      string `json:"sid"`
-		Snapshot struct {
-			LastSeq  uint64        `json:"lastSeq"`
-			Messages []rpc.Message `json:"messages"`
-		} `json:"snapshot"`
+	payload := spawn.GetSpawn()
+	if payload.GetSid() != inst.ID {
+		t.Fatalf("spawn did not reuse live instance: got sid %q want %q", payload.GetSid(), inst.ID)
 	}
-	if err := json.Unmarshal(spawn.Data, &payload); err != nil {
-		t.Fatal(err)
+	snapshot := payload.GetSession()
+	if snapshot.GetLastSeq() != 1 || len(snapshot.GetMessages()) != 1 {
+		t.Fatalf("boundary event missing from spawn snapshot: %+v", snapshot)
 	}
-	if payload.Sid != inst.ID {
-		t.Fatalf("spawn did not reuse live instance: got sid %q want %q", payload.Sid, inst.ID)
-	}
-	if payload.Snapshot.LastSeq != 1 || len(payload.Snapshot.Messages) != 1 {
-		t.Fatalf("boundary event missing from spawn snapshot: %s", spawn.Data)
-	}
-	if payload.Snapshot.Messages[0].Role != "assistant" || string(payload.Snapshot.Messages[0].Content) != `"boundary"` {
-		t.Fatalf("unexpected boundary snapshot message: %+v", payload.Snapshot.Messages[0])
+	message := snapshot.GetMessages()[0]
+	if message.GetRole() != "assistant" || message.GetContent().GetStringValue() != "boundary" {
+		t.Fatalf("unexpected boundary snapshot message: %+v", message)
 	}
 
 	// Emit only after the response has been read, which is after SnapshotCopy.
-	inst.Emit(rpc.EvtStateChanged, nil, map[string]any{"marker": "following"})
+	inst.Emit(rpc.EvtStateChanged, nil, map[string]any{"model": map[string]any{"name": "following"}})
 	for {
 		seenNext := false
-		for _, frame := range events {
-			if frame.Seq == payload.Snapshot.LastSeq+1 && frame.Evt == rpc.EvtStateChanged {
+		for _, ev := range events {
+			if ev.GetSeq() == snapshot.GetLastSeq()+1 && ev.GetStateChanged() != nil {
 				seenNext = true
 				break
 			}
@@ -680,27 +671,23 @@ func TestControlSpawnSnapshotBoundaryKeepsFollowingEvent(t *testing.T) {
 		if seenNext {
 			break
 		}
-		var frame Envelope
-		if err := c.ReadJSON(&frame); err != nil {
-			t.Fatal(err)
-		}
-		if frame.Type == "evt" && frame.Sid == inst.ID {
-			events = append(events, frame)
+		if ev := readFrame(t, c).GetEvent(); ev != nil && ev.GetSid() == inst.ID {
+			events = append(events, ev)
 		}
 	}
 
 	var seqs []uint64
-	for _, frame := range events {
-		if frame.Evt == rpc.EvtMessageEnd || frame.Evt == rpc.EvtStateChanged {
-			seqs = append(seqs, frame.Seq)
+	for _, ev := range events {
+		if ev.GetMessageEnd() != nil || ev.GetStateChanged() != nil {
+			seqs = append(seqs, ev.GetSeq())
 		}
 	}
-	if len(seqs) < 2 || seqs[0] != payload.Snapshot.LastSeq || seqs[1] != payload.Snapshot.LastSeq+1 {
+	if len(seqs) < 2 || seqs[0] != snapshot.GetLastSeq() || seqs[1] != snapshot.GetLastSeq()+1 {
 		t.Fatalf("event sequence was not contiguous after snapshot: got %v", seqs)
 	}
 }
 
-func TestControlSpawnIncludesLowerCamelSnapshot(t *testing.T) {
+func TestControlSpawnIncludesBootstrapSnapshot(t *testing.T) {
 	var calls atomic.Int32
 	child := newControlFakeChild()
 	respondControlCommands(child, func(command map[string]any) (any, bool, string) {
@@ -716,28 +703,16 @@ func TestControlSpawnIncludesLowerCamelSnapshot(t *testing.T) {
 		return child, child.stdinW, child.stdoutR, nil
 	})
 	c := helloDial(t, mgr)
-	args, err := json.Marshal(map[string]string{"cwd": "/w/demo"})
-	if err != nil {
-		t.Fatal(err)
+	res := mustCall(t, c, &wspb.ControlCall{
+		Id:   "sp",
+		Call: &wspb.ControlCall_Spawn{Spawn: &wspb.SpawnCall{Cwd: proto.String("/w/demo")}},
+	})
+	if calls.Load() != 1 {
+		t.Fatalf("spawn calls = %d, want 1", calls.Load())
 	}
-	if err := c.WriteJSON(Envelope{Type: "call", ID: "sp", Op: "spawn", Args: args}); err != nil {
-		t.Fatal(err)
-	}
-	res := readResponse(t, c, "sp")
-	if res.Ok == nil || !*res.Ok || calls.Load() != 1 {
-		t.Fatalf("spawn failed: %+v", res)
-	}
-	var payload struct {
-		Snapshot struct {
-			LastSeq  uint64        `json:"lastSeq"`
-			Messages []rpc.Message `json:"messages"`
-		} `json:"snapshot"`
-	}
-	if err := json.Unmarshal(res.Data, &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload.Snapshot.LastSeq != 3 || payload.Snapshot.Messages == nil {
-		t.Fatalf("spawn snapshot did not include bootstrap events with lower-camel fields: %s", res.Data)
+	snapshot := res.GetSpawn().GetSession()
+	if snapshot.GetLastSeq() != 3 || len(snapshot.GetMessages()) != 0 {
+		t.Fatalf("spawn snapshot did not include the bootstrap events: %+v", snapshot)
 	}
 }
 
@@ -755,39 +730,20 @@ func TestControlSpawnHydrateUsesCurrentSnapshot(t *testing.T) {
 		return child, child.stdinW, child.stdoutR, nil
 	})
 	c := helloDial(t, mgr)
-	args, _ := json.Marshal(map[string]string{"cwd": "/w/demo"})
-	if err := c.WriteJSON(Envelope{Type: "call", ID: "sp", Op: "spawn", Args: args}); err != nil {
-		t.Fatal(err)
-	}
-	spawnRes := readResponse(t, c, "sp")
-	var spawnPayload struct {
-		Sid string `json:"sid"`
-	}
-	if err := json.Unmarshal(spawnRes.Data, &spawnPayload); err != nil {
-		t.Fatal(err)
-	}
-	inst, err := mgr.Lookup(spawnPayload.Sid)
+	sid := spawnControlSession(t, c, "/w/demo")
+	inst, err := mgr.Lookup(sid)
 	if err != nil {
 		t.Fatal(err)
 	}
 	inst.Emit(rpc.EvtMessageEnd, &rpc.Message{Role: "user", Content: []byte(`"live"`)}, nil)
 	inst.ResetTranscript()
-	if err := c.WriteJSON(Envelope{Type: "call", ID: "hyd", Op: "hydrate", Sid: spawnPayload.Sid}); err != nil {
-		t.Fatal(err)
-	}
-	hydrate := readResponse(t, c, "hyd")
-	if hydrate.Ok == nil || !*hydrate.Ok {
-		t.Fatalf("hydrate failed: %+v", hydrate)
-	}
-	var payload struct {
-		LastSeq  uint64        `json:"lastSeq"`
-		Messages []rpc.Message `json:"messages"`
-	}
-	if err := json.Unmarshal(hydrate.Data, &payload); err != nil {
-		t.Fatal(err)
-	}
-	if len(payload.Messages) != 0 || payload.LastSeq == 0 {
-		t.Fatalf("hydrate did not return reset snapshot: %s", hydrate.Data)
+	hydrate := mustCall(t, c, &wspb.ControlCall{
+		Id:   "hyd",
+		Call: &wspb.ControlCall_Hydrate{Hydrate: &wspb.HydrateCall{Sid: sid}},
+	})
+	snapshot := hydrate.GetHydrate().GetSession()
+	if len(snapshot.GetMessages()) != 0 || snapshot.GetLastSeq() == 0 {
+		t.Fatalf("hydrate did not return reset snapshot: %+v", snapshot)
 	}
 }
 
@@ -826,38 +782,16 @@ func TestControlSpawnBootstrapsHydrateState(t *testing.T) {
 		return child, child.stdinW, child.stdoutR, nil
 	})
 	c := helloDial(t, mgr)
-	args, _ := json.Marshal(map[string]string{"cwd": "/w/demo"})
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "sp", Op: rpc.OpSpawn, Args: args}); err != nil {
-		t.Fatal(err)
-	}
-	spawn := readResponse(t, c, "sp")
-	if spawn.Ok == nil || !*spawn.Ok {
-		t.Fatalf("spawn failed: %+v", spawn)
-	}
-	var spawnPayload struct {
-		Sid string `json:"sid"`
-	}
-	if err := json.Unmarshal(spawn.Data, &spawnPayload); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "hyd", Op: rpc.OpHydrate, Sid: spawnPayload.Sid}); err != nil {
-		t.Fatal(err)
-	}
-	hydrate := readResponse(t, c, "hyd")
-	if hydrate.Ok == nil || !*hydrate.Ok {
-		t.Fatalf("hydrate failed: %+v", hydrate)
-	}
-	var payload struct {
-		State rpc.State `json:"state"`
-	}
-	if err := json.Unmarshal(hydrate.Data, &payload); err != nil {
-		t.Fatal(err)
-	}
-	state := payload.State
-	if state.Model != "pi-4" || state.Thinking != "high" || state.InputTokens == nil || *state.InputTokens != 11 ||
-		state.OutputTokens == nil || *state.OutputTokens != 22 || state.CacheReadTokens == nil || *state.CacheReadTokens != 33 ||
-		state.CacheWriteTokens == nil || *state.CacheWriteTokens != 44 || state.ContextUsedTokens == nil || *state.ContextUsedTokens != 55 ||
-		state.ContextWindowTokens == nil || *state.ContextWindowTokens != 66 || len(state.Skills) != 1 || state.Skills[0] != "review" {
+	sid := spawnControlSession(t, c, "/w/demo")
+	hydrate := mustCall(t, c, &wspb.ControlCall{
+		Id:   "hyd",
+		Call: &wspb.ControlCall_Hydrate{Hydrate: &wspb.HydrateCall{Sid: sid}},
+	})
+	state := hydrate.GetHydrate().GetSession().GetState()
+	if state.GetModel() != "pi-4" || state.GetThinking() != "high" || state.GetInputTokens() != 11 ||
+		state.GetOutputTokens() != 22 || state.GetCacheReadTokens() != 33 || state.GetCacheWriteTokens() != 44 ||
+		state.GetContextUsedTokens() != 55 || state.GetContextWindowTokens() != 66 ||
+		strings.Join(state.GetSkills(), ",") != "review" {
 		t.Fatalf("hydrate state is missing bootstrap metadata: %+v", state)
 	}
 	got := []string{<-commands, <-commands, <-commands}
@@ -879,14 +813,10 @@ func TestControlSpawnBootstrapFailureDoesNotPublishSession(t *testing.T) {
 		return child, child.stdinW, child.stdoutR, nil
 	})
 	c := helloDial(t, mgr)
-	args, _ := json.Marshal(map[string]string{"cwd": "/w/demo"})
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "sp", Op: rpc.OpSpawn, Args: args}); err != nil {
-		t.Fatal(err)
-	}
-	res := readResponse(t, c, "sp")
-	if res.Ok == nil || *res.Ok || !strings.Contains(res.Error, "state unavailable") {
-		t.Fatalf("bootstrap failure response = %+v", res)
-	}
+	expectError(t, c, &wspb.ControlCall{
+		Id:   "sp",
+		Call: &wspb.ControlCall_Spawn{Spawn: &wspb.SpawnCall{Cwd: proto.String("/w/demo")}},
+	}, "state unavailable")
 	if got := mgr.List(); len(got) != 0 {
 		t.Fatalf("failed bootstrap published %d sessions", len(got))
 	}
@@ -913,15 +843,11 @@ func TestControlSpawnReusedLeaseDoesNotBootstrapAgain(t *testing.T) {
 		return child, child.stdinW, child.stdoutR, nil
 	})
 	c := helloDial(t, mgr)
-	args, _ := json.Marshal(map[string]string{"cwd": cwd, "sessionPath": sessionPath})
 	for _, id := range []string{"first", "second"} {
-		if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: id, Op: rpc.OpSpawn, Args: args}); err != nil {
-			t.Fatal(err)
-		}
-		res := readResponse(t, c, id)
-		if res.Ok == nil || !*res.Ok {
-			t.Fatalf("%s spawn failed: %+v", id, res)
-		}
+		mustCall(t, c, &wspb.ControlCall{
+			Id:   id,
+			Call: &wspb.ControlCall_Spawn{Spawn: &wspb.SpawnCall{Cwd: proto.String(cwd), SessionPath: proto.String(sessionPath)}},
+		})
 	}
 	if got := requestCount.Load(); got != 3 {
 		t.Fatalf("reused lease issued %d startup requests, want 3 total", got)
@@ -973,29 +899,25 @@ func TestControlCompactRunsPiCompactAndReturnsRefreshedState(t *testing.T) {
 		}
 	})
 
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "compact-ok", Op: rpc.OpCompact, Sid: sid, Args: json.RawMessage(`{}`)}); err != nil {
-		t.Fatal(err)
+	response := mustCall(t, c, &wspb.ControlCall{
+		Id:   "compact-ok",
+		Call: &wspb.ControlCall_Compact{Compact: &wspb.CompactCall{Sid: sid}},
+	})
+	if compactCalls.Load() != 1 {
+		t.Fatalf("compact calls = %d, want 1", compactCalls.Load())
 	}
-	response := readResponse(t, c, "compact-ok")
-	if response.Ok == nil || !*response.Ok || compactCalls.Load() != 1 {
-		t.Fatalf("compact call failed: response=%+v calls=%d", response, compactCalls.Load())
-	}
-	var payload struct {
-		State rpc.State `json:"state"`
-	}
-	if err := json.Unmarshal(response.Data, &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload.State.Model != "m-compacted" || payload.State.Thinking != "high" {
-		t.Fatalf("compact did not return refreshed canonical state: %+v", payload.State)
+	state := response.GetCompact().GetState()
+	if state.GetModel() != "m-compacted" || state.GetThinking() != "high" {
+		t.Fatalf("compact did not return refreshed canonical state: %+v", state)
 	}
 
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "compact-reject", Op: rpc.OpCompact, Sid: sid, Args: json.RawMessage(`{"x":1}`)}); err != nil {
-		t.Fatal(err)
-	}
-	invalid := readResponse(t, c, "compact-reject")
-	if invalid.Ok == nil || *invalid.Ok || compactCalls.Load() != 1 {
-		t.Fatalf("compact validation unexpectedly succeeded: %+v", invalid)
+	// Validation still runs before any Pi write for an unknown sid.
+	expectError(t, c, &wspb.ControlCall{
+		Id:   "compact-reject",
+		Call: &wspb.ControlCall_Compact{Compact: &wspb.CompactCall{Sid: "missing-sid"}},
+	}, "missing-sid")
+	if compactCalls.Load() != 1 {
+		t.Fatalf("rejected compact reached Pi: calls=%d", compactCalls.Load())
 	}
 }
 
@@ -1037,22 +959,15 @@ func TestControlCompactRefreshFailureSurfacesWarningNotFailure(t *testing.T) {
 		}
 	})
 
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "compact-warn", Op: rpc.OpCompact, Sid: sid, Args: json.RawMessage(`{}`)}); err != nil {
-		t.Fatal(err)
-	}
-	response := readResponse(t, c, "compact-warn")
-	if response.Ok == nil || !*response.Ok || compactCalls.Load() != 1 {
+	response := mustCall(t, c, &wspb.ControlCall{
+		Id:   "compact-warn",
+		Call: &wspb.ControlCall_Compact{Compact: &wspb.CompactCall{Sid: sid}},
+	})
+	if compactCalls.Load() != 1 {
 		t.Fatalf("completed compaction reported as failure: %+v", response)
 	}
-	var payload struct {
-		State        rpc.State `json:"state"`
-		StateWarning string    `json:"stateWarning"`
-	}
-	if err := json.Unmarshal(response.Data, &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload.StateWarning == "" {
-		t.Fatalf("refresh failure did not surface a warning: %s", response.Data)
+	if response.GetCompact().GetStateWarning() == "" {
+		t.Fatalf("refresh failure did not surface a warning: %+v", response.GetCompact())
 	}
 }
 
@@ -1089,14 +1004,14 @@ func TestControlAbortBypassesControlGateHeldByCompact(t *testing.T) {
 	<-held
 	t.Cleanup(func() { close(release) })
 
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "abort-gate", Op: rpc.OpAbort, Sid: inst.ID, Args: json.RawMessage(`{}`)}); err != nil {
-		t.Fatal(err)
-	}
 	// If abort queued behind the gate it would hit the operation deadline;
 	// a short read deadline keeps the failure mode fast.
 	_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
-	response := readResponse(t, c, "abort-gate")
-	if response.Ok == nil || !*response.Ok {
+	response := mustCall(t, c, &wspb.ControlCall{
+		Id:   "abort-gate",
+		Call: &wspb.ControlCall_Abort{Abort: &wspb.AbortCall{Sid: inst.ID}},
+	})
+	if !response.GetAbort().GetAborted() {
 		t.Fatalf("abort was starved by the control gate: %+v", response)
 	}
 }
@@ -1152,84 +1067,56 @@ func TestControlPiAvailabilityAndSetterOutcomes(t *testing.T) {
 		}
 	})
 
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "models", Op: rpc.OpGetAvailableModels, Sid: sid, Args: json.RawMessage(`{}`)}); err != nil {
-		t.Fatal(err)
-	}
-	modelsResponse := readResponse(t, c, "models")
-	if modelsResponse.Ok == nil || !*modelsResponse.Ok {
-		t.Fatalf("model discovery failed: %+v", modelsResponse)
-	}
-	var models struct {
-		Models []map[string]string `json:"models"`
-	}
-	if err := json.Unmarshal(modelsResponse.Data, &models); err != nil {
-		t.Fatal(err)
-	}
-	if len(models.Models) != 2 || models.Models[0]["provider"] != "remote" || models.Models[0]["id"] != "remote-id" || models.Models[0]["name"] != "Remote model" {
-		t.Fatalf("model list was not Pi-derived: %+v", models.Models)
-	}
-	if _, hasModelID := models.Models[0]["modelId"]; hasModelID {
-		t.Fatal("model discovery exposed Phi modelId instead of Pi id")
+	modelsResponse := mustCall(t, c, &wspb.ControlCall{
+		Id:   "models",
+		Call: &wspb.ControlCall_GetAvailableModels{GetAvailableModels: &wspb.GetAvailableModelsCall{Sid: sid}},
+	})
+	models := modelsResponse.GetGetAvailableModels().GetModels()
+	if len(models) != 2 || models[0].GetProvider() != "remote" || models[0].GetId() != "remote-id" || models[0].GetName() != "Remote model" {
+		t.Fatalf("model list was not Pi-derived: %+v", models)
 	}
 
-	invalidModelArgs := json.RawMessage(`{"provider":"remote","modelId":"missing"}`)
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "bad-model", Op: rpc.OpSetModel, Sid: sid, Args: invalidModelArgs}); err != nil {
-		t.Fatal(err)
+	expectError(t, c, &wspb.ControlCall{
+		Id:   "bad-model",
+		Call: &wspb.ControlCall_SetModel{SetModel: &wspb.SetModelCall{Sid: sid, Provider: "remote", ModelId: "missing"}},
+	}, "model is not available in Pi")
+	if setModelCalls.Load() != 0 {
+		t.Fatalf("invalid model reached the Pi setter: calls=%d", setModelCalls.Load())
 	}
-	invalidModel := readResponse(t, c, "bad-model")
-	if invalidModel.Ok == nil || *invalidModel.Ok || setModelCalls.Load() != 0 {
-		t.Fatalf("invalid model was accepted or setter wrote: response=%+v calls=%d", invalidModel, setModelCalls.Load())
+	setModelResponse := mustCall(t, c, &wspb.ControlCall{
+		Id:   "set-model",
+		Call: &wspb.ControlCall_SetModel{SetModel: &wspb.SetModelCall{Sid: sid, Provider: "remote", ModelId: "remote-id"}},
+	})
+	if setModelCalls.Load() != 1 {
+		t.Fatalf("valid model setter calls = %d, want 1", setModelCalls.Load())
 	}
-	validModelArgs := json.RawMessage(`{"provider":"remote","modelId":"remote-id"}`)
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "set-model", Op: rpc.OpSetModel, Sid: sid, Args: validModelArgs}); err != nil {
-		t.Fatal(err)
-	}
-	setModelResponse := readResponse(t, c, "set-model")
-	if setModelResponse.Ok == nil || !*setModelResponse.Ok || setModelCalls.Load() != 1 {
-		t.Fatalf("valid model setter failed: response=%+v calls=%d", setModelResponse, setModelCalls.Load())
-	}
-	var modelState struct {
-		State rpc.State `json:"state"`
-	}
-	if err := json.Unmarshal(setModelResponse.Data, &modelState); err != nil {
-		t.Fatal(err)
-	}
-	if modelState.State.Model != "selected-model" {
-		t.Fatalf("setter did not return refreshed canonical state: %+v", modelState.State)
+	if got := setModelResponse.GetSetModel().GetState().GetModel(); got != "selected-model" {
+		t.Fatalf("setter did not return refreshed canonical state: %q", got)
 	}
 
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "levels", Op: rpc.OpGetAvailableThinkingLevels, Sid: sid, Args: json.RawMessage(`{}`)}); err != nil {
-		t.Fatal(err)
+	levelsResponse := mustCall(t, c, &wspb.ControlCall{
+		Id:   "levels",
+		Call: &wspb.ControlCall_GetAvailableThinkingLevels{GetAvailableThinkingLevels: &wspb.GetAvailableThinkingLevelsCall{Sid: sid}},
+	})
+	if got := strings.Join(levelsResponse.GetGetAvailableThinkingLevels().GetLevels(), ","); got != "off,low,high" {
+		t.Fatalf("thinking discovery = %q, want off,low,high", got)
 	}
-	levelsResponse := readResponse(t, c, "levels")
-	var levels struct {
-		Levels []string `json:"levels"`
+	expectError(t, c, &wspb.ControlCall{
+		Id:   "bad-thinking",
+		Call: &wspb.ControlCall_SetThinking{SetThinking: &wspb.SetThinkingCall{Sid: sid, Level: "unsupported"}},
+	}, "thinking level is not available in Pi")
+	if setThinkingCalls.Load() != 0 {
+		t.Fatalf("invalid thinking level reached the Pi setter: calls=%d", setThinkingCalls.Load())
 	}
-	if levelsResponse.Ok == nil || !*levelsResponse.Ok || json.Unmarshal(levelsResponse.Data, &levels) != nil || strings.Join(levels.Levels, ",") != "off,low,high" {
-		t.Fatalf("thinking discovery failed: %+v data=%s", levelsResponse, levelsResponse.Data)
+	setThinkingResponse := mustCall(t, c, &wspb.ControlCall{
+		Id:   "set-thinking",
+		Call: &wspb.ControlCall_SetThinking{SetThinking: &wspb.SetThinkingCall{Sid: sid, Level: "high"}},
+	})
+	if setThinkingCalls.Load() != 1 {
+		t.Fatalf("valid thinking setter calls = %d, want 1", setThinkingCalls.Load())
 	}
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "bad-thinking", Op: rpc.OpSetThinking, Sid: sid, Args: json.RawMessage(`{"level":"unsupported"}`)}); err != nil {
-		t.Fatal(err)
-	}
-	badThinking := readResponse(t, c, "bad-thinking")
-	if badThinking.Ok == nil || *badThinking.Ok || setThinkingCalls.Load() != 0 {
-		t.Fatalf("invalid thinking level was accepted or setter wrote: %+v calls=%d", badThinking, setThinkingCalls.Load())
-	}
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "set-thinking", Op: rpc.OpSetThinking, Sid: sid, Args: json.RawMessage(`{"level":"high"}`)}); err != nil {
-		t.Fatal(err)
-	}
-	setThinkingResponse := readResponse(t, c, "set-thinking")
-	if setThinkingResponse.Ok == nil || !*setThinkingResponse.Ok || setThinkingCalls.Load() != 1 {
-		t.Fatalf("valid thinking setter failed: %+v calls=%d", setThinkingResponse, setThinkingCalls.Load())
-	}
-	var thinkingState struct {
-		State rpc.State `json:"state"`
-	}
-	if err := json.Unmarshal(setThinkingResponse.Data, &thinkingState); err != nil {
-		t.Fatal(err)
-	}
-	if thinkingState.State.Thinking != "high" {
-		t.Fatalf("thinking setter did not return refreshed canonical state: %+v", thinkingState.State)
+	if got := setThinkingResponse.GetSetThinking().GetState().GetThinking(); got != "high" {
+		t.Fatalf("thinking setter did not return refreshed canonical state: %q", got)
 	}
 }
 
@@ -1262,12 +1149,13 @@ func TestControlOperationSharesOneContextBudgetAcrossPiRequests(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	response := server.dispatch(ctx, Envelope{
-		Type: rpc.CallFrame, ID: "budget", Op: rpc.OpSetModel, Sid: inst.ID,
-		Args: json.RawMessage(`{"provider":"p","modelId":"m"}`),
+	response := server.dispatch(ctx, &wspb.ControlCall{
+		Id:   "budget",
+		Call: &wspb.ControlCall_SetModel{SetModel: &wspb.SetModelCall{Sid: inst.ID, Provider: "p", ModelId: "m"}},
 	})
-	if response.Ok == nil || *response.Ok || !strings.Contains(response.Error, "timeout") {
-		t.Fatalf("shared operation budget response = %+v", response)
+	reason := response.GetError().GetReason()
+	if !strings.Contains(reason, "timeout") {
+		t.Fatalf("shared operation budget response = %q", reason)
 	}
 	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
 		t.Fatalf("operation exceeded one shared context budget: %s", elapsed)
@@ -1302,12 +1190,12 @@ func TestControlGateTimeoutWritesNoPiRecord(t *testing.T) {
 	server := &controlServer{mgr: mgr}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
-	response := server.dispatch(ctx, Envelope{
-		Type: rpc.CallFrame, ID: "gate", Op: rpc.OpGetAvailableModels, Sid: inst.ID,
-		Args: json.RawMessage(`{}`),
+	response := server.dispatch(ctx, &wspb.ControlCall{
+		Id:   "gate",
+		Call: &wspb.ControlCall_GetAvailableModels{GetAvailableModels: &wspb.GetAvailableModelsCall{Sid: inst.ID}},
 	})
-	if response.Ok == nil || *response.Ok || !strings.Contains(response.Error, "timeout") {
-		t.Fatalf("held gate response = %+v", response)
+	if reason := response.GetError().GetReason(); !strings.Contains(reason, "timeout") {
+		t.Fatalf("held gate response = %q", reason)
 	}
 	select {
 	case command := <-child.commands:
@@ -1338,12 +1226,12 @@ func TestControlResetBusyRejectsBeforePiNewSessionWrite(t *testing.T) {
 	})
 	c := helloDial(t, mgr)
 	sid := spawnControlSession(t, c, "/w/busy")
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "busy-reset", Op: rpc.OpNewSession, Sid: sid, Args: json.RawMessage(`{}`)}); err != nil {
-		t.Fatal(err)
-	}
-	response := readResponse(t, c, "busy-reset")
-	if response.Ok == nil || *response.Ok || newSessionCalls.Load() != 0 {
-		t.Fatalf("busy reset wrote Pi new_session: response=%+v calls=%d", response, newSessionCalls.Load())
+	expectError(t, c, &wspb.ControlCall{
+		Id:   "busy-reset",
+		Call: &wspb.ControlCall_NewSession{NewSession: &wspb.NewSessionCall{Sid: sid}},
+	}, "busy")
+	if newSessionCalls.Load() != 0 {
+		t.Fatalf("busy reset wrote Pi new_session: calls=%d", newSessionCalls.Load())
 	}
 }
 
@@ -1375,26 +1263,29 @@ func TestControlResetPromptGenerationRaceRejectsWithoutNewSessionWrite(t *testin
 	})
 	c := helloDial(t, mgr)
 	sid := spawnControlSession(t, c, "/w/race")
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "race-reset", Op: rpc.OpNewSession, Sid: sid, Args: json.RawMessage(`{}`)}); err != nil {
-		t.Fatal(err)
-	}
+	sendCall(t, c, &wspb.ControlCall{
+		Id:   "race-reset",
+		Call: &wspb.ControlCall_NewSession{NewSession: &wspb.NewSessionCall{Sid: sid}},
+	})
 	select {
 	case <-preflightStarted:
 	case <-time.After(time.Second):
 		t.Fatal("reset preflight did not start")
 	}
-	promptArgs := json.RawMessage(`{"message":"intervening prompt"}`)
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "intervening-prompt", Op: rpc.OpPrompt, Sid: sid, Args: promptArgs}); err != nil {
-		t.Fatal(err)
-	}
-	promptResponse := readResponse(t, c, "intervening-prompt")
-	if promptResponse.Ok == nil || !*promptResponse.Ok {
+	promptResponse := mustCall(t, c, &wspb.ControlCall{
+		Id:   "intervening-prompt",
+		Call: &wspb.ControlCall_Prompt{Prompt: &wspb.PromptCall{Sid: sid, Message: "intervening prompt"}},
+	})
+	if !promptResponse.GetPrompt().GetAccepted() {
 		t.Fatalf("intervening prompt was not accepted: %+v", promptResponse)
 	}
 	close(releasePreflight)
 	resetResponse := readResponse(t, c, "race-reset")
-	if resetResponse.Ok == nil || *resetResponse.Ok || newSessionCalls.Load() != 0 {
-		t.Fatalf("generation race did not reject before Pi write: response=%+v calls=%d", resetResponse, newSessionCalls.Load())
+	if resetResponse.GetError().GetReason() == "" {
+		t.Fatalf("generation race did not reject: %+v", resetResponse)
+	}
+	if newSessionCalls.Load() != 0 {
+		t.Fatalf("generation race wrote Pi new_session: calls=%d", newSessionCalls.Load())
 	}
 }
 
@@ -1423,15 +1314,12 @@ func TestControlResetCancellationPreservesTranscriptAndPath(t *testing.T) {
 	}
 	mgr.UpdateSessionPath(inst, "/sessions/cancelled.jsonl")
 	inst.Emit(rpc.EvtMessageEnd, &rpc.Message{Role: "user", Content: json.RawMessage(`"keep"`)}, nil)
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "cancel-reset", Op: rpc.OpNewSession, Sid: sid, Args: json.RawMessage(`{}`)}); err != nil {
-		t.Fatal(err)
-	}
-	response := readResponse(t, c, "cancel-reset")
-	var payload struct {
-		Cancelled bool `json:"cancelled"`
-	}
-	if response.Ok == nil || !*response.Ok || json.Unmarshal(response.Data, &payload) != nil || !payload.Cancelled {
-		t.Fatalf("cancelled reset response = %+v data=%s", response, response.Data)
+	response := mustCall(t, c, &wspb.ControlCall{
+		Id:   "cancel-reset",
+		Call: &wspb.ControlCall_NewSession{NewSession: &wspb.NewSessionCall{Sid: sid}},
+	})
+	if !response.GetNewSession().GetCancelled() {
+		t.Fatalf("cancelled reset response = %+v", response.GetNewSession())
 	}
 	if inst.SessionPathCopy() != "/sessions/cancelled.jsonl" || len(inst.SnapshotCopy().Messages) != 1 {
 		t.Fatalf("cancelled reset changed ownership/transcript: path=%q snapshot=%+v", inst.SessionPathCopy(), inst.SnapshotCopy())
@@ -1487,22 +1375,17 @@ func TestControlSuccessfulResetClearsAndRefreshesNewSessionPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	inst.Emit(rpc.EvtMessageEnd, &rpc.Message{Role: "assistant", Content: json.RawMessage(`"old"`)}, nil)
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "success-reset", Op: rpc.OpNewSession, Sid: sid, Args: json.RawMessage(`{}`)}); err != nil {
-		t.Fatal(err)
+	response := mustCall(t, c, &wspb.ControlCall{
+		Id:   "success-reset",
+		Call: &wspb.ControlCall_NewSession{NewSession: &wspb.NewSessionCall{Sid: sid}},
+	})
+	if newSessionCalls.Load() != 1 {
+		t.Fatalf("successful reset calls = %d, want 1", newSessionCalls.Load())
 	}
-	response := readResponse(t, c, "success-reset")
-	if response.Ok == nil || !*response.Ok || newSessionCalls.Load() != 1 {
-		t.Fatalf("successful reset failed: %+v calls=%d", response, newSessionCalls.Load())
-	}
-	var payload struct {
-		Reset bool      `json:"reset"`
-		State rpc.State `json:"state"`
-	}
-	if err := json.Unmarshal(response.Data, &payload); err != nil {
-		t.Fatal(err)
-	}
-	if !payload.Reset || payload.State.Model != "fresh-model" || len(inst.SnapshotCopy().Messages) != 0 || inst.SessionPathCopy() != "/sessions/new.jsonl" {
-		t.Fatalf("reset did not clear/refresh canonical state: payload=%+v path=%q snapshot=%+v", payload, inst.SessionPathCopy(), inst.SnapshotCopy())
+	reset := response.GetNewSession()
+	if !reset.GetReset_() || reset.GetState().GetModel() != "fresh-model" ||
+		len(inst.SnapshotCopy().Messages) != 0 || inst.SessionPathCopy() != "/sessions/new.jsonl" {
+		t.Fatalf("reset did not clear/refresh canonical state: result=%+v path=%q snapshot=%+v", reset, inst.SessionPathCopy(), inst.SnapshotCopy())
 	}
 	// The old public resume path is gone and the new one is not published:
 	// /sessions/new.jsonl does not exist as a regular file, so a reload
@@ -1551,16 +1434,13 @@ func TestControlResetPostRefreshFailureReturnsWarningAfterClearing(t *testing.T)
 		t.Fatal(err)
 	}
 	inst.Emit(rpc.EvtMessageEnd, &rpc.Message{Role: "assistant", Content: json.RawMessage(`"stale"`)}, nil)
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "warning-reset", Op: rpc.OpNewSession, Sid: sid, Args: json.RawMessage(`{}`)}); err != nil {
-		t.Fatal(err)
-	}
-	response := readResponse(t, c, "warning-reset")
-	var payload struct {
-		Reset        bool   `json:"reset"`
-		StateWarning string `json:"stateWarning"`
-	}
-	if response.Ok == nil || !*response.Ok || json.Unmarshal(response.Data, &payload) != nil || !payload.Reset || !strings.Contains(payload.StateWarning, "post-reset state unavailable") {
-		t.Fatalf("post-refresh warning response = %+v data=%s", response, response.Data)
+	response := mustCall(t, c, &wspb.ControlCall{
+		Id:   "warning-reset",
+		Call: &wspb.ControlCall_NewSession{NewSession: &wspb.NewSessionCall{Sid: sid}},
+	})
+	reset := response.GetNewSession()
+	if !reset.GetReset_() || !strings.Contains(reset.GetStateWarning(), "post-reset state unavailable") {
+		t.Fatalf("post-refresh warning result = %+v", reset)
 	}
 	if inst.SessionPathCopy() != "" || len(inst.SnapshotCopy().Messages) != 0 {
 		t.Fatalf("warning reset revived old state: path=%q snapshot=%+v", inst.SessionPathCopy(), inst.SnapshotCopy())
@@ -1592,13 +1472,10 @@ func TestControlResetPiRejectionPreservesTranscriptAndPath(t *testing.T) {
 	}
 	mgr.UpdateSessionPath(inst, "/sessions/reject.jsonl")
 	inst.Emit(rpc.EvtMessageEnd, &rpc.Message{Role: "user", Content: json.RawMessage(`"preserve"`)}, nil)
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "reject-reset", Op: rpc.OpNewSession, Sid: sid, Args: json.RawMessage(`{}`)}); err != nil {
-		t.Fatal(err)
-	}
-	response := readResponse(t, c, "reject-reset")
-	if response.Ok == nil || *response.Ok || !strings.Contains(response.Error, "Pi refused reset") {
-		t.Fatalf("Pi rejection response = %+v", response)
-	}
+	expectError(t, c, &wspb.ControlCall{
+		Id:   "reject-reset",
+		Call: &wspb.ControlCall_NewSession{NewSession: &wspb.NewSessionCall{Sid: sid}},
+	}, "Pi refused reset")
 	if inst.SessionPathCopy() != "/sessions/reject.jsonl" || len(inst.SnapshotCopy().Messages) != 1 {
 		t.Fatalf("pre-acceptance rejection changed state: path=%q snapshot=%+v", inst.SessionPathCopy(), inst.SnapshotCopy())
 	}
@@ -1606,11 +1483,12 @@ func TestControlResetPiRejectionPreservesTranscriptAndPath(t *testing.T) {
 
 func TestControlStubbedOps(t *testing.T) {
 	c := helloDial(t, rpc.NewManager())
-	res := call(t, c, "s1", "waitViewReady")
-	var payload map[string]any
-	_ = json.Unmarshal(res.Data, &payload)
-	if payload["stubbed"] != true {
-		t.Fatalf("want stubbed ack, got %s", res.Data)
+	res := mustCall(t, c, &wspb.ControlCall{
+		Id:   "s1",
+		Call: &wspb.ControlCall_WaitViewReady{WaitViewReady: &wspb.WaitViewReadyCall{}},
+	})
+	if !res.GetWaitViewReady().GetStubbed() {
+		t.Fatalf("want stubbed ack, got %+v", res)
 	}
 }
 
@@ -1676,12 +1554,10 @@ func newControlRenameManager(t *testing.T, rejectName string) (*rpc.Manager, *co
 			if rejectName != "" {
 				return nil, false, rejectName
 			}
-			// Pi emits the native name before the successful response.
 			name, _ := command["name"].(string)
-			encoded, _ := json.Marshal(map[string]any{
-				"type": "session_info_changed", "name": name,
-			})
-			_, _ = child.stdoutW.Write(append(encoded, '\n'))
+			if err := emitNativeSessionInfoChanged(child, name); err != nil {
+				return nil, false, err.Error()
+			}
 			return nil, true, ""
 		default:
 			return nil, false, "unexpected command"
@@ -1707,22 +1583,12 @@ func TestControlSetSessionNameForwardsAndUpdatesTitle(t *testing.T) {
 	sid := spawnControlSession(t, c, "/w/demo")
 	readBootstrapCommands(commands)
 
-	args, _ := json.Marshal(map[string]string{"name": "Audit auth module"})
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "snm", Op: rpc.OpSetSessionName, Sid: sid, Args: args}); err != nil {
-		t.Fatal(err)
-	}
-	res := readResponse(t, c, "snm")
-	if res.Ok == nil || !*res.Ok {
-		t.Fatalf("setSessionName failed: %+v", res)
-	}
-	var payload struct {
-		State rpc.State `json:"state"`
-	}
-	if err := json.Unmarshal(res.Data, &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload.State.Title != "Audit auth module" {
-		t.Fatalf("state.title = %q, want %q", payload.State.Title, "Audit auth module")
+	res := mustCall(t, c, &wspb.ControlCall{
+		Id:   "snm",
+		Call: &wspb.ControlCall_SetSessionName{SetSessionName: &wspb.SetSessionNameCall{Sid: sid, Name: "Audit auth module"}},
+	})
+	if got := res.GetSetSessionName().GetState().GetTitle(); got != "Audit auth module" {
+		t.Fatalf("state.title = %q, want %q", got, "Audit auth module")
 	}
 
 	inst, err := mgr.Lookup(sid)
@@ -1732,20 +1598,13 @@ func TestControlSetSessionNameForwardsAndUpdatesTitle(t *testing.T) {
 	if got := inst.TitleCopy(); got != "Audit auth module" {
 		t.Fatalf("inst.TitleCopy = %q, want %q", got, "Audit auth module")
 	}
-	var listPayload []map[string]any
-	listArgs, _ := json.Marshal(struct{}{})
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "ls", Op: rpc.OpListSessions, Args: listArgs}); err != nil {
-		t.Fatal(err)
-	}
-	list := readResponse(t, c, "ls")
-	if list.Ok == nil || !*list.Ok {
-		t.Fatalf("listSessions failed: %+v", list)
-	}
-	if err := json.Unmarshal(list.Data, &listPayload); err != nil {
-		t.Fatal(err)
-	}
-	if len(listPayload) != 1 || listPayload[0]["title"] != "Audit auth module" {
-		t.Fatalf("listSessions title = %+v, want %q", listPayload, "Audit auth module")
+	list := mustCall(t, c, &wspb.ControlCall{
+		Id:   "ls",
+		Call: &wspb.ControlCall_ListSessions{ListSessions: &wspb.ListSessionsCall{}},
+	})
+	sessions := list.GetListSessions().GetSessions()
+	if len(sessions) != 1 || sessions[0].GetTitle() != "Audit auth module" {
+		t.Fatalf("listSessions title = %+v, want %q", sessions, "Audit auth module")
 	}
 
 	// The child received the set_session_name command with the name.
@@ -1765,65 +1624,38 @@ func TestControlSetSessionNamePiRejectionSurfacesError(t *testing.T) {
 	sid := spawnControlSession(t, c, "/w/demo")
 	readBootstrapCommands(commands)
 
-	args, _ := json.Marshal(map[string]string{"name": "Audit auth module"})
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "snm", Op: rpc.OpSetSessionName, Sid: sid, Args: args}); err != nil {
-		t.Fatal(err)
-	}
-	res := readResponse(t, c, "snm")
-	if res.Ok == nil || *res.Ok {
-		t.Fatalf("setSessionName should reject Pi failure: %+v", res)
-	}
-	if !strings.Contains(res.Error, "name not allowed") {
-		t.Fatalf("error = %q, want it to contain %q", res.Error, "name not allowed")
-	}
+	expectError(t, c, &wspb.ControlCall{
+		Id:   "snm",
+		Call: &wspb.ControlCall_SetSessionName{SetSessionName: &wspb.SetSessionNameCall{Sid: sid, Name: "Audit auth module"}},
+	}, "name not allowed")
 	inst, err := mgr.Lookup(sid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := inst.TitleCopy()
 	if got := inst.TitleCopy(); got == "Audit auth module" {
 		t.Fatalf("inst.TitleCopy unexpectedly updated to %q on Pi rejection", got)
-	}
-	if state := inst.StateCopy(); state.Title != before {
-		t.Fatalf("rejected rename changed State title from %q to %q", before, state.Title)
 	}
 }
 
 func TestControlSetSessionNameUnknownSidReturnsError(t *testing.T) {
 	mgr, _, _ := newControlRenameManager(t, "")
 	c := helloDial(t, mgr)
-	args, _ := json.Marshal(map[string]string{"name": "Audit auth module"})
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "snm", Op: rpc.OpSetSessionName, Sid: "does-not-exist", Args: args}); err != nil {
-		t.Fatal(err)
-	}
-	res := readResponse(t, c, "snm")
-	if res.Ok == nil || *res.Ok {
-		t.Fatalf("setSessionName with unknown sid should reject: %+v", res)
-	}
+	expectError(t, c, &wspb.ControlCall{
+		Id:   "snm",
+		Call: &wspb.ControlCall_SetSessionName{SetSessionName: &wspb.SetSessionNameCall{Sid: "does-not-exist", Name: "Audit auth module"}},
+	}, "does-not-exist")
 }
 
-func TestControlSetSessionNameStrictDecode(t *testing.T) {
+func TestControlSetSessionNameValidation(t *testing.T) {
 	mgr, _, _ := newControlRenameManager(t, "")
 	c := helloDial(t, mgr)
 	sid := spawnControlSession(t, c, "/w/demo")
 
-	// Empty name is rejected.
-	empty, _ := json.Marshal(map[string]string{"name": "   "})
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "snm", Op: rpc.OpSetSessionName, Sid: sid, Args: empty}); err != nil {
-		t.Fatal(err)
-	}
-	if res := readResponse(t, c, "snm"); res.Ok == nil || *res.Ok {
-		t.Fatalf("empty name should reject: %+v", res)
-	}
-
-	// Unknown field rejected by decodeStrict.
-	unknown, _ := json.Marshal(map[string]string{"name": "x", "title": "y"})
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "snm", Op: rpc.OpSetSessionName, Sid: sid, Args: unknown}); err != nil {
-		t.Fatal(err)
-	}
-	if res := readResponse(t, c, "snm"); res.Ok == nil || *res.Ok {
-		t.Fatalf("unknown field should reject: %+v", res)
-	}
+	// A blank name is rejected before any Pi write.
+	expectError(t, c, &wspb.ControlCall{
+		Id:   "snm",
+		Call: &wspb.ControlCall_SetSessionName{SetSessionName: &wspb.SetSessionNameCall{Sid: sid, Name: "   "}},
+	}, "name is required")
 }
 
 func TestControlSetSessionNameEmitsStateChangedEvent(t *testing.T) {
@@ -1842,13 +1674,10 @@ func TestControlSetSessionNameEmitsStateChangedEvent(t *testing.T) {
 	}
 	defer sub.CloseThis()
 
-	args, _ := json.Marshal(map[string]string{"name": "Audit auth module"})
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "snm", Op: rpc.OpSetSessionName, Sid: sid, Args: args}); err != nil {
-		t.Fatal(err)
-	}
-	if res := readResponse(t, c, "snm"); res.Ok == nil || !*res.Ok {
-		t.Fatalf("setSessionName failed: %+v", res)
-	}
+	mustCall(t, c, &wspb.ControlCall{
+		Id:   "snm",
+		Call: &wspb.ControlCall_SetSessionName{SetSessionName: &wspb.SetSessionNameCall{Sid: sid, Name: "Audit auth module"}},
+	})
 
 	deadline := time.After(time.Second)
 	for {
@@ -1914,48 +1743,32 @@ func TestSubagentTranscriptOp(t *testing.T) {
 	}
 
 	server := &controlServer{mgr: rpc.NewManager()}
-	response := server.dispatch(context.Background(), Envelope{
-		Type: rpc.CallFrame,
-		ID:   "subagent-transcript",
-		Op:   rpc.OpSubagentTranscript,
-		Args: json.RawMessage(`{"runId":"run-transcript-test"}`),
+	response := server.dispatch(context.Background(), &wspb.ControlCall{
+		Id:   "subagent-transcript",
+		Call: &wspb.ControlCall_SubagentTranscript{SubagentTranscript: &wspb.SubagentTranscriptCall{RunId: "run-transcript-test"}},
 	})
-	if response.Ok == nil || !*response.Ok {
-		t.Fatalf("subagent transcript failed: %+v", response)
+	transcript := response.GetSubagentTranscript()
+	if transcript == nil || transcript.GetRunId() != runID {
+		t.Fatalf("subagent transcript response = %+v", response)
 	}
-	var payload struct {
-		RunID string `json:"runId"`
-		Steps []struct {
-			Messages []json.RawMessage `json:"messages"`
-		} `json:"steps"`
-	}
-	if err := json.Unmarshal(response.Data, &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload.RunID != runID {
-		t.Fatalf("runId = %q, want %q", payload.RunID, runID)
-	}
-	if len(payload.Steps) != 1 || len(payload.Steps[0].Messages) < 1 {
-		t.Fatalf("transcript steps = %+v, want one step with messages", payload.Steps)
+	steps := transcript.GetSteps()
+	if len(steps) != 1 || len(steps[0].GetMessages()) < 1 {
+		t.Fatalf("transcript steps = %+v, want one step with messages", steps)
 	}
 
-	traversal := server.dispatch(context.Background(), Envelope{
-		Type: rpc.CallFrame,
-		ID:   "subagent-traversal",
-		Op:   rpc.OpSubagentTranscript,
-		Args: json.RawMessage(`{"runId":"../x"}`),
+	traversal := server.dispatch(context.Background(), &wspb.ControlCall{
+		Id:   "subagent-traversal",
+		Call: &wspb.ControlCall_SubagentTranscript{SubagentTranscript: &wspb.SubagentTranscriptCall{RunId: "../x"}},
 	})
-	if traversal.Ok == nil || *traversal.Ok {
+	if traversal.GetError().GetReason() == "" {
 		t.Fatalf("traversal runId unexpectedly succeeded: %+v", traversal)
 	}
 
-	unknown := server.dispatch(context.Background(), Envelope{
-		Type: rpc.CallFrame,
-		ID:   "subagent-unknown",
-		Op:   rpc.OpSubagentTranscript,
-		Args: json.RawMessage(`{"runId":"missing-run"}`),
+	unknown := server.dispatch(context.Background(), &wspb.ControlCall{
+		Id:   "subagent-unknown",
+		Call: &wspb.ControlCall_SubagentTranscript{SubagentTranscript: &wspb.SubagentTranscriptCall{RunId: "missing-run"}},
 	})
-	if unknown.Ok == nil || *unknown.Ok || !strings.Contains(unknown.Error, "subagent run not found") {
+	if !strings.Contains(unknown.GetError().GetReason(), "subagent run not found") {
 		t.Fatalf("unknown runId response: %+v", unknown)
 	}
 }
@@ -1995,15 +1808,18 @@ func respondStateTransactionCommand(t *testing.T, child *controlFakeChild, comma
 	}
 }
 
-// respondNativeRename mirrors pi: the native session_info_changed event is
-// emitted before the successful set_session_name response.
-func respondNativeRename(t *testing.T, child *controlFakeChild, command map[string]any, name string) {
-	t.Helper()
+func emitNativeSessionInfoChanged(child *controlFakeChild, name string) error {
 	encoded, err := json.Marshal(map[string]any{"type": "session_info_changed", "name": name})
 	if err != nil {
-		t.Fatal(err)
+		return err
 	}
-	if _, err := child.stdoutW.Write(append(encoded, '\n')); err != nil {
+	_, err = child.stdoutW.Write(append(encoded, '\n'))
+	return err
+}
+
+func respondNativeRename(t *testing.T, child *controlFakeChild, command map[string]any, name string) {
+	t.Helper()
+	if err := emitNativeSessionInfoChanged(child, name); err != nil {
 		t.Fatalf("write native name event: %v", err)
 	}
 	respondStateTransactionCommand(t, child, command, true, map[string]any{}, "")
@@ -2023,29 +1839,25 @@ func stateTransactionControlFixture(t *testing.T, cwd string) (*rpc.Manager, *co
 	return mgr, child, inst
 }
 
-func stateTransactionRenameEnvelope(t *testing.T, inst *rpc.Instance, id, name string) Envelope {
-	t.Helper()
-	args, err := json.Marshal(map[string]string{"name": name})
-	if err != nil {
-		t.Fatal(err)
+func stateTransactionRenameCall(id, sid, name string) *wspb.ControlCall {
+	return &wspb.ControlCall{
+		Id: id,
+		Call: &wspb.ControlCall_SetSessionName{SetSessionName: &wspb.SetSessionNameCall{
+			Sid: sid, Name: name,
+		}},
 	}
-	return Envelope{Type: rpc.CallFrame, ID: id, Op: rpc.OpSetSessionName, Sid: inst.ID, Args: args}
 }
 
-// TestStateTransactionIndependentUpdates is integration coverage for a stats
-// refresh and a gated rename sharing one instance. It is not the lost-update
-// regression: its schedule answers the stats request before the rename ack, so
-// the old read-modify-write copy already carried the stats.
-// TestStateTransactionPublicationOrder in pkg/rpc carries that evidence.
+// This schedule answers stats before the rename ack; the root lost-update
+// regression is TestStateTransactionPublicationOrder in pkg/rpc.
 func TestStateTransactionIndependentUpdates(t *testing.T) {
 	mgr, child, inst := stateTransactionControlFixture(t, "/w/state-independent")
 	server := &controlServer{mgr: mgr}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	renameDone := make(chan Envelope, 1)
-	renameCall := stateTransactionRenameEnvelope(t, inst, "rename", "renamed")
+	renameDone := make(chan *wspb.ControlResponse, 1)
 	go func() {
-		renameDone <- server.dispatch(ctx, renameCall)
+		renameDone <- server.dispatch(ctx, stateTransactionRenameCall("rename", inst.ID, "renamed"))
 	}()
 	nameCommand := nextStateTransactionCommand(t, child)
 	if nameCommand["type"] != "set_session_name" {
@@ -2075,30 +1887,25 @@ func TestStateTransactionIndependentUpdates(t *testing.T) {
 		t.Fatal("stats request did not complete")
 	}
 	respondNativeRename(t, child, nameCommand, "renamed")
-	var renameResponse Envelope
+	var renameResponse *wspb.ControlResponse
 	select {
 	case renameResponse = <-renameDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("rename control did not complete")
 	}
-	if renameResponse.Ok == nil || !*renameResponse.Ok {
-		t.Fatalf("rename control failed: %+v", renameResponse)
-	}
-	var payload struct {
-		State rpc.State `json:"state"`
-	}
-	if err := json.Unmarshal(renameResponse.Data, &payload); err != nil {
-		t.Fatal(err)
+	if renameResponse.GetError() != nil {
+		t.Fatalf("rename control failed: %+v", renameResponse.GetError())
 	}
 	state := inst.StateCopy()
-	if state.Title != "renamed" || payload.State.Title != "renamed" {
-		t.Fatalf("rename did not commit both titles: retained=%+v response=%+v", state, payload.State)
+	resultState := renameResponse.GetSetSessionName().GetState()
+	if state.Title != "renamed" || resultState.GetTitle() != "renamed" {
+		t.Fatalf("rename did not commit both titles: retained=%+v response=%+v", state, resultState)
 	}
 	if state.InputTokens == nil || *state.InputTokens != 7 || state.OutputTokens == nil || *state.OutputTokens != 0 || state.CacheReadTokens == nil || *state.CacheReadTokens != 2 || state.CacheWriteTokens == nil || *state.CacheWriteTokens != 3 || state.ContextUsedTokens == nil || *state.ContextUsedTokens != 5 || state.ContextWindowTokens == nil || *state.ContextWindowTokens != 200000 {
 		t.Fatalf("concurrent stats were lost during rename: %+v", state)
 	}
-	if payload.State.InputTokens == nil || *payload.State.InputTokens != 7 || payload.State.CacheWriteTokens == nil || *payload.State.CacheWriteTokens != 3 {
-		t.Fatalf("rename acknowledgement omitted concurrent stats: %+v", payload.State)
+	if resultState.InputTokens == nil || resultState.GetInputTokens() != 7 || resultState.CacheWriteTokens == nil || resultState.GetCacheWriteTokens() != 3 {
+		t.Fatalf("rename acknowledgement omitted concurrent stats: %+v", resultState)
 	}
 }
 
@@ -2107,19 +1914,17 @@ func TestStateTransactionRenameGate(t *testing.T) {
 	server := &controlServer{mgr: mgr}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	firstDone := make(chan Envelope, 1)
-	firstCall := stateTransactionRenameEnvelope(t, inst, "first", "first title")
+	firstDone := make(chan *wspb.ControlResponse, 1)
 	go func() {
-		firstDone <- server.dispatch(ctx, firstCall)
+		firstDone <- server.dispatch(ctx, stateTransactionRenameCall("first", inst.ID, "first title"))
 	}()
 	firstCommand := nextStateTransactionCommand(t, child)
 	if firstCommand["type"] != "set_session_name" {
 		t.Fatalf("first native command = %v, want set_session_name", firstCommand["type"])
 	}
-	secondDone := make(chan Envelope, 1)
-	secondCall := stateTransactionRenameEnvelope(t, inst, "second", "second title")
+	secondDone := make(chan *wspb.ControlResponse, 1)
 	go func() {
-		secondDone <- server.dispatch(ctx, secondCall)
+		secondDone <- server.dispatch(ctx, stateTransactionRenameCall("second", inst.ID, "second title"))
 	}()
 	respondNativeRename(t, child, firstCommand, "first title")
 	secondCommand := nextStateTransactionCommand(t, child)
@@ -2128,14 +1933,14 @@ func TestStateTransactionRenameGate(t *testing.T) {
 	}
 	respondNativeRename(t, child, secondCommand, "second title")
 
-	responses := make(map[string]Envelope, 2)
+	responses := make(map[string]*wspb.ControlResponse, 2)
 	for range 2 {
 		select {
 		case response := <-firstDone:
-			responses[response.ID] = response
+			responses[response.GetId()] = response
 			firstDone = nil
 		case response := <-secondDone:
-			responses[response.ID] = response
+			responses[response.GetId()] = response
 			secondDone = nil
 		case <-time.After(2 * time.Second):
 			t.Fatal("serialized rename controls did not complete")
@@ -2143,17 +1948,11 @@ func TestStateTransactionRenameGate(t *testing.T) {
 	}
 	for id, wantTitle := range map[string]string{"first": "first title", "second": "second title"} {
 		response := responses[id]
-		if response.Ok == nil || !*response.Ok {
+		if response == nil || response.GetError() != nil {
 			t.Fatalf("rename %s failed: %+v", id, response)
 		}
-		var payload struct {
-			State rpc.State `json:"state"`
-		}
-		if err := json.Unmarshal(response.Data, &payload); err != nil {
-			t.Fatal(err)
-		}
-		if payload.State.Title != wantTitle {
-			t.Fatalf("rename %s acknowledgement title = %q, want %q", id, payload.State.Title, wantTitle)
+		if got := response.GetSetSessionName().GetState().GetTitle(); got != wantTitle {
+			t.Fatalf("rename %s acknowledgement title = %q, want %q", id, got, wantTitle)
 		}
 	}
 	if title := inst.TitleCopy(); title != "second title" {
@@ -2189,8 +1988,6 @@ func TestStateTransactionResetKeepsMessageAcceptedAfterResponse(t *testing.T) {
 			}
 			writeFrame(response)
 			if kind == "new_session" {
-				// Accepted after Pi acknowledged the reset: the server
-				// boundary must not erase it when the caller returns.
 				writeFrame(map[string]any{
 					"type":    "message_end",
 					"message": map[string]any{"role": "user", "content": "after-reset"},
@@ -2209,11 +2006,12 @@ func TestStateTransactionResetKeepsMessageAcceptedAfterResponse(t *testing.T) {
 	}
 	mgr.UpdateSessionPath(inst, "/sessions/old.jsonl")
 	inst.Emit(rpc.EvtMessageEnd, &rpc.Message{Role: "user", Content: json.RawMessage(`"old"`)}, nil)
-	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "boundary-reset", Op: rpc.OpNewSession, Sid: sid, Args: json.RawMessage(`{}`)}); err != nil {
-		t.Fatal(err)
-	}
+	sendCall(t, c, &wspb.ControlCall{
+		Id:   "boundary-reset",
+		Call: &wspb.ControlCall_NewSession{NewSession: &wspb.NewSessionCall{Sid: sid}},
+	})
 	response := readResponse(t, c, "boundary-reset")
-	if response.Ok == nil || !*response.Ok {
+	if response.GetError() != nil || !response.GetNewSession().GetReset_() {
 		t.Fatalf("reset failed: %+v", response)
 	}
 	if inst.SessionPathCopy() != "" {
@@ -2227,3 +2025,6 @@ func TestStateTransactionResetKeepsMessageAcceptedAfterResponse(t *testing.T) {
 		t.Fatalf("reset erased a message accepted after its response: %+v", messages)
 	}
 }
+
+// protoString is a helper for the optional string fields of typed calls.
+func protoString(value string) *string { return &value }

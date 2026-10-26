@@ -1,23 +1,47 @@
 /* Φ phi — Binary WebSocket Client */
-import { wsUrl } from './util.js';
-// Parses a framed header [u32 jsonLen BE][json bytes][extra bytes].
-// Returns null when the frame is too short or the JSON is malformed.
-function parseFramedHeader(payload) {
-    if (payload.byteLength < 4)
-        return null;
-    const view = new DataView(payload);
-    const jsonLen = view.getUint32(0, false);
-    if (4 + jsonLen > payload.byteLength)
-        return null;
-    try {
-        const hdr = JSON.parse(new TextDecoder().decode(new Uint8Array(payload, 4, jsonLen)));
-        if (!hdr || typeof hdr !== 'object' || Array.isArray(hdr))
-            return null;
-        return { hdr, extra: new Uint8Array(payload, 4 + jsonLen) };
-    }
-    catch (_e) {
-        return null;
-    }
+import { TerminalClientFrame, TerminalServerFrame } from './proto/terminal.js';
+import { terminalSubprotocol } from './ws-protocols.js';
+export { terminalSubprotocol };
+// Inbound whole-message bound, matching the server and native limits.
+// The browser allocates the ArrayBuffer before this check runs, so it
+// caps decoding work, not the allocation itself.
+const MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
+// Single checkpoint/output span bound, matching the server's 2 MiB cap.
+const MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
+// Outbound raw input span; larger pastes go out as ordered frames.
+const MAX_INPUT_CHUNK = 1 * 1024 * 1024;
+// Narrow one 64-bit field to a safe integer. Absent and out-of-range
+// values are both unusable as sequence numbers.
+function toSafeInt(v) {
+    if (v === undefined)
+        return undefined;
+    if (v < 0 || v > BigInt(Number.MAX_SAFE_INTEGER))
+        return undefined;
+    return Number(v);
+}
+// Narrow one 64-bit field to an exact decimal string. Only presence
+// matters; every uint64 has an exact decimal rendering.
+function toUintString(v) {
+    if (v === undefined)
+        return undefined;
+    return v.toString();
+}
+// Render one sync message as the JSON shape the old sync payload
+// carried, so downstream consumers see no difference. Millisecond
+// timestamps render as ISO-8601 UTC strings.
+function toSyncMessageJson(m) {
+    const out = {};
+    if (m.key !== undefined)
+        out.key = m.key;
+    if (m.value !== undefined)
+        out.value = m.value;
+    const created = toSafeInt(m.createdAtUnixMs);
+    if (created !== undefined)
+        out.created_at = new Date(created).toISOString();
+    const updated = toSafeInt(m.updatedAtUnixMs);
+    if (updated !== undefined)
+        out.updated_at = new Date(updated).toISOString();
+    return out;
 }
 // Decoder instances survive a same-pane reconnect. Keep their incomplete
 // UTF-8 prefix with them so checkpoints can rewind to a complete boundary.
@@ -44,9 +68,7 @@ export class PTYWebSocket {
         }
         catch (_e) { }
     }
-    // hot-v1 state. mode is 'hot' after an 0x08 frame arrives, 'legacy'
-    // after any legacy frame (old servers ignore term_proto), and
-    // 'unknown' until the first frame decides.
+    // mode is 'hot' after an attach frame arrives, 'unknown' until then.
     mode = 'unknown';
     // liveSeq is the next expected byte seq; lastFrameEnd is the end seq
     // of the newest delivered frame (hosts use it for checkpoint
@@ -67,80 +89,109 @@ export class PTYWebSocket {
         this.onOpen = onOpen;
         this.onAttachHead = opts?.onAttachHead;
         this.onGap = opts?.onGap;
-        if (opts && opts.hot === false) {
-            this.mode = 'legacy';
-            this.holding = false;
-        }
-        this.url = wsUrl(`/ws/pane/${paneId}?term_proto=hot-v1&state=ansi-v1`);
-        this.ws = new WebSocket(this.url);
+        const origin = typeof window !== 'undefined' && window.location?.origin
+            ? window.location.origin
+            : '';
+        this.url = new URL(`/ws/pane/${paneId}?state=ansi-v1`, origin).href;
+        this.ws = new WebSocket(this.url, terminalSubprotocol);
         this.ws.binaryType = 'arraybuffer';
         this.decoder = new TextDecoder('utf-8');
         this.ws.onopen = () => {
+            const negotiated = this.ws.protocol;
+            // Test fakes omit the attribute; real servers must select it.
+            if (negotiated !== undefined &&
+                negotiated !== terminalSubprotocol) {
+                console.error(`[ws] Server did not select ${terminalSubprotocol}`);
+                try {
+                    this.ws.close();
+                }
+                catch (_e) { }
+                return;
+            }
             console.log(`[ws] Connected for pane: ${paneId}`);
             if (this.onOpen)
                 this.onOpen();
         };
         this.ws.onmessage = (event) => {
             const buffer = event.data;
-            if (!(buffer instanceof ArrayBuffer))
+            // The pane endpoint is binary-only. A text or empty frame must
+            // fail closed, like every other malformed frame.
+            if (!(buffer instanceof ArrayBuffer) || buffer.byteLength === 0) {
+                console.error(`[ws] Malformed pane frame for: ${paneId}`);
+                try {
+                    this.ws.close();
+                }
+                catch (_e) { }
                 return;
-            const view = new DataView(buffer);
-            if (view.byteLength === 0)
+            }
+            if (buffer.byteLength > MAX_MESSAGE_BYTES) {
+                try {
+                    this.ws.close();
+                }
+                catch (_e) { }
                 return;
-            const msgType = view.getUint8(0);
-            const payload = buffer.slice(1);
-            switch (msgType) {
-                case 0x01: // PTY Output Stdout (legacy framing)
-                    this._markLegacy();
-                    this.onData(this.decodeOutput(new Uint8Array(payload)));
+            }
+            let frame;
+            try {
+                frame = TerminalServerFrame.decode(new Uint8Array(buffer));
+            }
+            catch (e) {
+                console.error('[ws] Malformed terminal frame', e);
+                try {
+                    this.ws.close();
+                }
+                catch (_e) { }
+                return;
+            }
+            const payload = frame.payload;
+            if (payload === undefined) {
+                try {
+                    this.ws.close();
+                }
+                catch (_e) { }
+                return;
+            }
+            switch (payload.$case) {
+                case 'attach':
+                    this._handleAttachHead(payload.value);
                     break;
-                case 0x02: // Control JSON Message
-                    this._handleJsonPayload(payload, (data) => {
-                        if (this.onControl)
-                            this.onControl(data);
-                    });
+                case 'output':
+                    this._handleLiveOutput(payload.value);
                     break;
-                case 0x03: // Pong
+                case 'pong':
                     // Pong received successfully
                     break;
-                case 0x04: // pty-exited
-                    this._handleJsonPayload(payload, (data) => {
-                        if (this.onControl)
-                            this.onControl({ type: 'pty-exited', ...data });
-                    });
-                    break;
-                case 0x05: // server-shutdown
-                    this._handleJsonPayload(payload, (data) => {
-                        if (this.onControl)
-                            this.onControl({
-                                type: 'server-shutdown',
-                                ...data,
-                            });
-                    });
-                    break;
-                case 0x06: // replay-complete (legacy framing)
-                    this._markLegacy();
+                case 'exit':
                     if (this.onControl)
-                        this.onControl({ type: 'replay-complete' });
+                        this.onControl({
+                            type: 'pty-exited',
+                            code: payload.value.code ?? 0,
+                        });
                     break;
-                case 0x07: // md-changed
-                    this._handleJsonPayload(payload, (data) => {
-                        if (this.onControl)
-                            this.onControl({ type: 'md-changed', ...data });
-                    });
+                case 'dropNotice':
+                    if (this.onControl)
+                        this.onControl({ type: 'output-dropped' });
                     break;
-                case 0x08: // ATTACH_HEAD (hot-v1)
-                    this._handleAttachHead(payload);
+                case 'title':
+                    this._handleTitle(payload.value);
                     break;
-                case 0x09: // LIVE_OUTPUT (hot-v1)
-                    this._handleLiveOutput(payload);
+                case 'bridgeState':
+                    this._handleBridgeState(payload.value);
                     break;
-                case 0x0a: // sync-changed
-                    this._handleJsonPayload(payload, (data) => {
-                        if (this.onControl)
-                            this.onControl({ type: 'sync-changed', ...data });
-                    });
+                case 'settlement':
+                    this._handleSettlement(payload.value);
                     break;
+                case 'notification':
+                    this._handleNotification(payload.value);
+                    break;
+                default:
+                    // Unknown server payload: no safe interpretation, so
+                    // close and let the host reconnect path redial.
+                    try {
+                        this.ws.close();
+                    }
+                    catch (_e) { }
+                    return;
             }
         };
         this.ws.onclose = () => {
@@ -152,36 +203,134 @@ export class PTYWebSocket {
             console.error(`[ws] Connection error for pane: ${paneId}`, err);
         };
     }
-    // Legacy frames prove the server ignored term_proto (or the host
-    // forced legacy mode): switch, release any hold, and let delivery
-    // proceed exactly as the pre-hot protocol did.
-    _markLegacy() {
-        if (this.mode === 'legacy')
+    _handleTitle(title) {
+        const revision = toSafeInt(title.revision);
+        if (revision === undefined) {
+            // The host orders titles by revision; an unusable one is
+            // dropped rather than delivered unsorted. The server caps
+            // revisions below 2^53, so this never fires in practice.
+            console.error('[ws] Title revision out of safe range; ignoring');
             return;
-        this.mode = 'legacy';
-        this.holding = false;
-        this.held = [];
-        this.liveSeq = undefined;
-        this.lastFrameEnd = undefined;
-    }
-    _handleJsonPayload(payload, deliver) {
-        try {
-            const dec = new TextDecoder('utf-8');
-            const jsonStr = dec.decode(payload);
-            deliver(JSON.parse(jsonStr));
         }
-        catch (e) {
-            console.error('[ws] Failed to parse control JSON', e);
+        if (this.onControl)
+            this.onControl({
+                type: 'session-title',
+                pane_id: title.paneId ?? '',
+                session_id: title.sessionId ?? '',
+                title: title.title ?? '',
+                revision,
+            });
+    }
+    _handleBridgeState(state) {
+        if (!this.onControl)
+            return;
+        // Absent keys stay absent: the host distinguishes a missing
+        // running/connected from an explicit false.
+        const msg = { type: 'pi-bridge-state' };
+        if (state.paneId !== undefined)
+            msg.pane_id = state.paneId;
+        if (state.state !== undefined)
+            msg.state = state.state;
+        if (state.reason !== undefined)
+            msg.reason = state.reason;
+        const generation = toUintString(state.generation);
+        if (generation !== undefined)
+            msg.generation = generation;
+        const telemetryRevision = toUintString(state.telemetryRevision);
+        if (telemetryRevision !== undefined)
+            msg.telemetry_revision = telemetryRevision;
+        const lastRun = toUintString(state.lastRun);
+        if (lastRun !== undefined)
+            msg.last_run = lastRun;
+        if (state.lastOutcome !== undefined)
+            msg.last_outcome = state.lastOutcome;
+        if (state.running !== undefined)
+            msg.running = state.running;
+        if (state.connected !== undefined)
+            msg.connected = state.connected;
+        if (state.model !== undefined)
+            msg.model = state.model;
+        if (state.thinkingLevel !== undefined)
+            msg.thinking_level = state.thinkingLevel;
+        if (state.contextTokens !== undefined)
+            msg.context_tokens = state.contextTokens;
+        if (state.contextWindow !== undefined)
+            msg.context_window = state.contextWindow;
+        if (state.contextPercent !== undefined)
+            msg.context_percent = state.contextPercent;
+        if (state.compactIdle !== undefined)
+            msg.compact_idle = state.compactIdle;
+        if (state.compactQueued !== undefined)
+            msg.compact_queued = state.compactQueued;
+        if (state.compactActive !== undefined)
+            msg.compact_active = state.compactActive;
+        if (state.compactPending !== undefined)
+            msg.compact_pending = state.compactPending;
+        if (state.capabilities.length > 0)
+            msg.capabilities = [...state.capabilities];
+        this.onControl(msg);
+    }
+    _handleSettlement(settlement) {
+        if (!this.onControl)
+            return;
+        const msg = { type: 'pi-bridge-settled' };
+        if (settlement.paneId !== undefined)
+            msg.pane_id = settlement.paneId;
+        const generation = toUintString(settlement.generation);
+        if (generation !== undefined)
+            msg.generation = generation;
+        const run = toUintString(settlement.run);
+        if (run !== undefined)
+            msg.run = run;
+        if (settlement.outcome !== undefined)
+            msg.outcome = settlement.outcome;
+        this.onControl(msg);
+    }
+    _handleNotification(notif) {
+        const kind = notif.kind;
+        // An empty notification carries no hint; ignoring it is safe.
+        if (kind === undefined)
+            return;
+        switch (kind.$case) {
+            case 'markdownChanged':
+                if (this.onControl)
+                    this.onControl({
+                        type: 'md-changed',
+                        dir: kind.value.dir ?? '',
+                    });
+                break;
+            case 'syncChanged':
+                this._handleSyncChanged(kind.value);
+                break;
+            case 'shutdown':
+                if (this.onControl)
+                    this.onControl({
+                        type: 'server-shutdown',
+                        reason: kind.value.reason ?? '',
+                    });
+                break;
         }
     }
-    _handleAttachHead(payload) {
-        const parsed = parseFramedHeader(payload);
-        const validSeq = (n) => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
-        if (!parsed ||
-            !validSeq(parsed.hdr.epoch) ||
-            !validSeq(parsed.hdr.oldest) ||
-            !validSeq(parsed.hdr.head) ||
-            parsed.hdr.oldest > parsed.hdr.head) {
+    _handleSyncChanged(sync) {
+        if (!this.onControl)
+            return;
+        const msg = { type: 'sync-changed' };
+        if (sync.action !== undefined)
+            msg.action = sync.action;
+        if (sync.key !== undefined)
+            msg.key = sync.key;
+        if (sync.msg !== undefined)
+            msg.msg = toSyncMessageJson(sync.msg);
+        this.onControl(msg);
+    }
+    _handleAttachHead(attach) {
+        const epoch = toSafeInt(attach.epoch);
+        const oldest = toSafeInt(attach.oldest);
+        const head = toSafeInt(attach.head);
+        if (epoch === undefined ||
+            oldest === undefined ||
+            head === undefined ||
+            oldest > head) {
             console.error('[ws] Malformed ATTACH_HEAD frame');
             // No head means no seq base: staying held would brick the tab
             // silently. Close and let the host reconnect path redial.
@@ -192,44 +341,42 @@ export class PTYWebSocket {
             return;
         }
         this.mode = 'hot';
-        const epoch = Number(parsed.hdr.epoch);
-        const oldest = Number(parsed.hdr.oldest);
-        const head = Number(parsed.hdr.head);
         this.liveSeq = head;
         this.lastFrameEnd = head;
         let ckpt = null;
-        const c = parsed.hdr.ckpt;
+        const c = attach.checkpoint;
         const validCursor = (v) => typeof v === 'string' &&
             v.length <= 128 &&
             /^v1\.\d+\.\d+\.\d+$/.test(v);
-        if (c &&
-            validSeq(c.through) &&
-            c.through >= oldest &&
-            c.through <= head &&
-            parsed.extra.byteLength <= 2 * 1024 * 1024 &&
-            Number.isInteger(c.cols) &&
-            Number(c.cols) > 0 &&
-            Number(c.cols) <= 65535 &&
-            Number.isInteger(c.rows) &&
-            Number(c.rows) > 0 &&
-            Number(c.rows) <= 65535 &&
-            (c.len === undefined || c.len === parsed.extra.byteLength) &&
-            (c.kind === undefined || c.kind === 'ansi-v1') &&
-            (c.event_cursor === undefined || validCursor(c.event_cursor))) {
-            ckpt = {
-                through: c.through,
-                kind: 'ansi-v1',
-                cols: Number(c.cols),
-                rows: Number(c.rows),
-                ansi: new TextDecoder().decode(parsed.extra),
-                ...(c.kind === 'ansi-v1' ? { bytes: parsed.extra } : {}),
-                ...(c.event_cursor === undefined
-                    ? {}
-                    : { eventCursor: c.event_cursor }),
-            };
+        if (c) {
+            const through = toSafeInt(c.through);
+            const data = c.data ?? new Uint8Array();
+            if (through !== undefined &&
+                through >= oldest &&
+                through <= head &&
+                data.byteLength <= MAX_PAYLOAD_BYTES &&
+                Number.isInteger(c.cols) &&
+                Number(c.cols) > 0 &&
+                Number(c.cols) <= 65535 &&
+                Number.isInteger(c.rows) &&
+                Number(c.rows) > 0 &&
+                Number(c.rows) <= 65535 &&
+                (c.kind === undefined || c.kind === 'ansi-v1') &&
+                (c.eventCursor === undefined || validCursor(c.eventCursor))) {
+                ckpt = {
+                    through,
+                    kind: 'ansi-v1',
+                    cols: Number(c.cols),
+                    rows: Number(c.rows),
+                    ansi: new TextDecoder().decode(data),
+                    ...(c.kind === 'ansi-v1' ? { bytes: data } : {}),
+                    ...(c.eventCursor === undefined
+                        ? {}
+                        : { eventCursor: c.eventCursor }),
+                };
+            }
         }
-        if ((c !== undefined && c !== null && !ckpt) ||
-            (!ckpt && parsed.extra.byteLength)) {
+        if (c !== undefined && c !== null && !ckpt) {
             // A malformed snapshot is not permission to fetch the library
             // from zero. Retry an authoritative attach instead.
             try {
@@ -238,23 +385,21 @@ export class PTYWebSocket {
             catch (_e) { }
             return;
         }
-        const replayFrom = parsed.hdr.replay_from;
+        const replayFrom = toSafeInt(attach.replayFrom);
         this._notify(this.onAttachHead, {
             epoch,
             oldest,
             head,
             ckpt,
-            ...(validSeq(replayFrom) &&
+            ...(replayFrom !== undefined &&
                 replayFrom >= oldest &&
                 replayFrom <= head
                 ? { replayFrom }
                 : {}),
         });
     }
-    _handleLiveOutput(payload) {
-        if (this.mode !== 'hot' ||
-            this.liveSeq === undefined ||
-            payload.byteLength < 8) {
+    _handleLiveOutput(out) {
+        if (this.mode !== 'hot' || this.liveSeq === undefined) {
             // Without the atomic attach frontier, no live byte is safe to
             // deliver. Reconnect and recover it from the recording instead.
             try {
@@ -263,11 +408,11 @@ export class PTYWebSocket {
             catch (_e) { }
             return;
         }
-        const view = new DataView(payload);
-        let start = Number(view.getBigUint64(0, false));
-        let bytes = new Uint8Array(payload, 8);
-        if (!Number.isSafeInteger(start) ||
-            !Number.isSafeInteger(start + bytes.byteLength)) {
+        let start = toSafeInt(out.start);
+        let bytes = out.data ?? new Uint8Array();
+        if (start === undefined ||
+            !Number.isSafeInteger(start + bytes.byteLength) ||
+            bytes.byteLength > MAX_PAYLOAD_BYTES) {
             try {
                 this.ws.close();
             }
@@ -410,40 +555,61 @@ export class PTYWebSocket {
     sendInput(text) {
         if (this.ws.readyState !== WebSocket.OPEN)
             return false;
-        const encoder = new TextEncoder();
-        const payload = encoder.encode(text);
-        const buffer = new ArrayBuffer(1 + payload.length);
-        const view = new DataView(buffer);
-        view.setUint8(0, 0x01); // 0x01: Input data
-        const uint8 = new Uint8Array(buffer);
-        uint8.set(payload, 1);
-        this.ws.send(buffer);
-        return true;
+        return this._sendChunks(new TextEncoder().encode(text));
     }
     // xterm's onBinary carries byte-valued strings (not Unicode text),
     // notably classic mouse reports with coordinates above ASCII.
     sendBinaryInput(data) {
         if (this.ws.readyState !== WebSocket.OPEN)
             return false;
-        const frame = new Uint8Array(1 + data.length);
-        frame[0] = 0x01;
+        const payload = new Uint8Array(data.length);
         for (let i = 0; i < data.length; i++)
-            frame[i + 1] = data.charCodeAt(i);
-        this.ws.send(frame.buffer);
+            payload[i] = data.charCodeAt(i);
+        return this._sendChunks(payload);
+    }
+    // Large pastes go out as ordered raw spans so every message stays
+    // far inside the whole-message bound. Splitting is byte-exact, so
+    // multi-byte sequences straddling a boundary reassemble verbatim.
+    _sendChunks(payload) {
+        try {
+            for (let at = 0; at < payload.length; at += MAX_INPUT_CHUNK) {
+                const frame = TerminalClientFrame.encode(TerminalClientFrame.fromPartial({
+                    payload: {
+                        $case: 'input',
+                        value: payload.subarray(at, at + MAX_INPUT_CHUNK),
+                    },
+                })).finish();
+                this.ws.send(frame);
+            }
+        }
+        catch (_e) {
+            return false;
+        }
         return true;
     }
     // Reports whether the resize actually went out: callers that must
     // not lose an unsent sizing (first-fit backend sync) gate retries
-    // on this. A not-open socket is a quiet false, never a throw.
+    // on this. A not-open socket or out-of-range geometry is a quiet
+    // false, never a throw.
     sendResize(cols, rows) {
         if (this.ws.readyState !== WebSocket.OPEN)
             return false;
-        const buffer = new ArrayBuffer(5);
-        const view = new DataView(buffer);
-        view.setUint8(0, 0x02); // 0x02: Resize command
-        view.setUint16(1, cols, false); // big-endian
-        view.setUint16(3, rows, false); // big-endian
-        this.ws.send(buffer);
+        if (!Number.isInteger(cols) ||
+            !Number.isInteger(rows) ||
+            cols < 1 ||
+            rows < 1 ||
+            cols > 65535 ||
+            rows > 65535)
+            return false;
+        try {
+            const frame = TerminalClientFrame.encode(TerminalClientFrame.fromPartial({
+                payload: { $case: 'resize', value: { cols, rows } },
+            })).finish();
+            this.ws.send(frame);
+        }
+        catch (_e) {
+            return false;
+        }
         return true;
     }
     close() {

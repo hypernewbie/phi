@@ -1,5 +1,19 @@
 import { expect, test, type WebSocketRoute } from '@playwright/test';
+import { TerminalClientFrame } from '../web/proto/terminal.js';
+import { TerminalServerFrame } from '../web/proto/terminal.js';
+import type {
+    MessageFns,
+    TerminalClientFrame as TerminalClientMessage,
+    TerminalServerFrame as TerminalServerMessage,
+} from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+
+// The served bundle carries no types; bind its runtime codecs to the
+// generated declarations so spec-side encoding is fully checked.
+const ServerCodec: MessageFns<TerminalServerMessage> =
+    TerminalServerFrame as unknown as MessageFns<TerminalServerMessage>;
+const ClientCodec: MessageFns<TerminalClientMessage> =
+    TerminalClientFrame as unknown as MessageFns<TerminalClientMessage>;
 
 let phi: PhiServer;
 test.beforeAll(async () => {
@@ -318,13 +332,12 @@ test('initial background attachment never fits the hidden panel, including its o
         if (!sent) throw new Error(`Unexpected pane: ${id}`);
         sockets.set(id, socket);
         socket.onMessage((message) => {
-            if (
-                !Buffer.isBuffer(message) ||
-                message.length !== 5 ||
-                message[0] !== 0x02
-            )
-                return;
-            sent.push([message.readUInt16BE(1), message.readUInt16BE(3)]);
+            if (!Buffer.isBuffer(message)) return;
+            const payload = ClientCodec.decode(new Uint8Array(message)).payload;
+            if (payload?.$case !== 'resize') return;
+            const { cols, rows } = payload.value;
+            if (cols === undefined || rows === undefined) return;
+            sent.push([cols, rows]);
         });
     });
     await page.goto(phi.url);
@@ -370,30 +383,35 @@ test('initial background attachment never fits the hidden panel, including its o
     expect(sizes.get(one)).toHaveLength(resizeCount);
     const head = (id: string, bytes?: Buffer) => {
         const through = bytes?.length ?? 0;
-        const json = Buffer.from(
-            JSON.stringify({
-                epoch: 7,
-                oldest: 0,
-                head: through,
-                ...(bytes
-                    ? {
-                          ckpt: {
-                              kind: 'ansi-v1',
-                              through,
-                              cols: 80,
-                              rows: 24,
-                              len: bytes.length,
-                          },
-                      }
-                    : {}),
-            }),
-        );
-        const frame = Buffer.alloc(5);
-        frame[0] = 0x08;
-        frame.writeUInt32BE(json.length, 1);
         const socket = sockets.get(id);
         if (!socket) throw new Error(`Missing attach socket: ${id}`);
-        socket.send(Buffer.concat([frame, json, bytes ?? Buffer.alloc(0)]));
+        socket.send(
+            Buffer.from(
+                ServerCodec.encode(
+                    ServerCodec.fromPartial({
+                        payload: {
+                            $case: 'attach',
+                            value: {
+                                epoch: BigInt(7),
+                                oldest: BigInt(0),
+                                head: BigInt(through),
+                                ...(bytes
+                                    ? {
+                                          checkpoint: {
+                                              kind: 'ansi-v1',
+                                              through: BigInt(through),
+                                              cols: 80,
+                                              rows: 24,
+                                              data: new Uint8Array(bytes),
+                                          },
+                                      }
+                                    : {}),
+                            },
+                        },
+                    }),
+                ).finish(),
+            ),
+        );
     };
     const checkpoint = Buffer.from(`${status}\r\n`);
     head(one, checkpoint);
@@ -409,10 +427,21 @@ test('initial background attachment never fits the hidden panel, including its o
     if (!firstSocket) throw new Error('Missing background socket');
     let frontier = checkpoint.length;
     for (let i = 0; i < 5; i++) {
-        const frame = Buffer.alloc(9);
-        frame[0] = 0x09;
-        frame.writeBigUInt64BE(BigInt(frontier), 1);
-        firstSocket.send(Buffer.concat([frame, update]));
+        firstSocket.send(
+            Buffer.from(
+                ServerCodec.encode(
+                    ServerCodec.fromPartial({
+                        payload: {
+                            $case: 'output',
+                            value: {
+                                start: BigInt(frontier),
+                                data: new Uint8Array(update),
+                            },
+                        },
+                    }),
+                ).finish(),
+            ),
+        );
         frontier += update.length;
     }
     await expect.poll(async () => (await probe())?.parsedChars).toBe(frontier);

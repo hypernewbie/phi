@@ -11,6 +11,10 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"google.golang.org/protobuf/proto"
+
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
+	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
 type shortTerminal struct {
@@ -56,7 +60,7 @@ func TestWrittenFrontierTracksShortWritesAndAcceptedErrorPrefix(t *testing.T) {
 	}
 }
 func TestConnectCancellationClosesSocketBeforeAttachTimeout(t *testing.T) {
-	up := websocket.Upgrader{}
+	up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ws, err := up.Upgrade(w, r, nil)
 		if err != nil {
@@ -91,4 +95,65 @@ func TestServerURLIsAnOrigin(t *testing.T) {
 	if api, err := newAPIClient("http://localhost:7070/"); err != nil || api.base.String() != "http://localhost:7070" {
 		t.Fatalf("trailing slash: %v %v", api, err)
 	}
+}
+
+// TestRelayClosesMalformedStreamWith1002 pins the native contract: a peer
+// that sends a non-binary application frame receives a bounded protocol close
+// instead of an abnormal TCP reset the server cannot interpret.
+func TestRelayClosesMalformedStreamWith1002(t *testing.T) {
+	attach, err := wireproto.EncodeAttachFrame(&wspb.TerminalAttach{
+		Epoch: proto.Uint64(1), Oldest: proto.Uint64(0), Head: proto.Uint64(0),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeCodes := make(chan int, 1)
+	up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, upgradeErr := up.Upgrade(w, r, nil)
+		if upgradeErr != nil {
+			return
+		}
+		defer ws.Close()
+		if writeErr := ws.WriteMessage(websocket.BinaryMessage, attach); writeErr != nil {
+			return
+		}
+		if writeErr := ws.WriteMessage(websocket.TextMessage, []byte("not protobuf")); writeErr != nil {
+			return
+		}
+		_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
+		for {
+			if _, _, readErr := ws.ReadMessage(); readErr != nil {
+				code := websocket.CloseAbnormalClosure
+				var closeErr *websocket.CloseError
+				if errors.As(readErr, &closeErr) {
+					code = closeErr.Code
+				}
+				closeCodes <- code
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	relay := NewRelay(&shortTerminal{}, mustAPI(t, server.URL))
+	if _, err := relay.Connect(ctx, "p"); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer relay.Close()
+	runDone := make(chan struct{})
+	go func() { defer close(runDone); _ = relay.Run(ctx) }()
+
+	select {
+	case code := <-closeCodes:
+		if code != websocket.CloseProtocolError {
+			t.Fatalf("close code = %d, want %d", code, websocket.CloseProtocolError)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("peer never observed a close frame")
+	}
+	cancel()
+	<-runDone
 }

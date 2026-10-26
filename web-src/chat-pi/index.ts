@@ -28,6 +28,8 @@ export interface PiRpcControls {
 
 export interface ChatPiHandle {
     destroy(): void;
+    /** Reports a refused control stream without discarding the transcript. */
+    streamFailed(message: string): void;
     send(text: string): boolean;
     getModels(): Promise<PiModel[]>;
     getThinkingLevels(): Promise<string[]>;
@@ -229,48 +231,14 @@ function validThinkingLevels(value: unknown): string[] {
     return [...(levels as string[])];
 }
 
-type LegacyClient = ControlClient & {
-    call?: <T = any>(op: string, sid?: string, args?: unknown) => Promise<T>;
-};
-
-type LegacyResponseMap = Map<
-    string,
-    { resolve: (value: any) => void; reject: (reason?: unknown) => void }
->;
-
 function invokeControl(
-    client: LegacyClient,
+    client: ControlClient,
     op: string,
     sid: string | undefined,
     args: unknown,
-    legacyId: string,
-    legacyResponses?: LegacyResponseMap,
     timeoutMs?: number,
 ): Promise<any> {
-    if (typeof client.call === 'function')
-        return client.call(
-            op,
-            sid,
-            args,
-            timeoutMs ? { timeoutMs } : undefined,
-        );
-    const frame: Record<string, unknown> = { t: 'call', id: legacyId, op };
-    if (sid !== undefined) frame.sid = sid;
-    if (args !== undefined) frame.args = args;
-    return new Promise((resolve, reject) => {
-        if (legacyResponses) {
-            legacyResponses.set(legacyId, { resolve, reject });
-            client.send(frame);
-            return;
-        }
-        const off = client.onMessage((env: any) => {
-            if (env?.t !== 'res' || env.id !== legacyId) return;
-            off();
-            if (env.ok) resolve(env.data);
-            else reject(new Error(String(env.error ?? 'control call failed')));
-        });
-        client.send(frame);
-    });
+    return client.call(op, sid, args, timeoutMs ? { timeoutMs } : undefined);
 }
 
 export function mountChatPi(
@@ -282,7 +250,7 @@ export function mountChatPi(
     onControlChange: PiRpcControlChange = () => {},
     onFleetChange: PiFleetChange = () => {},
 ): ChatPiHandle {
-    const wire = client as LegacyClient;
+    const wire = client;
     const buffer = new MessageBuffer();
     const localStatus: PiRpcStatus = { cwd };
     let sid = '';
@@ -333,8 +301,6 @@ export function mountChatPi(
         generation: number;
         reset: boolean;
     } | null = null;
-    let legacyHydrateId = 0;
-    const legacyResponses: LegacyResponseMap = new Map();
 
     const notifyStatus = (): void => onStatusChange(cloneStatus(localStatus));
     const notifyControls = (): void =>
@@ -612,16 +578,7 @@ export function mountChatPi(
         const currentSid = sid;
         const generation = ++hydrateGeneration;
         activeHydrate = { sid: currentSid, generation, reset: forReset };
-        const hydrateNumber = legacyHydrateId++;
-        const legacyId = hydrateNumber === 0 ? 'hyd' : `hyd-${hydrateNumber}`;
-        void invokeControl(
-            wire,
-            'hydrate',
-            currentSid,
-            {},
-            legacyId,
-            legacyResponses,
-        )
+        void invokeControl(wire, 'hydrate', currentSid, {})
             .then((data: any) => {
                 if (
                     destroyed ||
@@ -690,19 +647,12 @@ export function mountChatPi(
         turnPrompts.push(local);
         activePrompt = { ...local, origin: 'optimistic' };
         syncActiveTurn();
-        void invokeControl(
-            wire,
-            'prompt',
-            currentSid,
-            {
-                message: dispatch.message,
-                ...(dispatch.streamingBehavior
-                    ? { streamingBehavior: dispatch.streamingBehavior }
-                    : {}),
-            },
-            `p${Date.now()}-${Math.random().toString(16).slice(2)}`,
-            legacyResponses,
-        )
+        void invokeControl(wire, 'prompt', currentSid, {
+            message: dispatch.message,
+            ...(dispatch.streamingBehavior
+                ? { streamingBehavior: dispatch.streamingBehavior }
+                : {}),
+        })
             .then((data: any) => {
                 const index = outgoing.indexOf(local);
                 if (data?.accepted !== true) {
@@ -744,14 +694,9 @@ export function mountChatPi(
     const getModels = (): Promise<PiModel[]> => {
         if (!sid || !ready || exited) return rejected('Pi RPC is not ready');
         const currentSid = sid;
-        return invokeControl(
-            wire,
-            'getAvailableModels',
-            currentSid,
-            {},
-            'models',
-            legacyResponses,
-        ).then(validModels);
+        return invokeControl(wire, 'getAvailableModels', currentSid, {}).then(
+            validModels,
+        );
     };
     const getThinkingLevels = (): Promise<string[]> => {
         if (!sid || !ready || exited) return rejected('Pi RPC is not ready');
@@ -761,8 +706,6 @@ export function mountChatPi(
             'getAvailableThinkingLevels',
             currentSid,
             {},
-            'thinking',
-            legacyResponses,
         ).then(validThinkingLevels);
     };
     const setModel = (provider: string, modelId: string): Promise<unknown> => {
@@ -771,26 +714,15 @@ export function mountChatPi(
         // Live metadata comes from sequenced stateChanged events. The
         // operation response carries no version, so it must not overwrite
         // state an event has already advanced past.
-        return invokeControl(
-            wire,
-            'setModel',
-            currentSid,
-            { provider, modelId },
-            'set-model',
-            legacyResponses,
-        );
+        return invokeControl(wire, 'setModel', currentSid, {
+            provider,
+            modelId,
+        });
     };
     const setThinking = (level: string): Promise<unknown> => {
         if (!sid || !ready || exited) return rejected('Pi RPC is not ready');
         const currentSid = sid;
-        return invokeControl(
-            wire,
-            'setThinking',
-            currentSid,
-            { level },
-            'set-thinking',
-            legacyResponses,
-        );
+        return invokeControl(wire, 'setThinking', currentSid, { level });
     };
     const interrupt = (): Promise<unknown> => {
         if (!sid || !ready || exited || !sessionActive)
@@ -804,14 +736,7 @@ export function mountChatPi(
             .filter((text) => text !== '');
         abortInFlight = true;
         const currentSid = sid;
-        return invokeControl(
-            wire,
-            'abort',
-            currentSid,
-            {},
-            'abort',
-            legacyResponses,
-        )
+        return invokeControl(wire, 'abort', currentSid, {})
             .then((data: any) => ({ ...(data ?? {}), restored }))
             .catch((error: unknown) => {
                 if (!destroyed && currentSid === sid)
@@ -882,8 +807,6 @@ export function mountChatPi(
             'compact',
             currentSid,
             {},
-            'compact',
-            legacyResponses,
             CompactCallTimeout,
         )
             .then((data) => {
@@ -921,14 +844,7 @@ export function mountChatPi(
         // disables the response-only rule, even when it repeats the same path.
         const previousPath = localStatus.sessionPath;
         const previousCursor = buffer.getLastSeq();
-        return invokeControl(
-            wire,
-            'newSession',
-            currentSid,
-            {},
-            'reset',
-            legacyResponses,
-        )
+        return invokeControl(wire, 'newSession', currentSid, {})
             .then((data: any) => {
                 if (destroyed || currentSid !== sid) return data;
                 if (data?.cancelled === true) return data;
@@ -963,29 +879,10 @@ export function mountChatPi(
         const trimmed = name.trim();
         if (!trimmed) return rejected('name is required');
         if (!sid) return rejected('Pi RPC is not ready');
-        return invokeControl(
-            wire,
-            'setSessionName',
-            sid,
-            { name: trimmed },
-            'snm',
-            legacyResponses,
-        );
+        return invokeControl(wire, 'setSessionName', sid, { name: trimmed });
     };
 
     const off = client.onMessage((env: any) => {
-        if (env?.t === 'res' && typeof env.id === 'string') {
-            const response = legacyResponses.get(env.id);
-            if (response) {
-                legacyResponses.delete(env.id);
-                if (env.ok) response.resolve(env.data);
-                else
-                    response.reject(
-                        new Error(String(env.error ?? 'control call failed')),
-                    );
-                return;
-            }
-        }
         if (destroyed) return;
         if (env?.t !== 'evt' || env?.sid !== sid) return;
 
@@ -1245,14 +1142,7 @@ export function mountChatPi(
 
     const spawnArgs: { cwd: string; sessionPath?: string } = { cwd };
     if (sessionPath) spawnArgs.sessionPath = sessionPath;
-    void invokeControl(
-        wire,
-        'spawn',
-        undefined,
-        spawnArgs,
-        'sp',
-        legacyResponses,
-    )
+    void invokeControl(wire, 'spawn', undefined, spawnArgs)
         .then((data: any) => {
             if (destroyed) return;
             const nextSid = typeof data?.sid === 'string' ? data.sid : '';
@@ -1294,6 +1184,14 @@ export function mountChatPi(
             root.replaceChildren();
             onStatusChange(null);
             onControlChange(null);
+        },
+        streamFailed: (message: string): void => {
+            if (destroyed) return;
+            // Keep the transcript that already rendered; only the ability to
+            // send is withdrawn, and the status says why.
+            ready = false;
+            status.textContent = `Error: ${message}`;
+            notifyControls();
         },
         send,
         getModels,

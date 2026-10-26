@@ -3,7 +3,8 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { setupDomHarness } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
 
-// Phase 9 client reload poller. When the WS receives 0x05 with reason
+// Phase 9 client reload poller. When the WS receives a shutdown
+// notification with reason
 // "restart" or "update", the tab-level handleControlMessage delegates
 // to handleServerShutdown which polls /api/version and reloads when
 // the server reports a different commit.

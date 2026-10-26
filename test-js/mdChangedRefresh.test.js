@@ -9,7 +9,7 @@ import { MarkdownManager } from '../web/markdown.js';
 //   1. refreshFiles({force:false}) no longer swallows a same-cwd rescan
 //      (the removed lastRefreshCwd gate) but a *silent* rescan skips the
 //      re-render (and the "Scanning..." flash) when nothing changed.
-//   2. onExternalChange (the 0x07 md-changed WS push handler) debounces
+//   2. onExternalChange (the md-changed notification handler) debounces
 //      bursts and filters events to dirs this browser actually cares
 //      about.
 

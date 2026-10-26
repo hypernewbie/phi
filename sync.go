@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/hypernewbie/phi/pkg/system"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
+	"google.golang.org/protobuf/proto"
 )
 
 type SyncMessage struct {
@@ -191,12 +193,18 @@ func handleSyncMessages(w http.ResponseWriter, r *http.Request) {
 		TriggerSaveSyncStore()
 
 		if wsHub != nil {
-			payload, _ := json.Marshal(map[string]interface{}{
-				"action": "upsert",
-				"key":    msg.Key,
-				"msg":    msg,
+			wsHub.BroadcastNotification(&wspb.Notification{
+				Kind: &wspb.Notification_SyncChanged{SyncChanged: &wspb.SyncChanged{
+					Action: proto.String("upsert"),
+					Key:    proto.String(msg.Key),
+					Msg: &wspb.SyncMessageState{
+						Key:             proto.String(msg.Key),
+						Value:           proto.String(msg.Value),
+						CreatedAtUnixMs: proto.Int64(msg.CreatedAt.UnixMilli()),
+						UpdatedAtUnixMs: proto.Int64(msg.UpdatedAt.UnixMilli()),
+					},
+				}},
 			})
-			wsHub.BroadcastAll(0x0a, payload)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -217,11 +225,12 @@ func handleSyncMessages(w http.ResponseWriter, r *http.Request) {
 		if exists {
 			TriggerSaveSyncStore()
 			if wsHub != nil {
-				payload, _ := json.Marshal(map[string]interface{}{
-					"action": "delete",
-					"key":    key,
+				wsHub.BroadcastNotification(&wspb.Notification{
+					Kind: &wspb.Notification_SyncChanged{SyncChanged: &wspb.SyncChanged{
+						Action: proto.String("delete"),
+						Key:    proto.String(key),
+					}},
 				})
-				wsHub.BroadcastAll(0x0a, payload)
 			}
 		}
 

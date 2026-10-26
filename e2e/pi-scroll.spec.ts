@@ -1,7 +1,17 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
+import { TerminalServerFrame } from '../web/proto/terminal.js';
+import type {
+    MessageFns,
+    TerminalServerFrame as TerminalServerMessage,
+} from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+
+// The served bundle carries no types; bind its runtime codec to the
+// generated declarations so spec-side encoding is fully checked.
+const ServerCodec: MessageFns<TerminalServerMessage> =
+    TerminalServerFrame as unknown as MessageFns<TerminalServerMessage>;
 
 // A deterministic PTY app using Pi fullscreen's real DEC/SGR mouse protocol.
 // No model calls, credentials, or replacements for xterm parsing/scrolling.
@@ -176,23 +186,28 @@ test('manual history button fetches output omitted by a valid compact checkpoint
         },
     );
     await page.routeWebSocket('**/ws/pane/compact-history?*', (socket) => {
-        const json = Buffer.from(
-            JSON.stringify({
-                epoch: 7,
-                oldest: 0,
-                head: bytes.length,
-                ckpt: {
-                    through: bytes.length,
-                    cols: 80,
-                    rows: 24,
-                    len: checkpoint.length,
-                },
-            }),
+        socket.send(
+            Buffer.from(
+                ServerCodec.encode(
+                    ServerCodec.fromPartial({
+                        payload: {
+                            $case: 'attach',
+                            value: {
+                                epoch: BigInt(7),
+                                oldest: BigInt(0),
+                                head: BigInt(bytes.length),
+                                checkpoint: {
+                                    through: BigInt(bytes.length),
+                                    cols: 80,
+                                    rows: 24,
+                                    data: new Uint8Array(checkpoint),
+                                },
+                            },
+                        },
+                    }),
+                ).finish(),
+            ),
         );
-        const frame = Buffer.alloc(5);
-        frame[0] = 0x08;
-        frame.writeUInt32BE(json.length, 1);
-        socket.send(Buffer.concat([frame, json, checkpoint]));
     });
     await page.goto(phi.url);
     await page.locator(`.tab[data-pane-id="${pane}"]`).click();

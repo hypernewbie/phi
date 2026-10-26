@@ -1,21 +1,22 @@
 package ws
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/hypernewbie/phi/pkg/rpc"
 	"github.com/hypernewbie/phi/pkg/session"
+	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
+	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
 // ControlOperationTimeout is the one server-side budget for a complete Phi
@@ -27,30 +28,26 @@ const ControlOperationTimeout = 30 * time.Second
 // so compact needs its own budget instead of the shared control one.
 const CompactOperationTimeout = 10 * time.Minute
 
-// Envelope is the wire shape of every control frame (both directions).
-type Envelope struct {
-	Type  string          `json:"t"`
-	V     int             `json:"v,omitempty"`
-	ID    string          `json:"id,omitempty"`
-	Op    string          `json:"op,omitempty"`
-	Sid   string          `json:"sid,omitempty"`
-	Seq   uint64          `json:"seq,omitempty"`
-	Evt   string          `json:"evt,omitempty"`
-	Data  json.RawMessage `json:"data,omitempty"`
-	Args  json.RawMessage `json:"args,omitempty"`
-	Error string          `json:"error,omitempty"`
-	Ok    *bool           `json:"ok,omitempty"`
-}
-
 // HandleControl returns the /ws/control handler. defaultCwd supplies the
 // spawn cwd when a spawn call omits it (main passes activeCWD).
 func HandleControl(mgr *rpc.Manager, defaultCwd func() string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		c, err := Upgrader.Upgrade(w, r, nil)
+		if !wireproto.ClientRequestedSubprotocol(r, wireproto.ControlSubprotocol) {
+			http.Error(w, "expected WebSocket subprotocol "+wireproto.ControlSubprotocol, http.StatusUpgradeRequired)
+			return
+		}
+		// Copy the shared upgrader: concurrent upgrades for other endpoints
+		// must not observe this endpoint's subprotocol selection.
+		upgrader := Upgrader
+		upgrader.Subprotocols = []string{wireproto.ControlSubprotocol}
+		c, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			return
 		}
 		defer c.Close()
+		// SetReadLimit bounds the compressed wire; ReadBoundedMessage bounds
+		// the decompressed body. Both stages are required.
+		c.SetReadLimit(wireproto.MaxControlMessageBytes)
 		runConn(r, c, mgr, defaultCwd)
 	}
 }
@@ -80,38 +77,6 @@ func piSpawnOptions(cwd, sessionPath string) (rpc.SpawnOptions, error) {
 	return opts, nil
 }
 
-func decodeStrict(raw json.RawMessage, dst any, allowAbsent bool) error {
-	if len(bytes.TrimSpace(raw)) == 0 {
-		if allowAbsent {
-			return nil
-		}
-		return errors.New("args are required")
-	}
-	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return errors.New("args must be an object")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(dst); err != nil {
-		return fmt.Errorf("invalid args: %w", err)
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		if err == nil {
-			return errors.New("invalid args: trailing data")
-		}
-		return fmt.Errorf("invalid args: %w", err)
-	}
-	return nil
-}
-
-func decodeEmptyArgs(raw json.RawMessage) error {
-	var args struct{}
-	return decodeStrict(raw, &args, true)
-}
-
-func boolPtr(b bool) *bool { return &b }
-
 func controlError(err error) string {
 	if err == nil {
 		return ""
@@ -125,18 +90,6 @@ func controlError(err error) string {
 	return err.Error()
 }
 
-func failedResponse(id string, err error) Envelope {
-	return Envelope{Type: rpc.ResFrame, ID: id, Ok: boolPtr(false), Error: controlError(err)}
-}
-
-func successfulResponse(id string, payload any) Envelope {
-	res := Envelope{Type: rpc.ResFrame, ID: id, Ok: boolPtr(true)}
-	if payload != nil {
-		res.Data, _ = json.Marshal(payload)
-	}
-	return res
-}
-
 func lookupSid(mgr *rpc.Manager, sid string) (*rpc.Instance, error) {
 	if strings.TrimSpace(sid) == "" {
 		return nil, errors.New("sid is required")
@@ -144,7 +97,7 @@ func lookupSid(mgr *rpc.Manager, sid string) (*rpc.Instance, error) {
 	return mgr.Lookup(sid)
 }
 
-func availableModels(ctx context.Context, inst *rpc.Instance) ([]map[string]string, error) {
+func availableModels(ctx context.Context, inst *rpc.Instance) ([]*wspb.ModelInfo, error) {
 	data, err := inst.Request(ctx, "get_available_models", nil)
 	if err != nil {
 		return nil, err
@@ -159,16 +112,16 @@ func availableModels(ctx context.Context, inst *rpc.Instance) ([]map[string]stri
 	if err := json.Unmarshal(data, &response); err != nil {
 		return nil, fmt.Errorf("invalid Pi model list: %w", err)
 	}
-	models := make([]map[string]string, 0, len(response.Models))
+	models := make([]*wspb.ModelInfo, 0, len(response.Models))
 	for _, model := range response.Models {
 		if model.Provider == "" || model.ID == "" {
 			continue
 		}
-		item := map[string]string{"provider": model.Provider, "id": model.ID}
-		if model.Name != "" {
-			item["name"] = model.Name
-		}
-		models = append(models, item)
+		models = append(models, &wspb.ModelInfo{
+			Provider: model.Provider,
+			Id:       model.ID,
+			Name:     optionalString(model.Name),
+		})
 	}
 	return models, nil
 }
@@ -194,7 +147,7 @@ func refreshState(ctx context.Context, inst *rpc.Instance) (rpc.State, error) {
 	return inst.StateCopy(), nil
 }
 
-func resetSession(ctx context.Context, inst *rpc.Instance) (any, error) {
+func resetSession(ctx context.Context, inst *rpc.Instance) (*wspb.NewSessionResult, error) {
 	generation := inst.PromptWriteGeneration()
 	state, err := refreshState(ctx, inst)
 	if err != nil {
@@ -207,375 +160,26 @@ func resetSession(ctx context.Context, inst *rpc.Instance) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	cancelled, decodeErr := rpc.DecodeNewSessionResult(data)
-	if decodeErr != nil {
-		return nil, fmt.Errorf("invalid Pi new_session response: %w", decodeErr)
+	cancelled, err := rpc.DecodeNewSessionResult(data)
+	if err != nil {
+		return nil, fmt.Errorf("invalid Pi new_session response: %w", err)
 	}
 	if cancelled {
-		return map[string]any{"cancelled": true}, nil
+		return &wspb.NewSessionResult{Cancelled: true}, nil
 	}
-	// The read loop already invalidated the old path and transcript under one
-	// event boundary before this waiter resumed, so a message accepted after
-	// that boundary survives. The refresh may repopulate only a fresh path.
+
+	// The read loop invalidated the old path and transcript at the accepted
+	// reset event boundary. The refresh may repopulate only a fresh path.
 	fresh, err := refreshState(ctx, inst)
 	if err != nil {
-		return map[string]any{
-			"cancelled":    false,
-			"reset":        true,
-			"stateWarning": controlError(err),
+		// The reset completed; only the follow-up refresh failed.
+		return &wspb.NewSessionResult{
+			Cancelled:    false,
+			Reset_:       proto.Bool(true),
+			StateWarning: optionalString(controlError(err)),
 		}, nil
 	}
-	return map[string]any{"cancelled": false, "reset": true, "state": fresh}, nil
-}
-
-func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
-	if e.Type != rpc.CallFrame {
-		return failedResponse(e.ID, errors.New("expected call"))
-	}
-	var payload any
-	var err error
-	switch e.Op {
-	case rpc.OpSpawn:
-		var args struct {
-			Cwd         string `json:"cwd"`
-			SessionPath string `json:"sessionPath"`
-		}
-		if err = decodeStrict(e.Args, &args, true); err != nil {
-			break
-		}
-		cwd := args.Cwd
-		if cwd == "" && s.defaultCwd != nil {
-			cwd = s.defaultCwd()
-		}
-		opts, optsErr := piSpawnOptions(cwd, args.SessionPath)
-		if optsErr != nil {
-			err = optsErr
-			break
-		}
-		lease, beginErr := s.mgr.BeginSpawn(ctx, opts)
-		if beginErr != nil {
-			err = beginErr
-			break
-		}
-		inst := lease.Instance()
-		s.subscribeInstance(inst)
-		if lease.Created() {
-			_, bootstrapErr := inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
-				for _, command := range []string{"get_state", "get_session_stats", "get_commands"} {
-					if _, requestErr := inst.Request(requestCtx, command, nil); requestErr != nil {
-						return nil, requestErr
-					}
-				}
-				return nil, nil
-			})
-			if bootstrapErr != nil {
-				_ = s.mgr.FinishSpawn(lease, bootstrapErr)
-				err = bootstrapErr
-				break
-			}
-			if finishErr := s.mgr.FinishSpawn(lease, nil); finishErr != nil {
-				err = finishErr
-				break
-			}
-		}
-		snapshot, state := inst.SnapshotStateCopy()
-		payload = map[string]any{
-			"sid": inst.ID, "title": state.Title, "cwd": inst.Cwd,
-			"snapshot": snapshot, "state": state,
-		}
-	case rpc.OpListSessions:
-		if err = decodeEmptyArgs(e.Args); err != nil {
-			break
-		}
-		out := []map[string]any{}
-		for _, inst := range s.mgr.List() {
-			state := inst.StateCopy()
-			out = append(out, map[string]any{
-				"sid": inst.ID, "title": state.Title, "cwd": inst.Cwd,
-				"status": state.Status,
-			})
-		}
-		payload = out
-	case rpc.OpSubagentTranscript:
-		// Disk-scoped like listSessions: resolves a pi-subagents run from
-		// its status.json on disk, no sid ownership involved.
-		var args struct {
-			RunId string `json:"runId"`
-		}
-		if err = decodeStrict(e.Args, &args, false); err != nil {
-			break
-		}
-		payload, err = s.mgr.SubagentTranscript(args.RunId)
-	case rpc.OpHydrate, rpc.OpGetMessages:
-		if err = decodeEmptyArgs(e.Args); err != nil {
-			break
-		}
-		inst, lookupErr := lookupSid(s.mgr, e.Sid)
-		if lookupErr != nil {
-			err = lookupErr
-			break
-		}
-		s.subscribeInstance(inst)
-		snapshot, state := inst.SnapshotStateCopy()
-		payload = map[string]any{
-			"messages": snapshot.Messages, "lastSeq": snapshot.LastSeq,
-			"state": state,
-		}
-	case rpc.OpGetState:
-		if err = decodeEmptyArgs(e.Args); err != nil {
-			break
-		}
-		inst, lookupErr := lookupSid(s.mgr, e.Sid)
-		if lookupErr != nil {
-			err = lookupErr
-			break
-		}
-		payload = inst.StateCopy()
-	case rpc.OpPrompt:
-		var args struct {
-			Message           string `json:"message"`
-			StreamingBehavior string `json:"streamingBehavior"`
-		}
-		if err = decodeStrict(e.Args, &args, false); err != nil {
-			break
-		}
-		inst, lookupErr := lookupSid(s.mgr, e.Sid)
-		if lookupErr != nil {
-			err = lookupErr
-			break
-		}
-		prompt := map[string]any{"type": "prompt", "message": args.Message}
-		if args.StreamingBehavior != "" {
-			prompt["streamingBehavior"] = args.StreamingBehavior
-		}
-		if err = inst.SendPrompt(prompt); err != nil {
-			break
-		}
-		payload = map[string]any{"accepted": true}
-	case rpc.OpGetAvailableModels:
-		if err = decodeEmptyArgs(e.Args); err != nil {
-			break
-		}
-		inst, lookupErr := lookupSid(s.mgr, e.Sid)
-		if lookupErr != nil {
-			err = lookupErr
-			break
-		}
-		var models []map[string]string
-		_, err = inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
-			var requestErr error
-			models, requestErr = availableModels(requestCtx, inst)
-			return nil, requestErr
-		})
-		if err == nil {
-			payload = map[string]any{"models": models}
-		}
-	case rpc.OpSetModel:
-		var args struct {
-			Provider string `json:"provider"`
-			ModelID  string `json:"modelId"`
-		}
-		if err = decodeStrict(e.Args, &args, false); err != nil {
-			break
-		}
-		if args.Provider == "" || args.ModelID == "" {
-			err = errors.New("provider and modelId are required")
-			break
-		}
-		inst, lookupErr := lookupSid(s.mgr, e.Sid)
-		if lookupErr != nil {
-			err = lookupErr
-			break
-		}
-		_, err = inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
-			models, requestErr := availableModels(requestCtx, inst)
-			if requestErr != nil {
-				return nil, requestErr
-			}
-			found := false
-			for _, model := range models {
-				if model["provider"] == args.Provider && model["id"] == args.ModelID {
-					found = true
-					break
-				}
-			}
-			if !found {
-				return nil, errors.New("model is not available in Pi")
-			}
-			if _, requestErr = inst.Request(requestCtx, "set_model", map[string]any{
-				"provider": args.Provider, "modelId": args.ModelID,
-			}); requestErr != nil {
-				return nil, requestErr
-			}
-			state, requestErr := refreshState(requestCtx, inst)
-			if requestErr != nil {
-				return nil, requestErr
-			}
-			return state, nil
-		})
-		if err == nil {
-			payload = map[string]any{"state": inst.StateCopy()}
-		}
-	case rpc.OpGetAvailableThinkingLevels:
-		if err = decodeEmptyArgs(e.Args); err != nil {
-			break
-		}
-		inst, lookupErr := lookupSid(s.mgr, e.Sid)
-		if lookupErr != nil {
-			err = lookupErr
-			break
-		}
-		var levels []string
-		_, err = inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
-			var requestErr error
-			levels, requestErr = availableThinkingLevels(requestCtx, inst)
-			return nil, requestErr
-		})
-		if err == nil {
-			payload = map[string]any{"levels": levels}
-		}
-	case rpc.OpSetThinking:
-		var args struct {
-			Level string `json:"level"`
-		}
-		if err = decodeStrict(e.Args, &args, false); err != nil {
-			break
-		}
-		if args.Level == "" {
-			err = errors.New("level is required")
-			break
-		}
-		inst, lookupErr := lookupSid(s.mgr, e.Sid)
-		if lookupErr != nil {
-			err = lookupErr
-			break
-		}
-		_, err = inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
-			levels, requestErr := availableThinkingLevels(requestCtx, inst)
-			if requestErr != nil {
-				return nil, requestErr
-			}
-			found := false
-			for _, level := range levels {
-				if level == args.Level {
-					found = true
-					break
-				}
-			}
-			if !found {
-				return nil, errors.New("thinking level is not available in Pi")
-			}
-			if _, requestErr = inst.Request(requestCtx, "set_thinking_level", map[string]any{
-				"level": args.Level,
-			}); requestErr != nil {
-				return nil, requestErr
-			}
-			state, requestErr := refreshState(requestCtx, inst)
-			if requestErr != nil {
-				return nil, requestErr
-			}
-			return state, nil
-		})
-		if err == nil {
-			payload = map[string]any{"state": inst.StateCopy()}
-		}
-	case rpc.OpNewSession:
-		if err = decodeEmptyArgs(e.Args); err != nil {
-			break
-		}
-		inst, lookupErr := lookupSid(s.mgr, e.Sid)
-		if lookupErr != nil {
-			err = lookupErr
-			break
-		}
-		payload, err = inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
-			return resetSession(requestCtx, inst)
-		})
-	case rpc.OpAbort:
-		if err = decodeEmptyArgs(e.Args); err != nil {
-			break
-		}
-		inst, lookupErr := lookupSid(s.mgr, e.Sid)
-		if lookupErr != nil {
-			err = lookupErr
-			break
-		}
-		// Abort bypasses the control gate: it must stay available while a
-		// long-running operation (e.g. compact) holds the gate for minutes.
-		_, err = inst.Request(ctx, "abort", nil)
-		if err == nil {
-			payload = map[string]any{"aborted": true}
-		}
-	case rpc.OpCompact:
-		if err = decodeEmptyArgs(e.Args); err != nil {
-			break
-		}
-		inst, lookupErr := lookupSid(s.mgr, e.Sid)
-		if lookupErr != nil {
-			err = lookupErr
-			break
-		}
-		var compactWarning string
-		_, err = inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
-			if _, requestErr := inst.Request(requestCtx, "compact", nil); requestErr != nil {
-				return nil, requestErr
-			}
-			// Compaction already completed; a refresh failure must not report
-			// the whole operation as failed, or the UI invites a second compact.
-			if _, refreshErr := refreshState(requestCtx, inst); refreshErr != nil {
-				compactWarning = refreshErr.Error()
-			}
-			return nil, nil
-		})
-		if err == nil {
-			payload = map[string]any{"state": inst.StateCopy()}
-			if compactWarning != "" {
-				payload.(map[string]any)["stateWarning"] = compactWarning
-			}
-		}
-	case rpc.OpSetSessionName:
-		var args struct {
-			Name string `json:"name"`
-		}
-		if err = decodeStrict(e.Args, &args, false); err != nil {
-			break
-		}
-		name := strings.TrimSpace(args.Name)
-		if name == "" {
-			err = errors.New("name is required")
-			break
-		}
-		inst, lookupErr := lookupSid(s.mgr, e.Sid)
-		if lookupErr != nil {
-			err = lookupErr
-			break
-		}
-		result, requestErr := inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
-			if _, requestErr := inst.Request(requestCtx, "set_session_name", map[string]any{
-				"name": name,
-			}); requestErr != nil {
-				return nil, requestErr
-			}
-			// Pi's native session_info_changed event owns the title; the handler
-			// must not write the requested name after the response.
-			return inst.StateCopy(), nil
-		})
-		if requestErr != nil {
-			err = requestErr
-			break
-		}
-		payload = map[string]any{"state": result}
-	default:
-		if isStubbed(e.Op) {
-			payload = map[string]any{"stubbed": true}
-			break
-		}
-		err = fmt.Errorf("unknown op: %s", e.Op)
-	}
-	if err != nil {
-		return failedResponse(e.ID, err)
-	}
-	return successfulResponse(e.ID, payload)
+	return &wspb.NewSessionResult{Cancelled: false, Reset_: proto.Bool(true), State: stateToWire(fresh)}, nil
 }
 
 type controlServer struct {
@@ -584,8 +188,382 @@ type controlServer struct {
 	subscribeInstance func(*rpc.Instance)
 }
 
+// dispatch runs one typed call and attaches the call id. Every known
+// operation maps to its own result variant; an unknown or missing variant is
+// an error, never an untyped tunnel.
+func (s *controlServer) dispatch(ctx context.Context, call *wspb.ControlCall) *wspb.ControlResponse {
+	response, err := s.dispatchResult(ctx, call)
+	if err != nil {
+		response = &wspb.ControlResponse{
+			Result: &wspb.ControlResponse_Error{Error: &wspb.ControlError{Reason: controlError(err)}},
+		}
+	}
+	response.Id = call.GetId()
+	return response
+}
+
+func (s *controlServer) dispatchResult(ctx context.Context, call *wspb.ControlCall) (*wspb.ControlResponse, error) {
+	switch payload := call.GetCall().(type) {
+	case *wspb.ControlCall_Spawn:
+		cwd := payload.Spawn.GetCwd()
+		if cwd == "" && s.defaultCwd != nil {
+			cwd = s.defaultCwd()
+		}
+		opts, err := piSpawnOptions(cwd, payload.Spawn.GetSessionPath())
+		if err != nil {
+			return nil, err
+		}
+		lease, err := s.mgr.BeginSpawn(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+		inst := lease.Instance()
+		s.subscribeInstance(inst)
+		if lease.Created() {
+			_, err := inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
+				for _, command := range []string{"get_state", "get_session_stats", "get_commands"} {
+					if _, requestErr := inst.Request(requestCtx, command, nil); requestErr != nil {
+						return nil, requestErr
+					}
+				}
+				return nil, nil
+			})
+			if err != nil {
+				_ = s.mgr.FinishSpawn(lease, err)
+				return nil, err
+			}
+			if err := s.mgr.FinishSpawn(lease, nil); err != nil {
+				return nil, err
+			}
+		}
+		snapshot, state := inst.SnapshotStateCopy()
+		wireSnapshot, err := snapshotToWire(snapshot)
+		if err != nil {
+			return nil, err
+		}
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_Spawn{Spawn: &wspb.SpawnResult{
+			Sid:     inst.ID,
+			Title:   state.Title,
+			Cwd:     inst.Cwd,
+			Session: wireSnapshot,
+			State:   stateToWire(state),
+		}}}, nil
+
+	case *wspb.ControlCall_ListSessions:
+		sessions := []*wspb.SessionSummary{}
+		for _, inst := range s.mgr.List() {
+			state := inst.StateCopy()
+			sessions = append(sessions, &wspb.SessionSummary{
+				Sid:    inst.ID,
+				Title:  state.Title,
+				Cwd:    inst.Cwd,
+				Status: state.Status,
+			})
+		}
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_ListSessions{
+			ListSessions: &wspb.ListSessionsResult{Sessions: sessions},
+		}}, nil
+
+	case *wspb.ControlCall_SubagentTranscript:
+		// Disk-scoped like listSessions: resolves a pi-subagents run from
+		// its status.json on disk, no sid ownership involved.
+		value, err := s.mgr.SubagentTranscript(payload.SubagentTranscript.GetRunId())
+		if err != nil {
+			return nil, err
+		}
+		transcript, err := subagentTranscriptToWire(value)
+		if err != nil {
+			return nil, err
+		}
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_SubagentTranscript{
+			SubagentTranscript: transcript,
+		}}, nil
+
+	case *wspb.ControlCall_Hydrate:
+		return s.transcriptResult(payload.Hydrate.GetSid(), true, false)
+	case *wspb.ControlCall_GetMessages:
+		// Both transcript reads subscribe: a fresh connection that asks for
+		// messages must also receive the events that follow them.
+		return s.transcriptResult(payload.GetMessages.GetSid(), true, true)
+
+	case *wspb.ControlCall_GetState:
+		inst, err := lookupSid(s.mgr, payload.GetState.GetSid())
+		if err != nil {
+			return nil, err
+		}
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_GetState{
+			GetState: &wspb.StateResult{State: stateToWire(inst.StateCopy())},
+		}}, nil
+
+	case *wspb.ControlCall_Prompt:
+		inst, err := lookupSid(s.mgr, payload.Prompt.GetSid())
+		if err != nil {
+			return nil, err
+		}
+		prompt := map[string]any{"type": "prompt", "message": payload.Prompt.GetMessage()}
+		if behavior := payload.Prompt.GetStreamingBehavior(); behavior != "" {
+			prompt["streamingBehavior"] = behavior
+		}
+		if err := inst.SendPrompt(prompt); err != nil {
+			return nil, err
+		}
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_Prompt{
+			Prompt: &wspb.PromptResult{Accepted: true},
+		}}, nil
+
+	case *wspb.ControlCall_GetAvailableModels:
+		inst, err := lookupSid(s.mgr, payload.GetAvailableModels.GetSid())
+		if err != nil {
+			return nil, err
+		}
+		var models []*wspb.ModelInfo
+		_, err = inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
+			var requestErr error
+			models, requestErr = availableModels(requestCtx, inst)
+			return nil, requestErr
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_GetAvailableModels{
+			GetAvailableModels: &wspb.ModelsResult{Models: models},
+		}}, nil
+
+	case *wspb.ControlCall_SetModel:
+		provider, modelID := payload.SetModel.GetProvider(), payload.SetModel.GetModelId()
+		if provider == "" || modelID == "" {
+			return nil, errors.New("provider and modelId are required")
+		}
+		inst, err := lookupSid(s.mgr, payload.SetModel.GetSid())
+		if err != nil {
+			return nil, err
+		}
+		_, err = inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
+			models, requestErr := availableModels(requestCtx, inst)
+			if requestErr != nil {
+				return nil, requestErr
+			}
+			found := false
+			for _, model := range models {
+				if model.GetProvider() == provider && model.GetId() == modelID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return nil, errors.New("model is not available in Pi")
+			}
+			if _, requestErr = inst.Request(requestCtx, "set_model", map[string]any{
+				"provider": provider, "modelId": modelID,
+			}); requestErr != nil {
+				return nil, requestErr
+			}
+			_, requestErr = refreshState(requestCtx, inst)
+			return nil, requestErr
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_SetModel{
+			SetModel: &wspb.StateResult{State: stateToWire(inst.StateCopy())},
+		}}, nil
+
+	case *wspb.ControlCall_GetAvailableThinkingLevels:
+		inst, err := lookupSid(s.mgr, payload.GetAvailableThinkingLevels.GetSid())
+		if err != nil {
+			return nil, err
+		}
+		var levels []string
+		_, err = inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
+			var requestErr error
+			levels, requestErr = availableThinkingLevels(requestCtx, inst)
+			return nil, requestErr
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_GetAvailableThinkingLevels{
+			GetAvailableThinkingLevels: &wspb.ThinkingLevelsResult{Levels: levels},
+		}}, nil
+
+	case *wspb.ControlCall_SetThinking:
+		level := payload.SetThinking.GetLevel()
+		if level == "" {
+			return nil, errors.New("level is required")
+		}
+		inst, err := lookupSid(s.mgr, payload.SetThinking.GetSid())
+		if err != nil {
+			return nil, err
+		}
+		_, err = inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
+			levels, requestErr := availableThinkingLevels(requestCtx, inst)
+			if requestErr != nil {
+				return nil, requestErr
+			}
+			found := false
+			for _, candidate := range levels {
+				if candidate == level {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return nil, errors.New("thinking level is not available in Pi")
+			}
+			if _, requestErr = inst.Request(requestCtx, "set_thinking_level", map[string]any{
+				"level": level,
+			}); requestErr != nil {
+				return nil, requestErr
+			}
+			_, requestErr = refreshState(requestCtx, inst)
+			return nil, requestErr
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_SetThinking{
+			SetThinking: &wspb.StateResult{State: stateToWire(inst.StateCopy())},
+		}}, nil
+
+	case *wspb.ControlCall_NewSession:
+		inst, err := lookupSid(s.mgr, payload.NewSession.GetSid())
+		if err != nil {
+			return nil, err
+		}
+		var result *wspb.NewSessionResult
+		_, err = inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
+			var requestErr error
+			result, requestErr = resetSession(requestCtx, inst)
+			return nil, requestErr
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_NewSession{NewSession: result}}, nil
+
+	case *wspb.ControlCall_Abort:
+		inst, err := lookupSid(s.mgr, payload.Abort.GetSid())
+		if err != nil {
+			return nil, err
+		}
+		// Abort bypasses the control gate: it must stay available while a
+		// long-running operation (e.g. compact) holds the gate for minutes.
+		if _, err := inst.Request(ctx, "abort", nil); err != nil {
+			return nil, err
+		}
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_Abort{
+			Abort: &wspb.AbortResult{Aborted: true},
+		}}, nil
+
+	case *wspb.ControlCall_Compact:
+		inst, err := lookupSid(s.mgr, payload.Compact.GetSid())
+		if err != nil {
+			return nil, err
+		}
+		var warning string
+		_, err = inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
+			if _, requestErr := inst.Request(requestCtx, "compact", nil); requestErr != nil {
+				return nil, requestErr
+			}
+			// Compaction already completed; a refresh failure must not report
+			// the whole operation as failed, or the UI invites a second compact.
+			if _, refreshErr := refreshState(requestCtx, inst); refreshErr != nil {
+				warning = controlError(refreshErr)
+			}
+			return nil, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_Compact{Compact: &wspb.CompactResult{
+			State:        stateToWire(inst.StateCopy()),
+			StateWarning: optionalString(warning),
+		}}}, nil
+
+	case *wspb.ControlCall_SetSessionName:
+		name := strings.TrimSpace(payload.SetSessionName.GetName())
+		if name == "" {
+			return nil, errors.New("name is required")
+		}
+		inst, err := lookupSid(s.mgr, payload.SetSessionName.GetSid())
+		if err != nil {
+			return nil, err
+		}
+		var state rpc.State
+		_, err = inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
+			if _, requestErr := inst.Request(requestCtx, "set_session_name", map[string]any{"name": name}); requestErr != nil {
+				return nil, requestErr
+			}
+			// Pi's session_info_changed event owns the title update.
+			state = inst.StateCopy()
+			return nil, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_SetSessionName{
+			SetSessionName: &wspb.StateResult{State: stateToWire(state)},
+		}}, nil
+
+	// The six accepted no-ops keep explicit variants and answer with a
+	// typed stub result.
+	case *wspb.ControlCall_ViewReady:
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_ViewReady{
+			ViewReady: &wspb.StubResult{Stubbed: true},
+		}}, nil
+	case *wspb.ControlCall_SetCapabilities:
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_SetCapabilities{
+			SetCapabilities: &wspb.StubResult{Stubbed: true},
+		}}, nil
+	case *wspb.ControlCall_WaitViewReady:
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_WaitViewReady{
+			WaitViewReady: &wspb.StubResult{Stubbed: true},
+		}}, nil
+	case *wspb.ControlCall_Dlg:
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_Dlg{
+			Dlg: &wspb.StubResult{Stubbed: true},
+		}}, nil
+	case *wspb.ControlCall_DlgClosed:
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_DlgClosed{
+			DlgClosed: &wspb.StubResult{Stubbed: true},
+		}}, nil
+	case *wspb.ControlCall_ActivateTab:
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_ActivateTab{
+			ActivateTab: &wspb.StubResult{Stubbed: true},
+		}}, nil
+
+	default:
+		return nil, fmt.Errorf("unknown control call variant %T", call.GetCall())
+	}
+}
+
+// transcriptResult serves hydrate and getMessages from one snapshot. Both
+// subscribe; only hydrate participates in the hydrate fence.
+func (s *controlServer) transcriptResult(sid string, subscribe, getMessages bool) (*wspb.ControlResponse, error) {
+	inst, err := lookupSid(s.mgr, sid)
+	if err != nil {
+		return nil, err
+	}
+	if subscribe {
+		s.subscribeInstance(inst)
+	}
+	snapshot, err := snapshotToWire(inst.SnapshotCopy())
+	if err != nil {
+		return nil, err
+	}
+	snapshot.State = stateToWire(inst.StateCopy())
+	if getMessages {
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_GetMessages{
+			GetMessages: &wspb.TranscriptResult{Session: snapshot},
+		}}, nil
+	}
+	return &wspb.ControlResponse{Result: &wspb.ControlResponse_Hydrate{
+		Hydrate: &wspb.TranscriptResult{Session: snapshot},
+	}}, nil
+}
+
 type controlCallResult struct {
-	response     Envelope
+	response     *wspb.ControlResponse
 	hydrateSid   string
 	hydrateEpoch uint64
 }
@@ -593,38 +571,127 @@ type controlCallResult struct {
 type hydrateFence struct {
 	latest       uint64
 	nextResponse uint64
-	responses    map[uint64]Envelope
+	responses    map[uint64]*wspb.ControlResponse
 	queued       []rpc.Event
 }
 
+// controlConn owns the control socket's write side. Gorilla allows one
+// concurrent writer plus WriteControl, which is what failure paths use.
+type controlConn struct {
+	conn *websocket.Conn
+	once sync.Once
+}
+
+// encode marshals one server frame without touching the socket, so a
+// conversion failure cannot be mistaken for a write failure.
+func (c *controlConn) encode(frame *wspb.ControlServerFrame) ([]byte, error) {
+	return proto.Marshal(frame)
+}
+
+func (c *controlConn) writeRaw(data []byte) error {
+	return c.conn.WriteMessage(websocket.BinaryMessage, data)
+}
+
+func (c *controlConn) send(frame *wspb.ControlServerFrame) error {
+	data, err := c.encode(frame)
+	if err != nil {
+		return err
+	}
+	return c.writeRaw(data)
+}
+
+// encodeResponseFrame marshals one response frame. A response whose typed
+// result cannot be encoded (for example a string that is not valid UTF-8)
+// still gets a correlated error frame with the same call id, so the caller
+// never loses its answer.
+func encodeResponseFrame(response *wspb.ControlResponse) ([]byte, error) {
+	data, err := proto.Marshal(&wspb.ControlServerFrame{
+		Payload: &wspb.ControlServerFrame_Response{Response: response},
+	})
+	if err == nil {
+		return data, nil
+	}
+	return proto.Marshal(&wspb.ControlServerFrame{
+		Payload: &wspb.ControlServerFrame_Response{Response: &wspb.ControlResponse{
+			Id:     response.GetId(),
+			Result: &wspb.ControlResponse_Error{Error: &wspb.ControlError{Reason: "result encoding failed"}},
+		}},
+	})
+}
+
+// close writes one bounded close frame. Later calls are ignored.
+func (c *controlConn) close(code int, reason string) {
+	c.once.Do(func() {
+		_ = c.conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(code, reason),
+			time.Now().Add(time.Second),
+		)
+	})
+}
+
 func runConn(r *http.Request, c *websocket.Conn, mgr *rpc.Manager, defaultCwd func() string) {
-	var hello Envelope
-	if err := c.ReadJSON(&hello); err != nil {
+	conn := &controlConn{conn: c}
+
+	// Admission is already enforced by the handler; the first application
+	// message must still be a hello with the current protocol version.
+	mt, raw, err := wireproto.ReadBoundedMessage(c, wireproto.MaxControlMessageBytes)
+	if err != nil {
+		conn.close(controlCloseCode(err), "read failed")
 		return
 	}
-	if hello.Type != rpc.HelloFrame || hello.V != rpc.ProtocolVersion {
-		ok := false
-		_ = c.WriteJSON(Envelope{Type: rpc.ResFrame, Ok: &ok, Error: "expected hello v1"})
+	// The control endpoint is binary-only. A text frame must never reach
+	// protobuf decoding, even when its bytes happen to be a valid frame.
+	if mt != websocket.BinaryMessage {
+		conn.close(websocket.CloseProtocolError, "text frame not allowed")
 		return
 	}
-	if err := c.WriteJSON(Envelope{Type: rpc.WelcomeFrame, V: rpc.ProtocolVersion}); err != nil {
+	frame := &wspb.ControlClientFrame{}
+	if err := wireproto.DecodeControlClientFrame(raw, frame); err != nil {
+		conn.close(websocket.CloseProtocolError, "invalid frame")
+		return
+	}
+	if hello := frame.GetHello(); hello == nil || hello.GetVersion() != uint32(rpc.ProtocolVersion) {
+		conn.close(websocket.CloseProtocolError, "expected hello v1")
+		return
+	}
+	if err := conn.send(&wspb.ControlServerFrame{Payload: &wspb.ControlServerFrame_Welcome{
+		Welcome: &wspb.ControlWelcome{Version: uint32(rpc.ProtocolVersion)},
+	}}); err != nil {
 		return
 	}
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	calls := make(chan Envelope, 32)
+	calls := make(chan *wspb.ControlCall, 32)
 	go func() {
 		defer close(calls)
 		defer cancel()
 		for {
-			var e Envelope
-			if err := c.ReadJSON(&e); err != nil {
+			mt, raw, err := wireproto.ReadBoundedMessage(c, wireproto.MaxControlMessageBytes)
+			if err != nil {
+				if errors.Is(err, wireproto.ErrMessageTooLarge) {
+					conn.close(websocket.CloseMessageTooBig, "control message too large")
+				}
+				return
+			}
+			if mt != websocket.BinaryMessage {
+				conn.close(websocket.CloseProtocolError, "text frame not allowed")
+				return
+			}
+			frame := &wspb.ControlClientFrame{}
+			if err := wireproto.DecodeControlClientFrame(raw, frame); err != nil {
+				conn.close(websocket.CloseProtocolError, "invalid frame")
+				return
+			}
+			call := frame.GetCall()
+			if call == nil {
+				conn.close(websocket.CloseProtocolError, "expected call")
 				return
 			}
 			select {
-			case calls <- e:
+			case calls <- call:
 			case <-ctx.Done():
 				return
 			}
@@ -673,19 +740,43 @@ func runConn(r *http.Request, c *websocket.Conn, mgr *rpc.Manager, defaultCwd fu
 	results := make(chan controlCallResult, 32)
 	fences := map[string]*hydrateFence{}
 	callsOpen := true
-	write := func(frame Envelope) bool {
-		if err := c.WriteJSON(frame); err != nil {
+	// write answers one call. A response that cannot be encoded still gets a
+	// correlated error instead of a silent disconnect; only a failed write
+	// ends the stream.
+	write := func(response *wspb.ControlResponse) bool {
+		data, err := encodeResponseFrame(response)
+		if err != nil {
+			cancel()
+			return false
+		}
+		if err := conn.writeRaw(data); err != nil {
 			cancel()
 			return false
 		}
 		return true
 	}
 	writeEvent := func(ev rpc.Event) bool {
-		var data json.RawMessage
-		if ev.Data != nil {
-			data, _ = json.Marshal(ev.Data)
+		event, err := eventToWire(ev)
+		if err != nil {
+			// A refused event stops the stream instead of skipping the event
+			// or advancing past it.
+			conn.close(websocket.CloseInternalServerErr, "event conversion failed")
+			cancel()
+			return false
 		}
-		return write(Envelope{Type: "evt", Evt: ev.Evt, Sid: ev.Sid, Seq: ev.Seq, Data: data})
+		// Encode before writing: an encoding failure is a conversion failure
+		// and must close with 1011, not look like a dead socket.
+		data, err := conn.encode(&wspb.ControlServerFrame{Payload: &wspb.ControlServerFrame_Event{Event: event}})
+		if err != nil {
+			conn.close(websocket.CloseInternalServerErr, "event encoding failed")
+			cancel()
+			return false
+		}
+		if err := conn.writeRaw(data); err != nil {
+			cancel()
+			return false
+		}
+		return true
 	}
 	flushFence := func(sid string) bool {
 		fence := fences[sid]
@@ -719,48 +810,39 @@ func runConn(r *http.Request, c *websocket.Conn, mgr *rpc.Manager, defaultCwd fu
 		select {
 		case <-ctx.Done():
 			return
-		case e, ok := <-calls:
+		case call, ok := <-calls:
 			if !ok {
 				callsOpen = false
 				calls = nil
 				continue
 			}
-			if e.Type != rpc.CallFrame {
-				if !write(failedResponse(e.ID, errors.New("expected call"))) {
-					return
-				}
-				continue
-			}
 			epoch := uint64(0)
-			if e.Op == rpc.OpHydrate {
-				fence := fences[e.Sid]
+			sid := ""
+			if hydrate := call.GetHydrate(); hydrate != nil {
+				sid = hydrate.GetSid()
+				fence := fences[sid]
 				if fence == nil {
 					fence = &hydrateFence{
 						nextResponse: 1,
-						responses:    make(map[uint64]Envelope),
+						responses:    make(map[uint64]*wspb.ControlResponse),
 					}
-					fences[e.Sid] = fence
+					fences[sid] = fence
 				}
 				fence.latest++
 				epoch = fence.latest
 			}
-			opCtx, opCancel := context.WithTimeout(ctx, func() time.Duration {
-				if e.Op == rpc.OpCompact {
-					return CompactOperationTimeout
-				}
-				return ControlOperationTimeout
-			}())
-			go func(call Envelope, hydrateEpoch uint64, callCtx context.Context, done context.CancelFunc) {
+			opCtx, opCancel := context.WithTimeout(ctx, operationBudget(call))
+			go func(call *wspb.ControlCall, hydrateSid string, hydrateEpoch uint64, callCtx context.Context, done context.CancelFunc) {
 				defer done()
 				response := server.dispatch(callCtx, call)
-				result := controlCallResult{response: response, hydrateSid: call.Sid, hydrateEpoch: hydrateEpoch}
+				result := controlCallResult{response: response, hydrateSid: hydrateSid, hydrateEpoch: hydrateEpoch}
 				select {
 				case results <- result:
 				case <-ctx.Done():
 				}
-			}(e, epoch, opCtx, opCancel)
+			}(call, sid, epoch, opCtx, opCancel)
 		case result := <-results:
-			if result.response.ID == "" || result.hydrateEpoch == 0 {
+			if result.response.GetId() == "" || result.hydrateEpoch == 0 {
 				if !write(result.response) {
 					return
 				}
@@ -792,11 +874,21 @@ func runConn(r *http.Request, c *websocket.Conn, mgr *rpc.Manager, defaultCwd fu
 	}
 }
 
-func isStubbed(op string) bool {
-	for _, s := range rpc.P0StubbedFrames {
-		if s == op {
-			return true
-		}
+// operationBudget is the one per-call deadline selection: compaction runs a
+// summary through Pi and gets the long budget, every other operation uses
+// the short one. Abort does not take the control gate, so a compact in
+// flight never starves it.
+func operationBudget(call *wspb.ControlCall) time.Duration {
+	if call.GetCompact() != nil {
+		return CompactOperationTimeout
 	}
-	return false
+	return ControlOperationTimeout
+}
+
+// controlCloseCode maps a read failure to the close code peers expect.
+func controlCloseCode(err error) int {
+	if errors.Is(err, wireproto.ErrMessageTooLarge) {
+		return websocket.CloseMessageTooBig
+	}
+	return websocket.CloseProtocolError
 }

@@ -1,6 +1,20 @@
 import { expect, test } from '@playwright/test';
 import type { WebSocketRoute } from '@playwright/test';
+import { TerminalClientFrame } from '../web/proto/terminal.js';
+import { TerminalServerFrame } from '../web/proto/terminal.js';
+import type {
+    MessageFns,
+    TerminalClientFrame as TerminalClientMessage,
+    TerminalServerFrame as TerminalServerMessage,
+} from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+
+// The served bundle carries no types; bind its runtime codecs to the
+// generated declarations so spec-side encoding is fully checked.
+const ServerCodec: MessageFns<TerminalServerMessage> =
+    TerminalServerFrame as unknown as MessageFns<TerminalServerMessage>;
+const ClientCodec: MessageFns<TerminalClientMessage> =
+    TerminalClientFrame as unknown as MessageFns<TerminalClientMessage>;
 
 let phi: PhiServer;
 test.beforeAll(async () => {
@@ -68,7 +82,7 @@ test('long archive attaches from bounded state and fetches older books only on a
             stateRequests++;
     });
     const socketRoutes: WebSocketRoute[] = [];
-    const frames: { type: number; bytes: number }[] = [];
+    const frames: { type: string; bytes: number }[] = [];
     await page.addInitScript(() => {
         const w = window as unknown as PerfWindow;
         w.attachTerms = [];
@@ -181,30 +195,38 @@ test('long archive attaches from bounded state and fetches older books only on a
     });
     await page.routeWebSocket(`**/ws/pane/${id}?*`, (socket) => {
         socketRoutes.push(socket);
-        const header = Buffer.from(
-            JSON.stringify({
-                epoch,
-                oldest: 0,
-                head: archive.length,
-                ckpt: {
-                    kind: 'ansi-v1',
-                    through: archive.length,
-                    cols,
-                    rows,
-                    len: checkpoint.length,
-                },
-            }),
+        const message = Buffer.from(
+            ServerCodec.encode(
+                ServerCodec.fromPartial({
+                    payload: {
+                        $case: 'attach',
+                        value: {
+                            epoch: BigInt(epoch),
+                            oldest: BigInt(0),
+                            head: BigInt(archive.length),
+                            checkpoint: {
+                                kind: 'ansi-v1',
+                                through: BigInt(archive.length),
+                                cols,
+                                rows,
+                                data: new Uint8Array(checkpoint),
+                            },
+                        },
+                    },
+                }),
+            ).finish(),
         );
-        const prefix = Buffer.alloc(5);
-        prefix[0] = 0x08;
-        prefix.writeUInt32BE(header.length, 1);
-        const message = Buffer.concat([prefix, header, checkpoint]);
         sentAttachBytes += message.length;
-        frames.push({ type: 0x08, bytes: message.length });
+        frames.push({ type: 'attach', bytes: message.length });
         socket.send(message);
         socket.onMessage((message) => {
             if (Buffer.isBuffer(message))
-                frames.push({ type: message[0], bytes: message.length });
+                frames.push({
+                    type:
+                        ClientCodec.decode(new Uint8Array(message)).payload
+                            ?.$case ?? 'unknown',
+                    bytes: message.length,
+                });
         });
     });
     await page.goto(phi.url);
@@ -238,7 +260,7 @@ test('long archive attaches from bounded state and fetches older books only on a
     );
     expect(attachWriteBytes).toBeLessThan(archive.length / 100);
     expect(recordingRequests).toHaveLength(0);
-    expect(frames[0]?.type).toBe(0x08);
+    expect(frames[0]?.type).toBe('attach');
     const historyButton = page.locator(`#term-${id} .load-history-btn`);
     await page.locator(`#term-${id} .xterm-screen`).hover();
     await page.mouse.wheel(0, -40);

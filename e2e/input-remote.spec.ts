@@ -55,22 +55,70 @@ test('input.html sends keystrokes into a live pane', async ({ page }) => {
         .toBe(true);
     await picker.selectOption(paneId);
 
-    // Read-back tap: a vanilla WS attach streaming the pane's output.
-    // Framing-agnostic — the marker is scanned out of the raw bytes.
+    // Read-back tap: a vanilla WS attach streaming the pane's output. The
+    // endpoint admits only the terminal subprotocol, and frames are decoded
+    // with the generated browser codec rather than scanned as raw bytes.
     await page.evaluate(
-        ([url, id]) => {
-            const w = window as unknown as { __kbOut: string };
+        async ([url, id]) => {
+            const w = window as unknown as {
+                __kbOut: string;
+                __kbAttached: boolean;
+            };
             w.__kbOut = '';
+            w.__kbAttached = false;
+            type ServerFrame = {
+                payload?:
+                    | { $case: 'output'; value: { data: Uint8Array } }
+                    | { $case: string; value: unknown };
+            };
+            type OutputPayload = {
+                $case: 'output';
+                value: { data: Uint8Array };
+            };
+            type Codec = {
+                TerminalServerFrame: {
+                    decode: (bytes: Uint8Array) => ServerFrame;
+                };
+            };
+            const codecPath = '/proto/terminal.js';
+            const codec = (await import(codecPath)) as Codec;
             const ws = new WebSocket(
                 `${url.replace(/^http/, 'ws')}/ws/pane/${id}`,
+                'phi.terminal.protobuf.v1',
             );
             ws.binaryType = 'arraybuffer';
+            const decoder = new TextDecoder();
             ws.onmessage = (e) => {
-                w.__kbOut += String.fromCharCode(...new Uint8Array(e.data));
+                const frame = codec.TerminalServerFrame.decode(
+                    new Uint8Array(e.data as ArrayBuffer),
+                );
+                const payload = frame.payload;
+                if (!payload) return;
+                // The server registers this client before it enqueues the
+                // attach frame, so seeing it means live output will arrive.
+                if (payload.$case === 'attach') {
+                    w.__kbAttached = true;
+                    return;
+                }
+                if (payload.$case !== 'output') return;
+                w.__kbOut += decoder.decode(
+                    (payload as OutputPayload).value.data,
+                );
             };
         },
         [phi.url, paneId],
     );
+    await expect
+        .poll(
+            async () =>
+                page.evaluate(
+                    () =>
+                        (window as unknown as { __kbAttached: boolean })
+                            .__kbAttached,
+                ),
+            { timeout: 15_000 },
+        )
+        .toBe(true);
 
     await page.locator('#kb-text').fill(marker);
     await page.locator('#kb-send').click();

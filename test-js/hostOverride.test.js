@@ -24,9 +24,9 @@ describe('socket URLs ignore hostname_override', () => {
         vi.stubGlobal(
             'WebSocket',
             class {
-                constructor(url) {
+                constructor(url, protocols) {
                     this.url = url;
-                    seen.push(url);
+                    seen.push([url, protocols]);
                     this.readyState = 0;
                 }
             },
@@ -34,19 +34,20 @@ describe('socket URLs ignore hostname_override', () => {
         return seen;
     }
     it('pane socket dials the page origin with a label set', () => {
-        stubSocket();
+        const seen = stubSocket();
         setServerHostOverride('dusty_potato');
         const pty = new PTYWebSocket('p1', () => {});
         expect(pty.url).toBe(
-            `${window.location.origin}/ws/pane/p1?term_proto=hot-v1&state=ansi-v1`,
+            `${window.location.origin}/ws/pane/p1?state=ansi-v1`,
         );
+        expect(seen[0][1]).toBe('phi.terminal.protobuf.v1');
         pty.ws?.close?.();
     });
     it('pane socket dials the page origin with the label unset', () => {
         stubSocket();
         const pty = new PTYWebSocket('p1', () => {});
         expect(pty.url).toBe(
-            `${window.location.origin}/ws/pane/p1?term_proto=hot-v1&state=ansi-v1`,
+            `${window.location.origin}/ws/pane/p1?state=ansi-v1`,
         );
         pty.ws?.close?.();
     });
@@ -63,7 +64,7 @@ describe('socket URLs ignore hostname_override', () => {
             setServerHostOverride(label);
             const pty = new PTYWebSocket('p1', () => {});
             expect(pty.url).toBe(
-                `${window.location.origin}/ws/pane/p1?term_proto=hot-v1&state=ansi-v1`,
+                `${window.location.origin}/ws/pane/p1?state=ansi-v1`,
             );
             expect(pty.url).not.toContain(label);
             pty.ws?.close?.();
@@ -102,7 +103,7 @@ describe('hostname_override is a free-form display label', () => {
         setServerHostOverride(HAIKU);
         const pty = new PTYWebSocket('p1', () => {});
         expect(pty.url).toBe(
-            `${window.location.origin}/ws/pane/p1?term_proto=hot-v1&state=ansi-v1`,
+            `${window.location.origin}/ws/pane/p1?state=ansi-v1`,
         );
         pty.ws?.close?.();
     });
