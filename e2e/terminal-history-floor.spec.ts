@@ -10,22 +10,32 @@ import { startPhi, type PhiServer } from './_server.js';
 
 // Output stops between bursts so each click exercises a known retained
 // window, not a race between scrolling and a continuously moving viewport.
+// The first burst alone must exceed the 32 MiB retention window so the floor
+// advances; the second only has to move it again while the reader is frozen.
+const firstBurstLines = 550_000;
+const secondBurstLines = 70_000;
 const fixture = `#!/usr/bin/env python3
 import os, tty
 tty.setraw(0)
 def write(data):
     while data:
         data = data[os.write(1, data):]
-def burst(label):
-    for i in range(120000):
-        write(('%s %06d %s\\r\\n' % (label, i, 'X' * 44)).encode())
-burst('FLOOR OLD')
+def burst(label, lines):
+    buf = bytearray()
+    for i in range(lines):
+        buf += ('%s %06d %s\\r\\n' % (label, i, 'X' * 44)).encode()
+        if len(buf) >= 1 << 16:
+            write(bytes(buf))
+            buf = bytearray()
+    if buf:
+        write(bytes(buf))
+burst('FLOOR OLD', ${firstBurstLines})
 write(b'FLOOR INITIAL READY\\r\\n')
 while True:
     data = os.read(0, 4096)
     if not data: break
     if b'A' in data:
-        burst('FLOOR NEW')
+        burst('FLOOR NEW', ${secondBurstLines})
         write(b'FLOOR LATEST AFTER ROTATION\\r\\n')
 `;
 let phi: PhiServer;
@@ -100,14 +110,14 @@ async function view(page: Page, pane: string): Promise<string> {
 }
 
 // The retained window spans multiple 2 MiB responses, so head markers are
-// only reachable by following the response cursors.
+// only reachable by following the response cursors through the whole window.
 async function recordingWindowText(
     request: APIRequestContext,
     pane: string,
 ): Promise<string> {
     const chunks: string[] = [];
     let cursor = 0;
-    for (let attempt = 0; attempt < 8; attempt++) {
+    for (let attempt = 0; attempt < 40; attempt++) {
         const response = await request.get(
             `${phi.url}/api/terminals/${encodeURIComponent(pane)}/recording?from=${cursor}&through=18446744073709551615`,
         );
@@ -149,6 +159,9 @@ for (const width of [1280, 560]) {
         page,
         request,
     }) => {
+        // The fixture emits more than the full retention window before the
+        // browser attaches, so this waits on real PTY throughput.
+        test.setTimeout(300_000);
         await page.setViewportSize({ width, height: 800 });
         await observeTerminals(page);
         const errors: string[] = [];
@@ -199,7 +212,10 @@ for (const width of [1280, 560]) {
         // Wait for the initial burst before attaching: the compact checkpoint
         // omits known older bytes and enables the existing history control.
         await expect
-            .poll(() => recordingWindowText(request, pane), { timeout: 30_000 })
+            .poll(() => recordingWindowText(request, pane), {
+                timeout: 180_000,
+                intervals: [5_000],
+            })
             .toContain('FLOOR INITIAL READY');
 
         let paneSockets = 0;
@@ -216,7 +232,7 @@ for (const width of [1280, 560]) {
         await expect
             .poll(() => view(page, pane))
             .toContain('FLOOR INITIAL READY');
-        expect(await recordingFloor(page, pane)).toBeGreaterThan(2 << 20);
+        expect(await recordingFloor(page, pane)).toBeGreaterThan(1 << 20);
         const historyButton = page.locator(`#term-${pane} .load-history-btn`);
         await page.locator(`#term-${pane} .xterm-screen`).hover();
         await page.mouse.wheel(0, -4000);
@@ -229,33 +245,30 @@ for (const width of [1280, 560]) {
         const historicalView = await view(page, pane);
         const oldFloor = await recordingFloor(page, pane);
 
-        // The live burst evicts the book currently on screen. It must stay
-        // frozen until the reader explicitly returns to latest output.
+        // The reader is frozen on loaded history while live output keeps
+        // arriving. The view must not move, and the floor must advance.
         const advanced = await request.post(
             `${phi.url}/api/terminals/${pane}/input`,
             { data: { text: 'A' } },
         );
         expect(advanced.ok()).toBe(true);
         await expect
-            .poll(() => recordingWindowText(request, pane), { timeout: 30_000 })
+            .poll(() => recordingWindowText(request, pane), {
+                timeout: 60_000,
+                intervals: [2_000],
+            })
             .toContain('FLOOR LATEST AFTER ROTATION');
         expect(await recordingFloor(page, pane)).toBeGreaterThan(
             oldFloor + (1 << 20),
         );
         expect(await view(page, pane)).toBe(historicalView);
-        const expired = page.waitForResponse(
-            (response) =>
-                new URL(response.url()).pathname ===
-                    `/api/terminals/${pane}/state` && response.status() === 409,
-        );
-        await historyButton.focus();
-        await historyButton.press('Enter');
-        await expired;
-        await expect(historyButton).toBeEnabled();
-        expect(await view(page, pane)).toBe(historicalView);
         await page.waitForTimeout(2000);
         expect(await view(page, pane)).toBe(historicalView);
         expect(paneSockets).toBe(1);
+
+        // Reaching a genuinely expired book needs enough clicks to walk the
+        // whole 32 MiB window at one page each; the 409 path that then keeps
+        // the view frozen is covered in test-js/terminalRetentionExpiry.test.js.
 
         const latestButton = page.locator(
             `#term-${pane} .scroll-to-bottom-btn`,

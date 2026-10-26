@@ -213,7 +213,7 @@ func (h *Hub) importLegacyGroup(paneID string) (bool, error) {
 // stageLegacyImport streams the legacy journal, builds a bounded
 // single-segment replacement in staging, reopens it, and compares the
 // retained bytes and current parser state. Memory stays bounded:
-// one stream window, the 4 MiB tail, the parser, and capped markers.
+// one stream window, the imported tail, the parser, and capped markers.
 func stageLegacyImport(legacy, staging string, size int64, mtime time.Time) (importStats, error) {
 	var stats importStats
 	stats.sourceBytes = size
@@ -235,9 +235,12 @@ func stageLegacyImport(legacy, staging string, size int64, mtime time.Time) (imp
 	if err != nil {
 		return stats, err
 	}
+	// The replacement is one segment, so the imported tail is bounded by the
+	// physical segment ceiling, not by the larger public history window.
+	tailLimit := uint64(min(retentionHistoryCap, retentionSegRawMax))
 	tailStart := uint64(0)
-	if scan.head > retentionHistoryCap {
-		tailStart = scan.head - retentionHistoryCap
+	if scan.head > tailLimit {
+		tailStart = scan.head - tailLimit
 	}
 	// Newest first: a corrupt anchor falls back to an older one, then
 	// to a full prefix stream.

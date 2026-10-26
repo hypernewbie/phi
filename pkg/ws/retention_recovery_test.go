@@ -104,7 +104,7 @@ func TestReadRetentionManifestIsBoundedAndRegular(t *testing.T) {
 }
 
 func TestRetentionGiantPayloadRetryUsesAdmissionIdentity(t *testing.T) {
-	giant := bytes.Repeat([]byte("g"), retentionSegRawMax+65536)
+	giant := bytes.Repeat([]byte("g"), int(retentionSegRawMax)+65536)
 	newGroup := func(t *testing.T) (*Hub, *PaneHub) {
 		h := NewHub(0)
 		t.Cleanup(func() { _ = h.Close() })
@@ -140,7 +140,7 @@ func TestRetentionGiantPayloadRetryUsesAdmissionIdentity(t *testing.T) {
 	}
 	// Presenting only the retained suffix must not resolve it.
 	_, ph2 := newGroup(t)
-	suffix := giant[len(giant)-retentionSegRawMax:]
+	suffix := giant[len(giant)-int(retentionSegRawMax):]
 	if _, err := ph2.recording.appendPayload(suffix, ph2.snapshotBaseLocked); !errors.Is(err, errPendingTransaction) {
 		t.Fatalf("suffix-only retry err = %v, want errPendingTransaction", err)
 	}
@@ -186,7 +186,7 @@ func TestCommitRejectsSymlinkedNextSegment(t *testing.T) {
 	if err := h.SetRecordingDirectory(dir); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.Ingest("p", bytes.Repeat([]byte("f"), retentionSegNominal)); err != nil {
+	if err := h.Ingest("p", bytes.Repeat([]byte("f"), int(retentionSegNominal))); err != nil {
 		t.Fatal(err)
 	}
 	external := filepath.Join(t.TempDir(), "victim")

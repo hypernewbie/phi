@@ -224,7 +224,7 @@ func TestAttachHeadDropsCheckpointBelowRetentionFloor(t *testing.T) {
 	}
 	// Rotate the retained window well past the stored checkpoint.
 	chunk := bytes.Repeat([]byte("A"), 64<<10)
-	for i := 0; i < int(retentionHistoryCap/len(chunk))+40; i++ {
+	for i := 0; i < int(retentionHistoryCap)/len(chunk)+40; i++ {
 		h.Ingest("p", chunk)
 	}
 	ph.mu.Lock()
