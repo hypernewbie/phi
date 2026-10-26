@@ -164,6 +164,30 @@ describe('bridge skills control', () => {
         });
     });
 
+    it('shows the empty copy when the session knows no skill', async () => {
+        const fetchMock = mockFetch(() => skillList({ skills: [] }));
+        global.fetch = fetchMock;
+        const tab = bridgeTab();
+        const { tm, dropup } = harness(tab);
+        tm.renderPresets('pi');
+        skillsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('No Pi skills available');
+        });
+    });
+
+    it('marks a partial list', async () => {
+        const fetchMock = mockFetch(() => skillList({ truncated: true }));
+        global.fetch = fetchMock;
+        const tab = bridgeTab();
+        const { tm, dropup } = harness(tab);
+        tm.renderPresets('pi');
+        skillsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('Partial skill list');
+        });
+    });
+
     it('posts the skill with the list origin and closes the picker on success', async () => {
         const fetchMock = mockFetch((url, options) => {
             if (url.includes('/api/pi-bridge/skills?')) return skillList();
@@ -681,5 +705,71 @@ describe('bridge skills runtime fencing', () => {
         });
         // No row can be dispatched without an origin, so none is shown.
         expect(dropup.querySelector('.dropup-model-btn')).toBeFalsy();
+    });
+});
+
+describe('bridge skills offline behavior', () => {
+    it('keeps the last good list when the picker is reopened', async () => {
+        let calls = 0;
+        const fetchMock = mockFetch((url) => {
+            if (!url.includes('/api/pi-bridge/skills?')) return skillList();
+            calls += 1;
+            // The first answer lands; the refresh that follows fails.
+            if (calls === 1) return skillList();
+            return { ok: false, status: 503 };
+        });
+        global.fetch = fetchMock;
+        const tab = bridgeTab();
+        const { tm, dropup } = harness(tab);
+        tm.renderPresets('pi');
+        skillsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('demo-skill');
+        });
+
+        // The picker closes; the answer stays.
+        tm._closePiRpcDropups(true);
+        expect(dropup.textContent).not.toContain('demo-skill');
+
+        // Reopening shows the last good answer at once: no spinner, no
+        // wait for the network.
+        skillsTrigger(tm).click();
+        expect(dropup.textContent).toContain('demo-skill');
+        expect(dropup.textContent).not.toContain('Loading');
+
+        // The failed refresh keeps the list and says it may be stale.
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('Refresh failed');
+        });
+        expect(dropup.textContent).toContain('demo-skill');
+    });
+
+    it('bounds a stalled skill list request', async () => {
+        vi.useFakeTimers();
+        try {
+            const fetchMock = vi.fn((url, options) => {
+                // The list never answers: only the browser deadline
+                // ends it.
+                return new Promise((_resolve, reject) => {
+                    options?.signal?.addEventListener('abort', () => {
+                        const error = new Error('aborted');
+                        error.name = 'AbortError';
+                        reject(error);
+                    });
+                });
+            });
+            global.fetch = fetchMock;
+            const tab = bridgeTab();
+            const { tm, dropup } = harness(tab);
+            tm.renderPresets('pi');
+            skillsTrigger(tm).click();
+            expect(dropup.textContent).toContain('Loading');
+            await vi.advanceTimersByTimeAsync(5001);
+            await vi.waitFor(() => {
+                expect(dropup.textContent).toContain('timed out');
+            });
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });

@@ -44,11 +44,9 @@ function requestText(body: string): string {
         .join('\n');
 }
 
-test('bridge-live Pi lists and sends skills, bridge-absent keeps the composer', async ({
-    page,
-    request,
-}) => {
-    test.setTimeout(240_000);
+// One fixture for every spec: a real pinned Pi with one skill and a
+// loopback provider, so a click is proven by the request Pi sends.
+async function startSkillPhi() {
     const provider = await startSkillProvider();
     const phi = await startPhi({
         config: { auto_reconnect: 'off' },
@@ -119,6 +117,15 @@ test('bridge-live Pi lists and sends skills, bridge-absent keeps the composer', 
             );
         },
     });
+    return { provider, phi };
+}
+
+test('bridge-live Pi lists and sends skills, bridge-absent keeps the composer', async ({
+    page,
+    request,
+}) => {
+    test.setTimeout(240_000);
+    const { provider, phi } = await startSkillPhi();
 
     try {
         const cwd = realpathSync(phi.dir);
@@ -403,6 +410,94 @@ test('a busy agent queues the skill as a follow-up', async ({
         expect(lastText).toContain(`<skill name="${SKILL_NAME}"`);
         expect(lastText).toContain(MARKER);
     } finally {
+        await phi.stop();
+        await provider.close();
+    }
+});
+
+// The phone context is its own check: the composer is cramped, the tab
+// list collapses into the hostname dropdown, and every control is
+// touched.
+test('the skills picker lists, filters, and sends on a phone', async ({
+    browser,
+    request,
+}) => {
+    test.setTimeout(240_000);
+    const { provider, phi } = await startSkillPhi();
+    const context = await browser.newContext({
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+    });
+    try {
+        const cwd = realpathSync(phi.dir);
+        const spawn = await request.post(`${phi.url}/api/terminals`, {
+            data: { coder: 'pi', cwd, title: 'Pi phone' },
+        });
+        expect(spawn.ok()).toBe(true);
+        const livePane = ((await spawn.json()) as { pane_id: string }).pane_id;
+        await expect
+            .poll(() => paneBridge(request, phi.url, livePane), {
+                timeout: 30_000,
+            })
+            .toMatchObject({
+                state: 'managed',
+                connected: true,
+                capabilities: expect.arrayContaining(['pi.skills.v1']),
+            });
+
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on('pageerror', (error) => pageErrors.push(error.message));
+        await page.goto(phi.url);
+        // The phone layout selects tabs through the hostname dropdown.
+        await page.locator('#hostname-display').click();
+        const dropdown = page.locator('#hostname-tabs-dropdown');
+        await expect(dropdown).toBeVisible({ timeout: 10_000 });
+        await dropdown
+            .locator(
+                `.hostname-dropdown-row[data-pane-id="${livePane}"] .hostname-dropdown-select-btn`,
+            )
+            .click();
+        await expect(page.locator('.tab.active')).toHaveAttribute(
+            'data-pane-id',
+            livePane,
+        );
+
+        const trigger = page.locator(
+            '#presets-container button.pi-rpc-skills-trigger',
+        );
+        await expect(trigger).toBeVisible({ timeout: 15_000 });
+        const dropup = page.locator('#pi-rpc-skills-dropup');
+        await trigger.tap();
+        await expect(dropup).toBeVisible({ timeout: 10_000 });
+        await expect(dropup).toContainText(SKILL_NAME, { timeout: 10_000 });
+        await expect(dropup).toContainText(SKILL_DESCRIPTION);
+
+        // The open picker keeps the phone layout free of overflow.
+        const overflow = await page.evaluate(() => ({
+            inner: window.innerWidth,
+            scroll: document.documentElement.scrollWidth,
+        }));
+        expect(overflow.scroll).toBeLessThanOrEqual(overflow.inner);
+
+        // The filter narrows the list on touch.
+        const filter = dropup.locator('.pi-rpc-model-search');
+        await filter.fill('no-such-skill');
+        await expect(dropup.locator('.dropup-model-btn')).toHaveCount(0);
+        await filter.fill(SKILL_NAME);
+        await expect(dropup.locator('.dropup-model-btn')).toHaveCount(1);
+
+        // Tapping the skill dispatches it to Pi.
+        await dropup.locator('.dropup-model-btn').first().tap();
+        await expect(dropup).toBeHidden({ timeout: 10_000 });
+        const [sent] = await provider.waitForRequests(1);
+        const sentText = requestText(sent!);
+        expect(sentText).toContain(`<skill name="${SKILL_NAME}"`);
+        expect(sentText).toContain(MARKER);
+        expect(pageErrors).toEqual([]);
+    } finally {
+        await context.close();
         await phi.stop();
         await provider.close();
     }

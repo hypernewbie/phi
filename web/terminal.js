@@ -5892,13 +5892,18 @@ export class TabManager {
         // The list belongs to the runtime that answers it: a replaced
         // peer invalidates the whole picker session.
         const context = this._piBridgeSkillsContextFor(activeTab);
+        // The last good answer stays on screen while the picker
+        // refreshes: a slow or failed refresh never empties the list.
+        const reused = this._piBridgeSkillsReusable(context);
         this._piBridgeSkillsContext = context;
         const request = ++this._piBridgeSkillsRequest;
         if (!preserve) {
             this._piBridgeSkillQuery = '';
-            this._piBridgeSkills = null;
-            this._piBridgeSkillsTruncated = false;
-            this._piBridgeSkillsUnavailable = false;
+            if (!reused) {
+                this._piBridgeSkills = null;
+                this._piBridgeSkillsTruncated = false;
+                this._piBridgeSkillsUnavailable = false;
+            }
             const sticky = document.createElement('div');
             sticky.className = 'pi-rpc-model-sticky';
             const header = document.createElement('div');
@@ -5944,7 +5949,13 @@ export class TabManager {
         const loading = document.createElement('div');
         loading.className = 'dropup-row pi-rpc-dropup-message';
         loading.textContent = 'Loading Pi skills…';
-        listContainer.replaceChildren(loading);
+        if (reused) {
+            // The retained rows are shown at once; the refresh below
+            // replaces them in place.
+            this._buildPiRpcSkillsList();
+        } else {
+            listContainer.replaceChildren(loading);
+        }
 
         let requestResult;
         try {
@@ -5999,9 +6010,47 @@ export class TabManager {
                     );
                     return;
                 }
+                if (reused) {
+                    // The list stays: a failed refresh never empties
+                    // it. The note says the list may be out of date.
+                    this._showPiRpcSkillsNote(
+                        listContainer,
+                        'Refresh failed — showing the last known skills',
+                    );
+                    return;
+                }
                 loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
                 this._piRpcError(error, 'Pi skills');
             });
+    }
+
+    // _showPiRpcSkillsNote keeps the rendered list and adds one short
+    // status line. A failed refresh must not empty the list.
+    _showPiRpcSkillsNote(listContainer, text) {
+        if (!listContainer) return;
+        const note = document.createElement('div');
+        note.className = 'dropup-row pi-rpc-dropup-message';
+        note.textContent = text;
+        listContainer.append(note);
+    }
+
+    // _piBridgeSkillsReusable reports whether the retained answer can
+    // be shown again for this runtime, and hands its origin to the new
+    // context. The last good answer stays on screen while the picker
+    // refreshes, so a slow or failed refresh never empties the list.
+    // A replaced peer, a swapped socket, or a moved generation drops
+    // it.
+    _piBridgeSkillsReusable(context) {
+        const retained = this._piBridgeSkillsContext;
+        if (
+            !retained ||
+            retained.paneId !== context.paneId ||
+            !Array.isArray(this._piBridgeSkills) ||
+            !this._piBridgeSkillsContextValid(retained)
+        )
+            return false;
+        context.origin = retained.origin;
+        return true;
     }
 
     // _showPiRpcSkillsMessage replaces the picker list with one message
