@@ -5906,6 +5906,10 @@ export class TabManager {
                 this._piBridgeSkills = null;
                 this._piBridgeSkillsTruncated = false;
                 this._piBridgeSkillsUnavailable = false;
+                // The stale flag belongs to the retained catalog. A
+                // catalog that was never loaded has no last known
+                // answer, so it is never stale.
+                this._piBridgeSkillsStale = false;
             }
             const sticky = document.createElement('div');
             sticky.className = 'pi-rpc-model-sticky';

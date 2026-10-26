@@ -783,6 +783,49 @@ describe('bridge skills offline behavior', () => {
         expect(dropup.textContent).toContain('No Pi skills available');
     });
 
+    it('does not carry the stale warning into another pane', async () => {
+        let calls = 0;
+        const fetchMock = mockFetch((url) => {
+            if (!url.includes('/api/pi-bridge/skills?')) return skillList();
+            calls += 1;
+            // Only the first pane ever gets a list.
+            if (calls === 1) return skillList();
+            return { ok: false, status: 503 };
+        });
+        global.fetch = fetchMock;
+        const first = bridgeTab();
+        const second = bridgeTab({ paneId: 'pi-pane-2' });
+        const { tm, dropup } = harness(first);
+        tm.tabs.set(second.paneId, second);
+        let active = first;
+        tm.getActiveTab = vi.fn(() => active);
+        tm.renderPresets('pi');
+        skillsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('demo-skill');
+        });
+
+        // The picker closes; the answer stays.
+        tm._closePiRpcDropups(true);
+
+        // Reopening the first pane fails, so its list is stale.
+        skillsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('Refresh failed');
+        });
+
+        // The second pane never loaded a list: it has no last known
+        // answer, so it is never stale.
+        tm._closePiRpcDropups(true);
+        active = second;
+        tm.renderPresets('pi');
+        skillsTrigger(tm).click();
+        const filter = dropup.querySelector('.pi-rpc-model-search');
+        filter.value = 'demo';
+        filter.dispatchEvent(new Event('input'));
+        expect(dropup.textContent).not.toContain('Refresh failed');
+    });
+
     it('bounds a stalled skill list request', async () => {
         vi.useFakeTimers();
         try {
