@@ -10,7 +10,7 @@ import (
 // Exact web/theme.js accent values. The frontend parity test guards this small
 // palette without embedding browser assets in the native client.
 var phiAccents = map[string]string{
-	"purple": "7c6af7", "blue": "38bdf8", "green": "10b981", "amber": "fbbf24", "red": "f87171", "pink": "ec4899", "teal": "14b8a6", "indigo": "6366f1", "orange": "f97316", "cyan": "06b6d4", "rose": "f43f5e", "lime": "84cc16", "white": "ffffff", "gold": "d4af37", "violet": "a78bfa", "emerald": "059669", "neon": "00f0ff", "coral": "e07a5f", "fuchsia": "d946ef", "canary": "ffee10", "copper": "d35400", "mint": "2ed573", "arc": "00d4ff", "ember": "ff4500", "fog": "94a3b8", "ash": "a8a29e", "dusk": "b8a9c9", "pine": "84a59d", "fern": "9caf88",
+	"purple": "7c6af7", "blue": "38bdf8", "green": "10b981", "amber": "fbbf24", "red": "f87171", "pink": "ec4899", "teal": "14b8a6", "indigo": "6366f1", "orange": "f97316", "cyan": "06b6d4", "rose": "f43f5e", "lime": "84cc16", "white": "ffffff", "gold": "d4af37", "violet": "a78bfa", "emerald": "059669", "neon": "1a79ff", "coral": "e07a5f", "fuchsia": "d946ef", "canary": "ffee10", "copper": "d35400", "mint": "2ed573", "arc": "2952ff", "ember": "ff4500", "fog": "94a3b8", "ash": "a8a29e", "dusk": "b8a9c9", "pine": "84a59d", "fern": "9caf88",
 }
 
 type agyAnsiTones struct {
@@ -37,13 +37,13 @@ var phiAgyAnsiTones = map[string]agyAnsiTones{
 	"gold":    {Dim: "997a15", Bright: "f3e5ab"},
 	"violet":  {Dim: "6d28d9", Bright: "ddd6fe"},
 	"emerald": {Dim: "065f46", Bright: "34d399"},
-	"neon":    {Dim: "008b99", Bright: "70f8ff"},
+	"neon":    {Dim: "004ab2", Bright: "70acff"},
 	"coral":   {Dim: "9e4731", Bright: "f4a261"},
 	"fuchsia": {Dim: "86198f", Bright: "f0abfc"},
 	"canary":  {Dim: "b8ad00", Bright: "ffff66"},
 	"copper":  {Dim: "8a3700", Bright: "e59866"},
 	"mint":    {Dim: "1a8a4a", Bright: "7bed9f"},
-	"arc":     {Dim: "0080c0", Bright: "66e0ff"},
+	"arc":     {Dim: "1433b8", Bright: "708cff"},
 	"ember":   {Dim: "cc2200", Bright: "ff7733"},
 	"fog":     {Dim: "64748b", Bright: "cbd5e1"},
 	"ash":     {Dim: "78716c", Bright: "d6d3d1"},
