@@ -2,6 +2,7 @@ package pibridge
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -84,6 +85,26 @@ func sendInvokeSkillAck(t *testing.T, stream pibridgepb.Integration_ConnectClien
 		Payload: &pibridgepb.PiToPhi_InvokeSkillAck{InvokeSkillAck: ack},
 	}); err != nil {
 		t.Fatalf("send ack: %v", err)
+	}
+}
+
+// expectNoPeerRequest fails when the peer receives anything within a
+// short window. A refused request must never reach the peer.
+func expectNoPeerRequest(t *testing.T, stream pibridgepb.Integration_ConnectClient) {
+	t.Helper()
+	type res struct {
+		msg *pibridgepb.PhiToPi
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		m, e := stream.Recv()
+		ch <- res{msg: m, err: e}
+	}()
+	select {
+	case r := <-ch:
+		t.Fatalf("peer received %v", r.msg)
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 
@@ -313,7 +334,7 @@ func TestRequestInvokeSkillRoundTrip(t *testing.T) {
 	go func() {
 		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
-		res, err := s.RequestInvokeSkill(ctx, proc, "demo-skill")
+		res, err := s.RequestInvokeSkill(ctx, proc, 1, "demo-skill")
 		done <- outcome{res: res, err: err}
 	}()
 	id, name := recvInvokeSkillRequest(t, stream)
@@ -344,7 +365,7 @@ func TestRequestInvokeSkillUnknownSkill(t *testing.T) {
 	go func() {
 		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
-		res, err := s.RequestInvokeSkill(ctx, proc, "demo-skill")
+		res, err := s.RequestInvokeSkill(ctx, proc, 1, "demo-skill")
 		if err != nil {
 			t.Errorf("RequestInvokeSkill: %v", err)
 			return
@@ -373,7 +394,7 @@ func TestRequestInvokeSkillReasonAllowlist(t *testing.T) {
 	go func() {
 		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
-		res, err := s.RequestInvokeSkill(ctx, proc, "demo-skill")
+		res, err := s.RequestInvokeSkill(ctx, proc, 1, "demo-skill")
 		if err != nil {
 			t.Errorf("RequestInvokeSkill: %v", err)
 			return
@@ -400,7 +421,7 @@ func TestRequestInvokeSkillNegotiation(t *testing.T) {
 
 	ctx, stop := context.WithTimeout(context.Background(), 2*time.Second)
 	defer stop()
-	if _, err := s.RequestInvokeSkill(ctx, proc, "demo-skill"); err == nil {
+	if _, err := s.RequestInvokeSkill(ctx, proc, 1, "demo-skill"); err == nil {
 		t.Fatal("expected negotiation error")
 	}
 }
@@ -414,22 +435,26 @@ func TestRequestInvokeSkillRejectsOversizedName(t *testing.T) {
 
 	ctx, stop := context.WithTimeout(context.Background(), 2*time.Second)
 	defer stop()
-	if _, err := s.RequestInvokeSkill(ctx, proc, strings.Repeat("x", maxSkillNameBytes+1)); err == nil {
+	if _, err := s.RequestInvokeSkill(ctx, proc, 1, strings.Repeat("x", maxSkillNameBytes+1)); err == nil {
 		t.Fatal("expected invalid-name error")
 	}
 	// No request was queued for the peer.
-	type res struct {
-		msg *pibridgepb.PhiToPi
-		err error
+	expectNoPeerRequest(t, stream)
+}
+
+// A click must never land in a runtime that replaced the one that
+// served the list: the stale origin is refused before dispatch.
+func TestRequestInvokeSkillRejectsStaleOrigin(t *testing.T) {
+	s, sock, cleanup := testServer(t)
+	defer cleanup()
+	stream, proc, _, cancel := openLeaseStream(t, s, sock, "pane-k12", CapabilityLifecycle, CapabilitySkills)
+	defer cancel()
+
+	ctx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stop()
+	if _, err := s.RequestInvokeSkill(ctx, proc, 2, "demo-skill"); !errors.Is(err, ErrSkillOriginStale) {
+		t.Fatalf("err %v, want stale origin", err)
 	}
-	ch := make(chan res, 1)
-	go func() {
-		m, e := stream.Recv()
-		ch <- res{msg: m, err: e}
-	}()
-	select {
-	case r := <-ch:
-		t.Fatalf("peer received %v", r.msg)
-	case <-time.After(200 * time.Millisecond):
-	}
+	// The skill never reached the peer.
+	expectNoPeerRequest(t, stream)
 }

@@ -5814,6 +5814,17 @@ export class TabManager {
                 skills: Array.isArray(body.skills) ? body.skills : [],
                 truncated: body.truncated === true,
                 unavailable: body.unavailable === true,
+                // The origin of the answer: the peer that served the
+                // list. A click must carry it, so the skill can never
+                // reach a runtime that replaced this one.
+                processId:
+                    typeof body.process_id === 'string'
+                        ? body.process_id
+                        : '',
+                generation:
+                    typeof body.generation === 'string'
+                        ? body.generation
+                        : '',
             };
         } catch (error) {
             if (error?.name === 'AbortError')
@@ -5828,7 +5839,9 @@ export class TabManager {
     // request was dispatched to Pi, never that the agent accepted or
     // completed it. A failed round trip is explicitly unknown and is
     // never retried automatically: the skill may still have landed.
-    async _piBridgeSkillInvoke(paneId, name) {
+    // The origin of the list that produced the row travels with the
+    // request, so the bridge can refuse a stale runtime.
+    async _piBridgeSkillInvoke(paneId, name, origin) {
         const controller = new AbortController();
         // Bound the browser too: an HTTP request can stall before reaching Phi.
         const timer = setTimeout(() => controller.abort(), 10000);
@@ -5837,7 +5850,12 @@ export class TabManager {
             const res = await fetch('/api/pi-bridge/skill', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ pane: paneId, name }),
+                body: JSON.stringify({
+                    pane: paneId,
+                    name,
+                    process_id: origin.processId,
+                    generation: origin.generation,
+                }),
                 signal: controller.signal,
             });
             if (!res.ok) throw new Error('unknown');
@@ -5942,6 +5960,11 @@ export class TabManager {
                 const bridge = result && typeof result === 'object' ? result : {};
                 this._piBridgeSkillsTruncated = bridge.truncated === true;
                 this._piBridgeSkillsUnavailable = bridge.unavailable === true;
+                // The origin belongs to the runtime that answered.
+                context.origin = {
+                    processId: bridge.processId || '',
+                    generation: bridge.generation || '',
+                };
                 this._piBridgeSkills = Array.isArray(bridge.skills)
                     ? bridge.skills
                     : [];
@@ -5970,22 +5993,33 @@ export class TabManager {
         if (!listContainer) return;
         const paneId = activeTab.paneId;
         const query = this._piBridgeSkillQuery;
-        const pending = this._piBridgeSkillPending?.has(paneId) === true;
         // The rows belong to the runtime that produced the list.
         const context = this._piBridgeSkillsContext;
         if (!this._piBridgeSkillsContextValid(context)) return;
+        // Only a dispatch that still belongs to this runtime may lock
+        // the rows: an older runtime's request must not disable the
+        // current picker.
+        const pendingOp = this._piBridgeSkillPending?.get(paneId);
+        const pending =
+            !!pendingOp && this._piBridgeSkillsRuntimeCurrent(pendingOp);
         const skills = (this._piBridgeSkills || []).filter(
             (skill) =>
                 skill &&
                 typeof skill.name === 'string' &&
                 skill.name !== '',
         );
-        if (skills.length === 0) {
+        // Without the answering origin a row cannot be dispatched
+        // safely, so the list is unusable rather than dead.
+        const origin = context.origin;
+        const usable =
+            !!origin && origin.processId !== '' && origin.generation !== '';
+        if (skills.length === 0 || !usable) {
             const empty = document.createElement('div');
             empty.className = 'dropup-row pi-rpc-dropup-message';
-            empty.textContent = this._piBridgeSkillsUnavailable
-                ? 'Pi skill list unavailable'
-                : 'No Pi skills available';
+            empty.textContent =
+                this._piBridgeSkillsUnavailable || !usable
+                    ? 'Pi skill list unavailable'
+                    : 'No Pi skills available';
             listContainer.replaceChildren(empty);
             return;
         }
@@ -6028,6 +6062,7 @@ export class TabManager {
                     invokeResult = this._piBridgeSkillInvoke(
                         paneId,
                         skill.name,
+                        origin,
                     );
                 } catch (error) {
                     invokeResult = Promise.reject(error);
@@ -12776,14 +12811,7 @@ export class TabManager {
     // The skills picker needs the skills capability; anything else
     // keeps the composer exactly as it was, without a dead control.
     _piBridgeSkillsEligible(tab) {
-        return (
-            tab?.coder === 'pi' && !tab.isDead &&
-            !!tab.ws && tab._piBridgeFresh === tab.ws &&
-            tab.piBridge?.state === 'managed' &&
-            tab.piBridge.connected === true &&
-            Array.isArray(tab.piBridge.capabilities) &&
-            tab.piBridge.capabilities.includes('pi.skills.v1')
-        );
+        return piBridgeCapable(tab, 'pi.skills.v1');
     }
 
     // _piBridgeSkillsContext pins a skills request to the runtime that

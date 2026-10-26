@@ -165,7 +165,11 @@ Pi host, or a refusal with `unknown-skill` (the session does not know
 the name), `unavailable` (the host call is missing or failed), or
 `error`. `ok=true` means dispatched, never accepted or completed:
 later Pi-side failures (no model, no credentials) are not observable
-here. Queue, admission, drop, and timeout semantics match history
+here. Every invocation carries the origin of the list that produced
+the row: the answering process and runtime generation. A session that
+moved on refuses the request before any dispatch, so a click never
+lands in a runtime that replaced the one the list came from. Queue,
+admission, drop, and timeout semantics match history
 reads; Phi shows the picker only while the capability is live and
 shows nothing at all without it.
 

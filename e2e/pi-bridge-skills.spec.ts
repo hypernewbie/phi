@@ -148,11 +148,17 @@ test('bridge-live Pi lists and sends skills, bridge-absent keeps the composer', 
             skills: Array<{ name: string; description: string }>;
             truncated: boolean;
             unavailable: boolean;
+            process_id: string;
+            generation: string;
         };
         expect(list.unavailable).toBe(false);
         expect(list.skills.map((s) => s.name)).toContain(SKILL_NAME);
         const entry = list.skills.find((s) => s.name === SKILL_NAME);
         expect(entry?.description).toBe(SKILL_DESCRIPTION);
+        // The answer names the peer that served it: a click must carry
+        // that origin.
+        expect(list.process_id).not.toBe('');
+        expect(list.generation).not.toBe('');
 
         // Absent pane: disable injection, then spawn.
         const noInject = await request.post(
@@ -231,6 +237,24 @@ test('bridge-live Pi lists and sends skills, bridge-absent keeps the composer', 
         const sentText = requestText(sent!);
         expect(sentText).toContain(`<skill name="${SKILL_NAME}"`);
         expect(sentText).toContain(MARKER);
+
+        // A click that carries a stale origin is refused before any
+        // dispatch: the skill never reaches the session.
+        const stale = await request.post(`${phi.url}/api/pi-bridge/skill`, {
+            data: {
+                pane: livePane,
+                name: SKILL_NAME,
+                process_id: list.process_id,
+                generation: '999',
+            },
+        });
+        expect(stale.ok()).toBe(true);
+        expect(await stale.json()).toEqual({
+            ok: false,
+            reason: 'unavailable',
+        });
+        await page.waitForTimeout(500);
+        expect(provider.requests).toHaveLength(1);
 
         // Bridge-absent pane: no skills control, no skills request.
         await page.locator(`.tab[data-pane-id="${absentPane}"]`).click();
@@ -350,8 +374,23 @@ test('a busy agent queues the skill as a follow-up', async ({
         expect(prompt.ok()).toBe(true);
         await provider.waitForRequests(1);
 
+        // The list names the peer that served it; the invoke carries
+        // that origin so a moved session refuses the click.
+        const listResponse = await request.get(
+            `${phi.url}/api/pi-bridge/skills?pane=${encodeURIComponent(livePane)}`,
+        );
+        expect(listResponse.ok()).toBe(true);
+        const list = (await listResponse.json()) as {
+            process_id: string;
+            generation: string;
+        };
         const invoke = await request.post(`${phi.url}/api/pi-bridge/skill`, {
-            data: { pane: livePane, name: SKILL_NAME },
+            data: {
+                pane: livePane,
+                name: SKILL_NAME,
+                process_id: list.process_id,
+                generation: list.generation,
+            },
         });
         expect(invoke.ok()).toBe(true);
         expect(await invoke.json()).toEqual({ ok: true, reason: '' });

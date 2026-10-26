@@ -39,9 +39,23 @@ function bridgeTab(over = {}) {
             state: 'managed',
             connected: true,
             model: 'a/x',
+            generation: '1',
             capabilities: ['pi.lifecycle.v1', 'pi.models.v1', 'pi.skills.v1'],
         },
         ...over,
+    };
+}
+
+// The skill list answers with the origin of the peer that served it.
+// A click must carry that origin back to the bridge.
+function skillList(extra = {}) {
+    return {
+        skills: [{ name: 'demo-skill', description: 'demo' }],
+        truncated: false,
+        unavailable: false,
+        process_id: 'proc-1',
+        generation: '1',
+        ...extra,
     };
 }
 
@@ -98,9 +112,7 @@ describe('bridge skills control', () => {
     });
 
     it('sends no request without the capability', async () => {
-        const fetchMock = mockFetch(() => ({
-            skills: [{ name: 'demo-skill', description: 'demo' }],
-        }));
+        const fetchMock = mockFetch(() => skillList());
         global.fetch = fetchMock;
         const tab = bridgeTab({
             piBridge: {
@@ -117,14 +129,12 @@ describe('bridge skills control', () => {
     it('lists the live skills with their descriptions', async () => {
         const fetchMock = mockFetch((url) => {
             if (url.includes('/api/pi-bridge/skills?'))
-                return {
+                return skillList({
                     skills: [
                         { name: 'demo-skill', description: 'demo' },
                         { name: 'other-skill', description: 'another' },
                     ],
-                    truncated: false,
-                    unavailable: false,
-                };
+                });
             return { ok: false, status: 404 };
         });
         global.fetch = fetchMock;
@@ -141,11 +151,9 @@ describe('bridge skills control', () => {
     });
 
     it('shows the unavailable copy when the list cannot be represented', async () => {
-        const fetchMock = mockFetch(() => ({
-            skills: [],
-            truncated: false,
-            unavailable: true,
-        }));
+        const fetchMock = mockFetch(() =>
+            skillList({ skills: [], unavailable: true }),
+        );
         global.fetch = fetchMock;
         const tab = bridgeTab();
         const { tm, dropup } = harness(tab);
@@ -156,23 +164,23 @@ describe('bridge skills control', () => {
         });
     });
 
-    it('posts the skill and closes the picker on success', async () => {
+    it('posts the skill with the list origin and closes the picker on success', async () => {
         const fetchMock = mockFetch((url, options) => {
-            if (url.includes('/api/pi-bridge/skills?'))
-                return {
-                    skills: [{ name: 'demo-skill', description: 'demo' }],
-                    truncated: false,
-                    unavailable: false,
-                };
+            if (url.includes('/api/pi-bridge/skills?')) return skillList();
             expect(options?.method).toBe('POST');
             expect(JSON.parse(options.body)).toEqual({
                 pane: 'pi-pane-1',
                 name: 'demo-skill',
+                process_id: 'proc-1',
+                generation: '1',
             });
             return { json: { ok: true, reason: '' } };
         });
         global.fetch = fetchMock;
         const tab = bridgeTab();
+        // The browser view lags the bridge: the origin of the answer
+        // is what the click must carry.
+        tab.piBridge.generation = '77';
         const { tm, dropup } = harness(tab);
         tm.renderPresets('pi');
         skillsTrigger(tm).click();
@@ -193,11 +201,7 @@ describe('bridge skills control', () => {
                 !url.includes('/api/pi-bridge/skills?')
             )
                 return { json: { ok: false, reason: 'unknown-skill' } };
-            return {
-                skills: [{ name: 'demo-skill', description: 'demo' }],
-                truncated: false,
-                unavailable: false,
-            };
+            return skillList();
         });
         global.fetch = fetchMock;
         const tab = bridgeTab();
@@ -223,11 +227,7 @@ describe('bridge skills control', () => {
                 !url.includes('/api/pi-bridge/skills?')
             )
                 throw new Error('offline');
-            return {
-                skills: [{ name: 'demo-skill', description: 'demo' }],
-                truncated: false,
-                unavailable: false,
-            };
+            return skillList();
         });
         global.fetch = fetchMock;
         const tab = bridgeTab();
@@ -260,14 +260,7 @@ describe('bridge skills loss and reconnect', () => {
         const fetchMock = mockFetch(
             (url) =>
                 new Promise((resolve) => {
-                    release = () =>
-                        resolve({
-                            skills: [
-                                { name: 'demo-skill', description: 'demo' },
-                            ],
-                            truncated: false,
-                            unavailable: false,
-                        });
+                    release = () => resolve(skillList());
                 }),
         );
         global.fetch = fetchMock;
@@ -291,11 +284,7 @@ describe('bridge skills loss and reconnect', () => {
     });
 
     it('ignores a click on a detached row after eligibility is lost', async () => {
-        const fetchMock = mockFetch(() => ({
-            skills: [{ name: 'demo-skill', description: 'demo' }],
-            truncated: false,
-            unavailable: false,
-        }));
+        const fetchMock = mockFetch(() => skillList());
         global.fetch = fetchMock;
         const tab = bridgeTab();
         const { tm, dropup } = harness(tab);
@@ -317,11 +306,7 @@ describe('bridge skills loss and reconnect', () => {
     });
 
     it('works again after the capability returns', async () => {
-        const fetchMock = mockFetch(() => ({
-            skills: [{ name: 'demo-skill', description: 'demo' }],
-            truncated: false,
-            unavailable: false,
-        }));
+        const fetchMock = mockFetch(() => skillList());
         global.fetch = fetchMock;
         const tab = bridgeTab();
         const { tm, dropup } = harness(tab);
@@ -351,11 +336,7 @@ describe('bridge skills runtime fencing', () => {
                 return new Promise((resolve) => {
                     release = () => resolve({ ok: false, status: 503 });
                 });
-            return {
-                skills: [{ name: 'demo-skill', description: 'demo' }],
-                truncated: false,
-                unavailable: false,
-            };
+            return skillList();
         });
         return {
             fetchMock,
@@ -433,14 +414,7 @@ describe('bridge skills runtime fencing', () => {
         const fetchMock = mockFetch(
             () =>
                 new Promise((resolve) => {
-                    release = () =>
-                        resolve({
-                            skills: [
-                                { name: 'demo-skill', description: 'demo' },
-                            ],
-                            truncated: false,
-                            unavailable: false,
-                        });
+                    release = () => resolve(skillList());
                 }),
         );
         global.fetch = fetchMock;
@@ -464,11 +438,7 @@ describe('bridge skills runtime fencing', () => {
     });
 
     it('ignores a row click after the runtime generation moved', async () => {
-        const fetchMock = mockFetch(() => ({
-            skills: [{ name: 'demo-skill', description: 'demo' }],
-            truncated: false,
-            unavailable: false,
-        }));
+        const fetchMock = mockFetch(() => skillList());
         global.fetch = fetchMock;
         const tab = bridgeTab();
         const { tm, dropup } = harness(tab);
@@ -486,5 +456,84 @@ describe('bridge skills runtime fencing', () => {
         await new Promise((r) => setTimeout(r, 10));
         expect(fetchMock.mock.calls.length).toBe(callsBefore);
         expect(tm.app.showToast).not.toHaveBeenCalled();
+    });
+
+    it('refuses a stale origin instead of claiming an unknown outcome', async () => {
+        const fetchMock = mockFetch((url) => {
+            if (
+                url.includes('/api/pi-bridge/skill') &&
+                !url.includes('/api/pi-bridge/skills?')
+            )
+                return { json: { ok: false, reason: 'unavailable' } };
+            return skillList();
+        });
+        global.fetch = fetchMock;
+        const tab = bridgeTab();
+        const { tm, dropup } = harness(tab);
+        tm.renderPresets('pi');
+        skillsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('demo-skill');
+        });
+        dropup.querySelector('.dropup-model-btn').click();
+        await vi.waitFor(() => {
+            expect(tm.app.showToast).toHaveBeenCalled();
+        });
+        // The bridge refused before dispatch: the outcome is known.
+        expect(tm.app.showToast.mock.calls.at(-1)[0]).toContain('unavailable');
+        expect(tm.app.showToast.mock.calls.at(-1)[0]).not.toContain('unknown');
+        // A refused dispatch is never resent.
+        const invokes = fetchMock.mock.calls.filter((call) => {
+            const url = String(call[0]);
+            return (
+                url.includes('/api/pi-bridge/skill') &&
+                !url.includes('/api/pi-bridge/skills?')
+            );
+        });
+        expect(invokes).toHaveLength(1);
+    });
+
+    it('does not lock the rows of a replacement runtime', async () => {
+        const io = invokeMock();
+        global.fetch = io.fetchMock;
+        const tab = bridgeTab();
+        const { tm, dropup } = harness(tab);
+        tm.renderPresets('pi');
+        skillsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('demo-skill');
+        });
+        dropup.querySelector('.dropup-model-btn').click();
+        await vi.waitFor(() => {
+            expect(io.started()).toBe(true);
+        });
+
+        // The runtime is replaced while the dispatch is still in flight.
+        tab.piBridge.generation = '2';
+        tm.renderPresets('pi');
+        skillsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('demo-skill');
+        });
+        // The older runtime's dispatch must not disable the new rows.
+        expect(dropup.querySelector('.dropup-model-btn').disabled).toBe(false);
+    });
+
+    it('lists no rows when the answer carries no origin', async () => {
+        const fetchMock = mockFetch(() => ({
+            skills: [{ name: 'demo-skill', description: 'demo' }],
+            truncated: false,
+            unavailable: false,
+        }));
+        global.fetch = fetchMock;
+        const tab = bridgeTab();
+        const { tm, dropup } = harness(tab);
+        tm.renderPresets('pi');
+        skillsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('Pi skill list unavailable');
+        });
+        // No row can be dispatched without an origin, so none is shown.
+        expect(dropup.querySelector('.dropup-model-btn')).toBeFalsy();
     });
 });

@@ -2,12 +2,19 @@ package pibridge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
 
 	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
 )
+
+// ErrSkillOriginStale reports that the runtime which produced the
+// caller's skill list is no longer the live peer. The request is
+// refused before any dispatch, so the outcome is a refusal and never
+// an unknown one.
+var ErrSkillOriginStale = errors.New("pibridge: skill origin stale")
 
 // SkillRef is one skill the Pi session knows. Name is the bare skill
 // name without the "skill:" command prefix; Description is the host's
@@ -28,6 +35,11 @@ type SkillsResult struct {
 	Skills      []SkillRef
 	Truncated   bool
 	Unavailable bool
+	// ProcessID and Generation identify the peer that answered. A
+	// caller must echo them to invoke a skill, so a list is never used
+	// against a runtime that replaced the one it came from.
+	ProcessID  string
+	Generation uint64
 }
 
 // InvokeSkillResult is one fulfilled on-demand skill invocation. OK
@@ -132,12 +144,19 @@ func (s *Server) RequestSkills(ctx context.Context, processID string) (SkillsRes
 // waits for the correlated ack. Failure semantics mirror
 // RequestSkills; an ack from a replaced peer is rejected the same way.
 // The name is bounded here, so an oversized name never reaches the peer.
-func (s *Server) RequestInvokeSkill(ctx context.Context, processID, name string) (InvokeSkillResult, error) {
+//
+// The caller must name the peer that produced its skill list. A
+// session that moved on answers ErrSkillOriginStale before anything is
+// queued, so a click never lands in a different runtime.
+func (s *Server) RequestInvokeSkill(ctx context.Context, processID string, generation uint64, name string) (InvokeSkillResult, error) {
 	if err := ctx.Err(); err != nil {
 		return InvokeSkillResult{}, err
 	}
 	if !IsSkillName(name) {
 		return InvokeSkillResult{}, fmt.Errorf("pibridge: invalid skill name")
+	}
+	if processID == "" || generation == 0 {
+		return InvokeSkillResult{}, fmt.Errorf("pibridge: invalid skill origin")
 	}
 	l, ok := s.reg.lookupByProcess(processID)
 	if !ok {
@@ -149,6 +168,10 @@ func (s *Server) RequestInvokeSkill(ctx context.Context, processID, name string)
 	if p == nil || l.state == leaseRevoked {
 		l.mu.Unlock()
 		return InvokeSkillResult{}, fmt.Errorf("pibridge: no live peer")
+	}
+	if l.processID != processID || p.generation != generation || l.maxGen != generation {
+		l.mu.Unlock()
+		return InvokeSkillResult{}, ErrSkillOriginStale
 	}
 	if !slices.Contains(l.caps, CapabilitySkills) {
 		l.mu.Unlock()
@@ -231,7 +254,10 @@ func (s *Server) deliverSkills(l *lease, p *peer, res *pibridgepb.SkillsResponse
 	if !ok {
 		return
 	}
-	result := SkillsResult{Truncated: res.GetTruncated(), Unavailable: res.GetUnavailable()}
+	result := SkillsResult{
+		Truncated: res.GetTruncated(), Unavailable: res.GetUnavailable(),
+		ProcessID: l.processID, Generation: p.generation,
+	}
 	if !result.Unavailable {
 		skills := make([]SkillRef, 0, len(res.GetSkills()))
 		for _, s := range res.GetSkills() {

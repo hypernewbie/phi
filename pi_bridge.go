@@ -410,9 +410,11 @@ func (b *Bridge) RequestPaneSkills(ctx context.Context, paneID string) (pibridge
 	return b.server.RequestSkills(ctx, processID)
 }
 
-// RequestPaneInvokeSkill resolves a pane to its bridge process and asks
-// the live Pi session to send one skill. The caller owns the deadline.
-func (b *Bridge) RequestPaneInvokeSkill(ctx context.Context, paneID, name string) (pibridge.InvokeSkillResult, error) {
+// RequestPaneInvokeSkill requires the origin captured by the list that
+// produced the row: it never resolves a replacement process or
+// generation on the caller's behalf. A stale origin is refused before
+// any dispatch, so the caller learns the skill never left Phi.
+func (b *Bridge) RequestPaneInvokeSkill(ctx context.Context, paneID, originProcessID string, generation uint64, name string) (pibridge.InvokeSkillResult, error) {
 	if b == nil {
 		return pibridge.InvokeSkillResult{}, fmt.Errorf("pi-bridge: disabled")
 	}
@@ -427,7 +429,10 @@ func (b *Bridge) RequestPaneInvokeSkill(ctx context.Context, paneID, name string
 	if !ok || !managed {
 		return pibridge.InvokeSkillResult{}, fmt.Errorf("pi-bridge: pane not managed")
 	}
-	return b.server.RequestInvokeSkill(ctx, processID, name)
+	if processID != originProcessID {
+		return pibridge.InvokeSkillResult{}, pibridge.ErrSkillOriginStale
+	}
+	return b.server.RequestInvokeSkill(ctx, originProcessID, generation, name)
 }
 
 // RequestPaneThinkingLevels reads supported levels and rejects a result if
