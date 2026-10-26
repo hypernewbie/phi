@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
+import { HISTORY_BOOK_BYTES } from '../web/terminal-history.js';
 import { startPhi } from './_server.js';
 interface BookTerminal {
     element?: HTMLElement;
@@ -181,7 +182,8 @@ while True: time.sleep(1)
         expect(before?.lines.join('\n')).not.toContain('\ufffd');
         expect(
             ranges.every(
-                (r) => r.bytes === r.end - r.from && r.bytes <= (2 << 20) / 20,
+                (r) =>
+                    r.bytes === r.end - r.from && r.bytes <= HISTORY_BOOK_BYTES,
             ),
         ).toBe(true);
         // A second book progresses into the older source, not a whole replay.
