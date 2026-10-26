@@ -172,8 +172,8 @@ describe("pet media catalog", () => {
 
 describe("stationary animation chain", () => {
   it("retains the act catalog and excludes the current animation when requested", () => {
-    expect(ACTS()).toHaveLength(81);
-    expect(new Set(ACTS()).size).toBe(81);
+    expect(ACTS()).toHaveLength(96);
+    expect(new Set(ACTS()).size).toBe(96);
     const rng = vi.fn().mockReturnValue(0.5);
     expect(pick(["a", "b"], null, rng)).toBe("b");
     expect(pick(["a", "b", "c"], "b", rng)).toBe("c");

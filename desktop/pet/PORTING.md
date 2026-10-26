@@ -1,7 +1,7 @@
 # PORTING-PHI: syncing dsh-pet into phi
 
 > Tracked in phi. The untracked upstream-side copy lives at `/Users/n0mad/code/dsh-pet/PORTING-PHI.md`. Audience: whoever ports the next
-> dsh-pet version into phi. Snapshot: dsh-pet @ `52b313c`, 2026-08-22.
+> dsh-pet version into phi. Snapshot: dsh-pet @ `dfc0396`, 2026-10-27.
 
 Phi consumes two things from this repo. Everything else is not ported.
 
@@ -9,7 +9,7 @@ Phi consumes two things from this repo. Everything else is not ported.
 
 | dsh-pet source | phi destination | how |
 | --- | --- | --- |
-| `dsh-pet/assets/thumb/*.webm` | `desktop/pet/assets/thumb/` | byte copy (`cp`) |
+| `dsh-pet/assets/webm/*.webm` | `desktop/pet/assets/thumb/` | byte copy (`cp`) |
 | `dsh-pet/assets/config.jsonc` VALUES | `desktop/pet/src/pet-config.ts` | manual value port |
 
 Phi does NOT read `config.jsonc` at runtime. It embeds a typed fork
@@ -18,7 +18,7 @@ config, port the values by hand. Tests prove the port; see below.
 
 ## Sync procedure (new dsh-pet release)
 
-1. Copy media: `cp dsh-pet/assets/thumb/*.webm <phi>/desktop/pet/assets/thumb/`
+1. Copy media: `cp dsh-pet/assets/webm/*.webm <phi>/desktop/pet/assets/thumb/`
    Also delete phi-side webm whose names no longer exist upstream.
 2. Port config values into `pet-config.ts`:
    - `animations.idle`, `.turn`, `.drag`, `.clicks`, `.moves` (pool arrays)
@@ -52,6 +52,17 @@ Phi keeps the config keys but ignores them: multi-pet (`pets`), turn/facing
 mirror (`animations.turn`, `noMirror` gating), screen movement
 (`animations.moves`), settings i18n, `assets/preview/` GIFs. Do not delete
 these keys when porting.
+
+## Gotchas from the 2026-10-27 port
+
+- Upstream moved `assets/thumb/` to `dsh-pet/assets/webm/` (commit `9097f8c`,
+  macOS/Safari HEVC-alpha dual format). Same VP9-alpha bytes, new path. The
+  repo is now a monorepo: everything sits under `dsh-pet/`.
+- Upstream added `events.{balance,whisper,workStatus}` animation pools (15 new
+  webm, 91 -> 106 total). phi has no balance/whisper/work-status triggers, so
+  phi plays those 15 through the `小动作` random category instead. If phi ever
+  grows event triggers, move them out of `小动作` into an `events` block.
+- `深度思考碎碎念.webm` was re-encoded upstream; the port re-synced it.
 
 ## Gotchas from the 2026-08-22 port
 

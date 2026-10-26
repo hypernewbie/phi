@@ -1,5 +1,5 @@
 /** Embedded pet animation config — a typed value-fork of dsh-pet's
- *  assets/config.jsonc @ 52b313c (2026-08-22). No runtime parsing: data,
+ *  assets/config.jsonc @ dfc0396 (2026-10-27). No runtime parsing: data,
  *  checked by `satisfies` at compile time and config-manifest.test.ts at
  *  test time. Port procedure: desktop/pet/PORTING.md. */
 import type { PetConfig } from "./pet-bridge.js";
@@ -40,6 +40,24 @@ export const PET_CONFIG = {
           "写代码",
           "摇扇纳凉",
           "晨间刷牙",
+          // dsh @dfc0396 events.* pools (balance / whisper / work status). phi has no
+          // event triggers, so they join the random act chain instead of upstream's
+          // event-only path. PORTING.md records the divergence.
+          "余额-钱袋满溢",
+          "余额-金袋叮当",
+          "余额-钱袋如常",
+          "余额-数金皱眉",
+          "余额-袋空如洗",
+          "余额-分文不剩",
+          "碎碎念-擦桌碎碎念",
+          "碎碎念-发呆碎碎念",
+          "碎碎念-对屏碎碎念",
+          "工作状态-思考冒泡",
+          "工作状态-忙碌点按",
+          "工作状态-清点归档",
+          "工作状态-原地踱步张望",
+          "工作状态-雀跃庆祝",
+          "工作状态-垂头叹气冒汗",
         ],
       },
       {
