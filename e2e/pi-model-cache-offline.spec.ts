@@ -97,8 +97,10 @@ test('model picker opens from cache when the catalog request fails', async ({
         await trigger.click();
         await expect(dropup).toBeHidden({ timeout: 5_000 });
         expect(
-            await page.evaluate(() =>
-                window.localStorage.getItem('phi.piRpc.models.pi'),
+            await page.evaluate(
+                (id) =>
+                    window.localStorage.getItem(`phi.piRpc.models.pi:${id}`),
+                paneId,
             ),
         ).toContain('"models"');
 

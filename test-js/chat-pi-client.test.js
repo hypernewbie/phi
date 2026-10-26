@@ -247,6 +247,9 @@ describe('Pi RPC ControlClient', () => {
         ).rejects.toThrow(/message must be a string/);
         expect(socket.sent).toHaveLength(1);
         expect(socket.sent[0].payload.$case).toBe('hello');
+        // Only the stability timer is armed; the refused calls armed nothing.
+        expect(vi.getTimerCount()).toBe(1);
+        await vi.advanceTimersByTimeAsync(10_000);
         expect(vi.getTimerCount()).toBe(0);
     });
 
@@ -369,6 +372,56 @@ describe('Pi RPC ControlClient', () => {
         expect(report).toHaveBeenCalledTimes(1);
         expect(report).toHaveBeenLastCalledWith('control frame is empty');
         broken.close();
+    });
+
+    it('backs off further when a socket opens and drops again instead of recovering', () => {
+        vi.useFakeTimers();
+        vi.stubGlobal('WebSocket', FakeWebSocket);
+        const client = connectControl();
+        const delays = [];
+        for (let attempt = 0; attempt < 3; attempt++) {
+            const socket = FakeWebSocket.instances[attempt];
+            socket.open();
+            socket.close();
+            const before = FakeWebSocket.instances.length;
+            let waited = 0;
+            // 0.7–1.3 jitter straddles the nominal delay.
+            while (FakeWebSocket.instances.length === before) {
+                vi.advanceTimersByTime(100);
+                waited += 100;
+                if (waited > 20_000) break;
+            }
+            delays.push(waited);
+        }
+        client.close();
+        expect(FakeWebSocket.instances).toHaveLength(4);
+        // Each reopen/close cycle costs more than the one before it.
+        expect(delays[1]).toBeGreaterThan(delays[0]);
+        expect(delays[2]).toBeGreaterThan(delays[1]);
+    });
+
+    it('resets the backoff once a socket stays up long enough to count', () => {
+        vi.useFakeTimers();
+        vi.stubGlobal('WebSocket', FakeWebSocket);
+        const client = connectControl();
+        FakeWebSocket.instances[0].open();
+        FakeWebSocket.instances[0].close();
+        vi.advanceTimersByTime(20_000);
+        const second = FakeWebSocket.instances[1];
+        second.open();
+        // Hold this one well past the stability window, then drop it.
+        vi.advanceTimersByTime(30_000);
+        second.close();
+        const before = FakeWebSocket.instances.length;
+        let waited = 0;
+        while (FakeWebSocket.instances.length === before) {
+            vi.advanceTimersByTime(100);
+            waited += 100;
+            if (waited > 20_000) break;
+        }
+        client.close();
+        // First-attempt delay again, not the third step of the backoff.
+        expect(waited).toBeLessThanOrEqual(1_500);
     });
 
     it('rejects oversized outbound calls without closing the shared stream', async () => {

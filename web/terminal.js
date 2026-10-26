@@ -5069,11 +5069,12 @@ export class TabManager {
         // Cache first: the menu never waits for the catalog. A cached list
         // renders immediately and the refresh replaces it in place.
         this._piRpcModelsNote = null;
-        const cached = this._loadPiRpcModelCache(activeTab.coder);
+        const cached = this._loadPiRpcModelCache(activeTab.coder, paneId);
         const loading = document.createElement('div');
         loading.className = 'dropup-row pi-rpc-dropup-message';
         if (cached) {
-            this._piRpcModels = cached;
+            this._piRpcModels = cached.models;
+            this._piBridgeModelsTruncated = cached.truncated === true;
             this._buildPiRpcModelList();
         } else {
             loading.textContent = 'Loading Pi models…';
@@ -5136,6 +5137,7 @@ export class TabManager {
                 this._piRpcModelsNote = null;
                 this._savePiRpcModelCache(
                     activeTab.coder,
+                    paneId,
                     this._piRpcModels,
                 );
                 this._buildPiRpcModelList();
@@ -5202,16 +5204,7 @@ export class TabManager {
                 if (this.getActiveTab()?.paneId === paneId)
                     this.renderPresets(coder);
             }
-            const next = this._piRpcModelNextByPane?.get(paneId);
-            this._piRpcModelNextByPane?.delete(paneId);
-            if (next) {
-                this._setPiRpcModel(
-                    next.paneId,
-                    next.coder,
-                    next.provider,
-                    next.modelId,
-                );
-            }
+            this._flushPiRpcModelNext(paneId);
         };
         Promise.resolve(setterResult).then(
             () => settle(null),
@@ -5219,17 +5212,53 @@ export class TabManager {
         );
     }
 
-    _clearPiRpcModelPending(paneId) {
+    // A pick that never left the browser is still the user's latest choice, so
+    // it waits here until its pane can accept it again instead of being
+    // deleted with the failed request.
+    _flushPiRpcModelNext(paneId) {
+        if (this._piRpcModelInflight?.has(paneId)) return;
+        const next = this._piRpcModelNextByPane?.get(paneId);
+        if (!next) return;
+        const tab = this.tabs?.get(paneId);
+        if (!tab) {
+            this._piRpcModelNextByPane.delete(paneId);
+            return;
+        }
+        if (tab.coder === 'pi') {
+            if (!this._piBridgeModelsEligible(tab)) return;
+        } else if (tab.coder !== 'pi-rpc') {
+            this._piRpcModelNextByPane.delete(paneId);
+            return;
+        }
+        this._piRpcModelNextByPane.delete(paneId);
+        this._setPiRpcModel(
+            next.paneId,
+            next.coder,
+            next.provider,
+            next.modelId,
+        );
+    }
+
+    // The outcome of a written request is unknown once its pane loses the
+    // bridge: drop the slot so a late reply cannot speak for a dead pane. The
+    // never-sent queue is untouched and flushes when the pane returns.
+    _dropPiRpcModelInflight(paneId) {
         this._piRpcModelInflight?.delete(paneId);
-        this._piRpcModelNextByPane?.delete(paneId);
         if (this._piRpcModelPending?.paneId === paneId)
             this._piRpcModelPending = null;
     }
 
-    _piRpcModelCacheKey(coder) {
-        return coder === 'pi'
-            ? 'phi.piRpc.models.pi'
-            : 'phi.piRpc.models.pi-rpc';
+    // Full teardown: the pane is gone, so its queued pick has no future owner.
+    _clearPiRpcModelPending(paneId) {
+        this._dropPiRpcModelInflight(paneId);
+        this._piRpcModelNextByPane?.delete(paneId);
+    }
+
+    _piRpcModelCacheKey(coder, paneId) {
+        // Catalogs are session-scoped (a scoped model list belongs to one
+        // pane), so the key carries the pane or another pane's rows would
+        // render as this one's.
+        return `phi.piRpc.models.${coder}:${paneId ?? ''}`;
     }
 
     // Only plain rows leave here: a corrupt cached entry must not reach the
@@ -5250,38 +5279,44 @@ export class TabManager {
     }
 
     // The last good catalog lives in memory first: localStorage can refuse a
-    // write (quota, private mode) and the menu must still open from it.
-    _loadPiRpcModelCache(coder) {
-        const key = this._piRpcModelCacheKey(coder);
+    // write (quota, private mode) and the menu must still open from it. A
+    // stored empty list is a real answer and is kept as one.
+    _loadPiRpcModelCache(coder, paneId) {
+        const key = this._piRpcModelCacheKey(coder, paneId);
         const memory = this._piRpcModelMemory?.get(key);
         if (memory) return memory;
         try {
             const raw = window.localStorage?.getItem(key);
             if (typeof raw !== 'string' || !raw) return null;
             const parsed = JSON.parse(raw);
-            const models = this._cleanPiRpcModelRows(parsed?.models);
-            if (models.length === 0) return null;
+            if (!Array.isArray(parsed?.models)) return null;
+            const entry = {
+                models: this._cleanPiRpcModelRows(parsed.models),
+                truncated: parsed.truncated === true,
+            };
             if (!this._piRpcModelMemory) this._piRpcModelMemory = new Map();
-            this._piRpcModelMemory.set(key, models);
-            return models;
+            this._piRpcModelMemory.set(key, entry);
+            return entry;
         } catch (_error) {
             return null;
         }
     }
 
-    _savePiRpcModelCache(coder, models) {
-        const rows = this._cleanPiRpcModelRows(models);
-        if (rows.length === 0) return;
-        const key = this._piRpcModelCacheKey(coder);
+    _savePiRpcModelCache(coder, paneId, models) {
+        const entry = {
+            models: this._cleanPiRpcModelRows(models),
+            truncated: this._piBridgeModelsTruncated === true,
+        };
+        const key = this._piRpcModelCacheKey(coder, paneId);
         if (!this._piRpcModelMemory) this._piRpcModelMemory = new Map();
-        this._piRpcModelMemory.set(key, rows);
+        this._piRpcModelMemory.set(key, entry);
         try {
             window.localStorage?.setItem(
                 key,
                 JSON.stringify({
                     at: Date.now(),
-                    truncated: this._piBridgeModelsTruncated === true,
-                    models: rows,
+                    truncated: entry.truncated,
+                    models: entry.models,
                 }),
             );
         } catch (_error) {
@@ -6755,6 +6790,7 @@ export class TabManager {
         // The pane is leaving the map, so bridge Thinking ownership goes with
         // it; a stuck pending would block the Thinking controls elsewhere.
         this._invalidatePiBridgeThinking(tab);
+        this._clearPiRpcModelPending(tab.paneId);
         this.tabs.delete(paneId);
 
         if (!preserveStorage) {
@@ -10594,7 +10630,7 @@ export class TabManager {
                 this._piRpcModels = null;
                 this._piBridgeModelsTruncated = false;
                 this._piBridgeModelsUnavailable = false;
-                this._clearPiRpcModelPending(activeTab.paneId);
+                this._dropPiRpcModelInflight(activeTab.paneId);
                 const modelDropup = document.getElementById('pi-rpc-model-dropup');
                 modelDropup?.classList.add('hidden');
                 modelDropup?.replaceChildren();
@@ -12579,12 +12615,13 @@ export class TabManager {
     // Compact controls all re-derive from the retained view.
     _refreshPiBridgeModels(tab) {
         if (tab?.coder !== 'pi') return;
-        if (
-            this._piRpcModelPending?.paneId === tab.paneId &&
-            !this._piBridgeModelsEligible(tab)
-        ) {
-            this._clearPiRpcModelPending(tab.paneId);
-        }
+        const eligible = this._piBridgeModelsEligible(tab);
+        // Per pane, not through the last-started pointer: another pane's
+        // request must not keep this one's dead slot alive.
+        if (!eligible && this._piRpcModelInflight?.has(tab.paneId))
+            this._dropPiRpcModelInflight(tab.paneId);
+        // A pick the user made while the bridge was away goes out now.
+        if (eligible) this._flushPiRpcModelNext(tab.paneId);
         // Thinking cleanup first so the single renderPresets below owns the
         // open-picker re-render with settled pending state (one levels fetch).
         this._refreshPiBridgeThinking(tab);

@@ -36,6 +36,9 @@ export const CompactCallTimeout = 605_000;
 // cheap; a short blip still retries within about a second.
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 15_000;
+// A socket that upgrades and dies again must not reset the backoff: only a
+// connection that stays usable this long counts as recovery.
+const RECONNECT_STABLE_MS = 10_000;
 
 // Close codes the Phi server sends when this stream cannot work at all:
 // 1002 protocol error, 1009 message too big, 1011 event conversion/encoding
@@ -103,6 +106,7 @@ export function connectControl(
     const pending = new Map<string, PendingCall>();
     let ws: WebSocket | null = null;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let stableTimer: ReturnType<typeof setTimeout> | null = null;
     let retry = 0;
     let nextId = 1;
     let dialing = false;
@@ -165,6 +169,10 @@ export function connectControl(
         const socket = ws;
         ws = null;
         opened = false;
+        if (stableTimer !== null) {
+            clearTimeout(stableTimer);
+            stableTimer = null;
+        }
         if (!socket) return;
         socket.onopen = null;
         socket.onmessage = null;
@@ -272,7 +280,11 @@ export function connectControl(
         socket.onopen = () => {
             dialing = false;
             if (closed || broken || socket !== ws) return;
-            retry = 0;
+            if (stableTimer !== null) clearTimeout(stableTimer);
+            stableTimer = setTimeout(() => {
+                stableTimer = null;
+                retry = 0;
+            }, RECONNECT_STABLE_MS);
             let hello: Uint8Array<ArrayBuffer>;
             try {
                 hello = encodeHello(PROTOCOL_VERSION);

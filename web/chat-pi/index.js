@@ -507,6 +507,10 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
             buffer.applySnapshot(data);
             applyState(data.state);
             reconcileOutgoing();
+            // A hydrate that lands proves the stream is alive again, so a
+            // stale error line from the drop must not stay in the header.
+            if (ready && !exited)
+                status.textContent = 'Ready';
             paint();
             // A hydrate replaces the authoritative settled transcript.
             // Reset completion flushes in the next microtask; initial and
@@ -529,11 +533,12 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
             }
         });
     };
-    // Hydrate is authoritative: an optimistic record that was written and is
-    // already a user message in the snapshot landed, so its local row must go.
-    // Matching is one-to-one against the rows seen this pass, so an older,
-    // identical message in history cannot retire a prompt that never landed.
-    // Records that are absent stay visible as queued or unconfirmed work.
+    // Hydrate is authoritative: a record that was written and is already a
+    // user message in the snapshot landed, so its local row must go. Matching
+    // runs from the newest message backwards, so a repeated text reconciles
+    // the prompt just sent instead of an identical one from history, and each
+    // index is claimed once. Only a queued record is exempt: it never left
+    // the browser, so no snapshot can contain it.
     const reconcileOutgoing = () => {
         if (outgoing.length === 0)
             return;
@@ -542,17 +547,21 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
         const kept = [];
         let changed = false;
         for (const item of outgoing) {
-            // Only a written record can have landed. A queued one never left
-            // the browser, and an unconfirmed one is exactly what the user
-            // must still see. Neither may be retired by a text match.
-            if (item.state !== 'sending' && item.state !== 'sent') {
+            if (item.state === 'queued') {
                 kept.push(item);
                 continue;
             }
             const text = renderedUserText(item.text);
-            const index = messages.findIndex((message, position) => !claimed.has(position) &&
-                message?.role === 'user' &&
-                renderedUserText(message.content) === text);
+            let index = -1;
+            for (let position = messages.length - 1; position >= 0; position--) {
+                const message = messages[position];
+                if (!claimed.has(position) &&
+                    message?.role === 'user' &&
+                    renderedUserText(message.content) === text) {
+                    index = position;
+                    break;
+                }
+            }
             if (index < 0) {
                 kept.push(item);
                 continue;
@@ -561,7 +570,7 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
             changed = true;
             // Keep the turn marker on the transcript row it now belongs to.
             if (activePrompt?.id === item.id)
-                activePrompt = { ...item, origin: index };
+                activePrompt = { ...item, state: 'sent', origin: index };
         }
         if (!changed)
             return;
@@ -592,13 +601,19 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
         // A row retired at the turn boundary may still be unacknowledged. If
         // Pi did not clearly take it, put it back so the text is never lost.
         const retain = (state) => {
+            local.state = state;
             if (!outgoing.includes(local) && state !== 'sent') {
                 outgoing.push(local);
                 turnPrompts.push(local);
             }
-            local.state = state;
-            if (activePrompt?.id === local.id)
-                activePrompt = { ...local, origin: activePrompt.origin };
+            if (activePrompt?.id === local.id) {
+                activePrompt = { ...activePrompt, state };
+            }
+            else if (!activePrompt && outgoing.includes(local)) {
+                // The turn boundary retired this record before the failure
+                // landed, so nothing would render the text we just retained.
+                activePrompt = { ...local, origin: 'optimistic' };
+            }
         };
         void invokeControl(wire, 'prompt', currentSid, {
             message: dispatch.message,

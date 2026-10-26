@@ -624,16 +624,17 @@ export function createReviewTranscriptView(root, options) {
         // Rows for prompts still awaiting confirmation are drawn whatever the
         // active prompt resolved to: once the newest prompt reconciles to a
         // transcript index, an older unconfirmed one must stay on screen.
-        const pending = (activeTurn.outgoing?.length ?? 0) > 0
-            ? activeTurn.outgoing
-            : activeTurn.promptText
+        // An empty list is authoritative — the fallback only covers a state
+        // that carries prompt text and no list at all.
+        const pending = activeTurn.outgoing ??
+            (activeTurn.promptOrigin === 'optimistic' && activeTurn.promptText
                 ? [
                     {
                         text: activeTurn.promptText,
                         stateLabel: activeTurn.stateLabel,
                     },
                 ]
-                : [];
+                : []);
         for (const item of pending) {
             const optimistic = buildUserMessageBlock([
                 {

@@ -380,6 +380,127 @@ describe('bridge models picker', () => {
         expect(dropup.classList.contains('hidden')).toBe(true);
     });
 
+    it('keeps a pick made while the bridge is away and sends it when it returns', async () => {
+        const tab = bridgeTab();
+        const { tm } = harness(tab);
+        const posts = [];
+        mockFetch((url, options) => {
+            if (options?.method === 'POST') {
+                posts.push(JSON.parse(options.body));
+                return { json: { ok: true, reason: '' } };
+            }
+            return {
+                models: [
+                    { provider: 'b', id: 'y' },
+                    { provider: 'b', id: 'z' },
+                ],
+                truncated: false,
+                unavailable: false,
+            };
+        });
+
+        // First pick is written and stays pending.
+        tm._setPiRpcModel(tab.paneId, 'pi', 'b', 'y');
+        // Second pick queues behind it.
+        tm._setPiRpcModel(tab.paneId, 'pi', 'b', 'z');
+        expect(tm._piRpcModelNextByPane.get(tab.paneId)).toMatchObject({
+            provider: 'b',
+            modelId: 'z',
+        });
+
+        // The bridge drops: the unknown outcome goes, the queued pick stays.
+        tab.piBridge = {
+            ...tab.piBridge,
+            state: 'unavailable',
+            connected: false,
+        };
+        tm._refreshPiBridgeModels(tab);
+        expect(tm._piRpcModelPending).toBeNull();
+        expect(tm._piRpcModelNextByPane.get(tab.paneId)).toMatchObject({
+            modelId: 'z',
+        });
+
+        // Bridge returns: the queued pick is what the user last asked for.
+        tab.piBridge = {
+            state: 'managed',
+            connected: true,
+            model: 'a/x',
+            capabilities: ['pi.lifecycle.v1', 'pi.models.v1'],
+        };
+        tm._refreshPiBridgeModels(tab);
+        await vi.waitFor(() => {
+            expect(posts.at(-1)).toMatchObject({ provider: 'b', model: 'z' });
+        });
+        expect(tm._piRpcModelNextByPane.has(tab.paneId)).toBe(false);
+    });
+
+    it('scopes the cached catalog to its pane instead of the coder', async () => {
+        const tabA = bridgeTab();
+        const { tm } = harness(tabA);
+        const tabB = bridgeTab({
+            paneId: 'pi-pane-2',
+            piBridge: {
+                state: 'managed',
+                connected: true,
+                model: 'a/x',
+                capabilities: ['pi.lifecycle.v1', 'pi.models.v1'],
+            },
+        });
+        tm.tabs.set(tabB.paneId, tabB);
+        tm._savePiRpcModelCache('pi', tabA.paneId, [
+            { provider: 'a', id: 'only-a' },
+        ]);
+        tm._savePiRpcModelCache('pi', tabB.paneId, [
+            { provider: 'b', id: 'only-b' },
+        ]);
+
+        expect(tm._loadPiRpcModelCache('pi', tabA.paneId).models).toEqual([
+            { provider: 'a', id: 'only-a' },
+        ]);
+        expect(tm._loadPiRpcModelCache('pi', tabB.paneId).models).toEqual([
+            { provider: 'b', id: 'only-b' },
+        ]);
+    });
+
+    it('keeps a successful empty answer and a partial-list flag across a reopen', async () => {
+        const tab = bridgeTab();
+        const { tm, dropup } = harness(tab);
+        tm._piBridgeModelsTruncated = true;
+        tm._savePiRpcModelCache('pi', tab.paneId, [{ provider: 'b', id: 'y' }]);
+        expect(tm._loadPiRpcModelCache('pi', tab.paneId)).toEqual({
+            models: [{ provider: 'b', id: 'y' }],
+            truncated: true,
+        });
+
+        // A successful empty answer is proof, not a failure to keep rows for.
+        let empty = false;
+        mockFetch(() => ({
+            models: empty ? [] : [{ provider: 'b', id: 'y' }],
+            truncated: false,
+            unavailable: false,
+        }));
+        tm.renderPresets('pi');
+        modelsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.querySelector('.dropup-model-btn')).not.toBeNull();
+        });
+        empty = true;
+        dropup.classList.add('hidden');
+        modelsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.querySelector('.dropup-model-btn')).toBeNull();
+        });
+        expect(tm._loadPiRpcModelCache('pi', tab.paneId)).toEqual({
+            models: [],
+            truncated: false,
+        });
+        // Reopening with the refresh blocked keeps the authoritative empty
+        // answer rather than resurrecting the rows it replaced.
+        tm._piRpcModels = null;
+        tm._piRpcModelsNote = null;
+        expect(tm._loadPiRpcModelCache('pi', tab.paneId).models).toEqual([]);
+    });
+
     it('keeps the last list when a refresh fails', async () => {
         const tab = bridgeTab();
         const { tm, dropup } = harness(tab);
