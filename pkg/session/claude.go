@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 )
 
 // claudeConfigDir returns Claude Code's config directory, honoring
@@ -173,6 +175,13 @@ func ListClaudeSessions(cwd string) ([]Session, error) {
 // per-profile CLAUDE_CONFIG_DIR. Passing "" falls back to the
 // process env (the default path).
 func listClaudeSessions(cwd, configDir string) ([]Session, error) {
+	return listClaudeSessionsPage(cwd, configDir, 0, 0)
+}
+
+// listClaudeSessionsPage returns sessions newest first. Transcript metadata is
+// parsed only for the selected window; candidate discovery uses directory and
+// file metadata alone.
+func listClaudeSessionsPage(cwd, configDir string, offset, limit int) ([]Session, error) {
 	dir := configDir
 	if dir == "" {
 		dir = claudeConfigDir()
@@ -197,13 +206,18 @@ func listClaudeSessions(cwd, configDir string) ([]Session, error) {
 	}
 	registry := loadClaudeRegistry()
 
-	var sessions []Session
-
 	wantDir := ""
 	if cwd != "" {
 		wantDir = encodeClaudeProjectDir(cwd)
 	}
 
+	type candidate struct {
+		path      string
+		project   string
+		sessionID string
+		mod       time.Time
+	}
+	candidates := make([]candidate, 0, len(dirs))
 	for _, d := range dirs {
 		if !d.IsDir() {
 			continue
@@ -228,40 +242,62 @@ func listClaudeSessions(cwd, configDir string) ([]Session, error) {
 			if ierr != nil {
 				continue
 			}
-			filePath := filepath.Join(projDir, f.Name())
-			sessionID := strings.TrimSuffix(f.Name(), ".jsonl")
-
-			meta := extractClaudeMeta(filePath)
-			reg, hasReg := registry[sessionID]
-
-			title := resolveClaudeTitle(sessionID, renames, reg, hasReg, meta)
-			if title == "" {
-				short := sessionID
-				if len(short) > 8 {
-					short = short[:8]
-				}
-				title = "Claude session " + short + " " + info.ModTime().Format("02 Jan 2006")
-			}
-
-			// Authoritative displayed cwd: when filtered we already know it equals
-			// cwd; otherwise take the transcript's own cwd, then the (imperfect)
-			// decoded dir name as a last resort.
-			sessCwd := cwd
-			if sessCwd == "" {
-				sessCwd = meta.cwd
-				if sessCwd == "" {
-					sessCwd = decodeClaudePath(d.Name())
-				}
-			}
-
-			sessions = append(sessions, Session{
-				ID:          sessionID,
-				Title:       title,
-				Cwd:         sessCwd,
-				Coder:       "claude",
-				TimeUpdated: info.ModTime(),
+			candidates = append(candidates, candidate{
+				path:      filepath.Join(projDir, f.Name()),
+				project:   d.Name(),
+				sessionID: strings.TrimSuffix(f.Name(), ".jsonl"),
+				mod:       info.ModTime(),
 			})
 		}
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].mod.After(candidates[j].mod)
+	})
+
+	if offset < 0 {
+		offset = 0
+	}
+	selected := candidates
+	if limit > 0 {
+		if offset >= len(candidates) {
+			selected = candidates[:0]
+		} else {
+			selected = candidates[offset : offset+min(limit, len(candidates)-offset)]
+		}
+	}
+
+	sessions := make([]Session, 0, len(selected))
+	for _, cand := range selected {
+		meta := extractClaudeMeta(cand.path)
+		reg, hasReg := registry[cand.sessionID]
+
+		title := resolveClaudeTitle(cand.sessionID, renames, reg, hasReg, meta)
+		if title == "" {
+			short := cand.sessionID
+			if len(short) > 8 {
+				short = short[:8]
+			}
+			title = "Claude session " + short + " " + cand.mod.Format("02 Jan 2006")
+		}
+
+		// Authoritative displayed cwd: when filtered we already know it equals
+		// cwd; otherwise take the transcript's own cwd, then the (imperfect)
+		// decoded dir name as a last resort.
+		sessCwd := cwd
+		if sessCwd == "" {
+			sessCwd = meta.cwd
+			if sessCwd == "" {
+				sessCwd = decodeClaudePath(cand.project)
+			}
+		}
+
+		sessions = append(sessions, Session{
+			ID:          cand.sessionID,
+			Title:       title,
+			Cwd:         sessCwd,
+			Coder:       "claude",
+			TimeUpdated: cand.mod,
+		})
 	}
 	return sessions, nil
 }

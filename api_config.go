@@ -12,6 +12,22 @@ import (
 	"strings"
 )
 
+// resolvedSessionListPageSize defaults 0 (unset) to 10 and clamps every other
+// value to 5..100. The sidebar reads the resolved number, so the range lives
+// in one place.
+func resolvedSessionListPageSize(size int) int {
+	switch {
+	case size == 0:
+		return 10
+	case size < 5:
+		return 5
+	case size > 100:
+		return 100
+	default:
+		return size
+	}
+}
+
 func handleConfig(w http.ResponseWriter, r *http.Request) {
 	cfg := loadConfig()
 	hName := strings.ToUpper(reportedHostname(cfg))
@@ -44,6 +60,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		"ui_font_size":                        cfg.UIFontSize,
 		"terminal_font_family":                cfg.TerminalFontFamily,
 		"terminal_font_size":                  cfg.TerminalFontSize,
+		"session_list_page_size":              resolvedSessionListPageSize(cfg.SessionListPageSize),
 		"mobile_scrollback_rows":              cfg.MobileScrollbackRows,
 		"hostname_override":                   cfg.HostnameOverride,
 		"opencode_idle_stop_minutes":          cfg.OpenCodeIdleStopMinutes,

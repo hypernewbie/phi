@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -101,11 +102,19 @@ type claudeAdapterImpl struct{ c coders.Coder }
 // adapter would leak the override. configDir is plumbed through
 // the call chain instead. R5.
 func (a claudeAdapterImpl) List(ctx context.Context, cwd string) ([]Session, error) {
-	var configDir string
+	return listClaudeSessions(cwd, a.configDir())
+}
+
+// ListPage scans only the requested window instead of every transcript.
+func (a claudeAdapterImpl) ListPage(ctx context.Context, cwd string, offset, limit int) ([]Session, error) {
+	return listClaudeSessionsPage(cwd, a.configDir(), offset, limit)
+}
+
+func (a claudeAdapterImpl) configDir() string {
 	if a.c.SidecarClaude != nil {
-		configDir = a.c.SidecarClaude.ConfigDir
+		return a.c.SidecarClaude.ConfigDir
 	}
-	return listClaudeSessions(cwd, configDir)
+	return ""
 }
 
 func (claudeAdapterImpl) Transcript(ctx context.Context, cwd, id string) ([]Message, error) {
@@ -118,6 +127,11 @@ type piAdapterImpl struct{ c coders.Coder }
 
 func (a piAdapterImpl) List(ctx context.Context, cwd string) ([]Session, error) {
 	return ListPiSessions(cwd)
+}
+
+// ListPage scans only the requested window instead of every session file.
+func (a piAdapterImpl) ListPage(ctx context.Context, cwd string, offset, limit int) ([]Session, error) {
+	return listPiSessionsPage(cwd, offset, limit)
 }
 
 func (a piAdapterImpl) Transcript(ctx context.Context, cwd, id string) ([]Message, error) {
@@ -157,6 +171,60 @@ func ListSessions(ctx context.Context, c coders.Coder, cwd string) ([]Session, e
 		return nil, err
 	}
 	return a.List(ctx, cwd)
+}
+
+// ListSessionsPage returns one page of sessions, most recently updated
+// first. limit <= 0 returns every session. Adapters that can scan only the
+// requested window implement pagedLister; the rest are sliced after a full
+// list.
+func ListSessionsPage(ctx context.Context, c coders.Coder, cwd string, offset, limit int) ([]Session, error) {
+	a, err := AdapterFor(c)
+	if err != nil {
+		return nil, err
+	}
+	if limit > 0 {
+		if paged, ok := a.(pagedLister); ok {
+			if offset < 0 {
+				offset = 0
+			}
+			return paged.ListPage(ctx, cwd, offset, limit)
+		}
+	}
+	sessions, err := a.List(ctx, cwd)
+	if err != nil {
+		return nil, err
+	}
+	SortSessions(sessions)
+	return sliceSessions(sessions, offset, limit), nil
+}
+
+// pagedLister is implemented by adapters that can bound title parsing to the
+// requested page instead of reading every session file.
+type pagedLister interface {
+	ListPage(ctx context.Context, cwd string, offset, limit int) ([]Session, error)
+}
+
+// SortSessions orders sessions most recently updated first.
+func SortSessions(sessions []Session) {
+	sort.SliceStable(sessions, func(i, j int) bool {
+		return sessions[i].TimeUpdated.After(sessions[j].TimeUpdated)
+	})
+}
+
+// sliceSessions applies offset/limit to an already sorted slice. limit <= 0
+// returns the whole input regardless of offset.
+func sliceSessions(sessions []Session, offset, limit int) []Session {
+	if limit <= 0 {
+		return sessions
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(sessions) {
+		return sessions[:0]
+	}
+	end := offset + min(limit, len(sessions)-offset)
+	return sessions[offset:end]
 }
 
 // GetTranscript routes through the adapter registry and converts
