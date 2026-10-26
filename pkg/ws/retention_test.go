@@ -293,7 +293,7 @@ func TestRetentionNearFullSegmentRotatesBeforeBreachingRawMax(t *testing.T) {
 	if err := first.SetRecordingDirectory(dir); err != nil {
 		t.Fatal(err)
 	}
-	fill := bytes.Repeat([]byte("f"), retentionSegNominal-1)
+	fill := bytes.Repeat([]byte("f"), int(retentionSegNominal)-1)
 	if err := first.Ingest("p", fill); err != nil {
 		t.Fatal(err)
 	}
