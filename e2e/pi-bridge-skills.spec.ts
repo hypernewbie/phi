@@ -284,74 +284,11 @@ test('bridge-live Pi lists and sends skills, bridge-absent keeps the composer', 
     }
 });
 
-test('a busy agent queues the skill as a follow-up', async ({
-    page,
-    request,
-}) => {
+test('a busy agent queues the skill as a follow-up', async ({ request }) => {
     test.setTimeout(240_000);
-    const provider = await startSkillProvider();
-    const phi = await startPhi({
-        config: { auto_reconnect: 'off' },
-        env: {
-            PI_OFFLINE: '1',
-            PI_SKIP_VERSION_CHECK: '1',
-        },
-        setup(dir) {
-            const agent = join(dir, 'home', '.pi', 'agent');
-            mkdirSync(agent, { recursive: true });
-            writeFileSync(
-                join(agent, 'settings.json'),
-                JSON.stringify({
-                    defaultProjectTrust: 'never',
-                    quietStartup: true,
-                    enableInstallTelemetry: false,
-                    cacheWarming: 'off',
-                }),
-            );
-            writeFileSync(
-                join(agent, 'models.json'),
-                JSON.stringify({
-                    providers: {
-                        'phi-fixture': {
-                            baseUrl: `http://127.0.0.1:${provider.port}`,
-                            api: 'anthropic-messages',
-                            apiKey: 'fixture-key',
-                            models: [{ id: 'fixture-model' }],
-                        },
-                    },
-                }),
-            );
-            const skillDir = join(dir, 'skills', SKILL_NAME);
-            mkdirSync(skillDir, { recursive: true });
-            writeFileSync(
-                join(skillDir, 'SKILL.md'),
-                [
-                    '---',
-                    `name: ${SKILL_NAME}`,
-                    `description: ${SKILL_DESCRIPTION}`,
-                    '---',
-                    '',
-                    '# Demo skill',
-                    '',
-                    `Follow the demo instructions. ${MARKER}`,
-                    '',
-                ].join('\n'),
-            );
-            const command = join(dir, 'native-pi');
-            const binary = join(process.cwd(), 'node_modules', '.bin', 'pi');
-            writeFileSync(
-                command,
-                `#!/bin/sh\nexec ${shellQuote(binary)} --no-extensions --no-prompt-templates --no-context-files --no-approve --skill ${shellQuote(join(dir, 'skills'))} --model phi-fixture/fixture-model "$@"\n`,
-                { mode: 0o755 },
-            );
-            const backends = join(dir, 'home', '.phi', 'backends');
-            mkdirSync(backends, { recursive: true });
-            writeFileSync(
-                join(backends, 'pi.json'),
-                JSON.stringify({ id: 'pi', command }),
-            );
-        },
-    });
+    // The same fixture as the other specs: a real pinned Pi with one
+    // skill and a loopback provider.
+    const { provider, phi } = await startSkillPhi();
 
     try {
         const cwd = realpathSync(phi.dir);

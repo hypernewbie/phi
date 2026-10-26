@@ -742,6 +742,14 @@ describe('bridge skills offline behavior', () => {
             expect(dropup.textContent).toContain('Refresh failed');
         });
         expect(dropup.textContent).toContain('demo-skill');
+
+        // Filtering rebuilds the rows. The warning is state, so it
+        // stays: the rows are still the last known ones.
+        const filter = dropup.querySelector('.pi-rpc-model-search');
+        filter.value = 'demo';
+        filter.dispatchEvent(new Event('input'));
+        expect(dropup.textContent).toContain('demo-skill');
+        expect(dropup.textContent).toContain('Refresh failed');
     });
 
     it('bounds a stalled skill list request', async () => {

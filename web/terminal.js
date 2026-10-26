@@ -602,6 +602,9 @@ export class TabManager {
         this._piBridgeSkillQuery = '';
         this._piBridgeSkillsTruncated = false;
         this._piBridgeSkillsUnavailable = false;
+        // A failed refresh keeps the last good rows; this marks them
+        // as possibly out of date until a refresh succeeds.
+        this._piBridgeSkillsStale = false;
         this._piBridgeSkillsRequest = 0;
         this._piBridgeSkillsContext = null;
         // Pending invocations are per pane: one pane's dispatch never
@@ -5989,6 +5992,9 @@ export class TabManager {
                 }
                 this._piBridgeSkillsTruncated = bridge.truncated === true;
                 this._piBridgeSkillsUnavailable = bridge.unavailable === true;
+                // A fresh answer replaces the retained one: the rows are
+                // current again.
+                this._piBridgeSkillsStale = false;
                 this._piBridgeSkills = Array.isArray(bridge.skills)
                     ? bridge.skills
                     : [];
@@ -6012,11 +6018,12 @@ export class TabManager {
                 }
                 if (reused) {
                     // The list stays: a failed refresh never empties
-                    // it. The note says the list may be out of date.
-                    this._showPiRpcSkillsNote(
-                        listContainer,
-                        'Refresh failed — showing the last known skills',
-                    );
+                    // it. The rows are rebuilt with the note that says
+                    // they may be out of date. The note is state, not a
+                    // one-off element, so a later filter rebuild keeps
+                    // it.
+                    this._piBridgeSkillsStale = true;
+                    this._buildPiRpcSkillsList();
                     return;
                 }
                 loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
@@ -6214,6 +6221,14 @@ export class TabManager {
             footer.className = 'dropup-row pi-rpc-dropup-message';
             footer.textContent = 'Partial skill list';
             listContainer.append(footer);
+        }
+        if (this._piBridgeSkillsStale) {
+            // The rows are the last known ones. The note belongs to the
+            // state, so a filter rebuild keeps it.
+            this._showPiRpcSkillsNote(
+                listContainer,
+                'Refresh failed — showing the last known skills',
+            );
         }
     }
 
@@ -13002,6 +13017,7 @@ export class TabManager {
         this._piBridgeSkills = null;
         this._piBridgeSkillsTruncated = false;
         this._piBridgeSkillsUnavailable = false;
+        this._piBridgeSkillsStale = false;
         this._piBridgeSkillsContext = null;
         const dropup = document.getElementById('pi-rpc-skills-dropup');
         dropup?.classList.add('hidden');
