@@ -258,7 +258,7 @@ describe('bridge skills loss and reconnect', () => {
     it('closes the picker and drops a late reply when the peer is lost', async () => {
         let release;
         const fetchMock = mockFetch(
-            (url) =>
+            () =>
                 new Promise((resolve) => {
                     release = () => resolve(skillList());
                 }),
@@ -501,7 +501,7 @@ describe('bridge skills runtime fencing', () => {
 
     it('keeps the rows when the browser view lags the answering runtime', async () => {
         const tab = bridgeTab();
-        const fetchMock = mockFetch((url, options) => {
+        const fetchMock = mockFetch((url) => {
             if (
                 url.includes('/api/pi-bridge/skill') &&
                 !url.includes('/api/pi-bridge/skills?')
@@ -558,6 +558,111 @@ describe('bridge skills runtime fencing', () => {
         });
         // The older runtime's dispatch must not disable the new rows.
         expect(dropup.querySelector('.dropup-model-btn').disabled).toBe(false);
+    });
+
+    it('keeps a list answer that arrives after the runtime moved on', async () => {
+        let release;
+        const fetchMock = mockFetch(
+            () =>
+                new Promise((resolve) => {
+                    release = () => resolve(skillList({ generation: '2' }));
+                }),
+        );
+        global.fetch = fetchMock;
+        const tab = bridgeTab();
+        const { tm, dropup } = harness(tab);
+        tm.renderPresets('pi');
+        skillsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('Loading');
+        });
+
+        // The bridge publishes the next generation while the answer is
+        // still in flight: the browser's view moves on before the
+        // answer names the runtime that served it.
+        tab.piBridge.generation = '2';
+        tm.renderPresets('pi');
+
+        release();
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('demo-skill');
+        });
+    });
+
+    it('restores the control when a skills-only peer confirms a new socket', () => {
+        const tab = bridgeTab({
+            piBridge: {
+                state: 'managed',
+                connected: true,
+                model: 'a/x',
+                generation: '1',
+                capabilities: ['pi.lifecycle.v1', 'pi.skills.v1'],
+            },
+        });
+        const { tm } = harness(tab);
+        const live = { ...tab.piBridge, telemetry_revision: '3' };
+        tm._acceptPiBridgeState(tab, live);
+        tm.renderPresets('pi');
+        expect(skillsTrigger(tm)).toBeTruthy();
+
+        // A new browser socket drops freshness until the current
+        // socket confirms the state again.
+        tm._setCurrentTabSocket(tab, {});
+        expect(skillsTrigger(tm)).toBeFalsy();
+
+        // The confirmation brings the control back: the presets row
+        // moves with the skills capability, not only with the other
+        // bridge capabilities.
+        tm._acceptPiBridgeState(tab, live);
+        expect(skillsTrigger(tm)).toBeTruthy();
+    });
+
+    it('bounds a stalled skill request', async () => {
+        vi.useFakeTimers();
+        try {
+            const fetchMock = vi.fn((url, options) => {
+                if (String(url).includes('/api/pi-bridge/skills?'))
+                    return Promise.resolve({
+                        ok: true,
+                        status: 200,
+                        json: async () => skillList(),
+                    });
+                // The invoke never answers: only the browser deadline
+                // ends it.
+                return new Promise((_resolve, reject) => {
+                    options?.signal?.addEventListener('abort', () => {
+                        const error = new Error('aborted');
+                        error.name = 'AbortError';
+                        reject(error);
+                    });
+                });
+            });
+            global.fetch = fetchMock;
+            const tab = bridgeTab();
+            const { tm, dropup } = harness(tab);
+            tm.renderPresets('pi');
+            skillsTrigger(tm).click();
+            await vi.waitFor(() => {
+                expect(dropup.textContent).toContain('demo-skill');
+            });
+            dropup.querySelector('.dropup-model-btn').click();
+            await vi.advanceTimersByTimeAsync(10001);
+            await vi.waitFor(() => {
+                expect(tm.app.showToast).toHaveBeenCalled();
+            });
+            // The deadline makes the outcome unknown, never a resend.
+            expect(tm.app.showToast.mock.calls.at(-1)[0]).toContain('unknown');
+            const invokes = fetchMock.mock.calls.filter((call) => {
+                const url = String(call[0]);
+                return (
+                    url.includes('/api/pi-bridge/skill') &&
+                    !url.includes('/api/pi-bridge/skills?')
+                );
+            });
+            expect(invokes).toHaveLength(1);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('lists no rows when the answer carries no origin', async () => {

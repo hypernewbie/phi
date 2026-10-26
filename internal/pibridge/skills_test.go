@@ -571,3 +571,124 @@ func TestRequestInvokeSkillRejectsReplacedRuntime(t *testing.T) {
 	// The replacement peer never received the skill.
 	expectNoInvokeSkillRequest(t, next)
 }
+
+// Too many pending invocations are refused, and a settled one frees
+// its slot again.
+func TestRequestInvokeSkillPendingCap(t *testing.T) {
+	s, sock, cleanup := testServer(t)
+	defer cleanup()
+	stream, proc, _, cancel := openLeaseStream(t, s, sock, "pane-k16", CapabilityLifecycle, CapabilitySkills)
+	defer cancel()
+
+	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	type outcome struct {
+		res InvokeSkillResult
+		err error
+	}
+	results := make(chan outcome, maxSkillsPending+1)
+	for i := 0; i < maxSkillsPending; i++ {
+		go func() {
+			res, err := s.RequestInvokeSkill(ctx, proc, 1, "demo-skill")
+			results <- outcome{res: res, err: err}
+		}()
+	}
+	ids := map[string]bool{}
+	for i := 0; i < maxSkillsPending; i++ {
+		id, name := recvInvokeSkillRequest(t, stream)
+		if name != "demo-skill" {
+			t.Fatalf("name %q", name)
+		}
+		ids[id] = true
+	}
+	if len(ids) != maxSkillsPending {
+		t.Fatalf("ids %v, want %d unique", ids, maxSkillsPending)
+	}
+	if _, err := s.RequestInvokeSkill(ctx, proc, 1, "demo-skill"); err == nil || !strings.Contains(err.Error(), "too many pending") {
+		t.Fatalf("err %v, want too-many-pending", err)
+	}
+	var first string
+	for id := range ids {
+		first = id
+		break
+	}
+	sendInvokeSkillAck(t, stream, "pane-k16", proc, &pibridgepb.InvokeSkillAck{RequestId: first, Ok: true})
+	select {
+	case o := <-results:
+		if o.err != nil || !o.res.OK {
+			t.Fatalf("outcome %+v", o)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("first waiter hung")
+	}
+	// The settled invocation freed its slot.
+	go func() {
+		res, err := s.RequestInvokeSkill(ctx, proc, 1, "demo-skill")
+		results <- outcome{res: res, err: err}
+	}()
+	recvInvokeSkillRequest(t, stream)
+}
+
+// A cancelled invocation releases its pending slot, so the next one is
+// admitted instead of failing with a full queue.
+func TestRequestInvokeSkillCancelReleasesSlot(t *testing.T) {
+	s, sock, cleanup := testServer(t)
+	defer cleanup()
+	stream, proc, _, cancel := openLeaseStream(t, s, sock, "pane-k17", CapabilityLifecycle, CapabilitySkills)
+	defer cancel()
+
+	for i := 0; i < maxSkillsPending; i++ {
+		ctx, stop := context.WithCancel(context.Background())
+		errCh := make(chan error, 1)
+		go func() {
+			_, err := s.RequestInvokeSkill(ctx, proc, 1, "demo-skill")
+			errCh <- err
+		}()
+		recvInvokeSkillRequest(t, stream)
+		stop()
+		if err := <-errCh; err == nil {
+			t.Fatal("cancelled invocation succeeded")
+		}
+	}
+	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	go func() {
+		_, _ = s.RequestInvokeSkill(ctx, proc, 1, "demo-skill")
+	}()
+	recvInvokeSkillRequest(t, stream)
+}
+
+// A same-generation reconnect replaces the peer: the pending
+// invocation fails instead of waiting for an answer that never comes.
+func TestRequestInvokeSkillPeerReplacementFailsWaiter(t *testing.T) {
+	s, sock, cleanup := testServer(t)
+	defer cleanup()
+	stream, proc, token, cancel := openLeaseStream(t, s, sock, "pane-k18", CapabilityLifecycle, CapabilitySkills)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		_, err := s.RequestInvokeSkill(ctx, proc, 1, "demo-skill")
+		errCh <- err
+	}()
+	recvInvokeSkillRequest(t, stream)
+
+	// The same runtime reconnects: the peer is replaced under the
+	// waiting invocation.
+	next, cancelNext := openStream(t, sock, "pane-k18", proc, token)
+	defer cancelNext()
+	if err := next.Send(testHello("pane-k18", proc, 1, CapabilityLifecycle, CapabilitySkills)); err != nil {
+		t.Fatalf("hello2: %v", err)
+	}
+	recvAccepted(t, next)
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("stale waiter succeeded after replacement")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("stale waiter hung after replacement")
+	}
+}

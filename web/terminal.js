@@ -5969,7 +5969,13 @@ export class TabManager {
                 };
                 // The answer is checked against the browser's view: a
                 // list from a runtime the browser already left is stale.
-                if (!this._piBridgeSkillsContextValid(context)) return;
+                if (!this._piBridgeSkillsContextValid(context)) {
+                    this._showPiRpcSkillsMessage(
+                        listContainer,
+                        'Pi skill list unavailable',
+                    );
+                    return;
+                }
                 this._piBridgeSkillsTruncated = bridge.truncated === true;
                 this._piBridgeSkillsUnavailable = bridge.unavailable === true;
                 this._piBridgeSkills = Array.isArray(bridge.skills)
@@ -5981,12 +5987,32 @@ export class TabManager {
                 if (
                     request !== this._piBridgeSkillsRequest ||
                     this.getActiveTab()?.paneId !== paneId ||
-                    !this._piBridgeSkillsContextValid(context)
+                    !this._piBridgeSkillsContextBound(context)
                 )
                     return;
+                if (!this._piBridgeSkillsContextValid(context)) {
+                    // The runtime moved on: the failure belongs to a
+                    // runtime the user already left.
+                    this._showPiRpcSkillsMessage(
+                        listContainer,
+                        'Pi skill list unavailable',
+                    );
+                    return;
+                }
                 loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
                 this._piRpcError(error, 'Pi skills');
             });
+    }
+
+    // _showPiRpcSkillsMessage replaces the picker list with one message
+    // row. A stale answer or a failure for a runtime the user already
+    // left must not leave the picker on "Loading".
+    _showPiRpcSkillsMessage(listContainer, text) {
+        if (!listContainer) return;
+        const message = document.createElement('div');
+        message.className = 'dropup-row pi-rpc-dropup-message';
+        message.textContent = text;
+        listContainer.replaceChildren(message);
     }
 
     _buildPiRpcSkillsList() {
@@ -11071,7 +11097,7 @@ export class TabManager {
             if (
                 !this._piBridgeSkillsEligible(activeTab) ||
                 (skillsContext?.paneId === activeTab.paneId &&
-                    !this._piBridgeSkillsContextValid(skillsContext))
+                    this._piBridgeSkillsContextStale(skillsContext))
             )
                 this._invalidatePiBridgeSkillsList();
             if (!this._piBridgeThinkingEligible(activeTab))
@@ -12847,14 +12873,21 @@ export class TabManager {
         };
     }
 
+    // _piBridgeSkillsContextBound reports whether a skills request
+    // still belongs to the tab, socket, and capability it was made
+    // for. A replaced tab, a swapped socket, or a revoked capability
+    // invalidates the request at once.
+    _piBridgeSkillsContextBound(context) {
+        return (
+            !!context &&
+            this.tabs?.get(context.paneId) === context.tab &&
+            context.tab.ws === context.socket &&
+            this._piBridgeSkillsEligible(context.tab)
+        );
+    }
+
     _piBridgeSkillsContextValid(context) {
-        if (
-            !context ||
-            this.tabs?.get(context.paneId) !== context.tab ||
-            context.tab.ws !== context.socket ||
-            !this._piBridgeSkillsEligible(context.tab)
-        )
-            return false;
+        if (!this._piBridgeSkillsContextBound(context)) return false;
         const view = context.tab.piBridge?.generation ?? '';
         if (view === context.seen) return true;
         // The view moved on. The rows stay usable only when the answer
@@ -12862,6 +12895,21 @@ export class TabManager {
         // view can lag behind the answer, and a generation counter
         // alone cannot tell one lease from the next.
         return !!context.origin && context.origin.generation === view;
+    }
+
+    // _piBridgeSkillsContextStale reports whether a retained skills
+    // request must be dropped. A generation view that moved on decides
+    // only once the answer landed and named a different runtime: an
+    // answer still in flight may belong to the runtime the browser
+    // now sees, so it is judged when it arrives.
+    _piBridgeSkillsContextStale(context) {
+        if (this._piBridgeSkillsContextValid(context)) return false;
+        if (
+            context?.origin === null &&
+            this._piBridgeSkillsContextBound(context)
+        )
+            return false;
+        return true;
     }
 
     // _piBridgeSkillsOriginMatches reports whether a dispatch and a
@@ -13163,7 +13211,7 @@ export class TabManager {
     // occupancy only the status-bar meter renders.
     _piBridgeKeys(tab, view = tab.piBridge) {
         if (!view) return { row: '', bar: '' };
-        const row = `${this._piBridgeModelsEligible(tab)}|${this._piBridgeThinkingEligible(tab)}|${piBridgeCapable(tab, 'pi.context.v1')}|${piBridgeCapable(tab, 'pi.compact.v1')}|${view.state}|${view.generation || ''}|${view.model || ''}|${view.thinking_level || ''}|${view.connected}|${view.running}|${(view.capabilities || []).join(',')}|${view.compact_idle}/${view.compact_queued}/${view.compact_active}/${view.compact_pending}`;
+        const row = `${this._piBridgeModelsEligible(tab)}|${this._piBridgeThinkingEligible(tab)}|${piBridgeCapable(tab, 'pi.skills.v1')}|${piBridgeCapable(tab, 'pi.context.v1')}|${piBridgeCapable(tab, 'pi.compact.v1')}|${view.state}|${view.generation || ''}|${view.model || ''}|${view.thinking_level || ''}|${view.connected}|${view.running}|${(view.capabilities || []).join(',')}|${view.compact_idle}/${view.compact_queued}/${view.compact_active}/${view.compact_pending}`;
         return {
             row,
             bar: `${row}|${view.context_tokens ?? ''},${view.context_window ?? ''},${view.context_percent ?? ''}`,
