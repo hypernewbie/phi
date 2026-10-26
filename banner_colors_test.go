@@ -3,13 +3,14 @@ package main
 import (
 	"os"
 	"regexp"
+	"strconv"
 	"testing"
 )
 
 // TestBannerColorsCoversAllAccentColors asserts that every key in
-// web/theme.js's ACCENT_COLORS map has a matching entry in the Go
-// bannerColors map used by printWelcomeBanner. Drift silently falls
-// back to purple in the welcome banner, which is the "some colors don't
+// web/theme.js's ACCENT_COLORS map has a matching entry and accurate RGB
+// tuple in the Go bannerColors map used by printWelcomeBanner. Drift silently
+// falls back to purple in the welcome banner, which is the "some colors don't
 // work" bug that originally motivated this test.
 func TestBannerColorsCoversAllAccentColors(t *testing.T) {
 	data, err := os.ReadFile("web/theme.js")
@@ -31,11 +32,27 @@ func TestBannerColorsCoversAllAccentColors(t *testing.T) {
 		}
 	}
 
-	// Sanity floor — should always be at least the original 17 + the 5
-	// that motivated this test, otherwise the regex above silently broke
-	// against a future refactor of theme.js.
-	const wantMin = 22
+	// Sanity floor — should always be at least the 29 themes.
+	const wantMin = 29
 	if got := len(matches); got < wantMin {
 		t.Errorf("expected at least %d ACCENT_COLORS keys, parsed %d — regex may have broken against a theme.js refactor", wantMin, got)
+	}
+
+	// Also verify hex values in web/theme.js match bannerColors RGB values.
+	reHex := regexp.MustCompile(`(?s)([a-zA-Z][a-zA-Z0-9]*):\s*\{\s*accent:\s*'#([0-9a-fA-F]{6})'`)
+	hexMatches := reHex.FindAllStringSubmatch(string(data), -1)
+	for _, m := range hexMatches {
+		key := m[1]
+		hex := m[2]
+		val, _ := strconv.ParseUint(hex, 16, 32)
+		r, g, b := int((val>>16)&0xff), int((val>>8)&0xff), int(val&0xff)
+		rgb, ok := bannerColors[key]
+		if !ok {
+			continue // handled above
+		}
+		if len(rgb) != 3 || rgb[0] != r || rgb[1] != g || rgb[2] != b {
+			t.Errorf("theme %q RGB mismatch: bannerColors has %v, web/theme.js has %s (%d, %d, %d)",
+				key, rgb, hex, r, g, b)
+		}
 	}
 }

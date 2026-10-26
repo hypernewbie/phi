@@ -124,6 +124,21 @@ func TestBindWithRetry_TimesOutWhenPortNeverFrees(t *testing.T) {
 	}
 }
 
+func TestBindWithRetry_FailsFastOnUnavailableAddress(t *testing.T) {
+	// 192.0.2.1 is RFC 5737 TEST-NET-1 (non-routable documentation network),
+	// never assigned to local interfaces. BindWithRetry should fail fast on
+	// EADDRNOTAVAIL rather than waiting out the full maxWait duration.
+	start := time.Now()
+	_, err := BindWithRetry("192.0.2.1:0", 2*time.Second, 20*time.Millisecond)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected error binding unavailable address 192.0.2.1:0")
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("expected fail-fast (<500ms) for unavailable address, took %s", elapsed)
+	}
+}
+
 func TestExecSelf_RejectsOnWindows(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("only meaningful on Windows")
