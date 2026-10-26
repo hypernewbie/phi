@@ -541,9 +541,7 @@ describe('bridge models picker', () => {
 
         // A temporary detach keeps the catalog for the reconnect; a real close
         // drops it with the pane.
-        tm._savePiRpcModelCache('pi', tab.paneId, [
-            { provider: 'b', id: 'y' },
-        ]);
+        tm._savePiRpcModelCache('pi', tab.paneId, [{ provider: 'b', id: 'y' }]);
         tm.tabs = new Map([[tab.paneId, tab]]);
         tm.disposeTabClient(tab.paneId, { preserveStorage: true });
         expect(window.localStorage.getItem(key)).not.toBeNull();
