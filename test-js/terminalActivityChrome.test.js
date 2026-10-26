@@ -69,7 +69,7 @@ describe('terminal activity chrome rendering', () => {
         expect(document.title).toBe('● ϕ atlas');
     });
 
-    it('enters the live state on the first output byte, not every byte', () => {
+    it('enters the live state on the first output byte, not every byte', async () => {
         const updateDocumentTitle = vi.fn();
         const syncBackendPin = vi.fn();
         const term = {
@@ -89,6 +89,7 @@ describe('terminal activity chrome rendering', () => {
 
         TabManager.prototype.writeToTerminal.call(writeManager, tabInfo, 'one');
         TabManager.prototype.writeToTerminal.call(writeManager, tabInfo, 'two');
+        await Promise.resolve();
 
         expect(tabInfo.isBusy).toBe(true);
         expect(updateDocumentTitle).toHaveBeenCalledTimes(1);
