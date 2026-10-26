@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { expect, test, type WebSocketRoute } from '@playwright/test';
+import { TerminalServerFrame } from '../web/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
 
 let phi: PhiServer;
@@ -227,27 +228,34 @@ for (const alternate of [false, true]) {
             const ansi = checkpoint
                 ? Buffer.from(checkpoint.ansi)
                 : Buffer.alloc(0);
-            const hdr = Buffer.from(
-                JSON.stringify({
-                    epoch: 7,
-                    oldest: 0,
-                    head: retained.length,
-                    ...(checkpoint
-                        ? {
-                              ckpt: {
-                                  through: checkpoint.through,
-                                  cols: checkpoint.cols,
-                                  rows: checkpoint.rows,
-                                  len: ansi.length,
-                              },
-                          }
-                        : {}),
-                }),
+            socket.send(
+                Buffer.from(
+                    TerminalServerFrame.encode(
+                        TerminalServerFrame.fromPartial({
+                            payload: {
+                                $case: 'attach',
+                                value: {
+                                    epoch: BigInt(7),
+                                    oldest: BigInt(0),
+                                    head: BigInt(retained.length),
+                                    ...(checkpoint
+                                        ? {
+                                              checkpoint: {
+                                                  through: BigInt(
+                                                      checkpoint.through,
+                                                  ),
+                                                  cols: checkpoint.cols,
+                                                  rows: checkpoint.rows,
+                                                  data: new Uint8Array(ansi),
+                                              },
+                                          }
+                                        : {}),
+                                },
+                            },
+                        }),
+                    ).finish(),
+                ),
             );
-            const size = Buffer.alloc(5);
-            size[0] = 8;
-            size.writeUInt32BE(hdr.length, 1);
-            socket.send(Buffer.concat([size, hdr, ansi]));
         });
         const visible = () =>
             page.evaluate(() => {
@@ -275,11 +283,22 @@ for (const alternate of [false, true]) {
                 .poll(() => checkpoint?.through, { timeout: 30000 })
                 .toBe(bytes.length);
             const live = Buffer.from('LIVE AFTER REPLAY\r\n');
-            const frame = Buffer.alloc(9);
-            frame[0] = 9;
-            frame.writeBigUInt64BE(BigInt(bytes.length), 1);
             retained = Buffer.concat([bytes, live]);
-            liveSocket?.send(Buffer.concat([frame, live]));
+            liveSocket?.send(
+                Buffer.from(
+                    TerminalServerFrame.encode(
+                        TerminalServerFrame.fromPartial({
+                            payload: {
+                                $case: 'output',
+                                value: {
+                                    start: BigInt(bytes.length),
+                                    data: new Uint8Array(live),
+                                },
+                            },
+                        }),
+                    ).finish(),
+                ),
+            );
             await expect
                 .poll(() => checkpoint?.through, { timeout: 30000 })
                 .toBe(retained.length);
