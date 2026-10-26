@@ -327,7 +327,7 @@ func runAcceptanceRelay(t *testing.T, url, pane string) {
 		}
 	}
 	if exact != 1 {
-		t.Fatalf("RELAY-MARKER-1 output line appears %d times, want exactly once (no duplication)", exact)
+		t.Fatalf("RELAY-MARKER-1 output line appears %d times, want exactly once (no duplication)\nsnapshot: %q", exact, tty.snapshot())
 	}
 
 	cancel()
