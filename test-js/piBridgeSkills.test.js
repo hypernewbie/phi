@@ -752,6 +752,37 @@ describe('bridge skills offline behavior', () => {
         expect(dropup.textContent).toContain('Refresh failed');
     });
 
+    it('keeps the stale warning for a retained empty list', async () => {
+        let calls = 0;
+        const fetchMock = mockFetch((url) => {
+            if (!url.includes('/api/pi-bridge/skills?')) return skillList();
+            calls += 1;
+            // The first answer is an empty catalog with a valid origin.
+            if (calls === 1)
+                return skillList({ skills: [], unavailable: false });
+            return { ok: false, status: 503 };
+        });
+        global.fetch = fetchMock;
+        const tab = bridgeTab();
+        const { tm, dropup } = harness(tab);
+        tm.renderPresets('pi');
+        skillsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('No Pi skills available');
+        });
+
+        // The picker closes; the answer stays.
+        tm._closePiRpcDropups(true);
+
+        // Reopening shows the retained empty catalog, and the failed
+        // refresh says it may be out of date.
+        skillsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('Refresh failed');
+        });
+        expect(dropup.textContent).toContain('No Pi skills available');
+    });
+
     it('bounds a stalled skill list request', async () => {
         vi.useFakeTimers();
         try {

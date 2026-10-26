@@ -6111,6 +6111,14 @@ export class TabManager {
                     ? 'Pi skill list unavailable'
                     : 'No Pi skills available';
             listContainer.replaceChildren(empty);
+            // An empty retained list is stale too: the warning belongs
+            // to the state, so it is shown here as well.
+            if (this._piBridgeSkillsStale) {
+                this._showPiRpcSkillsNote(
+                    listContainer,
+                    'Refresh failed — showing the last known skills',
+                );
+            }
             return;
         }
         const matches = (skill) => {
