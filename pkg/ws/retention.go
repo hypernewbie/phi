@@ -1266,6 +1266,11 @@ func (g *retentionGroup) appendPayload(payload []byte, snap baseSnapshotFunc) ([
 	// rejects segments over retentionSegRawMax, so admission must never
 	// create one. The payload fits the fresh segment because anything
 	// over the cap takes the giant path above.
+	//
+	// shortcut: an admission larger than half a segment rotates before the
+	// segment reaches its nominal size, so a stream of large writes can leave
+	// the readable window below retentionHistoryCap. PTY reads are far below
+	// that size; only direct writes can build this shape.
 	rotate := cur.rawLen >= retentionSegNominal || cur.rawLen+uint64(len(payload)) > retentionSegRawMax || cur.rszCount >= retentionRszMaxCount
 	var ckpt []byte
 	if rotate {

@@ -268,7 +268,7 @@ for (const width of [1280, 560]) {
 
         // Reaching a genuinely expired book needs enough clicks to walk the
         // whole 32 MiB window at one page each; the 409 path that then keeps
-        // the view frozen is covered in test-js/terminalRetentionExpiry.test.js.
+        // the view frozen is covered in test-js/terminalStateBooks.test.js.
 
         const latestButton = page.locator(
             `#term-${pane} .scroll-to-bottom-btn`,
