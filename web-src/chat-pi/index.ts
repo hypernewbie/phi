@@ -649,6 +649,9 @@ export function mountChatPi(
                 rebaseOutgoing();
                 reconcileOutgoing();
                 applyState((data as Snapshot & { state?: unknown }).state);
+                // A snapshot that lands unblocks anything queued while the
+                // history was unknown (a reset clears readiness for it).
+                flushQueue();
                 // A hydrate that lands proves the stream is alive again, so a
                 // stale error line from the drop must not stay in the header.
                 if (ready && !exited) status.textContent = 'Ready';
@@ -673,20 +676,24 @@ export function mountChatPi(
             });
     };
 
-    // A hydrate that shrinks the transcript replaced it (a compaction reset
-    // can land while the stream is down), so every pending record counts as
-    // newer than an empty history and the row ledger belongs to the old one.
+    // A hydrate that replaced the transcript invalidates old row ownership: a
+    // pending record whose boundary no longer exists starts over, and rows the
+    // new transcript does not have cannot be owned any more (an empty
+    // transcript after a compaction reset owns nothing).
     const rebaseOutgoing = (): void => {
         const length = buffer.getMessages().length;
-        let replaced = false;
-        for (const item of outgoing) {
-            if (item.baseline !== null && item.baseline > length)
-                replaced = true;
+        const replaced = outgoing.some(
+            (item) => item.baseline !== null && item.baseline > length,
+        );
+        if (replaced) {
+            deliveryRows.clear();
+            for (const item of outgoing) {
+                if (item.baseline !== null) item.baseline = 0;
+            }
+            return;
         }
-        if (!replaced) return;
-        deliveryRows.clear();
-        for (const item of outgoing) {
-            if (item.baseline !== null) item.baseline = 0;
+        for (const row of deliveryRows) {
+            if (row >= length) deliveryRows.delete(row);
         }
     };
 
@@ -814,8 +821,15 @@ export function mountChatPi(
     };
 
     const flushQueue = (): void => {
-        if (destroyed || exited || streamBroken || !sid || !ready || !hydrated)
+        if (destroyed || exited || streamBroken || !sid || !ready) return;
+        if (!hydrated) {
+            // A prompt may not own a transcript row before the history is
+            // known. Only a failed reset hydrate leaves that unknown while
+            // the session is live, so ask once more instead of stalling the
+            // queue until the next reconnect.
+            if (!hydrateInFlight) requestHydrate(false);
             return;
+        }
         // One at a time: the server runs each call in its own goroutine, so a
         // batch would not keep the user's order.
         if (outgoing.some((item) => item.state === 'sending')) return;

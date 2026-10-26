@@ -272,10 +272,7 @@ export function connectControl(
         dialing = true;
         let socket: WebSocket;
         try {
-            socket = new WebSocket(
-                wsUrl('/ws/control'),
-                controlSubprotocol,
-            );
+            socket = new WebSocket(wsUrl('/ws/control'), controlSubprotocol);
         } catch (error) {
             dialing = false;
             reportStreamFailure(
