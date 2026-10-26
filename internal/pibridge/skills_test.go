@@ -469,29 +469,31 @@ func TestRequestInvokeSkillUnknownSkill(t *testing.T) {
 	}
 }
 
+// A reason outside the contract vocabulary is a malformed ack: it is
+// refused, so the waiter stays pending and the bounded request settles
+// as unknown instead of delivering a made-up reason.
 func TestRequestInvokeSkillReasonAllowlist(t *testing.T) {
 	s, sock, cleanup := testServer(t)
 	defer cleanup()
 	stream, proc, _, cancel := openLeaseStream(t, s, sock, "pane-k9", CapabilityLifecycle, CapabilitySkills)
 	defer cancel()
 
-	done := make(chan InvokeSkillResult, 1)
+	errCh := make(chan error, 1)
 	go func() {
-		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, stop := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer stop()
 		res, err := s.RequestInvokeSkill(ctx, proc, 1, "demo-skill")
-		if err != nil {
-			t.Errorf("RequestInvokeSkill: %v", err)
-			return
+		if err == nil {
+			t.Errorf("malformed ack delivered %+v", res)
 		}
-		done <- res
+		errCh <- err
 	}()
 	id, _ := recvInvokeSkillRequest(t, stream)
 	sendInvokeSkillAck(t, stream, "pane-k9", proc, &pibridgepb.InvokeSkillAck{RequestId: id, Reason: "<script>"})
 	select {
-	case res := <-done:
-		if res.OK || res.Reason != "" {
-			t.Fatalf("result %+v", res)
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("malformed ack settled the waiter")
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("RequestInvokeSkill hung")
@@ -570,6 +572,81 @@ func TestRequestInvokeSkillRejectsReplacedRuntime(t *testing.T) {
 	}
 	// The replacement peer never received the skill.
 	expectNoInvokeSkillRequest(t, next)
+}
+
+// A click for a runtime that was replaced and whose replacement peer
+// already went away is a known refusal: nothing was dispatched, so the
+// caller must not read it as an unknown outcome.
+func TestRequestInvokeSkillRejectsStaleOriginAfterPeerGone(t *testing.T) {
+	s, sock, cleanup := testServer(t)
+	defer cleanup()
+	_, proc, token, cancel := openLeaseStream(t, s, sock, "pane-k19", CapabilityLifecycle, CapabilitySkills)
+	defer cancel()
+
+	// The session moves on to generation 2 and that peer goes away.
+	next, cancelNext := openStream(t, sock, "pane-k19", proc, token)
+	if err := next.Send(testHello("pane-k19", proc, 2, CapabilityLifecycle, CapabilitySkills)); err != nil {
+		t.Fatalf("hello gen 2: %v", err)
+	}
+	recvAccepted(t, next)
+	cancelNext()
+	l, ok := s.reg.lookupByProcess(proc)
+	if !ok {
+		t.Fatal("lease missing")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		l.mu.Lock()
+		detached := l.peer == nil
+		l.mu.Unlock()
+		if detached {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("replacement peer still attached")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	ctx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stop()
+	// The click still carries the origin of the generation-1 list.
+	if _, err := s.RequestInvokeSkill(ctx, proc, 1, "demo-skill"); !errors.Is(err, ErrSkillOriginStale) {
+		t.Fatalf("err %v, want stale origin", err)
+	}
+}
+
+// A contradictory acknowledgement is refused: a success carries an
+// empty reason, so the waiter stays pending and the bounded request
+// settles as unknown.
+func TestRequestInvokeSkillRejectsContradictoryAck(t *testing.T) {
+	s, sock, cleanup := testServer(t)
+	defer cleanup()
+	stream, proc, _, cancel := openLeaseStream(t, s, sock, "pane-k20", CapabilityLifecycle, CapabilitySkills)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		ctx, stop := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer stop()
+		res, err := s.RequestInvokeSkill(ctx, proc, 1, "demo-skill")
+		if err == nil && res.OK {
+			t.Errorf("contradictory ack accepted: %+v", res)
+		}
+		errCh <- err
+	}()
+	id, _ := recvInvokeSkillRequest(t, stream)
+	sendInvokeSkillAck(t, stream, "pane-k20", proc, &pibridgepb.InvokeSkillAck{
+		RequestId: id, Ok: true, Reason: "unavailable",
+	})
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("contradictory ack settled the waiter")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RequestInvokeSkill hung")
+	}
 }
 
 // Too many pending invocations are refused, and a settled one frees

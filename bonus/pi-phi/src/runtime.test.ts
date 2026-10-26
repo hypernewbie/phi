@@ -3469,6 +3469,29 @@ describe('Runtime skills requests', () => {
         rt.shutdown();
     });
 
+    it('answers unavailable for a bad entry past the cap', async () => {
+        // The whole raw list is checked before the cap applies: an
+        // entry beyond the display limit still breaks the answer.
+        const entries = Array.from(
+            { length: MAX_SKILL_ENTRIES + 1 },
+            (_, i) => ({ name: `skill-${i}`, description: 'd' }),
+        );
+        entries[MAX_SKILL_ENTRIES] = {
+            name: 'demo skill',
+            description: 'd',
+        };
+        const { ch, rt } = await started({
+            getSkills: () => entries,
+            invokeSkill: () => {},
+        });
+        ch.hooks!.onMessage(skillsRequest('k9'));
+        expect(ch.nonfatalSends).toHaveLength(1);
+        const res = skillsOf(ch.nonfatalSends[0]!);
+        expect(res.unavailable).toBe(true);
+        expect(res.skills).toHaveLength(0);
+        rt.shutdown();
+    });
+
     it('drops requests when skills were not negotiated', async () => {
         const { ch, rt } = await started({ getSkills: () => [] });
         ch.hooks!.onMessage(skillsRequest('k6'));

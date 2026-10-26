@@ -58,7 +58,7 @@ type InvokeSkillResult struct {
 // wire and addressed to the host. The HTTP layer uses it to reject an
 // unusable name before any peer contact.
 func IsSkillName(name string) bool {
-	return name != "" && len(name) <= maxSkillNameBytes && isAddressableSkillName(name)
+	return len(name) <= maxSkillNameBytes && isAddressableSkillName(name)
 }
 
 // isAddressableSkillName reports whether a name addresses exactly one
@@ -175,11 +175,18 @@ func (s *Server) RequestInvokeSkill(ctx context.Context, processID string, gener
 	id := "i" + strconv.FormatUint(s.invokeSkillSeq.Add(1), 10)
 	l.mu.Lock()
 	p := l.peer
+	// The origin is judged before the peer: a request for a runtime
+	// that was replaced, or whose peer already went away, was never
+	// dispatched, so it is a known refusal and not an unknown outcome.
+	if l.processID != processID || l.maxGen != generation {
+		l.mu.Unlock()
+		return InvokeSkillResult{}, ErrSkillOriginStale
+	}
 	if p == nil || l.state == leaseRevoked {
 		l.mu.Unlock()
 		return InvokeSkillResult{}, fmt.Errorf("pibridge: no live peer")
 	}
-	if l.processID != processID || p.generation != generation || l.maxGen != generation {
+	if p.generation != generation {
 		l.mu.Unlock()
 		return InvokeSkillResult{}, ErrSkillOriginStale
 	}
@@ -300,6 +307,19 @@ func (s *Server) deliverInvokeSkill(l *lease, p *peer, ack *pibridgepb.InvokeSki
 	if ack.GetRequestId() == "" {
 		return
 	}
+	// The reason is allowlisted before the waiter is consumed: only
+	// the contract vocabulary can reach a caller, and a contradictory
+	// ack is refused like the thinking ack. The waiter then stays
+	// pending and the bounded request settles as unknown.
+	reason := ack.GetReason()
+	switch reason {
+	case "", "unknown-skill", "unavailable", "error":
+	default:
+		return
+	}
+	if ack.GetOk() && reason != "" {
+		return
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.peer != p || l.state == leaseRevoked || p.generation != l.maxGen {
@@ -314,12 +334,6 @@ func (s *Server) deliverInvokeSkill(l *lease, p *peer, ack *pibridgepb.InvokeSki
 	if !ok {
 		return
 	}
-	reason := ack.GetReason()
-	switch reason {
-	case "", "unknown-skill", "unavailable", "error":
-	default:
-		reason = ""
-	}
 	select {
 	case ch <- InvokeSkillResult{OK: ack.GetOk(), Reason: reason}:
 	default:
@@ -330,7 +344,7 @@ func (s *Server) deliverInvokeSkill(l *lease, p *peer, ack *pibridgepb.InvokeSki
 // bounds. The bounds are UTF-8 byte limits, and Go string length is
 // the UTF-8 byte count.
 func representableSkill(name, description string) bool {
-	if name == "" || len(name) > maxSkillNameBytes || !isAddressableSkillName(name) {
+	if len(name) > maxSkillNameBytes || !isAddressableSkillName(name) {
 		return false
 	}
 	return len(description) <= maxSkillDescriptionBytes

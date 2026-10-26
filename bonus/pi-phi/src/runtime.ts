@@ -100,8 +100,7 @@ export interface PiSkillView {
 function representableSkill(
     skill: PiSkillView | undefined,
 ): { name: string; description: string } | null {
-    if (!skill || typeof skill.name !== 'string' || skill.name === '')
-        return null;
+    if (!skill || typeof skill.name !== 'string') return null;
     if (!isAddressableSkillName(skill.name)) return null;
     if (typeof skill.description !== 'string') return null;
     if (Buffer.byteLength(skill.name, 'utf8') > MAX_SKILL_NAME_BYTES)
