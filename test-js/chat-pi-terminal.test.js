@@ -274,12 +274,12 @@ describe('Pi RPC TabManager boundaries', () => {
                 (button) => button.textContent,
             ),
         ).toEqual([
+            '🤖 Models ▾',
+            'Thinking ▾',
             'Compact',
             'Clear',
             'Show thinking',
             'Cmds ▾',
-            '🤖 Models ▾',
-            'Thinking ▾',
         ]);
         expect(row.querySelector('.presets-divider')).not.toBeNull();
         expect(row.querySelector('.mobile-nav-btn')).toBeNull();
@@ -319,15 +319,19 @@ describe('Pi RPC TabManager boundaries', () => {
                 (button) => button.textContent,
             ),
         ).toEqual([
+            '🤖 Models ▾',
+            'Thinking ▾',
             'Compact',
             'Clear',
             'Show thinking',
             'Cmds ▾',
-            '🤖 Models ▾',
-            'Thinking ▾',
         ]);
-        expect(row.querySelector('.pi-rpc-model-trigger').title).toBe('—');
-        expect(row.querySelector('.pi-rpc-thinking-trigger').title).toBe('—');
+        expect(row.querySelector('.pi-rpc-model-trigger').title).toBe(
+            'Model: — — click to change',
+        );
+        expect(row.querySelector('.pi-rpc-thinking-trigger').title).toBe(
+            'Thinking: — — click to change',
+        );
     });
 
     it('renders the Context meter with progressbar semantics and color states', () => {
@@ -1374,13 +1378,13 @@ describe('Pi RPC TabManager boundaries', () => {
             '🤖 Models ▾',
         );
         expect(presets.querySelector('.pi-rpc-model-trigger').title).toBe(
-            'old-model',
+            'Model: old-model — click to change',
         );
         expect(
             presets.querySelector('.pi-rpc-thinking-trigger').textContent,
         ).toBe('Thinking ▾');
         expect(presets.querySelector('.pi-rpc-thinking-trigger').title).toBe(
-            'low',
+            'Thinking: low — click to change',
         );
         expect(meter().getAttribute('aria-valuenow')).toBe('10');
         expect(
@@ -1444,10 +1448,10 @@ describe('Pi RPC TabManager boundaries', () => {
         notify(active.paneId, current.get(active.paneId));
         expect(bar.textContent).toContain('/work/active-new');
         expect(presets.querySelector('.pi-rpc-model-trigger').title).toBe(
-            'new-model',
+            'Model: new-model — click to change',
         );
         expect(presets.querySelector('.pi-rpc-thinking-trigger').title).toBe(
-            'high',
+            'Thinking: high — click to change',
         );
         expect(meter().getAttribute('aria-valuenow')).toBe('50');
         expect(

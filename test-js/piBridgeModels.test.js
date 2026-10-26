@@ -65,11 +65,12 @@ function harness(tab) {
     return { tm, dropup };
 }
 
-// Generic row order: Cmds, Models, Keys. Text matching is
-// impossible here: the row sets innerText, which jsdom leaves
-// unreadable, so the position plus the marker class identify it.
+// Picker row order: Models, Thinking, Skills, Keys, then the chip row
+// with Cmds. Text matching is impossible here: the row sets innerText,
+// which jsdom leaves unreadable, so the position plus the marker class
+// identify it.
 function modelsTrigger(tm) {
-    return tm.presetsContainer.querySelectorAll('.model-trigger-btn')[1];
+    return tm.presetsContainer.querySelectorAll('.model-trigger-btn')[0];
 }
 
 describe('bridge models trigger', () => {
@@ -93,7 +94,7 @@ describe('bridge models trigger', () => {
         const trigger = modelsTrigger(tm);
         expect(trigger).not.toBeUndefined();
         expect(trigger.classList.contains('pi-rpc-model-trigger')).toBe(true);
-        expect(trigger.title).toBe('a/x');
+        expect(trigger.title).toBe('Model: a/x — click to change');
         trigger.click();
 
         await vi.waitFor(() => {

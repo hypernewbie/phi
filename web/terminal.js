@@ -6598,6 +6598,7 @@ export class TabManager {
         compactButton.type = 'button';
         compactButton.className = 'preset-btn pi-rpc-compact-btn';
         compactButton.textContent = 'Compact';
+        compactButton.title = 'Compact the conversation to free context';
         const compactPending = this._piRpcCompactPending?.has(paneId) === true;
         compactButton.disabled =
             menuDisabled ||
@@ -6700,6 +6701,7 @@ export class TabManager {
         quickCmdsButton.type = 'button';
         quickCmdsButton.className = 'preset-btn model-trigger-btn';
         quickCmdsButton.textContent = 'Cmds ▾';
+        quickCmdsButton.title = 'Open quick commands';
         quickCmdsButton.disabled = menuDisabled;
         quickCmdsButton.addEventListener('click', (event) => {
             event.stopPropagation();
@@ -6713,7 +6715,7 @@ export class TabManager {
         modelButton.className =
             'preset-btn model-trigger-btn pi-rpc-model-trigger';
         modelButton.textContent = '🤖 Models ▾';
-        modelButton.title = state.model || '—';
+        modelButton.title = `Model: ${state.model || '—'} — click to change`;
         modelButton.disabled = menuDisabled;
         modelButton.addEventListener('click', (event) => {
             event.stopPropagation();
@@ -6727,7 +6729,7 @@ export class TabManager {
         thinkingButton.className =
             'preset-btn model-trigger-btn pi-rpc-thinking-trigger';
         thinkingButton.textContent = 'Thinking ▾';
-        thinkingButton.title = state.thinking || '—';
+        thinkingButton.title = `Thinking: ${state.thinking || '—'} — click to change`;
         thinkingButton.disabled =
             menuDisabled || this._piRpcThinkingPending?.paneId === paneId;
         thinkingButton.addEventListener('click', (event) => {
@@ -6736,6 +6738,12 @@ export class TabManager {
                 this._renderPiRpcThinkingDropup(),
             );
         });
+
+        // The pickers get their own line: the chip row would otherwise
+        // push them past the right edge on narrow panes.
+        const presetsBreak = document.createElement('div');
+        presetsBreak.className = 'presets-break';
+        presetsBreak.setAttribute('aria-hidden', 'true');
 
         this.presetsContainer.append(
             compactButton,
@@ -6746,6 +6754,13 @@ export class TabManager {
             modelButton,
             thinkingButton,
         );
+        // Picker row above the chip row — Models, then Thinking.
+        if (!isCompactViewport())
+            this.presetsContainer.prepend(
+                modelButton,
+                thinkingButton,
+                presetsBreak,
+            );
         const qcDropup = document.getElementById('quick-commands-dropup');
         if (qcDropup && !qcDropup.classList.contains('hidden'))
             this.renderQuickCmdsDropup();
@@ -11299,6 +11314,8 @@ export class TabManager {
                 Math.min(left, containerRect.width - dropupWidth - 12),
             );
             dropup.style.left = `${left}px`;
+            // Sit flush on the presets bar: it is one or two rows tall.
+            dropup.style.bottom = `${this.presetsContainer?.offsetHeight || 40}px`;
             dropup.classList.remove('hidden');
             renderFn();
         }
@@ -11375,6 +11392,7 @@ export class TabManager {
                     const slashBtn = document.createElement('button');
                     slashBtn.className = 'preset-btn slash-trigger-btn';
                     slashBtn.innerText = '/ ▾';
+                    slashBtn.title = 'Open slash commands';
                     slashBtn.addEventListener('click', (e) => {
                         e.stopPropagation();
                         this._toggleDropup(
@@ -11391,6 +11409,7 @@ export class TabManager {
                     const btn = document.createElement('button');
                     btn.className = 'preset-btn';
                     btn.innerText = p.name;
+                    btn.title = `Send ${p.name} to the terminal`;
                     btn.addEventListener('click', () => {
                         this.sendRawInput(p.value, { focusInputOnMobile: false });
                     });
@@ -11402,6 +11421,7 @@ export class TabManager {
                     const btn = document.createElement('button');
                     btn.className = 'preset-btn';
                     btn.innerText = p.name;
+                    btn.title = `Send ${p.name} to the terminal`;
                     if (p.value === '/compact\r' && activeTab?.coder === 'pi') {
                         const compactState =
                             this._piBridgeCompactControlState(activeTab);
@@ -11426,17 +11446,17 @@ export class TabManager {
 
         // 2b. Pi-specific shortcut chip: lives in the presets row alongside
         // /quit /resume /model /compact, with the same flat preset-btn
-        // shape (no kbd-key caps / glow, no extra id, no title, label
-        // matches the existing binding convention — lowercase, no
-        // separator, no action-verb suffix). Visible only when the
-        // active tab is a pi session. Clicking sends the staged input
-        // — same as Send ↵. The keyboard binding itself is global
-        // (document-level keydown listener below) and works whether
-        // the chip is rendered.
+        // shape (no kbd-key caps / glow, no extra id, label matches the
+        // existing binding convention — lowercase, no separator, no
+        // action-verb suffix). Visible only when the active tab is a pi
+        // session. Clicking sends the staged input — same as Send ↵. The
+        // keyboard binding itself is global (document-level keydown
+        // listener below) and works whether the chip is rendered.
         if (coderId === 'pi') {
             const chip = document.createElement('button');
             chip.className = 'preset-btn';
             chip.innerText = 'ctrl+shift+x';
+            chip.title = 'Send the input bar text (Ctrl+Shift+X)';
             chip.addEventListener('click', () => {
                 this.sendStagedInput();
             });
@@ -11447,6 +11467,7 @@ export class TabManager {
         const quickCmdsTriggerBtn = document.createElement('button');
         quickCmdsTriggerBtn.className = 'preset-btn model-trigger-btn';
         quickCmdsTriggerBtn.innerText = 'Cmds ▾';
+        quickCmdsTriggerBtn.title = 'Open quick commands';
         quickCmdsTriggerBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             this._toggleDropup(
@@ -11463,6 +11484,7 @@ export class TabManager {
         const modelsTriggerBtn = document.createElement('button');
         modelsTriggerBtn.className = 'preset-btn model-trigger-btn';
         modelsTriggerBtn.innerText = '🤖 Models ▾';
+        modelsTriggerBtn.title = 'Select the model for this session';
 
         const modelCoder = activeTab?.coder;
         const isCustomModelCoder =
@@ -11475,7 +11497,7 @@ export class TabManager {
             // Bridge-live Pi tabs share the Pi RPC model picker.
             // Anything else falls through to the legacy static list.
             modelsTriggerBtn.classList.add('pi-rpc-model-trigger');
-            modelsTriggerBtn.title = activeTab.piBridge?.model || '—';
+            modelsTriggerBtn.title = `Model: ${activeTab.piBridge?.model || '—'} — click to change`;
             modelsTriggerBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 this._toggleDropup(
@@ -11512,13 +11534,19 @@ export class TabManager {
                 );
             });
         }
+        // The pickers get their own line: the chip row would otherwise
+        // push them past the right edge on narrow panes.
+        const presetsBreak = document.createElement('div');
+        presetsBreak.className = 'presets-break';
+        presetsBreak.setAttribute('aria-hidden', 'true');
         this.presetsContainer.appendChild(modelsTriggerBtn);
 
         // Skills picker: only on bridge-live Pi tabs that negotiated
         // the skills capability. Without it the composer keeps exactly
         // the controls it had, so a missing bridge adds no dead button.
+        let skillsTriggerBtn = null;
         if (modelCoder === 'pi' && this._piBridgeSkillsEligible(activeTab)) {
-            const skillsTriggerBtn = document.createElement('button');
+            skillsTriggerBtn = document.createElement('button');
             skillsTriggerBtn.type = 'button';
             skillsTriggerBtn.className =
                 'preset-btn model-trigger-btn pi-rpc-skills-trigger';
@@ -11549,8 +11577,9 @@ export class TabManager {
             this.presetsContainer.appendChild(skillsTriggerBtn);
         }
 
+        let thinkingTriggerBtn = null;
         if (modelCoder === 'pi') {
-            const thinkingTriggerBtn = document.createElement('button');
+            thinkingTriggerBtn = document.createElement('button');
             thinkingTriggerBtn.type = 'button';
             thinkingTriggerBtn.className =
                 'preset-btn model-trigger-btn pi-rpc-thinking-trigger';
@@ -11592,6 +11621,20 @@ export class TabManager {
             );
         });
         this.presetsContainer.appendChild(keysTriggerBtn);
+
+        // Picker row above the chip row: the chip row grows with every
+        // coder and must not push the pickers past the right edge. Fixed
+        // order — Models, Thinking, Skills, Keyboard. The compact layout
+        // keeps its single swipeable strip in the original order.
+        if (!isCompactViewport()) {
+            const pickerButtons = [
+                modelsTriggerBtn,
+                thinkingTriggerBtn,
+                skillsTriggerBtn,
+                keysTriggerBtn,
+            ].filter(Boolean);
+            this.presetsContainer.prepend(...pickerButtons, presetsBreak);
+        }
 
         // Auto-refresh dropup content if currently open
         const dropup = document.getElementById('model-presets-dropup');
@@ -11645,6 +11688,7 @@ export class TabManager {
                 const btn = document.createElement('button');
                 btn.className = 'preset-btn mobile-nav-btn';
                 btn.innerText = nav.name;
+                btn.title = `Send the ${nav.name} arrow key`;
                 btn.addEventListener('click', () => {
                     this.sendRawInput(nav.value);
                 });
