@@ -603,7 +603,10 @@ export class TabManager {
         this._piBridgeSkillsTruncated = false;
         this._piBridgeSkillsUnavailable = false;
         this._piBridgeSkillsRequest = 0;
-        this._piBridgeSkillPending = null;
+        this._piBridgeSkillsContext = null;
+        // Pending invocations are per pane: one pane's dispatch never
+        // hides another pane's outcome.
+        this._piBridgeSkillPending = new Map();
         this._piRpcFavorites = null;
         this._piRpcFavoritesLoaded = false;
         this._piRpcModelAutoOpened = false;
@@ -5863,6 +5866,10 @@ export class TabManager {
             return;
         }
         const paneId = activeTab.paneId;
+        // The list belongs to the runtime that answers it: a replaced
+        // peer invalidates the whole picker session.
+        const context = this._piBridgeSkillsContextFor(activeTab);
+        this._piBridgeSkillsContext = context;
         const request = ++this._piBridgeSkillsRequest;
         if (!preserve) {
             this._piBridgeSkillQuery = '';
@@ -5929,7 +5936,7 @@ export class TabManager {
                 if (
                     request !== this._piBridgeSkillsRequest ||
                     this.getActiveTab()?.paneId !== paneId ||
-                    !this._piBridgeSkillsEligible(activeTab)
+                    !this._piBridgeSkillsContextValid(context)
                 )
                     return;
                 const bridge = result && typeof result === 'object' ? result : {};
@@ -5944,7 +5951,7 @@ export class TabManager {
                 if (
                     request !== this._piBridgeSkillsRequest ||
                     this.getActiveTab()?.paneId !== paneId ||
-                    !this._piBridgeSkillsEligible(activeTab)
+                    !this._piBridgeSkillsContextValid(context)
                 )
                     return;
                 loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
@@ -5963,7 +5970,10 @@ export class TabManager {
         if (!listContainer) return;
         const paneId = activeTab.paneId;
         const query = this._piBridgeSkillQuery;
-        const pending = this._piBridgeSkillPending?.paneId === paneId;
+        const pending = this._piBridgeSkillPending?.has(paneId) === true;
+        // The rows belong to the runtime that produced the list.
+        const context = this._piBridgeSkillsContext;
+        if (!this._piBridgeSkillsContextValid(context)) return;
         const skills = (this._piBridgeSkills || []).filter(
             (skill) =>
                 skill &&
@@ -5995,16 +6005,23 @@ export class TabManager {
             button.disabled = pending;
             button.addEventListener('click', (event) => {
                 event.stopPropagation();
-                // Re-check at the point of use: the peer, the socket, or
-                // the capability can be gone while the row is on screen.
+                // Re-check at the point of use: the peer, the socket, the
+                // runtime, or the capability can be gone while the row
+                // is on screen.
                 if (
                     this.getActiveTab() !== activeTab ||
-                    !this._piBridgeSkillsEligible(activeTab) ||
+                    !this._piBridgeSkillsContextValid(context) ||
                     !dropup.contains(button)
                 )
                     return;
-                const operation = { paneId, name: skill.name };
-                this._piBridgeSkillPending = operation;
+                const operation = {
+                    paneId,
+                    name: skill.name,
+                    tab: activeTab,
+                    socket: activeTab.ws,
+                    generation: activeTab.piBridge?.generation,
+                };
+                this._piBridgeSkillPending.set(paneId, operation);
                 this._setPiRpcDropupButtonsDisabled(dropup, true);
                 let invokeResult;
                 try {
@@ -6017,8 +6034,15 @@ export class TabManager {
                 }
                 Promise.resolve(invokeResult)
                     .then(() => {
-                        if (this._piBridgeSkillPending !== operation) return;
-                        this._piBridgeSkillPending = null;
+                        if (this._piBridgeSkillPending?.get(paneId) !== operation)
+                            return;
+                        this._piBridgeSkillPending.delete(paneId);
+                        // A closed pane reports nothing, and a moved
+                        // socket or runtime makes the waiter stale.
+                        if (this.tabs?.get(operation.paneId) !== operation.tab)
+                            return;
+                        if (!this._piBridgeSkillsRuntimeCurrent(operation))
+                            return;
                         if (this.getActiveTab()?.paneId === paneId) {
                             this._closePiRpcDropups(true);
                             this.app?.showToast?.(
@@ -6028,12 +6052,23 @@ export class TabManager {
                         }
                     })
                     .catch((error) => {
-                        if (this._piBridgeSkillPending !== operation) return;
-                        this._piBridgeSkillPending = null;
+                        if (this._piBridgeSkillPending?.get(paneId) !== operation)
+                            return;
+                        this._piBridgeSkillPending.delete(paneId);
+                        // A closed pane reports nothing, and a moved
+                        // socket or runtime makes the waiter stale. A
+                        // still-current pane reports the interrupted
+                        // dispatch as unknown exactly once: the skill
+                        // may still have landed, and it is never resent.
+                        if (this.tabs?.get(operation.paneId) !== operation.tab)
+                            return;
+                        if (!this._piBridgeSkillsRuntimeCurrent(operation))
+                            return;
                         this._piRpcError(error, 'Pi skill');
+                        const current = this.getActiveTab();
                         if (
-                            this.getActiveTab()?.paneId === paneId &&
-                            this._piBridgeSkillsEligible(activeTab)
+                            current?.paneId === paneId &&
+                            this._piBridgeSkillsEligible(current)
                         )
                             this._renderPiRpcSkillsDropup(true);
                     });
@@ -10974,22 +11009,19 @@ export class TabManager {
                 modelDropup?.classList.add('hidden');
                 modelDropup?.replaceChildren();
             }
-            if (!this._piBridgeSkillsEligible(activeTab)) {
-                // Drop any in-flight skill list and close the picker:
-                // a late reply must not repopulate a picker the user
-                // can no longer use.
-                ++this._piBridgeSkillsRequest;
-                this._piBridgeSkills = null;
-                this._piBridgeSkillsTruncated = false;
-                this._piBridgeSkillsUnavailable = false;
-                if (this._piBridgeSkillPending?.paneId === activeTab.paneId)
-                    this._piBridgeSkillPending = null;
-                const skillsDropup = document.getElementById(
-                    'pi-rpc-skills-dropup',
-                );
-                skillsDropup?.classList.add('hidden');
-                skillsDropup?.replaceChildren();
-            }
+            // The retained skill list belongs to the runtime that
+            // produced it. A lost peer, a swapped socket, or a moved
+            // generation drops the list and closes the picker. A
+            // started invocation keeps its ownership instead: the
+            // dispatch may still have landed, so its bounded reply
+            // settles the outcome.
+            const skillsContext = this._piBridgeSkillsContext;
+            if (
+                !this._piBridgeSkillsEligible(activeTab) ||
+                (skillsContext?.paneId === activeTab.paneId &&
+                    !this._piBridgeSkillsContextValid(skillsContext))
+            )
+                this._invalidatePiBridgeSkillsList();
             if (!this._piBridgeThinkingEligible(activeTab))
                 this._invalidatePiBridgeThinking(activeTab);
         }
@@ -12752,6 +12784,59 @@ export class TabManager {
             Array.isArray(tab.piBridge.capabilities) &&
             tab.piBridge.capabilities.includes('pi.skills.v1')
         );
+    }
+
+    // _piBridgeSkillsContext pins a skills request to the runtime that
+    // owns it: the pane, its socket, and the bridge generation. A
+    // reply, a row, or a completion that belongs to a replaced peer
+    // is stale and never touches the live picker.
+    _piBridgeSkillsContextFor(tab) {
+        if (!this._piBridgeSkillsEligible(tab)) return null;
+        return {
+            paneId: tab.paneId,
+            tab,
+            socket: tab.ws,
+            generation: tab.piBridge?.generation,
+        };
+    }
+
+    _piBridgeSkillsContextValid(context) {
+        return (
+            !!context &&
+            this.tabs?.get(context.paneId) === context.tab &&
+            context.tab.ws === context.socket &&
+            context.tab.piBridge?.generation === context.generation &&
+            this._piBridgeSkillsEligible(context.tab)
+        );
+    }
+
+    // _piBridgeSkillsRuntimeCurrent reports whether a started
+    // invocation still belongs to the runtime that received it. A
+    // swapped socket or a moved generation makes the waiter stale; a
+    // lost peer does not, because the dispatch may still have landed
+    // in the session that is gone.
+    _piBridgeSkillsRuntimeCurrent(operation) {
+        return (
+            !!operation &&
+            operation.tab?.ws === operation.socket &&
+            operation.tab?.piBridge?.generation === operation.generation
+        );
+    }
+
+    // _invalidatePiBridgeSkillsList drops the retained skill list and
+    // closes the picker. A late reply must not repopulate a picker
+    // the user can no longer use. A started invocation keeps its
+    // ownership: the dispatch may still have landed, so its bounded
+    // reply settles the outcome.
+    _invalidatePiBridgeSkillsList() {
+        ++this._piBridgeSkillsRequest;
+        this._piBridgeSkills = null;
+        this._piBridgeSkillsTruncated = false;
+        this._piBridgeSkillsUnavailable = false;
+        this._piBridgeSkillsContext = null;
+        const dropup = document.getElementById('pi-rpc-skills-dropup');
+        dropup?.classList.add('hidden');
+        dropup?.replaceChildren();
     }
 
     _piBridgeThinkingContext(tab) {

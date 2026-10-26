@@ -40,6 +40,13 @@ type InvokeSkillResult struct {
 	Reason string
 }
 
+// IsSkillName reports whether one skill name can be carried on the
+// wire and addressed to the host. The HTTP layer uses it to reject an
+// unusable name before any peer contact.
+func IsSkillName(name string) bool {
+	return name != "" && len(name) <= maxSkillNameBytes
+}
+
 // RequestSkills asks the live peer for the session's skills and waits
 // for the correlated response. It fails fast without a live peer, a
 // negotiated skills capability, pending-request room, or queue
@@ -129,7 +136,7 @@ func (s *Server) RequestInvokeSkill(ctx context.Context, processID, name string)
 	if err := ctx.Err(); err != nil {
 		return InvokeSkillResult{}, err
 	}
-	if name == "" || len(name) > maxSkillNameBytes {
+	if !IsSkillName(name) {
 		return InvokeSkillResult{}, fmt.Errorf("pibridge: invalid skill name")
 	}
 	l, ok := s.reg.lookupByProcess(processID)

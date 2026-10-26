@@ -1068,7 +1068,7 @@ func handlePiBridgeInvokeSkill(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if body.Pane == "" || len(body.Pane) > 256 || body.Name == "" || len(body.Name) > 256 {
+	if body.Pane == "" || len(body.Pane) > 256 || !pibridge.IsSkillName(body.Name) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}

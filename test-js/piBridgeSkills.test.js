@@ -58,7 +58,8 @@ function harness(tab) {
     tm.tabs = new Map([[tab.paneId, tab]]);
     tm.app = { showToast: vi.fn(), codersPresetRegistry: {} };
     tm._piBridgeSkillsRequest = 0;
-    tm._piBridgeSkillPending = null;
+    tm._piBridgeSkillsContext = null;
+    tm._piBridgeSkillPending = new Map();
     tm._piBridgeSkills = null;
     tm._piBridgeSkillQuery = '';
     tm._piBridgeSkillsTruncated = false;
@@ -336,5 +337,154 @@ describe('bridge skills loss and reconnect', () => {
         await vi.waitFor(() => {
             expect(dropup.textContent).toContain('demo-skill');
         });
+    });
+});
+
+describe('bridge skills runtime fencing', () => {
+    function invokeMock() {
+        let release;
+        const fetchMock = mockFetch((url) => {
+            if (
+                url.includes('/api/pi-bridge/skill') &&
+                !url.includes('/api/pi-bridge/skills?')
+            )
+                return new Promise((resolve) => {
+                    release = () => resolve({ ok: false, status: 503 });
+                });
+            return {
+                skills: [{ name: 'demo-skill', description: 'demo' }],
+                truncated: false,
+                unavailable: false,
+            };
+        });
+        return {
+            fetchMock,
+            release: () => release(),
+            started: () => release !== undefined,
+            invokes: () =>
+                fetchMock.mock.calls.filter((call) => {
+                    const url = String(call[0]);
+                    return (
+                        url.includes('/api/pi-bridge/skill') &&
+                        !url.includes('/api/pi-bridge/skills?')
+                    );
+                }),
+        };
+    }
+
+    it('reports an unknown outcome once when the peer is lost mid-dispatch', async () => {
+        const io = invokeMock();
+        global.fetch = io.fetchMock;
+        const tab = bridgeTab();
+        const { tm, dropup } = harness(tab);
+        tm.renderPresets('pi');
+        skillsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('demo-skill');
+        });
+        dropup.querySelector('.dropup-model-btn').click();
+        await vi.waitFor(() => {
+            expect(io.started()).toBe(true);
+        });
+
+        // The peer goes away while the dispatch is still in flight.
+        tab.piBridge.connected = false;
+        tm.renderPresets('pi');
+        expect(dropup.classList.contains('hidden')).toBe(true);
+
+        // The bridge answers with a failure: the skill may still have
+        // landed, so the outcome is unknown, not refused.
+        io.release();
+        await vi.waitFor(() => {
+            expect(tm.app.showToast).toHaveBeenCalled();
+        });
+        expect(tm.app.showToast.mock.calls.at(-1)[0]).toContain('unknown');
+        // An uncertain dispatch is never resent.
+        expect(io.invokes()).toHaveLength(1);
+    });
+
+    it('stays silent when the socket is replaced mid-dispatch', async () => {
+        const io = invokeMock();
+        global.fetch = io.fetchMock;
+        const tab = bridgeTab();
+        const { tm, dropup } = harness(tab);
+        tm.renderPresets('pi');
+        skillsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('demo-skill');
+        });
+        dropup.querySelector('.dropup-model-btn').click();
+        await vi.waitFor(() => {
+            expect(io.started()).toBe(true);
+        });
+
+        // A new browser socket replaces the runtime that received the
+        // dispatch: the waiter is stale and settles silently.
+        tab.ws = {};
+        tab._piBridgeFresh = tab.ws;
+        io.release();
+        await new Promise((r) => setTimeout(r, 10));
+        expect(tm.app.showToast).not.toHaveBeenCalled();
+        expect(io.invokes()).toHaveLength(1);
+    });
+
+    it('drops a list reply that belongs to a replaced socket', async () => {
+        let release;
+        const fetchMock = mockFetch(
+            () =>
+                new Promise((resolve) => {
+                    release = () =>
+                        resolve({
+                            skills: [
+                                { name: 'demo-skill', description: 'demo' },
+                            ],
+                            truncated: false,
+                            unavailable: false,
+                        });
+                }),
+        );
+        global.fetch = fetchMock;
+        const tab = bridgeTab();
+        const { tm, dropup } = harness(tab);
+        tm.renderPresets('pi');
+        skillsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('Loading');
+        });
+
+        // The browser socket is replaced while the list is in flight.
+        tab.ws = {};
+        tab._piBridgeFresh = null;
+        tm.renderPresets('pi');
+
+        release();
+        await new Promise((r) => setTimeout(r, 10));
+        // The late reply must not populate the new runtime's picker.
+        expect(dropup.textContent).not.toContain('demo-skill');
+    });
+
+    it('ignores a row click after the runtime generation moved', async () => {
+        const fetchMock = mockFetch(() => ({
+            skills: [{ name: 'demo-skill', description: 'demo' }],
+            truncated: false,
+            unavailable: false,
+        }));
+        global.fetch = fetchMock;
+        const tab = bridgeTab();
+        const { tm, dropup } = harness(tab);
+        tm.renderPresets('pi');
+        skillsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('demo-skill');
+        });
+        const row = dropup.querySelector('.dropup-model-btn');
+        const callsBefore = fetchMock.mock.calls.length;
+
+        // The runtime was replaced: the retained rows are stale.
+        tab.piBridge.generation = '2';
+        row.click();
+        await new Promise((r) => setTimeout(r, 10));
+        expect(fetchMock.mock.calls.length).toBe(callsBefore);
+        expect(tm.app.showToast).not.toHaveBeenCalled();
     });
 });

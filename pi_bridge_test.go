@@ -1761,6 +1761,11 @@ func TestHandlePiBridgeInvokeSkill(t *testing.T) {
 	if rec := serve(http.MethodPost, `{"pane":"p1"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("missing name code %d, want 400", rec.Code)
 	}
+	// A name that cannot be carried on the wire is a client error and
+	// never reaches the peer.
+	if rec := serve(http.MethodPost, `{"pane":"p1","name":"`+strings.Repeat("x", 65)+`"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized name code %d, want 400", rec.Code)
+	}
 	if rec := serve(http.MethodPost, `{"pane":"p1","name":"`+strings.Repeat("x", 5000)+`"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("oversized body code %d, want 400", rec.Code)
 	}
