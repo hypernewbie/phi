@@ -594,7 +594,10 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
         // Live metadata comes from sequenced stateChanged events. The
         // operation response carries no version, so it must not overwrite
         // state an event has already advanced past.
-        return invokeControl(wire, 'setModel', currentSid, { provider, modelId });
+        return invokeControl(wire, 'setModel', currentSid, {
+            provider,
+            modelId,
+        });
     };
     const setThinking = (level) => {
         if (!sid || !ready || exited)
