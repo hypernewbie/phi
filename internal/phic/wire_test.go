@@ -127,3 +127,35 @@ func TestParseAttachHeadCheckpointGeometry(t *testing.T) {
 		}
 	}
 }
+
+// An empty checkpoint is not a restorable screen. Accepting it turns a
+// server-side blank snapshot into a native repaint that never arrives, so
+// the bootstrap retries forever instead of failing the protocol.
+func TestParseAttachHeadRejectsEmptyCheckpoint(t *testing.T) {
+	attach := &wspb.TerminalAttach{
+		Epoch:  proto.Uint64(7),
+		Oldest: proto.Uint64(0),
+		Head:   proto.Uint64(0),
+		Checkpoint: &wspb.TerminalCheckpoint{
+			Through: proto.Uint64(0),
+			Cols:    proto.Uint32(80),
+			Rows:    proto.Uint32(24),
+			Kind:    proto.String("ghostty-ready-v1"),
+		},
+	}
+	raw, err := wireproto.EncodeAttachFrame(attach)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if _, err := ParseAttachHead(raw); err == nil {
+		t.Fatal("empty checkpoint accepted")
+	}
+	attach.Checkpoint.Data = []byte("snap")
+	raw, err = wireproto.EncodeAttachFrame(attach)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if _, err := ParseAttachHead(raw); err != nil {
+		t.Fatalf("non-empty checkpoint rejected: %v", err)
+	}
+}

@@ -547,11 +547,12 @@ func (s *controlServer) transcriptResult(sid string, subscribe, getMessages bool
 	if subscribe {
 		s.subscribeInstance(inst)
 	}
-	snapshot, err := snapshotToWire(inst.SnapshotCopy())
+	snapshotCopy, state := inst.SnapshotStateCopy()
+	snapshot, err := snapshotToWire(snapshotCopy)
 	if err != nil {
 		return nil, err
 	}
-	snapshot.State = stateToWire(inst.StateCopy())
+	snapshot.State = stateToWire(state)
 	if getMessages {
 		return &wspb.ControlResponse{Result: &wspb.ControlResponse_GetMessages{
 			GetMessages: &wspb.TranscriptResult{Session: snapshot},

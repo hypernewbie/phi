@@ -899,6 +899,19 @@ describe('external values', () => {
         expect(() =>
             externalToJS({ kind: { $case: 'numberValue', value: Infinity } }),
         ).toThrow(/nonfinite/);
+        // Pi data may hold integers a JS number cannot represent exactly. The
+        // server sends those as doubles, so the browser reads an ordinary
+        // number; a wide int_value is still a protocol bound violation.
+        expect(
+            externalToJS({
+                kind: { $case: 'numberValue', value: 9007199254740992 },
+            }),
+        ).toBe(9007199254740992);
+        expect(() =>
+            externalToJS({
+                kind: { $case: 'intValue', value: 9007199254740992n },
+            }),
+        ).toThrow(/safe integer range/);
         expect(() =>
             externalToJS({
                 kind: { $case: 'listValue', value: { values: [undefined] } },

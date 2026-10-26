@@ -747,13 +747,26 @@ func externalFromScalar(token json.Token) (*wspb.ExternalValue, error) {
 
 func externalFromNumber(number json.Number) (*wspb.ExternalValue, error) {
 	if integer, err := number.Int64(); err == nil {
-		return &wspb.ExternalValue{Kind: &wspb.ExternalValue_IntValue{IntValue: integer}}, nil
+		return externalFromInt(integer), nil
 	}
 	value, err := number.Float64()
 	if err != nil || math.IsInf(value, 0) || math.IsNaN(value) {
 		return nil, errors.New("external value has a nonfinite number")
 	}
 	return &wspb.ExternalValue{Kind: &wspb.ExternalValue_NumberValue{NumberValue: value}}, nil
+}
+
+// maxSafeExternalInteger is the largest integer a JavaScript number holds
+// exactly. Pi ships arbitrary JSON numbers, so an integer outside this range
+// goes out as a double: the browser reads doubles as ordinary numbers, while
+// a wider int_value is rejected as a sequence-number style bound violation.
+const maxSafeExternalInteger = 1<<53 - 1
+
+func externalFromInt(value int64) *wspb.ExternalValue {
+	if value > maxSafeExternalInteger || value < -maxSafeExternalInteger {
+		return &wspb.ExternalValue{Kind: &wspb.ExternalValue_NumberValue{NumberValue: float64(value)}}
+	}
+	return &wspb.ExternalValue{Kind: &wspb.ExternalValue_IntValue{IntValue: value}}
 }
 
 // externalFromAny converts one decoded Go value. Objects keep their keys
@@ -804,9 +817,9 @@ func convertExternal(value any, depth int, nodes *int) (*wspb.ExternalValue, err
 	case float32:
 		return convertExternal(float64(typed), depth, nodes)
 	case int:
-		return &wspb.ExternalValue{Kind: &wspb.ExternalValue_IntValue{IntValue: int64(typed)}}, nil
+		return externalFromInt(int64(typed)), nil
 	case int64:
-		return &wspb.ExternalValue{Kind: &wspb.ExternalValue_IntValue{IntValue: typed}}, nil
+		return externalFromInt(typed), nil
 	case []any:
 		list := &wspb.ExternalList{Values: make([]*wspb.ExternalValue, 0, len(typed))}
 		for _, item := range typed {

@@ -1016,6 +1016,29 @@ func TestWebSocketProtobufExternalValues(t *testing.T) {
 		}
 	})
 
+	t.Run("integers_beyond_js_safe_range", func(t *testing.T) {
+		// Pi sends arbitrary JSON numbers. An integer a JS number cannot hold
+		// exactly must travel as a double: int_value is reserved for values
+		// the browser can convert without losing precision, and the browser
+		// rejects a wider int_value as a bound violation.
+		big, ok := mustExternal(t, json.Number("9007199254740992")).GetKind().(*wspb.ExternalValue_NumberValue)
+		if !ok {
+			t.Fatalf("2^53 must travel as a double: %T", mustExternal(t, json.Number("9007199254740992")).GetKind())
+		}
+		if big.NumberValue != 9007199254740992 {
+			t.Fatalf("2^53 double = %v", big.NumberValue)
+		}
+		if _, ok := mustExternal(t, json.Number("9007199254740991")).GetKind().(*wspb.ExternalValue_IntValue); !ok {
+			t.Fatal("the largest safe integer must stay an int variant")
+		}
+		if _, ok := mustExternal(t, int64(1)<<62).GetKind().(*wspb.ExternalValue_NumberValue); !ok {
+			t.Fatal("a wide int64 must travel as a double")
+		}
+		if _, ok := mustExternal(t, json.Number("-9007199254740992")).GetKind().(*wspb.ExternalValue_NumberValue); !ok {
+			t.Fatal("a wide negative integer must travel as a double")
+		}
+	})
+
 	t.Run("finite_numbers", func(t *testing.T) {
 		if _, err := externalFromAny(math.NaN()); err == nil {
 			t.Fatal("NaN must be rejected")
