@@ -1791,6 +1791,14 @@ func TestHandlePiBridgeInvokeSkill(t *testing.T) {
 	if rec := serve(http.MethodPost, `{"pane":"p1","name":"demo-skill","process_id":"proc","generation":"x"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("malformed generation code %d, want 400", rec.Code)
 	}
+	// The body must be one JSON object: trailing content is a client
+	// error and never reaches the peer.
+	if rec := serve(http.MethodPost, `{"pane":"p1","name":"demo-skill","process_id":"proc","generation":"1"} {}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("trailing object code %d, want 400", rec.Code)
+	}
+	if rec := serve(http.MethodPost, `{"pane":"p1","name":"demo-skill","process_id":"proc","generation":"1"}`+strings.Repeat(" ", 4100)); rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized trailing code %d, want 400", rec.Code)
+	}
 	// A name that cannot be carried on the wire is a client error and
 	// never reaches the peer.
 	if rec := serve(http.MethodPost, `{"pane":"p1","name":"`+strings.Repeat("x", 65)+`"}`); rec.Code != http.StatusBadRequest {
