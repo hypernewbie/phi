@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -365,7 +364,31 @@ func handleGetSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessions, err := session.ListSessions(r.Context(), c, cwd)
+	limit, offset := 0, 0
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil {
+			http.Error(w, "Invalid limit", http.StatusBadRequest)
+			return
+		}
+		limit = value
+	}
+	if raw := r.URL.Query().Get("offset"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil {
+			http.Error(w, "Invalid offset", http.StatusBadRequest)
+			return
+		}
+		offset = value
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	sessions, err := session.ListSessionsPage(r.Context(), c, cwd, offset, limit)
 	if err != nil {
 		if errors.Is(err, session.ErrAdapterUnknown) {
 			http.Error(w, "Unsupported session_source: "+c.SessionSource, http.StatusBadRequest)
@@ -378,11 +401,6 @@ func handleGetSessions(w http.ResponseWriter, r *http.Request) {
 	if sessions == nil {
 		sessions = []session.Session{}
 	}
-
-	// Sort sessions so that the most recently updated sessions are returned first.
-	sort.Slice(sessions, func(i, j int) bool {
-		return sessions[i].TimeUpdated.After(sessions[j].TimeUpdated)
-	})
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(sessions)

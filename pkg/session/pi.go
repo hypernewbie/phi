@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
+	"time"
 )
 
 func newPiScanner(file *os.File) *bufio.Scanner {
@@ -196,6 +198,13 @@ func validatePiSessionFile(canonicalCwd, filePath string) (PiSessionHeader, os.F
 
 // ListPiSessions scans ~/.pi/agent/sessions/--cwd-- project directory and returns sessions.
 func ListPiSessions(cwd string) ([]Session, error) {
+	return listPiSessionsPage(cwd, 0, 0)
+}
+
+// listPiSessionsPage returns sessions newest first. offset/limit count valid
+// sessions (limit <= 0 means all): candidates outside the window still have
+// their header validated but never get their title parsed.
+func listPiSessionsPage(cwd string, offset, limit int) ([]Session, error) {
 	canonicalCwd, projectPath, err := piSessionDirectory(cwd)
 	if err != nil {
 		return nil, err
@@ -214,15 +223,45 @@ func ListPiSessions(cwd string) ([]Session, error) {
 		return nil, err
 	}
 
-	var sessions []Session
+	type candidate struct {
+		path string
+		mod  time.Time
+	}
+	candidates := make([]candidate, 0, len(files))
 	for _, f := range files {
 		if f.IsDir() || filepath.Ext(f.Name()) != ".jsonl" {
 			continue
 		}
+		info, ierr := f.Info()
+		if ierr != nil {
+			continue
+		}
+		candidates = append(candidates, candidate{
+			path: filepath.Join(projectPath, f.Name()),
+			mod:  info.ModTime(),
+		})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].mod.After(candidates[j].mod)
+	})
 
-		filePath := filepath.Join(projectPath, f.Name())
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		offset = 0
+	}
+
+	var sessions []Session
+	valid := 0
+	for _, cand := range candidates {
+		filePath := cand.path
 		header, info, err := validatePiSessionFile(canonicalCwd, filePath)
 		if err != nil {
+			continue
+		}
+		valid++
+		if valid <= offset {
 			continue
 		}
 
@@ -247,8 +286,12 @@ func ListPiSessions(cwd string) ([]Session, error) {
 			TimeUpdated: info.ModTime(),
 			SessionPath: absolutePath,
 		})
+		if limit > 0 && len(sessions) >= limit {
+			break
+		}
 	}
 
+	SortSessions(sessions)
 	return sessions, nil
 }
 

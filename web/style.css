@@ -5913,6 +5913,42 @@ html[data-phi-config-page] .settings-modal {
     color: var(--text-muted);
 }
 
+/* Sidebar page arrows: compose .btn .btn-primary and only override the
+   compact square size and muted idle colour. */
+.session-pager {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    margin-top: 4px;
+}
+
+.session-page {
+    width: 32px;
+    height: 30px;
+    padding: 0;
+    font-size: 15px;
+    line-height: 1;
+    color: var(--text-muted);
+    background: transparent;
+}
+
+.session-page:hover:not(:disabled) {
+    color: var(--text-primary);
+    background: transparent;
+    border-color: var(--accent);
+}
+
+.session-page:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.session-page-label {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
 .scanning-sessions,
 .no-sessions-found,
 .error-sessions {

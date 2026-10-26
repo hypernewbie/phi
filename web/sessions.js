@@ -40,6 +40,35 @@ const BUILTIN_SESSION_TITLES = new Map([
     ['bash', 'Shell'],
     ['pwsh', 'Shell'],
 ]);
+// sessionsUrl is the single source of the paginated session list URL: every
+// fetch, cache write, and cache lookup must produce the same string.
+function sessionsUrl(coder, cwd, limit, offset = 0) {
+    return `/api/sessions?coder=${encodeURIComponent(coder)}&cwd=${encodeURIComponent(cwd)}&limit=${limit}&offset=${offset}`;
+}
+// readCachedSessions returns the last good response for a URL, or null when
+// the cache is empty or corrupt.
+function readCachedSessions(store, url) {
+    const raw = store?.responses?.get?.(url);
+    if (!raw)
+        return null;
+    try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : null;
+    }
+    catch {
+        return null;
+    }
+}
+function focusPagerButton(container, delta) {
+    const preferred = container.querySelector(`.session-page[data-page="${delta}"]`);
+    if (preferred && !preferred.disabled) {
+        preferred.focus({ preventScroll: true });
+        return;
+    }
+    container
+        .querySelector('.session-page:not(:disabled)')
+        ?.focus({ preventScroll: true });
+}
 export class SessionsManager {
     app;
     activeCoder;
@@ -79,6 +108,7 @@ export class SessionsManager {
     wsModalFocusinHandler;
     worktreeDirtyRequestId;
     worktreeLoadRequestId;
+    sessionListPageSize = 10;
     _measureSpan = null;
     _contextMenu;
     _ctxDismissMousedown;
@@ -374,6 +404,10 @@ export class SessionsManager {
                 (ls?.ui_font_family ?? data.ui_font_family) || '';
             this.app.uiFontSize =
                 Number(ls?.ui_font_size ?? data.ui_font_size) || 0;
+            // Server resolves and clamps the page size; missing/older config
+            // falls back to 10. Not part of phi_appearance.
+            this.sessionListPageSize =
+                Number(data.session_list_page_size) || 10;
             this.app.terminalFontFamily =
                 (ls?.terminal_font_family ??
                     data.terminal_font_family) || '';
@@ -699,15 +733,9 @@ export class SessionsManager {
                     }
                     else {
                         const store = this.app?.getActiveStore?.();
-                        const cachedKey = `/api/sessions?coder=${this.activeCoder}&cwd=${encodeURIComponent(wt.path)}`;
-                        const cachedSessions = store?.responses?.get?.(cachedKey);
-                        if (cachedSessions) {
-                            try {
-                                this.renderWorktreeSessionsList(JSON.parse(cachedSessions), wt.path, container);
-                            }
-                            catch {
-                                container.innerHTML = '';
-                            }
+                        const firstPage = readCachedSessions(store, sessionsUrl(this.activeCoder, wt.path, this.sessionListPageSize ?? 10, 0));
+                        if (firstPage) {
+                            this.renderWorktreeSessionsList(firstPage, wt.path, container);
                         }
                         else {
                             container.innerHTML = '';
@@ -754,43 +782,110 @@ export class SessionsManager {
             }
         }
     }
-    async loadWorktreeSessions(wtPath, container) {
-        container.innerHTML =
-            '<div class="scanning-sessions">Scanning sessions...</div>';
+    async loadWorktreeSessions(wtPath, container, offset = 0) {
+        const size = this.sessionListPageSize ?? 10;
+        const coder = this.activeCoder;
+        const scope = this.app?.scope;
+        const store = this.app?.getActiveStore?.();
+        const url = sessionsUrl(coder, wtPath, size, offset);
+        // A duplicate call for the page already in flight must not advance the
+        // request token and orphan the response it replaces.
+        if (container.dataset.sessionPendingOffset === String(offset))
+            return;
+        // Restore focus only when a pager arrow still owns it at render time;
+        // a user who moved on must not be pulled back to the sidebar.
+        const focusedPagerPage = () => {
+            const active = document.activeElement;
+            return active instanceof HTMLElement &&
+                active.classList.contains('session-page') &&
+                container.contains(active)
+                ? active.dataset.page
+                : undefined;
+        };
+        const renderPage = (sessions) => {
+            const focusedPage = focusedPagerPage();
+            const renderSessions = typeof this.renderWorktreeSessionsList === 'function'
+                ? this.renderWorktreeSessionsList
+                : SessionsManager.prototype.renderWorktreeSessionsList;
+            renderSessions.call(this, sessions, wtPath, container, offset);
+            if (focusedPage)
+                focusPagerButton(container, focusedPage);
+        };
+        // Advance the generation before painting anything: opening a cached
+        // page must invalidate the refresh it interrupts.
+        const requestId = String(Number(container.dataset.sessionRequestId ?? 0) + 1);
+        container.dataset.sessionRequestId = requestId;
+        container.dataset.sessionPendingOffset = String(offset);
+        const isCurrentRequest = () => container.dataset.sessionRequestId === requestId &&
+            this.activeCoder === coder &&
+            this.app?.scope === scope;
+        // Paint the last good answer before any round-trip, then revalidate it
+        // in the background. A failed revalidation keeps the cached rows.
+        let cached = readCachedSessions(store, url);
+        if (cached) {
+            try {
+                renderPage(cached);
+            }
+            catch {
+                // Corrupt cached rows must not block the refresh.
+                store?.responses?.delete?.(url);
+                container.innerHTML = '';
+                cached = null;
+            }
+        }
+        if (!cached && !container.querySelector('.session-item')) {
+            container.innerHTML =
+                '<div class="scanning-sessions">Scanning sessions...</div>';
+        }
         try {
             const fetchFn = this.app?.scope && typeof this.app.scope.fetch === 'function'
                 ? (url, opts) => this.app.scope.fetch(url, opts)
                 : fetch;
-            const url = `/api/sessions?coder=${this.activeCoder}&cwd=${encodeURIComponent(wtPath)}`;
             const res = await fetchFn(url);
             if (!res.ok) {
                 const errMsg = await res.text();
                 throw new Error(errMsg || 'Failed to scan sessions');
             }
             const sessions = await res.json();
-            const store = this.app?.getActiveStore?.();
+            if (!isCurrentRequest())
+                return;
             if (store) {
                 store.responses.set(url, JSON.stringify(sessions));
             }
-            const renderSessions = typeof this.renderWorktreeSessionsList === 'function'
-                ? this.renderWorktreeSessionsList
-                : SessionsManager.prototype.renderWorktreeSessionsList;
-            renderSessions.call(this, sessions, wtPath, container);
+            renderPage(sessions);
         }
         catch (e) {
             if (e?.name === 'AbortError' || this.app?.scope?.aborted)
                 return;
-            container.innerHTML = `<div class="error-sessions">Error: ${escapeHtml(e.message)}</div>`;
+            if (!isCurrentRequest())
+                return;
+            const message = `Error: ${e.message}`;
+            container.querySelector('.error-sessions')?.remove();
+            if (container.querySelector('.session-item')) {
+                // A failed page must not clear the rows already on screen.
+                const error = document.createElement('div');
+                error.className = 'error-sessions';
+                error.textContent = message;
+                container.appendChild(error);
+            }
+            else {
+                container.innerHTML = `<div class="error-sessions">${escapeHtml(message)}</div>`;
+            }
+        }
+        finally {
+            if (container.dataset.sessionRequestId === requestId) {
+                delete container.dataset.sessionPendingOffset;
+            }
         }
     }
-    renderWorktreeSessionsList(sessions, wtPath, container) {
+    renderWorktreeSessionsList(sessions, wtPath, container, offset = 0) {
         container.innerHTML = '';
-        if (!sessions || sessions.length === 0) {
+        const rows = Array.isArray(sessions) ? sessions : [];
+        if (rows.length === 0) {
             container.innerHTML =
                 '<div class="no-sessions-found">No sessions found</div>';
-            return;
         }
-        sessions.forEach((sess) => {
+        rows.forEach((sess) => {
             const item = document.createElement('div');
             item.className = 'session-item';
             item.setAttribute('data-session-id', sess.id);
@@ -935,10 +1030,38 @@ export class SessionsManager {
             }
             container.appendChild(item);
         });
+        this.renderSessionPager(container, wtPath, offset, rows.length);
         const activeTab = this.app?.tabManager?.getActiveTab?.();
         if (activeTab && activeTab.coder === this.activeCoder) {
             this.highlightActiveSession(activeTab.sessionId);
         }
+    }
+    renderSessionPager(container, wtPath, offset, rowCount) {
+        const size = this.sessionListPageSize ?? 10;
+        const hasPrev = offset > 0;
+        const hasNext = rowCount === size;
+        if (!hasPrev && !hasNext)
+            return;
+        const pager = document.createElement('div');
+        pager.className = 'session-pager';
+        const pageButton = (delta, text) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'btn btn-primary session-page';
+            button.dataset.page = String(delta);
+            button.textContent = text;
+            button.disabled = delta < 0 ? !hasPrev : !hasNext;
+            button.setAttribute('aria-label', delta < 0 ? 'Previous page' : 'Next page');
+            button.addEventListener('click', () => {
+                void this.loadWorktreeSessions(wtPath, container, offset + delta * size);
+            });
+            return button;
+        };
+        const label = document.createElement('span');
+        label.className = 'session-page-label';
+        label.textContent = `Page ${Math.floor(offset / size) + 1}`;
+        pager.append(pageButton(-1, '\u2039'), label, pageButton(1, '\u203a'));
+        container.appendChild(pager);
     }
     async saveWorktreeState() {
         const expandedStates = {};

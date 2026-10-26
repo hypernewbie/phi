@@ -59,6 +59,12 @@ type Config struct {
 	TerminalFontFamily string `json:"terminal_font_family,omitempty"`
 	TerminalFontSize   int    `json:"terminal_font_size,omitempty"`
 
+	// SessionListPageSize controls how many sessions the sidebar shows per
+	// page. 0 uses 10; nonzero values are clamped to 5..100 when the
+	// /api/config payload is built. Optional: old config files load fine
+	// without it.
+	SessionListPageSize int `json:"session_list_page_size,omitempty"`
+
 	// HostnameOverride replaces the page host in socket URLs. Blank
 	// (default, backwards compatible) means location.host. Persisted so
 	// devices share it; each browser's localStorage still wins locally.
