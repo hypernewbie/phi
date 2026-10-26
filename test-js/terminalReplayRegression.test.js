@@ -289,6 +289,126 @@ describe('actual xterm byte-stream recovery', () => {
         }
     });
 
+    it('drains an epoch reset banner before resizing to the checkpoint grid', async () => {
+        const h = harness(encode(''));
+        const writes = [];
+        const callbacks = [];
+        const order = [];
+        const resize = h.term.resize.bind(h.term);
+        h.tab._termOpened = true;
+        h.tab._pendingResetBanner = 'RESET BANNER';
+        h.manager._cancelHistoryRequest = vi.fn();
+        h.manager._clearHistoryState = vi.fn();
+        h.manager._bootstrappedRelease = vi.fn();
+        h.term.write = (data, callback) => {
+            writes.push(data);
+            callbacks.push(callback);
+        };
+        vi.spyOn(h.term, 'resize').mockImplementation((cols, rows) => {
+            order.push({ kind: 'resize', pending: h.tab.writePending });
+            resize(cols, rows);
+        });
+
+        try {
+            const attach = h.manager._onAttachHead(h.tab, {
+                epoch: 8,
+                oldest: 0,
+                head: 0,
+                ckpt: { through: 0, cols: 100, rows: 30, ansi: 'CHECKPOINT' },
+            });
+            await Promise.resolve();
+
+            expect(writes).toEqual(['RESET BANNER']);
+            expect(order).toEqual([]);
+            expect(h.tab.writePending).toBe(true);
+
+            callbacks.shift()();
+            await attach;
+
+            expect(order).toEqual([{ kind: 'resize', pending: false }]);
+            expect(writes).toEqual(['RESET BANNER', 'CHECKPOINT']);
+            expect([h.term.cols, h.term.rows]).toEqual([100, 30]);
+            callbacks.shift()();
+            await Promise.resolve();
+        } finally {
+            h.term.dispose();
+        }
+    });
+
+    it('drains a recovered checkpoint and fits before releasing held live output', async () => {
+        const h = harness(encode(''));
+        const order = [];
+        let finishCheckpoint;
+        h.tab.fitAddon = {
+            fit: vi.fn(() => {
+                order.push('fit');
+                h.term.resize(90, 8);
+            }),
+        };
+        h.manager._fetchRecordingRange = vi.fn(async () => {
+            const error = new Error('recording expired');
+            error.historyPermanent = true;
+            throw error;
+        });
+        h.manager._fetchTerminalState = vi.fn(async () => ({
+            cols: 80,
+            rows: 8,
+            ansi: 'RECOVERED CHECKPOINT',
+            through: 1,
+            oldest: 0,
+        }));
+        h.manager._refreshTerminalScreen = vi.fn(() => order.push('refresh'));
+        h.manager._terminalPanelVisible = () => true;
+        h.pty.sendResize = vi.fn((cols, rows) => {
+            order.push(`resize:${cols}x${rows}`);
+            return true;
+        });
+        const release = h.pty.release.bind(h.pty);
+        h.pty.release = () => {
+            order.push('release');
+            return release();
+        };
+        h.term.write = (data, callback) => {
+            expect(data).toBe('RECOVERED CHECKPOINT');
+            order.push('checkpoint-write');
+            finishCheckpoint = () => {
+                order.push('checkpoint-parsed');
+                callback();
+            };
+        };
+
+        h.pty.hold();
+        try {
+            h.manager._bootstrappedRelease(h.tab, h.pty, 0, 1);
+            for (let i = 0; i < 10 && !finishCheckpoint; i++)
+                await Promise.resolve();
+            expect(finishCheckpoint).toBeTypeOf('function');
+            await Promise.resolve();
+
+            expect(order).toEqual(['checkpoint-write']);
+            expect(h.tab.writePending).toBe(true);
+            expect(h.pty.sendResize).not.toHaveBeenCalled();
+            expect(h.pty.ws.closed).toBeUndefined();
+
+            finishCheckpoint();
+            await Promise.all([...(h.tab._pendingBootstraps || [])]);
+
+            expect(order).toEqual([
+                'checkpoint-write',
+                'checkpoint-parsed',
+                'fit',
+                'refresh',
+                'resize:90x8',
+                'release',
+            ]);
+            expect(h.tab.writePending).toBe(false);
+        } finally {
+            if (finishCheckpoint && h.tab.writePending) finishCheckpoint();
+            await Promise.all([...(h.tab._pendingBootstraps || [])]);
+            h.term.dispose();
+        }
+    });
+
     it('waits for an outstanding parse before choosing the reconnect frontier, without replaying queued text twice', async () => {
         const before = 'already queued\r\n';
         const source = encode(`${before}missed while disconnected\r\n`);

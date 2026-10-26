@@ -260,6 +260,7 @@ describe('TabManager syncTabs and client-side lifecycle', () => {
         it('creates tabs with live: false + cachedScreen without creating WebSocket', async () => {
             const tm = makeTm();
             tm._connectTabSocket = vi.fn();
+            tm.syncBackendPin = vi.fn();
 
             const instances = [
                 {
@@ -282,7 +283,13 @@ describe('TabManager syncTabs and client-side lifecycle', () => {
             expect(tab.term.resize).toHaveBeenCalledWith(120, 40);
             expect(tab.term.origWrite).toHaveBeenCalledWith(
                 'cached output line\r\n',
+                expect.any(Function),
             );
+            expect(tab.lastOutputAt).toBeUndefined();
+            expect(tab.isBusy).toBe(false);
+            expect(tab.busyStartTime).toBeNull();
+            expect(tm.updateDocumentTitle).not.toHaveBeenCalled();
+            expect(tm.syncBackendPin).not.toHaveBeenCalled();
             expect(tm._connectTabSocket).not.toHaveBeenCalled();
         });
 

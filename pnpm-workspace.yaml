@@ -58,3 +58,6 @@ minimumReleaseAgeExclude:
   - html-encoding-sniffer@7.0.0
   - jsdom@30.1.1
   - w3c-xmlserializer@6.0.0
+patchedDependencies:
+  '@xterm/headless@6.1.0-beta.303': patches/@xterm__headless@6.1.0-beta.303.patch
+  '@xterm/xterm@6.1.0-beta.304': patches/@xterm__xterm@6.1.0-beta.304.patch

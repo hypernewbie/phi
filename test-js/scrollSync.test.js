@@ -53,18 +53,20 @@ function makeTab({ viewportY = 100, baseY = 100, follow = true } = {}) {
 }
 
 describe('write batches sync the DOM scroll area', () => {
-    it('calls _core.viewport.syncScrollArea(true) via the write callback', () => {
+    it('calls _core.viewport.syncScrollArea(true) via the write callback', async () => {
         const tm = Object.create(TabManager.prototype);
         const tab = makeTab();
         tm.writeToTerminal(tab, 'hello');
         expect(tab.term.write).toHaveBeenCalledTimes(1);
+        await Promise.resolve();
         expect(tab._syncSpy).toHaveBeenCalledWith(true);
     });
 
-    it('still snaps to bottom when following at bottom (existing behavior preserved)', () => {
+    it('still snaps to bottom when following at bottom (existing behavior preserved)', async () => {
         const tm = Object.create(TabManager.prototype);
         const tab = makeTab({ viewportY: 100, baseY: 100, follow: true });
         tm.writeToTerminal(tab, 'hello');
+        await Promise.resolve();
         expect(tab.term.scrollToBottom).toHaveBeenCalled();
     });
 
@@ -77,11 +79,12 @@ describe('write batches sync the DOM scroll area', () => {
         expect(tab._syncSpy).not.toHaveBeenCalled();
     });
 
-    it('tolerates a term without _core.viewport (optional chain)', () => {
+    it('tolerates a term without _core.viewport (optional chain)', async () => {
         const tm = Object.create(TabManager.prototype);
         const tab = makeTab();
         delete tab.term._core;
-        expect(() => tm.writeToTerminal(tab, 'hello')).not.toThrow();
+        tm.writeToTerminal(tab, 'hello');
+        await Promise.resolve();
     });
 });
 

@@ -45,39 +45,43 @@ function makeTm() {
 }
 
 describe('user-follow tracking on PTY writes', () => {
-    it('snaps to bottom when user is following and at bottom', () => {
+    it('snaps to bottom when user is following and at bottom', async () => {
         const tm = makeTm();
         const tab = makeTab({ viewportY: 100, baseY: 100, follow: true });
         tm.writeToTerminal(tab, 'hello');
+        await Promise.resolve();
         expect(tab.term.scrollToBottom).toHaveBeenCalledTimes(1);
     });
 
-    it('does NOT snap when userFollowBottom is false even though at bottom', () => {
+    it('does NOT snap when userFollowBottom is false even though at bottom', async () => {
         // User has scrolled up (wheel disengages follow). Output arriving
         // at the bottom must NOT yank the viewport back to live tail —
         // that's exactly the "scrollbar snap" bug we're fixing.
         const tm = makeTm();
         const tab = makeTab({ viewportY: 100, baseY: 100, follow: false });
         tm.writeToTerminal(tab, 'hello');
+        await Promise.resolve();
         expect(tab.term.scrollToBottom).not.toHaveBeenCalled();
     });
 
-    it('does NOT snap when user is NOT at bottom (regardless of follow flag)', () => {
+    it('does NOT snap when user is NOT at bottom (regardless of follow flag)', async () => {
         // User scrolled away and is reading history. Output should not
         // pop the viewport back to live tail.
         const tm = makeTm();
         const tab = makeTab({ viewportY: 50, baseY: 100, follow: true });
         tm.writeToTerminal(tab, 'hello');
+        await Promise.resolve();
         expect(tab.term.scrollToBottom).not.toHaveBeenCalled();
     });
 
-    it('uses the strict "viewportY >= baseY" predicate (matches the scroll-to-bottom button)', () => {
+    it('uses the strict "viewportY >= baseY" predicate (matches the scroll-to-bottom button)', async () => {
         // Regression: the contract pinned by test-js/scrollBugs.test.js
         // requires no "baseY - 1" slack. We use the exact same predicate
         // as the scroll-to-bottom button's onScroll handler.
         const tm = makeTm();
         const tab = makeTab({ viewportY: 99, baseY: 100, follow: true });
         tm.writeToTerminal(tab, 'hello');
+        await Promise.resolve();
         // 99 < 100 → not at bottom → no snap
         expect(tab.term.scrollToBottom).not.toHaveBeenCalled();
     });

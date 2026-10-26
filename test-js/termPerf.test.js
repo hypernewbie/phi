@@ -31,7 +31,7 @@ describe('terminal performance instrumentation', () => {
         measureSpy.mockRestore();
     });
 
-    it('marks first-write once per attach and measures attach latency', () => {
+    it('marks first-write once per attach and measures attach latency', async () => {
         const tm = makeTm();
         const written = [];
         const tab = {
@@ -54,6 +54,7 @@ describe('terminal performance instrumentation', () => {
 
         tm.writeToTerminal(tab, 'hello');
         tm.writeToTerminal(tab, ' world');
+        await Promise.resolve();
 
         expect(written.join('')).toBe('hello world');
         const marks = markSpy.mock.calls.map((c) => c[0]);

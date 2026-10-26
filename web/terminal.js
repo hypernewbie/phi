@@ -2523,6 +2523,8 @@ export class TabManager {
         if (tabInfo._pendingResetBanner) {
             this.writeToTerminal(tabInfo, tabInfo._pendingResetBanner);
             tabInfo._pendingResetBanner = null;
+            await this._drainSettled(tabInfo);
+            if (tabInfo.ws !== pty || tabInfo.paneEpoch !== info.epoch || tabInfo.finalizing) return;
         }
         if (info.ckpt) {
             // A checkpoint's cursor coordinates and wrapping belong to its
@@ -3011,6 +3013,10 @@ export class TabManager {
             }
             cursor = end;
         }
+        // Recovery can append its checkpoint after the delta loop. Drain it
+        // before fitting and releasing held live output.
+        await this._drainSettled(tabInfo);
+        if (!current()) return false;
         // Restore visible panel geometry; hidden parsers keep the recorded
         // grid until activation provides measurable panel dimensions.
         this._fitVisibleTerminal(tabInfo);
@@ -3251,6 +3257,10 @@ export class TabManager {
             tabInfo._pendingForceResize = true;
             return;
         }
+        if (tabInfo.writePending) {
+            tabInfo._pendingPanelFit = true;
+            return;
+        }
         tabInfo.fitAddon?.fit?.();
     }
 
@@ -3272,7 +3282,7 @@ export class TabManager {
         const fit = () => {
             tabInfo._panelFitRAF = null;
             if (tabInfo.finalizing || tabInfo.isDead || tabInfo !== this.getActiveTab()) return;
-            if (tabInfo._bootstrapGate || !this._terminalPanelVisible(tabInfo)) {
+            if (tabInfo._bootstrapGate || tabInfo.writePending || !this._terminalPanelVisible(tabInfo)) {
                 tabInfo._pendingPanelFit = true;
                 return;
             }
@@ -3334,8 +3344,6 @@ export class TabManager {
             tabInfo.loaderEl = null;
         }
 
-        tabInfo.writeBuffer += data;
-
         // Track PTY activity on output.
         tabInfo.lastOutputAt = Date.now();
         if (!tabInfo.isBusy) {
@@ -3350,9 +3358,15 @@ export class TabManager {
             this.updateDocumentTitle();
         }
 
-        if (!tabInfo.writePending) {
-            this._flushTerminalWrite(tabInfo);
-        }
+        this._enqueueTerminalWrite(tabInfo, data);
+    }
+
+    // Local screen text shares the parser FIFO without representing PTY
+    // activity or advancing source-sequence accounting.
+    _enqueueTerminalWrite(tabInfo, data) {
+        if (tabInfo.finalizing) return;
+        tabInfo.writeBuffer += data;
+        if (!tabInfo.writePending) this._flushTerminalWrite(tabInfo);
     }
 
     // Resolves bootstrap watermark waiters. Called wherever the pump
@@ -3424,51 +3438,69 @@ export class TabManager {
         try {
             tabInfo.term.write(data, () => {
                 parsed = true;
-                termPerfMeasureSince('write-batch', _writeT0);
-                tabInfo.writePending = false;
-                // Quiescence (nothing left unparsed) resolves watermark
-                // waiters: their bytes were enqueued before this point and
-                // the pump is strictly FIFO. Runs before the tail recurse
-                // so waiters observe parsed state even when more output
-                // arrived meanwhile.
-                if (tabInfo.writeBuffer.length === 0)
-                    this._runDrainWaiters(tabInfo);
-                if (tabInfo.finalizing) {
-                    tabInfo.writeBuffer = '';
-                    // Unblock watermark waiters even with data buffered:
-                    // owners re-verify death and dissolve, so resolving
-                    // here only ends the wait, never applies state.
-                    this._runDrainWaiters(tabInfo);
-                    return;
-                }
+                // xterm advances its retained-buffer offset after this callback.
+                // Keep the pump and geometry gates closed until that stack ends.
+                Promise.resolve().then(() => {
+                    try {
+                        termPerfMeasureSince('write-batch', _writeT0);
+                        tabInfo.writePending = false;
+                        // Quiescence resolves watermark waiters only after xterm
+                        // has advanced its parser offset past this callback.
+                        if (tabInfo.writeBuffer.length === 0)
+                            this._runDrainWaiters(tabInfo);
+                        if (tabInfo.finalizing) {
+                            tabInfo.writeBuffer = '';
+                            this._runDrainWaiters(tabInfo);
+                            return;
+                        }
 
-                // xterm has parsed this complete batch, so its buffer state is
-                // current. scrollToBottom changes ydisp, which is the coordinate
-                // the viewport uses to set native scrollTop; synchronize after it.
-                if (followBottom && tabInfo.userFollowBottom !== false) {
-                    tabInfo.term.scrollToBottom();
-                }
-                tabInfo.term._core?.viewport?.syncScrollArea(true);
+                        if (followBottom && tabInfo.userFollowBottom !== false) {
+                            tabInfo.term.scrollToBottom();
+                        }
+                        tabInfo.term._core?.viewport?.syncScrollArea(true);
 
-                // hot-v1: when the queue is fully drained, the xterm
-                // state now reflects every byte up to queuedSeq. That makes
-                // drainedSeq a valid checkpoint watermark — except while a
-                // bootstrap delta is still pending: advancing now would vouch
-                // for bytes below the live frontier that have not rendered.
-                // The bootstrap sets the watermark explicitly on success.
-                if (
-                    tabInfo.writeBuffer.length === 0 &&
-                    tabInfo.queuedSeq !== undefined &&
-                    !tabInfo._bootstrapGate &&
-                    (!tabInfo.ws || tabInfo.ws.mode === 'hot')
-                ) {
-                    if (tabInfo.queuedSeq >= (tabInfo.drainedSeq ?? 0)) {
-                        tabInfo.drainedSeq = tabInfo.queuedSeq;
-                        this._scheduleCheckpointUpload(tabInfo);
+                        // The parsed frontier is safe to publish only outside xterm's
+                        // callback, and never while a bootstrap delta is pending.
+                        if (
+                            tabInfo.writeBuffer.length === 0 &&
+                            tabInfo.queuedSeq !== undefined &&
+                            !tabInfo._bootstrapGate &&
+                            (!tabInfo.ws || tabInfo.ws.mode === 'hot')
+                        ) {
+                            if (tabInfo.queuedSeq >= (tabInfo.drainedSeq ?? 0)) {
+                                tabInfo.drainedSeq = tabInfo.queuedSeq;
+                                this._scheduleCheckpointUpload(tabInfo);
+                            }
+                        }
+
+                        // Apply a deferred visible fit before admitting the next
+                        // FIFO batch. Hidden/inactive panes keep their fit intent.
+                        if (
+                            tabInfo._pendingPanelFit &&
+                            !tabInfo._bootstrapGate &&
+                            tabInfo === this.getActiveTab() &&
+                            this._terminalPanelVisible(tabInfo)
+                        ) {
+                            const forceResize = tabInfo._pendingForceResize;
+                            tabInfo._pendingPanelFit = false;
+                            tabInfo._pendingForceResize = false;
+                            this.fitActiveTerminal({ forceResize });
+                        }
+                    } catch (e) {
+                        console.error('[term] write failed:', e);
+                        tabInfo.writePending = false;
+                        if (tabInfo.finalizing) {
+                            this._runDrainWaiters(tabInfo);
+                            return;
+                        }
+                        tabInfo._writeRetryTimer = setTimeout(() => {
+                            tabInfo._writeRetryTimer = null;
+                            this._flushTerminalWrite(tabInfo);
+                        }, 50);
+                        return;
                     }
-                }
-
-                this._flushTerminalWrite(tabInfo);
+                    this._flushTerminalWrite(tabInfo);
+                });
             });
         } catch (e) {
             console.error('[term] write failed:', e);
@@ -4233,7 +4265,7 @@ export class TabManager {
                         tabInfo.loaderEl = null;
                     }
                     try {
-                        tabInfo.term.write(ansi);
+                        this._enqueueTerminalWrite(tabInfo, ansi);
                     } catch (e) {
                         console.error('[term] failed to write cached screen:', e);
                     }
@@ -9486,7 +9518,7 @@ export class TabManager {
             // the next live byte would clear the terminal underneath the user.
             tabInfo.awaitingReplay = false;
             if (localStorage.getItem('phi_replay_divider') === 'true') {
-                tabInfo.term.write('\r\n\x1b[33m─── live ───\x1b[0m\r\n');
+                this._enqueueTerminalWrite(tabInfo, '\r\n\x1b[33m─── live ───\x1b[0m\r\n');
             }
         } else if (control.type === 'output-dropped') {
             // Hot-v1 slow-client warning. Rendered locally —
@@ -10909,7 +10941,7 @@ export class TabManager {
         const activeTab = this.getActiveTab();
         if (!activeTab || activeTab.isDead) return;
         const visible = this._terminalPanelVisible(activeTab);
-        if (activeTab._bootstrapGate || !visible) {
+        if (activeTab._bootstrapGate || activeTab.writePending || !visible) {
             activeTab._pendingPanelFit = true;
             activeTab._pendingForceResize = Boolean(activeTab._pendingForceResize || forceResize || !visible);
             return;
@@ -11110,6 +11142,11 @@ export class TabManager {
     // (the historical assumption); only an explicit false means dropped.
     sendResizeToBackend(tab) {
         if (!tab || tab.isDead || this._terminalPanelVisible?.(tab) === false) return false;
+        if (tab.writePending) {
+            tab._pendingPanelFit = true;
+            tab._pendingForceResize = true;
+            return false;
+        }
         const term = tab.term;
         if (term?.cols && term.rows && tab.ws) {
             return tab.ws.sendResize(term.cols, term.rows) !== false;

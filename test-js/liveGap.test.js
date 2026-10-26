@@ -430,23 +430,27 @@ describe('write drain advances the checkpoint watermark', () => {
         };
     }
 
-    it('hot: drained batch advances drainedSeq and schedules an upload', () => {
+    it('hot: drained batch advances drainedSeq and schedules an upload', async () => {
         const c = Object.create(TabManager.prototype);
         c.updateDocumentTitle = vi.fn();
+        c.syncBackendPin = vi.fn();
         c._scheduleCheckpointUpload = vi.fn();
         const { tab, stored } = drainTab('hot');
         c.writeToTerminal(tab, 'hi');
+        await Promise.resolve();
         expect(stored).toEqual(['hi']);
         expect(tab.drainedSeq).toBe(100);
         expect(c._scheduleCheckpointUpload).toHaveBeenCalledWith(tab);
     });
 
-    it('legacy: drained batch leaves the hot watermark alone', () => {
+    it('legacy: drained batch leaves the hot watermark alone', async () => {
         const c = Object.create(TabManager.prototype);
         c.updateDocumentTitle = vi.fn();
+        c.syncBackendPin = vi.fn();
         c._scheduleCheckpointUpload = vi.fn();
         const { tab } = drainTab('legacy');
         c.writeToTerminal(tab, 'hi');
+        await Promise.resolve();
         expect(tab.drainedSeq).toBe(50);
         expect(c._scheduleCheckpointUpload).not.toHaveBeenCalled();
     });
