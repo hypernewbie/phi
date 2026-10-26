@@ -594,7 +594,8 @@ export class TabManager {
         this._piRpcModels = null;
         this._piRpcModelsNote = null;
         this._piRpcModelMemory = new Map();
-        this._piRpcModelNext = null;
+        this._piRpcModelNextByPane = new Map();
+        this._piRpcModelInflight = new Map();
         this._piRpcModelQuery = '';
         this._piRpcModelExpandedGroup = null;
         this._piRpcFavorites = null;
@@ -5081,10 +5082,14 @@ export class TabManager {
 
         let requestResult;
         try {
-            requestResult =
-                activeTab.coder === 'pi'
-                    ? this._piBridgeModelsFetch(paneId)
-                    : rpcChatModels(paneId);
+            // Opening during a pick would read a catalog from before that
+            // pick and move the active row backwards, so the retained rows
+            // stand until the pick settles and repaints the presets.
+            requestResult = this._piRpcModelInflight?.has(paneId)
+                ? null
+                : activeTab.coder === 'pi'
+                  ? this._piBridgeModelsFetch(paneId)
+                  : rpcChatModels(paneId);
         } catch (error) {
             this._piRpcModelsNote = `Could not refresh: ${
                 error instanceof Error ? error.message : String(error)
@@ -5092,6 +5097,7 @@ export class TabManager {
             this._buildPiRpcModelList();
             return;
         }
+        if (requestResult === null) return;
         Promise.resolve(requestResult)
             .then((result) => {
                 if (
@@ -5104,21 +5110,25 @@ export class TabManager {
                 if (activeTab.coder === 'pi') {
                     const bridge =
                         result && typeof result === 'object' ? result : {};
-                    this._piBridgeModelsTruncated =
-                        bridge.truncated === true;
-                    this._piBridgeModelsUnavailable =
-                        bridge.unavailable === true;
+                    const unavailable = bridge.unavailable === true;
                     const rows = Array.isArray(bridge.models)
                         ? bridge.models
                         : [];
-                    // "unavailable" means the registry read failed or the
+                    // `unavailable` means the registry read failed or the
                     // answer was too large: that is not proof the last good
-                    // catalog is empty.
-                    if (rows.length === 0 && this._piRpcModels?.length) {
+                    // catalog is empty, so the retained rows stay. A
+                    // successful empty answer is proof, and clears them.
+                    if (unavailable && this._piRpcModels?.length) {
+                        this._piBridgeModelsTruncated =
+                            bridge.truncated === true;
+                        this._piBridgeModelsUnavailable = true;
                         this._piRpcModelsNote = 'Pi model list unavailable';
                         this._buildPiRpcModelList();
                         return;
                     }
+                    this._piBridgeModelsTruncated =
+                        bridge.truncated === true;
+                    this._piBridgeModelsUnavailable = unavailable;
                     this._piRpcModels = rows;
                 } else {
                     this._piRpcModels = Array.isArray(result) ? result : [];
@@ -5149,15 +5159,24 @@ export class TabManager {
     }
 
     // One setter per pane at a time. A pick made while one is in flight is
-    // kept as the newest and runs after it, so the last click is the one that
-    // lands last instead of two requests racing each other.
+    // kept per pane as the newest and runs after it, so the last click is the
+    // one that lands last instead of two requests racing each other. Picks in
+    // one pane never block or displace another pane's.
     _setPiRpcModel(paneId, coder, provider, modelId) {
-        const inFlight = this._piRpcModelPending;
-        if (inFlight && inFlight.paneId === paneId) {
-            this._piRpcModelNext = { paneId, coder, provider, modelId };
+        if (!this._piRpcModelInflight) this._piRpcModelInflight = new Map();
+        if (!this._piRpcModelNextByPane)
+            this._piRpcModelNextByPane = new Map();
+        if (this._piRpcModelInflight.has(paneId)) {
+            this._piRpcModelNextByPane.set(paneId, {
+                paneId,
+                coder,
+                provider,
+                modelId,
+            });
             return;
         }
         const operation = { paneId, provider, modelId };
+        this._piRpcModelInflight.set(paneId, operation);
         this._piRpcModelPending = operation;
         let setterResult;
         try {
@@ -5169,10 +5188,12 @@ export class TabManager {
             setterResult = Promise.reject(error);
         }
         const settle = (error) => {
-            // A disconnect or a newer owner cleared the slot: this reply is
-            // stale, so it reports nothing and starts nobody.
-            if (this._piRpcModelPending !== operation) return;
-            this._piRpcModelPending = null;
+            // A disconnect or a newer owner cleared this pane's slot: this
+            // reply is stale, so it reports nothing and starts nobody.
+            if (this._piRpcModelInflight?.get(paneId) !== operation) return;
+            this._piRpcModelInflight.delete(paneId);
+            if (this._piRpcModelPending === operation)
+                this._piRpcModelPending = null;
             if (error) {
                 this._piRpcError(error, 'Pi model');
             } else {
@@ -5181,8 +5202,8 @@ export class TabManager {
                 if (this.getActiveTab()?.paneId === paneId)
                     this.renderPresets(coder);
             }
-            const next = this._piRpcModelNext;
-            this._piRpcModelNext = null;
+            const next = this._piRpcModelNextByPane?.get(paneId);
+            this._piRpcModelNextByPane?.delete(paneId);
             if (next) {
                 this._setPiRpcModel(
                     next.paneId,
@@ -5196,6 +5217,13 @@ export class TabManager {
             () => settle(null),
             (error) => settle(error),
         );
+    }
+
+    _clearPiRpcModelPending(paneId) {
+        this._piRpcModelInflight?.delete(paneId);
+        this._piRpcModelNextByPane?.delete(paneId);
+        if (this._piRpcModelPending?.paneId === paneId)
+            this._piRpcModelPending = null;
     }
 
     _piRpcModelCacheKey(coder) {
@@ -10566,9 +10594,7 @@ export class TabManager {
                 this._piRpcModels = null;
                 this._piBridgeModelsTruncated = false;
                 this._piBridgeModelsUnavailable = false;
-                if (this._piRpcModelPending?.paneId === activeTab.paneId)
-                    this._piRpcModelPending = null;
-                this._piRpcModelNext = null;
+                this._clearPiRpcModelPending(activeTab.paneId);
                 const modelDropup = document.getElementById('pi-rpc-model-dropup');
                 modelDropup?.classList.add('hidden');
                 modelDropup?.replaceChildren();
@@ -12557,8 +12583,7 @@ export class TabManager {
             this._piRpcModelPending?.paneId === tab.paneId &&
             !this._piBridgeModelsEligible(tab)
         ) {
-            this._piRpcModelPending = null;
-            this._piRpcModelNext = null;
+            this._clearPiRpcModelPending(tab.paneId);
         }
         // Thinking cleanup first so the single renderPresets below owns the
         // open-picker re-render with settled pending state (one levels fetch).

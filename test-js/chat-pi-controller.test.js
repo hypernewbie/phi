@@ -187,6 +187,14 @@ describe('Pi RPC transcript controller', () => {
         expect(root.querySelector('.user-message')?.textContent).toContain(
             'saved text',
         );
+        // The prompt typed before bootstrap went out as soon as the sid
+        // arrived; drain its ack so the one-at-a-time queue is free.
+        const queuedPrompt = wire.sent.find((frame) => frame.op === 'prompt');
+        expect(queuedPrompt.args.message).toBe('before bootstrap');
+        wire.emit({ t: 'res', id: queuedPrompt.id, ok: true, data: { accepted: true } });
+        await Promise.resolve();
+        await Promise.resolve();
+
         expect(chat.send('/clear')).toBe(true);
         expect(wire.sent.at(-1)).toMatchObject({
             op: 'prompt',
@@ -194,6 +202,15 @@ describe('Pi RPC transcript controller', () => {
             args: { message: '/clear' },
         });
         expect(wire.sent.at(-1).args.streamingBehavior).toBeUndefined();
+        // Prompts go out one at a time, so the next one waits for this ack.
+        wire.emit({
+            t: 'res',
+            id: wire.sent.at(-1).id,
+            ok: true,
+            data: { accepted: true },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
 
         expect(chat.send('hello')).toBe(true);
         expect(wire.sent.at(-1)).toMatchObject({
@@ -1306,7 +1323,7 @@ describe('Pi RPC transcript controller', () => {
         await expect(rejected).rejects.toThrow('name not allowed');
     });
 
-    it('non-accepted prompt response removes only the matching optimistic record, surfaces an error, and falls back to the next one', async () => {
+    it('keeps a refused prompt visible and still delivers the one queued behind it', async () => {
         const root = document.createElement('div');
         const wire = fakeClient();
         const chat = mountChatPi(root, '/work/reject', wire.client);
@@ -1325,9 +1342,10 @@ describe('Pi RPC transcript controller', () => {
 
         expect(chat.send('first')).toBe(true);
         expect(chat.send('second')).toBe(true);
+        // One at a time: only the first prompt is on the wire.
         const prompts = wire.sent.filter((frame) => frame.op === 'prompt');
-        expect(prompts).toHaveLength(2);
-        const [firstPrompt, secondPrompt] = prompts;
+        expect(prompts).toHaveLength(1);
+        const [firstPrompt] = prompts;
 
         wire.emit({
             t: 'res',
@@ -1339,8 +1357,13 @@ describe('Pi RPC transcript controller', () => {
         await Promise.resolve();
 
         expect(root.textContent).toContain('Error: prompt was not accepted');
-        // The first prompt was rejected, the second is still in flight.
-        // A second user event for the surviving prompt must still reconcile.
+        // The refused text stays on screen, and the queue moves on.
+        expect(root.textContent).toContain('Not confirmed: first');
+        const secondPrompt = wire.sent
+            .filter((frame) => frame.op === 'prompt')
+            .at(-1);
+        expect(secondPrompt.args.message).toBe('second');
+
         wire.emit({
             t: 'res',
             id: secondPrompt.id,
@@ -1359,10 +1382,12 @@ describe('Pi RPC transcript controller', () => {
         await Promise.resolve();
         await Promise.resolve();
         expect(root.textContent).toContain('second');
-        // And after the second prompt reconciles, no optimistic marker remains.
-        expect(
-            root.querySelector('[data-pi-optimistic-prompt="true"]'),
-        ).toBeNull();
+        // The delivered prompt reconciled; the refused one is still shown.
+        const optimistics = root.querySelectorAll(
+            '[data-pi-optimistic-message="true"]',
+        );
+        expect(optimistics).toHaveLength(1);
+        expect(optimistics[0].textContent).toContain('Not confirmed: first');
     });
 
     it('non-matching authoritative user text leaves the optimistic record; identical texts reconcile via renderedUserText', async () => {
@@ -1482,11 +1507,14 @@ describe('Pi RPC transcript controller', () => {
         const transcript = transcriptEl;
         const transcriptOptimisticCount = () =>
             [...transcript.querySelectorAll('.user-message')].filter((node) =>
-                /^(Sending|Sent to Pi): /u.test(node.textContent ?? ''),
+                /^(Sending|Sent to Pi|Queued|Not confirmed): /u.test(
+                    node.textContent ?? '',
+                ),
             ).length;
         expect(transcriptOptimisticCount()).toBe(2);
-        // Busy transitions to false (agent_settled). The chat must clear
-        // ALL stranded optimistic records; both prefixes disappear.
+        // Busy transitions to false (agent_settled). The written record is
+        // retired; the queued one never left the browser, so the turn
+        // boundary must not erase text the user still expects to send.
         settledWire.emit({
             t: 'evt',
             sid: 's1',
@@ -1496,7 +1524,9 @@ describe('Pi RPC transcript controller', () => {
         });
         await Promise.resolve();
         await Promise.resolve();
-        expect(transcriptOptimisticCount()).toBe(0);
+        expect(transcriptOptimisticCount()).toBe(1);
+        expect(transcript.textContent).toContain('Queued: beta');
+        expect(transcript.textContent).not.toContain('alpha');
         // sessionActive is now false — interrupt() rejects.
         await expect(settledChat.interrupt()).rejects.toThrow(
             'Pi RPC is not active',
@@ -1528,8 +1558,10 @@ describe('Pi RPC transcript controller', () => {
         await Promise.resolve();
         await Promise.resolve();
         const prompts = failWire.sent.filter((frame) => frame.op === 'prompt');
-        const [firstPrompt, secondPrompt] = prompts;
-        // Reject the first prompt; the second must remain optimistic.
+        const [firstPrompt] = prompts;
+        // One at a time: the second is still queued locally.
+        expect(prompts).toHaveLength(1);
+        // Reject the first prompt; the queued second one goes out next.
         failWire.emit({
             t: 'res',
             id: firstPrompt.id,
@@ -1541,14 +1573,20 @@ describe('Pi RPC transcript controller', () => {
         expect(failRoot.textContent).toContain(
             'Error: control connection closed',
         );
-        // Exactly one optimistic record is left: the surviving "beta".
+        const secondPrompt = failWire.sent
+            .filter((frame) => frame.op === 'prompt')
+            .at(-1);
+        expect(secondPrompt.args.message).toBe('beta');
+        // The unconfirmed "alpha" and the in-flight "beta" both stay on
+        // screen until the transcript reconciles them.
         const failTranscript = failRoot.querySelector('.review-chat-wrapper');
         const optimistics = failTranscript.querySelectorAll(
-            '[data-pi-optimistic-prompt="true"]',
+            '[data-pi-optimistic-message="true"]',
         );
-        expect(optimistics).toHaveLength(1);
-        expect(optimistics[0].textContent).toContain('beta');
-        expect(optimistics[0].textContent).not.toContain('alpha');
+        expect(optimistics).toHaveLength(2);
+        const labels = [...optimistics].map((node) => node.textContent ?? '');
+        expect(labels.some((text) => text.includes('alpha'))).toBe(true);
+        expect(labels.some((text) => text.includes('beta'))).toBe(true);
         // And the second prompt can still reconcile via renderedUserText.
         failWire.emit({
             t: 'res',

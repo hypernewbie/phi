@@ -517,12 +517,15 @@ export function mountChatPi(
               : state === 'sending'
                 ? 'Sending'
                 : 'Sent to Pi';
+    // A row claims the working state only when Pi is actually working on it: a
+    // prompt still queued here, or an unconfirmed one the idle session never
+    // took, must not show "Pi is working" or the interrupt hint.
+    const promptIsWorking = (state: PromptState): boolean =>
+        state === 'sending' || (state !== 'queued' && sessionActive);
     const syncActiveTurn = (): void => {
         const base: ActiveTurnState | null = activePrompt
             ? {
-                  // A queued prompt has not reached Pi yet: it must not show
-                  // the working row or the interrupt hint.
-                  active: activePrompt.state !== 'queued',
+                  active: promptIsWorking(activePrompt.state),
                   promptText: activePrompt.text,
                   promptOrigin: activePrompt.origin,
                   stateLabel: promptLabel(activePrompt.state),
@@ -650,29 +653,46 @@ export function mountChatPi(
             });
     };
 
-    // Hydrate is authoritative: an optimistic record whose text is already a
-    // user message in the snapshot landed, so its local row must go. Records
-    // that are absent stay visible as queued or unconfirmed work.
+    // Hydrate is authoritative: an optimistic record that was written and is
+    // already a user message in the snapshot landed, so its local row must go.
+    // Matching is one-to-one against the rows seen this pass, so an older,
+    // identical message in history cannot retire a prompt that never landed.
+    // Records that are absent stay visible as queued or unconfirmed work.
     const reconcileOutgoing = (): void => {
         if (outgoing.length === 0) return;
-        const rendered = new Set(
-            buffer
-                .getMessages()
-                .filter((message: any) => message?.role === 'user')
-                .map((message: any) => renderedUserText(message.content)),
-        );
-        const kept = outgoing.filter(
-            (item) => !rendered.has(renderedUserText(item.text)),
-        );
-        if (kept.length === outgoing.length) return;
+        const messages = buffer.getMessages();
+        const claimed = new Set<number>();
+        const kept: OutgoingPrompt[] = [];
+        let changed = false;
+        for (const item of outgoing) {
+            // Only a written record can have landed. A queued one never left
+            // the browser, and an unconfirmed one is exactly what the user
+            // must still see. Neither may be retired by a text match.
+            if (item.state !== 'sending' && item.state !== 'sent') {
+                kept.push(item);
+                continue;
+            }
+            const text = renderedUserText(item.text);
+            const index = messages.findIndex(
+                (message: any, position: number) =>
+                    !claimed.has(position) &&
+                    message?.role === 'user' &&
+                    renderedUserText(message.content) === text,
+            );
+            if (index < 0) {
+                kept.push(item);
+                continue;
+            }
+            claimed.add(index);
+            changed = true;
+            // Keep the turn marker on the transcript row it now belongs to.
+            if (activePrompt?.id === item.id)
+                activePrompt = { ...item, origin: index };
+        }
+        if (!changed) return;
         outgoing.splice(0, outgoing.length, ...kept);
-        turnPrompts.splice(0, turnPrompts.length, ...kept);
-        activePrompt =
-            activePrompt && kept.some((item) => item.id === activePrompt?.id)
-                ? activePrompt
-                : kept.at(-1)
-                  ? { ...kept.at(-1)!, origin: 'optimistic' }
-                  : null;
+        // turnPrompts keeps its own copy for interrupt restoration: a prompt
+        // that left this list may still be the text the user wants back.
         syncActiveTurn();
     };
 
@@ -695,6 +715,17 @@ export function mountChatPi(
         }
         local.state = 'sending';
         syncActiveTurn();
+        // A row retired at the turn boundary may still be unacknowledged. If
+        // Pi did not clearly take it, put it back so the text is never lost.
+        const retain = (state: PromptState): void => {
+            if (!outgoing.includes(local) && state !== 'sent') {
+                outgoing.push(local);
+                turnPrompts.push(local);
+            }
+            local.state = state;
+            if (activePrompt?.id === local.id)
+                activePrompt = { ...local, origin: activePrompt.origin };
+        };
         void invokeControl(wire, 'prompt', currentSid, {
             message: dispatch.message,
             ...(dispatch.streamingBehavior
@@ -703,11 +734,13 @@ export function mountChatPi(
         })
             .then((data: any) => {
                 if (destroyed) return;
-                local.state = data?.accepted === true ? 'sent' : 'unconfirmed';
-                if (local.state === 'unconfirmed' && currentSid === sid)
-                    status.textContent = 'Error: prompt was not accepted';
-                if (activePrompt?.id === local.id)
-                    activePrompt.state = local.state;
+                if (data?.accepted === true) {
+                    retain('sent');
+                } else {
+                    retain('unconfirmed');
+                    if (currentSid === sid)
+                        status.textContent = 'Error: prompt was not accepted';
+                }
                 syncActiveTurn();
                 flushQueue();
             })
@@ -715,11 +748,9 @@ export function mountChatPi(
                 if (destroyed) return;
                 // Keep the text visible in both cases. A transport drop may
                 // have delivered it; hydrate reconciles the transcript.
-                local.state = 'unconfirmed';
+                retain('unconfirmed');
                 if (currentSid === sid)
                     status.textContent = `Not confirmed: ${String(error)}`;
-                if (activePrompt?.id === local.id)
-                    activePrompt.state = local.state;
                 syncActiveTurn();
                 flushQueue();
             });
@@ -729,6 +760,7 @@ export function mountChatPi(
         if (destroyed || exited || streamBroken || !sid || !ready) return;
         // One at a time: the server runs each call in its own goroutine, so a
         // batch would not keep the user's order.
+        if (outgoing.some((item) => item.state === 'sending')) return;
         const next = outgoing.find((item) => item.state === 'queued');
         if (next) deliverPrompt(next);
     };
@@ -752,13 +784,15 @@ export function mountChatPi(
         const local: OutgoingPrompt = {
             id: `out-${++outgoingSeq}`,
             text: dispatch.message,
-            state: sid && ready ? 'sending' : 'queued',
+            state: 'queued',
         };
         outgoing.push(local);
         turnPrompts.push(local);
         activePrompt = { ...local, origin: 'optimistic' };
         syncActiveTurn();
-        deliverPrompt(local);
+        // Every prompt goes through one ordered queue, so two quick sends
+        // reach Pi in the order they were typed.
+        flushQueue();
         return true;
     };
 
