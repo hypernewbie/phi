@@ -43,6 +43,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		"theme_color":                         cfg.ThemeColor,
 		"hostname":                            hName,
 		"model_presets":                       cfg.ModelPresets,
+		"thinking_presets":                    cfg.ThinkingPresets,
 		"quick_commands":                      cfg.QuickCommands,
 		"terminal_commands":                   cfg.TerminalCommands,
 		"markdown_dirs":                       cfg.MarkdownDirs,
@@ -174,6 +175,101 @@ func handleModelPresets(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// Thinking presets are the saved fallback levels offered for Pi PTY tabs
+// when the bridge, or its thinking capability, is unavailable. The list is
+// user-managed and holds only the exact tokens Pi accepts.
+var thinkingPresetLevels = []string{
+	"off", "minimal", "low", "medium", "high", "xhigh", "max",
+}
+
+func validThinkingPreset(level string) bool {
+	for _, allowed := range thinkingPresetLevels {
+		if level == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+// validateThinkingPresetList rejects anything that is not a short list of
+// exact, distinct tokens: no surrounding whitespace, no case changes, no
+// duplicates. The user's order is meaningful and is preserved.
+func validateThinkingPresetList(levels []string) ([]string, bool) {
+	if len(levels) > len(thinkingPresetLevels) {
+		return nil, false
+	}
+	seen := make(map[string]bool, len(levels))
+	out := make([]string, 0, len(levels))
+	for _, level := range levels {
+		if level != strings.TrimSpace(level) || !validThinkingPreset(level) || seen[level] {
+			return nil, false
+		}
+		seen[level] = true
+		out = append(out, level)
+	}
+	return out, true
+}
+
+// handleThinkingPresets owns the saved Thinking fallback list. Reads and
+// writes are transactional against the latest config file, so a stale
+// in-memory snapshot can never drop the list or another field.
+func handleThinkingPresets(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		configMu.RLock()
+		cfg, err := readConfigLocked()
+		configMu.RUnlock()
+		if err != nil {
+			http.Error(w, "Failed to read config", http.StatusInternalServerError)
+			return
+		}
+		levels := cfg.ThinkingPresets
+		if levels == nil {
+			levels = []string{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string][]string{"thinking_presets": levels})
+	case http.MethodPut:
+		configMu.Lock()
+		defer configMu.Unlock()
+		cfg, err := readConfigLocked()
+		if err != nil {
+			http.Error(w, "Failed to read config", http.StatusInternalServerError)
+			return
+		}
+		var req struct {
+			ThinkingPresets *[]string `json:"thinking_presets"`
+		}
+		decoder := json.NewDecoder(r.Body)
+		if err := decoder.Decode(&req); err != nil {
+			http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			http.Error(w, "Trailing data after JSON body", http.StatusBadRequest)
+			return
+		}
+		if req.ThinkingPresets == nil {
+			http.Error(w, "Missing thinking_presets", http.StatusBadRequest)
+			return
+		}
+		levels, ok := validateThinkingPresetList(*req.ThinkingPresets)
+		if !ok {
+			http.Error(w, "Invalid thinking preset list", http.StatusBadRequest)
+			return
+		}
+		cfg.ThinkingPresets = levels
+		if err := writeConfigLocked(cfg); err != nil {
+			http.Error(w, "Failed to write config", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string][]string{"thinking_presets": levels})
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func handleQuickCommands(w http.ResponseWriter, r *http.Request) {

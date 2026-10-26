@@ -193,25 +193,11 @@ function stagedContext(tab) {
 }
 
 describe('Pi RPC TabManager boundaries', () => {
-    it('shows Thinking controls for Pi PTY and Pi RPC tabs', () => {
-        const button = document.createElement('button');
-        const tm = Object.create(TabManager.prototype);
-        tm.piThinkingBtn = button;
-        tm.getActiveTab = vi.fn(() => ({ paneId: 'pi', coder: 'pi' }));
-
-        tm._updatePiThinkingButton();
-        expect(button.classList.contains('hidden')).toBe(false);
-        expect(button.disabled).toBe(true);
-        expect(button.title).toBe('Cycle Pi Thinking level');
-
-        tm.getActiveTab.mockReturnValue({
-            paneId: 'pi-rpc:one',
-            coder: 'pi-rpc',
-        });
-        getPiRpcStatus.mockReturnValue({ thinking: 'high' });
-        tm._updatePiThinkingButton();
-        expect(button.classList.contains('hidden')).toBe(false);
-        expect(button.title).toBe('Thinking: high');
+    it('has no Send-side Thinking control and keeps the bottom-bar menu', () => {
+        const html = readFileSync(join(ROOT, 'web/index.html'), 'utf8');
+        expect(html).not.toContain('pi-thinking-btn');
+        expect(html).not.toContain('Cycle thinking mode');
+        expect(html).toContain('id="pi-rpc-thinking-dropup"');
     });
 
     it('keeps the status bar between input and presets in the static DOM', () => {
@@ -244,7 +230,6 @@ describe('Pi RPC TabManager boundaries', () => {
         const tm = Object.create(TabManager.prototype);
         tm.piRpcStatusBar = bar;
         tm.getActiveTab = vi.fn(() => tab);
-        tm.piThinkingBtn = document.createElement('button');
         tm._piThinkingLevels = new Map();
 
         tm.renderPiRpcStatusBar();
@@ -484,48 +469,6 @@ describe('Pi RPC TabManager boundaries', () => {
             }
             expect(m.fill.style.width).toBe('0%');
         }
-    });
-
-    it('derives Pi thinking button colors from the selected accent', () => {
-        const baseRules = extractRuleRecords(BASE_CSS);
-        const levels = {
-            off: {
-                color: 'var(--text-dim)',
-                'border-color': 'var(--bg-border)',
-            },
-            minimal: {
-                color: 'var(--accent-dim)',
-                'border-color': 'var(--accent-dim)',
-            },
-            low: {
-                color: 'var(--accent)',
-                'border-color': 'var(--accent)',
-            },
-            medium: {
-                color: 'var(--accent-bright)',
-                'border-color': 'var(--accent)',
-            },
-            high: {
-                color: 'var(--accent-bright)',
-                'border-color': 'var(--accent-bright)',
-                'box-shadow': '0 0 10px var(--accent-glow)',
-            },
-            xhigh: {
-                color: 'var(--accent-bright)',
-                'border-color': 'var(--accent-bright)',
-                'box-shadow': '0 0 12px var(--accent-glow)',
-            },
-        };
-        for (const [level, declarations] of Object.entries(levels)) {
-            expectRuleDeclarations(
-                baseRules,
-                `.pi-thinking-btn--${level}`,
-                declarations,
-            );
-        }
-        expect(BASE_CSS).not.toMatch(
-            /\.pi-thinking-btn--(?:minimal|low|medium|high|xhigh)[^{]*\{[^}]*#[0-9a-f]{6}/i,
-        );
     });
 
     it('keeps Pi typography scoped and restores its narrow-screen sizing', () => {

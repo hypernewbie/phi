@@ -68,6 +68,7 @@ const WEB_JS_MODULES = [
   'vscode.js',
   'backend-scope.js',
   'backend-store.js',
+  'thinking-presets.js',
 ];
 
 /** Browser vendor subdirectory the module graph imports (auth.js imports

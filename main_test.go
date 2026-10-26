@@ -2950,3 +2950,199 @@ func TestDiagMethodNotAllowed(t *testing.T) {
 		t.Errorf("expected 405 on POST, got %d", w.Code)
 	}
 }
+
+// thinkingPresetsRequest drives the Thinking preset endpoint directly so
+// these tests exercise the real handler, not a reimplementation of it.
+func thinkingPresetsRequest(t *testing.T, method, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	req := httptest.NewRequest(method, "/api/config/thinking-presets", reader)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handleThinkingPresets(w, req)
+	return w
+}
+
+func decodeThinkingPresets(t *testing.T, w *httptest.ResponseRecorder) []string {
+	t.Helper()
+	var payload struct {
+		ThinkingPresets *[]string `json:"thinking_presets"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v (body %q)", err, w.Body.String())
+	}
+	if payload.ThinkingPresets == nil {
+		t.Fatalf("thinking_presets missing or null in %q", w.Body.String())
+	}
+	return *payload.ThinkingPresets
+}
+
+func TestThinkingPresets_DefaultsToEmptyList(t *testing.T) {
+	withTempConfig(t)
+
+	w := thinkingPresetsRequest(t, http.MethodGet, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET status: want 200, got %d - %s", w.Code, w.Body.String())
+	}
+	if got := decodeThinkingPresets(t, w); len(got) != 0 {
+		t.Fatalf("fresh config should have no presets, got %v", got)
+	}
+	if !strings.Contains(w.Body.String(), `[]`) {
+		t.Fatalf("empty list must serialize as [], got %q", w.Body.String())
+	}
+}
+
+func TestThinkingPresets_PutPersistsAndClears(t *testing.T) {
+	withTempConfig(t)
+
+	w := thinkingPresetsRequest(t, http.MethodPut, `{"thinking_presets":["low","high","max"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT status: want 200, got %d - %s", w.Code, w.Body.String())
+	}
+	if got := decodeThinkingPresets(t, w); !reflect.DeepEqual(got, []string{"low", "high", "max"}) {
+		t.Fatalf("PUT response: got %v", got)
+	}
+	if got := loadConfig().ThinkingPresets; !reflect.DeepEqual(got, []string{"low", "high", "max"}) {
+		t.Fatalf("saved order not preserved, got %v", got)
+	}
+
+	w = thinkingPresetsRequest(t, http.MethodPut, `{"thinking_presets":[]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("clear status: want 200, got %d - %s", w.Code, w.Body.String())
+	}
+	if got := loadConfig().ThinkingPresets; len(got) != 0 {
+		t.Fatalf("explicit empty list should clear, got %v", got)
+	}
+}
+
+func TestThinkingPresets_PutPreservesCompressionDefault(t *testing.T) {
+	path := withTempConfig(t)
+	if err := os.WriteFile(path, []byte(`{}`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if w := thinkingPresetsRequest(t, http.MethodPut, `{"thinking_presets":["high"]}`); w.Code != http.StatusOK {
+		t.Fatalf("PUT status: want 200, got %d - %s", w.Code, w.Body.String())
+	}
+	if cfg := loadConfig(); !cfg.CompressionEnabled {
+		t.Fatal("missing compression_enabled key must keep its true default")
+	}
+
+	if err := os.WriteFile(path, []byte(`{"compression_enabled":false}`), 0644); err != nil {
+		t.Fatalf("write explicit false config: %v", err)
+	}
+	if w := thinkingPresetsRequest(t, http.MethodPut, `{"thinking_presets":["low"]}`); w.Code != http.StatusOK {
+		t.Fatalf("PUT status: want 200, got %d - %s", w.Code, w.Body.String())
+	}
+	if cfg := loadConfig(); cfg.CompressionEnabled {
+		t.Fatal("explicit compression_enabled:false must remain false")
+	}
+}
+
+func TestThinkingPresets_RejectsInvalidWithoutWriting(t *testing.T) {
+	withTempConfig(t)
+
+	if w := thinkingPresetsRequest(t, http.MethodPut, `{"thinking_presets":["high"]}`); w.Code != http.StatusOK {
+		t.Fatalf("seed status: want 200, got %d", w.Code)
+	}
+
+	cases := map[string]string{
+		"duplicate":       `{"thinking_presets":["high","high"]}`,
+		"unknown token":   `{"thinking_presets":["turbo"]}`,
+		"case changed":    `{"thinking_presets":["High"]}`,
+		"padded token":    `{"thinking_presets":[" high "]}`,
+		"empty token":     `{"thinking_presets":[""]}`,
+		"non-string":      `{"thinking_presets":[1]}`,
+		"missing field":   `{}`,
+		"null field":      `{"thinking_presets":null}`,
+		"wrong type":      `{"thinking_presets":"high"}`,
+		"too many":        `{"thinking_presets":["off","minimal","low","medium","high","xhigh","max","off"]}`,
+		"malformed json":  `{"thinking_presets":["high"]`,
+		"trailing data":   `{"thinking_presets":["high"]} {"thinking_presets":[]}`,
+		"unknown coderix": `{"thinking_presets":["xhigh","xhigh"]}`,
+	}
+	for name, body := range cases {
+		w := thinkingPresetsRequest(t, http.MethodPut, body)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: want 400, got %d - %s", name, w.Code, w.Body.String())
+		}
+		if got := loadConfig().ThinkingPresets; !reflect.DeepEqual(got, []string{"high"}) {
+			t.Fatalf("%s: rejected request changed disk: %v", name, got)
+		}
+	}
+
+	if w := thinkingPresetsRequest(t, http.MethodPost, `{"thinking_presets":[]}`); w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST: want 405, got %d", w.Code)
+	}
+}
+
+// A legacy saveConfig caller passes a snapshot taken before another writer
+// changed the list; the newer list must survive.
+func TestThinkingPresets_LegacySavePreservesLatestList(t *testing.T) {
+	withTempConfig(t)
+
+	stale := loadConfig()
+	if w := thinkingPresetsRequest(t, http.MethodPut, `{"thinking_presets":["xhigh"]}`); w.Code != http.StatusOK {
+		t.Fatalf("seed status: want 200, got %d", w.Code)
+	}
+
+	stale.ThemeColor = "blue"
+	saveConfig(stale)
+
+	cfg := loadConfig()
+	if cfg.ThemeColor != "blue" {
+		t.Fatalf("unrelated save lost its own field, got theme %q", cfg.ThemeColor)
+	}
+	if !reflect.DeepEqual(cfg.ThinkingPresets, []string{"xhigh"}) {
+		t.Fatalf("legacy save overwrote thinking presets: %v", cfg.ThinkingPresets)
+	}
+}
+
+// Malformed disk state is not a safe base for a rewrite.
+func TestThinkingPresets_MalformedConfigFailsClosed(t *testing.T) {
+	path := withTempConfig(t)
+	if err := os.WriteFile(path, []byte("{not json"), 0644); err != nil {
+		t.Fatalf("write malformed config: %v", err)
+	}
+
+	if w := thinkingPresetsRequest(t, http.MethodGet, ""); w.Code != http.StatusInternalServerError {
+		t.Errorf("GET on malformed config: want 500, got %d - %s", w.Code, w.Body.String())
+	}
+	if w := thinkingPresetsRequest(t, http.MethodPut, `{"thinking_presets":["low"]}`); w.Code != http.StatusInternalServerError {
+		t.Errorf("PUT on malformed config: want 500, got %d - %s", w.Code, w.Body.String())
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("re-read config: %v", err)
+	}
+	if !strings.Contains(string(raw), "{not json") {
+		t.Errorf("malformed config was overwritten: %q", string(raw))
+	}
+}
+
+func TestThinkingPresets_AppearInConfigResponse(t *testing.T) {
+	withTempConfig(t)
+	if w := thinkingPresetsRequest(t, http.MethodPut, `{"thinking_presets":["medium"]}`); w.Code != http.StatusOK {
+		t.Fatalf("seed status: want 200, got %d", w.Code)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	w := httptest.NewRecorder()
+	handleConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/config: want 200, got %d", w.Code)
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode /api/config: %v", err)
+	}
+	var levels []string
+	if err := json.Unmarshal(payload["thinking_presets"], &levels); err != nil {
+		t.Fatalf("thinking_presets not an array in /api/config: %v", err)
+	}
+	if !reflect.DeepEqual(levels, []string{"medium"}) {
+		t.Fatalf("got %v", levels)
+	}
+}
