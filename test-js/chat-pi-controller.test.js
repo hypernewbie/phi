@@ -341,8 +341,10 @@ describe('Pi RPC transcript controller', () => {
             data: { message: { role: 'user', content: 'event first' } },
         });
         await Promise.resolve();
+        // The transcript row is proof the prompt landed, so the turn reads as
+        // sent even before the control ack arrives.
         expect(setActiveTurn).toHaveBeenLastCalledWith(
-            expect.objectContaining({ stateLabel: 'Sending' }),
+            expect.objectContaining({ stateLabel: 'Sent to Pi' }),
         );
         wire.emit({
             t: 'res',
@@ -1535,6 +1537,114 @@ describe('Pi RPC transcript controller', () => {
                 node.closest('.review-chat-wrapper') !== null,
         );
         expect(rows).toHaveLength(1);
+    });
+
+    it('does not retire a new prompt against an identical row from history', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/history-match', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: {
+                    lastSeq: 0,
+                    messages: [{ role: 'user', content: 'retry' }],
+                },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(chat.send('retry')).toBe(true);
+        const prompt = wire.sent
+            .filter((frame) => frame.op === 'prompt')
+            .at(-1);
+        wire.emit({
+            t: 'res',
+            id: prompt.id,
+            ok: false,
+            error: 'control connection lost',
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // The same text exists in history, but it was already there before
+        // this prompt was typed, so it proves nothing about delivery.
+        wire.emit({
+            t: 'res',
+            id: 'hyd',
+            ok: true,
+            data: {
+                lastSeq: 1,
+                messages: [{ role: 'user', content: 'retry' }],
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(root.textContent).toContain('Not confirmed: retry');
+    });
+
+    it('does not resurrect a delivered prompt when its ack fails late', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/delivered', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(chat.send('already there')).toBe(true);
+        const prompt = wire.sent
+            .filter((frame) => frame.op === 'prompt')
+            .at(-1);
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'messageEnd',
+            data: { message: { role: 'user', content: 'already there' } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'stateChanged',
+            data: { busy: false },
+        });
+        await Promise.resolve();
+        // The rejected request lands after the transcript already has the
+        // prompt: it may not add a second, doubting row.
+        wire.emit({
+            t: 'res',
+            id: prompt.id,
+            ok: false,
+            error: 'control connection lost',
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const transcript = root.querySelector('.review-chat-wrapper');
+        expect(transcript.textContent).not.toContain('Not confirmed');
+        expect(transcript.textContent).not.toContain('Sent to Pi');
+        expect(
+            [...transcript.querySelectorAll('.user-message')].filter((node) =>
+                (node.textContent ?? '').includes('already there'),
+            ),
+        ).toHaveLength(1);
     });
 
     it('non-matching authoritative user text leaves the optimistic record; identical texts reconcile via renderedUserText', async () => {

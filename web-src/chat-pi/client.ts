@@ -39,6 +39,9 @@ const RECONNECT_MAX_MS = 15_000;
 // A socket that upgrades and dies again must not reset the backoff: only a
 // connection that stays usable this long counts as recovery.
 const RECONNECT_STABLE_MS = 10_000;
+// A WebSocket handshake that has not completed by now is treated as a dead
+// link, so a stuck CONNECTING socket cannot hold the stream down for good.
+const DIAL_TIMEOUT_MS = 15_000;
 
 // Close codes the Phi server sends when this stream cannot work at all:
 // 1002 protocol error, 1009 message too big, 1011 event conversion/encoding
@@ -107,6 +110,7 @@ export function connectControl(
     let ws: WebSocket | null = null;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let stableTimer: ReturnType<typeof setTimeout> | null = null;
+    let dialTimer: ReturnType<typeof setTimeout> | null = null;
     let retry = 0;
     let nextId = 1;
     let dialing = false;
@@ -169,9 +173,14 @@ export function connectControl(
         const socket = ws;
         ws = null;
         opened = false;
+        dialing = false;
         if (stableTimer !== null) {
             clearTimeout(stableTimer);
             stableTimer = null;
+        }
+        if (dialTimer !== null) {
+            clearTimeout(dialTimer);
+            dialTimer = null;
         }
         if (!socket) return;
         socket.onopen = null;
@@ -277,9 +286,19 @@ export function connectControl(
         }
         ws = socket;
         socket.binaryType = 'arraybuffer';
+        // A handshake that never completes is a dead link too: the browser
+        // reports neither open nor error when the network is gone.
+        dialTimer = setTimeout(() => {
+            dialTimer = null;
+            if (socket === ws && !opened) dropSocket();
+        }, DIAL_TIMEOUT_MS);
         socket.onopen = () => {
             dialing = false;
             if (closed || broken || socket !== ws) return;
+            if (dialTimer !== null) {
+                clearTimeout(dialTimer);
+                dialTimer = null;
+            }
             if (stableTimer !== null) clearTimeout(stableTimer);
             stableTimer = setTimeout(() => {
                 stableTimer = null;
@@ -398,6 +417,9 @@ export function connectControl(
             retryTimer = null;
         }
         retry = 0;
+        // A dial that is still connecting must not block the redial a
+        // network change is meant to trigger.
+        if (dialing) dropSocket();
         dial();
     };
 

@@ -286,6 +286,12 @@ export function mountChatPi(
         id: string;
         text: string;
         state: PromptState;
+        // Rows the transcript already had when this prompt was typed. Only a
+        // user row after this point can be this prompt delivered.
+        baseline: number;
+        // The transcript proved this prompt landed, so no late failure may
+        // relabel it or bring its row back.
+        delivered?: boolean;
     };
     let outgoingSeq = 0;
     const outgoing: OutgoingPrompt[] = [];
@@ -657,11 +663,12 @@ export function mountChatPi(
     };
 
     // Hydrate is authoritative: a record that was written and is already a
-    // user message in the snapshot landed, so its local row must go. Matching
-    // runs from the newest message backwards, so a repeated text reconciles
-    // the prompt just sent instead of an identical one from history, and each
-    // index is claimed once. Only a queued record is exempt: it never left
-    // the browser, so no snapshot can contain it.
+    // user message in the snapshot landed, so its local row must go. The
+    // record only owns rows newer than where the transcript stood when it was
+    // typed, so an identical text from history can never retire a prompt that
+    // did not land; each row is claimed once, oldest record to oldest row.
+    // Only a queued record is exempt: it never left the browser, so no
+    // snapshot can contain it.
     const reconcileOutgoing = (): void => {
         if (outgoing.length === 0) return;
         const messages = buffer.getMessages();
@@ -675,7 +682,11 @@ export function mountChatPi(
             }
             const text = renderedUserText(item.text);
             let index = -1;
-            for (let position = messages.length - 1; position >= 0; position--) {
+            for (
+                let position = item.baseline;
+                position < messages.length;
+                position++
+            ) {
                 const message: any = messages[position];
                 if (
                     !claimed.has(position) &&
@@ -691,6 +702,7 @@ export function mountChatPi(
                 continue;
             }
             claimed.add(index);
+            item.delivered = true;
             changed = true;
             // Keep the turn marker on the transcript row it now belongs to.
             if (activePrompt?.id === item.id)
@@ -725,6 +737,9 @@ export function mountChatPi(
         // A row retired at the turn boundary may still be unacknowledged. If
         // Pi did not clearly take it, put it back so the text is never lost.
         const retain = (state: PromptState): void => {
+            // The transcript already holds this prompt: a late control failure
+            // describes a request whose text the user can see.
+            if (local.delivered) return;
             local.state = state;
             if (!outgoing.includes(local) && state !== 'sent') {
                 outgoing.push(local);
@@ -797,6 +812,7 @@ export function mountChatPi(
             id: `out-${++outgoingSeq}`,
             text: dispatch.message,
             state: 'queued',
+            baseline: buffer.getMessages().length,
         };
         outgoing.push(local);
         turnPrompts.push(local);
@@ -1212,15 +1228,20 @@ export function mountChatPi(
         }
         if (env.evt === 'messageEnd' && env.data?.message?.role === 'user') {
             const text = renderedUserText(env.data.message.content);
+            const position = result.messages.length - 1;
             const match = outgoing.find(
-                (item) => renderedUserText(item.text) === text,
+                (item) =>
+                    position >= item.baseline &&
+                    renderedUserText(item.text) === text,
             );
             if (match) {
+                match.delivered = true;
                 outgoing.splice(outgoing.indexOf(match), 1);
                 if (activePrompt?.id === match.id) {
                     activePrompt = {
                         ...match,
-                        origin: result.messages.length - 1,
+                        state: 'sent',
+                        origin: position,
                     };
                 }
             }

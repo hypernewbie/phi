@@ -465,40 +465,90 @@ describe('bridge models picker', () => {
     it('keeps a successful empty answer and a partial-list flag across a reopen', async () => {
         const tab = bridgeTab();
         const { tm, dropup } = harness(tab);
-        tm._piBridgeModelsTruncated = true;
-        tm._savePiRpcModelCache('pi', tab.paneId, [{ provider: 'b', id: 'y' }]);
-        expect(tm._loadPiRpcModelCache('pi', tab.paneId)).toEqual({
-            models: [{ provider: 'b', id: 'y' }],
-            truncated: true,
+        let fail = false;
+        let truncated = true;
+        let empty = false;
+        mockFetch((url, options) => {
+            if (String(url).includes('/api/pi-bridge/models')) {
+                if (fail)
+                    return new Promise((_resolve, reject) => {
+                        options.signal?.addEventListener('abort', () =>
+                            reject(new DOMException('Aborted', 'AbortError')),
+                        );
+                    });
+                return {
+                    models: empty ? [] : [{ provider: 'b', id: 'y' }],
+                    truncated,
+                    unavailable: false,
+                };
+            }
+            return undefined;
         });
 
-        // A successful empty answer is proof, not a failure to keep rows for.
-        let empty = false;
-        mockFetch(() => ({
-            models: empty ? [] : [{ provider: 'b', id: 'y' }],
-            truncated: false,
-            unavailable: false,
-        }));
         tm.renderPresets('pi');
         modelsTrigger(tm).click();
         await vi.waitFor(() => {
-            expect(dropup.querySelector('.dropup-model-btn')).not.toBeNull();
+            expect(dropup.textContent).toContain('Partial model list');
         });
+
+        // Reopen from the persisted copy with the refresh blocked: the
+        // warning belongs to the rows, so it must come back with them.
+        tm._piRpcModelMemory = null;
+        fail = true;
+        dropup.classList.add('hidden');
+        vi.useFakeTimers();
+        try {
+            modelsTrigger(tm).click();
+            expect(dropup.querySelector('.dropup-model-btn')).not.toBeNull();
+            expect(dropup.textContent).toContain('Partial model list');
+            await vi.advanceTimersByTimeAsync(15000);
+            expect(dropup.textContent).toContain('Partial model list');
+            expect(dropup.querySelector('.dropup-model-btn')).not.toBeNull();
+        } finally {
+            vi.useRealTimers();
+        }
+
+        // A successful empty answer is proof, not a failure to keep rows for.
+        fail = false;
+        truncated = false;
         empty = true;
+        tm._piRpcModelsNote = null;
         dropup.classList.add('hidden');
         modelsTrigger(tm).click();
         await vi.waitFor(() => {
             expect(dropup.querySelector('.dropup-model-btn')).toBeNull();
         });
-        expect(tm._loadPiRpcModelCache('pi', tab.paneId)).toEqual({
-            models: [],
-            truncated: false,
-        });
-        // Reopening with the refresh blocked keeps the authoritative empty
-        // answer rather than resurrecting the rows it replaced.
-        tm._piRpcModels = null;
-        tm._piRpcModelsNote = null;
-        expect(tm._loadPiRpcModelCache('pi', tab.paneId).models).toEqual([]);
+
+        // Reopening from the persisted empty answer must not resurrect the
+        // rows it replaced.
+        tm._piRpcModelMemory = null;
+        fail = true;
+        dropup.classList.add('hidden');
+        modelsTrigger(tm).click();
+        expect(dropup.querySelector('.dropup-model-btn')).toBeNull();
+    });
+
+    it('drops a deleted pane catalog and bounds the persisted ones', async () => {
+        const tab = bridgeTab();
+        const { tm } = harness(tab);
+        tm._savePiRpcModelCache('pi', tab.paneId, [{ provider: 'b', id: 'y' }]);
+        const key = 'phi.piRpc.models.pi:pi-pane-1';
+        expect(window.localStorage.getItem(key)).not.toBeNull();
+
+        tm._forgetPiRpcModelCache('pi', tab.paneId);
+        expect(window.localStorage.getItem(key)).toBeNull();
+        expect(tm._loadPiRpcModelCache('pi', tab.paneId)).toBeNull();
+
+        // A pane id changes with its session: old entries beyond the bound go.
+        for (let index = 0; index < 25; index++) {
+            tm._savePiRpcModelCache('pi', `old-pane-${index}`, [
+                { provider: 'b', id: `y${index}` },
+            ]);
+        }
+        const keys = Object.keys(window.localStorage).filter((name) =>
+            name.startsWith('phi.piRpc.models.'),
+        );
+        expect(keys.length).toBeLessThanOrEqual(20);
     });
 
     it('keeps the last list when a refresh fails', async () => {

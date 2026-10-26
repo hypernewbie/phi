@@ -5302,6 +5302,52 @@ export class TabManager {
         }
     }
 
+    // Catalogs are session-scoped, so a deleted pane's entry has no future
+    // owner and is not kept alive by the memory copy or by storage.
+    _forgetPiRpcModelCache(coder, paneId) {
+        const key = this._piRpcModelCacheKey(coder, paneId);
+        this._piRpcModelMemory?.delete(key);
+        try {
+            window.localStorage?.removeItem(key);
+        } catch (_error) {
+            /* storage unavailable */
+        }
+    }
+
+    // A pane id changes when its session is replaced, so persisted catalogs
+    // would otherwise accumulate until they use up the quota every other
+    // write needs. The oldest are dropped first.
+    _prunePiRpcModelCaches(keep = 20) {
+        const storage = window.localStorage;
+        if (!storage) return;
+        const entries = [];
+        try {
+            for (let index = 0; index < storage.length; index++) {
+                const key = storage.key(index);
+                if (typeof key !== 'string' || !key.startsWith('phi.piRpc.models.'))
+                    continue;
+                let at = 0;
+                try {
+                    at = Number(JSON.parse(storage.getItem(key))?.at) || 0;
+                } catch (_error) {
+                    at = 0;
+                }
+                entries.push({ key, at });
+            }
+        } catch (_error) {
+            return;
+        }
+        if (entries.length <= keep) return;
+        entries.sort((left, right) => left.at - right.at);
+        for (const entry of entries.slice(0, entries.length - keep)) {
+            try {
+                storage.removeItem(entry.key);
+            } catch (_error) {
+                /* storage unavailable */
+            }
+        }
+    }
+
     _savePiRpcModelCache(coder, paneId, models) {
         const entry = {
             models: this._cleanPiRpcModelRows(models),
@@ -5323,6 +5369,7 @@ export class TabManager {
             // localStorage may be unavailable; the memory copy still serves
             // this session.
         }
+        this._prunePiRpcModelCaches();
     }
 
     _buildPiRpcModelList() {
@@ -6791,6 +6838,7 @@ export class TabManager {
         // it; a stuck pending would block the Thinking controls elsewhere.
         this._invalidatePiBridgeThinking(tab);
         this._clearPiRpcModelPending(tab.paneId);
+        this._forgetPiRpcModelCache(tab.coder, tab.paneId);
         this.tabs.delete(paneId);
 
         if (!preserveStorage) {

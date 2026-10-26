@@ -333,8 +333,9 @@ describe('Pi RPC ControlClient', () => {
         const client = connectControl();
         const pending = client.call('hydrate', 'sid-1', {});
         // Offline is not a failure: the frame waits in the outbox, so its
-        // deadline only starts when it reaches a socket.
-        vi.advanceTimersByTime(ControlCallTimeout * 2);
+        // deadline only starts when it reaches a socket. The advance stays
+        // below the dial watchdog, so this is still the first handshake.
+        vi.advanceTimersByTime(5_000);
         const socket = FakeWebSocket.instances[0];
         socket.open();
         expect(socket.sent).toHaveLength(2);
@@ -359,7 +360,7 @@ describe('Pi RPC ControlClient', () => {
         socket.close();
         expect(report).not.toHaveBeenCalled();
         expect(states).toEqual([true, false]);
-        vi.advanceTimersByTime(20_000);
+        vi.advanceTimersByTime(5_000);
         expect(FakeWebSocket.instances).toHaveLength(2);
         client.close();
         expect(report).not.toHaveBeenCalled();
@@ -406,7 +407,7 @@ describe('Pi RPC ControlClient', () => {
         const client = connectControl();
         FakeWebSocket.instances[0].open();
         FakeWebSocket.instances[0].close();
-        vi.advanceTimersByTime(20_000);
+        vi.advanceTimersByTime(5_000);
         const second = FakeWebSocket.instances[1];
         second.open();
         // Hold this one well past the stability window, then drop it.
@@ -471,7 +472,7 @@ describe('Pi RPC ControlClient', () => {
         socket.readyState = 2;
         const pending = client.call('getState', 'sid-1', {});
         expect(socket.sent).toHaveLength(1);
-        await vi.advanceTimersByTimeAsync(20_000);
+        await vi.advanceTimersByTimeAsync(5_000);
         const redialed = FakeWebSocket.instances[1];
         redialed.open();
         expect(redialed.sent.map((frame) => frame.payload.$case)).toEqual([
@@ -485,6 +486,27 @@ describe('Pi RPC ControlClient', () => {
             }),
         );
         await expect(pending).resolves.toMatchObject({ sid: 'sid-1' });
+        client.close();
+    });
+
+    it('redials on the browser online event even when a dial is stuck connecting', () => {
+        vi.useFakeTimers();
+        vi.stubGlobal('WebSocket', FakeWebSocket);
+        const client = connectControl();
+        FakeWebSocket.instances[0].open();
+        FakeWebSocket.instances[0].close();
+        // The redial never finishes its handshake: the network is gone, so
+        // the browser neither opens nor fails the socket.
+        vi.advanceTimersByTime(1_500);
+        expect(FakeWebSocket.instances).toHaveLength(2);
+        expect(FakeWebSocket.instances[1].readyState).toBe(0);
+
+        // The link returns and the browser says so.
+        window.dispatchEvent(new Event('online'));
+        expect(FakeWebSocket.instances.length).toBeGreaterThan(2);
+        const fresh = FakeWebSocket.instances.at(-1);
+        fresh.open();
+        expect(fresh.sent[0].payload.$case).toBe('hello');
         client.close();
     });
 
@@ -508,7 +530,7 @@ describe('Pi RPC ControlClient', () => {
         await expect(written).rejects.toMatchObject({ transport: true });
 
         const later = second.call('prompt', 'sid-2', { message: 'later' });
-        vi.advanceTimersByTime(20_000);
+        vi.advanceTimersByTime(5_000);
         const redialed = FakeWebSocket.instances[2];
         redialed.open();
         expect(redialed.sent).toHaveLength(2);

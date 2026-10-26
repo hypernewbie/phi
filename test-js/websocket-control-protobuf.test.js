@@ -1033,7 +1033,7 @@ describe('control transport failures', () => {
         // The write never landed, so the socket is dropped and the frame
         // waits for the next one instead of failing the call.
         expect(socket.closed).toBe(true);
-        await vi.advanceTimersByTimeAsync(20_000);
+        await vi.advanceTimersByTimeAsync(5_000);
         const redialed = FakeWebSocket.instances[1];
         redialed.open();
         expect(redialed.sent.map((frame) => frame.payload.$case)).toEqual([
@@ -1054,7 +1054,7 @@ describe('control transport failures', () => {
         socket.throwOnSend = true;
         socket.open();
         expect(socket.closed).toBe(true);
-        await vi.advanceTimersByTimeAsync(20_000);
+        await vi.advanceTimersByTimeAsync(5_000);
         const redialed = FakeWebSocket.instances[1];
         redialed.open();
         expect(redialed.sent.map((frame) => frame.payload.$case)).toEqual([

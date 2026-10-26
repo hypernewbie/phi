@@ -127,8 +127,9 @@ describe('Pi chat over a real control socket', () => {
         expect(root.textContent).toContain('second');
 
         // Redial: only the never-written prompt is replayed, and it goes out
-        // before the reconnect resync.
-        await vi.advanceTimersByTimeAsync(20_000);
+        // before the reconnect resync. The advance stays below the dial
+        // watchdog, so the first redial is the one that opens.
+        await vi.advanceTimersByTimeAsync(5_000);
         const redialed = FakeWebSocket.instances[1];
         redialed.open();
         expect(promptTexts(redialed)).toEqual(['second']);
