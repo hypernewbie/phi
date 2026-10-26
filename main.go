@@ -468,8 +468,15 @@ func main() {
 
 	if *ipFlag == "lan" {
 		detected := bindaddr.Detect()
-		if len(detected) == 1 {
-			log.Printf("[bind] no LAN/Tailnet interfaces detected — binding 127.0.0.1 only. Use --ip to override.")
+		hasNonLoopback := false
+		for _, a := range detected {
+			if a.Kind != bindaddr.Loopback {
+				hasNonLoopback = true
+				break
+			}
+		}
+		if !hasNonLoopback {
+			log.Printf("[bind] no LAN/Tailnet interfaces detected — binding loopback only. Use --ip to override.")
 		}
 		for _, a := range detected {
 			addr := net.JoinHostPort(a.IP.String(), strconv.Itoa(*portFlag))
@@ -606,7 +613,7 @@ var bannerColors = map[string][]int{
 }
 
 func printWelcomeBanner(cfg Config, addrs []bindaddr.Addr, port int) {
-	rgb, ok := bannerColors[cfg.ThemeColor]
+	rgb, ok := bannerColors[strings.ToLower(cfg.ThemeColor)]
 	if !ok {
 		rgb = bannerColors["purple"]
 	}
@@ -642,6 +649,7 @@ func printWelcomeBanner(cfg Config, addrs []bindaddr.Addr, port int) {
 	// per successfully bound interface (loopback, each LAN IP, each
 	// Tailnet IP). In explicit --ip mode it prints one line. Called
 	// AFTER binds so the banner only advertises URLs we actually serve.
+	firstLoopback := true
 	for _, a := range addrs {
 		url := fmt.Sprintf("http://%s:%d", a.IP.String(), port)
 		switch {
@@ -652,8 +660,13 @@ func printWelcomeBanner(cfg Config, addrs []bindaddr.Addr, port int) {
 				boldEsc, resetEsc, boldEsc, url, resetEsc, dimEsc, resetEsc)
 			fmt.Printf("    %slocal:           http://localhost:%d%s\n", dimEsc, port, resetEsc)
 		case a.Kind == bindaddr.Loopback:
-			fmt.Printf("  %sServer running on:%s %s%s%s\n", boldEsc, resetEsc, boldEsc, url, resetEsc)
-			fmt.Printf("    %slocal%s\n", dimEsc, resetEsc)
+			if firstLoopback {
+				fmt.Printf("  %sServer running on:%s %s%s%s\n", boldEsc, resetEsc, boldEsc, url, resetEsc)
+				fmt.Printf("    %slocal%s\n", dimEsc, resetEsc)
+				firstLoopback = false
+			} else {
+				fmt.Printf("    %s%-8s%s %s%s%s\n", dimEsc, a.Kind.String()+":", resetEsc, boldEsc, url, resetEsc)
+			}
 		default:
 			fmt.Printf("    %s%-8s%s %s%s%s\n", dimEsc, a.Kind.String()+":", resetEsc, boldEsc, url, resetEsc)
 		}

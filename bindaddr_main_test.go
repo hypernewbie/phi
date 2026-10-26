@@ -209,3 +209,34 @@ func TestPrintWelcomeBanner_LoopbackOnly(t *testing.T) {
 		t.Errorf("loopback-only banner missing loopback URL:\n%s", out)
 	}
 }
+
+// TestPrintWelcomeBanner_With127011 verifies that when both loopback addresses
+// (127.0.0.1 and 127.0.1.1) are bound, 127.0.0.1 is rendered as the primary
+// "Server running on:" URL and 127.0.1.1 is cleanly listed with the "local:" label.
+func TestPrintWelcomeBanner_With127011(t *testing.T) {
+	prevActiveCWD := activeCWD
+	activeCWD = "/test/cwd"
+	t.Cleanup(func() { activeCWD = prevActiveCWD })
+
+	addrs := []bindaddr.Addr{
+		{IP: net.IPv4(127, 0, 0, 1), Kind: bindaddr.Loopback},
+		{IP: net.IPv4(127, 0, 1, 1), Kind: bindaddr.Loopback},
+		{IP: net.IPv4(192, 168, 1, 42), Kind: bindaddr.LAN},
+	}
+
+	out := captureStdout(t, func() {
+		printWelcomeBanner(Config{ThemeColor: "purple"}, addrs, 7070)
+	})
+
+	for _, want := range []string{
+		"http://127.0.0.1:7070",
+		"http://127.0.1.1:7070",
+		"http://192.168.1.42:7070",
+		"local:",
+		"LAN:",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("banner missing %q\n--- banner ---\n%s", want, out)
+		}
+	}
+}

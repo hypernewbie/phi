@@ -20,9 +20,10 @@ import (
 type Kind int
 
 const (
-	// Loopback is the always-bound 127.0.0.1. It comes first so every
-	// local script, bookmark, and health check pointed at localhost
-	// keeps working regardless of what else is up.
+	// Loopback is the always-bound 127.0.0.1 and 127.0.1.1. They come first
+	// so every local script, bookmark, Debian/Ubuntu hostname alias, and
+	// health check pointed at localhost keeps working regardless of what
+	// else is up.
 	Loopback Kind = iota
 	// LAN is an RFC 1918 private range (10/8, 172.16/12, 192.168/16).
 	LAN
@@ -71,23 +72,26 @@ var (
 // classification without touching the host's real interfaces.
 var interfaceAddrs = net.InterfaceAddrs
 
-// Detect returns the loopback address followed by every IPv4 interface
-// address on the host that falls in an RFC 1918 range or the
-// Tailscale CGNAT range. Returns at least the loopback entry even if
+// Detect returns the loopback addresses (127.0.0.1 and 127.0.1.1) followed
+// by every IPv4 interface address on the host that falls in an RFC 1918 range
+// or the Tailscale CGNAT range. Returns at least the loopback entries even if
 // the interface query fails or no LAN/Tailnet addresses are present,
 // so the caller always has something to bind to.
 //
-// Ordering: loopback first, then LAN addresses sorted ascending by IP,
-// then Tailnet addresses sorted ascending. The order is deterministic
-// for a given interface set so the welcome banner is stable across
-// restarts.
+// Ordering: loopbacks first (127.0.0.1, 127.0.1.1), then LAN addresses sorted
+// ascending by IP, then Tailnet addresses sorted ascending. The order is
+// deterministic for a given interface set so the welcome banner is stable
+// across restarts.
 //
 // IPv6 is intentionally excluded for v1: fe80::/10 link-local needs a
 // zone ID in URLs (ugly and rarely useful), and 2000::/3 global IPv6
 // is public (defeats the point). Tailscale also assigns fd7a:115c::/48
 // ULA — a v2 candidate, not in this commit.
 func Detect() []Addr {
-	out := []Addr{{IP: net.IPv4(127, 0, 0, 1), Kind: Loopback}}
+	out := []Addr{
+		{IP: net.IPv4(127, 0, 0, 1), Kind: Loopback},
+		{IP: net.IPv4(127, 0, 1, 1), Kind: Loopback},
+	}
 
 	addrs, err := interfaceAddrs()
 	if err != nil {
@@ -98,7 +102,10 @@ func Detect() []Addr {
 	}
 
 	var lan, tail []Addr
-	seen := map[string]bool{}
+	seen := map[string]bool{
+		"127.0.0.1": true,
+		"127.0.1.1": true,
+	}
 	for _, a := range addrs {
 		ipnet, ok := a.(*net.IPNet)
 		if !ok {

@@ -183,20 +183,34 @@ func handleTestWebhook(w http.ResponseWriter, r *http.Request) {
 
 func themeEmoji(color string) string {
 	switch strings.ToLower(color) {
+	case "neon":
+		return "⚡"
+	case "arc":
+		return "🔷"
 	case "blue":
 		return "🔵"
-	case "green":
+	case "green", "emerald", "pine", "fern", "mint":
 		return "🟢"
-	case "orange":
+	case "orange", "copper":
 		return "🟠"
-	case "pink", "magenta":
+	case "pink", "magenta", "rose":
 		return "🌸"
-	case "cyan":
+	case "cyan", "teal":
 		return "💎"
-	case "red":
+	case "red", "coral", "ember":
 		return "🔴"
-	case "yellow":
+	case "yellow", "amber", "canary", "gold":
 		return "🟡"
+	case "indigo":
+		return "🫐"
+	case "purple", "violet", "fuchsia":
+		return "🟣"
+	case "white":
+		return "⚪"
+	case "fog", "ash", "dusk":
+		return "🌫️"
+	case "lime":
+		return "🍈"
 	default:
 		return "🟣"
 	}

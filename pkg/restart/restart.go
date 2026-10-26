@@ -2,6 +2,7 @@ package restart
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -64,8 +65,27 @@ func (p *PortWaiter) Wait(ctx context.Context) error {
 	return fmt.Errorf("port %s never came back up after %d attempts", p.addr, p.maxAttempts)
 }
 
+// isAddrNotAvailable returns true when an error indicates the requested IP
+// cannot be assigned to any local interface. In this case, retrying will
+// not succeed and would only stall startup.
+func isAddrNotAvailable(err error) bool {
+	if errors.Is(err, syscall.EADDRNOTAVAIL) {
+		return true
+	}
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		// 10049 is WSAEADDRNOTAVAIL on Windows
+		if errno == 10049 || errno == syscall.EADDRNOTAVAIL {
+			return true
+		}
+	}
+	return false
+}
+
 // BindWithRetry binds addr, retrying until maxWait. Needed on Windows restart
 // where the old process briefly still holds the socket. No-op fast path on Unix.
+// If addr is not available on any local interface (EADDRNOTAVAIL), it fails fast
+// without waiting out the deadline.
 func BindWithRetry(addr string, maxWait time.Duration, interval time.Duration) (net.Listener, error) {
 	if maxWait <= 0 {
 		maxWait = 5 * time.Second
@@ -79,6 +99,9 @@ func BindWithRetry(addr string, maxWait time.Duration, interval time.Duration) (
 		ln, err := net.Listen("tcp", addr)
 		if err == nil {
 			return ln, nil
+		}
+		if isAddrNotAvailable(err) {
+			return nil, err
 		}
 		lastErr = err
 		if time.Now().After(deadline) {

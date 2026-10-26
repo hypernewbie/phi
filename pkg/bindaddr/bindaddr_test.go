@@ -112,21 +112,22 @@ func TestClassify_LinkLocalRejected(t *testing.T) {
 }
 
 // TestDetect_AlwaysIncludesLoopbackFirst — even with zero injected
-// interfaces or an error from the seam, loopback must be present and
-// first. This is the F1 guarantee (architectural blocker).
+// interfaces or an error from the seam, loopbacks (127.0.0.1 and 127.0.1.1)
+// must be present and first. This is the F1 guarantee (architectural blocker).
 func TestDetect_AlwaysIncludesLoopbackFirst(t *testing.T) {
 	// Empty input.
 	withMockInterfaces(t, nil, nil)
 	got := Detect()
-	if len(got) != 1 || got[0].Kind != Loopback || got[0].IP.String() != "127.0.0.1" {
-		t.Fatalf("empty input: want [loopback], got %+v", got)
+	if len(got) != 2 || got[0].Kind != Loopback || got[0].IP.String() != "127.0.0.1" ||
+		got[1].Kind != Loopback || got[1].IP.String() != "127.0.1.1" {
+		t.Fatalf("empty input: want [127.0.0.1, 127.0.1.1], got %+v", got)
 	}
 
 	// Seam returns error.
 	withMockInterfaces(t, nil, net.ErrClosed)
 	got = Detect()
-	if len(got) != 1 || got[0].Kind != Loopback {
-		t.Fatalf("error from seam: want [loopback], got %+v", got)
+	if len(got) != 2 || got[0].Kind != Loopback || got[1].Kind != Loopback {
+		t.Fatalf("error from seam: want [loopbacks], got %+v", got)
 	}
 }
 
@@ -147,6 +148,7 @@ func TestDetect_MixedInterfaces(t *testing.T) {
 
 	want := []Addr{
 		{IP: net.IPv4(127, 0, 0, 1), Kind: Loopback},
+		{IP: net.IPv4(127, 0, 1, 1), Kind: Loopback},
 		{IP: net.IPv4(10, 0, 0, 5), Kind: LAN},
 		{IP: net.IPv4(192, 168, 1, 42), Kind: LAN},
 		{IP: net.IPv4(100, 100, 50, 25), Kind: Tailnet},
@@ -197,12 +199,12 @@ func TestDetect_DeterministicOrder(t *testing.T) {
 	}
 	withMockInterfaces(t, addrs, nil)
 	got := Detect()
-	if len(got) != 6 {
-		t.Fatalf("len: got %d want 6 (%+v)", len(got), got)
+	if len(got) != 7 {
+		t.Fatalf("len: got %d want 7 (%+v)", len(got), got)
 	}
 	// Expected order: loopback, then LAN ascending, then Tailnet ascending.
 	wantStrs := []string{
-		"127.0.0.1",
+		"127.0.0.1", "127.0.1.1",
 		"10.0.0.5", "172.20.0.1", "192.168.50.50",
 		"100.64.0.1", "100.127.255.255",
 	}
@@ -210,6 +212,23 @@ func TestDetect_DeterministicOrder(t *testing.T) {
 		if got[i].IP.String() != want {
 			t.Errorf("entry %d: got %s want %s", i, got[i].IP.String(), want)
 		}
+	}
+}
+
+// TestDetect_Includes127011 specifically tests that 127.0.1.1 (Debian/Ubuntu host alias)
+// is present in Detect() with Loopback kind.
+func TestDetect_Includes127011(t *testing.T) {
+	withMockInterfaces(t, nil, nil)
+	got := Detect()
+	found := false
+	for _, a := range got {
+		if a.IP.String() == "127.0.1.1" && a.Kind == Loopback {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Detect() did not include 127.0.1.1 with Loopback kind: %+v", got)
 	}
 }
 
