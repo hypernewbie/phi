@@ -877,6 +877,10 @@ func handlePromptHistoryRecent(w http.ResponseWriter, r *http.Request) {
 
 const piBridgeOnDemandTimeout = time.Second
 
+// Model operations can wait behind native host work. This is local IPC time;
+// the browser allows a longer network budget for mobile connections.
+const piBridgeModelTimeout = 30 * time.Second
+
 // handlePiBridgeHistory uses the existing API auth gate. Errors reveal no
 // prompt text or bridge internals; successful snapshots must not be cached.
 func handlePiBridgeHistory(w http.ResponseWriter, r *http.Request) {
@@ -920,7 +924,7 @@ func handlePiBridgeModels(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing pane", http.StatusBadRequest)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), piBridgeOnDemandTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), piBridgeModelTimeout)
 	defer cancel()
 	res, err := piBridge.RequestPaneModels(ctx, paneID)
 	if err != nil {
@@ -1131,7 +1135,7 @@ func handlePiBridgeSetModel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), piBridgeOnDemandTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), piBridgeModelTimeout)
 	defer cancel()
 	res, err := piBridge.RequestPaneSetModel(ctx, body.Pane, body.Provider, body.Model)
 	if err != nil {

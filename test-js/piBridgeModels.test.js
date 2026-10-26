@@ -20,6 +20,7 @@ vi.mock('../web/chat-pi/controller.js', () => ({
 
 import { TabManager } from '../web/terminal.js';
 import { getPiRpcControls } from '../web/chat-pi/controller.js';
+import { ModelRequestTimeout } from '../web/model-request.js';
 
 setupDomHarness();
 
@@ -546,7 +547,7 @@ describe('bridge models picker', () => {
             modelsTrigger(tm).click();
             expect(dropup.querySelector('.dropup-model-btn')).not.toBeNull();
             expect(dropup.textContent).toContain('Partial model list');
-            await vi.advanceTimersByTimeAsync(15000);
+            await vi.advanceTimersByTimeAsync(ModelRequestTimeout);
             expect(dropup.textContent).toContain('Partial model list');
             expect(dropup.querySelector('.dropup-model-btn')).not.toBeNull();
         } finally {
@@ -670,7 +671,7 @@ describe('bridge models picker', () => {
             // refresh aborts. The list must not empty itself.
             modelsTrigger(tm).click();
             expect(dropup.querySelector('.dropup-model-btn')).not.toBeNull();
-            await vi.advanceTimersByTimeAsync(15000);
+            await vi.advanceTimersByTimeAsync(ModelRequestTimeout);
             expect(dropup.querySelector('.dropup-model-btn')).not.toBeNull();
             expect(dropup.textContent).toContain(
                 'Could not refresh: Pi models unavailable (request timed out)',
@@ -684,7 +685,7 @@ describe('bridge models picker', () => {
         }
     });
 
-    it('bounds a stalled switch request to fifteen seconds', async () => {
+    it('bounds a stalled switch request to the network budget', async () => {
         const tab = bridgeTab();
         const { tm, dropup } = harness(tab);
         mockFetch((_url, options) => {
@@ -709,7 +710,7 @@ describe('bridge models picker', () => {
         vi.useFakeTimers();
         try {
             dropup.querySelector('.dropup-model-btn').click();
-            await vi.advanceTimersByTimeAsync(15000);
+            await vi.advanceTimersByTimeAsync(ModelRequestTimeout);
             expect(tm.app.showToast).toHaveBeenCalledWith(
                 'unknown — reopen the picker',
                 { type: 'error', title: 'Pi model' },
@@ -719,6 +720,46 @@ describe('bridge models picker', () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+
+    it('queues a pick made offline and sends it once the browser is online', async () => {
+        const tab = bridgeTab();
+        const { tm, dropup } = harness(tab);
+        const posted = [];
+        mockFetch((_url, options) => {
+            if (options?.method === 'POST') {
+                posted.push(JSON.parse(options.body));
+                return { json: { ok: true, reason: '' } };
+            }
+            return {
+                models: [{ provider: 'b', id: 'y' }],
+                truncated: false,
+                unavailable: false,
+            };
+        });
+
+        tm.renderPresets('pi');
+        modelsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.querySelector('.dropup-model-btn')).not.toBeNull();
+        });
+        vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+        dropup.querySelector('.dropup-model-btn').click();
+        await vi.waitFor(() => {
+            expect(tm.app.showToast).toHaveBeenCalledWith(
+                'Offline — model change queued; waiting for connection…',
+                { type: 'info', title: 'Pi model' },
+            );
+        });
+        expect(posted).toEqual([]);
+
+        window.dispatchEvent(new Event('online'));
+        await vi.waitFor(() => expect(posted).toHaveLength(1));
+        expect(posted[0]).toMatchObject({
+            pane: 'pi-pane-1',
+            provider: 'b',
+            model: 'y',
+        });
     });
 
     it.each([
@@ -755,7 +796,7 @@ describe('bridge models picker', () => {
                 await vi.advanceTimersByTimeAsync(0);
                 expect(readBody).toHaveBeenCalledTimes(1);
                 expect(vi.getTimerCount()).toBe(1);
-                await vi.advanceTimersByTimeAsync(15000);
+                await vi.advanceTimersByTimeAsync(ModelRequestTimeout);
                 await rejected;
                 expect(vi.getTimerCount()).toBe(0);
             } finally {
