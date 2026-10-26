@@ -528,7 +528,9 @@ describe('reused context meter', () => {
         baseline(tm, tab);
 
         const m = meter();
-        expect(m.bar.classList.contains('hidden')).toBe(false);
+        // The Pi TUI prints its own status line, so the PTY tab keeps the
+        // meter rendered but out of sight; the chat surface shows it.
+        expect(m.bar.classList.contains('hidden')).toBe(true);
         expect(m.el.getAttribute('role')).toBe('progressbar');
         expect(m.el.getAttribute('aria-valuemin')).toBe('0');
         expect(m.el.getAttribute('aria-valuemax')).toBe('100');

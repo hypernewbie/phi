@@ -169,6 +169,8 @@ const MOVED_PRESET_VALUES = new Set([
     '/exit\r',
     '/resume\r',
     '/sessions\r',
+    // The Models picker replaces the chip; the command stays in Cmds.
+    '/model\r',
 ]);
 
 // Pi thinking vocabulary, in display order. `max` is a distinct level
@@ -4689,6 +4691,9 @@ export class TabManager {
         meterEl.append(fill, meterText);
 
         bar.classList.remove('hidden');
+        // The Pi TUI prints its own status line, so the PTY tab needs no
+        // second meter. The chat surface has no TUI and keeps its own.
+        if (activeTab?.coder === 'pi') bar.classList.add('hidden');
         const cwdEl = document.createElement('div');
         cwdEl.className = 'pi-rpc-status-cwd';
         cwdEl.textContent = cwdDisplay;
@@ -6714,8 +6719,8 @@ export class TabManager {
         modelButton.type = 'button';
         modelButton.className =
             'preset-btn model-trigger-btn pi-rpc-model-trigger';
-        modelButton.textContent = '🤖 Models ▾';
-        modelButton.title = `Model: ${state.model || '—'} — click to change`;
+        modelButton.textContent = `Model: ${state.model || '—'} ▾`;
+        modelButton.title = 'Change the model for this session';
         modelButton.disabled = menuDisabled;
         modelButton.addEventListener('click', (event) => {
             event.stopPropagation();
@@ -6728,8 +6733,8 @@ export class TabManager {
         thinkingButton.type = 'button';
         thinkingButton.className =
             'preset-btn model-trigger-btn pi-rpc-thinking-trigger';
-        thinkingButton.textContent = 'Thinking ▾';
-        thinkingButton.title = `Thinking: ${state.thinking || '—'} — click to change`;
+        thinkingButton.textContent = `Thinking: ${state.thinking || '—'} ▾`;
+        thinkingButton.title = 'Change the thinking level';
         thinkingButton.disabled =
             menuDisabled || this._piRpcThinkingPending?.paneId === paneId;
         thinkingButton.addEventListener('click', (event) => {
@@ -11497,7 +11502,8 @@ export class TabManager {
             // Bridge-live Pi tabs share the Pi RPC model picker.
             // Anything else falls through to the legacy static list.
             modelsTriggerBtn.classList.add('pi-rpc-model-trigger');
-            modelsTriggerBtn.title = `Model: ${activeTab.piBridge?.model || '—'} — click to change`;
+            modelsTriggerBtn.innerText = `Model: ${activeTab.piBridge?.model || '—'} ▾`;
+            modelsTriggerBtn.title = 'Change the model for this session';
             modelsTriggerBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 this._toggleDropup(
@@ -11584,7 +11590,11 @@ export class TabManager {
             thinkingTriggerBtn.className =
                 'preset-btn model-trigger-btn pi-rpc-thinking-trigger';
             thinkingTriggerBtn.textContent = 'Thinking ▾';
-            thinkingTriggerBtn.title = this._piBridgeThinkingEligible(activeTab)
+            // The compact strip is width-bound: short label there.
+            const thinkingLive = this._piBridgeThinkingEligible(activeTab);
+            if (thinkingLive && !isCompactViewport())
+                thinkingTriggerBtn.textContent = `Thinking: ${activeTab.piBridge.thinking_level || '—'} ▾`;
+            thinkingTriggerBtn.title = thinkingLive
                 ? `Thinking · ${activeTab.piBridge.thinking_level || '—'}`
                 : 'Thinking · saved options';
             thinkingTriggerBtn.addEventListener('click', (event) => {

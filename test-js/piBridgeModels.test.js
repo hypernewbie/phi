@@ -94,7 +94,7 @@ describe('bridge models trigger', () => {
         const trigger = modelsTrigger(tm);
         expect(trigger).not.toBeUndefined();
         expect(trigger.classList.contains('pi-rpc-model-trigger')).toBe(true);
-        expect(trigger.title).toBe('Model: a/x — click to change');
+        expect(trigger.title).toBe('Change the model for this session');
         trigger.click();
 
         await vi.waitFor(() => {
