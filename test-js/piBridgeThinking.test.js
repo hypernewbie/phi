@@ -39,8 +39,26 @@ function harness(tab) {
     const tm = Object.create(TabManager.prototype);
     tm.presetsContainer = document.createElement('div');
     document.body.appendChild(tm.presetsContainer);
-    tm.piThinkingBtn = document.createElement('button');
-    tm.piThinkingBtn.addEventListener('click', () => tm._cyclePiThinking());
+    tm.thinkingPresetStore = {
+        start: vi.fn(),
+        subscribe: vi.fn(() => () => {}),
+        ownerId: 'test-owner',
+        getState: () => ({
+            confirmed: [],
+            desired: [],
+            dirty: false,
+            saveRequired: false,
+            attempt: null,
+            writing: false,
+            error: '',
+            storageWarning: '',
+        }),
+        setLevels: vi.fn(),
+        saveAgain: vi.fn(),
+        useServerList: vi.fn(),
+        refresh: vi.fn(async () => true),
+        ensureLoaded: vi.fn(),
+    };
     tm._piRpcMenuRequest = 0;
     tm._piBridgeThinkingMenuRequest = 0;
     tm._piRpcThinkingPending = null;
@@ -54,6 +72,7 @@ function harness(tab) {
     tm.inputTextArea.value = 'KEEP THIS PHI DRAFT';
     tm.app = {
         codersPresetRegistry: { pi: { presets: [] } },
+        openConfigEditor: vi.fn(),
         showToast: vi.fn(),
     };
     tm.renderModelDropup = vi.fn();
@@ -228,40 +247,7 @@ describe('Pi bridge Thinking controls', () => {
         expect(tm.app.showToast).not.toHaveBeenCalled();
     });
 
-    it('cycles through the current supported levels without merging max and xhigh', async () => {
-        const { tm, tab } = harness(
-            bridgeTab({
-                piBridge: {
-                    ...bridgeTab().piBridge,
-                    thinking_level: 'xhigh',
-                },
-            }),
-        );
-        const fetchMock = mockFetch((_url, options) =>
-            options?.method === 'POST'
-                ? { ok: true, json: { ok: true, reason: '' } }
-                : levelsResponse(),
-        );
-        tm._updatePiThinkingButton();
-        expect(tm.piThinkingBtn.title).toBe('Thinking: xhigh');
-        tm.piThinkingBtn.click();
-        await vi.waitFor(() =>
-            expect(
-                fetchMock.mock.calls.some(
-                    ([, options]) => options?.method === 'POST',
-                ),
-            ).toBe(true),
-        );
-        const post = fetchMock.mock.calls.find(
-            ([, options]) => options?.method === 'POST',
-        );
-        expect(JSON.parse(post[1].body).level).toBe('max');
-        expect(tm.sendToTab).not.toHaveBeenCalled();
-        expect(tab.piBridge.thinking_level).toBe('xhigh');
-        expect(tm.app.showToast).not.toHaveBeenCalled();
-    });
-
-    it('keeps native picker and backtab fallbacks and preserves the staged draft', () => {
+    it('opens the fallback menu without sending and keeps the staged draft', () => {
         const tab = bridgeTab({
             piBridge: {
                 state: 'managed',
@@ -276,28 +262,225 @@ describe('Pi bridge Thinking controls', () => {
         tm.renderPresets('pi');
 
         expect(thinkingTrigger(tm)).not.toBeNull();
-        expect(thinkingTrigger(tm).title).toBe(
-            'Open Pi native Thinking picker',
-        );
+        expect(thinkingTrigger(tm).title).toBe('Thinking · saved options');
         expect(
             tm.presetsContainer.querySelector('.pi-rpc-model-trigger'),
         ).not.toBeNull();
+
+        // Opening the menu must not touch the PTY; the native picker is an
+        // explicit row the user chooses.
         thinkingTrigger(tm).click();
+        expect(tm.sendToTab).not.toHaveBeenCalled();
+        const dropup = document.getElementById('pi-rpc-thinking-dropup');
+        expect(dropup.classList.contains('hidden')).toBe(false);
+        expect(dropup.textContent).toContain('No saved Thinking options yet');
+        expect(dropup.querySelector('.dropup-add-row')).not.toBeNull();
+
+        dropup.querySelector('.pi-thinking-native-picker').click();
         expect(tm.sendToTab).toHaveBeenLastCalledWith(
             tab,
             '\x1b[200~/thinking\x1b[201~\r',
         );
-        tm.piThinkingBtn.click();
-        expect(tm.sendToTab).toHaveBeenLastCalledWith(tab, '\x1b[Z');
+        expect(dropup.classList.contains('hidden')).toBe(true);
         expect(tm.inputTextArea.value).toBe('KEEP THIS PHI DRAFT');
         expect(tm.app.showToast).not.toHaveBeenCalled();
         expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it('offers the native picker when the bridge has no usable model identity', () => {
-        const { tm } = harness(
+    it('recognizes the underlying live WebSocket in the PTY wrapper', () => {
+        const tab = bridgeTab({ ws: { ws: { readyState: 1 } } });
+        const { tm } = harness(tab);
+        expect(tm._piThinkingPtyLive(tab)).toBe(true);
+    });
+
+    it('keeps fallback management available with a closed socket and a pending settings write', () => {
+        const tab = bridgeTab({
+            ws: null,
+            _piBridgeFresh: null,
+            isDead: true,
+            piBridge: null,
+        });
+        const { tm } = harness(tab);
+        tm.thinkingPresetStore.getState = () => ({
+            confirmed: null,
+            desired: [],
+            dirty: false,
+            saveRequired: false,
+            attempt: null,
+            writing: true,
+            error: '',
+            storageWarning: '',
+        });
+        tm.renderPresets('pi');
+        const trigger = thinkingTrigger(tm);
+        expect(trigger.disabled).toBe(false);
+        trigger.click();
+        const dropup = document.getElementById('pi-rpc-thinking-dropup');
+        expect(dropup.classList.contains('hidden')).toBe(false);
+        expect(dropup.querySelector('.dropup-add-btn').disabled).toBe(false);
+        expect(
+            dropup.querySelector('.pi-thinking-native-picker').disabled,
+        ).toBe(true);
+        expect(tm.sendToTab).not.toHaveBeenCalled();
+    });
+
+    it('preserves an open same-pane fallback through routine ineligible bridge refresh', () => {
+        const tab = bridgeTab({
+            piBridge: {
+                state: 'managed',
+                connected: true,
+                generation: '9',
+                model: 'a/x',
+                capabilities: ['pi.lifecycle.v1'],
+            },
+        });
+        const { tm } = harness(tab);
+        tm.renderPresets('pi');
+        thinkingTrigger(tm).click();
+        const dropup = document.getElementById('pi-rpc-thinking-dropup');
+        expect(dropup.classList.contains('hidden')).toBe(false);
+        tm._refreshPiBridgeThinking(tab);
+        expect(dropup.classList.contains('hidden')).toBe(false);
+        expect(dropup.querySelector('.dropup-add-row')).not.toBeNull();
+    });
+
+    it('refuses a saved row when Thinking capability becomes live and opens the live picker', () => {
+        const tab = bridgeTab({
+            piBridge: {
+                state: 'managed',
+                connected: true,
+                generation: '9',
+                model: 'a/x',
+                capabilities: ['pi.lifecycle.v1'],
+            },
+        });
+        const { tm } = harness(tab);
+        tm.thinkingPresetStore.getState = () => ({
+            confirmed: ['high'],
+            desired: ['high'],
+            dirty: false,
+            saveRequired: false,
+            attempt: null,
+            writing: false,
+            error: '',
+            storageWarning: '',
+        });
+        tm._piBridgeThinkingEligible = vi.fn().mockReturnValue(false);
+        const dropup = document.getElementById('pi-rpc-thinking-dropup');
+        dropup.classList.remove('hidden');
+        tm._renderPiPtyThinkingFallback(dropup, tab);
+        tm._piBridgeThinkingEligible.mockReturnValue(true);
+        tm._renderPiRpcThinkingDropup = vi.fn();
+        dropup.querySelector('.pi-thinking-saved-level').click();
+        expect(tm._renderPiRpcThinkingDropup).toHaveBeenCalledOnce();
+        expect(tm.sendToTab).not.toHaveBeenCalled();
+    });
+
+    it('revalidates owner, tab, socket, and capability after an editor completes', async () => {
+        const mutations = [
+            (tm) => {
+                tm.thinkingPresetStore.ownerId = 'another-owner';
+            },
+            (_tm, tab) => {
+                tab.ws = { readyState: 1 };
+            },
+            (_tm, tab) => {
+                tab.paneId = 'replacement-pane';
+            },
+            (tm) => {
+                tm.getActiveTab = () => null;
+            },
+            (tm) => {
+                tm._piBridgeThinkingEligible = () => true;
+            },
+        ];
+        for (const invalidate of mutations) {
+            const tab = bridgeTab({
+                piBridge: {
+                    state: 'managed',
+                    connected: true,
+                    generation: '9',
+                    model: 'a/x',
+                    capabilities: ['pi.lifecycle.v1'],
+                },
+            });
+            const { tm } = harness(tab);
+            let finishEditor;
+            tm.app.openConfigEditor = vi.fn(
+                () => new Promise((resolve) => (finishEditor = resolve)),
+            );
+            const editing = tm._addThinkingPreset(tab);
+            await vi.waitFor(() => expect(finishEditor).toBeTypeOf('function'));
+            invalidate(tm, tab);
+            finishEditor({ level: 'high' });
+            await editing;
+            expect(tm.thinkingPresetStore.setLevels).not.toHaveBeenCalled();
+        }
+    });
+
+    it('confirms draft discard and refreshes before using the server list', async () => {
+        const tab = bridgeTab({
+            piBridge: {
+                state: 'managed',
+                connected: true,
+                generation: '9',
+                model: 'a/x',
+                capabilities: ['pi.lifecycle.v1'],
+            },
+        });
+        const { tm } = harness(tab);
+        const state = {
+            confirmed: ['old'],
+            desired: ['draft'],
+            dirty: true,
+            saveRequired: true,
+            attempt: null,
+            writing: false,
+            error: '',
+            storageWarning: '',
+        };
+        const order = [];
+        tm.thinkingPresetStore.getState = () => state;
+        tm.thinkingPresetStore.refresh = vi.fn(async () => {
+            order.push('refresh');
+            state.confirmed = ['fresh'];
+            return true;
+        });
+        tm.thinkingPresetStore.useServerList = vi.fn(() => {
+            order.push('use');
+            state.desired = [...state.confirmed];
+        });
+        const dropup = document.getElementById('pi-rpc-thinking-dropup');
+        dropup.classList.remove('hidden');
+        tm._renderPiPtyThinkingFallback(dropup, tab);
+        const confirmMock = vi.fn().mockReturnValue(false);
+        vi.stubGlobal('confirm', confirmMock);
+        const useServer = dropup.querySelector('.pi-thinking-use-server');
+        useServer.click();
+        expect(confirmMock).toHaveBeenCalledOnce();
+        expect(tm.thinkingPresetStore.refresh).not.toHaveBeenCalled();
+        expect(tm.thinkingPresetStore.useServerList).not.toHaveBeenCalled();
+
+        confirmMock.mockReturnValue(true);
+        useServer.click();
+        await vi.waitFor(() => expect(order).toEqual(['refresh', 'use']));
+        expect(state.desired).toEqual(['fresh']);
+    });
+
+    it('uses the fallback when model identity is missing and dispatches a saved level', () => {
+        const { tm, tab } = harness(
             bridgeTab({ piBridge: { ...bridgeTab().piBridge, model: '' } }),
         );
+        tm.thinkingPresetStore.getState = () => ({
+            confirmed: ['high'],
+            desired: ['high'],
+            dirty: false,
+            saveRequired: false,
+            attempt: null,
+            writing: false,
+            error: '',
+            storageWarning: '',
+        });
         mockFetch(() => {
             throw new Error(
                 'should not request levels without a model identity',
@@ -306,8 +489,15 @@ describe('Pi bridge Thinking controls', () => {
         tm.renderPresets('pi');
         thinkingTrigger(tm).click();
         const dropup = document.getElementById('pi-rpc-thinking-dropup');
-        expect(dropup.textContent).toContain('Pi thinking levels unavailable');
+        // Capability without a usable model still selects the PTY fallback.
         expect(dropup.textContent).toContain('Open native Thinking picker');
+        expect(dropup.querySelector('.dropup-add-row')).not.toBeNull();
+        dropup.querySelector('.pi-thinking-saved-level').click();
+        expect(tm.sendToTab).toHaveBeenCalledWith(
+            tab,
+            '\x1b[200~/thinking high\x1b[201~\r',
+        );
+        expect(dropup.classList.contains('hidden')).toBe(true);
     });
 
     it('ignores a setter completion after the bridge generation changes', async () => {
@@ -363,8 +553,8 @@ describe('Pi bridge Thinking controls', () => {
                 });
             return levelsResponse();
         });
-        tm._updatePiThinkingButton();
-        tm.piThinkingBtn.click();
+        tm.renderPresets('pi');
+        thinkingTrigger(tm).click();
         await vi.waitFor(() => expect(failLevels).toBeTypeOf('function'));
 
         tm.switchTab('pi-pane-2');
@@ -420,45 +610,6 @@ describe('Pi bridge Thinking controls', () => {
         expect(tm.app.showToast).not.toHaveBeenCalled();
     });
 
-    it('locks and releases the open picker around a bridge cycle', async () => {
-        const { tm } = harness(bridgeTab());
-        let finishSet;
-        mockFetch((_url, options) =>
-            options?.method === 'POST'
-                ? new Promise((resolve) => {
-                      finishSet = () =>
-                          resolve({ ok: true, json: { ok: true, reason: '' } });
-                  })
-                : levelsResponse(),
-        );
-        tm.renderPresets('pi');
-        thinkingTrigger(tm).click();
-        const dropup = document.getElementById('pi-rpc-thinking-dropup');
-        await vi.waitFor(() =>
-            expect(
-                [...dropup.querySelectorAll('.dropup-model-btn')].map(
-                    (button) => button.textContent,
-                ),
-            ).toContain('max'),
-        );
-
-        tm.piThinkingBtn.click();
-        await vi.waitFor(() => expect(finishSet).toBeTypeOf('function'));
-        expect(
-            [...dropup.querySelectorAll('.dropup-model-btn')].every(
-                (button) => button.disabled,
-            ),
-        ).toBe(true);
-        finishSet();
-        await vi.waitFor(() =>
-            expect(
-                [...dropup.querySelectorAll('.dropup-model-btn')].every(
-                    (button) => !button.disabled,
-                ),
-            ).toBe(true),
-        );
-    });
-
     it('revokes a pending operation when the last tab is closed and undone', async () => {
         const { tm, tab } = navHarness(bridgeTab());
         tm._startSoftCloseCountdown = vi.fn();
@@ -473,8 +624,8 @@ describe('Pi bridge Thinking controls', () => {
                 });
             return levelsResponse();
         });
-        tm._updatePiThinkingButton();
-        tm.piThinkingBtn.click();
+        tm.renderPresets('pi');
+        thinkingTrigger(tm).click();
         await vi.waitFor(() => expect(failLevels).toBeTypeOf('function'));
 
         tm.softCloseTab('pi-pane-1');
@@ -527,26 +678,10 @@ describe('Pi bridge Thinking controls', () => {
         expect(tm.sendToTab).not.toHaveBeenCalled();
     });
 
-    it('forwards one native cycle when the levels request times out', async () => {
-        vi.useFakeTimers();
-        const { tm } = harness(bridgeTab());
-        abortAwareFetch(() => {});
-        tm._updatePiThinkingButton();
-        tm.piThinkingBtn.click();
-        expect(tm.sendToTab).not.toHaveBeenCalled();
-
-        await vi.advanceTimersByTimeAsync(1100);
-        expect(tm.sendToTab).toHaveBeenCalledTimes(1);
-        expect(tm._piRpcThinkingPending).toBeNull();
-        // A failed list still cycles natively without alarming the user.
-        expect(errorToasts(tm)).toEqual([]);
-        vi.useRealTimers();
-    });
-
     it('reports an unknown outcome when the setter times out', async () => {
         vi.useFakeTimers();
         const { tm, tab } = harness(bridgeTab());
-        abortAwareFetch((resolve, url, options) => {
+        abortAwareFetch((resolve, _url, options) => {
             if (options.method !== 'POST')
                 resolve({ ok: true, json: () => levelsResponse() });
         });
@@ -574,18 +709,31 @@ describe('Pi bridge Thinking controls', () => {
         vi.useRealTimers();
     });
 
-    it('releases a pending operation when an HTTP baseline moves the model', async () => {
+    it('releases a pending setter when an HTTP baseline moves the model', async () => {
         const { tm, tab } = harness(bridgeTab());
-        let failLevels;
-        mockFetch(
-            () =>
-                new Promise((_resolve, reject) => {
-                    failLevels = () => reject(new Error('request timed out'));
-                }),
+        let failSetter;
+        mockFetch((_url, options) =>
+            options?.method === 'POST'
+                ? new Promise((_resolve, reject) => {
+                      failSetter = () => reject(new Error('request timed out'));
+                  })
+                : levelsResponse(),
         );
-        tm._updatePiThinkingButton();
-        tm.piThinkingBtn.click();
-        await vi.waitFor(() => expect(failLevels).toBeTypeOf('function'));
+        tm.renderPresets('pi');
+        thinkingTrigger(tm).click();
+        const dropup = document.getElementById('pi-rpc-thinking-dropup');
+        await vi.waitFor(() =>
+            expect(
+                [...dropup.querySelectorAll('.dropup-model-btn')].map(
+                    (button) => button.textContent,
+                ),
+            ).toContain('max'),
+        );
+        [...dropup.querySelectorAll('.dropup-model-btn')]
+            .find((button) => button.textContent === 'max')
+            .click();
+        await vi.waitFor(() => expect(failSetter).toBeTypeOf('function'));
+        expect(tm._piRpcThinkingPending).not.toBeNull();
 
         const baseline = {
             pane_id: tab.paneId,
@@ -608,31 +756,43 @@ describe('Pi bridge Thinking controls', () => {
             telemetry_revision: '14',
             model: 'a/x',
         });
-        failLevels();
+        failSetter();
         await new Promise((resolve) => setTimeout(resolve, 20));
         expect(tm.sendToTab).not.toHaveBeenCalled();
         expect(tm.app.showToast).not.toHaveBeenCalled();
     });
 
-    it('releases a pending operation before a restart swaps the pane id', async () => {
+    it('releases a pending setter before a restart swaps the pane id', async () => {
         const ws = { readyState: 1, close: vi.fn() };
         const { tm, tab } = navHarness(bridgeTab({ ws, _piBridgeFresh: ws }));
-        let failLevels;
+        let failSetter;
         mockFetch((_url, options) =>
             options?.method === 'POST'
-                ? new Promise(() => {})
-                : new Promise((_resolve, reject) => {
-                      failLevels = () => reject(new Error('request timed out'));
-                  }),
+                ? new Promise((_resolve, reject) => {
+                      failSetter = () => reject(new Error('request timed out'));
+                  })
+                : levelsResponse(),
         );
-        tm._updatePiThinkingButton();
-        tm.piThinkingBtn.click();
-        await vi.waitFor(() => expect(failLevels).toBeTypeOf('function'));
+        tm.renderPresets('pi');
+        thinkingTrigger(tm).click();
+        const dropup = document.getElementById('pi-rpc-thinking-dropup');
+        await vi.waitFor(() =>
+            expect(
+                [...dropup.querySelectorAll('.dropup-model-btn')].map(
+                    (button) => button.textContent,
+                ),
+            ).toContain('max'),
+        );
+        [...dropup.querySelectorAll('.dropup-model-btn')]
+            .find((button) => button.textContent === 'max')
+            .click();
+        await vi.waitFor(() => expect(failSetter).toBeTypeOf('function'));
+        expect(tm._piRpcThinkingPending).not.toBeNull();
 
         tm.restartTab(tab);
         expect(tm._piRpcThinkingPending).toBeNull();
         expect(tab.paneId).toBe('pi-pane-1');
-        failLevels();
+        failSetter();
         await new Promise((resolve) => setTimeout(resolve, 20));
         expect(tm.sendToTab).not.toHaveBeenCalled();
     });
@@ -641,49 +801,29 @@ describe('Pi bridge Thinking controls', () => {
         const ws = { readyState: 1, close: vi.fn() };
         const { tm, tab } = navHarness(bridgeTab({ ws, _piBridgeFresh: ws }));
         tab.term = { dispose: vi.fn() };
-        let failLevels;
-        mockFetch(
-            () =>
-                new Promise((_resolve, reject) => {
-                    failLevels = () => reject(new Error('request timed out'));
-                }),
+        mockFetch((_url, options) =>
+            options?.method === 'POST'
+                ? new Promise(() => {})
+                : levelsResponse(),
         );
-        tm._updatePiThinkingButton();
-        tm.piThinkingBtn.click();
-        await vi.waitFor(() => expect(failLevels).toBeTypeOf('function'));
+        tm.renderPresets('pi');
+        thinkingTrigger(tm).click();
+        const dropup = document.getElementById('pi-rpc-thinking-dropup');
+        await vi.waitFor(() =>
+            expect(
+                [...dropup.querySelectorAll('.dropup-model-btn')].map(
+                    (button) => button.textContent,
+                ),
+            ).toContain('max'),
+        );
+        [...dropup.querySelectorAll('.dropup-model-btn')]
+            .find((button) => button.textContent === 'max')
+            .click();
         expect(tm._piRpcThinkingPending).not.toBeNull();
 
         tm.disposeTabClient('pi-pane-1', { preserveStorage: true });
         expect(tm._piRpcThinkingPending).toBeNull();
-        failLevels();
-        await new Promise((resolve) => setTimeout(resolve, 20));
         expect(tm.sendToTab).not.toHaveBeenCalled();
-    });
-
-    it('repaints the cycle button when the bridge drops in direct mode', async () => {
-        const { tm, tab } = harness(bridgeTab({ directMode: true }));
-        let failLevels;
-        mockFetch(
-            () =>
-                new Promise((_resolve, reject) => {
-                    failLevels = () => reject(new Error('request timed out'));
-                }),
-        );
-        tm._updatePiThinkingButton();
-        tm.piThinkingBtn.click();
-        await vi.waitFor(() => expect(failLevels).toBeTypeOf('function'));
-        expect(tm.piThinkingBtn.disabled).toBe(true);
-
-        tab.piBridge.state = 'plain';
-        tm._refreshPiBridgeThinking(tab);
-        expect(tm._piRpcThinkingPending).toBeNull();
-        expect(tm.piThinkingBtn.disabled).toBe(false);
-
-        failLevels();
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        expect(tm.sendToTab).not.toHaveBeenCalled();
-        tm.piThinkingBtn.click();
-        expect(tm.sendToTab).toHaveBeenCalled();
     });
 
     it('discards a list response after the tab model changes', async () => {
@@ -738,31 +878,6 @@ describe('Pi bridge Thinking controls', () => {
             ).toContain('max'),
         );
         expect(dropup.textContent).not.toContain('unavailable');
-    });
-
-    it('never sends native input from a superseded cycle', async () => {
-        const { tm, tab } = harness(bridgeTab());
-        let failLevels;
-        mockFetch(
-            () =>
-                new Promise((_resolve, reject) => {
-                    failLevels = () => reject(new Error('request timed out'));
-                }),
-        );
-        tm._updatePiThinkingButton();
-        tm.piThinkingBtn.click();
-        await vi.waitFor(() => expect(failLevels).toBeTypeOf('function'));
-
-        // Another pane's operation takes the singleton pending slot.
-        tm._piRpcThinkingPending = { paneId: 'other-pane', level: 'low' };
-        failLevels();
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        expect(tm.sendToTab).not.toHaveBeenCalled();
-        expect(tm.app.showToast).not.toHaveBeenCalled();
-        expect(tm._piRpcThinkingPending).toEqual({
-            paneId: 'other-pane',
-            level: 'low',
-        });
     });
 
     it('does not let a superseded setter completion close a newer picker', async () => {

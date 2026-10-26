@@ -64,7 +64,6 @@ function makeTm() {
     bar.className = 'pi-rpc-status-bar hidden';
     document.body.appendChild(bar);
     tm.piRpcStatusBar = bar;
-    tm.piThinkingBtn = document.createElement('button');
     tm.copyInputBtn = document.createElement('button');
     tm.directModeToggle = document.createElement('button');
     const input = document.createElement('textarea');
@@ -665,14 +664,10 @@ describe('reused context meter', () => {
         expect(bar.querySelector('.pi-rpc-status-model').textContent).toBe(
             'prov/model',
         );
-        // No thinking capability: the chip stays generic and claims no level
-        // (a Pi pane still offers the native cycle, which is PTY-forwarded).
-        expect(tm.piThinkingBtn.title).toBe('Cycle Pi Thinking level');
-        expect(
-            [...tm.piThinkingBtn.classList].some((cls) =>
-                /^pi-thinking-btn--/.test(cls),
-            ),
-        ).toBe(false);
+        // No thinking capability: the removed cycle chip must not exist, and
+        // nothing here fabricates a level. The bottom-bar menu still offers
+        // saved options plus the native picker.
+        expect(document.querySelector('.pi-thinking-btn')).toBeNull();
     });
 
     it('treats explicit zero tokens as known with a zero fill', () => {

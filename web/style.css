@@ -3088,44 +3088,6 @@ body.has-terminal-bg
         0 0 16px var(--accent-glow);
 }
 
-.pi-thinking-btn {
-    width: 38px;
-    height: 38px;
-    color: var(--text-muted);
-}
-/* Thinking intensity changes the accent treatment, not the accent hue. */
-.pi-thinking-btn--off {
-    color: var(--text-dim);
-    border-color: var(--bg-border);
-}
-.pi-thinking-btn--minimal {
-    color: var(--accent-dim);
-    border-color: var(--accent-dim);
-}
-.pi-thinking-btn--low {
-    color: var(--accent);
-    border-color: var(--accent);
-    background-color: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
-}
-.pi-thinking-btn--medium {
-    color: var(--accent-bright);
-    border-color: var(--accent);
-    background-color: color-mix(in srgb, var(--accent) 16%, var(--bg-elevated));
-    box-shadow: 0 0 8px var(--accent-glow);
-}
-.pi-thinking-btn--high {
-    color: var(--accent-bright);
-    border-color: var(--accent-bright);
-    background-color: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
-    box-shadow: 0 0 10px var(--accent-glow);
-}
-.pi-thinking-btn--xhigh {
-    color: var(--accent-bright);
-    border-color: var(--accent-bright);
-    background-color: color-mix(in srgb, var(--accent) 22%, var(--bg-elevated));
-    box-shadow: 0 0 12px var(--accent-glow);
-}
-
 .cancel-btn-icon {
     font-size: 14px;
     font-weight: 600;
