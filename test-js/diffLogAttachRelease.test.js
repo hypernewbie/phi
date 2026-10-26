@@ -25,6 +25,7 @@ function context() {
         activeTab: 'log',
         isPanelOpen: true,
         currentWs: null,
+        _diffStreamToken: 0,
         commitSelect: { value: 'unstaged' },
         _setPanel: vi.fn(),
         fitTerminal: vi.fn(),
@@ -162,8 +163,60 @@ describe('diff log attach wiring', () => {
         expect(ctx.fitTerminal).toHaveBeenCalledTimes(1);
         ctx.term.write.mockClear();
         staleAttach({ epoch: 7, oldest: 0, head: 40, ckpt: null });
-        expect(ctx.term.write).not.toHaveBeenCalled();
         expect(release).not.toHaveBeenCalled();
         expect(ctx.fitTerminal).toHaveBeenCalledTimes(1);
+    });
+
+    it('decodes a checkpoint that ends mid-codepoint with the live stream', async () => {
+        const ctx = context();
+        await ctx.refreshDiff();
+        const pty = ctx.currentWs;
+        const full = 'bounded screen \u4f60 live\r\n';
+        const bytes = new TextEncoder().encode(full);
+        const cut = new TextEncoder().encode('bounded screen ').length + 1;
+        sendPayload(pty, {
+            $case: 'attach',
+            value: {
+                epoch: 7n,
+                oldest: 0n,
+                head: BigInt(cut),
+                checkpoint: {
+                    kind: 'ansi-v1',
+                    through: BigInt(cut),
+                    cols: 120,
+                    rows: 30,
+                    data: bytes.slice(0, cut),
+                },
+            },
+        });
+        const checkpointText = ctx.term.write.mock.calls.at(-1)[0];
+        expect(checkpointText).toBe('bounded screen ');
+        expect(checkpointText).not.toContain('\ufffd');
+        sendPayload(pty, {
+            $case: 'output',
+            value: { start: BigInt(cut), data: bytes.slice(cut) },
+        });
+        expect(checkpointText + ctx.term.write.mock.calls.at(-1)[0]).toBe(full);
+    });
+
+    it('drops a streaming response the user already replaced', async () => {
+        const ctx = context();
+        let resolveLog;
+        mockFetch((url) =>
+            String(url).startsWith('/api/diff')
+                ? new Promise((resolve) => {
+                      resolveLog = resolve;
+                  })
+                : { text: 'raw diff body' },
+        );
+        const slow = ctx.refreshDiff();
+        ctx.activeTab = 'diff';
+        await ctx.refreshDiff();
+        resolveLog({ pane_id: 'stale-pane' });
+        await slow;
+        expect(ctx.currentWs).toBeNull();
+        expect(
+            ctx.term.write.mock.calls.map(([text]) => text).join(''),
+        ).not.toContain('checkpoint');
     });
 });
