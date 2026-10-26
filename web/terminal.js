@@ -593,6 +593,8 @@ export class TabManager {
         this._piBridgeThinkingMenuRequest = 0;
         this._piRpcModels = null;
         this._piRpcModelsNote = null;
+        this._piRpcModelMemory = new Map();
+        this._piRpcModelNext = null;
         this._piRpcModelQuery = '';
         this._piRpcModelExpandedGroup = null;
         this._piRpcFavorites = null;
@@ -5106,9 +5108,18 @@ export class TabManager {
                         bridge.truncated === true;
                     this._piBridgeModelsUnavailable =
                         bridge.unavailable === true;
-                    this._piRpcModels = Array.isArray(bridge.models)
+                    const rows = Array.isArray(bridge.models)
                         ? bridge.models
                         : [];
+                    // "unavailable" means the registry read failed or the
+                    // answer was too large: that is not proof the last good
+                    // catalog is empty.
+                    if (rows.length === 0 && this._piRpcModels?.length) {
+                        this._piRpcModelsNote = 'Pi model list unavailable';
+                        this._buildPiRpcModelList();
+                        return;
+                    }
+                    this._piRpcModels = rows;
                 } else {
                     this._piRpcModels = Array.isArray(result) ? result : [];
                 }
@@ -5137,50 +5148,117 @@ export class TabManager {
             });
     }
 
+    // One setter per pane at a time. A pick made while one is in flight is
+    // kept as the newest and runs after it, so the last click is the one that
+    // lands last instead of two requests racing each other.
+    _setPiRpcModel(paneId, coder, provider, modelId) {
+        const inFlight = this._piRpcModelPending;
+        if (inFlight && inFlight.paneId === paneId) {
+            this._piRpcModelNext = { paneId, coder, provider, modelId };
+            return;
+        }
+        const operation = { paneId, provider, modelId };
+        this._piRpcModelPending = operation;
+        let setterResult;
+        try {
+            setterResult =
+                coder === 'pi'
+                    ? this._piBridgeModelSwitch(paneId, provider, modelId)
+                    : rpcChatSetModel(paneId, provider, modelId);
+        } catch (error) {
+            setterResult = Promise.reject(error);
+        }
+        const settle = (error) => {
+            // A disconnect or a newer owner cleared the slot: this reply is
+            // stale, so it reports nothing and starts nobody.
+            if (this._piRpcModelPending !== operation) return;
+            this._piRpcModelPending = null;
+            if (error) {
+                this._piRpcError(error, 'Pi model');
+            } else {
+                if (coder === 'pi-rpc')
+                    this._piAvailableThinking?.delete(paneId);
+                if (this.getActiveTab()?.paneId === paneId)
+                    this.renderPresets(coder);
+            }
+            const next = this._piRpcModelNext;
+            this._piRpcModelNext = null;
+            if (next) {
+                this._setPiRpcModel(
+                    next.paneId,
+                    next.coder,
+                    next.provider,
+                    next.modelId,
+                );
+            }
+        };
+        Promise.resolve(setterResult).then(
+            () => settle(null),
+            (error) => settle(error),
+        );
+    }
+
     _piRpcModelCacheKey(coder) {
         return coder === 'pi'
             ? 'phi.piRpc.models.pi'
             : 'phi.piRpc.models.pi-rpc';
     }
 
+    // Only plain rows leave here: a corrupt cached entry must not reach the
+    // DOM as an object that throws on string conversion.
+    _cleanPiRpcModelRows(models) {
+        if (!Array.isArray(models)) return [];
+        const rows = [];
+        for (const model of models) {
+            if (!model || typeof model.provider !== 'string' || !model.provider)
+                continue;
+            if (typeof model.id !== 'string' || !model.id) continue;
+            const row = { provider: model.provider, id: model.id };
+            if (typeof model.name === 'string' && model.name)
+                row.name = model.name;
+            rows.push(row);
+        }
+        return rows;
+    }
+
+    // The last good catalog lives in memory first: localStorage can refuse a
+    // write (quota, private mode) and the menu must still open from it.
     _loadPiRpcModelCache(coder) {
+        const key = this._piRpcModelCacheKey(coder);
+        const memory = this._piRpcModelMemory?.get(key);
+        if (memory) return memory;
         try {
-            const raw = window.localStorage?.getItem(
-                this._piRpcModelCacheKey(coder),
-            );
+            const raw = window.localStorage?.getItem(key);
             if (typeof raw !== 'string' || !raw) return null;
             const parsed = JSON.parse(raw);
-            if (!Array.isArray(parsed?.models)) return null;
-            const models = parsed.models.filter(
-                (model) =>
-                    model &&
-                    typeof model.provider === 'string' &&
-                    typeof model.id === 'string',
-            );
-            return models.length > 0 ? models : null;
+            const models = this._cleanPiRpcModelRows(parsed?.models);
+            if (models.length === 0) return null;
+            if (!this._piRpcModelMemory) this._piRpcModelMemory = new Map();
+            this._piRpcModelMemory.set(key, models);
+            return models;
         } catch (_error) {
             return null;
         }
     }
 
     _savePiRpcModelCache(coder, models) {
-        if (!Array.isArray(models) || models.length === 0) return;
+        const rows = this._cleanPiRpcModelRows(models);
+        if (rows.length === 0) return;
+        const key = this._piRpcModelCacheKey(coder);
+        if (!this._piRpcModelMemory) this._piRpcModelMemory = new Map();
+        this._piRpcModelMemory.set(key, rows);
         try {
             window.localStorage?.setItem(
-                this._piRpcModelCacheKey(coder),
+                key,
                 JSON.stringify({
                     at: Date.now(),
                     truncated: this._piBridgeModelsTruncated === true,
-                    models: models.filter(
-                        (model) =>
-                            model &&
-                            typeof model.provider === 'string' &&
-                            typeof model.id === 'string',
-                    ),
+                    models: rows,
                 }),
             );
         } catch (_error) {
-            // localStorage may be unavailable; the in-memory copy is enough.
+            // localStorage may be unavailable; the memory copy still serves
+            // this session.
         }
     }
 
@@ -5211,12 +5289,7 @@ export class TabManager {
         const state = this._piModelStateFor(activeTab);
         const paneId = activeTab.paneId;
         const query = this._piRpcModelQuery;
-        const models = this._piRpcModels.filter(
-            (model) =>
-                model &&
-                typeof model.provider === 'string' &&
-                typeof model.id === 'string',
-        );
+        const models = this._cleanPiRpcModelRows(this._piRpcModels);
         if (models.length === 0) {
             const empty = document.createElement('div');
             empty.className = 'dropup-row pi-rpc-dropup-message';
@@ -5304,49 +5377,16 @@ export class TabManager {
                         !dropup.contains(button))
                 )
                     return;
-                const operation = {
-                    paneId,
-                    provider: model.provider,
-                    modelId: model.id,
-                };
-                this._piRpcModelPending = operation;
                 // The pick is local feedback: close the menu now and let the
                 // state event (or the error toast) reconcile it. A slow link
                 // must not freeze the menu for the length of a round trip.
                 this._closePiRpcDropups(true);
-                let setterResult;
-                try {
-                    setterResult =
-                        activeTab.coder === 'pi'
-                            ? this._piBridgeModelSwitch(
-                                  paneId,
-                                  model.provider,
-                                  model.id,
-                              )
-                            : rpcChatSetModel(
-                                  paneId,
-                                  model.provider,
-                                  model.id,
-                              );
-                } catch (error) {
-                    setterResult = Promise.reject(error);
-                }
-                Promise.resolve(setterResult)
-                    .then(() => {
-                        if (this._piRpcModelPending !== operation) return;
-                        this._piRpcModelPending = null;
-                        if (activeTab.coder === 'pi-rpc')
-                            this._piAvailableThinking?.delete(paneId);
-                        if (this.getActiveTab()?.paneId === paneId) {
-                            this.renderPresets(activeTab.coder);
-                            this._closePiRpcDropups(true);
-                        }
-                    })
-                    .catch((error) => {
-                        if (this._piRpcModelPending !== operation) return;
-                        this._piRpcModelPending = null;
-                        this._piRpcError(error, 'Pi model');
-                    });
+                this._setPiRpcModel(
+                    paneId,
+                    activeTab.coder,
+                    model.provider,
+                    model.id,
+                );
             });
             const meta = document.createElement('span');
             meta.className = 'pi-rpc-dropup-meta';
@@ -10528,6 +10568,7 @@ export class TabManager {
                 this._piBridgeModelsUnavailable = false;
                 if (this._piRpcModelPending?.paneId === activeTab.paneId)
                     this._piRpcModelPending = null;
+                this._piRpcModelNext = null;
                 const modelDropup = document.getElementById('pi-rpc-model-dropup');
                 modelDropup?.classList.add('hidden');
                 modelDropup?.replaceChildren();
@@ -12515,8 +12556,10 @@ export class TabManager {
         if (
             this._piRpcModelPending?.paneId === tab.paneId &&
             !this._piBridgeModelsEligible(tab)
-        )
+        ) {
             this._piRpcModelPending = null;
+            this._piRpcModelNext = null;
+        }
         // Thinking cleanup first so the single renderPresets below owns the
         // open-picker re-render with settled pending state (one levels fetch).
         this._refreshPiBridgeThinking(tab);

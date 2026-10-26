@@ -37,6 +37,11 @@ export const CompactCallTimeout = 605_000;
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 15_000;
 
+// Close codes the Phi server sends when this stream cannot work at all:
+// 1002 protocol error, 1009 message too big, 1011 event conversion/encoding
+// failure. See pkg/ws/control.go.
+const SERVER_FAULT_CLOSE_CODES = new Set([1002, 1009, 1011]);
+
 export interface CallOptions {
     timeoutMs?: number;
 }
@@ -202,7 +207,11 @@ export function connectControl(
         reportStreamFailure(reason);
     };
 
-    const flushOutbox = (socket: WebSocket): void => {
+    // A native WebSocket buffers `send()` silently once it leaves OPEN, so
+    // the frame would be lost while we still believed it was written.
+    const writable = (socket: WebSocket): boolean => socket.readyState === 1;
+
+    const flushOutbox = (socket: WebSocket): boolean => {
         const frames = outbox.splice(0);
         for (let index = 0; index < frames.length; index++) {
             const frame = frames[index];
@@ -211,18 +220,24 @@ export function connectControl(
             // A call that timed out or was cancelled has no pending entry;
             // its frame must not reach the server.
             if (frame.id !== undefined && !call) continue;
+            if (!writable(socket)) {
+                outbox.push(...frames.slice(index));
+                dropSocket();
+                return false;
+            }
             try {
                 socket.send(frame.raw);
             } catch (_error) {
                 outbox.push(...frames.slice(index));
                 dropSocket();
-                return;
+                return false;
             }
             if (call) {
                 call.sent = true;
                 armTimer(frame.id as string, call);
             }
         }
+        return true;
     };
 
     const dropSocket = (): void => {
@@ -274,7 +289,7 @@ export function connectControl(
                 return;
             }
             opened = true;
-            flushOutbox(socket);
+            if (!flushOutbox(socket)) return;
             emitState(true);
         };
         socket.onerror = () => {
@@ -287,9 +302,17 @@ export function connectControl(
                 if (socket === ws) dropSocket();
             }
         };
-        socket.onclose = () => {
+        socket.onclose = (event) => {
             dialing = false;
             if (socket !== ws) return;
+            // The server closes with a protocol/internal code when it cannot
+            // speak this stream at all. Redialing would only loop, so those
+            // are reported; every other close is a transport problem worth
+            // retrying.
+            if (SERVER_FAULT_CLOSE_CODES.has(event?.code)) {
+                failStream(controlError('control stream refused'));
+                return;
+            }
             dropSocket();
         };
         socket.onmessage = (ev) => {
@@ -372,7 +395,7 @@ export function connectControl(
     const transmit = (raw: Uint8Array<ArrayBuffer>, id?: string): void => {
         if (closed || broken) return;
         const call = id === undefined ? undefined : pending.get(id);
-        if (opened && ws) {
+        if (opened && ws && writable(ws)) {
             try {
                 ws.send(raw);
             } catch (_error) {
@@ -387,6 +410,9 @@ export function connectControl(
             return;
         }
         outbox.push({ id, raw });
+        // A socket that is no longer OPEN will never write this frame: drop
+        // it now so the redial can replay the frame.
+        if (opened) dropSocket();
     };
 
     const call = <T = any>(

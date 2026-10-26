@@ -407,6 +407,34 @@ describe('Pi RPC ControlClient', () => {
         client.close();
     });
 
+    it('keeps a frame the socket can no longer write instead of losing it', async () => {
+        vi.useFakeTimers();
+        vi.stubGlobal('WebSocket', FakeWebSocket);
+        const client = connectControl();
+        const socket = FakeWebSocket.instances[0];
+        socket.open();
+        // CLOSING: a native WebSocket buffers send() silently here, so the
+        // frame must be held for the next socket instead.
+        socket.readyState = 2;
+        const pending = client.call('getState', 'sid-1', {});
+        expect(socket.sent).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(20_000);
+        const redialed = FakeWebSocket.instances[1];
+        redialed.open();
+        expect(redialed.sent.map((frame) => frame.payload.$case)).toEqual([
+            'hello',
+            'call',
+        ]);
+        redialed.receive(
+            response(redialed.sent[1].payload.value.id, {
+                $case: 'getState',
+                value: { state: stateFields({ sid: 'sid-1' }) },
+            }),
+        );
+        await expect(pending).resolves.toMatchObject({ sid: 'sid-1' });
+        client.close();
+    });
+
     it('rejects written calls on a drop, keeps queued work, and replays it after the redial', async () => {
         vi.useFakeTimers();
         vi.stubGlobal('WebSocket', FakeWebSocket);

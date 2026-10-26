@@ -177,6 +177,85 @@ describe('bridge models picker', () => {
         expect(dropup.textContent).toContain('Favorites');
     });
 
+    it('applies only the newest pick when two land while one is in flight', async () => {
+        const tab = bridgeTab();
+        const { tm, dropup } = harness(tab);
+        const posted = [];
+        const finishes = [];
+        mockFetch((_url, options) => {
+            if (options?.method === 'POST') {
+                posted.push(JSON.parse(options.body).model);
+                return new Promise((resolve) => {
+                    finishes.push(() => resolve({ json: { ok: true } }));
+                });
+            }
+            return {
+                models: [
+                    { provider: 'b', id: 'y' },
+                    { provider: 'b', id: 'z' },
+                ],
+                truncated: false,
+                unavailable: false,
+            };
+        });
+
+        tm.renderPresets('pi');
+        modelsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.querySelectorAll('.dropup-model-btn')).toHaveLength(
+                2,
+            );
+        });
+        const [first] = dropup.querySelectorAll('.dropup-model-btn');
+        first.click();
+        await vi.waitFor(() => expect(posted).toEqual(['y']));
+        // Reopen while the first pick is still in flight and pick again.
+        modelsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(
+                [...dropup.querySelectorAll('.dropup-model-btn')].some(
+                    (button) => button.textContent === 'z',
+                ),
+            ).toBe(true);
+        });
+        [...dropup.querySelectorAll('.dropup-model-btn')]
+            .find((button) => button.textContent === 'z')
+            .click();
+        // The second pick waits its turn instead of racing the first.
+        expect(posted).toEqual(['y']);
+        finishes[0]();
+        await vi.waitFor(() => expect(posted).toEqual(['y', 'z']));
+        finishes[1]();
+        await vi.waitFor(() => expect(tm._piRpcModelPending).toBeNull());
+        expect(tm.app.showToast).not.toHaveBeenCalled();
+    });
+
+    it('keeps the cached rows when the bridge reports the list unavailable', async () => {
+        const tab = bridgeTab();
+        const { tm, dropup } = harness(tab);
+        let unavailable = false;
+        mockFetch(() => ({
+            models: unavailable ? [] : [{ provider: 'b', id: 'y' }],
+            truncated: false,
+            unavailable,
+        }));
+
+        tm.renderPresets('pi');
+        modelsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.querySelector('.dropup-model-btn')).not.toBeNull();
+        });
+
+        unavailable = true;
+        dropup.classList.add('hidden');
+        modelsTrigger(tm).click();
+        await vi.waitFor(() => {
+            expect(dropup.textContent).toContain('Pi model list unavailable');
+        });
+        // An unusable registry answer is not proof that the catalog is empty.
+        expect(dropup.querySelector('.dropup-model-btn')).not.toBeNull();
+    });
+
     it('switches through the bridge and closes on ok', async () => {
         const tab = bridgeTab();
         const { tm, dropup } = harness(tab);

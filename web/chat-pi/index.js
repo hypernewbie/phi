@@ -191,6 +191,9 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
     // Bootstrap ended without a session. No sid will ever arrive, so input
     // must stay in the composer instead of queueing into a dead pane.
     let bootstrapFailed = false;
+    // The control stream failed a protocol check. Redialing cannot fix it, so
+    // the pane stays read-only instead of accepting prompts it can never send.
+    let streamBroken = false;
     let resetInFlight = false;
     let compactInFlight = false;
     let compactSnapshot = null;
@@ -235,9 +238,16 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
                 sessionActive = busy;
                 controlsChanged = true;
                 if (!busy) {
-                    outgoing.length = 0;
-                    turnPrompts.length = 0;
-                    activePrompt = null;
+                    // A turn boundary retires in-flight and accepted records.
+                    // Queued and unconfirmed ones are input Pi may never have
+                    // seen: they stay until the transcript reconciles them.
+                    const kept = outgoing.filter((item) => item.state === 'queued' ||
+                        item.state === 'unconfirmed');
+                    outgoing.splice(0, outgoing.length, ...kept);
+                    turnPrompts.splice(0, turnPrompts.length, ...kept);
+                    activePrompt = kept.at(-1)
+                        ? { ...kept.at(-1), origin: 'optimistic' }
+                        : null;
                     // Milestone 4: guard against a stranded retry state
                     // when the busy→false transition lands in a hydrate
                     // window that dropped the auto_retry_end event (the
@@ -494,6 +504,7 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
             }
             buffer.applySnapshot(data);
             applyState(data.state);
+            reconcileOutgoing();
             paint();
             // A hydrate replaces the authoritative settled transcript.
             // Reset completion flushes in the next microtask; initial and
@@ -516,13 +527,36 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
             }
         });
     };
+    // Hydrate is authoritative: an optimistic record whose text is already a
+    // user message in the snapshot landed, so its local row must go. Records
+    // that are absent stay visible as queued or unconfirmed work.
+    const reconcileOutgoing = () => {
+        if (outgoing.length === 0)
+            return;
+        const rendered = new Set(buffer
+            .getMessages()
+            .filter((message) => message?.role === 'user')
+            .map((message) => renderedUserText(message.content)));
+        const kept = outgoing.filter((item) => !rendered.has(renderedUserText(item.text)));
+        if (kept.length === outgoing.length)
+            return;
+        outgoing.splice(0, outgoing.length, ...kept);
+        turnPrompts.splice(0, turnPrompts.length, ...kept);
+        activePrompt =
+            activePrompt && kept.some((item) => item.id === activePrompt?.id)
+                ? activePrompt
+                : kept.at(-1)
+                    ? { ...kept.at(-1), origin: 'optimistic' }
+                    : null;
+        syncActiveTurn();
+    };
     // Delivers one outgoing record. A prompt that never reached a socket stays
     // queued and replays on reconnect; one written before a drop may still
     // have landed, so it stays on screen as unconfirmed and is never resent
     // silently.
     const deliverPrompt = (local) => {
         const currentSid = sid;
-        if (destroyed || exited || !currentSid || !ready) {
+        if (destroyed || exited || streamBroken || !currentSid || !ready) {
             local.state = 'queued';
             return;
         }
@@ -550,6 +584,7 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
             if (activePrompt?.id === local.id)
                 activePrompt.state = local.state;
             syncActiveTurn();
+            flushQueue();
         })
             .catch((error) => {
             if (destroyed)
@@ -562,20 +597,26 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
             if (activePrompt?.id === local.id)
                 activePrompt.state = local.state;
             syncActiveTurn();
+            flushQueue();
         });
     };
     const flushQueue = () => {
-        if (destroyed || exited || !sid || !ready)
+        if (destroyed || exited || streamBroken || !sid || !ready)
             return;
-        for (const item of [...outgoing]) {
-            if (item.state === 'queued')
-                deliverPrompt(item);
-        }
+        // One at a time: the server runs each call in its own goroutine, so a
+        // batch would not keep the user's order.
+        const next = outgoing.find((item) => item.state === 'queued');
+        if (next)
+            deliverPrompt(next);
     };
     const send = (text) => {
-        // No sid will ever arrive for a failed bootstrap, so keep the draft in
-        // the composer instead of queueing it into a dead pane.
-        if (exited || bootstrapFailed || subagentViewer.isOpen())
+        // No sid will ever arrive for a failed bootstrap, and a stream that
+        // failed a protocol check cannot send at all: keep the draft in the
+        // composer instead of queueing it into a dead pane.
+        if (exited ||
+            bootstrapFailed ||
+            streamBroken ||
+            subagentViewer.isOpen())
             return false;
         const dispatch = dispatchComposer(text);
         if (dispatch.kind === 'rejected') {
@@ -1058,6 +1099,7 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
                 return;
             // Keep the transcript that already rendered; only the ability to
             // send is withdrawn, and the status says why.
+            streamBroken = true;
             ready = false;
             status.textContent = `Error: ${message}`;
             notifyControls();

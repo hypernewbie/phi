@@ -797,17 +797,20 @@ describe('Pi RPC transcript controller', () => {
         expect(chat.send('after exit')).toBe(false);
     });
 
-    it('queues a prompt until the session exists, then flushes it in order', async () => {
+    it('queues a prompt until the session exists, then delivers it in order', async () => {
         const root = document.createElement('div');
         const wire = fakeClient();
         const chat = mountChatPi(root, '/work/demo', wire.client);
         expect(chat.send('first')).toBe(true);
         expect(chat.send('second')).toBe(true);
         // Nothing was written: no sid exists yet, so both wait locally.
-        expect(wire.sent.filter((frame) => frame.op === 'prompt')).toHaveLength(
-            0,
-        );
+        const prompts = () =>
+            wire.sent
+                .filter((frame) => frame.op === 'prompt')
+                .map((frame) => frame.args.message);
+        expect(prompts()).toEqual([]);
         expect(root.textContent).toContain('Queued: first');
+
         wire.emit({
             t: 'res',
             id: 'sp',
@@ -816,11 +819,18 @@ describe('Pi RPC transcript controller', () => {
         });
         await Promise.resolve();
         await Promise.resolve();
-        expect(
-            wire.sent
-                .filter((frame) => frame.op === 'prompt')
-                .map((frame) => frame.args.message),
-        ).toEqual(['first', 'second']);
+        // One at a time: the server runs calls in separate goroutines, so the
+        // second prompt waits for the first acknowledgement.
+        expect(prompts()).toEqual(['first']);
+        wire.emit({
+            t: 'res',
+            id: wire.sent.filter((frame) => frame.op === 'prompt').at(-1).id,
+            ok: true,
+            data: { accepted: true },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(prompts()).toEqual(['first', 'second']);
     });
 
     it('resyncs after a reconnect and reports the outage in the status line', async () => {
