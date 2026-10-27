@@ -11711,14 +11711,20 @@ export class TabManager {
                     compactChips.push(slashBtn);
                 }
 
-                // Render other horizontal utility presets (like ctrl+c, ctrl+o)
-                utilityPresets.forEach((p) => {
+                // Render the remaining utility presets (ctrl+o, ...). ctrl+c
+                // is skipped: the ✕ cancel button already interrupts with the
+                // right key for the coder, so it stays the single one.
+                utilityPresets
+                    .filter((p) => p.value !== '\u0003')
+                    .forEach((p) => {
                     const btn = this._buildPresetButton(p);
-                    btn.addEventListener('click', () => {
-                        this.sendRawInput(p.value, { focusInputOnMobile: false });
+                        btn.addEventListener('click', () => {
+                            this.sendRawInput(p.value, {
+                                focusInputOnMobile: false,
+                            });
+                        });
+                        compactChips.push(btn);
                     });
-                    compactChips.push(btn);
-                });
             } else {
                 // Desktop: Render everything horizontally as before
                 visiblePresets.forEach((p) => {

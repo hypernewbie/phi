@@ -176,9 +176,9 @@ describe('compact presets row', () => {
         const tm = compactTm(390);
         tm.renderPresets('pi');
         const actions = document.querySelector('.input-actions');
+        // ctrl+c stays out: the ✕ cancel button is the one interrupt.
         expect(labels(actions)).toEqual([
             'Open slash commands',
-            'Send ctrl+c to the terminal',
             'Send ctrl+o to the terminal',
         ]);
         expect(
@@ -236,6 +236,6 @@ describe('compact presets row', () => {
         tm.renderPresets('pi');
         expect(
             document.querySelectorAll('.input-actions .input-quick-chip'),
-        ).toHaveLength(3);
+        ).toHaveLength(2);
     });
 });
