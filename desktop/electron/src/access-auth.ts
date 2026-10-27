@@ -72,6 +72,25 @@ export type UnlockResult =
   | { kind: 'unavailable'; message: string }
   | { kind: 'stale'; message: string };
 
+/** Protocol the host last selected for an origin. Kept beside the token map
+ *  so a rejected v2 token does not silently fall back to a v1 cookie. */
+export type SelectedProtocol = 'v1' | 'v2';
+
+/** Result of validating an installed v2 token through `/api/auth/v2/status`. */
+export type TokenVerdict = 'valid' | 'invalid' | 'unavailable';
+
+/** Capability discovery from the legacy status route. `raw` is retained so
+ *  the v1 path can validate KDF metadata only when it needs it. */
+export type AuthDiscovery =
+  | { kind: 'disabled'; protocols: string[] }
+  | {
+      kind: 'enabled';
+      protocols: string[];
+      authenticated: boolean;
+      raw: Record<string, unknown>;
+    }
+  | { kind: 'unavailable'; message: string };
+
 /** A persisted access credential: the verifier plus the server's
  *  trust settings captured at unlock time. Used by the host to
  *  re-authenticate on next launch (the verifier replaces the typed
@@ -107,6 +126,8 @@ const FETCH_TIMEOUT_MS = 5_000;
 const COOKIE_NAME = 'phi_access_session';
 const AUTH_PATH_STATUS = '/api/auth/status';
 const AUTH_PATH_LOGIN = '/api/auth/login';
+const AUTH_PATH_V2_STATUS = '/api/auth/v2/status';
+const AUTH_PATH_V2_LOGIN = '/api/auth/v2/login';
 const CONFIG_PATH = '/api/config';
 
 /**
@@ -144,6 +165,12 @@ interface TrustedAuthStatus {
 
 export class AccessAuth {
   private readonly cookies = new Map<string, CookieJarEntry>();
+  /** Per-origin v2 bearer. Installed by a successful v2 login or by the
+   *  host restoring its encrypted store. Never persisted by this module. */
+  private readonly tokens = new Map<string, string>();
+  /** Per-origin protocol choice. Presence is intentional: a rejected token
+   *  clears the token but keeps `v2` selected, so no cookie fallback runs. */
+  private readonly selectedProtocols = new Map<string, SelectedProtocol>();
   /** Per-origin verifier cache: the verifier is computed once per
    *  successful login and held until the host reads it (for disk
    *  persistence) or a new login overwrites it. Cleared on `cancel`
@@ -204,10 +231,55 @@ export class AccessAuth {
       this.lastVerifier.delete(`${canonical}/`);
       this.lastCredential.delete(canonical);
       this.lastCredential.delete(`${canonical}/`);
+      this.tokens.delete(canonical);
+      this.selectedProtocols.delete(canonical);
     }
     this.cookies.delete(origin);
     this.lastVerifier.delete(origin);
     this.lastCredential.delete(origin);
+    this.tokens.delete(origin);
+    this.selectedProtocols.delete(origin);
+  }
+
+  /** Installs a host-held v2 token. Memory-only: persistence belongs to the
+   *  encrypted desktop store, never this module. */
+  installToken(origin: string, token: string): boolean {
+    const canonical = toCanonicalAuthOrigin(origin);
+    if (!canonical || typeof token !== 'string' || token.length === 0) {
+      return false;
+    }
+    this.tokens.set(canonical, token);
+    this.selectedProtocols.set(canonical, 'v2');
+    return true;
+  }
+
+  /** Drops one rejected token while keeping the v2 selection. A delayed
+   *  rejection for token A must not clear a newer token B. */
+  rejectToken(origin: string, token: string): void {
+    const canonical = toCanonicalAuthOrigin(origin);
+    if (!canonical) return;
+    if (this.tokens.get(canonical) === token) {
+      this.tokens.delete(canonical);
+    }
+    this.selectedProtocols.set(canonical, 'v2');
+  }
+
+  /** Returns the installed token for `origin`, if any. */
+  getToken(origin: string): string | null {
+    const canonical = toCanonicalAuthOrigin(origin);
+    if (!canonical) return null;
+    return this.tokens.get(canonical) ?? null;
+  }
+
+  hasToken(origin: string): boolean {
+    return this.getToken(origin) !== null;
+  }
+
+  /** Protocol selected for `origin`; null before a credential decides. */
+  getSelectedProtocol(origin: string): SelectedProtocol | null {
+    const canonical = toCanonicalAuthOrigin(origin);
+    if (!canonical) return null;
+    return this.selectedProtocols.get(canonical) ?? null;
   }
 
   /** Returns the verifier cached for `origin` from the most recent
@@ -257,6 +329,10 @@ export class AccessAuth {
     if (!canonical) {
       verifier.fill(0);
       return { kind: 'unavailable', message: 'invalid origin' };
+    }
+    if (this.selectedProtocols.get(canonical) === 'v2') {
+      verifier.fill(0);
+      return { kind: 'unavailable', message: 'v2 selected' };
     }
     if (verifier.length !== 32) {
       verifier.fill(0);
@@ -334,6 +410,9 @@ export class AccessAuth {
   > {
     const canonical = toCanonicalAuthOrigin(origin);
     if (!canonical) return { kind: 'unavailable', message: 'invalid origin' };
+    if (this.selectedProtocols.get(canonical) === 'v2') {
+      return { kind: 'unavailable', message: 'v2 selected' };
+    }
     if (signal?.aborted) return { kind: 'stale', message: 'Aborted' };
     const status = await this.fetchStatus(canonical, signal);
     if (signal?.aborted) return { kind: 'stale', message: 'Aborted' };
@@ -364,10 +443,14 @@ export class AccessAuth {
   ): Promise<FetchConfigResult> {
     const canonical = toCanonicalAuthOrigin(origin);
     if (!canonical) return { kind: 'unavailable', reason: 'invalid origin' };
+    const protocol = this.selectedProtocols.get(canonical) ?? 'v1';
+    const token = protocol === 'v2' ? this.tokens.get(canonical) : undefined;
     let cookie =
-      this.cookies.get(canonical) ??
-      (origin !== canonical ? this.cookies.get(origin) : undefined);
-    if (!cookie && this._cookieProvider) {
+      protocol === 'v2'
+        ? undefined
+        : (this.cookies.get(canonical) ??
+          (origin !== canonical ? this.cookies.get(origin) : undefined));
+    if (protocol !== 'v2' && !cookie && this._cookieProvider) {
       try {
         let fromProvider = await this._cookieProvider(origin);
         if (!fromProvider && origin !== canonical) {
@@ -384,7 +467,9 @@ export class AccessAuth {
       }
     }
     const headers: Record<string, string> = {};
-    if (cookie) headers.Cookie = `${cookie.cookieName}=${cookie.cookieValue}`;
+    if (token) headers.Authorization = `Bearer ${token}`;
+    else if (cookie)
+      headers.Cookie = `${cookie.cookieName}=${cookie.cookieValue}`;
     const sentCookie = cookie;
     try {
       const res = await this.safeFetch(new URL(CONFIG_PATH, canonical), {
@@ -393,14 +478,23 @@ export class AccessAuth {
         redirect: 'error',
       });
       if (res.status === 401) {
-        const current = this.cookies.get(canonical) ?? this.cookies.get(origin);
-        if (
-          sentCookie &&
-          current &&
-          current.cookieValue === sentCookie.cookieValue
-        ) {
-          this.cookies.delete(canonical);
-          this.cookies.delete(origin);
+        if (token) {
+          // Clear only the token this request sent. A newer token installed
+          // while the request was in flight must survive.
+          if (this.tokens.get(canonical) === token) {
+            this.tokens.delete(canonical);
+          }
+        } else {
+          const current =
+            this.cookies.get(canonical) ?? this.cookies.get(origin);
+          if (
+            sentCookie &&
+            current &&
+            current.cookieValue === sentCookie.cookieValue
+          ) {
+            this.cookies.delete(canonical);
+            this.cookies.delete(origin);
+          }
         }
         return { kind: 'unauthorized' };
       }
@@ -421,13 +515,14 @@ export class AccessAuth {
   }
 
   /**
-   * Runs the unlock handshake: fetch fresh status, derive verifier,
-   * compute proof, POST login, capture cookie, retry `/api/config`.
-   * Returns `stale` when the active origin changed mid-handshake. Status
-   * validation failures → `unavailable` (the caller shows the user a
-   * non-modal message — never a password prompt on a server we can't
-   * trust). Returns `no-auth-needed` when the server reports access
-   * disabled (the caller clears any prompt and re-fetches config).
+   * Runs the unlock handshake: fetch fresh status, choose the advertised
+   * protocol, then either derive a v1 verifier or post the raw password to
+   * the v2 route. Returns `stale` when the active origin changed
+   * mid-handshake. Status validation failures → `unavailable` (the caller
+   * shows the user a non-modal message — never a password prompt on a
+   * server we can't trust). Returns `no-auth-needed` when the server
+   * reports access disabled (the caller clears any prompt and re-fetches
+   * config).
    */
   async tryUnlock(
     origin: string,
@@ -438,20 +533,22 @@ export class AccessAuth {
     if (!canonical) {
       return { kind: 'unavailable', message: 'invalid origin' };
     }
-    if (
-      password.length < MIN_PASSWORD_LEN ||
-      password.length > MAX_PASSWORD_LEN
-    ) {
+    if (typeof password !== 'string') {
+      return { kind: 'invalid-password', message: 'Password is required.' };
+    }
+    // Character count is a lower bound for UTF-8 bytes, so this rejects a
+    // too-short password for either protocol before any network round trip.
+    if (password.length < MIN_PASSWORD_LEN) {
       return {
         kind: 'invalid-password',
         message: 'Password length is out of range.',
       };
     }
-    const status = await this.fetchStatus(canonical, signal);
-    if (status.kind === 'unavailable') {
-      return { kind: 'unavailable', message: status.message };
+    const discovery = await this.discoverStatus(canonical, signal);
+    if (discovery.kind === 'unavailable') {
+      return { kind: 'unavailable', message: discovery.message };
     }
-    if (status.kind === 'no-auth') {
+    if (discovery.kind === 'disabled') {
       this.cancel(origin);
       const cfg = await this.fetchConfig(canonical, signal);
       return cfg.kind === 'ok'
@@ -461,22 +558,246 @@ export class AccessAuth {
             message: 'auth disabled but config still failed',
           };
     }
-    // status.kind === 'trusted' — server-controlled values are validated.
+
+    let protocol = this.selectedProtocols.get(canonical);
+    // Only a successful v1-only discovery may move a selected v2 client back
+    // to v1. A v1 selection never upgrades during a login attempt.
+    if (protocol === 'v2' && !discovery.protocols.includes('v2')) {
+      this.selectedProtocols.set(canonical, 'v1');
+      this.tokens.delete(canonical);
+      protocol = 'v1';
+    }
+    if (!protocol) {
+      protocol = discovery.protocols.includes('v2') ? 'v2' : 'v1';
+    }
+
+    if (protocol === 'v2') {
+      const bytes = Buffer.byteLength(password, 'utf8');
+      if (bytes < MIN_PASSWORD_LEN || bytes > MAX_PASSWORD_LEN) {
+        return {
+          kind: 'invalid-password',
+          message: 'Password length is out of range.',
+        };
+      }
+      return this.completeV2Unlock(canonical, password, signal);
+    }
+
+    if (
+      password.length < MIN_PASSWORD_LEN ||
+      password.length > MAX_PASSWORD_LEN
+    ) {
+      return {
+        kind: 'invalid-password',
+        message: 'Password length is out of range.',
+      };
+    }
+    const status = validateStatus(discovery.raw);
+    if (status === null || status.kind !== 'trusted') {
+      return {
+        kind: 'unavailable',
+        message: 'Phi returned unexpected auth settings',
+      };
+    }
+    this.selectedProtocols.set(canonical, 'v1');
     const verifier = await deriveVerifier(
       password,
-      status.salt,
-      status.iterations,
+      status.status.salt,
+      status.status.iterations,
     );
     try {
       return await this.completeUnlock(
         canonical,
         verifier,
-        status,
+        { kind: 'trusted', ...status.status },
         signal,
         origin,
       );
     } finally {
       verifier.fill(0);
+    }
+  }
+
+  /** Posts a raw password to the v2 route, installs the returned bearer, and
+   *  retries `/api/config` with it. The token is cleared only when the server
+   *  rejects that same token; transient failures keep it for the next poll. */
+  private async completeV2Unlock(
+    canonical: string,
+    password: string,
+    signal?: AbortSignal,
+  ): Promise<UnlockResult> {
+    const attempt = (this.attemptTokens.get(canonical) ?? 0) + 1;
+    this.attemptTokens.set(canonical, attempt);
+    const isCurrent = (): boolean =>
+      this.attemptTokens.get(canonical) === attempt;
+    if (signal?.aborted || !isCurrent()) {
+      return { kind: 'stale', message: 'Aborted' };
+    }
+
+    let login: Awaited<ReturnType<AccessAuth['postV2Login']>>;
+    try {
+      login = await this.postV2Login(canonical, password, signal);
+    } catch (err) {
+      return {
+        kind: 'unavailable',
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+    if (signal?.aborted || !isCurrent()) {
+      return { kind: 'stale', message: 'Aborted' };
+    }
+    if (login.kind !== 'ok') return login;
+
+    this.tokens.set(canonical, login.token);
+    this.selectedProtocols.set(canonical, 'v2');
+
+    const cfg = await this.fetchConfig(canonical, signal);
+    if (signal?.aborted || !isCurrent()) {
+      return { kind: 'stale', message: 'Aborted' };
+    }
+    if (cfg.kind === 'ok') return { kind: 'ok', config: cfg.config };
+    if (cfg.kind === 'unauthorized') {
+      if (this.tokens.get(canonical) === login.token) {
+        this.tokens.delete(canonical);
+      }
+      return { kind: 'unavailable', message: 'Session was not accepted.' };
+    }
+    // 5xx/timeout after a successful login: keep the token so the next poll
+    // can recover, exactly like the v1 cookie path.
+    return { kind: 'ok', config: null };
+  }
+
+  private async postV2Login(
+    canonical: string,
+    password: string,
+    signal?: AbortSignal,
+  ): Promise<
+    | { kind: 'ok'; token: string }
+    | { kind: 'rate-limited'; message: string }
+    | { kind: 'invalid-password'; message: string }
+    | { kind: 'unavailable'; message: string }
+  > {
+    try {
+      const res = await this.safeFetch(new URL(AUTH_PATH_V2_LOGIN, canonical), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+        signal: withTimeout(signal, FETCH_TIMEOUT_MS),
+        redirect: 'error',
+      });
+      if (res.status === 429) {
+        return {
+          kind: 'rate-limited',
+          message: 'Too many attempts. Try again later.',
+        };
+      }
+      if (res.status === 400 || res.status === 401) {
+        return { kind: 'invalid-password', message: 'Password not accepted.' };
+      }
+      if (!res.ok) {
+        return { kind: 'unavailable', message: `v2 login http ${res.status}` };
+      }
+      let payload: unknown;
+      try {
+        payload = await res.json();
+      } catch {
+        return { kind: 'unavailable', message: 'v2 login returned bad json' };
+      }
+      if (
+        !payload ||
+        typeof payload !== 'object' ||
+        typeof (payload as { token?: unknown }).token !== 'string' ||
+        (payload as { token: string }).token.length === 0
+      ) {
+        return { kind: 'unavailable', message: 'v2 login returned no token' };
+      }
+      return { kind: 'ok', token: (payload as { token: string }).token };
+    } catch (err) {
+      return {
+        kind: 'unavailable',
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  /** Discovers enabled state and advertised protocols from the legacy status
+   *  route. The raw body is retained for the v1 KDF path only. */
+  async discoverStatus(
+    origin: string,
+    signal?: AbortSignal,
+  ): Promise<AuthDiscovery> {
+    const canonical = toCanonicalAuthOrigin(origin);
+    if (!canonical) return { kind: 'unavailable', message: 'invalid origin' };
+    try {
+      const res = await this.safeFetch(new URL(AUTH_PATH_STATUS, canonical), {
+        signal: withTimeout(signal, FETCH_TIMEOUT_MS),
+        redirect: 'error',
+      });
+      if (!res.ok) {
+        return { kind: 'unavailable', message: `status http ${res.status}` };
+      }
+      const raw = (await res.json()) as unknown;
+      if (!raw || typeof raw !== 'object') {
+        return { kind: 'unavailable', message: 'bad status json' };
+      }
+      const record = raw as Record<string, unknown>;
+      if (typeof record.enabled !== 'boolean') {
+        return { kind: 'unavailable', message: 'bad status enabled' };
+      }
+      const protocols = parseProtocols(record.protocols);
+      if (protocols === null) {
+        return { kind: 'unavailable', message: 'bad status protocols' };
+      }
+      if (record.enabled === false) {
+        return { kind: 'disabled', protocols };
+      }
+      if (typeof record.authenticated !== 'boolean') {
+        return { kind: 'unavailable', message: 'bad status authenticated' };
+      }
+      return {
+        kind: 'enabled',
+        protocols,
+        authenticated: record.authenticated,
+        raw: record,
+      };
+    } catch (err) {
+      return {
+        kind: 'unavailable',
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  /** Checks an installed token through the v2 status route. Never sends a
+   *  cookie, never clears the token: the caller owns that decision. */
+  async checkToken(
+    origin: string,
+    token: string,
+    signal?: AbortSignal,
+  ): Promise<TokenVerdict> {
+    const canonical = toCanonicalAuthOrigin(origin);
+    if (!canonical || typeof token !== 'string' || token.length === 0) {
+      return 'invalid';
+    }
+    try {
+      const res = await this.safeFetch(
+        new URL(AUTH_PATH_V2_STATUS, canonical),
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: withTimeout(signal, FETCH_TIMEOUT_MS),
+          redirect: 'error',
+        },
+      );
+      if (res.status === 401 || res.status === 403) return 'invalid';
+      if (!res.ok) return 'unavailable';
+      const payload = (await res.json()) as unknown;
+      if (!payload || typeof payload !== 'object') return 'unavailable';
+      const record = payload as Record<string, unknown>;
+      if (typeof record.enabled !== 'boolean') return 'unavailable';
+      if (typeof record.authenticated !== 'boolean') return 'unavailable';
+      if (record.enabled === false) return 'valid';
+      return record.authenticated ? 'valid' : 'invalid';
+    } catch {
+      return 'unavailable';
     }
   }
 
@@ -706,6 +1027,22 @@ export function makeProof(verifier: Buffer, challenge: string): string {
     .digest('base64url');
 }
 
+/** Validate the optional `protocols` capability field. Absent means a
+ *  legacy v1-only server. A present field must be a nonempty array of
+ *  unique, nonempty strings and must name at least one supported protocol. */
+export function parseProtocols(raw: unknown): string[] | null {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const seen = new Set<string>();
+  for (const value of raw) {
+    if (typeof value !== 'string' || value.length === 0) return null;
+    if (seen.has(value)) return null;
+    seen.add(value);
+  }
+  const supported = Array.from(seen).filter((p) => p === 'v1' || p === 'v2');
+  return supported.length === 0 ? null : supported;
+}
+
 /** Validate `/api/auth/status` JSON. Returns either the trusted status,
  *  an explicit disabled marker, or null on malformed input. */
 export type ValidateStatusOutcome =
@@ -717,6 +1054,7 @@ export function validateStatus(raw: unknown): ValidateStatusOutcome | null {
   const r = raw as Record<string, unknown>;
   if (r.enabled === false) return { kind: 'disabled' };
   if (r.enabled !== true) return null;
+  if (typeof r.authenticated !== 'boolean') return null;
   if (r.version !== 'v1') return null;
   if (r.algorithm !== 'pbkdf2-sha256') return null;
   if (typeof r.iterations !== 'number') return null;
