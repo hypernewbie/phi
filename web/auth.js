@@ -349,6 +349,10 @@ let accessEnabled = false; // last discovered enforcement state
 let accessToken = null; // in-memory bearer; null in v1 mode
 let memoryOnly = false; // host-installed token: never write it to storage
 let stateEpoch = 0; // bumped whenever the selected credential changes
+// Resolves a bootstrap that is waiting on the network when a host token
+// arrives. The late response is fenced by stateEpoch.
+let pendingBootstrapRelease = null;
+const HOST_INSTALL = Symbol('host install');
 
 function utf8Length(value) {
     return new TextEncoder().encode(value).length;
@@ -847,16 +851,25 @@ export async function bootstrapAccessAuth() {
     installAccessFetch();
     const epoch = stateEpoch;
     const installed = () => epoch !== stateEpoch;
+    // A host token can land while discovery or a status check is in flight.
+    // Wake bootstrap at once instead of waiting for the network deadline.
+    let releaseHost = () => {};
+    const hostInstall = new Promise((resolve) => {
+        releaseHost = () => resolve(HOST_INSTALL);
+    });
+    pendingBootstrapRelease = releaseHost;
+    const wait = (promise) => Promise.race([promise, hostInstall]);
 
     let status;
     try {
-        status = await discoverAccessStatus();
+        status = await wait(discoverAccessStatus());
     } catch (err) {
         // A host token installed during discovery supersedes its failure.
         if (installed()) return { enabled: accessEnabled };
         throw err;
     }
-    if (installed()) return { enabled: accessEnabled };
+    if (status === HOST_INSTALL || installed())
+        return { enabled: accessEnabled };
 
     // An existing selection survives a re-bootstrap: only a successful
     // v1-only discovery or a working v1 credential may change it.
@@ -876,12 +889,13 @@ export async function bootstrapAccessAuth() {
         if (token) {
             let verdict;
             try {
-                verdict = await checkV2Token(token);
+                verdict = await wait(checkV2Token(token));
             } catch (err) {
                 if (installed()) return { enabled: accessEnabled };
                 throw err;
             }
-            if (installed()) return { enabled: accessEnabled };
+            if (verdict === HOST_INSTALL || installed())
+                return { enabled: accessEnabled };
             if (verdict === 'valid') {
                 // A stored token is already persisted; a host token is not.
                 adoptToken(token);
@@ -903,8 +917,9 @@ export async function bootstrapAccessAuth() {
     if (hasV1Metadata(status)) {
         const verifier = savedVerifier(status.raw);
         if (verifier) {
-            const verdict = await login(status.raw, verifier);
-            if (installed()) return { enabled: accessEnabled };
+            const verdict = await wait(login(status.raw, verifier));
+            if (verdict === HOST_INSTALL || installed())
+                return { enabled: accessEnabled };
             if (verdict === 'ok') {
                 selectedProtocol = 'v1';
                 return { enabled: true };
@@ -1009,6 +1024,10 @@ export function installToken(token) {
     selectedProtocol = 'v2';
     memoryOnly = true;
     stateEpoch++;
+    // Release a bootstrap still waiting on discovery or a status check.
+    const releaseBootstrap = pendingBootstrapRelease;
+    pendingBootstrapRelease = null;
+    if (releaseBootstrap) releaseBootstrap();
     if (pendingOverlay) pendingOverlay.finish({ enabled: true });
     return true;
 }

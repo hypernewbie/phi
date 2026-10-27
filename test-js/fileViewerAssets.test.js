@@ -56,8 +56,8 @@ describe('authenticated file previews', () => {
         expect(REVOKE).toHaveBeenCalledTimes(1);
     });
 
-    it('mounts a download link from the authenticated address and releases it', async () => {
-        stubBridge();
+    it('renders the download control before fetching and resolves on click', async () => {
+        const assetURL = stubBridge();
         const container = document.createElement('div');
         const handle = await mountFileView({
             path: 'archive.zip',
@@ -65,8 +65,15 @@ describe('authenticated file previews', () => {
             container,
         });
         const link = container.querySelector('a.file-viewer-download-btn');
-        expect(link.getAttribute('href')).toBe(
-            `blob:phi/${encodeURIComponent('/api/file/asset?path=archive.zip&cwd=%2Fproject')}`,
+        // Previewing an unsupported file must not download it.
+        expect(assetURL).not.toHaveBeenCalled();
+        expect(link.hasAttribute('href')).toBe(false);
+        expect(link.textContent).toBe('Download');
+        link.click();
+        await vi.waitFor(() =>
+            expect(link.getAttribute('href')).toBe(
+                `blob:phi/${encodeURIComponent('/api/file/asset?path=archive.zip&cwd=%2Fproject')}`,
+            ),
         );
         expect(link.getAttribute('download')).toBe('archive.zip');
         handle.dispose();
@@ -89,6 +96,12 @@ describe('authenticated file previews', () => {
     });
 
     it('fails the preview when the asset cannot be loaded', async () => {
+        vi.stubGlobal(
+            'Viewer',
+            class {
+                destroy() {}
+            },
+        );
         window.phiAccessAuth = {
             installToken: () => true,
             getAccessToken: () => 'jwt-a',
@@ -99,7 +112,7 @@ describe('authenticated file previews', () => {
         };
         const container = document.createElement('div');
         await expect(
-            mountFileView({ path: 'archive.zip', cwd: '/project', container }),
+            mountFileView({ path: 'pic.png', cwd: '/project', container }),
         ).rejects.toThrow('Unable to load asset (401)');
     });
 });
