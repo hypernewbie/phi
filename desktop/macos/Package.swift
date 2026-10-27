@@ -24,6 +24,7 @@ let package = Package(
   platforms: [.macOS(.v14)],
   products: [
     .executable(name: "PhiProbe", targets: ["PhiProbe"]),
+    .executable(name: "PhiNative", targets: ["PhiNative"]),
   ],
   dependencies: [
     .package(url: "https://github.com/apple/swift-protobuf.git", exact: "1.39.0"),
@@ -50,9 +51,19 @@ let package = Package(
       dependencies: ["PhiTerminal"],
       swiftSettings: [.unsafeFlags(["-Xcc", "-I\(includeDir)"])]
     ),
+    .executableTarget(
+      name: "PhiNative",
+      dependencies: ["PhiTerminal", "PhiUI"],
+      swiftSettings: [.unsafeFlags(["-Xcc", "-I\(includeDir)"])]
+    ),
+    .target(
+      name: "PhiUI",
+      dependencies: ["PhiTerminal"],
+      swiftSettings: [.unsafeFlags(["-Xcc", "-I\(includeDir)"])]
+    ),
     .testTarget(
       name: "PhiTerminalTests",
-      dependencies: ["PhiTerminal"],
+      dependencies: ["PhiTerminal", "PhiUI"],
       swiftSettings: [.unsafeFlags(["-Xcc", "-I\(includeDir)"])]
     ),
   ],

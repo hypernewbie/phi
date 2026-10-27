@@ -75,6 +75,12 @@ public actor PaneWireClient {
     public var cols: Int
     public var rows: [String]
     public var colored: [ColoredCell]
+
+    public init(cols: Int, rows: [String], colored: [ColoredCell]) {
+      self.cols = cols
+      self.rows = rows
+      self.colored = colored
+    }
   }
 
   private let origin: URL
@@ -186,6 +192,11 @@ public actor PaneWireClient {
       lines.append(line)
     }
     return Frame(cols: width, rows: lines, colored: colored)
+  }
+
+  /// Live cursor in viewport cells, or nil while it is off-screen.
+  public func cursor() -> (x: Int, y: Int)? {
+    terminal.readCursor()
   }
 
   /// Sends raw bytes as ≤1 MiB frames. `.sentUnconfirmed` means bytes may have
