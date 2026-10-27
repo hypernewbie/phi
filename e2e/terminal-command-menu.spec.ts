@@ -9,6 +9,43 @@ import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { startPhi } from './_server.js';
 
+// The composer presets row is one line of buttons that never squeezes a
+// label: a wrapped row or an ellipsised chip is a regression, not a layout
+// preference. Chips differ in height (icons vs text) and are centred, so
+// their tops differ by a pixel or two: compare the row height against one
+// chip instead.
+async function expectSingleRowPresets(page: Page) {
+    const chips = page.locator('#presets-container > .preset-btn');
+    await expect(chips.first()).toBeVisible();
+    const measured = await chips.evaluateAll((els) => {
+        const container = els[0].closest('#presets-container');
+        if (!container) throw new Error('missing #presets-container');
+        return {
+            rowHeight: container.getBoundingClientRect().height,
+            wrap: getComputedStyle(container).flexWrap,
+            shrink: [
+                ...new Set(els.map((el) => getComputedStyle(el).flexShrink)),
+            ],
+            chipHeight: Math.max(
+                ...els.map((el) => el.getBoundingClientRect().height),
+            ),
+            squeezed: els
+                .filter((el) => el.scrollWidth > el.clientWidth + 1)
+                .map(
+                    (el) =>
+                        el.getAttribute('aria-label') || el.textContent.trim(),
+                ),
+        };
+    });
+    expect(measured.wrap, 'presets row is allowed to wrap').toBe('nowrap');
+    expect(measured.shrink, 'presets chips may shrink').toEqual(['0']);
+    expect(
+        measured.rowHeight,
+        'presets row wrapped onto more than one line',
+    ).toBeLessThan(measured.chipHeight * 2);
+    expect(measured.squeezed, 'chips shrank into an ellipsis').toEqual([]);
+}
+
 async function watchPage(page: Page, serverOrigin: string) {
     const consoleErrors: string[] = [];
     const pageErrors: string[] = [];
@@ -186,6 +223,9 @@ done
         // /model moved into Cmds: the Models picker covers it.
         expect(desktopLabels).not.toContain('/model');
         expect(desktopLabels).toContain('/compact');
+        // One row, and every chip keeps its full width: the row scrolls
+        // instead of squeezing labels into ellipses.
+        await expectSingleRowPresets(page);
 
         const desktopCommands = page.getByRole('button', { name: 'Cmds ▾' });
         await desktopCommands.focus();
@@ -219,6 +259,7 @@ done
             '#presets-container .slash-trigger-btn',
         );
         await expect(slashTrigger).toBeVisible();
+        await expectSingleRowPresets(mobilePage);
         await slashTrigger.tap();
         const slashMenu = mobilePage.locator('#slash-presets-dropup');
         await expect(slashMenu).not.toContainText('/model');
