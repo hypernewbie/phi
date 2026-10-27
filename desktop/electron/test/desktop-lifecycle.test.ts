@@ -5,7 +5,14 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { safeStorage } from 'electron';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -45,6 +52,7 @@ const fake = vi.hoisted(() => {
     readonly sent: Array<[string, unknown]> = [];
     zoom = 0;
     loadFileCalls: string[] = [];
+    url = '';
     send(channel: string, payload: unknown): void {
       this.sent.push([channel, payload]);
     }
@@ -58,8 +66,12 @@ const fake = vi.hoisted(() => {
       this.loadFileCalls.push(file);
       return Promise.resolve();
     }
-    loadURL(): Promise<void> {
+    loadURL(url?: string): Promise<void> {
+      if (typeof url === 'string') this.url = url;
       return Promise.resolve();
+    }
+    getURL(): string {
+      return this.url;
     }
     executeJavaScript(
       _code?: string,
@@ -218,6 +230,25 @@ const fake = vi.hoisted(() => {
     handle: (channel: string, listener: Listener) =>
       ipcHandlers.set(channel, listener),
   };
+  // Controllable safeStorage for credential-persistence tests. The
+  // "ciphertext" is a prefix plus base64 so a test can prove the plaintext
+  // bearer never reaches the file.
+  const safeStorage = {
+    available: false,
+    backend: 'keychain',
+    failEncrypt: false,
+    isEncryptionAvailable: () => safeStorage.available,
+    getSelectedStorageBackend: () => safeStorage.backend,
+    encryptString: (value: string) => {
+      if (safeStorage.failEncrypt) throw new Error('encrypt failed');
+      return Buffer.from(`enc:${Buffer.from(value).toString('base64')}`);
+    },
+    decryptString: (value: Buffer) => {
+      const text = value.toString();
+      if (!text.startsWith('enc:')) throw new Error('decrypt failed');
+      return Buffer.from(text.slice(4), 'base64').toString();
+    },
+  };
   return {
     FakeBrowserWindow,
     FakeWebContentsView,
@@ -226,6 +257,7 @@ const fake = vi.hoisted(() => {
     powerMonitor,
     ipcEvents,
     ipcHandlers,
+    safeStorage,
     setUserData: (value: string) => (userData = value),
     reset: () => {
       FakeBrowserWindow.instances.length = 0;
@@ -234,6 +266,9 @@ const fake = vi.hoisted(() => {
       powerMonitor.listeners.clear();
       ipcEvents.clear();
       ipcHandlers.clear();
+      safeStorage.available = false;
+      safeStorage.backend = 'keychain';
+      safeStorage.failEncrypt = false;
     },
   };
 });
@@ -254,11 +289,7 @@ vi.mock('electron', () => ({
   Notification: class {
     show(): void {}
   },
-  safeStorage: {
-    isEncryptionAvailable: () => false,
-    encryptString: (value: string) => Buffer.from(value),
-    decryptString: (value: Buffer) => value.toString('utf8'),
-  },
+  safeStorage: fake.safeStorage,
   session: { defaultSession: {} },
   shell: { openExternal: vi.fn(), openPath: vi.fn() },
   Tray: class {
@@ -982,6 +1013,7 @@ describe('DesktopHost fake-Electron lifecycle', () => {
           ok: true,
           json: async () => ({
             enabled: true,
+            authenticated: false,
             version: 'v1',
             algorithm: 'pbkdf2-sha256',
             iterations: 600_000,
@@ -1099,6 +1131,118 @@ describe('DesktopHost fake-Electron lifecycle', () => {
       }
       vi.unstubAllGlobals();
     }
+  });
+
+  it('installs a host v2 bearer into the trusted body view without a v1 proof', async () => {
+    const salt = Buffer.from('0123456789abcdef0123456789abcdef', 'hex');
+    vi.stubGlobal('fetch', async (url: string | URL, init?: RequestInit) => {
+      const u = url.toString();
+      if (!u.startsWith('https://minerva.example.test')) {
+        return { status: 404, ok: false, json: async () => ({}) } as Response;
+      }
+      if (u.includes('/api/auth/status')) {
+        return {
+          status: 200,
+          ok: true,
+          json: async () => ({
+            enabled: true,
+            authenticated: false,
+            protocols: ['v1', 'v2'],
+            version: 'v1',
+            algorithm: 'pbkdf2-sha256',
+            iterations: 600_000,
+            salt: salt.toString('base64url'),
+            challenge: 'test-challenge',
+          }),
+        } as Response;
+      }
+      if (u.includes('/api/auth/v2/login')) {
+        return {
+          status: 200,
+          ok: true,
+          json: async () => ({ token: 'host-token' }),
+        } as Response;
+      }
+      if (u.includes('/api/config')) {
+        const headers = (init?.headers as Record<string, string>) ?? {};
+        const authorization = headers.Authorization || headers.authorization;
+        if (authorization === 'Bearer host-token') {
+          const body = JSON.stringify({
+            hostname: 'minerva',
+            workspaces: ['/Users/minerva/project'],
+            active_cwd: '/Users/minerva/project',
+          });
+          return {
+            status: 200,
+            ok: true,
+            text: async () => body,
+            json: async () => JSON.parse(body),
+          } as Response;
+        }
+        return {
+          status: 401,
+          ok: false,
+          text: async () => 'access authentication required',
+        } as Response;
+      }
+      return { status: 200, ok: true, json: async () => ({}) } as Response;
+    });
+
+    const host = new DesktopHost();
+    await host.start(primary);
+    const win = fake.FakeBrowserWindow.instances[0];
+    win.webContents.emit('did-finish-load');
+    await flush();
+
+    const profile = host.controller?.add('https://minerva.example.test/');
+    if (!profile) throw new Error('controller missing');
+    host.profileViews!.addProfile(profile.id, profile.origin);
+    host.controller?.setActive(profile.id);
+    await flush();
+
+    const bodyViews = fake.FakeWebContentsView.instances;
+    const bodyView = bodyViews[bodyViews.length - 1];
+    const scripts: string[] = [];
+    bodyView.webContents.executeJavaScript = async (script: string) => {
+      scripts.push(script);
+      if (script.includes('installToken')) return 200;
+      return null;
+    };
+    bodyView.webContents.emit('did-finish-load');
+    await flush();
+
+    const configHandler = fake.ipcHandlers.get('phi:server-config');
+    if (!configHandler) throw new Error('server-config handler missing');
+    await configHandler({ sender: win.webContents });
+    await flush();
+
+    const required = win.webContents.sent.filter(
+      ([channel]) => channel === 'phi:auth-required',
+    );
+    expect(required.length).toBeGreaterThan(0);
+    const requestId = (
+      required[required.length - 1][1] as { requestId: string }
+    ).requestId;
+
+    const unlockHandler = fake.ipcHandlers.get('phi:auth-unlock');
+    if (!unlockHandler) throw new Error('auth-unlock handler missing');
+    const result = (await unlockHandler(
+      { sender: win.webContents },
+      { requestId, password: 'a long enough password' },
+    )) as unknown as { ok: boolean; code?: string };
+    expect(result).toEqual({ ok: true, config: expect.anything() });
+
+    // The v2 body receives the bearer; the legacy one-time proof is never
+    // used, and the page is not reloaded (a reload would discard it).
+    expect(
+      scripts.some(
+        (script) =>
+          script.includes('installToken') && script.includes('"host-token"'),
+      ),
+    ).toBe(true);
+    expect(scripts.some((script) => script.includes('/api/auth/login'))).toBe(
+      false,
+    );
   });
 
   it('rejects stale old-session main-frame senders for controller mutations and window-minimize (sender trust)', async () => {
@@ -1242,6 +1386,7 @@ describe('DesktopHost fake-Electron lifecycle', () => {
           ok: true,
           json: async () => ({
             enabled: true,
+            authenticated: false,
             version: 'v1',
             algorithm: 'pbkdf2-sha256',
             iterations: 600_000,
@@ -1357,6 +1502,7 @@ describe('DesktopHost fake-Electron lifecycle', () => {
           ok: true,
           json: async () => ({
             enabled: true,
+            authenticated: false,
             version: 'v1',
             algorithm: 'pbkdf2-sha256',
             iterations: 600_000,
@@ -1452,6 +1598,7 @@ describe('DesktopHost fake-Electron lifecycle', () => {
           ok: true,
           json: async () => ({
             enabled: true,
+            authenticated: false,
             version: 'v1',
             algorithm: 'pbkdf2-sha256',
             iterations: 600_000,
@@ -1586,4 +1733,272 @@ describe('DesktopHost fake-Electron lifecycle', () => {
 
     win.finishClose();
   };
+});
+
+describe('DesktopHost credential persistence (v1 + v2)', () => {
+  const originA = 'https://a.example.test';
+  const originB = 'https://b.example.test';
+  const v1Entry = {
+    version: 'v1' as const,
+    algorithm: 'pbkdf2-sha256' as const,
+    iterations: 600_000,
+    salt: Buffer.alloc(16, 0x11),
+    verifier: Buffer.alloc(32, 0x22),
+  };
+  type TestHost = {
+    storedCredentials: Map<string, unknown>;
+    saveStoredCredentials(): void;
+    loadStoredCredentials(): void;
+    bootstrapV2Token(
+      origin: string,
+      jwt: string,
+      auth: AccessAuth,
+      generation: number,
+    ): Promise<void>;
+    sessionGeneration: number;
+    credentialsPath: string;
+  };
+  const hostOf = (): TestHost => new DesktopHost() as unknown as TestHost;
+  const encrypted = (origins: Record<string, unknown>): Buffer =>
+    fake.safeStorage.encryptString(JSON.stringify({ origins }));
+
+  let temp = '';
+
+  beforeEach(() => {
+    fake.reset();
+    temp = mkdtempSync(path.join(os.tmpdir(), 'phi-desktop-creds-'));
+    fake.setUserData(temp);
+    fake.safeStorage.available = true;
+  });
+
+  afterEach(() => {
+    rmSync(temp, { recursive: true, force: true });
+    vi.unstubAllGlobals();
+  });
+
+  it('round-trips mixed v1/v2 entries without writing the v2 plaintext', () => {
+    const host = hostOf();
+    host.storedCredentials.set(originA, v1Entry);
+    host.storedCredentials.set(originB, { version: 'v2', jwt: 'jwt-secret' });
+    host.saveStoredCredentials();
+
+    const onDisk = readFileSync(host.credentialsPath);
+    expect(onDisk.toString()).not.toContain('jwt-secret');
+    expect(onDisk.toString()).not.toContain(
+      v1Entry.verifier.toString('base64url'),
+    );
+
+    const reloaded = hostOf();
+    reloaded.loadStoredCredentials();
+    expect(reloaded.storedCredentials.size).toBe(2);
+    expect(reloaded.storedCredentials.get(originA)).toMatchObject({
+      version: 'v1',
+      iterations: 600_000,
+    });
+    expect(reloaded.storedCredentials.get(originB)).toEqual({
+      version: 'v2',
+      jwt: 'jwt-secret',
+    });
+  });
+
+  it('loads a legacy v1-only file', () => {
+    const host = hostOf();
+    writeFileSync(
+      host.credentialsPath,
+      encrypted({
+        [originA]: {
+          version: 'v1',
+          algorithm: 'pbkdf2-sha256',
+          iterations: 600_000,
+          saltBase64: v1Entry.salt.toString('base64url'),
+          verifierBase64: v1Entry.verifier.toString('base64url'),
+        },
+      }),
+    );
+    host.loadStoredCredentials();
+    expect(host.storedCredentials.get(originA)).toMatchObject({
+      version: 'v1',
+      iterations: 600_000,
+    });
+  });
+
+  it('drops malformed entries independently', () => {
+    const host = hostOf();
+    writeFileSync(
+      host.credentialsPath,
+      encrypted({
+        [originA]: {
+          version: 'v1',
+          algorithm: 'pbkdf2-sha256',
+          iterations: 600_000,
+          saltBase64: v1Entry.salt.toString('base64url'),
+          verifierBase64: v1Entry.verifier.toString('base64url'),
+        },
+        'https://bad-v1.example.test': {
+          version: 'v1',
+          algorithm: 'pbkdf2-sha256',
+          iterations: 600_000,
+          saltBase64: '',
+          verifierBase64: 'AAAA',
+        },
+        [originB]: { version: 'v2', jwt: 'ok-token' },
+        'https://bad-v2.example.test': { version: 'v2', jwt: 42 },
+        'not a url': { version: 'v2', jwt: 'ignored' },
+      }),
+    );
+    host.loadStoredCredentials();
+    expect(Array.from(host.storedCredentials.keys()).sort()).toEqual(
+      [originA, originB].sort(),
+    );
+  });
+
+  it('clears the store when the file cannot be decrypted', () => {
+    const host = hostOf();
+    writeFileSync(host.credentialsPath, Buffer.from('not encrypted'));
+    host.storedCredentials.set(originA, v1Entry);
+    host.loadStoredCredentials();
+    expect(host.storedCredentials.size).toBe(0);
+  });
+
+  it('neither reads nor writes when encryption is unavailable', () => {
+    fake.safeStorage.available = false;
+    const host = hostOf();
+    writeFileSync(
+      host.credentialsPath,
+      encrypted({ [originA]: { version: 'v2', jwt: 'tok' } }),
+    );
+    host.loadStoredCredentials();
+    expect(host.storedCredentials.size).toBe(0);
+
+    const before = readFileSync(host.credentialsPath);
+    host.storedCredentials.set(originA, { version: 'v2', jwt: 'new-tok' });
+    host.saveStoredCredentials();
+    expect(readFileSync(host.credentialsPath)).toEqual(before);
+  });
+
+  it('refuses v2 writes and v2 loads on the Linux basic_text backend', () => {
+    vi.stubGlobal(
+      'process',
+      Object.create(process, {
+        platform: { value: 'linux' },
+      }) as NodeJS.Process,
+    );
+    fake.safeStorage.backend = 'basic_text';
+    const host = hostOf();
+    writeFileSync(
+      host.credentialsPath,
+      encrypted({
+        [originA]: {
+          version: 'v1',
+          algorithm: 'pbkdf2-sha256',
+          iterations: 600_000,
+          saltBase64: v1Entry.salt.toString('base64url'),
+          verifierBase64: v1Entry.verifier.toString('base64url'),
+        },
+        [originB]: { version: 'v2', jwt: 'tok' },
+      }),
+    );
+    host.loadStoredCredentials();
+    expect(host.storedCredentials.has(originA)).toBe(true);
+    expect(host.storedCredentials.has(originB)).toBe(false);
+
+    const before = readFileSync(host.credentialsPath);
+    host.storedCredentials.set(originB, { version: 'v2', jwt: 'new-tok' });
+    host.saveStoredCredentials();
+    expect(readFileSync(host.credentialsPath)).toEqual(before);
+
+    // A v1-only store still writes through the legacy backend.
+    host.storedCredentials.delete(originB);
+    host.saveStoredCredentials();
+    expect(readFileSync(host.credentialsPath)).not.toEqual(before);
+  });
+
+  it('leaves the old file intact when encryption throws', () => {
+    const host = hostOf();
+    host.storedCredentials.set(originA, v1Entry);
+    host.saveStoredCredentials();
+    const before = readFileSync(host.credentialsPath);
+    fake.safeStorage.failEncrypt = true;
+    host.storedCredentials.set(originB, { version: 'v2', jwt: 'tok' });
+    host.saveStoredCredentials();
+    expect(readFileSync(host.credentialsPath)).toEqual(before);
+  });
+
+  it('swallows a write failure without losing memory state', () => {
+    const host = hostOf();
+    mkdirSync(host.credentialsPath);
+    host.storedCredentials.set(originB, { version: 'v2', jwt: 'tok' });
+    expect(() => host.saveStoredCredentials()).not.toThrow();
+    expect(host.storedCredentials.get(originB)).toEqual({
+      version: 'v2',
+      jwt: 'tok',
+    });
+    expect(existsSync(host.credentialsPath)).toBe(true);
+  });
+
+  it('keeps a valid token and clears only the rejected one', async () => {
+    const host = hostOf();
+    const auth = new AccessAuth((async (url: URL) => {
+      if (url.pathname === '/api/auth/v2/status') {
+        return new Response(
+          JSON.stringify({ enabled: true, authenticated: true }),
+          {
+            status: 200,
+          },
+        );
+      }
+      throw new Error('unexpected');
+    }) as unknown as typeof fetch);
+    host.storedCredentials.set(originA, { version: 'v2', jwt: 'good' });
+    await host.bootstrapV2Token(originA, 'good', auth, host.sessionGeneration);
+    expect(auth.getToken(originA)).toBe('good');
+    expect(host.storedCredentials.has(originA)).toBe(true);
+
+    const rejecting = new AccessAuth(
+      (async () =>
+        new Response('', { status: 401 })) as unknown as typeof fetch,
+    );
+    host.storedCredentials.set(originB, { version: 'v2', jwt: 'bad' });
+    await host.bootstrapV2Token(
+      originB,
+      'bad',
+      rejecting,
+      host.sessionGeneration,
+    );
+    expect(rejecting.getToken(originB)).toBeNull();
+    expect(rejecting.getSelectedProtocol(originB)).toBe('v2');
+    expect(host.storedCredentials.has(originB)).toBe(false);
+  });
+
+  it('keeps a token on a transient failure and never overwrites a newer one', async () => {
+    const host = hostOf();
+    const transient = new AccessAuth(
+      (async () =>
+        new Response('', { status: 503 })) as unknown as typeof fetch,
+    );
+    host.storedCredentials.set(originA, { version: 'v2', jwt: 'kept' });
+    await host.bootstrapV2Token(
+      originA,
+      'kept',
+      transient,
+      host.sessionGeneration,
+    );
+    expect(transient.getToken(originA)).toBe('kept');
+    expect(host.storedCredentials.has(originA)).toBe(true);
+
+    const newer = new AccessAuth();
+    newer.installToken(originB, 'newer');
+    host.storedCredentials.set(originB, { version: 'v2', jwt: 'older' });
+    await host.bootstrapV2Token(
+      originB,
+      'older',
+      newer,
+      host.sessionGeneration,
+    );
+    expect(newer.getToken(originB)).toBe('newer');
+    expect(host.storedCredentials.get(originB)).toEqual({
+      version: 'v2',
+      jwt: 'older',
+    });
+  });
 });

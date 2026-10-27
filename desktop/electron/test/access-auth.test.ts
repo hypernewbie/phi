@@ -13,6 +13,7 @@ import {
   MAX_ITERATIONS,
   MIN_ITERATIONS,
   parseSessionCookie,
+  parseProtocols,
   readSetCookieHeaders,
   toCanonicalAuthOrigin,
   validateStatus,
@@ -64,6 +65,7 @@ describe('validateStatus', () => {
   it('returns null when iterations is below MIN_ITERATIONS', () => {
     const r = validateStatus({
       enabled: true,
+      authenticated: false,
       version: 'v1',
       algorithm: 'pbkdf2-sha256',
       iterations: 100,
@@ -76,6 +78,7 @@ describe('validateStatus', () => {
   it('returns null on malformed salt or challenge', () => {
     const r = validateStatus({
       enabled: true,
+      authenticated: false,
       version: 'v1',
       algorithm: 'pbkdf2-sha256',
       iterations: 600_000,
@@ -85,6 +88,7 @@ describe('validateStatus', () => {
     expect(r).toBe(null);
     const r2 = validateStatus({
       enabled: true,
+      authenticated: false,
       version: 'v1',
       algorithm: 'pbkdf2-sha256',
       iterations: 600_000,
@@ -102,6 +106,7 @@ describe('validateStatus', () => {
   it('accepts a well-formed enabled status', () => {
     const r = validateStatus({
       enabled: true,
+      authenticated: false,
       version: 'v1',
       algorithm: 'pbkdf2-sha256',
       iterations: 600_000,
@@ -276,6 +281,7 @@ describe('AccessAuth.tryUnlock', () => {
   const origin = 'https://phi.example/';
   const goodStatus = {
     enabled: true,
+    authenticated: false,
     version: 'v1' as const,
     algorithm: 'pbkdf2-sha256' as const,
     iterations: 600_000,
@@ -487,6 +493,7 @@ describe('AccessAuth.fetchStatus', () => {
   const origin = 'https://phi.example/';
   const goodStatus = {
     enabled: true,
+    authenticated: false,
     version: 'v1' as const,
     algorithm: 'pbkdf2-sha256' as const,
     iterations: 600_000,
@@ -587,6 +594,7 @@ describe('AccessAuth.tryUnlockWithVerifier + verifier cache', () => {
   const origin = 'https://phi.example/';
   const goodStatus = {
     enabled: true,
+    authenticated: false,
     version: 'v1' as const,
     algorithm: 'pbkdf2-sha256' as const,
     iterations: 600_000,
@@ -804,6 +812,7 @@ describe('AccessAuth: invariants the DesktopHost silent re-auth fix relies on', 
     );
     const goodStatus = {
       enabled: true,
+      authenticated: false,
       version: 'v1' as const,
       algorithm: 'pbkdf2-sha256' as const,
       iterations: 600_000,
@@ -887,6 +896,7 @@ describe('AccessAuth: invariants the DesktopHost silent re-auth fix relies on', 
   it('notifies onCookieCaptured when a new session cookie is acquired', async () => {
     const goodStatus = {
       enabled: true,
+      authenticated: false,
       version: 'v1' as const,
       algorithm: 'pbkdf2-sha256' as const,
       iterations: 600_000,
@@ -965,6 +975,7 @@ describe('AccessAuth: invariants the DesktopHost silent re-auth fix relies on', 
           return new Response(
             JSON.stringify({
               enabled: true,
+              authenticated: false,
               version: 'v1',
               algorithm: 'pbkdf2-sha256',
               iterations: 600_000,
@@ -1073,6 +1084,7 @@ describe('AccessAuth: invariants the DesktopHost silent re-auth fix relies on', 
 
       const goodStatus = {
         enabled: true,
+        authenticated: false,
         version: 'v1' as const,
         algorithm: 'pbkdf2-sha256' as const,
         iterations: 600_000,
@@ -1143,5 +1155,309 @@ describe('AccessAuth: invariants the DesktopHost silent re-auth fix relies on', 
         expect(postCheck.config).toEqual({ hostname: 'from-S2' });
       }
     });
+  });
+});
+
+// -- v2 selection, token ownership, and no-downgrade invariants --
+
+describe('AccessAuth v2 selection', () => {
+  const origin = 'https://phi.example/';
+  const v1Status = {
+    enabled: true,
+    authenticated: false,
+    version: 'v1',
+    algorithm: 'pbkdf2-sha256',
+    iterations: 600_000,
+    salt: Buffer.from('AQID', 'base64url').toString('base64url'),
+    challenge: 'sample-challenge',
+    protocols: ['v1', 'v2'],
+  };
+  const v1OnlyStatus = { ...v1Status, protocols: ['v1'] };
+
+  function json(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+
+  it('posts the raw password to v2 login and sends the token to config', async () => {
+    const seen: Array<{ path: string; auth: string | null; body: string }> = [];
+    const auth = new AccessAuth((async (url: URL, init?: RequestInit) => {
+      const path = url.pathname;
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      seen.push({
+        path,
+        auth: headers.Authorization ?? null,
+        body: typeof init?.body === 'string' ? init.body : '',
+      });
+      if (path === '/api/auth/status') return json(v1Status);
+      if (path === '/api/auth/v2/login') {
+        expect(init?.method).toBe('POST');
+        return json({ token: 'jwt-token' });
+      }
+      if (path === '/api/config') {
+        return json({ hostname: 'V2' });
+      }
+      throw new Error(`unexpected ${path}`);
+    }) as unknown as typeof fetch);
+
+    const result = await auth.tryUnlock(origin, 'test-pass-1234');
+    expect(result.kind).toBe('ok');
+    if (result.kind === 'ok') expect(result.config).toEqual({ hostname: 'V2' });
+    expect(auth.getSelectedProtocol(origin)).toBe('v2');
+    expect(auth.getToken(origin)).toBe('jwt-token');
+    const login = seen.find((c) => c.path === '/api/auth/v2/login');
+    expect(login?.body).toBe(JSON.stringify({ password: 'test-pass-1234' }));
+    const config = seen.find((c) => c.path === '/api/config');
+    expect(config?.auth).toBe('Bearer jwt-token');
+    expect(seen.some((c) => c.path === '/api/auth/login')).toBe(false);
+  });
+
+  it('keeps v2 selected after a rejected token and never falls back to a cookie', async () => {
+    const seen: Array<{
+      path: string;
+      cookie: string | null;
+      auth: string | null;
+    }> = [];
+    const auth = new AccessAuth((async (url: URL, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      seen.push({
+        path: url.pathname,
+        cookie: headers.Cookie ?? null,
+        auth: headers.Authorization ?? null,
+      });
+      return new Response('', { status: 401 });
+    }) as unknown as typeof fetch);
+    // A working legacy cookie exists, but an explicit token decides alone.
+    (
+      auth as unknown as {
+        cookies: Map<string, unknown>;
+      }
+    ).cookies.set(origin, {
+      cookieName: 'phi_access_session',
+      cookieValue: 'legacy-cookie',
+      path: '/',
+      httpOnly: true,
+    });
+    expect(auth.installToken(origin, 'rejected-token')).toBe(true);
+    expect((await auth.fetchConfig(origin)).kind).toBe('unauthorized');
+    expect(auth.getToken(origin)).toBeNull();
+    expect(auth.getSelectedProtocol(origin)).toBe('v2');
+    expect((await auth.fetchConfig(origin)).kind).toBe('unauthorized');
+    expect(
+      seen.every((c) => c.auth === 'Bearer rejected-token' || c.auth === null),
+    ).toBe(true);
+    expect(seen.every((c) => c.cookie === null)).toBe(true);
+  });
+
+  it('keeps a newer token when an older request is rejected', async () => {
+    let releaseA!: (res: Response) => void;
+    const configA = new Promise<Response>((resolve) => {
+      releaseA = resolve;
+    });
+    let configCalls = 0;
+    const auth = new AccessAuth((async (url: URL, init?: RequestInit) => {
+      if (url.pathname !== '/api/config')
+        throw new Error(`unexpected ${url.pathname}`);
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      configCalls += 1;
+      if (headers.Authorization === 'Bearer token-A') return configA;
+      if (headers.Authorization === 'Bearer token-B')
+        return json({ hostname: 'B' });
+      return new Response('', { status: 401 });
+    }) as unknown as typeof fetch);
+
+    expect(auth.installToken(origin, 'token-A')).toBe(true);
+    const requestA = auth.fetchConfig(origin);
+    // Wait until A is actually in flight before replacing it.
+    while (configCalls === 0) await new Promise((r) => setTimeout(r, 0));
+    expect(auth.installToken(origin, 'token-B')).toBe(true);
+    releaseA(new Response('', { status: 401 }));
+    expect((await requestA).kind).toBe('unauthorized');
+    expect(auth.getToken(origin)).toBe('token-B');
+    const next = await auth.fetchConfig(origin);
+    expect(next.kind).toBe('ok');
+  });
+
+  it('validates a token through v2 status without a cookie', async () => {
+    const seen: Array<{ auth: string | null; cookie: string | null }> = [];
+    const auth = new AccessAuth((async (url: URL, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      seen.push({
+        auth: headers.Authorization ?? null,
+        cookie: headers.Cookie ?? null,
+      });
+      if (url.pathname !== '/api/auth/v2/status')
+        throw new Error('wrong route');
+      return json({ enabled: true, authenticated: true });
+    }) as unknown as typeof fetch);
+    expect(await auth.checkToken(origin, 'tok')).toBe('valid');
+    expect(seen[0]).toEqual({ auth: 'Bearer tok', cookie: null });
+  });
+
+  it('reports invalid, disabled, transient, and malformed v2 statuses', async () => {
+    const make = (res: Response) =>
+      new AccessAuth((async () => res) as unknown as typeof fetch);
+    expect(
+      await make(json({ enabled: true, authenticated: false })).checkToken(
+        origin,
+        't',
+      ),
+    ).toBe('invalid');
+    expect(
+      await make(json({ enabled: false, authenticated: false })).checkToken(
+        origin,
+        't',
+      ),
+    ).toBe('valid');
+    expect(
+      await make(new Response('', { status: 401 })).checkToken(origin, 't'),
+    ).toBe('invalid');
+    expect(
+      await make(new Response('', { status: 500 })).checkToken(origin, 't'),
+    ).toBe('unavailable');
+    expect(
+      await make(new Response('not json', { status: 200 })).checkToken(
+        origin,
+        't',
+      ),
+    ).toBe('unavailable');
+    expect(await make(json({ enabled: true })).checkToken(origin, 't')).toBe(
+      'unavailable',
+    );
+  });
+
+  it('maps v2 login failures to fixed messages', async () => {
+    const make = (res: Response) =>
+      new AccessAuth((async (url: URL) => {
+        if (url.pathname === '/api/auth/status') return json(v1Status);
+        if (url.pathname === '/api/auth/v2/login') return res;
+        throw new Error(`unexpected ${url.pathname}`);
+      }) as unknown as typeof fetch);
+    const invalid = await make(
+      new Response('secret server text', { status: 401 }),
+    ).tryUnlock(origin, 'test-pass-1234');
+    expect(invalid).toEqual({
+      kind: 'invalid-password',
+      message: 'Password not accepted.',
+    });
+    const limited = await make(new Response('', { status: 429 })).tryUnlock(
+      origin,
+      'test-pass-1234',
+    );
+    expect(limited.kind).toBe('rate-limited');
+    const down = await make(new Response('', { status: 503 })).tryUnlock(
+      origin,
+      'test-pass-1234',
+    );
+    expect(down.kind).toBe('unavailable');
+    const badToken = await make(json({ token: 42 })).tryUnlock(
+      origin,
+      'test-pass-1234',
+    );
+    expect(badToken.kind).toBe('unavailable');
+  });
+
+  it('uses UTF-8 byte length for the v2 password bound', async () => {
+    const calls: string[] = [];
+    const auth = new AccessAuth((async (url: URL) => {
+      calls.push(url.pathname);
+      if (url.pathname === '/api/auth/status') return json(v1Status);
+      if (url.pathname === '/api/auth/v2/login') return json({ token: 'tok' });
+      return json({});
+    }) as unknown as typeof fetch);
+    // Four 4-byte characters plus four ASCII characters = 20 bytes, 8 chars.
+    expect((await auth.tryUnlock(origin, '😀😀😀😀abcd')).kind).toBe('ok');
+    // 1025 ASCII bytes exceeds the 1024-byte bound; no login request.
+    const before = calls.filter((p) => p === '/api/auth/v2/login').length;
+    const tooLong = await auth.tryUnlock(origin, 'a'.repeat(1025));
+    expect(tooLong.kind).toBe('invalid-password');
+    expect(calls.filter((p) => p === '/api/auth/v2/login').length).toBe(before);
+  });
+
+  it('refuses the v1 verifier and proof paths after v2 selection', async () => {
+    const auth = new AccessAuth();
+    auth.installToken(origin, 'tok');
+    const verifier = Buffer.alloc(32, 0x11);
+    expect((await auth.tryUnlockWithVerifier(origin, verifier)).kind).toBe(
+      'unavailable',
+    );
+    expect((await auth.createLoginProof(origin)).kind).toBe('unavailable');
+  });
+
+  it('moves a selected v2 client to v1 only after v1-only discovery', async () => {
+    const seen: string[] = [];
+    const auth = new AccessAuth((async (url: URL) => {
+      seen.push(url.pathname);
+      if (url.pathname === '/api/auth/status') return json(v1OnlyStatus);
+      if (url.pathname === '/api/auth/login') {
+        return new Response('', {
+          status: 200,
+          headers: { 'set-cookie': 'phi_access_session=v1; Path=/; HttpOnly' },
+        });
+      }
+      return json({ hostname: 'V1' });
+    }) as unknown as typeof fetch);
+    auth.installToken(origin, 'stale-v2');
+    const result = await auth.tryUnlock(origin, 'test-pass-1234');
+    expect(result.kind).toBe('ok');
+    expect(auth.getSelectedProtocol(origin)).toBe('v1');
+    expect(auth.getToken(origin)).toBeNull();
+    expect(seen).toContain('/api/auth/login');
+    expect(seen).not.toContain('/api/auth/v2/login');
+  });
+
+  it('keeps a selected v1 client on v1 when the server advertises v2', async () => {
+    const seen: string[] = [];
+    let status = v1OnlyStatus;
+    const auth = new AccessAuth((async (url: URL) => {
+      seen.push(url.pathname);
+      if (url.pathname === '/api/auth/status') return json(status);
+      if (url.pathname === '/api/auth/login') {
+        return new Response('', {
+          status: 200,
+          headers: { 'set-cookie': 'phi_access_session=v1; Path=/; HttpOnly' },
+        });
+      }
+      return json({});
+    }) as unknown as typeof fetch);
+    // Seed a v1 selection from a v1-only server.
+    expect((await auth.tryUnlock(origin, 'test-pass-1234')).kind).toBe('ok');
+    expect(auth.getSelectedProtocol(origin)).toBe('v1');
+    // The same server now advertises v2; the selected v1 client stays on v1.
+    status = v1Status;
+    seen.length = 0;
+    expect((await auth.tryUnlock(origin, 'test-pass-1234')).kind).toBe('ok');
+    expect(seen).toContain('/api/auth/login');
+    expect(seen).not.toContain('/api/auth/v2/login');
+    expect(auth.getSelectedProtocol(origin)).toBe('v1');
+  });
+
+  it('clears token and selection on cancel', () => {
+    const auth = new AccessAuth();
+    auth.installToken(origin, 'tok');
+    expect(auth.hasToken(origin)).toBe(true);
+    auth.cancel(origin);
+    expect(auth.hasToken(origin)).toBe(false);
+    expect(auth.getSelectedProtocol(origin)).toBeNull();
+  });
+});
+
+describe('parseProtocols', () => {
+  it('treats an absent field as legacy v1-only', () => {
+    expect(parseProtocols(undefined)).toEqual([]);
+  });
+  it('accepts unique supported names and ignores unknown neighbours', () => {
+    expect(parseProtocols(['v1', 'v2'])).toEqual(['v1', 'v2']);
+    expect(parseProtocols(['v2', 'future'])).toEqual(['v2']);
+  });
+  it('rejects malformed, empty, duplicate, and unsupported-only arrays', () => {
+    expect(parseProtocols(null)).toBeNull();
+    expect(parseProtocols([])).toBeNull();
+    expect(parseProtocols(['v1', 'v1'])).toBeNull();
+    expect(parseProtocols(['v1', ''])).toBeNull();
+    expect(parseProtocols(['future'])).toBeNull();
+    expect(parseProtocols('v2')).toBeNull();
   });
 });
