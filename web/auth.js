@@ -32,6 +32,9 @@ function credentialKey() {
     return serverKey(CREDENTIAL_KEY);
 }
 const PASSWORD_MIN_LENGTH = 8;
+// Module-owned auth requests must not hold bootstrap or a submit button open
+// forever. The deadline covers headers and response-body consumption.
+const AUTH_TIMEOUT_MS = 30000;
 
 function bytesToBase64URL(bytes) {
     let binary = '';
@@ -122,12 +125,19 @@ function hasV1Metadata(status) {
 }
 
 async function getStatus() {
-    const res = await fetch('/api/auth/status', { cache: 'no-store' });
-    if (!res.ok) throw new Error('Unable to check Phi access protection');
-    const status = await res.json();
-    if (status.enabled && !validStatus(status))
-        throw new Error('Phi returned invalid access protection settings');
-    return status;
+    return withAuthDeadline(async (signal) => {
+        const res = await fetch('/api/auth/status', {
+            cache: 'no-store',
+            redirect: 'error',
+            signal,
+        });
+        if (res.status !== 200)
+            throw new Error('Unable to check Phi access protection');
+        const status = await res.json();
+        if (status.enabled && !validStatus(status))
+            throw new Error('Phi returned invalid access protection settings');
+        return status;
+    });
 }
 
 async function deriveVerifierNative(subtle, password, salt, iterations) {
@@ -285,20 +295,25 @@ async function login(status, verifier) {
     const proof = bytesToBase64URL(
         hmac(sha256, verifier, new TextEncoder().encode(status.challenge)),
     );
-    let res;
     try {
-        res = await fetch('/api/auth/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ challenge: status.challenge, proof }),
+        return await withAuthDeadline(async (signal) => {
+            const res = await fetch('/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ challenge: status.challenge, proof }),
+                redirect: 'error',
+                signal,
+            });
+            if (res.ok) return 'ok';
+            if (res.status === 401) return 'rejected';
+            if (res.status === 429) return 'rate-limited';
+            return 'transient';
         });
     } catch {
+        // A timeout, redirect, or transport failure is transient: it must not
+        // discard the credential or change the selected protocol.
         return 'transient';
     }
-    if (res.ok) return 'ok';
-    if (res.status === 401) return 'rejected';
-    if (res.status === 429) return 'rate-limited';
-    return 'transient';
 }
 
 // Replaces a challenge that the derivation may have outlived. The fetch is
@@ -337,6 +352,29 @@ let stateEpoch = 0; // bumped whenever the selected credential changes
 
 function utf8Length(value) {
     return new TextEncoder().encode(value).length;
+}
+
+function authTimeoutError() {
+    return new Error('Phi did not respond. Try again.');
+}
+
+// The race settles the deadline even when a fetch implementation ignores the
+// abort signal, so a stalled connection cannot hold bootstrap or a submit
+// button open forever.
+async function withAuthDeadline(run) {
+    const controller = new AbortController();
+    let timer;
+    const deadline = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+            controller.abort();
+            reject(authTimeoutError());
+        }, AUTH_TIMEOUT_MS);
+    });
+    try {
+        return await Promise.race([run(controller.signal), deadline]);
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 function loadBearer() {
@@ -381,61 +419,75 @@ function adoptToken(token, { persist = false } = {}) {
 // must not clear a token B installed after it, and a rejection never changes
 // the selected protocol.
 function rejectToken(token) {
-    if (accessToken !== token && loadBearer() !== token) return;
+    // A host-installed session owns no standalone storage; never delete a
+    // token from another session just because its value matches.
+    if (
+        accessToken !== token &&
+        (memoryOnly || loadBearer() !== token)
+    )
+        return;
     // A rejection does not supersede a credential operation that is already
     // in flight: its replacement token is newer than this failure.
     if (accessToken === token) accessToken = null;
     // Token absence alone must not select v1: keep the v2 choice.
     selectedProtocol = 'v2';
-    clearStoredBearer(token);
+    if (!memoryOnly) clearStoredBearer(token);
 }
 
 // checkV2Token reports whether the server still accepts token. A rejected
 // token is 'invalid'; transport errors and 429/5xx throw, so a transient
 // failure never destroys a saved credential or changes protocol.
 async function checkV2Token(token) {
-    const res = await fetch('/api/auth/v2/status', {
-        headers: { Authorization: `Bearer ${token}` },
-        cache: 'no-store',
+    return withAuthDeadline(async (signal) => {
+        const res = await fetch('/api/auth/v2/status', {
+            headers: { Authorization: `Bearer ${token}` },
+            cache: 'no-store',
+            redirect: 'error',
+            signal,
+        });
+        if (res.status === 401 || res.status === 403) return 'invalid';
+        if (res.status !== 200)
+            throw new Error('Unable to check Phi access protection');
+        let payload;
+        try {
+            payload = await res.json();
+        } catch {
+            throw invalidStatusError();
+        }
+        if (
+            !payload ||
+            typeof payload.enabled !== 'boolean' ||
+            typeof payload.authenticated !== 'boolean'
+        )
+            throw invalidStatusError();
+        if (!payload.enabled) return 'invalid';
+        return payload.authenticated ? 'valid' : 'invalid';
     });
-    if (res.status === 401 || res.status === 403) return 'invalid';
-    if (res.status !== 200)
-        throw new Error('Unable to check Phi access protection');
-    let payload;
-    try {
-        payload = await res.json();
-    } catch {
-        throw invalidStatusError();
-    }
-    if (
-        !payload ||
-        typeof payload.enabled !== 'boolean' ||
-        typeof payload.authenticated !== 'boolean'
-    )
-        throw invalidStatusError();
-    if (!payload.enabled) return 'invalid';
-    return payload.authenticated ? 'valid' : 'invalid';
 }
 
 async function v2Login(password) {
-    const res = await fetch('/api/auth/v2/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
+    return withAuthDeadline(async (signal) => {
+        const res = await fetch('/api/auth/v2/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password }),
+            redirect: 'error',
+            signal,
+        });
+        if (res.status === 401) throw new Error('Wrong password');
+        if (res.status === 429)
+            throw new Error('Too many attempts. Try again in a moment.');
+        if (!res.ok) throw new Error('Unable to sign in');
+        let payload;
+        try {
+            payload = await res.json();
+        } catch {
+            throw new Error('Unable to sign in');
+        }
+        if (!payload || typeof payload.token !== 'string' || !payload.token)
+            throw new Error('Unable to sign in');
+        return payload.token;
     });
-    if (res.status === 401) throw new Error('Wrong password');
-    if (res.status === 429)
-        throw new Error('Too many attempts. Try again in a moment.');
-    if (!res.ok) throw new Error('Unable to sign in');
-    let payload;
-    try {
-        payload = await res.json();
-    } catch {
-        throw new Error('Unable to sign in');
-    }
-    if (!payload || typeof payload.token !== 'string' || !payload.token)
-        throw new Error('Unable to sign in');
-    return payload.token;
 }
 
 function validateV2Password(password) {
@@ -449,26 +501,33 @@ function validateV2Password(password) {
     if (bytes > 1024) throw new Error('Password must be at most 1024 bytes');
 }
 
+function v2PasswordError(res) {
+    if (res.status === 401) return new Error('Sign in to change Phi access');
+    if (res.status === 429)
+        return new Error('Too many attempts. Try again in a moment.');
+    return new Error('Unable to save access password');
+}
+
 async function saveV2Password(password) {
     validateV2Password(password);
     const epoch = stateEpoch;
     const headers = { 'Content-Type': 'application/json' };
     if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
-    const res = await fetch('/api/auth/v2/password', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ password }),
+    const payload = await withAuthDeadline(async (signal) => {
+        const res = await fetch('/api/auth/v2/password', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ password }),
+            redirect: 'error',
+            signal,
+        });
+        if (!res.ok) throw v2PasswordError(res);
+        try {
+            return await res.json();
+        } catch {
+            throw new Error('Unable to save access password');
+        }
     });
-    if (!res.ok)
-        throw new Error(
-            (await res.text()) || 'Unable to save access password',
-        );
-    let payload;
-    try {
-        payload = await res.json();
-    } catch {
-        throw new Error('Unable to save access password');
-    }
     if (
         !payload ||
         payload.enabled !== true ||
@@ -486,15 +545,25 @@ async function clearV2Password() {
     const activeToken = accessToken;
     const headers = { 'Content-Type': 'application/json' };
     if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
-    const res = await fetch('/api/auth/v2/password', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ password: '' }),
+    const payload = await withAuthDeadline(async (signal) => {
+        const res = await fetch('/api/auth/v2/password', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ password: '' }),
+            redirect: 'error',
+            signal,
+        });
+        if (!res.ok) throw v2PasswordError(res);
+        try {
+            return await res.json();
+        } catch {
+            throw new Error('Unable to clear access password');
+        }
     });
-    if (!res.ok)
-        throw new Error(
-            (await res.text()) || 'Unable to clear access password',
-        );
+    // Never discard a live credential because a proxy or error page returned
+    // a successful-looking response with the wrong body.
+    if (!payload || payload.enabled !== false)
+        throw new Error('Unable to clear access password');
     // A credential installed while the clear was in flight is newer than
     // this response; never clear it.
     if (epoch !== stateEpoch) return { enabled: false };
@@ -502,9 +571,10 @@ async function clearV2Password() {
     accessEnabled = false;
     selectedProtocol = 'v2';
     stateEpoch++;
-    // Remove only the token this session owned; another standalone token in
-    // storage belongs to a different session.
-    if (activeToken) clearStoredBearer(activeToken);
+    // Remove only the token this session owned; a host session and another
+    // standalone token belong to different sessions.
+    if (activeToken && !memoryOnly) clearStoredBearer(activeToken);
+    if (pendingOverlay) pendingOverlay.finish({ enabled: false });
     return { enabled: false };
 }
 
@@ -594,16 +664,22 @@ function requestReauth() {
 }
 
 async function discoverAccessStatus() {
-    const res = await fetch('/api/auth/status', { cache: 'no-store' });
-    if (res.status !== 200)
-        throw new Error('Unable to check Phi access protection');
-    let payload;
-    try {
-        payload = await res.json();
-    } catch {
-        throw invalidStatusError();
-    }
-    return parseAccessStatus(payload);
+    return withAuthDeadline(async (signal) => {
+        const res = await fetch('/api/auth/status', {
+            cache: 'no-store',
+            redirect: 'error',
+            signal,
+        });
+        if (res.status !== 200)
+            throw new Error('Unable to check Phi access protection');
+        let payload;
+        try {
+            payload = await res.json();
+        } catch {
+            throw invalidStatusError();
+        }
+        return parseAccessStatus(payload);
+    });
 }
 
 let pendingOverlay = null;
