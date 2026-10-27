@@ -6,8 +6,12 @@ vi.mock('../web/vendor/noble-hashes/pbkdf2.js', () => ({
     pbkdf2Async: vi.fn(async () => new Uint8Array(32).fill(9)),
 }));
 
-const { setAccessPassword, clearAccessPassword, bootstrapAccessAuth } =
-    await import('../web/auth.js');
+const {
+    setAccessPassword,
+    clearAccessPassword,
+    bootstrapAccessAuth,
+    __test__,
+} = await import('../web/auth.js');
 const { setEmbeddedBackend } = await import('../web/util.js');
 const { appearanceRequestContext } = await import(
     '../web/mobile-appearance.js'
@@ -151,5 +155,84 @@ describe('access credential storage', () => {
                 ([, init]) => init.headers['X-Phi-Backend'] === 'server-a',
             ),
         ).toBe(true);
+    });
+
+    it('keeps a late v2 save and clear bound to A after B becomes active', async () => {
+        const contextA = appearanceRequestContext(
+            new BackendScope('server-a', 'http://a.test'),
+        );
+        const contextB = appearanceRequestContext(
+            new BackendScope('server-b', 'http://b.test'),
+        );
+        localStorage.setItem('phi_access_bearer_v1:server-a', 'jwt-a-old');
+        localStorage.setItem('phi_access_bearer_v1:server-b', 'jwt-b-old');
+        let releaseSaveA;
+        const calls = [];
+        const request = vi.fn((url, init) => {
+            const headers = new Headers(init.headers);
+            const owner = headers.get('X-Phi-Backend');
+            calls.push({ url, owner, headers, body: init.body });
+            if (url === '/api/auth/status') {
+                return Response.json({
+                    enabled: true,
+                    authenticated: false,
+                    protocols: ['v2'],
+                });
+            }
+            if (url === '/api/auth/v2/status')
+                return Response.json({ enabled: true, authenticated: true });
+            if (url === '/api/auth/v2/password') {
+                const body = JSON.parse(init.body);
+                if (owner === 'server-a' && body.password === 'change-A') {
+                    return new Promise((resolve) => {
+                        releaseSaveA = resolve;
+                    });
+                }
+                if (owner === 'server-b' && body.password === 'change-B')
+                    return Response.json({ enabled: true, token: 'jwt-b-new' });
+                if (owner === 'server-a' && body.password === '')
+                    return Response.json({ enabled: false });
+            }
+            throw new Error(`unexpected request ${owner} ${url}`);
+        });
+        vi.stubGlobal('fetch', request);
+
+        await expect(bootstrapAccessAuth(contextA)).resolves.toEqual({
+            enabled: true,
+        });
+        const saveA = setAccessPassword('change-A', contextA);
+        await vi.waitFor(() => expect(releaseSaveA).toBeTypeOf('function'));
+
+        await expect(bootstrapAccessAuth(contextB)).resolves.toEqual({
+            enabled: true,
+        });
+        await setAccessPassword('change-B', contextB);
+        expect(__test__.getAccessState().accessToken).toBe('jwt-b-new');
+
+        releaseSaveA(Response.json({ enabled: true, token: 'jwt-a-new' }));
+        await saveA;
+        expect(__test__.getAccessState().accessToken).toBe('jwt-b-new');
+        expect(localStorage.getItem('phi_access_bearer_v1:server-a')).toBe(
+            'jwt-a-new',
+        );
+        expect(localStorage.getItem('phi_access_bearer_v1:server-b')).toBe(
+            'jwt-b-new',
+        );
+
+        await clearAccessPassword(contextA);
+        expect(__test__.getAccessState().accessToken).toBe('jwt-b-new');
+        expect(localStorage.getItem('phi_access_bearer_v1:server-a')).toBeNull();
+        expect(localStorage.getItem('phi_access_bearer_v1:server-b')).toBe(
+            'jwt-b-new',
+        );
+        expect(
+            calls
+                .filter((call) => call.url.endsWith('/api/auth/v2/password'))
+                .map((call) => [call.owner, call.headers.get('Authorization')]),
+        ).toEqual([
+            ['server-a', 'Bearer jwt-a-old'],
+            ['server-b', 'Bearer jwt-b-old'],
+            ['server-a', 'Bearer jwt-a-new'],
+        ]);
     });
 });

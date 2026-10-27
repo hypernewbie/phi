@@ -60,3 +60,18 @@ export interface AppLike {
     importCmdsConfig?: (...args: any[]) => void;
     exportTerminalCommandsConfig?: (...args: any[]) => void;
 }
+
+// Optional browser bridge installed by web/auth.js. The desktop host uses it
+// to install a memory-only v2 token; the socket constructors use it to carry
+// that token as one query parameter.
+export interface PhiAccessAuthBridge {
+    installToken(token: string): boolean;
+    getAccessToken(): string | null;
+    webSocketURL(url: URL): URL;
+}
+
+declare global {
+    interface Window {
+        phiAccessAuth?: PhiAccessAuthBridge;
+    }
+}
