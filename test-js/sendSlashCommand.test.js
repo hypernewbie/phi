@@ -95,6 +95,7 @@ function makeTm() {
                 presets: [
                     { name: '/quit', value: '/quit\r' },
                     { name: '/model', value: '/model\r' },
+                    { name: '/compact', value: '/compact\r' },
                 ],
             },
             claude: { presets: [{ name: '/compact', value: '/compact\r' }] },
@@ -420,15 +421,15 @@ describe('opencode/pi preset chip (desktop + mobile renderSlashDropup)', () => {
         const chips = Array.from(
             tm.presetsContainer.querySelectorAll('.preset-btn'),
         );
-        const modelChip = chips.find((b) => b.innerText === '/model');
-        expect(modelChip).toBeDefined();
-        modelChip.click();
+        const compactChip = chips.find((b) => b.innerText === '/compact');
+        expect(compactChip).toBeDefined();
+        compactChip.click();
 
         tm.activePaneId = tabB.paneId;
         vi.advanceTimersByTime(2000);
 
         expect(tabA.sendInputCalls.length).toBe(1);
-        expect(tabA.sendInputCalls[0][0]).toBe('\x1b[200~/model\x1b[201~\r');
+        expect(tabA.sendInputCalls[0][0]).toBe('\x1b[200~/compact\x1b[201~\r');
         expect(tabB.sendInputCalls.length).toBe(0);
     });
 
@@ -541,11 +542,11 @@ describe('pi /model picker sequence', () => {
         const chips = Array.from(
             tm.presetsContainer.querySelectorAll('.preset-btn'),
         );
-        const modelChip = chips.find((b) => b.innerText === '/model');
-        modelChip.click();
+        const compactChip = chips.find((b) => b.innerText === '/compact');
+        compactChip.click();
 
         expect(tabA.sendInputCalls.length).toBe(1);
-        expect(tabA.sendInputCalls[0][0]).toBe('\x1b[200~/model\x1b[201~\r');
+        expect(tabA.sendInputCalls[0][0]).toBe('\x1b[200~/compact\x1b[201~\r');
 
         vi.advanceTimersByTime(2000);
         expect(tabA.sendInputCalls.length).toBe(1);
@@ -588,11 +589,11 @@ describe('pi /model picker sequence', () => {
         const chips = Array.from(
             tm.presetsContainer.querySelectorAll('.preset-btn'),
         );
-        const modelChip = chips.find((b) => b.innerText === '/model');
-        modelChip.click();
+        const compactChip = chips.find((b) => b.innerText === '/compact');
+        compactChip.click();
 
         expect(tabA.sendInputCalls.length).toBe(1);
-        expect(tabA.sendInputCalls[0][0]).toBe('\x1b[200~/model\x1b[201~\r');
+        expect(tabA.sendInputCalls[0][0]).toBe('\x1b[200~/compact\x1b[201~\r');
     });
 
     it('opencode waits for the paste to settle before sending Enter', () => {

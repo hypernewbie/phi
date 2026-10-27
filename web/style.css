@@ -3193,7 +3193,7 @@ body.has-terminal-bg
 /* PRESETS PANEL */
 .presets-container {
     display: flex;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     overflow-x: auto;
     align-items: center;
     gap: 6px;
@@ -3207,6 +3207,14 @@ body.has-terminal-bg
 
 .presets-container::-webkit-scrollbar {
     display: none; /* Hide scrollbar Chrome/Safari/Opera */
+}
+
+/* Zero-height full-width item that pushes the model/thinking pickers onto
+   their own line, so a long chip row cannot hide them. Mobile keeps its
+   single swipeable line and hides this item. */
+.presets-break {
+    flex-basis: 100%;
+    height: 0;
 }
 
 .preset-btn {
@@ -3362,7 +3370,8 @@ body.has-terminal-bg
 
 .model-presets-dropup {
     position: absolute;
-    bottom: 40px; /* sits right above presets bar */
+    /* Fallback only: _toggleDropup sets the live presets-bar height. */
+    bottom: 40px;
     z-index: 1000;
     width: 320px;
     background-color: var(--bg-panel);
@@ -3675,6 +3684,8 @@ body.has-terminal-bg
 .preset-btn.model-trigger-btn {
     border-color: var(--accent);
     color: var(--accent-bright);
+    /* Pickers carry the live value; do not clip it with the chip cap. */
+    max-width: 320px;
 }
 
 .preset-btn.model-trigger-btn:hover {
@@ -5266,6 +5277,10 @@ html[data-phi-config-page] .settings-modal {
 
     .presets-container::-webkit-scrollbar {
         display: none; /* Hide Chrome/Safari scrollbar */
+    }
+
+    .presets-break {
+        display: none;
     }
 
     .preset-btn {

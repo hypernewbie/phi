@@ -65,11 +65,12 @@ function harness(tab) {
     return { tm, dropup };
 }
 
-// Generic row order: Cmds, Models, Keys. Text matching is
-// impossible here: the row sets innerText, which jsdom leaves
-// unreadable, so the position plus the marker class identify it.
+// Picker row order: Models, Thinking, Skills, Keys, then the chip row
+// with Cmds. Text matching is impossible here: the row sets innerText,
+// which jsdom leaves unreadable, so the position plus the marker class
+// identify it.
 function modelsTrigger(tm) {
-    return tm.presetsContainer.querySelectorAll('.model-trigger-btn')[1];
+    return tm.presetsContainer.querySelectorAll('.model-trigger-btn')[0];
 }
 
 describe('bridge models trigger', () => {
@@ -93,7 +94,7 @@ describe('bridge models trigger', () => {
         const trigger = modelsTrigger(tm);
         expect(trigger).not.toBeUndefined();
         expect(trigger.classList.contains('pi-rpc-model-trigger')).toBe(true);
-        expect(trigger.title).toBe('a/x');
+        expect(trigger.title).toBe('Change the model for this session');
         trigger.click();
 
         await vi.waitFor(() => {
@@ -106,6 +107,44 @@ describe('bridge models trigger', () => {
         expect(dropup.textContent).toContain('Model · a/x');
         expect(dropup.textContent).toContain('a/x');
         expect(dropup.textContent).toContain('b/y');
+    });
+
+    it('drops the live model slug from the label on a compact viewport', () => {
+        const tab = bridgeTab({
+            piBridge: {
+                state: 'managed',
+                connected: true,
+                model: 'a/x',
+                thinking_level: 'high',
+                capabilities: [
+                    'pi.lifecycle.v1',
+                    'pi.models.v1',
+                    'pi.thinking.v1',
+                ],
+            },
+        });
+        const { tm } = harness(tab);
+        mockFetch(() => undefined);
+        const innerWidth = window.innerWidth;
+        Object.defineProperty(window, 'innerWidth', {
+            configurable: true,
+            value: 390,
+        });
+        try {
+            tm.renderPresets('pi');
+            const label = (selector) => {
+                const el = tm.presetsContainer.querySelector(selector);
+                // jsdom has no innerText: fall back to the expando.
+                return el.textContent || el.innerText;
+            };
+            expect(label('.pi-rpc-model-trigger')).toBe('🤖 Models ▾');
+            expect(label('.pi-rpc-thinking-trigger')).toBe('Thinking ▾');
+        } finally {
+            Object.defineProperty(window, 'innerWidth', {
+                configurable: true,
+                value: innerWidth,
+            });
+        }
     });
 
     it('keeps the legacy static list when the bridge is absent', () => {

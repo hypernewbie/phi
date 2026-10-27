@@ -80,7 +80,11 @@ it('mobile shortcut chips and slash dropup selections suppress input focus', () 
         if (options?.focusInputOnMobile === false) input.blur();
     });
     manager.renderPresets('bash');
-    const utility = presets.querySelector('.preset-btn');
+    // Picker buttons open a dropup; the raw-input chips are the plain
+    // preset-btn entries after them.
+    const utility = presets.querySelector(
+        '.preset-btn:not(.model-trigger-btn):not(.slash-trigger-btn)',
+    );
     utility.click();
     expect(manager.sendRawInput).toHaveBeenCalledWith(expect.any(String), {
         focusInputOnMobile: false,

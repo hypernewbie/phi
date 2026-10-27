@@ -211,3 +211,48 @@ describe('NEVER source contract', () => {
         expect(src).toContain('heightOnly && isCoarseViewport()');
     });
 });
+
+// The picker row is built per layout: its own row on desktop, one swipe
+// strip on compact. handleWindowResize is the only place a live window
+// can cross that breakpoint, so it must rebuild the row exactly once.
+describe('handleWindowResize presets relayout', () => {
+    function makePresetTm(compact, tab = { coder: 'pi', directMode: false }) {
+        const m = makeTm();
+        m._presetsCompact = compact;
+        m.getActiveTab = () => tab;
+        m.renderPresets = vi.fn();
+        return m;
+    }
+
+    it('rebuilds the row when crossing into compact', () => {
+        const m = makePresetTm(false);
+        setPointer(false);
+        setWindow(390, 844);
+        m.handleWindowResize();
+        expect(m.renderPresets).toHaveBeenCalledWith('pi');
+    });
+
+    it('rebuilds the row when crossing out of compact', () => {
+        const m = makePresetTm(true);
+        setPointer(false);
+        setWindow(1440, 900);
+        m.handleWindowResize();
+        expect(m.renderPresets).toHaveBeenCalledWith('pi');
+    });
+
+    it('leaves the row alone while staying on the same layout', () => {
+        const m = makePresetTm(true);
+        setPointer(false);
+        setWindow(390, 800);
+        m.handleWindowResize();
+        expect(m.renderPresets).not.toHaveBeenCalled();
+    });
+
+    it('skips tabs in direct mode, where the row is hidden', () => {
+        const m = makePresetTm(false, { coder: 'pi', directMode: true });
+        setPointer(false);
+        setWindow(390, 844);
+        m.handleWindowResize();
+        expect(m.renderPresets).not.toHaveBeenCalled();
+    });
+});
