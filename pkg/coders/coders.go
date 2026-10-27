@@ -155,12 +155,12 @@ func DefaultRegistry() map[string]Coder {
 			Presets: []Preset{
 				{Name: "/resume", Value: "/resume\r"},
 				{Name: "/model", Value: "/model\r"},
+				{Name: "/compact", Value: "/compact\r"},
 				{Name: "/rewind", Value: "/rewind\r"},
 				{Name: "/diff", Value: "/diff\r"},
 				{Name: "/config", Value: "/config\r"},
 				{Name: "/fork", Value: "/fork\r"},
 				{Name: "/exit", Value: "/exit\r"},
-				{Name: "/help", Value: "/help\r"},
 				{Name: "ctrl+c", Value: "\x03"},
 			},
 		},
