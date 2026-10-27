@@ -805,9 +805,14 @@ export async function bootstrapAccessAuth() {
     if (status === HOST_INSTALL || installed())
         return { enabled: accessEnabled };
 
-    // An existing selection survives a re-bootstrap: only a successful
-    // v1-only discovery or a working v1 credential may change it.
-    const protocol = selectedProtocol || preferredProtocol(status.protocols);
+    // An existing v2 selection survives a re-bootstrap. Only a successful
+    // v1-only discovery may change it; a missing token never selects v1.
+    const advertised = preferredProtocol(status.protocols);
+    const hadV2Selection = selectedProtocol === 'v2';
+    const protocol =
+        hadV2Selection && advertised === 'v1'
+            ? 'v1'
+            : selectedProtocol || advertised;
     accessEnabled = status.enabled;
     if (!status.enabled) {
         selectedProtocol = protocol;
@@ -816,6 +821,11 @@ export async function bootstrapAccessAuth() {
     // Fix the protocol before any login attempt; the cookie and saved
     // verifier branches below are the only v2-to-v1 change.
     selectedProtocol = protocol;
+    if (protocol === 'v1' && hadV2Selection) {
+        // A v1-only server cannot use the bearer; keep the stored token for
+        // a server that can, but stop sending it here.
+        accessToken = null;
+    }
 
     if (protocol === 'v2') {
         const stored = loadBearer();
@@ -837,6 +847,11 @@ export async function bootstrapAccessAuth() {
             }
             rejectToken(token);
             // No cookie fallback: an explicit v2 credential decides alone.
+            return showUnlockPrompt('v2');
+        }
+        if (hadV2Selection) {
+            // The token was cleared after a rejection: token absence alone
+            // must not select v1 on a server that still advertises v2.
             return showUnlockPrompt('v2');
         }
     }

@@ -1828,10 +1828,12 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
   it('keeps a native unlock ready when a stale token is accepted late', async () => {
     const host = hostOf() as TestHost & { bodyTokens: Map<string, string> };
     let release!: (res: Response) => void;
-    const auth = new AccessAuth((async () =>
-      new Promise<Response>((resolve) => {
-        release = resolve;
-      })) as unknown as typeof fetch);
+    const auth = new AccessAuth(
+      (async () =>
+        new Promise<Response>((resolve) => {
+          release = resolve;
+        })) as unknown as typeof fetch,
+    );
     host.storedCredentials.set(originA, { version: 'v2', jwt: 'restored' });
     const pending = host.bootstrapV2Token(
       originA,
@@ -1855,10 +1857,12 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
   it('keeps a native unlock ready when a stale token is rejected late', async () => {
     const host = hostOf() as TestHost & { bodyTokens: Map<string, string> };
     let release!: (res: Response) => void;
-    const auth = new AccessAuth((async () =>
-      new Promise<Response>((resolve) => {
-        release = resolve;
-      })) as unknown as typeof fetch);
+    const auth = new AccessAuth(
+      (async () =>
+        new Promise<Response>((resolve) => {
+          release = resolve;
+        })) as unknown as typeof fetch,
+    );
     host.storedCredentials.set(originA, { version: 'v2', jwt: 'restored' });
     const pending = host.bootstrapV2Token(
       originA,
