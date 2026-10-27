@@ -849,6 +849,19 @@ func testAccessCookieFor(t *testing.T, auth *accessAuthManager) *http.Cookie {
 	return &http.Cookie{Name: accessSessionCookie, Value: token}
 }
 
+// testAccessSignedToken mints a bearer from the current record without a
+// login, so a socket can be admitted before the record changes.
+func testAccessSignedToken(t *testing.T, auth *accessAuthManager) string {
+	t.Helper()
+	auth.mu.Lock()
+	defer auth.mu.Unlock()
+	token, err := mintAccessJWT(auth.jwtKey, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
 func TestAccessStaleCredentialRejectedAtCommit(t *testing.T) {
 	withTempConfig(t)
 	auth := useTestAccessAuth(t)

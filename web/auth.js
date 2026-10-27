@@ -912,7 +912,7 @@ export async function bootstrapAccessAuth(context) {
     const state = activateAuthContext(context);
     installAccessFetch();
     const ownerKey = activeAuthKey;
-    const epoch = state.epoch;
+    let epoch = state.epoch;
     const superseded = () =>
         state.epoch !== epoch || activeAuthKey !== ownerKey;
     let releaseHost = () => {};
@@ -934,10 +934,13 @@ export async function bootstrapAccessAuth(context) {
         if (status === HOST_INSTALL || superseded())
             return { enabled: state.accessEnabled };
 
-        // Preserve an existing selection across re-bootstrap. Only a successful
-        // v1-only discovery or a working v1 credential may select v1 initially.
+        // Keep v2 selected across re-bootstrap unless the server is now v1-only.
+        const advertised = preferredProtocol(status.protocols);
+        const hadV2Selection = state.selectedProtocol === 'v2';
         const protocol =
-            state.selectedProtocol || preferredProtocol(status.protocols);
+            hadV2Selection && advertised === 'v1'
+                ? 'v1'
+                : state.selectedProtocol || advertised;
         state.accessEnabled = status.enabled;
         if (!status.enabled) {
             state.selectedProtocol = protocol;
@@ -946,6 +949,13 @@ export async function bootstrapAccessAuth(context) {
         // Fix the protocol before any login attempt; only an authenticated
         // session or a successful saved-v1 login may select v1.
         state.selectedProtocol = protocol;
+        if (protocol === 'v1' && hadV2Selection) {
+            // Keep the stored token for a server that can use it, but stop
+            // sending it to this v1-only server.
+            state.accessToken = null;
+            state.epoch++;
+            epoch = state.epoch;
+        }
 
         if (protocol === 'v2') {
             const stored = loadBearer(context);
@@ -969,6 +979,8 @@ export async function bootstrapAccessAuth(context) {
                 // No cookie fallback: an explicit v2 credential decides alone.
                 return showUnlockPrompt(context, 'v2');
             }
+            if (hadV2Selection)
+                return showUnlockPrompt(context, 'v2');
         }
 
         if (status.authenticated) {

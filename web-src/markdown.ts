@@ -67,6 +67,9 @@ export class MarkdownManager {
      *  the modal body. Markdown content owns no viewer handle, so this is the
      *  only thing closeModal and the next render must run. */
     _modalAssetRelease: () => void;
+    /** Bumped by every modal render and by close. A late image result for an
+     *  older render is released instead of adopted. */
+    _modalRenderId: number;
     markdownClipboard: { name: string; dir: string; content: string } | null;
     contextMenuEl: HTMLElement;
     refreshRequestId: number;
@@ -122,6 +125,7 @@ export class MarkdownManager {
         this._pasteConflict = false;
         this._currentFileView = null;
         this._modalAssetRelease = () => {};
+        this._modalRenderId = 0;
         this.currentRawContent = '';
         this.markdownClipboard = null;
         this.contextMenuEl = this._createContextMenu();
@@ -627,6 +631,7 @@ export class MarkdownManager {
     }
 
     async openFile(f: any): Promise<void> {
+        const render = ++this._modalRenderId;
         const cwd = this.app.sessionsManager.activeCWD || '';
         this._setModalTitle(f.name);
         this.modalBody.innerHTML =
@@ -646,8 +651,10 @@ export class MarkdownManager {
             const res = await fetch(
                 `/api/markdown/file?path=${encodeURIComponent(f.path)}&cwd=${encodeURIComponent(cwd)}`,
             );
+            if (render !== this._modalRenderId) return;
             if (!res.ok) throw new Error(await res.text());
             const raw = await res.text();
+            if (render !== this._modalRenderId) return;
             this.currentRawContent = raw;
             this._updateModalActions();
             const html = renderMarkdownSafe(raw);
@@ -655,8 +662,14 @@ export class MarkdownManager {
             this.modalBody.innerHTML = `<div class="md-rendered">${html}</div>`;
             rewriteRelativeImages(this.modalBody, f.path, cwd);
             highlightCodeIn(this.modalBody);
-            this._modalAssetRelease = await authenticateImages(this.modalBody);
+            const release = await authenticateImages(this.modalBody);
+            if (render !== this._modalRenderId) {
+                release();
+                return;
+            }
+            this._modalAssetRelease = release;
         } catch (e) {
+            if (render !== this._modalRenderId) return;
             this.modalBody.innerHTML = `<div class="md-list-error">Failed to load: ${escapeHtml((e as Error).message)}</div>`;
         }
     }
@@ -742,6 +755,7 @@ export class MarkdownManager {
     }
 
     closeModal(): void {
+        this._modalRenderId++;
         this.modal.classList.add('hidden');
         this._releaseModalAssets();
         this.modalBody.innerHTML = '';
