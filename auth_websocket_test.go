@@ -9,6 +9,7 @@ import (
 	neturl "net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -348,4 +349,105 @@ func TestAccessWSSocketsCloseOnStaleRecordRehash(t *testing.T) {
 	expectClosed(t, events)
 	expectClosed(t, cookieEvents)
 	expectClosed(t, control)
+}
+
+// dialAfterGate dials one fenced route whose handler waits for release after
+// the middleware has already authorized the request. The rotation happens in
+// that window, so the handler registers with a stale generation.
+func dialAfterGate(t *testing.T, serverURL, path, subprotocol, token string) (*websocket.Conn, error) {
+	t.Helper()
+	url := "ws" + strings.TrimPrefix(serverURL, "http") + path + "?token=" + neturl.QueryEscape(token)
+	dialer := websocket.Dialer{Subprotocols: []string{subprotocol}}
+	conn, _, err := dialer.Dial(url, nil)
+	return conn, err
+}
+
+func gatedEventsHandler(hub *ws.Hub, gate, release chan struct{}, once *sync.Once) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(gate) })
+		<-release
+		ws.HandleEventsWS(w, r, hub)
+	}
+}
+
+func expectRejectedUpgrade(t *testing.T, conn *websocket.Conn, err error) {
+	t.Helper()
+	if err != nil {
+		return // handshake refused before the upgrade
+	}
+	expectClosed(t, conn)
+}
+
+// A request authorized before the first password enable must not register a
+// socket after it: the enable advances the generation.
+func TestAccessWSLateRegistrationAfterEnableIsRejected(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	hub := testAccessUseHub(t)
+	gate, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	server := httptest.NewServer(accessAuthMiddleware(gatedEventsHandler(hub, gate, release, &once)))
+	defer server.Close()
+
+	type result struct {
+		conn *websocket.Conn
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		conn, err := dialAfterGate(t, server.URL, "/ws/md-events", wireproto.EventsSubprotocol, "")
+		done <- result{conn, err}
+	}()
+	<-gate
+	token := testAccessEnableV2(t, testAccessPassword)
+	close(release)
+	out := <-done
+	if out.conn != nil {
+		t.Cleanup(func() { _ = out.conn.Close() })
+	}
+	expectRejectedUpgrade(t, out.conn, out.err)
+
+	// The credential minted by the enable still connects.
+	dialer := websocket.Dialer{Subprotocols: []string{wireproto.EventsSubprotocol}}
+	url := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/md-events?token=" + neturl.QueryEscape(token)
+	conn, _, err := dialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("fresh credential after enable: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	expectOpen(t, conn)
+}
+
+// The same window after a password rotation must also reject the late
+// registration, through the production middleware and handler.
+func TestAccessWSLateRegistrationAfterRotationIsRejected(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	hub := testAccessUseHub(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+	gate, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	server := httptest.NewServer(accessAuthMiddleware(gatedEventsHandler(hub, gate, release, &once)))
+	defer server.Close()
+
+	type result struct {
+		conn *websocket.Conn
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		conn, err := dialAfterGate(t, server.URL, "/ws/md-events", wireproto.EventsSubprotocol, token)
+		done <- result{conn, err}
+	}()
+	<-gate
+	response := testAccessV2PasswordRequest(t, `{"password":"test-pass-5678"}`, token)
+	if response.Code != http.StatusOK {
+		t.Fatalf("change password: %d %s", response.Code, response.Body.String())
+	}
+	close(release)
+	out := <-done
+	if out.conn != nil {
+		t.Cleanup(func() { _ = out.conn.Close() })
+	}
+	expectRejectedUpgrade(t, out.conn, out.err)
 }
