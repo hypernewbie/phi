@@ -287,7 +287,7 @@ describe('unlock overlay slow-derive feedback', () => {
             await settled(overlay);
             expect(
                 overlay.querySelector('.access-auth-error').textContent,
-            ).toBe('Too many attempts. Wait a minute, then try again.');
+            ).toBe('Too many attempts. Wait about a minute, then try again.');
             overlay.remove();
             void boot;
         } finally {
@@ -297,7 +297,7 @@ describe('unlock overlay slow-derive feedback', () => {
         }
     });
 
-    it('uses a challenge taken after the derivation, not before it', async () => {
+    it('reuses the bootstrap challenge when the derivation was fast', async () => {
         __test__.resetNativeDerive();
         vi.stubGlobal('crypto', webcrypto);
         try {
@@ -327,10 +327,102 @@ describe('unlock overlay slow-derive feedback', () => {
                 .querySelector('form')
                 .dispatchEvent(new Event('submit', { cancelable: true }));
             await expect(boot).resolves.toEqual({ enabled: true });
-            // challenge-1 came from the bootstrap, challenge-2 preceded the
-            // derivation; only challenge-3 is guaranteed to still be live.
-            expect(posted.challenge).toBe('challenge-3');
+            // challenge-1 came from the bootstrap, challenge-2 was fetched
+            // right before the derivation. A derivation this fast cannot
+            // outlive the five-minute TTL, so no third call is made.
+            expect(statusCalls).toBe(2);
+            expect(posted.challenge).toBe('challenge-2');
         } finally {
+            vi.unstubAllGlobals();
+            __test__.resetNativeDerive();
+            document.querySelector('.access-auth-overlay')?.remove();
+        }
+    });
+
+    it('refreshes the challenge only after a long derivation', async () => {
+        const stale = { ...STATUS, challenge: 'challenge-old' };
+        let calls = 0;
+        mockFetch((url) => {
+            expect(url).toBe('/api/auth/status');
+            calls += 1;
+            return { ...STATUS, challenge: 'challenge-new' };
+        });
+        // Below the refresh threshold the fetch is skipped entirely.
+        expect(await __test__.freshStatus(stale, 80_000)).toBe(stale);
+        expect(calls).toBe(0);
+        expect(
+            (await __test__.freshStatus(stale, 4 * 60 * 1000)).challenge,
+        ).toBe('challenge-new');
+        expect(calls).toBe(1);
+    });
+
+    it('falls back to the original challenge when the refresh stalls', async () => {
+        const stale = { ...STATUS, challenge: 'challenge-old' };
+        // Honors the abort signal the way a real fetch does, so the test
+        // proves the deadline fires rather than just that the mock is slow.
+        mockFetch(
+            (_url, options) =>
+                new Promise((_, reject) =>
+                    options.signal.addEventListener('abort', () =>
+                        reject(new Error('aborted')),
+                    ),
+                ),
+        );
+        vi.useFakeTimers();
+        try {
+            const pending = __test__.freshStatus(stale, 5 * 60 * 1000);
+            await vi.advanceTimersByTimeAsync(15_000);
+            await expect(pending).resolves.toBe(stale);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('ticks the busy label by whole seconds and stops when settled', async () => {
+        __test__.resetNativeDerive();
+        vi.stubGlobal('crypto', webcrypto);
+        vi.useFakeTimers({
+            toFake: [
+                'setTimeout',
+                'clearTimeout',
+                'Date',
+                'requestAnimationFrame',
+                'cancelAnimationFrame',
+            ],
+        });
+        try {
+            let rejectLogin;
+            const gate = new Promise((r) => {
+                rejectLogin = r;
+            });
+            mockFetch((url) => {
+                if (url === '/api/auth/status')
+                    return { ...STATUS, iterations: 1 };
+                if (url === '/api/auth/login') return gate;
+                throw new Error();
+            });
+            const boot = bootstrapAccessAuth();
+            await vi.advanceTimersByTimeAsync(0);
+            const overlay = document.querySelector('.access-auth-overlay');
+            const button = overlay.querySelector('button[type="submit"]');
+            overlay.querySelector('input[type="password"]').value =
+                KAT_PASSWORD;
+            overlay
+                .querySelector('form')
+                .dispatchEvent(new Event('submit', { cancelable: true }));
+            await vi.advanceTimersByTimeAsync(0);
+            expect(button.textContent).toBe('Signing in…');
+            await vi.advanceTimersByTimeAsync(2100);
+            expect(button.textContent).toBe('Signing in… 2s');
+            rejectLogin({ ok: false });
+            await vi.advanceTimersByTimeAsync(0);
+            expect(button.textContent).toBe('Sign in');
+            await vi.advanceTimersByTimeAsync(3000);
+            // The ticker is cancelled on settle: no stray label writes left.
+            expect(button.textContent).toBe('Sign in');
+            void boot;
+        } finally {
+            vi.useRealTimers();
             vi.unstubAllGlobals();
             __test__.resetNativeDerive();
             document.querySelector('.access-auth-overlay')?.remove();
@@ -359,9 +451,11 @@ describe('unlock overlay slow-derive feedback', () => {
                 KAT_PASSWORD;
             form.dispatchEvent(new Event('submit', { cancelable: true }));
             await new Promise((resolve) => setTimeout(resolve, 0));
+            // A tick fires on the next frame, so the label may already carry
+            // an elapsed-seconds suffix here.
             expect(
                 overlay.querySelector('button[type="submit"]').textContent,
-            ).toBe('Signing in…');
+            ).toMatch(/^Signing in…/);
             rejectLogin({ ok: false });
             // The post-reject path crosses a real webcrypto derive plus
             // fetch/UI hops; a single fixed tick flakes under CI load.

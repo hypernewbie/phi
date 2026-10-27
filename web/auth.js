@@ -212,6 +212,12 @@ function savedVerifier(status) {
     }
 }
 
+// The challenge is single-use and expires five minutes after it is issued.
+// Re-deriving on a slow device can outlast that window, so a status older
+// than this refresh threshold is replaced (see freshStatus).
+const challengeRefreshAfterMs = 4 * 60 * 1000;
+const statusFetchTimeoutMs = 15000;
+
 async function login(status, verifier) {
     const proof = bytesToBase64URL(
         hmac(sha256, verifier, new TextEncoder().encode(status.challenge)),
@@ -224,15 +230,23 @@ async function login(status, verifier) {
     return { ok: res.ok, status: res.status };
 }
 
-// The challenge is single-use and expires after five minutes. A slow device
-// can spend longer than that deriving, so take the challenge used for the
-// proof from a fresh status call instead of the pre-derivation one.
-async function freshStatus(fallback) {
+// Replaces a challenge that the derivation may have outlived. The fetch is
+// bounded and optional: on any failure the original status is still usable.
+async function freshStatus(fallback, elapsedMs) {
+    if (elapsedMs < challengeRefreshAfterMs) return fallback;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), statusFetchTimeoutMs);
     try {
-        const status = await getStatus();
-        return status.enabled ? status : fallback;
+        const res = await fetch('/api/auth/status', {
+            cache: 'no-store',
+            signal: controller.signal,
+        });
+        const status = await res.json();
+        return validStatus(status) ? status : fallback;
     } catch {
         return fallback;
+    } finally {
+        clearTimeout(timer);
     }
 }
 
@@ -286,20 +300,20 @@ function showUnlockPrompt() {
             error.textContent = '';
             submit.disabled = true;
             // The pure-JS derivation runs for a minute or more on phones:
-            // WebKit disables the JIT for plain-HTTP origins (LAN iPhone),
-            // so 600k PBKDF2 iterations execute at interpreter speed. A
-            // ticking label is the difference between "slow" and "hung".
-            // (WASM was measured slower than noble here: hash-wasm's pbkdf2
-            // loops in JS around per-iteration WASM boundary crossings -
-            // 2.7x noble at c=600000.)
+            // WebKit disables the JIT for plain-HTTP origins, so 600k PBKDF2
+            // iterations run at interpreter speed. Tick the label so the
+            // wait reads as slow instead of dead.
             const started = Date.now();
             submit.textContent = 'Signing in…';
             // requestAnimationFrame, not setInterval: Chromium's
-            // scheduler.yield keeps rendering alive but starves timers, so a
-            // timer never fires until the derivation is already over.
+            // scheduler.yield keeps rendering alive but starves timers.
+            let shownSeconds = 0;
             let ticker = requestAnimationFrame(function tick() {
                 const seconds = Math.round((Date.now() - started) / 1000);
-                submit.textContent = `Signing in… ${seconds}s`;
+                if (seconds !== shownSeconds) {
+                    shownSeconds = seconds;
+                    submit.textContent = `Signing in… ${seconds}s`;
+                }
                 ticker = requestAnimationFrame(tick);
             });
             try {
@@ -310,13 +324,17 @@ function showUnlockPrompt() {
                     return;
                 }
                 const verifier = await deriveVerifier(input.value, status);
-                const result = await login(await freshStatus(status), verifier);
+                const result = await login(
+                    await freshStatus(status, Date.now() - started),
+                    verifier,
+                );
                 if (result.status === 429) {
                     // Rate limited, not a wrong password: the server refuses
-                    // every attempt for a while, so saying "Wrong password"
-                    // would send the user into a retry loop that cannot work.
+                    // every attempt until its backoff ends, so saying "Wrong
+                    // password" would send the user into a retry loop that
+                    // cannot work.
                     error.textContent =
-                        'Too many attempts. Wait a minute, then try again.';
+                        'Too many attempts. Wait about a minute, then try again.';
                     input.select();
                     return;
                 }
@@ -437,6 +455,7 @@ export const __test__ = {
     createPasswordRecord,
     storeCredential,
     deriveVerifier,
+    freshStatus,
     nativeDerive,
     resetNativeDerive,
 };
