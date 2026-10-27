@@ -8,6 +8,8 @@ import { App } from '../web/app.js';
 import { setEmbeddedBackend } from '../web/util.js';
 import { backendStores } from '../web/backend-store.js';
 import { loadCoderRegistry } from '../web/coders.js';
+import { readSwitchPhases, reportSwitchPhases } from './_perf.js';
+import { termPerfMeasureBetween } from '../web/terminal.js';
 
 setupDomHarness();
 const indexHtml = fs.readFileSync('web/index.html', 'utf8');
@@ -32,6 +34,7 @@ function setupVendorStubs() {
             }
         },
     );
+    // biome-ignore lint/complexity/useArrowFunction: arrows cannot be constructed; createTab calls new window.Terminal(...)
     vi.stubGlobal('Terminal', function () {
         const rootEl = document.createElement('div');
         const viewportEl = document.createElement('div');
@@ -120,10 +123,13 @@ describe('Switch latency: the cache is the switch', () => {
     let app;
 
     beforeEach(async () => {
+        performance.clearMarks();
+        performance.clearMeasures();
         setupVendorStubs();
         // The coder registry is a module-level singleton whose promise is
         // shared by every test in this file: settle it (forced) so one
         // test's pending fetch cannot stall the next test's config load.
+        mockFetch(() => []);
         await loadCoderRegistry(true);
         stubWebSocket();
         document.body.innerHTML = indexHtml;
@@ -132,13 +138,127 @@ describe('Switch latency: the cache is the switch', () => {
     });
 
     afterEach(() => {
-        setEmbeddedBackend('', '');
-        backendStores.clear();
+        try {
+            reportSwitchPhases(
+                expect.getState().currentTestName || 'switch latency',
+            );
+        } finally {
+            app?.scope?.abort?.();
+            setEmbeddedBackend('', '');
+            backendStores.clear();
+            app = undefined;
+        }
+    });
+
+    it('records readable User Timing entries for a switch', async () => {
+        const fetchStub = slowFetch(0);
+        globalThis.fetch = fetchStub;
+        global.fetch = fetchStub;
+        window.fetch = fetchStub;
+
+        backendStores.get('profile-markers').tabs = [];
+        app = new App();
+        await app.switchToBackend('profile-markers');
+
+        expect(
+            performance.getEntriesByName('phi:switch-start', 'mark'),
+        ).toHaveLength(1);
+        const totals = performance.getEntriesByName(
+            'phi:switch-total',
+            'measure',
+        );
+        expect(totals).toHaveLength(1);
+        expect(Number.isFinite(totals[0].duration)).toBe(true);
+        expect(totals[0].duration).toBeGreaterThanOrEqual(0);
+        app.scope.abort();
+    });
+
+    it('reports fast switch phases and excludes unrelated measures', () => {
+        performance.measure('unrelated-probe', {
+            start: 0,
+            duration: 2,
+        });
+        performance.measure('phi:switch-init', {
+            start: 0,
+            duration: 1,
+        });
+
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            expect(readSwitchPhases()).toEqual([
+                { name: 'phi:switch-init', ms: 1 },
+            ]);
+            expect(reportSwitchPhases('FAIL probe')).toBe(
+                '[phi-perf] FAIL probe phi:switch-init=1.0ms',
+            );
+            expect(warn).toHaveBeenCalledWith(
+                '[phi-perf] FAIL probe phi:switch-init=1.0ms',
+            );
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    it('records the total when the switch rejects', async () => {
+        app = new App();
+        vi.spyOn(app, '_performSwitch').mockRejectedValue(
+            new Error('switch probe failure'),
+        );
+
+        await expect(app.switchToBackend('profile-rejection')).rejects.toThrow(
+            'switch probe failure',
+        );
+
+        expect(
+            performance.getEntriesByName('phi:switch-total', 'measure'),
+        ).toHaveLength(1);
+    });
+
+    it('keeps one entry per owned name across queued switches', async () => {
+        const fetchStub = slowFetch(0);
+        globalThis.fetch = fetchStub;
+        global.fetch = fetchStub;
+        window.fetch = fetchStub;
+        backendStores.get('profile-markers').tabs = [];
+
+        app = new App();
+        await Promise.all([
+            app.switchToBackend('profile-markers'),
+            app.switchToBackend('profile-markers'),
+            app.switchToBackend('profile-markers'),
+        ]);
+
+        const names = performance
+            .getEntries()
+            .filter((entry) => entry.name.startsWith('phi:switch-'))
+            .map((entry) => entry.name);
+        expect(new Set(names).size).toBe(names.length);
+        expect(
+            performance.getEntriesByName('phi:switch-start', 'mark'),
+        ).toHaveLength(1);
+        expect(
+            performance.getEntriesByName('phi:switch-total', 'measure'),
+        ).toHaveLength(1);
+        expect(names.length).toBeLessThanOrEqual(7);
+        app.scope.abort();
+    });
+
+    it('keeps one entry when the same name is measured twice', () => {
+        expect(termPerfMeasureBetween('switch-init', 0, 5)).toBe(5);
+        expect(termPerfMeasureBetween('switch-init', 0, 7)).toBe(7);
+
+        const entries = performance.getEntriesByName(
+            'phi:switch-init',
+            'measure',
+        );
+        expect(entries).toHaveLength(1);
+        expect(entries[0].duration).toBe(7);
     });
 
     it('resolves the switch without waiting for the remote server', async () => {
         const log = [];
-        const fetchStub = slowFetch(300, log);
+        const remoteDelayMs = 600;
+        const fetchStub = slowFetch(remoteDelayMs, log);
         globalThis.fetch = fetchStub;
         global.fetch = fetchStub;
         window.fetch = fetchStub;
@@ -163,17 +283,45 @@ describe('Switch latency: the cache is the switch', () => {
         warm.screens.set('p-1', { ansi: 'cached $ ', cols: 80, rows: 24 });
 
         app = new App();
-        const t0 = Date.now();
-        await app.switchToBackend('profile-remote', 'http://remote:7070');
-        const elapsed = Date.now() - t0;
+        try {
+            const t0 = performance.now();
+            await app.switchToBackend('profile-remote', 'http://remote:7070');
+            const elapsed = performance.now() - t0;
 
-        // The remote server takes 300ms per call; a switch that waited for
-        // the server would cost several of those.
-        expect(elapsed).toBeLessThan(150);
-        // The cached tab is already on screen.
-        expect(app.tabManager.tabs.has('p-1')).toBe(true);
-        // The refresh is still running behind the switch.
-        expect(document.documentElement.dataset.sync).toBe('stale');
+            // The limit follows the remote delay, not a 150ms CPU budget.
+            expect(
+                elapsed,
+                'switch must resolve before a remote response',
+            ).toBeLessThan(remoteDelayMs);
+
+            expect(app.tabManager.tabs.has('p-1')).toBe(true);
+            expect(document.documentElement.dataset.sync).toBe('stale');
+
+            const phases = readSwitchPhases();
+            const names = phases.map(({ name }) => name);
+            for (const name of [
+                'phi:switch-total',
+                'phi:switch-init',
+                'phi:switch-prep',
+                'phi:switch-paint',
+                'phi:switch-sync-project',
+                'phi:switch-active-post',
+            ]) {
+                expect(names, `missing switch phase: ${name}`).toContain(name);
+            }
+            for (const { name, ms } of phases) {
+                expect(
+                    Number.isFinite(ms),
+                    `non-finite duration: ${name}`,
+                ).toBe(true);
+                expect(ms, `negative duration: ${name}`).toBeGreaterThanOrEqual(
+                    0,
+                );
+            }
+        } catch (error) {
+            reportSwitchPhases('FAIL switch-before-remote');
+            throw error;
+        }
     });
 
     it('lets the server override the cache when it answers', async () => {

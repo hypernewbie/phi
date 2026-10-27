@@ -411,13 +411,19 @@ const HISTORY_MIN_STEP_BYTES = 4 * 1024;
 // checkpoint so the next attach restores instantly.
 const CHECKPOINT_QUIET_MS = 2000;
 
-function termPerfMark(name) {
+// Each name written through these two helpers keeps at most one entry, so
+// repeated tab selections and overlapping switches cannot grow the User
+// Timing buffer without limit. termPerfMeasureSince below still appends
+// directly and is deliberately unchanged.
+export function termPerfMark(name) {
     try {
-        if (typeof performance !== 'undefined' && performance.mark)
+        if (typeof performance !== 'undefined' && performance.mark) {
+            performance.clearMarks(`phi:${name}`);
             performance.mark(`phi:${name}`);
+        }
     } catch (_e) {}
 }
-function termPerfMeasureBetween(name, startTs, endTs) {
+export function termPerfMeasureBetween(name, startTs, endTs) {
     try {
         if (
             typeof performance !== 'undefined' &&
@@ -425,6 +431,7 @@ function termPerfMeasureBetween(name, startTs, endTs) {
             typeof startTs === 'number'
         ) {
             const dur = (endTs ?? performance.now()) - startTs;
+            performance.clearMeasures(`phi:${name}`);
             performance.measure(`phi:${name}`, {
                 start: startTs,
                 duration: dur,
@@ -7032,7 +7039,14 @@ export class TabManager {
                   (newTab.term.buffer?.active?.baseY ?? 0)
             : true;
 
-        if (this._syncProjectForTab(newTab)) {
+        const projectSyncStart = globalThis.performance?.now?.();
+        let projectSynced;
+        try {
+            projectSynced = this._syncProjectForTab(newTab);
+        } finally {
+            termPerfMeasureBetween('switch-sync-project', projectSyncStart);
+        }
+        if (projectSynced) {
             this.activateTabViewport(newTab, {
                 scrollToBottom: shouldScrollToBottom,
                 autoReconnect: true,

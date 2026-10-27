@@ -1,4 +1,8 @@
-import { TabManager } from './terminal.js';
+import {
+    TabManager,
+    termPerfMark,
+    termPerfMeasureBetween,
+} from './terminal.js';
 import { SessionsManager } from './sessions.js';
 import { loadCoderRegistry, listCoders, rebuildRegistry } from './coders.js';
 import { DiffController } from './diff.js';
@@ -769,16 +773,27 @@ export class App {
 
     switchToBackend(profileId, origin = '') {
         if (!profileId) return Promise.resolve(false);
+        const switchStart = globalThis.performance?.now?.();
+        termPerfMark('switch-start');
         const seq = ++this._switchSeq;
         this.scope?.abort?.();
         this._switchChain = this._switchChain
             .catch(() => {})
-            .then(() => this._performSwitch(profileId, origin, seq));
+            .then(() => this._performSwitch(profileId, origin, seq))
+            .finally(() => {
+                termPerfMeasureBetween('switch-total', switchStart);
+            });
         return this._switchChain;
     }
 
     async _performSwitch(profileId, origin, seq) {
-        this.initOnce();
+        let phaseStart = globalThis.performance?.now?.();
+        try {
+            this.initOnce();
+        } finally {
+            termPerfMeasureBetween('switch-init', phaseStart);
+        }
+        phaseStart = globalThis.performance?.now?.();
         const prevProfileId = getEmbeddedProfileId();
         this.scope?.abort?.();
         if (this._fleetPollTimer) {
@@ -825,12 +840,19 @@ export class App {
         this.scope = scope;
         this.tabManager?._bindThinkingPresetStore?.(scope);
         const nextStore = backendStores.get(profileId);
-        this.paintBackendFromStore(nextStore);
+        termPerfMeasureBetween('switch-prep', phaseStart);
+        phaseStart = globalThis.performance?.now?.();
+        try {
+            this.paintBackendFromStore(nextStore);
+        } finally {
+            termPerfMeasureBetween('switch-paint', phaseStart);
+        }
         if (typeof document !== 'undefined' && document.documentElement) {
             document.documentElement.dataset.sync = 'stale';
         }
         if (seq !== this._switchSeq || scope.aborted) return true;
 
+        const activePostStart = globalThis.performance?.now?.();
         if (document.body) document.body.inert = true;
         try {
             await fetch('/__phi/active', {
@@ -840,6 +862,7 @@ export class App {
             });
         } catch {} finally {
             if (document.body) document.body.inert = false;
+            termPerfMeasureBetween('switch-active-post', activePostStart);
         }
         if (seq !== this._switchSeq || scope.aborted) return true;
         // The cached paint above IS the switch: it is already on screen.
