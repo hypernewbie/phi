@@ -942,20 +942,17 @@ export async function bootstrapAccessAuth(context) {
                 ? 'v1'
                 : state.selectedProtocol || advertised;
         state.accessEnabled = status.enabled;
-        if (!status.enabled) {
-            state.selectedProtocol = protocol;
-            return { enabled: false };
-        }
         // Fix the protocol before any login attempt; only an authenticated
         // session or a successful saved-v1 login may select v1.
         state.selectedProtocol = protocol;
         if (protocol === 'v1' && hadV2Selection) {
             // Keep the stored token for a server that can use it, but stop
-            // sending it to this v1-only server.
+            // sending it to this v1-only server, even if protection is disabled.
             state.accessToken = null;
             state.epoch++;
             epoch = state.epoch;
         }
+        if (!status.enabled) return { enabled: false };
 
         if (protocol === 'v2') {
             const stored = loadBearer(context);
