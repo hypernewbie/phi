@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/hypernewbie/phi/pkg/ws"
 )
 
 const (
@@ -438,6 +440,14 @@ func newAccessAuthManager() *accessAuthManager {
 
 var accessAuth = newAccessAuthManager()
 
+// revokeAccessSockets fences client-facing sockets to generation. The auth
+// layer owns the generation; the hub owns connection closure.
+func revokeAccessSockets(generation uint64) {
+	if wsHub != nil {
+		wsHub.RotateAuth(generation)
+	}
+}
+
 // configure activates the persisted record without rewriting it. The signing
 // key is derived from that record, so restart reproduces the same tokens' key.
 func (m *accessAuthManager) configure(encoded string) error {
@@ -558,20 +568,35 @@ func (m *accessAuthManager) jwtValidLocked(token string, now time.Time) bool {
 	return err == nil
 }
 
-// requestAuthorized applies the explicit-credential priority table. An explicit
+// accessDecision is the result of one authorization check. Generation is read
+// under the same lock, so a WebSocket upgrade can prove it attached at a
+// generation that was still current when the decision was made.
+type accessDecision struct {
+	Authorized bool
+	Generation uint64
+}
+
+// authorizeRequest applies the explicit-credential priority table. An explicit
 // v2 credential decides the result on its own and never falls back to a cookie.
-func (m *accessAuthManager) requestAuthorized(r *http.Request) bool {
-	credential := accessCredentialFromRequest(r)
-	if credential.State == accessCredentialInvalid {
-		return false
-	}
-	now := time.Now()
+func (m *accessAuthManager) authorizeRequest(r *http.Request) accessDecision {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if credential.State == accessCredentialPresent {
-		return m.jwtValidLocked(credential.Token, now)
+	decision := accessDecision{Generation: m.generation}
+	if m.record == nil {
+		decision.Authorized = true
+		return decision
 	}
-	return m.cookieValidLocked(credential.Cookie, now)
+	credential := accessCredentialFromRequest(r)
+	if credential.State == accessCredentialInvalid {
+		return decision
+	}
+	now := time.Now()
+	if credential.State == accessCredentialPresent {
+		decision.Authorized = m.jwtValidLocked(credential.Token, now)
+		return decision
+	}
+	decision.Authorized = m.cookieValidLocked(credential.Cookie, now)
+	return decision
 }
 
 func (m *accessAuthManager) login(challenge, proof, remoteAddr string) (string, error) {
@@ -707,7 +732,6 @@ func (m *accessAuthManager) loginPassword(password, remoteAddr string) (string, 
 type accessPasswordOutcome struct {
 	CookieToken string
 	JWTToken    string
-	Revoked     bool
 }
 
 // authorizedForPasswordLocked re-checks the caller against the current record.
@@ -749,7 +773,6 @@ func (m *accessAuthManager) commitPasswordLocked(record *accessPasswordRecord, n
 	if err := saveAccessPasswordHash(encoded); err != nil {
 		return accessPasswordOutcome{}, fmt.Errorf("%w: %v", errAccessPersistence, err)
 	}
-	outcome.Revoked = m.record != nil || record != nil
 	m.record = record
 	m.jwtKey = key
 	m.generation++
@@ -759,6 +782,10 @@ func (m *accessAuthManager) commitPasswordLocked(record *accessPasswordRecord, n
 	if outcome.CookieToken != "" {
 		m.sessions[outcome.CookieToken] = now.Add(accessSessionTTL)
 	}
+	// Fence client-facing sockets to the new generation while the record
+	// change is still under the lock. A socket admitted at the old
+	// generation cannot outlive the credential that authorized it.
+	revokeAccessSockets(m.generation)
 	return outcome, nil
 }
 
@@ -838,19 +865,22 @@ func accessClientIP(remoteAddr string) string {
 
 func accessAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if accessAuthPublicPath(r.URL.Path) || !accessAuth.enabled() {
+		if accessAuthPublicPath(r.URL.Path) || isSyncBoardPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if isSyncBoardPath(r.URL.Path) {
-			next.ServeHTTP(w, r)
+		decision := accessAuth.authorizeRequest(r)
+		if !decision.Authorized {
+			http.Error(w, "access authentication required", http.StatusUnauthorized)
 			return
 		}
-		if accessAuth.requestAuthorized(r) {
-			next.ServeHTTP(w, r)
-			return
+		if strings.HasPrefix(r.URL.Path, "/ws/") {
+			// Carry the generation from the same lock acquisition as the
+			// decision, so the upgrade can reject a socket that a password
+			// change retired in between.
+			r = r.WithContext(ws.WithAuthFence(r.Context(), ws.AuthFence{Generation: decision.Generation}))
 		}
-		http.Error(w, "access authentication required", http.StatusUnauthorized)
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -970,11 +1000,6 @@ func handleAccessPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if outcome.Revoked && wsHub != nil {
-		// Sessions are invalidated above; close already-upgraded sockets too so
-		// an old browser cannot keep driving a terminal until it reconnects.
-		wsHub.CloseAllClients()
-	}
 	if outcome.CookieToken == "" {
 		clearAccessSessionCookie(w, r)
 	} else {
@@ -1071,9 +1096,6 @@ func handleAccessV2Password(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if outcome.Revoked && wsHub != nil {
-		wsHub.CloseAllClients()
-	}
 	w.Header().Set("Content-Type", "application/json")
 	if password == "" {
 		_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": false})

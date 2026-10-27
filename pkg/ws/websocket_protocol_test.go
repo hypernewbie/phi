@@ -202,7 +202,7 @@ func TestWebSocketProtobufAdmissionIsolation(t *testing.T) {
 	mux.HandleFunc("/ws/md-events", func(w http.ResponseWriter, r *http.Request) {
 		HandleEventsWS(w, r, hub)
 	})
-	mux.Handle("/ws/control", HandleControl(rpc.NewManager(), func() string { return t.TempDir() }))
+	mux.Handle("/ws/control", HandleControl(nil, rpc.NewManager(), func() string { return t.TempDir() }))
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 	base := terminalURL(server)

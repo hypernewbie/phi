@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hypernewbie/phi/pkg/ws"
 )
 
 const (
@@ -993,4 +995,136 @@ func testAccessStaleHash(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return accessPasswordRecord{Iterations: accessPasswordMinIterations, Salt: salt, Verifier: verifier}.encoded()
+}
+
+// --- M1c: client-facing sockets are fenced to the access generation ---
+
+type testAuthSocket struct {
+	closed bool
+}
+
+func (s *testAuthSocket) Close() error {
+	s.closed = true
+	return nil
+}
+
+func testAccessUseHub(t *testing.T) *ws.Hub {
+	t.Helper()
+	hub := ws.NewHub(0)
+	previous := wsHub
+	wsHub = hub
+	t.Cleanup(func() {
+		wsHub = previous
+		_ = hub.Close()
+	})
+	return hub
+}
+
+func TestAccessPasswordChangeFencesStaleSockets(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	hub := testAccessUseHub(t)
+
+	token := testAccessEnableV2(t, testAccessPassword)
+	generation := accessAuth.accessGeneration()
+
+	stale := &testAuthSocket{}
+	if !hub.AdmitAuth(stale, ws.AuthFence{Generation: generation}) {
+		t.Fatal("socket was not admitted at the current generation")
+	}
+	// An upgrade that authenticated before a password change is refused.
+	if hub.AdmitAuth(&testAuthSocket{}, ws.AuthFence{Generation: generation - 1}) {
+		t.Fatal("stale generation was admitted")
+	}
+
+	if w := testAccessV2PasswordRequest(t, `{"password":"test-pass-5678"}`, token); w.Code != http.StatusOK {
+		t.Fatalf("change: %d %s", w.Code, w.Body.String())
+	}
+	if !stale.closed {
+		t.Fatal("password change did not close the socket admitted at the old generation")
+	}
+
+	current := &testAuthSocket{}
+	now := accessAuth.accessGeneration()
+	if !hub.AdmitAuth(current, ws.AuthFence{Generation: now}) {
+		t.Fatal("socket was not admitted after the change")
+	}
+	hub.RotateAuth(now)
+	if current.closed {
+		t.Fatal("rotation closed a socket admitted at the current generation")
+	}
+}
+
+func TestAccessFailedWriteClosesNoSockets(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	hub := testAccessUseHub(t)
+
+	token := testAccessEnableV2(t, testAccessPassword)
+	generation := accessAuth.accessGeneration()
+	socket := &testAuthSocket{}
+	if !hub.AdmitAuth(socket, ws.AuthFence{Generation: generation}) {
+		t.Fatal("socket was not admitted at the current generation")
+	}
+
+	previousWriter := writeConfigFile
+	writeConfigFile = func(string, []byte, os.FileMode) error { return errors.New("disk full") }
+	t.Cleanup(func() { writeConfigFile = previousWriter })
+	if w := testAccessV2PasswordRequest(t, `{"password":"test-pass-5678"}`, token); w.Code != http.StatusInternalServerError {
+		t.Fatalf("failed write: got %d want 500", w.Code)
+	}
+	if socket.closed {
+		t.Fatal("a failed password write closed live sockets")
+	}
+
+	writeConfigFile = previousWriter
+	if w := testAccessV2PasswordRequest(t, `{"password":"test-pass-5678"}`, token); w.Code != http.StatusOK {
+		t.Fatalf("change after failed write: %d %s", w.Code, w.Body.String())
+	}
+	if !socket.closed {
+		t.Fatal("successful change did not close the stale socket")
+	}
+}
+
+func TestAccessMiddlewareAttachesWSFence(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	testAccessEnableV2(t, testAccessPassword)
+	cookie := testAccessCookieFor(t, accessAuth)
+
+	var fence ws.AuthFence
+	var fenced bool
+	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		fence, fenced = ws.AuthFenceFrom(r.Context())
+	})
+	w := httptest.NewRecorder()
+	wsRequest := httptest.NewRequest(http.MethodGet, "/ws/pane/p1", nil)
+	wsRequest.AddCookie(cookie)
+	accessAuthMiddleware(next).ServeHTTP(w, wsRequest)
+	if w.Code != http.StatusOK || !fenced {
+		t.Fatalf("ws request: code=%d fenced=%v", w.Code, fenced)
+	}
+	if fence.Generation != accessAuth.accessGeneration() {
+		t.Fatalf("fence generation = %d want %d", fence.Generation, accessAuth.accessGeneration())
+	}
+
+	fenced = true
+	apiRequest := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	apiRequest.AddCookie(cookie)
+	accessAuthMiddleware(next).ServeHTTP(httptest.NewRecorder(), apiRequest)
+	if fenced {
+		t.Fatal("api request carried a ws fence")
+	}
+}
+
+func TestAccessDisabledPreservesOpenRequests(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	// With no password set, a malformed query must not turn into a 401: that
+	// is the pre-auth behavior.
+	w := testAccessServe(testAccessProtected().ServeHTTP,
+		httptest.NewRequest(http.MethodGet, "/api/coders?token=%zz", nil))
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("disabled auth rejected a request: %d", w.Code)
+	}
 }

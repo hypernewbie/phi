@@ -18,7 +18,7 @@ func TestControlAuthRejectsNoCookie(t *testing.T) {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/ws/control", ws.HandleControl(rpc.NewManager(), nil))
+	mux.HandleFunc("/ws/control", ws.HandleControl(nil, rpc.NewManager(), nil))
 	srv := httptest.NewServer(accessAuthMiddleware(mux))
 	defer srv.Close()
 	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/control"
