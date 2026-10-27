@@ -2,35 +2,45 @@
 
 ## Stage 02 status
 
-**Date:** 2026-10-20. **State:** `in-review`, not integrated.
+**Date:** 2026-10-27. **State:** `in-review`, not integrated.
 
-Stage 02 implements a development-only Connection shell, two shared controls, and an isolated browser/manual-session fixture.
-The user requested Playwright restoration. Unit/static/build gates and all 26 React Playwright cases passed after restoration.
-The October 20 review found lost keyboard focus after Retry. The user authorized the focused fix and its execution with `gpt-6.1-sol`.
-The fix now passes Chrome DevTools, 36 Playwright cases, and all unit/static/build gates.
-Safari, VoiceOver, and manual 200% zoom checks remain pending.
+The branch was rebased from `64fdea3` onto `main` `45dd7ea` and force-pushed as `9a6a822`. `main` has since advanced to `df73de3`, so the branch trails it by one commit. No CI run exists: `Run Tests` triggers only on a pull request to `main` or a push to `main`.
+Verified on that base: both required builds, `pnpm typecheck`, `pnpm check:code`, `pnpm lint:web`, `pnpm check:vendors`, `pnpm exec vitest run --maxWorkers=8` (3188 passed), all 36 React Playwright cases, and the legacy root suite (110 passed / 6 failed, every failure classified as pre-existing on `main` or load-sensitive).
+Not verified: no uncapped `pnpm test` pass, no clean full legacy pass, no CI run, and no Go checks, because the branch changes no Go file.
+Safari, VoiceOver, and manual 200% zoom checks remain deferred by user direction, not passed.
+Root `playwright.config.ts` now differs from the base by one edit: `outputDir: 'test-results/legacy'` and report folder `playwright-report/legacy`. Previously the legacy suite wiped the whole shared `test-results` and `playwright-report` trees, deleting this app's retained evidence.
+Superseded and no longer reproducible: the October logs under ignored `test-results/web-react/` were cleared when that directory was removed. Their recorded results stand only as history, below.
 The Go frontend remains embedded, shipped, and default. This foundation does not establish feature parity.
 
 | Reference | Value |
 | --- | --- |
 | Approved parity baseline | `dd94bbf78c4cc9f23b6d77d1e695244ba175dbbb` (October 4) |
-| Implementation and contract baseline | `64fdea38c410bc4d321c9b216bb7d4f32cb59c4f` |
+| Contract review baseline | `64fdea38c410bc4d321c9b216bb7d4f32cb59c4f` |
+| Current branch base | `45dd7ea`; `main` has since moved to `df73de3` |
+| Branch tip | `9a6a822`, pushed to `origin/stage-02-foundation` |
 | Branch | `stage-02-foundation` |
 | Worktree | `/Users/n0mad/code/phi-worktrees/stage-02-foundation` |
 | Execution brief | `/Users/n0mad/code/phi/plan/stage-02-foundation.md` (ignored, outside this worktree) |
 | Master plan | `/Users/n0mad/code/phi/plan/2026-08-24_02-52-07_frontend-migration.md` (ignored) |
-| Authorization | User supplied `EXECUTE`, then required direct execution in the same session without subagents. |
+| Authorization | User supplied `EXECUTE`; direct execution in the same session without subagents. On 2026-10-27 the user authorized the rebase onto current `main`, the force-push, an independent review by `openai/gpt-6.1-sol:xhigh`, and these two review fixes. |
 
-The user authorized the foundation commit `1acc148` and a separate reviewed Playwright restoration commit.
-No integration, fetch, rebase, push, publication, or device deployment occurred.
-Stage 03 requires its own authorization, reviewed Stage 02 integration, and the landed auth transition.
+### October 2026 record (historical)
 
-The revised brief includes the user-authorized Playwright restoration.
-Root changes include workspace, dependency, test/typecheck/lint, ignore, and CI configuration.
-All 44 legacy browser-test/configuration files match the pre-removal base byte for byte. The legacy CI job is restored.
-Unit/static CI jobs retain installation of root tooling and both new packages before their combined checks.
-New files occupy `packages/phi-core/`, `packages/web-react/`, and this document.
-Legacy/Go/desktop runtime code and root source/build TypeScript configurations remain unchanged. The index is empty.
+**Date:** 2026-10-20. **Base:** `64fdea3`. **Tip:** `dd716d2`.
+
+Stage 02 implements a development-only Connection shell, two shared controls, and an isolated browser/manual-session fixture.
+The user requested Playwright restoration. Unit/static/build gates and all 26 React Playwright cases passed after restoration.
+The October 20 review found lost keyboard focus after Retry. The user authorized the focused fix and its execution with `gpt-6.1-sol`.
+The fix then passed Chrome DevTools, 36 Playwright cases, and all unit/static/build gates.
+At that time no integration, fetch, rebase, push, publication, or device deployment had occurred.
+
+> The user authorized the foundation commit `1acc148` and a separate reviewed Playwright restoration commit.
+> The revised brief includes the user-authorized Playwright restoration.
+> Root changes include workspace, dependency, test/typecheck/lint, ignore, and CI configuration.
+> All 44 legacy browser-test/configuration files matched the pre-removal base byte for byte. The legacy CI job is restored.
+> Unit/static CI jobs retain installation of root tooling and both new packages before their combined checks.
+> New files occupy `packages/phi-core/`, `packages/web-react/`, and this document.
+> Legacy/Go/desktop runtime code and root source/build TypeScript configurations remain unchanged. The index is empty.
 
 ## Architecture and ownership
 
@@ -245,7 +255,7 @@ The final regression gates passed with the compatible SDK selection. No source o
 | `pnpm exec playwright test --list` | 0 | Legacy discovery: 86 cases in 39 files. No legacy cases executed. |
 | `git diff --check` | 0 | No whitespace errors |
 
-Restoration logs remain in ignored `test-results/web-react/restore/`, with per-command logs and `results.log` for the six W commands after typecheck.
+Restoration logs were recorded in ignored `test-results/web-react/restore/`, with per-command logs and `results.log` for the six W commands after typecheck. That directory was removed on 2026-10-27; the logs are historical, not current acceptance evidence.
 `typecheck.log`, `browser.log`, and `legacy-discovery.log` record the other passing commands above.
 Earlier implementation/review/cleanup logs are historical evidence, not the current acceptance run.
 Deliberate core-test, React-TSX-test, and package-E2E errors failed root typecheck before removal. All probes are absent.
