@@ -339,6 +339,8 @@ function adoptToken(token, { persist = false } = {}) {
     selectedProtocol = 'v2';
     stateEpoch++;
     if (persist && !memoryOnly) storeBearer(token);
+    // A replacement credential makes an open reauthentication prompt moot.
+    if (pendingOverlay) pendingOverlay.finish({ enabled: true });
 }
 
 // rejectToken clears only the token that failed. A delayed 401 for token A
@@ -346,10 +348,9 @@ function adoptToken(token, { persist = false } = {}) {
 // the selected protocol.
 function rejectToken(token) {
     if (accessToken !== token && loadBearer() !== token) return;
-    if (accessToken === token) {
-        accessToken = null;
-        stateEpoch++;
-    }
+    // A rejection does not supersede a credential operation that is already
+    // in flight: its replacement token is newer than this failure.
+    if (accessToken === token) accessToken = null;
     // Token absence alone must not select v1: keep the v2 choice.
     selectedProtocol = 'v2';
     clearStoredBearer(token);
@@ -448,6 +449,7 @@ async function saveV2Password(password) {
 async function clearV2Password() {
     if (!accessEnabled && !accessToken) return { enabled: false };
     const epoch = stateEpoch;
+    const activeToken = accessToken;
     const headers = { 'Content-Type': 'application/json' };
     if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
     const res = await fetch('/api/auth/v2/password', {
@@ -465,13 +467,10 @@ async function clearV2Password() {
     accessToken = null;
     accessEnabled = false;
     selectedProtocol = 'v2';
-    memoryOnly = false;
     stateEpoch++;
-    try {
-        localStorage.removeItem(BEARER_KEY);
-    } catch {
-        /* ignored */
-    }
+    // Remove only the token this session owned; another standalone token in
+    // storage belongs to a different session.
+    if (activeToken) clearStoredBearer(activeToken);
     return { enabled: false };
 }
 
@@ -659,6 +658,7 @@ function showUnlockPrompt(protocol) {
                     return;
                 }
                 const verifier = await deriveVerifier(input.value, status);
+                if (epoch !== stateEpoch) return;
                 const verdict = await login(status, verifier);
                 if (epoch !== stateEpoch) return;
                 if (verdict === 'rejected') {
@@ -711,7 +711,9 @@ export async function bootstrapAccessAuth() {
     }
     if (installed()) return { enabled: accessEnabled };
 
-    const protocol = preferredProtocol(status.protocols);
+    // An existing selection survives a re-bootstrap: only a successful
+    // v1-only discovery or a working v1 credential may change it.
+    const protocol = selectedProtocol || preferredProtocol(status.protocols);
     accessEnabled = status.enabled;
     if (!status.enabled) {
         selectedProtocol = protocol;
@@ -813,6 +815,8 @@ export async function setAccessPassword(password) {
     const epoch = stateEpoch;
     const { passwordHash, status, verifier } =
         await createPasswordRecord(password);
+    if (epoch !== stateEpoch)
+        throw new Error('Phi access changed; try again');
     const res = await fetch('/api/auth/password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -820,7 +824,9 @@ export async function setAccessPassword(password) {
     });
     if (!res.ok)
         throw new Error((await res.text()) || 'Unable to save access password');
-    if (epoch === stateEpoch) storeCredential(status, verifier);
+    storeCredential(status, verifier);
+    // The new credential supersedes any operation that started before it.
+    stateEpoch++;
     return { enabled: true };
 }
 
@@ -836,7 +842,8 @@ export async function clearAccessPassword() {
         throw new Error(
             (await res.text()) || 'Unable to clear access password',
         );
-    if (epoch === stateEpoch) clearCredential();
+    clearCredential();
+    stateEpoch++;
     return { enabled: false };
 }
 
