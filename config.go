@@ -403,15 +403,17 @@ func saveConfig(cfg Config) {
 	defer configMu.Unlock()
 
 	// Legacy callers hold a full snapshot from loadConfig, which may be
-	// older than disk. Thinking presets are owned by their own endpoint,
-	// so always keep the latest persisted list instead of overwriting it
-	// with this snapshot. An unreadable or malformed file is not a safe
-	// base: skip the write rather than destroy it.
+	// older than disk. Thinking presets and the access password hash are
+	// owned by their own endpoints, so always keep the latest persisted
+	// values instead of overwriting them with this snapshot. An unreadable
+	// or malformed file is not a safe base: skip the write rather than
+	// destroy it.
 	latest, err := readConfigLocked()
 	if err != nil {
 		return
 	}
 	cfg.ThinkingPresets = latest.ThinkingPresets
+	cfg.AccessPasswordHash = latest.AccessPasswordHash
 
 	// Defense in depth: never persist a workspace whose path looks
 	// like a test scratch dir (e.g. /tmp/phi-test-alpha). This guards
@@ -442,6 +444,11 @@ func readConfigLocked() (Config, error) {
 	return cfg, nil
 }
 
+// writeConfigFile is the atomic writer used for config writes. Tests replace
+// it to exercise persistence failures; production uses the strict variant that
+// never deletes the existing config.
+var writeConfigFile = system.WriteFileAtomicPreserveExisting
+
 // writeConfigLocked persists cfg without taking configMu. Callers must
 // hold it.
 func writeConfigLocked(cfg Config) error {
@@ -454,7 +461,25 @@ func writeConfigLocked(cfg Config) error {
 	if err != nil {
 		return err
 	}
-	return system.WriteFileAtomic(path, b, 0644)
+	// PreserveExisting keeps the old config on a failed replacement, which
+	// matters because auth state is persisted through this path before it is
+	// activated in memory.
+	return writeConfigFile(path, b, 0644)
+}
+
+// saveAccessPasswordHash persists only the access verifier, so a password
+// change never rewrites the rest of the config from a stale snapshot. A
+// missing or empty file counts as the default config; a malformed nonempty
+// file is an error, because replacing it would discard the user's settings.
+func saveAccessPasswordHash(encoded string) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+	cfg, err := readConfigLocked()
+	if err != nil {
+		return err
+	}
+	cfg.AccessPasswordHash = encoded
+	return writeConfigLocked(cfg)
 }
 
 // looksLikeTestArtifact returns true if `path` looks like a scratch
