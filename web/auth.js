@@ -293,16 +293,27 @@ const challengeRefreshAfterMs = 4 * 60 * 1000;
 const challengeLifetimeMs = 5 * 60 * 1000;
 const statusFetchTimeoutMs = 15000;
 
+// login reports 'ok', 'rejected', 'rate-limited', or 'transient'. Only an
+// explicit 401 rejects the credential; a 429, 5xx, or transport failure must
+// not destroy it, change the selected protocol, or prompt for another password.
 async function login(status, verifier, context) {
     const proof = bytesToBase64URL(
         hmac(sha256, verifier, new TextEncoder().encode(status.challenge)),
     );
-    const res = await authFetch(context, '/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ challenge: status.challenge, proof }),
-    });
-    return { ok: res.ok, status: res.status };
+    let res;
+    try {
+        res = await authFetch(context, '/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ challenge: status.challenge, proof }),
+        });
+    } catch {
+        return 'transient';
+    }
+    if (res.ok) return 'ok';
+    if (res.status === 401) return 'rejected';
+    if (res.status === 429) return 'rate-limited';
+    return 'transient';
 }
 
 // Replaces a challenge that the derivation may have outlived. The fetch is
@@ -343,6 +354,7 @@ function newAuthState() {
         accessEnabled: false,
         accessToken: null,
         persistedToken: null,
+        memoryOnly: false,
         epoch: 0,
         reauthInFlight: null,
     };
@@ -401,13 +413,15 @@ function clearStoredBearer(token, context) {
     }
 }
 
-function adoptToken(token, { persist }, context) {
+// A host-installed token stays memory-only for this page load. Later password
+// changes and reauthentication must not persist a replacement token.
+function adoptToken(token, { persist = false } = {}, context) {
     const state = stateFor(context);
     state.accessToken = token;
     state.accessEnabled = true;
     state.selectedProtocol = 'v2';
     state.epoch++;
-    if (persist) {
+    if (persist && !state.memoryOnly) {
         state.persistedToken = token;
         storeBearer(token, context);
     }
@@ -421,9 +435,9 @@ function rejectToken(token, context) {
     if (state.accessToken !== token && loadBearer(context) !== token) return;
     if (state.accessToken === token) {
         state.accessToken = null;
-        state.selectedProtocol = 'v2';
         state.epoch++;
     }
+    state.selectedProtocol = 'v2';
     if (state.persistedToken === token) state.persistedToken = null;
     clearStoredBearer(token, context);
 }
@@ -437,7 +451,8 @@ async function checkV2Token(token, context) {
         cache: 'no-store',
     });
     if (res.status === 401 || res.status === 403) return 'invalid';
-    if (!res.ok) throw new Error('Unable to check Phi access protection');
+    if (res.status !== 200)
+        throw new Error('Unable to check Phi access protection');
     let payload;
     try {
         payload = await res.json();
@@ -489,6 +504,7 @@ function validateV2Password(password) {
 async function saveV2Password(password, context) {
     validateV2Password(password);
     const state = stateFor(context);
+    const epoch = state.epoch;
     const headers = { 'Content-Type': 'application/json' };
     if (state.accessToken) headers.Authorization = `Bearer ${state.accessToken}`;
     const res = await authFetch(context, '/api/auth/v2/password', {
@@ -513,7 +529,8 @@ async function saveV2Password(password, context) {
         !payload.token
     )
         throw new Error('Unable to save access password');
-    adoptToken(payload.token, { persist: true }, context);
+    if (epoch === state.epoch)
+        adoptToken(payload.token, { persist: true }, context);
     return { enabled: true };
 }
 
@@ -533,14 +550,20 @@ async function clearV2Password(context) {
         throw new Error(
             (await res.text()) || 'Unable to clear access password',
         );
-    clearStoredBearer(token, context);
-    if (state.epoch === epoch && state.accessToken === token) {
-        state.accessToken = null;
-        state.accessEnabled = false;
-        state.selectedProtocol = 'v2';
-        state.persistedToken = null;
-        state.epoch++;
+    // A credential installed while the clear was in flight is newer than
+    // this response; never clear it.
+    if (state.epoch !== epoch) return { enabled: false };
+    try {
+        localStorage.removeItem(bearerKey(context));
+    } catch {
+        /* ignored */
     }
+    state.accessToken = null;
+    state.accessEnabled = false;
+    state.selectedProtocol = 'v2';
+    state.persistedToken = null;
+    state.memoryOnly = false;
+    state.epoch++;
     return { enabled: false };
 }
 
@@ -635,7 +658,8 @@ function requestReauth(context) {
 
 async function discoverAccessStatus(context) {
     const res = await authFetch(context, '/api/auth/status', { cache: 'no-store' });
-    if (!res.ok) throw new Error('Unable to check Phi access protection');
+    if (res.status !== 200)
+        throw new Error('Unable to check Phi access protection');
     let payload;
     try {
         payload = await res.json();
@@ -648,6 +672,7 @@ async function discoverAccessStatus(context) {
 let pendingOverlay = null;
 
 function showUnlockPrompt(context, protocol) {
+    const state = stateFor(context);
     return new Promise((resolve) => {
         let settled = false;
         const finish = (value) => {
@@ -712,6 +737,7 @@ function showUnlockPrompt(context, protocol) {
             // performance.now(): monotonic, so a clock correction during a
             // long derivation cannot make an old challenge look young.
             const started = performance.now();
+            const epoch = state.epoch;
             submit.textContent = 'Signing in…';
             // requestAnimationFrame, not setInterval: Chromium's
             // scheduler.yield keeps rendering alive but starves timers.
@@ -727,18 +753,22 @@ function showUnlockPrompt(context, protocol) {
             try {
                 if (protocol === 'v2') {
                     const token = await v2Login(input.value, context);
+                    if (epoch !== state.epoch) return;
                     adoptToken(token, { persist: true }, context);
                     input.value = '';
                     finish({ enabled: true });
                     return;
                 }
                 const status = await getStatus(context);
+                if (epoch !== state.epoch) return;
                 if (!status.enabled) {
                     finish({ enabled: false });
                     return;
                 }
                 const verifier = await deriveVerifier(input.value, status.raw);
+                if (epoch !== state.epoch) return;
                 const challenge = await freshStatus(status.raw, started, context);
+                if (epoch !== state.epoch) return;
                 if (!challenge) {
                     // The derivation outlived the challenge and the refresh
                     // failed. Posting it would count as a failed attempt and
@@ -747,8 +777,9 @@ function showUnlockPrompt(context, protocol) {
                     input.select();
                     return;
                 }
-                const result = await login(challenge, verifier, context);
-                if (result.status === 429) {
+                const verdict = await login(challenge, verifier, context);
+                if (epoch !== state.epoch) return;
+                if (verdict === 'rate-limited') {
                     // Rate limited, not a wrong password: the server refuses
                     // every attempt until its backoff ends, so saying "Wrong
                     // password" would send the user into a retry loop that
@@ -758,8 +789,13 @@ function showUnlockPrompt(context, protocol) {
                     input.select();
                     return;
                 }
-                if (!result.ok) {
+                if (verdict === 'rejected') {
                     error.textContent = 'Wrong password';
+                    input.select();
+                    return;
+                }
+                if (verdict === 'transient') {
+                    error.textContent = 'Unable to reach Phi. Try again.';
                     input.select();
                     return;
                 }
@@ -767,6 +803,7 @@ function showUnlockPrompt(context, protocol) {
                 input.value = '';
                 finish({ enabled: true });
             } catch (err) {
+                if (epoch !== state.epoch) return;
                 error.textContent =
                     err instanceof Error ? err.message : 'Unable to unlock Phi';
                 input.select();
@@ -793,9 +830,18 @@ export async function bootstrapAccessAuth(context) {
     installAccessFetch();
     const ownerKey = activeAuthKey;
     const epoch = state.epoch;
-    const status = await discoverAccessStatus(context);
-    if (state.epoch !== epoch || activeAuthKey !== ownerKey)
-        return { enabled: state.accessEnabled };
+    const superseded = () =>
+        state.epoch !== epoch || activeAuthKey !== ownerKey;
+
+    let status;
+    try {
+        status = await discoverAccessStatus(context);
+    } catch (err) {
+        // A host token installed during discovery supersedes its failure.
+        if (superseded()) return { enabled: state.accessEnabled };
+        throw err;
+    }
+    if (superseded()) return { enabled: state.accessEnabled };
 
     const protocol = preferredProtocol(status.protocols);
     state.accessEnabled = status.enabled;
@@ -803,15 +849,24 @@ export async function bootstrapAccessAuth(context) {
         state.selectedProtocol = protocol;
         return { enabled: false };
     }
+    // Fix the protocol before any login attempt; only an authenticated
+    // session or a successful saved-v1 login may select v1.
+    state.selectedProtocol = protocol;
 
     if (protocol === 'v2') {
         const stored = loadBearer(context);
         const token = state.accessToken || stored;
         if (token) {
-            const verdict = await checkV2Token(token, context);
-            if (state.epoch !== epoch || activeAuthKey !== ownerKey)
-                return { enabled: state.accessEnabled };
+            let verdict;
+            try {
+                verdict = await checkV2Token(token, context);
+            } catch (err) {
+                if (superseded()) return { enabled: state.accessEnabled };
+                throw err;
+            }
+            if (superseded()) return { enabled: state.accessEnabled };
             if (verdict === 'valid') {
+                // A stored token is already persisted; a host token is not.
                 adoptToken(token, { persist: stored === token }, context);
                 return { enabled: true };
             }
@@ -830,11 +885,15 @@ export async function bootstrapAccessAuth(context) {
     // metadata; a v2-only status must not be rejected by those bounds.
     if (hasV1Metadata(status)) {
         const verifier = savedVerifier(status.raw, context);
-        if (verifier && (await login(status.raw, verifier, context)).ok) {
-            if (state.epoch !== epoch || activeAuthKey !== ownerKey)
-                return { enabled: state.accessEnabled };
-            state.selectedProtocol = 'v1';
-            return { enabled: true };
+        if (verifier) {
+            const verdict = await login(status.raw, verifier, context);
+            if (superseded()) return { enabled: state.accessEnabled };
+            if (verdict === 'ok') {
+                state.selectedProtocol = 'v1';
+                return { enabled: true };
+            }
+            if (verdict === 'transient' || verdict === 'rate-limited')
+                throw new Error('Unable to check Phi access protection');
         }
     }
     return showUnlockPrompt(context, protocol);
@@ -882,8 +941,10 @@ async function createPasswordRecord(
 // Called from the existing Config modal. The returned password record is the
 // only thing written to config.toml; the raw password is discarded immediately.
 export async function setAccessPassword(password, context) {
-    if (stateFor(context).selectedProtocol === 'v2')
+    const state = stateFor(context);
+    if (state.selectedProtocol === 'v2')
         return saveV2Password(password, context);
+    const epoch = state.epoch;
     const { passwordHash, status, verifier } =
         await createPasswordRecord(password);
     const res = await authFetch(context, '/api/auth/password', {
@@ -893,13 +954,15 @@ export async function setAccessPassword(password, context) {
     });
     if (!res.ok)
         throw new Error((await res.text()) || 'Unable to save access password');
-    storeCredential(status, verifier, context);
+    if (epoch === state.epoch) storeCredential(status, verifier, context);
     return { enabled: true };
 }
 
 export async function clearAccessPassword(context) {
-    if (stateFor(context).selectedProtocol === 'v2')
+    const state = stateFor(context);
+    if (state.selectedProtocol === 'v2')
         return clearV2Password(context);
+    const epoch = state.epoch;
     const res = await authFetch(context, '/api/auth/password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -909,7 +972,7 @@ export async function clearAccessPassword(context) {
         throw new Error(
             (await res.text()) || 'Unable to clear access password',
         );
-    clearCredential(context);
+    if (epoch === state.epoch) clearCredential(context);
     return { enabled: false };
 }
 
@@ -929,6 +992,7 @@ export function installToken(token) {
     state.selectedProtocol = 'v2';
     state.epoch++;
     state.persistedToken = null;
+    state.memoryOnly = true;
     if (pendingOverlay?.ownerKey === activeAuthKey)
         pendingOverlay.finish({ enabled: true });
     return true;
@@ -978,6 +1042,7 @@ export const __test__ = {
 // resetAccessState restores the module to its pre-bootstrap state. Tests call
 // it between cases; nothing in the app calls it.
 function resetAccessState() {
+    for (const state of authStates.values()) state.epoch++;
     authStates.clear();
     activeAuthContext = null;
     activeAuthKey = credentialKey();
@@ -991,7 +1056,12 @@ function setReload(fn) {
 }
 
 function getAccessState() {
-    const { selectedProtocol, accessEnabled, accessToken, persistedToken } =
-        activeAuthState();
-    return { selectedProtocol, accessEnabled, accessToken, persistedToken };
+    const {
+        selectedProtocol,
+        accessEnabled,
+        accessToken,
+        persistedToken,
+        memoryOnly,
+    } = activeAuthState();
+    return { selectedProtocol, accessEnabled, accessToken, persistedToken, memoryOnly };
 }
