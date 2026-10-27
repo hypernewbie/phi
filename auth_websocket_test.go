@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"encoding/json"
+	neturl "net/url"
+
 	"github.com/gorilla/websocket"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/rpc"
@@ -36,9 +39,19 @@ func dialAuthSocket(t *testing.T, serverURL, path, subprotocol string) *websocke
 
 func expectClosed(t *testing.T, conn *websocket.Conn) {
 	t.Helper()
-	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	if _, _, err := conn.ReadMessage(); err == nil {
-		t.Fatal("stale socket stayed open")
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		_ = conn.SetReadDeadline(deadline)
+		_, _, err := conn.ReadMessage()
+		if err == nil {
+			// Frames queued before the close drain first.
+			continue
+		}
+		var netErr interface{ Timeout() bool }
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			t.Fatal("stale socket stayed open: read timed out")
+		}
+		return
 	}
 }
 
@@ -131,4 +144,72 @@ func TestAccessWSControlFenceRejectsStaleUpgrade(t *testing.T) {
 	current := httptest.NewServer(handler(ws.AuthFence{Generation: 2}))
 	defer current.Close()
 	expectOpen(t, dialAuthSocket(t, current.URL, "/ws/control", wireproto.ControlSubprotocol))
+}
+
+// A real password change must close sockets admitted at the previous
+// generation on all three routes, through the production middleware, hub,
+// and handlers, and the new credential must connect afterwards.
+func TestAccessWSHandlersCloseOnPasswordChange(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	hub := testAccessUseHub(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	manager := pty.NewManager()
+	t.Cleanup(func() { manager.Shutdown(2 * time.Second) })
+	shell, args := testMainShell()
+	instance, err := manager.SpawnWithOptions(context.Background(), home, shell, args, "pi", "rotate-sid", pty.SpawnOptions{ID: "rotate-pane"})
+	if err != nil {
+		t.Fatalf("spawn rotate pane: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws/pane/rotate-pane", func(w http.ResponseWriter, r *http.Request) {
+		ws.HandleWS(w, r, instance, manager, hub)
+	})
+	mux.HandleFunc("/ws/md-events", func(w http.ResponseWriter, r *http.Request) {
+		ws.HandleEventsWS(w, r, hub)
+	})
+	mux.HandleFunc("/ws/control", ws.HandleControl(hub, rpc.NewManager(), func() string { return home }))
+	server := httptest.NewServer(accessAuthMiddleware(mux))
+	defer server.Close()
+
+	dial := func(path, subprotocol, credential string) *websocket.Conn {
+		t.Helper()
+		url := "ws" + strings.TrimPrefix(server.URL, "http") + path + "?token=" + neturl.QueryEscape(credential)
+		dialer := websocket.Dialer{Subprotocols: []string{subprotocol}}
+		conn, _, err := dialer.Dial(url, nil)
+		if err != nil {
+			t.Fatalf("dial %s: %v", path, err)
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		return conn
+	}
+
+	pane := dial("/ws/pane/rotate-pane", wireproto.TerminalSubprotocol, token)
+	_ = pane.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := pane.ReadMessage(); err != nil {
+		t.Fatalf("pane attach before rotation: %v", err)
+	}
+	events := dial("/ws/md-events", wireproto.EventsSubprotocol, token)
+	control := dial("/ws/control", wireproto.ControlSubprotocol, token)
+
+	response := testAccessV2PasswordRequest(t, `{"password":"test-pass-5678"}`, token)
+	if response.Code != http.StatusOK {
+		t.Fatalf("change password: %d %s", response.Code, response.Body.String())
+	}
+	expectClosed(t, pane)
+	expectClosed(t, events)
+	expectClosed(t, control)
+
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || body.Token == "" {
+		t.Fatalf("replacement token: %v %q", err, response.Body.String())
+	}
+	expectOpen(t, dial("/ws/md-events", wireproto.EventsSubprotocol, body.Token))
 }
