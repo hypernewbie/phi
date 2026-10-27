@@ -7,6 +7,7 @@ setupDomHarness();
 
 const STATUS = {
     enabled: true,
+    authenticated: false,
     version: 'v1',
     algorithm: 'pbkdf2-sha256',
     iterations: 600000,

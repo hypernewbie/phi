@@ -120,6 +120,7 @@ describe('access credential storage', () => {
         release(
             Response.json({
                 enabled: true,
+                authenticated: false,
                 version: 'v1',
                 algorithm: 'pbkdf2-sha256',
                 iterations: 600000,
