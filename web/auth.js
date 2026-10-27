@@ -361,6 +361,7 @@ async function freshStatus(fallback, startedAt, context) {
 // --- v2 bearer client ----------------------------------------------------
 
 const authStates = new Map();
+const HOST_INSTALL = Symbol('host install');
 let activeAuthKey = null;
 let activeAuthContext = null;
 
@@ -373,6 +374,7 @@ function newAuthState() {
         memoryOnly: false,
         epoch: 0,
         reauthInFlight: null,
+        pendingBootstrapRelease: null,
     };
 }
 
@@ -913,74 +915,88 @@ export async function bootstrapAccessAuth(context) {
     const epoch = state.epoch;
     const superseded = () =>
         state.epoch !== epoch || activeAuthKey !== ownerKey;
+    let releaseHost = () => {};
+    const hostInstall = new Promise((resolve) => {
+        releaseHost = () => resolve(HOST_INSTALL);
+    });
+    state.pendingBootstrapRelease = releaseHost;
+    const wait = (promise) => Promise.race([promise, hostInstall]);
 
-    let status;
     try {
-        status = await discoverAccessStatus(context);
-    } catch (err) {
-        // A host token installed during discovery supersedes its failure.
-        if (superseded()) return { enabled: state.accessEnabled };
-        throw err;
-    }
-    if (superseded()) return { enabled: state.accessEnabled };
+        let status;
+        try {
+            status = await wait(discoverAccessStatus(context));
+        } catch (err) {
+            // A host token installed during discovery supersedes its failure.
+            if (superseded()) return { enabled: state.accessEnabled };
+            throw err;
+        }
+        if (status === HOST_INSTALL || superseded())
+            return { enabled: state.accessEnabled };
 
-    // Preserve an existing selection across re-bootstrap. Only a successful
-    // v1-only discovery or a working v1 credential may select v1 initially.
-    const protocol =
-        state.selectedProtocol || preferredProtocol(status.protocols);
-    state.accessEnabled = status.enabled;
-    if (!status.enabled) {
+        // Preserve an existing selection across re-bootstrap. Only a successful
+        // v1-only discovery or a working v1 credential may select v1 initially.
+        const protocol =
+            state.selectedProtocol || preferredProtocol(status.protocols);
+        state.accessEnabled = status.enabled;
+        if (!status.enabled) {
+            state.selectedProtocol = protocol;
+            return { enabled: false };
+        }
+        // Fix the protocol before any login attempt; only an authenticated
+        // session or a successful saved-v1 login may select v1.
         state.selectedProtocol = protocol;
-        return { enabled: false };
-    }
-    // Fix the protocol before any login attempt; only an authenticated
-    // session or a successful saved-v1 login may select v1.
-    state.selectedProtocol = protocol;
 
-    if (protocol === 'v2') {
-        const stored = loadBearer(context);
-        const token = state.accessToken || stored;
-        if (token) {
-            let verdict;
-            try {
-                verdict = await checkV2Token(token, context);
-            } catch (err) {
-                if (superseded()) return { enabled: state.accessEnabled };
-                throw err;
+        if (protocol === 'v2') {
+            const stored = loadBearer(context);
+            const token = state.accessToken || stored;
+            if (token) {
+                let verdict;
+                try {
+                    verdict = await wait(checkV2Token(token, context));
+                } catch (err) {
+                    if (superseded()) return { enabled: state.accessEnabled };
+                    throw err;
+                }
+                if (verdict === HOST_INSTALL || superseded())
+                    return { enabled: state.accessEnabled };
+                if (verdict === 'valid') {
+                    // A stored token is already persisted; a host token is not.
+                    adoptToken(token, { persist: stored === token }, context);
+                    return { enabled: true };
+                }
+                rejectToken(token, context);
+                // No cookie fallback: an explicit v2 credential decides alone.
+                return showUnlockPrompt(context, 'v2');
             }
-            if (superseded()) return { enabled: state.accessEnabled };
-            if (verdict === 'valid') {
-                // A stored token is already persisted; a host token is not.
-                adoptToken(token, { persist: stored === token }, context);
-                return { enabled: true };
-            }
-            rejectToken(token, context);
-            // No cookie fallback: an explicit v2 credential decides alone.
-            return showUnlockPrompt(context, 'v2');
         }
-    }
 
-    if (status.authenticated) {
-        state.selectedProtocol = 'v1';
-        return { enabled: true };
-    }
-
-    // A saved v1 verifier is only usable when the status still carries v1 KDF
-    // metadata; a v2-only status must not be rejected by those bounds.
-    if (hasV1Metadata(status)) {
-        const verifier = savedVerifier(status.raw, context);
-        if (verifier) {
-            const verdict = await login(status.raw, verifier, context);
-            if (superseded()) return { enabled: state.accessEnabled };
-            if (verdict === 'ok') {
-                state.selectedProtocol = 'v1';
-                return { enabled: true };
-            }
-            if (verdict === 'transient' || verdict === 'rate-limited')
-                throw new Error('Unable to check Phi access protection');
+        if (status.authenticated) {
+            state.selectedProtocol = 'v1';
+            return { enabled: true };
         }
+
+        // A saved v1 verifier is only usable when the status still carries v1 KDF
+        // metadata; a v2-only status must not be rejected by those bounds.
+        if (hasV1Metadata(status)) {
+            const verifier = savedVerifier(status.raw, context);
+            if (verifier) {
+                const verdict = await wait(login(status.raw, verifier, context));
+                if (verdict === HOST_INSTALL || superseded())
+                    return { enabled: state.accessEnabled };
+                if (verdict === 'ok') {
+                    state.selectedProtocol = 'v1';
+                    return { enabled: true };
+                }
+                if (verdict === 'transient' || verdict === 'rate-limited')
+                    throw new Error('Unable to check Phi access protection');
+            }
+        }
+        return showUnlockPrompt(context, protocol);
+    } finally {
+        if (state.pendingBootstrapRelease === releaseHost)
+            state.pendingBootstrapRelease = null;
     }
-    return showUnlockPrompt(context, protocol);
 }
 
 async function createPasswordRecord(
@@ -1095,6 +1111,9 @@ export function installToken(token) {
     state.epoch++;
     state.persistedToken = null;
     state.memoryOnly = true;
+    const releaseBootstrap = state.pendingBootstrapRelease;
+    state.pendingBootstrapRelease = null;
+    if (releaseBootstrap) releaseBootstrap();
     if (pendingOverlay?.ownerKey === activeAuthKey)
         pendingOverlay.finish({ enabled: true });
     return true;
@@ -1124,9 +1143,10 @@ export async function authAssetURL(url) {
         url instanceof URL ? url.href : String(url),
         location.href,
     );
+    const state = activeAuthState();
     if (
-        selectedProtocol !== 'v2' ||
-        !accessToken ||
+        state.selectedProtocol !== 'v2' ||
+        !state.accessToken ||
         target.origin !== location.origin ||
         !isProtectedAPIPath(target.pathname)
     )
@@ -1169,7 +1189,12 @@ export const __test__ = {
 // resetAccessState restores the module to its pre-bootstrap state. Tests call
 // it between cases; nothing in the app calls it.
 function resetAccessState() {
-    for (const state of authStates.values()) state.epoch++;
+    for (const state of authStates.values()) {
+        state.epoch++;
+        const releaseBootstrap = state.pendingBootstrapRelease;
+        state.pendingBootstrapRelease = null;
+        if (releaseBootstrap) releaseBootstrap();
+    }
     authStates.clear();
     activeAuthContext = null;
     activeAuthKey = credentialKey();

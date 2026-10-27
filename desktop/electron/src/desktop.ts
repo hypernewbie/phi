@@ -2334,6 +2334,9 @@ export class DesktopHost {
     accessAuth.installToken(origin, jwt);
     const verdict = await accessAuth.checkToken(origin, jwt);
     if (generation !== this.sessionGeneration) return;
+    // A native unlock can install a newer token while this check is in
+    // flight. Its readiness must survive the late verdict for the old one.
+    if (accessAuth.getToken(origin) !== jwt) return;
     if (verdict !== 'invalid') {
       if (verdict === 'valid') {
         // The server accepted this token: it may now reach a renderer.
@@ -2342,7 +2345,7 @@ export class DesktopHost {
       }
       return;
     }
-    this.bodyTokens.delete(origin);
+    if (this.bodyTokens.get(origin) === jwt) this.bodyTokens.delete(origin);
     accessAuth.rejectToken(origin, jwt);
     const current = this.storedCredentials.get(origin);
     if (current?.version === 'v2' && current.jwt === jwt) {
