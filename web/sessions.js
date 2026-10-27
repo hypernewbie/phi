@@ -312,8 +312,48 @@ export class SessionsManager {
     updateWorkspaceSelectWidth() {
         if (!this.workspaceSelect)
             return;
-        const idx = this.workspaceSelect.selectedIndex;
-        const selectedOpt = idx >= 0 ? this.workspaceSelect.options[idx] : null;
+        const select = this.workspaceSelect;
+        const active = this.activeWorkspace || select.value;
+        // Label and empty-state text describe the active path, so they must
+        // stay right even when there is nothing measurable to size.
+        select.title = active || '';
+        const emptyWs = document.getElementById('empty-workspace-path');
+        if (emptyWs)
+            emptyWs.textContent = active || 'Default';
+        // A tab's workspace can name a cwd that is not a registered workspace
+        // (worktree, entry removed from config). Setting .value to it leaves
+        // selectedIndex -1 and renders a blank selector, while selecting a
+        // registered workspace would label a project the app is not using.
+        // Show the active path as a temporary option instead. It cannot
+        // persist: /api/config rebuilds the list.
+        for (const opt of Array.from(select.options)) {
+            if (opt.dataset.transient)
+                opt.remove();
+        }
+        const known = Array.from(select.options, (opt) => opt.value);
+        if (active && !known.includes(active)) {
+            const opt = document.createElement('option');
+            opt.value = active;
+            opt.textContent = this.formatWorkspaceLabel(active, [
+                ...known,
+                active,
+            ]);
+            opt.title = active;
+            opt.dataset.transient = 'true';
+            select.appendChild(opt);
+            select.value = active;
+        }
+        // Nothing selectable: drop a width measured for a previous list.
+        if (select.options.length === 0) {
+            select.style.width = '';
+            return;
+        }
+        if (select.selectedIndex < 0 ||
+            select.selectedIndex >= select.options.length) {
+            select.selectedIndex = 0;
+        }
+        const idx = select.selectedIndex;
+        const selectedOpt = idx >= 0 ? select.options[idx] : null;
         const text = selectedOpt
             ? selectedOpt.text || selectedOpt.innerText || selectedOpt.value
             : '';
@@ -343,13 +383,7 @@ export class SessionsManager {
         const minW = isMobile ? 50 : 60;
         const maxW = isMobile ? 130 : 280;
         const finalWidth = Math.max(minW, Math.min(maxW, calculatedWidth));
-        this.workspaceSelect.style.width = `${finalWidth}px`;
-        this.workspaceSelect.title =
-            this.activeWorkspace || this.workspaceSelect.value || '';
-        const emptyWs = document.getElementById('empty-workspace-path');
-        if (emptyWs)
-            emptyWs.textContent =
-                this.activeWorkspace || this.workspaceSelect.value || 'Default';
+        select.style.width = `${finalWidth}px`;
     }
     applyConfigData(data, _options = {}) {
         if (!data || typeof data !== 'object')
