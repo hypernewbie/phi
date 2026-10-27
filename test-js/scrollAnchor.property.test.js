@@ -147,11 +147,12 @@ function wheel(h, rows) {
     h.tab.term.scrollLines(-rows);
 }
 
-// attachTab's reader-anchor subscription body. The harness bypasses attachTab,
-// so cases that expect anchoring call the same method the subscription calls,
-// and the subscription registration stays covered by the browser spec.
+// attachTab's reader-anchor subscriptions. The harness bypasses attachTab, so
+// cases that expect anchoring call the same methods the subscriptions call, and
+// the subscription registrations stay covered by the browser spec.
 function installAnchorWiring(h) {
     h.tab.term.onScroll(() => h.manager._readerAnchorScroll(h.tab));
+    h.tab.term.onResize(() => h.manager._clearReaderAnchor(h.tab));
 }
 
 // Deliver output frames without draining: this is the backlog that makes the
@@ -495,6 +496,69 @@ describe('reader anchor unit cases', () => {
             emit(500);
             await h.settle();
             expect(topMarker(h.tab.term)).toBe(landed);
+        } finally {
+            h.dispose();
+        }
+    });
+
+    it('a resize drops the anchor instead of reporting expiry', async () => {
+        const model = serverModel(1 << 24);
+        const h = replayHarness(encode(''));
+        const showToast = vi.fn();
+        h.manager.app = { showToast };
+        installFetch(model);
+        try {
+            const emit = await paint(h, model, 15000);
+            installAnchorWiring(h);
+            wheel(h, 40);
+            await h.settle();
+            expect(h.tab.term._phiReaderAnchor).toBeTruthy();
+            // Reflow can dispose the anchored row's marker while its text stays
+            // in the buffer, so this is a move the app caused, not expiry.
+            h.tab.term.resize(120, 30);
+            await h.settle();
+            expect(h.tab.term._phiReaderAnchor ?? null).toBe(null);
+            emit(400);
+            await h.settle();
+            expect(showToast).not.toHaveBeenCalled();
+        } finally {
+            h.dispose();
+        }
+    });
+
+    it('a scroll after a hidden expiry anchors the row it lands on', async () => {
+        const model = serverModel(1 << 14);
+        const h = replayHarness(encode(''));
+        const showToast = vi.fn();
+        h.manager.app = { showToast };
+        installFetch(model);
+        try {
+            const emit = await paint(h, model, 15000);
+            installAnchorWiring(h);
+            wheel(h, 30);
+            await h.settle();
+            // Hidden pane: the batch expires the anchor, but the restore (and so
+            // the notice and the jump to live output) is skipped.
+            const visible = h.manager._terminalPanelVisible.bind(h.manager);
+            h.manager._terminalPanelVisible = () => false;
+            for (let i = 0; i < 4; i++) emit(6000);
+            await h.settle();
+            h.manager._terminalPanelVisible = visible;
+            expect(h.tab.term._phiReaderAnchor.marker.isDisposed).toBe(true);
+            expect(h.tab.term.buffer.active.viewportY).toBe(0);
+
+            // The reader moves toward the bottom. That is a new gesture, not
+            // recycling, so it must anchor the row it landed on (far enough from
+            // the oldest row to survive the next batch).
+            h.tab.term.scrollLines(5000);
+            await h.settle();
+            const moved = h.tab.term._phiReaderAnchor;
+            expect(moved?.marker.isDisposed).toBe(false);
+            emit(300);
+            await h.settle();
+            expect(showToast).not.toHaveBeenCalled();
+            expect(state(h).atBottom).toBe(false);
+            expect(h.tab.term.buffer.active.viewportY).toBe(moved.marker.line);
         } finally {
             h.dispose();
         }

@@ -4490,6 +4490,11 @@ export class TabManager {
             term.onScroll(() => this._readerAnchorScroll(tabInfo));
         }
         term.onResize?.(updateScrollBtn);
+        // A reflow (column change) can dispose the anchored marker while its text
+        // is still in the buffer, which would report expiry for a move the app
+        // caused. Drop the anchor instead; preserving the row across a resize is
+        // out of scope, and the next gesture anchors again.
+        term.onResize?.(() => this._clearReaderAnchor(tabInfo));
         term.buffer?.onBufferChange?.(updateScrollBtn);
         // A wheel notch does fire public onScroll (Viewport._handleScroll ->
         // onRequestScrollLines -> CoreBrowserTerminal.scrollLines(diff, false)),
@@ -11129,7 +11134,17 @@ export class TabManager {
         const buffer = tabInfo?.term?.buffer?.active;
         if (!buffer || buffer.viewportY >= buffer.baseY) return;
         const anchor = tabInfo.term._phiReaderAnchor;
-        if (anchor && (anchor.marker.isDisposed || anchor.marker.line === buffer.viewportY)) return;
+        if (anchor) {
+            if (anchor.marker.isDisposed) {
+                // Recycled away. At the oldest retained row only the parser can
+                // put the view, and expiry must be reported; any move off that
+                // row came from a scroll this code did not schedule, so anchor
+                // where it landed.
+                if (buffer.viewportY <= 0) return;
+            } else if (anchor.marker.line === buffer.viewportY) {
+                return;
+            }
+        }
         this._captureReaderAnchor(tabInfo);
     }
 
