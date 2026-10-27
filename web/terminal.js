@@ -543,6 +543,9 @@ export class TabManager {
             typeof window !== 'undefined' ? window.innerWidth : 0;
         this._lastWindowH =
             typeof window !== 'undefined' ? window.innerHeight : 0;
+        // Layout the presets row was last built for (own picker row on
+        // desktop, single swipe strip on compact).
+        this._presetsCompact = isCompactViewport();
         // Prompt history. Alt+Up / Alt+Down on the textarea cycles through
         // previously-sent prompts in the active cwd. _historyCursor is the
         // index into _historyCache for the currently-shown entry; -1 means
@@ -6779,6 +6782,10 @@ export class TabManager {
         const tDropup = document.getElementById('pi-rpc-thinking-dropup');
         if (tDropup && !tDropup.classList.contains('hidden'))
             this._renderPiRpcThinkingDropup();
+        // Keep open pickers on top of the rebuit row's current height.
+        document
+            .querySelectorAll('.model-presets-dropup:not(.hidden)')
+            .forEach((d) => this._syncDropupOffset(d));
     }
 
     switchTab(paneId, { userInitiated = false } = {}) {
@@ -11069,6 +11076,14 @@ export class TabManager {
             window.innerHeight,
         );
         if (kind === 'keyboard' && isCoarseViewport()) return;
+        // The picker row is built per layout (own row on desktop, one
+        // swipe strip on compact). Crossing the breakpoint rebuilds it.
+        const compact = isCompactViewport();
+        if (compact !== this._presetsCompact) {
+            this._presetsCompact = compact;
+            const tab = this.getActiveTab();
+            if (tab && !tab.directMode) this.renderPresets(tab.coder);
+        }
         this.startResize();
         clearTimeout(this._windowResizeTimeout);
         this._windowResizeTimeout = setTimeout(() => {
@@ -11294,6 +11309,12 @@ export class TabManager {
         return false;
     }
 
+    // Sit flush on the presets bar: it is one or two rows tall and its
+    // height changes with the layout and the live picker labels.
+    _syncDropupOffset(dropup) {
+        dropup.style.bottom = `${this.presetsContainer?.offsetHeight || 40}px`;
+    }
+
     _toggleDropup(dropupId, triggerBtn, renderFn) {
         const dropup = document.getElementById(dropupId);
         if (!dropup) return;
@@ -11323,8 +11344,7 @@ export class TabManager {
                 Math.min(left, containerRect.width - dropupWidth - 12),
             );
             dropup.style.left = `${left}px`;
-            // Sit flush on the presets bar: it is one or two rows tall.
-            dropup.style.bottom = `${this.presetsContainer?.offsetHeight || 40}px`;
+            this._syncDropupOffset(dropup);
             dropup.classList.remove('hidden');
             renderFn();
         }
@@ -11681,6 +11701,11 @@ export class TabManager {
         if (keysDropup && !keysDropup.classList.contains('hidden')) {
             this.renderKeysDropup();
         }
+        // The row was just rebuilt: keep open pickers on top of its
+        // current height instead of the height they opened at.
+        document
+            .querySelectorAll('.model-presets-dropup:not(.hidden)')
+            .forEach((d) => this._syncDropupOffset(d));
         const slashDropup = document.getElementById('slash-presets-dropup');
         if (slashDropup && !slashDropup.classList.contains('hidden')) {
             this.renderSlashDropup(

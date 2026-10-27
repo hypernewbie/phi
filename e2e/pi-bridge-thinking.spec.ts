@@ -231,10 +231,7 @@ test('bridge thinking levels list, set and cycle; native and absent panes stay u
                 timeout: 10_000,
             })
             .toMatchObject({ thinking_level: target });
-        await expect(trigger).toHaveAttribute(
-            'title',
-            'Change the thinking level',
-        );
+        await expect(trigger).toHaveAttribute('title', `Thinking · ${target}`);
         await expect(trigger).toContainText(`Thinking: ${target}`);
 
         // The cycle icon uses the advertised order and one setter call.

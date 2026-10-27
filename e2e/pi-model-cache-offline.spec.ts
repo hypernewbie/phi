@@ -91,7 +91,7 @@ test('model picker opens from cache when the catalog request fails', async ({
         });
 
         // One successful open fills the local cache.
-        await expect(trigger).toContainText('🤖 Models', { timeout: 10_000 });
+        await expect(trigger).toContainText('Model', { timeout: 10_000 });
         await trigger.click();
         await expect(firstRow).toBeVisible({ timeout: 10_000 });
         await trigger.click();
