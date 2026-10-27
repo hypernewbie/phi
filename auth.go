@@ -11,9 +11,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,18 +35,24 @@ const (
 	accessSessionCookie          = "phi_access_session"
 	maxAccessChallenges          = 1024
 	accessJWTAlgorithm           = "HS256"
+	accessJWTProtocol            = "v2"
 	accessJWTType                = "JWT"
 	accessJWTIssuer              = "phi"
 	accessJWTKeyBytes            = 32
 	accessJWTNonceBytes          = 32
 	accessJWTInfo                = "phi/access-jwt/v1"
 	accessJWTLifetime            = accessSessionTTL
+	accessPasswordMinBytes       = 8
+	accessPasswordMaxBytes       = 1024
+	accessPasswordBodyLimit      = 8192
 )
 
 var (
 	errAccessUnauthorized = errors.New("access authentication required")
 	errAccessRateLimited  = errors.New("too many failed password attempts; try again shortly")
 	errAccessJWTInvalid   = errors.New("invalid access token")
+	errAccessPersistence  = errors.New("unable to persist access password")
+	errAccessNotEnabled   = errors.New("access password is not enabled")
 )
 
 type accessPasswordRecord struct {
@@ -326,6 +334,84 @@ func accessJWTHasExactKeys(members map[string]json.RawMessage, keys ...string) b
 	return true
 }
 
+// accessCredentialState records whether a request carries a usable explicit v2
+// credential, carries one that cannot be used here, or carries none.
+type accessCredentialState int
+
+const (
+	accessCredentialNone accessCredentialState = iota
+	accessCredentialPresent
+	accessCredentialInvalid
+)
+
+// accessCredential is the raw credential material of one request. It is
+// captured before taking the auth mutex and re-evaluated under it, so a record
+// change between middleware and handler cannot reuse a stale decision.
+type accessCredential struct {
+	State  accessCredentialState
+	Token  string
+	Cookie string
+}
+
+// accessCredentialFromRequest applies the transport rules: a bearer on an API
+// path, a token query on a WebSocket path, never both, never the other
+// transport, never a duplicate or empty value. Anything else is invalid rather
+// than absent, so it fails closed instead of falling back to the cookie.
+func accessCredentialFromRequest(r *http.Request) accessCredential {
+	credential := accessCredential{}
+	if cookie, err := r.Cookie(accessSessionCookie); err == nil {
+		credential.Cookie = cookie.Value
+	}
+	authorization := r.Header.Values("Authorization")
+	query, queryErr := url.ParseQuery(r.URL.RawQuery)
+	tokenValues, hasQueryToken := query["token"]
+	websocket := strings.HasPrefix(r.URL.Path, "/ws/")
+
+	switch {
+	case len(authorization) > 1 || len(tokenValues) > 1:
+		credential.State = accessCredentialInvalid
+	case len(authorization) == 1 && hasQueryToken:
+		credential.State = accessCredentialInvalid
+	case websocket && len(authorization) == 1:
+		credential.State = accessCredentialInvalid
+	case !websocket && hasQueryToken:
+		credential.State = accessCredentialInvalid
+	case queryErr != nil:
+		// A malformed query can hide a token, so selection cannot prove that
+		// the request has no explicit credential.
+		credential.State = accessCredentialInvalid
+	case len(authorization) == 1:
+		token, ok := parseAccessBearer(authorization[0])
+		if !ok {
+			credential.State = accessCredentialInvalid
+			return credential
+		}
+		credential.State = accessCredentialPresent
+		credential.Token = token
+	case hasQueryToken:
+		token := tokenValues[0]
+		if token == "" {
+			credential.State = accessCredentialInvalid
+			return credential
+		}
+		credential.State = accessCredentialPresent
+		credential.Token = token
+	}
+	return credential
+}
+
+func parseAccessBearer(value string) (string, bool) {
+	const prefix = "Bearer "
+	if len(value) <= len(prefix) || !strings.EqualFold(value[:len(prefix)], prefix) {
+		return "", false
+	}
+	token := value[len(prefix):]
+	if strings.ContainsAny(token, " \t") {
+		return "", false
+	}
+	return token, true
+}
+
 type accessLoginAttempt struct {
 	Failures    int
 	RetryAt     time.Time
@@ -416,22 +502,27 @@ func (m *accessAuthManager) authenticated(r *http.Request) bool {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.record == nil {
+	return m.cookieValidLocked(cookie.Value, time.Now())
+}
+
+// cookieValidLocked verifies a v1 session token against the current verifier.
+// Callers hold the mutex.
+func (m *accessAuthManager) cookieValidLocked(token string, now time.Time) bool {
+	if m.record == nil || token == "" {
 		return false
 	}
-	now := time.Now()
-	expiresAt, ok := m.sessions[cookie.Value]
+	expiresAt, ok := m.sessions[token]
 	if ok {
 		if expiresAt.After(now) {
 			return true
 		}
-		delete(m.sessions, cookie.Value)
+		delete(m.sessions, token)
 		return false
 	}
 	// Stateless token verification across server restarts. The token is
 	// signed with the current verifier, so it remains valid across restarts
 	// until expiry whilst any password change automatically invalidates it.
-	parts := strings.Split(cookie.Value, ".")
+	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return false
 	}
@@ -453,8 +544,34 @@ func (m *accessAuthManager) authenticated(r *http.Request) bool {
 	if subtle.ConstantTimeCompare(gotSig, wantSig) != 1 {
 		return false
 	}
-	m.sessions[cookie.Value] = tokenExpiry
+	m.sessions[token] = tokenExpiry
 	return true
+}
+
+// jwtValidLocked verifies an explicit v2 token against the current key.
+// Callers hold the mutex.
+func (m *accessAuthManager) jwtValidLocked(token string, now time.Time) bool {
+	if len(m.jwtKey) != accessJWTKeyBytes || token == "" {
+		return false
+	}
+	_, err := parseAccessJWT(m.jwtKey, token, now)
+	return err == nil
+}
+
+// requestAuthorized applies the explicit-credential priority table. An explicit
+// v2 credential decides the result on its own and never falls back to a cookie.
+func (m *accessAuthManager) requestAuthorized(r *http.Request) bool {
+	credential := accessCredentialFromRequest(r)
+	if credential.State == accessCredentialInvalid {
+		return false
+	}
+	now := time.Now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if credential.State == accessCredentialPresent {
+		return m.jwtValidLocked(credential.Token, now)
+	}
+	return m.cookieValidLocked(credential.Cookie, now)
 }
 
 func (m *accessAuthManager) login(challenge, proof, remoteAddr string) (string, error) {
@@ -494,29 +611,155 @@ func (m *accessAuthManager) login(challenge, proof, remoteAddr string) (string, 
 	return m.newSessionLocked(now)
 }
 
-// updatePassword atomically prevents an unauthenticated caller from replacing
-// a password that became enabled between middleware evaluation and this
-// handler. A new verifier invalidates all prior sessions.
-func (m *accessAuthManager) updatePassword(encoded string, authorized bool) (token string, revokeLiveConnections bool, err error) {
+// setEncodedPassword applies a v1 password change. The request credential is
+// re-evaluated under the lock, so a record change between middleware evaluation
+// and this call still rejects an unauthorized caller.
+func (m *accessAuthManager) setEncodedPassword(encoded string, credential accessCredential) (accessPasswordOutcome, error) {
 	record, err := parseAccessPasswordHash(encoded)
 	if err != nil {
-		return "", false, err
+		return accessPasswordOutcome{}, err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.record != nil && !authorized {
-		return "", false, errAccessUnauthorized
+	now := time.Now()
+	if !m.authorizedForPasswordLocked(credential, now) {
+		return accessPasswordOutcome{}, errAccessUnauthorized
 	}
-	revokeLiveConnections = m.record != nil || record != nil
+	return m.commitPasswordLocked(record, now)
+}
+
+// setRawPassword applies a v2 set or change. Clearing uses clearPassword.
+func (m *accessAuthManager) setRawPassword(password string, credential accessCredential) (accessPasswordOutcome, error) {
+	record, err := newAccessPasswordRecord(password)
+	if err != nil {
+		return accessPasswordOutcome{}, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	if !m.authorizedForPasswordLocked(credential, now) {
+		return accessPasswordOutcome{}, errAccessUnauthorized
+	}
+	return m.commitPasswordLocked(record, now)
+}
+
+// clearPassword disables authentication. Callers pass only the explicit v2
+// bearer, so a cookie alone cannot disable a v2 password.
+func (m *accessAuthManager) clearPassword(credential accessCredential) (accessPasswordOutcome, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	if m.record == nil {
+		return accessPasswordOutcome{}, errAccessNotEnabled
+	}
+	if !m.authorizedForPasswordLocked(credential, now) {
+		return accessPasswordOutcome{}, errAccessUnauthorized
+	}
+	return m.commitPasswordLocked(nil, now)
+}
+
+// loginPassword verifies a raw password and returns a JWT signed with the
+// committed key. A stale work factor is rehashed: the replacement is persisted
+// before activation, so a failed write leaves the old record and key valid.
+func (m *accessAuthManager) loginPassword(password, remoteAddr string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	m.cleanExpiredLocked(now)
+	if m.record == nil {
+		return "", errAccessUnauthorized
+	}
+
+	client := accessClientIP(remoteAddr)
+	if attempt, ok := m.attempts[client]; ok && attempt.RetryAt.After(now) {
+		return "", errAccessRateLimited
+	}
+	matched, err := m.record.matchesPassword(password)
+	if err != nil {
+		return "", err
+	}
+	if !matched {
+		m.recordFailureLocked(client, now)
+		return "", errAccessUnauthorized
+	}
+
+	replacement, changed, err := m.record.rehashed(password)
+	if err != nil {
+		return "", err
+	}
+	if changed {
+		outcome, err := m.commitPasswordLocked(replacement, now)
+		if err != nil {
+			return "", err
+		}
+		return outcome.JWTToken, nil
+	}
+	delete(m.attempts, client)
+	key, err := accessJWTKey(m.record)
+	if err != nil {
+		return "", err
+	}
+	return mintAccessJWT(key, now)
+}
+
+// accessPasswordOutcome reports the credentials minted by one guarded record
+// change. Both tokens are empty when the change cleared the password.
+type accessPasswordOutcome struct {
+	CookieToken string
+	JWTToken    string
+	Revoked     bool
+}
+
+// authorizedForPasswordLocked re-checks the caller against the current record.
+// A disabled record accepts anyone: that is the initial enable.
+func (m *accessAuthManager) authorizedForPasswordLocked(credential accessCredential, now time.Time) bool {
+	if m.record == nil {
+		return true
+	}
+	switch credential.State {
+	case accessCredentialInvalid:
+		return false
+	case accessCredentialPresent:
+		return m.jwtValidLocked(credential.Token, now)
+	}
+	return m.cookieValidLocked(credential.Cookie, now)
+}
+
+// commitPasswordLocked persists the replacement before activating it, so a
+// failed write leaves the old record, key, credentials, and sockets valid. The
+// v1 session is recorded only after the write succeeds.
+func (m *accessAuthManager) commitPasswordLocked(record *accessPasswordRecord, now time.Time) (accessPasswordOutcome, error) {
+	key, err := accessJWTKey(record)
+	if err != nil {
+		return accessPasswordOutcome{}, err
+	}
+	var outcome accessPasswordOutcome
+	if record != nil {
+		if outcome.CookieToken, err = signAccessSession(record.Verifier, now); err != nil {
+			return accessPasswordOutcome{}, err
+		}
+		if outcome.JWTToken, err = mintAccessJWT(key, now); err != nil {
+			return accessPasswordOutcome{}, err
+		}
+	}
+	encoded := ""
+	if record != nil {
+		encoded = record.encoded()
+	}
+	if err := saveAccessPasswordHash(encoded); err != nil {
+		return accessPasswordOutcome{}, fmt.Errorf("%w: %v", errAccessPersistence, err)
+	}
+	outcome.Revoked = m.record != nil || record != nil
 	m.record = record
+	m.jwtKey = key
+	m.generation++
 	m.challenges = make(map[string]time.Time)
 	m.sessions = make(map[string]time.Time)
 	m.attempts = make(map[string]accessLoginAttempt)
-	if record == nil {
-		return "", revokeLiveConnections, nil
+	if outcome.CookieToken != "" {
+		m.sessions[outcome.CookieToken] = now.Add(accessSessionTTL)
 	}
-	token, err = m.newSessionLocked(time.Now())
-	return token, revokeLiveConnections, err
+	return outcome, nil
 }
 
 func (m *accessAuthManager) newSessionLocked(now time.Time) (string, error) {
@@ -524,6 +767,17 @@ func (m *accessAuthManager) newSessionLocked(now time.Time) (string, error) {
 	if m.record == nil {
 		return "", nil
 	}
+	token, err := signAccessSession(m.record.Verifier, now)
+	if err != nil {
+		return "", err
+	}
+	m.sessions[token] = now.Add(accessSessionTTL)
+	return token, nil
+}
+
+// signAccessSession mints a v1 cookie token without storing it, so a record
+// change can persist first and activate the session only after the write.
+func signAccessSession(verifier []byte, now time.Time) (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
 		return "", err
@@ -532,12 +786,9 @@ func (m *accessAuthManager) newSessionLocked(now time.Time) (string, error) {
 	expiresAt := now.Add(accessSessionTTL)
 	expiresStr := strconv.FormatInt(expiresAt.Unix(), 10)
 	payload := nonce + "." + expiresStr
-	mac := hmac.New(sha256.New, m.record.Verifier)
+	mac := hmac.New(sha256.New, verifier)
 	_, _ = mac.Write([]byte(payload))
-	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-	token := payload + "." + sig
-	m.sessions[token] = expiresAt
-	return token, nil
+	return payload + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
 }
 
 func (m *accessAuthManager) recordFailureLocked(client string, now time.Time) {
@@ -587,11 +838,15 @@ func accessClientIP(remoteAddr string) string {
 
 func accessAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if accessAuthPublicPath(r.URL.Path) || !accessAuth.enabled() || accessAuth.authenticated(r) {
+		if accessAuthPublicPath(r.URL.Path) || !accessAuth.enabled() {
 			next.ServeHTTP(w, r)
 			return
 		}
 		if isSyncBoardPath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if accessAuth.requestAuthorized(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -619,7 +874,9 @@ func isSyncBoardPath(path string) bool {
 
 func accessAuthPublicPath(path string) bool {
 	switch path {
-	case "/api/auth/status", "/api/auth/login", "/livez", "/healthz", "/readyz":
+	case "/api/auth/status", "/api/auth/login",
+		"/api/auth/v2/status", "/api/auth/v2/login", "/api/auth/v2/password",
+		"/livez", "/healthz", "/readyz":
 		return true
 	}
 	return !strings.HasPrefix(path, "/api/") && !strings.HasPrefix(path, "/ws/")
@@ -638,6 +895,7 @@ func handleAccessAuthStatus(w http.ResponseWriter, r *http.Request) {
 	payload := map[string]interface{}{
 		"enabled":       enabled,
 		"authenticated": enabled && accessAuth.authenticated(r),
+		"protocols":     []string{accessPasswordHashVersion, accessJWTProtocol},
 	}
 	if enabled {
 		payload["version"] = accessPasswordHashVersion
@@ -699,32 +957,148 @@ func handleAccessPassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid password configuration", http.StatusBadRequest)
 		return
 	}
-	authorized := accessAuth.authenticated(r)
-	token, revokeLiveConnections, err := accessAuth.updatePassword(req.PasswordHash, authorized)
+	outcome, err := accessAuth.setEncodedPassword(req.PasswordHash, accessCredentialFromRequest(r))
 	if err != nil {
-		if errors.Is(err, errAccessUnauthorized) {
+		switch {
+		case errors.Is(err, errAccessUnauthorized):
 			http.Error(w, "access authentication required", http.StatusUnauthorized)
-			return
+		case errors.Is(err, errAccessPersistence):
+			http.Error(w, "Unable to save access password", http.StatusInternalServerError)
+		default:
+			http.Error(w, "Invalid password configuration", http.StatusBadRequest)
 		}
-		http.Error(w, "Invalid password configuration", http.StatusBadRequest)
 		return
 	}
 
-	cfg := loadConfig()
-	cfg.AccessPasswordHash = req.PasswordHash
-	saveConfig(cfg)
-	if revokeLiveConnections && wsHub != nil {
+	if outcome.Revoked && wsHub != nil {
 		// Sessions are invalidated above; close already-upgraded sockets too so
 		// an old browser cannot keep driving a terminal until it reconnects.
 		wsHub.CloseAllClients()
 	}
-	if token == "" {
+	if outcome.CookieToken == "" {
 		clearAccessSessionCookie(w, r)
 	} else {
-		setAccessSessionCookie(w, r, token)
+		setAccessSessionCookie(w, r, outcome.CookieToken)
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": token != ""})
+	_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": outcome.CookieToken != ""})
+}
+
+// handleAccessV2Status reports enforcement and whether the request carries a
+// valid explicit bearer. A cookie never authenticates this endpoint.
+func handleAccessV2Status(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	enabled, authenticated := accessAuth.v2Status(r)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": enabled, "authenticated": authenticated})
+}
+
+func (m *accessAuthManager) v2Status(r *http.Request) (enabled, authenticated bool) {
+	credential := accessCredentialFromRequest(r)
+	now := time.Now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	enabled = m.record != nil
+	if !enabled || credential.State != accessCredentialPresent {
+		return enabled, false
+	}
+	return enabled, m.jwtValidLocked(credential.Token, now)
+}
+
+func handleAccessV2Login(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	password, ok := decodeAccessPasswordBody(w, r)
+	if !ok || len(password) < accessPasswordMinBytes || len(password) > accessPasswordMaxBytes {
+		http.Error(w, "Invalid login request", http.StatusBadRequest)
+		return
+	}
+	token, err := accessAuth.loginPassword(password, r.RemoteAddr)
+	if err != nil {
+		switch {
+		case errors.Is(err, errAccessRateLimited):
+			http.Error(w, err.Error(), http.StatusTooManyRequests)
+		case errors.Is(err, errAccessUnauthorized):
+			http.Error(w, "Invalid password", http.StatusUnauthorized)
+		default:
+			http.Error(w, "Unable to login", http.StatusInternalServerError)
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"token": token})
+}
+
+func handleAccessV2Password(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	password, ok := decodeAccessPasswordBody(w, r)
+	if !ok {
+		http.Error(w, "Invalid password configuration", http.StatusBadRequest)
+		return
+	}
+	// This route accepts an explicit bearer only: a cookie cannot set or clear
+	// a v2 password, so it is dropped before the credential check.
+	credential := accessCredentialFromRequest(r)
+	credential.Cookie = ""
+
+	var outcome accessPasswordOutcome
+	var err error
+	if password == "" {
+		outcome, err = accessAuth.clearPassword(credential)
+	} else if len(password) < accessPasswordMinBytes || len(password) > accessPasswordMaxBytes {
+		http.Error(w, "Invalid password configuration", http.StatusBadRequest)
+		return
+	} else {
+		outcome, err = accessAuth.setRawPassword(password, credential)
+	}
+	if err != nil {
+		switch {
+		case errors.Is(err, errAccessNotEnabled):
+			http.Error(w, "Access password is not enabled", http.StatusBadRequest)
+		case errors.Is(err, errAccessUnauthorized):
+			http.Error(w, "access authentication required", http.StatusUnauthorized)
+		default:
+			http.Error(w, "Unable to save access password", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	if outcome.Revoked && wsHub != nil {
+		wsHub.CloseAllClients()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if password == "" {
+		_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": false})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"enabled": true, "token": outcome.JWTToken})
+}
+
+// decodeAccessPasswordBody reads the one v2 request shape: a JSON object with a
+// single string password field. Unknown fields, duplicate keys, null, missing
+// values, non-strings, and trailing JSON are rejected.
+func decodeAccessPasswordBody(w http.ResponseWriter, r *http.Request) (string, bool) {
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, accessPasswordBodyLimit))
+	if err != nil {
+		return "", false
+	}
+	members, err := scanAccessJSONObject(raw)
+	if err != nil || !accessJWTHasExactKeys(members, "password") {
+		return "", false
+	}
+	var password *string
+	if err := json.Unmarshal(members["password"], &password); err != nil || password == nil {
+		return "", false
+	}
+	return *password, true
 }
 
 func setAccessSessionCookie(w http.ResponseWriter, r *http.Request, token string) {

@@ -6,6 +6,11 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -342,4 +347,650 @@ func TestAccessConfigureDerivesJWTKeyAndAdvancesGeneration(t *testing.T) {
 	if got := auth.accessGeneration(); got != start+2 {
 		t.Errorf("generation after clear = %d want %d", got, start+2)
 	}
+}
+
+// --- M1b: routes, credential priority, guarded record replacement ---
+
+func testAccessServe(handler http.HandlerFunc, r *http.Request) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	handler(w, r)
+	return w
+}
+
+func testAccessJSONBody(t *testing.T, w *httptest.ResponseRecorder, target any) {
+	t.Helper()
+	if err := json.Unmarshal(w.Body.Bytes(), target); err != nil {
+		t.Fatalf("decode %q: %v", w.Body.String(), err)
+	}
+}
+
+func testAccessV2PasswordRequest(t *testing.T, body, bearer string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPost, "/api/auth/v2/password", strings.NewReader(body))
+	if bearer != "" {
+		r.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	return testAccessServe(handleAccessV2Password, r)
+}
+
+func testAccessV2LoginBody(t *testing.T, body, remoteAddr string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPost, "/api/auth/v2/login", strings.NewReader(body))
+	r.RemoteAddr = remoteAddr
+	return testAccessServe(handleAccessV2Login, r)
+}
+
+func testAccessV2LoginRequest(t *testing.T, password, remoteAddr string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(map[string]string{"password": password})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return testAccessV2LoginBody(t, string(body), remoteAddr)
+}
+
+// testAccessEnableV2 sets a password through the public v2 route.
+func testAccessEnableV2(t *testing.T, password string) string {
+	t.Helper()
+	body, err := json.Marshal(map[string]string{"password": password})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := testAccessV2PasswordRequest(t, string(body), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("enable v2 password: got %d body=%s", w.Code, w.Body.String())
+	}
+	var response struct {
+		Enabled bool   `json:"enabled"`
+		Token   string `json:"token"`
+	}
+	testAccessJSONBody(t, w, &response)
+	if !response.Enabled || response.Token == "" {
+		t.Fatalf("enable response = %+v", response)
+	}
+	if cookies := w.Result().Cookies(); len(cookies) != 0 {
+		t.Fatalf("v2 password route issued cookies: %v", cookies)
+	}
+	return response.Token
+}
+
+func testAccessProtected() http.Handler {
+	return accessAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+}
+
+func TestAccessV1StatusAdvertisesProtocols(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+
+	disabled := testAccessServe(handleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	var disabledPayload struct {
+		Enabled   bool     `json:"enabled"`
+		Protocols []string `json:"protocols"`
+		Salt      string   `json:"salt"`
+		Challenge string   `json:"challenge"`
+	}
+	testAccessJSONBody(t, disabled, &disabledPayload)
+	if disabledPayload.Enabled || len(disabledPayload.Protocols) != 2 ||
+		disabledPayload.Protocols[0] != "v1" || disabledPayload.Protocols[1] != "v2" {
+		t.Fatalf("disabled status = %+v", disabledPayload)
+	}
+	if disabledPayload.Salt != "" || disabledPayload.Challenge != "" {
+		t.Fatalf("disabled status leaked KDF data: %+v", disabledPayload)
+	}
+
+	if err := auth.configure(testAccessHash()); err != nil {
+		t.Fatal(err)
+	}
+	enabled := testAccessServe(handleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	var enabledPayload struct {
+		Enabled    bool     `json:"enabled"`
+		Iterations int      `json:"iterations"`
+		Protocols  []string `json:"protocols"`
+		Version    string   `json:"version"`
+		Algorithm  string   `json:"algorithm"`
+	}
+	testAccessJSONBody(t, enabled, &enabledPayload)
+	if !enabledPayload.Enabled || enabledPayload.Iterations != accessPasswordHashIterations {
+		t.Fatalf("enabled status = %+v", enabledPayload)
+	}
+	if len(enabledPayload.Protocols) != 2 || enabledPayload.Version != "v1" || enabledPayload.Algorithm != "pbkdf2-sha256" {
+		t.Fatalf("enabled status capabilities = %+v", enabledPayload)
+	}
+	if strings.Contains(enabled.Body.String(), "verifier") {
+		t.Fatalf("status leaked verifier: %s", enabled.Body.String())
+	}
+}
+
+func TestAccessV2PasswordLifecycle(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	protected := testAccessProtected()
+
+	token := testAccessEnableV2(t, testAccessPassword)
+	if got := loadConfig().AccessPasswordHash; got == "" {
+		t.Fatal("v2 enable did not persist a record")
+	}
+
+	var statusPayload struct {
+		Enabled       bool `json:"enabled"`
+		Authenticated bool `json:"authenticated"`
+	}
+	testAccessJSONBody(t, testAccessServe(handleAccessV2Status,
+		httptest.NewRequest(http.MethodGet, "/api/auth/v2/status", nil)), &statusPayload)
+	if !statusPayload.Enabled || statusPayload.Authenticated {
+		t.Fatalf("anonymous v2 status = %+v", statusPayload)
+	}
+
+	authedStatus := httptest.NewRequest(http.MethodGet, "/api/auth/v2/status", nil)
+	authedStatus.Header.Set("Authorization", "Bearer "+token)
+	testAccessJSONBody(t, testAccessServe(handleAccessV2Status, authedStatus), &statusPayload)
+	if !statusPayload.Authenticated {
+		t.Fatalf("bearer v2 status = %+v", statusPayload)
+	}
+
+	// A v1 cookie never authenticates the v2 status endpoint.
+	record, err := parseAccessPasswordHash(loadConfig().AccessPasswordHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, challenge, _, err := auth.statusAndChallenge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginBody := `{"challenge":"` + challenge + `","proof":"` + testAccessProof(t, record.Verifier, challenge) + `"}`
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(loginBody))
+	loginReq.RemoteAddr = "192.0.2.20:1"
+	loginW := testAccessServe(handleAccessAuthLogin, loginReq)
+	if loginW.Code != http.StatusOK {
+		t.Fatalf("v1 login: %d %s", loginW.Code, loginW.Body.String())
+	}
+	cookie := loginW.Result().Cookies()[0]
+	cookieStatus := httptest.NewRequest(http.MethodGet, "/api/auth/v2/status", nil)
+	cookieStatus.AddCookie(cookie)
+	testAccessJSONBody(t, testAccessServe(handleAccessV2Status, cookieStatus), &statusPayload)
+	if statusPayload.Authenticated {
+		t.Fatal("v2 status authenticated a cookie-only request")
+	}
+
+	if w := testAccessV2LoginRequest(t, "test-pass-9999", "192.0.2.20:1"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong password: got %d body=%s", w.Code, w.Body.String())
+	}
+	login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.21:1")
+	if login.Code != http.StatusOK {
+		t.Fatalf("v2 login: %d %s", login.Code, login.Body.String())
+	}
+	var loginPayload struct {
+		Token string `json:"token"`
+	}
+	testAccessJSONBody(t, login, &loginPayload)
+	request := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	request.Header.Set("Authorization", "Bearer "+loginPayload.Token)
+	if w := testAccessServe(protected.ServeHTTP, request); w.Code != http.StatusNoContent {
+		t.Fatalf("bearer did not authorize: %d", w.Code)
+	}
+	if w := testAccessServe(protected.ServeHTTP, request); w.Code != http.StatusNoContent {
+		t.Fatalf("token was not reusable: %d", w.Code)
+	}
+
+	changed := testAccessV2PasswordRequest(t, `{"password":"test-pass-5678"}`, loginPayload.Token)
+	if changed.Code != http.StatusOK {
+		t.Fatalf("change: %d %s", changed.Code, changed.Body.String())
+	}
+	var changedPayload struct {
+		Enabled bool   `json:"enabled"`
+		Token   string `json:"token"`
+	}
+	testAccessJSONBody(t, changed, &changedPayload)
+	if !changedPayload.Enabled || changedPayload.Token == "" || changedPayload.Token == loginPayload.Token {
+		t.Fatalf("change response = %+v", changedPayload)
+	}
+	if w := testAccessServe(protected.ServeHTTP, request); w.Code != http.StatusUnauthorized {
+		t.Fatalf("old token survived change: %d", w.Code)
+	}
+	oldCookie := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	oldCookie.AddCookie(cookie)
+	if w := testAccessServe(protected.ServeHTTP, oldCookie); w.Code != http.StatusUnauthorized {
+		t.Fatalf("old cookie survived change: %d", w.Code)
+	}
+	if w := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.22:1"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("old password still logs in: %d", w.Code)
+	}
+
+	clear := testAccessV2PasswordRequest(t, `{"password":""}`, changedPayload.Token)
+	if clear.Code != http.StatusOK {
+		t.Fatalf("clear: %d %s", clear.Code, clear.Body.String())
+	}
+	var clearPayload struct {
+		Enabled bool   `json:"enabled"`
+		Token   string `json:"token"`
+	}
+	testAccessJSONBody(t, clear, &clearPayload)
+	if clearPayload.Enabled || clearPayload.Token != "" {
+		t.Fatalf("clear response = %+v", clearPayload)
+	}
+	if got := loadConfig().AccessPasswordHash; got != "" {
+		t.Fatalf("clear left a record: %q", got)
+	}
+	if w := testAccessServe(protected.ServeHTTP, httptest.NewRequest(http.MethodGet, "/api/coders", nil)); w.Code != http.StatusNoContent {
+		t.Fatalf("clear did not disable enforcement: %d", w.Code)
+	}
+	// Disabled auth does not answer 401, so ask the manager directly.
+	auth.mu.Lock()
+	oldTokenValid := auth.jwtValidLocked(changedPayload.Token, time.Now())
+	auth.mu.Unlock()
+	if oldTokenValid {
+		t.Fatal("cleared record still validated the old token")
+	}
+
+	fresh := testAccessEnableV2(t, "test-pass-9012")
+	request = httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	request.Header.Set("Authorization", "Bearer "+changedPayload.Token)
+	if w := testAccessServe(protected.ServeHTTP, request); w.Code != http.StatusUnauthorized {
+		t.Fatalf("old token authorized a re-enabled server: %d", w.Code)
+	}
+	request = httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	request.Header.Set("Authorization", "Bearer "+fresh)
+	if w := testAccessServe(protected.ServeHTTP, request); w.Code != http.StatusNoContent {
+		t.Fatalf("fresh token rejected: %d", w.Code)
+	}
+}
+
+func TestAccessV2PasswordBodyValidation(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+
+	invalid := map[string]string{
+		"empty body":        ``,
+		"missing field":     `{}`,
+		"null password":     `{"password":null}`,
+		"number password":   `{"password":12345678}`,
+		"object password":   `{"password":{"value":"12345678"}}`,
+		"unknown field":     `{"password":"12345678","extra":true}`,
+		"duplicate field":   `{"password":"12345678","password":"87654321"}`,
+		"trailing value":    `{"password":"12345678"}{}`,
+		"not an object":     `["12345678"]`,
+		"seven bytes":       `{"password":"1234567"}`,
+		"too many bytes":    `{"password":"` + strings.Repeat("a", accessPasswordMaxBytes+1) + `"}`,
+		"oversized request": `{"password":"` + strings.Repeat("a", accessPasswordBodyLimit) + `"}`,
+	}
+	for name, body := range invalid {
+		if w := testAccessV2PasswordRequest(t, body, ""); w.Code != http.StatusBadRequest {
+			t.Errorf("%s: password route got %d want 400", name, w.Code)
+		}
+		if w := testAccessV2LoginBody(t, body, "192.0.2.30:1"); w.Code != http.StatusBadRequest {
+			t.Errorf("%s: login route got %d want 400", name, w.Code)
+		}
+	}
+
+	for name, password := range map[string]string{
+		"eight ascii bytes":  "12345678",
+		"four multibyte":     "éééé",
+		"escaped characters": `pa"ss\word`,
+		"maximum bytes":      strings.Repeat("a", accessPasswordMaxBytes),
+	} {
+		t.Run(name, func(t *testing.T) {
+			withTempConfig(t)
+			useTestAccessAuth(t)
+			body, err := json.Marshal(map[string]string{"password": password})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if w := testAccessV2PasswordRequest(t, string(body), ""); w.Code != http.StatusOK {
+				t.Fatalf("%d bytes: got %d body=%s", len(password), w.Code, w.Body.String())
+			}
+			if w := testAccessV2LoginRequest(t, password, "192.0.2.31:1"); w.Code != http.StatusOK {
+				t.Fatalf("login with %d bytes: got %d body=%s", len(password), w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestAccessCredentialPriority(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+	protected := testAccessProtected()
+
+	cookie := accessAuth.mustTestCookie(t)
+
+	cases := []struct {
+		name    string
+		path    string
+		request func(*http.Request)
+		want    int
+	}{
+		{"valid bearer", "/api/coders", func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+token) }, http.StatusNoContent},
+		{"valid bearer plus cookie", "/api/coders", func(r *http.Request) {
+			r.Header.Set("Authorization", "Bearer "+token)
+			r.AddCookie(cookie)
+		}, http.StatusNoContent},
+		{"invalid bearer plus cookie", "/api/coders", func(r *http.Request) {
+			r.Header.Set("Authorization", "Bearer not-a-token")
+			r.AddCookie(cookie)
+		}, http.StatusUnauthorized},
+		{"empty bearer plus cookie", "/api/coders", func(r *http.Request) {
+			r.Header.Set("Authorization", "Bearer ")
+			r.AddCookie(cookie)
+		}, http.StatusUnauthorized},
+		{"duplicate bearer plus cookie", "/api/coders", func(r *http.Request) {
+			r.Header.Add("Authorization", "Bearer "+token)
+			r.Header.Add("Authorization", "Bearer "+token)
+			r.AddCookie(cookie)
+		}, http.StatusUnauthorized},
+		{"bearer on websocket plus cookie", "/ws/pane/a", func(r *http.Request) {
+			r.Header.Set("Authorization", "Bearer "+token)
+			r.AddCookie(cookie)
+		}, http.StatusUnauthorized},
+		{"query token on api plus cookie", "/api/coders?token=" + token, func(r *http.Request) { r.AddCookie(cookie) }, http.StatusUnauthorized},
+		{"valid query token on websocket", "/ws/pane/a?token=" + token, func(*http.Request) {}, http.StatusNoContent},
+		{"duplicate query token", "/ws/pane/a?token=" + token + "&token=" + token, func(*http.Request) {}, http.StatusUnauthorized},
+		{"empty query token plus cookie", "/ws/pane/a?token=", func(r *http.Request) { r.AddCookie(cookie) }, http.StatusUnauthorized},
+		{"malformed query plus cookie", "/api/coders?token=%zz", func(r *http.Request) { r.AddCookie(cookie) }, http.StatusUnauthorized},
+		{"cookie only", "/api/coders", func(r *http.Request) { r.AddCookie(cookie) }, http.StatusNoContent},
+		{"no credential", "/api/coders", func(*http.Request) {}, http.StatusUnauthorized},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			tc.request(r)
+			if w := testAccessServe(protected.ServeHTTP, r); w.Code != tc.want {
+				t.Errorf("got %d want %d", w.Code, tc.want)
+			}
+		})
+	}
+	_ = auth
+}
+
+// mustTestCookie logs in through the v1 route and returns its session cookie.
+func (m *accessAuthManager) mustTestCookie(t *testing.T) *http.Cookie {
+	t.Helper()
+	record, err := parseAccessPasswordHash(loadConfig().AccessPasswordHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, challenge, _, err := m.statusAndChallenge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"challenge":"` + challenge + `","proof":"` + testAccessProof(t, record.Verifier, challenge) + `"}`
+	r := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(body))
+	r.RemoteAddr = "192.0.2.40:1"
+	w := testAccessServe(handleAccessAuthLogin, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("v1 login: %d %s", w.Code, w.Body.String())
+	}
+	return w.Result().Cookies()[0]
+}
+
+func TestAccessSharedRateLimit(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	testAccessEnableV2(t, testAccessPassword)
+
+	// A v1 failure rate-limits v2 for the same client.
+	_, _, challenge, _, err := auth.statusAndChallenge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	badProof := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x00}, sha256.Size))
+	r := httptest.NewRequest(http.MethodPost, "/api/auth/login",
+		strings.NewReader(`{"challenge":"`+challenge+`","proof":"`+badProof+`"}`))
+	r.RemoteAddr = "198.51.100.7:1000"
+	if w := testAccessServe(handleAccessAuthLogin, r); w.Code != http.StatusUnauthorized {
+		t.Fatalf("bad v1 proof: got %d", w.Code)
+	}
+	if w := testAccessV2LoginRequest(t, testAccessPassword, "198.51.100.7:2000"); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("v2 login was not rate-limited by the v1 failure: %d", w.Code)
+	}
+	if w := testAccessV2LoginRequest(t, testAccessPassword, "198.51.100.8:1000"); w.Code != http.StatusOK {
+		t.Fatalf("independent client was rate-limited: %d", w.Code)
+	}
+
+	// And a v2 failure rate-limits v1 for the same client.
+	if w := testAccessV2LoginRequest(t, "test-pass-0000", "198.51.100.8:2000"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("bad v2 password: got %d", w.Code)
+	}
+	_, _, challenge, _, err = auth.statusAndChallenge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := parseAccessPasswordHash(loadConfig().AccessPasswordHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := `{"challenge":"` + challenge + `","proof":"` + testAccessProof(t, record.Verifier, challenge) + `"}`
+	r = httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(good))
+	r.RemoteAddr = "198.51.100.8:3000"
+	if w := testAccessServe(handleAccessAuthLogin, r); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("v1 login was not rate-limited by the v2 failure: %d", w.Code)
+	}
+}
+
+func TestAccessRecordTransactionFailureKeepsOldState(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+	before := loadConfig().AccessPasswordHash
+	generation := auth.accessGeneration()
+
+	previousWriter := writeConfigFile
+	writeConfigFile = func(string, []byte, os.FileMode) error { return errors.New("disk full") }
+	t.Cleanup(func() { writeConfigFile = previousWriter })
+
+	if w := testAccessV2PasswordRequest(t, `{"password":"test-pass-5678"}`, token); w.Code != http.StatusInternalServerError {
+		t.Fatalf("failed write: got %d want 500 body=%s", w.Code, w.Body.String())
+	}
+	if got := loadConfig().AccessPasswordHash; got != before {
+		t.Fatalf("failed write changed the record: %q", got)
+	}
+	if got := auth.accessGeneration(); got != generation {
+		t.Fatalf("failed write advanced generation: %d want %d", got, generation)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	if w := testAccessServe(testAccessProtected().ServeHTTP, request); w.Code != http.StatusNoContent {
+		t.Fatalf("old token died on a failed write: %d", w.Code)
+	}
+	if w := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.50:1"); w.Code != http.StatusOK {
+		t.Fatalf("old password stopped working after a failed write: %d", w.Code)
+	}
+
+	// The v1 route must fail the same way instead of reporting success.
+	writeConfigFile = func(string, []byte, os.FileMode) error { return errors.New("disk full") }
+	v1Body := `{"password_hash":"` + testAccessHash() + `"}`
+	r := httptest.NewRequest(http.MethodPost, "/api/auth/password", strings.NewReader(v1Body))
+	r.AddCookie(testAccessCookieFor(t, auth))
+	if w := testAccessServe(handleAccessPassword, r); w.Code != http.StatusInternalServerError {
+		t.Fatalf("v1 failed write: got %d want 500 body=%s", w.Code, w.Body.String())
+	}
+}
+
+// testAccessCookieFor mints a v1 session cookie from the current record.
+func testAccessCookieFor(t *testing.T, auth *accessAuthManager) *http.Cookie {
+	t.Helper()
+	auth.mu.Lock()
+	defer auth.mu.Unlock()
+	token, err := auth.newSessionLocked(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &http.Cookie{Name: accessSessionCookie, Value: token}
+}
+
+func TestAccessStaleCredentialRejectedAtCommit(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+
+	// Capture the credential, then rotate the record before the commit path
+	// runs. The stale credential must be re-evaluated under the lock.
+	credential := accessCredential{State: accessCredentialPresent, Token: token}
+	if _, err := auth.setRawPassword("test-pass-5678", accessCredential{}); !errors.Is(err, errAccessUnauthorized) {
+		t.Fatalf("unauthorized change: got %v want %v", err, errAccessUnauthorized)
+	}
+	if _, err := auth.setRawPassword("test-pass-5678", credential); err != nil {
+		t.Fatalf("authorized change failed: %v", err)
+	}
+	if _, err := auth.setEncodedPassword(testAccessHash(), credential); !errors.Is(err, errAccessUnauthorized) {
+		t.Fatalf("stale credential accepted after rotation: %v", err)
+	}
+	if _, err := auth.setEncodedPassword(testAccessHash(), accessCredential{}); !errors.Is(err, errAccessUnauthorized) {
+		t.Fatalf("anonymous change accepted while enabled: %v", err)
+	}
+}
+
+func TestAccessV2LoginDoesNotRehashCurrentRecord(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+
+	auth.mu.Lock()
+	before := auth.record.encoded()
+	auth.mu.Unlock()
+	if w := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.60:1"); w.Code != http.StatusOK {
+		t.Fatalf("login: %d", w.Code)
+	}
+	auth.mu.Lock()
+	after := auth.record.encoded()
+	auth.mu.Unlock()
+	if before != after {
+		t.Fatalf("ordinary login rewrote the record: %q -> %q", before, after)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	if w := testAccessServe(testAccessProtected().ServeHTTP, request); w.Code != http.StatusNoContent {
+		t.Fatalf("login invalidated an existing token: %d", w.Code)
+	}
+}
+
+func TestAccessV2LoginRehashesStaleRecord(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+
+	stale := testAccessStaleHash(t)
+	if err := saveAccessPasswordHash(stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.configure(stale); err != nil {
+		t.Fatal(err)
+	}
+	oldRecord, err := parseAccessPasswordHash(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldKey, err := accessJWTKey(oldRecord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldToken, err := mintAccessJWT(oldKey, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldCookie := testAccessCookieFor(t, auth)
+
+	login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.70:1")
+	if login.Code != http.StatusOK {
+		t.Fatalf("login against stale record: %d %s", login.Code, login.Body.String())
+	}
+	var payload struct {
+		Token string `json:"token"`
+	}
+	testAccessJSONBody(t, login, &payload)
+
+	persisted, err := parseAccessPasswordHash(loadConfig().AccessPasswordHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Iterations != accessPasswordHashIterations {
+		t.Fatalf("rehash persisted %d iterations", persisted.Iterations)
+	}
+	if bytes.Equal(persisted.Salt, oldRecord.Salt) {
+		t.Fatal("rehash kept the old salt")
+	}
+	if ok, err := persisted.matchesPassword(testAccessPassword); err != nil || !ok {
+		t.Fatalf("rehashed record lost the password: ok=%v err=%v", ok, err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	request.Header.Set("Authorization", "Bearer "+oldToken)
+	if w := testAccessServe(testAccessProtected().ServeHTTP, request); w.Code != http.StatusUnauthorized {
+		t.Fatalf("pre-rehash token survived: %d", w.Code)
+	}
+	cookieRequest := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	cookieRequest.AddCookie(oldCookie)
+	if w := testAccessServe(testAccessProtected().ServeHTTP, cookieRequest); w.Code != http.StatusUnauthorized {
+		t.Fatalf("pre-rehash cookie survived: %d", w.Code)
+	}
+	newRequest := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	newRequest.Header.Set("Authorization", "Bearer "+payload.Token)
+	if w := testAccessServe(testAccessProtected().ServeHTTP, newRequest); w.Code != http.StatusNoContent {
+		t.Fatalf("rehash token rejected: %d", w.Code)
+	}
+}
+
+func TestAccessStaleConfigSaveKeepsAuthHash(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	testAccessEnableV2(t, testAccessPassword)
+
+	snapshot := loadConfig()
+	testAccessEnableV2Clear(t, "test-pass-5678")
+	rotated := loadConfig().AccessPasswordHash
+
+	saveConfig(snapshot)
+	if got := loadConfig().AccessPasswordHash; got != rotated {
+		t.Fatalf("stale save restored an old access hash: %q want %q", got, rotated)
+	}
+}
+
+// testAccessEnableV2Clear rotates an enabled password through the v2 route.
+func testAccessEnableV2Clear(t *testing.T, password string) {
+	t.Helper()
+	body, err := json.Marshal(map[string]string{"password": password})
+	if err != nil {
+		t.Fatal(err)
+	}
+	login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.80:1")
+	var payload struct {
+		Token string `json:"token"`
+	}
+	testAccessJSONBody(t, login, &payload)
+	if w := testAccessV2PasswordRequest(t, string(body), payload.Token); w.Code != http.StatusOK {
+		t.Fatalf("rotate: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAccessRestartAfterV2Change(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+
+	restarted := newAccessAuthManager()
+	if err := restarted.configure(loadConfig().AccessPasswordHash); err != nil {
+		t.Fatal(err)
+	}
+	previous := accessAuth
+	accessAuth = restarted
+	t.Cleanup(func() { accessAuth = previous })
+
+	request := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	if w := testAccessServe(testAccessProtected().ServeHTTP, request); w.Code != http.StatusNoContent {
+		t.Fatalf("token did not survive restart: %d", w.Code)
+	}
+	if w := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.90:1"); w.Code != http.StatusOK {
+		t.Fatalf("password login after restart: %d", w.Code)
+	}
+}
+
+func testAccessStaleHash(t *testing.T) string {
+	t.Helper()
+	salt := bytes.Repeat([]byte{0x11}, accessPasswordSaltBytes)
+	verifier, err := deriveAccessVerifier(testAccessPassword, salt, accessPasswordMinIterations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return accessPasswordRecord{Iterations: accessPasswordMinIterations, Salt: salt, Verifier: verifier}.encoded()
 }
