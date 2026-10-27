@@ -3488,6 +3488,9 @@ export class TabManager {
 
                         if (followBottom && tabInfo.userFollowBottom !== false) {
                             tabInfo.term.scrollToBottom();
+                            this._clearReaderAnchor(tabInfo);
+                        } else if (tabInfo.term._phiReaderAnchor) {
+                            this._restoreReaderAnchor(tabInfo);
                         }
                         tabInfo.term._core?.viewport?.syncScrollArea(true);
 
@@ -4424,6 +4427,7 @@ export class TabManager {
             this._spamScrollToBottom(tabInfo);
             // Explicit jump-to-bottom click re-engages follow mode.
             tabInfo.userFollowBottom = true;
+            this._clearReaderAnchor(tabInfo);
             scrollToBottomBtn.classList.add('hidden');
         });
         termContainer.appendChild(scrollToBottomBtn);
@@ -4476,20 +4480,31 @@ export class TabManager {
                 const b = tabInfo.term?.buffer?.active;
                 if (b && b.viewportY >= b.baseY) {
                     tabInfo.userFollowBottom = true;
+                    this._clearReaderAnchor(tabInfo);
                 }
             });
+            // Re-anchor on the buffer scroll rather than the DOM event: the
+            // event fires before xterm applies the notch, so it would pin the
+            // row the reader just left. `_readerAnchorScroll` holds the rule for
+            // which scrolls count.
+            term.onScroll(() => this._readerAnchorScroll(tabInfo));
         }
         term.onResize?.(updateScrollBtn);
+        // A reflow (column change) can dispose the anchored marker while its text
+        // is still in the buffer, which would report expiry for a move the app
+        // caused. Drop the anchor instead; preserving the row across a resize is
+        // out of scope, and the next gesture anchors again.
+        term.onResize?.(() => this._clearReaderAnchor(tabInfo));
         term.buffer?.onBufferChange?.(updateScrollBtn);
-        // xterm's public onScroll fires only for PROGRAMMATIC scrolls: the
-        // vendored build passes suppressScrollEvent=true for user wheel /
-        // scrollbar input (Viewport._handleScroll), so the two onScroll
-        // subscriptions above never fire for real user gestures. The DOM
-        // 'scroll' event is the signal those gestures do produce. It does
-        // not bubble — listen in the capture phase on termContainer. The
-        // capture listener fires BEFORE xterm's own scroll handler updates
-        // the buffer, so defer one frame (house rAF-coalesce pattern) to
-        // read fresh coordinates.
+        // A wheel notch does fire public onScroll (Viewport._handleScroll ->
+        // onRequestScrollLines -> CoreBrowserTerminal.scrollLines(diff, false)),
+        // which is what the anchor subscription above relies on. This DOM
+        // listener covers the gestures that never take that path (native touch
+        // momentum, scrollbar drags) and only drives follow state. It does not
+        // bubble — listen in the capture phase on termContainer. The capture
+        // listener fires BEFORE xterm's own scroll handler updates the buffer,
+        // so defer one frame (house rAF-coalesce pattern) to read fresh
+        // coordinates.
         let viewportScrollRafPending = false;
         termContainer.addEventListener(
             'scroll',
@@ -4503,6 +4518,7 @@ export class TabManager {
                     if (b) {
                         if (b.viewportY >= b.baseY) {
                             tabInfo.userFollowBottom = true;
+                            this._clearReaderAnchor(tabInfo);
                         } else {
                             this._cancelScrollFollowForUserScroll(tabInfo);
                         }
@@ -7550,6 +7566,7 @@ export class TabManager {
         const tab = this.tabs.get(paneId);
         if (!tab) return;
         tab.finalizing = true;
+        this._clearReaderAnchor(tab);
 
         this._cancelHistoryRequest?.(tab);
         // The pending native Compact waiter is pane-keyed, so a closed
@@ -10185,6 +10202,9 @@ export class TabManager {
         this._cancelHistoryRequest(tab);
         tab._forceStateRefresh = true;
         tab.userFollowBottom = true;
+        // Reading is abandoned on an explicit console refresh; authoritative
+        // state replaces the screen, so the anchor cannot hold.
+        this._clearReaderAnchor(tab);
         this.reconnectTab(tab);
     }
 
@@ -10473,6 +10493,7 @@ export class TabManager {
                 // hot attach bootstrap lands (an epoch change resets again,
                 // which would erase a banner written now).
                 tabInfo.term.reset();
+                this._clearReaderAnchor(tabInfo);
                 tabInfo._pendingResetBanner =
                     '\x1b[2J\x1b[H\r\n\x1b[33m[Restarted Session]\x1b[0m\r\n';
 
@@ -11087,6 +11108,101 @@ export class TabManager {
         tabInfo.userFollowBottom = false;
     }
 
+    // Reader anchor. xterm keeps a scrolled-up view steady by decrementing the
+    // buffer offset once per recycled line; a large write backlog therefore
+    // consumes the reader's whole offset and clamps them at the top of the
+    // retained scrollback. Anchor the row instead of the offset.
+    _clearReaderAnchor(tabInfo) {
+        const term = tabInfo?.term;
+        const marker = term?._phiReaderAnchor?.marker;
+        try {
+            if (marker && !marker.isDisposed) marker.dispose();
+        } catch (_e) {
+            /* already disposed with the buffer */
+        }
+        if (term) term._phiReaderAnchor = null;
+    }
+
+    // Every buffer scroll lands here (wheel, key, scrollbar, touch, parser).
+    // Parser scrolls move the anchored row and the viewport together, so they
+    // leave the invariant below intact and never replace the anchor; a gesture
+    // or any other move breaks it and re-anchors to the row now on screen. A
+    // marker the parser recycled is gone (line -1), so it is left to the
+    // restore's expiry branch instead of being replaced by the oldest row.
+    _readerAnchorScroll(tabInfo) {
+        if (this._restoringReaderAnchor) return;
+        const buffer = tabInfo?.term?.buffer?.active;
+        if (!buffer || buffer.viewportY >= buffer.baseY) return;
+        const anchor = tabInfo.term._phiReaderAnchor;
+        if (anchor) {
+            if (anchor.marker.isDisposed) {
+                // Recycled away. At the oldest retained row only the parser can
+                // put the view, and expiry must be reported; any move off that
+                // row came from a scroll this code did not schedule, so anchor
+                // where it landed.
+                if (buffer.viewportY <= 0) return;
+            } else if (anchor.marker.line === buffer.viewportY) {
+                return;
+            }
+        }
+        this._captureReaderAnchor(tabInfo);
+    }
+
+    _captureReaderAnchor(tabInfo) {
+        const term = tabInfo?.term;
+        const buffer = term?.buffer?.active;
+        if (!buffer || buffer.type !== 'normal' || tabInfo.isDead) return;
+        if (tabInfo._historyBrowsing || buffer.baseY <= 0) return;
+        if (typeof term.registerMarker !== 'function') return;
+        const line = buffer.viewportY;
+        const offset = line - (buffer.baseY + buffer.cursorY);
+        if (!Number.isFinite(offset)) return;
+        const marker = term.registerMarker(offset);
+        if (!marker) return;
+        this._clearReaderAnchor(tabInfo);
+        term._phiReaderAnchor = { marker };
+    }
+
+    _restoreReaderAnchor(tabInfo) {
+        const term = tabInfo?.term;
+        const anchor = term?._phiReaderAnchor;
+        const buffer = term?.buffer?.active;
+        if (!anchor || !buffer) return;
+        // A TUI owns the alternate screen; the normal buffer is not what is
+        // shown, so leave the anchor alone.
+        if (buffer.type !== 'normal' || !this._terminalPanelVisible(tabInfo)) return;
+        if (buffer.viewportY >= buffer.baseY) {
+            this._clearReaderAnchor(tabInfo);
+            return;
+        }
+        if (anchor.marker.isDisposed || anchor.marker.line < 0) {
+            // Clearing first keeps the notice to one per expired anchor: the
+            // next batch has nothing to restore.
+            this._clearReaderAnchor(tabInfo);
+            this._restoringReaderAnchor = true;
+            try {
+                term.scrollToBottom();
+            } finally {
+                this._restoringReaderAnchor = false;
+            }
+            this.app?.showToast?.(
+                'Reading position expired; jumped to live output.',
+                { type: 'info' },
+            );
+            return;
+        }
+        if (buffer.viewportY !== anchor.marker.line) {
+            // The restore's own scroll emits onScroll; skip the capture listener
+            // so it cannot re-anchor to a programmatic position.
+            this._restoringReaderAnchor = true;
+            try {
+                term.scrollToLine(anchor.marker.line);
+            } finally {
+                this._restoringReaderAnchor = false;
+            }
+        }
+    }
+
     // xterm derives its scrollable position from buffer-level scroll
     // events (`Viewport._sync`). A bootstrap screen checkpoint resizes the
     // terminal while the buffer is still empty, which syncs that position
@@ -11417,6 +11533,7 @@ export class TabManager {
                             activeTab._sizedWs = activeTab.ws;
                         }
                     }
+                    this._restoreReaderAnchor(activeTab);
                     return;
                 }
             }
@@ -11498,6 +11615,12 @@ export class TabManager {
         // Fit after layout, not after a guessed 50ms settling interval.
         // Coalescing retains the force bit through bootstrap/history gates.
         this._queuePanelFit(tabInfo, { forceResize: true });
+
+        // A tab shown again with no new output would otherwise never restore
+        // the reader's row; the fit above may also skip unchanged geometry.
+        if (tabInfo.term?._phiReaderAnchor) {
+            requestAnimationFrame(() => this._restoreReaderAnchor(tabInfo));
+        }
 
         if (scrollToBottom && tabInfo.term && !tabInfo.isDead) {
             this._spamScrollToBottom(tabInfo);
