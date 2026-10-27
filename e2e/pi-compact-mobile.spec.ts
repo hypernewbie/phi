@@ -187,7 +187,9 @@ test('native mobile compact: slash entry, keyboard, pending, preserved draft', a
         });
 
         // The actual mobile slash menu and its actual /compact entry.
-        await page.locator('#presets-container .slash-trigger-btn').click();
+        await page
+            .locator('#input-bar-container .input-actions .slash-trigger-btn')
+            .click();
         const slashDropup = page.locator('#slash-presets-dropup');
         await expect(slashDropup).toBeVisible({ timeout: 10_000 });
         const compactEntry = slashDropup.locator('button.pi-compact-btn');
@@ -213,7 +215,9 @@ test('native mobile compact: slash entry, keyboard, pending, preserved draft', a
             'input-textarea',
         );
         // Pending disables the entry while the op is in flight.
-        await page.locator('#presets-container .slash-trigger-btn').click();
+        await page
+            .locator('#input-bar-container .input-actions .slash-trigger-btn')
+            .click();
         await expect(slashDropup).toBeVisible({ timeout: 10_000 });
         await expect(compactEntry).toBeDisabled({ timeout: 10_000 });
         await expect(compactEntry).toHaveAttribute('title', 'Compacting…');
