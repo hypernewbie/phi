@@ -11571,7 +11571,14 @@ export class TabManager {
     // Sit flush on the presets bar: it is one or two rows tall and its
     // height changes with the layout and the live picker labels.
     _syncDropupOffset(dropup) {
-        dropup.style.bottom = `${this.presetsContainer?.offsetHeight || 40}px`;
+        // Dropups clear the presets row. A trigger that rides with the input
+        // controls sits one row higher, so its menu clears the whole bar.
+        const lift =
+            dropup.dataset.lift === 'input-row'
+                ? document.querySelector('#input-bar-container')?.offsetHeight ||
+                  0
+                : 0;
+        dropup.style.bottom = `${(this.presetsContainer?.offsetHeight || 40) + lift}px`;
     }
 
     _toggleDropup(dropupId, triggerBtn, renderFn) {
@@ -11582,6 +11589,8 @@ export class TabManager {
             d.classList.add('hidden');
         });
         if (wasHidden) {
+            if (triggerBtn.closest('.input-actions')) dropup.dataset.lift = 'input-row';
+            else delete dropup.dataset.lift;
             const btnRect = triggerBtn.getBoundingClientRect();
             const container = document.querySelector('.terminal-content');
             const containerRect = container?.getBoundingClientRect?.() || {

@@ -255,8 +255,10 @@ done
         mobileWatch = await watchPage(mobilePage, new URL(phi.url).origin);
         await mobilePage.goto(phi.url);
         await expect(mobilePage.locator(`#term-${paneId}`)).toBeVisible();
+        // Compact keeps the pickers in the row and parks the slash trigger
+        // with the input controls.
         const slashTrigger = mobilePage.locator(
-            '#presets-container .slash-trigger-btn',
+            '#input-bar-container .input-actions .slash-trigger-btn',
         );
         await expect(slashTrigger).toBeVisible();
         await expectSingleRowPresets(mobilePage);
