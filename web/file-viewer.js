@@ -357,14 +357,15 @@ function mountDownload(url, path, container) {
     message.append("Can't preview ", code, '.');
     const download = document.createElement('a');
     download.className = 'file-viewer-download-btn';
+    // The plain address keeps the control a real link: focusable, activated
+    // by Enter, and usable before any bearer is installed.
+    download.href = url;
     download.download = name;
     download.textContent = 'Download';
     // A v2 session has no cookie, so the bytes must be fetched with the
     // bearer. Fetch only when the user asks: previewing a large file must not
-    // download it. A v1 session keeps the plain link.
+    // download it.
     const needsBearer = () => Boolean(window.phiAccessAuth?.getAccessToken?.());
-    if (!needsBearer())
-        download.href = url;
     let release = () => { };
     let resolved = false;
     let disposed = false;
@@ -386,7 +387,6 @@ function mountDownload(url, path, container) {
             download.textContent = 'Download';
             resolved = true;
             download.click();
-            resolved = false;
         })
             .catch(() => {
             if (!disposed)

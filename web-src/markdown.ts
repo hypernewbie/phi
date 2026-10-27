@@ -789,6 +789,7 @@ export class MarkdownManager {
         };
         this._updateModalActions();
         const html = renderMarkdownSafe(rawMarkdown);
+        this._modalRenderId++;
         this._releaseModalAssets();
         this.modalBody.innerHTML = `<div class="md-rendered">${html}</div>`;
         highlightCodeIn(this.modalBody);
@@ -797,6 +798,7 @@ export class MarkdownManager {
 
     async openHelpModal(): Promise<void> {
         this.modalTitle.innerText = 'Phi Documentation';
+        this._modalRenderId++;
         this._releaseModalAssets();
         this.modalBody.innerHTML =
             '<div class="md-rendering">Loading help...</div>';
@@ -831,6 +833,8 @@ export class MarkdownManager {
     // every 2s while open.
     async openDiagModal(): Promise<void> {
         this.modalTitle.innerText = 'Phi Diagnostics';
+        this._modalRenderId++;
+        this._releaseModalAssets();
         this.modalBody.innerHTML =
             '<div class="md-rendering">Loading diagnostics…</div>';
         this.currentRawContent = '';
@@ -919,6 +923,8 @@ export class MarkdownManager {
         const version = (versionEl?.textContent || '').trim();
         const title = version ? `Changelog — ${version}` : 'Changelog';
         this.modalTitle.innerText = title;
+        this._modalRenderId++;
+        this._releaseModalAssets();
         this.modalBody.innerHTML =
             '<div class="md-rendering">Loading changelog...</div>';
         this.currentRawContent = '';

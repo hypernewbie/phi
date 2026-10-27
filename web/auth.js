@@ -814,18 +814,16 @@ export async function bootstrapAccessAuth() {
             ? 'v1'
             : selectedProtocol || advertised;
     accessEnabled = status.enabled;
-    if (!status.enabled) {
-        selectedProtocol = protocol;
-        return { enabled: false };
-    }
     // Fix the protocol before any login attempt; the cookie and saved
     // verifier branches below are the only v2-to-v1 change.
     selectedProtocol = protocol;
     if (protocol === 'v1' && hadV2Selection) {
         // A v1-only server cannot use the bearer; keep the stored token for
-        // a server that can, but stop sending it here.
+        // a server that can, but stop sending it here. This holds even when
+        // the server reports authentication disabled.
         accessToken = null;
     }
+    if (!status.enabled) return { enabled: false };
 
     if (protocol === 'v2') {
         const stored = loadBearer();

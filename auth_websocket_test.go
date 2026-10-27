@@ -93,7 +93,7 @@ func expectStillOpen(t *testing.T, conn *websocket.Conn) {
 // newAuthSocketFixture serves the three client-facing socket routes behind the
 // production middleware and returns a dialer for them. A credential is passed
 // either as a v2 query token or as a v1 cookie, never both.
-func newAuthSocketFixture(t *testing.T) func(path, subprotocol, token, cookie string) *websocket.Conn {
+func newAuthSocketFixture(t *testing.T) (*ws.Hub, func(path, subprotocol, token, cookie string) *websocket.Conn) {
 	t.Helper()
 	hub := testAccessUseHub(t)
 	home := t.TempDir()
@@ -118,7 +118,7 @@ func newAuthSocketFixture(t *testing.T) func(path, subprotocol, token, cookie st
 	server := httptest.NewServer(accessAuthMiddleware(mux))
 	t.Cleanup(server.Close)
 
-	return func(path, subprotocol, token, cookie string) *websocket.Conn {
+	return hub, func(path, subprotocol, token, cookie string) *websocket.Conn {
 		t.Helper()
 		url := "ws" + strings.TrimPrefix(server.URL, "http") + path
 		if token != "" {
@@ -219,7 +219,7 @@ func TestAccessWSControlFenceRejectsStaleUpgrade(t *testing.T) {
 func TestAccessWSHandlersCloseOnPasswordChange(t *testing.T) {
 	withTempConfig(t)
 	useTestAccessAuth(t)
-	dial := newAuthSocketFixture(t)
+	_, dial := newAuthSocketFixture(t)
 	token := testAccessEnableV2(t, testAccessPassword)
 
 	pane := dial("/ws/pane/rotate-pane", wireproto.TerminalSubprotocol, token, "")
@@ -303,7 +303,7 @@ func TestAccessWSSocketsFollowEveryRecordChange(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			withTempConfig(t)
 			auth := useTestAccessAuth(t)
-			dial := newAuthSocketFixture(t)
+			_, dial := newAuthSocketFixture(t)
 			token := testAccessEnableV2(t, testAccessPassword)
 			cookie := testAccessCookieFor(t, auth).Value
 
@@ -333,22 +333,40 @@ func TestAccessWSSocketsFollowEveryRecordChange(t *testing.T) {
 func TestAccessWSSocketsCloseOnStaleRecordRehash(t *testing.T) {
 	withTempConfig(t)
 	auth := useTestAccessAuth(t)
-	dial := newAuthSocketFixture(t)
+	hub, dial := newAuthSocketFixture(t)
 	if err := auth.configure(testAccessStaleHash(t)); err != nil {
 		t.Fatalf("configure stale record: %v", err)
 	}
+	// Production startup syncs the hub to the configured generation; without
+	// this the sockets would be rejected before the rehash could revoke them.
+	hub.RotateAuth(auth.accessGeneration())
 	cookie := testAccessCookieFor(t, auth).Value
 	token := testAccessSignedToken(t, auth)
 	events := dial("/ws/md-events", wireproto.EventsSubprotocol, token, "")
 	cookieEvents := dial("/ws/md-events", wireproto.EventsSubprotocol, "", cookie)
-	control := dial("/ws/control", wireproto.ControlSubprotocol, token, "")
+	// Registration proves admission without a client read, which would leave
+	// the Gorilla connection poisoned for the later close check.
+	waitForEventsClients(t, hub, 2)
 
 	if _, err := auth.loginPassword(testAccessPassword, "192.0.2.60:1"); err != nil {
 		t.Fatalf("rehash login: %v", err)
 	}
 	expectClosed(t, events)
 	expectClosed(t, cookieEvents)
-	expectClosed(t, control)
+}
+
+// waitForEventsClients polls the hub until the events route has attached the
+// expected clients.
+func waitForEventsClients(t *testing.T, hub *ws.Hub, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if count, _, _ := hub.PaneStats(ws.EventsPaneID); count >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("events route did not attach %d clients", want)
 }
 
 // dialAfterGate dials one fenced route whose handler waits for release after
