@@ -937,7 +937,10 @@ export async function bootstrapAccessAuth() {
                 selectedProtocol = 'v1';
                 return { enabled: true };
             }
-            if (verdict === 'transient')
+            // A rate limit cannot verify the saved credential either, so it is
+            // as unavailable as a transport failure: do not prompt for a
+            // password the server is refusing to check.
+            if (verdict === 'transient' || verdict === 'rate-limited')
                 throw new Error('Unable to check Phi access protection');
         }
     }
