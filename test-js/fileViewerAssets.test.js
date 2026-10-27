@@ -65,9 +65,12 @@ describe('authenticated file previews', () => {
             container,
         });
         const link = container.querySelector('a.file-viewer-download-btn');
-        // Previewing an unsupported file must not download it.
+        // A real link stays focusable and Enter-activatable; previewing an
+        // unsupported file must still not download it.
         expect(assetURL).not.toHaveBeenCalled();
-        expect(link.hasAttribute('href')).toBe(false);
+        expect(link.getAttribute('href')).toBe(
+            '/api/file/asset?path=archive.zip&cwd=%2Fproject',
+        );
         expect(link.textContent).toBe('Download');
         link.click();
         await vi.waitFor(() =>
@@ -76,6 +79,9 @@ describe('authenticated file previews', () => {
             ),
         );
         expect(link.getAttribute('download')).toBe('archive.zip');
+        // The resolved blob is reused: a second download must not refetch.
+        link.click();
+        expect(assetURL).toHaveBeenCalledTimes(1);
         handle.dispose();
         expect(REVOKE).toHaveBeenCalledTimes(1);
     });
