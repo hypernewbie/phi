@@ -110,7 +110,7 @@ describe('bridge models trigger', () => {
         expect(dropup.textContent).toContain('b/y');
     });
 
-    it('drops the live model slug from the label on a compact viewport', () => {
+    it('shows icon-only pickers on a compact viewport', () => {
         const tab = bridgeTab({
             piBridge: {
                 state: 'managed',
@@ -138,8 +138,13 @@ describe('bridge models trigger', () => {
                 // jsdom has no innerText: fall back to the expando.
                 return el.textContent || el.innerText;
             };
-            expect(label('.pi-rpc-model-trigger')).toBe('🤖 Models ▾');
-            expect(label('.pi-rpc-thinking-trigger')).toBe('🧠 ▾');
+            expect(label('.pi-rpc-model-trigger')).toBe('🤖');
+            expect(label('.pi-rpc-thinking-trigger')).toBe('🧠');
+            // Robot first, brain second, then the Cmds picker.
+            const row = [...tm.presetsContainer.children];
+            expect(row[0].className).toContain('pi-rpc-model-trigger');
+            expect(row[1].className).toContain('pi-rpc-thinking-trigger');
+            expect(row[2].textContent || row[2].innerText).toBe('Cmds ▾');
         } finally {
             Object.defineProperty(window, 'innerWidth', {
                 configurable: true,

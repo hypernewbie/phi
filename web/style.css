@@ -8631,6 +8631,17 @@ html[data-phi-config-page] .settings-modal {
         width: 28px !important;
         min-width: 28px !important;
     }
+
+    /* Keep the whole picker row on screen at 320px. Id selectors: the
+       compact block below sets the same properties later in the file. */
+    #presets-container {
+        gap: 2px !important;
+        padding: 4px 4px !important;
+    }
+
+    #presets-container .preset-btn {
+        padding: 0 6px !important;
+    }
 }
 
 /* MOBILE RESPONSIVE OVERRIDES */

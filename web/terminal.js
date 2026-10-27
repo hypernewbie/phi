@@ -11982,7 +11982,31 @@ export class TabManager {
             });
         }
 
+        if (isMobile) this._compactPickerRow({
+            models: modelsTriggerBtn,
+            thinking: thinkingTriggerBtn,
+            cmds: quickCmdsTriggerBtn,
+            skills: skillsTriggerBtn,
+            keys: keysTriggerBtn,
+        });
         if (isMobile) this._placeCompactQuickChips(compactChips);
+    }
+
+    // Compact only: the strip is width-bound, so the pickers trade words for
+    // icons and sit in the order the phone asks for. Desktop renders keep
+    // their labels and their append order.
+    _compactPickerRow({ models, thinking, cmds, skills, keys }) {
+        models.innerText = '🤖';
+        if (thinking) thinking.textContent = '🧠';
+        if (skills) {
+            skills.textContent = '📚';
+            skills.setAttribute('aria-label', 'Skills');
+        }
+        // Inserting ahead of the divider leaves the arrow keys at the end.
+        const anchor = this.presetsContainer.querySelector('.presets-divider');
+        for (const btn of [models, thinking, cmds, skills, keys]) {
+            if (btn) this.presetsContainer.insertBefore(btn, anchor);
+        }
     }
 
     // Compact only: park the slash trigger and the control-key chips at the

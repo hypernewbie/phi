@@ -198,6 +198,38 @@ describe('compact presets row', () => {
         ).toHaveLength(2);
     });
 
+    // jsdom has no innerText: fall back to the expando.
+    const rowLabels = (tm) =>
+        [...tm.presetsContainer.children].map((el) =>
+            (
+                el.textContent ||
+                el.innerText ||
+                el.getAttribute('aria-label') ||
+                ''
+            ).trim(),
+        );
+
+    it('starts the picker row with the robot and drops the words', () => {
+        const tm = compactTm(390);
+        tm.renderPresets('pi');
+        const row = rowLabels(tm);
+        expect(row.slice(0, 3)).toEqual([
+            '🤖',
+            'Cmds ▾',
+            'Virtual Keyboard and Shortcuts',
+        ]);
+        expect(row.slice(4)).toEqual(['▲', '▼', '◀', '▶']);
+    });
+
+    it('keeps the words on a desktop render', () => {
+        const tm = compactTm(1200);
+        tm.renderPresets('pi');
+        const row = rowLabels(tm);
+        expect(row).toContain('/compact');
+        expect(row).toContain('Cmds ▾');
+        expect(row).toContain('🤖 Models ▾');
+    });
+
     it('does not duplicate chips across renders', () => {
         const tm = compactTm(390);
         tm.renderPresets('pi');
