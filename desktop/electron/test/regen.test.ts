@@ -22,6 +22,7 @@ import { spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -312,20 +313,21 @@ describe('TBAR pipeline: regen + diff', () => {
     );
   });
 
-  it('vendors the VS Code launch helpers (vscode.js) byte-identical', () => {
-    // Plan 1 + Plan 2: the Files tab and the rich diff both reach
-    // for the URI builders. Vendoring keeps the desktop main view's
-    // module graph self-contained — the header would crash on import
-    // without this copy. Pin it so any future module rename or
-    // removal surfaces here before it lands in a commit.
-    const vendorScript = path.join(electronRoot, 'scripts', 'vendor-web.mjs');
-    const script = readFileSync(vendorScript, 'utf8');
-    expect(script).toMatch(/['"]vscode\.js['"]/);
-    const browserVSCode = path.join(webRoot, 'vscode.js');
-    const desktopVSCode = path.join(desktopWeb, 'vendor', 'vscode.js');
-    expect(readFileSync(desktopVSCode, 'utf8')).toBe(
-      readFileSync(browserVSCode, 'utf8'),
+  it('vendors every browser root module (vscode.js included) byte-identical', () => {
+    // The Files tab and the rich diff reach for vscode.js's URI builders,
+    // and the header crashes on import if any module of the browser page's
+    // root is missing. Assert the whole set rather than a hand list, so a
+    // new web-src module cannot be forgotten here.
+    const browserModules = readdirSync(webRoot).filter((name) =>
+      name.endsWith('.js'),
     );
+    expect(browserModules).toContain('vscode.js');
+    for (const name of browserModules) {
+      expect(
+        readFileSync(path.join(desktopWeb, 'vendor', name), 'utf8'),
+        `${name} is not vendored`,
+      ).toBe(readFileSync(path.join(webRoot, name), 'utf8'));
+    }
   });
 
   it('vendor-web.mjs produces the same bytes when invoked as a real subprocess', () => {

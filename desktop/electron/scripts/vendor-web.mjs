@@ -33,9 +33,10 @@ const embeddedDir = path.join(electronRoot, 'embedded');
 
 /** Browser Phi JS modules the main view page imports (app.js's module
  *  graph, copied byte-identical so the header runs the browser code).
- *  config.js is the standalone config page's entry; it is vendored for
- *  parity but never loaded by the main view page (it boots the settings
- *  surface). */
+ *  config.js and md-view.js are the standalone config and markdown viewer
+ *  page entries; they are vendored for parity but never loaded by the main
+ *  view page (they boot their own surfaces). Every top-level web/*.js is
+ *  listed so the vendored copy is the whole root set. */
 const WEB_JS_MODULES = [
   'app.js',
   'model-request.js',
@@ -62,6 +63,7 @@ const WEB_JS_MODULES = [
   'quota.js',
   'desktop.js',
   'config.js',
+  'md-view.js',
   'header-state.js',
   'theme.js',
   'prepaint.js',
