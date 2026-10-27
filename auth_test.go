@@ -23,7 +23,7 @@ func useTestAccessAuth(t *testing.T) *accessAuthManager {
 func testAccessHash() string {
 	salt := bytes.Repeat([]byte{0x11}, accessPasswordSaltBytes)
 	verifier := bytes.Repeat([]byte{0x22}, accessPasswordVerifierBytes)
-	return accessPasswordRecord{Salt: salt, Verifier: verifier}.encoded()
+	return accessPasswordRecord{Iterations: accessPasswordHashIterations, Salt: salt, Verifier: verifier}.encoded()
 }
 
 func testAccessProof(t *testing.T, verifier []byte, challenge string) string {
@@ -179,8 +179,9 @@ func TestAccessPasswordHandlerPersistsAndInvalidatesSessions(t *testing.T) {
 
 	// Generate a valid different verifier rather than relying on base64 text.
 	changedHash := accessPasswordRecord{
-		Salt:     bytes.Repeat([]byte{0x33}, accessPasswordSaltBytes),
-		Verifier: bytes.Repeat([]byte{0x44}, accessPasswordVerifierBytes),
+		Iterations: accessPasswordHashIterations,
+		Salt:       bytes.Repeat([]byte{0x33}, accessPasswordSaltBytes),
+		Verifier:   bytes.Repeat([]byte{0x44}, accessPasswordVerifierBytes),
 	}.encoded()
 	changeReq := httptest.NewRequest(http.MethodPost, "/api/auth/password", strings.NewReader(`{"password_hash":"`+changedHash+`"}`))
 	changeReq.AddCookie(firstCookie)
@@ -222,7 +223,7 @@ func TestAccessSessionSurvivesServerRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, challenge, err := auth.statusAndChallenge()
+	_, _, challenge, _, err := auth.statusAndChallenge()
 	if err != nil {
 		t.Fatal(err)
 	}
