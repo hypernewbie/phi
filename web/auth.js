@@ -556,8 +556,19 @@ async function discoverAccessStatus() {
     return parseAccessStatus(payload);
 }
 
+let pendingOverlay = null;
+
 function showUnlockPrompt(protocol) {
     return new Promise((resolve) => {
+        let settled = false;
+        const finish = (value) => {
+            if (settled) return;
+            settled = true;
+            if (pendingOverlay && pendingOverlay.finish === finish)
+                pendingOverlay = null;
+            overlay.remove();
+            resolve(value);
+        };
         const overlay = document.createElement('div');
         overlay.className = 'access-auth-overlay';
         overlay.setAttribute('role', 'dialog');
@@ -617,14 +628,12 @@ function showUnlockPrompt(protocol) {
                     const token = await v2Login(input.value);
                     adoptToken(token, { persist: true });
                     input.value = '';
-                    overlay.remove();
-                    resolve({ enabled: true });
+                    finish({ enabled: true });
                     return;
                 }
                 const status = await getStatus();
                 if (!status.enabled) {
-                    overlay.remove();
-                    resolve({ enabled: false });
+                    finish({ enabled: false });
                     return;
                 }
                 const verifier = await deriveVerifier(input.value, status);
@@ -635,8 +644,7 @@ function showUnlockPrompt(protocol) {
                 }
                 storeCredential(status, verifier);
                 input.value = '';
-                overlay.remove();
-                resolve({ enabled: true });
+                finish({ enabled: true });
             } catch (err) {
                 error.textContent =
                     err instanceof Error ? err.message : 'Unable to unlock Phi';
@@ -649,6 +657,7 @@ function showUnlockPrompt(protocol) {
 
         overlay.appendChild(dialog);
         document.body.appendChild(overlay);
+        pendingOverlay = { finish };
         requestAnimationFrame(() => input.focus());
     });
 }
@@ -775,6 +784,46 @@ export async function clearAccessPassword() {
     return { enabled: false };
 }
 
+// getAccessToken returns the selected v2 bearer, or null in v1 mode.
+export function getAccessToken() {
+    return accessToken;
+}
+
+// installToken is the host bridge: it installs a memory-only v2 credential
+// (never localStorage), releases a pending unlock overlay, and lets a loaded
+// body continue bootstrap.
+export function installToken(token) {
+    if (typeof token !== 'string' || !token) return false;
+    accessToken = token;
+    accessEnabled = true;
+    selectedProtocol = 'v2';
+    stateEpoch++;
+    persistedToken = null;
+    if (pendingOverlay) pendingOverlay.finish({ enabled: true });
+    return true;
+}
+
+// webSocketURL clones a socket URL and, in v2 mode, appends the bearer as one
+// encoded query parameter. The token only travels to the page's own origin.
+export function webSocketURL(url) {
+    const target = new URL(url instanceof URL ? url.href : String(url));
+    if (selectedProtocol !== 'v2' || !accessToken) return target;
+    const httpOrigin = target.origin
+        .replace(/^ws:/, 'http:')
+        .replace(/^wss:/, 'https:');
+    if (httpOrigin !== location.origin) return target;
+    target.searchParams.set('token', accessToken);
+    return target;
+}
+
+if (typeof window !== 'undefined') {
+    const bridge = window.phiAccessAuth || {};
+    bridge.installToken = installToken;
+    bridge.getAccessToken = getAccessToken;
+    bridge.webSocketURL = webSocketURL;
+    window.phiAccessAuth = bridge;
+}
+
 export const __test__ = {
     bytesToBase64URL,
     base64URLToBytes,
@@ -802,6 +851,7 @@ function resetAccessState() {
     persistedToken = null;
     stateEpoch++;
     reauthInFlight = null;
+    pendingOverlay = null;
     reloadPage = () => location.reload();
 }
 
