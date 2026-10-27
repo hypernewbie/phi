@@ -214,6 +214,31 @@ export function bodyAuthLoginScript(challenge: string, proof: string): string {
 }
 
 /**
+ * Builds the v2 body-install script. Only the bearer crosses into the body
+ * renderer; it stays in the page's memory (never localStorage). The script
+ * requires the exact trusted server origin before calling the bridge, so a
+ * redirected frame or the embedded shell never receives a host token.
+ * Returns 200 when the bridge accepted the token, 400 otherwise.
+ */
+export function bodyAuthTokenScript(
+  token: string,
+  expectedOrigin: string,
+): string {
+  return `(() => {
+    const token = ${JSON.stringify(token)};
+    const expectedOrigin = ${JSON.stringify(expectedOrigin)};
+    try {
+      if (location.origin !== expectedOrigin) return 400;
+      const bridge = window.phiAccessAuth;
+      if (!bridge || typeof bridge.installToken !== 'function') return 400;
+      return bridge.installToken(token) ? 200 : 400;
+    } catch {
+      return 400;
+    }
+  })()`;
+}
+
+/**
  * Builds the fixed script that applies a divider snapshot to the page:
  * persists each set key in the view's own localStorage, sets the panel
  * widths inline, toggles .sidebar-narrow for a narrow left panel, and

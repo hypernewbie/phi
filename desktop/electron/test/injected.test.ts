@@ -20,6 +20,7 @@ import {
   setWorkspaceScript,
   READ_WORKSPACE_SCRIPT,
   bodyAuthLoginScript,
+  bodyAuthTokenScript,
   LOW_POWER_STORAGE_KEY,
   lowPowerApplyScript,
 } from '../src/injected.js';
@@ -429,6 +430,49 @@ describe('retained body state scripts', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ challenge, proof }),
     });
+  });
+
+  it('builds a v2 body install with JSON-escaped token and origin', () => {
+    const token = 'tok"</script>\\value';
+    const origin = 'https://phi.example.test';
+    const script = bodyAuthTokenScript(token, origin);
+    expect(script).toContain(JSON.stringify(token));
+    expect(script).toContain(JSON.stringify(origin));
+  });
+
+  it('refuses a page that is not the exact expected origin', () => {
+    const installToken = vi.fn(() => true);
+    windowField().phiAccessAuth = { installToken };
+    try {
+      expect(
+        window.eval(bodyAuthTokenScript('tok', 'https://other.example.test')),
+      ).toBe(400);
+      expect(installToken).not.toHaveBeenCalled();
+    } finally {
+      delete windowField().phiAccessAuth;
+    }
+  });
+
+  it('installs the bearer only when the page origin matches and the bridge accepts it', () => {
+    const installToken = vi.fn(() => true);
+    windowField().phiAccessAuth = { installToken };
+    try {
+      expect(
+        window.eval(bodyAuthTokenScript('tok', window.location.origin)),
+      ).toBe(200);
+      expect(installToken).toHaveBeenCalledWith('tok');
+
+      installToken.mockReturnValue(false);
+      expect(
+        window.eval(bodyAuthTokenScript('tok', window.location.origin)),
+      ).toBe(400);
+    } finally {
+      delete windowField().phiAccessAuth;
+    }
+    // No bridge (a legacy body) is a refusal, never a thrown script.
+    expect(
+      window.eval(bodyAuthTokenScript('tok', window.location.origin)),
+    ).toBe(400);
   });
 });
 
