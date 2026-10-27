@@ -183,7 +183,8 @@ done
         const desktopLabels = await desktopPresets.allTextContents();
         expect(desktopLabels).not.toContain('/quit');
         expect(desktopLabels).not.toContain('/resume');
-        expect(desktopLabels).toContain('/model');
+        // /model moved into Cmds: the Models picker covers it.
+        expect(desktopLabels).not.toContain('/model');
         expect(desktopLabels).toContain('/compact');
 
         const desktopCommands = page.getByRole('button', { name: 'Cmds ▾' });
@@ -198,6 +199,7 @@ done
             .locator('.dropup-row > .dropup-model-btn')
             .allTextContents();
         expect(desktopBuiltIns.slice(0, 2)).toEqual(['/quit', '/resume']);
+        expect(desktopBuiltIns).toContain('/model');
         const desktopBaseline = countQuit(inputLog);
         const quit = desktopMenu.getByRole('button', { name: '/quit' });
         await quit.focus();
@@ -219,7 +221,7 @@ done
         await expect(slashTrigger).toBeVisible();
         await slashTrigger.tap();
         const slashMenu = mobilePage.locator('#slash-presets-dropup');
-        await expect(slashMenu).toContainText('/model');
+        await expect(slashMenu).not.toContainText('/model');
         await expect(slashMenu).toContainText('/compact');
         await expect(slashMenu).not.toContainText('/quit');
         await expect(slashMenu).not.toContainText('/resume');

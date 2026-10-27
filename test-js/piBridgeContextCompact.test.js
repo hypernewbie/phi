@@ -506,7 +506,7 @@ describe('ordered context/readiness updates', () => {
         expect(meter().el).not.toBeNull();
         tm.renderPresets('pi');
         expect(desktopCompact(tm).disabled).toBe(false);
-        expect(desktopCompact(tm).title).toBe('');
+        expect(desktopCompact(tm).title).toBe('Send /compact to the terminal');
         expect(tm.sendSlashCommand(ctxOnly, '/compact')).toBe(true);
         expect(ctxOnly.ws.sendInput).toHaveBeenCalledWith(
             '\x1b[200~/compact\x1b[201~\r',
@@ -528,7 +528,9 @@ describe('reused context meter', () => {
         baseline(tm, tab);
 
         const m = meter();
-        expect(m.bar.classList.contains('hidden')).toBe(false);
+        // The Pi TUI prints its own status line, so the PTY tab keeps the
+        // meter rendered but out of sight; the chat surface shows it.
+        expect(m.bar.classList.contains('hidden')).toBe(true);
         expect(m.el.getAttribute('role')).toBe('progressbar');
         expect(m.el.getAttribute('aria-valuemin')).toBe('0');
         expect(m.el.getAttribute('aria-valuemax')).toBe('100');
@@ -702,7 +704,7 @@ describe('meter and control lifecycle', () => {
         expect(tab.isDead).toBe(true);
         expect(meter().el).toBeNull();
         expect(desktopCompact(tm).disabled).toBe(false);
-        expect(desktopCompact(tm).title).toBe('');
+        expect(desktopCompact(tm).title).toBe('Send /compact to the terminal');
     });
 
     it('hides the meter on socket disconnect without killing the tab', () => {
@@ -1333,7 +1335,7 @@ describe('native compact dispatch', () => {
             inner.renderPresets('pi');
             const btn = desktopCompact(inner);
             expect(btn.disabled).toBe(false);
-            expect(btn.title).toBe('');
+            expect(btn.title).toBe('Send /compact to the terminal');
             btn.click();
             expect(tab.ws.sendInput).toHaveBeenCalledWith(
                 '\x1b[200~/compact\x1b[201~\r',

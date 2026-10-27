@@ -274,12 +274,12 @@ describe('Pi RPC TabManager boundaries', () => {
                 (button) => button.textContent,
             ),
         ).toEqual([
+            'Model: pi-4 ▾',
+            'Thinking: high ▾',
             'Compact',
             'Clear',
             'Show thinking',
             'Cmds ▾',
-            '🤖 Models ▾',
-            'Thinking ▾',
         ]);
         expect(row.querySelector('.presets-divider')).not.toBeNull();
         expect(row.querySelector('.mobile-nav-btn')).toBeNull();
@@ -319,15 +319,19 @@ describe('Pi RPC TabManager boundaries', () => {
                 (button) => button.textContent,
             ),
         ).toEqual([
+            'Model: — ▾',
+            'Thinking: — ▾',
             'Compact',
             'Clear',
             'Show thinking',
             'Cmds ▾',
-            '🤖 Models ▾',
-            'Thinking ▾',
         ]);
-        expect(row.querySelector('.pi-rpc-model-trigger').title).toBe('—');
-        expect(row.querySelector('.pi-rpc-thinking-trigger').title).toBe('—');
+        expect(row.querySelector('.pi-rpc-model-trigger').title).toBe(
+            'Change the model for this session',
+        );
+        expect(row.querySelector('.pi-rpc-thinking-trigger').title).toBe(
+            'Change the thinking level',
+        );
     });
 
     it('renders the Context meter with progressbar semantics and color states', () => {
@@ -1371,16 +1375,16 @@ describe('Pi RPC TabManager boundaries', () => {
         const meter = () => bar.querySelector('.pi-rpc-context-meter');
         const fill = () => meter()?.querySelector('.pi-rpc-context-meter-fill');
         expect(presets.querySelector('.pi-rpc-model-trigger').textContent).toBe(
-            '🤖 Models ▾',
+            'Model: old-model ▾',
         );
         expect(presets.querySelector('.pi-rpc-model-trigger').title).toBe(
-            'old-model',
+            'Change the model for this session',
         );
         expect(
             presets.querySelector('.pi-rpc-thinking-trigger').textContent,
-        ).toBe('Thinking ▾');
+        ).toBe('Thinking: low ▾');
         expect(presets.querySelector('.pi-rpc-thinking-trigger').title).toBe(
-            'low',
+            'Change the thinking level',
         );
         expect(meter().getAttribute('aria-valuenow')).toBe('10');
         expect(
@@ -1426,11 +1430,11 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(bar.textContent).toContain('/work/active-new');
         expect(bar.textContent).not.toContain('/work/inactive-new');
         expect(presets.querySelector('.pi-rpc-model-trigger').textContent).toBe(
-            '🤖 Models ▾',
+            'Model: old-model ▾',
         );
         expect(
             presets.querySelector('.pi-rpc-thinking-trigger').textContent,
-        ).toBe('Thinking ▾');
+        ).toBe('Thinking: low ▾');
         expect(meter().getAttribute('aria-valuenow')).toBe('10');
         expect(
             fill().classList.contains('pi-rpc-context-meter-fill--green') ||
@@ -1443,12 +1447,12 @@ describe('Pi RPC TabManager boundaries', () => {
         });
         notify(active.paneId, current.get(active.paneId));
         expect(bar.textContent).toContain('/work/active-new');
-        expect(presets.querySelector('.pi-rpc-model-trigger').title).toBe(
-            'new-model',
+        expect(presets.querySelector('.pi-rpc-model-trigger').textContent).toBe(
+            'Model: new-model ▾',
         );
-        expect(presets.querySelector('.pi-rpc-thinking-trigger').title).toBe(
-            'high',
-        );
+        expect(
+            presets.querySelector('.pi-rpc-thinking-trigger').textContent,
+        ).toBe('Thinking: high ▾');
         expect(meter().getAttribute('aria-valuenow')).toBe('50');
         expect(
             fill().classList.contains('pi-rpc-context-meter-fill--yellow') ||

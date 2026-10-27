@@ -212,9 +212,11 @@ test('bridge-only peer loss: unknown caller, live Pi, no replay on reconnect', a
             hasText: '/compact',
         });
         await expect(legacyBtn).toBeEnabled({ timeout: 10_000 });
+        // The bridge is gone, so the chip degrades to the plain PTY send
+        // and says so in its tooltip.
         expect(
             await legacyBtn.evaluate((el) => (el as HTMLButtonElement).title),
-        ).toBe('');
+        ).toBe('Send /compact to the terminal');
         expect(stub.count()).toBe(1);
         expect(compactionEntries(sessionFile)).toBe(0);
         expect(

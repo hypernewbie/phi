@@ -43,8 +43,6 @@ describe('Codex native model selection', () => {
         buttons.find((button) => button.innerText === '🤖 Models').click();
         expect(tm.sendSlashCommand).toHaveBeenCalledWith(tab, '/model');
         expect(tm._toggleDropup).not.toHaveBeenCalled();
-        buttons.find((button) => button.innerText === '/model').click();
-        expect(tm.sendSlashCommand).toHaveBeenLastCalledWith(tab, '/model');
     });
 
     it('wraps staged input in bracketed paste for codex even when short', () => {

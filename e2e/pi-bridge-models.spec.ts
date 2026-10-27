@@ -176,7 +176,7 @@ test('bridge-live Pi models picker lists and switches, bridge-absent keeps legac
         const trigger = page.locator(
             '#presets-container button.pi-rpc-model-trigger',
         );
-        await expect(trigger).toContainText('🤖 Models', { timeout: 10_000 });
+        await expect(trigger).toContainText('Model:', { timeout: 10_000 });
 
         // The shared picker renders real catalog rows.
         await trigger.click();

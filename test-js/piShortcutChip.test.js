@@ -9,11 +9,13 @@ import { TabManager } from '../web/terminal.js';
 // Send ↵ button. The keyboard shortcut itself is global; the chip is
 // only rendered when the active tab's coder is pi.
 //
-// The chip is a strict member of the preset-btn family — no id, no
-// title attribute, lowercase label matching the existing binding
-// convention (`ctrl+c`, `ctrl+o`, `esc`). The discoverability lives
-// entirely in the visible label and the click handler doing the same
-// `sendStagedInput()` call as Send ↵.
+// The chip is a strict member of the preset-btn family — no id, and
+// its hover helper follows the same title convention as the sibling
+// chips. The keyboard shortcut itself is global; the chip is only
+// rendered when the active tab's coder is pi.
+//
+// The discoverability lives in the visible label plus the hover helper;
+// the click handler does the same `sendStagedInput()` call as Send ↵.
 //
 // Contract tested here:
 //   1. renderPresets('pi')   -> chip is appended to presets-container
@@ -27,8 +29,8 @@ import { TabManager } from '../web/terminal.js';
 setupDomHarness();
 
 // The chip is found only by its preset-btn class + label content.
-// This locks the contract: no id, no title, no data-* — just another
-// preset-btn in the row.
+// This locks the contract: no id, no data-* — just another preset-btn
+// in the row, with the same title helper convention as its siblings.
 function findCtrlShiftXChip(container) {
     return (
         Array.from(container.querySelectorAll('.preset-btn')).find(
@@ -90,10 +92,10 @@ describe('pi shortcut chip placement', () => {
     it('keeps the legacy Models button state for shells, Agy, and restored unknown tabs', () => {
         const tm = makeTm();
         for (const [coder, disabled, title] of [
-            ['bash', false, ''],
-            ['pwsh', false, ''],
+            ['bash', false, 'Select the model for this session'],
+            ['pwsh', false, 'Select the model for this session'],
             ['agy', true, 'Model selection not supported for Antigravity'],
-            ['old-coder', false, ''],
+            ['old-coder', false, 'Select the model for this session'],
         ]) {
             tm.activePaneId = 'pane';
             tm.tabs.set('pane', { coder });
@@ -152,16 +154,18 @@ describe('pi shortcut chip placement', () => {
         expect(piChipAgain).not.toBe(piChip); // renderPresets rebuilds the row
     });
 
-    it('chip is a strict member of the preset-btn family — no id, no title, just preset-btn class + label', () => {
-        // Locks in: the chip carries no special DOM hooks. Discoverability
-        // lives in the label alone; the keyboard binding stays discoverable
-        // through help.md rather than a tooltip on the chip itself.
+    it('chip is a strict member of the preset-btn family — no id, just preset-btn class, label and hover helper', () => {
+        // Locks in: the chip carries no special DOM hooks — no id, no
+        // data-*. Its hover helper follows the same `preset-btn` title
+        // convention as the sibling chips.
         const tm = makeTm();
         tm.renderPresets('pi');
         const chip = findCtrlShiftXChip(tm.presetsContainer);
 
         expect(chip.id).toBe('');
-        expect(chip.getAttribute('title')).toBeNull();
+        expect(chip.getAttribute('title')).toBe(
+            'Send the input bar text (Ctrl+Shift+X)',
+        );
         // className is exactly 'preset-btn' (no extra modifiers).
         expect(chip.className).toBe('preset-btn');
         // Matches its sibling presets' text styling: lowercase, no separator.

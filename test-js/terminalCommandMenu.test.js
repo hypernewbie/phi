@@ -4,10 +4,11 @@ import { setupDomHarness, mockFetch } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
 import { loadCoderRegistry } from '../web/coders.js';
 
-// Focused regression net for the compact command menu: the four exact
-// low-frequency values (/quit, /exit, /resume, /sessions + \r) move from
-// the preset row into Cmds ▾ → Built-in Commands, only when the active
-// coder's effective presets advertise them.
+// Focused regression net for the compact command menu: low-frequency
+// values (/quit, /exit, /resume, /sessions, /model + \r) move from the
+// preset row into Cmds ▾ → Built-in Commands, only when the active
+// coder's effective presets advertise them. /model is in that set
+// because the Models picker already covers it.
 //
 // Harness discipline (as in sendSlashCommand.test.js):
 //   - ctx is Object.create(TabManager.prototype): getActiveTab,
@@ -173,7 +174,7 @@ afterEach(() => {
     vi.useRealTimers();
 });
 
-describe('A1 placement: only the four exact values move', () => {
+describe('A1 placement: only advertised low-frequency values move', () => {
     it('desktop row keeps common presets and utility keys in order', () => {
         const tm = makeTm();
         const tab = makeTab('pi-1', 'pi');
@@ -184,10 +185,10 @@ describe('A1 placement: only the four exact values move', () => {
         const labels = presetLabels(tm);
         expect(labels).not.toContain('/quit');
         expect(labels).not.toContain('/resume');
-        expect(labels).toContain('/model');
+        expect(labels).not.toContain('/model');
         expect(labels).toContain('/compact');
         expect(labels).toContain('esc');
-        expect(labels.indexOf('/model')).toBeLessThan(
+        expect(labels.indexOf('esc')).toBeGreaterThan(
             labels.indexOf('/compact'),
         );
     });
@@ -203,6 +204,7 @@ describe('A1 placement: only the four exact values move', () => {
         expect(builtInButtons().map((b) => b.innerText)).toEqual([
             '/quit',
             '/resume',
+            '/model',
         ]);
         const userRows = Array.from(
             document.querySelectorAll(
@@ -269,7 +271,10 @@ describe('A1 placement: only the four exact values move', () => {
         expect(presetLabels(tm)).toContain('/quitall');
         expect(presetLabels(tm)).not.toContain('/quit');
         tm.renderQuickCmdsDropup();
-        expect(builtInButtons().map((b) => b.innerText)).toEqual(['/quit']);
+        expect(builtInButtons().map((b) => b.innerText)).toEqual([
+            '/quit',
+            '/model',
+        ]);
     });
 
     it('compact slash menu excludes moved values; utility chips stay', () => {
@@ -290,7 +295,7 @@ describe('A1 placement: only the four exact values move', () => {
         ).map((b) => b.innerText);
         expect(slashLabels).not.toContain('/quit');
         expect(slashLabels).not.toContain('/resume');
-        expect(slashLabels).toContain('/model');
+        expect(slashLabels).not.toContain('/model');
         expect(slashLabels).toContain('/compact');
         expect(
             tm.presetsContainer.querySelector('.slash-trigger-btn'),
@@ -307,7 +312,7 @@ describe('A1 placement: only the four exact values move', () => {
         tm.renderQuickCmdsDropup();
         tm.renderQuickCmdsDropup();
         expect(menuHeaders()).toEqual(['Built-in Commands', 'Quick Commands']);
-        expect(builtInButtons()).toHaveLength(2);
+        expect(builtInButtons()).toHaveLength(3);
         tm.renderPresets('pi');
         const first = presetLabels(tm);
         tm.renderPresets('pi');
@@ -496,12 +501,12 @@ describe('A3 dispatch and focus match the old preset buttons', () => {
         tm.renderPresets('pi');
 
         Array.from(tm.presetsContainer.querySelectorAll('.preset-btn'))
-            .find((b) => b.innerText === '/model')
+            .find((b) => b.innerText === '/compact')
             .click();
-        expect(spy).toHaveBeenCalledWith(tab, '/model');
+        expect(spy).toHaveBeenCalledWith(tab, '/compact');
         expect(spy.mock.calls[0]).toHaveLength(2);
         expect(tm.focusActiveTerminal).toHaveBeenCalled();
-        expect(tab.sendInputCalls).toEqual([['\x1b[200~/model\x1b[201~\r']]);
+        expect(tab.sendInputCalls).toEqual([['\x1b[200~/compact\x1b[201~\r']]);
     });
 
     it('menu selections suppress mobile input focus like the old slash menu', () => {
@@ -536,9 +541,9 @@ describe('A3 dispatch and focus match the old preset buttons', () => {
                 '#slash-presets-dropup .dropup-model-btn',
             ),
         )
-            .find((b) => b.innerText === '/model')
+            .find((b) => b.innerText === '/compact')
             .click();
-        expect(spy).toHaveBeenCalledWith(tab, '/model', {
+        expect(spy).toHaveBeenCalledWith(tab, '/compact', {
             focusInputOnMobile: false,
         });
     });
