@@ -54,7 +54,7 @@ func TestOpenCodeLegacyOptionAndSeparateCommands(t *testing.T) {
 		m := NewManagerWithOptions(BuiltinOptions{OpenCodeLegacy: legacy, OpenCodeCommand: "/v2 bin/opencode", OpenCodeLegacyCommand: "/v1 bin/opencode"})
 		c, _ := m.Get("opencode")
 		if legacy {
-			if c.Command != "/v1 bin/opencode" || len(c.Args) != 0 || c.SessionSource != "opencode_sqlite" || c.OpenCodeMode != "legacy" || len(c.Presets) != 12 {
+			if c.Command != "/v1 bin/opencode" || len(c.Args) != 0 || c.SessionSource != "opencode_sqlite" || c.OpenCodeMode != "legacy" || len(c.Presets) != 8 {
 				t.Fatalf("wrong legacy: %+v", c)
 			}
 		} else if c.Command != "/v2 bin/opencode" || c.OpenCodeMode != "tui" {

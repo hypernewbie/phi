@@ -14,6 +14,29 @@ import (
 // It still passes against the rewritten defaults table.
 // ─────────────────────────────────────────────────────────────────────────
 
+// Removed preset buttons must stay removed from every built-in table: the
+// composer row is a single line, and each of these was cut from it.
+func TestRemovedPresetsStayOut(t *testing.T) {
+	banned := map[string]string{
+		"/copy\r":  "/copy",
+		"/clear\r": "/clear",
+		"y\r":      "y↵",
+		"\x1b":     "esc",
+	}
+	check := func(owner string, presets []Preset) {
+		for _, p := range presets {
+			if name, ok := banned[p.Value]; ok {
+				t.Errorf("%s still offers the removed %q preset", owner, name)
+			}
+		}
+	}
+	for id, c := range DefaultRegistry() {
+		check(id, c.Presets)
+	}
+	check("opencode legacy", legacyOpenCodePresets())
+	check("opencode mini", OpenCodeMiniPresets())
+}
+
 func TestRegistryPresets(t *testing.T) {
 	defaults := DefaultRegistry()
 	if len(defaults) == 0 {

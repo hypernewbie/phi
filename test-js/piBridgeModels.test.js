@@ -66,12 +66,12 @@ function harness(tab) {
     return { tm, dropup };
 }
 
-// Picker row order: Models, Thinking, Skills, Keys, then the chip row
-// with Cmds. Text matching is impossible here: the row sets innerText,
-// which jsdom leaves unreadable, so the position plus the marker class
-// identify it.
+// Row order: command chips, then Cmds, Models, Skills, Thinking, Keys.
+// Text matching is impossible here: the row sets innerText, which jsdom
+// leaves unreadable, so the position plus the marker class identify it.
+// Models is the second .model-trigger-btn; Cmds comes first.
 function modelsTrigger(tm) {
-    return tm.presetsContainer.querySelectorAll('.model-trigger-btn')[0];
+    return tm.presetsContainer.querySelectorAll('.model-trigger-btn')[1];
 }
 
 describe('bridge models trigger', () => {

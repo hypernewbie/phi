@@ -165,6 +165,20 @@ export function getTerminalTheme(
     };
 }
 
+// Control-key presets render as icons instead of their key name.
+const PRESET_ICONS = {
+    // ctrl+c — interrupt
+    '\x03': '<rect x="5" y="5" width="14" height="14" rx="2"></rect>',
+    // ctrl+d — end of input
+    '\x04': '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line>',
+    // ctrl+o — expand output
+    '\x0f': '<polyline points="7 15 12 20 17 15"></polyline><polyline points="7 9 12 4 17 9"></polyline>',
+    // ctrl+p — menu
+    '\x10': '<line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line>',
+    // ctrl+l — clear screen
+    '\x0c': '<path d="M3 6h18"></path><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path>',
+};
+
 const MOVED_PRESET_VALUES = new Set([
     '/quit\r',
     '/exit\r',
@@ -1749,8 +1763,7 @@ export class TabManager {
 
         // Global Ctrl+Shift+X -> send staged input. Fires regardless of
         // which element is focused (textarea, terminal, anywhere). The
-        // chip only displays for pi, but the keybinding itself is
-        // universally available since it's a quality-of-life shortcut.
+        // row has no chip for it, so the shortcut is keyboard-only.
         document.addEventListener('keydown', (e) => {
             if (
                 e.ctrlKey &&
@@ -6883,12 +6896,6 @@ export class TabManager {
             );
         });
 
-        // The pickers get their own line: the chip row would otherwise
-        // push them past the right edge on narrow panes.
-        const presetsBreak = document.createElement('div');
-        presetsBreak.className = 'presets-break';
-        presetsBreak.setAttribute('aria-hidden', 'true');
-
         this.presetsContainer.append(
             compactButton,
             resetButton,
@@ -6898,13 +6905,6 @@ export class TabManager {
             modelButton,
             thinkingButton,
         );
-        // Picker row above the chip row — Models, then Thinking.
-        if (!isCompactViewport())
-            this.presetsContainer.prepend(
-                modelButton,
-                thinkingButton,
-                presetsBreak,
-            );
         const qcDropup = document.getElementById('quick-commands-dropup');
         if (qcDropup && !qcDropup.classList.contains('hidden'))
             this.renderQuickCmdsDropup();
@@ -11682,12 +11682,9 @@ export class TabManager {
                     this.presetsContainer.appendChild(slashBtn);
                 }
 
-                // Render other horizontal utility presets (like ctrl+c, esc, y)
+                // Render other horizontal utility presets (like ctrl+c, ctrl+o)
                 utilityPresets.forEach((p) => {
-                    const btn = document.createElement('button');
-                    btn.className = 'preset-btn';
-                    btn.innerText = p.name;
-                    btn.title = `Send ${p.name} to the terminal`;
+                    const btn = this._buildPresetButton(p);
                     btn.addEventListener('click', () => {
                         this.sendRawInput(p.value, { focusInputOnMobile: false });
                     });
@@ -11696,10 +11693,7 @@ export class TabManager {
             } else {
                 // Desktop: Render everything horizontally as before
                 visiblePresets.forEach((p) => {
-                    const btn = document.createElement('button');
-                    btn.className = 'preset-btn';
-                    btn.innerText = p.name;
-                    btn.title = `Send ${p.name} to the terminal`;
+                    const btn = this._buildPresetButton(p);
                     if (p.value === '/compact\r' && activeTab?.coder === 'pi') {
                         const compactState =
                             this._piBridgeCompactControlState(activeTab);
@@ -11727,25 +11721,6 @@ export class TabManager {
             const divider = document.createElement('div');
             divider.className = 'presets-divider';
             this.presetsContainer.appendChild(divider);
-        }
-
-        // 2b. Pi-specific shortcut chip: lives in the presets row alongside
-        // /quit /resume /model /compact, with the same flat preset-btn
-        // shape (no kbd-key caps / glow, no extra id, label matches the
-        // existing binding convention — lowercase, no separator, no
-        // action-verb suffix). Visible only when the active tab is a pi
-        // session. Clicking sends the staged input — same as Send ↵. The
-        // keyboard binding itself is global (document-level keydown
-        // listener below) and works whether the chip is rendered.
-        if (coderId === 'pi') {
-            const chip = document.createElement('button');
-            chip.className = 'preset-btn';
-            chip.innerText = 'ctrl+shift+x';
-            chip.title = 'Send the input bar text (Ctrl+Shift+X)';
-            chip.addEventListener('click', () => {
-                this.sendStagedInput();
-            });
-            this.presetsContainer.appendChild(chip);
         }
 
         // 3. Render QuickCmds trigger button
@@ -11823,11 +11798,7 @@ export class TabManager {
                 );
             });
         }
-        // The pickers get their own line: the chip row would otherwise
-        // push them past the right edge on narrow panes.
-        const presetsBreak = document.createElement('div');
-        presetsBreak.className = 'presets-break';
-        presetsBreak.setAttribute('aria-hidden', 'true');
+        // The pickers keep their place at the end of the single row.
         this.presetsContainer.appendChild(modelsTriggerBtn);
 
         // Skills picker: only on bridge-live Pi tabs that negotiated
@@ -11915,19 +11886,7 @@ export class TabManager {
         });
         this.presetsContainer.appendChild(keysTriggerBtn);
 
-        // Picker row above the chip row: the chip row grows with every
-        // coder and must not push the pickers past the right edge. Fixed
-        // order — Models, Thinking, Skills, Keyboard. The compact layout
-        // keeps its single swipeable strip in the original order.
-        if (!isCompactViewport()) {
-            const pickerButtons = [
-                modelsTriggerBtn,
-                thinkingTriggerBtn,
-                skillsTriggerBtn,
-                keysTriggerBtn,
-            ].filter(Boolean);
-            this.presetsContainer.prepend(...pickerButtons, presetsBreak);
-        }
+        // Picker buttons keep their append order; the row scrolls sideways.
 
         // Auto-refresh dropup content if currently open
         const dropup = document.getElementById('model-presets-dropup');
@@ -11993,6 +11952,26 @@ export class TabManager {
                 this.presetsContainer.appendChild(btn);
             });
         }
+    }
+
+    // One preset chip. Control-key presets send a bare byte, so their text
+    // label is the only clue to what the key does: those render as an icon
+    // and keep the key name in the tooltip. Slash commands keep their text.
+    _buildPresetButton(preset) {
+        const btn = document.createElement('button');
+        btn.className = 'preset-btn';
+        const icon = Object.hasOwn(PRESET_ICONS, preset.value)
+            ? PRESET_ICONS[preset.value]
+            : null;
+        if (icon) {
+            btn.classList.add('btn-icon');
+            btn.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`;
+            btn.setAttribute('aria-label', preset.name);
+        } else {
+            btn.innerText = preset.name;
+        }
+        btn.title = `Send ${preset.name} to the terminal`;
+        return btn;
     }
 
     _getCoderPresetInfo(coderId, activeTab = this.getActiveTab()) {

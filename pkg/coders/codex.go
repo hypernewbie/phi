@@ -18,11 +18,8 @@ func defaultCodex() Coder {
 			{Name: "/new", Value: "/new\r"},
 			{Name: "/resume", Value: "/resume\r"},
 			{Name: "/diff", Value: "/diff\r"},
-			{Name: "/copy", Value: "/copy\r"},
 			{Name: "/quit", Value: "/quit\r"},
 			{Name: "ctrl+c", Value: "\x03"},
-			{Name: "y↵", Value: "y\r"},
-			{Name: "esc", Value: "\x1b"},
 		},
 	}
 }

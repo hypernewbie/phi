@@ -29,8 +29,6 @@ func OpenCodeMiniPresets() []Preset {
 		{Name: "menu", Value: "\x10"},
 		{Name: "clear", Value: "\x0c"},
 		{Name: "ctrl+c", Value: "\x03"},
-		{Name: "y↵", Value: "y\r"},
-		{Name: "esc", Value: "\x1b"},
 	}
 }
 
@@ -68,13 +66,9 @@ func legacyOpenCodePresets() []Preset {
 		{Name: "/model", Value: "/model\r"},
 		{Name: "/compact", Value: "/compact\r"},
 		{Name: "/undo", Value: "/undo\r"},
-		{Name: "/copy", Value: "/copy\r"},
 		{Name: "/sessions", Value: "/sessions\r"},
 		{Name: "ctrl+c", Value: "\x03"},
 		{Name: "ctrl+o", Value: "\x0f"},
-		{Name: "y↵", Value: "y\r"},
-		{Name: "esc", Value: "\x1b"},
-		{Name: "/clear", Value: "/clear\r"},
 	}
 }
 
