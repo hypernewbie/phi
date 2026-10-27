@@ -272,7 +272,12 @@ export function connectControl(
         dialing = true;
         let socket: WebSocket;
         try {
-            socket = new WebSocket(wsUrl('/ws/control'), controlSubprotocol);
+            const socketURL = new URL(wsUrl('/ws/control'));
+            socket = new WebSocket(
+                (window.phiAccessAuth?.webSocketURL?.(socketURL) ?? socketURL)
+                    .href,
+                controlSubprotocol,
+            );
         } catch (error) {
             dialing = false;
             reportStreamFailure(
