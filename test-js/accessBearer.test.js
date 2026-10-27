@@ -505,3 +505,147 @@ describe('webSocketURL bridge', () => {
         );
     });
 });
+
+describe('superseded responses and transient failures', () => {
+    function seedVerifier() {
+        localStorage.setItem(
+            CREDENTIAL_KEY,
+            JSON.stringify({
+                version: DUAL_STATUS.version,
+                algorithm: DUAL_STATUS.algorithm,
+                iterations: DUAL_STATUS.iterations,
+                salt: DUAL_STATUS.salt,
+                verifier: __test__.bytesToBase64URL(new Uint8Array(32).fill(7)),
+            }),
+        );
+    }
+
+    it('keeps the v2 selection after a stored token is rejected', async () => {
+        storeBearer('jwt-stale');
+        mockFetch((url) => {
+            if (url === '/api/auth/status') return DUAL_STATUS;
+            if (url === '/api/auth/v2/status')
+                return { enabled: true, authenticated: false };
+            return undefined;
+        });
+        void bootstrapAccessAuth();
+        await vi.waitFor(() =>
+            expect(document.querySelector('.access-auth-overlay')).toBeTruthy(),
+        );
+        const state = __test__.getAccessState();
+        expect(state.accessToken).toBeNull();
+        expect(state.selectedProtocol).toBe('v2');
+    });
+
+    it('rejects a non-200 discovery response instead of selecting', async () => {
+        mockFetch(() => ({
+            status: 201,
+            enabled: false,
+            protocols: ['v1', 'v2'],
+        }));
+        await expect(bootstrapAccessAuth()).rejects.toThrow(
+            'Unable to check Phi access protection',
+        );
+        expect(__test__.getAccessState().selectedProtocol).toBeNull();
+    });
+
+    it('treats a transient saved-v1 login as an error, not a prompt', async () => {
+        seedVerifier();
+        mockFetch((url) => {
+            if (url === '/api/auth/status') return DUAL_STATUS;
+            if (url === '/api/auth/login') return { ok: false, status: 429 };
+            return undefined;
+        });
+        await expect(bootstrapAccessAuth()).rejects.toThrow(
+            'Unable to check Phi access protection',
+        );
+        expect(document.querySelector('.access-auth-overlay')).toBeNull();
+        expect(localStorage.getItem(CREDENTIAL_KEY)).not.toBeNull();
+        // The preference is fixed, but nothing prompts or downgrades.
+        expect(__test__.getAccessState().selectedProtocol).toBe('v2');
+    });
+
+    it('prompts for the preferred protocol when the saved v1 verifier is rejected', async () => {
+        seedVerifier();
+        mockFetch((url) => {
+            if (url === '/api/auth/status') return DUAL_STATUS;
+            if (url === '/api/auth/login') return { ok: false, status: 401 };
+            return undefined;
+        });
+        void bootstrapAccessAuth();
+        await vi.waitFor(() =>
+            expect(document.querySelector('.access-auth-overlay')).toBeTruthy(),
+        );
+        expect(__test__.getAccessState().selectedProtocol).toBe('v2');
+    });
+
+    it('does not let a late login response overwrite a host token', async () => {
+        let release;
+        const gate = new Promise((resolve) => {
+            release = resolve;
+        });
+        mockFetch((url) => {
+            if (url === '/api/auth/status') return DUAL_STATUS;
+            if (url === '/api/auth/v2/login')
+                return gate.then(() => ({ token: 'stale-token' }));
+            return undefined;
+        });
+        const boot = bootstrapAccessAuth();
+        await vi.waitFor(() =>
+            expect(document.querySelector('.access-auth-overlay')).toBeTruthy(),
+        );
+        submitOverlay('password123');
+        await vi.waitFor(() =>
+            expect(
+                document.querySelector('.access-auth-overlay button')
+                    .textContent,
+            ).toBe('Signing in…'),
+        );
+        const { installToken } = await import('../web/auth.js');
+        installToken('host-token');
+        release();
+        await expect(boot).resolves.toEqual({ enabled: true });
+        const state = __test__.getAccessState();
+        expect(state.accessToken).toBe('host-token');
+        expect(state.selectedProtocol).toBe('v2');
+        expect(localStorage.getItem(BEARER_KEY)).toBeNull();
+    });
+
+    it('keeps a host session out of storage after a password change', async () => {
+        const { installToken } = await import('../web/auth.js');
+        installToken('host-token');
+        mockFetch((url) => {
+            if (url === '/api/auth/v2/password')
+                return { enabled: true, token: 'replacement-token' };
+            return undefined;
+        });
+        await expect(setAccessPassword('password123')).resolves.toEqual({
+            enabled: true,
+        });
+        expect(__test__.getAccessState().accessToken).toBe('replacement-token');
+        expect(localStorage.getItem(BEARER_KEY)).toBeNull();
+    });
+
+    it('keeps a host session out of storage after reauthentication', async () => {
+        const { installToken } = await import('../web/auth.js');
+        installToken('host-token');
+        mockFetch((url) => {
+            if (url === '/api/protected') return { ok: false, status: 401 };
+            if (url === '/api/auth/v2/login')
+                return { token: 'replacement-token' };
+            return { ok: true };
+        });
+        installAccessFetch();
+        await fetch('/api/protected');
+        await vi.waitFor(() =>
+            expect(document.querySelector('.access-auth-overlay')).toBeTruthy(),
+        );
+        submitOverlay('password123');
+        await vi.waitFor(() =>
+            expect(__test__.getAccessState().accessToken).toBe(
+                'replacement-token',
+            ),
+        );
+        expect(localStorage.getItem(BEARER_KEY)).toBeNull();
+    });
+});

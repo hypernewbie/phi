@@ -18,7 +18,7 @@ func (s *stubAuthSocket) Close() error {
 	return nil
 }
 
-func TestAuthFenceCarriesGenerationThroughContext(t *testing.T) {
+func TestAccessFenceCarriesGenerationThroughContext(t *testing.T) {
 	ctx := WithAuthFence(context.Background(), AuthFence{Generation: 7})
 	fence, ok := AuthFenceFrom(ctx)
 	if !ok || fence.Generation != 7 {
@@ -29,7 +29,7 @@ func TestAuthFenceCarriesGenerationThroughContext(t *testing.T) {
 	}
 }
 
-func TestAuthFencerAdmitsOnlyCurrentGeneration(t *testing.T) {
+func TestAccessFencerAdmitsOnlyCurrentGeneration(t *testing.T) {
 	var f authFencer
 	f.rotate(3)
 	if f.admit(&stubAuthSocket{}, AuthFence{Generation: 2}) {
@@ -40,7 +40,7 @@ func TestAuthFencerAdmitsOnlyCurrentGeneration(t *testing.T) {
 	}
 }
 
-func TestAuthFencerForgetsClosedSockets(t *testing.T) {
+func TestAccessFencerForgetsClosedSockets(t *testing.T) {
 	var f authFencer
 	f.rotate(1)
 	socket := &stubAuthSocket{}
