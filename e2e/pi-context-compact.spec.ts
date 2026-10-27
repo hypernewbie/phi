@@ -212,3 +212,117 @@ test('native desktop compact: known meter, one entry, unknown, recovery', async 
         expect(cleanupError, 'fixture cleanup failed').toBeNull();
     }
 });
+
+test('native compact pressed during a turn waits for that turn', async ({
+    page,
+    request,
+}) => {
+    test.setTimeout(180_000);
+    const stubTmp = mkdtempSync(join(tmpdir(), 'cc-queue-'));
+    const closers: Array<() => Promise<unknown>> = [];
+    let cleanupError: unknown = null;
+    try {
+        const stub = await startCompactStub();
+        closers.push(() => stub.close());
+        let seed: CompactSeed | undefined;
+        const phi = await startPhi({
+            config: { auto_reconnect: 'off' },
+            env: { PI_OFFLINE: '1', PI_SKIP_VERSION_CHECK: '1' },
+            setup(dir) {
+                seed = seedCompactFixture(dir, stub.port);
+            },
+        });
+        closers.push(() => phi.stop());
+        if (!seed) throw new Error('fixture seed missing');
+        const { cwd, sessionFile } = seed;
+
+        const spawn = await request.post(`${phi.url}/api/terminals`, {
+            data: {
+                coder: 'pi',
+                cwd,
+                title: 'Pi compact queued',
+                session_id: COMPACT_SESSION_ID,
+            },
+        });
+        expect(spawn.ok()).toBe(true);
+        const pane = ((await spawn.json()) as { pane_id: string }).pane_id;
+        await expect
+            .poll(() => paneBridge(request, phi.url, pane), {
+                timeout: 30_000,
+            })
+            .toMatchObject({
+                compact_idle: true,
+                compact_active: false,
+                compact_pending: false,
+            });
+
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await page.goto(phi.url);
+        await page.locator(`.tab[data-pane-id="${pane}"]`).click();
+        const compactBtn = page
+            .locator('#presets-container .preset-btn', {
+                hasText: '/compact',
+            })
+            .first();
+        await expect(compactBtn).toBeEnabled({ timeout: 15_000 });
+
+        // Hold the turn's completion so the run stays active while the
+        // user presses Compact.
+        stub.holdNext();
+        const input = await request.post(
+            `${phi.url}/api/terminals/${pane}/input`,
+            { data: { text: 'QUEUE A COMPACTION' } },
+        );
+        expect(input.status()).toBe(204);
+        await expect
+            .poll(() => paneBridge(request, phi.url, pane), {
+                timeout: 20_000,
+            })
+            .toMatchObject({ running: true });
+        expect(stub.count()).toBe(1);
+
+        // The control is not greyed out during a run: it offers the
+        // deferred action, then shows the held state after the press.
+        await expect(compactBtn).toBeEnabled();
+        await expect(compactBtn).toHaveAttribute(
+            'title',
+            'Compact after this turn',
+        );
+        await compactBtn.click();
+        await expect(
+            page.locator('.toast', {
+                hasText: 'Compact queued — runs when Pi is idle',
+            }),
+        ).toBeVisible();
+        await expect(compactBtn).toHaveAttribute(
+            'title',
+            'Compact queued — press to cancel',
+        );
+        await expect(compactBtn).toHaveClass(/pi-compact-queued/);
+        expect(
+            await compactBtn.evaluate(
+                (el) => getComputedStyle(el, '::after').content,
+            ),
+        ).toContain('queued');
+        expect(compactionEntries(sessionFile)).toBe(0);
+
+        // Releasing the turn flushes exactly one native compaction.
+        stub.release();
+        await expect(
+            page.locator('.toast', { hasText: 'Compaction complete' }),
+        ).toBeVisible({ timeout: 60_000 });
+        expect(stub.count()).toBe(2);
+        expect(compactionEntries(sessionFile)).toBe(1);
+        await expect(compactBtn).toBeEnabled({ timeout: 15_000 });
+    } finally {
+        for (const close of closers.reverse()) {
+            try {
+                await close();
+            } catch (err) {
+                cleanupError ??= err;
+            }
+        }
+        rmSync(stubTmp, { recursive: true, force: true });
+        expect(cleanupError, 'fixture cleanup failed').toBeNull();
+    }
+});

@@ -160,11 +160,9 @@ function meter() {
 }
 
 function desktopCompact(tm) {
-    // Buttons are labelled via innerText; this jsdom keeps the
-    // innerText value without materializing text nodes.
-    return Array.from(tm.presetsContainer.querySelectorAll('.preset-btn')).find(
-        (b) => b.innerText === '/compact',
-    );
+    // Stable hook: the label becomes Compacting…/queued without
+    // losing the control's identity.
+    return tm.presetsContainer.querySelector('.pi-compact-btn');
 }
 
 // Every Compact toast that reports an unknown outcome, so a lifecycle
@@ -186,9 +184,7 @@ function slashDropup() {
 }
 
 function mobileCompact() {
-    return Array.from(
-        slashDropup().querySelectorAll('button.dropup-model-btn'),
-    ).find((b) => b.innerText === '/compact');
+    return slashDropup().querySelector('button.pi-compact-btn');
 }
 
 function deferred() {
@@ -1134,27 +1130,199 @@ describe('native compact dispatch', () => {
         expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
-    it('sends neither api nor PTY while busy, queued, active, pending, or unknown', () => {
+    it('queues a press made during a turn and dispatches once it settles', async () => {
+        const fetchMock = mockFetch(() => ({
+            ok: true,
+            status: 200,
+            json: { outcome: 'completed' },
+        }));
+        const tm = makeTm();
+        const tab = makePiTab();
+        tm.tabs.set(tab.paneId, tab);
+        tm.activePaneId = tab.paneId;
+        baseline(tm, tab);
+        tm.renderPresets('pi');
+        slashDropup();
+        tm.renderSlashDropup(PI_PRESETS.filter((p) => p.value.startsWith('/')));
+
+        tm._acceptPiBridgeState(
+            tab,
+            wsFrame(tab, {
+                telemetry_revision: '8',
+                running: 'true',
+                compact_idle: 'false',
+                last_run: 'run-0',
+            }),
+            tab.ws,
+        );
+        // A running turn no longer greys the control: the press is held
+        // for that turn instead.
+        expect(desktopCompact(tm).disabled).toBe(false);
+        expect(desktopCompact(tm).title).toBe('Compact after this turn');
+        expect(mobileCompact().disabled).toBe(false);
+        expect(mobileCompact().title).toBe('Compact after this turn');
+
+        desktopCompact(tm).click();
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(tab.ws.sendInput).not.toHaveBeenCalled();
+        expect(tm.app.showToast).toHaveBeenCalledWith(
+            'Compact queued — runs when Pi is idle',
+            { type: 'info', title: 'Compact' },
+        );
+        expect(desktopCompact(tm).title).toBe(
+            'Compact queued — press to cancel',
+        );
+        expect(desktopCompact(tm).classList.contains('pi-compact-queued')).toBe(
+            true,
+        );
+        expect(mobileCompact().classList.contains('pi-compact-queued')).toBe(
+            true,
+        );
+        expect(tab._piCompactQueued).toBeTruthy();
+
+        // The settle frame flushes the held press exactly once.
+        tm._acceptPiBridgeState(
+            tab,
+            wsFrame(tab, {
+                telemetry_revision: '9',
+                running: 'false',
+                compact_idle: 'true',
+                last_run: 'run-0',
+            }),
+            tab.ws,
+        );
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(tab._piCompactQueued).toBeNull();
+        // Pending still disables the control while the native op runs.
+        expect(desktopCompact(tm).disabled).toBe(true);
+        expect(desktopCompact(tm).title).toBe('Compacting…');
+        expect(desktopCompact(tm).innerText).toBe('Compacting…');
+        expect(desktopCompact(tm).classList.contains('pi-compact-queued')).toBe(
+            false,
+        );
+        await vi.waitFor(() =>
+            expect(tm.app.showToast).toHaveBeenCalledWith(
+                'Compaction complete',
+                { type: 'success', title: 'Compact' },
+            ),
+        );
+        expect(tab.ws.sendInput).not.toHaveBeenCalled();
+    });
+
+    it('cancels a queued press on a second click or a new turn', () => {
+        const fetchMock = mockFetch(() => ({
+            ok: true,
+            status: 200,
+            json: { outcome: 'completed' },
+        }));
+        const tm = makeTm();
+        const tab = makePiTab();
+        tm.tabs.set(tab.paneId, tab);
+        tm.activePaneId = tab.paneId;
+        baseline(tm, tab);
+        tm.renderPresets('pi');
+
+        tm._acceptPiBridgeState(
+            tab,
+            wsFrame(tab, {
+                telemetry_revision: '8',
+                running: 'true',
+                compact_idle: 'false',
+                last_run: 'run-0',
+            }),
+            tab.ws,
+        );
+        desktopCompact(tm).click();
+        expect(tab._piCompactQueued).toBeTruthy();
+
+        // A second explicit press cancels instead of dispatching.
+        desktopCompact(tm).click();
+        expect(tab._piCompactQueued).toBeNull();
+        expect(tm.app.showToast).toHaveBeenCalledWith(
+            'Queued compaction cancelled',
+            { type: 'info', title: 'Compact' },
+        );
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(desktopCompact(tm).title).toBe('Compact after this turn');
+
+        // Queue again while the targeted run is still active, then
+        // observe a later run's id: the turn the user targeted already
+        // settled, so never compact context they added since.
+        desktopCompact(tm).click();
+        expect(tab._piCompactQueued).toBeTruthy();
+        tm._acceptPiBridgeState(
+            tab,
+            wsFrame(tab, {
+                telemetry_revision: '9',
+                running: 'true',
+                compact_idle: 'false',
+                last_run: 'run-1',
+            }),
+            tab.ws,
+        );
+        expect(tab._piCompactQueued).toBeNull();
+        expect(tm.app.showToast).toHaveBeenCalledWith(
+            'Queued compaction cancelled — a new turn started',
+            { type: 'info', title: 'Compact' },
+        );
+        expect(fetchMock).not.toHaveBeenCalled();
+
+        // A queued user message at settle also cancels: compacting after
+        // it would include context the user has not seen yet.
+        tm._acceptPiBridgeState(
+            tab,
+            wsFrame(tab, {
+                telemetry_revision: '10',
+                running: 'true',
+                compact_idle: 'false',
+                last_run: 'run-1',
+            }),
+            tab.ws,
+        );
+        desktopCompact(tm).click();
+        expect(tab._piCompactQueued).toBeTruthy();
+        tm._acceptPiBridgeState(
+            tab,
+            wsFrame(tab, {
+                telemetry_revision: '11',
+                running: 'false',
+                compact_idle: 'true',
+                compact_queued: 'true',
+                last_run: 'run-1',
+            }),
+            tab.ws,
+        );
+        expect(tab._piCompactQueued).toBeNull();
+        expect(tm.app.showToast).toHaveBeenCalledWith(
+            'Queued compaction cancelled — Pi has queued messages',
+            { type: 'info', title: 'Compact' },
+        );
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('keeps only an already-running compaction disabled', () => {
         const states = [
             [
-                { ...READY, compact_idle: false },
-                'Compact unavailable: Pi is busy',
-            ],
-            [
-                { ...READY, compact_queued: true },
+                { compact_queued: true },
                 'Compact unavailable: messages queued',
+                'Pi has queued messages',
+                false,
             ],
             [
-                { ...READY, compact_active: true },
+                { compact_active: true },
                 'Compact unavailable: compaction active',
+                'A compaction is already running',
+                true,
             ],
             [
-                { ...READY, compact_pending: true },
+                { compact_pending: true },
                 'Compact unavailable: compaction pending',
+                'A compaction is already pending',
+                true,
             ],
         ];
         let i = 0;
-        for (const [readiness, title] of states) {
+        for (const [readiness, title, toast, disabled] of states) {
             document.body.innerHTML = '';
             const fetchMock = mockFetch(() => ({
                 ok: true,
@@ -1167,10 +1335,9 @@ describe('native compact dispatch', () => {
             tm.activePaneId = tab.paneId;
             const view = httpView({ ...readiness });
             const frame = wsFrame(tab, {
-                compact_idle: String(readiness.compact_idle),
-                compact_queued: String(readiness.compact_queued),
-                compact_active: String(readiness.compact_active),
-                compact_pending: String(readiness.compact_pending),
+                compact_queued: String(readiness.compact_queued ?? false),
+                compact_active: String(readiness.compact_active ?? false),
+                compact_pending: String(readiness.compact_pending ?? false),
             });
             tm._seedHttpPiBridge(tab, view);
             tm._acceptPiBridgeState(tab, frame, tab.ws);
@@ -1179,20 +1346,25 @@ describe('native compact dispatch', () => {
             tm.renderSlashDropup(
                 PI_PRESETS.filter((p) => p.value.startsWith('/')),
             );
-            expect(desktopCompact(tm).disabled).toBe(true);
+            expect(desktopCompact(tm).disabled).toBe(disabled);
             expect(desktopCompact(tm).title).toBe(title);
-            expect(mobileCompact().disabled).toBe(true);
+            expect(mobileCompact().disabled).toBe(disabled);
             expect(mobileCompact().title).toBe(title);
+            // A typed command bypasses a disabled button but still
+            // reports the reason instead of silently doing nothing.
             expect(tm.sendSlashCommand(tab, '/compact')).toBe(true);
+            expect(tm.app.showToast).toHaveBeenCalledWith(toast, {
+                type: 'info',
+                title: 'Compact',
+            });
             expect(fetchMock).not.toHaveBeenCalled();
             expect(tab.ws.sendInput).not.toHaveBeenCalled();
-            expect(tm.app.showToast).not.toHaveBeenCalled();
             vi.unstubAllGlobals();
         }
     });
 
-    it('disables controls while readiness is unknown', () => {
-        mockFetch(() => ({
+    it('explains readiness unknown without disabling the control', () => {
+        const fetchMock = mockFetch(() => ({
             ok: true,
             status: 200,
             json: { outcome: 'completed' },
@@ -1228,11 +1400,16 @@ describe('native compact dispatch', () => {
             tab.ws,
         );
         tm.renderPresets('pi');
-        expect(desktopCompact(tm).disabled).toBe(true);
+        expect(desktopCompact(tm).disabled).toBe(false);
         expect(desktopCompact(tm).title).toBe(
             'Compact unavailable: unknown Pi state',
         );
         expect(tm.sendSlashCommand(tab, '/compact')).toBe(true);
+        expect(tm.app.showToast).toHaveBeenCalledWith('Pi state is unknown', {
+            type: 'info',
+            title: 'Compact',
+        });
+        expect(fetchMock).not.toHaveBeenCalled();
         expect(tab.ws.sendInput).not.toHaveBeenCalled();
     });
 
@@ -1635,20 +1812,23 @@ describe('compact control keyboard semantics', () => {
         btn.focus();
         expect(document.activeElement).toBe(btn);
 
-        // Busy readiness disables the same native control.
+        // Busy readiness keeps the control focusable so it can queue
+        // the press and explain itself instead of becoming dead.
         tm._acceptPiBridgeState(
             tab,
             wsFrame(tab, {
                 telemetry_revision: '8',
                 compact_idle: 'false',
+                running: 'true',
             }),
             tab.ws,
         );
         const busy = desktopCompact(tm);
         expect(busy.tagName).toBe('BUTTON');
-        expect(busy.disabled).toBe(true);
+        expect(busy.disabled).toBe(false);
+        expect(busy.title).toBe('Compact after this turn');
         busy.focus();
-        expect(document.activeElement).not.toBe(busy);
+        expect(document.activeElement).toBe(busy);
     });
 
     it('keeps preset focus across a context-only telemetry frame', () => {
@@ -1959,7 +2139,7 @@ describe('correction cycle 1 regressions', () => {
         );
     });
 
-    it('C3: blocks logically running native Compact even if sampled idle is true', () => {
+    it('C3: defers logically running native Compact even if sampled idle is true', () => {
         const fetchMock = mockFetch(() => ({
             ok: true,
             status: 200,
@@ -1976,30 +2156,30 @@ describe('correction cycle 1 regressions', () => {
         // Absent running is not a requirement: still enabled.
         expect(desktopCompact(tm).disabled).toBe(false);
 
-        // A running-only update immediately disables both surfaces.
+        // A running-only update keeps both surfaces pressable; the
+        // sampled idle flag does not make a running runtime compactable.
         tm._acceptPiBridgeState(
             tab,
             wsFrame(tab, { telemetry_revision: '8', running: 'true' }),
             tab.ws,
         );
-        expect(desktopCompact(tm).disabled).toBe(true);
-        expect(desktopCompact(tm).title).toBe(
-            'Compact unavailable: Pi is busy',
-        );
-        expect(mobileCompact().disabled).toBe(true);
-        expect(mobileCompact().title).toBe('Compact unavailable: Pi is busy');
+        expect(desktopCompact(tm).disabled).toBe(false);
+        expect(desktopCompact(tm).title).toBe('Compact after this turn');
+        expect(mobileCompact().disabled).toBe(false);
+        expect(mobileCompact().title).toBe('Compact after this turn');
         expect(tm.sendSlashCommand(tab, '/compact')).toBe(true);
         expect(fetchMock).not.toHaveBeenCalled();
         expect(tab.ws.sendInput).not.toHaveBeenCalled();
 
-        // A running-clear update re-enables without touching idle.
+        // A running-clear update flushes the queued press once.
         tm._acceptPiBridgeState(
             tab,
             wsFrame(tab, { telemetry_revision: '9', running: 'false' }),
             tab.ws,
         );
-        expect(desktopCompact(tm).disabled).toBe(false);
-        expect(desktopCompact(tm).title).toBe('Compact via bridge');
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(desktopCompact(tm).disabled).toBe(true);
+        expect(desktopCompact(tm).title).toBe('Compacting…');
     });
 
     it('C4: treats non-200 success statuses as unknown, never completed', async () => {

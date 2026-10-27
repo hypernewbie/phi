@@ -1216,6 +1216,68 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(row.querySelector('.pi-rpc-compact-btn').disabled).toBe(false);
     });
 
+    it('queues Compact while busy, flushes once idle, and cancels on a second press', async () => {
+        const row = document.createElement('div');
+        const tab = { paneId: 'pi-rpc:compact-queue', coder: 'pi-rpc' };
+        let state = {
+            ready: true,
+            exited: false,
+            busy: true,
+            queueDepth: 0,
+            hasTranscript: true,
+            model: 'm',
+            thinking: 'low',
+        };
+        getPiRpcControls.mockImplementation(() => state);
+        rpcChatCompact.mockImplementation(() => Promise.resolve({}));
+        const tm = Object.create(TabManager.prototype);
+        tm.presetsContainer = row;
+        tm.tabs = new Map([[tab.paneId, tab]]);
+        tm.getActiveTab = vi.fn(() => tab);
+        tm._piRpcResetPending = new Set();
+        tm._piRpcError = vi.fn();
+        tm.app = { showToast: vi.fn() };
+
+        tm.renderPresets('pi-rpc');
+        const button = () => row.querySelector('.pi-rpc-compact-btn');
+        expect(button().disabled).toBe(false);
+        expect(button().title).toBe('Compact after this turn');
+
+        // A running turn queues the explicit press instead of aborting it.
+        button().click();
+        expect(rpcChatCompact).not.toHaveBeenCalled();
+        expect(tab._piRpcCompactQueued).toBe(true);
+        expect(button().textContent).toBe('Compact queued');
+        expect(button().title).toBe('Compact queued — press to cancel');
+        expect(tm.app.showToast).toHaveBeenCalledWith(
+            'Compact queued — runs when Pi is idle',
+            { type: 'info', title: 'Compact' },
+        );
+
+        // A second press cancels rather than stacking another request.
+        button().click();
+        expect(tab._piRpcCompactQueued).toBe(false);
+        expect(rpcChatCompact).not.toHaveBeenCalled();
+        expect(button().title).toBe('Compact after this turn');
+        expect(tm.app.showToast).toHaveBeenCalledWith(
+            'Queued compaction cancelled',
+            { type: 'info', title: 'Compact' },
+        );
+
+        // Queue again, then let the RPC status settle.
+        button().click();
+        state = { ...state, busy: false };
+        tm._flushPiRpcCompactQueue(tab);
+        expect(rpcChatCompact).toHaveBeenCalledTimes(1);
+        expect(tab._piRpcCompactQueued).toBe(false);
+        expect(button().textContent).toBe('Compacting…');
+        expect(button().disabled).toBe(true);
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(button().disabled).toBe(false);
+        expect(button().textContent).toBe('Compact');
+    });
+
     it('handles Escape dropup-first, composing, active, and idle states', () => {
         const tab = { paneId: 'pi-rpc:escape', coder: 'pi-rpc' };
         const tm = Object.create(TabManager.prototype);
