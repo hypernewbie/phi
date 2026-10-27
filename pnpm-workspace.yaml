@@ -2,6 +2,7 @@ packages:
   - bonus/pi-phi
   - desktop/electron
   - desktop/pet
+  - packages/*
 
 catalog:
   '@alenaksu/json-viewer': 2.1.2
