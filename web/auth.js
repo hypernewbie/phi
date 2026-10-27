@@ -588,6 +588,16 @@ function isSyncMessagePath(path) {
     return path === '/api/sync/messages' || path.startsWith('/api/sync/messages/');
 }
 
+// isProtectedAPIPath is the wrapper and asset scope: same-origin API data that
+// needs a credential, excluding the public auth routes and the sync exemption.
+function isProtectedAPIPath(pathname) {
+    return (
+        pathname.startsWith('/api/') &&
+        !pathname.startsWith('/api/auth/') &&
+        !isSyncMessagePath(pathname)
+    );
+}
+
 function requestURL(input) {
     try {
         if (typeof input === 'string' || input instanceof URL)
@@ -618,12 +628,7 @@ export function installAccessFetch() {
         const token = accessToken;
         if (!url || !token || url.origin !== location.origin)
             return baseFetch(input, init);
-        if (
-            !url.pathname.startsWith('/api/') ||
-            url.pathname.startsWith('/api/auth/') ||
-            isSyncMessagePath(url.pathname)
-        )
-            return baseFetch(input, init);
+        if (!isProtectedAPIPath(url.pathname)) return baseFetch(input, init);
         const headers = requestHeaders(input, init);
         // A caller-supplied Authorization is the caller's business: keep it,
         // and never treat its failure as this module's token being rejected.
@@ -1021,11 +1026,36 @@ export function webSocketURL(url) {
     return target;
 }
 
+// authAssetURL makes a protected same-origin asset loadable by the DOM. A v2
+// bearer session has no cookie, so <img>, media, download, and iframe loads
+// cannot authenticate themselves: fetch the bytes with the module credential
+// and return an object URL plus its release. Every other address comes back
+// unchanged, so v1 sessions and public assets behave exactly as before.
+export async function authAssetURL(url) {
+    const target = new URL(
+        url instanceof URL ? url.href : String(url),
+        location.href,
+    );
+    if (
+        selectedProtocol !== 'v2' ||
+        !accessToken ||
+        target.origin !== location.origin ||
+        !isProtectedAPIPath(target.pathname)
+    )
+        return { url: target.href, revoke() {} };
+    // The installed wrapper supplies the bearer and reports a rejected token.
+    const res = await fetch(target.href, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`Unable to load asset (${res.status})`);
+    const objectURL = URL.createObjectURL(await res.blob());
+    return { url: objectURL, revoke: () => URL.revokeObjectURL(objectURL) };
+}
+
 if (typeof window !== 'undefined') {
     const bridge = window.phiAccessAuth || {};
     bridge.installToken = installToken;
     bridge.getAccessToken = getAccessToken;
     bridge.webSocketURL = webSocketURL;
+    bridge.assetURL = authAssetURL;
     window.phiAccessAuth = bridge;
 }
 

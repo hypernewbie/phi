@@ -1,5 +1,5 @@
 /* Φ phi — AI Sync Board Manager */
-import { escapeHtml as escapeHtmlUtil, buildProxyUrl, } from './util.js';
+import { escapeHtml as escapeHtmlUtil, buildProxyUrl, authenticateImages, } from './util.js';
 import { renderMarkdownSafe, highlightCodeIn } from './md-render.js';
 // Sync Board desktop-alert markers: a message whose key or value carries
 // one of these signals the desktop shell via a transient page title
@@ -73,6 +73,9 @@ export class SyncManager {
     formSubmit;
     messagesList;
     _fileExistCache = new Map();
+    /** Releases for the authenticated thumbnail object URLs in the current
+     *  card list; every re-render drops the previous list's URLs. */
+    _thumbnailReleases = [];
     _handledToastKeys = new Set();
     _syncDebounce = null;
     constructor(app) {
@@ -324,6 +327,9 @@ export class SyncManager {
         }
     }
     renderMessages(messages) {
+        for (const release of this._thumbnailReleases)
+            release();
+        this._thumbnailReleases = [];
         if (!messages || messages.length === 0) {
             this.messagesList.innerHTML =
                 '<div class="sync-empty-state">No messages synced.</div>';
@@ -560,6 +566,7 @@ export class SyncManager {
                                         <img src="${this.escapeHtml(assetUrl)}" class="sync-image-thumb" alt="${this.escapeHtml(previewName)}" loading="lazy" />
                                     </div>
                                 `;
+                            void authenticateImages(imgSlot).then((release) => this._thumbnailReleases.push(release));
                             imgSlot
                                 .querySelector('.sync-image-thumb')
                                 ?.addEventListener('click', (e) => {
