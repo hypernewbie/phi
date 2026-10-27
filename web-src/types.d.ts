@@ -63,11 +63,13 @@ export interface AppLike {
 
 // Optional browser bridge installed by web/auth.js. The desktop host uses it
 // to install a memory-only v2 token; the socket constructors use it to carry
-// that token as one query parameter.
+// that token as one query parameter; asset consumers use it to load protected
+// bytes the DOM cannot authenticate on its own.
 export interface PhiAccessAuthBridge {
     installToken(token: string): boolean;
     getAccessToken(): string | null;
     webSocketURL(url: URL): URL;
+    assetURL(url: string | URL): Promise<{ url: string; revoke(): void }>;
 }
 
 declare global {

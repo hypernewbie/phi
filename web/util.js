@@ -47,6 +47,46 @@ export function wsUrl(path) {
 export function serverKey(key) {
     return embeddedProfileId ? `${key}:${embeddedProfileId}` : key;
 }
+// authenticatedAsset turns a protected same-origin asset address into one the
+// DOM can load. A v2 bearer session has no cookie, so <img>, media, download,
+// and iframe loads cannot authenticate themselves; the auth bridge fetches the
+// bytes with that bearer and returns an object URL. A v1 session, a public
+// address, or a page without the bridge keeps the plain address.
+export async function authenticatedAsset(url) {
+    const bridge = window.phiAccessAuth;
+    if (!bridge?.assetURL)
+        return { url: String(url), revoke() { } };
+    return bridge.assetURL(url);
+}
+// authenticateImages authenticates every <img> in a container and returns the
+// release for the object URLs it created. Callers keep that release beside the
+// content they rendered and run it before replacing or removing the content.
+// A failed load restores the plain address so the element shows its own
+// failure state instead of a blank box.
+export async function authenticateImages(container) {
+    const releases = [];
+    await Promise.all(Array.from(container.querySelectorAll('img')).map(async (img) => {
+        const src = img.getAttribute('src');
+        if (!src)
+            return;
+        // Drop the protected address before awaiting: the browser must not
+        // request it unauthenticated and paint a broken image first.
+        img.removeAttribute('src');
+        try {
+            const asset = await authenticatedAsset(src);
+            if (asset.url !== src)
+                releases.push(asset.revoke);
+            img.src = asset.url;
+        }
+        catch {
+            img.src = src;
+        }
+    }));
+    return () => {
+        for (const release of releases)
+            release();
+    };
+}
 // projectWorktreeLabel renders a short "project/worktree" label from a cwd.
 // Pure: no DOM, no `this`. Handles mixed \ and / separators, drops empty
 // segments, and falls back to the em-dash sentinel for empty input.
