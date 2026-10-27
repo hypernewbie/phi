@@ -584,6 +584,7 @@ export class MarkdownManager {
             this._currentFileView = null;
         }
         this._setModalTitle(f.name);
+        this._modalRenderId++;
         this._releaseModalAssets();
         this.modalBody.innerHTML = '<div class="md-rendering">Loading…</div>';
         this.modal.classList.remove('hidden');
