@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { setupDomHarness, mockFetch } from './_dom.js';
 
 vi.mock('../web/vendor/noble-hashes/pbkdf2.js', () => ({
@@ -19,6 +19,7 @@ const { appearanceRequestContext } = await import(
 const { BackendScope } = await import('../web/backend-scope.js');
 
 setupDomHarness();
+beforeEach(() => __test__.resetAccessState());
 
 describe('access credential storage', () => {
     it('keeps one credential per server in the shared embedded page', async () => {
