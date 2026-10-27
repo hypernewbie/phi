@@ -190,9 +190,7 @@ test('native mobile compact: slash entry, keyboard, pending, preserved draft', a
         await page.locator('#presets-container .slash-trigger-btn').click();
         const slashDropup = page.locator('#slash-presets-dropup');
         await expect(slashDropup).toBeVisible({ timeout: 10_000 });
-        const compactEntry = slashDropup.locator('button.dropup-model-btn', {
-            hasText: '/compact',
-        });
+        const compactEntry = slashDropup.locator('button.pi-compact-btn');
         await expect(compactEntry).toBeEnabled({ timeout: 10_000 });
         await expect(compactEntry).toHaveAttribute(
             'title',

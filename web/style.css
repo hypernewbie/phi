@@ -3324,6 +3324,14 @@ body.has-terminal-bg
     pointer-events: none;
 }
 
+/* A compact press held for the running turn stays visibly queued,
+   not merely enabled: the suffix is state, the title is the action. */
+.preset-btn.pi-compact-queued::after,
+.dropup-model-btn.pi-compact-queued::after {
+    content: ' queued';
+    opacity: 0.7;
+}
+
 .presets-divider {
     width: 1px;
     height: 18px;

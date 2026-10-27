@@ -5,9 +5,11 @@ Pi completion to Phi's existing bell and provides read-only editor history.
 It also lists and switches models through Phi's shared model picker.
 It shows context usage as display-only telemetry. It runs a native
 compaction only on an explicit user action through the existing
-Compact control: one operation per Pi process, no queue, no automatic
-retry. An expired or interrupted wait reports unknown; native work
-may still complete, and a late result releases only its own operation.
+Compact control: one operation per Pi process, no server-side queue,
+no automatic retry. A press during a turn waits in the browser for that
+turn; a second press cancels it. An expired or interrupted wait reports
+unknown; native work may still complete, and a late result releases only
+its own operation.
 It never sends prompts on its own and never edits messages or files.
 
 ## Layout
@@ -53,6 +55,14 @@ picked offline is held, announced, and sent once the browser is online,
 after rechecking that its session is still current. Catalog reads may retry;
 a dispatched change is never automatically replayed. A switch timeout has an
 unknown outcome. Reopen the picker to check the model.
+
+## Native compact
+
+A Compact press during a turn is held for that turn and dispatched once Pi
+reports idle; a second press cancels it. It is cancelled rather than deferred
+if a new turn starts, messages are queued, or another compaction starts, so a
+later compaction never includes context the user did not intend. A press that
+cannot act immediately reports why instead of leaving a grey control.
 
 ## Skills
 

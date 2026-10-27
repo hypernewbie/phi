@@ -242,9 +242,10 @@ function piBridgeCapable(tab, capability) {
 }
 
 // piBridgeCompactReady is the one readiness predicate behind both the
-// Compact control and the dispatch guard, so an enabled button and a
-// dispatched request can never disagree. The reason is the control's
-// title when it is not ready.
+// Compact control and the dispatch guard. The control never greys out
+// a merely-busy action: it queues a press for the active turn or shows
+// the reason, so only an already-running compaction is disabled. The
+// reason is the control's title when it cannot act immediately.
 function piBridgeCompactReady(view) {
     const known =
         typeof view?.generation === 'string' &&
@@ -280,6 +281,25 @@ function piBridgeCompactReady(view) {
             reason: 'Compact unavailable: compaction pending',
         };
     return { ready: true, reason: 'Compact via bridge' };
+}
+
+// piBridgeCompactReasonText turns the readiness predicate's stable
+// diagnostic into a toast sentence; titles keep the precise form.
+function piBridgeCompactReasonText(reason) {
+    switch (reason) {
+        case 'Compact unavailable: unknown Pi state':
+            return 'Pi state is unknown';
+        case 'Compact unavailable: Pi is busy':
+            return 'Pi is busy';
+        case 'Compact unavailable: messages queued':
+            return 'Pi has queued messages';
+        case 'Compact unavailable: compaction active':
+            return 'A compaction is already running';
+        case 'Compact unavailable: compaction pending':
+            return 'A compaction is already pending';
+        default:
+            return reason.replace('Compact unavailable: ', '');
+    }
 }
 
 // piBridgeEqualRevAgrees compares the retained publication fields:
@@ -632,6 +652,9 @@ export class TabManager {
                         this.savePiRpcTabs();
                     }
                 }
+                const tab = this.tabs.get(paneId);
+                if (tab?.coder === 'pi-rpc')
+                    this._flushPiRpcCompactQueue(tab);
                 this.renderPiRpcStatusBar();
                 const activeTab = this.getActiveTab();
                 if (
@@ -6619,6 +6642,88 @@ export class TabManager {
         );
     }
 
+    // _sendPiRpcCompact runs the RPC Compact action from either the
+    // button or a queued press. A run in progress queues the explicit
+    // action for that run instead of aborting it; a second press
+    // cancels. Never dispatch while messages are queued: the user has
+    // not seen the context those messages will add.
+    _sendPiRpcCompact(tabInfo) {
+        const paneId = tabInfo.paneId;
+        if (this._piRpcCompactPending?.has(paneId)) return;
+        if (tabInfo._piRpcCompactQueued) {
+            tabInfo._piRpcCompactQueued = false;
+            this._piCompactToast('Queued compaction cancelled');
+            if (this.getActiveTab() === tabInfo)
+                this.renderPresets('pi-rpc');
+            return;
+        }
+        const state = this._piRpcControlsFor(tabInfo);
+        if (!state.ready || state.exited) return;
+        if (state.busy && state.queueDepth === 0) {
+            tabInfo._piRpcCompactQueued = true;
+            this._piCompactToast('Compact queued — runs when Pi is idle');
+            if (this.getActiveTab() === tabInfo)
+                this.renderPresets('pi-rpc');
+            return;
+        }
+        if (state.queueDepth > 0) {
+            this._piCompactToast('Pi has queued messages');
+            return;
+        }
+        if (!this._piRpcCompactPending)
+            this._piRpcCompactPending = new Set();
+        this._piRpcCompactPending.add(paneId);
+        if (this.getActiveTab() === tabInfo) this.renderPresets('pi-rpc');
+        let compactResult;
+        try {
+            compactResult = rpcChatCompact(paneId);
+        } catch (error) {
+            compactResult = Promise.reject(error);
+        }
+        Promise.resolve(compactResult)
+            .catch((error) => {
+                if (this.tabs.has(paneId)) this._piRpcError(error, 'Compact');
+            })
+            .finally(() => {
+                this._piRpcCompactPending.delete(paneId);
+                if (this.getActiveTab()?.paneId === paneId)
+                    this.renderPresets('pi-rpc');
+            });
+    }
+
+    // _flushPiRpcCompactQueue runs one held press on the idle status
+    // edge. The queue is scoped to the turn it was pressed in; a
+    // queued user message cancels it because compacting afterwards
+    // would include context the user did not intend.
+    _flushPiRpcCompactQueue(tabInfo) {
+        if (!tabInfo?._piRpcCompactQueued) return;
+        if (
+            tabInfo.coder !== 'pi-rpc' ||
+            this.tabs.get(tabInfo.paneId) !== tabInfo
+        ) {
+            tabInfo._piRpcCompactQueued = false;
+            return;
+        }
+        const state = this._piRpcControlsFor(tabInfo);
+        if (!state.ready || state.exited) {
+            tabInfo._piRpcCompactQueued = false;
+            return;
+        }
+        if (state.queueDepth > 0) {
+            tabInfo._piRpcCompactQueued = false;
+            this._piCompactToast(
+                'Queued compaction cancelled — Pi has queued messages',
+            );
+            if (this.getActiveTab() === tabInfo)
+                this.renderPresets('pi-rpc');
+            return;
+        }
+        if (state.busy || this._piRpcCompactPending?.has(tabInfo.paneId))
+            return;
+        tabInfo._piRpcCompactQueued = false;
+        this._sendPiRpcCompact(tabInfo);
+    }
+
     _renderPiRpcPresets() {
         if (!this.presetsContainer) return;
         const activeTab = this.getActiveTab();
@@ -6636,37 +6741,33 @@ export class TabManager {
         const compactButton = document.createElement('button');
         compactButton.type = 'button';
         compactButton.className = 'preset-btn pi-rpc-compact-btn';
-        compactButton.textContent = 'Compact';
-        compactButton.title = 'Compact the conversation to free context';
         const compactPending = this._piRpcCompactPending?.has(paneId) === true;
-        compactButton.disabled =
-            menuDisabled ||
-            state.busy ||
-            state.queueDepth > 0 ||
-            compactPending;
+        const compactQueued = activeTab._piRpcCompactQueued === true;
+        let compactLabel = 'Compact';
+        let compactTitle = 'Compact the conversation to free context';
+        // A running turn is a deferred action, not a dead control: the
+        // press is held until the RPC status turns idle. Queued messages
+        // and an unknown runtime still explain themselves on press.
+        if (compactPending) {
+            compactLabel = 'Compacting…';
+            compactTitle = 'Compacting…';
+        } else if (compactQueued) {
+            compactLabel = 'Compact queued';
+            compactTitle = 'Compact queued — press to cancel';
+        } else if (menuDisabled) {
+            compactTitle = 'Compact unavailable: Pi is not ready';
+        } else if (state.busy && state.queueDepth === 0) {
+            compactTitle = 'Compact after this turn';
+        } else if (state.queueDepth > 0) {
+            compactTitle = 'Compact unavailable: messages queued';
+        }
+        compactButton.textContent = compactLabel;
+        compactButton.title = compactTitle;
+        compactButton.disabled = menuDisabled || compactPending;
         compactButton.addEventListener('click', (event) => {
             event.stopPropagation();
             if (compactButton.disabled) return;
-            if (!this._piRpcCompactPending)
-                this._piRpcCompactPending = new Set();
-            this._piRpcCompactPending.add(paneId);
-            this.renderPresets('pi-rpc');
-            let compactResult;
-            try {
-                compactResult = rpcChatCompact(paneId);
-            } catch (error) {
-                compactResult = Promise.reject(error);
-            }
-            Promise.resolve(compactResult)
-                .catch((error) => {
-                    if (this.tabs.has(paneId))
-                        this._piRpcError(error, 'Compact');
-                })
-                .finally(() => {
-                    this._piRpcCompactPending.delete(paneId);
-                    if (this.getActiveTab()?.paneId === paneId)
-                        this.renderPresets('pi-rpc');
-                });
+            this._sendPiRpcCompact(activeTab);
         });
 
         const resetButton = document.createElement('button');
@@ -9206,18 +9307,53 @@ export class TabManager {
     }
 
     // _sendPiBridgeCompact runs the native bridge path for an exact
-    // /compact on a capable Pi PTY tab. Always handled (true): guards
-    // swallow without PTY fallback, and a dispatch never replays on
-    // refusal, error, timeout, or disconnect. Draft and attachments
-    // are never touched here; focus matches the legacy slash path.
+    // /compact on a capable Pi PTY tab. Always handled (true): a press
+    // during a turn is held for that turn, an unqueueable press explains
+    // itself, and a dispatch never replays on refusal, error, timeout,
+    // or disconnect. Draft and attachments are never touched here;
+    // focus matches the legacy slash path.
     _sendPiBridgeCompact(tabInfo, { focusInputOnMobile = true } = {}) {
         const paneId = tabInfo.paneId;
         // One native request per pane; a duplicate desktop/mobile
         // click while one is pending is swallowed, never replayed.
         if (this._piBridgeCompactPending?.get(paneId)) return true;
         const view = tabInfo.piBridge;
-        // Eligible but busy or unknown: send NEITHER api nor PTY.
-        if (!piBridgeCompactReady(view).ready) return true;
+        // A second press cancels the turn-scoped queue instead of
+        // dispatching or stacking another request.
+        if (tabInfo._piCompactQueued) {
+            tabInfo._piCompactQueued = null;
+            this._piCompactToast('Queued compaction cancelled');
+            this._refreshPiBridgeModels(tabInfo);
+            return true;
+        }
+        const readiness = piBridgeCompactReady(view);
+        if (!readiness.ready) {
+            // Pi is already running a turn: remember the explicit
+            // press and dispatch once that turn settles. Never queue
+            // for queued messages, active/unknown compaction, or an
+            // unknown Pi state. A press that cannot queue still gets
+            // an explanation instead of a dead grey control.
+            if (this._piBridgeCompactQueueable(tabInfo)) {
+                tabInfo._piCompactQueued = {
+                    ws: tabInfo.ws,
+                    generation: view.generation,
+                    lastRun:
+                        typeof view.last_run === 'string'
+                            ? view.last_run
+                            : '',
+                };
+                this._piCompactToast(
+                    'Compact queued — runs when Pi is idle',
+                );
+                this._refreshPiBridgeModels(tabInfo);
+            } else {
+                this._piCompactToast(
+                    piBridgeCompactReasonText(readiness.reason),
+                );
+            }
+            this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
+            return true;
+        }
         const controller = new AbortController();
         const op = {
             tab: tabInfo,
@@ -9275,6 +9411,84 @@ export class TabManager {
         this._refreshPiBridgeModels(tabInfo);
         this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
         return true;
+    }
+
+    // _piBridgeCompactQueueable is true only when the one blocker is
+    // the run currently in progress. Queued messages, an active or
+    // pending compaction, and an unknown sample are never turned into
+    // a deferred action: compacting after those would use context the
+    // user did not mean to include.
+    _piBridgeCompactQueueable(tab) {
+        if (!this._piBridgeCompactEligible(tab)) return false;
+        const view = tab?.piBridge;
+        return (
+            view?.running === true &&
+            view.compact_queued === false &&
+            view.compact_active === false &&
+            view.compact_pending === false &&
+            piBridgeCompactReady(view).reason ===
+                'Compact unavailable: Pi is busy'
+        );
+    }
+
+    // _flushPiBridgeCompactQueue dispatches one held press after the
+    // turn it targeted settles. It never replays a dispatched op and
+    // cancels if a new turn starts first, the runtime/socket moves,
+    // messages queue, or another compaction starts.
+    _flushPiBridgeCompactQueue(tabInfo) {
+        const queued = tabInfo?._piCompactQueued;
+        if (!queued) return;
+        if (
+            !this._piBridgeCompactEligible(tabInfo) ||
+            tabInfo.ws !== queued.ws ||
+            tabInfo.piBridge?.generation !== queued.generation
+        ) {
+            tabInfo._piCompactQueued = null;
+            return;
+        }
+        const view = tabInfo.piBridge;
+        // Any of these means the deferred context is no longer the one
+        // the user asked to compact, whether the turn is still running
+        // or has just settled.
+        if (
+            view.compact_queued === true ||
+            view.compact_active === true ||
+            view.compact_pending === true
+        ) {
+            tabInfo._piCompactQueued = null;
+            const reason =
+                view.compact_queued === true
+                    ? 'Pi has queued messages'
+                    : view.compact_active === true
+                      ? 'a compaction is already running'
+                      : 'a compaction is already pending';
+            this._piCompactToast(
+                `Queued compaction cancelled — ${reason}`,
+            );
+            this._refreshPiBridgeModels(tabInfo);
+            return;
+        }
+        if (view.running === true) {
+            const lastRun =
+                typeof view.last_run === 'string' ? view.last_run : '';
+            if (lastRun !== queued.lastRun) {
+                tabInfo._piCompactQueued = null;
+                this._piCompactToast(
+                    'Queued compaction cancelled — a new turn started',
+                );
+                this._refreshPiBridgeModels(tabInfo);
+            }
+            return;
+        }
+        // The idle sample can lag the lifecycle edge by one frame;
+        // keep the queue until readiness is authoritative.
+        if (!piBridgeCompactReady(view).ready) return;
+        tabInfo._piCompactQueued = null;
+        this._sendPiBridgeCompact(tabInfo, { focusInputOnMobile: false });
+    }
+
+    _piCompactToast(message) {
+        this.app?.showToast?.(message, { type: 'info', title: 'Compact' });
     }
 
     // _piBridgeCompactOutcome maps one Compact HTTP round trip to a
@@ -11490,8 +11704,15 @@ export class TabManager {
                         const compactState =
                             this._piBridgeCompactControlState(activeTab);
                         btn.disabled = compactState.disabled;
+                        btn.classList.add('pi-compact-btn');
                         if (compactState.title)
                             btn.title = compactState.title;
+                        if (compactState.label)
+                            btn.innerText = compactState.label;
+                        btn.classList.toggle(
+                            'pi-compact-queued',
+                            compactState.queued === true,
+                        );
                     }
                     btn.addEventListener('click', () => {
                         this._sendCoderPreset(p.value);
@@ -11853,7 +12074,13 @@ export class TabManager {
                     this.getActiveTab(),
                 );
                 btn.disabled = compactState.disabled;
+                btn.classList.add('pi-compact-btn');
                 if (compactState.title) btn.title = compactState.title;
+                if (compactState.label) btn.innerText = compactState.label;
+                btn.classList.toggle(
+                    'pi-compact-queued',
+                    compactState.queued === true,
+                );
             }
             btn.addEventListener('click', () => {
                 this._sendCoderPreset(p.value, {
@@ -13529,17 +13756,39 @@ export class TabManager {
         };
     }
 
-    // _piBridgeCompactControlState disables the existing /compact
-    // controls only for capable Pi PTY tabs: while a native request
-    // is pending, while readiness is unknown, or while Pi reports
-    // busy/queued/active/pending. Incapable tabs keep legacy buttons.
+    // _piBridgeCompactControlState keeps the /compact control actionable
+    // for capable Pi PTY tabs: a press during a turn queues, an unknown
+    // or queued-message press explains itself, and only a compaction
+    // already in flight (native pending or a running compaction) is
+    // disabled. Incapable tabs keep legacy buttons.
     _piBridgeCompactControlState(tab) {
         if (!this._piBridgeCompactEligible(tab))
             return { disabled: false, title: '' };
         if (this._piBridgeCompactPending?.get(tab.paneId))
-            return { disabled: true, title: 'Compacting…' };
+            return {
+                disabled: true,
+                title: 'Compacting…',
+                label: 'Compacting…',
+            };
+        if (tab._piCompactQueued)
+            return {
+                disabled: false,
+                queued: true,
+                title: 'Compact queued — press to cancel',
+            };
         const { ready, reason } = piBridgeCompactReady(tab.piBridge);
-        return { disabled: !ready, title: reason };
+        if (ready) return { disabled: false, title: reason };
+        // A compaction already running is a status, not a dead
+        // action. Everything else stays pressable so the control can
+        // queue a run (busy) or explain itself (unknown/queued).
+        if (
+            tab.piBridge?.compact_active === true ||
+            tab.piBridge?.compact_pending === true
+        )
+            return { disabled: true, title: reason, label: 'Compacting…' };
+        if (this._piBridgeCompactQueueable(tab))
+            return { disabled: false, title: 'Compact after this turn' };
+        return { disabled: false, title: reason };
     }
 
     // _piBridgeKeys splits one retained view into the two refresh keys.
@@ -13548,7 +13797,7 @@ export class TabManager {
     // occupancy only the status-bar meter renders.
     _piBridgeKeys(tab, view = tab.piBridge) {
         if (!view) return { row: '', bar: '' };
-        const row = `${this._piBridgeModelsEligible(tab)}|${this._piBridgeThinkingEligible(tab)}|${piBridgeCapable(tab, 'pi.skills.v1')}|${piBridgeCapable(tab, 'pi.context.v1')}|${piBridgeCapable(tab, 'pi.compact.v1')}|${view.state}|${view.generation || ''}|${view.model || ''}|${view.thinking_level || ''}|${view.connected}|${view.running}|${(view.capabilities || []).join(',')}|${view.compact_idle}/${view.compact_queued}/${view.compact_active}/${view.compact_pending}`;
+        const row = `${this._piBridgeModelsEligible(tab)}|${this._piBridgeThinkingEligible(tab)}|${piBridgeCapable(tab, 'pi.skills.v1')}|${piBridgeCapable(tab, 'pi.context.v1')}|${piBridgeCapable(tab, 'pi.compact.v1')}|${view.state}|${view.generation || ''}|${view.model || ''}|${view.thinking_level || ''}|${view.connected}|${view.running}|${view.last_run || ''}|${(view.capabilities || []).join(',')}|${view.compact_idle}/${view.compact_queued}/${view.compact_active}/${view.compact_pending}`;
         return {
             row,
             bar: `${row}|${view.context_tokens ?? ''},${view.context_window ?? ''},${view.context_percent ?? ''}`,
@@ -13567,6 +13816,9 @@ export class TabManager {
             this._dropPiRpcModelInflight(tab.paneId);
         // A pick the user made while the bridge was away goes out now.
         if (eligible) this._flushPiRpcModelNext(tab.paneId);
+        // A Compact press made during a turn goes out on the settle
+        // frame, before the row repaints with its queued state gone.
+        this._flushPiBridgeCompactQueue?.(tab);
         // Thinking cleanup first so the single renderPresets below owns the
         // open-picker re-render with settled pending state (one levels fetch).
         this._refreshPiBridgeThinking(tab);

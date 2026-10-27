@@ -202,15 +202,19 @@ and conflicting equal revisions never refresh stale data.
 ## Native Compact
 
 `pi.compact.v1` runs one native compaction per Pi process with no
-waiting queue, only on an explicit user action through the existing
-control. Phi sends `CompactRequest` (field 19) with a server-
-allocated monotonic decimal ID (opaque to browsers) and the
-expected session/leaf/model captured from the lease under the
-admission fence. Server admission needs a live peer, the negotiated
-capability, matching generation/publication stamps, and a snapshot
-showing an idle host with no queued messages, no active compaction,
-and no unresolved bridge work. Anything else is refused before
-start or unavailable, and the host is never invoked.
+server-side waiting queue, only on an explicit user action through the
+existing control. Phi's browser may hold one press until the current
+turn settles, then dispatch it after a fresh readiness check; the
+bridge itself still sees one immediate request or a refusal. A held
+press is cancelled if a newer turn starts, messages queue, or another
+compaction starts, and is never replayed after dispatch. Phi sends
+`CompactRequest` (field 19) with a server-allocated monotonic decimal
+ID (opaque to browsers) and the expected session/leaf/model captured
+from the lease under the admission fence. Server admission needs a
+live peer, the negotiated capability, matching generation/publication
+stamps, and a snapshot showing an idle host with no queued messages,
+no active compaction, and no unresolved bridge work. Anything else
+is refused before start or unavailable, and the host is never invoked.
 
 The extension rechecks live identity, idleness, queued messages,
 and local compaction state immediately before invocation, and
