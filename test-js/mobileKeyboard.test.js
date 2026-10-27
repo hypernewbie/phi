@@ -211,3 +211,26 @@ describe('negative guard — desktop rules unchanged', () => {
         expect(m).not.toMatch(/var\(--vv-height/);
     });
 });
+
+// Staged input bar on compact viewports: the textarea takes the full
+// content width and the action group drops to its own line. Part 3 of
+// plan/20261028-0045-mobile-input-row.md. Source-contract only — the
+// real geometry is verified in a browser, not here.
+describe('mobile input bar — staged row wraps compact-only', () => {
+    it('keeps wrapping, the textarea minimum and the 24px controls', () => {
+        expect(MOBILE).toMatch(/\.input-bar-row\s*\{[^}]*flex-wrap:\s*wrap/);
+        expect(MOBILE).toMatch(
+            /\.input-bar-container textarea\s*\{[^}]*min-width:\s*200px/,
+        );
+        expect(MOBILE).toMatch(
+            /\.input-actions \.btn,[\s\S]*?height:\s*24px\s*!important/,
+        );
+        // Desktop stays one row at full control size.
+        expect(extractRule(CSS, '.input-bar-row')).not.toMatch(
+            /flex-wrap:\s*wrap/,
+        );
+        expect(extractRule(CSS, '.input-bar-container textarea')).not.toMatch(
+            /min-width:\s*200px/,
+        );
+    });
+});

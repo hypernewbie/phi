@@ -5288,6 +5288,20 @@ html[data-phi-config-page] .settings-modal {
         gap: 4px;
     }
 
+    /* Let the actions wrap below the textarea when the row is squeezed.
+       Keep one row on compact viewports with enough room. */
+    .input-bar-row {
+        flex-wrap: wrap;
+    }
+
+    .input-bar-container textarea {
+        min-width: 200px;
+    }
+
+    .input-actions {
+        margin-left: auto;
+    }
+
     .input-actions .btn {
         padding: 0 10px;
         height: 36px;
@@ -5295,7 +5309,7 @@ html[data-phi-config-page] .settings-modal {
     }
 
     .direct-mode-btn {
-        width: 36px;
+        width: 32px;
         height: 36px;
     }
 
@@ -5498,17 +5512,17 @@ html[data-phi-config-page] .settings-modal {
         overflow-y: auto !important;
     }
 
-    /* Touch friendly input actions */
+    /* Touch friendly input actions, sized like the preset row below */
     .input-actions .btn,
     .direct-mode-btn {
-        height: 40px !important;
-        min-width: 40px !important;
+        height: 24px !important;
+        min-width: 24px !important;
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
     }
     .input-actions .btn {
-        padding: 0 14px !important;
+        padding: 0 10px !important;
     }
     .term-container {
         touch-action: none;
