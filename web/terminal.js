@@ -3569,12 +3569,14 @@ export class TabManager {
             this.directModeToggle.classList.remove('active');
             this.inputBarContainer.classList.remove('direct-mode-active');
             this.inputBarContainer.classList.remove('hidden');
-            this._renderPiRpcPresets();
+            this.renderPresets('pi-rpc');
         } else if (tab.directMode) {
             this.directModeToggle.classList.add('active');
             this.inputBarContainer.classList.add('direct-mode-active');
             this.inputBarContainer.classList.remove('hidden');
             this.presetsContainer.classList.add('hidden');
+            // The presets row is gone, so its parked chips go with it.
+            this._placeCompactQuickChips([]);
         } else {
             this.directModeToggle.classList.remove('active');
             this.inputBarContainer.classList.remove('direct-mode-active');
@@ -3587,6 +3589,12 @@ export class TabManager {
         // Toggle Ctrl+T button visibility based on backend
         if (this.ctrlTBtn) {
             if (['opencode', 'pi'].includes(tab.coder)) {
+                // Pi binds Ctrl+T to the thinking blocks, not a prompt
+                // shortcut (docs/keybindings.md: app.thinking.toggle).
+                this.ctrlTBtn.title =
+                    tab.coder === 'pi'
+                        ? 'Show or hide thinking blocks (Ctrl+T)'
+                        : 'Send Ctrl+T (Explain/Analyze)';
                 this.ctrlTBtn.classList.remove('hidden');
             } else {
                 this.ctrlTBtn.classList.add('hidden');
@@ -6907,9 +6915,10 @@ export class TabManager {
         thinkingButton.className =
             'preset-btn model-trigger-btn pi-rpc-thinking-trigger';
         thinkingButton.textContent = isCompactViewport()
-            ? 'Thinking ▾'
+            ? '🧠 ▾'
             : `Thinking: ${state.thinking || '—'} ▾`;
         thinkingButton.title = 'Change the thinking level';
+        thinkingButton.setAttribute('aria-label', 'Change the thinking level');
         thinkingButton.disabled =
             menuDisabled || this._piRpcThinkingPending?.paneId === paneId;
         thinkingButton.addEventListener('click', (event) => {
@@ -11459,6 +11468,8 @@ export class TabManager {
             const tab = this.getActiveTab();
             if (tab && !tab.directMode) this.renderPresets(tab.coder);
         }
+        // The action row can rewrap without crossing the breakpoint.
+        this._syncOpenDropups();
         this.startResize();
         clearTimeout(this._windowResizeTimeout);
         this._windowResizeTimeout = setTimeout(() => {
@@ -11694,7 +11705,14 @@ export class TabManager {
     // Sit flush on the presets bar: it is one or two rows tall and its
     // height changes with the layout and the live picker labels.
     _syncDropupOffset(dropup) {
-        dropup.style.bottom = `${this.presetsContainer?.offsetHeight || 40}px`;
+        // Dropups clear the presets row. A trigger that rides with the input
+        // controls sits one row higher, so its menu clears the whole bar.
+        const lift =
+            dropup.dataset.lift === 'input-row' && isCompactViewport()
+                ? document.querySelector('#input-bar-container')?.offsetHeight ||
+                  0
+                : 0;
+        dropup.style.bottom = `${(this.presetsContainer?.offsetHeight || 40) + lift}px`;
     }
 
     _toggleDropup(dropupId, triggerBtn, renderFn) {
@@ -11705,6 +11723,8 @@ export class TabManager {
             d.classList.add('hidden');
         });
         if (wasHidden) {
+            if (triggerBtn.closest('.input-actions')) dropup.dataset.lift = 'input-row';
+            else delete dropup.dataset.lift;
             const btnRect = triggerBtn.getBoundingClientRect();
             const container = document.querySelector('.terminal-content');
             const containerRect = container?.getBoundingClientRect?.() || {
@@ -11741,6 +11761,9 @@ export class TabManager {
         if (activeTab?.coder === 'pi')
             this._bindThinkingPresetStore(this.app?.scope);
         if (activeTab?.coder === 'pi-rpc') {
+            // Pi RPC renders its own row: parked chips must go, or their
+            // callbacks keep firing at the newly active pane.
+            this._placeCompactQuickChips([]);
             this._renderPiRpcPresets();
             return;
         }
@@ -11773,6 +11796,9 @@ export class TabManager {
                 this._invalidatePiBridgeThinking(activeTab);
         }
         this.presetsContainer.innerHTML = '';
+        // A previous compact render may have parked chips with the input
+        // controls; drop them so this render owns the placement.
+        this._placeCompactQuickChips([]);
 
         const coderPresetInfo = this._getCoderPresetInfo(coderId, activeTab);
         const presets = coderPresetInfo?.presets || [];
@@ -11790,6 +11816,9 @@ export class TabManager {
         this.presetsContainer.classList.remove('hidden');
 
         const isMobile = isCompactViewport();
+        // Compact moves the slash trigger and the control-key chips out of
+        // this row, so they ride with the input controls instead.
+        const compactChips = [];
 
         // 1. Render Static Coder Presets / Slash Menu
         if (hasCoderPresets) {
@@ -11816,17 +11845,23 @@ export class TabManager {
                             () => this.renderSlashDropup(slashPresets),
                         );
                     });
-                    this.presetsContainer.appendChild(slashBtn);
+                    compactChips.push(slashBtn);
                 }
 
-                // Render other horizontal utility presets (like ctrl+c, ctrl+o)
-                utilityPresets.forEach((p) => {
+                // Render the remaining utility presets (ctrl+o, ...). ctrl+c
+                // is skipped: the ✕ cancel button already interrupts with the
+                // right key for the coder, so it stays the single one.
+                utilityPresets
+                    .filter((p) => p.value !== '\u0003')
+                    .forEach((p) => {
                     const btn = this._buildPresetButton(p);
-                    btn.addEventListener('click', () => {
-                        this.sendRawInput(p.value, { focusInputOnMobile: false });
+                        btn.addEventListener('click', () => {
+                            this.sendRawInput(p.value, {
+                                focusInputOnMobile: false,
+                            });
+                        });
+                        compactChips.push(btn);
                     });
-                    this.presetsContainer.appendChild(btn);
-                });
             } else {
                 // Desktop: Render everything horizontally as before
                 visiblePresets.forEach((p) => {
@@ -11854,7 +11889,7 @@ export class TabManager {
         }
 
         // 2. Render Divider if static presets exist
-        if (hasCoderPresets) {
+        if (hasCoderPresets && !isMobile) {
             const divider = document.createElement('div');
             divider.className = 'presets-divider';
             this.presetsContainer.appendChild(divider);
@@ -12053,11 +12088,6 @@ export class TabManager {
         if (keysDropup && !keysDropup.classList.contains('hidden')) {
             this.renderKeysDropup();
         }
-        // The row was just rebuilt: keep open pickers on top of its
-        // current height instead of the height they opened at.
-        document
-            .querySelectorAll('.model-presets-dropup:not(.hidden)')
-            .forEach((d) => this._syncDropupOffset(d));
         const slashDropup = document.getElementById('slash-presets-dropup');
         if (slashDropup && !slashDropup.classList.contains('hidden')) {
             this.renderSlashDropup(
@@ -12088,6 +12118,68 @@ export class TabManager {
                 });
                 this.presetsContainer.appendChild(btn);
             });
+        }
+
+        if (isMobile) this._compactPickerRow({
+            models: modelsTriggerBtn,
+            thinking: thinkingTriggerBtn,
+            cmds: quickCmdsTriggerBtn,
+            skills: skillsTriggerBtn,
+            keys: keysTriggerBtn,
+        });
+        if (isMobile) this._placeCompactQuickChips(compactChips);
+        // Measured last: the chips above change the composer height, and an
+        // open menu must clear the row it was opened over.
+        this._syncOpenDropups();
+    }
+
+    _syncOpenDropups() {
+        document
+            .querySelectorAll('.model-presets-dropup:not(.hidden)')
+            .forEach((d) => this._syncDropupOffset(d));
+    }
+
+    // Compact only: the strip is width-bound, so the pickers trade words for
+    // icons and sit in the order the phone asks for. Desktop renders keep
+    // their labels and their append order.
+    _compactPickerRow({ models, thinking, cmds, skills, keys }) {
+        models.innerText = '🤖';
+        // The emoji replaces the words, so the name has to move to the
+        // accessibility tree (title alone does not name a button).
+        models.setAttribute('aria-label', models.title || 'Model');
+        if (thinking) {
+            thinking.textContent = '🧠';
+            thinking.setAttribute('aria-label', thinking.title || 'Thinking');
+        }
+        if (skills) {
+            skills.textContent = '📚';
+            skills.setAttribute('aria-label', 'Skills');
+        }
+        // Inserting ahead of the divider leaves the arrow keys at the end.
+        const anchor = this.presetsContainer.querySelector('.presets-divider');
+        for (const btn of [models, thinking, cmds, skills, keys]) {
+            if (btn) this.presetsContainer.insertBefore(btn, anchor);
+        }
+    }
+
+    // Compact only: park the slash trigger and the control-key chips at the
+    // start of the input controls, so the bottom row keeps just the pickers.
+    // Idempotent: chips from an earlier render are removed before the move.
+    _placeCompactQuickChips(chips = []) {
+        // Fall back to the presets row when the composer is not on the page,
+        // so a chip is never built and thrown away.
+        const actions =
+            document.querySelector('#input-bar-container .input-actions') ||
+            this.presetsContainer;
+        if (!actions) return;
+        for (const el of actions.querySelectorAll('.input-quick-chip'))
+            el.remove();
+        for (const chip of chips) {
+            chip.classList.add('input-quick-chip');
+            actions.insertBefore(
+                chip,
+                actions.querySelector(':scope > :not(.input-quick-chip)'),
+            );
         }
     }
 

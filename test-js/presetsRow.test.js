@@ -149,3 +149,146 @@ describe('presets row', () => {
         );
     });
 });
+
+// Compact strips the row down to the pickers: the slash trigger and the
+// control-key chips move up next to the input controls, so a phone keeps a
+// single row of dropdowns at the bottom.
+describe('compact presets row', () => {
+    function compactTm(width) {
+        document.body.innerHTML = `
+            <div id="input-bar-container">
+                <div class="input-actions"></div>
+            </div>
+        `;
+        Object.defineProperty(window, 'innerWidth', {
+            value: width,
+            configurable: true,
+        });
+        return makeTm();
+    }
+
+    const labels = (root) =>
+        [...root.querySelectorAll('.input-quick-chip')].map(
+            (btn) => btn.title || btn.getAttribute('aria-label'),
+        );
+
+    it('moves the slash and control-key chips into the input actions', () => {
+        const tm = compactTm(390);
+        tm.renderPresets('pi');
+        const actions = document.querySelector('.input-actions');
+        // ctrl+c stays out: the ✕ cancel button is the one interrupt.
+        expect(labels(actions)).toEqual([
+            'Open slash commands',
+            'Send ctrl+o to the terminal',
+        ]);
+        expect(
+            tm.presetsContainer.querySelectorAll('.slash-trigger-btn'),
+        ).toHaveLength(0);
+        expect(tm.presetsContainer.querySelectorAll('.btn-icon')).toHaveLength(
+            0,
+        );
+    });
+
+    it('puts them back in the row when the viewport widens', () => {
+        const tm = compactTm(390);
+        tm.renderPresets('pi');
+        expect(
+            document.querySelectorAll('.input-actions .input-quick-chip'),
+        ).toHaveLength(2);
+        Object.defineProperty(window, 'innerWidth', {
+            value: 1200,
+            configurable: true,
+        });
+        tm.renderPresets('pi');
+        expect(document.querySelectorAll('.input-quick-chip')).toHaveLength(0);
+        expect(
+            tm.presetsContainer.querySelectorAll('.preset-btn.btn-icon'),
+        ).toHaveLength(2);
+        // Desktop has no slash trigger: its slash presets are chips.
+        expect(rowLabels(tm).join(' ')).toContain('/compact');
+    });
+
+    // jsdom has no innerText: fall back to the expando.
+    const rowLabels = (tm) =>
+        [...tm.presetsContainer.children].map((el) =>
+            (
+                el.textContent ||
+                el.innerText ||
+                el.getAttribute('aria-label') ||
+                ''
+            ).trim(),
+        );
+
+    it('starts the picker row with the robot and drops the words', () => {
+        const tm = compactTm(390);
+        tm.renderPresets('pi');
+        const row = rowLabels(tm);
+        expect(row.slice(0, 3)).toEqual([
+            '🤖',
+            'Cmds ▾',
+            'Virtual Keyboard and Shortcuts',
+        ]);
+        expect(row.slice(4)).toEqual(['▲', '▼', '◀', '▶']);
+        // Icon-only chips still answer to their function.
+        expect(
+            tm.presetsContainer.querySelector(
+                '.model-trigger-btn[aria-label="Select the model for this session"]',
+            ),
+        ).not.toBeNull();
+    });
+
+    it('keeps the words on a desktop render', () => {
+        const tm = compactTm(1200);
+        tm.renderPresets('pi');
+        const row = rowLabels(tm);
+        expect(row).toContain('/compact');
+        expect(row).toContain('Cmds ▾');
+        expect(row).toContain('🤖 Models ▾');
+    });
+
+    it('drops parked chips when a Pi RPC tab takes over the row', () => {
+        const tm = compactTm(390);
+        tm.renderPresets('pi');
+        expect(
+            document.querySelectorAll('.input-actions .input-quick-chip'),
+        ).toHaveLength(2);
+        // The switch path: switchTab hands the new tab to updateDirectModeUI.
+        const piRpcTab = {
+            coder: 'pi-rpc',
+            paneId: 'p1',
+            directMode: false,
+            isAtBottom: true,
+        };
+        tm.getActiveTab = () => piRpcTab;
+        tm._renderPiRpcPresets = vi.fn();
+        tm.directModeToggle = document.createElement('button');
+        tm.inputBarContainer = document.getElementById('input-bar-container');
+        tm.updateDirectModeUI(piRpcTab, true);
+        expect(tm._renderPiRpcPresets).toHaveBeenCalled();
+        expect(document.querySelectorAll('.input-quick-chip')).toHaveLength(0);
+    });
+
+    it('drops parked chips when the pane enters direct mode', () => {
+        const tm = compactTm(390);
+        tm.renderPresets('pi');
+        expect(
+            document.querySelectorAll('.input-actions .input-quick-chip'),
+        ).toHaveLength(2);
+        tm.directModeToggle = document.createElement('button');
+        tm.inputBarContainer = document.getElementById('input-bar-container');
+        tm.updateDirectModeUI(
+            { coder: 'pi', directMode: true, isAtBottom: true },
+            true,
+        );
+        expect(document.querySelectorAll('.input-quick-chip')).toHaveLength(0);
+    });
+
+    it('does not duplicate chips across renders', () => {
+        const tm = compactTm(390);
+        tm.renderPresets('pi');
+        tm.renderPresets('pi');
+        expect(
+            document.querySelectorAll('.input-actions .input-quick-chip'),
+        ).toHaveLength(2);
+    });
+});
