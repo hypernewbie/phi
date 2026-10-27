@@ -10,6 +10,7 @@ async function upgrade(url: string, origin: string): Promise<number> {
                 Connection: 'Upgrade',
                 Upgrade: 'websocket',
                 Origin: origin,
+                'Sec-WebSocket-Protocol': 'phi.events.protobuf.v1',
                 'Sec-WebSocket-Version': '13',
                 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
             },
