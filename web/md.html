@@ -27,9 +27,15 @@
         if (params.get('page')) {
             initMdView();
         } else {
-            bootstrapAccessAuth()
-                .catch(() => {})
-                .then(() => initMdView());
+            bootstrapAccessAuth().then(
+                () => initMdView(),
+                () => {
+                    const body = document.getElementById('md-view-body');
+                    if (body)
+                        body.innerHTML =
+                            '<div class="md-list-error">Phi access could not be checked. <a href="">Reload</a></div>';
+                },
+            );
         }
         </script>
     </body>

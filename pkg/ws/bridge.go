@@ -345,6 +345,7 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 	// retired between the middleware decision and this upgrade.
 	if fence, fenced := AuthFenceFrom(r.Context()); fenced && !hub.AdmitAuth(conn, fence) {
 		logger.Warn("ws upgrade rejected: stale access generation")
+		endSpan(errors.New("stale access generation"))
 		_ = conn.Close()
 		return
 	}

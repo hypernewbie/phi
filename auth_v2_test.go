@@ -731,7 +731,7 @@ func TestAccessSharedRateLimit(t *testing.T) {
 	auth := useTestAccessAuth(t)
 	testAccessEnableV2(t, testAccessPassword)
 
-	// A v1 failure rate-limits v2 for the same client.
+	// A v1 failure is recorded under the client IP, not the address:port.
 	_, _, challenge, _, err := auth.statusAndChallenge()
 	if err != nil {
 		t.Fatal(err)
@@ -743,16 +743,35 @@ func TestAccessSharedRateLimit(t *testing.T) {
 	if w := testAccessServe(handleAccessAuthLogin, r); w.Code != http.StatusUnauthorized {
 		t.Fatalf("bad v1 proof: got %d", w.Code)
 	}
-	if w := testAccessV2LoginRequest(t, testAccessPassword, "198.51.100.7:2000"); w.Code != http.StatusTooManyRequests {
-		t.Fatalf("v2 login was not rate-limited by the v1 failure: %d", w.Code)
-	}
-	if w := testAccessV2LoginRequest(t, testAccessPassword, "198.51.100.8:1000"); w.Code != http.StatusOK {
-		t.Fatalf("independent client was rate-limited: %d", w.Code)
+	auth.mu.Lock()
+	attempt, ok := auth.attempts["198.51.100.7"]
+	auth.mu.Unlock()
+	if !ok || attempt.Failures != 1 || !attempt.RetryAt.After(time.Now()) {
+		t.Fatalf("v1 failure not recorded: %+v ok=%v", attempt, ok)
 	}
 
-	// And a v2 failure rate-limits v1 for the same client.
+	// A v2 failure lands in the same map under the same key.
 	if w := testAccessV2LoginRequest(t, "test-pass-0000", "198.51.100.8:2000"); w.Code != http.StatusUnauthorized {
 		t.Fatalf("bad v2 password: got %d", w.Code)
+	}
+	auth.mu.Lock()
+	attempt, ok = auth.attempts["198.51.100.8"]
+	auth.mu.Unlock()
+	if !ok || attempt.Failures != 1 {
+		t.Fatalf("v2 failure not recorded: %+v ok=%v", attempt, ok)
+	}
+
+	// While a client is in backoff, both routes reject it; another client
+	// is unaffected. Pin the window so a slow KDF cannot expire it first.
+	auth.mu.Lock()
+	auth.attempts["198.51.100.8"] = accessLoginAttempt{
+		Failures:    1,
+		RetryAt:     time.Now().Add(time.Minute),
+		LastFailure: time.Now(),
+	}
+	auth.mu.Unlock()
+	if w := testAccessV2LoginRequest(t, testAccessPassword, "198.51.100.8:2000"); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("v2 login ignored the shared backoff: %d", w.Code)
 	}
 	_, _, challenge, _, err = auth.statusAndChallenge()
 	if err != nil {
@@ -766,7 +785,16 @@ func TestAccessSharedRateLimit(t *testing.T) {
 	r = httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(good))
 	r.RemoteAddr = "198.51.100.8:3000"
 	if w := testAccessServe(handleAccessAuthLogin, r); w.Code != http.StatusTooManyRequests {
-		t.Fatalf("v1 login was not rate-limited by the v2 failure: %d", w.Code)
+		t.Fatalf("v1 login ignored the shared backoff: %d", w.Code)
+	}
+	if w := testAccessV2LoginRequest(t, testAccessPassword, "198.51.100.9:1000"); w.Code != http.StatusOK {
+		t.Fatalf("independent client was rate-limited: %d", w.Code)
+	}
+	auth.mu.Lock()
+	_, ok = auth.attempts["198.51.100.9"]
+	auth.mu.Unlock()
+	if ok {
+		t.Fatal("successful login did not clear the client backoff")
 	}
 }
 

@@ -655,15 +655,18 @@ func (m *accessAuthManager) setEncodedPassword(encoded string, credential access
 
 // setRawPassword applies a v2 set or change. Clearing uses clearPassword.
 func (m *accessAuthManager) setRawPassword(password string, credential accessCredential) (accessPasswordOutcome, error) {
-	record, err := newAccessPasswordRecord(password)
-	if err != nil {
-		return accessPasswordOutcome{}, err
-	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now()
+	// Authorize before deriving: an unauthenticated caller must not turn this
+	// public route into an unrestricted PBKDF2 cost. The lock is held through
+	// derivation so a concurrent record change cannot race the new record.
 	if !m.authorizedForPasswordLocked(credential, now) {
 		return accessPasswordOutcome{}, errAccessUnauthorized
+	}
+	record, err := newAccessPasswordRecord(password)
+	if err != nil {
+		return accessPasswordOutcome{}, err
 	}
 	return m.commitPasswordLocked(record, now)
 }
