@@ -9,17 +9,19 @@ import type {
 import { cleanup, mount } from './react-env.ts';
 
 afterEach(cleanup);
+afterEach(() => vi.restoreAllMocks());
 function deferredService() {
     const requests: Array<{
         signal: AbortSignal;
         resolve: (result: ConnectionResult) => void;
+        reject: (error: Error) => void;
     }> = [];
     const service: ConnectionService = {
         serverLabel: '<hostile-server>',
         getStatus: vi.fn(
             (signal) =>
-                new Promise<ConnectionResult>((resolve) => {
-                    requests.push({ signal, resolve });
+                new Promise<ConnectionResult>((resolve, reject) => {
+                    requests.push({ signal, resolve, reject });
                 }),
         ),
     };
@@ -101,3 +103,90 @@ it.each(['disabled', 'protected', 'unsupported', 'unavailable'] as const)(
         );
     },
 );
+
+async function startRetry(focused = true) {
+    // jsdom does not model the browser's loss of focus on native disable.
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    const { service, requests } = deferredService();
+    const { host } = await mount(<App service={service} />);
+    await act(async () => requests[0]?.resolve('unsupported'));
+    const retry = host.querySelectorAll('button')[1];
+    if (!retry) throw new Error('Retry button is missing.');
+    if (focused) retry.focus();
+    await act(async () => {
+        retry.click();
+        retry.blur();
+    });
+    expect(retry.disabled).toBe(true);
+    expect(document.activeElement).toBe(document.body);
+    return { host, requests, retry };
+}
+
+it.each([
+    'disabled',
+    'protected',
+    'unsupported',
+    'unavailable',
+    'rejected',
+] as const)(
+    'restores focused Retry after %s without replacing its status node',
+    async (result) => {
+        const { host, requests, retry } = await startRetry();
+        const status = host.querySelector('[role="status"]');
+        await act(async () => {
+            if (result === 'rejected')
+                requests[1]?.reject(new Error('offline'));
+            else requests[1]?.resolve(result);
+        });
+        expect(retry.disabled).toBe(false);
+        expect(document.activeElement).toBe(retry);
+        expect(host.querySelector('[role="status"]')).toBe(status);
+    },
+);
+
+it.each(['focus elsewhere', 'pointer elsewhere', 'Tab', 'page blur'] as const)(
+    'does not restore Retry after %s, even if focus returns to the body',
+    async (activity) => {
+        const { host, requests, retry } = await startRetry();
+        if (activity === 'focus elsewhere') {
+            const navigation = host.querySelector('button');
+            navigation?.focus();
+            navigation?.blur();
+        } else if (activity === 'pointer elsewhere') {
+            host.querySelector('h1')?.dispatchEvent(
+                new Event('pointerdown', { bubbles: true }),
+            );
+        } else if (activity === 'Tab') {
+            document.dispatchEvent(
+                new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
+            );
+        } else {
+            document.defaultView?.dispatchEvent(new Event('blur'));
+        }
+        await act(async () => requests[1]?.resolve('unsupported'));
+        expect(retry.disabled).toBe(false);
+        expect(document.activeElement).toBe(document.body);
+    },
+);
+
+it('does not focus Retry when an unfocused button initiated the request', async () => {
+    const { requests, retry } = await startRetry(false);
+    await act(async () => requests[1]?.resolve('unsupported'));
+    expect(retry.disabled).toBe(false);
+    expect(document.activeElement).toBe(document.body);
+});
+
+it('does not restore Retry while its page is unfocused', async () => {
+    const { requests } = await startRetry();
+    vi.mocked(document.hasFocus).mockReturnValue(false);
+    await act(async () => requests[1]?.resolve('unsupported'));
+    expect(document.activeElement).toBe(document.body);
+});
+
+it('does not restore Retry after unmount or obsolete completion', async () => {
+    const { requests, retry } = await startRetry();
+    const focus = vi.spyOn(retry, 'focus');
+    await cleanup();
+    await act(async () => requests[1]?.resolve('unsupported'));
+    expect(focus).not.toHaveBeenCalled();
+});

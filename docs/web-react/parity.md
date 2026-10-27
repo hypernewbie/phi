@@ -2,10 +2,12 @@
 
 ## Stage 02 status
 
-**Date:** 2026-10-19. **State:** `in-review`, not integrated.
+**Date:** 2026-10-20. **State:** `in-review`, not integrated.
 
 Stage 02 implements a development-only Connection shell, two shared controls, and an isolated browser/manual-session fixture.
 The user requested Playwright restoration. Unit/static/build gates and all 26 React Playwright cases passed after restoration.
+The October 20 review found lost keyboard focus after Retry. The user authorized the focused fix and its execution with `gpt-6.1-sol`.
+The fix now passes Chrome DevTools, 36 Playwright cases, and all unit/static/build gates.
 Safari, VoiceOver, and manual 200% zoom checks remain pending.
 The Go frontend remains embedded, shipped, and default. This foundation does not establish feature parity.
 
@@ -38,7 +40,7 @@ It has no runtime dependencies. Future stages introduce contracts only for actua
 `@phi/web-react` is a private Vite application, not a library.
 It has no production build script. Its HTML entrypoint loads package-owned fonts and `src/main.tsx`.
 The bootstrap creates the root and HTTP service. `App` owns typed screen selection.
-`ConnectionScreen` receives the service and owns request generations, pending state, and cancellation.
+`ConnectionScreen` receives the service and owns request generations, pending state, cancellation, and conditional Retry focus restoration.
 Shared controls own their markup and CSS Modules. They do not access services or feature state.
 
 Only `src/platform/http.ts` performs browser networking and timeout work.
@@ -168,7 +170,9 @@ Paths below are relative to `R/public/fonts/`.
 | `OFL-JetBrainsMono.txt` | `b2fe5e8987594e9ffd1d2ca52a2f5d73eb8335243893c5d6254b5ad69269591d` |
 
 Manual font checks must load Latin/Greek samples through both named families and request every WOFF2 URL with a cold cache.
-A computed font-family value alone does not prove that a font loaded. This browser evidence remains pending.
+A computed font-family value alone does not prove that a font loaded.
+The October 20 Chrome DevTools review loaded both families with Latin/Greek samples and received all 13 font files successfully.
+Safari font appearance remains pending.
 
 ## Feature parity matrix
 
@@ -179,7 +183,7 @@ The Stage 02 foundation is a new screen and is not a claim of converted full-she
 
 | Required outcome | Source anchor | Owner | Status | Automated evidence | Desktop result | Narrow result | Remaining gap |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Connection foundation and shared controls | Implementation baseline: `web/style.css` controls/auth-card, `web/index.html` brand | 02 | partial | Package unit tests | Manual checks pending | Manual checks pending | Safari/VoiceOver, font loading, geometry, reflow, and zoom |
+| Connection foundation and shared controls | Implementation baseline: `web/style.css` controls/auth-card, `web/index.html` brand | 02 | partial | Package unit tests; 36 Playwright cases; October 20 DevTools evidence | Chrome geometry/fonts/Retry focus pass | Chrome 390/320 px reflow and Retry focus pass | Safari/VoiceOver and manual zoom |
 | Auth entrypoints, login, expiry, server-scoped persistence | `web/auth.js`, `web/config.html` | 03 | missing | — | — | — | Landed v2 auth and complete client behavior |
 | Settings, appearance, configuration save/error outcomes | `web/settings.js`, `web/config.js`, `web/config.html` | 04 | missing | — | — | — | All configuration surfaces |
 | Session/coder capability and workspace service contracts | `web-src/sessions.ts`, `web-src/coders.ts` | 05 | missing | — | — | — | Shared contracts and adapters |
@@ -222,7 +226,8 @@ Current terminal wire compatibility remains mandatory for its later owning stage
 
 ## Verification record
 
-The following post-restoration commands ran from the authorized worktree. No check used a user server or auth worktree.
+The following October 19 post-restoration commands ran from the authorized worktree. No check used a user server or auth worktree.
+The October 20 Retry fix has a separate acceptance record below.
 The local linker required command-scoped `SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"`.
 The initial baseline test failed before implementation with incompatible SDK/TAPI architecture entries.
 The final regression gates passed with the compatible SDK selection. No source or global toolchain configuration changed for that correction.
@@ -240,7 +245,7 @@ The final regression gates passed with the compatible SDK selection. No source o
 | `pnpm exec playwright test --list` | 0 | Legacy discovery: 86 cases in 39 files. No legacy cases executed. |
 | `git diff --check` | 0 | No whitespace errors |
 
-Current logs remain in ignored `test-results/web-react/restore/`, with per-command logs and `results.log` for the six W commands after typecheck.
+Restoration logs remain in ignored `test-results/web-react/restore/`, with per-command logs and `results.log` for the six W commands after typecheck.
 `typecheck.log`, `browser.log`, and `legacy-discovery.log` record the other passing commands above.
 Earlier implementation/review/cleanup logs are historical evidence, not the current acceptance run.
 Deliberate core-test, React-TSX-test, and package-E2E errors failed root typecheck before removal. All probes are absent.
@@ -271,9 +276,91 @@ They also cover idempotent stop, bounded logs, escalation, Darwin zombie handlin
 HTTP regression tests retain unfinished 404, 405, and 500 bodies and require actual connection closure.
 The helper stores logs and owner metadata under ignored `test-results/web-react/phi-web-react-*/`.
 Cleanup signals only recorded owned process groups and removes only fixture-owned temporary directories.
-The current 26-case browser run includes redirect/cookie guard regressions and real WebSocket Origin checks.
+The browser suite includes redirect/cookie guard regressions and real WebSocket Origin checks.
 Screenshots reside under `test-results/web-react/browser/`; the HTML report is under `playwright-report/web-react/`.
 The restored legacy suite was collected but not run: its inherited environment and background destinations require separate isolation review.
+
+### Chrome DevTools review — 2026-10-20, before the fix
+
+This review used the existing isolated foundation stack and installed Chrome 155 through Chrome DevTools MCP 1.11.0.
+The configured MCP connection failed because another session owned its browser profile.
+A disposable local MCP client used `--isolated --headless`, without configuration changes or interference with that session.
+URL restrictions allowed only the React fixture origin and its HMR socket. Telemetry and CrUX requests were disabled.
+No application source changed. This review did not execute a later stage or authorize integration.
+
+| Check | Exit/result | Evidence |
+| --- | --- | --- |
+| Package-local Playwright suite | 0; 26 passed in 27.1 seconds | `test-results/web-react/devtools-2026-10-20/playwright.log` |
+| Chrome DevTools probe | Process exit 0; `review-findings`, not acceptance | `test-results/web-react/devtools-2026-10-20/evidence.json`, `mcp.jsonl`, `smoke.mjs` |
+| Layout, fonts, and states | 1280/390/320 px without horizontal overflow; 36 px controls; 13 px text; reduced motion; 13 local font responses | `connection-1280.png`, `connection-390.png`, `connection-320.png`, `protected.png`, `invalid-fields.png` in the same directory |
+| Status and transport | Real unsupported-v2 state; mocked success/protected/error states; disabled/busy Retry; omitted credentials; stable polite status node | `accessibility.txt`, `network-real.txt`, `status-request.txt`, `console-real.txt` in the same directory |
+| Cleanup | Owned MCP browser and fixture stopped; no listener remained on 5173 | Probe cleanup record and post-run process/listener inspection |
+
+The console contained the expected unsupported-v2 404 messages, Vite connection messages, and the React development notice.
+No unexpected runtime exception or external resource request appeared.
+The desktop and 320 px screenshots retain Phi's typography, purple controls, and density against the static legacy reference.
+The previously documented contrast and focus-outline differences remain intentional. Only the default theme was checked.
+
+**Finding, fixed below:** Tab reached Connection and Retry with a visible outline. Enter activated Retry, but focus became `BODY` after completion.
+The shared Button sets native `disabled` during busy state. Before the fix, the screen did not restore the trigger's focus.
+The previous Playwright keyboard case explicitly refocused Retry before its next activation and did not assert focus after completion.
+Its passing result did not cover this finding.
+
+Two initial probe setup errors concerned URL-pattern validation and page-list parsing, not application behavior.
+Their records remain in `startup-error.json` and `page-parser-error.json`. The first focus failure remains in `focus-finding-first-run.json`.
+Active LSP diagnostics for the disposable probe reported zero errors. Full unit/static/build gates were not repeated during this review.
+Safari, actual browser 200% zoom, and VoiceOver remain separate pending checks.
+
+### Retry focus fix — 2026-10-20
+
+The user authorized this fix and explicitly approved the current `gpt-6.1-sol` model instead of the brief's original executor.
+The user authorized a reviewed fix commit on `stage-02-foundation`. No integration or Stage 03 work is authorized.
+
+The screen reuses the existing Button and its forwarded native ref. Busy state still disables the native button.
+After completion, the screen restores focus only when Retry initiated the request with focus and the page still has focus.
+Restoration also requires focus on the page body, without intervening Tab, pointer, focus, or page-blur activity.
+The listeners exist only during loading and are removed when loading ends or the screen unmounts.
+Initial status checks and unfocused Retry activation do not move focus. Restoration uses `preventScroll:true`.
+No shared control, CSS, dependency, transport, or legacy-runtime change was necessary.
+This conditional restoration is the user-approved exception to the brief's original no-focus-change rule.
+
+| Check | Exit/result | Evidence under `test-results/web-react/retry-focus-2026-10-20/` |
+| --- | --- | --- |
+| Before-fix regressions | 1; five unit assertions and one delayed desktop-browser case failed on missing Retry focus | `before-unit.log`, `before-browser.log` |
+| Active LSP diagnostics | Zero errors in the three changed source/test files | Active paths probe |
+| Package unit tests | 0; 89 passed, including 12 new cases | `package-unit.log` |
+| Package Playwright suite | 0; 36 passed in 30.3 seconds, including 10 new desktop/narrow cases | `browser.log` |
+| Chrome DevTools MCP | 0; `passed`; native Retry restoration and all five pending-navigation cases | `devtools.log`, `evidence.json`, `mcp.jsonl`, `retry-focused.png` |
+| Full regression gates | All exit 0: `pnpm typecheck`, `pnpm test`, `pnpm lint:web`, `pnpm check:code`, `pnpm check:vendors` | `results.log` and command-specific logs; 2,584 unit tests passed, 2 skipped |
+| Required builds, in order | Both exit 0: `pnpm build:web`, then `pnpm --dir desktop/pet build` | `build-web.log`, `pet-build.log` |
+
+The unit cases cover all completed result states, service rejection, unfocused activation, page blur, unmount, and obsolete completion.
+The browser cases hold Retry pending, then retain focus or move elsewhere by focus, pointer, or Tab.
+The older keyboard case now asserts completion focus instead of manually repairing it.
+The repeated isolated DevTools review also passed local fonts, 1280/390/320 px reflow, reduced motion, and status/transport checks.
+Screenshot inspection showed the existing visible focus outline after restoration, without layout or theme changes.
+Expected unsupported-v2 404 messages remained. No unexpected runtime exception or external resource request appeared.
+All owned browser/fixture processes stopped. No listener remained on 5173. The other session's Chrome browser was left untouched.
+Safari, actual browser 200% zoom, and VoiceOver remain pending. This fix does not complete Stage 02 acceptance.
+
+### Pre-commit review — 2026-10-20
+
+The implementation review found no blocking issue in focus restoration, stale-request handling, or disposal of the four event listeners.
+Active diagnostics found zero errors or warnings in the three changed source/test files.
+Repeated typecheck, 2,584 unit tests, static/vendor checks, and both required builds passed. Two unit tests remained skipped.
+The web build ran before the pet build. The serial browser suite passed all 36 cases in 28.3 seconds.
+The uninstrumented Chrome DevTools probe also passed, including fixture cleanup.
+
+An earlier concurrent browser run passed all 36 assertions but exited 1 during fixture teardown with `kill EPERM`.
+One later DevTools run also exited 1 after successful assertions because fixture cleanup failed.
+These failures concern the unchanged fixture. Their cause remains unresolved. They are not evidence of a Retry regression.
+The later successful runs do not resolve this intermittent cleanup risk. No fixture code or permission checks were changed to suppress it.
+No fixture listener or owned live process remained after inspection.
+
+Review logs are under `test-results/web-react/commit-review-2026-10-20/`.
+`browser-teardown-error.log` and `devtools-teardown-error.json` preserve the failed runs.
+`browser.log`, `devtools.log`, `evidence.json`, and `results.log` record the passing repeat checks.
+The fixture cleanup risk and pending Safari/VoiceOver/zoom checks remain open for Stage 02 acceptance.
 
 ### Pending human checks
 

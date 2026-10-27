@@ -233,12 +233,13 @@ test('keeps the status node, keyboard navigation, and disabled/busy retry behavi
         await expect(page.getByRole('status')).toHaveText(
             'This server does not support v2 authentication.',
         );
-        await retry.focus();
+        await expect(retry).toBeFocused();
         statusMock.reply = { raw: '{secret-broken-json' };
         await retry.press('Space');
         await expect(page.getByRole('status')).toHaveText(
             'Cannot check this server. Retry the connection.',
         );
+        await expect(retry).toBeFocused();
         await expect(page.getByRole('main')).not.toContainText(
             'secret-broken-json',
         );
@@ -246,6 +247,69 @@ test('keeps the status node, keyboard navigation, and disabled/busy retry behavi
         release();
     }
 });
+
+for (const activity of [
+    'stay on Retry',
+    'focus another control',
+    'focus then blur',
+    'pointer elsewhere',
+    'Tab',
+] as const) {
+    test(`pending keyboard Retry: ${activity}`, async ({
+        page,
+        stack,
+        statusMock,
+    }) => {
+        let release = () => {};
+        statusMock.reply = { body: { enabled: false, authenticated: false } };
+        try {
+            await page.goto(stack.reactUrl);
+            const retry = page.getByRole('button', {
+                name: 'Retry',
+                exact: true,
+            });
+            await expect(retry).toBeEnabled();
+            statusMock.reply = {
+                body: { enabled: false, authenticated: false },
+                wait: new Promise<void>((done) => {
+                    release = done;
+                }),
+            };
+            await retry.focus();
+            await page.keyboard.press('Enter');
+            await expect(
+                page.getByRole('button', { name: 'Checking…' }),
+            ).toBeDisabled();
+            const navigation = page.getByRole('button', {
+                name: 'Connection',
+                exact: true,
+            });
+            if (
+                activity === 'focus another control' ||
+                activity === 'focus then blur'
+            ) {
+                await navigation.focus();
+                if (activity === 'focus then blur')
+                    await navigation.evaluate((element) => element.blur());
+            } else if (activity === 'pointer elsewhere') {
+                await page.getByRole('heading', { name: 'Connection' }).click();
+            } else if (activity === 'Tab') {
+                await page.keyboard.press('Tab');
+            }
+            release();
+            await expect(retry).toBeEnabled();
+            await expect(page.getByRole('status')).toHaveText(
+                'Connected. Password protection is disabled.',
+            );
+            if (activity === 'stay on Retry') await expect(retry).toBeFocused();
+            else await expect(retry).not.toBeFocused();
+            if (activity === 'focus another control')
+                await expect(navigation).toBeFocused();
+        } finally {
+            release();
+        }
+    });
+}
 
 test('serves public documents and retains real WebSocket Origin enforcement through Vite', async ({
     context,
