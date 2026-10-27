@@ -493,7 +493,7 @@ describe('unlock overlay slow-derive feedback', () => {
             expect(
                 overlay.querySelector('button[type="submit"]').textContent,
             ).toMatch(/^Signing in…/);
-            rejectLogin({ ok: false });
+            rejectLogin({ ok: false, status: 401 });
             // The post-reject path crosses a real webcrypto derive plus
             // fetch/UI hops; a single fixed tick flakes under CI load.
             // Poll for the settled state instead of assuming tick count.
