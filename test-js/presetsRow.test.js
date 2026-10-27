@@ -189,13 +189,23 @@ describe('compact presets row', () => {
         );
     });
 
-    it('puts them back in the row on a desktop render', () => {
-        const tm = compactTm(1200);
+    it('puts them back in the row when the viewport widens', () => {
+        const tm = compactTm(390);
+        tm.renderPresets('pi');
+        expect(
+            document.querySelectorAll('.input-actions .input-quick-chip'),
+        ).toHaveLength(2);
+        Object.defineProperty(window, 'innerWidth', {
+            value: 1200,
+            configurable: true,
+        });
         tm.renderPresets('pi');
         expect(document.querySelectorAll('.input-quick-chip')).toHaveLength(0);
         expect(
             tm.presetsContainer.querySelectorAll('.preset-btn.btn-icon'),
         ).toHaveLength(2);
+        // Desktop has no slash trigger: its slash presets are chips.
+        expect(rowLabels(tm).join(' ')).toContain('/compact');
     });
 
     // jsdom has no innerText: fall back to the expando.
@@ -228,6 +238,34 @@ describe('compact presets row', () => {
         expect(row).toContain('/compact');
         expect(row).toContain('Cmds ▾');
         expect(row).toContain('🤖 Models ▾');
+    });
+
+    it('drops parked chips when a Pi RPC tab takes over the row', () => {
+        const tm = compactTm(390);
+        tm.renderPresets('pi');
+        expect(
+            document.querySelectorAll('.input-actions .input-quick-chip'),
+        ).toHaveLength(2);
+        tm.getActiveTab = () => ({ coder: 'pi-rpc', paneId: 'p1' });
+        tm._renderPiRpcPresets = vi.fn();
+        tm.renderPresets('pi-rpc');
+        expect(tm._renderPiRpcPresets).toHaveBeenCalled();
+        expect(document.querySelectorAll('.input-quick-chip')).toHaveLength(0);
+    });
+
+    it('drops parked chips when the pane enters direct mode', () => {
+        const tm = compactTm(390);
+        tm.renderPresets('pi');
+        expect(
+            document.querySelectorAll('.input-actions .input-quick-chip'),
+        ).toHaveLength(2);
+        tm.directModeToggle = document.createElement('button');
+        tm.inputBarContainer = document.getElementById('input-bar-container');
+        tm.updateDirectModeUI(
+            { coder: 'pi', directMode: true, isAtBottom: true },
+            true,
+        );
+        expect(document.querySelectorAll('.input-quick-chip')).toHaveLength(0);
     });
 
     it('does not duplicate chips across renders', () => {

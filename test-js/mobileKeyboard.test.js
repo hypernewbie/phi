@@ -222,9 +222,13 @@ describe('mobile input bar — staged row wraps compact-only', () => {
         expect(MOBILE).toMatch(
             /\.input-bar-container textarea\s*\{[^}]*min-width:\s*200px/,
         );
-        expect(MOBILE).toMatch(
-            /\.input-actions \.btn,[\s\S]*?height:\s*24px\s*!important/,
-        );
+        // Stay inside the action-control rule: a loose match would accept a
+        // 40px control and find the 24px in the neighbouring preset rule.
+        const actionRule = MOBILE.match(
+            /\.input-actions \.btn,[^{]*\{[^}]*\}/,
+        )?.[0];
+        expect(actionRule).toMatch(/height:\s*24px\s*!important/);
+        expect(actionRule).toMatch(/min-width:\s*24px\s*!important/);
         // Desktop stays one row at full control size.
         expect(extractRule(CSS, '.input-bar-row')).not.toMatch(
             /flex-wrap:\s*wrap/,

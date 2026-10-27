@@ -3572,6 +3572,8 @@ export class TabManager {
             this.inputBarContainer.classList.add('direct-mode-active');
             this.inputBarContainer.classList.remove('hidden');
             this.presetsContainer.classList.add('hidden');
+            // The presets row is gone, so its parked chips go with it.
+            this._placeCompactQuickChips([]);
         } else {
             this.directModeToggle.classList.remove('active');
             this.inputBarContainer.classList.remove('direct-mode-active');
@@ -3584,6 +3586,12 @@ export class TabManager {
         // Toggle Ctrl+T button visibility based on backend
         if (this.ctrlTBtn) {
             if (['opencode', 'pi'].includes(tab.coder)) {
+                // Pi binds Ctrl+T to the thinking blocks, not a prompt
+                // shortcut (docs/keybindings.md: app.thinking.toggle).
+                this.ctrlTBtn.title =
+                    tab.coder === 'pi'
+                        ? 'Show or hide thinking blocks (Ctrl+T)'
+                        : 'Send Ctrl+T (Explain/Analyze)';
                 this.ctrlTBtn.classList.remove('hidden');
             } else {
                 this.ctrlTBtn.classList.add('hidden');
@@ -11574,7 +11582,7 @@ export class TabManager {
         // Dropups clear the presets row. A trigger that rides with the input
         // controls sits one row higher, so its menu clears the whole bar.
         const lift =
-            dropup.dataset.lift === 'input-row'
+            dropup.dataset.lift === 'input-row' && isCompactViewport()
                 ? document.querySelector('#input-bar-container')?.offsetHeight ||
                   0
                 : 0;
@@ -11627,6 +11635,9 @@ export class TabManager {
         if (activeTab?.coder === 'pi')
             this._bindThinkingPresetStore(this.app?.scope);
         if (activeTab?.coder === 'pi-rpc') {
+            // Pi RPC renders its own row: parked chips must go, or their
+            // callbacks keep firing at the newly active pane.
+            this._placeCompactQuickChips([]);
             this._renderPiRpcPresets();
             return;
         }
@@ -11878,7 +11889,7 @@ export class TabManager {
             thinkingTriggerBtn.type = 'button';
             thinkingTriggerBtn.className =
                 'preset-btn model-trigger-btn pi-rpc-thinking-trigger';
-            thinkingTriggerBtn.textContent = '🧠 ▾';
+            thinkingTriggerBtn.textContent = 'Thinking ▾';
             // The compact strip is width-bound: short label there.
             const thinkingLive = this._piBridgeThinkingEligible(activeTab);
             if (thinkingLive && !isCompactViewport())
