@@ -126,6 +126,10 @@ type Hub struct {
 	recordingDirectory string
 	archives           map[string]*PaneHub
 
+	// auth fences client-facing sockets to the access-auth generation they
+	// were admitted at. Password changes close older generations.
+	auth authFencer
+
 	// bridgeAttach encodes an optional Pi-bridge snapshot control frame
 	// for an attaching client. bridgeExit observes pane death with the
 	// exit code. Both are set once before serving; nil disables them.
@@ -862,7 +866,9 @@ func (h *Hub) StoreCheckpoint(paneID string, up CheckpointUpload) bool {
 	return true
 }
 
+// Unregister removes a client from a pane and drops it from the auth fence.
 func (h *Hub) Unregister(paneID string, client *Client) {
+	h.auth.forget(client.Ws)
 	h.mu.RLock()
 	ph, exists := h.panes[paneID]
 	h.mu.RUnlock()
@@ -878,29 +884,6 @@ func (h *Hub) Unregister(paneID string, client *Client) {
 	}
 	ph.mu.Unlock()
 	log.Printf("[ws] Unregistered client from pane %s", paneID)
-}
-
-// CloseAllClients closes every live WebSocket without deleting pane state.
-// Callers use this when a security boundary changes (for example, Phi access
-// password rotation) so connections authorized at handshake cannot outlive
-// the session that authorized them. ReadPump performs normal unregistering.
-func (h *Hub) CloseAllClients() {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	var clients []*Client
-	for _, ph := range h.panes {
-		ph.mu.Lock()
-		for client := range ph.clients {
-			clients = append(clients, client)
-		}
-		ph.mu.Unlock()
-	}
-	for _, client := range clients {
-		if client.Ws != nil {
-			_ = client.Ws.Close()
-		}
-	}
 }
 
 // Close stops the sweep worker, releases every owned recording handle,
