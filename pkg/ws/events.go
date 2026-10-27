@@ -35,6 +35,11 @@ func HandleEventsWS(w http.ResponseWriter, r *http.Request, hub *Hub) {
 		return
 	}
 	client := &Client{Ws: conn, Send: make(chan []byte, 256), Logger: logger}
+	if fence, fenced := AuthFenceFrom(r.Context()); fenced && !hub.AdmitAuth(conn, fence) {
+		logger.Warn("ws events upgrade rejected: stale access generation")
+		_ = conn.Close()
+		return
+	}
 	hub.Register(EventsPaneID, client)
 	go client.WritePump()
 	// Capture pongWait into a local: the pong handler can outlive this
