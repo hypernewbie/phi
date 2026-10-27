@@ -14,6 +14,7 @@ const {
     bootstrapAccessAuth,
     clearAccessPassword,
     installAccessFetch,
+    installToken,
     setAccessPassword,
     __test__,
 } = await import('../web/auth.js');
@@ -603,16 +604,15 @@ describe('superseded responses and transient failures', () => {
         await vi.waitFor(() =>
             expect(document.querySelector('.access-auth-overlay')).toBeTruthy(),
         );
-        submitOverlay('password123');
-        await vi.waitFor(() =>
-            expect(
-                document.querySelector('.access-auth-overlay button')
-                    .textContent,
-            ).toBe('Signing in…'),
-        );
+        const overlay = submitOverlay('password123');
+        const submit = overlay.querySelector('button');
+        await vi.waitFor(() => expect(submit.textContent).toBe('Signing in…'));
         const { installToken } = await import('../web/auth.js');
         installToken('host-token');
         release();
+        // Wait for the stale handler to leave its finally block, so the
+        // assertions below cannot run before the released response is fenced.
+        await vi.waitFor(() => expect(submit.textContent).toBe('Sign in'));
         await expect(boot).resolves.toEqual({ enabled: true });
         const state = __test__.getAccessState();
         expect(state.accessToken).toBe('host-token');
@@ -775,5 +775,98 @@ describe('credential ownership and superseded derivations', () => {
         );
         expect(__test__.getAccessState().selectedProtocol).toBe('v1');
         expect(document.querySelector('.access-auth-overlay')).toBeNull();
+    });
+});
+
+describe('request deadlines and credential retention', () => {
+    it('gives up on a discovery request that never answers', async () => {
+        vi.useFakeTimers();
+        try {
+            mockFetch(() => new Promise(() => {}));
+            const boot = bootstrapAccessAuth();
+            const failure = expect(boot).rejects.toThrow(
+                'Phi did not respond. Try again.',
+            );
+            await vi.advanceTimersByTimeAsync(30000);
+            await failure;
+            expect(__test__.getAccessState().selectedProtocol).toBeNull();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('reports a sign-in that never answers and stays open for a retry', async () => {
+        vi.useFakeTimers();
+        try {
+            mockFetch((url) => {
+                if (url === '/api/auth/status') return DUAL_STATUS;
+                if (url === '/api/auth/v2/login') return new Promise(() => {});
+                return undefined;
+            });
+            void bootstrapAccessAuth();
+            await vi.advanceTimersByTimeAsync(0);
+            const overlay = submitOverlay('password123');
+            await vi.advanceTimersByTimeAsync(30000);
+            expect(
+                overlay.querySelector('.access-auth-error').textContent,
+            ).toBe('Phi did not respond. Try again.');
+            expect(overlay.querySelector('button').disabled).toBe(false);
+            expect(__test__.getAccessState().accessToken).toBeNull();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('never follows a redirect on a module-owned auth request', async () => {
+        installToken('jwt-a');
+        const fetchSpy = mockFetch((url) =>
+            url === '/api/auth/v2/password'
+                ? { enabled: true, token: 'jwt-b' }
+                : undefined,
+        );
+        await setAccessPassword('password123');
+        const [url, options] = fetchSpy.mock.calls[0];
+        expect(url).toBe('/api/auth/v2/password');
+        expect(options.redirect).toBe('error');
+        expect(options.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it('keeps a stored token when the clear response is not a clear', async () => {
+        installToken('jwt-a');
+        mockFetch(() => ({ enabled: true, token: 'jwt-b' }));
+        await expect(clearAccessPassword()).rejects.toThrow(
+            'Unable to clear access password',
+        );
+        const state = __test__.getAccessState();
+        expect(state.accessToken).toBe('jwt-a');
+        expect(state.accessEnabled).toBe(true);
+    });
+
+    it('does not delete standalone storage owned by another session', async () => {
+        storeBearer('jwt-standalone');
+        installToken('jwt-standalone');
+        mockFetch((url) =>
+            url === '/api/protected'
+                ? { ok: false, status: 401 }
+                : { ok: true },
+        );
+        installAccessFetch();
+        await fetch('/api/protected');
+        await vi.waitFor(() =>
+            expect(__test__.getAccessState().accessToken).toBeNull(),
+        );
+        expect(localStorage.getItem(BEARER_KEY)).toBe('jwt-standalone');
+    });
+
+    it('keeps another standalone token when a host session clears access', async () => {
+        storeBearer('jwt-other');
+        installToken('host-token');
+        mockFetch((url) =>
+            url === '/api/auth/v2/password' ? { enabled: false } : undefined,
+        );
+        await expect(clearAccessPassword()).resolves.toEqual({
+            enabled: false,
+        });
+        expect(localStorage.getItem(BEARER_KEY)).toBe('jwt-other');
     });
 });
