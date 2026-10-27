@@ -3,11 +3,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { mockFetch, setupDomHarness } from './_dom.js';
 
 vi.mock('../web/vendor/noble-hashes/pbkdf2.js', () => ({
-    pbkdf2Async: vi.fn(async () => new Uint8Array(32).fill(9)),
+    pbkdf2Async: vi.fn(async () => {
+        // Tests can hold a derivation to interleave a superseding event.
+        if (globalThis.__pbkdf2Gate) await globalThis.__pbkdf2Gate;
+        return new Uint8Array(32).fill(9);
+    }),
 }));
 
-const { bootstrapAccessAuth, installAccessFetch, setAccessPassword, __test__ } =
-    await import('../web/auth.js');
+const {
+    bootstrapAccessAuth,
+    clearAccessPassword,
+    installAccessFetch,
+    setAccessPassword,
+    __test__,
+} = await import('../web/auth.js');
 
 setupDomHarness();
 
@@ -647,5 +656,124 @@ describe('superseded responses and transient failures', () => {
             ),
         );
         expect(localStorage.getItem(BEARER_KEY)).toBeNull();
+    });
+});
+
+describe('credential ownership and superseded derivations', () => {
+    it('keeps a host session memory-only across clear and re-enable', async () => {
+        const { installToken } = await import('../web/auth.js');
+        installToken('host-token');
+        let calls = 0;
+        mockFetch((url) => {
+            if (url !== '/api/auth/v2/password') return undefined;
+            calls += 1;
+            return calls === 1
+                ? { enabled: false }
+                : { enabled: true, token: 'replacement-token' };
+        });
+        await expect(clearAccessPassword()).resolves.toEqual({
+            enabled: false,
+        });
+        await expect(setAccessPassword('password123')).resolves.toEqual({
+            enabled: true,
+        });
+        expect(__test__.getAccessState().accessToken).toBe('replacement-token');
+        expect(localStorage.getItem(BEARER_KEY)).toBeNull();
+    });
+
+    it('does not post a v1 record after a superseding install', async () => {
+        mockFetch(() => ({ enabled: false }));
+        await bootstrapAccessAuth();
+        let release;
+        globalThis.__pbkdf2Gate = new Promise((resolve) => {
+            release = resolve;
+        });
+        try {
+            const change = setAccessPassword('password123');
+            await Promise.resolve();
+            const { installToken } = await import('../web/auth.js');
+            installToken('host-token');
+            release();
+            await expect(change).rejects.toThrow('Phi access changed');
+        } finally {
+            delete globalThis.__pbkdf2Gate;
+        }
+        expect(__test__.getAccessState().accessToken).toBe('host-token');
+    });
+
+    it('keeps a replacement token when the old token is rejected mid-change', async () => {
+        storeBearer('jwt-a');
+        mockFetch((url) => {
+            if (url === '/api/auth/status') return DUAL_STATUS;
+            if (url === '/api/auth/v2/status')
+                return { enabled: true, authenticated: true };
+            return undefined;
+        });
+        await bootstrapAccessAuth();
+        expect(__test__.getAccessState().accessToken).toBe('jwt-a');
+        const reload = vi.fn();
+        __test__.setReload(reload);
+        let release;
+        const gate = new Promise((resolve) => {
+            release = resolve;
+        });
+        const fetchSpy = mockFetch((url) => {
+            if (url === '/api/auth/v2/password')
+                return gate.then(() => ({ enabled: true, token: 'jwt-b' }));
+            if (url === '/api/protected') return { ok: false, status: 401 };
+            return { ok: true };
+        });
+        installAccessFetch();
+        const change = setAccessPassword('password123');
+        await vi.waitFor(() =>
+            expect(
+                fetchSpy.mock.calls.some(
+                    ([url]) => url === '/api/auth/v2/password',
+                ),
+            ).toBe(true),
+        );
+        await fetch('/api/protected');
+        await vi.waitFor(() =>
+            expect(document.querySelector('.access-auth-overlay')).toBeTruthy(),
+        );
+        release();
+        await expect(change).resolves.toEqual({ enabled: true });
+        await vi.waitFor(() =>
+            expect(__test__.getAccessState().accessToken).toBe('jwt-b'),
+        );
+        // The replacement resolves the now-redundant prompt and reloads once.
+        expect(document.querySelector('.access-auth-overlay')).toBeNull();
+        await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    });
+
+    it('keeps an existing v1 selection through a transient re-bootstrap', async () => {
+        mockFetch((url) => {
+            if (url === '/api/auth/status')
+                return { ...DUAL_STATUS, authenticated: true };
+            return undefined;
+        });
+        await expect(bootstrapAccessAuth()).resolves.toEqual({ enabled: true });
+        expect(__test__.getAccessState().selectedProtocol).toBe('v1');
+
+        localStorage.setItem(
+            CREDENTIAL_KEY,
+            JSON.stringify({
+                version: DUAL_STATUS.version,
+                algorithm: DUAL_STATUS.algorithm,
+                iterations: DUAL_STATUS.iterations,
+                salt: DUAL_STATUS.salt,
+                verifier: __test__.bytesToBase64URL(new Uint8Array(32).fill(7)),
+            }),
+        );
+        mockFetch((url) => {
+            if (url === '/api/auth/status') return DUAL_STATUS;
+            if (url === '/api/auth/login') return { ok: false, status: 429 };
+            return undefined;
+        });
+        await expect(bootstrapAccessAuth()).rejects.toThrow(
+            'Unable to check Phi access protection',
+        );
+        expect(__test__.getAccessState().selectedProtocol).toBe('v1');
+        expect(document.querySelector('.access-auth-overlay')).toBeNull();
     });
 });
