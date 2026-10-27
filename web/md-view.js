@@ -78,6 +78,10 @@ export function initMdView() {
     document.title = getLastFolderName(path);
     let lastRenderedRaw = null;
     let loadRequestId = 0;
+    // Assets belong to the render that owns the DOM, not to the request that
+    // produced it: an unchanged refresh must not revoke the images of the
+    // render still on screen.
+    let renderId = 0;
     // Object URLs from authenticated images belong to the content currently in
     // the container; release them before that content goes away.
     let releaseAssets = () => { };
@@ -86,6 +90,7 @@ export function initMdView() {
         // order; only the latest request may touch the DOM.
         const requestId = ++loadRequestId;
         const showError = (html) => {
+            renderId++;
             releaseAssets();
             releaseAssets = () => { };
             container.innerHTML = html;
@@ -112,13 +117,14 @@ export function initMdView() {
                 return; // unchanged: no re-render, no scroll jump
             lastRenderedRaw = raw;
             const prevScrollTop = document.scrollingElement?.scrollTop ?? 0;
+            const render = ++renderId;
             releaseAssets();
             releaseAssets = () => { };
             container.innerHTML = `<div class="md-rendered">${renderMarkdownSafe(raw)}</div>`;
             rewriteRelativeImages(container, path, cwd);
             highlightCodeIn(container);
             const release = await authenticateImages(container);
-            if (requestId !== loadRequestId) {
+            if (render !== renderId) {
                 release();
                 return;
             }

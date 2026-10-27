@@ -151,4 +151,65 @@ describe('initMdView', () => {
         await vi.waitFor(() => expect(sockets).toHaveLength(1));
         expect(new URL(sockets[0].url).searchParams.get('token')).toBe('jwt-a');
     });
+
+    it('keeps the images of an unchanged render when a refresh lands first', async () => {
+        // An authenticated image is fetched after the Markdown render. A
+        // second, identical refresh must not revoke the object URLs that the
+        // content still on screen owns.
+        document.body.innerHTML = '<main id="md-view-body"></main>';
+        const sockets = [];
+        vi.stubGlobal(
+            'WebSocket',
+            class {
+                constructor(url) {
+                    this.url = url;
+                    this.binaryType = '';
+                    sockets.push(this);
+                }
+                send() {}
+                close() {}
+            },
+        );
+        const raw = '<img src="pic.png">\n';
+        vi.stubGlobal('marked', { parse: (s) => s });
+        vi.stubGlobal('DOMPurify', { sanitize: (html) => html });
+        let releaseSecond = () => {};
+        const fetchSpy = vi.fn(async () => {
+            if (fetchSpy.mock.calls.length === 1) {
+                return { ok: true, status: 200, text: async () => raw };
+            }
+            await new Promise((resolve) => {
+                releaseSecond = resolve;
+            });
+            return { ok: true, status: 200, text: async () => raw };
+        });
+        vi.stubGlobal('fetch', fetchSpy);
+        const original = window.phiAccessAuth.assetURL;
+        const revoke = vi.fn();
+        let releaseAsset = () => {};
+        window.phiAccessAuth.assetURL = () =>
+            new Promise((resolve) => {
+                releaseAsset = () => resolve({ url: 'blob:pic', revoke });
+            });
+        try {
+            window.history.replaceState({}, '', '/md.html?path=a.md&cwd=/w');
+            initMdView();
+            const notReady = releaseAsset;
+            await vi.waitFor(() => expect(releaseAsset).not.toBe(notReady));
+            const img = document.querySelector('.md-rendered img');
+            expect(img.getAttribute('src')).toBeNull();
+
+            // The events socket refreshes while the image is in flight.
+            sockets[0].onopen();
+            await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+            releaseSecond();
+            releaseAsset();
+            await vi.waitFor(() =>
+                expect(img.getAttribute('src')).toBe('blob:pic'),
+            );
+            expect(revoke).not.toHaveBeenCalled();
+        } finally {
+            window.phiAccessAuth.assetURL = original;
+        }
+    });
 });

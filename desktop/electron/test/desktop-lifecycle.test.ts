@@ -1824,4 +1824,53 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
       jwt: 'older',
     });
   });
+
+  it('keeps a native unlock ready when a stale token is accepted late', async () => {
+    const host = hostOf() as TestHost & { bodyTokens: Map<string, string> };
+    let release!: (res: Response) => void;
+    const auth = new AccessAuth((async () =>
+      new Promise<Response>((resolve) => {
+        release = resolve;
+      })) as unknown as typeof fetch);
+    host.storedCredentials.set(originA, { version: 'v2', jwt: 'restored' });
+    const pending = host.bootstrapV2Token(
+      originA,
+      'restored',
+      auth,
+      host.sessionGeneration,
+    );
+    // The native unlock finishes while the restored token is still checking.
+    auth.installToken(originA, 'fresh');
+    host.bodyTokens.set(originA, 'fresh');
+    release(
+      new Response(JSON.stringify({ enabled: true, authenticated: true }), {
+        status: 200,
+      }),
+    );
+    await pending;
+    expect(auth.getToken(originA)).toBe('fresh');
+    expect(host.bodyTokens.get(originA)).toBe('fresh');
+  });
+
+  it('keeps a native unlock ready when a stale token is rejected late', async () => {
+    const host = hostOf() as TestHost & { bodyTokens: Map<string, string> };
+    let release!: (res: Response) => void;
+    const auth = new AccessAuth((async () =>
+      new Promise<Response>((resolve) => {
+        release = resolve;
+      })) as unknown as typeof fetch);
+    host.storedCredentials.set(originA, { version: 'v2', jwt: 'restored' });
+    const pending = host.bootstrapV2Token(
+      originA,
+      'restored',
+      auth,
+      host.sessionGeneration,
+    );
+    auth.installToken(originA, 'fresh');
+    host.bodyTokens.set(originA, 'fresh');
+    release(new Response('', { status: 401 }));
+    await pending;
+    expect(auth.getToken(originA)).toBe('fresh');
+    expect(host.bodyTokens.get(originA)).toBe('fresh');
+  });
 });

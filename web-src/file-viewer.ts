@@ -168,7 +168,7 @@ export async function mountFileView(opts: {
             handle = await mountJson(url, container, signal);
             break;
         default:
-            handle = await mountDownload(url, path, container);
+            handle = mountDownload(url, path, container);
             break;
     }
     handle.kind = kind;
@@ -394,15 +394,14 @@ async function mountJson(
     };
 }
 
-async function mountDownload(
+function mountDownload(
     url: string,
     path: string,
     container: HTMLElement,
-): Promise<FileViewHandle> {
+): FileViewHandle {
     const name = path.slice(
         Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1,
     );
-    const asset = await authenticatedAsset(url);
     const wrapper = document.createElement('div');
     wrapper.className = 'file-viewer-download';
     const message = document.createElement('p');
@@ -411,14 +410,45 @@ async function mountDownload(
     message.append("Can't preview ", code, '.');
     const download = document.createElement('a');
     download.className = 'file-viewer-download-btn';
-    download.href = asset.url;
     download.download = name;
     download.textContent = 'Download';
+    // A v2 session has no cookie, so the bytes must be fetched with the
+    // bearer. Fetch only when the user asks: previewing a large file must not
+    // download it. A v1 session keeps the plain link.
+    const needsBearer = () => Boolean(window.phiAccessAuth?.getAccessToken?.());
+    if (!needsBearer()) download.href = url;
+    let release: () => void = () => {};
+    let resolved = false;
+    let disposed = false;
+    download.addEventListener('click', (event) => {
+        if (resolved || !needsBearer()) return;
+        event.preventDefault();
+        if (download.textContent === 'Downloading…') return;
+        download.textContent = 'Downloading…';
+        void authenticatedAsset(url)
+            .then((asset) => {
+                if (disposed) {
+                    asset.revoke();
+                    return;
+                }
+                release = asset.revoke;
+                download.href = asset.url;
+                download.textContent = 'Download';
+                resolved = true;
+                download.click();
+                resolved = false;
+            })
+            .catch(() => {
+                if (!disposed) download.textContent = 'Unable to download';
+            });
+    });
     wrapper.append(message, download);
     container.replaceChildren(wrapper);
     return {
         dispose: () => {
-            asset.revoke();
+            disposed = true;
+            release();
+            release = () => {};
             container.innerHTML = '';
         },
     };

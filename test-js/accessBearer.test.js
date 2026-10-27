@@ -480,6 +480,26 @@ describe('host bridge', () => {
         expect(localStorage.getItem(BEARER_KEY)).toBeNull();
         expect(document.querySelector('.access-auth-overlay')).toBeNull();
     });
+
+    it('releases bootstrap when a host token lands mid-discovery', async () => {
+        let release;
+        const gate = new Promise((resolve) => {
+            release = resolve;
+        });
+        mockFetch((url) => {
+            if (url === '/api/auth/status') return gate.then(() => DUAL_STATUS);
+            throw new Error(`unexpected fetch ${url}`);
+        });
+        const boot = bootstrapAccessAuth();
+        await Promise.resolve();
+        const { installToken } = await import('../web/auth.js');
+        expect(installToken('host-token')).toBe(true);
+        // The discovery request is still pending: bootstrap must not wait for
+        // its 30-second deadline before starting the app.
+        await expect(boot).resolves.toEqual({ enabled: true });
+        expect(__test__.getAccessState().accessToken).toBe('host-token');
+        release();
+    });
 });
 
 describe('webSocketURL bridge', () => {
