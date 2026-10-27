@@ -271,16 +271,26 @@ function savedVerifier(status) {
     }
 }
 
+// login reports 'ok', 'rejected', or 'transient'. Only an explicit 401
+// rejects the credential; a 429, 5xx, or transport failure must not destroy
+// it, change the selected protocol, or prompt for another password.
 async function login(status, verifier) {
     const proof = bytesToBase64URL(
         hmac(sha256, verifier, new TextEncoder().encode(status.challenge)),
     );
-    const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ challenge: status.challenge, proof }),
-    });
-    return res.ok;
+    let res;
+    try {
+        res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ challenge: status.challenge, proof }),
+        });
+    } catch {
+        return 'transient';
+    }
+    if (res.ok) return 'ok';
+    if (res.status === 401) return 'rejected';
+    return 'transient';
 }
 
 // --- v2 bearer client ----------------------------------------------------
@@ -288,7 +298,7 @@ async function login(status, verifier) {
 let selectedProtocol = null; // 'v1' | 'v2' | null before discovery
 let accessEnabled = false; // last discovered enforcement state
 let accessToken = null; // in-memory bearer; null in v1 mode
-let persistedToken = null; // token this module wrote to BEARER_KEY
+let memoryOnly = false; // host-installed token: never write it to storage
 let stateEpoch = 0; // bumped whenever the selected credential changes
 
 function utf8Length(value) {
@@ -320,15 +330,15 @@ function clearStoredBearer(token) {
     }
 }
 
-function adoptToken(token, { persist }) {
+// adoptToken installs a v2 credential this module obtained. A host-installed
+// session stays memory-only for the rest of the page load: later module calls
+// (password change, reauthentication) must not write it to storage.
+function adoptToken(token, { persist = false } = {}) {
     accessToken = token;
     accessEnabled = true;
     selectedProtocol = 'v2';
     stateEpoch++;
-    if (persist) {
-        persistedToken = token;
-        storeBearer(token);
-    }
+    if (persist && !memoryOnly) storeBearer(token);
 }
 
 // rejectToken clears only the token that failed. A delayed 401 for token A
@@ -338,10 +348,10 @@ function rejectToken(token) {
     if (accessToken !== token && loadBearer() !== token) return;
     if (accessToken === token) {
         accessToken = null;
-        selectedProtocol = 'v2';
         stateEpoch++;
     }
-    if (persistedToken === token) persistedToken = null;
+    // Token absence alone must not select v1: keep the v2 choice.
+    selectedProtocol = 'v2';
     clearStoredBearer(token);
 }
 
@@ -354,7 +364,8 @@ async function checkV2Token(token) {
         cache: 'no-store',
     });
     if (res.status === 401 || res.status === 403) return 'invalid';
-    if (!res.ok) throw new Error('Unable to check Phi access protection');
+    if (res.status !== 200)
+        throw new Error('Unable to check Phi access protection');
     let payload;
     try {
         payload = await res.json();
@@ -405,6 +416,7 @@ function validateV2Password(password) {
 
 async function saveV2Password(password) {
     validateV2Password(password);
+    const epoch = stateEpoch;
     const headers = { 'Content-Type': 'application/json' };
     if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
     const res = await fetch('/api/auth/v2/password', {
@@ -429,12 +441,13 @@ async function saveV2Password(password) {
         !payload.token
     )
         throw new Error('Unable to save access password');
-    adoptToken(payload.token, { persist: true });
+    if (epoch === stateEpoch) adoptToken(payload.token, { persist: true });
     return { enabled: true };
 }
 
 async function clearV2Password() {
     if (!accessEnabled && !accessToken) return { enabled: false };
+    const epoch = stateEpoch;
     const headers = { 'Content-Type': 'application/json' };
     if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
     const res = await fetch('/api/auth/v2/password', {
@@ -446,10 +459,13 @@ async function clearV2Password() {
         throw new Error(
             (await res.text()) || 'Unable to clear access password',
         );
+    // A credential installed while the clear was in flight is newer than
+    // this response; never clear it.
+    if (epoch !== stateEpoch) return { enabled: false };
     accessToken = null;
     accessEnabled = false;
     selectedProtocol = 'v2';
-    persistedToken = null;
+    memoryOnly = false;
     stateEpoch++;
     try {
         localStorage.removeItem(BEARER_KEY);
@@ -546,7 +562,8 @@ function requestReauth() {
 
 async function discoverAccessStatus() {
     const res = await fetch('/api/auth/status', { cache: 'no-store' });
-    if (!res.ok) throw new Error('Unable to check Phi access protection');
+    if (res.status !== 200)
+        throw new Error('Unable to check Phi access protection');
     let payload;
     try {
         payload = await res.json();
@@ -623,22 +640,34 @@ function showUnlockPrompt(protocol) {
             // pbkdf2 loops in JS around per-iteration WASM boundary
             // crossings - 2.7x noble at c=600000.)
             submit.textContent = 'Signing in…';
+            // A host token installed while this request was in flight is
+            // newer than the response: it must win and the overlay is gone.
+            const epoch = stateEpoch;
             try {
                 if (protocol === 'v2') {
                     const token = await v2Login(input.value);
+                    if (epoch !== stateEpoch) return;
                     adoptToken(token, { persist: true });
                     input.value = '';
                     finish({ enabled: true });
                     return;
                 }
                 const status = await getStatus();
+                if (epoch !== stateEpoch) return;
                 if (!status.enabled) {
                     finish({ enabled: false });
                     return;
                 }
                 const verifier = await deriveVerifier(input.value, status);
-                if (!(await login(status, verifier))) {
+                const verdict = await login(status, verifier);
+                if (epoch !== stateEpoch) return;
+                if (verdict === 'rejected') {
                     error.textContent = 'Wrong password';
+                    input.select();
+                    return;
+                }
+                if (verdict === 'transient') {
+                    error.textContent = 'Unable to reach Phi. Try again.';
                     input.select();
                     return;
                 }
@@ -646,6 +675,7 @@ function showUnlockPrompt(protocol) {
                 input.value = '';
                 finish({ enabled: true });
             } catch (err) {
+                if (epoch !== stateEpoch) return;
                 error.textContent =
                     err instanceof Error ? err.message : 'Unable to unlock Phi';
                 input.select();
@@ -669,8 +699,17 @@ function showUnlockPrompt(protocol) {
 export async function bootstrapAccessAuth() {
     installAccessFetch();
     const epoch = stateEpoch;
-    const status = await discoverAccessStatus();
-    if (epoch !== stateEpoch) return { enabled: accessEnabled };
+    const installed = () => epoch !== stateEpoch;
+
+    let status;
+    try {
+        status = await discoverAccessStatus();
+    } catch (err) {
+        // A host token installed during discovery supersedes its failure.
+        if (installed()) return { enabled: accessEnabled };
+        throw err;
+    }
+    if (installed()) return { enabled: accessEnabled };
 
     const protocol = preferredProtocol(status.protocols);
     accessEnabled = status.enabled;
@@ -678,15 +717,25 @@ export async function bootstrapAccessAuth() {
         selectedProtocol = protocol;
         return { enabled: false };
     }
+    // Fix the protocol before any login attempt; the cookie and saved
+    // verifier branches below are the only v2-to-v1 change.
+    selectedProtocol = protocol;
 
     if (protocol === 'v2') {
         const stored = loadBearer();
         const token = accessToken || stored;
         if (token) {
-            const verdict = await checkV2Token(token);
-            if (epoch !== stateEpoch) return { enabled: accessEnabled };
+            let verdict;
+            try {
+                verdict = await checkV2Token(token);
+            } catch (err) {
+                if (installed()) return { enabled: accessEnabled };
+                throw err;
+            }
+            if (installed()) return { enabled: accessEnabled };
             if (verdict === 'valid') {
-                adoptToken(token, { persist: stored === token });
+                // A stored token is already persisted; a host token is not.
+                adoptToken(token);
                 return { enabled: true };
             }
             rejectToken(token);
@@ -704,10 +753,15 @@ export async function bootstrapAccessAuth() {
     // metadata; a v2-only status must not be rejected by those bounds.
     if (hasV1Metadata(status)) {
         const verifier = savedVerifier(status.raw);
-        if (verifier && (await login(status.raw, verifier))) {
-            if (epoch !== stateEpoch) return { enabled: accessEnabled };
-            selectedProtocol = 'v1';
-            return { enabled: true };
+        if (verifier) {
+            const verdict = await login(status.raw, verifier);
+            if (installed()) return { enabled: accessEnabled };
+            if (verdict === 'ok') {
+                selectedProtocol = 'v1';
+                return { enabled: true };
+            }
+            if (verdict === 'transient')
+                throw new Error('Unable to check Phi access protection');
         }
     }
     return showUnlockPrompt(protocol);
@@ -756,6 +810,7 @@ async function createPasswordRecord(
 // only thing written to config.json; the raw password is discarded immediately.
 export async function setAccessPassword(password) {
     if (selectedProtocol === 'v2') return saveV2Password(password);
+    const epoch = stateEpoch;
     const { passwordHash, status, verifier } =
         await createPasswordRecord(password);
     const res = await fetch('/api/auth/password', {
@@ -765,12 +820,13 @@ export async function setAccessPassword(password) {
     });
     if (!res.ok)
         throw new Error((await res.text()) || 'Unable to save access password');
-    storeCredential(status, verifier);
+    if (epoch === stateEpoch) storeCredential(status, verifier);
     return { enabled: true };
 }
 
 export async function clearAccessPassword() {
     if (selectedProtocol === 'v2') return clearV2Password();
+    const epoch = stateEpoch;
     const res = await fetch('/api/auth/password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -780,7 +836,7 @@ export async function clearAccessPassword() {
         throw new Error(
             (await res.text()) || 'Unable to clear access password',
         );
-    clearCredential();
+    if (epoch === stateEpoch) clearCredential();
     return { enabled: false };
 }
 
@@ -797,8 +853,8 @@ export function installToken(token) {
     accessToken = token;
     accessEnabled = true;
     selectedProtocol = 'v2';
+    memoryOnly = true;
     stateEpoch++;
-    persistedToken = null;
     if (pendingOverlay) pendingOverlay.finish({ enabled: true });
     return true;
 }
@@ -848,7 +904,7 @@ function resetAccessState() {
     selectedProtocol = null;
     accessEnabled = false;
     accessToken = null;
-    persistedToken = null;
+    memoryOnly = false;
     stateEpoch++;
     reauthInFlight = null;
     pendingOverlay = null;
@@ -860,5 +916,5 @@ function setReload(fn) {
 }
 
 function getAccessState() {
-    return { selectedProtocol, accessEnabled, accessToken, persistedToken };
+    return { selectedProtocol, accessEnabled, accessToken, memoryOnly };
 }
