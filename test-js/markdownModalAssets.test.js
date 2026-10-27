@@ -65,4 +65,36 @@ describe('modal image assets', () => {
         mm.closeModal();
         expect(revoke).toHaveBeenCalledTimes(1);
     });
+
+    it('releases a late image result when another view replaces it', async () => {
+        const revoke = vi.fn();
+        const bridge = stubDeferredBridge(revoke);
+        mockFetch((url) => {
+            if (String(url).startsWith('/api/markdown/file'))
+                return { ok: true, text: async () => '<img src="pic.png">' };
+            if (String(url) === '/api/diag')
+                return {
+                    ok: true,
+                    json: async () => ({
+                        version: 'test',
+                        uptime_seconds: 1,
+                        goroutines: 1,
+                        mem_alloc_mb: 1,
+                        pty_count: 0,
+                        panes: [],
+                    }),
+                };
+            return { ok: true, text: async () => '' };
+        });
+        const mm = makeMm();
+        const open = mm.openFile({ name: 'x.md', path: '/w/x.md' });
+        await vi.waitFor(() => expect(bridge.release).toBeTypeOf('function'));
+
+        // The Diagnostics view replaces the body while the image is pending.
+        void mm.openDiagModal();
+        bridge.release();
+        await open;
+        expect(revoke).toHaveBeenCalledTimes(1);
+        if (mm._diagInterval) clearInterval(mm._diagInterval);
+    });
 });
