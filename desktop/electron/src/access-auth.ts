@@ -221,10 +221,7 @@ export class AccessAuth {
   cancel(origin: string): void {
     const canonical = toCanonicalAuthOrigin(origin);
     if (canonical) {
-      this.attemptTokens.set(
-        canonical,
-        (this.attemptTokens.get(canonical) ?? 0) + 1,
-      );
+      this.bumpAttempt(canonical);
       this.cookies.delete(canonical);
       this.cookies.delete(`${canonical}/`);
       this.lastVerifier.delete(canonical);
@@ -242,7 +239,8 @@ export class AccessAuth {
   }
 
   /** Installs a host-held v2 token. Memory-only: persistence belongs to the
-   *  encrypted desktop store, never this module. */
+   *  encrypted desktop store, never this module. Installation supersedes any
+   *  auth handshake already in flight for that origin. */
   installToken(origin: string, token: string): boolean {
     const canonical = toCanonicalAuthOrigin(origin);
     if (!canonical || typeof token !== 'string' || token.length === 0) {
@@ -250,6 +248,7 @@ export class AccessAuth {
     }
     this.tokens.set(canonical, token);
     this.selectedProtocols.set(canonical, 'v2');
+    this.bumpAttempt(canonical);
     return true;
   }
 
@@ -273,6 +272,15 @@ export class AccessAuth {
 
   hasToken(origin: string): boolean {
     return this.getToken(origin) !== null;
+  }
+
+  /** Advances the per-origin attempt fence so a handshake that started
+   *  earlier cannot mutate the selected credential when it finishes. */
+  private bumpAttempt(canonical: string): void {
+    this.attemptTokens.set(
+      canonical,
+      (this.attemptTokens.get(canonical) ?? 0) + 1,
+    );
   }
 
   /** Protocol selected for `origin`; null before a credential decides. */
@@ -444,7 +452,7 @@ export class AccessAuth {
     const canonical = toCanonicalAuthOrigin(origin);
     if (!canonical) return { kind: 'unavailable', reason: 'invalid origin' };
     const protocol = this.selectedProtocols.get(canonical) ?? 'v1';
-    const token = protocol === 'v2' ? this.tokens.get(canonical) : undefined;
+    let token = protocol === 'v2' ? this.tokens.get(canonical) : undefined;
     let cookie =
       protocol === 'v2'
         ? undefined
@@ -464,6 +472,12 @@ export class AccessAuth {
         }
       } catch {
         /* ignore provider lookup error */
+      }
+      // A host token installed while the provider was pending wins: never
+      // send a legacy cookie for an origin that has since selected v2.
+      if (this.selectedProtocols.get(canonical) === 'v2') {
+        cookie = undefined;
+        token = this.tokens.get(canonical);
       }
     }
     const headers: Record<string, string> = {};
@@ -536,15 +550,23 @@ export class AccessAuth {
     if (typeof password !== 'string') {
       return { kind: 'invalid-password', message: 'Password is required.' };
     }
-    // Character count is a lower bound for UTF-8 bytes, so this rejects a
-    // too-short password for either protocol before any network round trip.
-    if (password.length < MIN_PASSWORD_LEN) {
+    // Byte length is the lower bound for both protocols: a multibyte
+    // password can be shorter in UTF-16 code units but long enough in
+    // UTF-8. The v1 branch still applies its character-count bounds.
+    if (Buffer.byteLength(password, 'utf8') < MIN_PASSWORD_LEN) {
       return {
         kind: 'invalid-password',
         message: 'Password length is out of range.',
       };
     }
+    const attempt = (this.attemptTokens.get(canonical) ?? 0) + 1;
+    this.attemptTokens.set(canonical, attempt);
+    const isCurrent = (): boolean =>
+      this.attemptTokens.get(canonical) === attempt;
     const discovery = await this.discoverStatus(canonical, signal);
+    if (signal?.aborted || !isCurrent()) {
+      return { kind: 'stale', message: 'Aborted' };
+    }
     if (discovery.kind === 'unavailable') {
       return { kind: 'unavailable', message: discovery.message };
     }
@@ -579,6 +601,9 @@ export class AccessAuth {
           message: 'Password length is out of range.',
         };
       }
+      // Fix the selection before the network round trip: a failed v2 login
+      // must not fall back to a v1 cookie or verifier on the next poll.
+      this.selectedProtocols.set(canonical, 'v2');
       return this.completeV2Unlock(canonical, password, signal);
     }
 
@@ -732,7 +757,7 @@ export class AccessAuth {
         signal: withTimeout(signal, FETCH_TIMEOUT_MS),
         redirect: 'error',
       });
-      if (!res.ok) {
+      if (res.status !== 200) {
         return { kind: 'unavailable', message: `status http ${res.status}` };
       }
       const raw = (await res.json()) as unknown;
@@ -788,7 +813,7 @@ export class AccessAuth {
         },
       );
       if (res.status === 401 || res.status === 403) return 'invalid';
-      if (!res.ok) return 'unavailable';
+      if (res.status !== 200) return 'unavailable';
       const payload = (await res.json()) as unknown;
       if (!payload || typeof payload !== 'object') return 'unavailable';
       const record = payload as Record<string, unknown>;

@@ -1970,6 +1970,76 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
     expect(host.storedCredentials.has(originB)).toBe(false);
   });
 
+  it('withholds a restored bearer from the body until the server validates it', async () => {
+    const host = hostOf() as TestHost & { bodyTokens: Map<string, string> };
+    const transient = new AccessAuth(
+      (async () =>
+        new Response('', { status: 503 })) as unknown as typeof fetch,
+    );
+    host.storedCredentials.set(originA, { version: 'v2', jwt: 'restored' });
+    await host.bootstrapV2Token(
+      originA,
+      'restored',
+      transient,
+      host.sessionGeneration,
+    );
+    // Native retries keep the token; a renderer must not receive an
+    // unconfirmed bearer.
+    expect(transient.getToken(originA)).toBe('restored');
+    expect(host.bodyTokens.has(originA)).toBe(false);
+
+    const valid = new AccessAuth(
+      (async () =>
+        new Response(JSON.stringify({ enabled: true, authenticated: true }), {
+          status: 200,
+        })) as unknown as typeof fetch,
+    );
+    await host.bootstrapV2Token(
+      originB,
+      'checked',
+      valid,
+      host.sessionGeneration,
+    );
+    expect(host.bodyTokens.get(originB)).toBe('checked');
+  });
+
+  it('installs the host bearer into a popout only after the origin authorized it', () => {
+    const host = hostOf() as TestHost & {
+      bodyTokens: Map<string, string>;
+      installPopoutToken(
+        contents: unknown,
+        origin: string,
+        auth: AccessAuth,
+        generation: number,
+        isCurrent: () => boolean,
+      ): void;
+    };
+    const auth = new AccessAuth();
+    auth.installToken(originA, 'popout-token');
+    const child = new fake.FakeBrowserWindow({}).webContents;
+    child.url = `${originA}/md.html`;
+    const scripts: string[] = [];
+    child.executeJavaScript = async (script: string) => {
+      scripts.push(script);
+      return null;
+    };
+    host.installPopoutToken(
+      child,
+      originA,
+      auth,
+      host.sessionGeneration,
+      () => true,
+    );
+
+    // A popout has no cookie to inherit, but an unconfirmed bearer must not
+    // reach a renderer either.
+    child.emit('did-finish-load');
+    expect(scripts).toHaveLength(0);
+    host.bodyTokens.set(originA, 'popout-token');
+    child.emit('did-finish-load');
+    expect(scripts.some((s) => s.includes('"popout-token"'))).toBe(true);
+  });
+
   it('keeps a token on a transient failure and never overwrites a newer one', async () => {
     const host = hostOf();
     const transient = new AccessAuth(

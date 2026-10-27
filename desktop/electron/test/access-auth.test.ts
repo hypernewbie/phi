@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AccessAuth,
+  type CookieJarEntry,
   deriveVerifier,
   makeProof,
   MAX_ITERATIONS,
@@ -1278,6 +1279,94 @@ describe('AccessAuth v2 selection', () => {
     expect(auth.getToken(origin)).toBe('token-B');
     const next = await auth.fetchConfig(origin);
     expect(next.kind).toBe('ok');
+  });
+
+  it('lets a host token installed mid-handshake win over the login response', async () => {
+    let releaseLogin!: (res: Response) => void;
+    const loginPending = new Promise<Response>((resolve) => {
+      releaseLogin = resolve;
+    });
+    let loginStarted = false;
+    const auth = new AccessAuth((async (url: URL) => {
+      if (url.pathname === '/api/auth/status') return json(v1Status);
+      if (url.pathname === '/api/auth/v2/login') {
+        loginStarted = true;
+        return loginPending;
+      }
+      throw new Error(`unexpected ${url.pathname}`);
+    }) as unknown as typeof fetch);
+
+    const unlock = auth.tryUnlock(origin, 'test-pass-1234');
+    while (!loginStarted) await new Promise((r) => setTimeout(r, 0));
+    // The host installs its own bearer while the password login is still
+    // in flight (restored credential, or a second window's unlock).
+    expect(auth.installToken(origin, 'host-token')).toBe(true);
+    releaseLogin(json({ token: 'login-token' }));
+
+    expect(await unlock).toMatchObject({ kind: 'stale' });
+    expect(auth.getToken(origin)).toBe('host-token');
+    expect(auth.getSelectedProtocol(origin)).toBe('v2');
+  });
+
+  it('keeps v2 selected when the login fails so no later poll sends the v1 cookie', async () => {
+    const seen: Array<{ path: string; cookie: string | null }> = [];
+    const auth = new AccessAuth((async (url: URL, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      seen.push({ path: url.pathname, cookie: headers.Cookie ?? null });
+      if (url.pathname === '/api/auth/status') return json(v1Status);
+      return new Response('', { status: 401 });
+    }) as unknown as typeof fetch);
+    (auth as unknown as { cookies: Map<string, unknown> }).cookies.set(origin, {
+      cookieName: 'phi_access_session',
+      cookieValue: 'legacy-cookie',
+      path: '/',
+      httpOnly: true,
+    });
+
+    expect((await auth.tryUnlock(origin, 'test-pass-1234')).kind).toBe(
+      'invalid-password',
+    );
+    expect(auth.getSelectedProtocol(origin)).toBe('v2');
+    expect((await auth.fetchConfig(origin)).kind).toBe('unauthorized');
+    expect(
+      seen
+        .filter((c) => c.path === '/api/config')
+        .every((c) => c.cookie === null),
+    ).toBe(true);
+  });
+
+  it('ignores a cookie provider that resolves after a v2 token is installed', async () => {
+    const sent: Array<{ cookie: string | null; auth: string | null }> = [];
+    const auth = new AccessAuth((async (_url: URL, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      sent.push({
+        cookie: headers.Cookie ?? null,
+        auth: headers.Authorization ?? null,
+      });
+      return json({ hostname: 'V2' });
+    }) as unknown as typeof fetch);
+    let releaseProvider!: (value: CookieJarEntry | null) => void;
+    auth.setCookieProvider(
+      () =>
+        new Promise((resolve) => {
+          releaseProvider = resolve;
+        }),
+    );
+
+    // The poll starts as a legacy (cookie) request and parks in the provider.
+    const config = auth.fetchConfig(origin);
+    while (!releaseProvider) await new Promise((r) => setTimeout(r, 0));
+    expect(auth.installToken(origin, 'host-token')).toBe(true);
+    releaseProvider({
+      origin,
+      cookieName: 'phi_access_session',
+      cookieValue: 'legacy-cookie',
+      path: '/',
+      httpOnly: true,
+    });
+
+    expect((await config).kind).toBe('ok');
+    expect(sent).toEqual([{ cookie: null, auth: 'Bearer host-token' }]);
   });
 
   it('validates a token through v2 status without a cookie', async () => {
