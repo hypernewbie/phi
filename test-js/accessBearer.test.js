@@ -180,6 +180,30 @@ describe('v2 selection', () => {
         ]);
     });
 
+    it('drops the in-memory bearer when a v1-only server disables auth', async () => {
+        installToken('jwt-host');
+        const fetchSpy = mockFetch((url) => {
+            if (url === '/api/auth/status')
+                return {
+                    ...DUAL_STATUS,
+                    protocols: ['v1'],
+                    enabled: false,
+                    authenticated: false,
+                };
+            throw new Error(`unexpected fetch ${url}`);
+        });
+        await expect(bootstrapAccessAuth()).resolves.toEqual({
+            enabled: false,
+        });
+        const state = __test__.getAccessState();
+        expect(state.selectedProtocol).toBe('v1');
+        // The bearer must not keep reaching a server that cannot verify it.
+        expect(state.accessToken).toBeNull();
+        expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([
+            '/api/auth/status',
+        ]);
+    });
+
     it('downgrades an existing v2 selection only on v1-only discovery', async () => {
         installToken('jwt-host');
         const fetchSpy = mockFetch((url) => {
