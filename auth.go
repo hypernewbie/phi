@@ -1,13 +1,17 @@
 package main
 
 import (
+	"bytes"
+	"crypto/hkdf"
 	"crypto/hmac"
+	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -20,29 +24,40 @@ const (
 	accessPasswordHashVersion    = "v1"
 	accessPasswordHashAlgorithm  = "pbkdf2-sha256"
 	accessPasswordHashIterations = 600000
+	accessPasswordMinIterations  = 100000
+	accessPasswordMaxIterations  = 10000000
 	accessPasswordSaltBytes      = 16
 	accessPasswordVerifierBytes  = 32
 	accessChallengeTTL           = 5 * time.Minute
 	accessSessionTTL             = 100 * 365 * 24 * time.Hour
 	accessSessionCookie          = "phi_access_session"
 	maxAccessChallenges          = 1024
+	accessJWTAlgorithm           = "HS256"
+	accessJWTType                = "JWT"
+	accessJWTIssuer              = "phi"
+	accessJWTKeyBytes            = 32
+	accessJWTNonceBytes          = 32
+	accessJWTInfo                = "phi/access-jwt/v1"
+	accessJWTLifetime            = accessSessionTTL
 )
 
 var (
 	errAccessUnauthorized = errors.New("access authentication required")
 	errAccessRateLimited  = errors.New("too many failed password attempts; try again shortly")
+	errAccessJWTInvalid   = errors.New("invalid access token")
 )
 
 type accessPasswordRecord struct {
-	Salt     []byte
-	Verifier []byte
+	Iterations int
+	Salt       []byte
+	Verifier   []byte
 }
 
 func (r accessPasswordRecord) encoded() string {
 	return strings.Join([]string{
 		accessPasswordHashVersion,
 		accessPasswordHashAlgorithm,
-		strconv.Itoa(accessPasswordHashIterations),
+		strconv.Itoa(r.Iterations),
 		base64.RawURLEncoding.EncodeToString(r.Salt),
 		base64.RawURLEncoding.EncodeToString(r.Verifier),
 	}, ".")
@@ -61,7 +76,7 @@ func parseAccessPasswordHash(encoded string) (*accessPasswordRecord, error) {
 		return nil, errors.New("invalid access password hash format")
 	}
 	iterations, err := strconv.Atoi(parts[2])
-	if err != nil || iterations != accessPasswordHashIterations {
+	if err != nil || iterations < accessPasswordMinIterations || iterations > accessPasswordMaxIterations {
 		return nil, errors.New("unsupported access password hash parameters")
 	}
 	salt, err := base64.RawURLEncoding.DecodeString(parts[3])
@@ -72,7 +87,243 @@ func parseAccessPasswordHash(encoded string) (*accessPasswordRecord, error) {
 	if err != nil || len(verifier) != accessPasswordVerifierBytes {
 		return nil, errors.New("invalid access password hash verifier")
 	}
-	return &accessPasswordRecord{Salt: salt, Verifier: verifier}, nil
+	return &accessPasswordRecord{Iterations: iterations, Salt: salt, Verifier: verifier}, nil
+}
+
+// deriveAccessVerifier runs PBKDF2-SHA256 at the record's own iteration count.
+func deriveAccessVerifier(password string, salt []byte, iterations int) ([]byte, error) {
+	return pbkdf2.Key(sha256.New, password, salt, iterations, accessPasswordVerifierBytes)
+}
+
+// newAccessPasswordRecord builds a record at the current parameters from a raw
+// password. The salt is fresh, so an identical password yields a new verifier.
+func newAccessPasswordRecord(password string) (*accessPasswordRecord, error) {
+	salt := make([]byte, accessPasswordSaltBytes)
+	if _, err := rand.Read(salt); err != nil {
+		return nil, err
+	}
+	verifier, err := deriveAccessVerifier(password, salt, accessPasswordHashIterations)
+	if err != nil {
+		return nil, err
+	}
+	return &accessPasswordRecord{Iterations: accessPasswordHashIterations, Salt: salt, Verifier: verifier}, nil
+}
+
+// matchesPassword compares a raw password with the stored verifier at the
+// record's iteration count in constant time.
+func (r accessPasswordRecord) matchesPassword(password string) (bool, error) {
+	candidate, err := deriveAccessVerifier(password, r.Salt, r.Iterations)
+	if err != nil {
+		return false, err
+	}
+	return subtle.ConstantTimeCompare(candidate, r.Verifier) == 1, nil
+}
+
+// rehashed returns a replacement record when the stored work factor is stale,
+// so a successful password login can upgrade it without a separate migration.
+func (r accessPasswordRecord) rehashed(password string) (*accessPasswordRecord, bool, error) {
+	if r.Iterations == accessPasswordHashIterations {
+		return nil, false, nil
+	}
+	record, err := newAccessPasswordRecord(password)
+	if err != nil {
+		return nil, false, err
+	}
+	return record, true, nil
+}
+
+// accessJWTKey derives the HS256 signing key from the stored verifier, so a
+// record change rotates every outstanding token without extra state.
+func accessJWTKey(record *accessPasswordRecord) ([]byte, error) {
+	if record == nil {
+		return nil, nil
+	}
+	return hkdf.Key(sha256.New, record.Verifier, record.Salt, accessJWTInfo, accessJWTKeyBytes)
+}
+
+type accessJWTHeader struct {
+	Algorithm string `json:"alg"`
+	Type      string `json:"typ"`
+}
+
+type accessJWTPayload struct {
+	Issuer    string `json:"iss"`
+	IssuedAt  int64  `json:"iat"`
+	ExpiresAt int64  `json:"exp"`
+	Nonce     string `json:"jti"`
+}
+
+// accessJWTClaims is the verified content of a v2 access token.
+type accessJWTClaims struct {
+	IssuedAt  time.Time
+	ExpiresAt time.Time
+	Nonce     string
+}
+
+// formatAccessJWT signs explicit claims. Production callers use mintAccessJWT,
+// which supplies a random nonce; tests use this form for fixed vectors.
+func formatAccessJWT(key []byte, issuedAt, expiresAt int64, nonce string) (string, error) {
+	header, err := json.Marshal(accessJWTHeader{Algorithm: accessJWTAlgorithm, Type: accessJWTType})
+	if err != nil {
+		return "", err
+	}
+	payload, err := json.Marshal(accessJWTPayload{
+		Issuer:    accessJWTIssuer,
+		IssuedAt:  issuedAt,
+		ExpiresAt: expiresAt,
+		Nonce:     nonce,
+	})
+	if err != nil {
+		return "", err
+	}
+	signingInput := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload)
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte(signingInput))
+	return signingInput + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
+}
+
+func mintAccessJWT(key []byte, now time.Time) (string, error) {
+	nonce := make([]byte, accessJWTNonceBytes)
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+	return formatAccessJWT(key, now.Unix(), now.Add(accessJWTLifetime).Unix(), base64.RawURLEncoding.EncodeToString(nonce))
+}
+
+// parseAccessJWT verifies the signature first, then enforces the exact header
+// and payload shape. Every failure returns the same error so callers cannot
+// distinguish a malformed token from a forged one.
+func parseAccessJWT(key []byte, token string, now time.Time) (*accessJWTClaims, error) {
+	if len(key) != accessJWTKeyBytes {
+		return nil, errAccessJWTInvalid
+	}
+	segments := strings.Split(token, ".")
+	if len(segments) != 3 {
+		return nil, errAccessJWTInvalid
+	}
+	header, err := decodeAccessJWTSegment(segments[0])
+	if err != nil {
+		return nil, errAccessJWTInvalid
+	}
+	payload, err := decodeAccessJWTSegment(segments[1])
+	if err != nil {
+		return nil, errAccessJWTInvalid
+	}
+	signature, err := decodeAccessJWTSegment(segments[2])
+	if err != nil || len(signature) != sha256.Size {
+		return nil, errAccessJWTInvalid
+	}
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte(segments[0] + "." + segments[1]))
+	if subtle.ConstantTimeCompare(signature, mac.Sum(nil)) != 1 {
+		return nil, errAccessJWTInvalid
+	}
+
+	headerMembers, err := scanAccessJSONObject(header)
+	if err != nil || !accessJWTHasExactKeys(headerMembers, "alg", "typ") {
+		return nil, errAccessJWTInvalid
+	}
+	var verifiedHeader accessJWTHeader
+	if err := json.Unmarshal(header, &verifiedHeader); err != nil {
+		return nil, errAccessJWTInvalid
+	}
+	if verifiedHeader.Algorithm != accessJWTAlgorithm || verifiedHeader.Type != accessJWTType {
+		return nil, errAccessJWTInvalid
+	}
+
+	payloadMembers, err := scanAccessJSONObject(payload)
+	if err != nil || !accessJWTHasExactKeys(payloadMembers, "iss", "iat", "exp", "jti") {
+		return nil, errAccessJWTInvalid
+	}
+	// null leaves a plain int64 at zero, so decode the timestamps through
+	// pointers and require both to be present as integers.
+	var claims struct {
+		Issuer    string `json:"iss"`
+		IssuedAt  *int64 `json:"iat"`
+		ExpiresAt *int64 `json:"exp"`
+		Nonce     string `json:"jti"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil || claims.IssuedAt == nil || claims.ExpiresAt == nil {
+		return nil, errAccessJWTInvalid
+	}
+	if claims.Issuer != accessJWTIssuer {
+		return nil, errAccessJWTInvalid
+	}
+	nonce, err := decodeAccessJWTSegment(claims.Nonce)
+	if err != nil || len(nonce) != accessJWTNonceBytes {
+		return nil, errAccessJWTInvalid
+	}
+	expiresAt := time.Unix(*claims.ExpiresAt, 0)
+	if !expiresAt.After(now) {
+		return nil, errAccessJWTInvalid
+	}
+	return &accessJWTClaims{
+		IssuedAt:  time.Unix(*claims.IssuedAt, 0),
+		ExpiresAt: expiresAt,
+		Nonce:     claims.Nonce,
+	}, nil
+}
+
+// decodeAccessJWTSegment rejects noncanonical base64url so one token cannot be
+// spelled two ways.
+func decodeAccessJWTSegment(segment string) ([]byte, error) {
+	if segment == "" {
+		return nil, errAccessJWTInvalid
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(segment)
+	if err != nil || base64.RawURLEncoding.EncodeToString(decoded) != segment {
+		return nil, errAccessJWTInvalid
+	}
+	return decoded, nil
+}
+
+// scanAccessJSONObject decodes one JSON object and rejects duplicate keys,
+// non-string keys, and trailing values. Unmarshalling into a map would keep the
+// last duplicate silently.
+func scanAccessJSONObject(data []byte) (map[string]json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return nil, errAccessJWTInvalid
+	}
+	members := make(map[string]json.RawMessage, 4)
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return nil, errAccessJWTInvalid
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return nil, errAccessJWTInvalid
+		}
+		if _, duplicate := members[key]; duplicate {
+			return nil, errAccessJWTInvalid
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, errAccessJWTInvalid
+		}
+		members[key] = value
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+		return nil, errAccessJWTInvalid
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return nil, errAccessJWTInvalid
+	}
+	return members, nil
+}
+
+func accessJWTHasExactKeys(members map[string]json.RawMessage, keys ...string) bool {
+	if len(members) != len(keys) {
+		return false
+	}
+	for _, key := range keys {
+		if _, ok := members[key]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 type accessLoginAttempt struct {
@@ -84,6 +335,8 @@ type accessLoginAttempt struct {
 type accessAuthManager struct {
 	mu         sync.Mutex
 	record     *accessPasswordRecord
+	jwtKey     []byte
+	generation uint64
 	challenges map[string]time.Time
 	sessions   map[string]time.Time
 	attempts   map[string]accessLoginAttempt
@@ -99,18 +352,33 @@ func newAccessAuthManager() *accessAuthManager {
 
 var accessAuth = newAccessAuthManager()
 
+// configure activates the persisted record without rewriting it. The signing
+// key is derived from that record, so restart reproduces the same tokens' key.
 func (m *accessAuthManager) configure(encoded string) error {
 	record, err := parseAccessPasswordHash(encoded)
+	if err != nil {
+		return err
+	}
+	key, err := accessJWTKey(record)
 	if err != nil {
 		return err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.record = record
+	m.jwtKey = key
+	m.generation++
 	m.challenges = make(map[string]time.Time)
 	m.sessions = make(map[string]time.Time)
 	m.attempts = make(map[string]accessLoginAttempt)
 	return nil
+}
+
+// accessGeneration fences WebSocket upgrades against record changes.
+func (m *accessAuthManager) accessGeneration() uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.generation
 }
 
 func (m *accessAuthManager) enabled() bool {
@@ -122,23 +390,23 @@ func (m *accessAuthManager) enabled() bool {
 // statusAndChallenge returns public KDF parameters and a single-use login
 // challenge from one locked snapshot, so a concurrent password change cannot
 // pair an old salt with a challenge for the new verifier.
-func (m *accessAuthManager) statusAndChallenge() (enabled bool, salt, challenge string, err error) {
+func (m *accessAuthManager) statusAndChallenge() (enabled bool, salt, challenge string, iterations int, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.record == nil {
-		return false, "", "", nil
+		return false, "", "", 0, nil
 	}
 	now := time.Now()
 	m.cleanExpiredLocked(now)
 	if len(m.challenges) >= maxAccessChallenges {
-		return false, "", "", errors.New("too many pending login attempts")
+		return false, "", "", 0, errors.New("too many pending login attempts")
 	}
 	challenge, err = randomAccessToken()
 	if err != nil {
-		return false, "", "", err
+		return false, "", "", 0, err
 	}
 	m.challenges[challenge] = now.Add(accessChallengeTTL)
-	return true, base64.RawURLEncoding.EncodeToString(m.record.Salt), challenge, nil
+	return true, base64.RawURLEncoding.EncodeToString(m.record.Salt), challenge, m.record.Iterations, nil
 }
 
 func (m *accessAuthManager) authenticated(r *http.Request) bool {
@@ -362,7 +630,7 @@ func handleAccessAuthStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	enabled, salt, challenge, err := accessAuth.statusAndChallenge()
+	enabled, salt, challenge, iterations, err := accessAuth.statusAndChallenge()
 	if err != nil {
 		http.Error(w, "Unable to start login: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -374,7 +642,7 @@ func handleAccessAuthStatus(w http.ResponseWriter, r *http.Request) {
 	if enabled {
 		payload["version"] = accessPasswordHashVersion
 		payload["algorithm"] = accessPasswordHashAlgorithm
-		payload["iterations"] = accessPasswordHashIterations
+		payload["iterations"] = iterations
 		payload["salt"] = salt
 		payload["challenge"] = challenge
 	}
