@@ -1,0 +1,99 @@
+import Foundation
+import PhiTerminal
+
+// Evidence tool for M0: attach to one pane, render its grid, print the wire
+// state. Not app UI.
+struct Options {
+  var server: URL
+  var pane: String
+  var cols: UInt16 = 80
+  var rows: UInt16 = 24
+  var seconds = 5
+}
+
+func usage() -> Never {
+  FileHandle.standardError.write(Data(
+    "usage: PhiProbe --server <origin> --pane <id> [--cols 80] [--rows 24] [--seconds 5]\n".utf8))
+  exit(2)
+}
+
+func parse(_ arguments: [String]) -> Options {
+  var server: URL?
+  var pane: String?
+  var options = Options(server: URL(string: "http://127.0.0.1")!, pane: "")
+  var index = 0
+  while index < arguments.count {
+    let flag = arguments[index]
+    guard index + 1 < arguments.count else { usage() }
+    let value = arguments[index + 1]
+    switch flag {
+    case "--server":
+      guard let url = URL(string: value) else { usage() }
+      server = url
+    case "--pane":
+      pane = value
+    case "--cols":
+      guard let parsed = UInt16(value), parsed >= 1 else { usage() }
+      options.cols = parsed
+    case "--rows":
+      guard let parsed = UInt16(value), parsed >= 1 else { usage() }
+      options.rows = parsed
+    case "--seconds":
+      guard let parsed = Int(value), parsed > 0 else { usage() }
+      options.seconds = parsed
+    default:
+      usage()
+    }
+    index += 2
+  }
+  guard let server, let pane, !pane.isEmpty else { usage() }
+  options.server = server
+  options.pane = pane
+  return options
+}
+
+let options = parse(Array(CommandLine.arguments.dropFirst()))
+let client = try PaneWireClient(
+  origin: options.server, paneID: options.pane, cols: options.cols, rows: options.rows)
+let wire = Task { await client.run() }
+
+let attachDeadline = Date().addingTimeInterval(10)
+while await !client.status().attached {
+  if Date() > attachDeadline {
+    FileHandle.standardError.write(Data("PhiProbe: attach timed out\n".utf8))
+    await client.close()
+    exit(1)
+  }
+  try? await Task.sleep(for: .milliseconds(50))
+}
+
+try? await Task.sleep(for: .seconds(options.seconds))
+
+let status = await client.status()
+let rendered = await client.frame()
+print("pane \(options.pane) \(options.server.absoluteString)")
+if let attach = status.attach {
+  let ckpt = attach.checkpoint
+  print("epoch \(attach.epoch) oldest \(attach.oldest) head \(attach.head) frontier \(status.frontier)"
+    + " replay_from \(attach.replayFrom.map(String.init) ?? "none")")
+  print("checkpoint kind \(ckpt?.kind ?? "none") through \(ckpt?.through ?? 0)"
+    + " cols \(ckpt?.cols ?? 0) rows \(ckpt?.rows ?? 0)"
+    + " event_cursor \(ckpt?.eventCursor ?? "none")")
+} else {
+  print("epoch none frontier \(status.frontier)")
+}
+print("attached \(status.attached) reconnects \(status.reconnects) gaps \(status.gaps.count)"
+  + " drop_notices \(status.dropNotices) exit \(status.exitCode.map(String.init) ?? "none")"
+  + " title \(status.title ?? "none")")
+if let error = status.lastError { print("last_error \(error)") }
+print("grid \(rendered.cols)x\(rendered.rows.count)")
+for (row, text) in rendered.rows.enumerated() where !text.isEmpty {
+  print(String(format: "%02d| %@", row, text))
+}
+for cell in rendered.colored.prefix(40) {
+  print(String(format: "fg %02d,%02d %@ #%02x%02x%02x",
+               cell.row, cell.column, cell.text, cell.red, cell.green, cell.blue))
+}
+
+await client.close()
+wire.cancel()
