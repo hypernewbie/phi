@@ -221,7 +221,19 @@ async function login(status, verifier) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ challenge: status.challenge, proof }),
     });
-    return res.ok;
+    return { ok: res.ok, status: res.status };
+}
+
+// The challenge is single-use and expires after five minutes. A slow device
+// can spend longer than that deriving, so take the challenge used for the
+// proof from a fresh status call instead of the pre-derivation one.
+async function freshStatus(fallback) {
+    try {
+        const status = await getStatus();
+        return status.enabled ? status : fallback;
+    } catch {
+        return fallback;
+    }
 }
 
 function showUnlockPrompt() {
@@ -273,13 +285,23 @@ function showUnlockPrompt() {
             event.preventDefault();
             error.textContent = '';
             submit.disabled = true;
-            // The derivation can genuinely take tens of seconds on the
-            // pure-JS path (plain-HTTP LAN origins, weak devices, first
-            // unlock per device) - so the button must read as busy, not
-            // dead. (WASM was measured slower than noble here: hash-wasm's
-            // pbkdf2 loops in JS around per-iteration WASM boundary
-            // crossings - 2.7x noble at c=600000.)
+            // The pure-JS derivation runs for a minute or more on phones:
+            // WebKit disables the JIT for plain-HTTP origins (LAN iPhone),
+            // so 600k PBKDF2 iterations execute at interpreter speed. A
+            // ticking label is the difference between "slow" and "hung".
+            // (WASM was measured slower than noble here: hash-wasm's pbkdf2
+            // loops in JS around per-iteration WASM boundary crossings -
+            // 2.7x noble at c=600000.)
+            const started = Date.now();
             submit.textContent = 'Signing in…';
+            // requestAnimationFrame, not setInterval: Chromium's
+            // scheduler.yield keeps rendering alive but starves timers, so a
+            // timer never fires until the derivation is already over.
+            let ticker = requestAnimationFrame(function tick() {
+                const seconds = Math.round((Date.now() - started) / 1000);
+                submit.textContent = `Signing in… ${seconds}s`;
+                ticker = requestAnimationFrame(tick);
+            });
             try {
                 const status = await getStatus();
                 if (!status.enabled) {
@@ -288,7 +310,17 @@ function showUnlockPrompt() {
                     return;
                 }
                 const verifier = await deriveVerifier(input.value, status);
-                if (!(await login(status, verifier))) {
+                const result = await login(await freshStatus(status), verifier);
+                if (result.status === 429) {
+                    // Rate limited, not a wrong password: the server refuses
+                    // every attempt for a while, so saying "Wrong password"
+                    // would send the user into a retry loop that cannot work.
+                    error.textContent =
+                        'Too many attempts. Wait a minute, then try again.';
+                    input.select();
+                    return;
+                }
+                if (!result.ok) {
                     error.textContent = 'Wrong password';
                     input.select();
                     return;
@@ -301,6 +333,7 @@ function showUnlockPrompt() {
                 error.textContent =
                     err instanceof Error ? err.message : 'Unable to unlock Phi';
             } finally {
+                cancelAnimationFrame(ticker);
                 submit.disabled = false;
                 submit.textContent = 'Sign in';
             }
@@ -320,7 +353,7 @@ export async function bootstrapAccessAuth() {
     if (status.authenticated === true) return { enabled: true };
 
     const verifier = savedVerifier(status);
-    if (verifier && (await login(status, verifier))) {
+    if (verifier && (await login(status, verifier)).ok) {
         return { enabled: true };
     }
     return showUnlockPrompt();

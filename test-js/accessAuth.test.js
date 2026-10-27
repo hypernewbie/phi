@@ -198,6 +198,23 @@ describe('deriveVerifier native acceleration', () => {
 });
 
 describe('unlock overlay slow-derive feedback', () => {
+    // The post-submit path crosses a derive plus several fetch/UI hops, so
+    // poll for the settled label instead of assuming a tick count.
+    const settled = async (overlay) => {
+        const deadline = Date.now() + 2000;
+        for (;;) {
+            const label = overlay.querySelector(
+                'button[type="submit"]',
+            ).textContent;
+            if (label === 'Sign in') return;
+            if (Date.now() > deadline)
+                throw new Error(
+                    `button never restored (last: ${JSON.stringify(label)})`,
+                );
+            await new Promise((r) => setTimeout(r, 10));
+        }
+    };
+
     const submitOverlay = async () => {
         let resolveLogin;
         const loginGate = new Promise((r) => {
@@ -231,7 +248,9 @@ describe('unlock overlay slow-derive feedback', () => {
         });
         try {
             const state = await submitOverlay();
-            expect(state.button.textContent).toBe('Signing in…');
+            // The label gains an elapsed-seconds suffix once the first tick
+            // fires, so assert the busy prefix rather than the exact string.
+            expect(state.button.textContent).toMatch(/^Signing in…/);
             expect(state.button.disabled).toBe(true);
             // The subtitle never changes - no crypto narration in the UI.
             expect(state.subtitle.textContent).toBe(
@@ -243,6 +262,78 @@ describe('unlock overlay slow-derive feedback', () => {
         } finally {
             vi.unstubAllGlobals();
             __test__.resetNativeDerive();
+        }
+    });
+
+    it('reports a rate-limited attempt as rate limiting, not a wrong password', async () => {
+        __test__.resetNativeDerive();
+        vi.stubGlobal('crypto', webcrypto);
+        try {
+            mockFetch((url) => {
+                if (url === '/api/auth/status')
+                    return { ...STATUS, iterations: 1 };
+                if (url === '/api/auth/login')
+                    return { ok: false, status: 429 };
+                throw new Error();
+            });
+            const boot = bootstrapAccessAuth();
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            const overlay = document.querySelector('.access-auth-overlay');
+            overlay.querySelector('input[type="password"]').value =
+                KAT_PASSWORD;
+            overlay
+                .querySelector('form')
+                .dispatchEvent(new Event('submit', { cancelable: true }));
+            await settled(overlay);
+            expect(
+                overlay.querySelector('.access-auth-error').textContent,
+            ).toBe('Too many attempts. Wait a minute, then try again.');
+            overlay.remove();
+            void boot;
+        } finally {
+            vi.unstubAllGlobals();
+            __test__.resetNativeDerive();
+            document.querySelector('.access-auth-overlay')?.remove();
+        }
+    });
+
+    it('uses a challenge taken after the derivation, not before it', async () => {
+        __test__.resetNativeDerive();
+        vi.stubGlobal('crypto', webcrypto);
+        try {
+            let statusCalls = 0;
+            let posted;
+            mockFetch((url, options) => {
+                if (url === '/api/auth/status') {
+                    statusCalls += 1;
+                    return {
+                        ...STATUS,
+                        iterations: 1,
+                        challenge: `challenge-${statusCalls}`,
+                    };
+                }
+                if (url === '/api/auth/login') {
+                    posted = JSON.parse(options.body);
+                    return { ok: true };
+                }
+                throw new Error();
+            });
+            const boot = bootstrapAccessAuth();
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            const overlay = document.querySelector('.access-auth-overlay');
+            overlay.querySelector('input[type="password"]').value =
+                KAT_PASSWORD;
+            overlay
+                .querySelector('form')
+                .dispatchEvent(new Event('submit', { cancelable: true }));
+            await expect(boot).resolves.toEqual({ enabled: true });
+            // challenge-1 came from the bootstrap, challenge-2 preceded the
+            // derivation; only challenge-3 is guaranteed to still be live.
+            expect(posted.challenge).toBe('challenge-3');
+        } finally {
+            vi.unstubAllGlobals();
+            __test__.resetNativeDerive();
+            document.querySelector('.access-auth-overlay')?.remove();
         }
     });
 
