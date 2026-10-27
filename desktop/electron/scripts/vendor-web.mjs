@@ -16,6 +16,7 @@
 import {
   copyFileSync,
   cpSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -33,43 +34,14 @@ const embeddedDir = path.join(electronRoot, 'embedded');
 
 /** Browser Phi JS modules the main view page imports (app.js's module
  *  graph, copied byte-identical so the header runs the browser code).
- *  config.js is the standalone config page's entry; it is vendored for
- *  parity but never loaded by the main view page (it boots the settings
- *  surface). */
-const WEB_JS_MODULES = [
-  'app.js',
-  'terminal.js',
-  'terminal-state.js',
-  'terminal-history.js',
-  'ws.js',
-  'ws-protocols.js',
-  'sessions.js',
-  'path-picker.js',
-  'util.js',
-  'attachments.js',
-  'coders.js',
-  'md-render.js',
-  'review-transcript.js',
-  'diff.js',
-  'markdown.js',
-  'filetree.js',
-  'kanban.js',
-  'kanban-features.js',
-  'sync.js',
-  'auth.js',
-  'settings.js',
-  'quota.js',
-  'desktop.js',
-  'config.js',
-  'header-state.js',
-  'theme.js',
-  'prepaint.js',
-  'file-viewer.js',
-  'vscode.js',
-  'backend-scope.js',
-  'backend-store.js',
-  'thinking-presets.js',
-];
+ *  Every top-level web/*.js is taken, because a hand-maintained list
+ *  drifts as soon as web-src gains a module and then only the electron
+ *  tests see the missing file. config.js is the standalone config page's
+ *  entry; it is vendored for parity but never loaded by the main view
+ *  page (it boots the settings surface). */
+const WEB_JS_MODULES = readdirSync(webRoot)
+  .filter((name) => name.endsWith('.js'))
+  .sort();
 
 /** Browser vendor subdirectory the module graph imports (auth.js imports
  *  './vendor/noble-hashes/...', so the relative layout is preserved under
@@ -194,6 +166,23 @@ const vendorJsDir = path.join(outDir, 'vendor');
 mkdirSync(vendorJsDir, { recursive: true });
 for (const name of WEB_JS_MODULES) {
   copyFileSync(path.join(webRoot, name), path.join(vendorJsDir, name));
+}
+// A vendored module that imports a file this script did not copy otherwise
+// surfaces much later as an opaque vite "Failed to resolve import" error
+// inside the electron tests. Check every relative import in the copied
+// modules resolves under web/ before the build reports success, and name
+// the missing file here instead.
+for (const name of WEB_JS_MODULES) {
+  const source = readFileSync(path.join(webRoot, name), 'utf8');
+  for (const [, rel] of source.matchAll(
+    /(?:from|import)\s+['"](\.{1,2}\/[^'"]+)['"]/g,
+  )) {
+    if (!existsSync(path.join(webRoot, rel))) {
+      throw new Error(
+        `vendor-web: web/${name} imports './${rel}', which is not vendored`,
+      );
+    }
+  }
 }
 for (const dir of WEB_JS_VENDOR_DIRS) {
   const src = path.join(webRoot, 'vendor', dir);
