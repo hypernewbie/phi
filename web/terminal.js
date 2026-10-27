@@ -4323,13 +4323,8 @@ export class TabManager {
         // it for our own programmatic scrolls too, which would weaken the
         // proven 10ms/300ms stabilization loop. DOM input events identify
         // user intent without changing that loop's timing or behavior.
-        const cancelFollowForUserScroll = () => {
+        const cancelFollowForUserScroll = () =>
             this._cancelScrollFollowForUserScroll(tabInfo);
-            // Anchor the reading position after xterm applied the notch: this
-            // listener is capture phase, so the buffer still holds the
-            // pre-gesture row here.
-            queueMicrotask(() => this._captureReaderAnchor(tabInfo));
-        };
         const loadNewer = () => {
             const buffer = tabInfo.term?.buffer?.active;
             if (tabInfo._historyBrowsing && buffer && buffer.viewportY >= buffer.baseY) {
@@ -4487,6 +4482,17 @@ export class TabManager {
                     tabInfo.userFollowBottom = true;
                     this._clearReaderAnchor(tabInfo);
                 }
+            });
+            // Anchor after any buffer scroll (wheel, keyboard, touch drag,
+            // scrollbar): xterm emits onScroll synchronously once the buffer has
+            // moved, so this is the post-gesture row. DOM capture listeners fire
+            // before the movement and would anchor the row the reader left. The
+            // follow-cancel loop above still keys off DOM input events; anchoring
+            // can use onScroll because programmatic scrolls are gated below.
+            term.onScroll(() => {
+                if (this._restoringReaderAnchor) return;
+                const b = tabInfo.term?.buffer?.active;
+                if (b && b.viewportY < b.baseY) this._captureReaderAnchor(tabInfo);
             });
         }
         term.onResize?.(updateScrollBtn);
@@ -11124,11 +11130,14 @@ export class TabManager {
         const buffer = term?.buffer?.active;
         if (!buffer || buffer.type !== 'normal' || tabInfo.isDead) return;
         if (tabInfo._historyBrowsing || buffer.baseY <= 0) return;
+        if (typeof term.registerMarker !== 'function') return;
         const line = buffer.viewportY;
-        const marker = term.registerMarker(line - (buffer.baseY + buffer.cursorY));
+        const offset = line - (buffer.baseY + buffer.cursorY);
+        if (!Number.isFinite(offset)) return;
+        const marker = term.registerMarker(offset);
         if (!marker) return;
         this._clearReaderAnchor(tabInfo);
-        term._phiReaderAnchor = { marker, line };
+        term._phiReaderAnchor = { marker };
     }
 
     _restoreReaderAnchor(tabInfo) {
@@ -11146,7 +11155,12 @@ export class TabManager {
         if (anchor.marker.isDisposed || anchor.marker.line < 0) {
             const announced = tabInfo._readerAnchorNoticeShown;
             this._clearReaderAnchor(tabInfo);
-            term.scrollToBottom();
+            this._restoringReaderAnchor = true;
+            try {
+                term.scrollToBottom();
+            } finally {
+                this._restoringReaderAnchor = false;
+            }
             if (!announced) {
                 tabInfo._readerAnchorNoticeShown = true;
                 this.app?.showToast?.(
@@ -11157,7 +11171,14 @@ export class TabManager {
             return;
         }
         if (buffer.viewportY !== anchor.marker.line) {
-            term.scrollToLine(anchor.marker.line);
+            // The restore's own scroll emits onScroll; skip the capture listener
+            // so it cannot re-anchor to a programmatic position.
+            this._restoringReaderAnchor = true;
+            try {
+                term.scrollToLine(anchor.marker.line);
+            } finally {
+                this._restoringReaderAnchor = false;
+            }
         }
     }
 

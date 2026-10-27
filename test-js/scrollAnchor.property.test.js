@@ -163,6 +163,7 @@ async function runOps(seed, ops) {
         const emit = await paint(h, model, 15000);
         for (const op of ops) {
             const before = state(h);
+            const noticesBefore = notices.length;
             if (op.kind === 'wheelUp' || op.kind === 'wheelDown') {
                 wheel(h, op.kind === 'wheelUp' ? op.rows : -op.rows);
             } else if (op.kind === 'queued') {
@@ -172,7 +173,7 @@ async function runOps(seed, ops) {
             }
             await h.settle();
             const after = state(h);
-            const verdict = check(op, before, after, notices.length);
+            const verdict = check(op, before, after, noticesBefore, notices.length);
             if (verdict) {
                 return { ok: false, seed, op, before, after, notices: notices.slice(), reason: verdict };
             }
@@ -184,7 +185,7 @@ async function runOps(seed, ops) {
 }
 
 // Invariants, all expressed in fixture-line numbers (content, not index).
-function check(op, before, after, notices) {
+function check(op, before, after, noticesBefore, noticesAfter) {
     if (before.top === null || after.top === null) return null;
     const moved = after.top - before.top; // positive = newer content on screen
 
@@ -203,9 +204,11 @@ function check(op, before, after, notices) {
     // who scrolled up has a position that must not move.
     if (before.atBottom) return null;
     if (after.atBottom) {
-        // Only legal when the reading position really left the buffer, and it
-        // must be announced rather than silently shown as a jump.
-        return notices ? null : 'anchor evicted silently (no toast)';
+        // Only legal when the reading position left the buffer during THIS op,
+        // and it must be announced rather than silently shown as a jump.
+        return noticesAfter > noticesBefore
+            ? null
+            : 'landed at live output without a fresh notice';
     }
     return moved === 0 ? null : `reading position drifted by ${moved} lines`;
 }
@@ -324,6 +327,34 @@ describe('reader anchor unit cases', () => {
             h.tab.term.scrollLines(-5);
             h.manager._captureReaderAnchor(h.tab);
             expect(h.tab.term._phiReaderAnchor ?? null).toBe(null);
+        } finally {
+            h.dispose();
+        }
+    });
+
+    it('keyboard scrolling after a notch is not undone by output', async () => {
+        const model = serverModel(1 << 24);
+        const h = replayHarness(encode(''));
+        h.manager.app = { showToast: vi.fn() };
+        installFetch(model);
+        try {
+            const emit = await paint(h, model, 15000);
+            // Mirror attachTab's wiring: anchor after any buffer scroll, so the
+            // gesture's landed row is the one pinned. The harness bypasses
+            // attachTab, hence the explicit subscription.
+            h.tab.term.onScroll(() => {
+                if (h.manager._restoringReaderAnchor) return;
+                const b = h.tab.term.buffer.active;
+                if (b.viewportY < b.baseY) h.manager._captureReaderAnchor(h.tab);
+            });
+            wheel(h, 3);
+            await h.settle();
+            h.tab.term.scrollLines(-20); // PageUp path: no capture call here
+            await h.settle();
+            const afterKeys = topMarker(h.tab.term);
+            emit(300);
+            await h.settle();
+            expect(topMarker(h.tab.term)).toBe(afterKeys);
         } finally {
             h.dispose();
         }

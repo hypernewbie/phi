@@ -27,11 +27,17 @@ burst(0, 11000)
 write(b'ANCHOR READY\\r\\n')
 # The test wheels inside this window, so the late burst always lands while the
 # reader is scrolled up.
+# Wait for the test's trigger file (written only after the wheel has landed and
+# the anchor is asserted), so a slow attach cannot consume the window.
+trigger = '__TRIGGER__'
+for _ in range(600):
+    if os.path.exists(trigger):
+        break
+    time.sleep(0.1)
 try:
-    size = int(open(os.path.join(os.getcwd(), 'late-burst.txt')).read().strip())
+    size = int(open('__BURST__').read().strip())
 except Exception:
     size = 6000
-time.sleep(10)
 burst(11000, size)
 write(b'ANCHOR LATE DONE\\r\\n')
 while True:
@@ -48,7 +54,14 @@ test.beforeAll(async () => {
     phi = await startPhi({
         setup(dir) {
             const command = join(dir, 'pi-wheel-fixture');
-            writeFileSync(command, fixture, { mode: 0o755 });
+            // The PTY does not start in this directory, so bake absolute paths in.
+            writeFileSync(
+                command,
+                fixture
+                    .replace('__TRIGGER__', join(dir, 'late-burst.trigger'))
+                    .replace('__BURST__', join(dir, 'late-burst.txt')),
+                { mode: 0o755 },
+            );
             const backends = join(dir, 'home', '.phi', 'backends');
             mkdirSync(backends, { recursive: true });
             writeFileSync(
@@ -203,18 +216,31 @@ test('one wheel notch keeps the reading row when a burst follows', async ({ page
                 const target = document.elementFromPoint(x, y)?.closest('.term-container');
                 const term = (window as unknown as { anchorTerms: Observed[] }).anchorTerms
                     .filter((t) => t.element?.closest('.term-container')?.id === `term-${id}`)
-                    .at(-1) as unknown as { _phiReaderAnchor?: unknown } | undefined;
+                    .at(-1) as unknown as {
+                    _phiReaderAnchor?: { marker: { line: number } };
+                    buffer: { active: { viewportY: number } };
+                } | undefined;
                 return {
                     container: target?.id ?? null,
-                    anchor: Boolean(term?._phiReaderAnchor),
+                    anchorLine: term?._phiReaderAnchor?.marker?.line ?? null,
+                    viewportY: term?.buffer.active.viewportY ?? null,
                 };
             },
             { id: pane, x: box.x + box.width / 2, y: box.y + box.height / 2 },
         );
         expect(anchored, `wheel must land on the pane and anchor it: ${JSON.stringify(anchored)}`).toEqual({
             container: `term-${pane}`,
-            anchor: true,
+            anchorLine: anchored.viewportY, // post-notch row, not the row the wheel left
+            viewportY: anchored.viewportY,
         });
+
+        // The notch must actually move the view upward; its landed row is the
+        // content the anchor has to hold.
+        const postNotch = await topLine(page, pane);
+        expect(postNotch!.line!).toBeLessThan(before!.line!);
+
+        // Release the late burst only now: the anchor is captured and asserted.
+        writeFileSync(join(phi.dir, 'late-burst.trigger'), 'go');
 
         await page.waitForFunction(
             (id) =>
@@ -233,10 +259,12 @@ test('one wheel notch keeps the reading row when a burst follows', async ({ page
         await page.waitForTimeout(500);
         const after = await topLine(page, pane);
 
-        // The reader's row is still inside the buffer: it must not move, and
-        // the viewport must not clamp to the oldest retained row (viewportY = 0).
+        // The reader's row is still inside the buffer: it must not move, and the
+        // viewport must not clamp to the oldest retained row (viewportY = 0).
+        // Two lines of slack for partial-line accounting; the defect this guards
+        // against displaced the row by a full screen (~9-11 rows).
         expect(after!.viewportY).toBeGreaterThan(0);
-        expect(Math.abs((after!.line ?? 0) - (before!.line ?? 0))).toBeLessThan(60);
+        expect(Math.abs((after!.line ?? 0) - (postNotch!.line ?? 0))).toBeLessThanOrEqual(2);
 
         const overflow = await page.evaluate(
             () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
