@@ -19,6 +19,7 @@
    Viewer.js holds a back-reference on the <img>; .destroy() releases
    both. */
 import { renderMarkdownSafe } from './md-render.js';
+import { authenticatedAsset } from './util.js';
 // Preview vendor bundles (Viewer.js, Plyr, json-viewer) are NOT in
 // web/index.html's <script> tags — they load here, on first use, so
 // every page load doesn't pay for a video player and an image
@@ -142,7 +143,7 @@ export async function mountFileView(opts) {
             handle = await mountMedia(url, container, false);
             break;
         case 'pdf':
-            handle = mountPdf(url, container);
+            handle = await mountPdf(url, container);
             break;
         case 'markdown':
             handle = await mountMarkdown(url, container, signal);
@@ -154,7 +155,7 @@ export async function mountFileView(opts) {
             handle = await mountJson(url, container, signal);
             break;
         default:
-            handle = mountDownload(url, path, container);
+            handle = await mountDownload(url, path, container);
             break;
     }
     handle.kind = kind;
@@ -166,9 +167,10 @@ async function mountImage(url, container) {
         // SAFETY: Viewer.js registers this global through the local vendor script above.
         return (window.Viewer !== undefined);
     });
+    const asset = await authenticatedAsset(url);
     const img = document.createElement('img');
     img.className = 'file-viewer-image';
-    img.src = url;
+    img.src = asset.url;
     img.alt = '';
     img.loading = 'lazy';
     container.appendChild(img);
@@ -191,6 +193,7 @@ async function mountImage(url, container) {
             catch {
                 // Viewer.destroy throws if called twice; that's fine.
             }
+            asset.revoke();
             container.innerHTML = '';
         },
         imageElement: img,
@@ -203,7 +206,8 @@ async function mountMedia(url, container, isVideo) {
     });
     const el = document.createElement(isVideo ? 'video' : 'audio');
     el.className = isVideo ? 'file-viewer-video' : 'file-viewer-audio';
-    el.src = url;
+    const asset = await authenticatedAsset(url);
+    el.src = asset.url;
     el.preload = 'metadata';
     el.controls = true;
     container.appendChild(el);
@@ -228,17 +232,19 @@ async function mountMedia(url, container, isVideo) {
             // buffered ranges; without this Chromium keeps the audio
             // context alive across modal close.
             el.load();
+            asset.revoke();
             container.innerHTML = '';
         },
     };
 }
-function mountPdf(url, container) {
+async function mountPdf(url, container) {
     // Use the vendored PDF.js wrapper instead of Chromium's built-in
     // viewer: cross-browser consistent toolbar (page nav, zoom, scale
     // picker, find), support for non-embedded CJK fonts via the
     // vendored cmaps/, and standard Type 1 fonts via standard_fonts/.
     // The wrapper receives the asset URL as a ?file= query param.
-    const wrapperUrl = `vendor/pdfjs/wrapper.html?file=${encodeURIComponent(url)}`;
+    const asset = await authenticatedAsset(url);
+    const wrapperUrl = `vendor/pdfjs/wrapper.html?file=${encodeURIComponent(asset.url)}`;
     const iframe = document.createElement('iframe');
     iframe.className = 'file-viewer-pdf';
     iframe.src = wrapperUrl;
@@ -252,6 +258,7 @@ function mountPdf(url, container) {
             // this the worker keeps streaming the PDF in the background
             // after the modal closes.
             iframe.removeAttribute('src');
+            asset.revoke();
             container.innerHTML = '';
         },
     };
@@ -340,8 +347,9 @@ async function mountJson(url, container, signal) {
         rawText: text,
     };
 }
-function mountDownload(url, path, container) {
+async function mountDownload(url, path, container) {
     const name = path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1);
+    const asset = await authenticatedAsset(url);
     const wrapper = document.createElement('div');
     wrapper.className = 'file-viewer-download';
     const message = document.createElement('p');
@@ -350,13 +358,14 @@ function mountDownload(url, path, container) {
     message.append("Can't preview ", code, '.');
     const download = document.createElement('a');
     download.className = 'file-viewer-download-btn';
-    download.href = url;
+    download.href = asset.url;
     download.download = name;
     download.textContent = 'Download';
     wrapper.append(message, download);
     container.replaceChildren(wrapper);
     return {
         dispose: () => {
+            asset.revoke();
             container.innerHTML = '';
         },
     };
