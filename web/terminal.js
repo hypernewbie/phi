@@ -6891,7 +6891,7 @@ export class TabManager {
         thinkingButton.className =
             'preset-btn model-trigger-btn pi-rpc-thinking-trigger';
         thinkingButton.textContent = isCompactViewport()
-            ? 'Thinking ▾'
+            ? '🧠 ▾'
             : `Thinking: ${state.thinking || '—'} ▾`;
         thinkingButton.title = 'Change the thinking level';
         thinkingButton.disabled =
@@ -11650,6 +11650,9 @@ export class TabManager {
                 this._invalidatePiBridgeThinking(activeTab);
         }
         this.presetsContainer.innerHTML = '';
+        // A previous compact render may have parked chips with the input
+        // controls; drop them so this render owns the placement.
+        this._placeCompactQuickChips([]);
 
         const coderPresetInfo = this._getCoderPresetInfo(coderId, activeTab);
         const presets = coderPresetInfo?.presets || [];
@@ -11667,6 +11670,9 @@ export class TabManager {
         this.presetsContainer.classList.remove('hidden');
 
         const isMobile = isCompactViewport();
+        // Compact moves the slash trigger and the control-key chips out of
+        // this row, so they ride with the input controls instead.
+        const compactChips = [];
 
         // 1. Render Static Coder Presets / Slash Menu
         if (hasCoderPresets) {
@@ -11693,7 +11699,7 @@ export class TabManager {
                             () => this.renderSlashDropup(slashPresets),
                         );
                     });
-                    this.presetsContainer.appendChild(slashBtn);
+                    compactChips.push(slashBtn);
                 }
 
                 // Render other horizontal utility presets (like ctrl+c, ctrl+o)
@@ -11702,7 +11708,7 @@ export class TabManager {
                     btn.addEventListener('click', () => {
                         this.sendRawInput(p.value, { focusInputOnMobile: false });
                     });
-                    this.presetsContainer.appendChild(btn);
+                    compactChips.push(btn);
                 });
             } else {
                 // Desktop: Render everything horizontally as before
@@ -11731,7 +11737,7 @@ export class TabManager {
         }
 
         // 2. Render Divider if static presets exist
-        if (hasCoderPresets) {
+        if (hasCoderPresets && !isMobile) {
             const divider = document.createElement('div');
             divider.className = 'presets-divider';
             this.presetsContainer.appendChild(divider);
@@ -11857,7 +11863,7 @@ export class TabManager {
             thinkingTriggerBtn.type = 'button';
             thinkingTriggerBtn.className =
                 'preset-btn model-trigger-btn pi-rpc-thinking-trigger';
-            thinkingTriggerBtn.textContent = 'Thinking ▾';
+            thinkingTriggerBtn.textContent = '🧠 ▾';
             // The compact strip is width-bound: short label there.
             const thinkingLive = this._piBridgeThinkingEligible(activeTab);
             if (thinkingLive && !isCompactViewport())
@@ -11965,6 +11971,29 @@ export class TabManager {
                 });
                 this.presetsContainer.appendChild(btn);
             });
+        }
+
+        if (isMobile) this._placeCompactQuickChips(compactChips);
+    }
+
+    // Compact only: park the slash trigger and the control-key chips at the
+    // start of the input controls, so the bottom row keeps just the pickers.
+    // Idempotent: chips from an earlier render are removed before the move.
+    _placeCompactQuickChips(chips = []) {
+        // Fall back to the presets row when the composer is not on the page,
+        // so a chip is never built and thrown away.
+        const actions =
+            document.querySelector('#input-bar-container .input-actions') ||
+            this.presetsContainer;
+        if (!actions) return;
+        for (const el of actions.querySelectorAll('.input-quick-chip'))
+            el.remove();
+        for (const chip of chips) {
+            chip.classList.add('input-quick-chip');
+            actions.insertBefore(
+                chip,
+                actions.querySelector(':scope > :not(.input-quick-chip)'),
+            );
         }
     }
 

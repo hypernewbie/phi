@@ -149,3 +149,61 @@ describe('presets row', () => {
         );
     });
 });
+
+// Compact strips the row down to the pickers: the slash trigger and the
+// control-key chips move up next to the input controls, so a phone keeps a
+// single row of dropdowns at the bottom.
+describe('compact presets row', () => {
+    function compactTm(width) {
+        document.body.innerHTML = `
+            <div id="input-bar-container">
+                <div class="input-actions"></div>
+            </div>
+        `;
+        Object.defineProperty(window, 'innerWidth', {
+            value: width,
+            configurable: true,
+        });
+        return makeTm();
+    }
+
+    const labels = (root) =>
+        [...root.querySelectorAll('.input-quick-chip')].map(
+            (btn) => btn.title || btn.getAttribute('aria-label'),
+        );
+
+    it('moves the slash and control-key chips into the input actions', () => {
+        const tm = compactTm(390);
+        tm.renderPresets('pi');
+        const actions = document.querySelector('.input-actions');
+        expect(labels(actions)).toEqual([
+            'Open slash commands',
+            'Send ctrl+c to the terminal',
+            'Send ctrl+o to the terminal',
+        ]);
+        expect(
+            tm.presetsContainer.querySelectorAll('.slash-trigger-btn'),
+        ).toHaveLength(0);
+        expect(tm.presetsContainer.querySelectorAll('.btn-icon')).toHaveLength(
+            0,
+        );
+    });
+
+    it('puts them back in the row on a desktop render', () => {
+        const tm = compactTm(1200);
+        tm.renderPresets('pi');
+        expect(document.querySelectorAll('.input-quick-chip')).toHaveLength(0);
+        expect(
+            tm.presetsContainer.querySelectorAll('.preset-btn.btn-icon'),
+        ).toHaveLength(2);
+    });
+
+    it('does not duplicate chips across renders', () => {
+        const tm = compactTm(390);
+        tm.renderPresets('pi');
+        tm.renderPresets('pi');
+        expect(
+            document.querySelectorAll('.input-actions .input-quick-chip'),
+        ).toHaveLength(3);
+    });
+});

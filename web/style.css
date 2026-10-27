@@ -5299,6 +5299,8 @@ html[data-phi-config-page] .settings-modal {
     }
 
     .input-actions {
+        flex-wrap: wrap;
+        justify-content: flex-end;
         margin-left: auto;
     }
 
@@ -8606,6 +8608,22 @@ html[data-phi-config-page] .settings-modal {
 .brand .hostname-display:hover {
     opacity: 1;
     text-decoration: underline;
+}
+
+/* Action row: the eight controls must stay on one line at 320px */
+@media (max-width: 380px) {
+    .input-actions {
+        gap: 2px !important;
+    }
+
+    .input-actions .btn {
+        padding: 0 6px !important;
+    }
+
+    .input-actions .direct-mode-btn {
+        width: 28px !important;
+        min-width: 28px !important;
+    }
 }
 
 /* MOBILE RESPONSIVE OVERRIDES */

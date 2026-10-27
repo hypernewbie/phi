@@ -139,7 +139,7 @@ describe('bridge models trigger', () => {
                 return el.textContent || el.innerText;
             };
             expect(label('.pi-rpc-model-trigger')).toBe('🤖 Models ▾');
-            expect(label('.pi-rpc-thinking-trigger')).toBe('Thinking ▾');
+            expect(label('.pi-rpc-thinking-trigger')).toBe('🧠 ▾');
         } finally {
             Object.defineProperty(window, 'innerWidth', {
                 configurable: true,
