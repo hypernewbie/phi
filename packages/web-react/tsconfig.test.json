@@ -1,0 +1,15 @@
+{
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "types": ["vite/client", "node"],
+        "allowJs": true,
+        "checkJs": true
+    },
+    "include": [
+        "src/vite-env.d.ts",
+        "vite.config.js",
+        "test/**/*.ts",
+        "test/**/*.tsx"
+    ],
+    "exclude": ["test/e2e/**"]
+}

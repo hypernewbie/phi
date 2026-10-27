@@ -9,9 +9,13 @@ export default defineConfig({
     testDir: './e2e',
     timeout: 120_000,
     retries: 0,
+    // Sibling paths, not the shared parents: each suite wipes its own
+    // outputDir and report folder, and packages/web-react writes under
+    // test-results/web-react and playwright-report/web-react.
+    outputDir: 'test-results/legacy',
     reporter: [
         ['line'],
-        ['html', { outputFolder: 'playwright-report', open: 'never' }],
+        ['html', { outputFolder: 'playwright-report/legacy', open: 'never' }],
     ],
     use: {
         trace: 'retain-on-failure',

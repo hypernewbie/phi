@@ -1,0 +1,12 @@
+{
+    "name": "@phi/core",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "exports": "./src/index.ts",
+    "devDependencies": {
+        "@types/node": "catalog:",
+        "typescript": "catalog:",
+        "vitest": "catalog:"
+    }
+}

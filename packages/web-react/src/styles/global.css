@@ -1,0 +1,19 @@
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    min-width: 0;
+    min-height: 100vh;
+    background: radial-gradient(
+        circle at 50% 0%,
+        #16161c 0%,
+        var(--bg-base) 70%
+    );
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    line-height: 1.5;
+}

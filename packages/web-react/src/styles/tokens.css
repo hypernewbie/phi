@@ -1,0 +1,24 @@
+:root {
+    color-scheme: dark;
+    --bg-base: #08080a;
+    --bg-panel: #0d0d10;
+    --bg-elevated: #141418;
+    --bg-border: #1f1f26;
+    --accent: #7c6af7;
+    --accent-dim: #5b4ec2;
+    --accent-bright: #9a8dfa;
+    --accent-glow: rgb(124 106 247 / 15%);
+    --accent-trace: color-mix(in srgb, var(--accent) 6%, transparent);
+    --text-primary: #e4e3e9;
+    --text-muted: #78768a;
+    --error: #f87171;
+    --success: #38bdf8;
+    --font-ui: "Inter", sans-serif;
+    --font-mono: "JetBrains Mono", monospace;
+    /* Phi's 4/8/12/16/24 px spacing steps. */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-6: 24px;
+}
