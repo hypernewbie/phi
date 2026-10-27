@@ -109,6 +109,7 @@ import {
   setWorkspaceScript,
   READ_WORKSPACE_SCRIPT,
   bodyAuthLoginScript,
+  bodyAuthTokenScript,
   WAKE_PAGE_SCRIPT,
   lowPowerApplyScript,
   switchToScript,
@@ -389,6 +390,18 @@ const realHealthChecker: HealthChecker = {
   },
 };
 
+/** One persisted access credential. The outer file keeps `{origins}` so an
+ *  older build still reads v1 entries; v2 entries are ignored by it. */
+type StoredCredential =
+  | {
+      version: 'v1';
+      algorithm: 'pbkdf2-sha256';
+      iterations: number;
+      salt: Buffer;
+      verifier: Buffer;
+    }
+  | { version: 'v2'; jwt: string };
+
 export class DesktopHost {
   // --- Host-loop state ---
   mainWindow: BrowserWindow | null = null;
@@ -492,16 +505,7 @@ export class DesktopHost {
   /** Per-origin verifier persistence (in-memory mirror of the
    *  decrypted file). Cleared when the corresponding origin is removed
    *  or the stored credential fails a server-side rotation check. */
-  private readonly storedCredentials = new Map<
-    string,
-    {
-      verifier: Buffer;
-      salt: Buffer;
-      iterations: number;
-      version: 'v1';
-      algorithm: 'pbkdf2-sha256';
-    }
-  >();
+  private readonly storedCredentials = new Map<string, StoredCredential>();
   /** Last CPU+activity+workspace push sent to the main view, for change-only
    *  emission. Null until the first push. */
   lastHeaderState: HeaderState | null = null;
@@ -1746,26 +1750,40 @@ export class DesktopHost {
     if (!parsed || typeof parsed !== 'object') return;
     const entries = (parsed as { origins?: Record<string, unknown> }).origins;
     if (!entries || typeof entries !== 'object') return;
-    for (const [origin, raw] of Object.entries(entries)) {
+    const v2Allowed = this.secureV2StorageAvailable();
+    for (const [origin, rawEntry] of Object.entries(entries)) {
       const canonical = toCanonicalAuthOrigin(origin);
       if (!canonical) continue;
-      const c = this.parseStoredCredential(raw);
-      if (c) this.storedCredentials.set(canonical, c);
+      const c = this.parseStoredCredential(rawEntry);
+      if (!c) continue;
+      // Never load a bearer through an insecure backend: keep the entry on
+      // disk (an encrypted backend may return later) but leave it unusable.
+      if (c.version === 'v2' && !v2Allowed) continue;
+      this.storedCredentials.set(canonical, c);
     }
+  }
+
+  /** True when the host can encrypt a v2 token at rest. Linux's
+   *  `basic_text` backend is obfuscation, not encryption. */
+  private secureV2StorageAvailable(): boolean {
+    if (!safeStorage.isEncryptionAvailable()) return false;
+    if (process.platform !== 'linux') return true;
+    const backend = (
+      safeStorage as unknown as { getSelectedStorageBackend?: () => string }
+    ).getSelectedStorageBackend?.();
+    return backend !== 'basic_text';
   }
 
   /** Validates and clones one entry of the credential blob. Defensive
    *  against partial / tampered files: a malformed entry is dropped
    *  silently rather than crashing the host. */
-  private parseStoredCredential(raw: unknown): {
-    verifier: Buffer;
-    salt: Buffer;
-    iterations: number;
-    version: 'v1';
-    algorithm: 'pbkdf2-sha256';
-  } | null {
+  private parseStoredCredential(raw: unknown): StoredCredential | null {
     if (!raw || typeof raw !== 'object') return null;
     const r = raw as Record<string, unknown>;
+    if (r.version === 'v2') {
+      if (typeof r.jwt !== 'string' || r.jwt.length === 0) return null;
+      return { version: 'v2', jwt: r.jwt };
+    }
     if (r.version !== 'v1' || r.algorithm !== 'pbkdf2-sha256') return null;
     if (typeof r.iterations !== 'number' || !Number.isFinite(r.iterations))
       return null;
@@ -1856,16 +1874,25 @@ export class DesktopHost {
    *  the next launch re-prompts. */
   private saveStoredCredentials(): void {
     if (!safeStorage.isEncryptionAvailable()) return;
+    // A v2 token must never be written through Linux's basic_text backend,
+    // including a mixed store that also holds legacy v1 entries.
+    const hasV2 = Array.from(this.storedCredentials.values()).some(
+      (c) => c.version === 'v2',
+    );
+    if (hasV2 && !this.secureV2StorageAvailable()) return;
     const origins: Record<string, unknown> = {};
     for (const [origin, c] of this.storedCredentials) {
       const canonical = toCanonicalAuthOrigin(origin) ?? origin;
-      origins[canonical] = {
-        version: c.version,
-        algorithm: c.algorithm,
-        iterations: c.iterations,
-        saltBase64: c.salt.toString('base64url'),
-        verifierBase64: c.verifier.toString('base64url'),
-      };
+      origins[canonical] =
+        c.version === 'v2'
+          ? { version: 'v2', jwt: c.jwt }
+          : {
+              version: c.version,
+              algorithm: c.algorithm,
+              iterations: c.iterations,
+              saltBase64: c.salt.toString('base64url'),
+              verifierBase64: c.verifier.toString('base64url'),
+            };
     }
     const plaintext = JSON.stringify({ origins });
     let encrypted: Buffer;
@@ -1992,6 +2019,8 @@ export class DesktopHost {
         this.storedCredentials.get(canonical) ??
         this.storedCredentials.get(origin);
     }
+    // A v2 bearer is not a verifier: never hand it to the PBKDF2 path.
+    if (cred?.version === 'v2') return null;
     return cred ?? null;
   }
 
@@ -2005,6 +2034,9 @@ export class DesktopHost {
   ): void {
     if (generation !== this.sessionGeneration) return;
     const canonical = toCanonicalAuthOrigin(origin) ?? origin;
+    // A v2 session persists only its bearer; a stale v1 verifier must not
+    // overwrite the selected v2 entry.
+    if (accessAuth.getSelectedProtocol(canonical) === 'v2') return;
     const cred =
       accessAuth.getLastCredential(canonical) ??
       accessAuth.getLastCredential(origin);
@@ -2088,6 +2120,7 @@ export class DesktopHost {
   ): Promise<boolean> {
     if (generation !== this.sessionGeneration) return false;
     const canonical = toCanonicalAuthOrigin(origin) ?? origin;
+    if (accessAuth.getSelectedProtocol(canonical) === 'v2') return false;
     const cred = this.getOrRecoverCredential(canonical);
     if (!cred) return false;
     const status = await this.fetchAuthStatusForPersistence(canonical);
@@ -2121,9 +2154,61 @@ export class DesktopHost {
     }
   }
 
-  /** Re-authenticates origins with cached credentials at startup.
-   *  Called once during
-   *  `start()` after the view manager is ready and before the first
+  /** Persists the bearer AccessAuth installed after a successful native v2
+   *  login. Memory keeps working when encryption is unavailable; the disk
+   *  write is skipped in that case by `saveStoredCredentials`. */
+  private persistTokenAfterUnlock(
+    origin: string,
+    accessAuth: AccessAuth,
+    generation: number,
+  ): void {
+    if (generation !== this.sessionGeneration) return;
+    const canonical = toCanonicalAuthOrigin(origin) ?? origin;
+    const token = accessAuth.getToken(canonical);
+    if (!token) return;
+    const existing = this.storedCredentials.get(canonical);
+    if (existing?.version === 'v2' && existing.jwt === token) return;
+    this.storedCredentials.set(canonical, { version: 'v2', jwt: token });
+    this.saveStoredCredentials();
+  }
+
+  /** Installs the host bearer into an already-loaded view whose main frame
+   *  is the exact credential origin. Body memory is discarded by every
+   *  load, so startup restoration and retained-profile recovery both use
+   *  this. Returns without side effects for the embedded shell, a missing
+   *  view, or a view that has not finished loading. */
+  private reinstallBodyToken(
+    origin: string,
+    accessAuth: AccessAuth,
+    generation: number,
+  ): void {
+    if (generation !== this.sessionGeneration) return;
+    const canonical = toCanonicalAuthOrigin(origin) ?? origin;
+    const token = accessAuth.getToken(canonical);
+    if (!token) return;
+    let view: WebContentsView | undefined;
+    for (const [key, candidate] of this.viewByOrigin) {
+      if ((toCanonicalAuthOrigin(key) ?? key) === canonical) {
+        view = candidate;
+        break;
+      }
+    }
+    if (!view?.webContents || view.webContents.isDestroyed()) return;
+    if (!this.loadedViews.has(view)) return;
+    let viewOrigin = '';
+    try {
+      viewOrigin = new URL(view.webContents.getURL()).origin;
+    } catch {
+      return;
+    }
+    if (viewOrigin !== canonical) return;
+    void view.webContents
+      .executeJavaScript(bodyAuthTokenScript(token, canonical))
+      .catch(() => {});
+  }
+
+  /** Re-authenticates origins with cached credentials at startup. Called once
+   *  during `start()` after the view manager is ready and before the first
    *  `/api/config` poll. */
   async bootstrapStoredCredentials(
     accessAuth: AccessAuth,
@@ -2153,11 +2238,21 @@ export class DesktopHost {
         // page ask for a password the user had already given.
         this.embeddedTransport?.beginAuth(origin);
         try {
-          await this.tryReauthWithStoredCredential(
-            origin,
-            accessAuth,
-            generation,
-          );
+          const entry = this.storedCredentials.get(origin);
+          if (entry?.version === 'v2') {
+            await this.bootstrapV2Token(
+              origin,
+              entry.jwt,
+              accessAuth,
+              generation,
+            );
+          } else {
+            await this.tryReauthWithStoredCredential(
+              origin,
+              accessAuth,
+              generation,
+            );
+          }
         } finally {
           this.embeddedTransport?.endAuth(origin);
         }
@@ -2168,6 +2263,35 @@ export class DesktopHost {
         worker(),
       ),
     );
+  }
+
+  /** Restores one persisted bearer into native memory and lets the server
+   *  decide whether it is still valid. A rejection clears only that same
+   *  token; a transient failure keeps it for the next poll. */
+  private async bootstrapV2Token(
+    origin: string,
+    jwt: string,
+    accessAuth: AccessAuth,
+    generation: number,
+  ): Promise<void> {
+    if (generation !== this.sessionGeneration) return;
+    const installed = accessAuth.getToken(origin);
+    // A newer in-memory token already won; a stale disk entry must not
+    // overwrite it.
+    if (installed && installed !== jwt) return;
+    accessAuth.installToken(origin, jwt);
+    const verdict = await accessAuth.checkToken(origin, jwt);
+    if (generation !== this.sessionGeneration) return;
+    if (verdict !== 'invalid') {
+      this.reinstallBodyToken(origin, accessAuth, generation);
+      return;
+    }
+    accessAuth.rejectToken(origin, jwt);
+    const current = this.storedCredentials.get(origin);
+    if (current?.version === 'v2' && current.jwt === jwt) {
+      this.storedCredentials.delete(origin);
+      this.saveStoredCredentials();
+    }
   }
 
   /** Injects Phi's error toast into the view for a failed local file action. */
@@ -3619,6 +3743,10 @@ export class DesktopHost {
               origin === EMBEDDED_ORIGIN ? this.activeServerOrigin() : origin;
             return toCanonicalAuthOrigin(serverOrigin) ?? serverOrigin;
           })();
+          // A v2 bearer lives only in body memory, so every load needs it
+          // again. The helper refuses the embedded shell and any frame that
+          // is not the exact credential origin.
+          this.reinstallBodyToken(canonicalOrigin, accessAuth, generation);
           const activeProfileId = this.controller?.state().activeId ?? null;
           void this.recoverFromViewLocalStorage(
             view,
@@ -4318,6 +4446,67 @@ export class DesktopHost {
       }
       if (pending.generation !== this.sessionGeneration)
         return { ok: false, code: 'stale', message: 'Prompt expired.' };
+      // A selected v2 session has no cookie and no verifier: install the
+      // host bearer into the trusted body view instead of a v1 proof. The
+      // body keeps it in memory, so this runs again after every load.
+      // The embedded single-tab shell is a different transport (its page
+      // origin is `phi-app://app`, not the server); it is refused here and
+      // keeps its own sign-in until that transport is separately approved.
+      if (pending.auth.getSelectedProtocol(pending.origin) === 'v2') {
+        const token = pending.auth.getToken(pending.origin);
+        if (!token) {
+          return {
+            ok: false,
+            code: 'unavailable',
+            message: 'A new sign-in is required.',
+          };
+        }
+        const canonical =
+          toCanonicalAuthOrigin(pending.origin) ?? pending.origin;
+        let viewOrigin = '';
+        try {
+          viewOrigin = new URL(view.webContents.getURL()).origin;
+        } catch {
+          /* unreadable or empty URL: refuse below */
+        }
+        // The injected script repeats this check; refusing first keeps the
+        // bearer out of a redirected or unrelated frame entirely.
+        if (viewOrigin !== canonical) {
+          return {
+            ok: false,
+            code: 'unavailable',
+            message: 'The server view is not the authenticated origin.',
+          };
+        }
+        let status: unknown;
+        try {
+          status = await view.webContents.executeJavaScript(
+            bodyAuthTokenScript(token, canonical),
+          );
+        } catch {
+          return {
+            ok: false,
+            code: 'unavailable',
+            message: 'Unable to authenticate the server view.',
+          };
+        }
+        if (
+          (pendingUnlock !== null && pendingUnlock !== pending) ||
+          pending.epoch !== activeEpoch ||
+          pending.generation !== this.sessionGeneration ||
+          ctrl.state().activeId !== pending.profileId
+        ) {
+          return { ok: false, code: 'stale', message: 'Prompt expired.' };
+        }
+        if (status !== 200) {
+          return {
+            ok: false,
+            code: 'unavailable',
+            message: 'The server view did not accept the session.',
+          };
+        }
+        return { ok: true };
+      }
       const login = await pending.auth.createLoginProof(
         pending.origin,
         pending.abort.signal,
@@ -4545,13 +4734,21 @@ export class DesktopHost {
         }
         if (result.kind === 'unavailable') return null;
         // result.kind === 'unauthorized': the server requires access.
+        // A selected v2 client never falls back to the legacy cookie or
+        // verifier recovery paths: only a fresh v2 password may replace a
+        // rejected bearer.
+        const v2Selected = auth.getSelectedProtocol(origin) === 'v2';
         // If the active body view is already loaded and authenticated (e.g. via browser session/localStorage),
         // read the rendered config directly from its DOM/fetch so the desktop TBAR syncs without a redundant prompt.
         const bodyView =
           this.profileViews?.getView(active.id) ??
           this.viewByOrigin.get(active.origin) ??
           this.viewByOrigin.get(origin);
-        if (bodyView?.webContents && !bodyView.webContents.isDestroyed()) {
+        if (
+          !v2Selected &&
+          bodyView?.webContents &&
+          !bodyView.webContents.isDestroyed()
+        ) {
           try {
             const recovered = await this.recoverFromViewLocalStorage(
               bodyView,
@@ -4684,6 +4881,7 @@ export class DesktopHost {
           ? this.getOrRecoverCredential(origin)
           : this.getOrRecoverCredential(origin);
         if (
+          !v2Selected &&
           cred !== null &&
           !unlockInFlight &&
           promptSuppressedFor !== origin
@@ -4928,6 +5126,14 @@ export class DesktopHost {
           return { ok: false, code: 'stale', message: 'replaced' };
         }
         if (result.kind === 'ok') {
+          // A v2 bearer must be durable before body-install retries: a
+          // transient body failure must not lose the credential the user
+          // just proved.
+          this.persistTokenAfterUnlock(
+            pending.origin,
+            pending.auth,
+            pending.generation,
+          );
           const bodyResult = await authenticateBodyView(pending);
           if (!bodyResult.ok) return bodyResult;
           const resolvedInfo = {
