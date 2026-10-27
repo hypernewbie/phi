@@ -118,7 +118,8 @@ export function initMdView() {
         }
     }
     function connect() {
-        const ws = new WebSocket(wsUrl('/ws/md-events'), eventsSubprotocol);
+        const socketURL = new URL(wsUrl('/ws/md-events'));
+        const ws = new WebSocket((window.phiAccessAuth?.webSocketURL?.(socketURL) ?? socketURL).href, eventsSubprotocol);
         ws.binaryType = 'arraybuffer';
         // Refresh on open too: content may have changed while disconnected.
         ws.onopen = () => {

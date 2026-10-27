@@ -103,7 +103,8 @@ export class PTYWebSocket {
         this.onOpen = onOpen;
         this.onAttachHead = opts?.onAttachHead;
         this.onGap = opts?.onGap;
-        this.url = wsUrl(`/ws/pane/${paneId}?state=ansi-v1`);
+        const socketURL = new URL(wsUrl(`/ws/pane/${paneId}?state=ansi-v1`));
+        this.url = (window.phiAccessAuth?.webSocketURL?.(socketURL) ?? socketURL).href;
         this.ws = new WebSocket(this.url, terminalSubprotocol);
         this.ws.binaryType = 'arraybuffer';
         this.decoder = new TextDecoder('utf-8');
@@ -210,8 +211,10 @@ export class PTYWebSocket {
             if (this.onClose)
                 this.onClose();
         };
-        this.ws.onerror = (err) => {
-            console.error(`[ws] Connection error for pane: ${paneId}`, err);
+        this.ws.onerror = () => {
+            // The error event exposes the socket target, whose URL may carry
+            // the access token; log the pane only.
+            console.error(`[ws] Connection error for pane: ${paneId}`);
         };
     }
     _handleTitle(title) {

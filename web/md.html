@@ -19,7 +19,18 @@
         <main id="md-view-body"><div class="md-rendering">Loading…</div></main>
         <script type="module">
         import { initMdView } from './md-view.js';
-        initMdView();
+        import { bootstrapAccessAuth } from './auth.js';
+        const params = new URL(location.href).searchParams;
+        // Static help/changelog pages are public and must not prompt. Dynamic
+        // workspace files finish auth before the protected fetch and events
+        // socket start.
+        if (params.get('page')) {
+            initMdView();
+        } else {
+            bootstrapAccessAuth()
+                .catch(() => {})
+                .then(() => initMdView());
+        }
         </script>
     </body>
 </html>
