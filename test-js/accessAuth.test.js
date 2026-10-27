@@ -370,7 +370,8 @@ describe('unlock overlay slow-derive feedback', () => {
         );
         vi.useFakeTimers();
         try {
-            const pending = __test__.freshStatus(stale, 5 * 60 * 1000);
+            // Still inside the five-minute lifetime: the fallback is valid.
+            const pending = __test__.freshStatus(stale, 4.5 * 60 * 1000);
             await vi.advanceTimersByTimeAsync(15_000);
             await expect(pending).resolves.toBe(stale);
         } finally {
@@ -378,14 +379,29 @@ describe('unlock overlay slow-derive feedback', () => {
         }
     });
 
+    it('refuses to post a challenge the derivation outlived', async () => {
+        const stale = { ...STATUS, challenge: 'challenge-old' };
+        mockFetch(() => Promise.reject(new Error('offline')));
+        // Past the server's accessChallengeTTL there is no challenge left to
+        // post: a null result stops the caller before login sends anything.
+        await expect(
+            __test__.freshStatus(stale, 5 * 60 * 1000),
+        ).resolves.toBeNull();
+    });
+
     it('ticks the busy label by whole seconds and stops when settled', async () => {
         __test__.resetNativeDerive();
-        vi.stubGlobal('crypto', webcrypto);
+        // Noble path: the derivation is then pure microtasks, so settlement
+        // depends only on the controlled promises and timers below.
+        vi.stubGlobal('crypto', {
+            getRandomValues: webcrypto.getRandomValues,
+        });
         vi.useFakeTimers({
             toFake: [
                 'setTimeout',
                 'clearTimeout',
                 'Date',
+                'performance',
                 'requestAnimationFrame',
                 'cancelAnimationFrame',
             ],

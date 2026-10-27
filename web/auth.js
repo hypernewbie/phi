@@ -212,10 +212,11 @@ function savedVerifier(status) {
     }
 }
 
-// The challenge is single-use and expires five minutes after it is issued.
-// Re-deriving on a slow device can outlast that window, so a status older
-// than this refresh threshold is replaced (see freshStatus).
+// The challenge is single-use and expires five minutes after it is issued
+// (accessChallengeTTL in auth.go). Re-deriving on a slow device can outlast
+// that window, so a status older than this threshold is refreshed.
 const challengeRefreshAfterMs = 4 * 60 * 1000;
+const challengeLifetimeMs = 5 * 60 * 1000;
 const statusFetchTimeoutMs = 15000;
 
 async function login(status, verifier) {
@@ -231,7 +232,9 @@ async function login(status, verifier) {
 }
 
 // Replaces a challenge that the derivation may have outlived. The fetch is
-// bounded and optional: on any failure the original status is still usable.
+// bounded. On failure the original status is still usable unless it is old
+// enough to have expired, in which case there is no challenge to post and
+// the caller must not send the login at all.
 async function freshStatus(fallback, elapsedMs) {
     if (elapsedMs < challengeRefreshAfterMs) return fallback;
     const controller = new AbortController();
@@ -242,12 +245,13 @@ async function freshStatus(fallback, elapsedMs) {
             signal: controller.signal,
         });
         const status = await res.json();
-        return validStatus(status) ? status : fallback;
+        if (validStatus(status)) return status;
     } catch {
-        return fallback;
+        // Fall through to the expiry check below.
     } finally {
         clearTimeout(timer);
     }
+    return elapsedMs < challengeLifetimeMs ? fallback : null;
 }
 
 function showUnlockPrompt() {
@@ -303,13 +307,15 @@ function showUnlockPrompt() {
             // WebKit disables the JIT for plain-HTTP origins, so 600k PBKDF2
             // iterations run at interpreter speed. Tick the label so the
             // wait reads as slow instead of dead.
-            const started = Date.now();
+            // performance.now(): monotonic, so a clock correction during a
+            // long derivation cannot make an old challenge look young.
+            const started = performance.now();
             submit.textContent = 'Signing in…';
             // requestAnimationFrame, not setInterval: Chromium's
             // scheduler.yield keeps rendering alive but starves timers.
             let shownSeconds = 0;
             let ticker = requestAnimationFrame(function tick() {
-                const seconds = Math.round((Date.now() - started) / 1000);
+                const seconds = Math.round((performance.now() - started) / 1000);
                 if (seconds !== shownSeconds) {
                     shownSeconds = seconds;
                     submit.textContent = `Signing in… ${seconds}s`;
@@ -324,10 +330,19 @@ function showUnlockPrompt() {
                     return;
                 }
                 const verifier = await deriveVerifier(input.value, status);
-                const result = await login(
-                    await freshStatus(status, Date.now() - started),
-                    verifier,
+                const challenge = await freshStatus(
+                    status,
+                    performance.now() - started,
                 );
+                if (!challenge) {
+                    // The derivation outlived the challenge and the refresh
+                    // failed. Posting it would count as a failed attempt and
+                    // report a correct password as wrong.
+                    error.textContent = 'Sign-in took too long. Try again.';
+                    input.select();
+                    return;
+                }
+                const result = await login(challenge, verifier);
                 if (result.status === 429) {
                     // Rate limited, not a wrong password: the server refuses
                     // every attempt until its backoff ends, so saying "Wrong
