@@ -43,7 +43,9 @@ const (
 	accessJWTKeyBytes            = 32
 	accessJWTNonceBytes          = 32
 	accessJWTInfo                = "phi/access-jwt/v1"
-	accessJWTLifetime            = accessSessionTTL
+	accessJWTLifetime            = time.Hour
+	accessJWTMaxLifetime         = time.Hour
+	accessJWTClockAllowance      = 30 * time.Second
 	accessPasswordMinBytes       = 8
 	accessPasswordMaxBytes       = 1024
 	accessPasswordBodyLimit      = 8192
@@ -161,6 +163,18 @@ type accessJWTPayload struct {
 	IssuedAt  int64  `json:"iat"`
 	ExpiresAt int64  `json:"exp"`
 	Nonce     string `json:"jti"`
+	RecordID  string `json:"rid"`
+	Epoch     uint64 `json:"epoch"`
+	FamilyID  string `json:"fid"`
+}
+
+// accessJWTRevocation is the record identity, epoch, and family a token is
+// bound to. A token outlives neither a new record identity nor a retired
+// family, whatever its expiry says.
+type accessJWTRevocation struct {
+	RecordID string
+	Epoch    uint64
+	FamilyID string
 }
 
 // accessJWTClaims is the verified content of a v2 access token.
@@ -168,11 +182,14 @@ type accessJWTClaims struct {
 	IssuedAt  time.Time
 	ExpiresAt time.Time
 	Nonce     string
+	RecordID  string
+	Epoch     uint64
+	FamilyID  string
 }
 
 // formatAccessJWT signs explicit claims. Production callers use mintAccessJWT,
 // which supplies a random nonce; tests use this form for fixed vectors.
-func formatAccessJWT(key []byte, issuedAt, expiresAt int64, nonce string) (string, error) {
+func formatAccessJWT(key []byte, issuedAt, expiresAt int64, nonce string, revocation accessJWTRevocation) (string, error) {
 	header, err := json.Marshal(accessJWTHeader{Algorithm: accessJWTAlgorithm, Type: accessJWTType})
 	if err != nil {
 		return "", err
@@ -182,6 +199,9 @@ func formatAccessJWT(key []byte, issuedAt, expiresAt int64, nonce string) (strin
 		IssuedAt:  issuedAt,
 		ExpiresAt: expiresAt,
 		Nonce:     nonce,
+		RecordID:  revocation.RecordID,
+		Epoch:     revocation.Epoch,
+		FamilyID:  revocation.FamilyID,
 	})
 	if err != nil {
 		return "", err
@@ -192,18 +212,20 @@ func formatAccessJWT(key []byte, issuedAt, expiresAt int64, nonce string) (strin
 	return signingInput + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
 }
 
-func mintAccessJWT(key []byte, now time.Time) (string, error) {
+func mintAccessJWT(key []byte, now time.Time, revocation accessJWTRevocation) (string, error) {
 	nonce := make([]byte, accessJWTNonceBytes)
 	if _, err := rand.Read(nonce); err != nil {
 		return "", err
 	}
-	return formatAccessJWT(key, now.Unix(), now.Add(accessJWTLifetime).Unix(), base64.RawURLEncoding.EncodeToString(nonce))
+	return formatAccessJWT(key, now.Unix(), now.Add(accessJWTLifetime).Unix(), base64.RawURLEncoding.EncodeToString(nonce), revocation)
 }
 
 // parseAccessJWT verifies the signature first, then enforces the exact header
 // and payload shape. Every failure returns the same error so callers cannot
-// distinguish a malformed token from a forged one.
-func parseAccessJWT(key []byte, token string, now time.Time) (*accessJWTClaims, error) {
+// distinguish a malformed token from a forged one. expiryAllowance widens only
+// the expiry comparison, so a browser request tolerates clock drift while a
+// socket still closes at exp.
+func parseAccessJWT(key []byte, token string, now time.Time, expiryAllowance time.Duration) (*accessJWTClaims, error) {
 	if len(key) != accessJWTKeyBytes {
 		return nil, errAccessJWTInvalid
 	}
@@ -242,7 +264,7 @@ func parseAccessJWT(key []byte, token string, now time.Time) (*accessJWTClaims, 
 	}
 
 	payloadMembers, err := scanAccessJSONObject(payload)
-	if err != nil || !accessJWTHasExactKeys(payloadMembers, "iss", "iat", "exp", "jti") {
+	if err != nil || !accessJWTHasExactKeys(payloadMembers, "iss", "iat", "exp", "jti", "rid", "epoch", "fid") {
 		return nil, errAccessJWTInvalid
 	}
 	// null leaves a plain int64 at zero, so decode the timestamps through
@@ -252,6 +274,8 @@ func parseAccessJWT(key []byte, token string, now time.Time) (*accessJWTClaims, 
 		IssuedAt  *int64 `json:"iat"`
 		ExpiresAt *int64 `json:"exp"`
 		Nonce     string `json:"jti"`
+		RecordID  string `json:"rid"`
+		FamilyID  string `json:"fid"`
 	}
 	if err := json.Unmarshal(payload, &claims); err != nil || claims.IssuedAt == nil || claims.ExpiresAt == nil {
 		return nil, errAccessJWTInvalid
@@ -263,15 +287,45 @@ func parseAccessJWT(key []byte, token string, now time.Time) (*accessJWTClaims, 
 	if err != nil || len(nonce) != accessJWTNonceBytes {
 		return nil, errAccessJWTInvalid
 	}
-	expiresAt := time.Unix(*claims.ExpiresAt, 0)
-	if !expiresAt.After(now) {
+	if !validAccessJWTID(claims.RecordID) || !validAccessJWTID(claims.FamilyID) {
+		return nil, errAccessJWTInvalid
+	}
+	// Parse the raw claim text, not a decoded value: a quoted number, a
+	// fraction, or an exponent must fail rather than round into an integer.
+	epoch, err := strconv.ParseUint(string(payloadMembers["epoch"]), 10, 64)
+	if err != nil || epoch == 0 {
+		return nil, errAccessJWTInvalid
+	}
+	issuedAt, expiresAt := *claims.IssuedAt, *claims.ExpiresAt
+	// Positive integers keep the lifetime subtraction from overflowing.
+	if issuedAt <= 0 || expiresAt <= 0 || expiresAt <= issuedAt {
+		return nil, errAccessJWTInvalid
+	}
+	if expiresAt-issuedAt > int64(accessJWTMaxLifetime/time.Second) {
+		return nil, errAccessJWTInvalid
+	}
+	if issuedAt > now.Add(accessJWTClockAllowance).Unix() {
+		return nil, errAccessJWTInvalid
+	}
+	expiry := time.Unix(expiresAt, 0)
+	if !expiry.Add(expiryAllowance).After(now) {
 		return nil, errAccessJWTInvalid
 	}
 	return &accessJWTClaims{
-		IssuedAt:  time.Unix(*claims.IssuedAt, 0),
-		ExpiresAt: expiresAt,
+		IssuedAt:  time.Unix(issuedAt, 0),
+		ExpiresAt: expiry,
 		Nonce:     claims.Nonce,
+		RecordID:  claims.RecordID,
+		Epoch:     epoch,
+		FamilyID:  claims.FamilyID,
 	}, nil
+}
+
+// validAccessJWTID accepts only the canonical 32-byte base64url form the
+// server writes, so one identity cannot be spelled two ways.
+func validAccessJWTID(encoded string) bool {
+	decoded, err := decodeAccessJWTSegment(encoded)
+	return err == nil && len(decoded) == accessJWTNonceBytes
 }
 
 // decodeAccessJWTSegment rejects noncanonical base64url so one token cannot be
@@ -424,6 +478,9 @@ type accessAuthManager struct {
 	mu         sync.Mutex
 	record     *accessPasswordRecord
 	jwtKey     []byte
+	recordID   string
+	epoch      uint64
+	families   map[string]time.Time
 	generation uint64
 	challenges map[string]time.Time
 	sessions   map[string]time.Time
@@ -432,6 +489,7 @@ type accessAuthManager struct {
 
 func newAccessAuthManager() *accessAuthManager {
 	return &accessAuthManager{
+		families:   make(map[string]time.Time),
 		challenges: make(map[string]time.Time),
 		sessions:   make(map[string]time.Time),
 		attempts:   make(map[string]accessLoginAttempt),
@@ -467,7 +525,66 @@ func (m *accessAuthManager) configure(encoded string) error {
 	m.challenges = make(map[string]time.Time)
 	m.sessions = make(map[string]time.Time)
 	m.attempts = make(map[string]accessLoginAttempt)
+	if err := m.resetRevocationLocked(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// resetRevocationLocked gives the current record a fresh identity and no
+// families, so every token minted under a previous record or epoch is dead.
+// Callers hold the mutex.
+func (m *accessAuthManager) resetRevocationLocked() error {
+	m.families = make(map[string]time.Time)
+	m.epoch = 1
+	m.recordID = ""
+	if m.record == nil {
+		return nil
+	}
+	recordID, err := randomAccessToken()
+	if err != nil {
+		return err
+	}
+	m.recordID = recordID
+	return nil
+}
+
+// issueAccessFamilyLocked records a new live family for the current record.
+// Callers hold the mutex.
+func (m *accessAuthManager) issueAccessFamilyLocked(now time.Time) (string, time.Time, error) {
+	familyID, err := randomAccessToken()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	m.pruneAccessFamiliesLocked(now)
+	expiresAt := now.Add(accessJWTLifetime)
+	m.families[familyID] = expiresAt
+	return familyID, expiresAt, nil
+}
+
+// pruneAccessFamiliesLocked drops families that can no longer authorize any
+// request: past the deadline and past the expiry allowance a browser may still
+// use. Callers hold the mutex.
+func (m *accessAuthManager) pruneAccessFamiliesLocked(now time.Time) {
+	for familyID, expiresAt := range m.families {
+		if !expiresAt.Add(accessJWTClockAllowance).After(now) {
+			delete(m.families, familyID)
+		}
+	}
+}
+
+// mintAccessJWTLocked mints a token bound to the current record identity and
+// a fresh family, so the caller never signs claims from a stale snapshot.
+// Callers hold the mutex.
+func (m *accessAuthManager) mintAccessJWTLocked(now time.Time) (string, error) {
+	if m.record == nil || m.recordID == "" || len(m.jwtKey) != accessJWTKeyBytes {
+		return "", nil
+	}
+	familyID, _, err := m.issueAccessFamilyLocked(now)
+	if err != nil {
+		return "", err
+	}
+	return mintAccessJWT(m.jwtKey, now, accessJWTRevocation{RecordID: m.recordID, Epoch: m.epoch, FamilyID: familyID})
 }
 
 // accessGeneration fences WebSocket upgrades against record changes.
@@ -558,14 +675,26 @@ func (m *accessAuthManager) cookieValidLocked(token string, now time.Time) bool 
 	return true
 }
 
-// jwtValidLocked verifies an explicit v2 token against the current key.
-// Callers hold the mutex.
-func (m *accessAuthManager) jwtValidLocked(token string, now time.Time) bool {
-	if len(m.jwtKey) != accessJWTKeyBytes || token == "" {
+// jwtValidLocked verifies an explicit v2 token against the current key, then
+// against the current record identity, epoch, and live family. expiryAllowance
+// widens only the expiry comparison: browsers tolerate clock drift, sockets
+// close at exp. Callers hold the mutex.
+func (m *accessAuthManager) jwtValidLocked(token string, now time.Time, expiryAllowance time.Duration) bool {
+	if len(m.jwtKey) != accessJWTKeyBytes || token == "" || m.record == nil {
 		return false
 	}
-	_, err := parseAccessJWT(m.jwtKey, token, now)
-	return err == nil
+	claims, err := parseAccessJWT(m.jwtKey, token, now, expiryAllowance)
+	if err != nil {
+		return false
+	}
+	if claims.RecordID != m.recordID || claims.Epoch != m.epoch {
+		return false
+	}
+	familyExpiry, ok := m.families[claims.FamilyID]
+	if !ok || !familyExpiry.Add(expiryAllowance).After(now) {
+		return false
+	}
+	return true
 }
 
 // accessDecision is the result of one authorization check. Generation is read
@@ -592,11 +721,21 @@ func (m *accessAuthManager) authorizeRequest(r *http.Request) accessDecision {
 	}
 	now := time.Now()
 	if credential.State == accessCredentialPresent {
-		decision.Authorized = m.jwtValidLocked(credential.Token, now)
+		decision.Authorized = m.jwtValidLocked(credential.Token, now, accessExpiryAllowance(r.URL.Path))
 		return decision
 	}
 	decision.Authorized = m.cookieValidLocked(credential.Cookie, now)
 	return decision
+}
+
+// accessExpiryAllowance is the expiry tolerance for one protected path. A
+// socket must close at exp itself, so only browser requests get the allowance
+// the contract grants them.
+func accessExpiryAllowance(path string) time.Duration {
+	if strings.HasPrefix(path, "/ws/") {
+		return 0
+	}
+	return accessJWTClockAllowance
 }
 
 func (m *accessAuthManager) login(challenge, proof, remoteAddr string) (string, error) {
@@ -723,11 +862,7 @@ func (m *accessAuthManager) loginPassword(password, remoteAddr string) (string, 
 		return outcome.JWTToken, nil
 	}
 	delete(m.attempts, client)
-	key, err := accessJWTKey(m.record)
-	if err != nil {
-		return "", err
-	}
-	return mintAccessJWT(key, now)
+	return m.mintAccessJWTLocked(now)
 }
 
 // accessPasswordOutcome reports the credentials minted by one guarded record
@@ -747,25 +882,38 @@ func (m *accessAuthManager) authorizedForPasswordLocked(credential accessCredent
 	case accessCredentialInvalid:
 		return false
 	case accessCredentialPresent:
-		return m.jwtValidLocked(credential.Token, now)
+		return m.jwtValidLocked(credential.Token, now, accessJWTClockAllowance)
 	}
 	return m.cookieValidLocked(credential.Cookie, now)
 }
 
 // commitPasswordLocked persists the replacement before activating it, so a
 // failed write leaves the old record, key, credentials, and sockets valid. The
-// v1 session is recorded only after the write succeeds.
+// v1 session is recorded only after the write succeeds. The replacement's
+// record identity and family are prepared before the write and activated after
+// it, so a rejected save cannot invalidate tokens minted under the old record.
 func (m *accessAuthManager) commitPasswordLocked(record *accessPasswordRecord, now time.Time) (accessPasswordOutcome, error) {
 	key, err := accessJWTKey(record)
 	if err != nil {
 		return accessPasswordOutcome{}, err
 	}
 	var outcome accessPasswordOutcome
+	recordID := ""
+	familyID := ""
+	familyExpiresAt := time.Time{}
 	if record != nil {
+		if recordID, err = randomAccessToken(); err != nil {
+			return accessPasswordOutcome{}, err
+		}
+		if familyID, err = randomAccessToken(); err != nil {
+			return accessPasswordOutcome{}, err
+		}
+		familyExpiresAt = now.Add(accessJWTLifetime)
 		if outcome.CookieToken, err = signAccessSession(record.Verifier, now); err != nil {
 			return accessPasswordOutcome{}, err
 		}
-		if outcome.JWTToken, err = mintAccessJWT(key, now); err != nil {
+		revocation := accessJWTRevocation{RecordID: recordID, Epoch: 1, FamilyID: familyID}
+		if outcome.JWTToken, err = mintAccessJWT(key, now, revocation); err != nil {
 			return accessPasswordOutcome{}, err
 		}
 	}
@@ -778,6 +926,12 @@ func (m *accessAuthManager) commitPasswordLocked(record *accessPasswordRecord, n
 	}
 	m.record = record
 	m.jwtKey = key
+	m.recordID = recordID
+	m.epoch = 1
+	m.families = make(map[string]time.Time)
+	if record != nil {
+		m.families[familyID] = familyExpiresAt
+	}
 	m.generation++
 	m.challenges = make(map[string]time.Time)
 	m.sessions = make(map[string]time.Time)
@@ -1033,7 +1187,7 @@ func (m *accessAuthManager) v2Status(r *http.Request) (enabled, authenticated bo
 	if !enabled || credential.State != accessCredentialPresent {
 		return enabled, false
 	}
-	return enabled, m.jwtValidLocked(credential.Token, now)
+	return enabled, m.jwtValidLocked(credential.Token, now, accessJWTClockAllowance)
 }
 
 func handleAccessV2Login(w http.ResponseWriter, r *http.Request) {
