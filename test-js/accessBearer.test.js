@@ -140,6 +140,67 @@ describe('v2 selection', () => {
         expect(document.querySelector('.access-auth-overlay')).toBeNull();
     });
 
+    it('keeps a v2 selection with no token instead of falling back to v1', async () => {
+        storeBearer('jwt-stale');
+        mockFetch((url) => {
+            if (url === '/api/auth/status')
+                return { ...DUAL_STATUS, authenticated: true };
+            if (url === '/api/auth/v2/status')
+                return { enabled: true, authenticated: false };
+            if (url === '/api/auth/login')
+                throw new Error('v1 login must not run after a v2 rejection');
+            return undefined;
+        });
+        void bootstrapAccessAuth();
+        await vi.waitFor(() =>
+            expect(
+                document.querySelectorAll('.access-auth-overlay'),
+            ).toHaveLength(1),
+        );
+        expect(__test__.getAccessState().accessToken).toBeNull();
+
+        // A second bootstrap must not use the valid v1 cookie: the rejected
+        // token cleared only the credential, not the protocol selection.
+        const fetchSpy = mockFetch((url) => {
+            if (url === '/api/auth/status')
+                return { ...DUAL_STATUS, authenticated: true };
+            if (url === '/api/auth/login')
+                throw new Error('v1 login must not run');
+            return undefined;
+        });
+        void bootstrapAccessAuth();
+        await vi.waitFor(() =>
+            expect(
+                document.querySelectorAll('.access-auth-overlay'),
+            ).toHaveLength(2),
+        );
+        expect(__test__.getAccessState().selectedProtocol).toBe('v2');
+        expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([
+            '/api/auth/status',
+        ]);
+    });
+
+    it('downgrades an existing v2 selection only on v1-only discovery', async () => {
+        installToken('jwt-host');
+        const fetchSpy = mockFetch((url) => {
+            if (url === '/api/auth/status')
+                return {
+                    ...DUAL_STATUS,
+                    protocols: ['v1'],
+                    authenticated: true,
+                };
+            throw new Error(`unexpected fetch ${url}`);
+        });
+        await expect(bootstrapAccessAuth()).resolves.toEqual({ enabled: true });
+        const state = __test__.getAccessState();
+        expect(state.selectedProtocol).toBe('v1');
+        // The bearer must stop reaching a server that cannot verify it.
+        expect(state.accessToken).toBeNull();
+        expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([
+            '/api/auth/status',
+        ]);
+    });
+
     it('keeps v1 when the saved verifier still logs in and retains it', async () => {
         const verifier = new Uint8Array(32).fill(7);
         localStorage.setItem(
