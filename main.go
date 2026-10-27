@@ -212,6 +212,9 @@ func main() {
 	})
 	startOpenCodeIdleWatcher()
 	wsHub = ws.NewHub(*cfg.ReplayBufferBytes)
+	// Adopt the generation loaded from config so the first upgrade is admitted
+	// and later password changes fence older sockets.
+	wsHub.RotateAuth(accessAuth.accessGeneration())
 	if err := wsHub.SetRecordingDirectory(filepath.Join(system.PhiDataDir(), "recordings")); err != nil {
 		slog.Error("terminal recording directory unavailable", "err", err)
 	}
@@ -422,7 +425,7 @@ func main() {
 	http.HandleFunc("/healthz", handleLivez) // alias
 	http.HandleFunc("/readyz", handleReadyz)
 	http.HandleFunc("/", handleFallback)
-	http.HandleFunc("/ws/control", ws.HandleControl(rpcMgr, func() string { return activeCWD }))
+	http.HandleFunc("/ws/control", ws.HandleControl(wsHub, rpcMgr, func() string { return activeCWD }))
 
 	// Graceful shutdown listener. The signal handler drains via
 	// gracefulShutdown (PHI_SHUTDOWN_* env tunables) instead of the old
