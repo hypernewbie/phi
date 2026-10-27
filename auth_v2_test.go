@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,15 +26,50 @@ const (
 	testAccessVerifier600kHex = "a5905483f9c280f6213bf99b80d651d17ff85bef07aa9a572d6cdd10507a456a"
 	testAccessJWTKeyHex       = "8351c1f8f8f34c7843cd0484f5cfe906d502e2b66de55c43e7b6fc083a229e6b"
 	testAccessJWTNonce        = "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM"
-	testAccessJWTFrozen       = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJwaGkiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6NDg1MzYwMDAwMCwianRpIjoiTXpNek16TXpNek16TXpNek16TXpNek16TXpNek16TXpNek16TXpNek16TSJ9.Z92aWHlvUPkKTcyC_WGaHiApRDyJGW4scY9OgjKX9Nw"
-	testAccessJWTIssuedAt     = int64(1700000000)
-	testAccessJWTExpiresAt    = int64(4853600000)
-	testAccessJWTValidHeader  = `{"alg":"HS256","typ":"JWT"}`
+	// testAccessJWTFrozen is the retired 100-year vector. It carries no
+	// record/epoch/family claims and exceeds the maximum lifetime, so it must
+	// reject under the same signing key it was signed with.
+	testAccessJWTFrozen      = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJwaGkiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6NDg1MzYwMDAwMCwianRpIjoiTXpNek16TXpNek16TXpNek16TXpNek16TXpNek16TXpNek16TXpNek16TSJ9.Z92aWHlvUPkKTcyC_WGaHiApRDyJGW4scY9OgjKX9Nw"
+	testAccessJWTIssuedAt    = int64(1700000000)
+	testAccessJWTExpiresAt   = int64(4853600000)
+	testAccessJWTValidHeader = `{"alg":"HS256","typ":"JWT"}`
+
+	// Accepted short-lived vector: rid 0x44*32, epoch 7, fid 0x55*32. The
+	// expected bytes were computed outside this package from the plan's key,
+	// times, and synthetic claims, so the formatter is checked against an
+	// independent calculation rather than against itself.
+	testAccessJWTShortExpiresAt = int64(1700003600)
+	testAccessJWTRecordID       = "REREREREREREREREREREREREREREREREREREREREREQ"
+	testAccessJWTEpoch          = uint64(7)
+	testAccessJWTFamilyID       = "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU"
+	testAccessJWTShort          = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJwaGkiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6MTcwMDAwMzYwMCwianRpIjoiTXpNek16TXpNek16TXpNek16TXpNek16TXpNek16TXpNek16TXpNek16TSIsInJpZCI6IlJFUkVSRVJFUkVSRVJFUkVSRVJFUkVSRVJFUkVSRVJFUkVSRVJFUkVSRVEiLCJlcG9jaCI6NywiZmlkIjoiVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVSJ9.aMQebo6s21MFuAHzU7gRohC1sDHXCq1wAXkFzG8i1jo"
 )
 
+// testAccessJWTPayloadWith builds one payload from raw JSON fragments, so a
+// rejection case can isolate exactly one defect.
+func testAccessJWTPayloadWith(issuer, issuedAt, expiresAt, nonce, recordID, epoch, familyID string) string {
+	return `{"iss":` + issuer + `,"iat":` + issuedAt + `,"exp":` + expiresAt +
+		`,"jti":` + nonce + `,"rid":` + recordID + `,"epoch":` + epoch + `,"fid":` + familyID + `}`
+}
+
 func testAccessJWTValidPayload() string {
-	return `{"iss":"phi","iat":` + strconv.FormatInt(testAccessJWTIssuedAt, 10) +
-		`,"exp":` + strconv.FormatInt(testAccessJWTExpiresAt, 10) + `,"jti":"` + testAccessJWTNonce + `"}`
+	return testAccessJWTPayloadWith(
+		`"phi"`,
+		strconv.FormatInt(testAccessJWTIssuedAt, 10),
+		strconv.FormatInt(testAccessJWTShortExpiresAt, 10),
+		`"`+testAccessJWTNonce+`"`,
+		`"`+testAccessJWTRecordID+`"`,
+		strconv.FormatUint(testAccessJWTEpoch, 10),
+		`"`+testAccessJWTFamilyID+`"`,
+	)
+}
+
+func testAccessJWTRevocation() accessJWTRevocation {
+	return accessJWTRevocation{
+		RecordID: testAccessJWTRecordID,
+		Epoch:    testAccessJWTEpoch,
+		FamilyID: testAccessJWTFamilyID,
+	}
 }
 
 // testAccessJWTSigningRecord is the frozen-vector record: it exercises key
@@ -219,40 +255,137 @@ func TestAccessJWTKeyMatchesFixtureAcrossRestart(t *testing.T) {
 	}
 }
 
-func TestAccessJWTFrozenVector(t *testing.T) {
+func TestAccessJWTFrozenVectorIsRejected(t *testing.T) {
 	key := testAccessJWTSigningKey(t)
-	token, err := formatAccessJWT(key, testAccessJWTIssuedAt, testAccessJWTExpiresAt, testAccessJWTNonce)
+	// The retired vector predates the record/epoch/family claims, so it can only
+	// be reproduced from its own raw payload.
+	frozenPayload := `{"iss":"phi","iat":` + strconv.FormatInt(testAccessJWTIssuedAt, 10) +
+		`,"exp":` + strconv.FormatInt(testAccessJWTExpiresAt, 10) + `,"jti":"` + testAccessJWTNonce + `"}`
+	if token := signTestAccessJWT(key, testAccessJWTValidHeader, frozenPayload); token != testAccessJWTFrozen {
+		t.Fatalf("token = %s\nwant    %s", token, testAccessJWTFrozen)
+	}
+	// It is signed with the key the server still uses, so only the claim and
+	// lifetime rules can reject it.
+	if _, err := parseAccessJWT(key, testAccessJWTFrozen, time.Unix(testAccessJWTIssuedAt+1, 0), accessJWTClockAllowance); err == nil {
+		t.Fatal("retired 100-year vector was accepted")
+	}
+	// The two defects reject independently: the same claim-less shape with a
+	// current lifetime still fails, and empty identities are never accepted.
+	shortFrozen := testAccessJWTPayloadWith(`"phi"`, strconv.FormatInt(testAccessJWTIssuedAt, 10),
+		strconv.FormatInt(testAccessJWTIssuedAt+3600, 10), `"`+testAccessJWTNonce+`"`, `""`, `0`, `""`)
+	if _, err := parseAccessJWT(key, signTestAccessJWT(key, testAccessJWTValidHeader, shortFrozen), time.Unix(testAccessJWTIssuedAt, 0), accessJWTClockAllowance); err == nil {
+		t.Fatal("empty record identity and epoch were accepted")
+	}
+}
+
+func TestAccessJWTShortVectorAccepted(t *testing.T) {
+	key := testAccessJWTSigningKey(t)
+	revocation := testAccessJWTRevocation()
+	token, err := formatAccessJWT(key, testAccessJWTIssuedAt, testAccessJWTShortExpiresAt, testAccessJWTNonce, revocation)
 	if err != nil {
 		t.Fatalf("format: %v", err)
 	}
-	if token != testAccessJWTFrozen {
-		t.Fatalf("token = %s\nwant    %s", token, testAccessJWTFrozen)
+	if token != testAccessJWTShort {
+		t.Fatalf("token = %s\nwant    %s", token, testAccessJWTShort)
 	}
-	claims, err := parseAccessJWT(key, token, time.Unix(testAccessJWTIssuedAt+1, 0))
+	claims, err := parseAccessJWT(key, testAccessJWTShort, time.Unix(testAccessJWTIssuedAt+1, 0), accessJWTClockAllowance)
 	if err != nil {
-		t.Fatalf("parse frozen vector: %v", err)
+		t.Fatalf("parse accepted vector: %v", err)
 	}
-	if claims.IssuedAt.Unix() != testAccessJWTIssuedAt || claims.ExpiresAt.Unix() != testAccessJWTExpiresAt {
+	if claims.IssuedAt.Unix() != testAccessJWTIssuedAt || claims.ExpiresAt.Unix() != testAccessJWTShortExpiresAt {
 		t.Errorf("claims times = %d/%d", claims.IssuedAt.Unix(), claims.ExpiresAt.Unix())
 	}
 	if claims.Nonce != testAccessJWTNonce {
 		t.Errorf("nonce = %q want %q", claims.Nonce, testAccessJWTNonce)
 	}
+	if claims.RecordID != testAccessJWTRecordID || claims.Epoch != testAccessJWTEpoch || claims.FamilyID != testAccessJWTFamilyID {
+		t.Errorf("revocation claims = %q/%d/%q", claims.RecordID, claims.Epoch, claims.FamilyID)
+	}
 
-	now := time.Unix(testAccessJWTIssuedAt, 0)
-	minted, err := mintAccessJWT(key, now)
+	// A minted token carries the same claim set and a one-hour lifetime.
+	minted, err := mintAccessJWT(key, time.Unix(testAccessJWTIssuedAt, 0), revocation)
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
-	mintedClaims, err := parseAccessJWT(key, minted, now)
+	mintedClaims, err := parseAccessJWT(key, minted, time.Unix(testAccessJWTIssuedAt, 0), accessJWTClockAllowance)
 	if err != nil {
 		t.Fatalf("parse minted token: %v", err)
 	}
 	if mintedClaims.Nonce == "" || mintedClaims.Nonce == testAccessJWTNonce {
 		t.Errorf("minted token did not use a fresh nonce: %q", mintedClaims.Nonce)
 	}
-	if want := now.Add(accessJWTLifetime).Unix(); mintedClaims.ExpiresAt.Unix() != want {
+	if want := time.Unix(testAccessJWTIssuedAt, 0).Add(accessJWTLifetime).Unix(); mintedClaims.ExpiresAt.Unix() != want {
 		t.Errorf("minted expiry = %d want %d", mintedClaims.ExpiresAt.Unix(), want)
+	}
+	if got := mintedClaims.ExpiresAt.Sub(mintedClaims.IssuedAt); got != time.Hour {
+		t.Errorf("minted lifetime = %v want 1h", got)
+	}
+	if mintedClaims.RecordID != testAccessJWTRecordID || mintedClaims.Epoch != testAccessJWTEpoch || mintedClaims.FamilyID != testAccessJWTFamilyID {
+		t.Errorf("minted revocation claims = %q/%d/%q", mintedClaims.RecordID, mintedClaims.Epoch, mintedClaims.FamilyID)
+	}
+}
+
+func TestAccessJWTLifetimeBounds(t *testing.T) {
+	key := testAccessJWTSigningKey(t)
+	now := time.Unix(testAccessJWTIssuedAt, 0)
+	sign := func(iat, exp int64) string {
+		return signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(
+			`"phi"`, strconv.FormatInt(iat, 10), strconv.FormatInt(exp, 10),
+			`"`+testAccessJWTNonce+`"`, `"`+testAccessJWTRecordID+`"`,
+			strconv.FormatUint(testAccessJWTEpoch, 10), `"`+testAccessJWTFamilyID+`"`))
+	}
+
+	if _, err := parseAccessJWT(key, sign(now.Unix(), now.Unix()+3600), now, accessJWTClockAllowance); err != nil {
+		t.Fatalf("exact 3600-second lifetime rejected: %v", err)
+	}
+	for name, token := range map[string]string{
+		"3601 seconds":     sign(now.Unix(), now.Unix()+3601),
+		"equal times":      sign(now.Unix(), now.Unix()),
+		"expiry before":    sign(now.Unix(), now.Unix()-1),
+		"nonpositive iat":  sign(0, 3600),
+		"nonpositive exp":  sign(-7200, -3600),
+		"overflow attempt": sign(1, math.MaxInt64),
+	} {
+		if _, err := parseAccessJWT(key, token, now, accessJWTClockAllowance); err == nil {
+			t.Errorf("%s: unexpectedly accepted", name)
+		}
+	}
+}
+
+func TestAccessJWTClockSkewAndExpiryAllowance(t *testing.T) {
+	key := testAccessJWTSigningKey(t)
+	sign := func(iat, exp int64) string {
+		return signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(
+			`"phi"`, strconv.FormatInt(iat, 10), strconv.FormatInt(exp, 10),
+			`"`+testAccessJWTNonce+`"`, `"`+testAccessJWTRecordID+`"`,
+			strconv.FormatUint(testAccessJWTEpoch, 10), `"`+testAccessJWTFamilyID+`"`))
+	}
+	base := int64(1700000000)
+
+	// Future iat: 30 seconds of skew is allowed, 31 is not.
+	if _, err := parseAccessJWT(key, sign(base+30, base+30+3600), time.Unix(base, 0), accessJWTClockAllowance); err != nil {
+		t.Errorf("iat +30s rejected: %v", err)
+	}
+	if _, err := parseAccessJWT(key, sign(base+31, base+31+3600), time.Unix(base, 0), accessJWTClockAllowance); err == nil {
+		t.Error("iat +31s accepted")
+	}
+
+	// Expiry: HTTP accepts up to exp+29s and rejects at exp+30s.
+	expiry := base + 3600
+	token := sign(base, expiry)
+	if _, err := parseAccessJWT(key, token, time.Unix(expiry+29, 0), accessJWTClockAllowance); err != nil {
+		t.Errorf("exp+29s rejected under the HTTP allowance: %v", err)
+	}
+	if _, err := parseAccessJWT(key, token, time.Unix(expiry+30, 0), accessJWTClockAllowance); err == nil {
+		t.Error("exp+30s accepted")
+	}
+	// The allowance must not leak into socket admission: exp itself closes it.
+	if _, err := parseAccessJWT(key, token, time.Unix(expiry, 0), 0); err == nil {
+		t.Error("socket allowance accepted a token at exp")
+	}
+	// And the allowance never extends the maximum minted lifetime.
+	if _, err := parseAccessJWT(key, sign(base, base+3601), time.Unix(base+3601, 0), accessJWTClockAllowance); err == nil {
+		t.Error("allowance rescued an overlong lifetime")
 	}
 }
 
@@ -260,9 +393,13 @@ func TestAccessJWTParseRejectsMalformedTokens(t *testing.T) {
 	key := testAccessJWTSigningKey(t)
 	now := time.Unix(testAccessJWTIssuedAt+1, 0)
 	validPayload := testAccessJWTValidPayload()
-	expiredPayload := `{"iss":"phi","iat":1700000000,"exp":1700000001,"jti":"` + testAccessJWTNonce + `"}`
+	issued := strconv.FormatInt(testAccessJWTIssuedAt, 10)
+	shortExpiry := strconv.FormatInt(testAccessJWTShortExpiresAt, 10)
+	nonce := `"` + testAccessJWTNonce + `"`
+	recordID := `"` + testAccessJWTRecordID + `"`
+	familyID := `"` + testAccessJWTFamilyID + `"`
 
-	if _, err := parseAccessJWT(key, signTestAccessJWT(key, testAccessJWTValidHeader, validPayload), now); err != nil {
+	if _, err := parseAccessJWT(key, signTestAccessJWT(key, testAccessJWTValidHeader, validPayload), now, accessJWTClockAllowance); err != nil {
 		t.Fatalf("valid control token rejected: %v", err)
 	}
 
@@ -273,24 +410,38 @@ func TestAccessJWTParseRejectsMalformedTokens(t *testing.T) {
 		"extra header field":      signTestAccessJWT(key, `{"alg":"HS256","typ":"JWT","kid":"x"}`, validPayload),
 		"duplicate header field":  signTestAccessJWT(key, `{"alg":"HS256","typ":"JWT","typ":"JWT"}`, validPayload),
 		"header not an object":    signTestAccessJWT(key, `["HS256"]`, validPayload),
-		"wrong issuer":            signTestAccessJWT(key, testAccessJWTValidHeader, `{"iss":"other","iat":1700000000,"exp":4853600000,"jti":"`+testAccessJWTNonce+`"}`),
-		"missing expiry":          signTestAccessJWT(key, testAccessJWTValidHeader, `{"iss":"phi","iat":1700000000,"jti":"`+testAccessJWTNonce+`"}`),
-		"extra payload field":     signTestAccessJWT(key, testAccessJWTValidHeader, `{"iss":"phi","iat":1700000000,"exp":4853600000,"jti":"`+testAccessJWTNonce+`","sub":"x"}`),
-		"duplicate payload field": signTestAccessJWT(key, testAccessJWTValidHeader, `{"iss":"phi","iss":"phi","iat":1700000000,"exp":4853600000,"jti":"`+testAccessJWTNonce+`"}`),
-		"string issued at":        signTestAccessJWT(key, testAccessJWTValidHeader, `{"iss":"phi","iat":"1700000000","exp":4853600000,"jti":"`+testAccessJWTNonce+`"}`),
-		"null issued at":          signTestAccessJWT(key, testAccessJWTValidHeader, `{"iss":"phi","iat":null,"exp":4853600000,"jti":"`+testAccessJWTNonce+`"}`),
-		"null expiry":             signTestAccessJWT(key, testAccessJWTValidHeader, `{"iss":"phi","iat":1700000000,"exp":null,"jti":"`+testAccessJWTNonce+`"}`),
-		"null issuer":             signTestAccessJWT(key, testAccessJWTValidHeader, `{"iss":null,"iat":1700000000,"exp":4853600000,"jti":"`+testAccessJWTNonce+`"}`),
-		"null nonce":              signTestAccessJWT(key, testAccessJWTValidHeader, `{"iss":"phi","iat":1700000000,"exp":4853600000,"jti":null}`),
-		"fractional expiry":       signTestAccessJWT(key, testAccessJWTValidHeader, `{"iss":"phi","iat":1700000000,"exp":4853600000.5,"jti":"`+testAccessJWTNonce+`"}`),
-		"short nonce":             signTestAccessJWT(key, testAccessJWTValidHeader, `{"iss":"phi","iat":1700000000,"exp":4853600000,"jti":"`+base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x33}, 16))+`"}`),
-		"padded nonce":            signTestAccessJWT(key, testAccessJWTValidHeader, `{"iss":"phi","iat":1700000000,"exp":4853600000,"jti":"`+testAccessJWTNonce+`="}`),
-		"empty nonce":             signTestAccessJWT(key, testAccessJWTValidHeader, `{"iss":"phi","iat":1700000000,"exp":4853600000,"jti":""}`),
-		"expired":                 signTestAccessJWT(key, testAccessJWTValidHeader, expiredPayload),
+		"wrong issuer":            signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"other"`, issued, shortExpiry, nonce, recordID, `7`, familyID)),
+		"null issuer":             signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`null`, issued, shortExpiry, nonce, recordID, `7`, familyID)),
+		"missing expiry":          signTestAccessJWT(key, testAccessJWTValidHeader, `{"iss":"phi","iat":`+issued+`,"jti":`+nonce+`,"rid":`+recordID+`,"epoch":7,"fid":`+familyID+`}`),
+		"missing record id":       signTestAccessJWT(key, testAccessJWTValidHeader, `{"iss":"phi","iat":`+issued+`,"exp":`+shortExpiry+`,"jti":`+nonce+`,"epoch":7,"fid":`+familyID+`}`),
+		"missing epoch":           signTestAccessJWT(key, testAccessJWTValidHeader, `{"iss":"phi","iat":`+issued+`,"exp":`+shortExpiry+`,"jti":`+nonce+`,"rid":`+recordID+`,"fid":`+familyID+`}`),
+		"missing family id":       signTestAccessJWT(key, testAccessJWTValidHeader, `{"iss":"phi","iat":`+issued+`,"exp":`+shortExpiry+`,"jti":`+nonce+`,"rid":`+recordID+`,"epoch":7}`),
+		"extra payload field":     signTestAccessJWT(key, testAccessJWTValidHeader, validPayload[:len(validPayload)-1]+`,"sub":"x"}`),
+		"duplicate payload field": signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"phi","iss":"phi"`, issued, shortExpiry, nonce, recordID, `7`, familyID)),
+		"string issued at":        signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"phi"`, `"`+issued+`"`, shortExpiry, nonce, recordID, `7`, familyID)),
+		"null issued at":          signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"phi"`, `null`, shortExpiry, nonce, recordID, `7`, familyID)),
+		"null expiry":             signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"phi"`, issued, `null`, nonce, recordID, `7`, familyID)),
+		"null record id":          signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"phi"`, issued, shortExpiry, nonce, `null`, `7`, familyID)),
+		"null epoch":              signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"phi"`, issued, shortExpiry, nonce, recordID, `null`, familyID)),
+		"null family id":          signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"phi"`, issued, shortExpiry, nonce, recordID, `7`, `null`)),
+		"zero epoch":              signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"phi"`, issued, shortExpiry, nonce, recordID, `0`, familyID)),
+		"negative epoch":          signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"phi"`, issued, shortExpiry, nonce, recordID, `-1`, familyID)),
+		"floating epoch":          signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"phi"`, issued, shortExpiry, nonce, recordID, `7.5`, familyID)),
+		"oversized epoch":         signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"phi"`, issued, shortExpiry, nonce, recordID, `18446744073709551616`, familyID)),
+		"string epoch":            signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"phi"`, issued, shortExpiry, nonce, recordID, `"7"`, familyID)),
+		"short record id":         signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"phi"`, issued, shortExpiry, nonce, `"`+base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x44}, 16))+`"`, `7`, familyID)),
+		"padded family id":        signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"phi"`, issued, shortExpiry, nonce, recordID, `7`, `"`+testAccessJWTFamilyID+`="`)),
+		"empty record id":         signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"phi"`, issued, shortExpiry, nonce, `""`, `7`, familyID)),
+		"null nonce":              signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"phi"`, issued, shortExpiry, `null`, recordID, `7`, familyID)),
+		"fractional expiry":       signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"phi"`, issued, shortExpiry+`.5`, nonce, recordID, `7`, familyID)),
+		"short nonce":             signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"phi"`, issued, shortExpiry, `"`+base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x33}, 16))+`"`, recordID, `7`, familyID)),
+		"padded nonce":            signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"phi"`, issued, shortExpiry, `"`+testAccessJWTNonce+`="`, recordID, `7`, familyID)),
+		"empty nonce":             signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"phi"`, issued, shortExpiry, `""`, recordID, `7`, familyID)),
+		"expired past allowance":  signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(`"phi"`, issued, strconv.FormatInt(now.Unix()-31, 10), nonce, recordID, `7`, familyID)),
 		"trailing payload value":  signTestAccessJWT(key, testAccessJWTValidHeader, validPayload+`{}`),
 	}
 	for name, token := range signed {
-		if _, err := parseAccessJWT(key, token, now); err == nil {
+		if _, err := parseAccessJWT(key, token, now, accessJWTClockAllowance); err == nil {
 			t.Errorf("%s: unexpectedly accepted", name)
 		}
 	}
@@ -310,10 +461,194 @@ func TestAccessJWTParseRejectsMalformedTokens(t *testing.T) {
 		"noncanonical payload": segments[0] + "." + segments[1] + "=." + segments[2],
 	}
 	for name, token := range unsigned {
-		if _, err := parseAccessJWT(key, token, now); err == nil {
+		if _, err := parseAccessJWT(key, token, now, accessJWTClockAllowance); err == nil {
 			t.Errorf("%s: unexpectedly accepted", name)
 		}
 	}
+}
+
+// --- M1a: record, epoch, and family revocation state ---
+
+func TestAccessJWTRevocationRequiresCurrentRecordEpochAndFamily(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	encoded := testAccessHash()
+	if err := auth.configure(encoded); err != nil {
+		t.Fatal(err)
+	}
+	token := testAccessSignedToken(t, auth)
+	now := time.Now()
+
+	auth.mu.Lock()
+	if !auth.jwtValidLocked(token, now, accessJWTClockAllowance) {
+		t.Fatal("freshly minted token rejected")
+	}
+	recordID, epoch := auth.recordID, auth.epoch
+	auth.mu.Unlock()
+	if recordID == "" || epoch == 0 {
+		t.Fatalf("minted token has no record identity: rid=%q epoch=%d", recordID, epoch)
+	}
+	claims, err := parseAccessJWT(mustTestAccessJWTKey(t, auth), token, now, accessJWTClockAllowance)
+	if err != nil {
+		t.Fatalf("parse minted token: %v", err)
+	}
+	if claims.RecordID != recordID || claims.Epoch != epoch {
+		t.Errorf("claims = %q/%d want %q/%d", claims.RecordID, claims.Epoch, recordID, epoch)
+	}
+
+	// A new record identity rejects the token even when the signing key is
+	// byte-identical: reconfiguring the same record rotates the identity.
+	if err := auth.configure(encoded); err != nil {
+		t.Fatal(err)
+	}
+	auth.mu.Lock()
+	staleRecord := auth.jwtValidLocked(token, now, accessJWTClockAllowance)
+	if auth.recordID == recordID {
+		auth.mu.Unlock()
+		t.Fatal("reconfigure reused the record identity")
+	}
+	auth.mu.Unlock()
+	if staleRecord {
+		t.Error("stale record identity accepted")
+	}
+
+	// A stale epoch rejects a token whose record and family are still current.
+	liveToken := testAccessSignedToken(t, auth)
+	auth.mu.Lock()
+	auth.epoch++
+	staleEpoch := auth.jwtValidLocked(liveToken, now, accessJWTClockAllowance)
+	auth.epoch--
+	auth.mu.Unlock()
+	if staleEpoch {
+		t.Error("stale epoch accepted")
+	}
+
+	// An unknown family is rejected, and so is a family past its deadline.
+	liveClaims, err := parseAccessJWT(mustTestAccessJWTKey(t, auth), liveToken, now, accessJWTClockAllowance)
+	if err != nil {
+		t.Fatalf("parse live token: %v", err)
+	}
+	auth.mu.Lock()
+	delete(auth.families, liveClaims.FamilyID)
+	auth.mu.Unlock()
+	if auth.jwtValidLocked(liveToken, now, accessJWTClockAllowance) {
+		t.Error("unknown family accepted")
+	}
+	expiring := testAccessSignedToken(t, auth)
+	// The family deadline carries the same expiry allowance as the token, so
+	// expire it past that allowance to prove the family itself is dead.
+	deadline := now.Add(-accessJWTClockAllowance - time.Second)
+	auth.mu.Lock()
+	for familyID := range auth.families {
+		auth.families[familyID] = deadline
+	}
+	auth.mu.Unlock()
+	if auth.jwtValidLocked(expiring, now, accessJWTClockAllowance) {
+		t.Error("expired family accepted")
+	}
+}
+
+func TestAccessJWTFullClaimsAcceptedThroughMiddleware(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+
+	// The end-to-end path is the real proof that the minted claim set and the
+	// exact-key parser agree; a claim added on one side only fails here.
+	request := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	if w := testAccessServe(testAccessProtected().ServeHTTP, request); w.Code != http.StatusNoContent {
+		t.Fatalf("full-claim token rejected by middleware: %d", w.Code)
+	}
+
+	// A correctly signed token missing one required claim is refused.
+	key := mustTestAccessJWTKey(t, accessAuth)
+	auth := accessAuth
+	auth.mu.Lock()
+	claims := accessJWTRevocation{RecordID: auth.recordID, Epoch: auth.epoch}
+	familyID, _, err := auth.issueAccessFamilyLocked(time.Now())
+	auth.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	noFamily := signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(
+		`"phi"`, strconv.FormatInt(time.Now().Unix(), 10), strconv.FormatInt(time.Now().Unix()+3600, 10),
+		`"`+testAccessJWTNonce+`"`, `"`+claims.RecordID+`"`, strconv.FormatUint(claims.Epoch, 10), `"`))
+	request = httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	request.Header.Set("Authorization", "Bearer "+noFamily)
+	if w := testAccessServe(testAccessProtected().ServeHTTP, request); w.Code != http.StatusUnauthorized {
+		t.Fatalf("token with an empty family id authorized: %d", w.Code)
+	}
+
+	// The same identity with every claim present is accepted.
+	full := signTestAccessJWT(key, testAccessJWTValidHeader, testAccessJWTPayloadWith(
+		`"phi"`, strconv.FormatInt(time.Now().Unix(), 10), strconv.FormatInt(time.Now().Unix()+3600, 10),
+		`"`+testAccessJWTNonce+`"`, `"`+claims.RecordID+`"`, strconv.FormatUint(claims.Epoch, 10), `"`+familyID+`"`))
+	request = httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	request.Header.Set("Authorization", "Bearer "+full)
+	if w := testAccessServe(testAccessProtected().ServeHTTP, request); w.Code != http.StatusNoContent {
+		t.Fatalf("externally signed full-claim token rejected: %d", w.Code)
+	}
+}
+
+func TestAccessJWTWebsocketAdmissionUsesExpiryWithoutAllowance(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	if err := auth.configure(testAccessHash()); err != nil {
+		t.Fatal(err)
+	}
+	if got := accessExpiryAllowance("/ws/panes/1"); got != 0 {
+		t.Errorf("socket allowance = %v want 0", got)
+	}
+	if got := accessExpiryAllowance("/api/coders"); got != accessJWTClockAllowance {
+		t.Errorf("api allowance = %v want %v", got, accessJWTClockAllowance)
+	}
+
+	key := mustTestAccessJWTKey(t, auth)
+	auth.mu.Lock()
+	revocation := accessJWTRevocation{RecordID: auth.recordID, Epoch: auth.epoch}
+	auth.mu.Unlock()
+	familyID, expiresAt, err := func() (string, time.Time, error) {
+		auth.mu.Lock()
+		defer auth.mu.Unlock()
+		return auth.issueAccessFamilyLocked(time.Unix(testAccessJWTIssuedAt, 0))
+	}()
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth.mu.Lock()
+	auth.families[familyID] = expiresAt
+	auth.mu.Unlock()
+	revocation.FamilyID = familyID
+	token, err := formatAccessJWT(key, testAccessJWTIssuedAt, testAccessJWTShortExpiresAt, testAccessJWTNonce, revocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expiredAt := time.Unix(testAccessJWTShortExpiresAt, 0)
+	if auth.jwtValidLocked(token, expiredAt, 0) {
+		t.Error("socket allowance admitted a token at exp")
+	}
+	if !auth.jwtValidLocked(token, expiredAt.Add(-time.Second), 0) {
+		t.Error("socket rejected a live token")
+	}
+	if !auth.jwtValidLocked(token, expiredAt.Add(29*time.Second), accessJWTClockAllowance) {
+		t.Error("http allowance rejected a token inside exp+29s")
+	}
+	if auth.jwtValidLocked(token, expiredAt.Add(30*time.Second), accessJWTClockAllowance) {
+		t.Error("http allowance admitted a token at exp+30s")
+	}
+}
+
+func mustTestAccessJWTKey(t *testing.T, auth *accessAuthManager) []byte {
+	t.Helper()
+	auth.mu.Lock()
+	defer auth.mu.Unlock()
+	if len(auth.jwtKey) != accessJWTKeyBytes {
+		t.Fatalf("manager has no signing key")
+	}
+	return append([]byte(nil), auth.jwtKey...)
 }
 
 func TestAccessConfigureDerivesJWTKeyAndAdvancesGeneration(t *testing.T) {
@@ -580,7 +915,7 @@ func TestAccessV2PasswordLifecycle(t *testing.T) {
 	}
 	// Disabled auth does not answer 401, so ask the manager directly.
 	auth.mu.Lock()
-	oldTokenValid := auth.jwtValidLocked(changedPayload.Token, time.Now())
+	oldTokenValid := auth.jwtValidLocked(changedPayload.Token, time.Now(), accessJWTClockAllowance)
 	auth.mu.Unlock()
 	if oldTokenValid {
 		t.Fatal("cleared record still validated the old token")
@@ -855,7 +1190,7 @@ func testAccessSignedToken(t *testing.T, auth *accessAuthManager) string {
 	t.Helper()
 	auth.mu.Lock()
 	defer auth.mu.Unlock()
-	token, err := mintAccessJWT(auth.jwtKey, time.Now())
+	token, err := auth.mintAccessJWTLocked(time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -923,11 +1258,14 @@ func TestAccessV2LoginRehashesStaleRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldKey, err := accessJWTKey(oldRecord)
-	if err != nil {
+	if _, err := accessJWTKey(oldRecord); err != nil {
 		t.Fatal(err)
 	}
-	oldToken, err := mintAccessJWT(oldKey, time.Now())
+	// Mint through the manager so the token belongs to a live family of the
+	// record that the rehash is about to replace.
+	auth.mu.Lock()
+	oldToken, err := auth.mintAccessJWTLocked(time.Now())
+	auth.mu.Unlock()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1009,6 +1347,7 @@ func TestAccessRestartAfterV2Change(t *testing.T) {
 	withTempConfig(t)
 	useTestAccessAuth(t)
 	token := testAccessEnableV2(t, testAccessPassword)
+	cookie := testAccessCookieFor(t, accessAuth)
 
 	restarted := newAccessAuthManager()
 	if err := restarted.configure(loadConfig().AccessPasswordHash); err != nil {
@@ -1018,10 +1357,20 @@ func TestAccessRestartAfterV2Change(t *testing.T) {
 	accessAuth = restarted
 	t.Cleanup(func() { accessAuth = previous })
 
+	// The v1 cookie is stateless and survives restart unchanged.
 	request := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
-	request.Header.Set("Authorization", "Bearer "+token)
+	request.AddCookie(cookie)
 	if w := testAccessServe(testAccessProtected().ServeHTTP, request); w.Code != http.StatusNoContent {
-		t.Fatalf("token did not survive restart: %d", w.Code)
+		t.Fatalf("v1 cookie did not survive restart: %d", w.Code)
+	}
+	// A v2 token carries a record identity and family that only the durable
+	// state file can reproduce, so a restarted process rejects it. M1b loads
+	// that state before admitting v2 and restores this case; until then the
+	// server must fail closed rather than admit an unrecognised family.
+	request = httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	if w := testAccessServe(testAccessProtected().ServeHTTP, request); w.Code != http.StatusUnauthorized {
+		t.Fatalf("restarted process admitted an unowned v2 token: %d", w.Code)
 	}
 	if w := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.90:1"); w.Code != http.StatusOK {
 		t.Fatalf("password login after restart: %d", w.Code)
