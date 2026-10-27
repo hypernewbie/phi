@@ -1125,3 +1125,54 @@ describe('Add Workspace directory tree', () => {
         ).toBe(false);
     });
 });
+
+describe('workspace selector', () => {
+    it('shows an unregistered active path instead of going blank', () => {
+        const manager = makeManager();
+        const select = document.getElementById('workspace-select');
+
+        // A tab in a worktree or a removed workspace names a cwd with no
+        // <option>; assigning it leaves the control rendering nothing.
+        manager.activeWorkspace = '/worktrees/feature-x';
+        select.value = '/worktrees/feature-x';
+        expect(select.selectedIndex).toBe(-1);
+
+        manager.updateWorkspaceSelectWidth();
+
+        const shown = select.options[select.selectedIndex];
+        expect(shown.value).toBe('/worktrees/feature-x');
+        expect(shown.text).toBe('feature-x');
+        expect(shown.dataset.transient).toBe('true');
+        expect(select.selectedIndex).toBe(select.options.length - 1);
+    });
+
+    it('keeps a registered selection and drops a stale temporary option', () => {
+        const manager = makeManager();
+        const select = document.getElementById('workspace-select');
+
+        manager.activeWorkspace = '/worktrees/feature-x';
+        manager.updateWorkspaceSelectWidth();
+        expect(select.options.length).toBe(2);
+
+        manager.activeWorkspace = '/configured';
+        select.value = '/configured';
+        manager.updateWorkspaceSelectWidth();
+
+        expect(select.options.length).toBe(1);
+        expect(select.value).toBe('/configured');
+    });
+
+    it('clears a stale width when the list is empty', () => {
+        const manager = makeManager();
+        const select = document.getElementById('workspace-select');
+
+        select.style.width = '180px';
+        select.innerHTML = '';
+        manager.activeWorkspace = '';
+        manager.updateWorkspaceSelectWidth();
+
+        expect(select.style.width).toBe('');
+        expect(select.title).toBe('');
+        expect(select.options.length).toBe(0);
+    });
+});
