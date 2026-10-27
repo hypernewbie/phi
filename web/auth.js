@@ -16,6 +16,10 @@ import { sha256 } from './vendor/noble-hashes/sha2.js';
 import { serverKey } from './util.js';
 
 const CREDENTIAL_KEY = 'phi_access_credential_v1';
+// Standalone-browser storage for the v2 bearer. The desktop body serves every
+// server from one page, so it installs its token in memory instead of writing
+// here (installToken).
+const BEARER_KEY = 'phi_access_bearer_v1';
 
 // The desktop's embedded page serves EVERY server from one page, so one
 // localStorage holds every server's credential. A single shared key made
@@ -59,6 +63,61 @@ function validStatus(status) {
         status.iterations > 0 &&
         typeof status.salt === 'string' &&
         typeof status.challenge === 'string'
+    );
+}
+
+function invalidStatusError() {
+    return new Error('Phi returned invalid access protection settings');
+}
+
+// parseProtocols maps the capability field to the protocols this client can
+// speak. An absent field is the legacy v1-only response. A present field must
+// be a nonempty array of unique nonempty names, and unknown names are only
+// tolerated beside a supported protocol.
+function parseProtocols(value) {
+    if (value === undefined) return ['v1'];
+    if (!Array.isArray(value) || value.length === 0) throw invalidStatusError();
+    const seen = new Set();
+    for (const protocol of value) {
+        if (typeof protocol !== 'string' || !protocol || seen.has(protocol))
+            throw invalidStatusError();
+        seen.add(protocol);
+    }
+    const supported = value.filter((p) => p === 'v1' || p === 'v2');
+    if (supported.length === 0) throw invalidStatusError();
+    return supported;
+}
+
+// parseAccessStatus validates the status contract shared by both protocols.
+function parseAccessStatus(payload) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload))
+        throw invalidStatusError();
+    if (typeof payload.enabled !== 'boolean') throw invalidStatusError();
+    const protocols = parseProtocols(payload.protocols);
+    if (payload.enabled && typeof payload.authenticated !== 'boolean')
+        throw invalidStatusError();
+    return {
+        enabled: payload.enabled,
+        authenticated: payload.authenticated === true,
+        protocols,
+        raw: payload,
+    };
+}
+
+function preferredProtocol(protocols) {
+    return protocols.includes('v2') ? 'v2' : 'v1';
+}
+
+// v1 KDF metadata is only required before using the v1 path; a v2 status must
+// not be rejected by v1-only bounds.
+function hasV1Metadata(status) {
+    return (
+        status.raw.version === 'v1' &&
+        status.raw.algorithm === 'pbkdf2-sha256' &&
+        Number.isInteger(status.raw.iterations) &&
+        status.raw.iterations > 0 &&
+        typeof status.raw.salt === 'string' &&
+        typeof status.raw.challenge === 'string'
     );
 }
 
@@ -257,7 +316,280 @@ async function freshStatus(fallback, startedAt) {
         : null;
 }
 
-function showUnlockPrompt() {
+// --- v2 bearer client ----------------------------------------------------
+
+let selectedProtocol = null; // 'v1' | 'v2' | null before discovery
+let accessEnabled = false; // last discovered enforcement state
+let accessToken = null; // in-memory bearer; null in v1 mode
+let persistedToken = null; // token this module wrote to BEARER_KEY
+let stateEpoch = 0; // bumped whenever the selected credential changes
+
+function utf8Length(value) {
+    return new TextEncoder().encode(value).length;
+}
+
+function loadBearer() {
+    try {
+        return localStorage.getItem(BEARER_KEY) || null;
+    } catch {
+        return null;
+    }
+}
+
+function storeBearer(token) {
+    try {
+        localStorage.setItem(BEARER_KEY, token);
+    } catch {
+        // The in-memory token still works for this page load.
+    }
+}
+
+function clearStoredBearer(token) {
+    try {
+        if (localStorage.getItem(BEARER_KEY) === token)
+            localStorage.removeItem(BEARER_KEY);
+    } catch {
+        /* ignored */
+    }
+}
+
+function adoptToken(token, { persist }) {
+    accessToken = token;
+    accessEnabled = true;
+    selectedProtocol = 'v2';
+    stateEpoch++;
+    if (persist) {
+        persistedToken = token;
+        storeBearer(token);
+    }
+}
+
+// rejectToken clears only the token that failed. A delayed 401 for token A
+// must not clear a token B installed after it, and a rejection never changes
+// the selected protocol.
+function rejectToken(token) {
+    if (accessToken !== token && loadBearer() !== token) return;
+    if (accessToken === token) {
+        accessToken = null;
+        selectedProtocol = 'v2';
+        stateEpoch++;
+    }
+    if (persistedToken === token) persistedToken = null;
+    clearStoredBearer(token);
+}
+
+// checkV2Token reports whether the server still accepts token. A rejected
+// token is 'invalid'; transport errors and 429/5xx throw, so a transient
+// failure never destroys a saved credential or changes protocol.
+async function checkV2Token(token) {
+    const res = await fetch('/api/auth/v2/status', {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store',
+    });
+    if (res.status === 401 || res.status === 403) return 'invalid';
+    if (!res.ok) throw new Error('Unable to check Phi access protection');
+    let payload;
+    try {
+        payload = await res.json();
+    } catch {
+        throw invalidStatusError();
+    }
+    if (
+        !payload ||
+        typeof payload.enabled !== 'boolean' ||
+        typeof payload.authenticated !== 'boolean'
+    )
+        throw invalidStatusError();
+    if (!payload.enabled) return 'invalid';
+    return payload.authenticated ? 'valid' : 'invalid';
+}
+
+async function v2Login(password) {
+    const res = await fetch('/api/auth/v2/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+    });
+    if (res.status === 401) throw new Error('Wrong password');
+    if (res.status === 429)
+        throw new Error('Too many attempts. Try again in a moment.');
+    if (!res.ok) throw new Error('Unable to sign in');
+    let payload;
+    try {
+        payload = await res.json();
+    } catch {
+        throw new Error('Unable to sign in');
+    }
+    if (!payload || typeof payload.token !== 'string' || !payload.token)
+        throw new Error('Unable to sign in');
+    return payload.token;
+}
+
+function validateV2Password(password) {
+    if (typeof password !== 'string')
+        throw new Error('Enter a password to continue');
+    const bytes = utf8Length(password);
+    if (bytes < PASSWORD_MIN_LENGTH)
+        throw new Error(
+            `Password must be at least ${PASSWORD_MIN_LENGTH} characters`,
+        );
+    if (bytes > 1024) throw new Error('Password must be at most 1024 bytes');
+}
+
+async function saveV2Password(password) {
+    validateV2Password(password);
+    const headers = { 'Content-Type': 'application/json' };
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+    const res = await fetch('/api/auth/v2/password', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ password }),
+    });
+    if (!res.ok)
+        throw new Error(
+            (await res.text()) || 'Unable to save access password',
+        );
+    let payload;
+    try {
+        payload = await res.json();
+    } catch {
+        throw new Error('Unable to save access password');
+    }
+    if (
+        !payload ||
+        payload.enabled !== true ||
+        typeof payload.token !== 'string' ||
+        !payload.token
+    )
+        throw new Error('Unable to save access password');
+    adoptToken(payload.token, { persist: true });
+    return { enabled: true };
+}
+
+async function clearV2Password() {
+    if (!accessEnabled && !accessToken) return { enabled: false };
+    const headers = { 'Content-Type': 'application/json' };
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+    const res = await fetch('/api/auth/v2/password', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ password: '' }),
+    });
+    if (!res.ok)
+        throw new Error(
+            (await res.text()) || 'Unable to clear access password',
+        );
+    accessToken = null;
+    accessEnabled = false;
+    selectedProtocol = 'v2';
+    persistedToken = null;
+    stateEpoch++;
+    try {
+        localStorage.removeItem(BEARER_KEY);
+    } catch {
+        /* ignored */
+    }
+    return { enabled: false };
+}
+
+// --- protected fetch wrapper --------------------------------------------
+
+const WRAPPED_FETCH = Symbol.for('phi.accessFetch');
+let reloadPage = () => location.reload();
+let reauthInFlight = null;
+
+function isSyncMessagePath(path) {
+    return path === '/api/sync/messages' || path.startsWith('/api/sync/messages/');
+}
+
+function requestURL(input) {
+    try {
+        if (typeof input === 'string' || input instanceof URL)
+            return new URL(input, location.href);
+        if (input && typeof input.url === 'string')
+            return new URL(input.url, location.href);
+    } catch {
+        /* not a URL this wrapper can scope */
+    }
+    return null;
+}
+
+function requestHeaders(input, init) {
+    if (init && init.headers) return new Headers(init.headers);
+    if (typeof Request !== 'undefined' && input instanceof Request)
+        return new Headers(input.headers);
+    return new Headers();
+}
+
+// installAccessFetch wraps fetch once so same-origin protected API calls carry
+// the in-memory bearer, and a rejected token can trigger one unlock overlay.
+// It never replays the request that failed.
+export function installAccessFetch() {
+    const baseFetch = globalThis.fetch;
+    if (!baseFetch || baseFetch[WRAPPED_FETCH]) return;
+    const wrapped = async (input, init) => {
+        const url = requestURL(input);
+        const token = accessToken;
+        if (!url || !token || url.origin !== location.origin)
+            return baseFetch(input, init);
+        if (
+            !url.pathname.startsWith('/api/') ||
+            url.pathname.startsWith('/api/auth/') ||
+            isSyncMessagePath(url.pathname)
+        )
+            return baseFetch(input, init);
+        const headers = requestHeaders(input, init);
+        // A caller-supplied Authorization is the caller's business: keep it,
+        // and never treat its failure as this module's token being rejected.
+        if (headers.has('Authorization')) return baseFetch(input, init);
+        headers.set('Authorization', `Bearer ${token}`);
+        const response = await baseFetch(
+            input,
+            init ? { ...init, headers } : { headers },
+        );
+        if (
+            (response.status === 401 || response.status === 403) &&
+            accessToken === token
+        ) {
+            rejectToken(token);
+            requestReauth();
+        }
+        return response;
+    };
+    wrapped[WRAPPED_FETCH] = true;
+    globalThis.fetch = wrapped;
+}
+
+// requestReauth coalesces every rejected request into one overlay, then reloads
+// once after a successful sign-in.
+function requestReauth() {
+    if (reauthInFlight) return reauthInFlight;
+    reauthInFlight = (async () => {
+        try {
+            const result = await showUnlockPrompt('v2');
+            if (result.enabled) reloadPage();
+        } catch {
+            /* the overlay reports its own failure */
+        } finally {
+            reauthInFlight = null;
+        }
+    })();
+    return reauthInFlight;
+}
+
+async function discoverAccessStatus() {
+    const res = await fetch('/api/auth/status', { cache: 'no-store' });
+    if (!res.ok) throw new Error('Unable to check Phi access protection');
+    let payload;
+    try {
+        payload = await res.json();
+    } catch {
+        throw invalidStatusError();
+    }
+    return parseAccessStatus(payload);
+}
+
+function showUnlockPrompt(protocol) {
     return new Promise((resolve) => {
         const overlay = document.createElement('div');
         overlay.className = 'access-auth-overlay';
@@ -326,6 +658,14 @@ function showUnlockPrompt() {
                 ticker = requestAnimationFrame(tick);
             });
             try {
+                if (protocol === 'v2') {
+                    const token = await v2Login(input.value);
+                    adoptToken(token, { persist: true });
+                    input.value = '';
+                    overlay.remove();
+                    resolve({ enabled: true });
+                    return;
+                }
                 const status = await getStatus();
                 if (!status.enabled) {
                     overlay.remove();
@@ -365,6 +705,7 @@ function showUnlockPrompt() {
             } catch (err) {
                 error.textContent =
                     err instanceof Error ? err.message : 'Unable to unlock Phi';
+                input.select();
             } finally {
                 cancelAnimationFrame(ticker);
                 submit.disabled = false;
@@ -379,17 +720,54 @@ function showUnlockPrompt() {
 }
 
 // Called before App.init() so the normal UI never starts fetching protected
-// data until either the session cookie or remembered derived credential works.
+// data until either the bearer, the session cookie, or a remembered derived
+// credential works. The selection is fixed for the rest of the page load: a
+// v2 failure never falls back to v1.
 export async function bootstrapAccessAuth() {
-    const status = await getStatus();
-    if (!status.enabled) return { enabled: false };
-    if (status.authenticated === true) return { enabled: true };
+    installAccessFetch();
+    const epoch = stateEpoch;
+    const status = await discoverAccessStatus();
+    if (epoch !== stateEpoch) return { enabled: accessEnabled };
 
-    const verifier = savedVerifier(status);
-    if (verifier && (await login(status, verifier)).ok) {
+    const protocol = preferredProtocol(status.protocols);
+    accessEnabled = status.enabled;
+    if (!status.enabled) {
+        selectedProtocol = protocol;
+        return { enabled: false };
+    }
+
+    if (protocol === 'v2') {
+        const stored = loadBearer();
+        const token = accessToken || stored;
+        if (token) {
+            const verdict = await checkV2Token(token);
+            if (epoch !== stateEpoch) return { enabled: accessEnabled };
+            if (verdict === 'valid') {
+                adoptToken(token, { persist: stored === token });
+                return { enabled: true };
+            }
+            rejectToken(token);
+            // No cookie fallback: an explicit v2 credential decides alone.
+            return showUnlockPrompt('v2');
+        }
+    }
+
+    if (status.authenticated) {
+        selectedProtocol = 'v1';
         return { enabled: true };
     }
-    return showUnlockPrompt();
+
+    // A saved v1 verifier is only usable when the status still carries v1 KDF
+    // metadata; a v2-only status must not be rejected by those bounds.
+    if (hasV1Metadata(status)) {
+        const verifier = savedVerifier(status.raw);
+        if (verifier && (await login(status.raw, verifier)).ok) {
+            if (epoch !== stateEpoch) return { enabled: accessEnabled };
+            selectedProtocol = 'v1';
+            return { enabled: true };
+        }
+    }
+    return showUnlockPrompt(protocol);
 }
 
 async function createPasswordRecord(
@@ -434,6 +812,7 @@ async function createPasswordRecord(
 // Called from the existing Config modal. The returned password record is the
 // only thing written to config.json; the raw password is discarded immediately.
 export async function setAccessPassword(password) {
+    if (selectedProtocol === 'v2') return saveV2Password(password);
     const { passwordHash, status, verifier } =
         await createPasswordRecord(password);
     const res = await fetch('/api/auth/password', {
@@ -448,6 +827,7 @@ export async function setAccessPassword(password) {
 }
 
 export async function clearAccessPassword() {
+    if (selectedProtocol === 'v2') return clearV2Password();
     const res = await fetch('/api/auth/password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -473,4 +853,29 @@ export const __test__ = {
     freshStatus,
     nativeDerive,
     resetNativeDerive,
+    parseAccessStatus,
+    parseProtocols,
+    resetAccessState,
+    setReload,
+    getAccessState,
 };
+
+// resetAccessState restores the module to its pre-bootstrap state. Tests call
+// it between cases; nothing in the app calls it.
+function resetAccessState() {
+    selectedProtocol = null;
+    accessEnabled = false;
+    accessToken = null;
+    persistedToken = null;
+    stateEpoch++;
+    reauthInFlight = null;
+    reloadPage = () => location.reload();
+}
+
+function setReload(fn) {
+    reloadPage = fn;
+}
+
+function getAccessState() {
+    return { selectedProtocol, accessEnabled, accessToken, persistedToken };
+}
