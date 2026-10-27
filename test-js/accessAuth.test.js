@@ -348,10 +348,17 @@ describe('unlock overlay slow-derive feedback', () => {
             return { ...STATUS, challenge: 'challenge-new' };
         });
         // Below the refresh threshold the fetch is skipped entirely.
-        expect(await __test__.freshStatus(stale, 80_000)).toBe(stale);
+        expect(
+            await __test__.freshStatus(stale, performance.now() - 80_000),
+        ).toBe(stale);
         expect(calls).toBe(0);
         expect(
-            (await __test__.freshStatus(stale, 4 * 60 * 1000)).challenge,
+            (
+                await __test__.freshStatus(
+                    stale,
+                    performance.now() - 4 * 60 * 1000,
+                )
+            ).challenge,
         ).toBe('challenge-new');
         expect(calls).toBe(1);
     });
@@ -370,10 +377,23 @@ describe('unlock overlay slow-derive feedback', () => {
         );
         vi.useFakeTimers();
         try {
-            // Still inside the five-minute lifetime: the fallback is valid.
-            const pending = __test__.freshStatus(stale, 4.5 * 60 * 1000);
+            // Still inside the five-minute lifetime after the timeout: the
+            // fallback is valid.
+            const pending = __test__.freshStatus(
+                stale,
+                performance.now() - 4.5 * 60 * 1000,
+            );
             await vi.advanceTimersByTimeAsync(15_000);
             await expect(pending).resolves.toBe(stale);
+
+            // 290s of derivation plus the 15s timeout crosses the five-minute
+            // lifetime, so the fallback must not be handed back for a POST.
+            const expired = __test__.freshStatus(
+                stale,
+                performance.now() - 290_000,
+            );
+            await vi.advanceTimersByTimeAsync(15_000);
+            await expect(expired).resolves.toBeNull();
         } finally {
             vi.useRealTimers();
         }
@@ -385,7 +405,7 @@ describe('unlock overlay slow-derive feedback', () => {
         // Past the server's accessChallengeTTL there is no challenge left to
         // post: a null result stops the caller before login sends anything.
         await expect(
-            __test__.freshStatus(stale, 5 * 60 * 1000),
+            __test__.freshStatus(stale, performance.now() - 5 * 60 * 1000),
         ).resolves.toBeNull();
     });
 

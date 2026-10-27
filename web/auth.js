@@ -234,9 +234,10 @@ async function login(status, verifier) {
 // Replaces a challenge that the derivation may have outlived. The fetch is
 // bounded. On failure the original status is still usable unless it is old
 // enough to have expired, in which case there is no challenge to post and
-// the caller must not send the login at all.
-async function freshStatus(fallback, elapsedMs) {
-    if (elapsedMs < challengeRefreshAfterMs) return fallback;
+// the caller must not send the login at all. Age is measured at the moment of
+// the decision, so time spent refreshing counts against the lifetime too.
+async function freshStatus(fallback, startedAt) {
+    if (performance.now() - startedAt < challengeRefreshAfterMs) return fallback;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), statusFetchTimeoutMs);
     try {
@@ -251,7 +252,9 @@ async function freshStatus(fallback, elapsedMs) {
     } finally {
         clearTimeout(timer);
     }
-    return elapsedMs < challengeLifetimeMs ? fallback : null;
+    return performance.now() - startedAt < challengeLifetimeMs
+        ? fallback
+        : null;
 }
 
 function showUnlockPrompt() {
@@ -330,10 +333,7 @@ function showUnlockPrompt() {
                     return;
                 }
                 const verifier = await deriveVerifier(input.value, status);
-                const challenge = await freshStatus(
-                    status,
-                    performance.now() - started,
-                );
+                const challenge = await freshStatus(status, started);
                 if (!challenge) {
                     // The derivation outlived the challenge and the refresh
                     // failed. Posting it would count as a failed attempt and
