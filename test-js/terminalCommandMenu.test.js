@@ -131,7 +131,7 @@ function setViewportWidth(width) {
 function presetLabels(tm) {
     return Array.from(
         tm.presetsContainer.querySelectorAll(':scope > .preset-btn'),
-    ).map((b) => b.innerText);
+    ).map((b) => b.getAttribute('aria-label') || b.innerText);
 }
 
 function menuHeaders() {

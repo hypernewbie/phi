@@ -3193,7 +3193,7 @@ body.has-terminal-bg
 /* PRESETS PANEL */
 .presets-container {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     overflow-x: auto;
     align-items: center;
     gap: 6px;
@@ -3207,14 +3207,6 @@ body.has-terminal-bg
 
 .presets-container::-webkit-scrollbar {
     display: none; /* Hide scrollbar Chrome/Safari/Opera */
-}
-
-/* Zero-height full-width item that pushes the model/thinking pickers onto
-   their own line, so a long chip row cannot hide them. Mobile keeps its
-   single swipeable line and hides this item. */
-.presets-break {
-    flex-basis: 100%;
-    height: 0;
 }
 
 .preset-btn {
@@ -3231,6 +3223,9 @@ body.has-terminal-bg
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 160px;
+    /* The row is one scrollable line: a chip keeps its width and pushes
+       the row into overflow instead of shrinking into an ellipsis. */
+    flex-shrink: 0;
 }
 
 .presets-container > .pi-rpc-model-trigger,
@@ -3315,6 +3310,22 @@ body.has-terminal-bg
 .preset-btn:hover {
     color: var(--text-primary);
     background-color: var(--bg-border);
+}
+
+/* Icon-only preset: the label lives in the tooltip. */
+.preset-btn.btn-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 7px;
+    flex-shrink: 0;
+    color: var(--text-primary);
+}
+
+.preset-btn.btn-icon .icon {
+    width: 15px;
+    height: 15px;
+    display: block;
 }
 
 .preset-btn:disabled,
@@ -5304,8 +5315,8 @@ html[data-phi-config-page] .settings-modal {
         display: none; /* Hide Chrome/Safari scrollbar */
     }
 
-    .presets-break {
-        display: none;
+    .preset-btn.btn-icon {
+        padding: 0 8px !important;
     }
 
     .preset-btn {

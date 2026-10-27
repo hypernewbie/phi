@@ -274,12 +274,12 @@ describe('Pi RPC TabManager boundaries', () => {
                 (button) => button.textContent,
             ),
         ).toEqual([
-            'Model: pi-4 ▾',
-            'Thinking: high ▾',
             'Compact',
             'Clear',
             'Show thinking',
             'Cmds ▾',
+            'Model: pi-4 ▾',
+            'Thinking: high ▾',
         ]);
         expect(row.querySelector('.presets-divider')).not.toBeNull();
         expect(row.querySelector('.mobile-nav-btn')).toBeNull();
@@ -319,12 +319,12 @@ describe('Pi RPC TabManager boundaries', () => {
                 (button) => button.textContent,
             ),
         ).toEqual([
-            'Model: — ▾',
-            'Thinking: — ▾',
             'Compact',
             'Clear',
             'Show thinking',
             'Cmds ▾',
+            'Model: — ▾',
+            'Thinking: — ▾',
         ]);
         expect(row.querySelector('.pi-rpc-model-trigger').title).toBe(
             'Change the model for this session',

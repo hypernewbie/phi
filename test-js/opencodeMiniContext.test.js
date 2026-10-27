@@ -159,7 +159,7 @@ describe('OpenCode Mini is explicit and per launch', () => {
         tm.renderPresets('opencode');
         const names = [
             ...tm.presetsContainer.querySelectorAll('.preset-btn'),
-        ].map((p) => p.innerText);
+        ].map((p) => p.getAttribute('aria-label') || p.innerText);
         expect(names).toContain('menu');
         expect(names).not.toContain('/models');
         expect(coders.getCoder('opencode').opencode_mode).toBe('tui');
