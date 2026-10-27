@@ -38,6 +38,7 @@ const embeddedDir = path.join(electronRoot, 'embedded');
  *  surface). */
 const WEB_JS_MODULES = [
   'app.js',
+  'model-request.js',
   'terminal.js',
   'terminal-state.js',
   'terminal-history.js',
