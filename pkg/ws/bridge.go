@@ -341,6 +341,13 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 		Send:   make(chan []byte, 65536),
 		Logger: logger,
 	}
+	// Refuse a socket authenticated at a generation a password change already
+	// retired between the middleware decision and this upgrade.
+	if fence, fenced := AuthFenceFrom(r.Context()); fenced && !hub.AdmitAuth(conn, fence) {
+		logger.Warn("ws upgrade rejected: stale access generation")
+		_ = conn.Close()
+		return
+	}
 
 	manager.RegisterWS(inst.ID, fmt.Sprintf("%p", client))
 	client.NativeState = r.URL.Query().Get("state") == "ghostty-ready-v1"

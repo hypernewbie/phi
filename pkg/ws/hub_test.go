@@ -74,14 +74,34 @@ func TestHub_RegisterAndUnregister(t *testing.T) {
 	}
 }
 
-func TestHubCloseAllClientsPreservesPaneState(t *testing.T) {
+func TestHubRotateAuthClosesOnlyStaleSockets(t *testing.T) {
 	h := NewHub(0)
 	client := &Client{Send: make(chan []byte, 1)}
 	h.Register("pane", client)
 
-	// A nil Ws is valid for unit-created clients; the important contract is
-	// that forced live-connection cleanup does not discard pane/ring state.
-	h.CloseAllClients()
+	h.RotateAuth(1)
+	stale := &stubAuthSocket{}
+	if !h.AdmitAuth(stale, AuthFence{Generation: 1}) {
+		t.Fatal("current generation was rejected")
+	}
+
+	h.RotateAuth(2)
+	if !stale.closed {
+		t.Fatal("stale socket survived the rotation")
+	}
+	current := &stubAuthSocket{}
+	if !h.AdmitAuth(current, AuthFence{Generation: 2}) {
+		t.Fatal("new generation was rejected")
+	}
+	h.RotateAuth(2)
+	if current.closed {
+		t.Fatal("rotation closed a socket admitted at the current generation")
+	}
+	if h.AdmitAuth(&stubAuthSocket{}, AuthFence{Generation: 1}) {
+		t.Fatal("stale generation was admitted after the rotation")
+	}
+
+	// Fencing closes sockets, it does not discard pane state.
 	ph, gerr := h.GetOrCreatePaneHub("pane")
 	if gerr != nil {
 		t.Fatal(gerr)
@@ -90,7 +110,7 @@ func TestHubCloseAllClientsPreservesPaneState(t *testing.T) {
 	registered := ph.clients[client]
 	ph.mu.Unlock()
 	if !registered {
-		t.Fatal("CloseAllClients removed pane state instead of only closing sockets")
+		t.Fatal("rotation removed pane state instead of only closing sockets")
 	}
 }
 
