@@ -1,0 +1,22 @@
+.status {
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+    padding-inline-start: var(--space-2);
+    border-inline-start: 2px solid var(--text-primary);
+}
+
+.loading {
+    border-color: var(--accent-bright);
+}
+
+.success {
+    border-color: var(--success);
+}
+
+.warning {
+    border-color: var(--accent-bright);
+}
+
+.error {
+    border-color: var(--error);
+}

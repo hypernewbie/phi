@@ -92,7 +92,9 @@ jobs:
           cache: 'pnpm'
 
       - name: Install Dependencies
-        run: pnpm install --frozen-lockfile --filter phi-dev
+        run: >-
+          pnpm install --frozen-lockfile
+          --filter phi-dev --filter @phi/core --filter @phi/web-react
 
       - name: Check vendored assets
         run: pnpm run check:vendors
@@ -178,7 +180,9 @@ jobs:
           cache: 'pnpm'
 
       - name: Install Dependencies
-        run: pnpm install --frozen-lockfile --filter phi-dev
+        run: >-
+          pnpm install --frozen-lockfile
+          --filter phi-dev --filter @phi/core --filter @phi/web-react
 
       - name: Run JS Tests
         run: pnpm test
