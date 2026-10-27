@@ -111,6 +111,37 @@ describe('presets row', () => {
         expect(button.innerText).toBe('toString');
     });
 
+    it('keeps the legacy Models button state for shells, Agy, and restored unknown tabs', () => {
+        const tm = makeTm();
+        for (const [coder, disabled, title] of [
+            ['bash', false, 'Select the model for this session'],
+            ['pwsh', false, 'Select the model for this session'],
+            ['agy', true, 'Model selection not supported for Antigravity'],
+            ['old-coder', false, 'Select the model for this session'],
+        ]) {
+            tm.activePaneId = 'pane';
+            tm.tabs.set('pane', { coder });
+            tm.renderPresets(coder);
+            // Cmds, Models and Keys share the class; Models is the second
+            // one and the only one carrying this title.
+            const models = [
+                ...tm.presetsContainer.querySelectorAll('.model-trigger-btn'),
+            ].find((button) => button.title === title);
+            expect(models, coder).toBeTruthy();
+            expect(models.disabled, coder).toBe(disabled);
+        }
+    });
+
+    it('keeps the Ctrl+Shift+X handler itself wired to sendStagedInput', () => {
+        const start = terminalJsSrc.indexOf("(e.key === 'X' || e.key === 'x')");
+        expect(start).toBeGreaterThan(-1);
+        const handler = terminalJsSrc.slice(
+            start,
+            terminalJsSrc.indexOf('});', start),
+        );
+        expect(handler).toContain('this.sendStagedInput();');
+    });
+
     it('keeps the Ctrl+Shift+X binding wired to sendStagedInput', () => {
         expect(terminalJsSrc).toContain('this.sendStagedInput();');
         expect(terminalJsSrc).toMatch(
