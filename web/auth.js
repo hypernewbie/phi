@@ -212,6 +212,13 @@ function savedVerifier(status) {
     }
 }
 
+// The challenge is single-use and expires five minutes after it is issued
+// (accessChallengeTTL in auth.go). Re-deriving on a slow device can outlast
+// that window, so a status older than this threshold is refreshed.
+const challengeRefreshAfterMs = 4 * 60 * 1000;
+const challengeLifetimeMs = 5 * 60 * 1000;
+const statusFetchTimeoutMs = 15000;
+
 async function login(status, verifier) {
     const proof = bytesToBase64URL(
         hmac(sha256, verifier, new TextEncoder().encode(status.challenge)),
@@ -221,7 +228,33 @@ async function login(status, verifier) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ challenge: status.challenge, proof }),
     });
-    return res.ok;
+    return { ok: res.ok, status: res.status };
+}
+
+// Replaces a challenge that the derivation may have outlived. The fetch is
+// bounded. On failure the original status is still usable unless it is old
+// enough to have expired, in which case there is no challenge to post and
+// the caller must not send the login at all. Age is measured at the moment of
+// the decision, so time spent refreshing counts against the lifetime too.
+async function freshStatus(fallback, startedAt) {
+    if (performance.now() - startedAt < challengeRefreshAfterMs) return fallback;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), statusFetchTimeoutMs);
+    try {
+        const res = await fetch('/api/auth/status', {
+            cache: 'no-store',
+            signal: controller.signal,
+        });
+        const status = await res.json();
+        if (validStatus(status)) return status;
+    } catch {
+        // Fall through to the expiry check below.
+    } finally {
+        clearTimeout(timer);
+    }
+    return performance.now() - startedAt < challengeLifetimeMs
+        ? fallback
+        : null;
 }
 
 function showUnlockPrompt() {
@@ -273,13 +306,25 @@ function showUnlockPrompt() {
             event.preventDefault();
             error.textContent = '';
             submit.disabled = true;
-            // The derivation can genuinely take tens of seconds on the
-            // pure-JS path (plain-HTTP LAN origins, weak devices, first
-            // unlock per device) - so the button must read as busy, not
-            // dead. (WASM was measured slower than noble here: hash-wasm's
-            // pbkdf2 loops in JS around per-iteration WASM boundary
-            // crossings - 2.7x noble at c=600000.)
+            // The pure-JS derivation runs for a minute or more on phones:
+            // WebKit disables the JIT for plain-HTTP origins, so 600k PBKDF2
+            // iterations run at interpreter speed. Tick the label so the
+            // wait reads as slow instead of dead.
+            // performance.now(): monotonic, so a clock correction during a
+            // long derivation cannot make an old challenge look young.
+            const started = performance.now();
             submit.textContent = 'Signing in…';
+            // requestAnimationFrame, not setInterval: Chromium's
+            // scheduler.yield keeps rendering alive but starves timers.
+            let shownSeconds = 0;
+            let ticker = requestAnimationFrame(function tick() {
+                const seconds = Math.round((performance.now() - started) / 1000);
+                if (seconds !== shownSeconds) {
+                    shownSeconds = seconds;
+                    submit.textContent = `Signing in… ${seconds}s`;
+                }
+                ticker = requestAnimationFrame(tick);
+            });
             try {
                 const status = await getStatus();
                 if (!status.enabled) {
@@ -288,7 +333,27 @@ function showUnlockPrompt() {
                     return;
                 }
                 const verifier = await deriveVerifier(input.value, status);
-                if (!(await login(status, verifier))) {
+                const challenge = await freshStatus(status, started);
+                if (!challenge) {
+                    // The derivation outlived the challenge and the refresh
+                    // failed. Posting it would count as a failed attempt and
+                    // report a correct password as wrong.
+                    error.textContent = 'Sign-in took too long. Try again.';
+                    input.select();
+                    return;
+                }
+                const result = await login(challenge, verifier);
+                if (result.status === 429) {
+                    // Rate limited, not a wrong password: the server refuses
+                    // every attempt until its backoff ends, so saying "Wrong
+                    // password" would send the user into a retry loop that
+                    // cannot work.
+                    error.textContent =
+                        'Too many attempts. Wait about a minute, then try again.';
+                    input.select();
+                    return;
+                }
+                if (!result.ok) {
                     error.textContent = 'Wrong password';
                     input.select();
                     return;
@@ -301,6 +366,7 @@ function showUnlockPrompt() {
                 error.textContent =
                     err instanceof Error ? err.message : 'Unable to unlock Phi';
             } finally {
+                cancelAnimationFrame(ticker);
                 submit.disabled = false;
                 submit.textContent = 'Sign in';
             }
@@ -320,7 +386,7 @@ export async function bootstrapAccessAuth() {
     if (status.authenticated === true) return { enabled: true };
 
     const verifier = savedVerifier(status);
-    if (verifier && (await login(status, verifier))) {
+    if (verifier && (await login(status, verifier)).ok) {
         return { enabled: true };
     }
     return showUnlockPrompt();
@@ -404,6 +470,7 @@ export const __test__ = {
     createPasswordRecord,
     storeCredential,
     deriveVerifier,
+    freshStatus,
     nativeDerive,
     resetNativeDerive,
 };

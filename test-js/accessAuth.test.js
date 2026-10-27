@@ -198,6 +198,23 @@ describe('deriveVerifier native acceleration', () => {
 });
 
 describe('unlock overlay slow-derive feedback', () => {
+    // The post-submit path crosses a derive plus several fetch/UI hops, so
+    // poll for the settled label instead of assuming a tick count.
+    const settled = async (overlay) => {
+        const deadline = Date.now() + 2000;
+        for (;;) {
+            const label = overlay.querySelector(
+                'button[type="submit"]',
+            ).textContent;
+            if (label === 'Sign in') return;
+            if (Date.now() > deadline)
+                throw new Error(
+                    `button never restored (last: ${JSON.stringify(label)})`,
+                );
+            await new Promise((r) => setTimeout(r, 10));
+        }
+    };
+
     const submitOverlay = async () => {
         let resolveLogin;
         const loginGate = new Promise((r) => {
@@ -231,7 +248,9 @@ describe('unlock overlay slow-derive feedback', () => {
         });
         try {
             const state = await submitOverlay();
-            expect(state.button.textContent).toBe('Signing in…');
+            // The label gains an elapsed-seconds suffix once the first tick
+            // fires, so assert the busy prefix rather than the exact string.
+            expect(state.button.textContent).toMatch(/^Signing in…/);
             expect(state.button.disabled).toBe(true);
             // The subtitle never changes - no crypto narration in the UI.
             expect(state.subtitle.textContent).toBe(
@@ -243,6 +262,206 @@ describe('unlock overlay slow-derive feedback', () => {
         } finally {
             vi.unstubAllGlobals();
             __test__.resetNativeDerive();
+        }
+    });
+
+    it('reports a rate-limited attempt as rate limiting, not a wrong password', async () => {
+        __test__.resetNativeDerive();
+        vi.stubGlobal('crypto', webcrypto);
+        try {
+            mockFetch((url) => {
+                if (url === '/api/auth/status')
+                    return { ...STATUS, iterations: 1 };
+                if (url === '/api/auth/login')
+                    return { ok: false, status: 429 };
+                throw new Error();
+            });
+            const boot = bootstrapAccessAuth();
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            const overlay = document.querySelector('.access-auth-overlay');
+            overlay.querySelector('input[type="password"]').value =
+                KAT_PASSWORD;
+            overlay
+                .querySelector('form')
+                .dispatchEvent(new Event('submit', { cancelable: true }));
+            await settled(overlay);
+            expect(
+                overlay.querySelector('.access-auth-error').textContent,
+            ).toBe('Too many attempts. Wait about a minute, then try again.');
+            overlay.remove();
+            void boot;
+        } finally {
+            vi.unstubAllGlobals();
+            __test__.resetNativeDerive();
+            document.querySelector('.access-auth-overlay')?.remove();
+        }
+    });
+
+    it('reuses the bootstrap challenge when the derivation was fast', async () => {
+        __test__.resetNativeDerive();
+        vi.stubGlobal('crypto', webcrypto);
+        try {
+            let statusCalls = 0;
+            let posted;
+            mockFetch((url, options) => {
+                if (url === '/api/auth/status') {
+                    statusCalls += 1;
+                    return {
+                        ...STATUS,
+                        iterations: 1,
+                        challenge: `challenge-${statusCalls}`,
+                    };
+                }
+                if (url === '/api/auth/login') {
+                    posted = JSON.parse(options.body);
+                    return { ok: true };
+                }
+                throw new Error();
+            });
+            const boot = bootstrapAccessAuth();
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            const overlay = document.querySelector('.access-auth-overlay');
+            overlay.querySelector('input[type="password"]').value =
+                KAT_PASSWORD;
+            overlay
+                .querySelector('form')
+                .dispatchEvent(new Event('submit', { cancelable: true }));
+            await expect(boot).resolves.toEqual({ enabled: true });
+            // challenge-1 came from the bootstrap, challenge-2 was fetched
+            // right before the derivation. A derivation this fast cannot
+            // outlive the five-minute TTL, so no third call is made.
+            expect(statusCalls).toBe(2);
+            expect(posted.challenge).toBe('challenge-2');
+        } finally {
+            vi.unstubAllGlobals();
+            __test__.resetNativeDerive();
+            document.querySelector('.access-auth-overlay')?.remove();
+        }
+    });
+
+    it('refreshes the challenge only after a long derivation', async () => {
+        const stale = { ...STATUS, challenge: 'challenge-old' };
+        let calls = 0;
+        mockFetch((url) => {
+            expect(url).toBe('/api/auth/status');
+            calls += 1;
+            return { ...STATUS, challenge: 'challenge-new' };
+        });
+        // Below the refresh threshold the fetch is skipped entirely.
+        expect(
+            await __test__.freshStatus(stale, performance.now() - 80_000),
+        ).toBe(stale);
+        expect(calls).toBe(0);
+        expect(
+            (
+                await __test__.freshStatus(
+                    stale,
+                    performance.now() - 4 * 60 * 1000,
+                )
+            ).challenge,
+        ).toBe('challenge-new');
+        expect(calls).toBe(1);
+    });
+
+    it('falls back to the original challenge when the refresh stalls', async () => {
+        const stale = { ...STATUS, challenge: 'challenge-old' };
+        // Honors the abort signal the way a real fetch does, so the test
+        // proves the deadline fires rather than just that the mock is slow.
+        mockFetch(
+            (_url, options) =>
+                new Promise((_, reject) =>
+                    options.signal.addEventListener('abort', () =>
+                        reject(new Error('aborted')),
+                    ),
+                ),
+        );
+        vi.useFakeTimers();
+        try {
+            // Still inside the five-minute lifetime after the timeout: the
+            // fallback is valid.
+            const pending = __test__.freshStatus(
+                stale,
+                performance.now() - 4.5 * 60 * 1000,
+            );
+            await vi.advanceTimersByTimeAsync(15_000);
+            await expect(pending).resolves.toBe(stale);
+
+            // 290s of derivation plus the 15s timeout crosses the five-minute
+            // lifetime, so the fallback must not be handed back for a POST.
+            const expired = __test__.freshStatus(
+                stale,
+                performance.now() - 290_000,
+            );
+            await vi.advanceTimersByTimeAsync(15_000);
+            await expect(expired).resolves.toBeNull();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('refuses to post a challenge the derivation outlived', async () => {
+        const stale = { ...STATUS, challenge: 'challenge-old' };
+        mockFetch(() => Promise.reject(new Error('offline')));
+        // Past the server's accessChallengeTTL there is no challenge left to
+        // post: a null result stops the caller before login sends anything.
+        await expect(
+            __test__.freshStatus(stale, performance.now() - 5 * 60 * 1000),
+        ).resolves.toBeNull();
+    });
+
+    it('ticks the busy label by whole seconds and stops when settled', async () => {
+        __test__.resetNativeDerive();
+        // Noble path: the derivation is then pure microtasks, so settlement
+        // depends only on the controlled promises and timers below.
+        vi.stubGlobal('crypto', {
+            getRandomValues: webcrypto.getRandomValues,
+        });
+        vi.useFakeTimers({
+            toFake: [
+                'setTimeout',
+                'clearTimeout',
+                'Date',
+                'performance',
+                'requestAnimationFrame',
+                'cancelAnimationFrame',
+            ],
+        });
+        try {
+            let rejectLogin;
+            const gate = new Promise((r) => {
+                rejectLogin = r;
+            });
+            mockFetch((url) => {
+                if (url === '/api/auth/status')
+                    return { ...STATUS, iterations: 1 };
+                if (url === '/api/auth/login') return gate;
+                throw new Error();
+            });
+            const boot = bootstrapAccessAuth();
+            await vi.advanceTimersByTimeAsync(0);
+            const overlay = document.querySelector('.access-auth-overlay');
+            const button = overlay.querySelector('button[type="submit"]');
+            overlay.querySelector('input[type="password"]').value =
+                KAT_PASSWORD;
+            overlay
+                .querySelector('form')
+                .dispatchEvent(new Event('submit', { cancelable: true }));
+            await vi.advanceTimersByTimeAsync(0);
+            expect(button.textContent).toBe('Signing in…');
+            await vi.advanceTimersByTimeAsync(2100);
+            expect(button.textContent).toBe('Signing in… 2s');
+            rejectLogin({ ok: false });
+            await vi.advanceTimersByTimeAsync(0);
+            expect(button.textContent).toBe('Sign in');
+            await vi.advanceTimersByTimeAsync(3000);
+            // The ticker is cancelled on settle: no stray label writes left.
+            expect(button.textContent).toBe('Sign in');
+            void boot;
+        } finally {
+            vi.useRealTimers();
+            vi.unstubAllGlobals();
+            __test__.resetNativeDerive();
+            document.querySelector('.access-auth-overlay')?.remove();
         }
     });
 
@@ -268,9 +487,11 @@ describe('unlock overlay slow-derive feedback', () => {
                 KAT_PASSWORD;
             form.dispatchEvent(new Event('submit', { cancelable: true }));
             await new Promise((resolve) => setTimeout(resolve, 0));
+            // A tick fires on the next frame, so the label may already carry
+            // an elapsed-seconds suffix here.
             expect(
                 overlay.querySelector('button[type="submit"]').textContent,
-            ).toBe('Signing in…');
+            ).toMatch(/^Signing in…/);
             rejectLogin({ ok: false });
             // The post-reject path crosses a real webcrypto derive plus
             // fetch/UI hops; a single fixed tick flakes under CI load.
