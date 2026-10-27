@@ -66,6 +66,30 @@ func TestRegistryPresets(t *testing.T) {
 	}
 }
 
+// /compact is a real agy command now. The row is full, so /help gives up
+// its slot; both facts are pinned here rather than left to the defaults.
+func TestAgyCompactReplacesHelp(t *testing.T) {
+	agy, ok := DefaultRegistry()["agy"]
+	if !ok {
+		t.Fatal("agy coder missing from default registry")
+	}
+	var compact, help bool
+	for _, p := range agy.Presets {
+		switch p.Name {
+		case "/compact":
+			compact = p.Value == "/compact\r"
+		case "/help":
+			help = true
+		}
+	}
+	if !compact {
+		t.Error("agy should offer /compact")
+	}
+	if help {
+		t.Error("agy should not offer /help; /compact needs the row slot")
+	}
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Manager
 // ─────────────────────────────────────────────────────────────────────────
