@@ -506,6 +506,11 @@ export class DesktopHost {
    *  decrypted file). Cleared when the corresponding origin is removed
    *  or the stored credential fails a server-side rotation check. */
   private readonly storedCredentials = new Map<string, StoredCredential>();
+  /** Tokens that already authorized a native request, so they may be
+   *  installed into a renderer. A restored token waits for validation:
+   *  a transient status failure keeps it for native retries but must not
+   *  authorize body bootstrap. */
+  private readonly bodyTokens = new Map<string, string>();
   /** Last CPU+activity+workspace push sent to the main view, for change-only
    *  emission. Null until the first push. */
   lastHeaderState: HeaderState | null = null;
@@ -2166,18 +2171,22 @@ export class DesktopHost {
     const canonical = toCanonicalAuthOrigin(origin) ?? origin;
     const token = accessAuth.getToken(canonical);
     if (!token) return;
+    // A successful native unlock authorized this token: body install may
+    // use it now.
+    this.bodyTokens.set(canonical, token);
     const existing = this.storedCredentials.get(canonical);
     if (existing?.version === 'v2' && existing.jwt === token) return;
     this.storedCredentials.set(canonical, { version: 'v2', jwt: token });
     this.saveStoredCredentials();
   }
 
-  /** Installs the host bearer into an already-loaded view whose main frame
-   *  is the exact credential origin. Body memory is discarded by every
-   *  load, so startup restoration and retained-profile recovery both use
-   *  this. Returns without side effects for the embedded shell, a missing
-   *  view, or a view that has not finished loading. */
-  private reinstallBodyToken(
+  /** Installs the host bearer into one loaded frame whose main frame is the
+   *  exact credential origin. Body memory is discarded by every load, so
+   *  startup restoration and retained-profile recovery both use this. The
+   *  token must have authorized a native request first; the embedded shell
+   *  (phi-app://app) and any other origin are refused. */
+  private installBodyToken(
+    contents: WebContents,
     origin: string,
     accessAuth: AccessAuth,
     generation: number,
@@ -2185,30 +2194,66 @@ export class DesktopHost {
     if (generation !== this.sessionGeneration) return;
     const canonical = toCanonicalAuthOrigin(origin) ?? origin;
     const token = accessAuth.getToken(canonical);
-    if (!token) return;
-    let view: WebContentsView | undefined;
-    for (const [key, candidate] of this.viewByOrigin) {
-      if ((toCanonicalAuthOrigin(key) ?? key) === canonical) {
-        view = candidate;
-        break;
-      }
-    }
-    if (!view?.webContents || view.webContents.isDestroyed()) return;
-    if (!this.loadedViews.has(view)) return;
+    if (!token || this.bodyTokens.get(canonical) !== token) return;
+    if (!contents || contents.isDestroyed()) return;
     let viewOrigin = '';
     try {
-      viewOrigin = new URL(view.webContents.getURL()).origin;
+      viewOrigin = new URL(contents.getURL()).origin;
     } catch {
       return;
     }
     if (viewOrigin !== canonical) return;
-    void view.webContents
+    void contents
       .executeJavaScript(bodyAuthTokenScript(token, canonical))
       .catch(() => {});
   }
 
-  /** Re-authenticates origins with cached credentials at startup. Called once
-   *  during `start()` after the view manager is ready and before the first
+  /** Installs the host bearer into a popout window once it has loaded.
+   *  A popout has no cookie to inherit, so without this a v2 popout would
+   *  render signed out. The exact-origin check inside `installBodyToken`
+   *  refuses the embedded shell and any other frame. */
+  private installPopoutToken(
+    contents: WebContents,
+    origin: string,
+    accessAuth: AccessAuth,
+    generation: number,
+    isCurrent: () => boolean,
+  ): void {
+    contents.on('did-finish-load', () => {
+      if (!isCurrent() || contents.isDestroyed()) return;
+      this.installBodyToken(
+        contents,
+        origin === EMBEDDED_ORIGIN ? this.activeServerOrigin() : origin,
+        accessAuth,
+        generation,
+      );
+    });
+  }
+
+  /** Reinstalls the host bearer into every loaded view for `origin` (two
+   *  profiles can share one canonical auth origin). */
+  private reinstallBodyToken(
+    origin: string,
+    accessAuth: AccessAuth,
+    generation: number,
+  ): void {
+    if (generation !== this.sessionGeneration) return;
+    const canonical = toCanonicalAuthOrigin(origin) ?? origin;
+    for (const [key, view] of this.viewByOrigin) {
+      if ((toCanonicalAuthOrigin(key) ?? key) !== canonical) continue;
+      if (!this.loadedViews.has(view)) continue;
+      this.installBodyToken(
+        view.webContents,
+        canonical,
+        accessAuth,
+        generation,
+      );
+    }
+  }
+
+  /** Iterates every saved profile at startup and re-authenticates
+   *  any that have a persisted credential. Called once during
+   *  `start()` after the view manager is ready and before the first
    *  `/api/config` poll. */
   async bootstrapStoredCredentials(
     accessAuth: AccessAuth,
@@ -2218,6 +2263,13 @@ export class DesktopHost {
     this.loadStoredCredentials();
     if (this.storedCredentials.size === 0) return;
     const origins = Array.from(this.storedCredentials.keys());
+    // Restore every bearer into native memory before any network work.
+    // Validation is a background confirmation; a slow or offline server
+    // must not leave a later profile without its credential when the user
+    // activates it. Body installation stays gated on validation.
+    for (const [origin, entry] of this.storedCredentials) {
+      if (entry.version === 'v2') accessAuth.installToken(origin, entry.jwt);
+    }
     // Re-authenticate the origins CONCURRENTLY, with a small concurrency
     // cap. Sequentially, every server cost a status round trip plus a
     // login round trip before the next one started, so a server late in
@@ -2283,9 +2335,14 @@ export class DesktopHost {
     const verdict = await accessAuth.checkToken(origin, jwt);
     if (generation !== this.sessionGeneration) return;
     if (verdict !== 'invalid') {
-      this.reinstallBodyToken(origin, accessAuth, generation);
+      if (verdict === 'valid') {
+        // The server accepted this token: it may now reach a renderer.
+        this.bodyTokens.set(origin, jwt);
+        this.reinstallBodyToken(origin, accessAuth, generation);
+      }
       return;
     }
+    this.bodyTokens.delete(origin);
     accessAuth.rejectToken(origin, jwt);
     const current = this.storedCredentials.get(origin);
     if (current?.version === 'v2' && current.jwt === jwt) {
@@ -3551,6 +3608,16 @@ export class DesktopHost {
                   child.once('ready-to-show', () => {
                     if (isCurrent() && !child.isDestroyed()) child.show();
                   });
+                  // A v2 popout has no cookie to inherit: install the same
+                  // host bearer the body view uses. The embedded shell is
+                  // refused by the exact-origin check.
+                  this.installPopoutToken(
+                    child.webContents,
+                    origin,
+                    accessAuth,
+                    generation,
+                    isCurrent,
+                  );
                   attachNavGuard(child.webContents);
                   child.webContents.setWindowOpenHandler(
                     ({ url: childUrl }) => {
@@ -3728,7 +3795,12 @@ export class DesktopHost {
           // A v2 bearer lives only in body memory, so every load needs it
           // again. The helper refuses the embedded shell and any frame that
           // is not the exact credential origin.
-          this.reinstallBodyToken(canonicalOrigin, accessAuth, generation);
+          this.installBodyToken(
+            view.webContents,
+            canonicalOrigin,
+            accessAuth,
+            generation,
+          );
           const activeProfileId = this.controller?.state().activeId ?? null;
           void this.recoverFromViewLocalStorage(
             view,
@@ -4436,15 +4508,22 @@ export class DesktopHost {
       // keeps its own sign-in until that transport is separately approved.
       if (pending.auth.getSelectedProtocol(pending.origin) === 'v2') {
         const token = pending.auth.getToken(pending.origin);
-        if (!token) {
-          return {
-            ok: false,
-            code: 'unavailable',
-            message: 'A new sign-in is required.',
-          };
-        }
         const canonical =
           toCanonicalAuthOrigin(pending.origin) ?? pending.origin;
+        // The load wait above can span a rail switch, a cancellation, or a
+        // session teardown. Reapply every foreground guard before the
+        // renderer mutation, not only after it.
+        if (
+          !token ||
+          this.bodyTokens.get(canonical) !== token ||
+          pending.abort.signal.aborted ||
+          (pendingUnlock !== null && pendingUnlock !== pending) ||
+          pending.epoch !== activeEpoch ||
+          pending.generation !== this.sessionGeneration ||
+          ctrl.state().activeId !== pending.profileId
+        ) {
+          return { ok: false, code: 'stale', message: 'Prompt expired.' };
+        }
         let viewOrigin = '';
         try {
           viewOrigin = new URL(view.webContents.getURL()).origin;
@@ -4473,6 +4552,8 @@ export class DesktopHost {
           };
         }
         if (
+          pending.abort.signal.aborted ||
+          pending.auth.getToken(canonical) !== token ||
           (pendingUnlock !== null && pendingUnlock !== pending) ||
           pending.epoch !== activeEpoch ||
           pending.generation !== this.sessionGeneration ||
@@ -4697,6 +4778,15 @@ export class DesktopHost {
         // header after the rail has switched to another profile.
         if (ctrl.state().activeId !== capture.profileId) return null;
         if (result.kind === 'ok') {
+          // A successful config request proves the bearer; a restored
+          // token that was still unvalidated may now reach the body once.
+          if (auth.getSelectedProtocol(origin) === 'v2') {
+            const token = auth.getToken(origin);
+            if (token && this.bodyTokens.get(origin) !== token) {
+              this.bodyTokens.set(origin, token);
+              this.reinstallBodyToken(origin, auth, capture.generation);
+            }
+          }
           if (
             pendingUnlock &&
             (pendingUnlock.origin === origin ||
@@ -4720,6 +4810,11 @@ export class DesktopHost {
         // verifier recovery paths: only a fresh v2 password may replace a
         // rejected bearer.
         const v2Selected = auth.getSelectedProtocol(origin) === 'v2';
+        // Keep a newer token installable if this 401 belonged to an older
+        // request; only a currently absent token loses body readiness.
+        if (v2Selected && auth.getToken(origin) === null) {
+          this.bodyTokens.delete(origin);
+        }
         // If the active body view is already loaded and authenticated (e.g. via browser session/localStorage),
         // read the rendered config directly from its DOM/fetch so the desktop TBAR syncs without a redundant prompt.
         const bodyView =
@@ -4819,14 +4914,25 @@ export class DesktopHost {
         }
         // Re-check the visit as well as the profile, including A→B→A.
         if (!isCurrentCapture()) return null;
-        const status = await auth
-          .fetchStatus(
-            origin,
-            pendingUnlock === null ? undefined : pendingUnlock.abort.signal,
-          )
-          .catch(() => null);
+        // A selected v2 origin asks only whether the server is protected:
+        // its legacy v1 KDF metadata is irrelevant and may even be outside
+        // the v1 client's accepted bounds. The v1 path keeps the trusted
+        // status check it always had.
+        const status = v2Selected
+          ? await auth
+              .discoverStatus(
+                origin,
+                pendingUnlock === null ? undefined : pendingUnlock.abort.signal,
+              )
+              .catch(() => null)
+          : await auth
+              .fetchStatus(
+                origin,
+                pendingUnlock === null ? undefined : pendingUnlock.abort.signal,
+              )
+              .catch(() => null);
         if (!isCurrentCapture() || status === null) return null;
-        if (status.kind === 'no-auth') {
+        if (status.kind === 'no-auth' || status.kind === 'disabled') {
           // Server reports no auth protection — the unlock is moot.
           const cfg = await auth.fetchConfig(origin).catch(() => null);
           if (!isCurrentCapture()) return null;
@@ -4858,11 +4964,11 @@ export class DesktopHost {
         // re-authenticate), and the verifier on disk is exactly the secret
         // that lets us do that without a prompt. Only when no valid
         // credential exists (or the server rotated the salt) do we fall
-        // through to the modal below.
-        const cred = this.storedCredentials.has(origin)
-          ? this.getOrRecoverCredential(origin)
-          : this.getOrRecoverCredential(origin);
+        // through to the modal below. A selected v2 origin never recovers
+        // a v1 credential here.
+        const cred = v2Selected ? null : this.getOrRecoverCredential(origin);
         if (
+          status.kind === 'trusted' &&
           !v2Selected &&
           cred !== null &&
           !unlockInFlight &&
@@ -5117,7 +5223,19 @@ export class DesktopHost {
             pending.generation,
           );
           const bodyResult = await authenticateBodyView(pending);
-          if (!bodyResult.ok) return bodyResult;
+          if (!bodyResult.ok) {
+            // Native auth succeeded but the body did not accept the
+            // credential (transient navigation, a slow load, or a
+            // rejected install). Reuse the existing coalesced retry chain
+            // so a body failure does not force a second password entry.
+            scheduleBodyReauthRetry(
+              pending.auth,
+              pending.origin,
+              pending.profileId,
+              pending.generation,
+            );
+            return bodyResult;
+          }
           const resolvedInfo = {
             requestId: pending.requestId,
             origin: pending.origin,
