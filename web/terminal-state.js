@@ -15,7 +15,7 @@ export function resetTerminalState(term) {
     // Drop the reference so the next batch does not report a deliberate reset
     // (checkpoint recovery, epoch replacement, history book) as an expired
     // reading position.
-    if (term) term._phiReaderAnchor = null;
+    term._phiReaderAnchor = null;
 }
 
 function charsetName(map) {

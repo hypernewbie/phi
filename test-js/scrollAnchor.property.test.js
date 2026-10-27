@@ -7,7 +7,11 @@
 // not, which is how the original jump-to-top bug hid from index-based tests.
 import { describe, it, expect, vi } from 'vitest';
 import { setupDomHarness } from './_dom.js';
-import { encode, recordingEnvelope, replayHarness } from './_terminalReplayHarness.js';
+import {
+    encode,
+    recordingEnvelope,
+    replayHarness,
+} from './_terminalReplayHarness.js';
 
 setupDomHarness();
 
@@ -16,7 +20,9 @@ const LINE = 'WHEEL 000000 '.length + 40 + 2;
 const chunkFor = (from, count) => {
     const lines = [];
     for (let i = 0; i < count; i++) {
-        lines.push(`WHEEL ${String(from + i).padStart(6, '0')} ${'X'.repeat(40)}`);
+        lines.push(
+            `WHEEL ${String(from + i).padStart(6, '0')} ${'X'.repeat(40)}`,
+        );
     }
     return encode(`${lines.join('\r\n')}\r\n`);
 };
@@ -48,7 +54,12 @@ function serverModel(cap) {
         const start = Math.max(from, model.oldest);
         const end = Math.min(through, model.head);
         return recordingEnvelope(
-            end > start ? chunkFor(0, Math.ceil((end - start) / LINE)).subarray(0, end - start) : new Uint8Array(0),
+            end > start
+                ? chunkFor(0, Math.ceil((end - start) / LINE)).subarray(
+                      0,
+                      end - start,
+                  )
+                : new Uint8Array(0),
             start,
             end,
         );
@@ -60,21 +71,34 @@ function serverModel(cap) {
         return recordingEnvelope(bytes, frontier, frontier, {
             oldest: model.oldest,
             head: frontier,
-            ckpt: { kind: 'ansi-v1', through: frontier, cols: 240, rows: 12, len: bytes.length },
+            ckpt: {
+                kind: 'ansi-v1',
+                through: frontier,
+                cols: 240,
+                rows: 12,
+                len: bytes.length,
+            },
         });
     };
     return model;
 }
 
 function installFetch(model) {
-    vi.stubGlobal('fetch', vi.fn(async (url) => {
-        const q = new URL(String(url), 'http://localhost').searchParams;
-        if (String(url).includes('/state?')) return model.state(q.get('through'));
-        if (String(url).includes('/recording?')) {
-            return model.recording(Number(q.get('from')), Number(q.get('through')));
-        }
-        return { ok: false, status: 404 };
-    }));
+    vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url) => {
+            const q = new URL(String(url), 'http://localhost').searchParams;
+            if (String(url).includes('/state?'))
+                return model.state(q.get('through'));
+            if (String(url).includes('/recording?')) {
+                return model.recording(
+                    Number(q.get('from')),
+                    Number(q.get('through')),
+                );
+            }
+            return { ok: false, status: 404 };
+        }),
+    );
 }
 
 // The fixture line currently at the top of the viewport.
@@ -115,12 +139,19 @@ async function paint(h, model, lines) {
     return emit;
 }
 
-// One real wheel notch, applied the way xterm applies it, then the anchor the
-// capture listener would record after the scroll has landed.
+// One real wheel notch, applied the way xterm applies it: the DOM listener only
+// cancels follow, and the buffer scroll raises onScroll, which is where the
+// production subscription anchors.
 function wheel(h, rows) {
     h.manager._cancelScrollFollowForUserScroll(h.tab);
     h.tab.term.scrollLines(-rows);
-    h.manager._captureReaderAnchor?.(h.tab);
+}
+
+// attachTab's reader-anchor subscription body. The harness bypasses attachTab,
+// so cases that expect anchoring call the same method the subscription calls,
+// and the subscription registration stays covered by the browser spec.
+function installAnchorWiring(h) {
+    h.tab.term.onScroll(() => h.manager._readerAnchorScroll(h.tab));
 }
 
 // Deliver output frames without draining: this is the backlog that makes the
@@ -143,10 +174,18 @@ function buildOps(rng, count) {
     const ops = [];
     for (let i = 0; i < count; i++) {
         const roll = rng();
-        if (roll < 0.3) ops.push({ kind: 'wheelUp', rows: 1 + Math.floor(rng() * 20) });
-        else if (roll < 0.4) ops.push({ kind: 'wheelDown', rows: 1 + Math.floor(rng() * 20) });
-        else if (roll < 0.55) ops.push({ kind: 'queued', frames: 1 + Math.floor(rng() * 8), lines: 200 + Math.floor(rng() * 600) });
-        else if (roll < 0.7) ops.push({ kind: 'write', lines: 100 + Math.floor(rng() * 900) });
+        if (roll < 0.3)
+            ops.push({ kind: 'wheelUp', rows: 1 + Math.floor(rng() * 20) });
+        else if (roll < 0.4)
+            ops.push({ kind: 'wheelDown', rows: 1 + Math.floor(rng() * 20) });
+        else if (roll < 0.55)
+            ops.push({
+                kind: 'queued',
+                frames: 1 + Math.floor(rng() * 8),
+                lines: 200 + Math.floor(rng() * 600),
+            });
+        else if (roll < 0.7)
+            ops.push({ kind: 'write', lines: 100 + Math.floor(rng() * 900) });
         else if (roll < 0.8) ops.push({ kind: 'settle' });
         else ops.push({ kind: 'settle' });
     }
@@ -161,6 +200,7 @@ async function runOps(seed, ops) {
     installFetch(model);
     try {
         const emit = await paint(h, model, 15000);
+        installAnchorWiring(h);
         for (const op of ops) {
             const before = state(h);
             const noticesBefore = notices.length;
@@ -173,9 +213,23 @@ async function runOps(seed, ops) {
             }
             await h.settle();
             const after = state(h);
-            const verdict = check(op, before, after, noticesBefore, notices.length);
+            const verdict = check(
+                op,
+                before,
+                after,
+                noticesBefore,
+                notices.length,
+            );
             if (verdict) {
-                return { ok: false, seed, op, before, after, notices: notices.slice(), reason: verdict };
+                return {
+                    ok: false,
+                    seed,
+                    op,
+                    before,
+                    after,
+                    notices: notices.slice(),
+                    reason: verdict,
+                };
             }
         }
         return { ok: true, seed };
@@ -191,13 +245,16 @@ function check(op, before, after, noticesBefore, noticesAfter) {
 
     if (op.kind === 'wheelUp') {
         if (moved > 0) return `wheel up showed newer content (${moved})`;
-        if (moved < -op.rows) return `wheel up moved ${-moved} rows, asked ${op.rows}`;
-        if (moved === 0 && before.viewportY > 0) return 'wheel up was undone by the restore';
+        if (moved < -op.rows)
+            return `wheel up moved ${-moved} rows, asked ${op.rows}`;
+        if (moved === 0 && before.viewportY > 0)
+            return 'wheel up was undone by the restore';
         return null;
     }
     if (op.kind === 'wheelDown') {
         if (moved < 0) return `wheel down showed older content (${moved})`;
-        if (moved > op.rows) return `wheel down moved ${moved} rows, asked ${op.rows}`;
+        if (moved > op.rows)
+            return `wheel down moved ${moved} rows, asked ${op.rows}`;
         return null;
     }
     // Data ops. At the tail, following new output is the point; only a reader
@@ -224,9 +281,9 @@ describe('reader anchor property', () => {
             if (!result.ok) {
                 throw new Error(
                     `seed ${result.seed} failed on ${JSON.stringify(result.op)}\n` +
-                    `  before=${JSON.stringify(result.before)} after=${JSON.stringify(result.after)}\n` +
-                    `  reason=${result.reason}\n` +
-                    `  ops=${JSON.stringify(ops)}`,
+                        `  before=${JSON.stringify(result.before)} after=${JSON.stringify(result.after)}\n` +
+                        `  reason=${result.reason}\n` +
+                        `  ops=${JSON.stringify(ops)}`,
                 );
             }
             expect(result.ok).toBe(true);
@@ -241,7 +298,8 @@ describe('reader anchor unit cases', () => {
         h.manager.app = { showToast: vi.fn() };
         installFetch(model);
         try {
-            const emit = await paint(h, model, 15000);
+            await paint(h, model, 15000);
+            installAnchorWiring(h);
             const start = topMarker(h.tab.term);
             wheel(h, 5);
             await h.settle();
@@ -262,11 +320,15 @@ describe('reader anchor unit cases', () => {
             await paint(h, model, 15000);
             // A full-screen TUI takes the alternate buffer: no scrollback, so a
             // reader anchor there would be meaningless.
-            await new Promise((resolve) => h.tab.term.write('\x1b[?1049h', resolve));
+            await new Promise((resolve) =>
+                h.tab.term.write('\x1b[?1049h', resolve),
+            );
             h.tab.term.scrollLines(-5);
             h.manager._captureReaderAnchor(h.tab);
             expect(h.tab.term._phiReaderAnchor ?? null).toBe(null);
-            await new Promise((resolve) => h.tab.term.write('\x1b[?1049l', resolve));
+            await new Promise((resolve) =>
+                h.tab.term.write('\x1b[?1049l', resolve),
+            );
             h.manager._captureReaderAnchor(h.tab);
             expect(h.tab.term._phiReaderAnchor).toBeTruthy();
         } finally {
@@ -282,6 +344,7 @@ describe('reader anchor unit cases', () => {
         installFetch(model);
         try {
             const emit = await paint(h, model, 15000);
+            installAnchorWiring(h);
             wheel(h, 30);
             await h.settle();
             // More lines than the whole scrollback: the reader's row leaves the buffer.
@@ -302,6 +365,7 @@ describe('reader anchor unit cases', () => {
         installFetch(model);
         try {
             const emit = await paint(h, model, 15000);
+            installAnchorWiring(h);
             wheel(h, 5);
             await h.settle();
             const first = topMarker(h.tab.term);
@@ -339,17 +403,12 @@ describe('reader anchor unit cases', () => {
         installFetch(model);
         try {
             const emit = await paint(h, model, 15000);
-            // Mirror attachTab's wiring: anchor after any buffer scroll, so the
-            // gesture's landed row is the one pinned. The harness bypasses
-            // attachTab, hence the explicit subscription.
-            h.tab.term.onScroll(() => {
-                if (h.manager._restoringReaderAnchor) return;
-                const b = h.tab.term.buffer.active;
-                if (b.viewportY < b.baseY) h.manager._captureReaderAnchor(h.tab);
-            });
+            installAnchorWiring(h);
             wheel(h, 3);
             await h.settle();
-            h.tab.term.scrollLines(-20); // PageUp path: no capture call here
+            // PageUp: the buffer scroll, not a DOM listener, is what moves the
+            // view, so the subscription has to re-anchor here.
+            h.tab.term.scrollLines(-20);
             await h.settle();
             const afterKeys = topMarker(h.tab.term);
             emit(300);
@@ -368,15 +427,74 @@ describe('reader anchor unit cases', () => {
         installFetch(model);
         try {
             const emit = await paint(h, model, 15000);
+            installAnchorWiring(h);
             wheel(h, 40);
             await h.settle();
-            const { resetTerminalState } = await import('../web/terminal-state.js');
+            const { resetTerminalState } = await import(
+                '../web/terminal-state.js'
+            );
             resetTerminalState(h.tab.term);
             expect(h.tab.term._phiReaderAnchor ?? null).toBe(null);
             emit(300);
             await h.settle();
             expect(showToast).not.toHaveBeenCalled();
             expect(state(h).atBottom).toBe(true);
+        } finally {
+            h.dispose();
+        }
+    });
+
+    it('expires the anchor through the real subscription, not a replaced row', async () => {
+        const model = serverModel(1 << 14);
+        const h = replayHarness(encode(''));
+        const showToast = vi.fn();
+        h.manager.app = { showToast };
+        installFetch(model);
+        try {
+            const emit = await paint(h, model, 15000);
+            installAnchorWiring(h);
+            wheel(h, 30);
+            await h.settle();
+            const anchored = h.tab.term._phiReaderAnchor.marker.line;
+            expect(anchored).toBe(h.tab.term.buffer.active.viewportY);
+
+            // Output must not re-anchor per parsed row: the marker keeps tracking
+            // the reader's row while recycling consumes it.
+            emit(6000);
+            await h.settle();
+            expect(h.tab.term._phiReaderAnchor.marker.isDisposed).toBe(false);
+            expect(h.tab.term._phiReaderAnchor.marker.line).toBeLessThan(
+                anchored,
+            );
+            expect(h.tab.term._phiReaderAnchor.marker.line).toBe(
+                h.tab.term.buffer.active.viewportY,
+            );
+
+            for (let i = 0; i < 3; i++) emit(6000);
+            await h.settle();
+            expect(state(h).atBottom).toBe(true);
+            expect(showToast).toHaveBeenCalledTimes(1);
+        } finally {
+            h.dispose();
+        }
+    });
+
+    it('a wheel during a pending backlog keeps the row the notch landed on', async () => {
+        const model = serverModel(1 << 24);
+        const h = replayHarness(encode(''));
+        h.manager.app = { showToast: vi.fn() };
+        installFetch(model);
+        try {
+            const emit = await paint(h, model, 15000);
+            installAnchorWiring(h);
+            // Queue frames without draining: the gesture lands while the parser
+            // still owes rows, which is the case the browser hit.
+            queuedOutput(emit, 6, 500);
+            wheel(h, 4);
+            const landed = topMarker(h.tab.term);
+            emit(500);
+            await h.settle();
+            expect(topMarker(h.tab.term)).toBe(landed);
         } finally {
             h.dispose();
         }

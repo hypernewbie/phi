@@ -4483,29 +4483,23 @@ export class TabManager {
                     this._clearReaderAnchor(tabInfo);
                 }
             });
-            // Anchor after any buffer scroll (wheel, keyboard, touch drag,
-            // scrollbar): xterm emits onScroll synchronously once the buffer has
-            // moved, so this is the post-gesture row. DOM capture listeners fire
-            // before the movement and would anchor the row the reader left. The
-            // follow-cancel loop above still keys off DOM input events; anchoring
-            // can use onScroll because programmatic scrolls are gated below.
-            term.onScroll(() => {
-                if (this._restoringReaderAnchor) return;
-                const b = tabInfo.term?.buffer?.active;
-                if (b && b.viewportY < b.baseY) this._captureReaderAnchor(tabInfo);
-            });
+            // Re-anchor on the buffer scroll rather than the DOM event: the
+            // event fires before xterm applies the notch, so it would pin the
+            // row the reader just left. `_readerAnchorScroll` holds the rule for
+            // which scrolls count.
+            term.onScroll(() => this._readerAnchorScroll(tabInfo));
         }
         term.onResize?.(updateScrollBtn);
         term.buffer?.onBufferChange?.(updateScrollBtn);
-        // xterm's public onScroll fires only for PROGRAMMATIC scrolls: the
-        // vendored build passes suppressScrollEvent=true for user wheel /
-        // scrollbar input (Viewport._handleScroll), so the two onScroll
-        // subscriptions above never fire for real user gestures. The DOM
-        // 'scroll' event is the signal those gestures do produce. It does
-        // not bubble — listen in the capture phase on termContainer. The
-        // capture listener fires BEFORE xterm's own scroll handler updates
-        // the buffer, so defer one frame (house rAF-coalesce pattern) to
-        // read fresh coordinates.
+        // A wheel notch does fire public onScroll (Viewport._handleScroll ->
+        // onRequestScrollLines -> CoreBrowserTerminal.scrollLines(diff, false)),
+        // which is what the anchor subscription above relies on. This DOM
+        // listener covers the gestures that never take that path (native touch
+        // momentum, scrollbar drags) and only drives follow state. It does not
+        // bubble — listen in the capture phase on termContainer. The capture
+        // listener fires BEFORE xterm's own scroll handler updates the buffer,
+        // so defer one frame (house rAF-coalesce pattern) to read fresh
+        // coordinates.
         let viewportScrollRafPending = false;
         termContainer.addEventListener(
             'scroll',
@@ -11122,7 +11116,21 @@ export class TabManager {
             /* already disposed with the buffer */
         }
         if (term) term._phiReaderAnchor = null;
-        if (tabInfo) tabInfo._readerAnchorNoticeShown = false;
+    }
+
+    // Every buffer scroll lands here (wheel, key, scrollbar, touch, parser).
+    // Parser scrolls move the anchored row and the viewport together, so they
+    // leave the invariant below intact and never replace the anchor; a gesture
+    // or any other move breaks it and re-anchors to the row now on screen. A
+    // marker the parser recycled is gone (line -1), so it is left to the
+    // restore's expiry branch instead of being replaced by the oldest row.
+    _readerAnchorScroll(tabInfo) {
+        if (this._restoringReaderAnchor) return;
+        const buffer = tabInfo?.term?.buffer?.active;
+        if (!buffer || buffer.viewportY >= buffer.baseY) return;
+        const anchor = tabInfo.term._phiReaderAnchor;
+        if (anchor && (anchor.marker.isDisposed || anchor.marker.line === buffer.viewportY)) return;
+        this._captureReaderAnchor(tabInfo);
     }
 
     _captureReaderAnchor(tabInfo) {
@@ -11153,7 +11161,8 @@ export class TabManager {
             return;
         }
         if (anchor.marker.isDisposed || anchor.marker.line < 0) {
-            const announced = tabInfo._readerAnchorNoticeShown;
+            // Clearing first keeps the notice to one per expired anchor: the
+            // next batch has nothing to restore.
             this._clearReaderAnchor(tabInfo);
             this._restoringReaderAnchor = true;
             try {
@@ -11161,13 +11170,10 @@ export class TabManager {
             } finally {
                 this._restoringReaderAnchor = false;
             }
-            if (!announced) {
-                tabInfo._readerAnchorNoticeShown = true;
-                this.app?.showToast?.(
-                    'Reading position expired; jumped to live output.',
-                    { type: 'info' },
-                );
-            }
+            this.app?.showToast?.(
+                'Reading position expired; jumped to live output.',
+                { type: 'info' },
+            );
             return;
         }
         if (buffer.viewportY !== anchor.marker.line) {
