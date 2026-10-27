@@ -229,6 +229,12 @@ describe('compact presets row', () => {
             'Virtual Keyboard and Shortcuts',
         ]);
         expect(row.slice(4)).toEqual(['▲', '▼', '◀', '▶']);
+        // Icon-only chips still answer to their function.
+        expect(
+            tm.presetsContainer.querySelector(
+                '.model-trigger-btn[aria-label="Select the model for this session"]',
+            ),
+        ).not.toBeNull();
     });
 
     it('keeps the words on a desktop render', () => {
@@ -246,9 +252,18 @@ describe('compact presets row', () => {
         expect(
             document.querySelectorAll('.input-actions .input-quick-chip'),
         ).toHaveLength(2);
-        tm.getActiveTab = () => ({ coder: 'pi-rpc', paneId: 'p1' });
+        // The switch path: switchTab hands the new tab to updateDirectModeUI.
+        const piRpcTab = {
+            coder: 'pi-rpc',
+            paneId: 'p1',
+            directMode: false,
+            isAtBottom: true,
+        };
+        tm.getActiveTab = () => piRpcTab;
         tm._renderPiRpcPresets = vi.fn();
-        tm.renderPresets('pi-rpc');
+        tm.directModeToggle = document.createElement('button');
+        tm.inputBarContainer = document.getElementById('input-bar-container');
+        tm.updateDirectModeUI(piRpcTab, true);
         expect(tm._renderPiRpcPresets).toHaveBeenCalled();
         expect(document.querySelectorAll('.input-quick-chip')).toHaveLength(0);
     });

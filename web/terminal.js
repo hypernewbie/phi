@@ -3566,7 +3566,7 @@ export class TabManager {
             this.directModeToggle.classList.remove('active');
             this.inputBarContainer.classList.remove('direct-mode-active');
             this.inputBarContainer.classList.remove('hidden');
-            this._renderPiRpcPresets();
+            this.renderPresets('pi-rpc');
         } else if (tab.directMode) {
             this.directModeToggle.classList.add('active');
             this.inputBarContainer.classList.add('direct-mode-active');
@@ -6902,6 +6902,7 @@ export class TabManager {
             ? '🧠 ▾'
             : `Thinking: ${state.thinking || '—'} ▾`;
         thinkingButton.title = 'Change the thinking level';
+        thinkingButton.setAttribute('aria-label', 'Change the thinking level');
         thinkingButton.disabled =
             menuDisabled || this._piRpcThinkingPending?.paneId === paneId;
         thinkingButton.addEventListener('click', (event) => {
@@ -11351,6 +11352,8 @@ export class TabManager {
             const tab = this.getActiveTab();
             if (tab && !tab.directMode) this.renderPresets(tab.coder);
         }
+        // The action row can rewrap without crossing the breakpoint.
+        this._syncOpenDropups();
         this.startResize();
         clearTimeout(this._windowResizeTimeout);
         this._windowResizeTimeout = setTimeout(() => {
@@ -11962,11 +11965,6 @@ export class TabManager {
         if (keysDropup && !keysDropup.classList.contains('hidden')) {
             this.renderKeysDropup();
         }
-        // The row was just rebuilt: keep open pickers on top of its
-        // current height instead of the height they opened at.
-        document
-            .querySelectorAll('.model-presets-dropup:not(.hidden)')
-            .forEach((d) => this._syncDropupOffset(d));
         const slashDropup = document.getElementById('slash-presets-dropup');
         if (slashDropup && !slashDropup.classList.contains('hidden')) {
             this.renderSlashDropup(
@@ -12007,6 +12005,15 @@ export class TabManager {
             keys: keysTriggerBtn,
         });
         if (isMobile) this._placeCompactQuickChips(compactChips);
+        // Measured last: the chips above change the composer height, and an
+        // open menu must clear the row it was opened over.
+        this._syncOpenDropups();
+    }
+
+    _syncOpenDropups() {
+        document
+            .querySelectorAll('.model-presets-dropup:not(.hidden)')
+            .forEach((d) => this._syncDropupOffset(d));
     }
 
     // Compact only: the strip is width-bound, so the pickers trade words for
@@ -12014,7 +12021,13 @@ export class TabManager {
     // their labels and their append order.
     _compactPickerRow({ models, thinking, cmds, skills, keys }) {
         models.innerText = '🤖';
-        if (thinking) thinking.textContent = '🧠';
+        // The emoji replaces the words, so the name has to move to the
+        // accessibility tree (title alone does not name a button).
+        models.setAttribute('aria-label', models.title || 'Model');
+        if (thinking) {
+            thinking.textContent = '🧠';
+            thinking.setAttribute('aria-label', thinking.title || 'Thinking');
+        }
         if (skills) {
             skills.textContent = '📚';
             skills.setAttribute('aria-label', 'Skills');
