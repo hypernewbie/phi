@@ -1156,3 +1156,140 @@ func TestAccessDisabledPreservesOpenRequests(t *testing.T) {
 		t.Fatalf("disabled auth rejected a request: %d", w.Code)
 	}
 }
+
+// --- M4a: non-current record and rollback-format evidence ---
+
+// testAccessV1Login runs the legacy one-time-proof login against the current
+// manager and returns the response with the iteration count the status route
+// advertised for it.
+func testAccessV1Login(t *testing.T) (*httptest.ResponseRecorder, int) {
+	t.Helper()
+	enabled, saltB64, challenge, iterations, err := accessAuth.statusAndChallenge()
+	if err != nil || !enabled {
+		t.Fatalf("status challenge: enabled=%v err=%v", enabled, err)
+	}
+	salt, err := base64.RawURLEncoding.DecodeString(saltB64)
+	if err != nil {
+		t.Fatalf("decode salt: %v", err)
+	}
+	verifier, err := deriveAccessVerifier(testAccessPassword, salt, iterations)
+	if err != nil {
+		t.Fatalf("derive verifier at %d: %v", iterations, err)
+	}
+	body, err := json.Marshal(map[string]string{
+		"challenge": challenge,
+		"proof":     testAccessProof(t, verifier, challenge),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
+	return testAccessServe(handleAccessAuthLogin, request), iterations
+}
+
+// A non-current record keeps working over v1 at its stored work factor; the
+// v2 login then rehashes it, and the unchanged password still signs in
+// through v1 afterwards.
+func TestAccessV1LoginSurvivesV2RehashOfStaleRecord(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+
+	stale := testAccessStaleHash(t)
+	if err := saveAccessPasswordHash(stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.configure(stale); err != nil {
+		t.Fatal(err)
+	}
+
+	first, advertised := testAccessV1Login(t)
+	if first.Code != http.StatusOK {
+		t.Fatalf("v1 login on a non-current record: %d %s", first.Code, first.Body.String())
+	}
+	if advertised != accessPasswordMinIterations {
+		t.Fatalf("status advertised %d iterations, want the stored %d", advertised, accessPasswordMinIterations)
+	}
+	if len(first.Result().Cookies()) == 0 {
+		t.Fatal("v1 login on a non-current record issued no session cookie")
+	}
+
+	login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.71:1")
+	if login.Code != http.StatusOK {
+		t.Fatalf("v2 login against the non-current record: %d %s", login.Code, login.Body.String())
+	}
+	persisted, err := parseAccessPasswordHash(loadConfig().AccessPasswordHash)
+	if err != nil || persisted == nil {
+		t.Fatalf("parse rehashed record: %v", err)
+	}
+	if persisted.Iterations != accessPasswordHashIterations {
+		t.Fatalf("rehash persisted %d iterations", persisted.Iterations)
+	}
+
+	second, advertised := testAccessV1Login(t)
+	if second.Code != http.StatusOK {
+		t.Fatalf("v1 login after the rehash: %d %s", second.Code, second.Body.String())
+	}
+	if advertised != accessPasswordHashIterations {
+		t.Fatalf("status advertised %d iterations after the rehash", advertised)
+	}
+}
+
+// legacyAccessRecordMatches mirrors the pre-transition parser (the binary a
+// rollback would restore): five dot-separated parts, version v1, algorithm
+// pbkdf2-sha256, exactly 600000 iterations, a 16-byte salt, and a 32-byte
+// verifier. It is deliberately independent of parseAccessPasswordHash so a
+// change to the new parser cannot make this rollback evidence pass by
+// construction.
+func legacyAccessRecordMatches(encoded string) bool {
+	parts := strings.Split(encoded, ".")
+	if len(parts) != 5 || parts[0] != "v1" || parts[1] != "pbkdf2-sha256" || parts[2] != "600000" {
+		return false
+	}
+	salt, err := base64.RawURLEncoding.DecodeString(parts[3])
+	if err != nil || len(salt) != 16 {
+		return false
+	}
+	verifier, err := base64.RawURLEncoding.DecodeString(parts[4])
+	if err != nil || len(verifier) != 32 {
+		return false
+	}
+	return true
+}
+
+func TestAccessRollbackRecordFormatStaysLegacyCompatible(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+
+	current, err := newAccessPasswordRecord(testAccessPassword)
+	if err != nil {
+		t.Fatalf("create current record: %v", err)
+	}
+	if !legacyAccessRecordMatches(current.encoded()) {
+		t.Fatalf("a current record is not rollback-compatible: %q", current.encoded())
+	}
+
+	stale := testAccessStaleHash(t)
+	if err := saveAccessPasswordHash(stale); err != nil {
+		t.Fatal(err)
+	}
+	if legacyAccessRecordMatches(stale) {
+		t.Fatal("an unrehashed non-current record claims to be rollback-compatible")
+	}
+	if err := auth.configure(stale); err != nil {
+		t.Fatal(err)
+	}
+	if login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.72:1"); login.Code != http.StatusOK {
+		t.Fatalf("v2 login against the non-current record: %d %s", login.Code, login.Body.String())
+	}
+	rehashed := loadConfig().AccessPasswordHash
+	if !legacyAccessRecordMatches(rehashed) {
+		t.Fatalf("a rehashed record is not rollback-compatible: %q", rehashed)
+	}
+	record, err := parseAccessPasswordHash(rehashed)
+	if err != nil || record == nil || record.Iterations != accessPasswordHashIterations {
+		t.Fatalf("rehashed record: %#v err=%v", record, err)
+	}
+	if ok, err := record.matchesPassword(testAccessPassword); err != nil || !ok {
+		t.Fatalf("rehashed record lost the password: ok=%v err=%v", ok, err)
+	}
+}
