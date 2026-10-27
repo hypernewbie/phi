@@ -645,8 +645,19 @@ async function discoverAccessStatus(context) {
     return parseAccessStatus(payload);
 }
 
+let pendingOverlay = null;
+
 function showUnlockPrompt(context, protocol) {
     return new Promise((resolve) => {
+        let settled = false;
+        const finish = (value) => {
+            if (settled) return;
+            settled = true;
+            if (pendingOverlay && pendingOverlay.finish === finish)
+                pendingOverlay = null;
+            overlay.remove();
+            resolve(value);
+        };
         const overlay = document.createElement('div');
         overlay.className = 'access-auth-overlay';
         overlay.setAttribute('role', 'dialog');
@@ -718,14 +729,12 @@ function showUnlockPrompt(context, protocol) {
                     const token = await v2Login(input.value, context);
                     adoptToken(token, { persist: true }, context);
                     input.value = '';
-                    overlay.remove();
-                    resolve({ enabled: true });
+                    finish({ enabled: true });
                     return;
                 }
                 const status = await getStatus(context);
                 if (!status.enabled) {
-                    overlay.remove();
-                    resolve({ enabled: false });
+                    finish({ enabled: false });
                     return;
                 }
                 const verifier = await deriveVerifier(input.value, status.raw);
@@ -756,8 +765,7 @@ function showUnlockPrompt(context, protocol) {
                 }
                 storeCredential(status.raw, verifier, context);
                 input.value = '';
-                overlay.remove();
-                resolve({ enabled: true });
+                finish({ enabled: true });
             } catch (err) {
                 error.textContent =
                     err instanceof Error ? err.message : 'Unable to unlock Phi';
@@ -771,6 +779,7 @@ function showUnlockPrompt(context, protocol) {
 
         overlay.appendChild(dialog);
         document.body.appendChild(overlay);
+        pendingOverlay = { finish, ownerKey: credentialKey(context) };
         requestAnimationFrame(() => input.focus());
     });
 }
@@ -904,6 +913,49 @@ export async function clearAccessPassword(context) {
     return { enabled: false };
 }
 
+// getAccessToken returns the selected v2 bearer, or null in v1 mode.
+export function getAccessToken() {
+    return activeAuthState().accessToken;
+}
+
+// installToken is the host bridge: it installs a memory-only v2 credential
+// (never localStorage), releases a pending unlock overlay, and lets a loaded
+// body continue bootstrap.
+export function installToken(token) {
+    if (typeof token !== 'string' || !token) return false;
+    const state = activeAuthState();
+    state.accessToken = token;
+    state.accessEnabled = true;
+    state.selectedProtocol = 'v2';
+    state.epoch++;
+    state.persistedToken = null;
+    if (pendingOverlay?.ownerKey === activeAuthKey)
+        pendingOverlay.finish({ enabled: true });
+    return true;
+}
+
+// webSocketURL clones a socket URL and, in v2 mode, appends the bearer as one
+// encoded query parameter. The token only travels to the page's own origin.
+export function webSocketURL(url) {
+    const target = new URL(url instanceof URL ? url.href : String(url));
+    const state = activeAuthState();
+    if (state.selectedProtocol !== 'v2' || !state.accessToken) return target;
+    const httpOrigin = target.origin
+        .replace(/^ws:/, 'http:')
+        .replace(/^wss:/, 'https:');
+    if (httpOrigin !== location.origin) return target;
+    target.searchParams.set('token', state.accessToken);
+    return target;
+}
+
+if (typeof window !== 'undefined') {
+    const bridge = window.phiAccessAuth || {};
+    bridge.installToken = installToken;
+    bridge.getAccessToken = getAccessToken;
+    bridge.webSocketURL = webSocketURL;
+    window.phiAccessAuth = bridge;
+}
+
 export const __test__ = {
     bytesToBase64URL,
     base64URLToBytes,
@@ -930,6 +982,7 @@ function resetAccessState() {
     activeAuthContext = null;
     activeAuthKey = credentialKey();
     authStates.set(activeAuthKey, newAuthState());
+    pendingOverlay = null;
     reloadPage = () => location.reload();
 }
 

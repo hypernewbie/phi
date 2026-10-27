@@ -6,12 +6,8 @@ vi.mock('../web/vendor/noble-hashes/pbkdf2.js', () => ({
     pbkdf2Async: vi.fn(async () => new Uint8Array(32).fill(9)),
 }));
 
-const {
-    bootstrapAccessAuth,
-    installAccessFetch,
-    setAccessPassword,
-    __test__,
-} = await import('../web/auth.js');
+const { bootstrapAccessAuth, installAccessFetch, setAccessPassword, __test__ } =
+    await import('../web/auth.js');
 
 setupDomHarness();
 
@@ -37,9 +33,11 @@ function submitOverlay(password) {
     const overlay = document.querySelector('.access-auth-overlay');
     if (!overlay) throw new Error('no unlock overlay');
     overlay.querySelector('input[type="password"]').value = password;
-    overlay.querySelector('form').dispatchEvent(
-        new Event('submit', { cancelable: true, bubbles: true }),
-    );
+    overlay
+        .querySelector('form')
+        .dispatchEvent(
+            new Event('submit', { cancelable: true, bubbles: true }),
+        );
     return overlay;
 }
 
@@ -54,7 +52,9 @@ describe('v2 selection', () => {
             enabled: false,
             protocols: ['v1', 'v2'],
         }));
-        await expect(bootstrapAccessAuth()).resolves.toEqual({ enabled: false });
+        await expect(bootstrapAccessAuth()).resolves.toEqual({
+            enabled: false,
+        });
         expect(fetchSpy).toHaveBeenCalledTimes(1);
         expect(__test__.getAccessState().selectedProtocol).toBe('v2');
         expect(document.querySelector('.access-auth-overlay')).toBeNull();
@@ -62,7 +62,9 @@ describe('v2 selection', () => {
 
     it('treats an absent capability field as v1-only', async () => {
         mockFetch(() => ({ enabled: false }));
-        await expect(bootstrapAccessAuth()).resolves.toEqual({ enabled: false });
+        await expect(bootstrapAccessAuth()).resolves.toEqual({
+            enabled: false,
+        });
         expect(__test__.getAccessState().selectedProtocol).toBe('v1');
     });
 
@@ -111,7 +113,8 @@ describe('v2 selection', () => {
         storeBearer('jwt-stored');
         mockFetch((url) => {
             if (url === '/api/auth/status') return DUAL_STATUS;
-            if (url === '/api/auth/v2/status') return { ok: false, status: 503 };
+            if (url === '/api/auth/v2/status')
+                return { ok: false, status: 503 };
             return undefined;
         });
         await expect(bootstrapAccessAuth()).rejects.toThrow(
@@ -194,12 +197,17 @@ describe('v2 selection', () => {
                 document.querySelector('.access-auth-error').textContent,
             ).toBe('Wrong password'),
         );
-        expect(fetchSpy.mock.calls.some(([url]) => url === '/api/auth/login'))
-            .toBe(false);
+        expect(
+            fetchSpy.mock.calls.some(([url]) => url === '/api/auth/login'),
+        ).toBe(false);
     });
 
     it('rejects an unusable capability response instead of downgrading', async () => {
-        mockFetch(() => ({ enabled: true, authenticated: false, protocols: [] }));
+        mockFetch(() => ({
+            enabled: true,
+            authenticated: false,
+            protocols: [],
+        }));
         await expect(bootstrapAccessAuth()).rejects.toThrow(
             'Phi returned invalid access protection settings',
         );
@@ -210,7 +218,9 @@ describe('v2 selection', () => {
             enabled: false,
             protocols: ['v3', 'v2', 'v1'],
         }));
-        await expect(bootstrapAccessAuth()).resolves.toEqual({ enabled: false });
+        await expect(bootstrapAccessAuth()).resolves.toEqual({
+            enabled: false,
+        });
         expect(__test__.getAccessState().selectedProtocol).toBe('v2');
     });
 });
@@ -233,10 +243,7 @@ describe('protected fetch wrapper', () => {
         await bootstrapWithBearer();
         const seen = [];
         mockFetch((url, options) => {
-            seen.push([
-                url,
-                options?.headers?.get?.('Authorization') ?? null,
-            ]);
+            seen.push([url, options?.headers?.get?.('Authorization') ?? null]);
             return { ok: true };
         });
         installAccessFetch();
@@ -295,7 +302,10 @@ describe('protected fetch wrapper', () => {
             return { ok: true };
         });
         installAccessFetch();
-        const results = await Promise.all([fetch('/api/one'), fetch('/api/two')]);
+        const results = await Promise.all([
+            fetch('/api/one'),
+            fetch('/api/two'),
+        ]);
         expect(results.map((r) => r.status)).toEqual([401, 401]);
         expect(document.querySelectorAll('.access-auth-overlay')).toHaveLength(
             1,
@@ -320,7 +330,8 @@ describe('protected fetch wrapper', () => {
             release = resolve;
         });
         mockFetch((url) => {
-            if (url === '/api/slow') return gate.then(() => ({ ok: false, status: 401 }));
+            if (url === '/api/slow')
+                return gate.then(() => ({ ok: false, status: 401 }));
             if (url === '/api/auth/v2/password')
                 return { enabled: true, token: 'jwt-b' };
             return { ok: true };
@@ -387,21 +398,110 @@ describe('v2 password route', () => {
         const fetchSpy = mockFetch(() => ({ enabled: true }));
         await setAccessPassword('password123');
         expect(fetchSpy.mock.calls[0][0]).toBe('/api/auth/password');
-        expect(JSON.parse(fetchSpy.mock.calls[0][1].body).password_hash).toMatch(
-            /^v1\.pbkdf2-sha256\./,
-        );
+        expect(
+            JSON.parse(fetchSpy.mock.calls[0][1].body).password_hash,
+        ).toMatch(/^v1\.pbkdf2-sha256\./);
     });
 
     it('rejects a v2 password outside the byte bounds', async () => {
         mockFetch(() => ({ enabled: false, protocols: ['v1', 'v2'] }));
         await bootstrapAccessAuth();
         const fetchSpy = mockFetch(() => ({ enabled: true, token: 'jwt-new' }));
-        await expect(setAccessPassword('short')).rejects.toThrow(
-            'at least 8',
+        await expect(setAccessPassword('short')).rejects.toThrow('at least 8');
+        await expect(setAccessPassword('é'.repeat(600))).rejects.toThrow(
+            'at most 1024 bytes',
         );
-        await expect(
-            setAccessPassword('é'.repeat(600)),
-        ).rejects.toThrow('at most 1024 bytes');
         expect(fetchSpy).not.toHaveBeenCalled();
+    });
+});
+
+describe('host bridge', () => {
+    it('installs a memory-only token and never touches storage', async () => {
+        const { installToken, getAccessToken } = await import('../web/auth.js');
+        expect(installToken('')).toBe(false);
+        expect(installToken(null)).toBe(false);
+        expect(installToken('host-token')).toBe(true);
+        expect(getAccessToken()).toBe('host-token');
+        expect(__test__.getAccessState().selectedProtocol).toBe('v2');
+        expect(localStorage.getItem(BEARER_KEY)).toBeNull();
+        expect(window.phiAccessAuth.installToken).toBe(installToken);
+        expect(window.phiAccessAuth.getAccessToken).toBe(getAccessToken);
+    });
+
+    it('releases a pending unlock overlay', async () => {
+        mockFetch((url) => {
+            if (url === '/api/auth/status') return DUAL_STATUS;
+            return undefined;
+        });
+        const boot = bootstrapAccessAuth();
+        await vi.waitFor(() =>
+            expect(document.querySelector('.access-auth-overlay')).toBeTruthy(),
+        );
+        const { installToken } = await import('../web/auth.js');
+        installToken('host-token');
+        await expect(boot).resolves.toEqual({ enabled: true });
+        expect(document.querySelector('.access-auth-overlay')).toBeNull();
+        expect(__test__.getAccessState().accessToken).toBe('host-token');
+    });
+
+    it('is not overwritten by a late legacy discovery', async () => {
+        let release;
+        const gate = new Promise((resolve) => {
+            release = resolve;
+        });
+        const fetchSpy = mockFetch((url) => {
+            if (url === '/api/auth/status')
+                return gate.then(() => ({
+                    ...DUAL_STATUS,
+                    authenticated: true,
+                }));
+            throw new Error(`unexpected fetch ${url}`);
+        });
+        const boot = bootstrapAccessAuth();
+        await Promise.resolve();
+        const { installToken } = await import('../web/auth.js');
+        expect(installToken('host-token')).toBe(true);
+        release();
+        await expect(boot).resolves.toEqual({ enabled: true });
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        const state = __test__.getAccessState();
+        expect(state.accessToken).toBe('host-token');
+        expect(state.selectedProtocol).toBe('v2');
+        expect(localStorage.getItem(BEARER_KEY)).toBeNull();
+        expect(document.querySelector('.access-auth-overlay')).toBeNull();
+    });
+});
+
+describe('webSocketURL bridge', () => {
+    it('appends one encoded token and preserves existing parameters', async () => {
+        const { installToken, webSocketURL } = await import('../web/auth.js');
+        installToken('jwt a/b');
+        const input = new URL('ws://localhost:3000/ws/pane/p1?state=ansi-v1');
+        const result = webSocketURL(input);
+        expect(result).not.toBe(input);
+        expect(input.searchParams.get('token')).toBeNull();
+        expect(result.searchParams.get('token')).toBe('jwt a/b');
+        expect(result.searchParams.get('state')).toBe('ansi-v1');
+        expect(result.href).not.toContain('jwt a/b');
+    });
+
+    it('leaves v1 URLs cookie-only', async () => {
+        const { webSocketURL } = await import('../web/auth.js');
+        const input = new URL('ws://localhost:3000/ws/pane/p1?state=ansi-v1');
+        const result = webSocketURL(input);
+        expect(result.href).toBe(input.href);
+        expect(result.searchParams.get('token')).toBeNull();
+    });
+
+    it('never sends the token to a foreign origin', async () => {
+        const { installToken, webSocketURL } = await import('../web/auth.js');
+        installToken('jwt-a');
+        const foreign = new URL('wss://elsewhere.example/ws/pane/p1');
+        expect(webSocketURL(foreign).searchParams.get('token')).toBeNull();
+        // Normalized wss/https comparison accepts the page's own origin.
+        const sameOrigin = new URL('ws://localhost:3000/ws/control');
+        expect(webSocketURL(sameOrigin).searchParams.get('token')).toBe(
+            'jwt-a',
+        );
     });
 });

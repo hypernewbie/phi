@@ -1,5 +1,11 @@
-import { describe, it, expect } from 'vitest';
-import { decodeNotificationDir, mdEventMatchesPath } from '../web/md-view.js';
+// @vitest-environment jsdom
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import {
+    decodeNotificationDir,
+    initMdView,
+    mdEventMatchesPath,
+} from '../web/md-view.js';
+import { installToken, __test__ } from '../web/auth.js';
 import { Notification } from '../web/proto/events.js';
 
 // Pure helpers of the standalone markdown viewer (web-src/md-view.ts).
@@ -71,5 +77,78 @@ describe('mdEventMatchesPath', () => {
 
     it('matches Windows backslash paths', () => {
         expect(mdEventMatchesPath('C:\\ws', 'C:\\ws\\x.md')).toBe(true);
+    });
+});
+
+// initMdView renders either a whitelisted static page or one workspace file.
+// md.html decides whether to bootstrap first; these tests pin what each branch
+// touches so a public help page can never start a login or a protected call.
+function mdHarness() {
+    document.body.innerHTML = '<main id="md-view-body"></main>';
+    const sockets = [];
+    vi.stubGlobal(
+        'WebSocket',
+        class {
+            constructor(url) {
+                this.url = url;
+                this.binaryType = '';
+                sockets.push(this);
+            }
+            send() {}
+            close() {}
+        },
+    );
+    const fetchSpy = vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        text: async () => '# page',
+        json: async () => ({}),
+    }));
+    vi.stubGlobal('fetch', fetchSpy);
+    return { sockets, fetchSpy };
+}
+
+afterEach(() => {
+    window.history.replaceState({}, '', '/md.html');
+    document.body.innerHTML = '';
+    vi.unstubAllGlobals();
+    __test__.resetAccessState();
+});
+
+describe('initMdView', () => {
+    it('loads a static page without auth or a socket', async () => {
+        const { sockets, fetchSpy } = mdHarness();
+        window.history.replaceState({}, '', '/md.html?page=help');
+        initMdView();
+        await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+        expect(fetchSpy.mock.calls[0][0]).toBe('help.md');
+        expect(sockets).toHaveLength(0);
+        expect(
+            fetchSpy.mock.calls.some(([url]) =>
+                String(url).startsWith('/api/auth/'),
+            ),
+        ).toBe(false);
+    });
+
+    it('loads a workspace file and dials the events socket', async () => {
+        const { sockets, fetchSpy } = mdHarness();
+        window.history.replaceState({}, '', '/md.html?path=a.md&cwd=/w');
+        initMdView();
+        await vi.waitFor(() => expect(sockets).toHaveLength(1));
+        expect(String(fetchSpy.mock.calls[0][0])).toContain(
+            '/api/markdown/file?',
+        );
+        const url = new URL(sockets[0].url);
+        expect(url.pathname).toBe('/ws/md-events');
+        expect(url.searchParams.get('token')).toBeNull();
+    });
+
+    it('carries the v2 token on the events socket', async () => {
+        const { sockets } = mdHarness();
+        installToken('jwt-a');
+        window.history.replaceState({}, '', '/md.html?path=a.md&cwd=/w');
+        initMdView();
+        await vi.waitFor(() => expect(sockets).toHaveLength(1));
+        expect(new URL(sockets[0].url).searchParams.get('token')).toBe('jwt-a');
     });
 });

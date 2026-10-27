@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { setupDomHarness } from './_dom.js';
 import { PTYWebSocket } from '../web/ws.js';
 import { TerminalServerFrame } from '../web/proto/terminal.js';
+import { installToken, __test__ } from '../web/auth.js';
 
 // M2: the notification case in ws.js's protobuf frame switch. The
 // server wraps the shared Notification in a TerminalServerFrame;
@@ -39,6 +40,32 @@ function sendNotification(pty, kind) {
 describe('PTYWebSocket markdown notification', () => {
     beforeEach(() => {
         vi.stubGlobal('WebSocket', FakeWebSocket);
+        __test__.resetAccessState();
+    });
+
+    it('keeps the pane parameters and adds the v2 token', () => {
+        installToken('jwt-a');
+        const pty = new PTYWebSocket('pane-1', () => {});
+        const url = new URL(pty.ws.url);
+        expect(url.pathname).toBe('/ws/pane/pane-1');
+        expect(url.searchParams.get('state')).toBe('ansi-v1');
+        expect(url.searchParams.get('token')).toBe('jwt-a');
+    });
+
+    it('keeps v1 pane URLs cookie-only', () => {
+        const pty = new PTYWebSocket('pane-1', () => {});
+        const url = new URL(pty.ws.url);
+        expect(url.searchParams.get('state')).toBe('ansi-v1');
+        expect(url.searchParams.get('token')).toBeNull();
+    });
+
+    it('never logs a token-bearing socket target on error', () => {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const pty = new PTYWebSocket('pane-1', () => {});
+        pty.ws.onerror({ target: { url: 'ws://x/ws/pane/p1?token=secret' } });
+        expect(error).toHaveBeenCalledTimes(1);
+        expect(error.mock.calls[0]).toHaveLength(1);
+        expect(JSON.stringify(error.mock.calls)).not.toContain('secret');
     });
 
     it('decodes into onControl({type: "md-changed", dir})', () => {

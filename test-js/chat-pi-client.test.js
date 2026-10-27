@@ -6,6 +6,7 @@ import {
     ControlClientFrame,
     ControlServerFrame,
 } from '../web/proto/control.js';
+import { installToken, __test__ } from '../web/auth.js';
 
 class FakeWebSocket {
     static instances = [];
@@ -82,9 +83,24 @@ afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     FakeWebSocket.instances = [];
+    __test__.resetAccessState();
 });
 
 describe('Pi RPC ControlClient', () => {
+    it('carries the v2 token on the control socket and omits it in v1', () => {
+        vi.stubGlobal('WebSocket', FakeWebSocket);
+        connectControl();
+        const v1URL = new URL(FakeWebSocket.instances[0].url);
+        expect(v1URL.pathname).toBe('/ws/control');
+        expect(v1URL.searchParams.get('token')).toBeNull();
+
+        FakeWebSocket.instances = [];
+        installToken('jwt-a');
+        connectControl();
+        const v2URL = new URL(FakeWebSocket.instances[0].url);
+        expect(v2URL.searchParams.get('token')).toBe('jwt-a');
+    });
+
     it('correlates calls by unique ids and delivers only sequenced events to listeners', async () => {
         vi.stubGlobal('WebSocket', FakeWebSocket);
         const client = connectControl();
