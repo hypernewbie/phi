@@ -11,6 +11,11 @@ export function resetTerminalState(term) {
     input?._stringDecoder?.clear?.();
     input?._utf8Decoder?.clear?.();
     term.reset();
+    // A reader anchor cannot survive a reset: the markers go with the buffer.
+    // Drop the reference so the next batch does not report a deliberate reset
+    // (checkpoint recovery, epoch replacement, history book) as an expired
+    // reading position.
+    if (term) term._phiReaderAnchor = null;
 }
 
 function charsetName(map) {

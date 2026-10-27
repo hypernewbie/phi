@@ -3488,6 +3488,9 @@ export class TabManager {
 
                         if (followBottom && tabInfo.userFollowBottom !== false) {
                             tabInfo.term.scrollToBottom();
+                            this._clearReaderAnchor(tabInfo);
+                        } else if (tabInfo.term._phiReaderAnchor) {
+                            this._restoreReaderAnchor(tabInfo);
                         }
                         tabInfo.term._core?.viewport?.syncScrollArea(true);
 
@@ -4320,8 +4323,13 @@ export class TabManager {
         // it for our own programmatic scrolls too, which would weaken the
         // proven 10ms/300ms stabilization loop. DOM input events identify
         // user intent without changing that loop's timing or behavior.
-        const cancelFollowForUserScroll = () =>
+        const cancelFollowForUserScroll = () => {
             this._cancelScrollFollowForUserScroll(tabInfo);
+            // Anchor the reading position after xterm applied the notch: this
+            // listener is capture phase, so the buffer still holds the
+            // pre-gesture row here.
+            queueMicrotask(() => this._captureReaderAnchor(tabInfo));
+        };
         const loadNewer = () => {
             const buffer = tabInfo.term?.buffer?.active;
             if (tabInfo._historyBrowsing && buffer && buffer.viewportY >= buffer.baseY) {
@@ -4424,6 +4432,7 @@ export class TabManager {
             this._spamScrollToBottom(tabInfo);
             // Explicit jump-to-bottom click re-engages follow mode.
             tabInfo.userFollowBottom = true;
+            this._clearReaderAnchor(tabInfo);
             scrollToBottomBtn.classList.add('hidden');
         });
         termContainer.appendChild(scrollToBottomBtn);
@@ -4476,6 +4485,7 @@ export class TabManager {
                 const b = tabInfo.term?.buffer?.active;
                 if (b && b.viewportY >= b.baseY) {
                     tabInfo.userFollowBottom = true;
+                    this._clearReaderAnchor(tabInfo);
                 }
             });
         }
@@ -4503,6 +4513,7 @@ export class TabManager {
                     if (b) {
                         if (b.viewportY >= b.baseY) {
                             tabInfo.userFollowBottom = true;
+                            this._clearReaderAnchor(tabInfo);
                         } else {
                             this._cancelScrollFollowForUserScroll(tabInfo);
                         }
@@ -7550,6 +7561,7 @@ export class TabManager {
         const tab = this.tabs.get(paneId);
         if (!tab) return;
         tab.finalizing = true;
+        this._clearReaderAnchor(tab);
 
         this._cancelHistoryRequest?.(tab);
         // The pending native Compact waiter is pane-keyed, so a closed
@@ -10185,6 +10197,9 @@ export class TabManager {
         this._cancelHistoryRequest(tab);
         tab._forceStateRefresh = true;
         tab.userFollowBottom = true;
+        // Reading is abandoned on an explicit console refresh; authoritative
+        // state replaces the screen, so the anchor cannot hold.
+        this._clearReaderAnchor(tab);
         this.reconnectTab(tab);
     }
 
@@ -10473,6 +10488,7 @@ export class TabManager {
                 // hot attach bootstrap lands (an epoch change resets again,
                 // which would erase a banner written now).
                 tabInfo.term.reset();
+                this._clearReaderAnchor(tabInfo);
                 tabInfo._pendingResetBanner =
                     '\x1b[2J\x1b[H\r\n\x1b[33m[Restarted Session]\x1b[0m\r\n';
 
@@ -11087,6 +11103,64 @@ export class TabManager {
         tabInfo.userFollowBottom = false;
     }
 
+    // Reader anchor. xterm keeps a scrolled-up view steady by decrementing the
+    // buffer offset once per recycled line; a large write backlog therefore
+    // consumes the reader's whole offset and clamps them at the top of the
+    // retained scrollback. Anchor the row instead of the offset.
+    _clearReaderAnchor(tabInfo) {
+        const term = tabInfo?.term;
+        const marker = term?._phiReaderAnchor?.marker;
+        try {
+            if (marker && !marker.isDisposed) marker.dispose();
+        } catch (_e) {
+            /* already disposed with the buffer */
+        }
+        if (term) term._phiReaderAnchor = null;
+        if (tabInfo) tabInfo._readerAnchorNoticeShown = false;
+    }
+
+    _captureReaderAnchor(tabInfo) {
+        const term = tabInfo?.term;
+        const buffer = term?.buffer?.active;
+        if (!buffer || buffer.type !== 'normal' || tabInfo.isDead) return;
+        if (tabInfo._historyBrowsing || buffer.baseY <= 0) return;
+        const line = buffer.viewportY;
+        const marker = term.registerMarker(line - (buffer.baseY + buffer.cursorY));
+        if (!marker) return;
+        this._clearReaderAnchor(tabInfo);
+        term._phiReaderAnchor = { marker, line };
+    }
+
+    _restoreReaderAnchor(tabInfo) {
+        const term = tabInfo?.term;
+        const anchor = term?._phiReaderAnchor;
+        const buffer = term?.buffer?.active;
+        if (!anchor || !buffer) return;
+        // A TUI owns the alternate screen; the normal buffer is not what is
+        // shown, so leave the anchor alone.
+        if (buffer.type !== 'normal' || !this._terminalPanelVisible(tabInfo)) return;
+        if (buffer.viewportY >= buffer.baseY) {
+            this._clearReaderAnchor(tabInfo);
+            return;
+        }
+        if (anchor.marker.isDisposed || anchor.marker.line < 0) {
+            const announced = tabInfo._readerAnchorNoticeShown;
+            this._clearReaderAnchor(tabInfo);
+            term.scrollToBottom();
+            if (!announced) {
+                tabInfo._readerAnchorNoticeShown = true;
+                this.app?.showToast?.(
+                    'Reading position expired; jumped to live output.',
+                    { type: 'info' },
+                );
+            }
+            return;
+        }
+        if (buffer.viewportY !== anchor.marker.line) {
+            term.scrollToLine(anchor.marker.line);
+        }
+    }
+
     // xterm derives its scrollable position from buffer-level scroll
     // events (`Viewport._sync`). A bootstrap screen checkpoint resizes the
     // terminal while the buffer is still empty, which syncs that position
@@ -11417,6 +11491,7 @@ export class TabManager {
                             activeTab._sizedWs = activeTab.ws;
                         }
                     }
+                    this._restoreReaderAnchor(activeTab);
                     return;
                 }
             }
@@ -11498,6 +11573,12 @@ export class TabManager {
         // Fit after layout, not after a guessed 50ms settling interval.
         // Coalescing retains the force bit through bootstrap/history gates.
         this._queuePanelFit(tabInfo, { forceResize: true });
+
+        // A tab shown again with no new output would otherwise never restore
+        // the reader's row; the fit above may also skip unchanged geometry.
+        if (tabInfo.term?._phiReaderAnchor) {
+            requestAnimationFrame(() => this._restoreReaderAnchor(tabInfo));
+        }
 
         if (scrollToBottom && tabInfo.term && !tabInfo.isDead) {
             this._spamScrollToBottom(tabInfo);
