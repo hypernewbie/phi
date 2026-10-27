@@ -5300,7 +5300,14 @@ html[data-phi-config-page] .settings-modal {
 
     .input-actions {
         flex-wrap: wrap;
-        justify-content: flex-end;
+        justify-content: flex-start;
+        width: 100%;
+        margin-left: 0;
+    }
+
+    /* Grey controls hug the left edge; Send keeps the right corner. */
+    #send-input-btn {
+        order: 1;
         margin-left: auto;
     }
 
