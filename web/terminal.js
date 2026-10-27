@@ -411,8 +411,10 @@ const HISTORY_MIN_STEP_BYTES = 4 * 1024;
 // checkpoint so the next attach restores instantly.
 const CHECKPOINT_QUIET_MS = 2000;
 
-// Each phi: name keeps at most one entry, so repeated tab selections and
-// overlapping switches cannot grow the User Timing buffer without limit.
+// Each name written through these two helpers keeps at most one entry, so
+// repeated tab selections and overlapping switches cannot grow the User
+// Timing buffer without limit. termPerfMeasureSince below still appends
+// directly and is deliberately unchanged.
 export function termPerfMark(name) {
     try {
         if (typeof performance !== 'undefined' && performance.mark) {
