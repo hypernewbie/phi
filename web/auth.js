@@ -427,10 +427,13 @@ function receiveLogout(message) {
     const family = Number.isInteger(message.family) ? message.family : 0;
     const currentFamily = state.refreshAbsoluteExpiresAt;
     if (family && currentFamily && family !== currentFamily) return;
+    const hasPrompt = pendingOverlay?.ownerKey === ownerKey;
     state.loggedOut = true;
     dropCredential(state);
-    if (pendingOverlay?.ownerKey === ownerKey)
-        pendingOverlay.finish({ enabled: false });
+    // The family is gone server-side. Keep an existing prompt open, or ask the
+    // active tab to sign in again instead of leaving it silently signed out.
+    if (state.accessEnabled && activeAuthKey === ownerKey && !hasPrompt)
+        void requestReauth(contextForKey(ownerKey));
 }
 
 function broadcastBundle(context, state) {
