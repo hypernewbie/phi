@@ -13,6 +13,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	neturl "net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -20,8 +21,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/hypernewbie/phi/pkg/system"
 	"github.com/hypernewbie/phi/pkg/ws"
+	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
 const (
@@ -4599,5 +4602,188 @@ func TestAccessStateCommitCrossedRenameStopsAuthorizing(t *testing.T) {
 	}
 	if got := testAccessV2RefreshRequest(t, handle); got.Code == http.StatusOK {
 		t.Error("revoked handle still refreshed")
+	}
+}
+
+// TestAccessV2OutOfBandRevocationIsDurable covers the restart sequence the audit
+// flagged: Config carries record A, an out-of-band edit makes it B, the process
+// starts and stops, Config is restored to A, and the process starts again. The
+// revocation has no journal entry and no expired family, so it only survives if
+// reconciliation persists it instead of keeping it in memory.
+func TestAccessV2OutOfBandRevocationIsDurable(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	testAccessEnableV2(t, testAccessPassword)
+	login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.231:1")
+	handle := testAccessRefreshHandle(t, login)
+	token := testAccessDecodeBundle(t, login).Token
+	recordA := loadConfig().AccessPasswordHash
+	familiesBefore := len(testAccessStateFile(t).Active.Families)
+	if familiesBefore == 0 {
+		t.Fatal("no family was recorded before the out-of-band edit")
+	}
+
+	other, err := newAccessPasswordRecord("an out-of-band password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := saveAccessPasswordHash(other.encoded()); err != nil {
+		t.Fatalf("out-of-band config write: %v", err)
+	}
+
+	// Start under record B: the mismatch has to be persisted, not remembered.
+	auth.owner.release()
+	firstStart := testAccessRestart(t)
+	recovered := testAccessStateFile(t)
+	if recovered.Pending != nil {
+		t.Fatal("a bare binding mismatch left a journal entry")
+	}
+	if len(recovered.Active.Families) != 0 {
+		t.Fatalf("families after the binding-mismatch start = %d want 0 on disk", len(recovered.Active.Families))
+	}
+	if recovered.Active.RecordBinding != accessRecordBinding(other.encoded()) {
+		t.Fatal("recovery did not bind the state to the record Config now carries")
+	}
+	firstStart.owner.release()
+
+	// Restore record A and start again: the revocation must not have revived.
+	if err := saveAccessPasswordHash(recordA); err != nil {
+		t.Fatalf("restore config: %v", err)
+	}
+	secondStart := testAccessRestart(t)
+	if families := testAccessStateFile(t).Active.Families; len(families) != 0 {
+		t.Fatalf("restored record revived %d families", len(families))
+	}
+	testAccessSwapManager(t, secondStart)
+	if w := testAccessV2RefreshRequest(t, handle); w.Code == http.StatusOK {
+		t.Error("a revoked handle refreshed after the record was restored")
+	}
+	protected := testAccessProtected()
+	bearer := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	bearer.Header.Set("Authorization", "Bearer "+token)
+	if w := testAccessServe(protected.ServeHTTP, bearer); w.Code != http.StatusUnauthorized {
+		t.Errorf("revoked bearer after the record was restored = %d want 401", w.Code)
+	}
+}
+
+// TestAccessV2OutOfBandRevocationPersistFailureFaultsClosed pins the other half:
+// a reset that cannot be written must not be admitted from, or the next start
+// would revive the families the current process decided to drop.
+func TestAccessV2OutOfBandRevocationPersistFailureFaultsClosed(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	testAccessEnableV2(t, testAccessPassword)
+	login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.232:1")
+	handle := testAccessRefreshHandle(t, login)
+
+	other, err := newAccessPasswordRecord("another out-of-band password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := saveAccessPasswordHash(other.encoded()); err != nil {
+		t.Fatalf("out-of-band config write: %v", err)
+	}
+
+	previous := writeAccessV2StateFile
+	writeAccessV2StateFile = func(string, []byte, os.FileMode) error {
+		return errors.New("injected state write failure")
+	}
+	auth.owner.release()
+	restarted := testAccessRestart(t)
+	writeAccessV2StateFile = previous
+
+	testAccessSwapManager(t, restarted)
+	if w := testAccessV2RefreshRequest(t, handle); w.Code != http.StatusInternalServerError {
+		t.Errorf("handle under an unwritable revocation = %d want 500", w.Code)
+	}
+}
+
+// TestAccessV2OwnershipHandoffUsesCurrentRecordAndAdmitsSockets covers the
+// handoff race and its socket side effect: the waiter read the record while the
+// owner was still running, the owner then committed a new record and exited, and
+// the recovered instance must activate the record on disk and publish a
+// generation the socket fence will accept.
+func TestAccessV2OwnershipHandoffUsesCurrentRecordAndAdmitsSockets(t *testing.T) {
+	withTempConfig(t)
+	owner := useTestAccessAuth(t)
+	testAccessUseHub(t)
+
+	testAccessEnableV2(t, testAccessPassword)
+	login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.233:1")
+	staleToken := testAccessDecodeBundle(t, login).Token
+	handle := testAccessRefreshHandle(t, login)
+
+	// The waiter reads Config while the owner is still holding the lock.
+	second := newAccessAuthManager()
+	t.Cleanup(func() { second.owner.release() })
+	if err := second.configure(loadConfig().AccessPasswordHash); err != nil {
+		t.Fatalf("configure waiter: %v", err)
+	}
+	if second.ownedNow() {
+		t.Fatal("waiter took ownership of a held lock")
+	}
+
+	// The owner commits a new record and exits.
+	body, err := json.Marshal(map[string]string{"password": "handoff-pass-1234"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := testAccessV2PasswordRequest(t, string(body), staleToken); w.Code != http.StatusOK {
+		t.Fatalf("owner password change = %d %s", w.Code, w.Body.String())
+	}
+	committed := loadConfig().AccessPasswordHash
+	if committed == accessRecordBinding("") || committed == "" {
+		t.Fatal("owner password change did not commit a record")
+	}
+	owner.owner.release()
+
+	// The waiter runs its own hub, exactly like a separate process, and starts
+	// with the fence at the generation it booted with.
+	waiterHub := testAccessUseHub(t)
+	waiterHub.RotateAuth(second.accessGeneration())
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws/md-events", func(w http.ResponseWriter, r *http.Request) {
+		ws.HandleEventsWS(w, r, waiterHub)
+	})
+	server := httptest.NewServer(accessAuthMiddleware(mux))
+	t.Cleanup(server.Close)
+	socketURL := "ws" + strings.TrimPrefix(server.URL, "http")
+
+	// The waiter recovers: it must adopt the committed record, not the one it
+	// read before acquiring.
+	if !second.ensureOwned() {
+		t.Fatal("waiter did not recover ownership")
+	}
+	if w := testAccessV2RefreshRequest(t, handle); w.Code == http.StatusOK {
+		t.Error("pre-handoff handle still refreshed after the owner changed the record")
+	}
+	testAccessSwapManager(t, second)
+	if w := testAccessV2LoginRequest(t, "handoff-pass-1234", "192.0.2.234:1"); w.Code != http.StatusOK {
+		t.Fatalf("login with the committed password after handoff = %d %s", w.Code, w.Body.String())
+	}
+	freshToken := testAccessDecodeBundle(t, testAccessV2LoginRequest(t, "handoff-pass-1234", "192.0.2.235:1")).Token
+	if freshToken == "" {
+		t.Fatal("login after handoff issued no token")
+	}
+	if loadConfig().AccessPasswordHash != committed {
+		t.Fatal("handoff changed the durable record")
+	}
+
+	// A real upgrade must be admitted: the recovered owner publishes its
+	// reconciled generation to the fence, so the gate does not compare against
+	// the generation this process started with.
+	dialer := websocket.Dialer{Subprotocols: []string{wireproto.EventsSubprotocol}}
+	url := socketURL + "/ws/md-events?token=" + neturl.QueryEscape(freshToken)
+	conn, _, err := dialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("events upgrade after handoff: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	expectStillOpen(t, conn)
+
+	stale, _, err := dialer.Dial(socketURL+"/ws/md-events?token="+neturl.QueryEscape(staleToken), nil)
+	if err == nil {
+		t.Cleanup(func() { _ = stale.Close() })
+		expectClosed(t, stale)
 	}
 }
