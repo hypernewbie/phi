@@ -1851,7 +1851,7 @@ export class TabManager {
 
         if (this.copyInputBtn) {
             this.copyInputBtn.addEventListener('click', () => {
-                this.sendRawInput('/copy\r');
+                this.sendRawInput('/copy\r', { submit: true });
                 this.inputTextArea.focus({ preventScroll: true });
             });
         }
@@ -2629,11 +2629,15 @@ export class TabManager {
                 case 'applied':
                     releaseOnce();
                     return;
-                case 'retained':
+                case 'retained': {
                     // A coherent view is on screen. Closing the socket here
                     // would replace it, so hold delivery and wait for the
-                    // reader's explicit resync.
+                    // reader's explicit resync. The gate has settled; leaving
+                    // it installed would keep every later fit pending.
+                    if (tabInfo._bootstrapGate === boot) tabInfo._bootstrapGate = null;
+                    if (tabInfo._pendingPanelFit) this._queuePanelFit(tabInfo);
                     return;
+                }
                 case 'cancelled':
                     // A successor owns the socket and the gate; nothing here
                     // is ours to release or close.
@@ -2978,6 +2982,9 @@ export class TabManager {
             try {
                 state = await this._fetchTerminalState(tabInfo.paneId, epoch, 'latest');
             } catch (error) {
+                // Stale intent is not a failure: a successor owns the pane, and
+                // only a failure may mutate its view.
+                if (!current()) return { kind: 'cancelled', reason: 'stale' };
                 if (error?.historyPermanent) return { kind: 'failed', error };
                 state = null;
             }
@@ -3032,6 +3039,7 @@ export class TabManager {
                 // checkpoint and resume from its frontier instead of
                 // replaying evicted bytes.
                 const healed = await this._recoverBootstrapFromLiveState(tabInfo, ws, current);
+                if (!current()) return { kind: 'cancelled', reason: 'stale' };
                 if (healed.kind !== 'applied') {
                     // No certified frontier. A view the reader is holding is
                     // worth more than a repaint, so keep it and wait for the
@@ -3102,6 +3110,9 @@ export class TabManager {
     async _onLiveGap(tabInfo, from, to) {
         const pty = tabInfo.ws;
         if (pty?.mode !== 'hot') return;
+        // A retained view has no live parser to patch. Repairing the hole
+        // would paint over the reading position and release the pause.
+        if (tabInfo._resyncNeeded) return;
         // Order with an in-flight bootstrap: the delta must enqueue first,
         // or the patch (newer bytes) lands below it. Stale when the socket
         // swapped mid-fetch: verify identity before touching watermarks.
@@ -4546,7 +4557,7 @@ export class TabManager {
             this._clearReaderAnchor(tabInfo);
             tabInfo.userFollowBottom = true;
             requestAnimationFrame(() => {
-                if (tabInfo.isDead || tabInfo._historyBrowsing) return;
+                if (tabInfo.isDead || tabInfo.finalizing || tabInfo._historyBrowsing) return;
                 this._spamScrollToBottom(tabInfo);
             });
         });
@@ -4625,15 +4636,11 @@ export class TabManager {
                 /^(?:\x1b\[<\d+;\d+;\d+[Mm])+$/.test(data) ||
                 /^\x1b\[\??[\d;:]*[cnRu]$/.test(data);
             if (tabInfo.directMode || protocolReply) {
-                this.sendInput(tabInfo, data);
-                // Enter-only follow: a bare Enter from the user is a submit; a
-                // printable key, a protocol reply, or a paste carrying newlines
-                // is not.
-                if (
-                    tabInfo.directMode &&
-                    fromUser &&
-                    (data === '\r' || data === '\n')
-                ) {
+                const accepted = this.sendInput(tabInfo, data);
+                // Enter-only follow: a bare physical Enter that the pane
+                // accepted is a submit; a printable key, a protocol reply, a
+                // paste carrying newlines, or a refused send is not.
+                if (tabInfo.directMode && accepted && fromUser && data === '\r') {
                     this._resumeFollowOnSubmit(tabInfo);
                 }
             }
@@ -7142,6 +7149,8 @@ export class TabManager {
             autoReconnect: true,
             force: userInitiated,
         });
+        // The restriction line belongs to the tab that owns it.
+        this._renderInputRestriction();
         this.updateDocumentTitle();
     }
 
@@ -8608,6 +8617,13 @@ export class TabManager {
             return false;
         }
 
+        // A retained view owns the screen. Screen state (mouse reports,
+        // application-mode keys, paste wrappers) describes the screen the
+        // reader left, so the single writer refuses it here instead of at
+        // every caller. Text and newlines still pass.
+        if (tabInfo._resyncNeeded && typeof payload === 'string' &&
+            /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(payload)) return false;
+
         // Track user-initiated commands and cancellation
         if (typeof payload === 'string') {
             if (payload === '\x03' || payload === '\x14') {
@@ -9146,6 +9162,14 @@ export class TabManager {
         const activeTab = this.getActiveTab();
         if (!activeTab) return;
 
+        // A retained view is waiting for its resync. Sending now would push a
+        // prompt into a pane whose output cannot come back, so ask for the
+        // resync and keep the draft and attachments exactly as they are.
+        if (activeTab._resyncNeeded) {
+            this._resyncRetainedView(activeTab);
+            return;
+        }
+
         const val = this.inputTextArea.value;
         const attachments = this.stagedAttachments;
         // Empty guard now also allows attachments-only sends. Without
@@ -9249,7 +9273,7 @@ export class TabManager {
         this.inputTextArea.focus({ preventScroll: true });
     }
 
-    sendRawInput(bytes, { focusInputOnMobile = true } = {}) {
+    sendRawInput(bytes, { focusInputOnMobile = true, submit = false } = {}) {
         const activeTab = this.getActiveTab();
         if (!activeTab || activeTab.coder === 'pi-rpc') return;
         // The backend PTY layer handles the Windows ConPTY quirk where a \r
@@ -9268,7 +9292,9 @@ export class TabManager {
             this.focusActiveTerminal();
         }
 
-        this._resumeFollowOnSubmit(activeTab);
+        // Sending bytes is not a submit unless the caller says so: Cancel,
+        // Escape, Ctrl+T, and quick-nav arrows must leave a reader in place.
+        if (submit) this._resumeFollowOnSubmit(activeTab);
 
         // Auto sync clipboard on /copy command
         if (bytes.includes('/copy')) {
@@ -11274,6 +11300,13 @@ export class TabManager {
             return;
         }
         if (anchor.marker.isDisposed || anchor.marker.line < 0) {
+            // A width change can dispose the marker of a wrapped continuation
+            // row whose content survives in a merged row. That is a reflow,
+            // not eviction: clear quietly and leave the view where it is.
+            if (anchor.reflow) {
+                this._clearReaderAnchor(tabInfo);
+                return;
+            }
             // The reading row left the buffer. Clearing first keeps the notice to
             // one per reading episode (the next batch has nothing to restore) and
             // the reader stays in read mode at the oldest retained row instead of
@@ -11291,6 +11324,7 @@ export class TabManager {
             );
             return;
         }
+        anchor.reflow = false;
         if (buffer.viewportY !== anchor.marker.line) {
             // The restore's own scroll emits onScroll; skip the capture listener
             // so it cannot re-anchor to a programmatic position.
@@ -11395,6 +11429,10 @@ export class TabManager {
         if (!holding) return false;
         if ((tabInfo.term.buffer?.active?.baseY ?? 0) <= 0) return false;
         tabInfo._resyncNeeded = true;
+        // Validate and drop later frames instead of accumulating them: a held
+        // queue has no bound, and any queued frame would land in the retained
+        // parser on release.
+        tabInfo.ws?.discard?.();
         this._updateResyncAffordance(tabInfo);
         this.app?.showToast?.(
             'Live output is paused while you read. Resync when you are ready.',
@@ -11407,7 +11445,8 @@ export class TabManager {
         if (!tabInfo._resyncNeeded) return;
         tabInfo._resyncNeeded = false;
         this._updateResyncAffordance(tabInfo);
-        this._setInputRestriction('');
+        tabInfo._inputRestriction = '';
+        this._renderInputRestriction();
     }
 
     // True when the caller must not send the bytes. Printable text still
@@ -11434,13 +11473,39 @@ export class TabManager {
         }
         // Mouse reports and application-mode sequences are screen state, not
         // text. Never queue them against a view that is held.
-        if (/^\x1b/.test(data) || /[\x00-\x1f]/.test(data)) return true;
+        if (/^\x1b/.test(data) || /[\x00-\x08\x0b-\x1f\x7f]/.test(data)) return true;
+        // Bracketed mode can be off, in which case a paste arrives as plain
+        // text. Newlines are the only signal left, and dropping them would
+        // lose the reader's text, so stage it instead.
+        if (data.includes('\n')) {
+            const area = this.inputTextArea;
+            if (area) {
+                area.value += data;
+                this.adjustInputHeight();
+                this.saveActiveDraft();
+            }
+            this._setInputRestriction(
+                'Paste held until live output is resynced.',
+            );
+            return true;
+        }
         return false;
     }
 
     _setInputRestriction(text) {
+        // Per pane: recovering a background tab must not clear the message an
+        // active restricted tab is showing, and a tab switch must show the
+        // restriction that this pane actually has.
+        const tab = this.getActiveTab?.();
+        if (tab) tab._inputRestriction = text;
+        this._renderInputRestriction();
+    }
+
+    _renderInputRestriction() {
         const line = document.getElementById('input-restriction');
         if (!line) return;
+        const tab = this.getActiveTab?.();
+        const text = tab?._inputRestriction ?? '';
         if (line.textContent !== text) line.textContent = text;
         line.classList.toggle('hidden', !text);
     }
@@ -11449,9 +11514,14 @@ export class TabManager {
     // path asks the server for a fresh atomic attach; nothing else repairs it.
     _resyncRetainedView(tabInfo) {
         if (!tabInfo || tabInfo.isDead) return;
-        this._clearResyncNeeded(tabInfo);
+        // Restrictions stay until a replacement frontier is parsed: asking for
+        // the resync is not the same as having one.
         tabInfo.userFollowBottom = true;
         this._clearReaderAnchor(tabInfo);
+        // The attach checkpoint is authoritative even though the viewport may
+        // still sit above the bottom; without this the fresh head is ignored
+        // and the evicted frontier is retried.
+        tabInfo._forceStateRefresh = true;
         try {
             tabInfo.ws?.ws?.close();
         } catch (_e) {}
@@ -11785,6 +11855,9 @@ export class TabManager {
                 scrollY = buffer.viewportY;
             }
 
+            // The fit reflows the buffer. A marker disposed during it was
+            // merged into another row by the new width, not evicted.
+            if (readerAnchor) readerAnchor.reflow = true;
             activeTab.fitAddon.fit();
             const fitMs = termPerfMeasureSince('fit', _fitT0);
             termPerfLogSlowFit(
@@ -12075,6 +12148,7 @@ export class TabManager {
                         btn.addEventListener('click', () => {
                             this.sendRawInput(p.value, {
                                 focusInputOnMobile: false,
+                                submit: true,
                             });
                         });
                         compactChips.push(btn);
@@ -13013,7 +13087,7 @@ export class TabManager {
                 ) {
                     // Preserve the legacy shell/unknown-tab behavior;
                     // never guess a command for a registered custom backend.
-                    this.sendRawInput(`/model ${model}\r`);
+                    this.sendRawInput(`/model ${model}\r`, { submit: true });
                 }
                 dropup.classList.add('hidden');
             });
@@ -13335,7 +13409,10 @@ export class TabManager {
                     e.stopPropagation();
                     const activeTab = this.getActiveTab();
                     if (!activeTab || activeTab.coder === 'pi-rpc') return;
-                    this.sendRawInput(k.value, { focusInputOnMobile: false });
+                    this.sendRawInput(k.value, {
+                        focusInputOnMobile: false,
+                        submit: k.value === '\r',
+                    });
                     btn.classList.add('key-pressed');
                     setTimeout(() => btn.classList.remove('key-pressed'), 120);
                 });

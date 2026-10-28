@@ -193,7 +193,11 @@ export const terminalHistoryMethods = {
                     tabInfo.queuedSeq = frontier; tabInfo.drainedSeq = frontier;
                     pty.adoptState(frontier);
                     const tail = await this._bootstrapDelta(tabInfo, frontier, caughtUp);
-                    if (tail.kind !== 'applied') throw new Error('Concurrent live tail unavailable');
+                    // A retained tail keeps its own pause: the reader asked for
+                    // the view, not for a retry. Only a real failure throws.
+                    if (tail.kind !== 'applied' && tail.kind !== 'retained') {
+                        throw new Error('Concurrent live tail unavailable');
+                    }
                     tabInfo._historyWindowStart = frontier;
                     tabInfo._historyWindowEnd = caughtUp;
                     tabInfo._historyLiveState = null;
@@ -229,7 +233,7 @@ export const terminalHistoryMethods = {
                 }
                 if (tabInfo._bootstrapGate === gate) tabInfo._bootstrapGate = null;
                 finishGate?.();
-                if (current() && tabInfo.ws === pty) {
+                if (current() && tabInfo.ws === pty && !tabInfo._resyncNeeded) {
                     pty.release();
                     this._queuePanelFit(tabInfo, { forceResize: true });
                 }

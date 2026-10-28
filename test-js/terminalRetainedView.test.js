@@ -62,7 +62,7 @@ it('an empty pane is never retained', async () => {
     expect(outcome.kind).toBe('failed');
 });
 
-it('the explicit resync clears the hold and asks for a fresh attach', async () => {
+it('the explicit resync asks for a fresh attach and keeps the hold until it lands', async () => {
     const h = await readingHarness();
     const close = closeSpy(h);
     await h.manager._bootstrapDelta(h.tab, 0, 200);
@@ -70,9 +70,13 @@ it('the explicit resync clears the hold and asks for a fresh attach', async () =
 
     h.manager._resyncRetainedView(h.tab);
 
-    expect(h.tab._resyncNeeded).toBe(false);
+    // Asking for the resync is not the same as having one: the restriction
+    // and the input hold stay until a replacement frontier is certified.
+    expect(h.tab._resyncNeeded).toBe(true);
+    expect(h.tab._forceStateRefresh).toBe(true);
     expect(h.tab.userFollowBottom).toBe(true);
     expect(close).toHaveBeenCalledTimes(1);
+    expect(h.tab.ws.discarding).toBe(true);
 });
 
 it('a certified frontier clears the hold', async () => {
@@ -138,6 +142,7 @@ describe('input while the view is retained', () => {
         tm.adjustInputHeight = vi.fn();
         tm.saveActiveDraft = vi.fn();
         const tab = { _resyncNeeded: true, isDead: false };
+        tm.getActiveTab = () => tab;
 
         const held = tm._holdFrozenInput(
             tab,
@@ -169,12 +174,118 @@ describe('input while the view is retained', () => {
     it('clears the restriction line once a frontier is certified', () => {
         const tm = manager();
         const line = document.getElementById('input-restriction');
+        const tab = { _resyncNeeded: true };
+        tm.getActiveTab = () => tab;
         tm._setInputRestriction('Paste held until live output is resynced.');
         expect(line.classList.contains('hidden')).toBe(false);
-        const tab = { _resyncNeeded: true };
         tm._updateResyncAffordance = vi.fn();
         tm._clearResyncNeeded(tab);
         expect(line.classList.contains('hidden')).toBe(true);
         expect(line.textContent).toBe('');
+    });
+});
+
+describe('the retained state owns the send path', () => {
+    const manager = () => Object.create(TabManager.prototype);
+
+    it('a composer submit sends nothing and keeps the draft', () => {
+        const tm = manager();
+        const area = document.createElement('textarea');
+        area.value = 'held prompt';
+        tm.inputTextArea = area;
+        tm.stagedAttachments = [];
+        tm.adjustInputHeight = vi.fn();
+        tm.saveActiveDraft = vi.fn();
+        tm._renderAttachmentStrip = vi.fn();
+        tm._resetPiRecall = vi.fn();
+        tm.sendInput = vi.fn(() => true);
+        tm._resyncRetainedView = vi.fn();
+        const tab = { _resyncNeeded: true, coder: 'pi', paneId: 'p1' };
+        tm.getActiveTab = () => tab;
+
+        tm.sendStagedInput();
+
+        expect(tm.sendInput).not.toHaveBeenCalled();
+        expect(area.value).toBe('held prompt');
+        expect(tm._resyncRetainedView).toHaveBeenCalledWith(tab);
+    });
+
+    it('the single PTY writer refuses screen state but keeps text', () => {
+        const tm = manager();
+        const tab = {
+            _resyncNeeded: true,
+            isDead: false,
+            paneId: 'p1',
+            ws: { sendInput: vi.fn(() => true) },
+        };
+        tm.app = { showToast: vi.fn() };
+
+        for (const data of ['\x1b[<64;1;1M', '\x1b[A', '\x03', '\x7f']) {
+            expect(tm.sendInput(tab, data)).toBe(false);
+        }
+        expect(tab.ws.sendInput).not.toHaveBeenCalled();
+        // Text and Enter still pass; Enter is the resync gesture upstream.
+        expect(tm.sendInput(tab, 'hello')).toBe(true);
+        expect(tm.sendInput(tab, '\r')).toBe(true);
+        expect(tm.app.showToast).not.toHaveBeenCalled();
+    });
+
+    it('a gap never repairs a frozen view', async () => {
+        const tm = manager();
+        tm._fetchRecordingRange = vi.fn();
+        const tab = { _resyncNeeded: true, ws: { mode: 'hot' } };
+        await tm._onLiveGap(tab, 0, 10);
+        expect(tm._fetchRecordingRange).not.toHaveBeenCalled();
+    });
+
+    it('a retained bootstrap settles its gate without closing or releasing', async () => {
+        const tm = manager();
+        const tab = { _resyncNeeded: false, paneId: 'p1', isDead: false };
+        tab._bootstrapDelta = async () => ({ kind: 'retained', reason: 'reader' });
+        const pty = {
+            release: vi.fn(),
+            ws: { close: vi.fn() },
+        };
+        tab.ws = pty;
+        tab._pendingBootstraps = [];
+        tm._trackBootstrap = (info, promise) => {
+            info._pendingBootstraps.push(promise);
+        };
+        tm._bootstrapDelta = tab._bootstrapDelta;
+
+        tm._bootstrappedRelease(tab, pty, 0, 10, undefined);
+        await Promise.all(tab._pendingBootstraps);
+
+        expect(tab._bootstrapGate).toBeNull();
+        expect(pty.release).not.toHaveBeenCalled();
+        expect(pty.ws.close).not.toHaveBeenCalled();
+    });
+
+    it('a stale recovery failure cannot retain a successor', async () => {
+        const tm = manager();
+        const tab = {
+            paneEpoch: 2,
+            paneOldest: 0,
+            _resyncNeeded: false,
+            isDead: false,
+            finalizing: false,
+            term: { buffer: { active: { baseY: 40 } }, _phiReaderAnchor: {} },
+            userFollowBottom: false,
+        };
+        let current = true;
+        tm._fetchTerminalState = async () => {
+            current = false; // a successor takes the pane mid-flight
+            const error = new Error('gone');
+            error.historyPermanent = true;
+            throw error;
+        };
+        const healed = await tm._recoverBootstrapFromLiveState(
+            tab,
+            {},
+            () => current,
+        );
+        expect(healed.kind).toBe('cancelled');
+        expect(await tm._retainReaderView(tab, healed)).toBe(false);
+        expect(tab._resyncNeeded).toBe(false);
     });
 });

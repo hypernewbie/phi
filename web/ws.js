@@ -82,6 +82,8 @@ export class PTYWebSocket {
     // until applyGapPatch() supplies the missing bytes.
     holding = true;
     held = [];
+    /** Retained view: validate and sequence live frames, but store nothing. */
+    discarding = false;
     constructor(paneId, onData, onControl, onClose, onOpen, opts) {
         this.paneId = paneId;
         this.onData = onData;
@@ -429,6 +431,13 @@ export class PTYWebSocket {
             // when a bootstrap-held frame is released).
             start = this.liveSeq;
         }
+        if (this.discarding) {
+            // A retained view owns the screen. W may cross holes here; P never
+            // does, because nothing is parsed, queued, or gap-fetched.
+            this.liveSeq = start + bytes.byteLength;
+            this.lastFrameEnd = this.liveSeq;
+            return;
+        }
         if (start > this.liveSeq) {
             // Gap: hold delivery until the host patches the missing range.
             this.held.push({ start, bytes });
@@ -511,6 +520,13 @@ export class PTYWebSocket {
      * (checkpoint + delta) are queued so live frames land after them. */
     hold() {
         this.holding = true;
+    }
+    /** discard() freezes live delivery for a retained view: later frames are
+     * sequenced and dropped, so nothing accumulates and no gap is reported.
+     * Only an explicit resync rebuilds the stream. */
+    discard() {
+        this.discarding = true;
+        this.held = [];
     }
     release() {
         this.holding = false;
