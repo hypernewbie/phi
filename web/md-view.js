@@ -4,7 +4,7 @@
    Imports only pure helpers — no app singletons. Importing this module
    has no side effects; md.html calls initMdView() explicitly. */
 import { renderMarkdownSafe, rewriteRelativeImages, highlightCodeIn, } from './md-render.js';
-import { escapeHtml, getLastFolderName, wsUrl, authenticateImages, } from './util.js';
+import { escapeHtml, getLastFolderName, wsUrl } from './util.js';
 import { eventsSubprotocol } from './ws-protocols.js';
 import { Notification } from './proto/events.js';
 // --- pure helpers (exported for tests) ---
@@ -92,21 +92,11 @@ export function initMdView() {
     document.title = getLastFolderName(path);
     let lastRenderedRaw = null;
     let loadRequestId = 0;
-    // Assets belong to the render that owns the DOM, not to the request that
-    // produced it: an unchanged refresh must not revoke the images of the
-    // render still on screen.
-    let renderId = 0;
-    // Object URLs from authenticated images belong to the content currently in
-    // the container; release them before that content goes away.
-    let releaseAssets = () => { };
     async function loadAndRender() {
         // Overlapping fetches (onopen + 0x07 event) can resolve out of
         // order; only the latest request may touch the DOM.
         const requestId = ++loadRequestId;
         const showError = (html) => {
-            renderId++;
-            releaseAssets();
-            releaseAssets = () => { };
             container.innerHTML = html;
         };
         try {
@@ -131,18 +121,9 @@ export function initMdView() {
                 return; // unchanged: no re-render, no scroll jump
             lastRenderedRaw = raw;
             const prevScrollTop = document.scrollingElement?.scrollTop ?? 0;
-            const render = ++renderId;
-            releaseAssets();
-            releaseAssets = () => { };
             container.innerHTML = `<div class="md-rendered">${renderMarkdownSafe(raw)}</div>`;
             rewriteRelativeImages(container, path, cwd);
             highlightCodeIn(container);
-            const release = await authenticateImages(container);
-            if (render !== renderId) {
-                release();
-                return;
-            }
-            releaseAssets = release;
             if (document.scrollingElement)
                 document.scrollingElement.scrollTop = prevScrollTop;
         }

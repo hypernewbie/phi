@@ -818,71 +818,35 @@ describe('superseded responses and transient failures', () => {
 });
 
 describe('protected asset loads', () => {
-    it('keeps the plain address outside a v2 session', async () => {
-        const { authAssetURL } = await import('../web/auth.js');
-        const fetchSpy = mockAuth(() => ({ json: { ok: true } }));
-        const asset = await authAssetURL('/api/file/asset?path=a.png');
-        expect(asset.url).toBe(`${location.origin}/api/file/asset?path=a.png`);
-        expect(fetchSpy).not.toHaveBeenCalled();
-        asset.revoke();
+    it('exposes no asset fetcher on the bridge', async () => {
+        await import('../web/auth.js');
+        // Assets load from their plain same-origin address so the browser
+        // sends the scoped phi_access_asset cookie and streams them; an
+        // in-page fetch would buffer the whole file into a blob instead.
+        expect(window.phiAccessAuth.assetURL).toBeUndefined();
+        expect(window.phiAccessAuth.installToken).toBeTypeOf('function');
+        expect(window.phiAccessAuth.webSocketURL).toBeTypeOf('function');
     });
 
-    it('leaves public and foreign addresses to the browser', async () => {
-        const { authAssetURL } = await import('../web/auth.js');
-        installToken('jwt-a');
-        const fetchSpy = mockAuth(() => ({ json: { ok: true } }));
-        expect((await authAssetURL('/api/auth/status')).url).toBe(
-            `${location.origin}/api/auth/status`,
+    it('rewrites socket URLs only, never an asset address', async () => {
+        mockAuth((url) => {
+            if (url === '/api/auth/status') return DUAL_STATUS;
+            if (url === '/api/auth/v2/refresh') return BUNDLE;
+            return undefined;
+        });
+        await bootstrapAccessAuth();
+        expect(__test__.getAccessState().selectedProtocol).toBe('v2');
+
+        // The module owns one URL rewrite: socket dials. Asset addresses are
+        // built by the viewers and stay credential-free, so a token can never
+        // reach history, a referrer, or a server access log.
+        const wsOrigin = location.origin.replace(/^http/, 'ws');
+        const socket = window.phiAccessAuth.webSocketURL(
+            new URL(`${wsOrigin}/ws/md-events?state=ansi-v1`),
         );
-        expect(
-            (await authAssetURL('https://elsewhere.example/a.png')).url,
-        ).toBe('https://elsewhere.example/a.png');
-        expect(fetchSpy).not.toHaveBeenCalled();
-    });
-
-    it('fetches a protected asset with the bearer and hands back an object URL', async () => {
-        const { authAssetURL } = await import('../web/auth.js');
-        installToken('jwt-a');
-        const create = vi.fn(() => 'blob:phi/asset-1');
-        const revoke = vi.fn();
-        URL.createObjectURL = create;
-        URL.revokeObjectURL = revoke;
-        try {
-            const fetchSpy = vi.fn(async () => ({
-                ok: true,
-                status: 200,
-                blob: async () => new Blob(['png']),
-            }));
-            vi.stubGlobal('fetch', fetchSpy);
-            installAccessFetch();
-            const asset = await authAssetURL('/api/file/asset?path=a.png');
-            expect(asset.url).toBe('blob:phi/asset-1');
-            const [url, init] = fetchSpy.mock.calls[0];
-            expect(String(url)).toBe(
-                `${location.origin}/api/file/asset?path=a.png`,
-            );
-            expect(new Headers(init.headers).get('Authorization')).toBe(
-                'Bearer jwt-a',
-            );
-            asset.revoke();
-            expect(revoke).toHaveBeenCalledWith('blob:phi/asset-1');
-        } finally {
-            delete URL.createObjectURL;
-            delete URL.revokeObjectURL;
-        }
-    });
-
-    it('reports a protected asset the server refuses', async () => {
-        const { authAssetURL } = await import('../web/auth.js');
-        installToken('jwt-a');
-        vi.stubGlobal(
-            'fetch',
-            vi.fn(async () => ({ ok: false, status: 404 })),
-        );
-        installAccessFetch();
-        await expect(
-            authAssetURL('/api/file/asset?path=a.png'),
-        ).rejects.toThrow('Unable to load asset (404)');
+        expect(socket.pathname).toBe('/ws/md-events');
+        expect(socket.searchParams.get('token')).toBe('jwt-bundle');
+        expect(socket.searchParams.get('state')).toBe('ansi-v1');
     });
 });
 

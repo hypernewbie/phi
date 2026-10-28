@@ -1525,45 +1525,18 @@ export function webSocketURL(url) {
     return target;
 }
 
-// authAssetURL makes a protected same-origin asset loadable by the DOM. A v2
-// bearer session has no cookie, so <img>, media, download, and iframe loads
-// cannot authenticate themselves: fetch the bytes with the module credential
-// and return an object URL plus its release. Every other address comes back
-// unchanged, so v1 sessions and public assets behave exactly as before.
-export async function authAssetURL(url) {
-    const target = new URL(
-        url instanceof URL ? url.href : String(url),
-        location.href,
-    );
-    const state = activeAuthState();
-    if (
-        state.selectedProtocol !== 'v2' ||
-        !state.accessToken ||
-        target.origin !== location.origin ||
-        !isProtectedAPIPath(target.pathname)
-    )
-        return { url: target.href, revoke() {} };
-    // The installed wrapper supplies the bearer and reports a rejected token.
-    const res = await fetch(target.href, { cache: 'no-store' });
-    if (!res.ok) throw new Error(`Unable to load asset (${res.status})`);
-    const objectURL = URL.createObjectURL(await res.blob());
-    return { url: objectURL, revoke: () => URL.revokeObjectURL(objectURL) };
-}
-
 if (typeof document !== 'undefined' && document.addEventListener) {
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState !== 'visible') return;
         void renewIfDue();
     });
 }
-
 if (typeof window !== 'undefined') {
     const bridge = window.phiAccessAuth || {};
     bridge.installToken = installToken;
     bridge.getAccessToken = getAccessToken;
     bridge.webSocketURL = webSocketURL;
     bridge.refreshAccessIfDue = refreshAccessIfDue;
-    bridge.assetURL = authAssetURL;
     window.phiAccessAuth = bridge;
 }
 

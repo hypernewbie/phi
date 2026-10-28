@@ -20,7 +20,6 @@
    both. */
 
 import { renderMarkdownSafe } from './md-render.js';
-import { authenticatedAsset } from './util.js';
 
 export interface FileViewHandle {
     dispose(): void;
@@ -186,10 +185,9 @@ async function mountImage(
             (window as unknown as Record<string, unknown>).Viewer !== undefined
         );
     });
-    const asset = await authenticatedAsset(url);
     const img = document.createElement('img');
     img.className = 'file-viewer-image';
-    img.src = asset.url;
+    img.src = url;
     img.alt = '';
     img.loading = 'lazy';
     container.appendChild(img);
@@ -211,7 +209,6 @@ async function mountImage(
             } catch {
                 // Viewer.destroy throws if called twice; that's fine.
             }
-            asset.revoke();
             container.innerHTML = '';
         },
         imageElement: img,
@@ -231,8 +228,7 @@ async function mountMedia(
     });
     const el = document.createElement(isVideo ? 'video' : 'audio');
     el.className = isVideo ? 'file-viewer-video' : 'file-viewer-audio';
-    const asset = await authenticatedAsset(url);
-    el.src = asset.url;
+    el.src = url;
     el.preload = 'metadata';
     el.controls = true;
     container.appendChild(el);
@@ -256,7 +252,6 @@ async function mountMedia(
             // buffered ranges; without this Chromium keeps the audio
             // context alive across modal close.
             el.load();
-            asset.revoke();
             container.innerHTML = '';
         },
     };
@@ -271,8 +266,7 @@ async function mountPdf(
     // picker, find), support for non-embedded CJK fonts via the
     // vendored cmaps/, and standard Type 1 fonts via standard_fonts/.
     // The wrapper receives the asset URL as a ?file= query param.
-    const asset = await authenticatedAsset(url);
-    const wrapperUrl = `vendor/pdfjs/wrapper.html?file=${encodeURIComponent(asset.url)}`;
+    const wrapperUrl = `vendor/pdfjs/wrapper.html?file=${encodeURIComponent(url)}`;
     const iframe = document.createElement('iframe');
     iframe.className = 'file-viewer-pdf';
     iframe.src = wrapperUrl;
@@ -286,7 +280,6 @@ async function mountPdf(
             // this the worker keeps streaming the PDF in the background
             // after the modal closes.
             iframe.removeAttribute('src');
-            asset.revoke();
             container.innerHTML = '';
         },
     };
@@ -415,42 +408,9 @@ function mountDownload(
     download.href = url;
     download.download = name;
     download.textContent = 'Download';
-    // A v2 session has no cookie, so the bytes must be fetched with the
-    // bearer. Fetch only when the user asks: previewing a large file must not
-    // download it.
-    const needsBearer = () => Boolean(window.phiAccessAuth?.getAccessToken?.());
-    let release: () => void = () => {};
-    let resolved = false;
-    let disposed = false;
-    download.addEventListener('click', (event) => {
-        if (resolved || !needsBearer()) return;
-        event.preventDefault();
-        if (download.textContent === 'Downloading…') return;
-        download.textContent = 'Downloading…';
-        void authenticatedAsset(url)
-            .then((asset) => {
-                if (disposed) {
-                    asset.revoke();
-                    return;
-                }
-                release = asset.revoke;
-                download.href = asset.url;
-                download.textContent = 'Download';
-                resolved = true;
-                download.click();
-            })
-            .catch(() => {
-                if (!disposed) download.textContent = 'Unable to download';
-            });
-    });
     wrapper.append(message, download);
     container.replaceChildren(wrapper);
     return {
-        dispose: () => {
-            disposed = true;
-            release();
-            release = () => {};
-            container.innerHTML = '';
-        },
+        dispose: () => container.replaceChildren(),
     };
 }
