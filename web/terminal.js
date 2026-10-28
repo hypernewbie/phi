@@ -1640,12 +1640,8 @@ export class TabManager {
         // Trigger spam scroll on transition from empty to typed content
         this.inputTextArea.addEventListener('input', () => {
             const currentVal = this.inputTextArea.value;
-            if (this.lastInputValue === '' && currentVal !== '') {
-                const activeTab = this.getActiveTab();
-                if (activeTab) {
-                    this._spamScrollToBottom(activeTab);
-                }
-            }
+            // Typing is not a submit: it must leave a scrolled-up reader where
+            // they are. Follow is re-applied by the submit paths only.
             this.lastInputValue = currentVal;
             this.saveActiveDraft();
             this.adjustInputHeight();
@@ -3884,6 +3880,10 @@ export class TabManager {
             // Mobile may shrink via _liveScrollbackRows (fast-mode gate);
             // desktop always keeps LIVE_SCROLLBACK_ROWS.
             scrollback: this._liveScrollbackRows(),
+            // Enter-only follow: xterm's default follows on ANY data event, so a
+            // keystroke or a paste would drag a scrolled-up reader to the bottom.
+            // Follow is re-applied per send path, only for an accepted submit.
+            scrollOnUserInput: false,
             theme: this.getTerminalTheme(coder),
             linkHandler: {
                 activate: (_event, text) => {
@@ -4498,12 +4498,19 @@ export class TabManager {
             term.onScroll(() => this._readerAnchorScroll(tabInfo));
         }
         term.onResize?.(updateScrollBtn);
-        // A reflow (column change) can dispose the anchored marker while its text
-        // is still in the buffer, which would report expiry for a move the app
-        // caused. Drop the anchor instead; preserving the row across a resize is
-        // out of scope, and the next gesture anchors again.
-        term.onResize?.(() => this._clearReaderAnchor(tabInfo));
         term.buffer?.onBufferChange?.(updateScrollBtn);
+        // Decision: the alternate screen owns the view. Leaving it lands at the
+        // bottom and forgets the reading position instead of restoring a row
+        // from before the TUI took over.
+        term.buffer?.onBufferChange?.((buffer) => {
+            if (buffer.type !== 'normal') return;
+            this._clearReaderAnchor(tabInfo);
+            tabInfo.userFollowBottom = true;
+            requestAnimationFrame(() => {
+                if (tabInfo.isDead || tabInfo._historyBrowsing) return;
+                this._spamScrollToBottom(tabInfo);
+            });
+        });
         // A wheel notch does fire public onScroll (Viewport._handleScroll ->
         // onRequestScrollLines -> CoreBrowserTerminal.scrollLines(diff, false)),
         // which is what the anchor subscription above relies on. This DOM
@@ -4576,8 +4583,15 @@ export class TabManager {
                 /^\x1b\[\??[\d;:]*[cnRu]$/.test(data);
             if (tabInfo.directMode || protocolReply) {
                 this.sendInput(tabInfo, data);
-                if (tabInfo.directMode && data.includes('\r')) {
-                    this._spamScrollToBottom(tabInfo);
+                // Enter-only follow: a bare Enter from the user is a submit; a
+                // printable key, a protocol reply, or a paste carrying newlines
+                // is not.
+                if (
+                    tabInfo.directMode &&
+                    fromUser &&
+                    (data === '\r' || data === '\n')
+                ) {
+                    this._resumeFollowOnSubmit(tabInfo);
                 }
             }
         });
@@ -9172,7 +9186,7 @@ export class TabManager {
         this.saveActiveDraft();
         this._renderAttachmentStrip();
         this.adjustInputHeight();
-        this._spamScrollToBottom(activeTab);
+        this._resumeFollowOnSubmit(activeTab);
 
         // Auto sync clipboard on /copy command
         if (val?.includes('/copy')) {
@@ -9203,7 +9217,7 @@ export class TabManager {
             this.focusActiveTerminal();
         }
 
-        this._spamScrollToBottom(activeTab);
+        this._resumeFollowOnSubmit(activeTab);
 
         // Auto sync clipboard on /copy command
         if (bytes.includes('/copy')) {
@@ -9221,9 +9235,9 @@ export class TabManager {
      * switched away from. Use from setTimeout chains or anywhere the
      * active tab may have changed between scheduling and firing.
      */
-    sendToTab(tabInfo, payload) {
+    sendToTab(tabInfo, payload, { submit = false } = {}) {
         const sent = this.sendInput(tabInfo, payload);
-        if (sent) this._spamScrollToBottom(tabInfo);
+        if (sent && submit) this._resumeFollowOnSubmit(tabInfo);
         return sent;
     }
 
@@ -9276,7 +9290,11 @@ export class TabManager {
         }
         if (sendChar === null) return false;
         e.preventDefault();
-        if (tab) this.sendToTab(tab, sendChar);
+        // Forwarding a key is not a submit except when the key is Enter.
+        if (tab) {
+            if (e.key === 'Enter') this.sendToTab(tab, sendChar, { submit: true });
+            else this.sendToTab(tab, sendChar);
+        }
         return true;
     }
 
@@ -9319,11 +9337,17 @@ export class TabManager {
         const sent = this.sendToTab(
             tabInfo,
             legacyOpenCode ? paste : `${paste}\r`,
+            { submit: true },
         );
         if (!sent) return false;
         if (legacyOpenCode) {
+            // The command is already authorized; only a newer viewport intent
+            // cancels the follow, never the send.
+            const intent = tabInfo._viewportIntentSeq;
             setTimeout(() => {
-                this.sendToTab(tabInfo, '\r');
+                this.sendToTab(tabInfo, '\r', {
+                    submit: intent === tabInfo._viewportIntentSeq,
+                });
             }, 200);
         }
         this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
@@ -11115,6 +11139,9 @@ export class TabManager {
         tabInfo.isSpammingBottom = undefined;
         tabInfo.spamScrollY = undefined;
         tabInfo.userFollowBottom = false;
+        // A newer viewport intent: a deferred send may still fire, but it does
+        // not get to move the reader after this gesture.
+        tabInfo._viewportIntentSeq = (tabInfo._viewportIntentSeq ?? 0) + 1;
     }
 
     // Reader anchor. xterm keeps a scrolled-up view steady by decrementing the
@@ -11164,6 +11191,9 @@ export class TabManager {
         if (tabInfo._historyBrowsing || buffer.baseY <= 0) return;
         if (typeof term.registerMarker !== 'function') return;
         const line = buffer.viewportY;
+        // The oldest retained row cannot be held: the next trimmed line takes it
+        // away, so anchoring there would report eviction for a move the app made.
+        if (line <= 0) return;
         const offset = line - (buffer.baseY + buffer.cursorY);
         if (!Number.isFinite(offset)) return;
         const marker = term.registerMarker(offset);
@@ -11185,17 +11215,19 @@ export class TabManager {
             return;
         }
         if (anchor.marker.isDisposed || anchor.marker.line < 0) {
-            // Clearing first keeps the notice to one per expired anchor: the
-            // next batch has nothing to restore.
+            // The reading row left the buffer. Clearing first keeps the notice to
+            // one per reading episode (the next batch has nothing to restore) and
+            // the reader stays in read mode at the oldest retained row instead of
+            // being dropped onto live output.
             this._clearReaderAnchor(tabInfo);
             this._restoringReaderAnchor = true;
             try {
-                term.scrollToBottom();
+                term.scrollToTop();
             } finally {
                 this._restoringReaderAnchor = false;
             }
             this.app?.showToast?.(
-                'Reading position expired; jumped to live output.',
+                'Reading position evicted; showing the oldest retained output.',
                 { type: 'info' },
             );
             return;
@@ -11241,6 +11273,12 @@ export class TabManager {
     _spamScroll(tabInfo, isAtBottom, scrollY = null) {
         if (!tabInfo || tabInfo.isDead) return;
 
+        // Following live output and holding a reading row are mutually
+        // exclusive; the marker would otherwise win on the next parsed batch.
+        if (isAtBottom && tabInfo.userFollowBottom !== false) {
+            this._clearReaderAnchor(tabInfo);
+        }
+
         this._resyncViewportScroll(tabInfo);
 
         clearInterval(tabInfo.spamInterval);
@@ -11281,6 +11319,16 @@ export class TabManager {
 
     _spamScrollToBottom(tabInfo) {
         this._spamScroll(tabInfo, true);
+    }
+
+    // The one user action that resumes follow: an accepted submit drops the
+    // reading target and puts the view back on live output. Typing does not
+    // call this; neither does anything the pane does to itself.
+    _resumeFollowOnSubmit(tabInfo) {
+        if (!tabInfo || tabInfo.isDead) return;
+        tabInfo.userFollowBottom = true;
+        this._clearReaderAnchor(tabInfo);
+        this._spamScrollToBottom(tabInfo);
     }
 
     copyTextRobustly(text, silent = false) {
@@ -11556,11 +11604,19 @@ export class TabManager {
 
             // Capture scroll state PRE-FIT
             const buffer = activeTab.term.buffer.active;
+            // A reader's position is a row of content, not a buffer index: the
+            // fit reflows the buffer, so a pre-fit index points at a different
+            // row afterwards. The marker moves with the row, so it owns the
+            // restore and the numeric capture below is skipped.
+            const readerAnchor = activeTab.term._phiReaderAnchor;
             let isAtBottom;
             let scrollY;
 
             // If we are resizing continuously, cache these stable coordinates on the tab
-            if (this.isResizing) {
+            if (readerAnchor) {
+                isAtBottom = false;
+                scrollY = null;
+            } else if (this.isResizing) {
                 isAtBottom =
                     activeTab.isAtBottom === undefined
                         ? buffer.viewportY >= buffer.baseY
@@ -11592,6 +11648,22 @@ export class TabManager {
                 activeTab.term.rows,
                 buffer.length,
             );
+
+            // Reflow moves the anchored row; put the viewport back on it. A
+            // marker the reflow disposed falls through to the next batch's
+            // expiry branch, which reports it once.
+            if (
+                readerAnchor &&
+                !readerAnchor.marker.isDisposed &&
+                readerAnchor.marker.line >= 0
+            ) {
+                this._restoringReaderAnchor = true;
+                try {
+                    activeTab.term.scrollToLine(readerAnchor.marker.line);
+                } finally {
+                    this._restoringReaderAnchor = false;
+                }
+            }
 
             // Restore scroll state POST-FIT using the unified helper to synchronise viewport
             this._spamScroll(activeTab, isAtBottom, scrollY);
@@ -12720,7 +12792,7 @@ export class TabManager {
                         model,
                         sendFn: (id, payload) => {
                             const tab = this.app.tabManager?.tabs?.get?.(id);
-                            return tab ? this.sendToTab(tab, payload) : false;
+                            return tab ? this.sendToTab(tab, payload, { submit: true }) : false;
                         },
                         isAliveFn: (id) => {
                             const tab = this.app.tabManager?.tabs?.get?.(id);
@@ -12737,13 +12809,13 @@ export class TabManager {
                     // Pinned to the click-time tab (captured at render, line 4376)
                     // so the puppet sequence can't be redirected by a tab switch
                     // mid-chain. Timing unchanged from prior behavior.
-                    this.sendToTab(activeTab, '/models');
+                    this.sendToTab(activeTab, '/models', { submit: true });
                     setTimeout(() => {
-                        this.sendToTab(activeTab, '\r');
+                        this.sendToTab(activeTab, '\r', { submit: true });
                         setTimeout(() => {
-                            this.sendToTab(activeTab, model);
+                            this.sendToTab(activeTab, model, { submit: true });
                             setTimeout(() => {
-                                this.sendToTab(activeTab, '\r');
+                                this.sendToTab(activeTab, '\r', { submit: true });
                             }, 350);
                         }, 350);
                     }, 350);
@@ -12769,11 +12841,13 @@ export class TabManager {
                     // bundles the keys into one event, so the dropdown never
                     // opens, the Esc has nothing to dismiss, and the Enter
                     // lands in whatever state pi-tui happened to be in.
-                    this.sendToTab(activeTab, `/model ${model}`);
+                    this.sendToTab(activeTab, `/model ${model}`, {
+                        submit: true,
+                    });
                     setTimeout(() => {
                         this.sendToTab(activeTab, '\x1b');
                         setTimeout(() => {
-                            this.sendToTab(activeTab, '\r');
+                            this.sendToTab(activeTab, '\r', { submit: true });
                         }, PI_MODEL_STEP_MS);
                     }, PI_MODEL_STEP_MS);
                 } else if (backend === 'claude') {
@@ -12781,9 +12855,11 @@ export class TabManager {
                     // command resolves. The second Enter acknowledges it.
                     // Pin it to the clicked tab just like the other delayed
                     // backend-specific model flows.
-                    this.sendToTab(activeTab, `/model ${model}\r`);
+                    this.sendToTab(activeTab, `/model ${model}\r`, {
+                        submit: true,
+                    });
                     setTimeout(() => {
-                        this.sendToTab(activeTab, '\r');
+                        this.sendToTab(activeTab, '\r', { submit: true });
                     }, 500);
                 } else if (
                     backend === 'bash' ||

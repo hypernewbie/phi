@@ -280,6 +280,7 @@ describe('Pi bridge Thinking controls', () => {
         expect(tm.sendToTab).toHaveBeenLastCalledWith(
             tab,
             '\x1b[200~/thinking\x1b[201~\r',
+            { submit: true },
         );
         expect(dropup.classList.contains('hidden')).toBe(true);
         expect(tm.inputTextArea.value).toBe('KEEP THIS PHI DRAFT');
@@ -496,6 +497,7 @@ describe('Pi bridge Thinking controls', () => {
         expect(tm.sendToTab).toHaveBeenCalledWith(
             tab,
             '\x1b[200~/thinking high\x1b[201~\r',
+            { submit: true },
         );
         expect(dropup.classList.contains('hidden')).toBe(true);
     });
