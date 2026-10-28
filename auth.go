@@ -1080,14 +1080,14 @@ func (m *accessAuthManager) configure(encoded string) error {
 	if err != nil {
 		return err
 	}
-	owned := m.owner.tryAcquire(accessV2LockPath())
-	var state *accessV2StateFile
-	var loadErr error
-	if owned {
-		state, loadErr = loadAccessV2StateFile(accessV2StatePath())
-	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.activateLocked(encoded, record, key)
+}
+
+// beginActivationLocked installs the record and ownership decision this
+// process starts with. The caller holds the manager lock.
+func (m *accessAuthManager) beginActivationLocked(owned bool, encoded string, record *accessPasswordRecord, key []byte) {
 	m.record = record
 	m.jwtKey = key
 	m.owned = owned
@@ -1096,6 +1096,14 @@ func (m *accessAuthManager) configure(encoded string) error {
 	m.sessions = make(map[string]time.Time)
 	m.attempts = make(map[string]accessLoginAttempt)
 	m.refreshBuckets = make(map[string]accessRefreshBucket)
+}
+
+// activateLocked takes the state lock, reconciles the durable state, and only
+// then publishes ownership. The caller holds the manager lock, so two callers
+// cannot interleave an activation with someone else's reconciliation.
+func (m *accessAuthManager) activateLocked(encoded string, record *accessPasswordRecord, key []byte) error {
+	owned := m.owner.tryAcquire(accessV2LockPath())
+	m.beginActivationLocked(owned, encoded, record, key)
 	if !owned {
 		// A second instance cannot tell whether the owner enabled or revoked
 		// anything since it read Config, so it authorizes nothing at all.
@@ -1105,7 +1113,22 @@ func (m *accessAuthManager) configure(encoded string) error {
 		m.v2.epoch = 1
 		return nil
 	}
-	return m.reconcileLocked(encoded, state, loadErr)
+	return m.finishActivationLocked(encoded)
+}
+
+// finishActivationLocked reconciles the durable state for the record that is
+// already installed and publishes the result to the socket fence.
+func (m *accessAuthManager) finishActivationLocked(encoded string) error {
+	state, loadErr := loadAccessV2StateFile(accessV2StatePath())
+	if err := m.reconcileLocked(encoded, state, loadErr); err != nil {
+		return err
+	}
+	// Publish the reconciled generation to the socket fence. Without this a
+	// recovered owner keeps the fence this process started with and refuses
+	// every upgrade, because the gate compares against a generation the auth
+	// layer already advanced.
+	revokeAccessSockets(m.generation)
+	return nil
 }
 
 // stateOwned reports whether this process owns the auth state file, so the
@@ -1126,17 +1149,50 @@ func (m *accessAuthManager) ownedNow() bool {
 }
 
 // ensureOwned retries ownership for a process that started second. It returns
-// true once this process may authorize anything, after reloading Config and
-// reconciling the journal, so a recovered owner never admits from cache.
+// true once this process may authorize anything, after taking the lock and
+// reconciling the authoritative record, so a recovered owner never admits from
+// cache and never activates a record the previous owner already replaced.
 func (m *accessAuthManager) ensureOwned() bool {
 	if m.stateOwned() {
 		return true
 	}
-	cfg := loadConfig()
-	if err := m.configure(cfg.AccessPasswordHash); err != nil {
+	// Serialize the handoff: the lock file, the Config read, and reconciliation
+	// must be one step, or two waiters read different records and one of them
+	// activates a stale password.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.owned {
+		return true
+	}
+	if !m.owner.tryAcquire(accessV2LockPath()) {
 		return false
 	}
-	return m.stateOwned()
+	// Read the record only now that the lock is ours: the previous owner may
+	// have committed a password change and exited between an earlier read and
+	// this acquisition, and activating that record would authorize against a
+	// credential the disk no longer carries.
+	encoded, err := accessPasswordHashAuthoritative()
+	if err == nil {
+		var record *accessPasswordRecord
+		record, err = parseAccessPasswordHash(encoded)
+		var key []byte
+		if err == nil {
+			key, err = accessJWTKey(record)
+			if err == nil {
+				m.beginActivationLocked(true, encoded, record, key)
+				if cerr := m.finishActivationLocked(encoded); cerr != nil {
+					return false
+				}
+				return m.owned
+			}
+		}
+	}
+	// The lock is ours but the record is not readable: report unavailable rather
+	// than admitting against a guess, because an unreadable Config is not the
+	// same as "no password set".
+	m.owned = true
+	m.faulted = true
+	return false
 }
 
 // reconcileLocked installs state read from disk and resolves an interrupted
@@ -1164,23 +1220,28 @@ func (m *accessAuthManager) reconcileLocked(encoded string, state *accessV2State
 	}
 	active := state.Active
 	pending := state.Pending
+	reconciled := false
 	switch {
 	case pending != nil && accessRecordBinding(pending.PasswordRecord) == binding:
 		// Config carries the journaled record: the commit happened, so the
 		// journaled state is the truth.
 		active = pending.Next
+		reconciled = true
 	case pending != nil && active.RecordBinding == binding:
 		// Config still carries the previous record: the commit never landed.
 		// Drop the journal and keep the old sessions.
+		reconciled = true
 	case pending != nil:
 		// Neither binding matches: an out-of-band edit or an unsupported
 		// history. Revoke everything rather than restore the journal's
 		// password into Config.
 		active = accessRevokedState(active, binding)
+		reconciled = true
 	case active.RecordBinding != binding:
 		// Out-of-band record edit or a downgraded run: families minted under
 		// another record must not survive.
 		active = accessRevokedState(active, binding)
+		reconciled = true
 	}
 	pruned := pruneExpiredAccessFamilies(&active, m.now())
 	if err := m.loadRuntimeLocked(&active); err != nil {
@@ -1190,10 +1251,16 @@ func (m *accessAuthManager) reconcileLocked(encoded string, state *accessV2State
 		m.v2.epoch = 1
 		return nil
 	}
-	if pending != nil || pruned {
-		// A journal entry or expired evidence must not survive the restart.
+	if reconciled || pruned {
+		// A reset that is only in memory revives the revoked families on the
+		// next start, so it must be durable before this process admits anything.
 		if err := m.persistLocked(); err != nil {
-			m.faulted = true
+			// A committed-but-unconfirmed write already holds the bytes; any
+			// other failure leaves the old state on disk, which must fault v2
+			// closed rather than authorize from a reset nobody can see.
+			if !system.IsAtomicCommitted(err) {
+				m.faulted = true
+			}
 		}
 	}
 	return nil
@@ -1246,6 +1313,21 @@ func pruneExpiredAccessFamilies(active *accessV2ActiveState, now time.Time) bool
 	return changed
 }
 
+// pruneAccessConsumedFamily drops one family's replay evidence that is old
+// enough to expire. Evidence is only useful while the family can still identify
+// it, so pruning before the cap check keeps a long-lived family renewing instead
+// of revoking itself on stale entries.
+func pruneAccessConsumedFamily(family *accessV2Family, now time.Time) {
+	kept := family.Consumed[:0]
+	for _, entry := range family.Consumed {
+		if now.Unix()-entry.ConsumedAt >= int64(accessConsumedRetention/time.Second) {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	family.Consumed = kept
+}
+
 // familyDeadline is the earlier of a family's two deadlines: past either one it
 // can no longer authorize anything.
 func familyDeadline(family *accessV2Family) time.Time {
@@ -1254,6 +1336,43 @@ func familyDeadline(family *accessV2Family) time.Time {
 		return absolute
 	}
 	return deadline
+}
+
+// faultAccessClosedLocked stops v2 authorization after a write that landed on
+// disk but was not confirmed durable. The durable copy is authoritative and may
+// be older than memory after a crash, so serving from either one is unsound
+// until reconciliation; the generation bump also fences the sockets the
+// retired credentials admitted.
+func (m *accessAuthManager) faultAccessClosedLocked(binding string, epoch uint64) {
+	m.faulted = true
+	m.v2 = newAccessV2Runtime()
+	m.v2.recordBinding = binding
+	m.v2.epoch = epoch
+	m.generation++
+	revokeAccessSockets(m.generation)
+}
+
+// adoptDurableRecordLocked points v1 at the record the durable Config carries.
+// After a Config write that crossed its rename the new record is on disk even
+// though the write is unconfirmed, so v1 must follow it instead of authorizing
+// against the record this process still has in memory.
+func (m *accessAuthManager) adoptDurableRecordLocked() {
+	encoded, err := accessPasswordHashAuthoritative()
+	if err != nil {
+		return
+	}
+	record, err := parseAccessPasswordHash(encoded)
+	if err != nil {
+		return
+	}
+	key, err := accessJWTKey(record)
+	if err != nil {
+		return
+	}
+	m.record = record
+	m.jwtKey = key
+	m.challenges = make(map[string]time.Time)
+	m.sessions = make(map[string]time.Time)
 }
 
 // commitActiveLocked persists next and only then installs it. Nothing is
@@ -1268,6 +1387,12 @@ func (m *accessAuthManager) commitActiveLocked(next *accessV2ActiveState) error 
 		Version: accessV2StateVersion,
 		Active:  *next,
 	}); err != nil {
+		if system.IsAtomicCommitted(err) {
+			// The revocation is already on disk and cannot be rolled back, so
+			// continuing to authorize from memory would serve a family the
+			// durable state dropped.
+			m.faultAccessClosedLocked(next.RecordBinding, next.Epoch)
+		}
 		return err
 	}
 	// The retired set must be captured before the new runtime is installed:
@@ -1400,6 +1525,10 @@ func addAccessFamily(active *accessV2ActiveState, key, refreshKey []byte, now ti
 		CurrentAccess:     access,
 		Consumed:          []accessV2Consumed{},
 	}
+	// Families that are already past a deadline cannot authorize anything, so
+	// they must leave before a live one is chosen as the least-recently-used
+	// victim: capacity must count usable families, not tombstones.
+	pruneExpiredAccessFamilies(active, now)
 	enforceAccessFamilyCapacity(active)
 	active.Families = append(active.Families, family)
 	return &family, accessV2Bundle{
@@ -1963,13 +2092,26 @@ func (m *accessAuthManager) commitPasswordLocked(record *accessPasswordRecord, n
 			},
 		}
 		if err := saveAccessV2StateFile(accessV2StatePath(), journal); err != nil {
-			// Known pre-commit failure: Config still carries the old record, so
-			// the old credentials and sockets stay valid.
-			return accessPasswordOutcome{}, fmt.Errorf("%w: %v", errAccessPersistence, err)
+			if !system.IsAtomicCommitted(err) {
+				// Known pre-commit failure: Config still carries the old record, so
+				// the old credentials and sockets stay valid.
+				return accessPasswordOutcome{}, fmt.Errorf("%w: %v", errAccessPersistence, err)
+			}
+			// The journal is on disk even though its durability is unconfirmed.
+			// Proceeding keeps the recovery table valid either way: a restart
+			// that cannot see the journal keeps the old record, and one that can
+			// resolves it against Config.
 		}
 		if err := saveAccessPasswordHash(plan.encoded); err != nil {
-			// The commit point did not happen. The pending entry is cleaned up
-			// by reconciliation on the next start.
+			if system.IsAtomicCommitted(err) {
+				// The commit point crossed its rename: Config carries the new
+				// record, so v1 follows the durable copy, and v2 stays closed
+				// until reconciliation promotes the journal.
+				m.adoptDurableRecordLocked()
+				m.faultAccessClosedLocked(plan.next.RecordBinding, plan.next.Epoch)
+			}
+			// Otherwise the commit point did not happen. The pending entry is
+			// cleaned up by reconciliation on the next start.
 			return accessPasswordOutcome{}, fmt.Errorf("%w: %v", errAccessPersistence, err)
 		}
 		// Config now carries the new record. v1 must follow it even if the
@@ -1986,18 +2128,18 @@ func (m *accessAuthManager) commitPasswordLocked(record *accessPasswordRecord, n
 			// Ambiguous: the record is committed but the journal is not
 			// promoted. Fault v2 closed until reconciliation instead of
 			// claiming success or promising a rollback.
-			m.faulted = true
-			m.v2 = newAccessV2Runtime()
-			m.v2.recordBinding = plan.next.RecordBinding
-			m.v2.epoch = plan.next.Epoch
-			m.generation++
-			revokeAccessSockets(m.generation)
+			m.faultAccessClosedLocked(plan.next.RecordBinding, plan.next.Epoch)
 			return accessPasswordOutcome{}, fmt.Errorf("%w: %v", errAccessPersistence, err)
 		}
 	} else if err := saveAccessV2StateFile(accessV2StatePath(), &accessV2StateFile{
 		Version: accessV2StateVersion,
 		Active:  plan.next,
 	}); err != nil {
+		if system.IsAtomicCommitted(err) {
+			// The state-only commit crossed its rename, so the durable state no
+			// longer matches the record this process is still holding.
+			m.faultAccessClosedLocked(plan.next.RecordBinding, plan.next.Epoch)
+		}
 		return accessPasswordOutcome{}, fmt.Errorf("%w: %v", errAccessPersistence, err)
 	}
 
@@ -2075,6 +2217,13 @@ func (m *accessAuthManager) rotateRefreshLocked(familyID, digest string, now tim
 	family := findAccessFamily(active, familyID)
 	if family == nil {
 		return accessV2Bundle{}, errAccessUnauthorized
+	}
+	if len(family.Consumed) >= maxAccessConsumedPerFam {
+		// Never evict younger replay evidence to make room: the family is
+		// revoked durably instead. Evidence past its retention window is not
+		// evidence, so prune it first or a returning family revokes a healthy
+		// session on entries nobody could still replay.
+		pruneAccessConsumedFamily(family, now)
 	}
 	if len(family.Consumed) >= maxAccessConsumedPerFam {
 		// Never evict younger replay evidence to make room: the family is
