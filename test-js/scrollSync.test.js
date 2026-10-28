@@ -694,7 +694,10 @@ describe('only an accepted submit resumes follow', () => {
         });
         for (const key of ['ArrowUp', 'PageUp', 'Home', 'Escape', 'Tab']) {
             tm._forwardKeyToPty({ key, preventDefault: vi.fn() }, tab);
-            expect(tm.sendToTab).toHaveBeenLastCalledWith(tab, expect.any(String));
+            expect(tm.sendToTab).toHaveBeenLastCalledWith(
+                tab,
+                expect.any(String),
+            );
         }
     });
 

@@ -71,10 +71,7 @@ const attach = (extra = {}) => ({
 describe('attach replay window', () => {
     it('resumes from the local frontier instead of repainting', async () => {
         const { tm, tab, pty } = harness({ drainedSeq: 100 });
-        await tm._onAttachHead(
-            tab,
-            attach({ replayFrom: 64 }),
-        );
+        await tm._onAttachHead(tab, attach({ replayFrom: 64 }));
 
         expect(tm._writeAttachCheckpoint).not.toHaveBeenCalled();
         expect(tab.term.reset).not.toHaveBeenCalled();

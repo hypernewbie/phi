@@ -47,7 +47,10 @@ describe('_forwardKeyToPty', () => {
         const tab = makeTab();
         const e = makeEvent({ key });
         expect(run(ctx, e, tab)).toBe(true);
-        if (key === 'Enter') expect(ctx.sendToTab).toHaveBeenCalledWith(tab, bytes, { submit: true });
+        if (key === 'Enter')
+            expect(ctx.sendToTab).toHaveBeenCalledWith(tab, bytes, {
+                submit: true,
+            });
         else expect(ctx.sendToTab).toHaveBeenCalledWith(tab, bytes);
         expect(e.preventDefault).toHaveBeenCalled();
     });

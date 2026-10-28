@@ -585,7 +585,9 @@ export class PTYWebSocket {
      * of growing without limit, and the caller falls back to retained. */
     _captureFrame(start, bytes) {
         const next = this.capturedBytes + bytes.byteLength;
-        if (this.captureOverflow || this.captured.length >= MAX_HELD_SPANS || next > MAX_HELD_BYTES) {
+        if (this.captureOverflow ||
+            this.captured.length >= MAX_HELD_SPANS ||
+            next > MAX_HELD_BYTES) {
             this.captureOverflow = true;
             this.captured = [];
             this.capturedBytes = 0;
@@ -648,8 +650,7 @@ export class PTYWebSocket {
      * Overflow reconnects instead of silently dropping bytes into a parser. */
     _holdFrame(start, bytes) {
         const next = this.heldBytes + bytes.byteLength;
-        if (this.held.length >= MAX_HELD_SPANS ||
-            next > MAX_HELD_BYTES) {
+        if (this.held.length >= MAX_HELD_SPANS || next > MAX_HELD_BYTES) {
             this.held = [];
             this.heldBytes = 0;
             this.holding = false;

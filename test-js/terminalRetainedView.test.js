@@ -242,7 +242,10 @@ describe('the retained state owns the send path', () => {
     it('a retained bootstrap settles its gate without closing or releasing', async () => {
         const tm = manager();
         const tab = { _resyncNeeded: false, paneId: 'p1', isDead: false };
-        tab._bootstrapDelta = async () => ({ kind: 'retained', reason: 'reader' });
+        tab._bootstrapDelta = async () => ({
+            kind: 'retained',
+            reason: 'reader',
+        });
         const pty = {
             release: vi.fn(),
             ws: { close: vi.fn() },

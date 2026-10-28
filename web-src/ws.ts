@@ -531,7 +531,10 @@ export class PTYWebSocket {
             // The fence is not known yet, so retain everything from the
             // current received frontier. finishCapture() trims below C.
             this._captureFrame(start, bytes);
-            this.lastFrameEnd = Math.max(this.lastFrameEnd ?? 0, start + bytes.byteLength);
+            this.lastFrameEnd = Math.max(
+                this.lastFrameEnd ?? 0,
+                start + bytes.byteLength,
+            );
             return;
         }
         if (this.discarding) {
@@ -682,7 +685,11 @@ export class PTYWebSocket {
      * of growing without limit, and the caller falls back to retained. */
     private _captureFrame(start: number, bytes: Uint8Array) {
         const next = this.capturedBytes + bytes.byteLength;
-        if (this.captureOverflow || this.captured.length >= MAX_HELD_SPANS || next > MAX_HELD_BYTES) {
+        if (
+            this.captureOverflow ||
+            this.captured.length >= MAX_HELD_SPANS ||
+            next > MAX_HELD_BYTES
+        ) {
             this.captureOverflow = true;
             this.captured = [];
             this.capturedBytes = 0;
@@ -747,10 +754,7 @@ export class PTYWebSocket {
      * Overflow reconnects instead of silently dropping bytes into a parser. */
     private _holdFrame(start: number, bytes: Uint8Array): boolean {
         const next = this.heldBytes + bytes.byteLength;
-        if (
-            this.held.length >= MAX_HELD_SPANS ||
-            next > MAX_HELD_BYTES
-        ) {
+        if (this.held.length >= MAX_HELD_SPANS || next > MAX_HELD_BYTES) {
             this.held = [];
             this.heldBytes = 0;
             this.holding = false;
