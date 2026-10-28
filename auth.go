@@ -66,6 +66,14 @@ const (
 	accessAssetCookiePath   = "/api"
 	accessAssetFilePath     = "/api/file/asset"
 	accessAssetMarkdownPath = "/api/markdown/asset"
+	// accessSocketTokenHeader carries the access token on a WebSocket upgrade
+	// for a host that holds the credential instead of the page. The Electron
+	// shell renders from phi-app://app, which cannot build the ?token= a
+	// browser socket uses, so its main process adds this header on the
+	// handshake. It is a WebSocket credential and nothing else: on an HTTP
+	// route the header is not a credential at all, so it fails closed rather
+	// than being ignored.
+	accessSocketTokenHeader = "X-Phi-Socket-Token"
 
 	// v2 session state. The file is a read-modify-write record whose content
 	// decides revocation, so exactly one process may own it.
@@ -929,12 +937,20 @@ func accessCredentialFromRequest(r *http.Request) accessCredential {
 		}
 	}
 	authorization := r.Header.Values("Authorization")
+	socketTokens := r.Header.Values(accessSocketTokenHeader)
 	query, queryErr := url.ParseQuery(r.URL.RawQuery)
 	tokenValues, hasQueryToken := query["token"]
 	websocket := strings.HasPrefix(r.URL.Path, "/ws/")
 
 	switch {
-	case len(authorization) > 1 || len(tokenValues) > 1:
+	case len(authorization) > 1 || len(tokenValues) > 1 || len(socketTokens) > 1:
+		credential.State = accessCredentialInvalid
+	case len(socketTokens) != 0 && !websocket:
+		// The host-only carrier authenticates an upgrade, never an HTTP
+		// route. A request that sends it to one carries a credential that
+		// cannot be used here, which fails closed like the other carriers.
+		credential.State = accessCredentialInvalid
+	case len(socketTokens) != 0 && (len(authorization) == 1 || hasQueryToken):
 		credential.State = accessCredentialInvalid
 	case len(authorization) == 1 && hasQueryToken:
 		credential.State = accessCredentialInvalid
@@ -946,6 +962,13 @@ func accessCredentialFromRequest(r *http.Request) accessCredential {
 		// A malformed query can hide a token, so selection cannot prove that
 		// the request has no explicit credential.
 		credential.State = accessCredentialInvalid
+	case len(socketTokens) == 1:
+		if socketTokens[0] == "" {
+			credential.State = accessCredentialInvalid
+			return credential
+		}
+		credential.State = accessCredentialPresent
+		credential.Token = socketTokens[0]
 	case len(authorization) == 1:
 		token, ok := parseAccessBearer(authorization[0])
 		if !ok {
@@ -2619,7 +2642,8 @@ func handleAccessV2Refresh(w http.ResponseWriter, r *http.Request) {
 		accessError(w, "Invalid refresh request", http.StatusBadRequest)
 		return
 	}
-	if len(r.Header.Values("Authorization")) != 0 {
+	if len(r.Header.Values("Authorization")) != 0 ||
+		len(r.Header.Values(accessSocketTokenHeader)) != 0 {
 		accessError(w, errAccessUnauthorized.Error(), http.StatusUnauthorized)
 		return
 	}
