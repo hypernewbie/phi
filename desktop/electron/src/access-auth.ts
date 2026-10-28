@@ -79,6 +79,35 @@ export type SelectedProtocol = 'v1' | 'v2';
 /** Result of validating an installed v2 token through `/api/auth/v2/status`. */
 export type TokenVerdict = 'valid' | 'invalid' | 'unavailable';
 
+/** One server-issued v2 credential bundle. The access token is short-lived; the
+ *  refresh handle above it is the host's alone — it never reaches a renderer,
+ *  an IPC payload, or a page-visible object. The deadline fields are integer
+ *  Unix seconds from the server, and `expiresIn` is the server-computed
+ *  remaining seconds, which is what renewal schedules from: a host clock that
+ *  is behind would otherwise renew late and serve 401s for the whole window. */
+export interface V2Bundle {
+  readonly token: string;
+  readonly expiresAt: number;
+  readonly expiresIn: number;
+  readonly refreshHandle: string;
+  readonly refreshIdleExpiresAt: number;
+  readonly refreshAbsoluteExpiresAt: number;
+}
+
+/** Discriminated outcome of a host refresh. `unauthorized` is the only terminal
+ *  result; every other failure keeps the bundle for a later retry. */
+export type RefreshResult =
+  | { kind: 'ok'; bundle: V2Bundle }
+  | { kind: 'unauthorized' }
+  | { kind: 'unavailable'; reason: string; retryAfterMs?: number }
+  | { kind: 'superseded' };
+
+/** Discriminated outcome of a host logout. */
+export type LogoutResult =
+  | { kind: 'ok' }
+  | { kind: 'unauthorized' }
+  | { kind: 'unavailable'; reason: string };
+
 /** Capability discovery from the legacy status route. `raw` is retained so
  *  the v1 path can validate KDF metadata only when it needs it. */
 export type AuthDiscovery =
@@ -128,7 +157,23 @@ const AUTH_PATH_STATUS = '/api/auth/status';
 const AUTH_PATH_LOGIN = '/api/auth/login';
 const AUTH_PATH_V2_STATUS = '/api/auth/v2/status';
 const AUTH_PATH_V2_LOGIN = '/api/auth/v2/login';
+const AUTH_PATH_V2_REFRESH = '/api/auth/v2/refresh';
+const AUTH_PATH_V2_LOGOUT = '/api/auth/v2/logout';
+const REFRESH_COOKIE_NAME = 'phi_access_refresh';
+const REFRESH_COOKIE_PATH = '/api/auth/v2/refresh';
+const REFRESH_HANDLE_BYTES = 32;
+const CSRF_HEADER = 'X-Phi-Auth';
+const CSRF_VALUE = 'v2';
 const CONFIG_PATH = '/api/config';
+/** Renew this long before the access expiry. The token lives one hour, so the
+ *  lead is small relative to its lifetime and absorbs a slow round trip. */
+const RENEW_LEAD_S = 60;
+const REFRESH_BACKOFF_BASE_MS = 1_000;
+const REFRESH_BACKOFF_MAX_MS = 60_000;
+const RETRY_AFTER_MAX_MS = 300_000;
+/** A bundle is five short fields; anything larger is not one. Matches the
+ *  embedded proxy's limit so both owners reject the same bodies. */
+const MAX_BUNDLE_BYTES = 64 * 1024;
 
 /**
  * Canonicalizes and validates an origin string for access-auth identity.
@@ -165,9 +210,20 @@ interface TrustedAuthStatus {
 
 export class AccessAuth {
   private readonly cookies = new Map<string, CookieJarEntry>();
-  /** Per-origin v2 bearer. Installed by a successful v2 login or by the
-   *  host restoring its encrypted store. Never persisted by this module. */
+  /** Per-origin v2 bearer. Installed by a successful v2 login, a host refresh,
+   *  or the host restoring its encrypted store. Never persisted here. */
   private readonly tokens = new Map<string, string>();
+  /** Per-origin refresh bundle. Present only when the host holds a handle, so
+   *  a host-installed token with no handle is never refreshed. */
+  private readonly bundles = new Map<string, V2Bundle>();
+  /** One in-flight refresh promise per canonical origin: a reload, a poll and a
+   *  401-driven renewal must never consume the same handle twice. */
+  private readonly refreshes = new Map<string, Promise<RefreshResult>>();
+  /** Bounded retry state after a non-terminal refresh failure. */
+  private readonly refreshBackoff = new Map<
+    string,
+    { attempts: number; until: number }
+  >();
   /** Per-origin protocol choice. Presence is intentional: a rejected token
    *  clears the token but keeps `v2` selected, so no cookie fallback runs. */
   private readonly selectedProtocols = new Map<string, SelectedProtocol>();
@@ -182,11 +238,13 @@ export class AccessAuth {
   >();
   private readonly attemptTokens = new Map<string, number>();
   private readonly _doFetch: FetchLike;
+  private readonly _now: () => number;
   private _cookieProvider: CookieProvider | null = null;
   private _onCookieCaptured: CookieCapturedListener | null = null;
 
-  constructor(doFetch: FetchLike = fetch) {
+  constructor(doFetch: FetchLike = fetch, now: () => number = Date.now) {
     this._doFetch = doFetch;
+    this._now = now;
   }
 
   setCookieProvider(provider: CookieProvider | null): void {
@@ -229,12 +287,18 @@ export class AccessAuth {
       this.lastCredential.delete(canonical);
       this.lastCredential.delete(`${canonical}/`);
       this.tokens.delete(canonical);
+      this.bundles.delete(canonical);
+      this.refreshes.delete(canonical);
+      this.refreshBackoff.delete(canonical);
       this.selectedProtocols.delete(canonical);
     }
     this.cookies.delete(origin);
     this.lastVerifier.delete(origin);
     this.lastCredential.delete(origin);
     this.tokens.delete(origin);
+    this.bundles.delete(origin);
+    this.refreshes.delete(origin);
+    this.refreshBackoff.delete(origin);
     this.selectedProtocols.delete(origin);
   }
 
@@ -247,9 +311,34 @@ export class AccessAuth {
       return false;
     }
     this.tokens.set(canonical, token);
+    // A bare token carries no refresh handle, so any older bundle describes a
+    // different credential and must not be refreshed against this token.
+    this.bundles.delete(canonical);
     this.selectedProtocols.set(canonical, 'v2');
     this.bumpAttempt(canonical);
     return true;
+  }
+
+  /** Installs a full v2 credential bundle: access token plus the host-only
+   *  refresh handle and the server's deadlines. Returns false when the bundle
+   *  is malformed, so a bad body can never displace a working credential. */
+  installBundle(origin: string, bundle: V2Bundle): boolean {
+    const canonical = toCanonicalAuthOrigin(origin);
+    if (!canonical || !isValidBundle(bundle)) return false;
+    this.tokens.set(canonical, bundle.token);
+    this.bundles.set(canonical, bundle);
+    this.selectedProtocols.set(canonical, 'v2');
+    this.refreshBackoff.delete(canonical);
+    this.bumpAttempt(canonical);
+    return true;
+  }
+
+  /** The bundle held for `origin`, or null. Host-only: the caller must never
+   *  put this object (or its handle) into a renderer. */
+  getBundle(origin: string): V2Bundle | null {
+    const canonical = toCanonicalAuthOrigin(origin);
+    if (!canonical) return null;
+    return this.bundles.get(canonical) ?? null;
   }
 
   /** Drops one rejected token while keeping the v2 selection. A delayed
@@ -259,6 +348,7 @@ export class AccessAuth {
     if (!canonical) return;
     if (this.tokens.get(canonical) === token) {
       this.tokens.delete(canonical);
+      this.bundles.delete(canonical);
     }
     this.selectedProtocols.set(canonical, 'v2');
   }
@@ -493,9 +583,15 @@ export class AccessAuth {
       });
       if (res.status === 401) {
         if (token) {
-          // Clear only the token this request sent. A newer token installed
-          // while the request was in flight must survive.
-          if (this.tokens.get(canonical) === token) {
+          const bundle = this.bundles.get(canonical);
+          if (bundle && bundle.token === token) {
+            // A current access 401 is not proof the session ended: start one
+            // host refresh for subsequent work. This request is never
+            // replayed, so a mutation cannot be duplicated here.
+            void this.refreshAccess(canonical);
+          } else if (this.tokens.get(canonical) === token) {
+            // A host-installed token without a refresh handle can only be
+            // cleared; a newer token installed meanwhile survives.
             this.tokens.delete(canonical);
           }
         } else {
@@ -672,18 +768,26 @@ export class AccessAuth {
     }
     if (login.kind !== 'ok') return login;
 
-    this.tokens.set(canonical, login.token);
+    if (!this.installBundle(canonical, login.bundle)) {
+      return { kind: 'unavailable', message: 'v2 login returned bad bundle' };
+    }
     this.selectedProtocols.set(canonical, 'v2');
+    // Installing advances the handshake fence, which is what retires an older
+    // in-flight attempt. This attempt must keep owning the credential it just
+    // installed, so it adopts the new fence value before the follow-up fetch.
+    const installedAttempt = this.attemptTokens.get(canonical) ?? 0;
+    const stillCurrent = (): boolean =>
+      this.attemptTokens.get(canonical) === installedAttempt;
 
     const cfg = await this.fetchConfig(canonical, signal);
-    if (signal?.aborted || !isCurrent()) {
+    if (signal?.aborted || !stillCurrent()) {
       return { kind: 'stale', message: 'Aborted' };
     }
     if (cfg.kind === 'ok') return { kind: 'ok', config: cfg.config };
     if (cfg.kind === 'unauthorized') {
-      if (this.tokens.get(canonical) === login.token) {
-        this.tokens.delete(canonical);
-      }
+      // The login itself succeeded; a 401 on config means the access token was
+      // not accepted. A refresh is already in flight from fetchConfig, so the
+      // bundle stays and the next poll recovers without another prompt.
       return { kind: 'unavailable', message: 'Session was not accepted.' };
     }
     // 5xx/timeout after a successful login: keep the token so the next poll
@@ -696,7 +800,7 @@ export class AccessAuth {
     password: string,
     signal?: AbortSignal,
   ): Promise<
-    | { kind: 'ok'; token: string }
+    | { kind: 'ok'; bundle: V2Bundle }
     | { kind: 'rate-limited'; message: string }
     | { kind: 'invalid-password'; message: string }
     | { kind: 'unavailable'; message: string }
@@ -704,7 +808,9 @@ export class AccessAuth {
     try {
       const res = await this.safeFetch(new URL(AUTH_PATH_V2_LOGIN, canonical), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // No browser metadata is forged: the host sends the route-local CSRF
+        // header a non-browser client is required to present.
+        headers: { 'Content-Type': 'application/json', [CSRF_HEADER]: CSRF_VALUE },
         body: JSON.stringify({ password }),
         signal: withTimeout(signal, FETCH_TIMEOUT_MS),
         redirect: 'error',
@@ -718,24 +824,27 @@ export class AccessAuth {
       if (res.status === 400 || res.status === 401) {
         return { kind: 'invalid-password', message: 'Password not accepted.' };
       }
+      if (res.status === 403) {
+        return {
+          kind: 'unavailable',
+          message: 'Server refused the request origin',
+        };
+      }
       if (!res.ok) {
         return { kind: 'unavailable', message: `v2 login http ${res.status}` };
       }
-      let payload: unknown;
-      try {
-        payload = await res.json();
-      } catch {
-        return { kind: 'unavailable', message: 'v2 login returned bad json' };
+      const handle = parseRefreshHandle(res);
+      if (handle === null) {
+        return {
+          kind: 'unavailable',
+          message: 'v2 login returned no refresh handle',
+        };
       }
-      if (
-        !payload ||
-        typeof payload !== 'object' ||
-        typeof (payload as { token?: unknown }).token !== 'string' ||
-        (payload as { token: string }).token.length === 0
-      ) {
-        return { kind: 'unavailable', message: 'v2 login returned no token' };
+      const bundle = await this.readBundle(res, handle);
+      if (bundle === null) {
+        return { kind: 'unavailable', message: 'v2 login returned bad bundle' };
       }
-      return { kind: 'ok', token: (payload as { token: string }).token };
+      return { kind: 'ok', bundle };
     } catch (err) {
       return {
         kind: 'unavailable',
@@ -824,6 +933,236 @@ export class AccessAuth {
     } catch {
       return 'unavailable';
     }
+  }
+
+  /** Renews the bundled credential when its access expiry is near. Pull-based
+   *  on purpose: the host calls this before its own polling, so there is no
+   *  timer loop to drift, duplicate, or fire for a stale origin. Returns null
+   *  when nothing is due, or when a previous failure is still backing off. */
+  async renewIfDue(
+    origin: string,
+    signal?: AbortSignal,
+  ): Promise<RefreshResult | null> {
+    const canonical = toCanonicalAuthOrigin(origin);
+    if (!canonical) return null;
+    if (!this.renewalDue(canonical)) return null;
+    return this.refreshAccess(canonical, signal);
+  }
+
+  /** Synchronous form of the same check, so a caller can skip the `await`
+   *  entirely when no renewal is pending: a poll for an origin without a
+   *  bundle must not gain a microtask boundary it never had. */
+  renewalDue(origin: string): boolean {
+    const canonical = toCanonicalAuthOrigin(origin);
+    if (!canonical) return false;
+    const bundle = this.bundles.get(canonical);
+    if (!bundle) return false;
+    const backoff = this.refreshBackoff.get(canonical);
+    if (backoff && backoff.until > this._now()) return false;
+    const nowSeconds = Math.floor(this._now() / 1000);
+    // `expiresIn <= 0` means the bundle was already unusable on arrival; the
+    // backoff check above keeps that from becoming a retry loop.
+    return bundle.expiresIn <= 0 || nowSeconds >= bundle.expiresAt - RENEW_LEAD_S;
+  }
+
+  /** Forces one host refresh for `origin`, coalescing concurrent callers onto
+   *  a single request. The refresh handle travels only in the `Cookie` header
+   *  built here: never in JSON, a URL, or an `Authorization` value. */
+  async refreshAccess(
+    origin: string,
+    signal?: AbortSignal,
+  ): Promise<RefreshResult> {
+    const canonical = toCanonicalAuthOrigin(origin);
+    if (!canonical) return { kind: 'unavailable', reason: 'invalid origin' };
+    const existing = this.refreshes.get(canonical);
+    if (existing) return existing;
+    const bundle = this.bundles.get(canonical);
+    if (!bundle) return { kind: 'unavailable', reason: 'no refresh handle' };
+    const pending = this.runRefresh(canonical, bundle, signal);
+    this.refreshes.set(canonical, pending);
+    try {
+      return await pending;
+    } finally {
+      if (this.refreshes.get(canonical) === pending) {
+        this.refreshes.delete(canonical);
+      }
+    }
+  }
+
+  /** Revokes this host's v2 session through the bearer route. `all` revokes
+   *  every family and advances the record epoch. The host never claims the
+   *  logout reached the server when the request failed. */
+  async logout(
+    origin: string,
+    all: boolean,
+    signal?: AbortSignal,
+  ): Promise<LogoutResult> {
+    const canonical = toCanonicalAuthOrigin(origin);
+    const token = canonical ? this.tokens.get(canonical) : undefined;
+    if (!canonical || !token) {
+      return { kind: 'unavailable', reason: 'no credential to logout' };
+    }
+    let res: Response;
+    try {
+      res = await this.safeFetch(new URL(AUTH_PATH_V2_LOGOUT, canonical), {
+        method: 'POST',
+        // The bearer is the only authorization; the refresh cookie is not.
+        headers: {
+          'Content-Type': 'application/json',
+          [CSRF_HEADER]: CSRF_VALUE,
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ all }),
+        signal: withTimeout(signal, FETCH_TIMEOUT_MS),
+        redirect: 'error',
+      });
+    } catch (err) {
+      return {
+        kind: 'unavailable',
+        reason: err instanceof Error ? err.message : String(err),
+      };
+    }
+    if (res.status === 401) {
+      // Terminal: the credential is already gone server-side.
+      if (this.tokens.get(canonical) === token) this.clearBundle(canonical);
+      return { kind: 'unauthorized' };
+    }
+    if (!res.ok) {
+      return { kind: 'unavailable', reason: `logout http ${res.status}` };
+    }
+    // Confirmed: the server cut the session and deleted its cookies.
+    if (this.tokens.get(canonical) === token) this.clearBundle(canonical);
+    return { kind: 'ok' };
+  }
+
+  /** Runs one refresh request and applies its outcome under the same fencing
+   *  rules as a login: only a response that still owns the current handle may
+   *  install, and only the current handle's 401 may clear. */
+  private async runRefresh(
+    canonical: string,
+    bundle: V2Bundle,
+    signal?: AbortSignal,
+  ): Promise<RefreshResult> {
+    let res: Response;
+    try {
+      res = await this.safeFetch(new URL(AUTH_PATH_V2_REFRESH, canonical), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          [CSRF_HEADER]: CSRF_VALUE,
+          Cookie: `${REFRESH_COOKIE_NAME}=${bundle.refreshHandle}`,
+        },
+        body: '{}',
+        signal: withTimeout(signal, FETCH_TIMEOUT_MS),
+        redirect: 'error',
+      });
+    } catch (err) {
+      return this.failRefresh(
+        canonical,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    if (res.status === 401) {
+      // Only a 401 for the handle this request sent is terminal. A newer
+      // login may have replaced it while this was in flight.
+      const current = this.bundles.get(canonical);
+      if (current && current.refreshHandle === bundle.refreshHandle) {
+        this.clearBundle(canonical);
+      }
+      return { kind: 'unauthorized' };
+    }
+    if (res.status === 429) {
+      return this.failRefresh(canonical, 'refresh rate limited', retryAfterMs(res));
+    }
+    if (!res.ok) {
+      return this.failRefresh(canonical, `refresh http ${res.status}`);
+    }
+    // Even a grace replay re-issues the refresh cookie, so a success without
+    // one is not a usable rotation: keep the current handle and retry rather
+    // than treat a half-formed response as fresh state.
+    const handle = parseRefreshHandle(res);
+    if (handle === null) {
+      return this.failRefresh(canonical, 'refresh returned no usable handle');
+    }
+    let installed: V2Bundle | null;
+    try {
+      installed = await this.readBundle(res, handle);
+    } catch (err) {
+      return this.failRefresh(
+        canonical,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    if (installed === null) {
+      return this.failRefresh(canonical, 'refresh returned a bad bundle');
+    }
+    const current = this.bundles.get(canonical);
+    if (
+      !current ||
+      current.refreshHandle !== bundle.refreshHandle ||
+      current.token !== bundle.token
+    ) {
+      // A newer credential won while this refresh was in flight: installing
+      // now would resurrect the rotated handle the server just retired.
+      return { kind: 'superseded' };
+    }
+    this.tokens.set(canonical, installed.token);
+    this.bundles.set(canonical, installed);
+    this.selectedProtocols.set(canonical, 'v2');
+    this.refreshBackoff.delete(canonical);
+    this.bumpAttempt(canonical);
+    return { kind: 'ok', bundle: installed };
+  }
+
+  /** Reads and validates a bundle body, bounded before parsing so a hostile or
+   *  broken response cannot be interpreted as a credential. */
+  private async readBundle(
+    res: Response,
+    handle: string,
+  ): Promise<V2Bundle | null> {
+    const text = await res.text();
+    if (text.length > MAX_BUNDLE_BYTES) throw new Error('bundle too large');
+    let payload: unknown;
+    try {
+      payload = JSON.parse(text) as unknown;
+    } catch {
+      throw new Error('bundle is not json');
+    }
+    return parseCredentialBundle(payload, handle);
+  }
+
+  /** Records a non-terminal failure and returns it: the bundle stays, and the
+   *  next attempt waits out a bounded backoff. */
+  private failRefresh(
+    canonical: string,
+    reason: string,
+    retryAfter?: number,
+  ): RefreshResult {
+    const previous = this.refreshBackoff.get(canonical);
+    const attempts = (previous?.attempts ?? 0) + 1;
+    const computed = Math.min(
+      REFRESH_BACKOFF_MAX_MS,
+      REFRESH_BACKOFF_BASE_MS * 2 ** (attempts - 1),
+    );
+    const delay = Math.min(
+      RETRY_AFTER_MAX_MS,
+      retryAfter !== undefined ? Math.max(retryAfter, computed) : computed,
+    );
+    this.refreshBackoff.set(canonical, {
+      attempts,
+      until: this._now() + delay,
+    });
+    const result: RefreshResult = { kind: 'unavailable', reason };
+    return retryAfter !== undefined ? { ...result, retryAfterMs: delay } : result;
+  }
+
+  /** Drops the v2 credential for `canonical` but keeps the protocol selection,
+   *  so no later request falls back to a legacy cookie or verifier. */
+  private clearBundle(canonical: string): void {
+    this.tokens.delete(canonical);
+    this.bundles.delete(canonical);
+    this.refreshBackoff.delete(canonical);
+    this.selectedProtocols.set(canonical, 'v2');
   }
 
   /** Shared post-status-fetch login path: computes the proof, posts
@@ -1145,6 +1484,107 @@ export function parseSessionCookie(res: Response): ParsedSessionCookie | null {
     };
   }
   return null;
+}
+
+/** A canonical refresh handle: 32 raw bytes, unpadded base64url. Re-encoding
+ *  must reproduce the input, so a padded or non-canonical value is rejected
+ *  instead of decoded leniently. */
+export function isCanonicalRefreshHandle(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0) return false;
+  const bytes = Buffer.from(value, 'base64url');
+  if (bytes.length !== REFRESH_HANDLE_BYTES) return false;
+  return bytes.toString('base64url') === value;
+}
+
+/** Validates a credential bundle against the section 3 field and deadline
+ *  rules. Returns null rather than throwing: a bad bundle never replaces a
+ *  working credential. */
+export function parseCredentialBundle(
+  raw: unknown,
+  handle: unknown,
+): V2Bundle | null {
+  if (!isCanonicalRefreshHandle(handle)) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.token !== 'string' || r.token.length === 0) return null;
+  const expiresAt = r.expires_at;
+  const expiresIn = r.expires_in;
+  const idle = r.refresh_idle_expires_at;
+  const absolute = r.refresh_absolute_expires_at;
+  if (!isPositiveInt(expiresAt)) return null;
+  if (typeof expiresIn !== 'number' || !Number.isInteger(expiresIn)) return null;
+  if (!isPositiveInt(idle) || !isPositiveInt(absolute)) return null;
+  if (idle > absolute) return null;
+  return {
+    token: r.token,
+    expiresAt,
+    expiresIn,
+    refreshHandle: handle,
+    refreshIdleExpiresAt: idle,
+    refreshAbsoluteExpiresAt: absolute,
+  };
+}
+
+/** Checks a bundle a caller already holds (a restored store entry) against the
+ *  same rules, so a stored credential is validated before it is trusted. */
+export function isValidBundle(value: unknown): value is V2Bundle {
+  if (!value || typeof value !== 'object') return false;
+  const b = value as Partial<V2Bundle>;
+  return (
+    parseCredentialBundle(
+      {
+        token: b.token,
+        expires_at: b.expiresAt,
+        expires_in: b.expiresIn,
+        refresh_idle_expires_at: b.refreshIdleExpiresAt,
+        refresh_absolute_expires_at: b.refreshAbsoluteExpiresAt,
+      },
+      b.refreshHandle,
+    ) !== null
+  );
+}
+
+function isPositiveInt(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
+/** Pulls the rotated `phi_access_refresh` handle out of a response. The exact
+ *  server attributes are required: a handle without them is not one this host
+ *  may hold, and accepting it loosely would store an unprotected credential. */
+export function parseRefreshHandle(res: Response): string | null {
+  for (const raw of readSetCookieHeaders(res)) {
+    const parts = raw.split(';').map((s) => s.trim());
+    const pair = parts[0] ?? '';
+    const eq = pair.indexOf('=');
+    if (eq <= 0) continue;
+    if (pair.slice(0, eq) !== REFRESH_COOKIE_NAME) continue;
+    const value = pair.slice(eq + 1);
+    if (!isCanonicalRefreshHandle(value)) continue;
+    let httpOnly = false;
+    let sameSiteStrict = false;
+    let path = '';
+    let hostOnly = true;
+    for (const attr of parts.slice(1)) {
+      const lower = attr.toLowerCase();
+      if (lower === 'httponly') httpOnly = true;
+      if (lower === 'samesite=strict') sameSiteStrict = true;
+      if (lower.startsWith('path=')) path = attr.slice(5);
+      if (lower.startsWith('domain=')) hostOnly = false;
+    }
+    if (!httpOnly || !sameSiteStrict || !hostOnly) continue;
+    if (path !== REFRESH_COOKIE_PATH) continue;
+    return value;
+  }
+  return null;
+}
+
+/** `Retry-After` in milliseconds, when the server sent integer seconds. */
+export function retryAfterMs(res: Response): number | undefined {
+  const raw = res.headers.get('retry-after');
+  if (raw === null) return undefined;
+  const seconds = Number(raw.trim());
+  if (!Number.isFinite(seconds) || seconds < 0) return undefined;
+  return Math.round(seconds * 1000);
 }
 
 /** Reads the Set-Cookie headers off a `fetch` `Response`. */

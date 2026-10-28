@@ -4793,6 +4793,15 @@ export class DesktopHost {
           capture.generation === this.sessionGeneration &&
           capture.epoch === activeEpoch &&
           ctrl.state().activeId === capture.profileId;
+        // Renew a bundled v2 credential before this poll when its access
+        // expiry is near. The owner coalesces callers onto one request, so a
+        // reload racing a poll never consumes the same handle twice, and a v1
+        // session is untouched. The due check is synchronous: an origin with
+        // no bundle keeps this poll's existing timing exactly.
+        if (auth.renewalDue(origin)) {
+          await auth.renewIfDue(origin);
+          if (!isCurrentCapture()) return null;
+        }
         const result = await auth.fetchConfig(origin);
         if (!isCurrentCapture()) return null;
         // A config response for the outgoing server must never repaint the
