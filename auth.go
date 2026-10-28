@@ -1028,6 +1028,23 @@ func revokeAccessSockets(generation uint64) {
 	}
 }
 
+// retireAccessFamilySockets closes the sockets one v2 family admitted. A family
+// revocation must not touch v1 or disabled admissions: their credential is
+// unaffected and the contract keeps record fencing separate.
+func retireAccessFamilySockets(familyID string) {
+	if wsHub != nil && familyID != "" {
+		wsHub.RetireAuthFamily(familyID)
+	}
+}
+
+// retireAccessV2Sockets closes every socket a v2 family admitted, leaving v1
+// and disabled sockets open. Logout-all is the only caller.
+func retireAccessV2Sockets() {
+	if wsHub != nil {
+		wsHub.RetireAuthV2()
+	}
+}
+
 // configure activates the persisted record and reconciles session state. It is
 // the startup entry point, so ownership is taken first: reconciliation writes
 // the state file and a non-owner must never write it.
@@ -1230,7 +1247,35 @@ func (m *accessAuthManager) commitActiveLocked(next *accessV2ActiveState) error 
 	}); err != nil {
 		return err
 	}
-	return m.loadRuntimeLocked(next)
+	// The retired set must be captured before the new runtime is installed:
+	// after that the live map no longer remembers the families next dropped.
+	retired := m.retiredFamiliesLocked(next)
+	if err := m.loadRuntimeLocked(next); err != nil {
+		return err
+	}
+	// Every durable family removal closes that family's sockets: expiry, replay
+	// revocation, logout, and capacity eviction all pass through here, so the
+	// closure cannot be forgotten by one of them.
+	for _, familyID := range retired {
+		retireAccessFamilySockets(familyID)
+	}
+	return nil
+}
+
+// retiredFamiliesLocked lists the families the live runtime had and next does
+// not. The caller holds the manager lock and has already installed next.
+func (m *accessAuthManager) retiredFamiliesLocked(next *accessV2ActiveState) []string {
+	kept := make(map[string]struct{}, len(next.Families))
+	for i := range next.Families {
+		kept[next.Families[i].ID] = struct{}{}
+	}
+	var retired []string
+	for familyID := range m.v2.families {
+		if _, ok := kept[familyID]; !ok {
+			retired = append(retired, familyID)
+		}
+	}
+	return retired
 }
 
 // signAccessToken mints one access token and returns the metadata needed to
@@ -1516,6 +1561,11 @@ func (m *accessAuthManager) jwtClaimsLocked(token string, now time.Time, expiryA
 type accessDecision struct {
 	Authorized bool
 	Generation uint64
+	// FamilyID, ExpiresAt and SocketDeadline describe the v2 admission a socket
+	// inherits. They stay zero for v1, disabled, and cookie-only requests.
+	FamilyID       string
+	ExpiresAt      time.Time
+	SocketDeadline time.Time
 }
 
 // authorizeRequest applies the explicit-credential priority table. An explicit
@@ -1539,7 +1589,12 @@ func (m *accessAuthManager) authorizeRequest(r *http.Request) accessDecision {
 	}
 	now := m.now()
 	if credential.State == accessCredentialPresent {
-		decision.Authorized = m.jwtValidLocked(credential.Token, now, accessExpiryAllowance(r.URL.Path))
+		allowance := accessExpiryAllowance(r.URL.Path)
+		claims, ok := m.jwtClaimsLocked(credential.Token, now, allowance)
+		decision.Authorized = ok
+		if ok {
+			m.describeSocketLocked(&decision, claims)
+		}
 		return decision
 	}
 	// The asset cookie decides alone on the two reads it is scoped to: an
@@ -1550,6 +1605,54 @@ func (m *accessAuthManager) authorizeRequest(r *http.Request) accessDecision {
 	}
 	decision.Authorized = m.cookieValidLocked(credential.Cookie, now)
 	return decision
+}
+
+// describeSocketLocked records the admission a v2 socket inherits: its family,
+// the admitted exp, and the earliest deadline that must close it. The caller
+// holds the manager lock.
+func (m *accessAuthManager) describeSocketLocked(decision *accessDecision, claims *accessJWTClaims) {
+	decision.FamilyID = claims.FamilyID
+	decision.ExpiresAt = claims.ExpiresAt
+	decision.SocketDeadline = claims.ExpiresAt
+	if family, ok := m.v2.families[claims.FamilyID]; ok {
+		if deadline := familyDeadline(family); deadline.Before(decision.SocketDeadline) {
+			decision.SocketDeadline = deadline
+		}
+	}
+}
+
+// admitsFence re-checks a WebSocket admission against live auth state. It runs
+// at registration time, after the middleware snapshot, so a revocation that
+// landed in between still refuses the socket. The manager lock is never held
+// while closing sockets in the reverse direction, which keeps the lock order
+// one-way: auth state first, connection closure second.
+func (m *accessAuthManager) admitsFence(fence ws.AuthFence) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.owned || fence.Generation != m.generation {
+		return false
+	}
+	if m.record == nil {
+		// Disabled: nothing to revoke, and no v2 admission can exist.
+		return fence.FamilyID == "" && fence.ExpiresAt.IsZero()
+	}
+	if fence.FamilyID == "" {
+		// A v1 cookie or asset admission has no family and no v2 expiry.
+		return fence.ExpiresAt.IsZero()
+	}
+	if m.faulted {
+		return false
+	}
+	now := m.now()
+	if !fence.ExpiresAt.After(now) {
+		// A socket closes at exp exactly; the HTTP allowance never applies.
+		return false
+	}
+	family, ok := m.v2.families[fence.FamilyID]
+	if !ok {
+		return false
+	}
+	return familyDeadline(family).After(now)
 }
 
 // accessExpiryAllowance is the expiry tolerance for one protected path. A
@@ -2044,13 +2147,13 @@ func (m *accessAuthManager) revokeFamilyLocked(familyID string, now time.Time) (
 	if err := m.commitActiveLocked(active); err != nil {
 		return accessV2Bundle{}, fmt.Errorf("%w: %v", errAccessPersistence, err)
 	}
-	revokeAccessSockets(m.generation)
+	retireAccessFamilySockets(familyID)
 	return accessV2Bundle{}, errAccessUnauthorized
 }
 
-// logoutLocked revokes the bearer's family, or every family with its epoch, then
-// fences sockets. Neither clears v1 cookies: their signature is unaffected and
-// v1 has no epoch to advance.
+// logoutLocked revokes the bearer's family, or every family through an epoch
+// advance. The v2-only closure is deliberate: v1 cookies and v1 sockets are
+// not part of a v2 session, so they survive both forms.
 func (m *accessAuthManager) logoutLocked(claims *accessJWTClaims, all bool, now time.Time) error {
 	if m.faulted {
 		return errAccessPersistence
@@ -2073,8 +2176,11 @@ func (m *accessAuthManager) logoutLocked(claims *accessJWTClaims, all bool, now 
 	if err := m.commitActiveLocked(active); err != nil {
 		return fmt.Errorf("%w: %v", errAccessPersistence, err)
 	}
-	m.generation++
-	revokeAccessSockets(m.generation)
+	if all {
+		retireAccessV2Sockets()
+	} else {
+		retireAccessFamilySockets(claims.FamilyID)
+	}
 	return nil
 }
 
@@ -2208,10 +2314,15 @@ func accessAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/ws/") {
-			// Carry the generation from the same lock acquisition as the
-			// decision, so the upgrade can reject a socket that a password
-			// change retired in between.
-			r = r.WithContext(ws.WithAuthFence(r.Context(), ws.AuthFence{Generation: decision.Generation}))
+			// Carry the admission from the same lock acquisition as the decision,
+			// so the upgrade can reject a socket that a password change or a
+			// family revocation retired in between.
+			r = r.WithContext(ws.WithAuthFence(r.Context(), ws.AuthFence{
+				Generation: decision.Generation,
+				FamilyID:   decision.FamilyID,
+				ExpiresAt:  decision.ExpiresAt,
+				Deadline:   decision.SocketDeadline,
+			}))
 		}
 		next.ServeHTTP(w, r)
 	})
