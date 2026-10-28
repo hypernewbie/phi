@@ -4614,6 +4614,10 @@ export class TabManager {
         term.onData((data) => {
             const fromUser = terminalUserInput;
             terminalUserInput = false;
+            // A retained view holds live delivery. Nothing mode-dependent may
+            // reach the PTY from it: the mouse reports, application-mode keys,
+            // and paste wrappers all describe a screen that is no longer live.
+            if (fromUser && tabInfo._resyncNeeded && this._holdFrozenInput(tabInfo, data)) return;
             // Archive queries must not send old DSR/OSC/DCS replies into the
             // live app. Keep real keyboard/IME/paste input distinguishable.
             if ((tabInfo._historyParsing || tabInfo._historyBrowsing) && !fromUser) return;
@@ -9200,6 +9204,14 @@ export class TabManager {
             if (!sent) return;
         }
 
+        // A retained view is waiting for its resync. Sending now would push a
+        // prompt into a pane whose output cannot come back, so ask for the
+        // resync and keep the draft exactly as the reader typed it.
+        if (activeTab._resyncNeeded) {
+            this._resyncRetainedView(activeTab);
+            return;
+        }
+
         // Record this prompt into ~/.phi/prompt_history.json BEFORE
         // clearing the textarea. Fire-and-forget so a slow disk
         // doesn't hold up the send. The backend handles dedup / cap
@@ -9328,6 +9340,14 @@ export class TabManager {
             }
         }
         if (sendChar === null) return false;
+        // While a retained view waits for its resync, Enter is the reader
+        // asking to rejoin live output, not a submit; every other forwarded
+        // key belongs to a screen that is held.
+        if (tab?._resyncNeeded) {
+            e.preventDefault();
+            if (e.key === 'Enter') this._resyncRetainedView(tab);
+            return true;
+        }
         e.preventDefault();
         // Forwarding a key is not a submit except when the key is Enter.
         if (tab) {
@@ -11387,6 +11407,42 @@ export class TabManager {
         if (!tabInfo._resyncNeeded) return;
         tabInfo._resyncNeeded = false;
         this._updateResyncAffordance(tabInfo);
+        this._setInputRestriction('');
+    }
+
+    // True when the caller must not send the bytes. Printable text still
+    // reaches the PTY once, as before; a paste is held in the draft instead,
+    // and Enter is the resync gesture.
+    _holdFrozenInput(tabInfo, data) {
+        if (data === '\r' || data === '\n') {
+            this._resyncRetainedView(tabInfo);
+            return true;
+        }
+        const paste = /^\x1b\[200~([\s\S]*)\x1b\[201~$/.exec(data);
+        if (paste) {
+            const area = this.inputTextArea;
+            if (area) {
+                const text = paste[1].replace(/\r\n?/g, '\n');
+                area.value += text;
+                this.adjustInputHeight();
+                this.saveActiveDraft();
+            }
+            this._setInputRestriction(
+                'Paste held until live output is resynced.',
+            );
+            return true;
+        }
+        // Mouse reports and application-mode sequences are screen state, not
+        // text. Never queue them against a view that is held.
+        if (/^\x1b/.test(data) || /[\x00-\x1f]/.test(data)) return true;
+        return false;
+    }
+
+    _setInputRestriction(text) {
+        const line = document.getElementById('input-restriction');
+        if (!line) return;
+        if (line.textContent !== text) line.textContent = text;
+        line.classList.toggle('hidden', !text);
     }
 
     // The one explicit recovery action for a retained view. The existing close

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { setupDomHarness } from './_dom.js';
 import { replayHarness, recordingEnvelope } from './_terminalReplayHarness.js';
 import { parse } from './_terminalOracle.js';
@@ -101,5 +101,80 @@ it('the history module reads the outcome union, not a boolean', async () => {
     expect(await manager._bootstrapDelta({}, {}, 0)).toEqual({
         kind: 'retained',
         reason: 'reader',
+    });
+});
+
+// Frozen input: a retained view holds live delivery, so only text may leave
+// the client. Mouse state, application-mode keys, and paste wrappers describe
+// a screen the reader is no longer looking at.
+describe('input while the view is retained', () => {
+    const manager = () => Object.create(TabManager.prototype);
+    // The served markup owns this line; jsdom starts without index.html.
+    beforeEach(() => {
+        document.body.innerHTML =
+            '<div id="input-restriction" class="hidden" role="status"></div>';
+    });
+
+    it('drops mouse reports and application-mode keys', () => {
+        const tm = manager();
+        const tab = { _resyncNeeded: true, isDead: false };
+        for (const data of [
+            '\x1b[<64;20;5M',
+            '\x1b[A',
+            '\x03',
+            '\x1b[200~half',
+        ]) {
+            tm._holdFrozenInput(tab, data);
+        }
+        expect(tab.ws).toBeUndefined();
+        expect(tab.userFollowBottom).toBeUndefined();
+    });
+
+    it('holds a paste in the draft and says so', () => {
+        const tm = manager();
+        const area = document.createElement('textarea');
+        area.value = 'kept ';
+        tm.inputTextArea = area;
+        tm.adjustInputHeight = vi.fn();
+        tm.saveActiveDraft = vi.fn();
+        const tab = { _resyncNeeded: true, isDead: false };
+
+        const held = tm._holdFrozenInput(
+            tab,
+            '\x1b[200~first\r\nsecond\x1b[201~',
+        );
+
+        expect(held).toBe(true);
+        expect(area.value).toBe('kept first\nsecond');
+        expect(document.getElementById('input-restriction').textContent).toBe(
+            'Paste held until live output is resynced.',
+        );
+    });
+
+    it('lets printable text through to the normal send path', () => {
+        const tm = manager();
+        expect(tm._holdFrozenInput({ _resyncNeeded: true }, 'hello')).toBe(
+            false,
+        );
+    });
+
+    it('treats Enter as the resync gesture', () => {
+        const tm = manager();
+        const tab = { _resyncNeeded: true, isDead: false };
+        tm._resyncRetainedView = vi.fn();
+        expect(tm._holdFrozenInput(tab, '\r')).toBe(true);
+        expect(tm._resyncRetainedView).toHaveBeenCalledWith(tab);
+    });
+
+    it('clears the restriction line once a frontier is certified', () => {
+        const tm = manager();
+        const line = document.getElementById('input-restriction');
+        tm._setInputRestriction('Paste held until live output is resynced.');
+        expect(line.classList.contains('hidden')).toBe(false);
+        const tab = { _resyncNeeded: true };
+        tm._updateResyncAffordance = vi.fn();
+        tm._clearResyncNeeded(tab);
+        expect(line.classList.contains('hidden')).toBe(true);
+        expect(line.textContent).toBe('');
     });
 });
