@@ -227,3 +227,40 @@ it.each([
         }
     },
 );
+
+// A pane socket the server closed at the admitted token exp must not redial
+// with that same expired token: maybeAutoReconnect keeps the backoff timer and
+// waits for the due refresh before handing the tab to reconnectTab.
+it('waits for a due refresh before redialing an expired pane', async () => {
+    const h = replayHarness(encode(''));
+    try {
+        vi.useFakeTimers();
+        h.manager.app = { config: { auto_reconnect: 'visible' } };
+        h.manager.activePaneId = h.tab.paneId;
+        h.tab.isDead = true;
+        h.tab.termContainer = { querySelector: () => null };
+        const redial = vi.fn();
+        h.manager.reconnectTab = redial;
+
+        let releaseRefresh;
+        const refresh = new Promise((resolve) => {
+            releaseRefresh = resolve;
+        });
+        const refreshCalls = vi.fn(() => refresh);
+        window.phiAccessAuth = { refreshAccessIfDue: refreshCalls };
+
+        expect(h.manager.maybeAutoReconnect(h.tab)).toBe(true);
+        // The backoff timer fires, but the redial waits on the refresh.
+        await vi.advanceTimersByTimeAsync(h.tab.autoReconnectTimerDelay ?? 21000);
+        expect(refreshCalls).toHaveBeenCalledTimes(1);
+        expect(redial).not.toHaveBeenCalled();
+
+        releaseRefresh();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(redial).toHaveBeenCalledTimes(1);
+    } finally {
+        delete window.phiAccessAuth;
+        vi.useRealTimers();
+    }
+});
