@@ -133,6 +133,93 @@ final class WireCompatibilityTests: XCTestCase {
     XCTFail("condition not reached within \(timeout)s")
   }
 
+  /// A password-protected server must be reachable, and an unauthenticated
+  /// client must fail with a named reason instead of an unexplained 401.
+  func testRealServerAccessPasswordLoginsAttaches() async throws {
+    let target = try realServer()
+    guard let password = ProcessInfo.processInfo.environment["PHI_TEST_PASSWORD"],
+          !password.isEmpty else {
+      throw XCTSkip("set PHI_TEST_PASSWORD to exercise access-password login")
+    }
+    let service = "phi-access-test"
+    let account = "access-\(target.origin.absoluteString)"
+    addTeardownBlock { Keychain.delete(service: service, account: account) }
+
+    let salt = (0..<AccessAuth.saltBytes).map { _ in UInt8.random(in: 0...255) }
+    let verifier = try XCTUnwrap(AccessAuth.pbkdf2SHA256(
+      password: Array(password.utf8), salt: salt, iterations: AccessAuth.iterations))
+    let hash = AccessAuth.passwordHash(
+      verifier: verifier, salt: salt, iterations: AccessAuth.iterations)
+    let enabled = await Self.post(
+      target.origin, "/api/auth/password", ["password_hash": hash], cookie: nil)
+    XCTAssertEqual(enabled, 200, "enabling the access password on the isolated server failed")
+
+    // The session token is fetched first so cleanup can disable the password
+    // even if a later assertion fails, instead of breaking every later test.
+    let auth = AccessAuth(origin: target.origin, useKeychain: false, password: { password })
+    let session = try await auth.token(force: true)
+    let sessionToken = try XCTUnwrap(session, "password was not enabled")
+    addTeardownBlock {
+      _ = await Self.post(
+        target.origin, "/api/auth/password", ["password_hash": ""],
+        cookie: "\(AccessAuth.cookieName)=\(sessionToken)")
+    }
+
+    let client = try PaneWireClient(
+      origin: target.origin, paneID: target.pane, useKeychain: true,
+      keychainService: service, password: { password })
+    addTeardownBlock { await client.close() }
+    let run = Task { await client.run() }
+    addTeardownBlock { run.cancel() }
+    try await waitFor { await client.status().attached }
+
+    let delivery = await client.sendInput(Array("echo pwe\r".utf8))
+    XCTAssertEqual(delivery, .sentUnconfirmed)
+    try await waitFor { await client.frame().rows.contains { $0.contains("pwe") } }
+
+    // The verifier, not the password, is what a later launch reuses.
+    if Keychain.read(service: service, account: account) != nil {
+      let relaunched = try PaneWireClient(
+        origin: target.origin, paneID: target.pane, useKeychain: true,
+        keychainService: service, password: nil)
+      addTeardownBlock { await relaunched.close() }
+      let relaunchRun = Task { await relaunched.run() }
+      addTeardownBlock { relaunchRun.cancel() }
+      try await waitFor { await relaunched.status().attached }
+    } else {
+      throw XCTSkip("keychain unavailable; verifier reuse not exercised")
+    }
+
+    let anonymous = try PaneWireClient(
+      origin: target.origin, paneID: target.pane, useKeychain: false, password: nil)
+    addTeardownBlock { await anonymous.close() }
+    let anonymousRun = Task { await anonymous.run() }
+    addTeardownBlock { anonymousRun.cancel() }
+    try await waitFor { await anonymous.status().lastError != nil }
+    let anonymousStatus = await anonymous.status()
+    XCTAssertFalse(anonymousStatus.attached, "an anonymous client must not attach")
+    let reason = anonymousStatus.lastError ?? ""
+    XCTAssertTrue(
+      reason.contains("accessDenied") || reason.contains("noPassword"),
+      "unexpected refusal: \(reason)")
+  }
+
+  private static func post(
+    _ origin: URL, _ path: String, _ body: [String: String], cookie: String?
+  ) async -> Int {
+    var comps = URLComponents(url: origin, resolvingAgainstBaseURL: false)
+    comps?.path = path
+    guard let url = comps?.url else { return 0 }
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.timeoutInterval = 15
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    if let cookie { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
+    request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+    guard let (_, response) = try? await URLSession.shared.data(for: request) else { return 0 }
+    return (response as? HTTPURLResponse)?.statusCode ?? 0
+  }
+
   private func rows(of terminal: TerminalSession) -> [String] {
     (0..<terminal.rowCount()).map { row in
       terminal.cells(inRow: row).map(\.text).joined()

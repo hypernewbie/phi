@@ -9,14 +9,37 @@ struct Options {
   var cols: UInt16 = 80
   var rows: UInt16 = 24
   var stateDir: URL
-  // M0 stores no secrets; the flag keeps one CLI for the milestones that do.
+  /// The verifier, never the password, is what gets stored.
   var noKeychain = false
+  var passwordStdin = false
 }
 
 let usageLine = """
 usage: PhiNative --server <origin> --pane <id> --state-dir <path> \
-[--cols 80] [--rows 24] [--no-keychain]
+[--cols 80] [--rows 24] [--no-keychain] [--password-stdin]
+
+An access password is read from PHI_ACCESS_PASSWORD, or from stdin with
+--password-stdin. After the first successful login only the derived verifier
+is used, so the password is not asked again until it changes.
 """
+
+/// Reads one line with echo off when stdin is a terminal.
+func readPasswordLine() -> String? {
+  if isatty(STDIN_FILENO) == 1 {
+    var original = termios()
+    guard tcgetattr(STDIN_FILENO, &original) == 0 else { return readLine() }
+    var quiet = original
+    quiet.c_lflag &= ~tcflag_t(ECHO)
+    FileHandle.standardError.write(Data("Phi access password: ".utf8))
+    tcsetattr(STDIN_FILENO, TCSANOW, &quiet)
+    defer {
+      tcsetattr(STDIN_FILENO, TCSANOW, &original)
+      FileHandle.standardError.write(Data("\n".utf8))
+    }
+    return readLine()
+  }
+  return readLine()
+}
 
 func fail(_ message: String) -> Never {
   FileHandle.standardError.write(Data("PhiNative: \(message)\n\(usageLine)\n".utf8))
@@ -30,11 +53,17 @@ func parse(_ arguments: [String]) -> Options {
   var cols: UInt16 = 80
   var rows: UInt16 = 24
   var noKeychain = false
+  var passwordStdin = false
   var index = 0
   while index < arguments.count {
     let flag = arguments[index]
     if flag == "--no-keychain" {
       noKeychain = true
+      index += 1
+      continue
+    }
+    if flag == "--password-stdin" {
+      passwordStdin = true
       index += 1
       continue
     }
@@ -70,7 +99,7 @@ func parse(_ arguments: [String]) -> Options {
   guard let stateDir else { fail("--state-dir is required") }
   return Options(
     server: server, pane: pane, cols: cols, rows: rows, stateDir: stateDir,
-    noKeychain: noKeychain)
+    noKeychain: noKeychain, passwordStdin: passwordStdin)
 }
 
 @MainActor
@@ -91,10 +120,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 let options = parse(Array(CommandLine.arguments.dropFirst()))
+let environmentPassword = ProcessInfo.processInfo.environment["PHI_ACCESS_PASSWORD"]
+let password: AccessAuth.PasswordProvider?
+if let environmentPassword, !environmentPassword.isEmpty {
+  password = { environmentPassword }
+} else if options.passwordStdin {
+  password = { readPasswordLine() }
+} else {
+  password = nil
+}
 let client: PaneWireClient
 do {
   client = try PaneWireClient(
-    origin: options.server, paneID: options.pane, cols: options.cols, rows: options.rows)
+    origin: options.server, paneID: options.pane, cols: options.cols, rows: options.rows,
+    useKeychain: !options.noKeychain, password: password)
 } catch {
   fail("cannot attach: \(error)")
 }
