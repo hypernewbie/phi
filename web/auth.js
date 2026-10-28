@@ -371,6 +371,7 @@ async function freshStatus(fallback, startedAt, context) {
 
 const authStates = new Map();
 const HOST_INSTALL = Symbol('host install');
+const HOST_SESSION_TOKEN = Symbol('phi-host-session');
 const REFRESH_LEAD_MS = 60 * 1000;
 const RETRY_BASE_MS = 2000;
 const RETRY_MAX_MS = 60000;
@@ -464,6 +465,7 @@ function newAuthState() {
         accessToken: null,
         persistedToken: null,
         memoryOnly: false,
+        hostSession: false,
         accessExpiresAt: 0,
         refreshIdleExpiresAt: 0,
         refreshAbsoluteExpiresAt: 0,
@@ -499,6 +501,14 @@ function activateAuthContext(context) {
 function activeAuthState() {
     if (activeAuthKey === null) activateAuthContext();
     return stateForKey(activeAuthKey);
+}
+
+function hostAuthenticatedMode() {
+    try {
+        return location.protocol === 'phi-app:' && location.host === 'app';
+    } catch {
+        return false;
+    }
 }
 
 function utf8Length(value) {
@@ -664,6 +674,7 @@ async function runRefresh(context, state, origin) {
 // Browser storage holds neither an access token nor a refresh handle.
 function adoptToken(token, bundle, context, { broadcast = true } = {}) {
     const state = stateFor(context);
+    state.hostSession = false;
     state.accessToken = token;
     state.accessEnabled = true;
     state.selectedProtocol = 'v2';
@@ -685,6 +696,7 @@ function adoptToken(token, bundle, context, { broadcast = true } = {}) {
 function clearTokenState(state) {
     state.accessToken = null;
     state.persistedToken = null;
+    state.hostSession = false;
     state.accessExpiresAt = 0;
     state.refreshIdleExpiresAt = 0;
     state.refreshAbsoluteExpiresAt = 0;
@@ -793,8 +805,10 @@ export function refreshAccessIfDue(context) {
 // failure never destroys a saved credential or changes protocol.
 async function checkV2Token(token, context) {
     return withAuthDeadline(async (signal) => {
+        // The embedded host proxy supplies its own bearer; the page sends none.
+        const headers = token ? { Authorization: `Bearer ${token}` } : {};
         const res = await authFetch(context, '/api/auth/v2/status', {
-            headers: { Authorization: `Bearer ${token}` },
+            headers,
             cache: 'no-store',
             redirect: 'error',
             signal,
@@ -815,6 +829,8 @@ async function checkV2Token(token, context) {
         )
             throw invalidStatusError();
         if (!payload.enabled) return 'invalid';
+        if (payload.owned === false)
+            throw new Error('Another Phi instance owns access state');
         return payload.authenticated ? 'valid' : 'invalid';
     });
 }
@@ -840,6 +856,10 @@ async function v2Login(password, context) {
         try {
             payload = await res.json();
         } catch {
+            throw new Error('Unable to sign in');
+        }
+        if (hostAuthenticatedMode()) {
+            if (payload && payload.ok === true) return HOST_SESSION_TOKEN;
             throw new Error('Unable to sign in');
         }
         const bundle = parseCredentialBundle(payload);
@@ -892,6 +912,17 @@ async function saveV2Password(password, context) {
             throw new Error('Unable to save access password');
         }
     });
+    if (hostAuthenticatedMode()) {
+        if (!payload || payload.ok !== true || payload.enabled !== true)
+            throw new Error('Unable to save access password');
+        if (epoch === state.epoch) {
+            state.hostSession = true;
+            state.accessEnabled = true;
+            state.selectedProtocol = 'v2';
+            state.epoch++;
+        }
+        return { enabled: true };
+    }
     const bundle = parseCredentialBundle(payload);
     if (!payload || payload.enabled !== true || !bundle || bundle.expiresIn <= 0)
         throw new Error('Unable to save access password');
@@ -901,7 +932,8 @@ async function saveV2Password(password, context) {
 
 async function clearV2Password(context) {
     const state = stateFor(context);
-    if (!state.accessEnabled && !state.accessToken) return { enabled: false };
+    if (!state.accessEnabled && !state.accessToken && !state.hostSession)
+        return { enabled: false };
     const token = state.accessToken;
     const epoch = state.epoch;
     const headers = {
@@ -928,6 +960,19 @@ async function clearV2Password(context) {
     // Never discard a live credential after a successful-looking proxy page.
     if (!payload || payload.enabled !== false)
         throw new Error('Unable to clear access password');
+    if (hostAuthenticatedMode()) {
+        if (payload.ok !== true)
+            throw new Error('Unable to clear access password');
+        if (state.epoch !== epoch) return { enabled: false };
+        clearTokenState(state);
+        state.accessEnabled = false;
+        state.selectedProtocol = 'v2';
+        state.epoch++;
+        broadcastInvalidation(credentialKey(context));
+        if (pendingOverlay?.ownerKey === credentialKey(context))
+            pendingOverlay.finish({ enabled: false });
+        return { enabled: false };
+    }
     // A credential installed while the clear was in flight is newer than
     // this response; never clear it.
     if (state.epoch !== epoch) return { enabled: false };
@@ -990,6 +1035,20 @@ export function installAccessFetch() {
         const ownerKey = activeAuthKey ?? credentialKey();
         const context = activeAuthContext;
         const state = stateForKey(ownerKey);
+        if (state.hostSession) {
+            // The host proxy authorizes protected API requests and returns a
+            // fixed, token-free 401 only when its own refresh failed terminally.
+            const answer = await baseFetch(input, init);
+            if (
+                answer.status === 401 &&
+                url &&
+                url.protocol === 'phi-app:' &&
+                url.host === 'app' &&
+                isProtectedAPIPath(url.pathname)
+            )
+                requestReauth(context);
+            return answer;
+        }
         const token = state.accessToken;
         if (!url || !token || url.origin !== location.origin)
             return baseFetch(input, init);
@@ -1160,6 +1219,16 @@ function showUnlockPrompt(context, protocol) {
                 if (protocol === 'v2') {
                     const bundle = await v2Login(input.value, context);
                     if (epoch !== state.epoch) return;
+                    if (bundle === HOST_SESSION_TOKEN) {
+                        state.hostSession = true;
+                        state.accessEnabled = true;
+                        state.selectedProtocol = 'v2';
+                        state.memoryOnly = false;
+                        state.epoch++;
+                        input.value = '';
+                        finish({ enabled: true });
+                        return;
+                    }
                     adoptToken(bundle.token, bundle, context);
                     input.value = '';
                     finish({ enabled: true });
@@ -1227,6 +1296,31 @@ function showUnlockPrompt(context, protocol) {
     });
 }
 
+// The embedded shell owns the v2 bundle in the main process. The page sees
+// only the host's token-free status and login answers.
+async function bootstrapHostAuthenticated(context) {
+    const state = stateFor(context);
+    clearTokenState(state);
+    state.memoryOnly = false;
+    state.hostSession = false;
+    state.selectedProtocol = 'v2';
+    const epoch = ++state.epoch;
+    const current = () => state.epoch === epoch;
+
+    const status = await discoverAccessStatus(context);
+    if (!current()) return { enabled: state.accessEnabled };
+    state.accessEnabled = status.enabled;
+    if (!status.enabled) return { enabled: false };
+
+    const verdict = await checkV2Token(null, context);
+    if (!current()) return { enabled: state.accessEnabled };
+    if (verdict === 'valid') {
+        state.hostSession = true;
+        return { enabled: true };
+    }
+    return showUnlockPrompt(context, 'v2');
+}
+
 // Called before App.init() so the normal UI never starts fetching protected
 // data until either the bearer, the session cookie, or a remembered derived
 // credential works. The selection is fixed for the rest of the page load: a
@@ -1235,6 +1329,7 @@ export async function bootstrapAccessAuth(context) {
     const state = activateAuthContext(context);
     discardLegacyBearer(context);
     installAccessFetch();
+    if (hostAuthenticatedMode()) return bootstrapHostAuthenticated(context);
     const ownerKey = activeAuthKey;
     let epoch = state.epoch;
     const superseded = () =>
@@ -1458,6 +1553,7 @@ export function installToken(token) {
     state.renewalTimer = null;
     state.retryTimer = null;
     state.accessToken = token;
+    state.hostSession = false;
     state.accessEnabled = true;
     state.selectedProtocol = 'v2';
     state.epoch++;
@@ -1476,6 +1572,32 @@ export function installToken(token) {
 
 export async function logoutAccess(all = false, context) {
     const state = stateFor(context);
+    if (state.hostSession) {
+        const epoch = state.epoch;
+        const answerOK = await withAuthDeadline(async (signal) => {
+            const res = await authFetch(context, '/api/auth/v2/logout', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Phi-Auth': 'v2',
+                },
+                body: JSON.stringify({ all: all === true }),
+                credentials: 'same-origin',
+                redirect: 'error',
+                signal,
+            });
+            return res.ok;
+        });
+        if (!answerOK) throw new Error('Unable to logout');
+        if (epoch === state.epoch) {
+            state.hostSession = false;
+            state.epoch++;
+        }
+        broadcastInvalidation(credentialKey(context));
+        if (pendingOverlay?.ownerKey === credentialKey(context))
+            pendingOverlay.finish({ enabled: false });
+        return { ok: true };
+    }
     const token = state.accessToken;
     if (!token) throw new Error('Sign in to continue');
     const epoch = state.epoch;
@@ -1598,6 +1720,7 @@ function getAccessState() {
         accessToken,
         persistedToken,
         memoryOnly,
+        hostSession,
         accessExpiresAt,
     } = activeAuthState();
     return {
@@ -1606,6 +1729,7 @@ function getAccessState() {
         accessToken,
         persistedToken,
         memoryOnly,
+        hostSession,
         accessExpiresAt,
     };
 }

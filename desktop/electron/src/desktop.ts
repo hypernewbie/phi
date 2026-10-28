@@ -58,6 +58,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ProfileViewManager } from './views.js';
 import {
+  EMBEDDED_HOST,
   EMBEDDED_ORIGIN,
   EMBEDDED_PARTITION,
   EMBEDDED_SCHEME,
@@ -511,6 +512,41 @@ export const realCredentialStoreFs: CredentialStoreFs = {
   },
   remove: (file) => rmSync(file, { force: true }),
 };
+
+/** The in-app routes a retained view may navigate to. */
+function isAppRoute(pathname: string): boolean {
+  return (
+    pathname === '/' ||
+    pathname === '/index.html' ||
+    pathname === '/md.html' ||
+    pathname === '/config.html' ||
+    pathname === '/input.html'
+  );
+}
+
+/**
+ * The one navigation rule for a retained profile view: window opens,
+ * will-navigate, will-redirect, and main-process loadURL all consult it. The
+ * embedded shell reports origin "null" (a non-special scheme has no tuple
+ * origin), so scheme and host are its only usable identity: an origin equality
+ * test can never match phi-app://app and would wrongly match file://, which
+ * reports "null" too. `isSameServer` is the caller's same-server comparison, so
+ * the profile's own origin and its loopback fallback keep working.
+ */
+export function isAllowedNavigationTarget(
+  target: URL,
+  allowedOrigin: string,
+  isSameServer: (target: URL) => boolean,
+): boolean {
+  if (
+    allowedOrigin === EMBEDDED_ORIGIN &&
+    target.protocol === `${EMBEDDED_SCHEME}:` &&
+    target.host === EMBEDDED_HOST
+  ) {
+    return isAppRoute(target.pathname);
+  }
+  return isSameServer(target) && isAppRoute(target.pathname);
+}
 
 export class DesktopHost {
   // --- Host-loop state ---
@@ -3750,6 +3786,10 @@ export class DesktopHost {
         resolveProfile: (id) =>
           this.controller?.state().profiles.find((p) => p.id === id) ?? null,
         listProfiles: () => this.controller?.state().profiles ?? [],
+        // The page holds no credential at all: every protected row of the
+        // embedded request table is authorized here, through the same host
+        // owner the main process uses, so one refresh handle has one owner.
+        auth: accessAuth,
         // The server capability answer is a stable fact about a server:
         // persisting it keeps the FIRST flip to a server after a restart
         // as fast as every flip after it.
@@ -3866,6 +3906,27 @@ export class DesktopHost {
             isLoopback(allowed.hostname)
           );
         };
+        // ONE navigation policy for this view: remote navigation stays limited
+        // to this profile's own Phi origin, including its loopback fallback, and
+        // the embedded shell to its own scheme and host.
+        const isAllowedNavigation = (target: URL): boolean =>
+          isAllowedNavigationTarget(target, allowedOrigin, (candidate) =>
+            isSameServerOrigin(candidate, allowedOrigin),
+          );
+        const handOffExternal = (url: string): void => {
+          try {
+            const target = new URL(url);
+            if (
+              target.protocol === 'http:' ||
+              target.protocol === 'https:' ||
+              target.protocol === 'mailto:'
+            ) {
+              void shell.openExternal(url);
+            }
+          } catch {
+            /* malformed URL: deny */
+          }
+        };
         const popupSize = (
           features: string,
         ): { width: number; height: number } => {
@@ -3884,11 +3945,8 @@ export class DesktopHost {
           if (!isCurrent()) return { action: 'deny' };
           try {
             const target = new URL(url);
-            const isSameOrigin =
-              target.origin === allowedOrigin ||
-              isSameServerOrigin(target, allowedOrigin);
             const isInternalPopout =
-              isSameOrigin &&
+              isAllowedNavigation(target) &&
               (target.pathname === '/md.html' ||
                 target.pathname === '/config.html') &&
               Boolean(
@@ -3981,39 +4039,48 @@ export class DesktopHost {
           }
           return { action: 'deny' };
         });
-        // Navigation guard (security): a retained profile view may only
-        // navigate within its own origin — the same same-origin rule as the
-        // window-open guard above. Same-origin navigations are allowed;
-        // http(s) targets are handed to the OS browser via
-        // shell.openExternal; everything else is denied. The main process's
-        // own loadURL calls do not emit will-navigate, so the view manager's
-        // initial page loads are unaffected.
+        // Navigation guard (security): one predicate for will-navigate,
+        // will-redirect, window opens, and main-process loadURL targets. A
+        // redirect is checked exactly like a fresh navigation: a permitted URL
+        // that redirects to a foreign page must not become a credential-bearing
+        // renderer (the proxy would inject host credentials into it).
         const attachNavGuard = (contents: typeof view.webContents): void => {
+          const deny = (event: { preventDefault(): void }, url: string) => {
+            handOffExternal(url);
+            event.preventDefault();
+          };
           contents.on('will-navigate', (event, url) => {
             try {
-              const target = new URL(url);
-              const isSameOrigin =
-                target.origin === allowedOrigin ||
-                isSameServerOrigin(target, allowedOrigin);
-              const isInternalRoute =
-                target.pathname === '/' ||
-                target.pathname === '/index.html' ||
-                target.pathname === '/md.html' ||
-                target.pathname === '/config.html' ||
-                target.pathname === '/input.html';
-              if (isSameOrigin && isInternalRoute) return; // same-origin internal app route: allow
-              if (
-                target.protocol === 'http:' ||
-                target.protocol === 'https:' ||
-                target.protocol === 'mailto:'
-              ) {
-                void shell.openExternal(url);
-              }
+              if (isAllowedNavigation(new URL(url))) return;
             } catch {
               /* malformed URL: deny below */
             }
-            event.preventDefault();
+            deny(event, url);
           });
+          contents.on('will-redirect', (event, url) => {
+            try {
+              if (isAllowedNavigation(new URL(url))) return;
+            } catch {
+              /* malformed URL: deny below */
+            }
+            deny(event, url);
+          });
+          // A main-process loadURL emits neither event, so its target is
+          // validated explicitly instead of relying on that exemption.
+          const loadURL = contents.loadURL.bind(contents);
+          contents.loadURL = ((
+            url: string,
+            options?: Parameters<typeof loadURL>[1],
+          ) => {
+            let allowed = false;
+            try {
+              allowed = isAllowedNavigation(new URL(url));
+            } catch {
+              allowed = false;
+            }
+            if (!allowed) return Promise.resolve();
+            return loadURL(url, options);
+          }) as typeof contents.loadURL;
         };
         attachNavGuard(view.webContents);
         // Rail-selection shortcuts: before-input-event runs in the browser
