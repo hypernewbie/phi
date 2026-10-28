@@ -14,11 +14,25 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
-import { readSetCookieHeaders } from './access-auth.js';
+import {
+  parseCredentialBundle,
+  parseRefreshHandle,
+  readSetCookieHeaders,
+} from './access-auth.js';
+import type { LogoutResult, RefreshResult, V2Bundle } from './access-auth.js';
 
 export const EMBEDDED_SCHEME = 'phi-app';
 export const EMBEDDED_HOST = 'app';
 export const EMBEDDED_ORIGIN = 'phi-app://app';
+
+/** The header the server accepts as a WebSocket credential. The shell page
+ *  holds no token, so the main process adds it on approved upgrades. */
+export const SOCKET_TOKEN_HEADER = 'X-Phi-Socket-Token';
+/** Fixed host requirement on every v2 POST row. */
+const V2_CSRF_HEADER = 'X-Phi-Auth';
+const V2_CSRF_VALUE = 'v2';
+/** A credential bundle larger than this is a host error, never a credential. */
+const MAX_CREDENTIAL_BODY_BYTES = 64 * 1024;
 
 /** How long a positive capability answer is reused. */
 const COMPAT_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -43,6 +57,22 @@ export interface EmbeddedTransportOptions {
   fetchImpl?: typeof fetch;
   /** Optional path for the persisted server-capability cache. */
   compatCachePath?: string;
+  /**
+   * The host's access-auth owner. The embedded page holds no credential, so
+   * every protected row of the request table is authorized here, and the
+   * rotating bundle never leaves host memory.
+   */
+  auth?: EmbeddedAuthHost;
+}
+
+/** The slice of the host `AccessAuth` owner this transport drives. Keeping it
+ *  structural avoids a second credential owner and lets tests supply a fake. */
+export interface EmbeddedAuthHost {
+  getToken(origin: string): string | null;
+  getBundle(origin: string): V2Bundle | null;
+  installBundle(origin: string, bundle: V2Bundle): boolean;
+  refreshAccess(origin: string): Promise<RefreshResult>;
+  logout(origin: string, all: boolean): Promise<LogoutResult>;
 }
 
 export interface WebRequestFilter {
@@ -111,6 +141,118 @@ export function registerEmbeddedScheme(protocol: ProtocolRegistrar): void {
   ]);
 }
 
+/** Which row of the embedded request table a proxied `/api/*` call belongs to. */
+type AuthProxyRow =
+  | 'refresh'
+  | 'login'
+  | 'password'
+  | 'logout'
+  | 'status'
+  | 'other';
+
+/** The v2 POST routes carry the host's own credential handling. */
+const V2_AUTH_POST_ROUTES: Readonly<Record<string, AuthProxyRow>> =
+  Object.freeze({
+    '/api/auth/v2/refresh': 'refresh',
+    '/api/auth/v2/login': 'login',
+    '/api/auth/v2/password': 'password',
+    '/api/auth/v2/logout': 'logout',
+  });
+
+/** Token-free answers the page may receive. A raw bundle never gets here. */
+const REFRESH_OK_BODY = '{"ok":true}';
+const ENABLED_BODY = '{"ok":true,"enabled":true}';
+const CLEARED_BODY = '{"ok":true,"enabled":false}';
+const LOGOUT_OK_BODY = '{"ok":true}';
+
+function authProxyRow(pathname: string, method: string): AuthProxyRow {
+  if (method === 'GET' && pathname === '/api/auth/v2/status') return 'status';
+  if (method !== 'POST') return 'other';
+  return V2_AUTH_POST_ROUTES[pathname] ?? 'other';
+}
+
+function isPasswordRoute(pathname: string): boolean {
+  return pathname === '/api/auth/v2/password';
+}
+
+function tokenFreeJSON(body: string, status: number): Response {
+  return new Response(body, {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+    },
+  });
+}
+
+/** A fixed token-free failure. The upstream body never reaches the page. */
+function tokenFreeError(
+  error: string,
+  status: number,
+  extra: Record<string, string> = {},
+): Response {
+  return new Response(JSON.stringify({ error }), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+      ...extra,
+    },
+  });
+}
+
+/** Preserves the status a page needs (401 terminal, 429 wait) without the
+ *  upstream body, which can carry credential detail. */
+function authFailureResponse(res: Response): Response {
+  const error =
+    res.status === 401
+      ? 'unauthorized'
+      : res.status === 429
+        ? 'too many attempts'
+        : 'authentication failed';
+  const retryAfter = res.headers.get('Retry-After');
+  return tokenFreeError(
+    error,
+    res.status,
+    retryAfter ? { 'Retry-After': retryAfter } : {},
+  );
+}
+
+async function readRequestBody(req: Request): Promise<BodyInit | undefined> {
+  if (req.method === 'GET' || req.method === 'HEAD') return undefined;
+  if (typeof req.arrayBuffer === 'function') {
+    try {
+      const buf = await req.arrayBuffer();
+      return buf.byteLength > 0 ? buf : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  const fallback = (req as unknown as { body?: BodyInit }).body;
+  return fallback === undefined ? undefined : fallback;
+}
+
+/** Reads a credential-bearing body under the 64 KiB host limit. `null` means an
+ *  empty body and `'oversized'` means the bundle must be rejected, not parsed. */
+async function readBoundedText(
+  res: Response,
+): Promise<string | null | 'oversized'> {
+  const declared = Number.parseInt(res.headers.get('Content-Length') ?? '', 10);
+  if (Number.isInteger(declared) && declared > MAX_CREDENTIAL_BODY_BYTES) {
+    return 'oversized';
+  }
+  let text: string;
+  try {
+    text = await res.text();
+  } catch {
+    return null;
+  }
+  if (Buffer.byteLength(text, 'utf8') > MAX_CREDENTIAL_BODY_BYTES) {
+    return 'oversized';
+  }
+  return text.length === 0 ? null : text;
+}
+
 const MIME_TYPES: Readonly<Record<string, string>> = Object.freeze({
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -158,6 +300,8 @@ export class EmbeddedTransport {
     string,
     { done: Promise<void>; release: () => void; holders: number }
   >();
+  /** The host credential owner. Absent only in tests that never proxy `/api`. */
+  private readonly auth?: EmbeddedAuthHost;
 
   constructor(options: EmbeddedTransportOptions) {
     this.embeddedDir = path.resolve(options.embeddedDir);
@@ -165,6 +309,7 @@ export class EmbeddedTransport {
     this.listProfiles = options.listProfiles;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
     this.compatCachePath = options.compatCachePath;
+    this.auth = options.auth;
     this.loadPersistedCompat();
   }
 
@@ -604,6 +749,24 @@ export class EmbeddedTransport {
           }
         }
 
+        // The shell page holds no token, so it cannot build the `?token=` a
+        // browser socket uses. The server accepts the host token in this header
+        // on upgrades only; a URL rewrite is not available (Chromium drops
+        // `onBeforeRequest` redirects for WebSocket handshakes).
+        // A page-supplied value is always dropped: only the host may set this
+        // header, so a renderer cannot choose its socket credential.
+        for (const k of Object.keys(headers)) {
+          if (k.toLowerCase() === SOCKET_TOKEN_HEADER.toLowerCase()) {
+            delete headers[k];
+          }
+        }
+        const isSocketPath =
+          wsUrl.pathname === '/ws' || wsUrl.pathname.startsWith('/ws/');
+        const hostToken = isSocketPath
+          ? (this.auth?.getToken(matchedProfile.origin) ?? null)
+          : null;
+        if (hostToken) headers[SOCKET_TOKEN_HEADER] = hostToken;
+
         callback({ requestHeaders: headers });
       },
     );
@@ -879,87 +1042,185 @@ export class EmbeddedTransport {
       });
     }
 
-    const forwardHeaders = new Headers();
-    const stripped = new Set([
-      'x-phi-backend',
-      'host',
-      'origin',
-      'cookie',
-      'connection',
-      'content-length',
-    ]);
+    // Section 6's request/response table. The page never supplies a
+    // credential, so each row decides what the host attaches.
+    const row = authProxyRow(targetUrl.pathname, req.method);
+    if (row === 'refresh') return this.handleV2Refresh(profile);
+    if (row === 'login' || row === 'password') {
+      return this.handleV2CredentialRow(req, targetUrl, profile);
+    }
+    if (row === 'logout') return this.handleV2Logout(req, targetUrl, profile);
+    return this.forwardApiRow(req, targetUrl, profile, row);
+  }
 
-    req.headers.forEach((val, key) => {
-      if (!stripped.has(key.toLowerCase())) {
-        forwardHeaders.set(key, val);
-      }
+  /**
+   * The refresh row: the page's request never reaches the server. Refresh runs
+   * through the host owner (one single-flight per origin), so a renderer reload
+   * cannot consume the same handle twice, and only a terminal `401` drops the
+   * bundle. The page gets a token-free answer either way.
+   */
+  private async handleV2Refresh(profile: EmbeddedProfile): Promise<Response> {
+    if (!this.auth) return tokenFreeError('unavailable', 503);
+    const result = await this.auth.refreshAccess(profile.origin);
+    if (result.kind === 'ok') return tokenFreeJSON(REFRESH_OK_BODY, 200);
+    if (result.kind === 'unauthorized') {
+      return tokenFreeError('unauthorized', 401);
+    }
+    // Every other outcome keeps the bundle: the page retries with backoff and
+    // must not be told to sign in.
+    const headers: Record<string, string> = {};
+    if (
+      result.kind === 'unavailable' &&
+      typeof result.retryAfterMs === 'number' &&
+      result.retryAfterMs > 0
+    ) {
+      headers['Retry-After'] = String(Math.ceil(result.retryAfterMs / 1000));
+    }
+    return tokenFreeError('unavailable', 503, headers);
+  }
+
+  /**
+   * The login and password rows. The body is forwarded unchanged; the row
+   * decides which credential the host attaches, and a credential-bearing body
+   * is consumed here and replaced by the exact token-free answer.
+   */
+  private async handleV2CredentialRow(
+    req: Request,
+    targetUrl: URL,
+    profile: EmbeddedProfile,
+  ): Promise<Response> {
+    const body = await readRequestBody(req);
+    const headers = this.buildForwardHeaders(req, profile, {
+      jsonContentType: true,
+      // A login carries no access credential even when the host holds one.
+      bearer: null,
+      v2: true,
     });
-
-    forwardHeaders.set('Origin', new URL(profile.origin).origin);
-
-    const jarCookie = this.getCookieHeader(profile.id);
-    const incomingCookie = req.headers.get('cookie');
-    let finalCookie = '';
-    if (incomingCookie && jarCookie) {
-      const map = new Map<string, string>();
-      for (const part of incomingCookie.split(';')) {
-        const p = part.trim();
-        const eq = p.indexOf('=');
-        if (eq > 0) map.set(p.slice(0, eq).trim(), p.slice(eq + 1).trim());
-      }
-      const jarMap = this.cookieJars.get(profile.id);
-      if (jarMap) {
-        for (const [k, v] of jarMap.entries()) map.set(k, v);
-      }
-      finalCookie = Array.from(map.entries())
-        .map(([k, v]) => `${k}=${v}`)
-        .join('; ');
-    } else {
-      finalCookie = jarCookie || incomingCookie || '';
-    }
-    if (finalCookie) {
-      forwardHeaders.set('Cookie', finalCookie);
-    }
-
-    let body: BodyInit | undefined = undefined;
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      if (typeof req.arrayBuffer === 'function') {
-        try {
-          const buf = await req.arrayBuffer();
-          if (buf.byteLength > 0) {
-            body = buf;
-          }
-        } catch {
-          /* ignore body read error */
-        }
-      } else if ((req as unknown as { body?: BodyInit }).body !== undefined) {
-        body = (req as unknown as { body?: BodyInit }).body;
-      }
+    // The password route requires a bearer once the server is enabled: without
+    // this row the shell could neither change nor clear its own password.
+    const hostToken = this.auth?.getToken(profile.origin) ?? null;
+    if (hostToken && isPasswordRoute(targetUrl.pathname)) {
+      headers.set('Authorization', `Bearer ${hostToken}`);
     }
 
     let upstreamRes: Response;
     try {
       upstreamRes = await this.fetchImpl(targetUrl.toString(), {
         method: req.method,
-        headers: forwardHeaders,
+        headers,
         body,
         redirect: 'manual',
       });
-    } catch (err) {
+    } catch {
+      return tokenFreeError('upstream request failed', 502);
+    }
+    for (const sc of readSetCookieHeaders(upstreamRes)) {
+      this.applySetCookieHeader(profile.id, sc);
+    }
+
+    if (!upstreamRes.ok) return authFailureResponse(upstreamRes);
+
+    const raw = await readBoundedText(upstreamRes);
+    if (raw === 'oversized')
+      return tokenFreeError('invalid credential response', 502);
+    let payload: unknown;
+    try {
+      payload = raw === null ? null : JSON.parse(raw);
+    } catch {
+      return tokenFreeError('invalid credential response', 502);
+    }
+
+    // Clear: the credential is gone server-side, and the host drops its own.
+    if (
+      payload &&
+      typeof payload === 'object' &&
+      (payload as Record<string, unknown>).enabled === false
+    ) {
+      return tokenFreeJSON(CLEARED_BODY, 200);
+    }
+
+    const bundle = parseCredentialBundle(
+      payload,
+      parseRefreshHandle(upstreamRes),
+    );
+    // A malformed or oversized bundle is a host error. It must never reach the
+    // page, and it must never displace a working credential.
+    if (!bundle) return tokenFreeError('invalid credential response', 502);
+    if (!this.auth?.installBundle(profile.origin, bundle)) {
+      return tokenFreeError('unable to install credential', 503);
+    }
+    return tokenFreeJSON(ENABLED_BODY, 200);
+  }
+
+  /** The logout row: host bearer only, and the bundle drops on confirmation. */
+  private async handleV2Logout(
+    req: Request,
+    targetUrl: URL,
+    profile: EmbeddedProfile,
+  ): Promise<Response> {
+    const body = await readRequestBody(req);
+    const headers = this.buildForwardHeaders(req, profile, {
+      jsonContentType: true,
+      bearer: this.auth?.getToken(profile.origin) ?? null,
+      v2: true,
+    });
+    let upstreamRes: Response;
+    try {
+      upstreamRes = await this.fetchImpl(targetUrl.toString(), {
+        method: req.method,
+        headers,
+        body,
+        redirect: 'manual',
+      });
+    } catch {
+      return tokenFreeError('upstream request failed', 502);
+    }
+    for (const sc of readSetCookieHeaders(upstreamRes)) {
+      this.applySetCookieHeader(profile.id, sc);
+    }
+    if (!upstreamRes.ok) return authFailureResponse(upstreamRes);
+    if (this.auth) await this.auth.logout(profile.origin, false);
+    return tokenFreeJSON(LOGOUT_OK_BODY, 200);
+  }
+
+  /**
+   * The rows that are plain forwarding: the v2 status row (host-authenticated so
+   * the proxied answer reflects the host's session) and every other `/api/*`
+   * row. Both strip the page's credential and browser-metadata headers; only the
+   * host bearer differs, and an unprotected route ignores it.
+   */
+  private async forwardApiRow(
+    req: Request,
+    targetUrl: URL,
+    profile: EmbeddedProfile,
+    _row: AuthProxyRow,
+  ): Promise<Response> {
+    const body = await readRequestBody(req);
+    const hostToken = this.auth?.getToken(profile.origin) ?? null;
+    const headers = this.buildForwardHeaders(req, profile, {
+      jsonContentType: false,
+      bearer: hostToken,
+      v2: false,
+    });
+
+    let upstreamRes: Response;
+    try {
+      upstreamRes = await this.fetchImpl(targetUrl.toString(), {
+        method: req.method,
+        headers,
+        body,
+        redirect: 'manual',
+      });
+    } catch {
       return new Response(
         JSON.stringify({
           error: 'upstream request failed',
-          message: String(err),
         }),
-        {
-          status: 502,
-          headers: { 'Content-Type': 'application/json' },
-        },
+        { status: 502, headers: { 'Content-Type': 'application/json' } },
       );
     }
 
-    const setCookies = readSetCookieHeaders(upstreamRes);
-    for (const sc of setCookies) {
+    for (const sc of readSetCookieHeaders(upstreamRes)) {
       this.applySetCookieHeader(profile.id, sc);
     }
 
@@ -980,6 +1241,49 @@ export class EmbeddedTransport {
       statusText: upstreamRes.statusText,
       headers: clientHeaders,
     });
+  }
+
+  /**
+   * The headers every proxied row sends. The page's own credential, cookie and
+   * browser-metadata headers are always dropped: the renderer cannot choose its
+   * credential, and a `phi-app://app` page presents Fetch-Metadata the server
+   * rejects.
+   */
+  private buildForwardHeaders(
+    req: Request,
+    profile: EmbeddedProfile,
+    options: { jsonContentType: boolean; bearer: string | null; v2: boolean },
+  ): Headers {
+    const headers = new Headers();
+    const stripped = new Set([
+      'x-phi-backend',
+      'host',
+      'origin',
+      'sec-fetch-site',
+      'sec-fetch-mode',
+      'sec-fetch-dest',
+      'cookie',
+      'authorization',
+      V2_CSRF_HEADER.toLowerCase(),
+      SOCKET_TOKEN_HEADER.toLowerCase(),
+      'connection',
+      'content-length',
+    ]);
+    req.headers.forEach((val, key) => {
+      if (!stripped.has(key.toLowerCase())) headers.set(key, val);
+    });
+    if (options.jsonContentType) {
+      headers.set('Content-Type', 'application/json');
+    }
+    if (options.v2) {
+      headers.set(V2_CSRF_HEADER, V2_CSRF_VALUE);
+    }
+    if (options.bearer) {
+      headers.set('Authorization', `Bearer ${options.bearer}`);
+    }
+    const jarCookie = this.getCookieHeader(profile.id);
+    if (jarCookie) headers.set('Cookie', jarCookie);
+    return headers;
   }
 
   private handleStaticFile(req: Request, url: URL): Response {
