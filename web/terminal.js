@@ -388,6 +388,10 @@ const PERF_SLOW_MS = 16;
 // Max delta and checkpoint limits: 2 MiB bounds live payloads while
 // ensuring terminal history is never dropped or truncated on attach.
 const MAX_DELTA_BYTES = 2 * 1024 * 1024;
+// A resync capture window that cannot commit in this long is abandoned: the
+// pane stays retained and the reader retries explicitly. It bounds the work,
+// not the attempt.
+const MAX_CAPTURE_MS = 30_000;
 const MAX_CHECKPOINT_BYTES = 2 * 1024 * 1024;
 const MAX_WRITE_CHARS = 64 * 1024;
 // Full live scrollback, desktop and unset-mobile alike. The mobile lane
@@ -2990,6 +2994,13 @@ export class TabManager {
     // 'applied' carries a numeric frontier.
     async _recoverBootstrapFromLiveState(tabInfo, ws, current) {
         const epoch = tabInfo.paneEpoch;
+        // Everything already received stays covered: the recording supplies
+        // [state.through, C), and the socket captures raw spans from the same
+        // frontier on, so no byte between the checkpoint and the commit is
+        // re-requested or lost.
+        const receivedAtStart = Math.max(0, ws?.receivedThrough ?? 0);
+        let capturing = typeof ws?.beginCapture === 'function' &&
+            ws.beginCapture(receivedAtStart);
         let state = null;
         for (let attempt = 0; attempt < 3; attempt++) {
             try {
@@ -3004,23 +3015,131 @@ export class TabManager {
             if (state) break;
             if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
         }
-        if (!current()) return { kind: 'cancelled', reason: 'stale' };
-        if (!state) return { kind: 'failed', error: new Error('no authoritative state') };
+        if (!current()) {
+            if (capturing) ws.abortCapture?.();
+            return { kind: 'cancelled', reason: 'stale' };
+        }
+        if (!state) {
+            if (capturing) ws.abortCapture?.();
+            return { kind: 'failed', error: new Error('no authoritative state') };
+        }
         const pty = tabInfo.ws;
-        this._clearHistoryAnchors(tabInfo);
-        this._resetPaneBuffer(tabInfo);
-        tabInfo.term.resize(state.cols, state.rows);
-        pty.decoder = new TextDecoder('utf-8');
-        tabInfo._streamDecoder = pty.decoder;
-        this._writeAttachCheckpoint(tabInfo, pty, state);
-        tabInfo.paneOldest = state.oldest;
-        tabInfo._historyLiveState = null;
-        const frontier = state.through;
-        tabInfo.queuedSeq = frontier;
-        tabInfo.drainedSeq = frontier;
-        if (typeof pty.adoptState === 'function') pty.adoptState(frontier);
-        this._clearResyncNeeded(tabInfo);
-        return { kind: 'applied', through: frontier };
+        // One fixed fence for this attempt. C is never chased as output arrives.
+        const fence = Math.max(state.through, receivedAtStart);
+        const captureDeadline = capturing
+            ? setTimeout(() => pty.abortCapture?.(), MAX_CAPTURE_MS)
+            : null;
+        try {
+            this._clearHistoryAnchors(tabInfo);
+            this._resetPaneBuffer(tabInfo);
+            tabInfo.term.resize(state.cols, state.rows);
+            pty.decoder = new TextDecoder('utf-8');
+            tabInfo._streamDecoder = pty.decoder;
+            this._writeAttachCheckpoint(tabInfo, pty, state);
+            tabInfo.paneOldest = state.oldest;
+            tabInfo._historyLiveState = null;
+            tabInfo.queuedSeq = state.through;
+            tabInfo.drainedSeq = state.through;
+            if (typeof pty.adoptState === 'function') pty.adoptState(state.through);
+            // Bytes below the fence were received and are not in the
+            // checkpoint: the recording covers them without capture.
+            if (fence > state.through) {
+                const replayed = await this._replayFence(tabInfo, state.through, fence, current, pty);
+                if (replayed.kind === 'cancelled') return replayed;
+                if (replayed.kind !== 'applied') {
+                    // The checkpoint is already on screen and coherent. Only
+                    // the tail is uncertified, so keep the view and wait for
+                    // the explicit retry instead of closing the socket.
+                    tabInfo._resyncNeeded = true;
+                    pty.discard?.();
+                    this._updateResyncAffordance(tabInfo);
+                    return { kind: 'retained', reason: 'fence', through: state.through };
+                }
+            }
+            if (!capturing) {
+                this._clearResyncNeeded(tabInfo);
+                return { kind: 'applied', through: fence };
+            }
+            // Commit in one turn: the suffix is what arrived beyond the fence,
+            // delivered through the replay decoder before any later frame.
+            const captured = pty.finishCapture?.(fence);
+            if (!captured) {
+                tabInfo._resyncNeeded = true;
+                this._updateResyncAffordance(tabInfo);
+                return { kind: 'retained', reason: 'capture', through: fence };
+            }
+            if (captured.bytes.byteLength > 0) {
+                const delivered = await this._parseRecordingRange(
+                    tabInfo,
+                    {
+                        start: captured.from,
+                        end: captured.through,
+                        bytes: captured.bytes,
+                        byteLength: captured.bytes.byteLength,
+                    },
+                    current,
+                    undefined,
+                    pty,
+                );
+                if (!delivered) {
+                    tabInfo._resyncNeeded = true;
+                    return { kind: 'retained', reason: 'capture', through: fence };
+                }
+            }
+            // No release here: the caller owns the bootstrap ordering
+            // (fit, refresh, resize) and releases after it. Frames that land
+            // in between stay in the bounded hold.
+            tabInfo.queuedSeq = captured.through;
+            tabInfo.drainedSeq = captured.through;
+            this._clearResyncNeeded(tabInfo);
+            return { kind: 'applied', through: captured.through };
+        } finally {
+            if (captureDeadline) clearTimeout(captureDeadline);
+        }
+    }
+
+    // Replays exactly [from, to) from the recording, one bounded range at a
+    // time. A retention miss or a malformed range is a failure, not a skip.
+    async _replayFence(tabInfo, from, to, current, pty) {
+        let cursor = from;
+        let chained;
+        while (cursor < to) {
+            const end = Math.min(to, cursor + MAX_DELTA_BYTES);
+            let d;
+            try {
+                d = await this._fetchRecordingRange(
+                    tabInfo.paneId,
+                    cursor,
+                    end,
+                    tabInfo.paneEpoch,
+                    chained,
+                );
+            } catch (error) {
+                if (!current()) return { kind: 'cancelled', reason: 'stale' };
+                return { kind: 'failed', error };
+            }
+            if (!current()) return { kind: 'cancelled', reason: 'stale' };
+            if (
+                !d ||
+                d.start !== cursor ||
+                d.end !== end ||
+                d.byteLength !== end - cursor ||
+                (d.bytes && d.bytes.byteLength !== d.byteLength)
+            ) {
+                return { kind: 'failed', error: new Error('malformed recording range') };
+            }
+            if (d.endCursor !== undefined) chained = d.endCursor;
+            if (d.bytes) {
+                if (!await this._parseRecordingRange(tabInfo, d, current, undefined, pty)) {
+                    return { kind: 'cancelled', reason: 'stale' };
+                }
+            } else {
+                this.writeToTerminal(tabInfo, d.text);
+                await this._drainSettled(tabInfo);
+            }
+            cursor = end;
+        }
+        return { kind: 'applied', through: to };
     }
 
     async _bootstrapDelta(tabInfo, from, head, expectGen, onReady, eventCursor) {

@@ -364,3 +364,83 @@ it('old servers without cursors keep working without cursor parameters', async (
         h.dispose();
     }
 });
+
+// Slice 3d: the recovery reset covers the socket's own received frontier with
+// the recording, then commits the captured suffix at one fixed fence.
+it('a recovery replays only the span the checkpoint does not cover', async () => {
+    const source = encode('A'.repeat(174) + 'B'.repeat(14));
+    const h = await attached(source);
+    try {
+        h.pty.ws.output(184, encode('LIVE'));
+        await h.settle();
+        expect(h.tab.ws.receivedThrough).toBe(188);
+        const asked = [];
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async (url) => {
+                const parsed = new URL(url, 'http://localhost');
+                if (parsed.pathname.endsWith('/state')) {
+                    // The checkpoint sits behind what the socket already has.
+                    return stateEnvelope(encode('RECOVERED'), 174);
+                }
+                const from = Number(parsed.searchParams.get('from'));
+                const to = Number(parsed.searchParams.get('through'));
+                asked.push([from, to]);
+                return recordingEnvelope(source.slice(from, to), from, to);
+            }),
+        );
+        const outcome = await h.manager._recoverBootstrapFromLiveState(
+            h.tab,
+            h.tab.ws,
+            () => true,
+        );
+        expect(outcome.kind).toBe('applied');
+        // The fence is the received frontier, not the checkpoint.
+        expect(outcome.through).toBe(188);
+        // Only [checkpoint, fence) is re-requested; nothing below it is.
+        expect(asked).toEqual([[174, 188]]);
+        expect(h.tape.join('')).toContain('RECOVERED');
+        expect(h.tape.join('')).toContain('B'.repeat(14));
+        expect(h.tab.drainedSeq).toBe(188);
+        expect(h.tab._resyncNeeded).toBeFalsy();
+    } finally {
+        h.dispose();
+    }
+});
+
+it('a frame received during the capture window commits after the fence once', async () => {
+    const source = encode('A'.repeat(174) + 'B'.repeat(14));
+    const h = await attached(source);
+    try {
+        h.pty.ws.output(184, encode('LIVE'));
+        await h.settle();
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async (url) => {
+                const parsed = new URL(url, 'http://localhost');
+                if (parsed.pathname.endsWith('/state')) {
+                    // Output keeps arriving while the state request is open.
+                    h.pty.ws.output(188, encode('TAIL'));
+                    return stateEnvelope(encode('RECOVERED'), 174);
+                }
+                const from = Number(parsed.searchParams.get('from'));
+                const to = Number(parsed.searchParams.get('through'));
+                return recordingEnvelope(source.slice(from, to), from, to);
+            }),
+        );
+        const outcome = await h.manager._recoverBootstrapFromLiveState(
+            h.tab,
+            h.tab.ws,
+            () => true,
+        );
+        expect(outcome.kind).toBe('applied');
+        expect(outcome.through).toBe(192);
+        const tape = h.tape.join('');
+        expect(tape).toContain('RECOVERED');
+        expect(tape.indexOf('TAIL')).toBeGreaterThan(tape.indexOf('RECOVERED'));
+        expect(tape.split('TAIL')).toHaveLength(2);
+        expect(h.tab._resyncNeeded).toBeFalsy();
+    } finally {
+        h.dispose();
+    }
+});

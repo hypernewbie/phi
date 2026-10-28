@@ -173,6 +173,13 @@ export class PTYWebSocket {
     private heldBytes = 0;
     /** Retained view: validate and sequence live frames, but store nothing. */
     private discarding = false;
+    /** Replay fence: retain raw spans from the capture origin so a reset can
+     * resume at the fence instead of re-requesting bytes already received.
+     * Null when not capturing. */
+    private capturing: { from: number } | null = null;
+    private captured: Array<{ start: number; bytes: Uint8Array }> = [];
+    private capturedBytes = 0;
+    private captureOverflow = false;
 
     constructor(
         paneId: string,
@@ -520,6 +527,13 @@ export class PTYWebSocket {
             // when a bootstrap-held frame is released).
             start = this.liveSeq;
         }
+        if (this.capturing) {
+            // The fence is not known yet, so retain everything from the
+            // current received frontier. finishCapture() trims below C.
+            this._captureFrame(start, bytes);
+            this.lastFrameEnd = Math.max(this.lastFrameEnd ?? 0, start + bytes.byteLength);
+            return;
+        }
         if (this.discarding) {
             // A retained view owns the screen. W may cross holes here; P never
             // does, because nothing is parsed, queued, or gap-fetched.
@@ -625,8 +639,107 @@ export class PTYWebSocket {
      * Only an explicit resync rebuilds the stream. */
     discard() {
         this.discarding = true;
+        this.capturing = null;
+        this.captured = [];
+        this.capturedBytes = 0;
+        this.captureOverflow = false;
         this.held = [];
         this.heldBytes = 0;
+    }
+
+    /** The received frontier, which a reset has to cover to lose nothing. */
+    get receivedThrough(): number {
+        return Math.max(this.lastFrameEnd ?? 0, this.liveSeq ?? 0);
+    }
+
+    /** beginCapture() switches a held delivery to raw retention from `from`.
+     * Bytes at or below `from` are already covered by the reset, so they are
+     * neither stored nor parsed. */
+    beginCapture(from: number): boolean {
+        if (this.mode !== 'hot' || !Number.isSafeInteger(from) || from < 0)
+            return false;
+        this.capturing = { from };
+        this.captured = [];
+        this.capturedBytes = 0;
+        this.captureOverflow = false;
+        this.discarding = false;
+        this.held = [];
+        this.heldBytes = 0;
+        return true;
+    }
+
+    /** abortCapture() drops the window and returns to discard: the attempt
+     * cannot certify a frontier from what it holds. */
+    abortCapture() {
+        this.capturing = null;
+        this.captured = [];
+        this.capturedBytes = 0;
+        this.captureOverflow = false;
+        this.discarding = true;
+    }
+
+    /** Capture is bounded like a hold: overflow abandons the window instead
+     * of growing without limit, and the caller falls back to retained. */
+    private _captureFrame(start: number, bytes: Uint8Array) {
+        const next = this.capturedBytes + bytes.byteLength;
+        if (this.captureOverflow || this.captured.length >= MAX_HELD_SPANS || next > MAX_HELD_BYTES) {
+            this.captureOverflow = true;
+            this.captured = [];
+            this.capturedBytes = 0;
+            return;
+        }
+        this.captured.push({ start, bytes });
+        this.capturedBytes = next;
+    }
+
+    /** finishCapture() returns the contiguous captured suffix from `from`.
+     * A hole, an overflow, or no active window returns null: the caller must
+     * stay retained rather than deliver a stream with a missing interval.
+     * On success the stream is live from the returned frontier, and later
+     * frames are delivered through the normal hold/release path. */
+    finishCapture(
+        from: number,
+    ): { from: number; through: number; bytes: Uint8Array } | null {
+        const cap = this.capturing;
+        this.capturing = null;
+        const spans = this.captured;
+        const overflowed = this.captureOverflow;
+        this.captured = [];
+        this.capturedBytes = 0;
+        this.captureOverflow = false;
+        if (!cap || overflowed || !Number.isSafeInteger(from)) {
+            this.discarding = true;
+            return null;
+        }
+        let cursor = Math.max(from, cap.from);
+        const parts: Uint8Array[] = [];
+        for (let i = 0; i < spans.length; i++) {
+            const span = spans[i];
+            const end = span.start + span.bytes.byteLength;
+            if (end <= cursor) continue;
+            if (span.start > cursor) {
+                // A hole inside the window cannot be delivered as a suffix.
+                this.discarding = true;
+                this.liveSeq = cursor;
+                this.lastFrameEnd = Math.max(this.lastFrameEnd ?? 0, cursor);
+                return null;
+            }
+            const skip = cursor - span.start;
+            parts.push(skip > 0 ? span.bytes.subarray(skip) : span.bytes);
+            cursor = end;
+        }
+        let total = 0;
+        for (const part of parts) total += part.byteLength;
+        const bytes = new Uint8Array(total);
+        let offset = 0;
+        for (const part of parts) {
+            bytes.set(part, offset);
+            offset += part.byteLength;
+        }
+        this.discarding = false;
+        this.liveSeq = cursor;
+        this.lastFrameEnd = Math.max(this.lastFrameEnd ?? 0, cursor);
+        return { from, through: cursor, bytes };
     }
 
     /** A hold is bounded: an unbounded queue behind a stalled bootstrap is a
