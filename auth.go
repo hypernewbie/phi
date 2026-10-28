@@ -1695,7 +1695,27 @@ func (m *accessAuthManager) loginPassword(password, remoteAddr string) (accessV2
 	// A current-parameter login opens a new family and keeps the existing ones:
 	// signing in from another device must not sign the first device out.
 	active := m.snapshotLocked()
-	_, bundle, err := addAccessFamily(active, m.jwtKey, m.v2.refreshKey, now)
+	refreshKey := m.v2.refreshKey
+	if active.RecordID == "" || len(refreshKey) != accessRefreshKeyBytes {
+		// The record identity is missing: either no state file was written yet,
+		// or reconciliation revoked the families because the state matched no
+		// journal binding. A raw-password login is the documented way to
+		// re-establish identity for the record Config carries, so derive it here
+		// and keep the binding and epoch that are already durable.
+		recordID, keyErr := randomAccessToken()
+		if keyErr != nil {
+			return accessV2Bundle{}, keyErr
+		}
+		derived, keyErr := accessRefreshKey(m.record)
+		if keyErr != nil {
+			return accessV2Bundle{}, keyErr
+		}
+		encodedKey := base64.RawURLEncoding.EncodeToString(derived)
+		active.RecordID = recordID
+		active.RefreshKey = &encodedKey
+		refreshKey = derived
+	}
+	_, bundle, err := addAccessFamily(active, m.jwtKey, refreshKey, now)
 	if err != nil {
 		return accessV2Bundle{}, err
 	}

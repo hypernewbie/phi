@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -3255,5 +3256,927 @@ func TestAccessV2RefreshRateLimitIsolated(t *testing.T) {
 	clock.advance(time.Minute)
 	if w := testAccessV2RefreshRequest(t, handle); w.Code != http.StatusOK {
 		t.Fatalf("live handle after the cap reset: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// testAccessSwapManager installs manager as the global auth manager for the
+// duration of the test, so handler-level assertions can target a second
+// instance without disturbing the owner installed by useTestAccessAuth.
+func testAccessSwapManager(t *testing.T, manager *accessAuthManager) {
+	t.Helper()
+	previous := accessAuth
+	accessAuth = manager
+	t.Cleanup(func() { accessAuth = previous })
+}
+
+// testAccessV2Status asserts the documented status shape and returns it.
+func testAccessV2StatusBody(t *testing.T, manager *accessAuthManager) map[string]bool {
+	t.Helper()
+	testAccessSwapManager(t, manager)
+	w := testAccessServe(handleAccessV2Status, httptest.NewRequest(http.MethodGet, "/api/auth/v2/status", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("v2 status: %d %s", w.Code, w.Body.String())
+	}
+	var payload map[string]bool
+	testAccessJSONBody(t, w, &payload)
+	return payload
+}
+
+// TestAccessStateOwnershipLockExcludesSecondInstance covers the single-owner
+// contract: the process that cannot take the lock authorizes nothing, keeps
+// serving non-auth surfaces, never writes the shared state file, and recovers
+// ownership once the first instance releases it.
+func TestAccessStateOwnershipLockExcludesSecondInstance(t *testing.T) {
+	withTempConfig(t)
+	owner := useTestAccessAuth(t)
+	testAccessEnableV2(t, testAccessPassword)
+	login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.201:1")
+	bundle := testAccessDecodeBundle(t, login)
+	v1Cookie := testAccessCookieFor(t, owner)
+
+	// The state file must not double as the lock: every write replaces its
+	// inode, so a lock taken on it would protect nothing.
+	if accessV2LockPath() == accessV2StatePath() {
+		t.Fatal("lock file shares the state path")
+	}
+	lockInfo, err := os.Stat(accessV2LockPath())
+	if err != nil {
+		t.Fatalf("stat lock file: %v", err)
+	}
+	stateInfo, err := os.Stat(accessV2StatePath())
+	if err != nil {
+		t.Fatalf("stat state file: %v", err)
+	}
+	if os.SameFile(lockInfo, stateInfo) {
+		t.Fatal("lock and state are the same inode")
+	}
+	// A rotation rewrites the state file. The lock must survive it, which is
+	// only possible because it lives in a separate, stable file.
+	rotated := testAccessV2RefreshRequest(t, testAccessRefreshHandle(t, login))
+	if rotated.Code != http.StatusOK {
+		t.Fatalf("rotation before the ownership check: %d %s", rotated.Code, rotated.Body.String())
+	}
+	liveHandle := testAccessRefreshHandle(t, rotated)
+	afterRotation, err := os.Stat(accessV2StatePath())
+	if err != nil {
+		t.Fatalf("stat state file after rotation: %v", err)
+	}
+	if os.SameFile(stateInfo, afterRotation) {
+		t.Error("state write did not replace the file inode")
+	}
+	if !owner.owner.held() {
+		t.Error("owner lost the lock across a state replacement")
+	}
+	if held, err := os.Stat(accessV2LockPath()); err != nil {
+		t.Fatalf("stat lock file after state write: %v", err)
+	} else if !os.SameFile(lockInfo, held) {
+		t.Error("lock file inode changed across a state write")
+	}
+
+	second := newAccessAuthManager()
+	t.Cleanup(func() { second.owner.release() })
+	cfg := loadConfig()
+	if err := second.configure(cfg.AccessPasswordHash); err != nil {
+		t.Fatalf("configure second instance: %v", err)
+	}
+	if second.ownedNow() || second.stateOwned() {
+		t.Fatal("second instance took ownership of a held lock")
+	}
+
+	// It authorizes nothing: neither the owner's v2 bearer nor its v1 cookie.
+	protected := testAccessProtected()
+	bearer := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	bearer.Header.Set("Authorization", "Bearer "+bundle.Token)
+	v1 := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	v1.AddCookie(v1Cookie)
+	testAccessSwapManager(t, second)
+	for name, request := range map[string]*http.Request{"v2 bearer": bearer, "v1 cookie": v1} {
+		if w := testAccessServe(protected.ServeHTTP, request); w.Code != http.StatusUnauthorized {
+			t.Errorf("%s: status = %d want 401", name, w.Code)
+		}
+	}
+
+	// v2 status reports the refusal instead of pretending to be authenticated.
+	status := testAccessV2StatusBody(t, second)
+	if status["owned"] {
+		t.Error("second instance reported ownership")
+	}
+	if status["authenticated"] {
+		t.Error("second instance reported an authenticated session")
+	}
+	if !status["enabled"] {
+		t.Error("second instance hid the enforcement state")
+	}
+
+	// Non-auth surfaces keep working: only /api and /ws are gated.
+	public := accessAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	if w := testAccessServe(public.ServeHTTP, httptest.NewRequest(http.MethodGet, "/healthz", nil)); w.Code != http.StatusNoContent {
+		t.Errorf("public health path under a non-owner = %d want 204", w.Code)
+	}
+
+	// A write attempt fails and leaves the owner's state bytes untouched.
+	before, err := os.ReadFile(accessV2StatePath())
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if _, err := second.commitPasswordLocked(testAccessPasswordRecord(t), time.Now(), true); !errors.Is(err, errAccessPersistence) {
+		t.Errorf("second instance password commit error = %v want persistence refusal", err)
+	}
+	if _, err := second.refresh(liveHandle, "192.0.2.201:1", time.Now()); !errors.Is(err, errAccessPersistence) {
+		t.Errorf("second instance refresh error = %v want persistence refusal", err)
+	}
+	passwordBody, err := json.Marshal(map[string]string{"password": testAccessPassword})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testAccessErrorResponse(t, "non-owner password change",
+		testAccessV2PasswordRequest(t, string(passwordBody), bundle.Token),
+		http.StatusInternalServerError, "Unable to save access password\n")
+	after, err := os.ReadFile(accessV2StatePath())
+	if err != nil {
+		t.Fatalf("re-read state: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Error("second instance wrote the shared state file")
+	}
+
+	// The owner releases and the second instance recovers without a restart.
+	owner.owner.release()
+	if !second.ensureOwned() {
+		t.Fatal("second instance did not recover ownership")
+	}
+	if status := testAccessV2StatusBody(t, second); !status["owned"] {
+		t.Error("recovered instance still reports owned=false")
+	}
+	recovered := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	recovered.Header.Set("Authorization", "Bearer "+bundle.Token)
+	if w := testAccessServe(testAccessProtected().ServeHTTP, recovered); w.Code != http.StatusNoContent {
+		t.Errorf("recovered instance rejected the owner's bearer: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// testAccessPasswordRecord builds a record distinct from testAccessHash so a
+// password change is a real record change.
+func testAccessPasswordRecord(t *testing.T) *accessPasswordRecord {
+	t.Helper()
+	record, err := newAccessPasswordRecord(testAccessPassword)
+	if err != nil {
+		t.Fatalf("derive test record: %v", err)
+	}
+	return record
+}
+
+// testAccessStateBytes returns the raw durable state produced by the real
+// enable/login flow, so each schema case mutates a state the code itself wrote.
+func testAccessStateBytes(t *testing.T) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(accessV2StatePath())
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	return raw
+}
+
+// testAccessRewriteState decodes the durable state, hands it to mutate, and
+// writes the result back without validation, so the loader can be tested
+// against states the writer would refuse to produce.
+func testAccessRewriteState(t *testing.T, mutate func(*accessV2StateFile)) {
+	t.Helper()
+	var state accessV2StateFile
+	if err := json.Unmarshal(testAccessStateBytes(t), &state); err != nil {
+		t.Fatalf("decode state: %v", err)
+	}
+	mutate(&state)
+	raw, err := json.Marshal(&state)
+	if err != nil {
+		t.Fatalf("encode state: %v", err)
+	}
+	if err := os.WriteFile(accessV2StatePath(), raw, 0o600); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+}
+
+// TestAccessV2StateSchemaBounds pins that unreadable, oversized, or
+// contract-violating state is a fixed error rather than an auto-repair: the
+// loader must never guess its way to an authorizable state.
+func TestAccessV2StateSchemaBounds(t *testing.T) {
+	withTempConfig(t)
+	if state, err := loadAccessV2StateFile(accessV2StatePath()); err != nil || state != nil {
+		t.Fatalf("missing state = (%v, %v) want (nil, nil)", state, err)
+	}
+	if err := os.WriteFile(accessV2StatePath(), []byte("  \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if state, err := loadAccessV2StateFile(accessV2StatePath()); err != nil || state != nil {
+		t.Fatalf("empty state = (%v, %v) want (nil, nil)", state, err)
+	}
+
+	useTestAccessAuth(t)
+	testAccessEnableV2(t, testAccessPassword)
+	testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.211:1")
+	testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.212:1")
+	valid := testAccessStateBytes(t)
+	// Two families are needed for the duplicate checks; prove the baseline loads.
+	if state, err := loadAccessV2StateFile(accessV2StatePath()); err != nil || state == nil {
+		t.Fatalf("valid state rejected: state=%v err=%v", state, err)
+	}
+
+	digest := func(seed byte) string {
+		return fmt.Sprintf("%064x", bytes.Repeat([]byte{seed}, 32))
+	}
+	handle := func(seed byte) string {
+		return base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{seed}, 32))
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*accessV2StateFile)
+	}{
+		{"unsupported version", func(s *accessV2StateFile) { s.Version = accessV2StateVersion + 1 }},
+		{"invalid active binding", func(s *accessV2StateFile) { s.Active.RecordBinding = "nothex" }},
+		{"zero epoch", func(s *accessV2StateFile) { s.Active.Epoch = 0 }},
+		{"invalid record id", func(s *accessV2StateFile) { s.Active.RecordID = "short" }},
+		{"invalid refresh key", func(s *accessV2StateFile) {
+			key := base64.RawURLEncoding.EncodeToString([]byte("too-short"))
+			s.Active.RefreshKey = &key
+		}},
+		{"invalid family id", func(s *accessV2StateFile) { s.Active.Families[0].ID = "short" }},
+		{"duplicate family id", func(s *accessV2StateFile) { s.Active.Families[1].ID = s.Active.Families[0].ID }},
+		{"family used before creation", func(s *accessV2StateFile) {
+			s.Active.Families[0].LastUsedAt = s.Active.Families[0].CreatedAt - 1
+		}},
+		{"idle deadline inside creation", func(s *accessV2StateFile) {
+			s.Active.Families[0].IdleExpiresAt = s.Active.Families[0].CreatedAt
+		}},
+		{"absolute before idle", func(s *accessV2StateFile) {
+			s.Active.Families[0].AbsoluteExpiresAt = s.Active.Families[0].IdleExpiresAt - 1
+		}},
+		{"invalid active digest", func(s *accessV2StateFile) { s.Active.Families[0].ActiveDigest = "zz" }},
+		{"duplicate active digest", func(s *accessV2StateFile) {
+			s.Active.Families[1].ActiveDigest = s.Active.Families[0].ActiveDigest
+		}},
+		{"invalid access nonce", func(s *accessV2StateFile) { s.Active.Families[0].CurrentAccess.Nonce = "x" }},
+		{"access issued at zero", func(s *accessV2StateFile) { s.Active.Families[0].CurrentAccess.IssuedAt = 0 }},
+		{"access expires before issue", func(s *accessV2StateFile) {
+			s.Active.Families[0].CurrentAccess.ExpiresAt = s.Active.Families[0].CurrentAccess.IssuedAt
+		}},
+		{"access lifetime over maximum", func(s *accessV2StateFile) {
+			s.Active.Families[0].CurrentAccess.ExpiresAt = s.Active.Families[0].CurrentAccess.IssuedAt +
+				int64(accessJWTMaxLifetime/time.Second) + 1
+		}},
+		{"invalid consumed digest", func(s *accessV2StateFile) {
+			s.Active.Families[0].Consumed = []accessV2Consumed{{Digest: "zz", ConsumedAt: 1}}
+		}},
+		{"consumed digest collides with active", func(s *accessV2StateFile) {
+			s.Active.Families[0].Consumed = []accessV2Consumed{{
+				Digest:     s.Active.Families[0].ActiveDigest,
+				ConsumedAt: s.Active.Families[0].CreatedAt,
+			}}
+		}},
+		{"consumed timestamp zero", func(s *accessV2StateFile) {
+			s.Active.Families[0].Consumed = []accessV2Consumed{{Digest: digest(9), ConsumedAt: 0}}
+		}},
+		{"consumed over the cap", func(s *accessV2StateFile) {
+			consumed := make([]accessV2Consumed, 0, maxAccessConsumedPerFam+1)
+			for i := 0; i <= maxAccessConsumedPerFam; i++ {
+				consumed = append(consumed, accessV2Consumed{
+					Digest:     fmt.Sprintf("%064x", i+1),
+					ConsumedAt: s.Active.Families[0].CreatedAt,
+				})
+			}
+			s.Active.Families[0].Consumed = consumed
+		}},
+		{"families over the cap", func(s *accessV2StateFile) {
+			template := s.Active.Families[0]
+			families := make([]accessV2Family, 0, maxAccessFamilies+1)
+			for i := 0; i <= maxAccessFamilies; i++ {
+				family := template
+				family.ID = handle(byte(i % 251))
+				family.ActiveDigest = digest(byte(i % 251))
+				families = append(families, family)
+			}
+			s.Active.Families = families
+		}},
+		{"invalid pending binding", func(s *accessV2StateFile) {
+			s.Pending = &accessV2Pending{
+				FromRecordBinding: "nothex",
+				PasswordRecord:    testAccessHash(),
+				Next:              s.Active,
+			}
+		}},
+		{"invalid pending record", func(s *accessV2StateFile) {
+			s.Pending = &accessV2Pending{
+				FromRecordBinding: s.Active.RecordBinding,
+				PasswordRecord:    "pbkdf2-sha256$1$abc$def",
+				Next:              s.Active,
+			}
+		}},
+		{"invalid pending next", func(s *accessV2StateFile) {
+			next := s.Active
+			next.Epoch = 0
+			s.Pending = &accessV2Pending{
+				FromRecordBinding: s.Active.RecordBinding,
+				PasswordRecord:    testAccessHash(),
+				Next:              next,
+			}
+		}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if err := os.WriteFile(accessV2StatePath(), valid, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			testAccessRewriteState(t, testCase.mutate)
+			state, err := loadAccessV2StateFile(accessV2StatePath())
+			if err == nil {
+				t.Fatalf("state accepted: %+v", state)
+			}
+			if state != nil {
+				t.Error("rejected state was also returned")
+			}
+		})
+	}
+
+	t.Run("oversized", func(t *testing.T) {
+		padded := make([]byte, len(valid))
+		copy(padded, valid)
+		padded = append(padded, bytes.Repeat([]byte(" "), maxAccessV2StateBytes-len(valid)+1)...)
+		if err := os.WriteFile(accessV2StatePath(), padded, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadAccessV2StateFile(accessV2StatePath()); err == nil {
+			t.Fatal("oversized state accepted")
+		}
+	})
+	t.Run("trailing data", func(t *testing.T) {
+		if err := os.WriteFile(accessV2StatePath(), append(append([]byte{}, valid...), []byte("{}")...), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadAccessV2StateFile(accessV2StatePath()); err == nil {
+			t.Fatal("trailing data accepted")
+		}
+	})
+	t.Run("unknown field", func(t *testing.T) {
+		var generic map[string]any
+		if err := json.Unmarshal(valid, &generic); err != nil {
+			t.Fatal(err)
+		}
+		generic["unexpected"] = true
+		raw, err := json.Marshal(generic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(accessV2StatePath(), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadAccessV2StateFile(accessV2StatePath()); err == nil {
+			t.Fatal("unknown field accepted")
+		}
+	})
+
+	// Corrupt state on disk must fault v2 closed and stay untouched: repairing
+	// it silently would resurrect sessions the contract revoked.
+	testAccessRewriteState(t, func(s *accessV2StateFile) { s.Active.Epoch = 0 })
+	corrupt := testAccessStateBytes(t)
+	auth := useTestAccessAuth(t)
+	cfg := loadConfig()
+	if err := auth.configure(cfg.AccessPasswordHash); err != nil {
+		t.Fatalf("configure with corrupt state: %v", err)
+	}
+	if status := testAccessV2StatusBody(t, auth); status["authenticated"] {
+		t.Error("corrupt state authorized a session")
+	}
+	if after := testAccessStateBytes(t); !bytes.Equal(corrupt, after) {
+		t.Error("corrupt state was rewritten during configure")
+	}
+}
+
+// testAccessRestart builds a fresh manager from Config the way process startup
+// does, after releasing the current owner's lock. A non-nil fault reports the
+// recovered state instead of asserting a healthy one.
+func testAccessRestart(t *testing.T) *accessAuthManager {
+	t.Helper()
+	restarted := newAccessAuthManager()
+	t.Cleanup(func() { restarted.owner.release() })
+	if err := restarted.configure(loadConfig().AccessPasswordHash); err != nil {
+		t.Fatalf("restart configure: %v", err)
+	}
+	return restarted
+}
+
+// testAccessJournaledChange drives a real record change and stops it at a chosen
+// point by failing the nth state write, leaving the journal on disk exactly as
+// a crash at that instruction would.
+func testAccessJournaledChange(t *testing.T, auth *accessAuthManager, failWriteAt int) {
+	t.Helper()
+	previous := writeAccessV2StateFile
+	writes := 0
+	writeAccessV2StateFile = func(path string, data []byte, perm os.FileMode) error {
+		writes++
+		if writes == failWriteAt {
+			return errors.New("injected state write failure")
+		}
+		return previous(path, data, perm)
+	}
+	t.Cleanup(func() { writeAccessV2StateFile = previous })
+	if _, err := auth.commitPasswordLocked(testAccessPasswordRecord(t), auth.now(), true); err == nil {
+		t.Fatalf("record change succeeded despite failing state write %d", failWriteAt)
+	}
+	writeAccessV2StateFile = previous
+	if writes < failWriteAt {
+		t.Fatalf("record change performed %d state writes, wanted at least %d", writes, failWriteAt)
+	}
+}
+
+// TestAccessV2JournalRecovery covers the three restart cases from the
+// persistence contract: the Config commit happened, it did not happen, and the
+// state matches neither side of the journal.
+func TestAccessV2JournalRecovery(t *testing.T) {
+	t.Run("config commit never landed keeps the old sessions", func(t *testing.T) {
+		withTempConfig(t)
+		auth := useTestAccessAuth(t)
+		testAccessEnableV2(t, testAccessPassword)
+		login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.221:1")
+		handle := testAccessRefreshHandle(t, login)
+		oldBinding := testAccessStateFile(t).Active.RecordBinding
+		oldHandleCount := len(testAccessStateFile(t).Active.Families)
+
+		previousConfig := writeConfigFile
+		writeConfigFile = func(string, []byte, os.FileMode) error {
+			return errors.New("injected config write failure")
+		}
+		if _, err := auth.commitPasswordLocked(testAccessPasswordRecord(t), auth.now(), true); !errors.Is(err, errAccessPersistence) {
+			t.Fatalf("config write failure = %v want persistence refusal", err)
+		}
+		writeConfigFile = previousConfig
+
+		// The journal is on disk with the old active state beside it.
+		journaled := testAccessStateFile(t)
+		if journaled.Pending == nil {
+			t.Fatal("no journal was written before the config commit")
+		}
+		if loadConfig().AccessPasswordHash != "" && journaled.Pending.PasswordRecord == loadConfig().AccessPasswordHash {
+			t.Fatal("config committed despite the injected failure")
+		}
+
+		auth.owner.release()
+		restarted := testAccessRestart(t)
+		recovered := testAccessStateFile(t)
+		if recovered.Pending != nil {
+			t.Error("journal survived a restart that should have discarded it")
+		}
+		if recovered.Active.RecordBinding != oldBinding {
+			t.Error("restart replaced the active record without a config commit")
+		}
+		if len(recovered.Active.Families) != oldHandleCount {
+			t.Error("restart dropped sessions that the failed change never revoked")
+		}
+		testAccessSwapManager(t, restarted)
+		if w := testAccessV2RefreshRequest(t, handle); w.Code != http.StatusOK {
+			t.Errorf("pre-change handle after restart = %d %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("config commit landed promotes the journaled record", func(t *testing.T) {
+		withTempConfig(t)
+		auth := useTestAccessAuth(t)
+		testAccessEnableV2(t, testAccessPassword)
+		testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.222:1")
+		// Write 1 is the journal, write 2 is the promote: failing the promote
+		// leaves Config on the new record with the journal still present.
+		testAccessJournaledChange(t, auth, 2)
+
+		journaled := testAccessStateFile(t)
+		if journaled.Pending == nil {
+			t.Fatal("promote failure cleared the journal")
+		}
+		newBinding := accessRecordBinding(journaled.Pending.PasswordRecord)
+		if loadConfig().AccessPasswordHash != journaled.Pending.PasswordRecord {
+			t.Fatal("config does not carry the journaled record")
+		}
+		if journaled.Active.RecordBinding == newBinding {
+			t.Fatal("active state already matches the new record before restart")
+		}
+
+		auth.owner.release()
+		restarted := testAccessRestart(t)
+		recovered := testAccessStateFile(t)
+		if recovered.Pending != nil {
+			t.Error("journal survived the restart that promoted it")
+		}
+		if recovered.Active.RecordBinding != newBinding {
+			t.Error("restart did not promote the journaled record")
+		}
+		// The promoted families authorize, and the handle is the journaled one.
+		key, err := base64.RawURLEncoding.DecodeString(*recovered.Active.RefreshKey)
+		if err != nil {
+			t.Fatalf("decode refresh key: %v", err)
+		}
+		if len(recovered.Active.Families) != 1 {
+			t.Fatalf("promoted families = %d want 1", len(recovered.Active.Families))
+		}
+		family := recovered.Active.Families[0]
+		handle, err := accessRefreshHandle(key, family.ID, family.Generation)
+		if err != nil {
+			t.Fatalf("derive promoted handle: %v", err)
+		}
+		testAccessSwapManager(t, restarted)
+		rotated := testAccessV2RefreshRequest(t, handle)
+		if rotated.Code != http.StatusOK {
+			t.Fatalf("journaled handle = %d %s", rotated.Code, rotated.Body.String())
+		}
+		bundle := testAccessDecodeBundle(t, rotated)
+		restarted.mu.Lock()
+		claims, ok := restarted.jwtClaimsLocked(bundle.Token, restarted.now(), 0)
+		restarted.mu.Unlock()
+		if !ok || claims == nil {
+			t.Fatal("promoted access token rejected")
+		}
+		if claims.RecordID != recovered.Active.RecordID {
+			t.Error("promoted token was minted for another record")
+		}
+	})
+
+	t.Run("neither binding revokes every family", func(t *testing.T) {
+		withTempConfig(t)
+		auth := useTestAccessAuth(t)
+		testAccessEnableV2(t, testAccessPassword)
+		login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.223:1")
+		handle := testAccessRefreshHandle(t, login)
+		testAccessJournaledChange(t, auth, 2)
+
+		// An out-of-band edit: Config now carries a record that matches neither
+		// the active state nor the journal.
+		third, err := newAccessPasswordRecord("a third unrelated password")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := saveAccessPasswordHash(third.encoded()); err != nil {
+			t.Fatalf("out-of-band config write: %v", err)
+		}
+
+		auth.owner.release()
+		restarted := testAccessRestart(t)
+		recovered := testAccessStateFile(t)
+		if recovered.Pending != nil {
+			t.Error("journal survived the neither-binding recovery")
+		}
+		if len(recovered.Active.Families) != 0 {
+			t.Errorf("families after neither-binding recovery = %d want 0", len(recovered.Active.Families))
+		}
+		if recovered.Active.RecordBinding != accessRecordBinding(third.encoded()) {
+			t.Error("recovery did not bind state to the current config record")
+		}
+		testAccessSwapManager(t, restarted)
+		if w := testAccessV2RefreshRequest(t, handle); w.Code != http.StatusUnauthorized {
+			t.Errorf("pre-existing handle after revocation = %d want 401", w.Code)
+		}
+		// v2 is closed until a fresh password login establishes state for the
+		// record Config actually carries.
+		if w := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.226:1"); w.Code != http.StatusUnauthorized {
+			t.Errorf("stale password after revocation = %d want 401", w.Code)
+		}
+		fresh := testAccessV2LoginRequest(t, "a third unrelated password", "192.0.2.227:1")
+		freshBundle := testAccessDecodeBundle(t, fresh)
+		if freshBundle.Token == "" {
+			t.Fatal("fresh login after revocation issued no token")
+		}
+		if recovered := testAccessStateFile(t); len(recovered.Active.Families) != 1 {
+			t.Errorf("families after a fresh login = %d want 1", len(recovered.Active.Families))
+		}
+	})
+}
+
+// TestAccessV2PersistedJSONHoldsNoSecrets pins that the durable state carries
+// only digests and derived material, never a refresh handle, bearer, or
+// password.
+func TestAccessV2PersistedJSONHoldsNoSecrets(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	testAccessEnableV2(t, testAccessPassword)
+	login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.225:1")
+	bundle := testAccessDecodeBundle(t, login)
+	handle := testAccessRefreshHandle(t, login)
+	rotated := testAccessV2RefreshRequest(t, handle)
+	rotatedBundle := testAccessDecodeBundle(t, rotated)
+	liveHandle := testAccessRefreshHandle(t, rotated)
+
+	raw := string(testAccessStateBytes(t))
+	for name, secret := range map[string]string{
+		"login bearer":     bundle.Token,
+		"refreshed bearer": rotatedBundle.Token,
+		"refresh handle":   handle,
+		"live handle":      liveHandle,
+		"password":         testAccessPassword,
+	} {
+		if strings.Contains(raw, secret) {
+			t.Errorf("state file contains the %s", name)
+		}
+	}
+	if strings.Contains(raw, string(testAccessPasswordRecord(t).Verifier)) {
+		t.Error("state file contains raw verifier bytes")
+	}
+}
+
+// TestAccessV1BackoffShiftsAndCap pins the exact unchanged v1 backoff schedule
+// and the six-shift cap, so the v2 work cannot silently retune the pre-existing
+// brute-force protection.
+func TestAccessV1BackoffShiftsAndCap(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	if err := auth.configure(testAccessHash()); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	clock := testAccessUseClock(t, auth, time.Unix(testAccessJWTIssuedAt, 0))
+	client := "192.0.2.240"
+
+	want := []time.Duration{
+		time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second,
+		16 * time.Second, 32 * time.Second, 64 * time.Second, 64 * time.Second,
+		64 * time.Second,
+	}
+	for i, delay := range want {
+		auth.mu.Lock()
+		auth.recordFailureLocked(client, clock.now)
+		attempt := auth.attempts[client]
+		auth.mu.Unlock()
+		if attempt.Failures != i+1 {
+			t.Fatalf("failure %d: count = %d", i+1, attempt.Failures)
+		}
+		got := attempt.RetryAt.Sub(clock.now)
+		if got != delay {
+			t.Errorf("failure %d: backoff = %v want %v", i+1, got, delay)
+		}
+		if !attempt.LastFailure.Equal(clock.now) {
+			t.Errorf("failure %d: last failure = %v want %v", i+1, attempt.LastFailure, clock.now)
+		}
+		clock.advance(delay)
+	}
+
+	// The capped backoff still protects the route: a client inside the window
+	// is refused without touching the verifier. The v1 login route reads the
+	// wall clock, so this part records a real failure rather than a frozen one.
+	auth.mu.Lock()
+	auth.recordFailureLocked("192.0.2.241", time.Now())
+	auth.mu.Unlock()
+	status := testAccessServe(handleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	if status.Code != http.StatusOK {
+		t.Fatalf("status: %d", status.Code)
+	}
+	var challenge struct {
+		Challenge string `json:"challenge"`
+	}
+	testAccessJSONBody(t, status, &challenge)
+	body, err := json.Marshal(map[string]string{
+		"challenge": challenge.Challenge,
+		"proof":     testAccessProof(t, bytes.Repeat([]byte{0x22}, accessPasswordVerifierBytes), challenge.Challenge),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.RemoteAddr = "192.0.2.241:1"
+	w := testAccessServe(handleAccessAuthLogin, request)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("login inside the capped backoff = %d want 429", w.Code)
+	}
+	// The correct proof after the window is accepted, so the cap bounds the
+	// wait instead of locking the client out. The window is expired by moving
+	// the stored deadline, not by sleeping.
+	auth.mu.Lock()
+	attempt := auth.attempts["192.0.2.241"]
+	attempt.RetryAt = time.Now().Add(-time.Second)
+	auth.attempts["192.0.2.241"] = attempt
+	auth.mu.Unlock()
+	status = testAccessServe(handleAccessAuthStatus, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	testAccessJSONBody(t, status, &challenge)
+	body, err = json.Marshal(map[string]string{
+		"challenge": challenge.Challenge,
+		"proof":     testAccessProof(t, bytes.Repeat([]byte{0x22}, accessPasswordVerifierBytes), challenge.Challenge),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.RemoteAddr = "192.0.2.241:1"
+	if w := testAccessServe(handleAccessAuthLogin, request); w.Code != http.StatusOK {
+		t.Fatalf("login after the backoff window = %d %s", w.Code, w.Body.String())
+	}
+}
+
+// TestAccessExemptionLists pins the exact public and sync exemptions. Widening
+// either one silently unprotects routes, so the lists are asserted literally.
+func TestAccessExemptionLists(t *testing.T) {
+	public := []string{
+		"/api/auth/status", "/api/auth/login",
+		"/api/auth/v2/status", "/api/auth/v2/login", "/api/auth/v2/password",
+		"/api/auth/v2/refresh", "/api/auth/v2/logout",
+		"/livez", "/healthz", "/readyz",
+	}
+	for _, path := range public {
+		if !accessAuthPublicPath(path) {
+			t.Errorf("%s is not exempt", path)
+		}
+	}
+	// Non-/api, non-/ws paths serve the UI shell and stay reachable.
+	for _, path := range []string{"/", "/index.html", "/app.js", "/style.css"} {
+		if !accessAuthPublicPath(path) {
+			t.Errorf("%s is not served without a session", path)
+		}
+	}
+	protected := []string{
+		"/api/config", "/api/coders", "/api/files", "/api/markdown",
+		"/api/config/sync-coordinator", "/api/sync/messages",
+		"/api/auth/status/../config",
+		"/ws/panes/1", "/ws/events", "/ws/control",
+	}
+	for _, path := range protected {
+		if accessAuthPublicPath(path) {
+			t.Errorf("%s is exempt from authentication", path)
+		}
+	}
+	// The sync board is the one deliberate non-auth API exemption, and it is
+	// narrow: only the message endpoints, never the coordinator setting.
+	for _, path := range []string{"/api/sync/messages", "/api/sync/messages/abc"} {
+		if !isSyncBoardPath(path) {
+			t.Errorf("%s is not a sync board path", path)
+		}
+	}
+	for _, path := range []string{
+		"/api/sync/messages2", "/api/sync/coordinator",
+		"/api/config/sync-coordinator", "/api/sync", "/api/syncboard",
+	} {
+		if isSyncBoardPath(path) {
+			t.Errorf("%s is wrongly treated as a sync board path", path)
+		}
+	}
+}
+
+// TestAccessAssetCookieReach pins the exact reach of the asset cookie: the two
+// asset paths, GET and HEAD only, and nothing else.
+func TestAccessAssetCookieReach(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	testAccessEnableV2(t, testAccessPassword)
+	login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.231:1")
+	bundle := testAccessDecodeBundle(t, login)
+	assetCookie := testAccessResponseCookie(t, login, accessAssetCookie)
+	if assetCookie.Value == "" {
+		t.Fatal("login installed no asset cookie")
+	}
+
+	allowed := map[string]string{
+		"file asset":     accessAssetFilePath,
+		"markdown asset": accessAssetMarkdownPath,
+	}
+	for name, path := range allowed {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			request := httptest.NewRequest(method, path, nil)
+			request.AddCookie(&http.Cookie{Name: accessAssetCookie, Value: assetCookie.Value})
+			if w := testAccessServe(testAccessProtected().ServeHTTP, request); w.Code != http.StatusNoContent {
+				t.Errorf("%s %s = %d want 204", name, method, w.Code)
+			}
+		}
+	}
+
+	// Everything else stays closed: the asset cookie is not a session.
+	refused := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, accessAssetFilePath},
+		{http.MethodPut, accessAssetMarkdownPath},
+		{http.MethodDelete, accessAssetFilePath},
+		{http.MethodGet, "/api/coders"},
+		{http.MethodGet, "/api/file/asset/extra"},
+		{http.MethodGet, "/api/markdown/asset/extra"},
+		{http.MethodGet, "/ws/events"},
+	}
+	for _, testCase := range refused {
+		request := httptest.NewRequest(testCase.method, testCase.path, nil)
+		request.AddCookie(&http.Cookie{Name: accessAssetCookie, Value: assetCookie.Value})
+		if w := testAccessServe(testAccessProtected().ServeHTTP, request); w.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s with the asset cookie = %d want 401", testCase.method, testCase.path, w.Code)
+		}
+	}
+
+	// A duplicate asset cookie fails closed rather than picking one.
+	for _, path := range []string{accessAssetFilePath, accessAssetMarkdownPath} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.AddCookie(&http.Cookie{Name: accessAssetCookie, Value: assetCookie.Value})
+		request.AddCookie(&http.Cookie{Name: accessAssetCookie, Value: assetCookie.Value})
+		if w := testAccessServe(testAccessProtected().ServeHTTP, request); w.Code != http.StatusUnauthorized {
+			t.Errorf("duplicate asset cookie on %s = %d want 401", path, w.Code)
+		}
+	}
+
+	// Logging out revokes the family, and its asset cookie stops working with it.
+	if w := testAccessV2LogoutRequest(t, `{"all":false}`, bundle.Token); w.Code != http.StatusOK {
+		t.Fatalf("logout: %d %s", w.Code, w.Body.String())
+	}
+	request := httptest.NewRequest(http.MethodGet, accessAssetFilePath, nil)
+	request.AddCookie(&http.Cookie{Name: accessAssetCookie, Value: assetCookie.Value})
+	if w := testAccessServe(testAccessProtected().ServeHTTP, request); w.Code != http.StatusUnauthorized {
+		t.Errorf("revoked asset cookie = %d want 401", w.Code)
+	}
+	// A fresh login mints a new family whose asset cookie works again, which
+	// also proves the revocation did not wedge the manager.
+	second := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.232:1")
+	secondAsset := testAccessResponseCookie(t, second, accessAssetCookie)
+	request = httptest.NewRequest(http.MethodGet, accessAssetFilePath, nil)
+	request.AddCookie(&http.Cookie{Name: accessAssetCookie, Value: secondAsset.Value})
+	if w := testAccessServe(testAccessProtected().ServeHTTP, request); w.Code != http.StatusNoContent {
+		t.Errorf("asset cookie after a fresh login = %d want 204", w.Code)
+	}
+}
+
+// TestAccessPostCommitFailureIssuesNoCredential covers the ambiguous half of the
+// record transaction: once Config carries the new record, a failed promotion
+// must issue nothing, fault v2 closed, and let v1 follow the committed record
+// rather than keep authorizing against the old in-memory one.
+func TestAccessPostCommitFailureIssuesNoCredential(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+	login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.251:1")
+	handle := testAccessRefreshHandle(t, login)
+	v1Cookie := testAccessCookieFor(t, auth)
+	before := loadConfig().AccessPasswordHash
+
+	previous := writeAccessV2StateFile
+	writes := 0
+	writeAccessV2StateFile = func(path string, data []byte, perm os.FileMode) error {
+		writes++
+		if writes == 2 {
+			return errors.New("injected promote failure")
+		}
+		return previous(path, data, perm)
+	}
+	t.Cleanup(func() { writeAccessV2StateFile = previous })
+
+	body, err := json.Marshal(map[string]string{"password": "post-commit-pass"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := testAccessV2PasswordRequest(t, string(body), token)
+	writeAccessV2StateFile = previous
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("ambiguous promotion = %d want 500 (body %q)", w.Code, w.Body.String())
+	}
+	if got := w.Body.String(); got != "Unable to save access password\n" {
+		t.Errorf("body = %q", got)
+	}
+	if writes < 2 {
+		t.Fatalf("record change performed %d state writes, wanted the journal and the promote", writes)
+	}
+	if cookies := w.Result().Cookies(); len(cookies) != 0 {
+		t.Errorf("failed promotion issued %d cookies", len(cookies))
+	}
+
+	// The Config commit did happen, so the durable record is the new one.
+	committed := loadConfig().AccessPasswordHash
+	if committed == before {
+		t.Fatal("config did not commit before the promotion failure")
+	}
+
+	// v2 is faulted closed instead of serving from the old runtime.
+	protected := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	protected.Header.Set("Authorization", "Bearer "+token)
+	if got := testAccessServe(testAccessProtected().ServeHTTP, protected); got.Code != http.StatusUnauthorized {
+		t.Errorf("old bearer after an ambiguous promotion = %d want 401", got.Code)
+	}
+	// A faulted manager reports the persistence fault (500, retryable) instead of
+	// minting anything, and installs no cookie.
+	faultedRefresh := testAccessV2RefreshRequest(t, handle)
+	if faultedRefresh.Code != http.StatusInternalServerError {
+		t.Errorf("old handle after an ambiguous promotion = %d want 500", faultedRefresh.Code)
+	}
+	if cookies := faultedRefresh.Result().Cookies(); len(cookies) != 0 {
+		t.Errorf("faulted refresh issued %d cookies", len(cookies))
+	}
+
+	// v1 follows the committed record: the old cookie is dead and the old
+	// password no longer logs in.
+	stale := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	stale.AddCookie(v1Cookie)
+	if got := testAccessServe(testAccessProtected().ServeHTTP, stale); got.Code != http.StatusUnauthorized {
+		t.Errorf("old v1 cookie after a committed record change = %d want 401", got.Code)
+	}
+
+	// A restart reconciles the journal and v2 works again.
+	auth.owner.release()
+	restarted := testAccessRestart(t)
+	testAccessSwapManager(t, restarted)
+	fresh := testAccessV2LoginRequest(t, "post-commit-pass", "192.0.2.252:1")
+	if freshBundle := testAccessDecodeBundle(t, fresh); freshBundle.Token == "" {
+		t.Fatal("v2 did not recover after reconciliation")
+	}
+	if got := testAccessStateFile(t).Pending; got != nil {
+		t.Error("journal survived the restart that promoted it")
 	}
 }
