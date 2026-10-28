@@ -73,7 +73,8 @@ it('the explicit resync asks for a fresh attach and keeps the hold until it land
     // Asking for the resync is not the same as having one: the restriction
     // and the input hold stay until a replacement frontier is certified.
     expect(h.tab._resyncNeeded).toBe(true);
-    expect(h.tab._forceStateRefresh).toBe(true);
+    // A resume keeps the view; the checkpoint is the fallback, not the plan.
+    expect(h.tab._forceStateRefresh).toBe(false);
     expect(h.tab.userFollowBottom).toBe(true);
     expect(close).toHaveBeenCalledTimes(1);
     expect(h.tab.ws.discarding).toBe(true);

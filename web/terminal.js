@@ -11523,10 +11523,11 @@ export class TabManager {
         // the resync is not the same as having one.
         tabInfo.userFollowBottom = true;
         this._clearReaderAnchor(tabInfo);
-        // The attach checkpoint is authoritative even though the viewport may
-        // still sit above the bottom; without this the fresh head is ignored
-        // and the evicted frontier is retried.
-        tabInfo._forceStateRefresh = true;
+        // Prefer a resume: the attach now carries a certified replay window, so
+        // a pane whose own frontier is still inside it reattaches from there
+        // and keeps its view. A pane outside the window falls back to the
+        // checkpoint, which is the only remaining repair.
+        tabInfo._forceStateRefresh = false;
         try {
             tabInfo.ws?.ws?.close();
         } catch (_e) {}
