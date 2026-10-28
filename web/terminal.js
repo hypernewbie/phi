@@ -4092,6 +4092,14 @@ export class TabManager {
         // Register OSC 52 clipboard handler
         if (term.parser?.registerOscHandler) {
             term.parser.registerOscHandler(52, (data) => {
+                // A replayed copy is history, not the agent copying now:
+                // painting an old window must not overwrite the clipboard.
+                // Every replayed byte is parsed while the load that owns it is
+                // still open, and that load drains each chunk before it
+                // continues, so no replay sequence can straddle the flag.
+                if (tabInfo._historyParsing || tabInfo._historyBrowsing) {
+                    return true;
+                }
                 const parts = data.split(';');
                 if (parts.length < 2) return true;
                 const base64Text = parts[1].replace(/[^A-Za-z0-9+/=]/g, '');

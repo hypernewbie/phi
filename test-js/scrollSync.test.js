@@ -125,6 +125,7 @@ function stubXtermGlobals() {
         const binaryListeners = [];
         const scrollListeners = [];
         const bufferChangeListeners = [];
+        const oscHandlers = new Map();
         // xterm flags user-originated data through coreService.onUserInput
         // before onData; the fake keeps that hook so tests can emit as a user.
         let userInputHook = null;
@@ -149,6 +150,13 @@ function stubXtermGlobals() {
                 binaryListeners.forEach((fn) => {
                     fn(data);
                 }),
+            emitOsc: (ident, data) => oscHandlers.get(ident)?.(data),
+            parser: {
+                registerOscHandler: (ident, fn) => {
+                    oscHandlers.set(ident, fn);
+                    return { dispose() {} };
+                },
+            },
             element: rootEl,
             buffer: {
                 active: { type: 'normal', viewportY: 100, baseY: 100 },
@@ -770,5 +778,41 @@ describe('alternate-screen exit resumes follow only for the app', () => {
             expect(tm._spamScrollToBottom).not.toHaveBeenCalled();
             expect(tab.userFollowBottom).toBe(false);
         }
+    });
+});
+
+// A replayed window is history: painting it must not overwrite the clipboard.
+describe('replay provenance for OSC 52', () => {
+    const clip = (data) => `c;${Buffer.from(data, 'utf8').toString('base64')}`;
+
+    it('a live copy reaches the clipboard', () => {
+        const tab = mountRealTab({ coder: 'bash' });
+        const tm = tab.__tm;
+        tm._agentClipboardCopy = vi.fn();
+        tab.term.emitOsc(52, clip('live copy'));
+        expect(tm._agentClipboardCopy).toHaveBeenCalledWith('live copy');
+    });
+
+    it('a copy parsed while a history load owns the parser is dropped', () => {
+        const tab = mountRealTab({ coder: 'bash' });
+        const tm = tab.__tm;
+        tm._agentClipboardCopy = vi.fn();
+        tab._historyParsing = true;
+        tab.term.emitOsc(52, clip('archived copy'));
+        tab._historyParsing = false;
+        expect(tm._agentClipboardCopy).not.toHaveBeenCalled();
+    });
+
+    it('a copy parsed against a browsed window is dropped', () => {
+        const tab = mountRealTab({ coder: 'bash' });
+        const tm = tab.__tm;
+        tm._agentClipboardCopy = vi.fn();
+        tab._historyBrowsing = true;
+        tab.term.emitOsc(52, clip('archived copy'));
+        expect(tm._agentClipboardCopy).not.toHaveBeenCalled();
+        // Leaving the archive restores genuine live copies.
+        tab._historyBrowsing = false;
+        tab.term.emitOsc(52, clip('live again'));
+        expect(tm._agentClipboardCopy).toHaveBeenCalledWith('live again');
     });
 });
