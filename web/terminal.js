@@ -2618,17 +2618,32 @@ export class TabManager {
             }
         };
         const boot = (async () => {
-            let complete = false;
+            let outcome = null;
             try {
-                complete = await this._bootstrapDelta(tabInfo, from, head, gen, releaseOnce, eventCursor);
+                outcome = await this._bootstrapDelta(tabInfo, from, head, gen, releaseOnce, eventCursor);
             } catch (error) {
                 console.warn('[term] bootstrap failed:', error);
+                outcome = { kind: 'failed', error };
             }
-            if (complete) releaseOnce();
-            else if (tabInfo.ws === pty && tabInfo._bootstrapGen === gen) {
-                // Never release held live frames across an unfilled interval.
-                tabInfo._bootstrapGate = null;
-                try { pty.ws?.close(); } catch (_e) {}
+            switch (outcome?.kind) {
+                case 'applied':
+                    releaseOnce();
+                    return;
+                case 'retained':
+                    // A coherent view is on screen. Closing the socket here
+                    // would replace it, so hold delivery and wait for the
+                    // reader's explicit resync.
+                    return;
+                case 'cancelled':
+                    // A successor owns the socket and the gate; nothing here
+                    // is ours to release or close.
+                    return;
+                default: {
+                    // Never release held live frames across an unfilled interval.
+                    if (tabInfo.ws !== pty || tabInfo._bootstrapGen !== gen) return;
+                    tabInfo._bootstrapGate = null;
+                    try { pty.ws?.close(); } catch (_e) {}
+                }
             }
         })();
         tabInfo._bootstrapGate = boot;
@@ -2799,7 +2814,7 @@ export class TabManager {
                 // Never stay in browsing mode after a failure: the next
                 // wheel event would run the same miss again.
                 tabInfo._historyBrowsing = false;
-                if (healed === null) {
+                if (healed.kind === 'failed') {
                     try { pty.ws.close(); } catch (_e) {}
                 }
             } else if (error?.historyPermanent) {
@@ -2891,7 +2906,7 @@ export class TabManager {
             // Take the live state instead, and never stay in browsing mode.
             const healed = await this._recoverBootstrapFromLiveState(tabInfo, pty, () => current() && tabInfo.ws === pty);
             tabInfo._historyBrowsing = false;
-            if (healed === null) {
+            if (healed.kind === 'failed') {
                 try { pty.ws?.close(); } catch (_e) {}
             }
         } finally {
@@ -2954,8 +2969,8 @@ export class TabManager {
     }
 
     // Reattaches a bootstrap through an authoritative live checkpoint when
-    // its span crossed the retention floor. Returns the adopted frontier or
-    // null when recovery is impossible (the caller fails its bootstrap).
+    // its span crossed the retention floor. Returns a recovery outcome; only
+    // 'applied' carries a numeric frontier.
     async _recoverBootstrapFromLiveState(tabInfo, ws, current) {
         const epoch = tabInfo.paneEpoch;
         let state = null;
@@ -2963,13 +2978,14 @@ export class TabManager {
             try {
                 state = await this._fetchTerminalState(tabInfo.paneId, epoch, 'latest');
             } catch (error) {
-                if (error?.historyPermanent) return null;
+                if (error?.historyPermanent) return { kind: 'failed', error };
                 state = null;
             }
             if (state) break;
             if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
         }
-        if (!state || !current()) return null;
+        if (!current()) return { kind: 'cancelled', reason: 'stale' };
+        if (!state) return { kind: 'failed', error: new Error('no authoritative state') };
         const pty = tabInfo.ws;
         this._clearHistoryAnchors(tabInfo);
         resetTerminalState(tabInfo.term);
@@ -2983,7 +2999,8 @@ export class TabManager {
         tabInfo.queuedSeq = frontier;
         tabInfo.drainedSeq = frontier;
         if (typeof pty.adoptState === 'function') pty.adoptState(frontier);
-        return frontier;
+        this._clearResyncNeeded(tabInfo);
+        return { kind: 'applied', through: frontier };
     }
 
     async _bootstrapDelta(tabInfo, from, head, expectGen, onReady, eventCursor) {
@@ -2993,12 +3010,12 @@ export class TabManager {
         const current = () => !tabInfo.finalizing && tabInfo.paneEpoch === epoch &&
             (tabInfo.ws === ws || admitted) &&
             (expectGen === undefined || tabInfo._bootstrapGen === expectGen);
-        if (!current()) return false;
+        if (!current()) return { kind: 'cancelled', reason: 'stale' };
         // Even a zero-delta resume must finish its checkpoint write before
         // fitting the live viewport and synchronizing backend dimensions.
         if (from === head || tabInfo.writePending || tabInfo.writeBuffer?.length) {
             await this._drainSettled(tabInfo);
-            if (!current()) return false;
+            if (!current()) return { kind: 'cancelled', reason: 'stale' };
         }
         let cursor = from;
         let target = head;
@@ -3010,30 +3027,44 @@ export class TabManager {
                 d = await this._fetchRecordingRange(tabInfo.paneId, cursor, end, tabInfo.paneEpoch, chained);
             } catch (error) {
                 if (!error?.historyPermanent) throw error;
-                if (!current()) return false;
+                if (!current()) return { kind: 'cancelled', reason: 'stale' };
                 // The span crossed the retention floor. Adopt the live
                 // checkpoint and resume from its frontier instead of
                 // replaying evicted bytes.
-                const frontier = await this._recoverBootstrapFromLiveState(tabInfo, ws, current);
-                if (frontier === null) return false;
+                const healed = await this._recoverBootstrapFromLiveState(tabInfo, ws, current);
+                if (healed.kind !== 'applied') {
+                    // No certified frontier. A view the reader is holding is
+                    // worth more than a repaint, so keep it and wait for the
+                    // explicit resync instead of closing the socket.
+                    if (this._retainReaderView(tabInfo, healed)) {
+                        return { kind: 'retained', reason: 'reader' };
+                    }
+                    return healed;
+                }
                 admitted = true;
-                cursor = frontier;
-                target = Math.max(target, frontier);
+                cursor = healed.through;
+                target = Math.max(target, healed.through);
                 chained = undefined;
                 continue;
             }
-            if (!current()) return false;
+            if (!current()) return { kind: 'cancelled', reason: 'stale' };
             if (!d || d.start !== cursor || d.end !== end || d.byteLength !== end - cursor ||
-                (d.bytes && d.bytes.byteLength !== d.byteLength)) return false;
+                (d.bytes && d.bytes.byteLength !== d.byteLength)) {
+                return { kind: 'failed', error: new Error('malformed recording range') };
+            }
             admitted = true;
             if (d.endCursor !== undefined) chained = d.endCursor;
             if (d.bytes) {
-                if (!await this._parseRecordingRange(tabInfo, d, current, undefined, ws)) return false;
+                // A false here is a stale intent: the parser stopped because
+                // this attempt no longer owns the pane.
+                if (!await this._parseRecordingRange(tabInfo, d, current, undefined, ws)) {
+                    return { kind: 'cancelled', reason: 'stale' };
+                }
             } else {
                 this.writeToTerminal(tabInfo, d.text);
                 await this._drainSettled(tabInfo);
             }
-            if (!current()) return false;
+            if (!current()) return { kind: 'cancelled', reason: 'stale' };
             if (ws?.mode === 'hot' && ws.decoder) tabInfo._streamDecoder = ws.decoder;
             if ((tabInfo.queuedSeq ?? 0) <= end) {
                 tabInfo.queuedSeq = end;
@@ -3044,7 +3075,7 @@ export class TabManager {
         // Recovery can append its checkpoint after the delta loop. Drain it
         // before fitting and releasing held live output.
         await this._drainSettled(tabInfo);
-        if (!current()) return false;
+        if (!current()) return { kind: 'cancelled', reason: 'stale' };
         // Restore visible panel geometry; hidden parsers keep the recorded
         // grid until activation provides measurable panel dimensions.
         this._fitVisibleTerminal(tabInfo);
@@ -3064,7 +3095,8 @@ export class TabManager {
         // A quiet raw attach must also leave a checkpoint; otherwise every
         // refresh repeats the whole prefix until the backend emits again.
         this._scheduleCheckpointUpload(tabInfo);
-        return true;
+        this._clearResyncNeeded(tabInfo);
+        return { kind: 'applied', through: cursor };
     }
 
     async _onLiveGap(tabInfo, from, to) {
@@ -4427,6 +4459,11 @@ export class TabManager {
         scrollToBottomBtn.innerHTML = '\u2193'; // ↓
         scrollToBottomBtn.addEventListener('click', (e) => {
             e.stopPropagation();
+            // A retained view is only repaired by the reader asking for it.
+            if (tabInfo._resyncNeeded) {
+                this._resyncRetainedView(tabInfo);
+                return;
+            }
             if (tabInfo._historyBrowsing) {
                 this._restoreLatestHistory(tabInfo);
             } else {
@@ -4471,7 +4508,9 @@ export class TabManager {
             const buf = tabInfo.term?.buffer?.active;
             if (!buf) return;
             const atBottom = buf.viewportY >= buf.baseY;
-            if (atBottom && !tabInfo._historyBrowsing) {
+            // A pending resync keeps the affordance on screen even at the
+            // bottom: it is the only control that repairs the pane.
+            if (atBottom && !tabInfo._historyBrowsing && !tabInfo._resyncNeeded) {
                 scrollToBottomBtn.classList.add('hidden');
             } else {
                 scrollToBottomBtn.classList.remove('hidden');
@@ -11324,6 +11363,56 @@ export class TabManager {
     // The one user action that resumes follow: an accepted submit drops the
     // reading target and puts the view back on live output. Typing does not
     // call this; neither does anything the pane does to itself.
+    // A replacement attach failed to certify a frontier. Keep the coherent
+    // view only when the reader is actually holding it: a pane following live
+    // output gains nothing from retention, and the caller's re-attach is the
+    // cheaper repair.
+    _retainReaderView(tabInfo, healed) {
+        if (healed?.kind !== 'failed') return false;
+        if (!tabInfo.term || tabInfo.isDead || tabInfo.finalizing) return false;
+        const holding = tabInfo.userFollowBottom === false ||
+            Boolean(tabInfo.term._phiReaderAnchor);
+        if (!holding) return false;
+        if ((tabInfo.term.buffer?.active?.baseY ?? 0) <= 0) return false;
+        tabInfo._resyncNeeded = true;
+        this._updateResyncAffordance(tabInfo);
+        this.app?.showToast?.(
+            'Live output is paused while you read. Resync when you are ready.',
+            { type: 'info', title: 'Terminal' },
+        );
+        return true;
+    }
+
+    _clearResyncNeeded(tabInfo) {
+        if (!tabInfo._resyncNeeded) return;
+        tabInfo._resyncNeeded = false;
+        this._updateResyncAffordance(tabInfo);
+    }
+
+    // The one explicit recovery action for a retained view. The existing close
+    // path asks the server for a fresh atomic attach; nothing else repairs it.
+    _resyncRetainedView(tabInfo) {
+        if (!tabInfo || tabInfo.isDead) return;
+        this._clearResyncNeeded(tabInfo);
+        tabInfo.userFollowBottom = true;
+        this._clearReaderAnchor(tabInfo);
+        try {
+            tabInfo.ws?.ws?.close();
+        } catch (_e) {}
+    }
+
+    _updateResyncAffordance(tabInfo) {
+        const button = tabInfo.scrollToBottomBtn;
+        if (!button) return;
+        const needed = Boolean(tabInfo._resyncNeeded);
+        const title = needed ? 'Resync live output' : 'Jump to bottom';
+        if (button.title !== title) button.title = title;
+        if (button.getAttribute('aria-label') !== title) {
+            button.setAttribute('aria-label', title);
+        }
+        button.classList.toggle('hidden', !needed);
+    }
+
     _resumeFollowOnSubmit(tabInfo) {
         if (!tabInfo || tabInfo.isDead) return;
         tabInfo.userFollowBottom = true;

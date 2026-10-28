@@ -235,7 +235,7 @@ it('zero-delta reconnect refreshes both renderers before releasing live delivery
     const release = vi.fn();
     expect(
         await h.manager._bootstrapDelta(h.tab, 0, 0, undefined, release),
-    ).toBe(true);
+    ).toEqual({ kind: 'applied', through: 0 });
     expect(h.term.refresh).toHaveBeenCalledWith(0, 23);
     expect(h.ws.sendResize).toHaveBeenCalledWith(80, 24);
     expect(h.ws.sendResize.mock.invocationCallOrder[0]).toBeLessThan(
