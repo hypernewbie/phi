@@ -3251,6 +3251,12 @@ body.has-terminal-bg
     flex-shrink: 0;
 }
 
+#presets-container > .preset-btn {
+    height: 24px;
+    line-height: 22px;
+    padding: 0 8px;
+}
+
 .presets-container > .pi-rpc-model-trigger,
 .presets-container > .pi-rpc-thinking-trigger,
 .presets-container > .pi-rpc-skills-trigger,

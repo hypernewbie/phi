@@ -291,4 +291,173 @@ describe('compact presets row', () => {
             document.querySelectorAll('.input-actions .input-quick-chip'),
         ).toHaveLength(2);
     });
+
+    // The bridge-live pi tab the row reads. The predicates are not mocked:
+    // this object is their input.
+    function bridgeTab(piBridge) {
+        const ws = { readyState: 1 };
+        return {
+            paneId: 'order-pane',
+            coder: 'pi',
+            ws,
+            _piBridgeFresh: ws,
+            piBridge,
+        };
+    }
+
+    // The compact row shows emoji, so the pickers are found by class.
+    const pickerNames = (tm) =>
+        [...tm.presetsContainer.querySelectorAll('.model-trigger-btn')].map(
+            (button) => {
+                if (button.classList.contains('pi-rpc-model-trigger'))
+                    return 'Model';
+                if (button.classList.contains('pi-rpc-thinking-trigger'))
+                    return 'Thinking';
+                if (button.classList.contains('pi-rpc-skills-trigger'))
+                    return 'Skills';
+                if (button.classList.contains('keys-trigger-btn'))
+                    return 'Keys';
+                if (button.title === 'Open quick commands') return 'Cmds';
+                // The legacy Models button, for a tab without the bridge.
+                if (button.title === 'Select the model for this session')
+                    return 'Model';
+                return 'unknown';
+            },
+        );
+
+    it('orders the pickers Model, Thinking, Skills, Cmds, Keys', () => {
+        const live = {
+            state: 'managed',
+            connected: true,
+            model: 'fixture/model',
+            thinking_level: 'high',
+            capabilities: ['pi.models.v1', 'pi.thinking.v1', 'pi.skills.v1'],
+        };
+
+        for (const width of [1200, 390]) {
+            const tm = compactTm(width);
+            const tab = bridgeTab(live);
+            tm.activePaneId = tab.paneId;
+            tm.tabs.set(tab.paneId, tab);
+            tm.renderPresets('pi');
+
+            expect(pickerNames(tm), `width ${width}`).toEqual([
+                'Model',
+                'Thinking',
+                'Skills',
+                'Cmds',
+                'Keys',
+            ]);
+
+            // The keyboard chip keeps its name and its 14px icon.
+            const keys = tm.presetsContainer.querySelector('.keys-trigger-btn');
+            expect(keys.getAttribute('aria-label')).toBe(
+                'Virtual Keyboard and Shortcuts',
+            );
+            const icon = keys.querySelector('svg');
+            expect(icon.getAttribute('class')).toBe('icon');
+            expect(icon.getAttribute('style')).toContain('width: 14px');
+            expect(icon.getAttribute('style')).toContain('height: 14px');
+
+            // One divider: the compact row adds its own, the desktop row
+            // keeps the coder one.
+            expect(
+                tm.presetsContainer.querySelectorAll('.presets-divider'),
+                `width ${width}`,
+            ).toHaveLength(1);
+
+            if (width === 390) {
+                const navs = [
+                    ...tm.presetsContainer.querySelectorAll('.mobile-nav-btn'),
+                ];
+                expect(navs.map((nav) => nav.innerText)).toEqual([
+                    '▲',
+                    '▼',
+                    '◀',
+                    '▶',
+                ]);
+                const children = [...tm.presetsContainer.children];
+                navs.forEach((nav, index) => {
+                    expect(
+                        children[children.length - navs.length + index],
+                    ).toBe(nav);
+                });
+            }
+        }
+    });
+
+    it('keeps the picker order through every bridge state', () => {
+        const live = {
+            state: 'managed',
+            connected: true,
+            model: 'fixture/model',
+            thinking_level: 'high',
+            capabilities: ['pi.models.v1', 'pi.thinking.v1', 'pi.skills.v1'],
+        };
+        const states = [
+            [
+                'live',
+                live,
+                ['Model', 'Thinking', 'Skills', 'Cmds', 'Keys'],
+                'Thinking · high',
+            ],
+            [
+                'absent at startup',
+                undefined,
+                ['Model', 'Thinking', 'Cmds', 'Keys'],
+                'Thinking · saved options',
+            ],
+            [
+                'injection disabled',
+                { state: 'plain', connected: false, capabilities: [] },
+                ['Model', 'Thinking', 'Cmds', 'Keys'],
+                'Thinking · saved options',
+            ],
+            [
+                'disconnected',
+                { ...live, connected: false },
+                ['Model', 'Thinking', 'Cmds', 'Keys'],
+                'Thinking · saved options',
+            ],
+            [
+                'capability missing',
+                { ...live, capabilities: ['pi.models.v1'] },
+                ['Model', 'Thinking', 'Cmds', 'Keys'],
+                'Thinking · saved options',
+            ],
+            [
+                'reconnected',
+                live,
+                ['Model', 'Thinking', 'Skills', 'Cmds', 'Keys'],
+                'Thinking · high',
+            ],
+        ];
+
+        for (const [name, piBridge, expected, thinkingTitle] of states) {
+            for (const width of [1200, 390]) {
+                const tm = compactTm(width);
+                const tab = bridgeTab(piBridge);
+                tm.activePaneId = tab.paneId;
+                tm.tabs.set(tab.paneId, tab);
+                tm.renderPresets('pi');
+                tm.renderPresets('pi');
+
+                expect(pickerNames(tm), `${name} at ${width}`).toEqual(
+                    expected,
+                );
+                expect(
+                    tm.presetsContainer.querySelectorAll('.presets-divider'),
+                    `${name} at ${width}`,
+                ).toHaveLength(1);
+
+                // Without the capability, Thinking keeps its saved options.
+                const thinking = tm.presetsContainer.querySelector(
+                    '.pi-rpc-thinking-trigger',
+                );
+                expect(thinking.title, `${name} at ${width}`).toBe(
+                    thinkingTitle,
+                );
+            }
+        }
+    });
 });
