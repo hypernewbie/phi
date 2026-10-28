@@ -497,14 +497,13 @@ describe('src/desktop.ts (step 6B view manager + rail renderer wiring)', () => {
   });
 
   it('presents same-origin popup children as hidden native windows, shown on ready-to-show and navigation-guarded', () => {
-    const guardIdx = desktopSource.indexOf('const attachNavGuard =');
+    const guardIdx = desktopSource.indexOf('export function attachNavGuard(');
     expect(guardIdx).toBeGreaterThan(-1);
     expect(
-      desktopSource.indexOf('attachNavGuard(view.webContents)', guardIdx),
+      desktopSource.indexOf('attachNavGuard(', guardIdx + 1),
     ).toBeGreaterThan(guardIdx);
     const createIdx = desktopSource.indexOf('createWindow: (options) => {');
     expect(createIdx).toBeGreaterThan(-1);
-    expect(guardIdx).toBeGreaterThan(createIdx);
     const childIdx = desktopSource.indexOf('new BrowserWindow({', createIdx);
     expect(childIdx).toBeGreaterThan(createIdx);
     expect(desktopSource.indexOf('show: false', childIdx)).toBeGreaterThan(
@@ -517,7 +516,7 @@ describe('src/desktop.ts (step 6B view manager + rail renderer wiring)', () => {
       desktopSource.indexOf("child.once('ready-to-show'", childIdx),
     ).toBeGreaterThan(childIdx);
     expect(
-      desktopSource.indexOf('attachNavGuard(child.webContents)', childIdx),
+      desktopSource.indexOf('attachNavGuard(', childIdx),
     ).toBeGreaterThan(childIdx);
     const childRegion = desktopSource.slice(
       childIdx,
@@ -539,8 +538,13 @@ describe('src/desktop.ts (step 6B view manager + rail renderer wiring)', () => {
     // phi-app://app and would wrongly match file://. The policy must compare
     // scheme and host explicitly, and one predicate must serve window opens,
     // will-navigate, will-redirect, and main-process loadURL targets.
+    // The shell's origin is the literal string "null", so a caller that
+    // normalizes it destroys the only thing that identifies the shell.
     expect(desktopSource).toContain(
-      'const allowedOrigin = new URL(origin).origin',
+      "origin === EMBEDDED_ORIGIN ? EMBEDDED_ORIGIN : new URL(origin).origin",
+    );
+    expect(desktopSource).toContain(
+      'const target = resolveV2BodyAuthTarget(',
     );
     expect(desktopSource).toContain(
       'export function isAllowedNavigationTarget(',
@@ -558,19 +562,21 @@ describe('src/desktop.ts (step 6B view manager + rail renderer wiring)', () => {
     expect(
       desktopSource.indexOf('setWindowOpenHandler', policyIdx),
     ).toBeGreaterThan(policyIdx);
+    const guardIdx = desktopSource.indexOf('export function attachNavGuard(');
+    expect(guardIdx).toBeGreaterThan(-1);
     expect(
-      desktopSource.indexOf("contents.on('will-navigate'", policyIdx),
-    ).toBeGreaterThan(policyIdx);
+      desktopSource.indexOf("'will-navigate'", guardIdx),
+    ).toBeGreaterThan(guardIdx);
     expect(
-      desktopSource.indexOf("contents.on('will-redirect'", policyIdx),
-    ).toBeGreaterThan(policyIdx);
+      desktopSource.indexOf("'will-redirect'", guardIdx),
+    ).toBeGreaterThan(guardIdx);
     // A main-process loadURL emits neither navigation event, so its target is
     // validated explicitly rather than treated as exempt.
     const loadURLIdx = desktopSource.indexOf(
       'contents.loadURL = ((',
-      policyIdx,
+      guardIdx,
     );
-    expect(loadURLIdx).toBeGreaterThan(policyIdx);
+    expect(loadURLIdx).toBeGreaterThan(guardIdx);
     expect(
       desktopSource.indexOf('isAllowedNavigation(new URL(url))', loadURLIdx),
     ).toBeGreaterThan(loadURLIdx);

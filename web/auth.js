@@ -1105,14 +1105,15 @@ export function installAccessFetch() {
         const context = activeAuthContext;
         const state = stateForKey(ownerKey);
         if (state.hostSession) {
-            // The host proxy authorizes protected API requests and returns a
-            // fixed, token-free 401 only when its own refresh failed terminally.
+            // The host proxy authorizes protected API requests and recovers
+            // stale tokens itself. Only a terminal 401 from a protected path
+            // means that its host-owned session ended; mutations are not replayed.
             const answer = await baseFetch(input, init);
             if (
                 answer.status === 401 &&
                 url &&
-                url.protocol === 'phi-app:' &&
-                url.host === 'app' &&
+                url.protocol === location.protocol &&
+                url.host === location.host &&
                 isProtectedAPIPath(url.pathname)
             )
                 requestReauth(context);
@@ -1172,7 +1173,8 @@ function requestReauth(context) {
     if (state.reauthInFlight) return state.reauthInFlight;
     state.reauthInFlight = (async () => {
         try {
-            const result = await showUnlockPrompt(context, 'v2');
+            const protocol = state.selectedProtocol === 'v1' ? 'v1' : 'v2';
+            const result = await showUnlockPrompt(context, protocol);
             if (result.enabled && activeAuthKey === key) reloadPage();
         } catch {
             /* the overlay reports its own failure */
@@ -1344,6 +1346,12 @@ function showUnlockPrompt(context, protocol) {
                     return;
                 }
                 storeCredential(status.raw, verifier, context);
+                if (hostAuthenticatedMode()) {
+                    // The proxy owns the v1 cookie; the page only tracks that
+                    // the host now has an authenticated session.
+                    state.hostSession = true;
+                    state.loggedOut = false;
+                }
                 input.value = '';
                 finish({ enabled: true });
             } catch (err) {
@@ -1372,14 +1380,32 @@ async function bootstrapHostAuthenticated(context) {
     clearTokenState(state);
     state.memoryOnly = false;
     state.hostSession = false;
-    state.selectedProtocol = 'v2';
     const epoch = ++state.epoch;
     const current = () => state.epoch === epoch;
 
-    const status = await discoverAccessStatus(context);
+    let status;
+    try {
+        status = await discoverAccessStatus(context);
+    } catch (err) {
+        if (!current()) return { enabled: state.accessEnabled };
+        throw err;
+    }
     if (!current()) return { enabled: state.accessEnabled };
     state.accessEnabled = status.enabled;
+    const protocol = preferredProtocol(status.protocols);
+    state.selectedProtocol = protocol;
     if (!status.enabled) return { enabled: false };
+
+    if (protocol === 'v1') {
+        // A v1-only server has no v2 route. The host proxy owns the cookie;
+        // page code only follows its token-free status and login answers.
+        if (status.authenticated) {
+            state.hostSession = true;
+            state.loggedOut = false;
+            return { enabled: true };
+        }
+        return showUnlockPrompt(context, 'v1');
+    }
 
     const verdict = await checkV2Token(null, context);
     if (!current()) return { enabled: state.accessEnabled };
