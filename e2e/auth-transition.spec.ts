@@ -708,6 +708,52 @@ test.describe('v1-only capability', () => {
         expect(legacyLogins).toEqual([]);
         await context.close();
     });
+
+    test('an old-v2 server without the refresh route leaves no durable credential', async ({
+        browser,
+    }) => {
+        // The unpublished candidate's v2 kept a long-lived token in storage. A
+        // server advertising v2 but answering the refresh route with 404 must
+        // therefore leave nothing behind: the new client persists no token, so
+        // an old-v2 server cannot hold a session open across a reload.
+        const context = await browser.newContext();
+        const page = await context.newPage();
+        await page.goto(phi.url);
+        await unlock(page, PASSWORD);
+        await expectSignedIn(page);
+        expect(
+            await page.evaluate(() => window.phiAccessAuth.getAccessToken()),
+        ).toBeTruthy();
+
+        await page.route('**/api/auth/v2/refresh', (route) =>
+            route.fulfill({ status: 404, body: 'not found' }),
+        );
+        const legacyLogins: string[] = [];
+        page.on('request', (request) => {
+            if (request.url().endsWith('/api/auth/login')) {
+                legacyLogins.push(request.url());
+            }
+        });
+        await page.reload();
+        await expect
+            .poll(() =>
+                page.evaluate(() => window.phiAccessAuth.getAccessToken()),
+            )
+            .toBeNull();
+        // No v1 session is fabricated and no v1 login is attempted.
+        expect(legacyLogins).toEqual([]);
+        expect(
+            (await context.cookies(phi.url)).some(
+                (cookie) => cookie.name === 'phi_access_session',
+            ),
+        ).toBe(false);
+        expect(
+            await page.evaluate(() =>
+                localStorage.getItem('phi_access_credential_v1'),
+            ),
+        ).toBeNull();
+        await context.close();
+    });
 });
 
 test.describe('public pages, sockets, and rotation', () => {
@@ -760,7 +806,7 @@ test.describe('public pages, sockets, and rotation', () => {
         }
         expect(await openSocket(page, '/ws/md-events', EVENTS)).toBe('open');
         expect(await openSocket(page, '/ws/control', CONTROL)).toBe('open');
-        const paneId = await spawnPane(page, phi.url, token);
+        const paneId = await spawnPane(page, phi.url, token as string);
         expect(await openSocket(page, `/ws/pane/${paneId}`, TERMINAL)).toBe(
             'open',
         );
@@ -800,7 +846,7 @@ test.describe('public pages, sockets, and rotation', () => {
 
         // The retired password and its bearer are checked in a separate test:
         // a failed login arms the rate limiter for this client address.
-        retiredBearer = token;
+        retiredBearer = token as string;
         await fresh.close();
         await context.close();
     });
@@ -853,12 +899,607 @@ test.describe('public pages, sockets, and rotation', () => {
     });
 });
 
+test.describe('two same-origin tabs', () => {
+    let phi: PhiServer;
+
+    test.beforeAll(async () => {
+        phi = await startPhi({ config: { sync_coordinator: '', peers: [] } });
+        await lockServer(phi.url, PASSWORD);
+    });
+
+    test.afterAll(async () => {
+        await phi.stop();
+    });
+
+    test('shares one renewal across tabs and survives a lost refresh', async ({
+        browser,
+    }) => {
+        const context = await browser.newContext();
+        const first = await context.newPage();
+        await first.goto(phi.url);
+        await unlock(first, PASSWORD);
+        await expectSignedIn(first);
+
+        const second = await context.newPage();
+        await second.goto(phi.url);
+        await expectSignedIn(second);
+        // The second tab bootstraps from the shared HttpOnly refresh cookie.
+        const firstToken = await first.evaluate(() =>
+            window.phiAccessAuth.getAccessToken(),
+        );
+        expect(firstToken).toBeTruthy();
+
+        // A renewal in one tab broadcasts its bundle: the other tab adopts the
+        // new token without spending a refresh of its own. The bundle only wins
+        // when its deadline is strictly later, and exp has one-second
+        // granularity, so cross the second boundary before renewing.
+        await first.waitForTimeout(1200);
+        let secondRefreshes = 0;
+        second.on('request', (request) => {
+            if (request.url().includes('/api/auth/v2/refresh')) {
+                secondRefreshes += 1;
+            }
+        });
+        const shared = await first.evaluate(async () => {
+            const auth = await import(new URL('./auth.js', location.href).href);
+            await auth.__test__.refreshSession();
+            return window.phiAccessAuth.getAccessToken();
+        });
+        expect(shared).toBeTruthy();
+        await expect
+            .poll(() =>
+                second.evaluate(() => window.phiAccessAuth.getAccessToken()),
+            )
+            .toBe(shared);
+        expect(secondRefreshes).toBe(0);
+
+        // Both tabs renewing at once stay signed in: the rotation grace window
+        // admits the second request instead of revoking the family.
+        const refreshPosts: string[] = [];
+        context.on('request', (request) => {
+            if (request.url().includes('/api/auth/v2/refresh')) {
+                refreshPosts.push(request.url());
+            }
+        });
+        const [left, right] = await Promise.all([
+            first.evaluate(async () => {
+                const auth = await import(
+                    new URL('./auth.js', location.href).href
+                );
+                await auth.__test__.refreshSession();
+                return window.phiAccessAuth.getAccessToken();
+            }),
+            second.evaluate(async () => {
+                const auth = await import(
+                    new URL('./auth.js', location.href).href
+                );
+                await auth.__test__.refreshSession();
+                return window.phiAccessAuth.getAccessToken();
+            }),
+        ]);
+        expect(left).toBeTruthy();
+        expect(right).toBeTruthy();
+        expect(refreshPosts.length).toBeLessThanOrEqual(2);
+        for (const page of [first, second]) {
+            await expect(page.locator('.access-auth-overlay')).toHaveCount(0);
+            expect(
+                await page.evaluate(
+                    async () => (await fetch('/api/coders')).status,
+                ),
+            ).toBe(200);
+        }
+
+        // A lost refresh response keeps the credential, the rendered state, and
+        // the backoff retry instead of signing the tab out.
+        const surviving = await second.evaluate(() =>
+            window.phiAccessAuth.getAccessToken(),
+        );
+        await second.route('**/api/auth/v2/refresh', (route) =>
+            route.abort('failed'),
+        );
+        expect(
+            await second.evaluate(async () => {
+                const auth = await import(
+                    new URL('./auth.js', location.href).href
+                );
+                try {
+                    await auth.__test__.refreshSession();
+                    return 'resolved';
+                } catch {
+                    return 'retryable';
+                }
+            }),
+        ).toBe('retryable');
+        expect(
+            await second.evaluate(() => window.phiAccessAuth.getAccessToken()),
+        ).toBe(surviving);
+        await expect(second.locator('.access-auth-overlay')).toHaveCount(0);
+        expect(
+            await second.evaluate(
+                async () => (await fetch('/api/coders')).status,
+            ),
+        ).toBe(200);
+        await second.unroute('**/api/auth/v2/refresh');
+        await context.close();
+    });
+
+    test('renews without locks or a broadcast channel', async ({ browser }) => {
+        const context = await browser.newContext();
+        // A browser without Web Locks or BroadcastChannel still coalesces its
+        // own renewal and bootstraps from the cookie.
+        await context.addInitScript(() => {
+            Object.defineProperty(navigator, 'locks', {
+                configurable: true,
+                get: () => undefined,
+            });
+            Object.defineProperty(window, 'BroadcastChannel', {
+                configurable: true,
+                get: () => undefined,
+            });
+        });
+        const page = await context.newPage();
+        await page.goto(phi.url);
+        await unlock(page, PASSWORD);
+        await expectSignedIn(page);
+        expect(await page.evaluate(() => typeof navigator.locks)).toBe(
+            'undefined',
+        );
+        expect(await page.evaluate(() => typeof window.BroadcastChannel)).toBe(
+            'undefined',
+        );
+        const before = await page.evaluate(() =>
+            window.phiAccessAuth.getAccessToken(),
+        );
+        const renewed = await page.evaluate(async () => {
+            const auth = await import(new URL('./auth.js', location.href).href);
+            await Promise.all([
+                auth.__test__.refreshSession(),
+                auth.__test__.refreshSession(),
+            ]);
+            return window.phiAccessAuth.getAccessToken();
+        });
+        expect(renewed).toBeTruthy();
+        expect(renewed).not.toBe(before);
+        expect(
+            await page.evaluate(
+                async () => (await fetch('/api/coders')).status,
+            ),
+        ).toBe(200);
+        await context.close();
+    });
+
+    test('replays a renewed read but never a mutation', async ({ browser }) => {
+        const context = await browser.newContext();
+        const page = await context.newPage();
+        await page.goto(phi.url);
+        await unlock(page, PASSWORD);
+        await expectSignedIn(page);
+
+        let reads = 0;
+        await page.route('**/api/coders', async (route) => {
+            reads += 1;
+            if (reads === 1) {
+                await route.fulfill({ status: 401, body: 'stale' });
+                return;
+            }
+            await route.continue();
+        });
+        expect(
+            await page.evaluate(
+                async () => (await fetch('/api/coders')).status,
+            ),
+        ).toBe(200);
+        expect(reads).toBe(2);
+
+        // The same stale-token 401 on a mutation surfaces to the caller once:
+        // a write is never re-sent behind the user's back.
+        let writes = 0;
+        await page.route('**/api/terminals', async (route) => {
+            writes += 1;
+            await route.fulfill({ status: 401, body: 'stale' });
+        });
+        expect(
+            await page.evaluate(
+                async () =>
+                    (
+                        await fetch('/api/terminals', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ coder: 'bash' }),
+                        })
+                    ).status,
+            ),
+        ).toBe(401);
+        expect(writes).toBe(1);
+        await context.close();
+    });
+});
+
+test.describe('session lifecycle and precedence', () => {
+    // Ordering matters: logout and password operations retire credentials.
+    test.describe.configure({ mode: 'serial' });
+
+    let phi: PhiServer;
+
+    test.beforeAll(async () => {
+        phi = await startPhi({ config: { sync_coordinator: '', peers: [] } });
+        await lockServer(phi.url, PASSWORD);
+    });
+
+    test.afterAll(async () => {
+        await phi.stop();
+    });
+
+    test('logout closes the admitted socket, drops the credential, and reaches other tabs', async ({
+        browser,
+    }) => {
+        const context = await browser.newContext();
+        const page = await context.newPage();
+        await page.goto(phi.url);
+        await unlock(page, PASSWORD);
+        await expectSignedIn(page);
+
+        const other = await context.newPage();
+        await other.goto(phi.url);
+        await expectSignedIn(other);
+
+        // Hold a socket open, then log out current: the server retires every
+        // socket this family admitted.
+        const closed = page.evaluate(async () => {
+            const url = window.phiAccessAuth.webSocketURL(
+                new URL('/ws/md-events', location.href),
+            );
+            return new Promise<string>((resolve) => {
+                const ws = new WebSocket(url.href, 'phi.events.protobuf.v1');
+                ws.onopen = () => {
+                    void import(new URL('./auth.js', location.href).href).then(
+                        (auth) => auth.logoutAccess(false),
+                    );
+                };
+                ws.onclose = (event) => resolve(`close:${event.code}`);
+                setTimeout(() => resolve('timeout'), 15_000);
+            });
+        });
+        expect(await closed).not.toBe('timeout');
+        await expect
+            .poll(() =>
+                page.evaluate(() => window.phiAccessAuth.getAccessToken()),
+            )
+            .toBeNull();
+        // The other tab was told, without receiving any secret, and prompts.
+        await expect(other.locator('.access-auth-overlay')).toBeVisible({
+            timeout: 30_000,
+        });
+        expect(
+            await page.evaluate(
+                async () => (await fetch('/api/coders')).status,
+            ),
+        ).toBe(401);
+        await context.close();
+    });
+
+    test('logout-all ends every v2 session', async ({ browser }) => {
+        const context = await browser.newContext();
+        const page = await context.newPage();
+        await page.goto(phi.url);
+        await unlock(page, PASSWORD);
+        await expectSignedIn(page);
+        const token = await page.evaluate(() =>
+            window.phiAccessAuth.getAccessToken(),
+        );
+
+        const second = await browser.newContext();
+        const otherPage = await second.newPage();
+        await otherPage.goto(phi.url);
+        await unlock(otherPage, PASSWORD);
+        await expectSignedIn(otherPage);
+        const otherToken = await otherPage.evaluate(() =>
+            window.phiAccessAuth.getAccessToken(),
+        );
+
+        expect(
+            await page.evaluate(async () => {
+                const auth = await import(
+                    new URL('./auth.js', location.href).href
+                );
+                return auth.logoutAccess(true);
+            }),
+        ).toEqual({ ok: true });
+
+        // Every family is gone: both bearers are rejected and the other
+        // context cannot refresh back in.
+        for (const bearer of [token, otherToken]) {
+            expect(
+                (
+                    await context.request.get(`${phi.url}/api/config`, {
+                        headers: { Authorization: `Bearer ${bearer}` },
+                    })
+                ).status(),
+            ).toBe(401);
+        }
+        expect(
+            (
+                await second.request.post(`${phi.url}/api/auth/v2/refresh`, {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Phi-Auth': 'v2',
+                    },
+                    data: {},
+                })
+            ).status(),
+        ).toBe(401);
+        await second.close();
+        await context.close();
+    });
+
+    test('a late refresh answer never resurrects a logged-out session', async ({
+        browser,
+    }) => {
+        const context = await browser.newContext();
+        const page = await context.newPage();
+        await page.goto(phi.url);
+        await unlock(page, PASSWORD);
+        await expectSignedIn(page);
+
+        // Hold the refresh answer back until after the logout: the older answer
+        // must lose to the newer local state instead of restoring a token.
+        await page.route('**/api/auth/v2/refresh', async (route) => {
+            await new Promise((resolve) => setTimeout(resolve, 800));
+            await route.continue();
+        });
+        expect(
+            await page.evaluate(async () => {
+                const auth = await import(
+                    new URL('./auth.js', location.href).href
+                );
+                const refresh = auth.__test__.refreshSession();
+                await auth.logoutAccess(false);
+                await refresh.catch(() => {});
+                return window.phiAccessAuth.getAccessToken();
+            }),
+        ).toBeNull();
+        expect(
+            await page.evaluate(
+                async () => (await fetch('/api/coders')).status,
+            ),
+        ).toBe(401);
+        await context.close();
+    });
+
+    test('a valid family refreshes without a new sign-in, then clearing the password disables auth', async ({
+        browser,
+    }) => {
+        const context = await browser.newContext();
+        const page = await context.newPage();
+        await page.goto(phi.url);
+        await unlock(page, PASSWORD);
+        await expectSignedIn(page);
+
+        // A live family renews repeatedly without prompting again.
+        for (let cycle = 0; cycle < 2; cycle++) {
+            await page.evaluate(async () => {
+                const auth = await import(
+                    new URL('./auth.js', location.href).href
+                );
+                await auth.__test__.refreshSession();
+            });
+            await expect(page.locator('.access-auth-overlay')).toHaveCount(0);
+            expect(
+                await page.evaluate(
+                    async () => (await fetch('/api/coders')).status,
+                ),
+            ).toBe(200);
+        }
+
+        // Clearing the password turns enforcement off for the server, so the
+        // next bootstrap drops the credential instead of renewing it.
+        expect(
+            await page.evaluate(async () => {
+                const auth = await import(
+                    new URL('./auth.js', location.href).href
+                );
+                return auth.clearAccessPassword();
+            }),
+        ).toEqual({ enabled: false });
+        const status = (await (
+            await fetch(`${phi.url}/api/auth/status`)
+        ).json()) as { enabled: boolean };
+        expect(status.enabled).toBe(false);
+        await page.reload();
+        await expectSignedIn(page);
+        expect(
+            await page.evaluate(() => window.phiAccessAuth.getAccessToken()),
+        ).toBeNull();
+        expect(
+            await page.evaluate(
+                async () => (await fetch('/api/coders')).status,
+            ),
+        ).toBe(200);
+        await context.close();
+    });
+});
+
+test.describe('route-local CSRF and credential precedence', () => {
+    let phi: PhiServer;
+    let bundle: { refresh: string; asset: string; session: string };
+
+    test.beforeAll(async () => {
+        phi = await startPhi({ config: { sync_coordinator: '', peers: [] } });
+        const res = await fetch(`${phi.url}/api/auth/v2/password`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Phi-Auth': 'v2' },
+            body: JSON.stringify({ password: PASSWORD }),
+        });
+        expect(res.status).toBe(200);
+        const cookies = res.headers.getSetCookie().join(', ');
+        const pick = (name: string) =>
+            new RegExp(`${name}=([^;]+)`).exec(cookies)?.[1] ?? '';
+        bundle = {
+            refresh: pick('phi_access_refresh'),
+            asset: pick('phi_access_asset'),
+            session: await legacySessionCookie(phi.url, PASSWORD),
+        };
+        expect(bundle.refresh).toBeTruthy();
+        expect(bundle.asset).toBeTruthy();
+    });
+
+    test.afterAll(async () => {
+        await phi.stop();
+    });
+
+    test('rejects every v2 mutation without the route-local CSRF proof', async () => {
+        const origin = new URL(phi.url).origin;
+        const post = (headers: Record<string, string>) =>
+            fetch(`${phi.url}/api/auth/v2/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...headers },
+                body: JSON.stringify({ password: PASSWORD }),
+            });
+
+        // A missing or wrong proof header is refused outright.
+        expect((await post({})).status).toBe(403);
+        expect((await post({ 'X-Phi-Auth': 'v1' })).status).toBe(403);
+        // A foreign or opaque origin is refused even with the proof header.
+        expect(
+            (await post({ 'X-Phi-Auth': 'v2', Origin: 'https://evil.example' }))
+                .status,
+        ).toBe(403);
+        expect((await post({ 'X-Phi-Auth': 'v2', Origin: 'null' })).status).toBe(
+            403,
+        );
+        // Cross-site fetch metadata is refused for the same reason.
+        expect(
+            (
+                await post({
+                    'X-Phi-Auth': 'v2',
+                    'Sec-Fetch-Site': 'cross-site',
+                })
+            ).status,
+        ).toBe(403);
+        // The intended client passes: proof header, same origin, same-site.
+        expect(
+            (
+                await post({
+                    'X-Phi-Auth': 'v2',
+                    Origin: origin,
+                    'Sec-Fetch-Site': 'same-origin',
+                })
+            ).status,
+        ).toBe(200);
+    });
+
+    test('a refresh or asset cookie never authorizes an API call or a socket', async ({
+        browser,
+    }) => {
+        // The asset cookie is scoped to the asset routes, so it cannot
+        // authenticate an ordinary API call.
+        expect(
+            (
+                await fetch(`${phi.url}/api/config`, {
+                    headers: { Cookie: `phi_access_asset=${bundle.asset}` },
+                })
+            ).status,
+        ).toBe(401);
+        // The refresh handle is scoped to its own route and authorizes nothing
+        // else, including the mutation routes.
+        expect(
+            (
+                await fetch(`${phi.url}/api/config`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Cookie: `phi_access_refresh=${bundle.refresh}`,
+                    },
+                    body: JSON.stringify({ sync_coordinator: '' }),
+                })
+            ).status,
+        ).toBe(401);
+
+        // The refresh handle still works on its own route: it is a scoped
+        // credential, not a dead one. It simply carries no authority elsewhere.
+        expect(
+            (
+                await fetch(`${phi.url}/api/auth/v2/refresh`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Phi-Auth': 'v2',
+                        Cookie: `phi_access_refresh=${bundle.refresh}`,
+                    },
+                    body: '{}',
+                })
+            ).status,
+        ).toBe(200);
+
+        // A context holding only that path-scoped handle cannot open a socket:
+        // the browser does not even send it to the socket path.
+        const context = await browser.newContext();
+        await context.addCookies([
+            {
+                name: 'phi_access_refresh',
+                value: bundle.refresh,
+                domain: new URL(phi.url).hostname,
+                path: '/api/auth/v2/refresh',
+                httpOnly: true,
+            },
+        ]);
+        const page = await context.newPage();
+        await page.goto(`${phi.url}/help.md`);
+        expect(
+            await page.evaluate(
+                async () =>
+                    new Promise<string>((resolve) => {
+                        const ws = new WebSocket(
+                            new URL('/ws/md-events', location.href).href,
+                            'phi.events.protobuf.v1',
+                        );
+                        ws.onopen = () => {
+                            ws.close();
+                            resolve('open');
+                        };
+                        ws.onerror = () => resolve('error');
+                        ws.onclose = (event) => resolve(`close:${event.code}`);
+                        setTimeout(() => resolve('timeout'), 10_000);
+                    }),
+            ),
+        ).not.toBe('open');
+        await context.close();
+    });
+
+    test('renders without horizontal overflow on desktop and mobile', async ({
+        browser,
+    }) => {
+        const context = await browser.newContext();
+        const page = await context.newPage();
+        await page.goto(phi.url);
+        await unlock(page, PASSWORD);
+        await expectSignedIn(page);
+        for (const viewport of [
+            { width: 1440, height: 900 },
+            { width: 390, height: 844 },
+        ]) {
+            await page.setViewportSize(viewport);
+            await expectSignedIn(page);
+            expect(
+                await page.evaluate(
+                    () =>
+                        document.documentElement.scrollWidth >
+                        window.innerWidth,
+                ),
+                `${viewport.width}px`,
+            ).toBe(false);
+        }
+        await context.close();
+    });
+});
+
 declare global {
     interface Window {
         phiAccessAuth: {
             webSocketURL: (url: URL | string) => URL;
             getAccessToken: () => string | null;
             installToken: (token: string) => boolean;
+            refreshAccessIfDue: () => Promise<unknown>;
         };
     }
 }
