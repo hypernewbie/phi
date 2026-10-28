@@ -3,6 +3,9 @@ import { describe, it, expect, vi } from 'vitest';
 import { setupDomHarness } from './_dom.js';
 import { TabManager, termPerfLogSlowFit } from '../web/terminal.js';
 
+// Mirrors MAX_WRITE_CHARS in web/terminal.js: the parser FIFO batch ceiling.
+const MAX_WRITE_CHARS = 64 * 1024;
+
 // Live-gap healing: recover every interval through bounded requests.
 // An unavailable interval reconnects; it never permits skipping bytes.
 // This file exists because `d.bytes`
@@ -430,20 +433,79 @@ describe('write drain advances the checkpoint watermark', () => {
         };
     }
 
-    it('hot: drained batch advances drainedSeq and schedules an upload', async () => {
+    it('hot: drained batch advances drainedSeq to the source front it painted', async () => {
         const c = Object.create(TabManager.prototype);
         c.updateDocumentTitle = vi.fn();
         c.syncBackendPin = vi.fn();
         c._scheduleCheckpointUpload = vi.fn();
         const { tab, stored } = drainTab('hot');
-        c.writeToTerminal(tab, 'hi');
+        c.writeToTerminal(tab, 'hi', 100);
         await Promise.resolve();
         expect(stored).toEqual(['hi']);
         expect(tab.drainedSeq).toBe(100);
         expect(c._scheduleCheckpointUpload).toHaveBeenCalledWith(tab);
     });
 
-    it('legacy: drained batch leaves the hot watermark alone', async () => {
+    it('hot: received bytes never advance P past what was painted', async () => {
+        // The old rule copied queuedSeq (W) into drainedSeq (P) whenever the
+        // FIFO emptied. Bytes received while the reader was browsing are not
+        // in the FIFO at all, so W must not leak into P here.
+        const c = Object.create(TabManager.prototype);
+        c.updateDocumentTitle = vi.fn();
+        c.syncBackendPin = vi.fn();
+        c._scheduleCheckpointUpload = vi.fn();
+        const { tab } = drainTab('hot');
+        const callbacks = [];
+        tab.term.write = (_d, cb) => {
+            callbacks.push(cb);
+        };
+        c.writeToTerminal(tab, 'painted', 90);
+        tab.queuedSeq = 500; // browsing: received, deliberately not painted
+        callbacks.shift()();
+        await Promise.resolve();
+        expect(tab.drainedSeq).toBe(90);
+    });
+
+    it('hot: text with no source front never advances drainedSeq', async () => {
+        // A banner or a replayed recording is not live PTY output: painting it
+        // must not publish a parsed frontier the reader never reached.
+        const c = Object.create(TabManager.prototype);
+        c.updateDocumentTitle = vi.fn();
+        c.syncBackendPin = vi.fn();
+        c._scheduleCheckpointUpload = vi.fn();
+        const { tab } = drainTab('hot');
+        c.writeToTerminal(tab, 'banner');
+        await Promise.resolve();
+        expect(tab.drainedSeq).toBe(50);
+    });
+
+    it('hot: a batch cut inside a frame does not publish that frame', async () => {
+        // P must not advance on bytes that were only received. Frame A is
+        // painted, frame B is cut in two: the cut batch ends inside B, so only
+        // A's frontier may be published.
+        const c = Object.create(TabManager.prototype);
+        c.updateDocumentTitle = vi.fn();
+        c.syncBackendPin = vi.fn();
+        c._scheduleCheckpointUpload = vi.fn();
+        const { tab } = drainTab('hot');
+        const callbacks = [];
+        tab.term.write = (d, cb) => {
+            callbacks.push(cb);
+        };
+        c.writeToTerminal(tab, 'a'.repeat(10), 90);
+        c.writeToTerminal(tab, 'b'.repeat(MAX_WRITE_CHARS + 10), 100);
+        callbacks.shift()(); // batch 1: frame A only
+        await Promise.resolve();
+        expect(tab.drainedSeq).toBe(90);
+        callbacks.shift()(); // batch 2: cut inside frame B
+        await Promise.resolve();
+        expect(tab.drainedSeq).toBe(90);
+        callbacks.shift()(); // batch 3: frame B complete
+        await Promise.resolve();
+        expect(tab.drainedSeq).toBe(100);
+    });
+
+    it('hot: text with no source front never advances drainedSeq', async () => {
         const c = Object.create(TabManager.prototype);
         c.updateDocumentTitle = vi.fn();
         c.syncBackendPin = vi.fn();

@@ -388,6 +388,10 @@ const PERF_SLOW_MS = 16;
 // Max delta and checkpoint limits: 2 MiB bounds live payloads while
 // ensuring terminal history is never dropped or truncated on attach.
 const MAX_DELTA_BYTES = 2 * 1024 * 1024;
+// A resync capture window that cannot commit in this long is abandoned: the
+// pane stays retained and the reader retries explicitly. It bounds the work,
+// not the attempt.
+const MAX_CAPTURE_MS = 30_000;
 const MAX_CHECKPOINT_BYTES = 2 * 1024 * 1024;
 const MAX_WRITE_CHARS = 64 * 1024;
 // Full live scrollback, desktop and unset-mobile alike. The mobile lane
@@ -1640,12 +1644,8 @@ export class TabManager {
         // Trigger spam scroll on transition from empty to typed content
         this.inputTextArea.addEventListener('input', () => {
             const currentVal = this.inputTextArea.value;
-            if (this.lastInputValue === '' && currentVal !== '') {
-                const activeTab = this.getActiveTab();
-                if (activeTab) {
-                    this._spamScrollToBottom(activeTab);
-                }
-            }
+            // Typing is not a submit: it must leave a scrolled-up reader where
+            // they are. Follow is re-applied by the submit paths only.
             this.lastInputValue = currentVal;
             this.saveActiveDraft();
             this.adjustInputHeight();
@@ -1855,7 +1855,7 @@ export class TabManager {
 
         if (this.copyInputBtn) {
             this.copyInputBtn.addEventListener('click', () => {
-                this.sendRawInput('/copy\r');
+                this.sendRawInput('/copy\r', { submit: true });
                 this.inputTextArea.focus({ preventScroll: true });
             });
         }
@@ -2208,7 +2208,9 @@ export class TabManager {
             tabInfo.queuedSeq = pty.lastFrameEnd;
         }
         if (!tabInfo._historyBrowsing) {
-            this.writeToTerminal(tabInfo, data);
+            // The painted frontier is the source frontier this text completes,
+            // never whatever happens to be received by then.
+            this.writeToTerminal(tabInfo, data, pty?.lastFrameEnd);
             // Decoder-only frames have consumed source bytes but enqueue no
             // xterm write/callback. At quiescence they still own a frontier,
             // including the incomplete UTF-8 prefix retained by the decoder.
@@ -2216,7 +2218,7 @@ export class TabManager {
             if (pty?.mode === 'hot' && data.length === 0 &&
                 !tabInfo.writePending && !tabInfo.writeBuffer?.length &&
                 !tabInfo._bootstrapGate) {
-                tabInfo.drainedSeq = tabInfo.queuedSeq;
+                this._advanceDrained(tabInfo, pty.lastFrameEnd);
                 this._scheduleCheckpointUpload(tabInfo);
             }
         }
@@ -2484,6 +2486,19 @@ export class TabManager {
             }
             const visible = tabInfo.term.buffer?.active;
             const readingLocalHistory = !tabInfo._forceStateRefresh && visible?.type === 'normal' && visible.viewportY < visible.baseY;
+            // The attach also carries a certified replay window. When this
+            // parser already sits inside it, resume from the local frontier:
+            // the recording owns every byte from there to the head, so a
+            // repaint would throw away a coherent view for nothing.
+            const resumeFrom = tabInfo.drainedSeq ?? 0;
+            const windowResume = info.replayFrom !== undefined &&
+                !tabInfo._forceStateRefresh &&
+                resumeFrom >= info.replayFrom &&
+                resumeFrom <= info.head;
+            if (windowResume) {
+                this._bootstrappedRelease(tabInfo, pty, resumeFrom, info.head);
+                return;
+            }
             if (info.ckpt?.bytes && !readingLocalHistory) {
                 if (info.head < (tabInfo.drainedSeq ?? 0)) {
                     try { pty.ws?.close(); } catch (_e) {}
@@ -2493,7 +2508,7 @@ export class TabManager {
                 // damaged local parser and repainting it just repaints garbage.
                 // Older books remain in the archive; a reader's view stays put.
                 this._clearHistoryAnchors(tabInfo);
-                resetTerminalState(tabInfo.term);
+                this._resetPaneBuffer(tabInfo);
                 tabInfo.term.resize(info.ckpt.cols, info.ckpt.rows);
                 pty.decoder = new TextDecoder('utf-8');
                 tabInfo._streamDecoder = pty.decoder;
@@ -2548,7 +2563,7 @@ export class TabManager {
         pty.decoder = new TextDecoder('utf-8');
         tabInfo._streamDecoder = pty.decoder;
         try {
-            resetTerminalState(tabInfo.term);
+            this._resetPaneBuffer(tabInfo);
         } catch (e) {
             console.error('[term] reset on epoch change failed:', e);
         }
@@ -2622,17 +2637,36 @@ export class TabManager {
             }
         };
         const boot = (async () => {
-            let complete = false;
+            let outcome = null;
             try {
-                complete = await this._bootstrapDelta(tabInfo, from, head, gen, releaseOnce, eventCursor);
+                outcome = await this._bootstrapDelta(tabInfo, from, head, gen, releaseOnce, eventCursor);
             } catch (error) {
                 console.warn('[term] bootstrap failed:', error);
+                outcome = { kind: 'failed', error };
             }
-            if (complete) releaseOnce();
-            else if (tabInfo.ws === pty && tabInfo._bootstrapGen === gen) {
-                // Never release held live frames across an unfilled interval.
-                tabInfo._bootstrapGate = null;
-                try { pty.ws?.close(); } catch (_e) {}
+            switch (outcome?.kind) {
+                case 'applied':
+                    releaseOnce();
+                    return;
+                case 'retained': {
+                    // A coherent view is on screen. Closing the socket here
+                    // would replace it, so hold delivery and wait for the
+                    // reader's explicit resync. The gate has settled; leaving
+                    // it installed would keep every later fit pending.
+                    if (tabInfo._bootstrapGate === boot) tabInfo._bootstrapGate = null;
+                    if (tabInfo._pendingPanelFit) this._queuePanelFit(tabInfo);
+                    return;
+                }
+                case 'cancelled':
+                    // A successor owns the socket and the gate; nothing here
+                    // is ours to release or close.
+                    return;
+                default: {
+                    // Never release held live frames across an unfilled interval.
+                    if (tabInfo.ws !== pty || tabInfo._bootstrapGen !== gen) return;
+                    tabInfo._bootstrapGate = null;
+                    try { pty.ws?.close(); } catch (_e) {}
+                }
             }
         })();
         tabInfo._bootstrapGate = boot;
@@ -2763,7 +2797,7 @@ export class TabManager {
             if (!range) throw new Error('terminal history temporarily unavailable');
             tabInfo._historyParsing = true;
             this._clearHistoryAnchors(tabInfo);
-            resetTerminalState(tabInfo.term);
+            this._resetPaneBuffer(tabInfo);
             reset = true;
             pty.decoder = new TextDecoder('utf-8');
             tabInfo._streamDecoder = pty.decoder;
@@ -2803,7 +2837,7 @@ export class TabManager {
                 // Never stay in browsing mode after a failure: the next
                 // wheel event would run the same miss again.
                 tabInfo._historyBrowsing = false;
-                if (healed === null) {
+                if (healed.kind === 'failed') {
                     try { pty.ws.close(); } catch (_e) {}
                 }
             } else if (error?.historyPermanent) {
@@ -2841,7 +2875,7 @@ export class TabManager {
             tabInfo._bootstrapGate = gate;
             const head = Math.max(saved.head, pty.lastFrameEnd ?? 0);
             this._clearHistoryAnchors(tabInfo);
-            resetTerminalState(tabInfo.term);
+            this._resetPaneBuffer(tabInfo);
             tabInfo.term.resize(saved.cols, saved.rows);
             pty.decoder = new TextDecoder('utf-8');
             tabInfo._streamDecoder = pty.decoder;
@@ -2895,7 +2929,7 @@ export class TabManager {
             // Take the live state instead, and never stay in browsing mode.
             const healed = await this._recoverBootstrapFromLiveState(tabInfo, pty, () => current() && tabInfo.ws === pty);
             tabInfo._historyBrowsing = false;
-            if (healed === null) {
+            if (healed.kind === 'failed') {
                 try { pty.ws?.close(); } catch (_e) {}
             }
         } finally {
@@ -2958,36 +2992,156 @@ export class TabManager {
     }
 
     // Reattaches a bootstrap through an authoritative live checkpoint when
-    // its span crossed the retention floor. Returns the adopted frontier or
-    // null when recovery is impossible (the caller fails its bootstrap).
+    // its span crossed the retention floor. Returns a recovery outcome; only
+    // 'applied' carries a numeric frontier.
     async _recoverBootstrapFromLiveState(tabInfo, ws, current) {
         const epoch = tabInfo.paneEpoch;
+        // Everything already received stays covered: the recording supplies
+        // [state.through, C), and the socket captures raw spans from the same
+        // frontier on, so no byte between the checkpoint and the commit is
+        // re-requested or lost.
+        const receivedAtStart = Math.max(0, ws?.receivedThrough ?? 0);
+        let capturing = typeof ws?.beginCapture === 'function' &&
+            ws.beginCapture(receivedAtStart);
         let state = null;
         for (let attempt = 0; attempt < 3; attempt++) {
             try {
                 state = await this._fetchTerminalState(tabInfo.paneId, epoch, 'latest');
             } catch (error) {
-                if (error?.historyPermanent) return null;
+                // Stale intent is not a failure: a successor owns the pane, and
+                // only a failure may mutate its view.
+                if (!current()) return { kind: 'cancelled', reason: 'stale' };
+                if (error?.historyPermanent) return { kind: 'failed', error };
                 state = null;
             }
             if (state) break;
             if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
         }
-        if (!state || !current()) return null;
+        if (!current()) {
+            if (capturing) ws.abortCapture?.();
+            return { kind: 'cancelled', reason: 'stale' };
+        }
+        if (!state) {
+            if (capturing) ws.abortCapture?.();
+            return { kind: 'failed', error: new Error('no authoritative state') };
+        }
         const pty = tabInfo.ws;
-        this._clearHistoryAnchors(tabInfo);
-        resetTerminalState(tabInfo.term);
-        tabInfo.term.resize(state.cols, state.rows);
-        pty.decoder = new TextDecoder('utf-8');
-        tabInfo._streamDecoder = pty.decoder;
-        this._writeAttachCheckpoint(tabInfo, pty, state);
-        tabInfo.paneOldest = state.oldest;
-        tabInfo._historyLiveState = null;
-        const frontier = state.through;
-        tabInfo.queuedSeq = frontier;
-        tabInfo.drainedSeq = frontier;
-        if (typeof pty.adoptState === 'function') pty.adoptState(frontier);
-        return frontier;
+        // One fixed fence for this attempt. C is never chased as output arrives.
+        const fence = Math.max(state.through, receivedAtStart);
+        const captureDeadline = capturing
+            ? setTimeout(() => pty.abortCapture?.(), MAX_CAPTURE_MS)
+            : null;
+        try {
+            this._clearHistoryAnchors(tabInfo);
+            this._resetPaneBuffer(tabInfo);
+            tabInfo.term.resize(state.cols, state.rows);
+            pty.decoder = new TextDecoder('utf-8');
+            tabInfo._streamDecoder = pty.decoder;
+            this._writeAttachCheckpoint(tabInfo, pty, state);
+            tabInfo.paneOldest = state.oldest;
+            tabInfo._historyLiveState = null;
+            tabInfo.queuedSeq = state.through;
+            tabInfo.drainedSeq = state.through;
+            if (typeof pty.adoptState === 'function') pty.adoptState(state.through);
+            // Bytes below the fence were received and are not in the
+            // checkpoint: the recording covers them without capture.
+            if (fence > state.through) {
+                const replayed = await this._replayFence(tabInfo, state.through, fence, current, pty);
+                if (replayed.kind === 'cancelled') return replayed;
+                if (replayed.kind !== 'applied') {
+                    // The checkpoint is already on screen and coherent. Only
+                    // the tail is uncertified, so keep the view and wait for
+                    // the explicit retry instead of closing the socket.
+                    tabInfo._resyncNeeded = true;
+                    pty.discard?.();
+                    this._updateResyncAffordance(tabInfo);
+                    return { kind: 'retained', reason: 'fence', through: state.through };
+                }
+            }
+            if (!capturing) {
+                this._clearResyncNeeded(tabInfo);
+                return { kind: 'applied', through: fence };
+            }
+            // Commit in one turn: the suffix is what arrived beyond the fence,
+            // delivered through the replay decoder before any later frame.
+            const captured = pty.finishCapture?.(fence);
+            if (!captured) {
+                tabInfo._resyncNeeded = true;
+                this._updateResyncAffordance(tabInfo);
+                return { kind: 'retained', reason: 'capture', through: fence };
+            }
+            if (captured.bytes.byteLength > 0) {
+                const delivered = await this._parseRecordingRange(
+                    tabInfo,
+                    {
+                        start: captured.from,
+                        end: captured.through,
+                        bytes: captured.bytes,
+                        byteLength: captured.bytes.byteLength,
+                    },
+                    current,
+                    undefined,
+                    pty,
+                );
+                if (!delivered) {
+                    tabInfo._resyncNeeded = true;
+                    return { kind: 'retained', reason: 'capture', through: fence };
+                }
+            }
+            // No release here: the caller owns the bootstrap ordering
+            // (fit, refresh, resize) and releases after it. Frames that land
+            // in between stay in the bounded hold.
+            tabInfo.queuedSeq = captured.through;
+            tabInfo.drainedSeq = captured.through;
+            this._clearResyncNeeded(tabInfo);
+            return { kind: 'applied', through: captured.through };
+        } finally {
+            if (captureDeadline) clearTimeout(captureDeadline);
+        }
+    }
+
+    // Replays exactly [from, to) from the recording, one bounded range at a
+    // time. A retention miss or a malformed range is a failure, not a skip.
+    async _replayFence(tabInfo, from, to, current, pty) {
+        let cursor = from;
+        let chained;
+        while (cursor < to) {
+            const end = Math.min(to, cursor + MAX_DELTA_BYTES);
+            let d;
+            try {
+                d = await this._fetchRecordingRange(
+                    tabInfo.paneId,
+                    cursor,
+                    end,
+                    tabInfo.paneEpoch,
+                    chained,
+                );
+            } catch (error) {
+                if (!current()) return { kind: 'cancelled', reason: 'stale' };
+                return { kind: 'failed', error };
+            }
+            if (!current()) return { kind: 'cancelled', reason: 'stale' };
+            if (
+                !d ||
+                d.start !== cursor ||
+                d.end !== end ||
+                d.byteLength !== end - cursor ||
+                (d.bytes && d.bytes.byteLength !== d.byteLength)
+            ) {
+                return { kind: 'failed', error: new Error('malformed recording range') };
+            }
+            if (d.endCursor !== undefined) chained = d.endCursor;
+            if (d.bytes) {
+                if (!await this._parseRecordingRange(tabInfo, d, current, undefined, pty)) {
+                    return { kind: 'cancelled', reason: 'stale' };
+                }
+            } else {
+                this.writeToTerminal(tabInfo, d.text);
+                await this._drainSettled(tabInfo);
+            }
+            cursor = end;
+        }
+        return { kind: 'applied', through: to };
     }
 
     async _bootstrapDelta(tabInfo, from, head, expectGen, onReady, eventCursor) {
@@ -2997,12 +3151,12 @@ export class TabManager {
         const current = () => !tabInfo.finalizing && tabInfo.paneEpoch === epoch &&
             (tabInfo.ws === ws || admitted) &&
             (expectGen === undefined || tabInfo._bootstrapGen === expectGen);
-        if (!current()) return false;
+        if (!current()) return { kind: 'cancelled', reason: 'stale' };
         // Even a zero-delta resume must finish its checkpoint write before
         // fitting the live viewport and synchronizing backend dimensions.
         if (from === head || tabInfo.writePending || tabInfo.writeBuffer?.length) {
             await this._drainSettled(tabInfo);
-            if (!current()) return false;
+            if (!current()) return { kind: 'cancelled', reason: 'stale' };
         }
         let cursor = from;
         let target = head;
@@ -3014,30 +3168,45 @@ export class TabManager {
                 d = await this._fetchRecordingRange(tabInfo.paneId, cursor, end, tabInfo.paneEpoch, chained);
             } catch (error) {
                 if (!error?.historyPermanent) throw error;
-                if (!current()) return false;
+                if (!current()) return { kind: 'cancelled', reason: 'stale' };
                 // The span crossed the retention floor. Adopt the live
                 // checkpoint and resume from its frontier instead of
                 // replaying evicted bytes.
-                const frontier = await this._recoverBootstrapFromLiveState(tabInfo, ws, current);
-                if (frontier === null) return false;
+                const healed = await this._recoverBootstrapFromLiveState(tabInfo, ws, current);
+                if (!current()) return { kind: 'cancelled', reason: 'stale' };
+                if (healed.kind !== 'applied') {
+                    // No certified frontier. A view the reader is holding is
+                    // worth more than a repaint, so keep it and wait for the
+                    // explicit resync instead of closing the socket.
+                    if (this._retainReaderView(tabInfo, healed)) {
+                        return { kind: 'retained', reason: 'reader' };
+                    }
+                    return healed;
+                }
                 admitted = true;
-                cursor = frontier;
-                target = Math.max(target, frontier);
+                cursor = healed.through;
+                target = Math.max(target, healed.through);
                 chained = undefined;
                 continue;
             }
-            if (!current()) return false;
+            if (!current()) return { kind: 'cancelled', reason: 'stale' };
             if (!d || d.start !== cursor || d.end !== end || d.byteLength !== end - cursor ||
-                (d.bytes && d.bytes.byteLength !== d.byteLength)) return false;
+                (d.bytes && d.bytes.byteLength !== d.byteLength)) {
+                return { kind: 'failed', error: new Error('malformed recording range') };
+            }
             admitted = true;
             if (d.endCursor !== undefined) chained = d.endCursor;
             if (d.bytes) {
-                if (!await this._parseRecordingRange(tabInfo, d, current, undefined, ws)) return false;
+                // A false here is a stale intent: the parser stopped because
+                // this attempt no longer owns the pane.
+                if (!await this._parseRecordingRange(tabInfo, d, current, undefined, ws)) {
+                    return { kind: 'cancelled', reason: 'stale' };
+                }
             } else {
                 this.writeToTerminal(tabInfo, d.text);
                 await this._drainSettled(tabInfo);
             }
-            if (!current()) return false;
+            if (!current()) return { kind: 'cancelled', reason: 'stale' };
             if (ws?.mode === 'hot' && ws.decoder) tabInfo._streamDecoder = ws.decoder;
             if ((tabInfo.queuedSeq ?? 0) <= end) {
                 tabInfo.queuedSeq = end;
@@ -3048,7 +3217,7 @@ export class TabManager {
         // Recovery can append its checkpoint after the delta loop. Drain it
         // before fitting and releasing held live output.
         await this._drainSettled(tabInfo);
-        if (!current()) return false;
+        if (!current()) return { kind: 'cancelled', reason: 'stale' };
         // Restore visible panel geometry; hidden parsers keep the recorded
         // grid until activation provides measurable panel dimensions.
         this._fitVisibleTerminal(tabInfo);
@@ -3068,12 +3237,16 @@ export class TabManager {
         // A quiet raw attach must also leave a checkpoint; otherwise every
         // refresh repeats the whole prefix until the backend emits again.
         this._scheduleCheckpointUpload(tabInfo);
-        return true;
+        this._clearResyncNeeded(tabInfo);
+        return { kind: 'applied', through: cursor };
     }
 
     async _onLiveGap(tabInfo, from, to) {
         const pty = tabInfo.ws;
         if (pty?.mode !== 'hot') return;
+        // A retained view has no live parser to patch. Repairing the hole
+        // would paint over the reading position and release the pause.
+        if (tabInfo._resyncNeeded) return;
         // Order with an in-flight bootstrap: the delta must enqueue first,
         // or the patch (newer bytes) lands below it. Stale when the socket
         // swapped mid-fetch: verify identity before touching watermarks.
@@ -3342,7 +3515,7 @@ export class TabManager {
         );
     }
 
-    writeToTerminal(tabInfo, data) {
+    writeToTerminal(tabInfo, data, frontier) {
         // Disconnection and process exit do not dispose xterm. Already
         // received output still belongs to its history, including exit
         // sequences that leave the alternate screen. Only teardown cancels.
@@ -3390,15 +3563,54 @@ export class TabManager {
             this.updateDocumentTitle();
         }
 
-        this._enqueueTerminalWrite(tabInfo, data);
+        this._enqueueTerminalWrite(tabInfo, data, frontier);
     }
 
     // Local screen text shares the parser FIFO without representing PTY
     // activity or advancing source-sequence accounting.
-    _enqueueTerminalWrite(tabInfo, data) {
+    _enqueueTerminalWrite(tabInfo, data, frontier) {
         if (tabInfo.finalizing) return;
+        this._pushWriteRun(tabInfo, data.length, frontier);
         tabInfo.writeBuffer += data;
         if (!tabInfo.writePending) this._flushTerminalWrite(tabInfo);
+    }
+
+    // Each queued span records the source frontier it completes. Text with no
+    // frontier (a banner, a recorded replay) can never advance the painted
+    // frontier, so P cannot inherit bytes that were only received.
+    _pushWriteRun(tabInfo, length, frontier) {
+        if (!tabInfo.writeRuns) tabInfo.writeRuns = [];
+        const runs = tabInfo.writeRuns;
+        const last = runs[runs.length - 1];
+        const end = (last ? last.end : 0) + length;
+        if (last && last.frontier === frontier) last.end = end;
+        else runs.push({ end, frontier });
+    }
+
+    // Advance the painted frontier. Only source spans that were parsed may
+    // move it, and it never moves backwards.
+    _advanceDrained(tabInfo, frontier) {
+        if (!Number.isSafeInteger(frontier)) return;
+        if (frontier <= (tabInfo.drainedSeq ?? 0)) return;
+        tabInfo.drainedSeq = frontier;
+    }
+
+    // Splits the run list at the batch boundary without mutating it: the
+    // caller commits `rest` only when the batch is admitted.
+    _splitWriteRuns(tabInfo, length) {
+        const runs = tabInfo.writeRuns;
+        if (!runs || runs.length === 0) return { painted: undefined, rest: [] };
+        let painted;
+        let index = 0;
+        while (index < runs.length && runs[index].end <= length) {
+            const run = runs[index++];
+            if (run.frontier !== undefined) painted = run.frontier;
+        }
+        const rest = runs.slice(index).map((run) => ({
+            end: run.end - length,
+            frontier: run.frontier,
+        }));
+        return { painted, rest };
     }
 
     // Resolves bootstrap watermark waiters. Called wherever the pump
@@ -3458,6 +3670,12 @@ export class TabManager {
         if (length < tabInfo.writeBuffer.length && last >= 0xd800 && last <= 0xdbff) length--;
         const data = tabInfo.writeBuffer.slice(0, length);
         tabInfo.writeBuffer = tabInfo.writeBuffer.slice(length);
+        // Runs this batch fully covers are parsed once its callback fires; a
+        // run cut in two keeps its frontier for a later batch. The split is
+        // computed here, captured by the callback, and committed only if the
+        // batch is admitted, so a refused write keeps its provenance intact.
+        const consumed = this._splitWriteRuns(tabInfo, length);
+        const painted = consumed.painted;
         tabInfo.writePending = true;
         let parsed = false;
 
@@ -3496,14 +3714,17 @@ export class TabManager {
 
                         // The parsed frontier is safe to publish only outside xterm's
                         // callback, and never while a bootstrap delta is pending.
+                        // The painted front may advance as soon as a source
+                        // span is parsed; only the upload waits for quiescence.
                         if (
-                            tabInfo.writeBuffer.length === 0 &&
-                            tabInfo.queuedSeq !== undefined &&
                             !tabInfo._bootstrapGate &&
                             (!tabInfo.ws || tabInfo.ws.mode === 'hot')
                         ) {
-                            if (tabInfo.queuedSeq >= (tabInfo.drainedSeq ?? 0)) {
-                                tabInfo.drainedSeq = tabInfo.queuedSeq;
+                            this._advanceDrained(tabInfo, painted);
+                            if (
+                                tabInfo.writeBuffer.length === 0 &&
+                                tabInfo.queuedSeq !== undefined
+                            ) {
                                 this._scheduleCheckpointUpload(tabInfo);
                             }
                         }
@@ -3537,6 +3758,8 @@ export class TabManager {
                     this._flushTerminalWrite(tabInfo);
                 });
             });
+            // Admitted: the batch now owns those runs.
+            tabInfo.writeRuns = consumed.rest;
         } catch (e) {
             console.error('[term] write failed:', e);
             tabInfo.writePending = false;
@@ -3884,6 +4107,10 @@ export class TabManager {
             // Mobile may shrink via _liveScrollbackRows (fast-mode gate);
             // desktop always keeps LIVE_SCROLLBACK_ROWS.
             scrollback: this._liveScrollbackRows(),
+            // Enter-only follow: xterm's default follows on ANY data event, so a
+            // keystroke or a paste would drag a scrolled-up reader to the bottom.
+            // Follow is re-applied per send path, only for an accepted submit.
+            scrollOnUserInput: false,
             theme: this.getTerminalTheme(coder),
             linkHandler: {
                 activate: (_event, text) => {
@@ -3917,6 +4144,14 @@ export class TabManager {
         // Register OSC 52 clipboard handler
         if (term.parser?.registerOscHandler) {
             term.parser.registerOscHandler(52, (data) => {
+                // A replayed copy is history, not the agent copying now:
+                // painting an old window must not overwrite the clipboard.
+                // Every replayed byte is parsed while the load that owns it is
+                // still open, and that load drains each chunk before it
+                // continues, so no replay sequence can straddle the flag.
+                if (tabInfo._historyParsing || tabInfo._historyBrowsing) {
+                    return true;
+                }
                 const parts = data.split(';');
                 if (parts.length < 2) return true;
                 const base64Text = parts[1].replace(/[^A-Za-z0-9+/=]/g, '');
@@ -4427,6 +4662,11 @@ export class TabManager {
         scrollToBottomBtn.innerHTML = '\u2193'; // ↓
         scrollToBottomBtn.addEventListener('click', (e) => {
             e.stopPropagation();
+            // A retained view is only repaired by the reader asking for it.
+            if (tabInfo._resyncNeeded) {
+                this._resyncRetainedView(tabInfo);
+                return;
+            }
             if (tabInfo._historyBrowsing) {
                 this._restoreLatestHistory(tabInfo);
             } else {
@@ -4471,7 +4711,9 @@ export class TabManager {
             const buf = tabInfo.term?.buffer?.active;
             if (!buf) return;
             const atBottom = buf.viewportY >= buf.baseY;
-            if (atBottom && !tabInfo._historyBrowsing) {
+            // A pending resync keeps the affordance on screen even at the
+            // bottom: it is the only control that repairs the pane.
+            if (atBottom && !tabInfo._historyBrowsing && !tabInfo._resyncNeeded) {
                 scrollToBottomBtn.classList.add('hidden');
             } else {
                 scrollToBottomBtn.classList.remove('hidden');
@@ -4498,12 +4740,28 @@ export class TabManager {
             term.onScroll(() => this._readerAnchorScroll(tabInfo));
         }
         term.onResize?.(updateScrollBtn);
-        // A reflow (column change) can dispose the anchored marker while its text
-        // is still in the buffer, which would report expiry for a move the app
-        // caused. Drop the anchor instead; preserving the row across a resize is
-        // out of scope, and the next gesture anchors again.
-        term.onResize?.(() => this._clearReaderAnchor(tabInfo));
         term.buffer?.onBufferChange?.(updateScrollBtn);
+        // Decision: the alternate screen owns the view. Leaving it lands at the
+        // bottom and forgets the reading position instead of restoring a row
+        // from before the TUI took over.
+        term.buffer?.onBufferChange?.((buffer) => {
+            if (buffer.type !== 'normal') return;
+            // The app exiting its full-screen TUI lands at the bottom. A pane
+            // repainting its own buffer is not the app leaving: the loader
+            // places that view itself, and following here would undo it.
+            if (
+                tabInfo._ownBufferReset ||
+                tabInfo._historyParsing ||
+                tabInfo._historyBrowsing
+            )
+                return;
+            this._clearReaderAnchor(tabInfo);
+            tabInfo.userFollowBottom = true;
+            requestAnimationFrame(() => {
+                if (tabInfo.isDead || tabInfo.finalizing || tabInfo._historyBrowsing) return;
+                this._spamScrollToBottom(tabInfo);
+            });
+        });
         // A wheel notch does fire public onScroll (Viewport._handleScroll ->
         // onRequestScrollLines -> CoreBrowserTerminal.scrollLines(diff, false)),
         // which is what the anchor subscription above relies on. This DOM
@@ -4568,6 +4826,10 @@ export class TabManager {
         term.onData((data) => {
             const fromUser = terminalUserInput;
             terminalUserInput = false;
+            // A retained view holds live delivery. Nothing mode-dependent may
+            // reach the PTY from it: the mouse reports, application-mode keys,
+            // and paste wrappers all describe a screen that is no longer live.
+            if (fromUser && tabInfo._resyncNeeded && this._holdFrozenInput(tabInfo, data)) return;
             // Archive queries must not send old DSR/OSC/DCS replies into the
             // live app. Keep real keyboard/IME/paste input distinguishable.
             if ((tabInfo._historyParsing || tabInfo._historyBrowsing) && !fromUser) return;
@@ -4575,9 +4837,12 @@ export class TabManager {
                 /^(?:\x1b\[<\d+;\d+;\d+[Mm])+$/.test(data) ||
                 /^\x1b\[\??[\d;:]*[cnRu]$/.test(data);
             if (tabInfo.directMode || protocolReply) {
-                this.sendInput(tabInfo, data);
-                if (tabInfo.directMode && data.includes('\r')) {
-                    this._spamScrollToBottom(tabInfo);
+                const accepted = this.sendInput(tabInfo, data);
+                // Enter-only follow: a bare physical Enter that the pane
+                // accepted is a submit; a printable key, a protocol reply, a
+                // paste carrying newlines, or a refused send is not.
+                if (tabInfo.directMode && accepted && fromUser && data === '\r') {
+                    this._resumeFollowOnSubmit(tabInfo);
                 }
             }
         });
@@ -7085,6 +7350,8 @@ export class TabManager {
             autoReconnect: true,
             force: userInitiated,
         });
+        // The restriction line belongs to the tab that owns it.
+        this._renderInputRestriction();
         this.updateDocumentTitle();
     }
 
@@ -8551,6 +8818,13 @@ export class TabManager {
             return false;
         }
 
+        // A retained view owns the screen. Screen state (mouse reports,
+        // application-mode keys, paste wrappers) describes the screen the
+        // reader left, so the single writer refuses it here instead of at
+        // every caller. Text and newlines still pass.
+        if (tabInfo._resyncNeeded && typeof payload === 'string' &&
+            /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(payload)) return false;
+
         // Track user-initiated commands and cancellation
         if (typeof payload === 'string') {
             if (payload === '\x03' || payload === '\x14') {
@@ -9089,6 +9363,14 @@ export class TabManager {
         const activeTab = this.getActiveTab();
         if (!activeTab) return;
 
+        // A retained view is waiting for its resync. Sending now would push a
+        // prompt into a pane whose output cannot come back, so ask for the
+        // resync and keep the draft and attachments exactly as they are.
+        if (activeTab._resyncNeeded) {
+            this._resyncRetainedView(activeTab);
+            return;
+        }
+
         const val = this.inputTextArea.value;
         const attachments = this.stagedAttachments;
         // Empty guard now also allows attachments-only sends. Without
@@ -9147,6 +9429,14 @@ export class TabManager {
             if (!sent) return;
         }
 
+        // A retained view is waiting for its resync. Sending now would push a
+        // prompt into a pane whose output cannot come back, so ask for the
+        // resync and keep the draft exactly as the reader typed it.
+        if (activeTab._resyncNeeded) {
+            this._resyncRetainedView(activeTab);
+            return;
+        }
+
         // Record this prompt into ~/.phi/prompt_history.json BEFORE
         // clearing the textarea. Fire-and-forget so a slow disk
         // doesn't hold up the send. The backend handles dedup / cap
@@ -9172,7 +9462,7 @@ export class TabManager {
         this.saveActiveDraft();
         this._renderAttachmentStrip();
         this.adjustInputHeight();
-        this._spamScrollToBottom(activeTab);
+        this._resumeFollowOnSubmit(activeTab);
 
         // Auto sync clipboard on /copy command
         if (val?.includes('/copy')) {
@@ -9184,7 +9474,7 @@ export class TabManager {
         this.inputTextArea.focus({ preventScroll: true });
     }
 
-    sendRawInput(bytes, { focusInputOnMobile = true } = {}) {
+    sendRawInput(bytes, { focusInputOnMobile = true, submit = false } = {}) {
         const activeTab = this.getActiveTab();
         if (!activeTab || activeTab.coder === 'pi-rpc') return;
         // The backend PTY layer handles the Windows ConPTY quirk where a \r
@@ -9203,7 +9493,9 @@ export class TabManager {
             this.focusActiveTerminal();
         }
 
-        this._spamScrollToBottom(activeTab);
+        // Sending bytes is not a submit unless the caller says so: Cancel,
+        // Escape, Ctrl+T, and quick-nav arrows must leave a reader in place.
+        if (submit) this._resumeFollowOnSubmit(activeTab);
 
         // Auto sync clipboard on /copy command
         if (bytes.includes('/copy')) {
@@ -9221,9 +9513,9 @@ export class TabManager {
      * switched away from. Use from setTimeout chains or anywhere the
      * active tab may have changed between scheduling and firing.
      */
-    sendToTab(tabInfo, payload) {
+    sendToTab(tabInfo, payload, { submit = false } = {}) {
         const sent = this.sendInput(tabInfo, payload);
-        if (sent) this._spamScrollToBottom(tabInfo);
+        if (sent && submit) this._resumeFollowOnSubmit(tabInfo);
         return sent;
     }
 
@@ -9275,8 +9567,20 @@ export class TabManager {
             }
         }
         if (sendChar === null) return false;
+        // While a retained view waits for its resync, Enter is the reader
+        // asking to rejoin live output, not a submit; every other forwarded
+        // key belongs to a screen that is held.
+        if (tab?._resyncNeeded) {
+            e.preventDefault();
+            if (e.key === 'Enter') this._resyncRetainedView(tab);
+            return true;
+        }
         e.preventDefault();
-        if (tab) this.sendToTab(tab, sendChar);
+        // Forwarding a key is not a submit except when the key is Enter.
+        if (tab) {
+            if (e.key === 'Enter') this.sendToTab(tab, sendChar, { submit: true });
+            else this.sendToTab(tab, sendChar);
+        }
         return true;
     }
 
@@ -9319,11 +9623,17 @@ export class TabManager {
         const sent = this.sendToTab(
             tabInfo,
             legacyOpenCode ? paste : `${paste}\r`,
+            { submit: true },
         );
         if (!sent) return false;
         if (legacyOpenCode) {
+            // The command is already authorized; only a newer viewport intent
+            // cancels the follow, never the send.
+            const intent = tabInfo._viewportIntentSeq;
             setTimeout(() => {
-                this.sendToTab(tabInfo, '\r');
+                this.sendToTab(tabInfo, '\r', {
+                    submit: intent === tabInfo._viewportIntentSeq,
+                });
             }, 200);
         }
         this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
@@ -11115,6 +11425,9 @@ export class TabManager {
         tabInfo.isSpammingBottom = undefined;
         tabInfo.spamScrollY = undefined;
         tabInfo.userFollowBottom = false;
+        // A newer viewport intent: a deferred send may still fire, but it does
+        // not get to move the reader after this gesture.
+        tabInfo._viewportIntentSeq = (tabInfo._viewportIntentSeq ?? 0) + 1;
     }
 
     // Reader anchor. xterm keeps a scrolled-up view steady by decrementing the
@@ -11164,6 +11477,9 @@ export class TabManager {
         if (tabInfo._historyBrowsing || buffer.baseY <= 0) return;
         if (typeof term.registerMarker !== 'function') return;
         const line = buffer.viewportY;
+        // The oldest retained row cannot be held: the next trimmed line takes it
+        // away, so anchoring there would report eviction for a move the app made.
+        if (line <= 0) return;
         const offset = line - (buffer.baseY + buffer.cursorY);
         if (!Number.isFinite(offset)) return;
         const marker = term.registerMarker(offset);
@@ -11185,17 +11501,19 @@ export class TabManager {
             return;
         }
         if (anchor.marker.isDisposed || anchor.marker.line < 0) {
-            // Clearing first keeps the notice to one per expired anchor: the
-            // next batch has nothing to restore.
+            // The reading row left the buffer. Clearing first keeps the notice to
+            // one per reading episode (the next batch has nothing to restore) and
+            // the reader stays in read mode at the oldest retained row instead of
+            // being dropped onto live output.
             this._clearReaderAnchor(tabInfo);
             this._restoringReaderAnchor = true;
             try {
-                term.scrollToBottom();
+                term.scrollToTop();
             } finally {
                 this._restoringReaderAnchor = false;
             }
             this.app?.showToast?.(
-                'Reading position expired; jumped to live output.',
+                'Reading position evicted; showing the oldest retained output.',
                 { type: 'info' },
             );
             return;
@@ -11241,6 +11559,12 @@ export class TabManager {
     _spamScroll(tabInfo, isAtBottom, scrollY = null) {
         if (!tabInfo || tabInfo.isDead) return;
 
+        // Following live output and holding a reading row are mutually
+        // exclusive; the marker would otherwise win on the next parsed batch.
+        if (isAtBottom && tabInfo.userFollowBottom !== false) {
+            this._clearReaderAnchor(tabInfo);
+        }
+
         this._resyncViewportScroll(tabInfo);
 
         clearInterval(tabInfo.spamInterval);
@@ -11281,6 +11605,151 @@ export class TabManager {
 
     _spamScrollToBottom(tabInfo) {
         this._spamScroll(tabInfo, true);
+    }
+
+    // A client-side repaint of this pane's own buffer. The buffer change it
+    // emits must not be read as the app leaving its full-screen TUI.
+    _resetPaneBuffer(tabInfo) {
+        tabInfo.writeRuns = [];
+        tabInfo._ownBufferReset = true;
+        try {
+            resetTerminalState(tabInfo.term);
+        } finally {
+            tabInfo._ownBufferReset = false;
+        }
+    }
+
+    // The one user action that resumes follow: an accepted submit drops the
+    // reading target and puts the view back on live output. Typing does not
+    // call this; neither does anything the pane does to itself.
+    // A replacement attach failed to certify a frontier. Keep the coherent
+    // view only when the reader is actually holding it: a pane following live
+    // output gains nothing from retention, and the caller's re-attach is the
+    // cheaper repair.
+    _retainReaderView(tabInfo, healed) {
+        if (healed?.kind !== 'failed') return false;
+        if (!tabInfo.term || tabInfo.isDead || tabInfo.finalizing) return false;
+        const holding = tabInfo.userFollowBottom === false ||
+            Boolean(tabInfo.term._phiReaderAnchor);
+        if (!holding) return false;
+        if ((tabInfo.term.buffer?.active?.baseY ?? 0) <= 0) return false;
+        tabInfo._resyncNeeded = true;
+        // Validate and drop later frames instead of accumulating them: a held
+        // queue has no bound, and any queued frame would land in the retained
+        // parser on release.
+        tabInfo.ws?.discard?.();
+        this._updateResyncAffordance(tabInfo);
+        this.app?.showToast?.(
+            'Live output is paused while you read. Resync when you are ready.',
+            { type: 'info', title: 'Terminal' },
+        );
+        return true;
+    }
+
+    _clearResyncNeeded(tabInfo) {
+        if (!tabInfo._resyncNeeded) return;
+        tabInfo._resyncNeeded = false;
+        this._updateResyncAffordance(tabInfo);
+        tabInfo._inputRestriction = '';
+        this._renderInputRestriction();
+    }
+
+    // True when the caller must not send the bytes. Printable text still
+    // reaches the PTY once, as before; a paste is held in the draft instead,
+    // and Enter is the resync gesture.
+    _holdFrozenInput(tabInfo, data) {
+        if (data === '\r' || data === '\n') {
+            this._resyncRetainedView(tabInfo);
+            return true;
+        }
+        const paste = /^\x1b\[200~([\s\S]*)\x1b\[201~$/.exec(data);
+        if (paste) {
+            const area = this.inputTextArea;
+            if (area) {
+                const text = paste[1].replace(/\r\n?/g, '\n');
+                area.value += text;
+                this.adjustInputHeight();
+                this.saveActiveDraft();
+            }
+            this._setInputRestriction(
+                'Paste held until live output is resynced.',
+            );
+            return true;
+        }
+        // Mouse reports and application-mode sequences are screen state, not
+        // text. Never queue them against a view that is held.
+        if (/^\x1b/.test(data) || /[\x00-\x08\x0b-\x1f\x7f]/.test(data)) return true;
+        // Bracketed mode can be off, in which case a paste arrives as plain
+        // text. Newlines are the only signal left, and dropping them would
+        // lose the reader's text, so stage it instead.
+        if (data.includes('\n')) {
+            const area = this.inputTextArea;
+            if (area) {
+                area.value += data;
+                this.adjustInputHeight();
+                this.saveActiveDraft();
+            }
+            this._setInputRestriction(
+                'Paste held until live output is resynced.',
+            );
+            return true;
+        }
+        return false;
+    }
+
+    _setInputRestriction(text) {
+        // Per pane: recovering a background tab must not clear the message an
+        // active restricted tab is showing, and a tab switch must show the
+        // restriction that this pane actually has.
+        const tab = this.getActiveTab?.();
+        if (tab) tab._inputRestriction = text;
+        this._renderInputRestriction();
+    }
+
+    _renderInputRestriction() {
+        const line = document.getElementById('input-restriction');
+        if (!line) return;
+        const tab = this.getActiveTab?.();
+        const text = tab?._inputRestriction ?? '';
+        if (line.textContent !== text) line.textContent = text;
+        line.classList.toggle('hidden', !text);
+    }
+
+    // The one explicit recovery action for a retained view. The existing close
+    // path asks the server for a fresh atomic attach; nothing else repairs it.
+    _resyncRetainedView(tabInfo) {
+        if (!tabInfo || tabInfo.isDead) return;
+        // Restrictions stay until a replacement frontier is parsed: asking for
+        // the resync is not the same as having one.
+        tabInfo.userFollowBottom = true;
+        this._clearReaderAnchor(tabInfo);
+        // Prefer a resume: the attach now carries a certified replay window, so
+        // a pane whose own frontier is still inside it reattaches from there
+        // and keeps its view. A pane outside the window falls back to the
+        // checkpoint, which is the only remaining repair.
+        tabInfo._forceStateRefresh = false;
+        try {
+            tabInfo.ws?.ws?.close();
+        } catch (_e) {}
+    }
+
+    _updateResyncAffordance(tabInfo) {
+        const button = tabInfo.scrollToBottomBtn;
+        if (!button) return;
+        const needed = Boolean(tabInfo._resyncNeeded);
+        const title = needed ? 'Resync live output' : 'Jump to bottom';
+        if (button.title !== title) button.title = title;
+        if (button.getAttribute('aria-label') !== title) {
+            button.setAttribute('aria-label', title);
+        }
+        button.classList.toggle('hidden', !needed);
+    }
+
+    _resumeFollowOnSubmit(tabInfo) {
+        if (!tabInfo || tabInfo.isDead) return;
+        tabInfo.userFollowBottom = true;
+        this._clearReaderAnchor(tabInfo);
+        this._spamScrollToBottom(tabInfo);
     }
 
     copyTextRobustly(text, silent = false) {
@@ -11556,11 +12025,19 @@ export class TabManager {
 
             // Capture scroll state PRE-FIT
             const buffer = activeTab.term.buffer.active;
+            // A reader's position is a row of content, not a buffer index: the
+            // fit reflows the buffer, so a pre-fit index points at a different
+            // row afterwards. The marker moves with the row, so it owns the
+            // restore and the numeric capture below is skipped.
+            const readerAnchor = activeTab.term._phiReaderAnchor;
             let isAtBottom;
             let scrollY;
 
             // If we are resizing continuously, cache these stable coordinates on the tab
-            if (this.isResizing) {
+            if (readerAnchor) {
+                isAtBottom = false;
+                scrollY = null;
+            } else if (this.isResizing) {
                 isAtBottom =
                     activeTab.isAtBottom === undefined
                         ? buffer.viewportY >= buffer.baseY
@@ -11592,6 +12069,22 @@ export class TabManager {
                 activeTab.term.rows,
                 buffer.length,
             );
+
+            // Reflow moves the anchored row; put the viewport back on it. A
+            // marker the reflow disposed falls through to the next batch's
+            // expiry branch, which reports it once.
+            if (
+                readerAnchor &&
+                !readerAnchor.marker.isDisposed &&
+                readerAnchor.marker.line >= 0
+            ) {
+                this._restoringReaderAnchor = true;
+                try {
+                    activeTab.term.scrollToLine(readerAnchor.marker.line);
+                } finally {
+                    this._restoringReaderAnchor = false;
+                }
+            }
 
             // Restore scroll state POST-FIT using the unified helper to synchronise viewport
             this._spamScroll(activeTab, isAtBottom, scrollY);
@@ -11858,6 +12351,7 @@ export class TabManager {
                         btn.addEventListener('click', () => {
                             this.sendRawInput(p.value, {
                                 focusInputOnMobile: false,
+                                submit: true,
                             });
                         });
                         compactChips.push(btn);
@@ -12720,7 +13214,7 @@ export class TabManager {
                         model,
                         sendFn: (id, payload) => {
                             const tab = this.app.tabManager?.tabs?.get?.(id);
-                            return tab ? this.sendToTab(tab, payload) : false;
+                            return tab ? this.sendToTab(tab, payload, { submit: true }) : false;
                         },
                         isAliveFn: (id) => {
                             const tab = this.app.tabManager?.tabs?.get?.(id);
@@ -12737,13 +13231,13 @@ export class TabManager {
                     // Pinned to the click-time tab (captured at render, line 4376)
                     // so the puppet sequence can't be redirected by a tab switch
                     // mid-chain. Timing unchanged from prior behavior.
-                    this.sendToTab(activeTab, '/models');
+                    this.sendToTab(activeTab, '/models', { submit: true });
                     setTimeout(() => {
-                        this.sendToTab(activeTab, '\r');
+                        this.sendToTab(activeTab, '\r', { submit: true });
                         setTimeout(() => {
-                            this.sendToTab(activeTab, model);
+                            this.sendToTab(activeTab, model, { submit: true });
                             setTimeout(() => {
-                                this.sendToTab(activeTab, '\r');
+                                this.sendToTab(activeTab, '\r', { submit: true });
                             }, 350);
                         }, 350);
                     }, 350);
@@ -12769,11 +13263,13 @@ export class TabManager {
                     // bundles the keys into one event, so the dropdown never
                     // opens, the Esc has nothing to dismiss, and the Enter
                     // lands in whatever state pi-tui happened to be in.
-                    this.sendToTab(activeTab, `/model ${model}`);
+                    this.sendToTab(activeTab, `/model ${model}`, {
+                        submit: true,
+                    });
                     setTimeout(() => {
                         this.sendToTab(activeTab, '\x1b');
                         setTimeout(() => {
-                            this.sendToTab(activeTab, '\r');
+                            this.sendToTab(activeTab, '\r', { submit: true });
                         }, PI_MODEL_STEP_MS);
                     }, PI_MODEL_STEP_MS);
                 } else if (backend === 'claude') {
@@ -12781,9 +13277,11 @@ export class TabManager {
                     // command resolves. The second Enter acknowledges it.
                     // Pin it to the clicked tab just like the other delayed
                     // backend-specific model flows.
-                    this.sendToTab(activeTab, `/model ${model}\r`);
+                    this.sendToTab(activeTab, `/model ${model}\r`, {
+                        submit: true,
+                    });
                     setTimeout(() => {
-                        this.sendToTab(activeTab, '\r');
+                        this.sendToTab(activeTab, '\r', { submit: true });
                     }, 500);
                 } else if (
                     backend === 'bash' ||
@@ -12792,7 +13290,7 @@ export class TabManager {
                 ) {
                     // Preserve the legacy shell/unknown-tab behavior;
                     // never guess a command for a registered custom backend.
-                    this.sendRawInput(`/model ${model}\r`);
+                    this.sendRawInput(`/model ${model}\r`, { submit: true });
                 }
                 dropup.classList.add('hidden');
             });
@@ -13114,7 +13612,10 @@ export class TabManager {
                     e.stopPropagation();
                     const activeTab = this.getActiveTab();
                     if (!activeTab || activeTab.coder === 'pi-rpc') return;
-                    this.sendRawInput(k.value, { focusInputOnMobile: false });
+                    this.sendRawInput(k.value, {
+                        focusInputOnMobile: false,
+                        submit: k.value === '\r',
+                    });
                     btn.classList.add('key-pressed');
                     setTimeout(() => btn.classList.remove('key-pressed'), 120);
                 });

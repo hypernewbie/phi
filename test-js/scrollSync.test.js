@@ -113,7 +113,8 @@ function stubXtermGlobals() {
     // createTab constructs it; the returned object literal wins over the
     // default `this` under constructor semantics.
     // biome-ignore lint/complexity/useArrowFunction: arrows cannot be constructed; createTab calls new window.Terminal(...)
-    vi.stubGlobal('Terminal', function () {
+    vi.stubGlobal('Terminal', function (options) {
+        globalThis.__lastTerminalOptions = options;
         // Mirrors real xterm.js DOM shape: term.element with a
         // .xterm-viewport child, which is what both listeners query.
         const viewportEl = document.createElement('div');
@@ -123,9 +124,20 @@ function stubXtermGlobals() {
         const dataListeners = [];
         const binaryListeners = [];
         const scrollListeners = [];
+        const bufferChangeListeners = [];
+        const oscHandlers = new Map();
+        // xterm flags user-originated data through coreService.onUserInput
+        // before onData; the fake keeps that hook so tests can emit as a user.
+        let userInputHook = null;
         const write = vi.fn((_data, cb) => cb?.());
         return {
             rows: 24,
+            emitUserData: (data) => {
+                userInputHook?.();
+                dataListeners.forEach((fn) => {
+                    fn(data);
+                });
+            },
             emitScroll: () =>
                 scrollListeners.forEach((fn) => {
                     fn();
@@ -138,8 +150,25 @@ function stubXtermGlobals() {
                 binaryListeners.forEach((fn) => {
                     fn(data);
                 }),
+            emitOsc: (ident, data) => oscHandlers.get(ident)?.(data),
+            parser: {
+                registerOscHandler: (ident, fn) => {
+                    oscHandlers.set(ident, fn);
+                    return { dispose() {} };
+                },
+            },
             element: rootEl,
-            buffer: { active: { type: 'normal', viewportY: 100, baseY: 100 } },
+            buffer: {
+                active: { type: 'normal', viewportY: 100, baseY: 100 },
+                onBufferChange: (fn) => {
+                    bufferChangeListeners.push(fn);
+                },
+            },
+            emitBufferChange: (type) => {
+                bufferChangeListeners.forEach((fn) => {
+                    fn({ type });
+                });
+            },
             // Real xterm.js renders term.element into the container passed
             // to open() — without this, .xterm-viewport is never actually a
             // descendant of termContainer, and the capture-phase listener
@@ -159,7 +188,14 @@ function stubXtermGlobals() {
             nativeWrite: write,
             scrollToBottom: vi.fn(),
             scrollLines: vi.fn(),
-            _core: { viewport: { syncScrollArea: vi.fn() } },
+            _core: {
+                viewport: { syncScrollArea: vi.fn() },
+                coreService: {
+                    onUserInput: (fn) => {
+                        userInputHook = fn;
+                    },
+                },
+            },
         };
     });
 }
@@ -207,6 +243,7 @@ function mountRealTab({ coder = 'bash', opencodeMode = null } = {}) {
     // runs on its own. Production opens on ATTACH_HEAD / first legacy
     // frame / the 300ms fallback; tests force the same post-open path.
     tm._openTermAndViewport(tab);
+    tab.__tm = tm;
     return tab;
 }
 
@@ -607,5 +644,178 @@ describe('source contracts', () => {
             'vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 1',
         );
         expect(src).not.toContain('baseY - 1');
+    });
+});
+
+// Enter-only follow (decision: submit resumes follow, typing does not).
+describe('only an accepted submit resumes follow', () => {
+    it('disables xterm’s own follow-on-any-data', () => {
+        mountRealTab();
+        expect(globalThis.__lastTerminalOptions?.scrollOnUserInput).toBe(false);
+    });
+
+    it('a send without submit authority leaves the reader alone', () => {
+        const tm = Object.create(TabManager.prototype);
+        const tab = { paneId: 'p9', isDead: false, userFollowBottom: false };
+        tm.sendInput = vi.fn(() => true);
+        tm._spamScrollToBottom = vi.fn();
+        expect(tm.sendToTab(tab, 'typed text')).toBe(true);
+        expect(tm._spamScrollToBottom).not.toHaveBeenCalled();
+        expect(tab.userFollowBottom).toBe(false);
+    });
+
+    it('an accepted submit resumes follow', () => {
+        const tm = Object.create(TabManager.prototype);
+        const tab = { paneId: 'p9', isDead: false, userFollowBottom: false };
+        tm.sendInput = vi.fn(() => true);
+        tm._spamScrollToBottom = vi.fn();
+        tm.sendToTab(tab, 'prompt\r', { submit: true });
+        expect(tm._spamScrollToBottom).toHaveBeenCalledTimes(1);
+        expect(tab.userFollowBottom).toBe(true);
+    });
+
+    it('a refused send resumes no follow', () => {
+        const tm = Object.create(TabManager.prototype);
+        const tab = { paneId: 'p9', isDead: false, userFollowBottom: false };
+        tm.sendInput = vi.fn(() => false);
+        tm._spamScrollToBottom = vi.fn();
+        tm.sendToTab(tab, 'prompt\r', { submit: true });
+        expect(tm._spamScrollToBottom).not.toHaveBeenCalled();
+    });
+
+    it('forwarded Enter resumes follow, forwarded navigation keys do not', () => {
+        const tm = Object.create(TabManager.prototype);
+        const tab = { coder: 'bash', paneId: 'p9', isDead: false };
+        tm.sendToTab = vi.fn(() => true);
+        const enter = { key: 'Enter', preventDefault: vi.fn() };
+        tm._forwardKeyToPty(enter, tab);
+        expect(tm.sendToTab).toHaveBeenLastCalledWith(tab, '\r', {
+            submit: true,
+        });
+        for (const key of ['ArrowUp', 'PageUp', 'Home', 'Escape', 'Tab']) {
+            tm._forwardKeyToPty({ key, preventDefault: vi.fn() }, tab);
+            expect(tm.sendToTab).toHaveBeenLastCalledWith(
+                tab,
+                expect.any(String),
+            );
+        }
+    });
+
+    it('direct-mode Enter follows, printable input and paste newlines do not', () => {
+        const tab = mountRealTab({ coder: 'bash' });
+        const tm = tab.__tm;
+        tab.directMode = true;
+        tm.sendInput = vi.fn(() => true);
+        tm._spamScrollToBottom = vi.fn();
+        tab.term.emitUserData('a');
+        expect(tm._spamScrollToBottom).not.toHaveBeenCalled();
+        tab.term.emitUserData('pasted\r\nlines');
+        expect(tm._spamScrollToBottom).not.toHaveBeenCalled();
+        tab.term.emitUserData('\r');
+        expect(tm._spamScrollToBottom).toHaveBeenCalledTimes(1);
+        expect(tab.userFollowBottom).toBe(true);
+    });
+
+    it('a newer gesture cancels the deferred slash-command follow but not its send', () => {
+        vi.useFakeTimers();
+        try {
+            const tm = Object.create(TabManager.prototype);
+            const tab = {
+                coder: 'opencode',
+                paneId: 'p9',
+                isDead: false,
+                userFollowBottom: true,
+            };
+            tm.sendToTab = vi.fn(() => true);
+            tm._focusAfterSlashCommand = vi.fn();
+            tm.isOpenCodeMini = () => false;
+            tm.sendSlashCommand(tab, '/status');
+            expect(tm.sendToTab.mock.calls[0][2]).toEqual({ submit: true });
+            // The reader scrolls up inside the 200 ms window.
+            tm._cancelScrollFollowForUserScroll(tab);
+            vi.advanceTimersByTime(200);
+            expect(tm.sendToTab).toHaveBeenCalledTimes(2);
+            expect(tm.sendToTab.mock.calls[1][1]).toBe('\r');
+            expect(tm.sendToTab.mock.calls[1][2]).toEqual({ submit: false });
+            expect(tab.userFollowBottom).toBe(false);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
+// The alternate-screen rule must not fire for a pane repainting its own
+// buffer: a history load swaps the buffer and then places the view itself.
+describe('alternate-screen exit resumes follow only for the app', () => {
+    it('the app leaving its full-screen TUI lands at the bottom', () => {
+        const tab = mountRealTab({ coder: 'bash' });
+        const tm = tab.__tm;
+        tm._spamScrollToBottom = vi.fn();
+        tab.userFollowBottom = false;
+        tab.term.emitBufferChange('normal');
+        expect(tm._spamScrollToBottom).toHaveBeenCalledTimes(1);
+        expect(tab.userFollowBottom).toBe(true);
+    });
+
+    it('a pane rewriting its own buffer leaves the view to the loader', () => {
+        const tab = mountRealTab({ coder: 'bash' });
+        const tm = tab.__tm;
+        tm._spamScrollToBottom = vi.fn();
+        tab._ownBufferReset = true;
+        tab.userFollowBottom = false;
+        tab.term.emitBufferChange('normal');
+        tab._ownBufferReset = false;
+        expect(tm._spamScrollToBottom).not.toHaveBeenCalled();
+        expect(tab.userFollowBottom).toBe(false);
+    });
+
+    it('a history load in progress leaves the view to the loader', () => {
+        const tab = mountRealTab({ coder: 'bash' });
+        const tm = tab.__tm;
+        tm._spamScrollToBottom = vi.fn();
+        for (const flag of ['_historyParsing', '_historyBrowsing']) {
+            tab.userFollowBottom = false;
+            tab[flag] = true;
+            tab.term.emitBufferChange('normal');
+            tab[flag] = false;
+            expect(tm._spamScrollToBottom).not.toHaveBeenCalled();
+            expect(tab.userFollowBottom).toBe(false);
+        }
+    });
+});
+
+// A replayed window is history: painting it must not overwrite the clipboard.
+describe('replay provenance for OSC 52', () => {
+    const clip = (data) => `c;${Buffer.from(data, 'utf8').toString('base64')}`;
+
+    it('a live copy reaches the clipboard', () => {
+        const tab = mountRealTab({ coder: 'bash' });
+        const tm = tab.__tm;
+        tm._agentClipboardCopy = vi.fn();
+        tab.term.emitOsc(52, clip('live copy'));
+        expect(tm._agentClipboardCopy).toHaveBeenCalledWith('live copy');
+    });
+
+    it('a copy parsed while a history load owns the parser is dropped', () => {
+        const tab = mountRealTab({ coder: 'bash' });
+        const tm = tab.__tm;
+        tm._agentClipboardCopy = vi.fn();
+        tab._historyParsing = true;
+        tab.term.emitOsc(52, clip('archived copy'));
+        tab._historyParsing = false;
+        expect(tm._agentClipboardCopy).not.toHaveBeenCalled();
+    });
+
+    it('a copy parsed against a browsed window is dropped', () => {
+        const tab = mountRealTab({ coder: 'bash' });
+        const tm = tab.__tm;
+        tm._agentClipboardCopy = vi.fn();
+        tab._historyBrowsing = true;
+        tab.term.emitOsc(52, clip('archived copy'));
+        expect(tm._agentClipboardCopy).not.toHaveBeenCalled();
+        // Leaving the archive restores genuine live copies.
+        tab._historyBrowsing = false;
+        tab.term.emitOsc(52, clip('live again'));
+        expect(tm._agentClipboardCopy).toHaveBeenCalledWith('live again');
     });
 });

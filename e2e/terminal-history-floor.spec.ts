@@ -243,6 +243,11 @@ for (const width of [1280, 560]) {
         await historyButton.press('Enter');
         await expect.poll(() => view(page, pane)).toContain('FLOOR OLD');
         await expect(historyButton).toBeEnabled();
+        // The baseline must be the settled view. A late panel fit can still be
+        // reflowing the freshly replayed window when the load reports done, and
+        // a baseline sampled mid-reflow turns an unrelated layout settle into a
+        // failure of the "the view does not move" assertion.
+        await page.waitForTimeout(300);
         const historicalView = await view(page, pane);
         const oldFloor = await retainedFloor(request, pane);
 

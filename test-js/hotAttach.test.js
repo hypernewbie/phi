@@ -791,3 +791,120 @@ describe('checkpoint upload', () => {
         expect(fetchMock).not.toHaveBeenCalled();
     });
 });
+
+describe('a held live queue is bounded', () => {
+    it('reconnects when held output exceeds the cap instead of growing without limit', () => {
+        const data = vi.fn();
+        const pty = new PTYWebSocket('p', data, null, null, null, {});
+        const ws = pty.ws;
+        ws.emitAttachHead({ epoch: 7, oldest: 0, head: 0 });
+        const close = vi.spyOn(ws, 'close');
+        pty.hold();
+
+        // 2 MiB cap at 256 spans: 300 spans of 8 KiB must trip one of them.
+        const chunk = new Uint8Array(8 * 1024).fill(65);
+        let start = 0;
+        for (let i = 0; i < 300; i++) {
+            ws.emitHot(start, chunk);
+            start += chunk.byteLength;
+        }
+
+        expect(close).toHaveBeenCalled();
+        expect(data).not.toHaveBeenCalled();
+    });
+
+    it('discarding stores nothing and reports no gap', () => {
+        const data = vi.fn();
+        const onGap = vi.fn();
+        const pty = new PTYWebSocket('p', data, null, null, null, { onGap });
+        const ws = pty.ws;
+        ws.emitAttachHead({ epoch: 7, oldest: 0, head: 0 });
+        pty.discard();
+
+        // A skipped range would be a gap on a live parser; a retained view
+        // must absorb it without queuing, decoding, or asking for a patch.
+        ws.emitHot(4096, 'later');
+        ws.emitHot(4100, 'more');
+
+        expect(onGap).not.toHaveBeenCalled();
+        expect(data).not.toHaveBeenCalled();
+        expect(pty.held).toHaveLength(0);
+    });
+});
+
+// Slice 3d capture: a reset keeps the bytes it already received, so the
+// replay only has to cover the gap between the checkpoint and the fence.
+describe('a capture window resumes at a fixed fence', () => {
+    const open = () => {
+        const data = vi.fn();
+        const pty = new PTYWebSocket('p', data, null, null, null, {});
+        pty.ws.emitAttachHead({ epoch: 7, oldest: 0, head: 0 });
+        return { pty, ws: pty.ws, data };
+    };
+    const decode = (bytes) => new TextDecoder().decode(bytes);
+
+    it('returns the contiguous captured suffix from the fence', () => {
+        const { pty, ws } = open();
+        expect(pty.beginCapture(0)).toBe(true);
+        ws.emitHot(0, 'abc');
+        ws.emitHot(3, 'def');
+        expect(pty.receivedThrough).toBe(6);
+        const captured = pty.finishCapture(0);
+        expect(captured.from).toBe(0);
+        expect(captured.through).toBe(6);
+        expect(decode(captured.bytes)).toBe('abcdef');
+        expect(pty.discarding).toBe(false);
+    });
+
+    it('trims bytes the reset already covered and keeps the tail', () => {
+        const { pty, ws } = open();
+        pty.beginCapture(0);
+        ws.emitHot(0, 'abc');
+        ws.emitHot(3, 'def');
+        const captured = pty.finishCapture(3);
+        expect(captured.through).toBe(6);
+        expect(decode(captured.bytes)).toBe('def');
+    });
+
+    it('refuses a window with a hole instead of delivering a gap', () => {
+        const { pty, ws } = open();
+        pty.beginCapture(0);
+        ws.emitHot(0, 'abc');
+        ws.emitHot(10, 'later');
+        expect(pty.finishCapture(0)).toBe(null);
+        expect(pty.discarding).toBe(true);
+    });
+
+    it('abandons an overflowing window instead of growing without bound', () => {
+        const { pty, ws } = open();
+        pty.beginCapture(0);
+        const chunk = new Uint8Array(8 * 1024).fill(65);
+        let start = 0;
+        for (let i = 0; i < 300; i++) {
+            ws.emitHot(start, chunk);
+            start += chunk.byteLength;
+        }
+        expect(pty.capturedBytes).toBe(0);
+        expect(pty.finishCapture(0)).toBe(null);
+        expect(pty.discarding).toBe(true);
+    });
+
+    it('commits an empty suffix when nothing arrived beyond the fence', () => {
+        const { pty, ws, data } = open();
+        pty.beginCapture(0);
+        const captured = pty.finishCapture(0);
+        expect(captured.through).toBe(0);
+        expect(captured.bytes.byteLength).toBe(0);
+        pty.release();
+        ws.emitHot(0, 'after');
+        expect(data).toHaveBeenCalledTimes(1);
+    });
+
+    it('abortCapture drops the window and returns to discard', () => {
+        const { pty } = open();
+        pty.beginCapture(0);
+        pty.abortCapture();
+        expect(pty.finishCapture(0)).toBe(null);
+        expect(pty.capturedBytes).toBe(0);
+    });
+});

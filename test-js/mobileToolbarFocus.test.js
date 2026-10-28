@@ -86,9 +86,10 @@ it('mobile shortcut chips and slash dropup selections suppress input focus', () 
         '.preset-btn:not(.model-trigger-btn):not(.slash-trigger-btn)',
     );
     utility.click();
-    expect(manager.sendRawInput).toHaveBeenCalledWith(expect.any(String), {
-        focusInputOnMobile: false,
-    });
+    expect(manager.sendRawInput).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ focusInputOnMobile: false }),
+    );
     expect(document.activeElement).not.toBe(input);
 
     const slashDropup = document.createElement('div');
@@ -97,9 +98,10 @@ it('mobile shortcut chips and slash dropup selections suppress input focus', () 
     manager.renderSlashDropup([{ name: 'Exit', value: '\x1b' }]);
     input.focus();
     slashDropup.querySelector('button.dropup-model-btn').click();
-    expect(manager.sendRawInput).toHaveBeenLastCalledWith('\x1b', {
-        focusInputOnMobile: false,
-    });
+    expect(manager.sendRawInput).toHaveBeenLastCalledWith(
+        '\x1b',
+        expect.objectContaining({ focusInputOnMobile: false }),
+    );
     expect(document.activeElement).not.toBe(input);
     expect(tab.coder).toBe('bash');
 });

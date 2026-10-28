@@ -112,6 +112,25 @@ function topMarker(term) {
     return null;
 }
 
+// The fixture line that owns a buffer row, joined through its wrapped
+// continuations. This is the content identity a reflow has to preserve; a row
+// index or a viewport offset is not one.
+function logicalId(term, line) {
+    const buffer = term.buffer.active;
+    let start = line;
+    while (start > 0 && buffer.getLine(start)?.isWrapped) start--;
+    let text = '';
+    for (let i = start; i < buffer.length; i++) {
+        const row = buffer.getLine(i);
+        if (!row) break;
+        if (i > start && !row.isWrapped) break;
+        text += row.translateToString(true);
+        const match = /WHEEL (\d{6})/.exec(text);
+        if (match) return Number(match[1]);
+    }
+    return null;
+}
+
 function state(h) {
     const buffer = h.tab.term.buffer.active;
     return {
@@ -152,7 +171,6 @@ function wheel(h, rows) {
 // the subscription registrations stay covered by the browser spec.
 function installAnchorWiring(h) {
     h.tab.term.onScroll(() => h.manager._readerAnchorScroll(h.tab));
-    h.tab.term.onResize(() => h.manager._clearReaderAnchor(h.tab));
 }
 
 // Deliver output frames without draining: this is the backlog that makes the
@@ -261,6 +279,11 @@ function check(op, before, after, noticesBefore, noticesAfter) {
     // Data ops. At the tail, following new output is the point; only a reader
     // who scrolled up has a position that must not move.
     if (before.atBottom) return null;
+    // An evicted reading row is clamped to the oldest retained row: announced
+    // once, read mode kept. From there every trimmed line replaces what the
+    // reader sees, so the content identity check cannot apply.
+    if (after.viewportY === 0 && noticesAfter > noticesBefore) return null;
+    if (before.viewportY === 0 && after.viewportY === 0) return null;
     if (after.atBottom) {
         // Only legal when the reading position left the buffer during THIS op,
         // and it must be announced rather than silently shown as a jump.
@@ -337,7 +360,7 @@ describe('reader anchor unit cases', () => {
         }
     });
 
-    it('announces an expired anchor instead of jumping silently', async () => {
+    it('clamps an evicted reader to the oldest row and says so once', async () => {
         const model = serverModel(1 << 14);
         const h = replayHarness(encode(''));
         const showToast = vi.fn();
@@ -352,8 +375,18 @@ describe('reader anchor unit cases', () => {
             for (let i = 0; i < 4; i++) emit(6000);
             await h.settle();
             const now = state(h);
-            expect(now.atBottom).toBe(true);
+            // Read mode survives the eviction: the view sits at the oldest
+            // retained row, not at live output.
+            expect(now.atBottom).toBe(false);
+            expect(now.viewportY).toBe(0);
             expect(showToast).toHaveBeenCalledTimes(1);
+            expect(showToast.mock.calls[0][0]).toMatch(/evicted/);
+            // One notice per reading episode: later output does not re-notify or
+            // pull the reader to the bottom.
+            emit(600);
+            await h.settle();
+            expect(showToast).toHaveBeenCalledTimes(1);
+            expect(state(h).atBottom).toBe(false);
         } finally {
             h.dispose();
         }
@@ -473,7 +506,10 @@ describe('reader anchor unit cases', () => {
 
             for (let i = 0; i < 3; i++) emit(6000);
             await h.settle();
-            expect(state(h).atBottom).toBe(true);
+            // Read mode survives the eviction: clamped to the oldest retained
+            // row, not dropped onto live output.
+            expect(state(h).atBottom).toBe(false);
+            expect(state(h).viewportY).toBe(0);
             expect(showToast).toHaveBeenCalledTimes(1);
         } finally {
             h.dispose();
@@ -501,32 +537,42 @@ describe('reader anchor unit cases', () => {
         }
     });
 
-    it('a resize drops the anchor instead of reporting expiry', async () => {
+    it('a resize keeps the reading row through the reflow', async () => {
         const model = serverModel(1 << 24);
         const h = replayHarness(encode(''));
         const showToast = vi.fn();
         h.manager.app = { showToast };
         installFetch(model);
         try {
-            const emit = await paint(h, model, 15000);
+            // 2000 rows: narrowing doubles every row, which stays inside the
+            // 10000-row scrollback, so the reflow cannot evict the target.
+            const emit = await paint(h, model, 2000);
             installAnchorWiring(h);
             wheel(h, 40);
             await h.settle();
-            expect(h.tab.term._phiReaderAnchor).toBeTruthy();
-            // Reflow can dispose the anchored row's marker while its text stays
-            // in the buffer, so this is a move the app caused, not expiry.
-            h.tab.term.resize(120, 30);
+            const anchor = h.tab.term._phiReaderAnchor;
+            expect(anchor).toBeTruthy();
+            const reading = logicalId(h.tab.term, anchor.marker.line);
+            expect(reading).not.toBeNull();
+            // A narrow grid wraps every fixture line, so the anchored row moves.
+            // The marker moves with its content, which is why the fit can restore
+            // the row instead of dropping the reader to live output.
+            h.tab.term.resize(40, 30);
             await h.settle();
-            expect(h.tab.term._phiReaderAnchor ?? null).toBe(null);
+            expect(h.tab.term._phiReaderAnchor).toBe(anchor);
+            expect(anchor.marker.isDisposed).toBe(false);
+            h.tab.term.scrollToLine(anchor.marker.line);
+            expect(logicalId(h.tab.term, anchor.marker.line)).toBe(reading);
             emit(400);
             await h.settle();
             expect(showToast).not.toHaveBeenCalled();
+            expect(logicalId(h.tab.term, anchor.marker.line)).toBe(reading);
         } finally {
             h.dispose();
         }
     });
 
-    it('a scroll after a hidden expiry anchors the row it lands on', async () => {
+    it('a scroll after a hidden eviction anchors the row it lands on', async () => {
         const model = serverModel(1 << 14);
         const h = replayHarness(encode(''));
         const showToast = vi.fn();

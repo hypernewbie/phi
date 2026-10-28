@@ -45,3 +45,6 @@ native/libghostty-vt/*/*.dll
 
 # darwin phic archives downloaded for goreleaser (release CI only)
 /prebuilt/
+
+# Local verification scratch (server + HOME under .tmp-e2e)
+.tmp-e2e/

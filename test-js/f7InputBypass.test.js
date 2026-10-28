@@ -27,6 +27,7 @@ function ctx(activeTab) {
     c.getActiveTab = vi.fn(() => activeTab);
     c.adjustInputHeight = vi.fn();
     c._spamScrollToBottom = vi.fn();
+    c._resumeFollowOnSubmit = vi.fn();
     c._showReconnectOverlay = vi.fn();
     c.focusActiveTerminal = vi.fn();
     // sendStagedInput now reads stagedAttachments and the attachment
@@ -111,7 +112,20 @@ describe('sendRawInput on a live tab', () => {
 
         expect(tab.ws.sendInput).toHaveBeenCalledWith('\x03');
         expect(c.app.showToast).not.toHaveBeenCalled();
-        expect(c._spamScrollToBottom).toHaveBeenCalledWith(tab);
+        // Cancel is not a submit: it must not drag a scrolled-up reader along.
+        expect(c._resumeFollowOnSubmit).not.toHaveBeenCalled();
+    });
+
+    it('follows only when the caller marks the send as a submission', () => {
+        const tab = liveTab();
+        const c = ctx(tab);
+
+        TabManager.prototype.sendRawInput.call(c, '/models\r', {
+            submit: true,
+        });
+
+        expect(tab.ws.sendInput).toHaveBeenCalledWith('/models\r');
+        expect(c._resumeFollowOnSubmit).toHaveBeenCalledWith(tab);
     });
 });
 
