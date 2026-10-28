@@ -2480,6 +2480,19 @@ export class TabManager {
             }
             const visible = tabInfo.term.buffer?.active;
             const readingLocalHistory = !tabInfo._forceStateRefresh && visible?.type === 'normal' && visible.viewportY < visible.baseY;
+            // The attach also carries a certified replay window. When this
+            // parser already sits inside it, resume from the local frontier:
+            // the recording owns every byte from there to the head, so a
+            // repaint would throw away a coherent view for nothing.
+            const resumeFrom = tabInfo.drainedSeq ?? 0;
+            const windowResume = info.replayFrom !== undefined &&
+                !tabInfo._forceStateRefresh &&
+                resumeFrom >= info.replayFrom &&
+                resumeFrom <= info.head;
+            if (windowResume) {
+                this._bootstrappedRelease(tabInfo, pty, resumeFrom, info.head);
+                return;
+            }
             if (info.ckpt?.bytes && !readingLocalHistory) {
                 if (info.head < (tabInfo.drainedSeq ?? 0)) {
                     try { pty.ws?.close(); } catch (_e) {}
