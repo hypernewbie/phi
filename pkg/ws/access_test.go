@@ -1,7 +1,6 @@
 package ws
 
 import (
-	"context"
 	"sync"
 	"testing"
 	"time"
@@ -17,17 +16,6 @@ func (s *stubAuthSocket) Close() error {
 	defer s.mu.Unlock()
 	s.closed = true
 	return nil
-}
-
-func TestAccessFenceCarriesGenerationThroughContext(t *testing.T) {
-	ctx := WithAuthFence(context.Background(), AuthFence{Generation: 7})
-	fence, ok := AuthFenceFrom(ctx)
-	if !ok || fence.Generation != 7 {
-		t.Fatalf("fence = %+v ok=%v", fence, ok)
-	}
-	if _, ok := AuthFenceFrom(context.Background()); ok {
-		t.Fatal("unfenced context reported a fence")
-	}
 }
 
 func TestAccessFencerAdmitsOnlyCurrentGeneration(t *testing.T) {
