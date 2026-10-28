@@ -1920,7 +1920,11 @@ describe('AccessAuth v2 refresh bundle', () => {
     // The request is not replayed, but the credential is not deleted either.
     expect(configCalls).toBe(1);
     expect(auth.getToken(origin)).toBe('access-1');
+    // The 401 itself started the refresh, and exactly one.
+    expect(refreshCalls).toBe(1);
     const refreshed = await auth.refreshAccess(origin);
+    // A caller asking while that refresh is in flight joins it instead of
+    // starting a second rotation of the same handle.
     expect(refreshed.kind).toBe('ok');
     expect(refreshCalls).toBe(1);
     expect(auth.getToken(origin)).toBe('access-2');
@@ -2074,12 +2078,75 @@ describe('AccessAuth v2 refresh bundle', () => {
     expect(auth.getBundle('http://127.0.0.1:8080')).toBeNull();
   });
 
-  it('never puts the handle in a renderer-visible accessor', () => {
+  it('renews from the receipt, not from a skewed server timestamp', () => {
+    // The server says the token lives an hour. Its absolute timestamp is a
+    // different clock entirely: this machine's clock is far ahead of it, so an
+    // absolute comparison would call a fresh token overdue forever.
+    let clock = 1_900_000_000_000;
+    const auth = new AccessAuth(undefined, () => clock);
+    auth.installBundle(origin, {
+      token: 'access-1',
+      expiresAt: 1_000_000,
+      expiresIn: 3600,
+      refreshHandle: handleA,
+      refreshIdleExpiresAt: 1_900_500_000,
+      refreshAbsoluteExpiresAt: 1_900_900_000,
+    });
+    expect(auth.renewalDue(origin)).toBe(false);
+    // The scoped consumer sees the same receipt-relative deadline.
+    expect(auth.getAccessDeadline(origin)).toBe(1_900_000_000 + 3600);
+    // Renewal starts one lead before that deadline, not before the server's.
+    clock += (3600 - 61) * 1000;
+    expect(auth.renewalDue(origin)).toBe(false);
+    clock += 1000;
+    expect(auth.renewalDue(origin)).toBe(true);
+  });
+
+  it('treats a restored bundle as due at once', () => {
+    const auth = new AccessAuth(undefined, now);
+    // A bundle read back from disk carries no receipt time, so its absolute
+    // timestamp proves nothing: the host must renew before protected work.
+    auth.installBundle(
+      origin,
+      {
+        token: 'access-1',
+        expiresAt: 4_000_000_000,
+        expiresIn: 3600,
+        refreshHandle: handleA,
+        refreshIdleExpiresAt: 4_000_500_000,
+        refreshAbsoluteExpiresAt: 4_000_900_000,
+      },
+      { restored: true },
+    );
+    expect(auth.renewalDue(origin)).toBe(true);
+  });
+
+  it('installs and clears only while the captured attempt owns the origin', async () => {
     const auth = new AccessAuth(undefined, now);
     install(auth, 'access-1', handleA);
-    // Everything the host hands to a body is the bare token.
-    expect(auth.getToken(origin)).toBe('access-1');
-    expect(auth.getToken(origin)).not.toContain(handleA);
-    expect(JSON.stringify(auth.getToken(origin))).not.toContain(handleA);
+    const attempt = auth.captureAttempt(origin);
+    expect(attempt).not.toBeNull();
+    const bundle = {
+      token: 'access-2',
+      expiresAt: 4_000_000_000,
+      expiresIn: 3600,
+      refreshHandle: handleB,
+      refreshIdleExpiresAt: 4_000_500_000,
+      refreshAbsoluteExpiresAt: 4_000_900_000,
+    };
+    // A newer credential landed after the capture.
+    auth.installBundle(origin, { ...bundle, token: 'access-3' });
+    expect(auth.installBundleForAttempt(origin, bundle, attempt!)).toBe(false);
+    expect(auth.getToken(origin)).toBe('access-3');
+    expect(auth.clearBundleForAttempt(attempt!)).toBe(false);
+    expect(auth.getToken(origin)).toBe('access-3');
+    // A fresh capture owns the origin again. Installing supersedes the fence it
+    // used, so the next mutation needs its own capture.
+    const fresh = auth.captureAttempt(origin);
+    expect(auth.installBundleForAttempt(origin, bundle, fresh!)).toBe(true);
+    expect(auth.getToken(origin)).toBe('access-2');
+    expect(auth.clearBundleForAttempt(fresh!)).toBe(false);
+    expect(auth.clearBundleForAttempt(auth.captureAttempt(origin)!)).toBe(true);
+    expect(auth.getToken(origin)).toBeNull();
   });
 });
