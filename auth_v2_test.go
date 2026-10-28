@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -476,6 +478,15 @@ func TestAccessJWTRevocationRequiresCurrentRecordEpochAndFamily(t *testing.T) {
 	if err := auth.configure(encoded); err != nil {
 		t.Fatal(err)
 	}
+	// Record identity is durable state, so it is minted by a real v2 login
+	// rather than by configure.
+	auth.mu.Lock()
+	auth.v2.recordID = testAccessJWTRecordID
+	auth.v2.epoch = testAccessJWTEpoch
+	if key, err := accessRefreshKey(auth.record); err == nil {
+		auth.v2.refreshKey = key
+	}
+	auth.mu.Unlock()
 	token := testAccessSignedToken(t, auth)
 	now := time.Now()
 
@@ -483,7 +494,7 @@ func TestAccessJWTRevocationRequiresCurrentRecordEpochAndFamily(t *testing.T) {
 	if !auth.jwtValidLocked(token, now, accessJWTClockAllowance) {
 		t.Fatal("freshly minted token rejected")
 	}
-	recordID, epoch := auth.recordID, auth.epoch
+	recordID, epoch := auth.v2.recordID, auth.v2.epoch
 	auth.mu.Unlock()
 	if recordID == "" || epoch == 0 {
 		t.Fatalf("minted token has no record identity: rid=%q epoch=%d", recordID, epoch)
@@ -496,17 +507,28 @@ func TestAccessJWTRevocationRequiresCurrentRecordEpochAndFamily(t *testing.T) {
 		t.Errorf("claims = %q/%d want %q/%d", claims.RecordID, claims.Epoch, recordID, epoch)
 	}
 
-	// A new record identity rejects the token even when the signing key is
-	// byte-identical: reconfiguring the same record rotates the identity.
+	// Reconfiguring the same record keeps the durable identity: restarting phi
+	// must not sign every browser out, so record identity lives in the state
+	// file rather than in memory.
 	if err := auth.configure(encoded); err != nil {
 		t.Fatal(err)
 	}
 	auth.mu.Lock()
-	staleRecord := auth.jwtValidLocked(token, now, accessJWTClockAllowance)
-	if auth.recordID == recordID {
-		auth.mu.Unlock()
-		t.Fatal("reconfigure reused the record identity")
+	keptRecord := auth.v2.recordID
+	restartAccepted := auth.jwtValidLocked(token, now, accessJWTClockAllowance)
+	auth.mu.Unlock()
+	if keptRecord != recordID {
+		t.Fatalf("restart rotated the record identity: %q want %q", keptRecord, recordID)
 	}
+	if !restartAccepted {
+		t.Error("restart rejected a live token for the unchanged record")
+	}
+
+	// A stale record identity rejects the token even when the key is unchanged.
+	auth.mu.Lock()
+	auth.v2.recordID = ""
+	staleRecord := auth.jwtValidLocked(token, now, accessJWTClockAllowance)
+	auth.v2.recordID = recordID
 	auth.mu.Unlock()
 	if staleRecord {
 		t.Error("stale record identity accepted")
@@ -515,9 +537,9 @@ func TestAccessJWTRevocationRequiresCurrentRecordEpochAndFamily(t *testing.T) {
 	// A stale epoch rejects a token whose record and family are still current.
 	liveToken := testAccessSignedToken(t, auth)
 	auth.mu.Lock()
-	auth.epoch++
+	auth.v2.epoch++
 	staleEpoch := auth.jwtValidLocked(liveToken, now, accessJWTClockAllowance)
-	auth.epoch--
+	auth.v2.epoch--
 	auth.mu.Unlock()
 	if staleEpoch {
 		t.Error("stale epoch accepted")
@@ -529,7 +551,7 @@ func TestAccessJWTRevocationRequiresCurrentRecordEpochAndFamily(t *testing.T) {
 		t.Fatalf("parse live token: %v", err)
 	}
 	auth.mu.Lock()
-	delete(auth.families, liveClaims.FamilyID)
+	delete(auth.v2.families, liveClaims.FamilyID)
 	auth.mu.Unlock()
 	if auth.jwtValidLocked(liveToken, now, accessJWTClockAllowance) {
 		t.Error("unknown family accepted")
@@ -537,10 +559,10 @@ func TestAccessJWTRevocationRequiresCurrentRecordEpochAndFamily(t *testing.T) {
 	expiring := testAccessSignedToken(t, auth)
 	// The family deadline carries the same expiry allowance as the token, so
 	// expire it past that allowance to prove the family itself is dead.
-	deadline := now.Add(-accessJWTClockAllowance - time.Second)
+	deadline := now.Add(-accessJWTClockAllowance - time.Second).Unix()
 	auth.mu.Lock()
-	for familyID := range auth.families {
-		auth.families[familyID] = deadline
+	for _, family := range auth.v2.families {
+		family.IdleExpiresAt = deadline
 	}
 	auth.mu.Unlock()
 	if auth.jwtValidLocked(expiring, now, accessJWTClockAllowance) {
@@ -565,7 +587,7 @@ func TestAccessJWTFullClaimsAcceptedThroughMiddleware(t *testing.T) {
 	key := mustTestAccessJWTKey(t, accessAuth)
 	auth := accessAuth
 	auth.mu.Lock()
-	claims := accessJWTRevocation{RecordID: auth.recordID, Epoch: auth.epoch}
+	claims := accessJWTRevocation{RecordID: auth.v2.recordID, Epoch: auth.v2.epoch}
 	familyID, _, err := auth.issueAccessFamilyLocked(time.Now())
 	auth.mu.Unlock()
 	if err != nil {
@@ -607,7 +629,10 @@ func TestAccessJWTWebsocketAdmissionUsesExpiryWithoutAllowance(t *testing.T) {
 
 	key := mustTestAccessJWTKey(t, auth)
 	auth.mu.Lock()
-	revocation := accessJWTRevocation{RecordID: auth.recordID, Epoch: auth.epoch}
+	// The fixed vector carries its own synthetic identity, so pin it here.
+	auth.v2.recordID = testAccessJWTRecordID
+	auth.v2.epoch = testAccessJWTEpoch
+	revocation := accessJWTRevocation{RecordID: auth.v2.recordID, Epoch: auth.v2.epoch}
 	auth.mu.Unlock()
 	familyID, expiresAt, err := func() (string, time.Time, error) {
 		auth.mu.Lock()
@@ -618,7 +643,9 @@ func TestAccessJWTWebsocketAdmissionUsesExpiryWithoutAllowance(t *testing.T) {
 		t.Fatal(err)
 	}
 	auth.mu.Lock()
-	auth.families[familyID] = expiresAt
+	if family := auth.v2.families[familyID]; family != nil {
+		family.IdleExpiresAt = expiresAt.Unix()
+	}
 	auth.mu.Unlock()
 	revocation.FamilyID = familyID
 	token, err := formatAccessJWT(key, testAccessJWTIssuedAt, testAccessJWTShortExpiresAt, testAccessJWTNonce, revocation)
@@ -652,6 +679,7 @@ func mustTestAccessJWTKey(t *testing.T, auth *accessAuthManager) []byte {
 }
 
 func TestAccessConfigureDerivesJWTKeyAndAdvancesGeneration(t *testing.T) {
+	withTempConfig(t)
 	auth := useTestAccessAuth(t)
 	start := auth.accessGeneration()
 	if err := auth.configure(testAccessHash()); err != nil {
@@ -703,16 +731,26 @@ func testAccessJSONBody(t *testing.T, w *httptest.ResponseRecorder, target any) 
 
 func testAccessV2PasswordRequest(t *testing.T, body, bearer string) *httptest.ResponseRecorder {
 	t.Helper()
-	r := httptest.NewRequest(http.MethodPost, "/api/auth/v2/password", strings.NewReader(body))
+	r := testAccessV2Request(http.MethodPost, "/api/auth/v2/password", body)
 	if bearer != "" {
 		r.Header.Set("Authorization", "Bearer "+bearer)
 	}
 	return testAccessServe(handleAccessV2Password, r)
 }
 
+// testAccessV2Request builds the request shape the v2 POST routes require: the
+// non-secret custom header plus JSON. No Origin is set, which is the native
+// caller case the contract allows.
+func testAccessV2Request(method, path, body string) *http.Request {
+	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	r.Header.Set(accessV2Header, accessV2HeaderValue)
+	r.Header.Set("Content-Type", "application/json")
+	return r
+}
+
 func testAccessV2LoginBody(t *testing.T, body, remoteAddr string) *httptest.ResponseRecorder {
 	t.Helper()
-	r := httptest.NewRequest(http.MethodPost, "/api/auth/v2/login", strings.NewReader(body))
+	r := testAccessV2Request(http.MethodPost, "/api/auth/v2/login", body)
 	r.RemoteAddr = remoteAddr
 	return testAccessServe(handleAccessV2Login, r)
 }
@@ -745,8 +783,14 @@ func testAccessEnableV2(t *testing.T, password string) string {
 	if !response.Enabled || response.Token == "" {
 		t.Fatalf("enable response = %+v", response)
 	}
-	if cookies := w.Result().Cookies(); len(cookies) != 0 {
-		t.Fatalf("v2 password route issued cookies: %v", cookies)
+	// A successful set/change now issues both v2 cookies: the refresh handle
+	// never travels in JSON, so the cookie is the only way it can reach a client.
+	names := map[string]bool{}
+	for _, cookie := range w.Result().Cookies() {
+		names[cookie.Name] = true
+	}
+	if !names[accessRefreshCookie] || !names[accessAssetCookie] {
+		t.Fatalf("v2 password route cookies = %v", names)
 	}
 	return response.Token
 }
@@ -1190,9 +1234,29 @@ func testAccessSignedToken(t *testing.T, auth *accessAuthManager) string {
 	t.Helper()
 	auth.mu.Lock()
 	defer auth.mu.Unlock()
+	// Production mints identity through a v2 login; a test that only needs a
+	// token pins the identity directly instead.
+	if auth.record != nil && auth.v2.recordID == "" {
+		recordID, err := randomAccessToken()
+		if err != nil {
+			t.Fatal(err)
+		}
+		auth.v2.recordID = recordID
+		auth.v2.epoch = 1
+	}
+	if auth.record != nil && len(auth.v2.refreshKey) != accessRefreshKeyBytes {
+		key, err := accessRefreshKey(auth.record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		auth.v2.refreshKey = key
+	}
 	token, err := auth.mintAccessJWTLocked(time.Now())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if token == "" {
+		t.Fatal("manager minted no token")
 	}
 	return token
 }
@@ -1349,6 +1413,9 @@ func TestAccessRestartAfterV2Change(t *testing.T) {
 	token := testAccessEnableV2(t, testAccessPassword)
 	cookie := testAccessCookieFor(t, accessAuth)
 
+	// A second live process is refused all authentication, so a simulated
+	// restart must hand the state lock over before configuring.
+	testAccessReleaseStateOwnership(accessAuth)
 	restarted := newAccessAuthManager()
 	if err := restarted.configure(loadConfig().AccessPasswordHash); err != nil {
 		t.Fatal(err)
@@ -1364,13 +1431,11 @@ func TestAccessRestartAfterV2Change(t *testing.T) {
 		t.Fatalf("v1 cookie did not survive restart: %d", w.Code)
 	}
 	// A v2 token carries a record identity and family that only the durable
-	// state file can reproduce, so a restarted process rejects it. M1b loads
-	// that state before admitting v2 and restores this case; until then the
-	// server must fail closed rather than admit an unrecognised family.
+	// state file can reproduce, so it survives a restart with that file.
 	request = httptest.NewRequest(http.MethodGet, "/api/coders", nil)
 	request.Header.Set("Authorization", "Bearer "+token)
-	if w := testAccessServe(testAccessProtected().ServeHTTP, request); w.Code != http.StatusUnauthorized {
-		t.Fatalf("restarted process admitted an unowned v2 token: %d", w.Code)
+	if w := testAccessServe(testAccessProtected().ServeHTTP, request); w.Code != http.StatusNoContent {
+		t.Fatalf("restarted process rejected a durable v2 token: %d", w.Code)
 	}
 	if w := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.90:1"); w.Code != http.StatusOK {
 		t.Fatalf("password login after restart: %d", w.Code)
@@ -1653,5 +1718,1542 @@ func TestAccessRollbackRecordFormatStaysLegacyCompatible(t *testing.T) {
 	}
 	if ok, err := record.matchesPassword(testAccessPassword); err != nil || !ok {
 		t.Fatalf("rehashed record lost the password: ok=%v err=%v", ok, err)
+	}
+}
+
+// --- M1b: v2 route contracts, CSRF, cookies, carriers, refresh machine ---
+
+// testAccessStart is the fixed instant clocked tests start from, so a deadline
+// assertion is an exact comparison instead of a race with the wall clock.
+var testAccessStart = time.Unix(1700000000, 0).UTC()
+
+// testAccessBundleKeys is the complete documented credential-bundle shape. A
+// test compares the decoded key set against it, so an added or renamed field
+// fails instead of passing silently.
+var testAccessBundleKeys = []string{
+	"expires_at",
+	"expires_in",
+	"refresh_absolute_expires_at",
+	"refresh_idle_expires_at",
+	"token",
+}
+
+type testAccessBundle struct {
+	Token                    string `json:"token"`
+	ExpiresAt                int64  `json:"expires_at"`
+	ExpiresIn                int64  `json:"expires_in"`
+	RefreshIdleExpiresAt     int64  `json:"refresh_idle_expires_at"`
+	RefreshAbsoluteExpiresAt int64  `json:"refresh_absolute_expires_at"`
+}
+
+// testAccessDecodeBundle asserts the success shape once and returns it.
+func testAccessDecodeBundle(t *testing.T, w *httptest.ResponseRecorder) testAccessBundle {
+	t.Helper()
+	if w.Code != http.StatusOK {
+		t.Fatalf("bundle response: %d %s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("bundle content type = %q want application/json", got)
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("bundle cache control = %q want no-store", got)
+	}
+	var raw map[string]json.RawMessage
+	testAccessJSONBody(t, w, &raw)
+	if len(raw) != len(testAccessBundleKeys) {
+		t.Fatalf("bundle keys = %v want %v", raw, testAccessBundleKeys)
+	}
+	for _, key := range testAccessBundleKeys {
+		if _, ok := raw[key]; !ok {
+			t.Fatalf("bundle is missing %q: %v", key, raw)
+		}
+	}
+	var bundle testAccessBundle
+	testAccessJSONBody(t, w, &bundle)
+	if bundle.Token == "" || bundle.ExpiresAt == 0 || bundle.ExpiresIn <= 0 ||
+		bundle.RefreshIdleExpiresAt == 0 || bundle.RefreshAbsoluteExpiresAt == 0 {
+		t.Fatalf("bundle = %+v", bundle)
+	}
+	if bundle.RefreshAbsoluteExpiresAt < bundle.RefreshIdleExpiresAt {
+		t.Fatalf("absolute deadline precedes idle: %+v", bundle)
+	}
+	return bundle
+}
+
+// testAccessResponseCookie returns one Set-Cookie from a response.
+func testAccessResponseCookie(t *testing.T, w *httptest.ResponseRecorder, name string) *http.Cookie {
+	t.Helper()
+	for _, cookie := range w.Result().Cookies() {
+		if cookie.Name == name {
+			return cookie
+		}
+	}
+	t.Fatalf("response has no %q cookie", name)
+	return nil
+}
+
+// testAccessRefreshHandle returns the refresh handle a response installed.
+func testAccessRefreshHandle(t *testing.T, w *httptest.ResponseRecorder) string {
+	t.Helper()
+	handle := testAccessResponseCookie(t, w, accessRefreshCookie).Value
+	if handle == "" {
+		t.Fatal("refresh cookie is empty")
+	}
+	return handle
+}
+
+// testAccessV2RefreshRequest sends the refresh route's documented shape.
+func testAccessV2RefreshRequest(t *testing.T, handle string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh", `{}`)
+	if handle != "" {
+		r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: handle})
+	}
+	r.RemoteAddr = "192.0.2.60:1"
+	return testAccessServe(handleAccessV2Refresh, r)
+}
+
+// testAccessV2LogoutRequest sends {"all":<bool>} with an optional bearer.
+func testAccessV2LogoutRequest(t *testing.T, body, bearer string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := testAccessV2Request(http.MethodPost, "/api/auth/v2/logout", body)
+	if bearer != "" {
+		r.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	r.RemoteAddr = "192.0.2.61:1"
+	return testAccessServe(handleAccessV2Logout, r)
+}
+
+// testAccessClock drives the manager clock, so a deadline can be tested at its
+// exact instant without a sleep.
+type testAccessClock struct {
+	now time.Time
+}
+
+func (c *testAccessClock) advance(d time.Duration) { c.now = c.now.Add(d) }
+
+func testAccessUseClock(t *testing.T, auth *accessAuthManager, start time.Time) *testAccessClock {
+	t.Helper()
+	clock := &testAccessClock{now: start}
+	previous := auth.now
+	auth.now = func() time.Time { return clock.now }
+	t.Cleanup(func() { auth.now = previous })
+	return clock
+}
+
+// testAccessErrorResponse asserts the shared error envelope: the exact fixed
+// body, its status, no-store, and the plain-text content type.
+func testAccessErrorResponse(t *testing.T, name string, w *httptest.ResponseRecorder, wantCode int, wantBody string) {
+	t.Helper()
+	if w.Code != wantCode {
+		t.Errorf("%s: status = %d want %d (body %q)", name, w.Code, wantCode, w.Body.String())
+	}
+	if got := w.Body.String(); got != wantBody {
+		t.Errorf("%s: body = %q want %q", name, got, wantBody)
+	}
+	if got := w.Header().Get("Content-Type"); got != "text/plain; charset=utf-8" {
+		t.Errorf("%s: content type = %q", name, got)
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("%s: cache control = %q", name, got)
+	}
+	if cookies := w.Result().Cookies(); len(cookies) != 0 {
+		t.Errorf("%s: error response set cookies: %v", name, cookies)
+	}
+}
+
+func TestAccessV2RouteShapes(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+
+	// Status: exactly the three documented booleans, with no credential or KDF
+	// field, including while authentication is disabled.
+	status := testAccessServe(handleAccessV2Status, httptest.NewRequest(http.MethodGet, "/api/auth/v2/status", nil))
+	if status.Code != http.StatusOK {
+		t.Fatalf("status: %d %s", status.Code, status.Body.String())
+	}
+	if got := status.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("status cache control = %q", got)
+	}
+	var raw map[string]json.RawMessage
+	testAccessJSONBody(t, status, &raw)
+	if len(raw) != 3 {
+		t.Fatalf("status keys = %v want enabled/authenticated/owned", raw)
+	}
+	for _, key := range []string{"enabled", "authenticated", "owned"} {
+		if _, ok := raw[key]; !ok {
+			t.Errorf("status is missing %q", key)
+		}
+	}
+	for _, forbidden := range []string{"token", "salt", "challenge", "iterations", "version", "algorithm", "protocols"} {
+		if _, ok := raw[forbidden]; ok {
+			t.Errorf("status leaked %q", forbidden)
+		}
+	}
+
+	// Enable through the public route: bundle fields plus the enabled flag, and
+	// both v2 cookies.
+	enableBody, err := json.Marshal(map[string]string{"password": testAccessPassword})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enable := testAccessV2PasswordRequest(t, string(enableBody), "")
+	if enable.Code != http.StatusOK {
+		t.Fatalf("enable: %d %s", enable.Code, enable.Body.String())
+	}
+	var enabled map[string]json.RawMessage
+	testAccessJSONBody(t, enable, &enabled)
+	for _, key := range append([]string{"enabled"}, testAccessBundleKeys...) {
+		if _, ok := enabled[key]; !ok {
+			t.Errorf("enable response is missing %q: %v", key, enabled)
+		}
+	}
+	if len(enabled) != len(testAccessBundleKeys)+1 {
+		t.Errorf("enable response keys = %v", enabled)
+	}
+	enableHandle := testAccessRefreshHandle(t, enable)
+	if got := testAccessResponseCookie(t, enable, accessAssetCookie).Value; got == "" {
+		t.Error("enable installed an empty asset cookie")
+	}
+
+	// Login returns the bundle without the enabled flag, and a fresh family.
+	login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.62:1")
+	loginBundle := testAccessDecodeBundle(t, login)
+	loginHandle := testAccessRefreshHandle(t, login)
+	if loginHandle == enableHandle {
+		t.Error("login reused the existing family's refresh handle")
+	}
+
+	// Refresh returns the same bundle shape and rotates the handle.
+	refreshed := testAccessV2RefreshRequest(t, loginHandle)
+	refreshBundle := testAccessDecodeBundle(t, refreshed)
+	rotatedHandle := testAccessRefreshHandle(t, refreshed)
+	if rotatedHandle == loginHandle {
+		t.Error("refresh did not rotate the handle")
+	}
+	if refreshBundle.Token == loginBundle.Token {
+		t.Error("refresh reissued the previous access token as a new rotation")
+	}
+
+	// Clear returns {"enabled":false} and deletes both cookies. Logout runs
+	// after clear's own assertions, because it revokes this token's family.
+	clear := testAccessV2PasswordRequest(t, `{"password":""}`, refreshBundle.Token)
+	if clear.Code != http.StatusOK {
+		t.Fatalf("clear: %d %s", clear.Code, clear.Body.String())
+	}
+	var clearPayload map[string]json.RawMessage
+	testAccessJSONBody(t, clear, &clearPayload)
+	if len(clearPayload) != 1 || string(clearPayload["enabled"]) != "false" {
+		t.Fatalf("clear payload = %v", clearPayload)
+	}
+	for _, name := range []string{accessRefreshCookie, accessAssetCookie} {
+		if cookie := testAccessResponseCookie(t, clear, name); cookie.MaxAge != -1 {
+			t.Errorf("clear did not delete %s: %+v", name, cookie)
+		}
+	}
+
+	// Logout with the (now cleared) family: authentication is disabled, so
+	// only a live bearer worked before clear. Re-enable and use a fresh token.
+	token := testAccessEnableV2(t, testAccessPassword)
+	logout := testAccessV2LogoutRequest(t, `{"all":false}`, token)
+	if logout.Code != http.StatusOK {
+		t.Fatalf("logout: %d %s", logout.Code, logout.Body.String())
+	}
+	var logoutPayload map[string]json.RawMessage
+	testAccessJSONBody(t, logout, &logoutPayload)
+	if len(logoutPayload) != 1 {
+		t.Fatalf("logout keys = %v", logoutPayload)
+	}
+	if string(logoutPayload["ok"]) != "true" {
+		t.Fatalf("logout ok = %s", logoutPayload["ok"])
+	}
+	for _, name := range []string{accessRefreshCookie, accessAssetCookie} {
+		cookie := testAccessResponseCookie(t, logout, name)
+		if cookie.Value != "" || cookie.MaxAge != -1 {
+			t.Errorf("logout %s deletion = %+v", name, cookie)
+		}
+	}
+}
+
+func TestAccessV2RouteErrors(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+	handle := testAccessRefreshHandle(t,
+		testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.63:1"))
+
+	noHeader := func(method, path, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		return testAccessServe(handleAccessV2Login, r)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		w        *httptest.ResponseRecorder
+		wantCode int
+		wantBody string
+	}{
+		{"login wrong password", testAccessV2LoginRequest(t, "test-pass-0000", "192.0.2.64:1"), http.StatusUnauthorized, "Invalid password\n"},
+		{"login empty body", testAccessV2LoginBody(t, ``, "192.0.2.65:1"), http.StatusBadRequest, "Invalid login request\n"},
+		{"login missing custom header", noHeader(http.MethodPost, "/api/auth/v2/login", `{"password":"`+testAccessPassword+`"}`), http.StatusForbidden, "forbidden\n"},
+		{"password without bearer", testAccessV2PasswordRequest(t, `{"password":"test-pass-5678"}`, ""), http.StatusUnauthorized, "access authentication required\n"},
+		{"password invalid body", testAccessV2PasswordRequest(t, `[]`, token), http.StatusBadRequest, "Invalid password configuration\n"},
+		{"refresh empty body", func() *httptest.ResponseRecorder {
+			r := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh", ``)
+			r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: handle})
+			return testAccessServe(handleAccessV2Refresh, r)
+		}(), http.StatusBadRequest, "Invalid refresh request\n"},
+		{"refresh non-empty body", func() *httptest.ResponseRecorder {
+			r := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh", `{"all":true}`)
+			r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: handle})
+			return testAccessServe(handleAccessV2Refresh, r)
+		}(), http.StatusBadRequest, "Invalid refresh request\n"},
+		{"refresh without cookie", testAccessV2RefreshRequest(t, ""), http.StatusUnauthorized, "access authentication required\n"},
+		{"refresh with duplicate cookies", func() *httptest.ResponseRecorder {
+			r := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh", `{}`)
+			r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: handle})
+			r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: handle})
+			return testAccessServe(handleAccessV2Refresh, r)
+		}(), http.StatusUnauthorized, "access authentication required\n"},
+		{"refresh with bearer", func() *httptest.ResponseRecorder {
+			r := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh", `{}`)
+			r.Header.Set("Authorization", "Bearer "+token)
+			r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: handle})
+			return testAccessServe(handleAccessV2Refresh, r)
+		}(), http.StatusUnauthorized, "access authentication required\n"},
+		{"refresh with token query", func() *httptest.ResponseRecorder {
+			r := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh?token="+token, `{}`)
+			r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: handle})
+			return testAccessServe(handleAccessV2Refresh, r)
+		}(), http.StatusUnauthorized, "access authentication required\n"},
+		{"refresh unknown handle", testAccessV2RefreshRequest(t, "bm90LWEtcmVmcmVzaC1oYW5kbGUtdmFsdWUtdGhhdC1pcy0zMmI"), http.StatusUnauthorized, "access authentication required\n"},
+		{"logout without bearer", testAccessV2LogoutRequest(t, `{"all":false}`, ""), http.StatusUnauthorized, "access authentication required\n"},
+		{"logout invalid bearer", testAccessV2LogoutRequest(t, `{"all":false}`, "not-a-token"), http.StatusUnauthorized, "access authentication required\n"},
+		{"logout missing all", testAccessV2LogoutRequest(t, `{}`, token), http.StatusBadRequest, "Invalid logout request\n"},
+		{"logout non-bool all", testAccessV2LogoutRequest(t, `{"all":"yes"}`, token), http.StatusBadRequest, "Invalid logout request\n"},
+		{"logout null all", testAccessV2LogoutRequest(t, `{"all":null}`, token), http.StatusBadRequest, "Invalid logout request\n"},
+		{"logout trailing value", testAccessV2LogoutRequest(t, `{"all":true}{}`, token), http.StatusBadRequest, "Invalid logout request\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testAccessErrorResponse(t, tc.name, tc.w, tc.wantCode, tc.wantBody)
+		})
+	}
+
+	// A cookie never authorizes logout, even a valid refresh cookie.
+	cookieOnly := testAccessV2Request(http.MethodPost, "/api/auth/v2/logout", `{"all":false}`)
+	cookieOnly.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: handle})
+	testAccessErrorResponse(t, "logout with refresh cookie only",
+		testAccessServe(handleAccessV2Logout, cookieOnly), http.StatusUnauthorized, "access authentication required\n")
+
+	// Wrong methods answer 405 with the Allow header the contract names.
+	for _, tc := range []struct {
+		name    string
+		handler http.HandlerFunc
+		path    string
+		allow   string
+	}{
+		{"status", handleAccessV2Status, "/api/auth/v2/status", http.MethodGet},
+		{"login", handleAccessV2Login, "/api/auth/v2/login", http.MethodPost},
+		{"password", handleAccessV2Password, "/api/auth/v2/password", http.MethodPost},
+		{"refresh", handleAccessV2Refresh, "/api/auth/v2/refresh", http.MethodPost},
+		{"logout", handleAccessV2Logout, "/api/auth/v2/logout", http.MethodPost},
+	} {
+		t.Run(tc.name+" method", func(t *testing.T) {
+			method := http.MethodPost
+			if tc.allow == http.MethodPost {
+				method = http.MethodGet
+			}
+			w := testAccessServe(tc.handler, httptest.NewRequest(method, tc.path, nil))
+			if got := w.Header().Get("Allow"); got != tc.allow {
+				t.Errorf("Allow = %q want %q", got, tc.allow)
+			}
+			testAccessErrorResponse(t, tc.name+" method", w, http.StatusMethodNotAllowed, "Method not allowed\n")
+		})
+	}
+}
+
+// TestAccessV2ClearWhileDisabled covers the one documented error that needs a
+// server with no password: clearing cannot enable anything.
+func TestAccessV2ClearWhileDisabled(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	testAccessErrorResponse(t, "clear while disabled",
+		testAccessV2PasswordRequest(t, `{"password":""}`, ""), http.StatusBadRequest, "Access password is not enabled\n")
+}
+
+func TestAccessV2BodyBounds(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+
+	// Login and password keep the 8192-byte limit; refresh and logout use 1024.
+	oversized := `{"password":"` + strings.Repeat("a", accessPasswordBodyLimit) + `"}`
+	if got := len(oversized); got <= accessPasswordBodyLimit {
+		t.Fatalf("oversized body is only %d bytes", got)
+	}
+	if w := testAccessV2LoginBody(t, oversized, "192.0.2.66:1"); w.Code != http.StatusBadRequest {
+		t.Errorf("oversized login body: %d", w.Code)
+	}
+	if w := testAccessV2PasswordRequest(t, oversized, token); w.Code != http.StatusBadRequest {
+		t.Errorf("oversized password body: %d", w.Code)
+	}
+
+	// The refresh/logout limit counts whitespace, so padding alone is refused.
+	padded := strings.Repeat(" ", accessRefreshBodyLimit) + `{}`
+	for name, handler := range map[string]http.HandlerFunc{
+		"refresh": handleAccessV2Refresh,
+		"logout":  handleAccessV2Logout,
+	} {
+		path := "/api/auth/v2/" + name
+		r := testAccessV2Request(http.MethodPost, path, padded)
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: "handle"})
+		if w := testAccessServe(handler, r); w.Code != http.StatusBadRequest {
+			t.Errorf("%s padded body: got %d want 400", name, w.Code)
+		}
+	}
+
+	// The password bound is measured in UTF-8 bytes, not characters.
+	threeByte := strings.Repeat("\u4e16", accessPasswordMaxBytes/3)
+	if w := testAccessV2PasswordRequest(t, `{"password":"`+threeByte+`"}`, token); w.Code != http.StatusOK {
+		t.Errorf("%d-byte multibyte password: got %d body=%s", len(threeByte), w.Code, w.Body.String())
+	}
+	tooLong := threeByte + "\u4e16"
+	if w := testAccessV2PasswordRequest(t, `{"password":"`+tooLong+`"}`, token); w.Code != http.StatusBadRequest {
+		t.Errorf("%d-byte multibyte password: got %d want 400", len(tooLong), w.Code)
+	}
+
+	// Exactly-empty and single-pair shapes that must not sneak through.
+	for name, body := range map[string]string{
+		"refresh null":     `null`,
+		"refresh array":    `[]`,
+		"refresh string":   `"{}"`,
+		"logout array":     `[false]`,
+		"logout duplicate": `{"all":false,"all":false}`,
+	} {
+		w := testAccessV2RefreshRequest(t, "")
+		if strings.HasPrefix(name, "logout") {
+			w = testAccessV2LogoutRequest(t, body, token)
+		} else {
+			r := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh", body)
+			r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: "handle"})
+			w = testAccessServe(handleAccessV2Refresh, r)
+		}
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: got %d want 400 (body %q)", name, w.Code, w.Body.String())
+		}
+	}
+}
+
+// testAccessSetOrigins writes auth_origins into the temporary config, which is
+// how an operator allows a TLS-terminating proxy's external origin.
+func testAccessSetOrigins(t *testing.T, origins ...string) {
+	t.Helper()
+	cfg := loadConfig()
+	cfg.AuthOrigins = origins
+	saveConfig(cfg)
+	if got := loadConfig().AuthOrigins; len(got) != len(origins) {
+		t.Fatalf("auth_origins = %v want %v", got, origins)
+	}
+}
+
+// testAccessV2LoginWith builds the login route's request and lets one case
+// adjust its headers. Every case starts from the native-caller baseline: custom
+// header, JSON, no Origin.
+func testAccessV2LoginWith(t *testing.T, password string, remoteAddr string, mutate func(*http.Request)) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(map[string]string{"password": password})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/api/auth/v2/login", strings.NewReader(string(body)))
+	r.Header.Set(accessV2Header, accessV2HeaderValue)
+	r.Header.Set("Content-Type", "application/json")
+	r.RemoteAddr = remoteAddr
+	if mutate != nil {
+		mutate(r)
+	}
+	return testAccessServe(handleAccessV2Login, r)
+}
+
+func TestAccessV2CSRFHeaderAndContentType(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	testAccessEnableV2(t, testAccessPassword)
+
+	nextIP := 0
+	fresh := func() string {
+		nextIP++
+		return "198.51.100." + strconv.Itoa(nextIP) + ":1"
+	}
+
+	for _, tc := range []struct {
+		name     string
+		mutate   func(*http.Request)
+		wantCode int
+	}{
+		{"absent custom header", func(r *http.Request) { r.Header.Del(accessV2Header) }, http.StatusForbidden},
+		{"wrong custom header value", func(r *http.Request) { r.Header.Set(accessV2Header, "v1") }, http.StatusForbidden},
+		{"empty custom header", func(r *http.Request) { r.Header.Set(accessV2Header, "") }, http.StatusForbidden},
+		{"duplicate custom header", func(r *http.Request) {
+			r.Header.Add(accessV2Header, accessV2HeaderValue)
+			r.Header.Add(accessV2Header, accessV2HeaderValue)
+		}, http.StatusForbidden},
+		{"charset parameter", func(r *http.Request) {
+			r.Header.Set("Content-Type", "application/json; charset=utf-8")
+		}, http.StatusOK},
+		{"charset without space", func(r *http.Request) {
+			r.Header.Set("Content-Type", "application/json;charset=UTF-8")
+		}, http.StatusOK},
+		{"form content type", func(r *http.Request) {
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}, http.StatusBadRequest},
+		{"plain text content type", func(r *http.Request) {
+			r.Header.Set("Content-Type", "text/plain")
+		}, http.StatusBadRequest},
+		{"absent content type", func(r *http.Request) { r.Header.Del("Content-Type") }, http.StatusBadRequest},
+		{"duplicate content type", func(r *http.Request) {
+			r.Header.Add("Content-Type", "application/json")
+		}, http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := testAccessV2LoginWith(t, testAccessPassword, fresh(), tc.mutate)
+			if w.Code != tc.wantCode {
+				t.Fatalf("got %d want %d (body %q)", w.Code, tc.wantCode, w.Body.String())
+			}
+		})
+	}
+
+	// The same gate guards all four POST routes: a missing custom header is a
+	// 403 even when the body and credentials are otherwise valid. The password
+	// is already enabled above, so log in for a bearer instead of re-enabling.
+	login := testAccessV2LoginRequest(t, testAccessPassword, "198.51.100.250:1")
+	var token string
+	{
+		var payload struct {
+			Token string `json:"token"`
+		}
+		testAccessJSONBody(t, login, &payload)
+		token = payload.Token
+	}
+	if login.Code != http.StatusOK || token == "" {
+		t.Fatalf("login for the CSRF gate cases: %d %s", login.Code, login.Body.String())
+	}
+	for _, tc := range []struct {
+		name    string
+		handler http.HandlerFunc
+		path    string
+		body    string
+		cookie  bool
+	}{
+		{"login", handleAccessV2Login, "/api/auth/v2/login", `{"password":"` + testAccessPassword + `"}`, false},
+		{"password", handleAccessV2Password, "/api/auth/v2/password", `{"password":"test-pass-5678"}`, false},
+		{"refresh", handleAccessV2Refresh, "/api/auth/v2/refresh", `{}`, true},
+		{"logout", handleAccessV2Logout, "/api/auth/v2/logout", `{"all":false}`, false},
+	} {
+		t.Run(tc.name+" without custom header", func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/json")
+			r.Header.Set("Authorization", "Bearer "+token)
+			if tc.cookie {
+				r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: "handle"})
+			}
+			testAccessErrorResponse(t, tc.name, testAccessServe(tc.handler, r), http.StatusForbidden, "forbidden\n")
+		})
+	}
+}
+
+func TestAccessV2OriginAndFetchMetadata(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	testAccessEnableV2(t, testAccessPassword)
+	testAccessSetOrigins(t, "https://phi.example", "https://proxy.example:443")
+
+	nextIP := 0
+	fresh := func() string {
+		nextIP++
+		return "203.0.113." + strconv.Itoa(nextIP) + ":1"
+	}
+	// httptest sets Host example.com and no TLS state, so the request's own
+	// origin is http://example.com.
+	const self = "http://example.com"
+
+	for _, tc := range []struct {
+		name     string
+		mutate   func(*http.Request)
+		wantCode int
+	}{
+		{"no browser headers", nil, http.StatusOK},
+		{"own origin", func(r *http.Request) { r.Header.Set("Origin", self) }, http.StatusOK},
+		{"own origin default port", func(r *http.Request) { r.Header.Set("Origin", self+":80") }, http.StatusOK},
+		{"own origin uppercase host", func(r *http.Request) { r.Header.Set("Origin", "http://EXAMPLE.com") }, http.StatusOK},
+		{"configured extra origin", func(r *http.Request) { r.Header.Set("Origin", "https://phi.example") }, http.StatusOK},
+		{"configured default port", func(r *http.Request) { r.Header.Set("Origin", "https://proxy.example") }, http.StatusOK},
+		{"scheme mismatch", func(r *http.Request) { r.Header.Set("Origin", "https://example.com") }, http.StatusForbidden},
+		{"port mismatch", func(r *http.Request) { r.Header.Set("Origin", self+":8080") }, http.StatusForbidden},
+		{"unconfigured origin", func(r *http.Request) { r.Header.Set("Origin", "https://other.example") }, http.StatusForbidden},
+		{"opaque origin", func(r *http.Request) { r.Header.Set("Origin", "null") }, http.StatusForbidden},
+		{"empty origin", func(r *http.Request) { r.Header.Set("Origin", "") }, http.StatusForbidden},
+		{"origin with userinfo", func(r *http.Request) { r.Header.Set("Origin", "http://user:pw@example.com") }, http.StatusForbidden},
+		{"origin with path", func(r *http.Request) { r.Header.Set("Origin", self+"/path") }, http.StatusForbidden},
+		{"origin with query", func(r *http.Request) { r.Header.Set("Origin", self+"?q=1") }, http.StatusForbidden},
+		{"origin with fragment", func(r *http.Request) { r.Header.Set("Origin", self+"#f") }, http.StatusForbidden},
+		{"origin wildcard", func(r *http.Request) { r.Header.Set("Origin", "http://*.example.com") }, http.StatusForbidden},
+		{"origin without scheme", func(r *http.Request) { r.Header.Set("Origin", "example.com") }, http.StatusForbidden},
+		{"non-http origin", func(r *http.Request) { r.Header.Set("Origin", "ftp://example.com") }, http.StatusForbidden},
+		{"malformed origin", func(r *http.Request) { r.Header.Set("Origin", "http://") }, http.StatusForbidden},
+		{"duplicate origin", func(r *http.Request) {
+			r.Header.Add("Origin", self)
+			r.Header.Add("Origin", self)
+		}, http.StatusForbidden},
+		{"fetch metadata same-origin", func(r *http.Request) { r.Header.Set("Sec-Fetch-Site", "same-origin") }, http.StatusOK},
+		{"fetch metadata none", func(r *http.Request) { r.Header.Set("Sec-Fetch-Site", "none") }, http.StatusOK},
+		{"fetch metadata same-site", func(r *http.Request) { r.Header.Set("Sec-Fetch-Site", "same-site") }, http.StatusForbidden},
+		{"fetch metadata cross-site", func(r *http.Request) { r.Header.Set("Sec-Fetch-Site", "cross-site") }, http.StatusForbidden},
+		{"fetch metadata unknown value", func(r *http.Request) { r.Header.Set("Sec-Fetch-Site", "sideways") }, http.StatusForbidden},
+		{"duplicate fetch metadata", func(r *http.Request) {
+			r.Header.Add("Sec-Fetch-Site", "same-origin")
+			r.Header.Add("Sec-Fetch-Site", "same-origin")
+		}, http.StatusForbidden},
+		{"good origin with bad fetch metadata", func(r *http.Request) {
+			r.Header.Set("Origin", self)
+			r.Header.Set("Sec-Fetch-Site", "cross-site")
+		}, http.StatusForbidden},
+		{"good fetch metadata with bad origin", func(r *http.Request) {
+			r.Header.Set("Origin", "https://other.example")
+			r.Header.Set("Sec-Fetch-Site", "same-origin")
+		}, http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := testAccessV2LoginWith(t, testAccessPassword, fresh(), tc.mutate)
+			if w.Code != tc.wantCode {
+				t.Fatalf("got %d want %d (body %q)", w.Code, tc.wantCode, w.Body.String())
+			}
+			if tc.wantCode == http.StatusForbidden {
+				if got := w.Body.String(); got != "forbidden\n" {
+					t.Fatalf("forbidden body = %q", got)
+				}
+			}
+		})
+	}
+}
+
+// TestAccessV2OriginTLSAndIPv6 covers the request shapes a proxy and a tailnet
+// actually produce: a TLS connection of its own, and an IPv6 host with a port.
+func TestAccessV2OriginTLSAndIPv6(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	testAccessEnableV2(t, testAccessPassword)
+
+	nextIP := 0
+	fresh := func() string {
+		nextIP++
+		return "198.18.0." + strconv.Itoa(nextIP) + ":1"
+	}
+
+	tlsRequest := func(r *http.Request) { r.TLS = &tls.ConnectionState{} }
+
+	if w := testAccessV2LoginWith(t, testAccessPassword, fresh(), func(r *http.Request) {
+		tlsRequest(r)
+		r.Header.Set("Origin", "https://example.com")
+	}); w.Code != http.StatusOK {
+		t.Fatalf("tls own origin: %d %s", w.Code, w.Body.String())
+	}
+	if w := testAccessV2LoginWith(t, testAccessPassword, fresh(), func(r *http.Request) {
+		tlsRequest(r)
+		r.Header.Set("Origin", "http://example.com")
+	}); w.Code != http.StatusForbidden {
+		t.Fatalf("tls request accepted a plain-http origin: %d", w.Code)
+	}
+	if w := testAccessV2LoginWith(t, testAccessPassword, fresh(), func(r *http.Request) {
+		r.Host = "[::1]:7070"
+		r.Header.Set("Origin", "http://[::1]:7070")
+	}); w.Code != http.StatusOK {
+		t.Fatalf("ipv6 own origin: %d %s", w.Code, w.Body.String())
+	}
+	if w := testAccessV2LoginWith(t, testAccessPassword, fresh(), func(r *http.Request) {
+		r.Host = "[::1]:7070"
+		r.Header.Set("Origin", "http://[::1]:7071")
+	}); w.Code != http.StatusForbidden {
+		t.Fatalf("ipv6 port mismatch was accepted: %d", w.Code)
+	}
+}
+
+// TestAccessV2MalformedConfiguredOrigin pins that a bad auth_origins entry is a
+// startup error and refuses browser requests instead of silently not matching.
+func TestAccessV2MalformedConfiguredOrigin(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	testAccessEnableV2(t, testAccessPassword)
+
+	for _, entry := range []string{
+		"https://phi.example/",
+		"https://phi.example/path",
+		"phi.example",
+		"https://*.phi.example",
+		"https://phi.example?x=1",
+	} {
+		t.Run(entry, func(t *testing.T) {
+			testAccessSetOrigins(t, entry)
+			if err := accessAuth.validateOrigins(); err == nil {
+				t.Fatalf("validateOrigins accepted %q", entry)
+			}
+			w := testAccessV2LoginWith(t, testAccessPassword, "198.18.1.1:1", func(r *http.Request) {
+				r.Header.Set("Origin", "http://example.com")
+			})
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("request with a malformed auth_origins: got %d want 403", w.Code)
+			}
+		})
+	}
+
+	// A well-formed list validates, and duplicate entries collapse.
+	testAccessSetOrigins(t, "https://phi.example", "https://phi.example:443", "http://127.0.0.1:7070")
+	if err := accessAuth.validateOrigins(); err != nil {
+		t.Fatalf("validateOrigins rejected a valid list: %v", err)
+	}
+	origins, err := accessConfiguredOrigins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(origins) != 2 {
+		t.Fatalf("canonical origins = %v want two entries", origins)
+	}
+}
+
+// TestAccessV2CookieSecureDerivation covers the Secure rule: it follows the
+// validated origin and the transport, never r.Host.
+func TestAccessV2CookieSecureDerivation(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	testAccessEnableV2(t, testAccessPassword)
+
+	nextIP := 0
+	fresh := func() string {
+		nextIP++
+		return "192.0.2." + strconv.Itoa(100+nextIP) + ":1"
+	}
+
+	for _, tc := range []struct {
+		name       string
+		origins    []string
+		mutate     func(*http.Request)
+		wantSecure bool
+	}{
+		{"plain native caller", nil, nil, false},
+		{"tls native caller", nil, func(r *http.Request) { r.TLS = &tls.ConnectionState{} }, true},
+		{"plain caller with configured https origin", []string{"https://phi.example"}, nil, true},
+		{"plain caller presenting a configured https origin", []string{"https://phi.example"}, func(r *http.Request) {
+			r.Header.Set("Origin", "https://phi.example")
+		}, true},
+		{"plain caller presenting its own http origin", nil, func(r *http.Request) {
+			r.Header.Set("Origin", "http://example.com")
+		}, false},
+		{"tls caller presenting its own https origin", nil, func(r *http.Request) {
+			r.TLS = &tls.ConnectionState{}
+			r.Header.Set("Origin", "https://example.com")
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testAccessSetOrigins(t, tc.origins...)
+			w := testAccessV2LoginWith(t, testAccessPassword, fresh(), tc.mutate)
+			if w.Code != http.StatusOK {
+				t.Fatalf("login: %d %s", w.Code, w.Body.String())
+			}
+			for _, name := range []string{accessRefreshCookie, accessAssetCookie} {
+				if cookie := testAccessResponseCookie(t, w, name); cookie.Secure != tc.wantSecure {
+					t.Errorf("%s Secure = %v want %v", name, cookie.Secure, tc.wantSecure)
+				}
+			}
+		})
+	}
+}
+
+// testAccessDecodeHandle asserts the refresh handle is one canonical unpadded
+// 32-byte base64url value: opaque, unguessable length, and never padded.
+func testAccessDecodeHandle(t *testing.T, handle string) {
+	t.Helper()
+	if strings.ContainsAny(handle, "=+/") {
+		t.Errorf("handle is not canonical base64url: %q", handle)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(handle)
+	if err != nil || len(raw) != accessRefreshHandleBytes {
+		t.Errorf("handle decodes to %d bytes (err %v) want %d", len(raw), err, accessRefreshHandleBytes)
+	}
+}
+
+func TestAccessV2CookieAttributes(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	testAccessEnableV2(t, testAccessPassword)
+
+	login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.120:1")
+	bundle := testAccessDecodeBundle(t, login)
+
+	refresh := testAccessResponseCookie(t, login, accessRefreshCookie)
+	if refresh.Path != accessRefreshCookiePath {
+		t.Errorf("refresh Path = %q want %q", refresh.Path, accessRefreshCookiePath)
+	}
+	if !refresh.HttpOnly || refresh.SameSite != http.SameSiteStrictMode {
+		t.Errorf("refresh flags = %+v", refresh)
+	}
+	if refresh.Domain != "" {
+		t.Errorf("refresh cookie is not host-only: Domain=%q", refresh.Domain)
+	}
+	if refresh.Expires.Unix() != bundle.RefreshIdleExpiresAt {
+		t.Errorf("refresh Expires = %d want %d", refresh.Expires.Unix(), bundle.RefreshIdleExpiresAt)
+	}
+	if want := bundle.RefreshIdleExpiresAt - time.Now().Unix(); refresh.MaxAge > int(want) || refresh.MaxAge < int(want)-60 {
+		t.Errorf("refresh MaxAge = %d want about %d", refresh.MaxAge, want)
+	}
+	testAccessDecodeHandle(t, refresh.Value)
+
+	asset := testAccessResponseCookie(t, login, accessAssetCookie)
+	if asset.Path != accessAssetCookiePath {
+		t.Errorf("asset Path = %q want %q", asset.Path, accessAssetCookiePath)
+	}
+	if !asset.HttpOnly || asset.SameSite != http.SameSiteStrictMode || asset.Domain != "" {
+		t.Errorf("asset cookie flags = %+v", asset)
+	}
+	if asset.Expires.Unix() != bundle.ExpiresAt {
+		t.Errorf("asset Expires = %d want %d", asset.Expires.Unix(), bundle.ExpiresAt)
+	}
+	// The asset cookie carries the access token itself and no 30-second
+	// extension, so its deadline is the admitted `exp`.
+	if asset.Value != bundle.Token {
+		t.Error("asset cookie is not the access token")
+	}
+	if bundle.ExpiresAt-bundle.RefreshIdleExpiresAt >= 0 {
+		t.Errorf("idle deadline is not later than the access deadline: %+v", bundle)
+	}
+	if want := bundle.ExpiresAt - time.Now().Unix(); asset.MaxAge > int(want) || asset.MaxAge < int(want)-60 {
+		t.Errorf("asset MaxAge = %d want about %d", asset.MaxAge, want)
+	}
+}
+
+func TestAccessV2CookieDeletionAttributes(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+
+	// Clear first: logout revokes the bearer's family, so the same token could
+	// not authorize both.
+	clear := testAccessV2PasswordRequest(t, `{"password":""}`, testAccessEnableV2(t, testAccessPassword))
+	logout := testAccessV2LogoutRequest(t, `{"all":false}`, testAccessEnableV2(t, testAccessPassword))
+
+	deletions := []struct {
+		name string
+		w    *httptest.ResponseRecorder
+	}{
+		{"clear", clear},
+		{"logout", logout},
+	}
+	for _, deletion := range deletions {
+		name, w := deletion.name, deletion.w
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", name, w.Code, w.Body.String())
+		}
+		for _, want := range []struct {
+			name string
+			path string
+		}{
+			{accessRefreshCookie, accessRefreshCookiePath},
+			{accessAssetCookie, accessAssetCookiePath},
+		} {
+			cookie := testAccessResponseCookie(t, w, want.name)
+			if cookie.Path != want.path {
+				t.Errorf("%s %s Path = %q want %q", name, want.name, cookie.Path, want.path)
+			}
+			if cookie.Value != "" || cookie.MaxAge != -1 {
+				t.Errorf("%s %s deletion = %+v", name, want.name, cookie)
+			}
+			if !cookie.Expires.Before(time.Now()) {
+				t.Errorf("%s %s Expires = %v want a past time", name, want.name, cookie.Expires)
+			}
+			if !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || cookie.Domain != "" {
+				t.Errorf("%s %s deletion attributes = %+v", name, want.name, cookie)
+			}
+		}
+	}
+}
+
+// TestAccessV2PersistedThenAnnounced pins that a failed state write produces no
+// replacement cookies: the handler reports 500 before any cookie is set.
+func TestAccessV2PersistedThenAnnounced(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	handle := testAccessRefreshHandle(t,
+		func() *httptest.ResponseRecorder {
+			testAccessEnableV2(t, testAccessPassword)
+			return testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.121:1")
+		}())
+
+	previous := writeAccessV2StateFile
+	writeAccessV2StateFile = func(string, []byte, os.FileMode) error { return errors.New("disk full") }
+	t.Cleanup(func() { writeAccessV2StateFile = previous })
+
+	refresh := testAccessV2RefreshRequest(t, handle)
+	testAccessErrorResponse(t, "refresh persistence failure", refresh, http.StatusInternalServerError, "Unable to refresh access session\n")
+
+	writeAccessV2StateFile = previous
+	// The handle is still the active one: nothing was consumed by the failure.
+	if w := testAccessV2RefreshRequest(t, handle); w.Code != http.StatusOK {
+		t.Fatalf("handle stopped working after a failed write: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAccessV2GraceReissuesOriginalDeadlines(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	clock := testAccessUseClock(t, auth, testAccessStart)
+
+	testAccessEnableV2(t, testAccessPassword)
+	login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.122:1")
+	loginBundle := testAccessDecodeBundle(t, login)
+	handle := testAccessRefreshHandle(t, login)
+
+	rotated := testAccessV2RefreshRequest(t, handle)
+	rotatedBundle := testAccessDecodeBundle(t, rotated)
+	if rotatedBundle.Token == loginBundle.Token {
+		t.Fatal("rotation reused the access token")
+	}
+
+	// The client lost the response, so it retries the consumed handle inside the
+	// grace window. It must get the same token, handle, and deadlines back.
+	clock.advance(30 * time.Second)
+	replay := testAccessV2RefreshRequest(t, handle)
+	replayBundle := testAccessDecodeBundle(t, replay)
+	if replayBundle.Token != rotatedBundle.Token {
+		t.Error("grace replay minted a different access token")
+	}
+	if replayBundle.ExpiresAt != rotatedBundle.ExpiresAt {
+		t.Error("grace replay moved the access deadline")
+	}
+	if replayBundle.RefreshIdleExpiresAt != rotatedBundle.RefreshIdleExpiresAt ||
+		replayBundle.RefreshAbsoluteExpiresAt != rotatedBundle.RefreshAbsoluteExpiresAt {
+		t.Error("grace replay extended a refresh deadline")
+	}
+	if replayBundle.ExpiresIn != rotatedBundle.ExpiresIn-30 {
+		t.Errorf("grace expires_in = %d want %d", replayBundle.ExpiresIn, rotatedBundle.ExpiresIn-30)
+	}
+	if replayHandle := testAccessRefreshHandle(t, replay); replayHandle != testAccessRefreshHandle(t, rotated) {
+		t.Error("grace replay rotated the handle again")
+	}
+	if got := testAccessResponseCookie(t, replay, accessAssetCookie); got.Expires.Unix() != rotatedBundle.ExpiresAt {
+		t.Errorf("grace asset cookie Expires = %d want %d", got.Expires.Unix(), rotatedBundle.ExpiresAt)
+	}
+	if got := testAccessResponseCookie(t, replay, accessRefreshCookie); got.Expires.Unix() != rotatedBundle.RefreshIdleExpiresAt {
+		t.Errorf("grace refresh cookie Expires = %d want %d", got.Expires.Unix(), rotatedBundle.RefreshIdleExpiresAt)
+	}
+}
+
+func TestAccessV2AssetCookieScope(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	testAccessEnableV2(t, testAccessPassword)
+	login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.123:1")
+	bundle := testAccessDecodeBundle(t, login)
+	asset := &http.Cookie{Name: accessAssetCookie, Value: bundle.Token}
+	v1 := auth.mustTestCookie(t)
+	protected := testAccessProtected()
+
+	serve := func(method, path string, cookies ...*http.Cookie) int {
+		r := httptest.NewRequest(method, path, nil)
+		for _, cookie := range cookies {
+			r.AddCookie(cookie)
+		}
+		return testAccessServe(protected.ServeHTTP, r).Code
+	}
+
+	if code := serve(http.MethodGet, accessAssetFilePath, asset); code != http.StatusNoContent {
+		t.Errorf("asset cookie on GET file/asset: %d", code)
+	}
+	if code := serve(http.MethodHead, accessAssetMarkdownPath, asset); code != http.StatusNoContent {
+		t.Errorf("asset cookie on HEAD markdown/asset: %d", code)
+	}
+	// Outside the exact allowlist the cookie is ignored, so an API read needs
+	// a real credential.
+	if code := serve(http.MethodGet, "/api/coders", asset); code != http.StatusUnauthorized {
+		t.Errorf("asset cookie authorized an API read: %d", code)
+	}
+	// Only GET and HEAD are eligible.
+	if code := serve(http.MethodPost, accessAssetFilePath, asset); code != http.StatusUnauthorized {
+		t.Errorf("asset cookie authorized a mutation: %d", code)
+	}
+	// An invalid asset cookie on an allowed read is a 401, never a v1 fallback.
+	if code := serve(http.MethodGet, accessAssetFilePath,
+		&http.Cookie{Name: accessAssetCookie, Value: "not-a-token"}, v1); code != http.StatusUnauthorized {
+		t.Errorf("invalid asset cookie fell back to the v1 cookie: %d", code)
+	}
+	// A duplicated asset cookie fails closed.
+	if code := serve(http.MethodGet, accessAssetFilePath, asset, asset); code != http.StatusUnauthorized {
+		t.Errorf("duplicate asset cookies were accepted: %d", code)
+	}
+	// The approved v1 fallback still works on the allowed read.
+	if code := serve(http.MethodGet, accessAssetFilePath, v1); code != http.StatusNoContent {
+		t.Errorf("v1 cookie on an asset read: %d", code)
+	}
+	// A valid bearer wins on the allowed read.
+	r := httptest.NewRequest(http.MethodGet, accessAssetFilePath, nil)
+	r.Header.Set("Authorization", "Bearer "+bundle.Token)
+	r.AddCookie(&http.Cookie{Name: accessAssetCookie, Value: "not-a-token"})
+	if code := testAccessServe(protected.ServeHTTP, r).Code; code != http.StatusNoContent {
+		t.Errorf("bearer did not outrank an invalid asset cookie: %d", code)
+	}
+
+	// Past exp the asset cookie stops authorizing, with the browser allowance
+	// being the documented thirty seconds and nothing more.
+	clock := testAccessUseClock(t, auth, time.Unix(bundle.ExpiresAt, 0))
+	if code := serve(http.MethodGet, accessAssetFilePath, asset); code != http.StatusNoContent {
+		t.Errorf("asset cookie at exp: %d", code)
+	}
+	clock.advance(accessJWTClockAllowance)
+	if code := serve(http.MethodGet, accessAssetFilePath, asset); code != http.StatusUnauthorized {
+		t.Errorf("asset cookie at exp+allowance: %d", code)
+	}
+}
+
+func TestAccessV2RefreshCookieAuthorizesNothing(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	testAccessEnableV2(t, testAccessPassword)
+	handle := testAccessRefreshHandle(t,
+		testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.124:1"))
+	refresh := &http.Cookie{Name: accessRefreshCookie, Value: handle}
+
+	protected := testAccessProtected()
+	for _, path := range []string{"/api/coders", accessAssetFilePath, accessAssetMarkdownPath, "/ws/pane/p1"} {
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		r.AddCookie(refresh)
+		if code := testAccessServe(protected.ServeHTTP, r).Code; code != http.StatusUnauthorized {
+			t.Errorf("refresh cookie authorized %s: %d", path, code)
+		}
+	}
+
+	// The status route reports cookie authentication as false, and the password
+	// route does not accept the refresh cookie as a bearer either.
+	r := httptest.NewRequest(http.MethodGet, "/api/auth/v2/status", nil)
+	r.AddCookie(refresh)
+	var payload struct {
+		Authenticated bool `json:"authenticated"`
+	}
+	testAccessJSONBody(t, testAccessServe(handleAccessV2Status, r), &payload)
+	if payload.Authenticated {
+		t.Error("v2 status authenticated a refresh cookie")
+	}
+	password := testAccessV2Request(http.MethodPost, "/api/auth/v2/password", `{"password":"test-pass-5678"}`)
+	password.AddCookie(refresh)
+	if code := testAccessServe(handleAccessV2Password, password).Code; code != http.StatusUnauthorized {
+		t.Errorf("password route accepted a refresh cookie: %d", code)
+	}
+}
+
+func TestAccessRevokedJWTWithValidV1Cookie(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+	v1 := auth.mustTestCookie(t)
+	protected := testAccessProtected()
+
+	if w := testAccessV2LogoutRequest(t, `{"all":true}`, token); w.Code != http.StatusOK {
+		t.Fatalf("logout all: %d %s", w.Code, w.Body.String())
+	}
+
+	// A stolen revoked bearer decides alone: the valid v1 cookie must not
+	// rescue it.
+	r := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	r.AddCookie(v1)
+	if w := testAccessServe(protected.ServeHTTP, r); w.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked bearer fell back to the v1 cookie: %d", w.Code)
+	}
+
+	// v1 keeps working on its own: logout-all has no v1 epoch.
+	r = httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	r.AddCookie(v1)
+	if w := testAccessServe(protected.ServeHTTP, r); w.Code != http.StatusNoContent {
+		t.Fatalf("logout-all invalidated the v1 cookie: %d", w.Code)
+	}
+}
+
+// testAccessStateFile reads the durable state the manager just wrote.
+func testAccessStateFile(t *testing.T) *accessV2StateFile {
+	t.Helper()
+	state, err := loadAccessV2StateFile(accessV2StatePath())
+	if err != nil || state == nil {
+		t.Fatalf("load state file: state=%v err=%v", state, err)
+	}
+	return state
+}
+
+func TestAccessV2RefreshRotation(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	clock := testAccessUseClock(t, auth, testAccessStart)
+
+	testAccessEnableV2(t, testAccessPassword)
+	login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.130:1")
+	loginHandle := testAccessRefreshHandle(t, login)
+
+	firstResponse := testAccessV2RefreshRequest(t, loginHandle)
+	first := testAccessDecodeBundle(t, firstResponse)
+	firstHandle := testAccessRefreshHandle(t, firstResponse)
+	if firstHandle == loginHandle {
+		t.Fatal("the first rotation did not change the handle")
+	}
+
+	clock.advance(time.Minute)
+	second := testAccessDecodeBundle(t, testAccessV2RefreshRequest(t, firstHandle))
+
+	if first.Token == second.Token {
+		t.Error("rotations reused the access token")
+	}
+	if second.ExpiresAt <= first.ExpiresAt {
+		t.Error("a rotation did not get a fresh access deadline")
+	}
+	// The idle deadline is now+30 days, capped by the absolute deadline.
+	if want := testAccessStart.Add(time.Minute + accessRefreshIdle).Unix(); second.RefreshIdleExpiresAt != want {
+		t.Errorf("idle deadline = %d want %d", second.RefreshIdleExpiresAt, want)
+	}
+	if want := testAccessStart.Add(accessRefreshAbsolute).Unix(); second.RefreshAbsoluteExpiresAt != want {
+		t.Errorf("absolute deadline moved: %d want %d", second.RefreshAbsoluteExpiresAt, want)
+	}
+
+	state := testAccessStateFile(t)
+	if len(state.Active.Families) != 2 {
+		t.Fatalf("families = %d want 2 (enable and login)", len(state.Active.Families))
+	}
+	var rotated *accessV2Family
+	for i := range state.Active.Families {
+		if state.Active.Families[i].Generation > 0 {
+			rotated = &state.Active.Families[i]
+		}
+	}
+	if rotated == nil {
+		t.Fatal("no family recorded a rotation")
+	}
+	if rotated.Generation != 2 {
+		t.Errorf("generation = %d want 2", rotated.Generation)
+	}
+	if len(rotated.Consumed) != 2 {
+		t.Fatalf("consumed evidence = %d want 2", len(rotated.Consumed))
+	}
+	if rotated.Consumed[0].ConsumedAt != testAccessStart.Unix() ||
+		rotated.Consumed[1].ConsumedAt != testAccessStart.Add(time.Minute).Unix() {
+		t.Errorf("consumed_at = %v want the two rotation instants", rotated.Consumed)
+	}
+	if rotated.LastUsedAt != testAccessStart.Add(time.Minute).Unix() {
+		t.Errorf("last_used_at = %d", rotated.LastUsedAt)
+	}
+	if !validAccessDigest(rotated.ActiveDigest) {
+		t.Error("active digest is not a digest")
+	}
+	// No handle, token, or password reaches the file.
+	raw, err := os.ReadFile(accessV2StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{second.Token, firstHandle, testAccessPassword, loadConfig().AccessPasswordHash} {
+		if forbidden != "" && strings.Contains(string(raw), forbidden) {
+			t.Error("state file contains a credential")
+		}
+	}
+}
+
+func TestAccessV2RefreshReplayRevokesOutsideGrace(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	clock := testAccessUseClock(t, auth, testAccessStart)
+
+	testAccessEnableV2(t, testAccessPassword)
+	handle := testAccessRefreshHandle(t, testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.131:1"))
+	rotated := testAccessDecodeBundle(t, testAccessV2RefreshRequest(t, handle))
+	current := testAccessRefreshHandle(t, testAccessV2RefreshRequest(t, handle))
+
+	// One second past the grace window the retry is a reuse signal.
+	clock.advance(accessRefreshGrace + time.Second)
+	testAccessErrorResponse(t, "replay past grace",
+		testAccessV2RefreshRequest(t, handle), http.StatusUnauthorized, "access authentication required\n")
+
+	// The revocation is durable and immediate: the live handle and the live
+	// token both stop working.
+	testAccessErrorResponse(t, "handle after replay revocation",
+		testAccessV2RefreshRequest(t, current), http.StatusUnauthorized, "access authentication required\n")
+	r := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	r.Header.Set("Authorization", "Bearer "+rotated.Token)
+	if w := testAccessServe(testAccessProtected().ServeHTTP, r); w.Code != http.StatusUnauthorized {
+		t.Errorf("revoked family's token still authorized: %d", w.Code)
+	}
+	for _, family := range testAccessStateFile(t).Active.Families {
+		if family.Generation > 0 {
+			t.Error("revoked family is still durable")
+		}
+	}
+}
+
+func TestAccessV2RefreshUnknownHandles(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	clock := testAccessUseClock(t, auth, testAccessStart)
+
+	testAccessEnableV2(t, testAccessPassword)
+	rotated := testAccessV2RefreshRequest(t,
+		testAccessRefreshHandle(t, testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.132:1")))
+	bundle := testAccessDecodeBundle(t, rotated)
+	live := testAccessRefreshHandle(t, rotated)
+	familiesBefore := len(testAccessStateFile(t).Active.Families)
+
+	unknown, err := randomAccessToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, candidate := range map[string]string{
+		"unknown 32-byte handle": unknown,
+		"short handle":           "dG9vLXNob3J0",
+		"padded handle":          "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM=",
+		"non-base64 handle":      "%%%%",
+		"empty handle":           "",
+	} {
+		r := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh", `{}`)
+		r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: candidate})
+		testAccessErrorResponse(t, name, testAccessServe(handleAccessV2Refresh, r),
+			http.StatusUnauthorized, "access authentication required\n")
+	}
+
+	// No collateral revocation: the rotated handle still rotates and its token
+	// still authorizes, and the rejected attempts wrote nothing.
+	if len(testAccessStateFile(t).Active.Families) != familiesBefore {
+		t.Error("an unknown handle changed the family set")
+	}
+	clock.advance(time.Second)
+	if w := testAccessV2RefreshRequest(t, live); w.Code != http.StatusOK {
+		t.Errorf("live handle after unknown-handle attempts: %d %s", w.Code, w.Body.String())
+	}
+	r := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	r.Header.Set("Authorization", "Bearer "+bundle.Token)
+	if w := testAccessServe(testAccessProtected().ServeHTTP, r); w.Code != http.StatusNoContent {
+		t.Errorf("live token stopped working after unknown-handle attempts: %d", w.Code)
+	}
+}
+
+func TestAccessV2RefreshConcurrentSerialization(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	testAccessUseClock(t, auth, testAccessStart)
+	testAccessEnableV2(t, testAccessPassword)
+	handle := testAccessRefreshHandle(t, testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.133:1"))
+
+	const callers = 8
+	var wg sync.WaitGroup
+	results := make([]*httptest.ResponseRecorder, callers)
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i] = testAccessV2RefreshRequest(t, handle)
+		}(i)
+	}
+	wg.Wait()
+
+	var token string
+	for i, w := range results {
+		if w.Code != http.StatusOK {
+			t.Fatalf("caller %d: %d %s", i, w.Code, w.Body.String())
+		}
+		var payload struct {
+			Token string `json:"token"`
+		}
+		testAccessJSONBody(t, w, &payload)
+		if token == "" {
+			token = payload.Token
+		} else if payload.Token != token {
+			t.Fatalf("caller %d got a different token: the rotation was not serialized", i)
+		}
+	}
+
+	// Exactly one rotation happened: the rest were grace replays of it.
+	rotations := 0
+	for _, family := range testAccessStateFile(t).Active.Families {
+		if family.Generation == 1 {
+			rotations++
+			if len(family.Consumed) != 1 {
+				t.Errorf("consumed evidence = %d want 1", len(family.Consumed))
+			}
+		}
+	}
+	if rotations != 1 {
+		t.Fatalf("rotated families = %d want 1", rotations)
+	}
+}
+
+func TestAccessV2RefreshIdleAndAbsoluteDeadlines(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	clock := testAccessUseClock(t, auth, testAccessStart)
+
+	testAccessEnableV2(t, testAccessPassword)
+	first := testAccessV2RefreshRequest(t,
+		testAccessRefreshHandle(t, testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.134:1")))
+	handle := testAccessRefreshHandle(t, first)
+	login := testAccessDecodeBundle(t, first)
+	absolute := time.Unix(login.RefreshAbsoluteExpiresAt, 0)
+
+	rotate := func() testAccessBundle {
+		t.Helper()
+		w := testAccessV2RefreshRequest(t, handle)
+		if w.Code != http.StatusOK {
+			t.Fatalf("rotation at %v: %d %s", clock.now.Sub(testAccessStart), w.Code, w.Body.String())
+		}
+		handle = testAccessRefreshHandle(t, w)
+		return testAccessDecodeBundle(t, w)
+	}
+
+	// Idle: one second before the idle deadline the family still rotates, and
+	// the rotation is capped by the absolute deadline rather than extending
+	// past it.
+	clock.advance(accessRefreshIdle - time.Second)
+	idleRenewed := rotate()
+	if want := clock.now.Add(accessRefreshIdle).Unix(); idleRenewed.RefreshIdleExpiresAt != want {
+		t.Errorf("idle deadline = %d want a full renewal at %d", idleRenewed.RefreshIdleExpiresAt, want)
+	}
+	if got := time.Unix(idleRenewed.RefreshIdleExpiresAt, 0); got.After(absolute) {
+		t.Errorf("idle deadline %v passed the absolute cap %v", got, absolute)
+	}
+
+	// Walk the family to the absolute deadline without ever letting the idle
+	// window lapse.
+	for clock.now.Before(absolute.Add(-20 * 24 * time.Hour)) {
+		clock.advance(20 * 24 * time.Hour)
+		renewed := rotate()
+		if renewed.RefreshAbsoluteExpiresAt != login.RefreshAbsoluteExpiresAt {
+			t.Fatalf("absolute deadline moved to %d", renewed.RefreshAbsoluteExpiresAt)
+		}
+		if got := time.Unix(renewed.RefreshIdleExpiresAt, 0); got.After(absolute) {
+			t.Fatalf("idle deadline %v passed the absolute cap %v", got, absolute)
+		}
+	}
+
+	// At absolute-1s it still rotates and the idle deadline lands exactly on the
+	// cap; at absolute itself the family is gone.
+	clock.advance(absolute.Add(-time.Second).Sub(clock.now))
+	capped := rotate()
+	if want := capped.RefreshAbsoluteExpiresAt; capped.RefreshIdleExpiresAt != want {
+		t.Errorf("idle deadline = %d want the absolute cap %d", capped.RefreshIdleExpiresAt, want)
+	}
+	clock.advance(time.Second)
+	testAccessErrorResponse(t, "rotation at the absolute deadline",
+		testAccessV2RefreshRequest(t, handle), http.StatusUnauthorized, "access authentication required\n")
+}
+
+func TestAccessV2RefreshConsumedPruning(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	clock := testAccessUseClock(t, auth, testAccessStart)
+
+	testAccessEnableV2(t, testAccessPassword)
+	handle := testAccessRefreshHandle(t, testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.135:1"))
+	testAccessDecodeBundle(t, testAccessV2RefreshRequest(t, handle))
+	current := testAccessRefreshHandle(t, func() *httptest.ResponseRecorder {
+		r := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh", `{}`)
+		r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: handle})
+		return testAccessServe(handleAccessV2Refresh, r)
+	}())
+
+	for _, family := range testAccessStateFile(t).Active.Families {
+		if family.Generation == 1 && len(family.Consumed) != 1 {
+			t.Fatalf("consumed evidence = %d before pruning", len(family.Consumed))
+		}
+	}
+
+	// Seven days later the replay evidence is past its retention and the next
+	// commit drops it, so an old handle is simply unknown.
+	clock.advance(accessConsumedRetention)
+	if w := testAccessV2RefreshRequest(t, current); w.Code != http.StatusOK {
+		t.Fatalf("rotation after the retention window: %d %s", w.Code, w.Body.String())
+	}
+	for _, family := range testAccessStateFile(t).Active.Families {
+		if family.Generation == 2 && len(family.Consumed) != 1 {
+			t.Errorf("consumed evidence = %d want only the newest entry", len(family.Consumed))
+		}
+	}
+	testAccessErrorResponse(t, "pruned handle",
+		testAccessV2RefreshRequest(t, handle), http.StatusUnauthorized, "access authentication required\n")
+}
+
+func TestAccessV2RefreshConsumedCapRevokes(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	clock := testAccessUseClock(t, auth, testAccessStart)
+
+	testAccessEnableV2(t, testAccessPassword)
+	handle := testAccessRefreshHandle(t, testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.136:1"))
+
+	var token string
+	for i := 0; i < maxAccessConsumedPerFam; i++ {
+		// One second per rotation keeps the refresh bucket (two tokens a
+		// second) ahead of the cap loop without touching the grace window.
+		clock.advance(time.Second)
+		w := testAccessV2RefreshRequest(t, handle)
+		if w.Code != http.StatusOK {
+			t.Fatalf("rotation %d: %d %s", i+1, w.Code, w.Body.String())
+		}
+		bundle := testAccessDecodeBundle(t, w)
+		token = bundle.Token
+		handle = testAccessRefreshHandle(t, w)
+	}
+	for _, family := range testAccessStateFile(t).Active.Families {
+		if len(family.Consumed) > maxAccessConsumedPerFam {
+			t.Fatalf("consumed evidence = %d exceeds the cap", len(family.Consumed))
+		}
+	}
+
+	// The next rotation would have to evict younger evidence, so the family is
+	// revoked instead.
+	testAccessErrorResponse(t, "rotation at the consumed cap",
+		testAccessV2RefreshRequest(t, handle), http.StatusUnauthorized, "access authentication required\n")
+	r := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	if w := testAccessServe(testAccessProtected().ServeHTTP, r); w.Code != http.StatusUnauthorized {
+		t.Errorf("the cap revocation left the token valid: %d", w.Code)
+	}
+}
+
+func TestAccessV2FamilyCapacityEvictsLRU(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	testAccessEnableV2(t, testAccessPassword)
+
+	auth.mu.Lock()
+	active := auth.snapshotLocked()
+	active.Families = nil
+	key, refreshKey := auth.jwtKey, auth.v2.refreshKey
+	auth.mu.Unlock()
+
+	ids := make([]string, 0, maxAccessFamilies+1)
+	add := func(offset int) error {
+		family, _, err := addAccessFamily(active, key, refreshKey, testAccessStart.Add(time.Duration(offset)*time.Second))
+		if err != nil {
+			return err
+		}
+		ids = append(ids, family.ID)
+		return nil
+	}
+	for i := 0; i < maxAccessFamilies; i++ {
+		if err := add(i); err != nil {
+			t.Fatalf("add family %d: %v", i, err)
+		}
+	}
+	if err := add(maxAccessFamilies); err != nil {
+		t.Fatalf("add the over-cap family: %v", err)
+	}
+	if len(active.Families) != maxAccessFamilies {
+		t.Fatalf("families = %d want the cap %d", len(active.Families), maxAccessFamilies)
+	}
+	if findAccessFamily(active, ids[0]) != nil {
+		t.Error("the least-recently-used family survived eviction")
+	}
+	if findAccessFamily(active, ids[1]) == nil {
+		t.Error("eviction removed more than the least-recently-used family")
+	}
+	if findAccessFamily(active, ids[len(ids)-1]) == nil {
+		t.Error("eviction removed the newest family")
+	}
+}
+
+func TestAccessV2RefreshRestartReconstruction(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	clock := testAccessUseClock(t, auth, testAccessStart)
+
+	testAccessEnableV2(t, testAccessPassword)
+	consumed := testAccessRefreshHandle(t, testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.137:1"))
+	// The client sent the handle and lost the response; the server rotated and
+	// persisted before it wrote anything.
+	lostResponse := testAccessV2RefreshRequest(t, consumed)
+	lostBundle := testAccessDecodeBundle(t, lostResponse)
+	lostHandle := testAccessRefreshHandle(t, lostResponse)
+
+	// A restart must reproduce the same bytes from durable state alone.
+	testAccessReleaseStateOwnership(auth)
+	restarted := newAccessAuthManager()
+	testAccessUseClock(t, restarted, clock.now)
+	if err := restarted.configure(loadConfig().AccessPasswordHash); err != nil {
+		t.Fatal(err)
+	}
+	previous := accessAuth
+	accessAuth = restarted
+	t.Cleanup(func() { accessAuth = previous })
+
+	clock.advance(10 * time.Second)
+	replay := testAccessV2RefreshRequest(t, consumed)
+	replayBundle := testAccessDecodeBundle(t, replay)
+	if replayBundle.Token != lostBundle.Token {
+		t.Error("restart did not reconstruct the lost access token byte for byte")
+	}
+	if replayHandle := testAccessRefreshHandle(t, replay); replayHandle != lostHandle {
+		t.Error("restart did not reconstruct the lost handle")
+	}
+	if replayBundle.ExpiresAt != lostBundle.ExpiresAt ||
+		replayBundle.RefreshIdleExpiresAt != lostBundle.RefreshIdleExpiresAt ||
+		replayBundle.RefreshAbsoluteExpiresAt != lostBundle.RefreshAbsoluteExpiresAt {
+		t.Errorf("restart changed a deadline: %+v want %+v", replayBundle, lostBundle)
+	}
+	// The reconstructed token must still authorize, and the reconstructed handle
+	// must still rotate.
+	r := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	r.Header.Set("Authorization", "Bearer "+replayBundle.Token)
+	if w := testAccessServe(testAccessProtected().ServeHTTP, r); w.Code != http.StatusNoContent {
+		t.Fatalf("reconstructed token was rejected: %d", w.Code)
+	}
+	if w := testAccessV2RefreshRequest(t, lostHandle); w.Code != http.StatusOK {
+		t.Fatalf("reconstructed handle did not rotate: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAccessV2RefreshRateLimitIsolated(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	clock := testAccessUseClock(t, auth, testAccessStart)
+	testAccessEnableV2(t, testAccessPassword)
+	handle := testAccessRefreshHandle(t, testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.138:1"))
+
+	// Fill the refresh budget with handles that cannot exist, so the family is
+	// untouched while the bucket drains.
+	unknown, err := randomAccessToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < accessRefreshBurst; i++ {
+		if w := testAccessV2RefreshRequest(t, unknown); w.Code != http.StatusUnauthorized {
+			t.Fatalf("burn %d: %d %s", i, w.Code, w.Body.String())
+		}
+	}
+	limited := testAccessV2RefreshRequest(t, unknown)
+	if limited.Code != http.StatusTooManyRequests {
+		t.Fatalf("refresh past the burst: %d %s", limited.Code, limited.Body.String())
+	}
+	if got := limited.Header().Get("Retry-After"); got == "" {
+		t.Error("429 without Retry-After")
+	}
+	if got := limited.Body.String(); got != "Too many refresh requests\n" {
+		t.Errorf("429 body = %q", got)
+	}
+
+	// The shared password-login backoff is a different budget: a wrong password
+	// is still an honest 401, not a 429.
+	if w := testAccessV2LoginRequest(t, "wrong-pass-0000", "192.0.2.139:1"); w.Code != http.StatusUnauthorized {
+		t.Errorf("login after the refresh cap: %d %s", w.Code, w.Body.String())
+	}
+	auth.mu.Lock()
+	attempts := len(auth.attempts)
+	auth.mu.Unlock()
+	if attempts != 1 {
+		t.Errorf("refresh traffic touched the login attempt map: %d entries", attempts)
+	}
+
+	// Once the bucket refills the live family still rotates.
+	clock.advance(time.Minute)
+	if w := testAccessV2RefreshRequest(t, handle); w.Code != http.StatusOK {
+		t.Fatalf("live handle after the cap reset: %d %s", w.Code, w.Body.String())
 	}
 }

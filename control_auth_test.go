@@ -13,6 +13,8 @@ import (
 )
 
 func TestControlAuthRejectsNoCookie(t *testing.T) {
+	// Auth state lives beside config, so this test isolates both.
+	withTempConfig(t)
 	auth := useTestAccessAuth(t)
 	if err := auth.configure(testAccessHash()); err != nil {
 		t.Fatal(err)
