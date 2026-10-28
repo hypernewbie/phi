@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hypernewbie/phi/pkg/system"
 	"github.com/hypernewbie/phi/pkg/ws"
 )
 
@@ -4451,5 +4452,152 @@ func TestAccessJWTLifetimeRejectedUnderRestoredKey(t *testing.T) {
 		if _, err := parseAccessJWT(restored, mint(lifetime), now, accessJWTClockAllowance); err == nil {
 			t.Errorf("%s lifetime accepted under the restored key", name)
 		}
+	}
+}
+
+// testAccessCommittedError is the error a strict replacement returns after its
+// rename succeeded and only the directory sync that makes it durable failed.
+func testAccessCommittedError(t *testing.T) error {
+	t.Helper()
+	return fmt.Errorf("%w: %w", system.ErrAtomicCommitted, errors.New("injected directory sync failure"))
+}
+
+// TestAccessConfigCommitCrossedRenameFollowsDurableRecord covers the boundary
+// the strict writer reports as ambiguous rather than pre-commit: the Config
+// rename happened, so v1 must follow the durable record, v2 must stop
+// authorizing, and the caller still gets the fixed 500 with no credential.
+func TestAccessConfigCommitCrossedRenameFollowsDurableRecord(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+	login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.61:1")
+	handle := testAccessRefreshHandle(t, login)
+	before := loadConfig().AccessPasswordHash
+
+	previous := writeConfigFile
+	writeConfigFile = func(path string, data []byte, perm os.FileMode) error {
+		// The rename lands: the destination really carries the new record, and
+		// only its durability is unconfirmed.
+		if err := previous(path, data, perm); err != nil {
+			return err
+		}
+		return testAccessCommittedError(t)
+	}
+	t.Cleanup(func() { writeConfigFile = previous })
+
+	body, err := json.Marshal(map[string]string{"password": "crossed-rename-pass"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := testAccessV2PasswordRequest(t, string(body), token)
+	writeConfigFile = previous
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("committed-but-unconfirmed record change = %d want 500 (body %q)", w.Code, w.Body.String())
+	}
+	if cookies := w.Result().Cookies(); len(cookies) != 0 {
+		t.Errorf("unconfirmed commit issued %d cookies", len(cookies))
+	}
+	committed := loadConfig().AccessPasswordHash
+	if committed == before {
+		t.Fatal("the rename landed, so Config must carry the new record")
+	}
+	// v1 follows the durable record instead of the record this process held.
+	auth.mu.Lock()
+	adopted := auth.record
+	auth.mu.Unlock()
+	durable, err := parseAccessPasswordHash(committed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adopted == nil || adopted.Verifier == nil || durable == nil {
+		t.Fatalf("v1 record not adopted after a crossed Config rename")
+	}
+	if !bytes.Equal(adopted.Verifier, durable.Verifier) || !bytes.Equal(adopted.Salt, durable.Salt) {
+		t.Error("v1 still authorizes against the pre-commit record")
+	}
+	// v2 stops authorizing: the family is not served from the old runtime.
+	protected := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	protected.Header.Set("Authorization", "Bearer "+token)
+	if got := testAccessServe(testAccessProtected().ServeHTTP, protected); got.Code != http.StatusUnauthorized {
+		t.Errorf("old bearer after a crossed Config rename = %d want 401", got.Code)
+	}
+	if got := testAccessV2RefreshRequest(t, handle); got.Code != http.StatusInternalServerError {
+		t.Errorf("old handle after a crossed Config rename = %d want 500", got.Code)
+	}
+}
+
+// TestAccessStateCommitCrossedRenameStopsAuthorizing pins the other half of the
+// same boundary: a state-only write that crossed its rename cannot be rolled
+// back, so the memory copy must stop authorizing the family the disk just
+// revoked.
+func TestAccessStateCommitCrossedRenameStopsAuthorizing(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	testAccessEnableV2(t, testAccessPassword)
+	login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.62:1")
+	handle := testAccessRefreshHandle(t, login)
+	var loginBundle struct {
+		Token string `json:"token"`
+	}
+	testAccessJSONBody(t, login, &loginBundle)
+	if loginBundle.Token == "" {
+		t.Fatal("login issued no access token")
+	}
+	token := loginBundle.Token
+
+	accessAuth.mu.Lock()
+	key, now := accessAuth.jwtKey, accessAuth.now()
+	accessAuth.mu.Unlock()
+	claims, err := parseAccessJWT(key, token, now, accessJWTClockAllowance)
+	if err != nil {
+		t.Fatalf("parse access token: %v", err)
+	}
+	before, err := loadAccessV2StateFile(accessV2StatePath())
+	if err != nil {
+		t.Fatalf("reload state: %v", err)
+	}
+	familiesBefore := len(before.Active.Families)
+
+	previous := writeAccessV2StateFile
+	writeAccessV2StateFile = func(path string, data []byte, perm os.FileMode) error {
+		if err := previous(path, data, perm); err != nil {
+			return err
+		}
+		return testAccessCommittedError(t)
+	}
+	body, err := json.Marshal(map[string]bool{"all": false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := testAccessV2LogoutRequest(t, string(body), token)
+	writeAccessV2StateFile = previous
+
+	if w.Code == http.StatusOK {
+		t.Fatalf("logout with an unconfirmed revocation reported success")
+	}
+	if cookies := w.Result().Cookies(); len(cookies) != 0 {
+		t.Errorf("unconfirmed revocation issued %d cookies", len(cookies))
+	}
+	// The durable state dropped the family, so the in-memory copy must agree.
+	state, err := loadAccessV2StateFile(accessV2StatePath())
+	if err != nil {
+		t.Fatalf("reload state: %v", err)
+	}
+	for _, family := range state.Active.Families {
+		if family.ID == claims.FamilyID {
+			t.Fatal("durable state still carries the logged-out family")
+		}
+	}
+	if len(state.Active.Families) != familiesBefore-1 {
+		t.Fatalf("durable families = %d want %d after logout", len(state.Active.Families), familiesBefore-1)
+	}
+	protected := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	protected.Header.Set("Authorization", "Bearer "+token)
+	if got := testAccessServe(testAccessProtected().ServeHTTP, protected); got.Code != http.StatusUnauthorized {
+		t.Errorf("revoked bearer still authorized: %d", got.Code)
+	}
+	if got := testAccessV2RefreshRequest(t, handle); got.Code == http.StatusOK {
+		t.Error("revoked handle still refreshed")
 	}
 }
