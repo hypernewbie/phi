@@ -414,9 +414,11 @@ for (const surface of surfaces) {
                                             h.armed &&
                                             h.term === term &&
                                             h.initialReleased &&
-                                            h.fitRequested &&
                                             h.pendingCallbacks > 0 &&
-                                            !h.didHoldContinuation
+                                            !h.didHoldContinuation &&
+                                            h.parsed
+                                                .join('')
+                                                .includes('BURST_START')
                                         ) {
                                             h.didHoldContinuation = true;
                                             h.heldState = {
@@ -437,6 +439,45 @@ for (const surface of surfaces) {
                                                         promiseResult,
                                                     );
                                             };
+                                            // Request the fit from the held
+                                            // continuation. Asking at a parsed
+                                            // boundary raced the batch
+                                            // callback: on a quiet instant
+                                            // nothing was in flight, so the fit
+                                            // ran at once and the deferral under
+                                            // test could not be observed.
+                                            if (!h.fitRequested) {
+                                                h.sliceState = {
+                                                    offset: this._bufferOffset,
+                                                    queued: this._writeBuffer
+                                                        .length,
+                                                    writeCalls: h.writeCalls,
+                                                    writtenChars:
+                                                        h.writtenChars,
+                                                    pendingCallbacks:
+                                                        h.pendingCallbacks,
+                                                };
+                                                h.fitRequested = true;
+                                                h.geometryAtFitRequest =
+                                                    h.geometry.length;
+                                                h.order.push({
+                                                    kind: 'fit-request',
+                                                });
+                                                const panel =
+                                                    document.getElementById(
+                                                        `term-${id}`,
+                                                    );
+                                                panel?.style.setProperty(
+                                                    'width',
+                                                    '520px',
+                                                    'important',
+                                                );
+                                                panel?.style.setProperty(
+                                                    'height',
+                                                    '360px',
+                                                    'important',
+                                                );
+                                            }
                                             return;
                                         }
                                         schedule(lastTime, promiseResult);
@@ -444,40 +485,6 @@ for (const surface of surfaces) {
                                     this.onWriteParsed(() => {
                                         if (h.forceSliceClock)
                                             h.forceSliceClock = false;
-                                        if (
-                                            h.term !== term ||
-                                            !h.armed ||
-                                            h.fitRequested ||
-                                            !h.parsed
-                                                .join('')
-                                                .includes('BURST_START')
-                                        )
-                                            return;
-                                        h.sliceState = {
-                                            offset: buffer._bufferOffset,
-                                            queued: buffer._writeBuffer.length,
-                                            writeCalls: h.writeCalls,
-                                            writtenChars: h.writtenChars,
-                                            pendingCallbacks:
-                                                h.pendingCallbacks,
-                                        };
-                                        h.fitRequested = true;
-                                        h.geometryAtFitRequest =
-                                            h.geometry.length;
-                                        h.order.push({ kind: 'fit-request' });
-                                        const panel = document.getElementById(
-                                            `term-${id}`,
-                                        );
-                                        panel?.style.setProperty(
-                                            'width',
-                                            '520px',
-                                            'important',
-                                        );
-                                        panel?.style.setProperty(
-                                            'height',
-                                            '360px',
-                                            'important',
-                                        );
                                     });
                                 }
 
