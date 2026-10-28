@@ -369,6 +369,13 @@ let stateEpoch = 0; // bumped whenever the selected credential changes
 let accessExpiresAt = 0;
 let refreshIdleExpiresAt = 0;
 let refreshAbsoluteExpiresAt = 0;
+// Renewal deadline on the monotonic clock. expires_in is a duration the server
+// measured when it answered, so the deadline is computed from receipt: a skewed
+// wall clock can neither renew past the server's exp nor storm the endpoint.
+let accessRenewAt = 0;
+// The user ended this page's session. A sibling tab's delayed bundle must not
+// restore it; a browser session the server ended still accepts one.
+let loggedOut = false;
 // Renewal lead: a token is renewed this long before it expires. The stale-token
 // path in the fetch wrapper covers a tab whose timers were throttled anyway.
 const REFRESH_LEAD_MS = 60 * 1000;
@@ -395,8 +402,7 @@ function invalidationChannel() {
         channel.addEventListener('message', (event) => {
             if (!event.data) return;
             if (event.data.kind === 'logout') {
-                dropCredential();
-                if (pendingOverlay) pendingOverlay.finish({ enabled: false });
+                receiveLogout(event.data);
                 return;
             }
             if (event.data.kind === 'bundle') receiveBundle(event.data);
@@ -409,9 +415,34 @@ function invalidationChannel() {
     return invalidation;
 }
 
-function broadcastInvalidation() {
+// familyIdentity is the cross-tab session discriminator. The absolute refresh
+// deadline is minted once per family: it survives rotation, so a bundle from the
+// same family matches, and it changes on a new sign-in, so a delayed message
+// from an older session cannot replace a newer one.
+function familyIdentity() {
+    return refreshAbsoluteExpiresAt;
+}
+
+function broadcastInvalidation(family = familyIdentity()) {
     const channel = invalidationChannel();
-    if (channel) channel.postMessage({ kind: 'logout' });
+    if (!channel) return;
+    channel.postMessage({
+        kind: 'logout',
+        origin: location.origin,
+        family,
+    });
+}
+
+// receiveLogout ends this page's session only for the family that ended. A
+// delayed message from a superseded session leaves the current one alone.
+function receiveLogout(message) {
+    if (message.origin !== undefined && message.origin !== location.origin)
+        return;
+    const family = Number.isInteger(message.family) ? message.family : 0;
+    if (family && familyIdentity() && family !== familyIdentity()) return;
+    loggedOut = true;
+    dropCredential();
+    if (pendingOverlay) pendingOverlay.finish({ enabled: false });
 }
 
 // broadcastBundle shares a renewed bundle with the other tabs of this
@@ -427,23 +458,50 @@ function broadcastBundle() {
         bundle: {
             token: accessToken,
             expiresAt: accessExpiresAt,
+            // Remaining duration, so the receiver derives its own
+            // receipt-relative deadline instead of trusting this page's clock.
+            expiresIn: remainingDurationSeconds(),
             refreshIdleExpiresAt,
             refreshAbsoluteExpiresAt,
         },
     });
 }
 
+// remainingDurationSeconds reports how much of the installed token's lifetime is
+// left, using the same monotonic clock that scheduled its renewal.
+function remainingDurationSeconds() {
+    if (!accessRenewAt) return 0;
+    const leftMs = accessRenewAt - performance.now() + REFRESH_LEAD_MS;
+    return Math.max(1, Math.round(leftMs / 1000));
+}
+
 // receiveBundle adopts another tab's memory-only bundle. Deadlines only move
 // forward, so a late message from an older refresh cannot replace a newer
-// token, and a host install always outranks a page bundle.
+// token, a bundle from another family cannot hijack this session, a logged-out
+// page stays logged out, and a host install always outranks a page bundle.
 function receiveBundle(message) {
     const bundle = message.bundle;
     if (!bundle || typeof bundle.token !== 'string' || !bundle.token) return;
     if (message.origin !== location.origin) return;
+    if (memoryOnly || loggedOut || hostSession) return;
+    if (selectedProtocol === 'v1') return;
     if (!Number.isInteger(bundle.expiresAt) || bundle.expiresAt <= 0) return;
-    if (memoryOnly) return;
+    if (!Number.isInteger(bundle.expiresIn) || bundle.expiresIn <= 0) return;
+    const family = Number.isInteger(bundle.refreshAbsoluteExpiresAt)
+        ? bundle.refreshAbsoluteExpiresAt
+        : 0;
+    if (family && familyIdentity() && family !== familyIdentity()) return;
     if (accessToken && bundle.expiresAt <= accessExpiresAt) return;
-    adoptToken(bundle.token, bundle, { broadcast: false });
+    adoptToken(
+        bundle.token,
+        {
+            expiresAt: bundle.expiresAt,
+            expiresIn: bundle.expiresIn,
+            refreshIdleExpiresAt: bundle.refreshIdleExpiresAt,
+            refreshAbsoluteExpiresAt: family,
+        },
+        { broadcast: false },
+    );
 }
 
 function utf8Length(value) {
@@ -532,8 +590,11 @@ function hostAuthenticatedMode() {
 }
 
 function refreshDue() {
-    if (!accessToken || !accessExpiresAt) return true;
-    return accessExpiresAt * 1000 - Date.now() <= REFRESH_LEAD_MS;
+    if (!accessToken) return true;
+    // No duration came with this credential, so nothing can be scheduled: the
+    // stale-token path in the fetch wrapper is its only recovery.
+    if (!accessRenewAt) return false;
+    return performance.now() >= accessRenewAt;
 }
 
 function withRefreshLock(origin, run) {
@@ -541,8 +602,13 @@ function withRefreshLock(origin, run) {
     if (!locks || typeof locks.request !== 'function')
         return Promise.resolve().then(run);
     try {
-        return Promise.resolve(
-            locks.request(REFRESH_LOCK_PREFIX + origin, () => run()),
+        // The lock is coordination, not a requirement: one that never grants
+        // must not wedge the per-origin owner, so waiting for it is bounded by
+        // the same deadline as the request it protects.
+        return withAuthDeadline(() =>
+            Promise.resolve(
+                locks.request(REFRESH_LOCK_PREFIX + origin, () => run()),
+            ),
         );
     } catch {
         return Promise.resolve().then(run);
@@ -555,12 +621,20 @@ function refreshSession({ ifDue = false } = {}) {
     if (pending) return pending;
     // A host-installed token is renewed by the host; rotating it here would
     // race the host's own owner and consume its handle.
-    if (memoryOnly) return Promise.resolve(REFRESH_NONE);
-    const attempt = withRefreshLock(origin, () =>
+    if (memoryOnly || hostSession) return Promise.resolve(REFRESH_NONE);
+    // The generation is captured before queuing: a host install, logout, or
+    // origin change while this attempt waits on the lock supersedes it, and an
+    // attempt for an older generation must never send or install anything.
+    const epoch = stateEpoch;
+    const attempt = withRefreshLock(origin, () => {
+        if (epoch !== stateEpoch) return REFRESH_SUPERSEDED;
+        if (memoryOnly || hostSession) return REFRESH_SUPERSEDED;
+        if (location.origin !== origin) return REFRESH_SUPERSEDED;
         // Re-evaluated inside the lock: a bundle broadcast while this caller
         // waited makes the network request unnecessary.
-        ifDue && !refreshDue() ? REFRESH_INSTALLED : runRefresh(origin),
-    );
+        if (ifDue && !refreshDue()) return REFRESH_INSTALLED;
+        return runRefresh(origin, epoch);
+    });
     refreshOwners.set(origin, attempt);
     void attempt
         .catch(() => {})
@@ -591,56 +665,80 @@ function refreshFailure(message, waitMs) {
 
 // Only 401 ends the session. Every other failure keeps the credential, logs
 // nobody out, and stays retryable; a malformed bundle is a server fault, not a
-// reason to prompt for a password.
-async function runRefresh(origin) {
-    const epoch = stateEpoch;
-    const res = await withAuthDeadline((signal) =>
-        fetch('/api/auth/v2/refresh', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Phi-Auth': 'v2' },
-            body: '{}',
-            credentials: 'same-origin',
-            redirect: 'error',
-            signal,
-        }),
-    ).catch(() => {
-        throw new Error('Unable to reach Phi. Try again.');
+// reason to prompt for a password. The whole exchange - response, status and
+// body - is inside one deadline, because headers that arrive while the body
+// never does would otherwise leave the per-origin owner pending forever.
+async function runRefresh(origin, epoch) {
+    return withAuthDeadline(async (signal) => {
+        let res;
+        try {
+            res = await fetch('/api/auth/v2/refresh', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Phi-Auth': 'v2',
+                },
+                body: '{}',
+                credentials: 'same-origin',
+                redirect: 'error',
+                signal,
+            });
+        } catch {
+            throw new Error('Unable to reach Phi. Try again.');
+        }
+        if (res.status === 401) return REFRESH_NONE;
+        if (!res.ok)
+            throw refreshFailure(
+                'Unable to refresh access session',
+                retryAfterMs(res),
+            );
+        let payload;
+        try {
+            payload = await res.json();
+        } catch {
+            throw invalidStatusError();
+        }
+        const bundle = parseCredentialBundle(payload);
+        if (!bundle) throw invalidStatusError();
+        // A non-positive duration cannot be used for this page load and is not a
+        // credential failure, so it stays retryable instead of prompting.
+        if (bundle.expiresIn <= 0)
+            throw new Error('Unable to refresh access session');
+        // A host install, logout, or origin change during the request is newer
+        // than this answer.
+        if (epoch !== stateEpoch || location.origin !== origin)
+            return REFRESH_SUPERSEDED;
+        adoptToken(bundle.token, bundle);
+        return REFRESH_INSTALLED;
     });
-    if (res.status === 401) return REFRESH_NONE;
-    if (!res.ok)
-        throw refreshFailure(
-            'Unable to refresh access session',
-            retryAfterMs(res),
-        );
-    let payload;
-    try {
-        payload = await res.json();
-    } catch {
-        throw invalidStatusError();
-    }
-    const bundle = parseCredentialBundle(payload);
-    if (!bundle) throw invalidStatusError();
-    // A non-positive duration cannot be used for this page load and is not a
-    // credential failure, so it stays retryable instead of prompting.
-    if (bundle.expiresIn <= 0)
-        throw new Error('Unable to refresh access session');
-    // A host install, logout, or origin change during the request is newer
-    // than this answer.
-    if (epoch !== stateEpoch || location.origin !== origin)
-        return REFRESH_SUPERSEDED;
-    adoptToken(bundle.token, bundle);
-    return REFRESH_INSTALLED;
 }
 
 // adoptToken installs a v2 credential this module obtained. It lives in memory
-// for the rest of the page load and is never persisted.
+// for the rest of the page load and is never persisted. A bundle carries the
+// duration that arms renewal; re-validating the token already installed keeps
+// the deadlines it already had instead of erasing them.
 function adoptToken(token, bundle = null, { broadcast = true } = {}) {
+    const sameToken = token === accessToken;
     accessToken = token;
     accessEnabled = true;
     selectedProtocol = 'v2';
-    accessExpiresAt = bundle ? bundle.expiresAt : 0;
-    refreshIdleExpiresAt = bundle ? bundle.refreshIdleExpiresAt : 0;
-    refreshAbsoluteExpiresAt = bundle ? bundle.refreshAbsoluteExpiresAt : 0;
+    loggedOut = false;
+    hostSession = false;
+    clearTimeout(retryTimer);
+    retryTimer = null;
+    if (bundle) {
+        accessExpiresAt = bundle.expiresAt;
+        refreshIdleExpiresAt = bundle.refreshIdleExpiresAt;
+        refreshAbsoluteExpiresAt = bundle.refreshAbsoluteExpiresAt;
+        accessRenewAt = bundle.expiresIn > 0
+            ? performance.now() + bundle.expiresIn * 1000 - REFRESH_LEAD_MS
+            : 0;
+    } else if (!sameToken) {
+        accessExpiresAt = 0;
+        refreshIdleExpiresAt = 0;
+        refreshAbsoluteExpiresAt = 0;
+        accessRenewAt = 0;
+    }
     retryDelayMs = 0;
     stateEpoch++;
     scheduleRenewal();
@@ -657,8 +755,12 @@ function clearTokenState() {
     accessExpiresAt = 0;
     refreshIdleExpiresAt = 0;
     refreshAbsoluteExpiresAt = 0;
+    accessRenewAt = 0;
     clearTimeout(renewalTimer);
     renewalTimer = null;
+    clearTimeout(retryTimer);
+    retryTimer = null;
+    retryDelayMs = 0;
 }
 
 // dropCredential forgets the credential and supersedes every operation that
@@ -685,12 +787,9 @@ function rejectToken(token) {
 function scheduleRenewal() {
     clearTimeout(renewalTimer);
     renewalTimer = null;
-    if (!accessToken || memoryOnly || !accessExpiresAt) return;
+    if (!accessToken || memoryOnly || !accessRenewAt) return;
     const epoch = stateEpoch;
-    const delay = Math.max(
-        0,
-        accessExpiresAt * 1000 - Date.now() - REFRESH_LEAD_MS,
-    );
+    const delay = Math.max(0, accessRenewAt - performance.now());
     renewalTimer = setTimeout(() => {
         renewalTimer = null;
         if (epoch !== stateEpoch) return;
@@ -722,9 +821,11 @@ function scheduleRetry(err) {
 
 // renewIfDue is the background renewal owner: the scheduled timer, a return to
 // a visible tab, and a socket reconnect all call it. A 401 is the only outcome
-// that ends the session.
+// that ends the session, and a pending retry owns the next attempt so no trigger
+// can shortcut the server's own backoff.
 async function renewIfDue({ ifDue = true } = {}) {
     if (!accessToken || memoryOnly || hostSession) return;
+    if (retryTimer !== null) return;
     if (ifDue && !refreshDue()) {
         scheduleRenewal();
         return;
@@ -755,6 +856,9 @@ async function renewIfDue({ ifDue = true } = {}) {
 // microtask and v1/disabled deployments keep their exact dial behavior.
 export function refreshAccessIfDue() {
     if (!accessToken || memoryOnly) return undefined;
+    // A scheduled retry already owns the next attempt: a redial must wait for it
+    // rather than bypass the server's backoff.
+    if (retryTimer !== null) return undefined;
     if (!refreshDue()) {
         scheduleRenewal();
         return undefined;
@@ -775,7 +879,9 @@ async function checkV2Token(token) {
             redirect: 'error',
             signal,
         });
-        if (res.status === 401 || res.status === 403) return 'invalid';
+        if (res.status === 401) return 'invalid';
+        // A 403 is a proxy or CSRF refusal, never a wrong credential: it stays
+        // unavailable so the page does not prompt for a password it cannot fix.
         if (res.status !== 200)
             throw new Error('Unable to check Phi access protection');
         let payload;
@@ -830,7 +936,9 @@ async function v2Login(password) {
         const bundle = parseCredentialBundle(payload);
         if (!bundle || bundle.expiresIn <= 0)
             throw new Error('Unable to sign in');
-        return bundle.token;
+        // The whole bundle travels on: expires_in is what arms renewal, so a
+        // typed sign-in renews before expiry instead of waiting for a 401.
+        return bundle;
     });
 }
 
@@ -891,7 +999,7 @@ async function saveV2Password(password) {
         bundle.expiresIn <= 0
     )
         throw new Error('Unable to save access password');
-    if (epoch === stateEpoch) adoptToken(bundle.token);
+    if (epoch === stateEpoch) adoptToken(bundle.token, bundle);
     return { enabled: true };
 }
 
@@ -929,6 +1037,7 @@ async function clearV2Password() {
         hostSession = false;
         accessEnabled = false;
         selectedProtocol = 'v2';
+        loggedOut = true;
         stateEpoch++;
         broadcastInvalidation();
         if (pendingOverlay) pendingOverlay.finish({ enabled: false });
@@ -937,8 +1046,9 @@ async function clearV2Password() {
     if (!payload || payload.enabled !== false)
         throw new Error('Unable to clear access password');
     // A credential installed while the clear was in flight is newer than
-    // this response; never clear it.
+    // this response; never clear it, and never tell other tabs to either.
     if (epoch !== stateEpoch) return { enabled: false };
+    loggedOut = true;
     accessToken = null;
     accessEnabled = false;
     selectedProtocol = 'v2';
@@ -1022,10 +1132,11 @@ export function installAccessFetch() {
         let outcome;
         try {
             outcome = await refreshSession();
-        } catch {
+        } catch (err) {
             // Transient failure: keep the credential, surface this response,
-            // and let the background owner retry with backoff.
-            scheduleRetry();
+            // and let the background owner retry with the server's own
+            // Retry-After and bounded backoff.
+            scheduleRetry(err);
             return response;
         }
         if (outcome === REFRESH_NONE) {
@@ -1038,11 +1149,12 @@ export function installAccessFetch() {
             (input && typeof input.method === 'string' ? input.method : 'GET')
         ).toUpperCase();
         const renewed = accessToken;
-        if (
-            outcome !== REFRESH_INSTALLED ||
-            !renewed ||
-            (method !== 'GET' && method !== 'HEAD')
-        )
+        // A sibling tab's bundle can supersede this attempt: that is a newer
+        // credential for the same request, not a failure to recover.
+        const installed =
+            outcome === REFRESH_INSTALLED ||
+            (outcome === REFRESH_SUPERSEDED && !!renewed && renewed !== token);
+        if (!installed || !renewed || (method !== 'GET' && method !== 'HEAD'))
             return response;
         const retryHeaders = requestHeaders(input, init);
         retryHeaders.set('Authorization', `Bearer ${renewed}`);
@@ -1175,9 +1287,9 @@ function showUnlockPrompt(protocol) {
             const epoch = stateEpoch;
             try {
                 if (protocol === 'v2') {
-                    const token = await v2Login(input.value);
+                    const session = await v2Login(input.value);
                     if (epoch !== stateEpoch) return;
-                    if (token === HOST_SESSION_TOKEN) {
+                    if (session === HOST_SESSION_TOKEN) {
                         // Nothing to install: the host owns the credential.
                         hostSession = true;
                         accessEnabled = true;
@@ -1187,7 +1299,7 @@ function showUnlockPrompt(protocol) {
                         finish({ enabled: true });
                         return;
                     }
-                    adoptToken(token);
+                    adoptToken(session.token, session);
                     input.value = '';
                     finish({ enabled: true });
                     return;
@@ -1368,8 +1480,24 @@ export async function bootstrapAccessAuth() {
         if (verdict === HOST_INSTALL || installed())
             return { enabled: accessEnabled };
         if (verdict === 'valid') {
+            // Same token, so its deadlines and renewal stay as they were.
             adoptToken(token);
             return { enabled: true };
+        }
+        // A browser token can be stale while its refresh cookie is still live,
+        // so recover through the one refresh owner before asking for a
+        // password. A host-installed token is the host's to renew.
+        if (!memoryOnly) {
+            let outcome;
+            try {
+                outcome = await wait(refreshSession());
+            } catch (err) {
+                if (installed()) return { enabled: accessEnabled };
+                throw err;
+            }
+            if (outcome === REFRESH_INSTALLED) return { enabled: true };
+            if (outcome === HOST_INSTALL || installed())
+                return { enabled: accessEnabled };
         }
         rejectToken(token);
         // No cookie fallback: an explicit v2 credential decides alone.
@@ -1506,9 +1634,11 @@ export function installToken(token) {
     accessEnabled = true;
     selectedProtocol = 'v2';
     memoryOnly = true;
+    loggedOut = false;
     accessExpiresAt = 0;
     refreshIdleExpiresAt = 0;
     refreshAbsoluteExpiresAt = 0;
+    accessRenewAt = 0;
     stateEpoch++;
     // Release a bootstrap still waiting on discovery or a status check.
     const releaseBootstrap = pendingBootstrapRelease;
@@ -1540,11 +1670,13 @@ export async function logoutAccess(all = false) {
             }),
         );
         if (!answer.ok) throw new Error('Unable to logout');
+        // Only a logout this page still owns tells the other tabs anything.
         if (epoch === stateEpoch) {
             hostSession = false;
+            loggedOut = true;
             stateEpoch++;
+            broadcastInvalidation();
         }
-        broadcastInvalidation();
         if (pendingOverlay) pendingOverlay.finish({ enabled: false });
         return { ok: true };
     }
@@ -1573,12 +1705,15 @@ export async function logoutAccess(all = false) {
         throw new Error('Unable to logout');
     }
     if (!payload || payload.ok !== true) throw new Error('Unable to logout');
-    // A credential installed while the logout was in flight is newer than it.
+    // A credential installed while the logout was in flight is newer than it:
+    // keep it, and do not claim the other tabs' sessions are gone either.
     if (epoch === stateEpoch && accessToken === token) {
+        const family = familyIdentity();
         clearTokenState();
+        loggedOut = true;
         stateEpoch++;
+        broadcastInvalidation(family);
     }
-    broadcastInvalidation();
     if (pendingOverlay) pendingOverlay.finish({ enabled: false });
     return { ok: true };
 }
@@ -1634,6 +1769,7 @@ export const __test__ = {
     renewIfDue,
     refreshDue,
     receiveBundle,
+    receiveLogout,
     resetAccessState,
     setReload,
     getAccessState,
@@ -1647,9 +1783,11 @@ function resetAccessState() {
     accessToken = null;
     memoryOnly = false;
     hostSession = false;
+    loggedOut = false;
     accessExpiresAt = 0;
     refreshIdleExpiresAt = 0;
     refreshAbsoluteExpiresAt = 0;
+    accessRenewAt = 0;
     clearTimeout(renewalTimer);
     renewalTimer = null;
     clearTimeout(retryTimer);
@@ -1678,5 +1816,6 @@ function getAccessState() {
         memoryOnly,
         accessExpiresAt,
         hostSession,
+        loggedOut,
     };
 }

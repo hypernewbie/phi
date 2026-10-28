@@ -258,6 +258,66 @@ describe('md events reconnect', () => {
         }
     });
 
+    it('keeps backing off when a flapping socket opens and drops again', async () => {
+        vi.useFakeTimers();
+        try {
+            const { sockets } = mdHarness();
+            window.history.replaceState({}, '', '/md.html?path=a.md&cwd=/w');
+            initMdView();
+            await vi.waitFor(() => expect(sockets).toHaveLength(1));
+
+            const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(1);
+            // The server accepts, then drops well before the connection is
+            // stable. An unconditional reset on open would dial again in the
+            // first window forever, so attempt 2 must still be used.
+            sockets[0].onopen();
+            sockets[0].onclose();
+            await vi.advanceTimersByTimeAsync(1499);
+            expect(sockets).toHaveLength(1);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(sockets).toHaveLength(2);
+
+            sockets[1].onopen();
+            sockets[1].onclose();
+            await vi.advanceTimersByTimeAsync(2499);
+            expect(sockets).toHaveLength(2);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(sockets).toHaveLength(3);
+            randomSpy.mockRestore();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('resets the backoff only after a connection stays up', async () => {
+        vi.useFakeTimers();
+        try {
+            const { sockets } = mdHarness();
+            window.history.replaceState({}, '', '/md.html?path=a.md&cwd=/w');
+            initMdView();
+            await vi.waitFor(() => expect(sockets).toHaveLength(1));
+
+            const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(1);
+            // Grow the attempt count first.
+            sockets[0].onclose();
+            await vi.advanceTimersByTimeAsync(1500);
+            expect(sockets).toHaveLength(2);
+
+            // A connection that survives the stability window resets it, so the
+            // next drop waits in the first window again.
+            sockets[1].onopen();
+            await vi.advanceTimersByTimeAsync(10000);
+            sockets[1].onclose();
+            await vi.advanceTimersByTimeAsync(1499);
+            expect(sockets).toHaveLength(2);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(sockets).toHaveLength(3);
+            randomSpy.mockRestore();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('dials synchronously when no refresh is due', async () => {
         // A v1 cookie session has no in-memory token, so refreshAccessIfDue
         // returns undefined and the dial must not be deferred by a microtask.
