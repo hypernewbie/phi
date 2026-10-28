@@ -1493,6 +1493,101 @@ test.describe('route-local CSRF and credential precedence', () => {
     });
 });
 
+// The repo's e2e rule also requires console errors and failed network requests
+// to be checked, in both a desktop and an emulated mobile/touch context. The
+// other groups assert behavior; this group asserts the session is quiet, so a
+// regression that only surfaces as a console error or a failed request cannot
+// pass unnoticed.
+//
+// Two expected messages are allowlisted, both by design rather than by defect:
+//   - `401 POST /api/auth/v2/refresh` is the one speculative refresh the
+//     selection table mandates for an unselected session; its 401 means "no
+//     working refresh session", after which the client prompts.
+//   - `503 GET /api/update/status` is the update checker being uninitialized in
+//     an isolated fixture (api_update.go: `updateChecker == nil`), not an auth
+//     path.
+// Anything else in either list fails the test.
+const EXPECTED_CONSOLE = [
+    /^Failed to load resource: the server responded with a status of 401 \(Unauthorized\)$/,
+    /^Failed to load resource: the server responded with a status of 503 \(Service Unavailable\)$/,
+];
+const EXPECTED_RESPONSES = [/\/api\/auth\/v2\/refresh$/, /\/api\/update\/status$/];
+
+test.describe('a signed-in session stays quiet', () => {
+    let phi: PhiServer;
+
+    test.beforeAll(async () => {
+        phi = await startPhi({ config: { sync_coordinator: '', peers: [] } });
+        await lockServer(phi.url, PASSWORD);
+    });
+
+    test.afterAll(async () => {
+        await phi.stop();
+    });
+
+    for (const profile of [
+        {
+            name: 'desktop',
+            options: { viewport: { width: 1440, height: 900 } },
+        },
+        {
+            name: 'mobile touch',
+            options: {
+                viewport: { width: 390, height: 844 },
+                isMobile: true,
+                hasTouch: true,
+                deviceScaleFactor: 3,
+            },
+        },
+    ]) {
+        test(`${profile.name}: sign-in and reload raise no unexpected errors`, async ({
+            browser,
+        }) => {
+            const context = await browser.newContext(profile.options);
+            const page = await context.newPage();
+            const unexpectedConsole: string[] = [];
+            const pageErrors: string[] = [];
+            const failedRequests: string[] = [];
+            const unexpectedResponses: string[] = [];
+            page.on('console', (message) => {
+                if (message.type() !== 'error') return;
+                const text = message.text();
+                if (EXPECTED_CONSOLE.some((pattern) => pattern.test(text))) return;
+                unexpectedConsole.push(text);
+            });
+            page.on('pageerror', (error) => pageErrors.push(error.message));
+            page.on('requestfailed', (request) =>
+                failedRequests.push(
+                    `${request.method()} ${request.url()} ${request.failure()?.errorText ?? ''}`,
+                ),
+            );
+            page.on('response', (response) => {
+                if (response.status() < 400) return;
+                const url = response.url();
+                if (EXPECTED_RESPONSES.some((pattern) => pattern.test(url))) return;
+                unexpectedResponses.push(
+                    `${response.status()} ${response.request().method()} ${url}`,
+                );
+            });
+
+            await page.goto(phi.url);
+            await unlock(page, PASSWORD);
+            await expectSignedIn(page);
+
+            // The reload exercises the refresh path, which is the one place a
+            // quiet session could regress into a console error.
+            await page.reload();
+            await expectSignedIn(page);
+
+            expect(unexpectedConsole, 'unexpected console errors').toEqual([]);
+            expect(pageErrors, 'page errors').toEqual([]);
+            expect(failedRequests, 'failed requests').toEqual([]);
+            expect(unexpectedResponses, 'unexpected bad responses').toEqual([]);
+            await context.close();
+        });
+    }
+});
+
 declare global {
     interface Window {
         phiAccessAuth: {
