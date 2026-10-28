@@ -16,10 +16,9 @@ import { sha256 } from './vendor/noble-hashes/sha2.js';
 import { serverKey } from './util.js';
 
 const CREDENTIAL_KEY = 'phi_access_credential_v1';
-// Standalone-browser storage for the v2 bearer. The desktop body serves every
-// server from one page, so it installs its token in memory instead of writing
-// here (installToken).
-const BEARER_KEY = 'phi_access_bearer_v1';
+// Legacy browser storage for the v2 bearer. Tokens now live only in memory;
+// the refresh handle stays in its HttpOnly cookie.
+const LEGACY_BEARER_KEY = 'phi_access_bearer_v1';
 
 // The desktop's embedded page serves EVERY server from one page, so one
 // localStorage holds every server's credential. A single shared key made
@@ -33,12 +32,22 @@ function credentialKey(context) {
 }
 
 function bearerKey(context) {
-    if (!context?.credentialKey) return serverKey(BEARER_KEY);
+    if (!context?.credentialKey) return serverKey(LEGACY_BEARER_KEY);
     const key = context.credentialKey;
     return key.startsWith(CREDENTIAL_KEY)
-        ? `${BEARER_KEY}${key.slice(CREDENTIAL_KEY.length)}`
-        : `${BEARER_KEY}:${key}`;
+        ? `${LEGACY_BEARER_KEY}${key.slice(CREDENTIAL_KEY.length)}`
+        : `${LEGACY_BEARER_KEY}:${key}`;
 }
+
+function discardLegacyBearer(context) {
+    try {
+        localStorage.removeItem(bearerKey(context));
+    } catch {
+        // Storage is blocked, so there is no value to migrate.
+    }
+}
+
+discardLegacyBearer();
 
 function authFetch(context, url, init) {
     return (context?.fetch || fetch)(url, init);
@@ -365,6 +374,42 @@ const HOST_INSTALL = Symbol('host install');
 let activeAuthKey = null;
 let activeAuthContext = null;
 
+const AUTH_CHANNEL = 'phi-access-auth';
+let invalidation = null;
+
+function invalidationChannel() {
+    if (invalidation) return invalidation;
+    if (typeof BroadcastChannel !== 'function') return null;
+    try {
+        const channel = new BroadcastChannel(AUTH_CHANNEL);
+        channel.addEventListener('message', (event) => {
+            if (
+                !event.data ||
+                event.data.kind !== 'logout' ||
+                typeof event.data.ownerKey !== 'string'
+            )
+                return;
+            const state = authStates.get(event.data.ownerKey);
+            if (!state) return;
+            state.accessToken = null;
+            state.persistedToken = null;
+            state.epoch++;
+            if (pendingOverlay?.ownerKey === event.data.ownerKey)
+                pendingOverlay.finish({ enabled: false });
+        });
+        invalidation = channel;
+    } catch {
+        // No channel support: this page still clears its own credential.
+        invalidation = null;
+    }
+    return invalidation;
+}
+
+function broadcastInvalidation(ownerKey) {
+    const channel = invalidationChannel();
+    if (channel) channel.postMessage({ kind: 'logout', ownerKey });
+}
+
 function newAuthState() {
     return {
         selectedProtocol: null,
@@ -374,6 +419,7 @@ function newAuthState() {
         memoryOnly: false,
         epoch: 0,
         reauthInFlight: null,
+        refreshInFlight: null,
         pendingBootstrapRelease: null,
     };
 }
@@ -428,66 +474,114 @@ async function withAuthDeadline(run, timeoutMs = AUTH_TIMEOUT_MS) {
     }
 }
 
-function loadBearer(context) {
-    try {
-        return localStorage.getItem(bearerKey(context)) || null;
-    } catch {
+function parseCredentialBundle(payload) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload))
         return null;
+    const {
+        token,
+        expires_at: expiresAt,
+        expires_in: expiresIn,
+        refresh_idle_expires_at: refreshIdle,
+        refresh_absolute_expires_at: refreshAbsolute,
+    } = payload;
+    if (typeof token !== 'string' || !token) return null;
+    for (const value of [expiresAt, expiresIn, refreshIdle, refreshAbsolute]) {
+        if (!Number.isInteger(value)) return null;
     }
+    if (expiresAt <= 0 || refreshIdle <= 0 || refreshAbsolute <= 0) return null;
+    if (refreshIdle > refreshAbsolute) return null;
+    return {
+        token,
+        expiresAt,
+        expiresIn,
+        refreshIdleExpiresAt: refreshIdle,
+        refreshAbsoluteExpiresAt: refreshAbsolute,
+    };
 }
 
-function storeBearer(token, context) {
+const REFRESH_INSTALLED = 'installed';
+const REFRESH_NONE = 'none';
+const REFRESH_SUPERSEDED = 'superseded';
+
+function refreshSession(context) {
+    const state = stateFor(context);
+    if (state.refreshInFlight) return state.refreshInFlight;
+    const attempt = runRefresh(context, state);
+    state.refreshInFlight = attempt;
+    void attempt
+        .catch(() => {})
+        .then(() => {
+            if (state.refreshInFlight === attempt)
+                state.refreshInFlight = null;
+        });
+    return attempt;
+}
+
+async function runRefresh(context, state) {
+    const epoch = state.epoch;
+    let result;
     try {
-        localStorage.setItem(bearerKey(context), token);
-    } catch {
-        // The in-memory token still works for this page load.
+        result = await withAuthDeadline(async (signal) => {
+            const res = await authFetch(context, '/api/auth/v2/refresh', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Phi-Auth': 'v2',
+                },
+                body: '{}',
+                credentials: 'same-origin',
+                redirect: 'error',
+                signal,
+            });
+            if (res.status !== 200) return { status: res.status };
+            try {
+                return { status: res.status, payload: await res.json() };
+            } catch {
+                return { status: res.status, invalid: true };
+            }
+        });
+    } catch (err) {
+        if (
+            err instanceof Error &&
+            err.message === 'Phi returned invalid access protection settings'
+        )
+            throw err;
+        throw new Error('Unable to reach Phi. Try again.');
     }
+    if (result.status === 401) return REFRESH_NONE;
+    if (result.status !== 200)
+        throw new Error('Unable to refresh access session');
+    if (result.invalid) throw invalidStatusError();
+    const bundle = parseCredentialBundle(result.payload);
+    if (!bundle) throw invalidStatusError();
+    if (bundle.expiresIn <= 0)
+        throw new Error('Unable to refresh access session');
+    if (epoch !== state.epoch) return REFRESH_SUPERSEDED;
+    adoptToken(bundle.token, {}, context);
+    return REFRESH_INSTALLED;
 }
 
-function clearStoredBearer(token, context) {
-    try {
-        const key = bearerKey(context);
-        if (localStorage.getItem(key) === token) localStorage.removeItem(key);
-    } catch {
-        /* ignored */
-    }
-}
-
-// A host-installed token stays memory-only for this page load. Later password
-// changes and reauthentication must not persist a replacement token.
-function adoptToken(token, { persist = false } = {}, context) {
+// Tokens obtained from the host, password login, or refresh cookie stay in
+// memory. Browser storage holds neither an access token nor a refresh handle.
+function adoptToken(token, _options = {}, context) {
     const state = stateFor(context);
     state.accessToken = token;
     state.accessEnabled = true;
     state.selectedProtocol = 'v2';
+    state.persistedToken = null;
+    state.memoryOnly = true;
     state.epoch++;
-    if (persist && !state.memoryOnly) {
-        state.persistedToken = token;
-        storeBearer(token, context);
-    }
-    // A replacement credential makes this backend's open prompt moot.
     if (pendingOverlay?.ownerKey === credentialKey(context))
         pendingOverlay.finish({ enabled: true });
 }
 
-// rejectToken clears only the token that failed. A delayed 401 for token A
-// must not clear a token B installed after it, and a rejection never changes
-// the selected protocol.
+// A delayed rejection for token A must not clear token B installed after it.
 function rejectToken(token, context) {
     const state = stateFor(context);
-    // A host-installed session owns no standalone storage; never delete a
-    // token from another session just because its value matches.
-    if (
-        state.accessToken !== token &&
-        (state.memoryOnly || loadBearer(context) !== token)
-    )
-        return;
-    // A rejection does not supersede a credential operation already in
-    // flight: its replacement token is newer than this failure.
-    if (state.accessToken === token) state.accessToken = null;
+    if (state.accessToken !== token) return;
+    state.accessToken = null;
+    state.persistedToken = null;
     state.selectedProtocol = 'v2';
-    if (state.persistedToken === token) state.persistedToken = null;
-    if (!state.memoryOnly) clearStoredBearer(token, context);
 }
 
 // checkV2Token reports whether the server still accepts token. A rejected
@@ -525,8 +619,12 @@ async function v2Login(password, context) {
     return withAuthDeadline(async (signal) => {
         const res = await authFetch(context, '/api/auth/v2/login', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Phi-Auth': 'v2',
+            },
             body: JSON.stringify({ password }),
+            credentials: 'same-origin',
             redirect: 'error',
             signal,
         });
@@ -540,9 +638,10 @@ async function v2Login(password, context) {
         } catch {
             throw new Error('Unable to sign in');
         }
-        if (!payload || typeof payload.token !== 'string' || !payload.token)
+        const bundle = parseCredentialBundle(payload);
+        if (!bundle || bundle.expiresIn <= 0)
             throw new Error('Unable to sign in');
-        return payload.token;
+        return bundle.token;
     });
 }
 
@@ -568,13 +667,17 @@ async function saveV2Password(password, context) {
     validateV2Password(password);
     const state = stateFor(context);
     const epoch = state.epoch;
-    const headers = { 'Content-Type': 'application/json' };
+    const headers = {
+        'Content-Type': 'application/json',
+        'X-Phi-Auth': 'v2',
+    };
     if (state.accessToken) headers.Authorization = `Bearer ${state.accessToken}`;
     const payload = await withAuthDeadline(async (signal) => {
         const res = await authFetch(context, '/api/auth/v2/password', {
             method: 'POST',
             headers,
             body: JSON.stringify({ password }),
+            credentials: 'same-origin',
             redirect: 'error',
             signal,
         });
@@ -585,15 +688,10 @@ async function saveV2Password(password, context) {
             throw new Error('Unable to save access password');
         }
     });
-    if (
-        !payload ||
-        payload.enabled !== true ||
-        typeof payload.token !== 'string' ||
-        !payload.token
-    )
+    const bundle = parseCredentialBundle(payload);
+    if (!payload || payload.enabled !== true || !bundle || bundle.expiresIn <= 0)
         throw new Error('Unable to save access password');
-    if (epoch === state.epoch)
-        adoptToken(payload.token, { persist: true }, context);
+    if (epoch === state.epoch) adoptToken(bundle.token, {}, context);
     return { enabled: true };
 }
 
@@ -602,14 +700,17 @@ async function clearV2Password(context) {
     if (!state.accessEnabled && !state.accessToken) return { enabled: false };
     const token = state.accessToken;
     const epoch = state.epoch;
-    const activeToken = token;
-    const headers = { 'Content-Type': 'application/json' };
+    const headers = {
+        'Content-Type': 'application/json',
+        'X-Phi-Auth': 'v2',
+    };
     if (token) headers.Authorization = `Bearer ${token}`;
     const payload = await withAuthDeadline(async (signal) => {
         const res = await authFetch(context, '/api/auth/v2/password', {
             method: 'POST',
             headers,
             body: JSON.stringify({ password: '' }),
+            credentials: 'same-origin',
             redirect: 'error',
             signal,
         });
@@ -631,9 +732,7 @@ async function clearV2Password(context) {
     state.selectedProtocol = 'v2';
     state.persistedToken = null;
     state.epoch++;
-    // Remove only the token this state owned; do not clear a foreign value.
-    if (activeToken && !state.memoryOnly)
-        clearStoredBearer(activeToken, context);
+    broadcastInvalidation(credentialKey(context));
     if (pendingOverlay?.ownerKey === credentialKey(context))
         pendingOverlay.finish({ enabled: false });
     return { enabled: false };
@@ -678,8 +777,8 @@ function requestHeaders(input, init) {
 }
 
 // installAccessFetch wraps fetch once so same-origin protected API calls carry
-// the in-memory bearer, and a rejected token can trigger one unlock overlay.
-// It never replays the request that failed.
+// the in-memory bearer. Only a 401 expires it; route-specific 403 responses
+// reach the caller unchanged. It never replays the request that failed.
 export function installAccessFetch() {
     const baseFetch = globalThis.fetch;
     if (!baseFetch || baseFetch[WRAPPED_FETCH]) return;
@@ -701,10 +800,7 @@ export function installAccessFetch() {
             input,
             init ? { ...init, headers } : { headers },
         );
-        if (
-            (response.status === 401 || response.status === 403) &&
-            state.accessToken === token
-        ) {
+        if (response.status === 401 && state.accessToken === token) {
             rejectToken(token, context);
             if (activeAuthKey === ownerKey) requestReauth(context);
         }
@@ -910,6 +1006,7 @@ function showUnlockPrompt(context, protocol) {
 // v2 failure never falls back to v1.
 export async function bootstrapAccessAuth(context) {
     const state = activateAuthContext(context);
+    discardLegacyBearer(context);
     installAccessFetch();
     const ownerKey = activeAuthKey;
     let epoch = state.epoch;
@@ -946,62 +1043,80 @@ export async function bootstrapAccessAuth(context) {
         // session or a successful saved-v1 login may select v1.
         state.selectedProtocol = protocol;
         if (protocol === 'v1' && hadV2Selection) {
-            // Keep the stored token for a server that can use it, but stop
-            // sending it to this v1-only server, even if protection is disabled.
+            // A v1-only server cannot use the previous bearer.
             state.accessToken = null;
             state.epoch++;
             epoch = state.epoch;
         }
-        if (!status.enabled) return { enabled: false };
+        if (!status.enabled) {
+            if (state.accessToken) {
+                state.accessToken = null;
+                state.epoch++;
+                epoch = state.epoch;
+            }
+            return { enabled: false };
+        }
+
+        if (protocol === 'v2' && state.accessToken) {
+            const token = state.accessToken;
+            let verdict;
+            try {
+                verdict = await wait(checkV2Token(token, context));
+            } catch (err) {
+                if (superseded()) return { enabled: state.accessEnabled };
+                throw err;
+            }
+            if (verdict === HOST_INSTALL || superseded())
+                return { enabled: state.accessEnabled };
+            if (verdict === 'valid') {
+                adoptToken(token, {}, context);
+                return { enabled: true };
+            }
+            rejectToken(token, context);
+            // No cookie fallback: an explicit v2 credential decides alone.
+            return showUnlockPrompt(context, 'v2');
+        }
+
+        if (protocol === 'v1' || !hadV2Selection) {
+            if (status.authenticated) {
+                state.selectedProtocol = 'v1';
+                return { enabled: true };
+            }
+
+            // A saved v1 verifier is only usable when the status still carries
+            // v1 KDF metadata; a v2-only status must not be rejected by those bounds.
+            if (hasV1Metadata(status)) {
+                const verifier = savedVerifier(status.raw, context);
+                if (verifier) {
+                    const verdict = await wait(login(status.raw, verifier, context));
+                    if (verdict === HOST_INSTALL || superseded())
+                        return { enabled: state.accessEnabled };
+                    if (verdict === 'ok') {
+                        state.selectedProtocol = 'v1';
+                        return { enabled: true };
+                    }
+                    if (verdict === 'transient' || verdict === 'rate-limited')
+                        throw new Error('Unable to check Phi access protection');
+                }
+            }
+        }
 
         if (protocol === 'v2') {
-            const stored = loadBearer(context);
-            const token = state.accessToken || stored;
-            if (token) {
-                let verdict;
-                try {
-                    verdict = await wait(checkV2Token(token, context));
-                } catch (err) {
-                    if (superseded()) return { enabled: state.accessEnabled };
-                    throw err;
-                }
-                if (verdict === HOST_INSTALL || superseded())
-                    return { enabled: state.accessEnabled };
-                if (verdict === 'valid') {
-                    // A stored token is already persisted; a host token is not.
-                    adoptToken(token, { persist: stored === token }, context);
-                    return { enabled: true };
-                }
-                rejectToken(token, context);
-                // No cookie fallback: an explicit v2 credential decides alone.
-                return showUnlockPrompt(context, 'v2');
+            let outcome;
+            try {
+                outcome = await wait(refreshSession(context));
+            } catch (err) {
+                if (superseded()) return { enabled: state.accessEnabled };
+                throw err;
             }
-            if (hadV2Selection)
-                return showUnlockPrompt(context, 'v2');
+            if (outcome === REFRESH_INSTALLED) return { enabled: true };
+            if (outcome === HOST_INSTALL || superseded())
+                return { enabled: state.accessEnabled };
+            if (outcome === REFRESH_SUPERSEDED && state.accessToken)
+                return { enabled: true };
+            return showUnlockPrompt(context, 'v2');
         }
-
-        if (status.authenticated) {
-            state.selectedProtocol = 'v1';
-            return { enabled: true };
-        }
-
-        // A saved v1 verifier is only usable when the status still carries v1 KDF
-        // metadata; a v2-only status must not be rejected by those bounds.
-        if (hasV1Metadata(status)) {
-            const verifier = savedVerifier(status.raw, context);
-            if (verifier) {
-                const verdict = await wait(login(status.raw, verifier, context));
-                if (verdict === HOST_INSTALL || superseded())
-                    return { enabled: state.accessEnabled };
-                if (verdict === 'ok') {
-                    state.selectedProtocol = 'v1';
-                    return { enabled: true };
-                }
-                if (verdict === 'transient' || verdict === 'rate-limited')
-                    throw new Error('Unable to check Phi access protection');
-            }
-        }
-        return showUnlockPrompt(context, protocol);
+        return showUnlockPrompt(context, 'v1');
     } finally {
         if (state.pendingBootstrapRelease === releaseHost)
             state.pendingBootstrapRelease = null;
@@ -1128,6 +1243,44 @@ export function installToken(token) {
     return true;
 }
 
+export async function logoutAccess(all = false, context) {
+    const state = stateFor(context);
+    const token = state.accessToken;
+    if (!token) throw new Error('Sign in to continue');
+    const epoch = state.epoch;
+    const result = await withAuthDeadline(async (signal) => {
+        const res = await authFetch(context, '/api/auth/v2/logout', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Phi-Auth': 'v2',
+                Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ all: all === true }),
+            credentials: 'same-origin',
+            redirect: 'error',
+            signal,
+        });
+        if (!res.ok) return { ok: false };
+        try {
+            return { ok: true, payload: await res.json() };
+        } catch {
+            return { ok: false };
+        }
+    });
+    if (!result.ok || !result.payload || result.payload.ok !== true)
+        throw new Error('Unable to logout');
+    if (epoch === state.epoch && state.accessToken === token) {
+        state.accessToken = null;
+        state.persistedToken = null;
+        state.epoch++;
+    }
+    broadcastInvalidation(credentialKey(context));
+    if (pendingOverlay?.ownerKey === credentialKey(context))
+        pendingOverlay.finish({ enabled: false });
+    return { ok: true };
+}
+
 // webSocketURL clones a socket URL and, in v2 mode, appends the bearer as one
 // encoded query parameter. The token only travels to the page's own origin.
 export function webSocketURL(url) {
@@ -1190,6 +1343,8 @@ export const __test__ = {
     resetNativeDerive,
     parseAccessStatus,
     parseProtocols,
+    parseCredentialBundle,
+    refreshSession,
     resetAccessState,
     setReload,
     getAccessState,
@@ -1200,6 +1355,7 @@ export const __test__ = {
 function resetAccessState() {
     for (const state of authStates.values()) {
         state.epoch++;
+        state.refreshInFlight = null;
         const releaseBootstrap = state.pendingBootstrapRelease;
         state.pendingBootstrapRelease = null;
         if (releaseBootstrap) releaseBootstrap();
@@ -1209,6 +1365,10 @@ function resetAccessState() {
     activeAuthKey = credentialKey();
     authStates.set(activeAuthKey, newAuthState());
     pendingOverlay = null;
+    if (invalidation) {
+        if (typeof invalidation.close === 'function') invalidation.close();
+        invalidation = null;
+    }
     reloadPage = () => location.reload();
 }
 

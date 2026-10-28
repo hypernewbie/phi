@@ -169,6 +169,15 @@ describe('access credential storage', () => {
         localStorage.setItem('phi_access_bearer_v1:server-b', 'jwt-b-old');
         let releaseSaveA;
         const calls = [];
+        const bundle = (token) =>
+            Response.json({
+                enabled: true,
+                token,
+                expires_at: 1800000000,
+                expires_in: 3600,
+                refresh_idle_expires_at: 1802000000,
+                refresh_absolute_expires_at: 1807000000,
+            });
         const request = vi.fn((url, init) => {
             const headers = new Headers(init.headers);
             const owner = headers.get('X-Phi-Backend');
@@ -180,6 +189,8 @@ describe('access credential storage', () => {
                     protocols: ['v2'],
                 });
             }
+            if (url === '/api/auth/v2/refresh')
+                return bundle(owner === 'server-a' ? 'jwt-a-old' : 'jwt-b-old');
             if (url === '/api/auth/v2/status')
                 return Response.json({ enabled: true, authenticated: true });
             if (url === '/api/auth/v2/password') {
@@ -190,7 +201,7 @@ describe('access credential storage', () => {
                     });
                 }
                 if (owner === 'server-b' && body.password === 'change-B')
-                    return Response.json({ enabled: true, token: 'jwt-b-new' });
+                    return bundle('jwt-b-new');
                 if (owner === 'server-a' && body.password === '')
                     return Response.json({ enabled: false });
             }
@@ -210,22 +221,24 @@ describe('access credential storage', () => {
         await setAccessPassword('change-B', contextB);
         expect(__test__.getAccessState().accessToken).toBe('jwt-b-new');
 
-        releaseSaveA(Response.json({ enabled: true, token: 'jwt-a-new' }));
+        releaseSaveA(bundle('jwt-a-new'));
         await saveA;
         expect(__test__.getAccessState().accessToken).toBe('jwt-b-new');
-        expect(localStorage.getItem('phi_access_bearer_v1:server-a')).toBe(
-            'jwt-a-new',
-        );
-        expect(localStorage.getItem('phi_access_bearer_v1:server-b')).toBe(
-            'jwt-b-new',
-        );
+        expect(
+            localStorage.getItem('phi_access_bearer_v1:server-a'),
+        ).toBeNull();
+        expect(
+            localStorage.getItem('phi_access_bearer_v1:server-b'),
+        ).toBeNull();
 
         await clearAccessPassword(contextA);
         expect(__test__.getAccessState().accessToken).toBe('jwt-b-new');
-        expect(localStorage.getItem('phi_access_bearer_v1:server-a')).toBeNull();
-        expect(localStorage.getItem('phi_access_bearer_v1:server-b')).toBe(
-            'jwt-b-new',
-        );
+        expect(
+            localStorage.getItem('phi_access_bearer_v1:server-a'),
+        ).toBeNull();
+        expect(
+            localStorage.getItem('phi_access_bearer_v1:server-b'),
+        ).toBeNull();
         expect(
             calls
                 .filter((call) => call.url.endsWith('/api/auth/v2/password'))
