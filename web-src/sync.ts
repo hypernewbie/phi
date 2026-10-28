@@ -5,7 +5,6 @@ import {
     escapeHtml as escapeHtmlUtil,
     buildProxyUrl,
     openExternalLink,
-    authenticateImages,
 } from './util.js';
 import { renderMarkdownSafe, highlightCodeIn } from './md-render.js';
 
@@ -129,9 +128,6 @@ export class SyncManager {
     messagesList!: HTMLElement;
 
     private _fileExistCache = new Map<string, Promise<boolean>>();
-    /** Releases for the authenticated thumbnail object URLs in the current
-     *  card list; every re-render drops the previous list's URLs. */
-    private _thumbnailReleases: Array<() => void> = [];
     private _handledToastKeys = new Set<string>();
     private _syncDebounce: ReturnType<typeof setTimeout> | null = null;
 
@@ -459,8 +455,6 @@ export class SyncManager {
     }
 
     renderMessages(messages: any[]): void {
-        for (const release of this._thumbnailReleases) release();
-        this._thumbnailReleases = [];
         if (!messages || messages.length === 0) {
             this.messagesList.innerHTML =
                 '<div class="sync-empty-state">No messages synced.</div>';
@@ -751,10 +745,6 @@ export class SyncManager {
                                         <img src="${this.escapeHtml(assetUrl)}" class="sync-image-thumb" alt="${this.escapeHtml(previewName)}" loading="lazy" />
                                     </div>
                                 `;
-                                void authenticateImages(imgSlot).then(
-                                    (release) =>
-                                        this._thumbnailReleases.push(release),
-                                );
                                 imgSlot
                                     .querySelector('.sync-image-thumb')
                                     ?.addEventListener('click', (e) => {
