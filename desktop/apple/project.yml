@@ -1,0 +1,130 @@
+name: PhiApple
+options:
+  bundleIdPrefix: dev.phi
+  createIntermediateGroups: true
+  deploymentTarget:
+    macOS: "14.0"
+    iOS: "17.0"
+
+# Signing lives outside the repo: copy Apps/Signing.xcconfig.example to
+# Apps/Signing.xcconfig and set PHI_TEAM to your Apple Developer team id.
+configFiles:
+  Debug: Apps/Signing.xcconfig
+  Release: Apps/Signing.xcconfig
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: $(PHI_TEAM)
+    MARKETING_VERSION: "0.1"
+    CURRENT_PROJECT_VERSION: "1"
+    # The vendored engine's simulator slice is arm64 only.
+    EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
+
+packages:
+  PhiCore:
+    path: .
+
+targets:
+  PhiMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: Apps/Mac
+        excludes:
+          - "*.entitlements"
+          - Info.plist
+    info:
+      path: Apps/Mac/Info.plist
+      properties:
+        CFBundleDisplayName: Phi
+        CFBundleName: Phi
+        LSApplicationCategoryType: public.app-category.developer-tools
+        NSHumanReadableCopyright: ""
+        # Phi servers are reached over a tailnet on plain HTTP.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    entitlements:
+      path: Apps/Mac/PhiMac.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.phi.mac
+        ENABLE_HARDENED_RUNTIME: YES
+    dependencies:
+      - package: PhiCore
+        product: PhiKit
+      - package: PhiCore
+        product: PhiTerminal
+
+  PhiMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Apps/MacTests]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.phi.mac.tests
+    dependencies:
+      - target: PhiMac
+      - package: PhiCore
+        product: PhiTerminal
+      - package: PhiCore
+        product: PhiKit
+
+  PhiPhone:
+    type: application
+    platform: iOS
+    sources:
+      - path: Apps/iOS
+        excludes:
+          - Info.plist
+    info:
+      path: Apps/iOS/Info.plist
+      properties:
+        CFBundleDisplayName: Phi
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # Phi servers are reached over a tailnet on plain HTTP.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.phi.phone
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+    dependencies:
+      - package: PhiCore
+        product: PhiKit
+      - package: PhiCore
+        product: PhiTerminal
+
+schemes:
+  PhiMac:
+    build:
+      targets:
+        PhiMac: all
+        PhiMacTests: [test]
+    run:
+      config: Debug
+      environmentVariables:
+        PHI_SERVER:
+          value: ""
+          isEnabled: false
+        PHI_PANE:
+          value: ""
+          isEnabled: false
+    test:
+      config: Debug
+      targets: [PhiMacTests]
+  PhiPhone:
+    build:
+      targets:
+        PhiPhone: all
+    run:
+      config: Debug

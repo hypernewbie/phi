@@ -1,0 +1,4 @@
+// Copy to Signing.xcconfig (gitignored) and set your Apple Developer team id.
+// Without it, builds still work for "Sign to Run Locally" on macOS and for the
+// iOS simulator; device installs and TestFlight need a real team.
+PHI_TEAM =
