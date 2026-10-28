@@ -24,6 +24,7 @@ function bumpFence(origin: string): void {
   attemptFence.set(origin, (attemptFence.get(origin) ?? 0) + 1);
 }
 
+
 /** A canonical refresh handle: 32 base64url bytes. */
 const AUTH_HANDLE = Buffer.alloc(32, 0xc3).toString('base64url');
 
@@ -78,7 +79,7 @@ function fakeAuthHost(
       };
     }),
     installBundleForAttempt: vi.fn(
-      (origin: string, bundle: V2Bundle, attempt: AuthAttempt) =>
+      (origin: string, _bundle: V2Bundle, attempt: AuthAttempt) =>
         attempt.isCurrent() && attempt.origin === origin,
     ),
     clearBundleForAttempt: vi.fn((attempt: AuthAttempt) => attempt.isCurrent()),
@@ -777,6 +778,118 @@ describe('embedded-transport', () => {
       expect(await Promise.all([first, second])).toHaveLength(2);
       expect(mockFetch).not.toHaveBeenCalled();
       expect(auth.refreshAccess).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps a v2 refresh handle out of the pathless cookie jar', async () => {
+      // The login answer carries the handle in Set-Cookie. The jar is replayed
+      // on every API row and every socket upgrade, so a handle stored there
+      // would travel far past its one allowed path.
+      mockFetch.mockResolvedValueOnce(credentialResponse());
+      await send('/api/auth/v2/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: 'correct-horse-battery' }),
+      });
+      expect(authed.getCookieHeader('prof1')).toBe('');
+      // The same applies to a v1 cookie value planted directly.
+      authed.setCookie('prof1', 'phi_access_refresh', AUTH_HANDLE);
+      expect(authed.getCookieHeader('prof1')).toBe('');
+
+      mockFetch.mockResolvedValueOnce(new Response('{}', { status: 200 }));
+      await send('/api/config');
+      expect(mockFetch.mock.calls.at(-1)![1].headers.get('Cookie')).toBeNull();
+    });
+
+    it('does not install a login that lost the race to a newer attempt', async () => {
+      // A slow response A must never replace a credential B installed while A
+      // was in flight: the fence advances mid-request.
+      mockFetch.mockImplementationOnce(async () => {
+        bumpFence('http://127.0.0.1:8080');
+        return credentialResponse();
+      });
+      const res = await send('/api/auth/v2/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: 'correct-horse-battery' }),
+      });
+      expect(res.status).toBe(409);
+      expect(await res.text()).toBe('{"error":"superseded"}');
+      expect(auth.installBundle).not.toHaveBeenCalled();
+    });
+
+    it('requires the exact clear answer before dropping the host credential', async () => {
+      // `enabled: false` alone is also an unrelated config row, so it is not a
+      // clear: the host keeps its credential and the page sees a host error.
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ enabled: false }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+      const res = await send('/api/auth/v2/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: '' }),
+      });
+      expect(res.status).toBe(502);
+      expect(auth.clearBundleForAttempt).not.toHaveBeenCalled();
+    });
+
+    it('refuses to clear a credential a newer attempt installed', async () => {
+      mockFetch.mockImplementationOnce(async () => {
+        bumpFence('http://127.0.0.1:8080');
+        return new Response(JSON.stringify({ ok: true, enabled: false }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      });
+      const res = await send('/api/auth/v2/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: '' }),
+      });
+      expect(res.status).toBe(503);
+      expect(auth.clearBundleForAttempt).toHaveBeenCalledTimes(1);
+    });
+
+    it('recovers a stale host token on an idempotent row instead of prompting', async () => {
+      mockFetch
+        .mockResolvedValueOnce(new Response('{}', { status: 401 }))
+        .mockResolvedValueOnce(new Response('{"ok":1}', { status: 200 }));
+      auth.getToken
+        .mockReturnValueOnce('stale-token')
+        .mockReturnValue('fresh-token');
+      const res = await send('/api/config');
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('{"ok":1}');
+      // The host owner is the one refresher, and the retry carries the token it
+      // installed rather than the stale one.
+      expect(auth.refreshAccess).toHaveBeenCalledWith('http://127.0.0.1:8080');
+      expect(mockFetch.mock.calls.at(-1)![1].headers.get('Authorization')).toBe(
+        'Bearer fresh-token',
+      );
+    });
+
+    it('never replays a mutation after recovering a stale token', async () => {
+      mockFetch.mockResolvedValueOnce(new Response('{}', { status: 401 }));
+      const res = await send('/api/pty/new', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cmd: 'ls' }),
+      });
+      expect(res.status).toBe(503);
+      expect(await res.text()).toBe('{"error":"unavailable"}');
+      // One upstream call only: a mutation is never sent twice.
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(auth.refreshAccess).toHaveBeenCalledTimes(1);
+    });
+
+    it('prompts only when the host refresh itself was refused', async () => {
+      mockFetch.mockResolvedValueOnce(new Response('{}', { status: 401 }));
+      auth.refreshAccess.mockResolvedValueOnce({ kind: 'unauthorized' });
+      const res = await send('/api/config');
+      expect(res.status).toBe(401);
+      expect(await res.text()).toBe('{"error":"unauthorized"}');
     });
 
     it('delegates the one logout to the host owner with the page\u2019s scope', async () => {
