@@ -251,7 +251,9 @@ it('waits for a due refresh before redialing an expired pane', async () => {
 
         expect(h.manager.maybeAutoReconnect(h.tab)).toBe(true);
         // The backoff timer fires, but the redial waits on the refresh.
-        await vi.advanceTimersByTimeAsync(h.tab.autoReconnectTimerDelay ?? 21000);
+        await vi.advanceTimersByTimeAsync(
+            h.tab.autoReconnectTimerDelay ?? 21000,
+        );
         expect(refreshCalls).toHaveBeenCalledTimes(1);
         expect(redial).not.toHaveBeenCalled();
 

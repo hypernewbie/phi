@@ -309,9 +309,9 @@ test.describe('v2 bearer session', () => {
 
         // The refresh handle is HttpOnly: the page cannot read it, and neither
         // cookie leaks a value the page JavaScript can see.
-        expect(
-            await page.evaluate(() => document.cookie),
-        ).not.toContain('phi_access');
+        expect(await page.evaluate(() => document.cookie)).not.toContain(
+            'phi_access',
+        );
         // The refresh and asset cookies are path-scoped, so each is visible
         // only to its own URL: query the scope that owns it.
         const sessionCookies = await context.cookies(
@@ -1364,9 +1364,9 @@ test.describe('route-local CSRF and credential precedence', () => {
             (await post({ 'X-Phi-Auth': 'v2', Origin: 'https://evil.example' }))
                 .status,
         ).toBe(403);
-        expect((await post({ 'X-Phi-Auth': 'v2', Origin: 'null' })).status).toBe(
-            403,
-        );
+        expect(
+            (await post({ 'X-Phi-Auth': 'v2', Origin: 'null' })).status,
+        ).toBe(403);
         // Cross-site fetch metadata is refused for the same reason.
         expect(
             (
@@ -1511,7 +1511,10 @@ const EXPECTED_CONSOLE = [
     /^Failed to load resource: the server responded with a status of 401 \(Unauthorized\)$/,
     /^Failed to load resource: the server responded with a status of 503 \(Service Unavailable\)$/,
 ];
-const EXPECTED_RESPONSES = [/\/api\/auth\/v2\/refresh$/, /\/api\/update\/status$/];
+const EXPECTED_RESPONSES = [
+    /\/api\/auth\/v2\/refresh$/,
+    /\/api\/update\/status$/,
+];
 
 test.describe('a signed-in session stays quiet', () => {
     let phi: PhiServer;
@@ -1552,7 +1555,8 @@ test.describe('a signed-in session stays quiet', () => {
             page.on('console', (message) => {
                 if (message.type() !== 'error') return;
                 const text = message.text();
-                if (EXPECTED_CONSOLE.some((pattern) => pattern.test(text))) return;
+                if (EXPECTED_CONSOLE.some((pattern) => pattern.test(text)))
+                    return;
                 unexpectedConsole.push(text);
             });
             page.on('pageerror', (error) => pageErrors.push(error.message));
@@ -1564,7 +1568,8 @@ test.describe('a signed-in session stays quiet', () => {
             page.on('response', (response) => {
                 if (response.status() < 400) return;
                 const url = response.url();
-                if (EXPECTED_RESPONSES.some((pattern) => pattern.test(url))) return;
+                if (EXPECTED_RESPONSES.some((pattern) => pattern.test(url)))
+                    return;
                 unexpectedResponses.push(
                     `${response.status()} ${response.request().method()} ${url}`,
                 );

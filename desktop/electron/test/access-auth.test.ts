@@ -1622,7 +1622,11 @@ describe('AccessAuth v2 refresh bundle', () => {
     });
   }
 
-  function install(auth: AccessAuth, token = 'token-a', handle = handleA): void {
+  function install(
+    auth: AccessAuth,
+    token = 'token-a',
+    handle = handleA,
+  ): void {
     expect(
       auth.installBundle(origin, {
         token,
@@ -1762,9 +1766,10 @@ describe('AccessAuth v2 refresh bundle', () => {
 
   it('treats a matching refresh 401 as terminal and keeps v2 selected', async () => {
     const auth = new AccessAuth(
-      (async () => new Response('access authentication required\n', {
-        status: 401,
-      })) as unknown as typeof fetch,
+      (async () =>
+        new Response('access authentication required\n', {
+          status: 401,
+        })) as unknown as typeof fetch,
       now,
     );
     install(auth, 'access-1', handleA);
@@ -1828,7 +1833,12 @@ describe('AccessAuth v2 refresh bundle', () => {
     await Promise.resolve();
     // A second login (another window) installs a newer credential meanwhile.
     install(auth, 'access-b', handleB);
-    release(bundleResponse('access-late', Buffer.alloc(32, 0xc3).toString('base64url')));
+    release(
+      bundleResponse(
+        'access-late',
+        Buffer.alloc(32, 0xc3).toString('base64url'),
+      ),
+    );
     expect((await inFlight).kind).toBe('superseded');
     expect(auth.getToken(origin)).toBe('access-b');
     expect(auth.getBundle(origin)?.refreshHandle).toBe(handleB);
@@ -1838,9 +1848,15 @@ describe('AccessAuth v2 refresh bundle', () => {
     const badBundles: Response[] = [
       bundleResponse('access-2', handleB, { expires_at: 0 }),
       bundleResponse('access-2', handleB, { expires_in: 'soon' }),
-      bundleResponse('access-2', handleB, { refresh_idle_expires_at: 9_999_999_999, refresh_absolute_expires_at: 1 }),
+      bundleResponse('access-2', handleB, {
+        refresh_idle_expires_at: 9_999_999_999,
+        refresh_absolute_expires_at: 1,
+      }),
       new Response(JSON.stringify({ token: '' }), { status: 200 }),
-      new Response('x'.repeat(70_000), { status: 200, headers: { 'content-type': 'application/json' } }),
+      new Response('x'.repeat(70_000), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
     ];
     for (const response of badBundles) {
       const auth = new AccessAuth(
@@ -1869,7 +1885,10 @@ describe('AccessAuth v2 refresh bundle', () => {
         (async () =>
           new Response(JSON.stringify(bundle('access-2')), {
             status: 200,
-            headers: { 'content-type': 'application/json', 'set-cookie': cookie },
+            headers: {
+              'content-type': 'application/json',
+              'set-cookie': cookie,
+            },
           })) as unknown as typeof fetch,
         now,
       );
@@ -1966,7 +1985,8 @@ describe('AccessAuth v2 refresh bundle', () => {
 
   it('keeps the bundle when logout is not confirmed', async () => {
     const auth = new AccessAuth(
-      (async () => new Response('', { status: 503 })) as unknown as typeof fetch,
+      (async () =>
+        new Response('', { status: 503 })) as unknown as typeof fetch,
       now,
     );
     install(auth, 'access-1', handleA);
@@ -2013,7 +2033,8 @@ describe('AccessAuth v2 refresh bundle', () => {
     // server's 60-second grace the replay succeeds and re-issues that same
     // handle, which must not be mistaken for a missing rotation.
     const auth = new AccessAuth(
-      (async () => bundleResponse('access-2', handleA)) as unknown as typeof fetch,
+      (async () =>
+        bundleResponse('access-2', handleA)) as unknown as typeof fetch,
       now,
     );
     install(auth, 'access-1', handleA);
@@ -2028,7 +2049,8 @@ describe('AccessAuth v2 refresh bundle', () => {
     const auth = new AccessAuth(
       (async (url: URL) => {
         hosts.push(url.host);
-        if (url.host === 'localhost:8080') throw new Error('connection refused');
+        if (url.host === 'localhost:8080')
+          throw new Error('connection refused');
         return bundleResponse('access-2', handleB);
       }) as unknown as typeof fetch,
       now,

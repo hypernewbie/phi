@@ -1892,7 +1892,9 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
       version: 'v1',
       iterations: 600_000,
     });
-    expect(reloaded.storedCredentials.get(originB)).toEqual(v2Entry('jwt-secret'));
+    expect(reloaded.storedCredentials.get(originB)).toEqual(
+      v2Entry('jwt-secret'),
+    );
   });
 
   it('loads a legacy v1-only file', () => {
@@ -2336,8 +2338,10 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
       }) as never,
     );
     const auth = host.watchBundles(
-      new AccessAuth((async () =>
-        new Response('', { status: 401 })) as unknown as typeof fetch),
+      new AccessAuth(
+        (async () =>
+          new Response('', { status: 401 })) as unknown as typeof fetch,
+      ),
     );
 
     await host.bootstrapV2Token(
@@ -2365,8 +2369,10 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
       }) as never,
     );
     const auth = host.watchBundles(
-      new AccessAuth((async () =>
-        new Response('', { status: 503 })) as unknown as typeof fetch),
+      new AccessAuth(
+        (async () =>
+          new Response('', { status: 503 })) as unknown as typeof fetch,
+      ),
     );
 
     await host.bootstrapV2Token(
@@ -2471,9 +2477,12 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
     expect(readFileSync(host.credentialsPath)).not.toEqual(before);
   });
 
-  it('refuses a v2 write through the Linux basic_text backend after a rotation', () => {    vi.stubGlobal(
+  it('refuses a v2 write through the Linux basic_text backend after a rotation', () => {
+    vi.stubGlobal(
       'process',
-      Object.create(process, { platform: { value: 'linux' } }) as NodeJS.Process,
+      Object.create(process, {
+        platform: { value: 'linux' },
+      }) as NodeJS.Process,
     );
     fake.safeStorage.backend = 'basic_text';
     const host = hostOf();
@@ -2508,8 +2517,7 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
         expiresIn: entry.expiresIn as number,
         refreshHandle: entry.refreshHandle as string,
         refreshIdleExpiresAt: entry.refreshIdleExpiresAt as number,
-        refreshAbsoluteExpiresAt: entry
-          .refreshAbsoluteExpiresAt as number,
+        refreshAbsoluteExpiresAt: entry.refreshAbsoluteExpiresAt as number,
       });
       host.bodyTokens.set(origin, token);
       const contents = newBodyContents();
@@ -2525,12 +2533,7 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
         return 200;
       };
 
-      host.installBodyToken(
-        contents,
-        originA,
-        auth,
-        host.sessionGeneration,
-      );
+      host.installBodyToken(contents, originA, auth, host.sessionGeneration);
 
       // Exactly one cookie, with the server's own attributes.
       expect(contents.cookies.setCalls).toEqual([
@@ -2559,12 +2562,7 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
       const { host, auth, contents } = authorizedHost(originA, 'body-token');
       host.viewByOrigin.set(originA, { webContents: contents });
       contents.executeJavaScript = async () => 200;
-      host.installBodyToken(
-        contents,
-        originA,
-        auth,
-        host.sessionGeneration,
-      );
+      host.installBodyToken(contents, originA, auth, host.sessionGeneration);
       expect(contents.cookies.setCalls).toHaveLength(1);
 
       // A terminal rejection clears the bundle: the asset handle must not
@@ -2578,12 +2576,7 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
     it('renews the asset cookie deadline with the rotated token', () => {
       const { host, auth, contents } = authorizedHost(originA, 'body-token');
       contents.executeJavaScript = async () => 200;
-      host.installBodyToken(
-        contents,
-        originA,
-        auth,
-        host.sessionGeneration,
-      );
+      host.installBodyToken(contents, originA, auth, host.sessionGeneration);
 
       // A host refresh rotates the bundle; the next install mirrors the new
       // token and its later deadline instead of leaving the old one behind.
@@ -2596,12 +2589,7 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
         refreshAbsoluteExpiresAt: 1_900_900_000,
       });
       host.bodyTokens.set(originA, 'rotated-token');
-      host.installBodyToken(
-        contents,
-        originA,
-        auth,
-        host.sessionGeneration,
-      );
+      host.installBodyToken(contents, originA, auth, host.sessionGeneration);
 
       expect(contents.cookies.setCalls.at(-1)).toMatchObject({
         value: 'rotated-token',
@@ -2619,24 +2607,14 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
 
       // Redirected main frame: the origin check refuses before the mutation.
       contents.url = `${originB}/index.html`;
-      host.installBodyToken(
-        contents,
-        originA,
-        auth,
-        host.sessionGeneration,
-      );
+      host.installBodyToken(contents, originA, auth, host.sessionGeneration);
       expect(contents.cookies.setCalls).toEqual([]);
       expect(scripts).toEqual([]);
 
       // Destroyed view: nothing is written either.
       contents.url = `${originA}/index.html`;
       contents.destroyed = true;
-      host.installBodyToken(
-        contents,
-        originA,
-        auth,
-        host.sessionGeneration,
-      );
+      host.installBodyToken(contents, originA, auth, host.sessionGeneration);
       expect(contents.cookies.setCalls).toEqual([]);
 
       // An unconfirmed token never authorized a native request, so no frame

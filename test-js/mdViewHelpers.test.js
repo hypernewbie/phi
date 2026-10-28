@@ -200,9 +200,7 @@ describe('initMdView', () => {
         sockets[0].onopen();
         await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
         releaseSecond();
-        await vi.waitFor(() =>
-            expect(fetchSpy).toHaveBeenCalledTimes(2),
-        );
+        await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
         // Same node, same address: the render was not replaced.
         expect(document.querySelector('.md-rendered img')).toBe(img);
         expect(img.getAttribute('src')).toBe(assetSrc);
