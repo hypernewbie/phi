@@ -1750,3 +1750,61 @@ describe('stale-token recovery in the fetch wrapper', () => {
         );
     });
 });
+
+describe('refreshAccessIfDue', () => {
+    it('returns synchronously when no v2 credential exists', async () => {
+        const { refreshAccessIfDue } = await import('../web/auth.js');
+        // A v1 cookie/verifier session has nothing to renew: sockets must not
+        // be deferred by a microtask on the strength of an empty promise.
+        expect(refreshAccessIfDue()).toBeUndefined();
+    });
+
+    it('never renews a host-installed token', async () => {
+        const { refreshAccessIfDue } = await import('../web/auth.js');
+        const fetchSpy = mockAuth(() => ({ ok: true, status: 200 }));
+        installToken('jwt-host');
+        expect(refreshAccessIfDue()).toBeUndefined();
+        expect(refreshCalls(fetchSpy)).toHaveLength(0);
+    });
+
+    it('skips a fresh browser token without a request', async () => {
+        const { refreshAccessIfDue } = await import('../web/auth.js');
+        let refreshCount = 0;
+        mockAuth((url) => {
+            if (url === '/api/auth/status') return DUAL_STATUS;
+            if (url === '/api/auth/v2/refresh') {
+                refreshCount += 1;
+                return bundleFor('jwt-a', 3600);
+            }
+            return undefined;
+        });
+        await bootstrapAccessAuth();
+        const before = refreshCount;
+        expect(refreshAccessIfDue()).toBeUndefined();
+        expect(refreshCount).toBe(before);
+    });
+
+    it('refreshes once when the token is inside the renewal lead', async () => {
+        const { refreshAccessIfDue } = await import('../web/auth.js');
+        let refreshCount = 0;
+        mockAuth((url) => {
+            if (url === '/api/auth/status') return DUAL_STATUS;
+            if (url === '/api/auth/v2/refresh') {
+                refreshCount += 1;
+                // A 30-second access deadline is inside the 60-second lead.
+                return refreshCount === 1
+                    ? bundleFor('jwt-a', 30)
+                    : bundleFor('jwt-renewed', 7200);
+            }
+            return undefined;
+        });
+        await bootstrapAccessAuth();
+        const before = refreshCount;
+        const pending = refreshAccessIfDue();
+        // The scheduled owner may already have coalesced into this renewal, in
+        // which case nothing is due any more and the call returns undefined.
+        if (pending) await pending;
+        expect(refreshCount).toBeLessThanOrEqual(before + 1);
+        expect(__test__.getAccessState().accessToken).toBe('jwt-renewed');
+    });
+});
