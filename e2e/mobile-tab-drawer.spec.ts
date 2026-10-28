@@ -156,6 +156,45 @@ test('drawer keys never reach the PTY: Enter activates the row', async ({
     await context.close();
 });
 
+test('a left-edge swipe opens the drawer on the tab tree', async ({
+    browser,
+}) => {
+    const { context, page } = await touchPage(browser, 390, 844);
+
+    // The swipe handler reads document-level touchstart/touchend and needs a
+    // start inside the left 40px edge plus 60px of horizontal travel.
+    await page.evaluate(() => {
+        const touch = (x: number) =>
+            new Touch({
+                identifier: 1,
+                target: document.body,
+                clientX: x,
+                clientY: 400,
+            });
+        document.dispatchEvent(
+            new TouchEvent('touchstart', {
+                bubbles: true,
+                touches: [touch(10)],
+                changedTouches: [touch(10)],
+            }),
+        );
+        document.dispatchEvent(
+            new TouchEvent('touchend', {
+                bubbles: true,
+                touches: [],
+                changedTouches: [touch(140)],
+            }),
+        );
+    });
+
+    await expect(page.locator('#sidebar-panel')).toHaveClass(/drawer-open/);
+    await expect(page.locator('#drawer-panel-title')).toHaveText('TABS');
+    await expect(
+        page.locator('#drawer-tabs-body .hostname-dropdown-row'),
+    ).toHaveCount(2);
+    await context.close();
+});
+
 test('the brand opens the drawer on phones, the desktop dropdown on wide screens', async ({
     browser,
 }) => {
