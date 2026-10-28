@@ -7,6 +7,7 @@ import {
     type Page,
 } from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
+import { tabList } from './_tabs.js';
 
 // Output stops between bursts so each click exercises a known retained
 // window, not a race between scrolling and a continuously moving viewport.
@@ -225,10 +226,8 @@ for (const width of [1280, 560]) {
         });
         await page.goto(phi.url);
         await page.locator('#hostname-display').click();
-        await page
-            .locator(
-                `#hostname-tabs-dropdown [data-pane-id="${pane}"] .hostname-dropdown-select-btn`,
-            )
+        await tabList(page)
+            .locator(`[data-pane-id="${pane}"] .hostname-dropdown-select-btn`)
             .click();
         await expect
             .poll(() => view(page, pane))

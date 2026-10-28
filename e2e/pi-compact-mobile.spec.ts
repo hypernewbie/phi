@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import { startPhi } from './_server.js';
+import { tabList } from './_tabs.js';
 import {
     COMPACT_FOLLOWUP_TOKENS,
     COMPACT_MODEL,
@@ -132,7 +133,7 @@ test('native mobile compact: slash entry, keyboard, pending, preserved draft', a
         // Compact layout selects tabs through the hostname dropdown;
         // rows carry the pane id (titles may retitle from content).
         await page.locator('#hostname-display').click();
-        const dropdown = page.locator('#hostname-tabs-dropdown');
+        const dropdown = tabList(page);
         await expect(dropdown).toBeVisible({ timeout: 10_000 });
         await dropdown
             .locator(

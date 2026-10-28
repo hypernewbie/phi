@@ -213,13 +213,10 @@ export class App {
         if (mobileSidebarToggle && sidebar) {
             mobileSidebarToggle.addEventListener('click', (e) => {
                 e.stopPropagation();
-                sidebar.classList.toggle('drawer-open');
-                // An open HUD floats above the slide-out (z-index), so
-                // opening the drawer dismisses it. Same call the edge
-                // swipe makes below.
                 if (sidebar.classList.contains('drawer-open')) {
-                    this.setDrawerMode('tabs');
-                    this.tabManager?._closeSelfHudNow?.();
+                    sidebar.classList.remove('drawer-open');
+                } else {
+                    this.openTabsDrawer();
                 }
             });
 
@@ -1176,6 +1173,18 @@ export class App {
     // the sessions block on demand. The mode CSS exists only inside the
     // compact viewport query, so anywhere else the drawer keeps its native
     // sessions content (it is still a drawer from 769-1023px).
+    // The single entry point for opening the compact drawer on its tab tree:
+    // the hamburger, the brand and a left-edge swipe all land here.
+    openTabsDrawer() {
+        const sidebar = document.getElementById('sidebar-panel');
+        if (!sidebar) return;
+        sidebar.classList.add('drawer-open');
+        this.setDrawerMode('tabs');
+        // An open HUD floats above the slide-out (z-index), so opening the
+        // drawer dismisses it.
+        this.tabManager?._closeSelfHudNow?.();
+    }
+
     setDrawerMode(mode) {
         if (!isCompactViewport()) mode = 'sessions';
         const sidebar = document.getElementById('sidebar-panel');
