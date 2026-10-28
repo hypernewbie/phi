@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { setupDomHarness, mockFetch } from './_dom.js';
-import { bootstrapAccessAuth, __test__ } from '../web/auth.js';
+import { bootstrapAccessAuth, logoutAccess, __test__ } from '../web/auth.js';
 
 setupDomHarness();
 
@@ -526,5 +526,160 @@ describe('unlock overlay slow-derive feedback', () => {
             __test__.resetNativeDerive();
             document.querySelector('.access-auth-overlay')?.remove();
         }
+    });
+});
+
+// The embedded shell (phi-app://app) holds no credential: the main-process
+// proxy authorizes every request, and the page only reads the proxied status.
+describe('host-authenticated shell', () => {
+    const HOST_STATUS = { enabled: true, authenticated: true, owned: true };
+
+    const asEmbeddedShell = () => {
+        const original = window.location;
+        Object.defineProperty(window, 'location', {
+            configurable: true,
+            value: {
+                protocol: 'phi-app:',
+                host: 'app',
+                origin: 'phi-app://app',
+                href: 'phi-app://app/',
+                reload: vi.fn(),
+            },
+        });
+        return () =>
+            Object.defineProperty(window, 'location', {
+                configurable: true,
+                value: original,
+            });
+    };
+
+    let restoreLocation;
+
+    beforeEach(() => {
+        __test__.resetAccessState();
+        restoreLocation = asEmbeddedShell();
+    });
+
+    afterEach(() => {
+        __test__.resetAccessState();
+        restoreLocation?.();
+        restoreLocation = undefined;
+    });
+
+    it('trusts the proxied status answer and installs no token', async () => {
+        const fetchSpy = mockFetch((url) => {
+            if (url === '/api/auth/status')
+                return {
+                    ...STATUS,
+                    authenticated: true,
+                    protocols: ['v1', 'v2'],
+                };
+            if (url === '/api/auth/v2/status') return HOST_STATUS;
+            throw new Error(`unexpected fetch ${url}`);
+        });
+
+        await expect(bootstrapAccessAuth()).resolves.toEqual({ enabled: true });
+
+        expect(document.querySelector('.access-auth-overlay')).toBeNull();
+        const state = __test__.getAccessState();
+        expect(state.hostSession).toBe(true);
+        expect(state.accessToken).toBeNull();
+        expect(state.selectedProtocol).toBe('v2');
+        // Renewal belongs to the host owner: the page never asks for a bundle.
+        expect(
+            fetchSpy.mock.calls.filter(([url]) =>
+                String(url).includes('/refresh'),
+            ),
+        ).toEqual([]);
+    });
+
+    it('accepts the token-free login answer without adopting a credential', async () => {
+        const fetchSpy = mockFetch((url, options) => {
+            if (url === '/api/auth/status')
+                return { ...STATUS, protocols: ['v1', 'v2'] };
+            if (url === '/api/auth/v2/status')
+                return { enabled: true, authenticated: false, owned: true };
+            if (url === '/api/auth/v2/login') {
+                expect(options.method).toBe('POST');
+                expect(options.headers['X-Phi-Auth']).toBe('v2');
+                expect(JSON.parse(options.body)).toEqual({
+                    password: 'correct horse',
+                });
+                return { ok: true, json: { ok: true, enabled: true } };
+            }
+            throw new Error(`unexpected fetch ${url}`);
+        });
+
+        const boot = bootstrapAccessAuth();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const overlay = document.querySelector('.access-auth-overlay');
+        expect(overlay).not.toBeNull();
+        overlay.querySelector('input[type="password"]').value = 'correct horse';
+        overlay
+            .querySelector('form')
+            .dispatchEvent(new Event('submit', { cancelable: true }));
+
+        await expect(boot).resolves.toEqual({ enabled: true });
+        expect(document.querySelector('.access-auth-overlay')).toBeNull();
+        const state = __test__.getAccessState();
+        expect(state.hostSession).toBe(true);
+        // The bundle stayed in host memory: nothing was installed here.
+        expect(state.accessToken).toBeNull();
+        expect(state.memoryOnly).toBe(false);
+        // No token reached localStorage either.
+        expect(localStorage.getItem('phi_access_credential_v1')).toBeNull();
+        expect(fetchSpy).toHaveBeenCalled();
+    });
+
+    it('asks for a new session on a proxied 401 instead of renewing', async () => {
+        const fetchSpy = mockFetch((url) => {
+            if (url === '/api/auth/status')
+                return {
+                    ...STATUS,
+                    authenticated: true,
+                    protocols: ['v1', 'v2'],
+                };
+            if (url === '/api/auth/v2/status') return HOST_STATUS;
+            if (url === '/api/terminals') return { ok: false, status: 401 };
+            throw new Error(`unexpected fetch ${url}`);
+        });
+
+        await bootstrapAccessAuth();
+        const answer = await fetch('/api/terminals');
+        expect(answer.status).toBe(401);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        // A terminal answer from the host proxy means the session is gone.
+        expect(document.querySelector('.access-auth-overlay')).not.toBeNull();
+        expect(
+            fetchSpy.mock.calls.filter(([url]) =>
+                String(url).includes('/refresh'),
+            ),
+        ).toEqual([]);
+    });
+
+    it('logs out through the host row and drops the session', async () => {
+        const fetchSpy = mockFetch((url) => {
+            if (url === '/api/auth/status')
+                return {
+                    ...STATUS,
+                    authenticated: true,
+                    protocols: ['v1', 'v2'],
+                };
+            if (url === '/api/auth/v2/status') return HOST_STATUS;
+            if (url === '/api/auth/v2/logout') return { ok: true };
+            throw new Error(`unexpected fetch ${url}`);
+        });
+
+        await bootstrapAccessAuth();
+        await expect(logoutAccess()).resolves.toEqual({ ok: true });
+
+        const call = fetchSpy.mock.calls.find(
+            ([url]) => url === '/api/auth/v2/logout',
+        );
+        expect(call[1].method).toBe('POST');
+        expect(call[1].headers['X-Phi-Auth']).toBe('v2');
+        expect(JSON.parse(call[1].body)).toEqual({ all: false });
+        expect(__test__.getAccessState().hostSession).toBe(false);
     });
 });

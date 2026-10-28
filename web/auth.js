@@ -359,6 +359,10 @@ let selectedProtocol = null; // 'v1' | 'v2' | null before discovery
 let accessEnabled = false; // last discovered enforcement state
 let accessToken = null; // in-memory bearer; null in v1 mode
 let memoryOnly = false; // host-installed token: renewed by the host, not here
+// hostSession means the page is the phi-app://app shell: the main-process proxy
+// authorizes every request, so this page holds no token, renews nothing, and
+// only reads the proxied status answer.
+let hostSession = false;
 let stateEpoch = 0; // bumped whenever the selected credential changes
 // Server-reported deadlines for the installed token, in Unix seconds. Like the
 // token they are memory-only: the server is the only durable owner.
@@ -499,6 +503,10 @@ function parseCredentialBundle(payload) {
     };
 }
 
+// HOST_SESSION_TOKEN is not a credential: it marks a successful sign-in whose
+// bundle stayed in host memory. It is never sent, stored, or compared to a token.
+const HOST_SESSION_TOKEN = Symbol('phi-host-session');
+
 const REFRESH_INSTALLED = 'installed';
 const REFRESH_NONE = 'none';
 const REFRESH_SUPERSEDED = 'superseded';
@@ -513,6 +521,16 @@ const refreshOwners = new Map();
 
 // refreshDue reports whether the installed token is close enough to expiry to
 // justify a request. A session with no token is always due.
+// hostAuthenticatedMode reports whether this document is the embedded shell. The
+// host owns the credential there; the page must not ask for one.
+function hostAuthenticatedMode() {
+    try {
+        return location.protocol === 'phi-app:' && location.host === 'app';
+    } catch {
+        return false;
+    }
+}
+
 function refreshDue() {
     if (!accessToken || !accessExpiresAt) return true;
     return accessExpiresAt * 1000 - Date.now() <= REFRESH_LEAD_MS;
@@ -706,7 +724,7 @@ function scheduleRetry(err) {
 // a visible tab, and a socket reconnect all call it. A 401 is the only outcome
 // that ends the session.
 async function renewIfDue({ ifDue = true } = {}) {
-    if (!accessToken || memoryOnly) return;
+    if (!accessToken || memoryOnly || hostSession) return;
     if (ifDue && !refreshDue()) {
         scheduleRenewal();
         return;
@@ -749,8 +767,10 @@ export function refreshAccessIfDue() {
 // failure never destroys a saved credential or changes protocol.
 async function checkV2Token(token) {
     return withAuthDeadline(async (signal) => {
+        // A host-authenticated page sends no bearer: the proxy attaches one.
+        const headers = token ? { Authorization: `Bearer ${token}` } : {};
         const res = await fetch('/api/auth/v2/status', {
-            headers: { Authorization: `Bearer ${token}` },
+            headers,
             cache: 'no-store',
             redirect: 'error',
             signal,
@@ -771,6 +791,10 @@ async function checkV2Token(token) {
         )
             throw invalidStatusError();
         if (!payload.enabled) return 'invalid';
+        // Another process owns the auth state file: the host cannot authorize,
+        // and a password prompt could not fix that.
+        if (payload.owned === false)
+            throw new Error('Another Phi instance owns access state');
         return payload.authenticated ? 'valid' : 'invalid';
     });
 }
@@ -796,6 +820,11 @@ async function v2Login(password) {
         try {
             payload = await res.json();
         } catch {
+            throw new Error('Unable to sign in');
+        }
+        // The embedded shell's reply is token-free: the host holds the bundle.
+        if (hostAuthenticatedMode()) {
+            if (payload && payload.ok === true) return HOST_SESSION_TOKEN;
             throw new Error('Unable to sign in');
         }
         const bundle = parseCredentialBundle(payload);
@@ -847,6 +876,13 @@ async function saveV2Password(password) {
             throw new Error('Unable to save access password');
         }
     });
+    if (hostAuthenticatedMode()) {
+        if (!payload || payload.ok !== true) {
+            throw new Error('Unable to save access password');
+        }
+        if (epoch === stateEpoch) hostSession = true;
+        return { enabled: true };
+    }
     const bundle = parseCredentialBundle(payload);
     if (
         !payload ||
@@ -885,6 +921,19 @@ async function clearV2Password() {
     });
     // Never discard a live credential because a proxy or error page returned
     // a successful-looking response with the wrong body.
+    if (hostAuthenticatedMode()) {
+        if (!payload || payload.enabled !== false) {
+            throw new Error('Unable to clear access password');
+        }
+        if (epoch !== stateEpoch) return { enabled: false };
+        hostSession = false;
+        accessEnabled = false;
+        selectedProtocol = 'v2';
+        stateEpoch++;
+        broadcastInvalidation();
+        if (pendingOverlay) pendingOverlay.finish({ enabled: false });
+        return { enabled: false };
+    }
     if (!payload || payload.enabled !== false)
         throw new Error('Unable to clear access password');
     // A credential installed while the clear was in flight is newer than
@@ -948,6 +997,13 @@ export function installAccessFetch() {
     const baseFetch = globalThis.fetch;
     if (!baseFetch || baseFetch[WRAPPED_FETCH]) return;
     const wrapped = async (input, init) => {
+        if (hostSession) {
+            // The host proxy authorizes this request and answers with a fixed
+            // token-free 401 only when its own refresh failed terminally.
+            const answer = await baseFetch(input, init);
+            if (answer.status === 401) requestReauth();
+            return answer;
+        }
         const url = requestURL(input);
         const token = accessToken;
         if (!url || !token || url.origin !== location.origin)
@@ -1121,6 +1177,16 @@ function showUnlockPrompt(protocol) {
                 if (protocol === 'v2') {
                     const token = await v2Login(input.value);
                     if (epoch !== stateEpoch) return;
+                    if (token === HOST_SESSION_TOKEN) {
+                        // Nothing to install: the host owns the credential.
+                        hostSession = true;
+                        accessEnabled = true;
+                        selectedProtocol = 'v2';
+                        stateEpoch++;
+                        input.value = '';
+                        finish({ enabled: true });
+                        return;
+                    }
                     adoptToken(token);
                     input.value = '';
                     finish({ enabled: true });
@@ -1187,6 +1253,28 @@ function showUnlockPrompt(protocol) {
     });
 }
 
+// bootstrapHostAuthenticated is the phi-app://app shell's bootstrap. The page
+// holds no credential and can never read one: it reads the proxied status, which
+// the host authenticates, and prompts only when that answer says the session is
+// gone. Renewal, rotation and logout all belong to the host owner.
+async function bootstrapHostAuthenticated() {
+    const status = await discoverAccessStatus();
+    accessEnabled = status.enabled;
+    // The shell is v2-only: it has no cookie jar of its own to fall back to.
+    selectedProtocol = 'v2';
+    if (!status.enabled) {
+        hostSession = false;
+        return { enabled: false };
+    }
+    const verdict = await checkV2Token(null);
+    if (verdict === 'valid') {
+        hostSession = true;
+        return { enabled: true };
+    }
+    hostSession = false;
+    return showUnlockPrompt('v2');
+}
+
 // recoverV1 returns a bootstrap result when an unselected session still holds
 // a working v1 cookie or saved verifier, or null when it holds neither. A
 // selected v2 session never reaches here: its credential decides alone.
@@ -1220,6 +1308,7 @@ async function recoverV1(status, wait, installed) {
 export async function bootstrapAccessAuth() {
     installAccessFetch();
     discardLegacyBearer();
+    if (hostAuthenticatedMode()) return bootstrapHostAuthenticated();
     const epoch = stateEpoch;
     const installed = () => epoch !== stateEpoch;
     // A host token can land while discovery or a status check is in flight.
@@ -1433,6 +1522,32 @@ export function installToken(token) {
 // (all=true) on the server, then drops the in-memory credential. It claims
 // nothing the server has not confirmed.
 export async function logoutAccess(all = false) {
+    // The embedded shell holds no token: the host proxy supplies the bearer and
+    // drops its own bundle when the server confirms.
+    if (hostSession) {
+        const epoch = stateEpoch;
+        const answer = await withAuthDeadline((signal) =>
+            fetch('/api/auth/v2/logout', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Phi-Auth': 'v2',
+                },
+                body: JSON.stringify({ all: all === true }),
+                credentials: 'same-origin',
+                redirect: 'error',
+                signal,
+            }),
+        );
+        if (!answer.ok) throw new Error('Unable to logout');
+        if (epoch === stateEpoch) {
+            hostSession = false;
+            stateEpoch++;
+        }
+        broadcastInvalidation();
+        if (pendingOverlay) pendingOverlay.finish({ enabled: false });
+        return { ok: true };
+    }
     const token = accessToken;
     if (!token) throw new Error('Sign in to continue');
     const epoch = stateEpoch;
@@ -1531,6 +1646,7 @@ function resetAccessState() {
     accessEnabled = false;
     accessToken = null;
     memoryOnly = false;
+    hostSession = false;
     accessExpiresAt = 0;
     refreshIdleExpiresAt = 0;
     refreshAbsoluteExpiresAt = 0;
@@ -1561,5 +1677,6 @@ function getAccessState() {
         accessToken,
         memoryOnly,
         accessExpiresAt,
+        hostSession,
     };
 }

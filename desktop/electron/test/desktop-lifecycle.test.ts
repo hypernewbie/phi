@@ -307,7 +307,11 @@ vi.mock('electron', () => ({
 
 import { DesktopHost } from '../src/desktop.js';
 import type { CredentialStoreFs } from '../src/desktop.js';
-import { realCredentialStoreFs } from '../src/desktop.js';
+import {
+  isAllowedNavigationTarget,
+  realCredentialStoreFs,
+} from '../src/desktop.js';
+import { EMBEDDED_ORIGIN } from '../src/embedded-transport.js';
 import { AccessAuth } from '../src/access-auth.js';
 import type { V2Bundle } from '../src/access-auth.js';
 import { FORWARD_CHANNEL } from '../src/single-instance.js';
@@ -2418,5 +2422,61 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
         ),
       ).resolves.toBe(false);
     });
+  });
+});
+
+/**
+ * The one navigation rule for a retained view. The embedded shell reports
+ * origin "null", so these cases pin the scheme/host identity a browser-only
+ * origin comparison cannot express, and the deny path that also covers
+ * `will-redirect` targets.
+ */
+describe('isAllowedNavigationTarget', () => {
+  const embedded = EMBEDDED_ORIGIN;
+  const ownOrigin = 'https://phi.example';
+  const sameServerOnly = (target: URL): boolean => target.origin === ownOrigin;
+
+  const allows = (
+    target: string,
+    allowedOrigin: string,
+    same = sameServerOnly,
+  ) => isAllowedNavigationTarget(new URL(target), allowedOrigin, same);
+
+  it('allows only the embedded app routes inside the embedded shell', () => {
+    for (const route of [
+      '/',
+      '/index.html',
+      '/md.html',
+      '/config.html',
+      '/input.html',
+    ]) {
+      expect(allows(`phi-app://app${route}`, embedded)).toBe(true);
+    }
+  });
+
+  it('denies every other embedded-shell target', () => {
+    // A different host on the same scheme, a foreign scheme that also reports
+    // origin "null" (file://), and a non-app route all fail.
+    expect(allows('phi-app://other/index.html', embedded)).toBe(false);
+    expect(allows('file:///index.html', embedded)).toBe(false);
+    expect(allows('phi-app://app/tokens.json', embedded)).toBe(false);
+    expect(allows('https://evil.example/', embedded)).toBe(false);
+    expect(allows('javascript:alert(1)', embedded)).toBe(false);
+  });
+
+  it('allows the bound profile origin in a remote view and nothing else', () => {
+    expect(allows(`${ownOrigin}/`, ownOrigin)).toBe(true);
+    expect(allows(`${ownOrigin}/md.html`, ownOrigin)).toBe(true);
+    expect(allows('https://evil.example/', ownOrigin)).toBe(false);
+    expect(allows('https://evil.example/md.html', ownOrigin)).toBe(false);
+    expect(allows('phi-app://app/', ownOrigin)).toBe(false);
+  });
+
+  it('applies the same rule to a redirect target a permitted page lands on', () => {
+    // will-redirect consults this predicate: a permitted URL that redirects to
+    // a foreign page must be denied, because the proxy would then attach host
+    // credentials to that page's requests.
+    expect(allows('https://evil.example/', embedded)).toBe(false);
+    expect(allows('https://evil.example/', ownOrigin)).toBe(false);
   });
 });

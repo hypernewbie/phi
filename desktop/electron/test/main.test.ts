@@ -533,33 +533,48 @@ describe('src/desktop.ts (step 6B view manager + rail renderer wiring)', () => {
     ).toBeGreaterThan(sizeIdx);
   });
 
-  it('computes the normalized comparison origin once and uses it in both guard paths', () => {
-    // The origin comparison must be computed once (normalized via
-    // `new URL(origin).origin`) before setWindowOpenHandler, and both
-    // handler paths (window-open and will-navigate) must compare against
-    // the same `allowedOrigin` constant.
+  it('routes every navigation path through one policy that names the embedded scheme and host', () => {
+    // The embedded view reports origin "null" (a non-special scheme has no
+    // tuple origin), so an origin equality test can never match
+    // phi-app://app and would wrongly match file://. The policy must compare
+    // scheme and host explicitly, and one predicate must serve window opens,
+    // will-navigate, will-redirect, and main-process loadURL targets.
     expect(desktopSource).toContain(
       'const allowedOrigin = new URL(origin).origin',
     );
-    const allowedIdx = desktopSource.indexOf(
-      'const allowedOrigin = new URL(origin).origin',
+    expect(desktopSource).toContain(
+      'export function isAllowedNavigationTarget(',
     );
-    const openHandlerIdx = desktopSource.indexOf(
-      'setWindowOpenHandler',
-      allowedIdx,
+    expect(desktopSource).toContain(
+      'const isAllowedNavigation = (target: URL): boolean =>',
     );
-    expect(openHandlerIdx).toBeGreaterThan(allowedIdx);
-    const windowOpenCompare = desktopSource.indexOf(
-      'target.origin === allowedOrigin',
-      openHandlerIdx,
+    expect(desktopSource).toContain(
+      'target.protocol === `${EMBEDDED_SCHEME}:`',
     );
-    expect(windowOpenCompare).toBeGreaterThan(openHandlerIdx);
-    const navGuardCompare = desktopSource.indexOf(
-      'target.origin === allowedOrigin',
-      windowOpenCompare + 1,
+    expect(desktopSource).toContain('target.host === EMBEDDED_HOST');
+    const policyIdx = desktopSource.indexOf(
+      'const isAllowedNavigation = (target: URL): boolean =>',
     );
-    expect(navGuardCompare).toBeGreaterThan(windowOpenCompare);
-    // No stale direct comparison to the raw origin string remains in either path.
+    expect(
+      desktopSource.indexOf('setWindowOpenHandler', policyIdx),
+    ).toBeGreaterThan(policyIdx);
+    expect(
+      desktopSource.indexOf("contents.on('will-navigate'", policyIdx),
+    ).toBeGreaterThan(policyIdx);
+    expect(
+      desktopSource.indexOf("contents.on('will-redirect'", policyIdx),
+    ).toBeGreaterThan(policyIdx);
+    // A main-process loadURL emits neither navigation event, so its target is
+    // validated explicitly rather than treated as exempt.
+    const loadURLIdx = desktopSource.indexOf(
+      'contents.loadURL = ((',
+      policyIdx,
+    );
+    expect(loadURLIdx).toBeGreaterThan(policyIdx);
+    expect(
+      desktopSource.indexOf('isAllowedNavigation(new URL(url))', loadURLIdx),
+    ).toBeGreaterThan(loadURLIdx);
+    // No stale direct comparison to the raw origin string remains.
     expect(desktopSource.match(/target\.origin === origin/g)).toBeNull();
   });
 
