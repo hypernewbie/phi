@@ -358,8 +358,21 @@ async function freshStatus(fallback, startedAt) {
 let selectedProtocol = null; // 'v1' | 'v2' | null before discovery
 let accessEnabled = false; // last discovered enforcement state
 let accessToken = null; // in-memory bearer; null in v1 mode
-let memoryOnly = false; // host-installed token: never write it to storage
+let memoryOnly = false; // host-installed token: renewed by the host, not here
 let stateEpoch = 0; // bumped whenever the selected credential changes
+// Server-reported deadlines for the installed token, in Unix seconds. Like the
+// token they are memory-only: the server is the only durable owner.
+let accessExpiresAt = 0;
+let refreshIdleExpiresAt = 0;
+let refreshAbsoluteExpiresAt = 0;
+// Renewal lead: a token is renewed this long before it expires. The stale-token
+// path in the fetch wrapper covers a tab whose timers were throttled anyway.
+const REFRESH_LEAD_MS = 60 * 1000;
+const RETRY_BASE_MS = 2000;
+const RETRY_MAX_MS = 60000;
+let renewalTimer = null;
+let retryTimer = null;
+let retryDelayMs = 0;
 // Resolves a bootstrap that is waiting on the network when a host token
 // arrives. The late response is fenced by stateEpoch.
 let pendingBootstrapRelease = null;
@@ -376,10 +389,13 @@ function invalidationChannel() {
     try {
         const channel = new BroadcastChannel(AUTH_CHANNEL);
         channel.addEventListener('message', (event) => {
-            if (!event.data || event.data.kind !== 'logout') return;
-            accessToken = null;
-            stateEpoch++;
-            if (pendingOverlay) pendingOverlay.finish({ enabled: false });
+            if (!event.data) return;
+            if (event.data.kind === 'logout') {
+                dropCredential();
+                if (pendingOverlay) pendingOverlay.finish({ enabled: false });
+                return;
+            }
+            if (event.data.kind === 'bundle') receiveBundle(event.data);
         });
         invalidation = channel;
     } catch {
@@ -392,6 +408,38 @@ function invalidationChannel() {
 function broadcastInvalidation() {
     const channel = invalidationChannel();
     if (channel) channel.postMessage({ kind: 'logout' });
+}
+
+// broadcastBundle shares a renewed bundle with the other tabs of this
+// origin/profile. The token already lives in this page's memory, so the
+// message crosses no boundary a same-origin script could not cross itself. It
+// carries no refresh handle - that stays in its HttpOnly cookie.
+function broadcastBundle() {
+    const channel = invalidationChannel();
+    if (!channel || !accessToken) return;
+    channel.postMessage({
+        kind: 'bundle',
+        origin: location.origin,
+        bundle: {
+            token: accessToken,
+            expiresAt: accessExpiresAt,
+            refreshIdleExpiresAt,
+            refreshAbsoluteExpiresAt,
+        },
+    });
+}
+
+// receiveBundle adopts another tab's memory-only bundle. Deadlines only move
+// forward, so a late message from an older refresh cannot replace a newer
+// token, and a host install always outranks a page bundle.
+function receiveBundle(message) {
+    const bundle = message.bundle;
+    if (!bundle || typeof bundle.token !== 'string' || !bundle.token) return;
+    if (message.origin !== location.origin) return;
+    if (!Number.isInteger(bundle.expiresAt) || bundle.expiresAt <= 0) return;
+    if (memoryOnly) return;
+    if (accessToken && bundle.expiresAt <= accessExpiresAt) return;
+    adoptToken(bundle.token, bundle, { broadcast: false });
 }
 
 function utf8Length(value) {
@@ -455,27 +503,78 @@ const REFRESH_INSTALLED = 'installed';
 const REFRESH_NONE = 'none';
 const REFRESH_SUPERSEDED = 'superseded';
 
-// One refresh per page load. Simultaneous callers share the in-flight request
-// instead of rotating the same handle twice; another tab's refresh is covered
-// by the server's grace window, not by a channel message.
-let refreshInFlight = null;
+// One refresh owner per server origin. Simultaneous callers share the in-flight
+// request instead of rotating the same handle twice, and tabs of the same origin
+// serialize through one named lock so a page reload cannot consume the handle a
+// sibling just rotated. Without Locks, per-page single-flight still applies and
+// the server's grace window covers the overlap.
+const REFRESH_LOCK_PREFIX = 'phi-access-refresh:';
+const refreshOwners = new Map();
 
-function refreshSession() {
-    if (refreshInFlight) return refreshInFlight;
-    const attempt = runRefresh();
-    refreshInFlight = attempt;
+// refreshDue reports whether the installed token is close enough to expiry to
+// justify a request. A session with no token is always due.
+function refreshDue() {
+    if (!accessToken || !accessExpiresAt) return true;
+    return accessExpiresAt * 1000 - Date.now() <= REFRESH_LEAD_MS;
+}
+
+function withRefreshLock(origin, run) {
+    const locks = typeof navigator !== 'undefined' ? navigator.locks : null;
+    if (!locks || typeof locks.request !== 'function')
+        return Promise.resolve().then(run);
+    try {
+        return Promise.resolve(
+            locks.request(REFRESH_LOCK_PREFIX + origin, () => run()),
+        );
+    } catch {
+        return Promise.resolve().then(run);
+    }
+}
+
+function refreshSession({ ifDue = false } = {}) {
+    const origin = location.origin;
+    const pending = refreshOwners.get(origin);
+    if (pending) return pending;
+    // A host-installed token is renewed by the host; rotating it here would
+    // race the host's own owner and consume its handle.
+    if (memoryOnly) return Promise.resolve(REFRESH_NONE);
+    const attempt = withRefreshLock(origin, () =>
+        // Re-evaluated inside the lock: a bundle broadcast while this caller
+        // waited makes the network request unnecessary.
+        ifDue && !refreshDue() ? REFRESH_INSTALLED : runRefresh(origin),
+    );
+    refreshOwners.set(origin, attempt);
     void attempt
         .catch(() => {})
         .then(() => {
-            if (refreshInFlight === attempt) refreshInFlight = null;
+            if (refreshOwners.get(origin) === attempt)
+                refreshOwners.delete(origin);
         });
     return attempt;
+}
+
+// retryAfterMs honors the server's own backoff instruction, bounded so a
+// nonsense header cannot park the retry loop for hours.
+function retryAfterMs(res) {
+    const raw =
+        res.headers && typeof res.headers.get === 'function'
+            ? res.headers.get('Retry-After')
+            : null;
+    const seconds = Number.parseInt(raw, 10);
+    if (!Number.isInteger(seconds) || seconds <= 0) return 0;
+    return Math.min(seconds, 300) * 1000;
+}
+
+function refreshFailure(message, waitMs) {
+    const err = new Error(message);
+    if (waitMs > 0) err.retryAfterMs = waitMs;
+    return err;
 }
 
 // Only 401 ends the session. Every other failure keeps the credential, logs
 // nobody out, and stays retryable; a malformed bundle is a server fault, not a
 // reason to prompt for a password.
-async function runRefresh() {
+async function runRefresh(origin) {
     const epoch = stateEpoch;
     const res = await withAuthDeadline((signal) =>
         fetch('/api/auth/v2/refresh', {
@@ -490,7 +589,11 @@ async function runRefresh() {
         throw new Error('Unable to reach Phi. Try again.');
     });
     if (res.status === 401) return REFRESH_NONE;
-    if (!res.ok) throw new Error('Unable to refresh access session');
+    if (!res.ok)
+        throw refreshFailure(
+            'Unable to refresh access session',
+            retryAfterMs(res),
+        );
     let payload;
     try {
         payload = await res.json();
@@ -501,32 +604,137 @@ async function runRefresh() {
     if (!bundle) throw invalidStatusError();
     // A non-positive duration cannot be used for this page load and is not a
     // credential failure, so it stays retryable instead of prompting.
-    if (bundle.expiresIn <= 0) throw new Error('Unable to refresh access session');
-    // A host install or logout during the request is newer than this answer.
-    if (epoch !== stateEpoch) return REFRESH_SUPERSEDED;
-    adoptToken(bundle.token);
+    if (bundle.expiresIn <= 0)
+        throw new Error('Unable to refresh access session');
+    // A host install, logout, or origin change during the request is newer
+    // than this answer.
+    if (epoch !== stateEpoch || location.origin !== origin)
+        return REFRESH_SUPERSEDED;
+    adoptToken(bundle.token, bundle);
     return REFRESH_INSTALLED;
 }
 
 // adoptToken installs a v2 credential this module obtained. It lives in memory
 // for the rest of the page load and is never persisted.
-function adoptToken(token) {
+function adoptToken(token, bundle = null, { broadcast = true } = {}) {
     accessToken = token;
     accessEnabled = true;
     selectedProtocol = 'v2';
+    accessExpiresAt = bundle ? bundle.expiresAt : 0;
+    refreshIdleExpiresAt = bundle ? bundle.refreshIdleExpiresAt : 0;
+    refreshAbsoluteExpiresAt = bundle ? bundle.refreshAbsoluteExpiresAt : 0;
+    retryDelayMs = 0;
     stateEpoch++;
+    scheduleRenewal();
+    if (broadcast) broadcastBundle();
     // A replacement credential makes an open reauthentication prompt moot.
     if (pendingOverlay) pendingOverlay.finish({ enabled: true });
+}
+
+// clearTokenState forgets the in-memory token and everything scheduled for it
+// without changing the selected protocol. It never touches the HttpOnly refresh
+// cookie, which only the server can clear.
+function clearTokenState() {
+    accessToken = null;
+    accessExpiresAt = 0;
+    refreshIdleExpiresAt = 0;
+    refreshAbsoluteExpiresAt = 0;
+    clearTimeout(renewalTimer);
+    renewalTimer = null;
+}
+
+// dropCredential forgets the credential and supersedes every operation that
+// depended on it.
+function dropCredential() {
+    clearTokenState();
+    selectedProtocol = 'v2';
+    stateEpoch++;
 }
 
 // rejectToken clears only the token that failed. A delayed 401 for token A
 // must not clear a token B installed after it, and a rejection never changes
 // the selected protocol.
 function rejectToken(token) {
-    if (accessToken !== token) return;
-    accessToken = null;
+    if (!token || accessToken !== token) return;
+    clearTokenState();
     // Token absence alone must not select v1: keep the v2 choice.
     selectedProtocol = 'v2';
+}
+
+// scheduleRenewal renews near expiry for the current generation only. A timer
+// armed for a credential that has since been replaced or dropped cannot renew
+// anything.
+function scheduleRenewal() {
+    clearTimeout(renewalTimer);
+    renewalTimer = null;
+    if (!accessToken || memoryOnly || !accessExpiresAt) return;
+    const epoch = stateEpoch;
+    const delay = Math.max(
+        0,
+        accessExpiresAt * 1000 - Date.now() - REFRESH_LEAD_MS,
+    );
+    renewalTimer = setTimeout(() => {
+        renewalTimer = null;
+        if (epoch !== stateEpoch) return;
+        void renewIfDue();
+    }, delay);
+}
+
+// scheduleRetry retries a failed renewal with bounded jitter/backoff, honoring
+// Retry-After. Nothing is cleared: a failed refresh must not log anybody out,
+// open a prompt, or drop rendered data.
+function scheduleRetry(err) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+    if (!accessToken || memoryOnly) return;
+    const epoch = stateEpoch;
+    retryDelayMs = retryDelayMs
+        ? Math.min(RETRY_MAX_MS, retryDelayMs * 2)
+        : RETRY_BASE_MS;
+    const jitter = retryDelayMs * 0.2 * Math.random();
+    const honored =
+        err && Number.isFinite(err.retryAfterMs) ? err.retryAfterMs : 0;
+    const delay = Math.max(honored, retryDelayMs + jitter);
+    retryTimer = setTimeout(() => {
+        retryTimer = null;
+        if (epoch !== stateEpoch) return;
+        void renewIfDue({ ifDue: false });
+    }, delay);
+}
+
+// renewIfDue is the background renewal owner: the scheduled timer, a return to
+// a visible tab, and a socket reconnect all call it. A 401 is the only outcome
+// that ends the session.
+async function renewIfDue({ ifDue = true } = {}) {
+    if (!accessToken || memoryOnly) return;
+    if (ifDue && !refreshDue()) {
+        scheduleRenewal();
+        return;
+    }
+    const epoch = stateEpoch;
+    let outcome;
+    try {
+        outcome = await refreshSession({ ifDue });
+    } catch (err) {
+        if (epoch !== stateEpoch) return;
+        scheduleRetry(err);
+        return;
+    }
+    if (epoch !== stateEpoch) return;
+    if (outcome === REFRESH_INSTALLED) return;
+    if (outcome === REFRESH_NONE) {
+        // The refresh cookie is gone: the server has ended this session.
+        dropCredential();
+        void requestReauth();
+        return;
+    }
+    scheduleRenewal();
+}
+
+// refreshAccessIfDue lets a reconnecting socket bring the credential up to date
+// without a request when the in-memory token is still fresh.
+export function refreshAccessIfDue() {
+    return renewIfDue();
 }
 
 // checkV2Token reports whether the server still accepts token. A rejected
@@ -726,7 +934,9 @@ function requestHeaders(input, init) {
 // installAccessFetch wraps fetch once so same-origin protected API calls carry
 // the in-memory bearer. Only a 401 means the access credential expired or was
 // revoked; a 403 is a route-specific refusal and reaches the caller unchanged.
-// It never replays the request that failed.
+// A stale-token 401 starts the one refresh owner and then retries this request
+// once, and only when it is idempotent (GET/HEAD). A mutation is never replayed
+// here: the caller resubmits after the refreshed state renders.
 export function installAccessFetch() {
     const baseFetch = globalThis.fetch;
     if (!baseFetch || baseFetch[WRAPPED_FETCH]) return;
@@ -741,18 +951,42 @@ export function installAccessFetch() {
         // and never treat its failure as this module's token being rejected.
         if (headers.has('Authorization')) return baseFetch(input, init);
         headers.set('Authorization', `Bearer ${token}`);
-        const response = await baseFetch(
-            input,
-            init ? { ...init, headers } : { headers },
-        );
-        if (
-            (response.status === 401) &&
-            accessToken === token
-        ) {
+        const requestInit = init ? { ...init, headers } : { headers };
+        const response = await baseFetch(input, requestInit);
+        if (response.status !== 401) return response;
+        // A delayed rejection of token A must not touch token B.
+        if (accessToken !== token) return response;
+        let outcome;
+        try {
+            outcome = await refreshSession();
+        } catch {
+            // Transient failure: keep the credential, surface this response,
+            // and let the background owner retry with backoff.
+            scheduleRetry();
+            return response;
+        }
+        if (outcome === REFRESH_NONE) {
             rejectToken(token);
             requestReauth();
+            return response;
         }
-        return response;
+        const method = (
+            (init && init.method) ||
+            (input && typeof input.method === 'string' ? input.method : 'GET')
+        ).toUpperCase();
+        const renewed = accessToken;
+        if (
+            outcome !== REFRESH_INSTALLED ||
+            !renewed ||
+            (method !== 'GET' && method !== 'HEAD')
+        )
+            return response;
+        const retryHeaders = requestHeaders(input, init);
+        retryHeaders.set('Authorization', `Bearer ${renewed}`);
+        return baseFetch(
+            input,
+            init ? { ...init, headers: retryHeaders } : { headers: retryHeaders },
+        );
     };
     wrapped[WRAPPED_FETCH] = true;
     globalThis.fetch = wrapped;
@@ -1016,12 +1250,12 @@ export async function bootstrapAccessAuth() {
     if (protocol === 'v1' && hadV2Selection) {
         // A v1-only server cannot use the bearer. This holds even when the
         // server reports authentication disabled.
-        accessToken = null;
+        clearTokenState();
     }
     if (!status.enabled) {
         // Enforcement is off: a credential from before is stale, and a
         // refresh would rotate a session the server no longer honours.
-        accessToken = null;
+        clearTokenState();
         return { enabled: false };
     }
 
@@ -1164,13 +1398,21 @@ export function getAccessToken() {
 
 // installToken is the host bridge: it installs a memory-only v2 credential
 // (never localStorage), releases a pending unlock overlay, and lets a loaded
-// body continue bootstrap.
+// body continue bootstrap. The host renews its own token, so no renewal timer
+// or standalone refresh is armed for it.
 export function installToken(token) {
     if (typeof token !== 'string' || !token) return false;
+    clearTimeout(renewalTimer);
+    renewalTimer = null;
+    clearTimeout(retryTimer);
+    retryTimer = null;
     accessToken = token;
     accessEnabled = true;
     selectedProtocol = 'v2';
     memoryOnly = true;
+    accessExpiresAt = 0;
+    refreshIdleExpiresAt = 0;
+    refreshAbsoluteExpiresAt = 0;
     stateEpoch++;
     // Release a bootstrap still waiting on discovery or a status check.
     const releaseBootstrap = pendingBootstrapRelease;
@@ -1211,7 +1453,7 @@ export async function logoutAccess(all = false) {
     if (!payload || payload.ok !== true) throw new Error('Unable to logout');
     // A credential installed while the logout was in flight is newer than it.
     if (epoch === stateEpoch && accessToken === token) {
-        accessToken = null;
+        clearTokenState();
         stateEpoch++;
     }
     broadcastInvalidation();
@@ -1265,6 +1507,16 @@ if (typeof window !== 'undefined') {
     window.phiAccessAuth = bridge;
 }
 
+// A hidden tab has throttled timers, and a resumed machine may have slept
+// through the whole token lifetime, so returning to the foreground re-checks
+// the deadline instead of trusting the schedule.
+if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'visible') return;
+        void renewIfDue();
+    });
+}
+
 export const __test__ = {
     bytesToBase64URL,
     base64URLToBytes,
@@ -1281,6 +1533,9 @@ export const __test__ = {
     parseProtocols,
     parseCredentialBundle,
     refreshSession,
+    renewIfDue,
+    refreshDue,
+    receiveBundle,
     resetAccessState,
     setReload,
     getAccessState,
@@ -1293,10 +1548,18 @@ function resetAccessState() {
     accessEnabled = false;
     accessToken = null;
     memoryOnly = false;
+    accessExpiresAt = 0;
+    refreshIdleExpiresAt = 0;
+    refreshAbsoluteExpiresAt = 0;
+    clearTimeout(renewalTimer);
+    renewalTimer = null;
+    clearTimeout(retryTimer);
+    retryTimer = null;
+    retryDelayMs = 0;
     stateEpoch++;
     reauthInFlight = null;
     pendingOverlay = null;
-    refreshInFlight = null;
+    refreshOwners.clear();
     if (invalidation) {
         if (typeof invalidation.close === 'function') invalidation.close();
         invalidation = null;
@@ -1309,5 +1572,11 @@ function setReload(fn) {
 }
 
 function getAccessState() {
-    return { selectedProtocol, accessEnabled, accessToken, memoryOnly };
+    return {
+        selectedProtocol,
+        accessEnabled,
+        accessToken,
+        memoryOnly,
+        accessExpiresAt,
+    };
 }
