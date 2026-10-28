@@ -1468,6 +1468,9 @@ func (s *testAuthSocket) Close() error {
 	return nil
 }
 
+// closedForTest reports whether the hub closed this socket.
+func (s *testAuthSocket) closedForTest() bool { return s.closed }
+
 func testAccessUseHub(t *testing.T) *ws.Hub {
 	t.Helper()
 	hub := ws.NewHub(0)
@@ -3048,6 +3051,19 @@ func TestAccessV2RefreshIdleAndAbsoluteDeadlines(t *testing.T) {
 	clock.advance(time.Second)
 	testAccessErrorResponse(t, "rotation at the absolute deadline",
 		testAccessV2RefreshRequest(t, handle), http.StatusUnauthorized, "access authentication required\n")
+
+	// The idle boundary is inclusive: the renewal one second before the deadline
+	// already happened above, and a refresh at the deadline itself is refused.
+	boundaryHandle := testAccessRefreshHandle(t, testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.135:1"))
+	boundaryFamily := testAccessDecodeBundle(t, testAccessV2RefreshRequest(t, boundaryHandle))
+	boundaryHandle = testAccessRefreshHandle(t, func() *httptest.ResponseRecorder {
+		r := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh", `{}`)
+		r.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: boundaryHandle})
+		return testAccessServe(handleAccessV2Refresh, r)
+	}())
+	clock.advance(time.Unix(boundaryFamily.RefreshIdleExpiresAt, 0).Sub(clock.now))
+	testAccessErrorResponse(t, "rotation at the idle deadline",
+		testAccessV2RefreshRequest(t, boundaryHandle), http.StatusUnauthorized, "access authentication required\n")
 }
 
 func TestAccessV2RefreshConsumedPruning(t *testing.T) {
@@ -3123,6 +3139,57 @@ func TestAccessV2RefreshConsumedCapRevokes(t *testing.T) {
 	}
 }
 
+// TestAccessV2RefreshConsumedCapPrunesFirst pins the ordering between the
+// retention window and the consumed cap: evidence older than the window cannot
+// be replayed, so a family returning after eight days must prune it and renew
+// instead of revoking itself on entries nobody could still use.
+func TestAccessV2RefreshConsumedCapPrunesFirst(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	clock := testAccessUseClock(t, auth, testAccessStart)
+
+	testAccessEnableV2(t, testAccessPassword)
+	handle := testAccessRefreshHandle(t, testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.138:1"))
+
+	// Walk the family up to the cap. One second per rotation stays inside the
+	// refresh budget and keeps the handled evidence fresh.
+	for i := 0; i < maxAccessConsumedPerFam; i++ {
+		clock.advance(time.Second)
+		w := testAccessV2RefreshRequest(t, handle)
+		if w.Code != http.StatusOK {
+			t.Fatalf("rotation %d: %d %s", i+1, w.Code, w.Body.String())
+		}
+		handle = testAccessRefreshHandle(t, w)
+	}
+	atCap := testAccessStateFile(t)
+	fresh := false
+	for _, family := range atCap.Active.Families {
+		if len(family.Consumed) == maxAccessConsumedPerFam {
+			fresh = true
+			if now := clock.now.Unix(); now-family.Consumed[0].ConsumedAt >= int64(accessConsumedRetention/time.Second) {
+				t.Fatalf("the oldest evidence is already expired: now=%d oldest=%d", now, family.Consumed[0].ConsumedAt)
+			}
+		}
+	}
+	if !fresh {
+		t.Fatalf("no family reached the consumed cap of %d", maxAccessConsumedPerFam)
+	}
+
+	// Eight days later every entry is past retention but the family is still
+	// inside its idle window. No commit ran in between, so only the refresh path
+	// can prune before it counts.
+	clock.advance(8 * 24 * time.Hour)
+	renewed := testAccessV2RefreshRequest(t, handle)
+	if renewed.Code != http.StatusOK {
+		t.Fatalf("rotation after the retention window = %d want 200 (%s)", renewed.Code, renewed.Body.String())
+	}
+	for _, family := range testAccessStateFile(t).Active.Families {
+		if len(family.Consumed) > 1 {
+			t.Errorf("consumed evidence = %d after pruning, want at most the newest entry", len(family.Consumed))
+		}
+	}
+}
+
 func TestAccessV2FamilyCapacityEvictsLRU(t *testing.T) {
 	withTempConfig(t)
 	auth := useTestAccessAuth(t)
@@ -3148,20 +3215,104 @@ func TestAccessV2FamilyCapacityEvictsLRU(t *testing.T) {
 			t.Fatalf("add family %d: %v", i, err)
 		}
 	}
-	if err := add(maxAccessFamilies); err != nil {
+	// Touch the oldest family so it is no longer the least recently used: a
+	// FIFO or insertion-order victim would still drop it.
+	touched := findAccessFamily(active, ids[0])
+	if touched == nil {
+		t.Fatal("oldest family is missing before the eviction")
+	}
+	touched.LastUsedAt = testAccessStart.Add(time.Hour).Unix()
+
+	if err := add(maxAccessFamilies + 10000); err != nil {
 		t.Fatalf("add the over-cap family: %v", err)
 	}
 	if len(active.Families) != maxAccessFamilies {
 		t.Fatalf("families = %d want the cap %d", len(active.Families), maxAccessFamilies)
 	}
-	if findAccessFamily(active, ids[0]) != nil {
+	if findAccessFamily(active, ids[1]) != nil {
 		t.Error("the least-recently-used family survived eviction")
 	}
-	if findAccessFamily(active, ids[1]) == nil {
-		t.Error("eviction removed more than the least-recently-used family")
+	if findAccessFamily(active, ids[0]) == nil {
+		t.Error("eviction dropped a recently used family: capacity orders by last use, not insertion")
 	}
 	if findAccessFamily(active, ids[len(ids)-1]) == nil {
 		t.Error("eviction removed the newest family")
+	}
+}
+
+// TestAccessV2CapacityEvictionRetiresVictimSocket ties capacity eviction to the
+// durable state and to the socket it admitted: the evicted family must leave the
+// state file and lose its socket, while the family it displaced around keeps
+// both.
+func TestAccessV2CapacityEvictionRetiresVictimSocket(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	testAccessUseClock(t, auth, testAccessStart)
+	hub := testAccessUseHub(t)
+	testAccessEnableV2(t, testAccessPassword)
+
+	auth.mu.Lock()
+	active := auth.snapshotLocked()
+	active.Families = nil
+	key, refreshKey := auth.jwtKey, auth.v2.refreshKey
+	auth.mu.Unlock()
+
+	for i := 0; i < maxAccessFamilies; i++ {
+		if _, _, err := addAccessFamily(active, key, refreshKey, testAccessStart.Add(time.Duration(i)*time.Second)); err != nil {
+			t.Fatalf("add family %d: %v", i, err)
+		}
+	}
+	// Install the families so the commit can tell which one it retires.
+	auth.mu.Lock()
+	err := auth.commitActiveLocked(active)
+	generation := auth.generation
+	auth.mu.Unlock()
+	if err != nil {
+		t.Fatalf("commit the capped families: %v", err)
+	}
+	hub.RotateAuth(generation)
+
+	victimID := active.Families[0].ID
+	keptID := active.Families[1].ID
+	victim := &testAuthSocket{}
+	kept := &testAuthSocket{}
+	if !hub.AdmitAuth(victim, ws.AuthFence{Generation: generation, FamilyID: victimID}) {
+		t.Fatal("victim socket was not admitted at the current generation")
+	}
+	if !hub.AdmitAuth(kept, ws.AuthFence{Generation: generation, FamilyID: keptID}) {
+		t.Fatal("kept socket was not admitted at the current generation")
+	}
+
+	// One more family evicts the least recently used one.
+	overCap := testAccessStart.Add(time.Duration(maxAccessFamilies+10000) * time.Second)
+	if _, _, err := addAccessFamily(active, key, refreshKey, overCap); err != nil {
+		t.Fatalf("add the over-cap family: %v", err)
+	}
+	if findAccessFamily(active, victimID) != nil {
+		t.Fatal("the victim family is still in the candidate state")
+	}
+	auth.mu.Lock()
+	err = auth.commitActiveLocked(active)
+	auth.mu.Unlock()
+	if err != nil {
+		t.Fatalf("commit the eviction: %v", err)
+	}
+
+	if !victim.closedForTest() {
+		t.Error("the evicted family kept its socket open")
+	}
+	if kept.closedForTest() {
+		t.Error("eviction closed an unrelated family's socket")
+	}
+	durable := testAccessStateFile(t)
+	if findAccessFamily(&durable.Active, victimID) != nil {
+		t.Error("the evicted family survived in the durable state")
+	}
+	if findAccessFamily(&durable.Active, keptID) == nil {
+		t.Error("eviction removed the surviving family from durable state")
+	}
+	if len(durable.Active.Families) != maxAccessFamilies {
+		t.Errorf("durable families = %d want the cap %d", len(durable.Active.Families), maxAccessFamilies)
 	}
 }
 
@@ -3490,10 +3641,6 @@ func TestAccessV2StateSchemaBounds(t *testing.T) {
 	digest := func(seed byte) string {
 		return fmt.Sprintf("%064x", bytes.Repeat([]byte{seed}, 32))
 	}
-	handle := func(seed byte) string {
-		return base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{seed}, 32))
-	}
-
 	cases := []struct {
 		name   string
 		mutate func(*accessV2StateFile)
@@ -3553,12 +3700,16 @@ func TestAccessV2StateSchemaBounds(t *testing.T) {
 			s.Active.Families[0].Consumed = consumed
 		}},
 		{"families over the cap", func(s *accessV2StateFile) {
+			// Every family needs its own canonical id and digest, or the loader
+			// would reject this state for duplication even with the cap gone.
 			template := s.Active.Families[0]
 			families := make([]accessV2Family, 0, maxAccessFamilies+1)
 			for i := 0; i <= maxAccessFamilies; i++ {
+				familyID := sha256.Sum256([]byte(fmt.Sprintf("family-%d", i)))
+				digestBytes := sha256.Sum256([]byte(fmt.Sprintf("digest-%d", i)))
 				family := template
-				family.ID = handle(byte(i % 251))
-				family.ActiveDigest = digest(byte(i % 251))
+				family.ID = base64.RawURLEncoding.EncodeToString(familyID[:])
+				family.ActiveDigest = hex.EncodeToString(digestBytes[:])
 				families = append(families, family)
 			}
 			s.Active.Families = families
