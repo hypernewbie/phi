@@ -13,6 +13,7 @@ vi.mock('../web/vendor/noble-hashes/pbkdf2.js', () => ({
 const {
     bootstrapAccessAuth,
     clearAccessPassword,
+    logoutAccess,
     installAccessFetch,
     installToken,
     setAccessPassword,
@@ -35,8 +36,29 @@ const DUAL_STATUS = {
     challenge: 'one-time-challenge',
 };
 
-function storeBearer(token) {
-    localStorage.setItem(BEARER_KEY, token);
+const LEGACY_BEARER_KEY = 'phi_access_bearer_v1';
+
+// A complete credential bundle, exactly as the server sends it. expires_in is
+// a duration; the three deadlines are integer Unix seconds.
+const BUNDLE = {
+    enabled: true,
+    token: 'jwt-bundle',
+    expires_at: 1800000000,
+    expires_in: 3600,
+    refresh_idle_expires_at: 1802000000,
+    refresh_absolute_expires_at: 1807000000,
+};
+
+// mockAuth adds the refresh route to a test's fetch stub. Unless the handler
+// answers it, the page holds no working refresh cookie - the state a v1
+// recovery test or a password-prompt test starts from.
+function mockAuth(handler) {
+    return mockFetch((url, options) => {
+        const answer = handler ? handler(url, options) : undefined;
+        if (answer !== undefined) return answer;
+        if (url === '/api/auth/v2/refresh') return { ok: false, status: 401 };
+        return undefined;
+    });
 }
 
 function submitOverlay(password) {
@@ -58,7 +80,7 @@ beforeEach(() => {
 
 describe('v2 selection', () => {
     it('remembers the preferred protocol without logging in when disabled', async () => {
-        const fetchSpy = mockFetch(() => ({
+        const fetchSpy = mockAuth(() => ({
             enabled: false,
             protocols: ['v1', 'v2'],
         }));
@@ -71,7 +93,7 @@ describe('v2 selection', () => {
     });
 
     it('treats an absent capability field as v1-only', async () => {
-        mockFetch(() => ({ enabled: false }));
+        mockAuth(() => ({ enabled: false }));
         await expect(bootstrapAccessAuth()).resolves.toEqual({
             enabled: false,
         });
@@ -79,8 +101,8 @@ describe('v2 selection', () => {
     });
 
     it('reuses a stored bearer the server still accepts', async () => {
-        storeBearer('jwt-stored');
-        const fetchSpy = mockFetch((url) => {
+        installToken('jwt-stored');
+        const fetchSpy = mockAuth((url) => {
             if (url === '/api/auth/status') return DUAL_STATUS;
             if (url === '/api/auth/v2/status') {
                 return { enabled: true, authenticated: true };
@@ -96,8 +118,8 @@ describe('v2 selection', () => {
     });
 
     it('clears only a rejected bearer and asks for a v2 password without a cookie fallback', async () => {
-        storeBearer('jwt-stale');
-        const fetchSpy = mockFetch((url) => {
+        installToken('jwt-stale');
+        const fetchSpy = mockAuth((url) => {
             if (url === '/api/auth/status')
                 return { ...DUAL_STATUS, authenticated: true };
             if (url === '/api/auth/v2/status') {
@@ -119,9 +141,9 @@ describe('v2 selection', () => {
         ]);
     });
 
-    it('keeps a stored bearer when the token check fails transiently', async () => {
-        storeBearer('jwt-stored');
-        mockFetch((url) => {
+    it('keeps an in-memory token when the token check fails transiently', async () => {
+        installToken('jwt-stored');
+        mockAuth((url) => {
             if (url === '/api/auth/status') return DUAL_STATUS;
             if (url === '/api/auth/v2/status')
                 return { ok: false, status: 503 };
@@ -130,19 +152,20 @@ describe('v2 selection', () => {
         await expect(bootstrapAccessAuth()).rejects.toThrow(
             'Unable to check Phi access protection',
         );
-        expect(localStorage.getItem(BEARER_KEY)).toBe('jwt-stored');
+        expect(__test__.getAccessState().accessToken).toBe('jwt-stored');
+        expect(localStorage.getItem(LEGACY_BEARER_KEY)).toBeNull();
     });
 
     it('keeps v1 when the cookie is still valid even though v2 is advertised', async () => {
-        mockFetch(() => ({ ...DUAL_STATUS, authenticated: true }));
+        mockAuth(() => ({ ...DUAL_STATUS, authenticated: true }));
         await expect(bootstrapAccessAuth()).resolves.toEqual({ enabled: true });
         expect(__test__.getAccessState().selectedProtocol).toBe('v1');
         expect(document.querySelector('.access-auth-overlay')).toBeNull();
     });
 
     it('keeps a v2 selection with no token instead of falling back to v1', async () => {
-        storeBearer('jwt-stale');
-        mockFetch((url) => {
+        installToken('jwt-stale');
+        mockAuth((url) => {
             if (url === '/api/auth/status')
                 return { ...DUAL_STATUS, authenticated: true };
             if (url === '/api/auth/v2/status')
@@ -161,7 +184,7 @@ describe('v2 selection', () => {
 
         // A second bootstrap must not use the valid v1 cookie: the rejected
         // token cleared only the credential, not the protocol selection.
-        const fetchSpy = mockFetch((url) => {
+        const fetchSpy = mockAuth((url) => {
             if (url === '/api/auth/status')
                 return { ...DUAL_STATUS, authenticated: true };
             if (url === '/api/auth/login')
@@ -177,12 +200,13 @@ describe('v2 selection', () => {
         expect(__test__.getAccessState().selectedProtocol).toBe('v2');
         expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([
             '/api/auth/status',
+            '/api/auth/v2/refresh',
         ]);
     });
 
     it('drops the in-memory bearer when a v1-only server disables auth', async () => {
         installToken('jwt-host');
-        const fetchSpy = mockFetch((url) => {
+        const fetchSpy = mockAuth((url) => {
             if (url === '/api/auth/status')
                 return {
                     ...DUAL_STATUS,
@@ -206,7 +230,7 @@ describe('v2 selection', () => {
 
     it('downgrades an existing v2 selection only on v1-only discovery', async () => {
         installToken('jwt-host');
-        const fetchSpy = mockFetch((url) => {
+        const fetchSpy = mockAuth((url) => {
             if (url === '/api/auth/status')
                 return {
                     ...DUAL_STATUS,
@@ -237,7 +261,7 @@ describe('v2 selection', () => {
                 verifier: __test__.bytesToBase64URL(verifier),
             }),
         );
-        const fetchSpy = mockFetch((url) => {
+        const fetchSpy = mockAuth((url) => {
             if (url === '/api/auth/status') return DUAL_STATUS;
             if (url === '/api/auth/login') return { ok: true };
             throw new Error(`unexpected fetch ${url}`);
@@ -248,10 +272,11 @@ describe('v2 selection', () => {
         expect(localStorage.getItem(CREDENTIAL_KEY)).not.toBeNull();
     });
 
-    it('signs in with a raw password and persists the bearer', async () => {
-        const fetchSpy = mockFetch((url) => {
+    it('signs in with a raw password and keeps the token in memory only', async () => {
+        const fetchSpy = mockAuth((url) => {
             if (url === '/api/auth/status') return DUAL_STATUS;
-            if (url === '/api/auth/v2/login') return { token: 'jwt-fresh' };
+            if (url === '/api/auth/v2/login')
+                return { ...BUNDLE, token: 'jwt-fresh' };
             if (url === '/api/auth/login')
                 throw new Error('v1 login must not run for a v2 sign-in');
             return undefined;
@@ -270,12 +295,16 @@ describe('v2 selection', () => {
         expect(JSON.parse(loginCall[1].body)).toEqual({
             password: 'password123',
         });
-        expect(localStorage.getItem(BEARER_KEY)).toBe('jwt-fresh');
+        expect(loginCall[1].headers['X-Phi-Auth']).toBe('v2');
+        expect(loginCall[1].credentials).toBe('same-origin');
+        // The access token is memory-only: no browser storage holds it.
+        expect(localStorage.getItem(LEGACY_BEARER_KEY)).toBeNull();
+        expect(Object.keys(localStorage)).toEqual([]);
         expect(document.querySelector('.access-auth-overlay')).toBeNull();
     });
 
     it('never downgrades to v1 when a v2 sign-in fails', async () => {
-        const fetchSpy = mockFetch((url) => {
+        const fetchSpy = mockAuth((url) => {
             if (url === '/api/auth/status') return DUAL_STATUS;
             if (url === '/api/auth/v2/login') return { ok: false, status: 401 };
             if (url === '/api/auth/login')
@@ -298,7 +327,7 @@ describe('v2 selection', () => {
     });
 
     it('rejects an unusable capability response instead of downgrading', async () => {
-        mockFetch(() => ({
+        mockAuth(() => ({
             enabled: true,
             authenticated: false,
             protocols: [],
@@ -309,7 +338,7 @@ describe('v2 selection', () => {
     });
 
     it('ignores unknown protocols only beside a supported one', async () => {
-        mockFetch(() => ({
+        mockAuth(() => ({
             enabled: false,
             protocols: ['v3', 'v2', 'v1'],
         }));
@@ -322,8 +351,8 @@ describe('v2 selection', () => {
 
 describe('protected fetch wrapper', () => {
     async function bootstrapWithBearer(token = 'jwt-a') {
-        storeBearer(token);
-        mockFetch((url) => {
+        installToken(token);
+        mockAuth((url) => {
             if (url === '/api/auth/status') return DUAL_STATUS;
             if (url === '/api/auth/v2/status') {
                 return { enabled: true, authenticated: true };
@@ -337,7 +366,7 @@ describe('protected fetch wrapper', () => {
     it('attaches the bearer only to same-origin protected api paths', async () => {
         await bootstrapWithBearer();
         const seen = [];
-        mockFetch((url, options) => {
+        mockAuth((url, options) => {
             seen.push([url, options?.headers?.get?.('Authorization') ?? null]);
             return { ok: true };
         });
@@ -362,7 +391,7 @@ describe('protected fetch wrapper', () => {
         await bootstrapWithBearer();
         const controller = new AbortController();
         const seen = [];
-        mockFetch((url, options) => {
+        mockAuth((url, options) => {
             seen.push([url, options]);
             return { ok: true };
         });
@@ -390,10 +419,11 @@ describe('protected fetch wrapper', () => {
         await bootstrapWithBearer('jwt-a');
         const reload = vi.fn();
         __test__.setReload(reload);
-        const fetchSpy = mockFetch((url) => {
+        const fetchSpy = mockAuth((url) => {
             if (url === '/api/one' || url === '/api/two')
                 return { ok: false, status: 401 };
-            if (url === '/api/auth/v2/login') return { token: 'jwt-b' };
+            if (url === '/api/auth/v2/login')
+                return { ...BUNDLE, token: 'jwt-b' };
             return { ok: true };
         });
         installAccessFetch();
@@ -408,7 +438,7 @@ describe('protected fetch wrapper', () => {
         submitOverlay('password123');
         await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
         expect(__test__.getAccessState().accessToken).toBe('jwt-b');
-        expect(localStorage.getItem(BEARER_KEY)).toBe('jwt-b');
+        expect(localStorage.getItem(LEGACY_BEARER_KEY)).toBeNull();
         // The failed requests were never replayed.
         expect(
             fetchSpy.mock.calls.filter(([url]) => url === '/api/one'),
@@ -424,11 +454,11 @@ describe('protected fetch wrapper', () => {
         const gate = new Promise((resolve) => {
             release = resolve;
         });
-        mockFetch((url) => {
+        mockAuth((url) => {
             if (url === '/api/slow')
                 return gate.then(() => ({ ok: false, status: 401 }));
             if (url === '/api/auth/v2/password')
-                return { enabled: true, token: 'jwt-b' };
+                return { ...BUNDLE, token: 'jwt-b' };
             return { ok: true };
         });
         installAccessFetch();
@@ -438,25 +468,25 @@ describe('protected fetch wrapper', () => {
         release();
         await slow;
         expect(__test__.getAccessState().accessToken).toBe('jwt-b');
-        expect(localStorage.getItem(BEARER_KEY)).toBe('jwt-b');
+        expect(localStorage.getItem(LEGACY_BEARER_KEY)).toBeNull();
     });
 });
 
 describe('v2 password route', () => {
     it('posts the raw password with the current bearer', async () => {
-        storeBearer('jwt-a');
-        mockFetch((url) => {
+        installToken('jwt-a');
+        mockAuth((url) => {
             if (url === '/api/auth/status') return DUAL_STATUS;
             if (url === '/api/auth/v2/status')
                 return { enabled: true, authenticated: true };
             if (url === '/api/auth/v2/password')
-                return { enabled: true, token: 'jwt-b' };
+                return { ...BUNDLE, enabled: true, token: 'jwt-b' };
             return undefined;
         });
         await bootstrapAccessAuth();
-        const fetchSpy = mockFetch((url, options) => {
+        const fetchSpy = mockAuth((url, options) => {
             if (url === '/api/auth/v2/password')
-                return { enabled: true, token: 'jwt-b' };
+                return { ...BUNDLE, token: 'jwt-b' };
             return undefined;
         });
         await expect(setAccessPassword('password123')).resolves.toEqual({
@@ -465,24 +495,31 @@ describe('v2 password route', () => {
         const [, options] = fetchSpy.mock.calls[0];
         expect(fetchSpy.mock.calls[0][0]).toBe('/api/auth/v2/password');
         expect(options.headers.Authorization).toBe('Bearer jwt-a');
+        expect(options.headers['X-Phi-Auth']).toBe('v2');
+        expect(options.credentials).toBe('same-origin');
         expect(JSON.parse(options.body)).toEqual({ password: 'password123' });
         expect(__test__.getAccessState().accessToken).toBe('jwt-b');
-        expect(localStorage.getItem(BEARER_KEY)).toBe('jwt-b');
+        expect(localStorage.getItem(LEGACY_BEARER_KEY)).toBeNull();
     });
 
     it('enables a dual server without a bearer', async () => {
-        mockFetch(() => ({ enabled: false, protocols: ['v1', 'v2'] }));
+        mockAuth(() => ({ enabled: false, protocols: ['v1', 'v2'] }));
         await bootstrapAccessAuth();
-        const fetchSpy = mockFetch(() => ({ enabled: true, token: 'jwt-new' }));
+        const fetchSpy = mockAuth(() => ({
+            ...BUNDLE,
+            enabled: true,
+            token: 'jwt-new',
+        }));
         await setAccessPassword('password123');
         const [, options] = fetchSpy.mock.calls[0];
         expect(fetchSpy.mock.calls[0][0]).toBe('/api/auth/v2/password');
         expect(options.headers.Authorization).toBeUndefined();
+        expect(options.headers['X-Phi-Auth']).toBe('v2');
         expect(JSON.parse(options.body)).toEqual({ password: 'password123' });
     });
 
     it('keeps the v1 hash route for a v1-only server', async () => {
-        mockFetch(() => ({ enabled: false }));
+        mockAuth(() => ({ enabled: false }));
         await bootstrapAccessAuth();
         vi.stubGlobal('crypto', {
             getRandomValues(bytes) {
@@ -490,7 +527,7 @@ describe('v2 password route', () => {
                 return bytes;
             },
         });
-        const fetchSpy = mockFetch(() => ({ enabled: true }));
+        const fetchSpy = mockAuth(() => ({ enabled: true }));
         await setAccessPassword('password123');
         expect(fetchSpy.mock.calls[0][0]).toBe('/api/auth/password');
         expect(
@@ -499,9 +536,9 @@ describe('v2 password route', () => {
     });
 
     it('rejects a v2 password outside the byte bounds', async () => {
-        mockFetch(() => ({ enabled: false, protocols: ['v1', 'v2'] }));
+        mockAuth(() => ({ enabled: false, protocols: ['v1', 'v2'] }));
         await bootstrapAccessAuth();
-        const fetchSpy = mockFetch(() => ({ enabled: true, token: 'jwt-new' }));
+        const fetchSpy = mockAuth(() => ({ ...BUNDLE, enabled: true, token: 'jwt-new' }));
         await expect(setAccessPassword('short')).rejects.toThrow('at least 8');
         await expect(setAccessPassword('é'.repeat(600))).rejects.toThrow(
             'at most 1024 bytes',
@@ -524,7 +561,7 @@ describe('host bridge', () => {
     });
 
     it('releases a pending unlock overlay', async () => {
-        mockFetch((url) => {
+        mockAuth((url) => {
             if (url === '/api/auth/status') return DUAL_STATUS;
             return undefined;
         });
@@ -544,7 +581,7 @@ describe('host bridge', () => {
         const gate = new Promise((resolve) => {
             release = resolve;
         });
-        const fetchSpy = mockFetch((url) => {
+        const fetchSpy = mockAuth((url) => {
             if (url === '/api/auth/status')
                 return gate.then(() => ({
                     ...DUAL_STATUS,
@@ -571,7 +608,7 @@ describe('host bridge', () => {
         const gate = new Promise((resolve) => {
             release = resolve;
         });
-        mockFetch((url) => {
+        mockAuth((url) => {
             if (url === '/api/auth/status') return gate.then(() => DUAL_STATUS);
             throw new Error(`unexpected fetch ${url}`);
         });
@@ -636,8 +673,8 @@ describe('superseded responses and transient failures', () => {
     }
 
     it('keeps the v2 selection after a stored token is rejected', async () => {
-        storeBearer('jwt-stale');
-        mockFetch((url) => {
+        installToken('jwt-stale');
+        mockAuth((url) => {
             if (url === '/api/auth/status') return DUAL_STATUS;
             if (url === '/api/auth/v2/status')
                 return { enabled: true, authenticated: false };
@@ -653,7 +690,7 @@ describe('superseded responses and transient failures', () => {
     });
 
     it('rejects a non-200 discovery response instead of selecting', async () => {
-        mockFetch(() => ({
+        mockAuth(() => ({
             status: 201,
             enabled: false,
             protocols: ['v1', 'v2'],
@@ -666,7 +703,7 @@ describe('superseded responses and transient failures', () => {
 
     it('treats a transient saved-v1 login as an error, not a prompt', async () => {
         seedVerifier();
-        mockFetch((url) => {
+        mockAuth((url) => {
             if (url === '/api/auth/status') return DUAL_STATUS;
             if (url === '/api/auth/login') return { ok: false, status: 429 };
             return undefined;
@@ -682,7 +719,7 @@ describe('superseded responses and transient failures', () => {
 
     it('prompts for the preferred protocol when the saved v1 verifier is rejected', async () => {
         seedVerifier();
-        mockFetch((url) => {
+        mockAuth((url) => {
             if (url === '/api/auth/status') return DUAL_STATUS;
             if (url === '/api/auth/login') return { ok: false, status: 401 };
             return undefined;
@@ -699,10 +736,10 @@ describe('superseded responses and transient failures', () => {
         const gate = new Promise((resolve) => {
             release = resolve;
         });
-        mockFetch((url) => {
+        mockAuth((url) => {
             if (url === '/api/auth/status') return DUAL_STATUS;
             if (url === '/api/auth/v2/login')
-                return gate.then(() => ({ token: 'stale-token' }));
+                return gate.then(() => ({ ...BUNDLE, token: 'stale-token' }));
             return undefined;
         });
         const boot = bootstrapAccessAuth();
@@ -722,31 +759,31 @@ describe('superseded responses and transient failures', () => {
         const state = __test__.getAccessState();
         expect(state.accessToken).toBe('host-token');
         expect(state.selectedProtocol).toBe('v2');
-        expect(localStorage.getItem(BEARER_KEY)).toBeNull();
+        expect(localStorage.getItem(LEGACY_BEARER_KEY)).toBeNull();
     });
 
     it('keeps a host session out of storage after a password change', async () => {
         const { installToken } = await import('../web/auth.js');
         installToken('host-token');
-        mockFetch((url) => {
+        mockAuth((url) => {
             if (url === '/api/auth/v2/password')
-                return { enabled: true, token: 'replacement-token' };
+                return { ...BUNDLE, token: 'replacement-token' };
             return undefined;
         });
         await expect(setAccessPassword('password123')).resolves.toEqual({
             enabled: true,
         });
         expect(__test__.getAccessState().accessToken).toBe('replacement-token');
-        expect(localStorage.getItem(BEARER_KEY)).toBeNull();
+        expect(localStorage.getItem(LEGACY_BEARER_KEY)).toBeNull();
     });
 
     it('keeps a host session out of storage after reauthentication', async () => {
         const { installToken } = await import('../web/auth.js');
         installToken('host-token');
-        mockFetch((url) => {
+        mockAuth((url) => {
             if (url === '/api/protected') return { ok: false, status: 401 };
             if (url === '/api/auth/v2/login')
-                return { token: 'replacement-token' };
+                return { ...BUNDLE, token: 'replacement-token' };
             return { ok: true };
         });
         installAccessFetch();
@@ -760,14 +797,14 @@ describe('superseded responses and transient failures', () => {
                 'replacement-token',
             ),
         );
-        expect(localStorage.getItem(BEARER_KEY)).toBeNull();
+        expect(localStorage.getItem(LEGACY_BEARER_KEY)).toBeNull();
     });
 });
 
 describe('protected asset loads', () => {
     it('keeps the plain address outside a v2 session', async () => {
         const { authAssetURL } = await import('../web/auth.js');
-        const fetchSpy = mockFetch(() => ({ ok: true }));
+        const fetchSpy = mockAuth(() => ({ json: { ok: true } }));
         const asset = await authAssetURL('/api/file/asset?path=a.png');
         expect(asset.url).toBe(`${location.origin}/api/file/asset?path=a.png`);
         expect(fetchSpy).not.toHaveBeenCalled();
@@ -777,7 +814,7 @@ describe('protected asset loads', () => {
     it('leaves public and foreign addresses to the browser', async () => {
         const { authAssetURL } = await import('../web/auth.js');
         installToken('jwt-a');
-        const fetchSpy = mockFetch(() => ({ ok: true }));
+        const fetchSpy = mockAuth(() => ({ json: { ok: true } }));
         expect((await authAssetURL('/api/auth/status')).url).toBe(
             `${location.origin}/api/auth/status`,
         );
@@ -838,12 +875,12 @@ describe('credential ownership and superseded derivations', () => {
         const { installToken } = await import('../web/auth.js');
         installToken('host-token');
         let calls = 0;
-        mockFetch((url) => {
+        mockAuth((url) => {
             if (url !== '/api/auth/v2/password') return undefined;
             calls += 1;
             return calls === 1
                 ? { enabled: false }
-                : { enabled: true, token: 'replacement-token' };
+                : { ...BUNDLE, token: 'replacement-token' };
         });
         await expect(clearAccessPassword()).resolves.toEqual({
             enabled: false,
@@ -852,11 +889,11 @@ describe('credential ownership and superseded derivations', () => {
             enabled: true,
         });
         expect(__test__.getAccessState().accessToken).toBe('replacement-token');
-        expect(localStorage.getItem(BEARER_KEY)).toBeNull();
+        expect(localStorage.getItem(LEGACY_BEARER_KEY)).toBeNull();
     });
 
     it('does not post a v1 record after a superseding install', async () => {
-        mockFetch(() => ({ enabled: false }));
+        mockAuth(() => ({ enabled: false }));
         await bootstrapAccessAuth();
         let release;
         globalThis.__pbkdf2Gate = new Promise((resolve) => {
@@ -876,8 +913,8 @@ describe('credential ownership and superseded derivations', () => {
     });
 
     it('keeps a replacement token when the old token is rejected mid-change', async () => {
-        storeBearer('jwt-a');
-        mockFetch((url) => {
+        installToken('jwt-a');
+        mockAuth((url) => {
             if (url === '/api/auth/status') return DUAL_STATUS;
             if (url === '/api/auth/v2/status')
                 return { enabled: true, authenticated: true };
@@ -891,9 +928,9 @@ describe('credential ownership and superseded derivations', () => {
         const gate = new Promise((resolve) => {
             release = resolve;
         });
-        const fetchSpy = mockFetch((url) => {
+        const fetchSpy = mockAuth((url) => {
             if (url === '/api/auth/v2/password')
-                return gate.then(() => ({ enabled: true, token: 'jwt-b' }));
+                return gate.then(() => ({ ...BUNDLE, token: 'jwt-b' }));
             if (url === '/api/protected') return { ok: false, status: 401 };
             return { ok: true };
         });
@@ -921,7 +958,7 @@ describe('credential ownership and superseded derivations', () => {
     });
 
     it('keeps an existing v1 selection through a transient re-bootstrap', async () => {
-        mockFetch((url) => {
+        mockAuth((url) => {
             if (url === '/api/auth/status')
                 return { ...DUAL_STATUS, authenticated: true };
             return undefined;
@@ -939,7 +976,7 @@ describe('credential ownership and superseded derivations', () => {
                 verifier: __test__.bytesToBase64URL(new Uint8Array(32).fill(7)),
             }),
         );
-        mockFetch((url) => {
+        mockAuth((url) => {
             if (url === '/api/auth/status') return DUAL_STATUS;
             if (url === '/api/auth/login') return { ok: false, status: 429 };
             return undefined;
@@ -956,7 +993,7 @@ describe('request deadlines and credential retention', () => {
     it('gives up on a discovery request that never answers', async () => {
         vi.useFakeTimers();
         try {
-            mockFetch(() => new Promise(() => {}));
+            mockAuth(() => new Promise(() => {}));
             const boot = bootstrapAccessAuth();
             const failure = expect(boot).rejects.toThrow(
                 'Phi did not respond. Try again.',
@@ -972,7 +1009,7 @@ describe('request deadlines and credential retention', () => {
     it('reports a sign-in that never answers and stays open for a retry', async () => {
         vi.useFakeTimers();
         try {
-            mockFetch((url) => {
+            mockAuth((url) => {
                 if (url === '/api/auth/status') return DUAL_STATUS;
                 if (url === '/api/auth/v2/login') return new Promise(() => {});
                 return undefined;
@@ -993,9 +1030,9 @@ describe('request deadlines and credential retention', () => {
 
     it('never follows a redirect on a module-owned auth request', async () => {
         installToken('jwt-a');
-        const fetchSpy = mockFetch((url) =>
+        const fetchSpy = mockAuth((url) =>
             url === '/api/auth/v2/password'
-                ? { enabled: true, token: 'jwt-b' }
+                ? { ...BUNDLE, token: 'jwt-b' }
                 : undefined,
         );
         await setAccessPassword('password123');
@@ -1005,9 +1042,9 @@ describe('request deadlines and credential retention', () => {
         expect(options.signal).toBeInstanceOf(AbortSignal);
     });
 
-    it('keeps a stored token when the clear response is not a clear', async () => {
+    it('keeps the live token when the clear response is not a clear', async () => {
         installToken('jwt-a');
-        mockFetch(() => ({ enabled: true, token: 'jwt-b' }));
+        mockAuth(() => ({ ...BUNDLE, enabled: true, token: 'jwt-b' }));
         await expect(clearAccessPassword()).rejects.toThrow(
             'Unable to clear access password',
         );
@@ -1016,31 +1053,271 @@ describe('request deadlines and credential retention', () => {
         expect(state.accessEnabled).toBe(true);
     });
 
-    it('does not delete standalone storage owned by another session', async () => {
-        storeBearer('jwt-standalone');
-        installToken('jwt-standalone');
-        mockFetch((url) =>
-            url === '/api/protected'
-                ? { ok: false, status: 401 }
-                : { ok: true },
-        );
-        installAccessFetch();
-        await fetch('/api/protected');
+    it('discards the superseded stored bearer without ever sending it', async () => {
+        localStorage.setItem(LEGACY_BEARER_KEY, 'legacy-jwt');
+        const fetchSpy = mockAuth((url) => {
+            if (url === '/api/auth/status') return DUAL_STATUS;
+            return undefined;
+        });
+        void bootstrapAccessAuth();
         await vi.waitFor(() =>
-            expect(__test__.getAccessState().accessToken).toBeNull(),
+            expect(document.querySelector('.access-auth-overlay')).toBeTruthy(),
         );
-        expect(localStorage.getItem(BEARER_KEY)).toBe('jwt-standalone');
+        // The superseded key is removed, and no request ever carried it.
+        expect(localStorage.getItem(LEGACY_BEARER_KEY)).toBeNull();
+        expect(__test__.getAccessState().accessToken).toBeNull();
+        expect(
+            fetchSpy.mock.calls.some(([, options]) =>
+                JSON.stringify(options || {}).includes('legacy-jwt'),
+            ),
+        ).toBe(false);
     });
 
-    it('keeps another standalone token when a host session clears access', async () => {
-        storeBearer('jwt-other');
+    it('never writes a token to browser storage, host-owned or not', async () => {
         installToken('host-token');
-        mockFetch((url) =>
-            url === '/api/auth/v2/password' ? { enabled: false } : undefined,
+        mockAuth((url) =>
+            url === '/api/auth/v2/password'
+                ? { ...BUNDLE, token: 'replacement-token' }
+                : undefined,
         );
-        await expect(clearAccessPassword()).resolves.toEqual({
-            enabled: false,
+        await expect(setAccessPassword('password123')).resolves.toEqual({
+            enabled: true,
         });
-        expect(localStorage.getItem(BEARER_KEY)).toBe('jwt-other');
+        expect(__test__.getAccessState().accessToken).toBe('replacement-token');
+        expect(Object.keys(localStorage)).toEqual([]);
+    });
+});
+
+describe('refresh-cookie bootstrap', () => {
+    it('installs a v2 session from the refresh cookie after a reload', async () => {
+        const fetchSpy = mockAuth((url) => {
+            if (url === '/api/auth/status')
+                return { ...DUAL_STATUS, authenticated: false };
+            if (url === '/api/auth/v2/refresh')
+                return { ...BUNDLE, token: 'jwt-refreshed' };
+            return undefined;
+        });
+        await expect(bootstrapAccessAuth()).resolves.toEqual({
+            enabled: true,
+        });
+        const state = __test__.getAccessState();
+        expect(state.selectedProtocol).toBe('v2');
+        expect(state.accessToken).toBe('jwt-refreshed');
+        expect(document.querySelector('.access-auth-overlay')).toBeNull();
+        // Never v1: a refresh-cookie session has no verifier and no login.
+        expect(
+            fetchSpy.mock.calls.some(([url]) => url === '/api/auth/login'),
+        ).toBe(false);
+        const refreshCall = fetchSpy.mock.calls.find(
+            ([url]) => url === '/api/auth/v2/refresh',
+        );
+        expect(refreshCall[1].method).toBe('POST');
+        expect(refreshCall[1].body).toBe('{}');
+        expect(refreshCall[1].headers['X-Phi-Auth']).toBe('v2');
+        expect(refreshCall[1].credentials).toBe('same-origin');
+    });
+
+    it('keeps a selected v2 session and prompts v2 when the refresh is rejected', async () => {
+        // A selected v2 session never falls back to a working v1 cookie.
+        mockAuth((url) => {
+            if (url === '/api/auth/status')
+                return { ...DUAL_STATUS, authenticated: false };
+            if (url === '/api/auth/v2/refresh') return { ...BUNDLE };
+            return undefined;
+        });
+        await expect(bootstrapAccessAuth()).resolves.toEqual({ enabled: true });
+        expect(__test__.getAccessState().selectedProtocol).toBe('v2');
+        // Drop the token the way a page loses it: a confirmed logout keeps the
+        // v2 selection and leaves no in-memory credential behind.
+        mockAuth((url) =>
+            url === '/api/auth/v2/logout' ? { json: { ok: true } } : undefined,
+        );
+        await logoutAccess();
+        expect(__test__.getAccessState().accessToken).toBeNull();
+        expect(__test__.getAccessState().selectedProtocol).toBe('v2');
+
+        const fetchSpy = mockAuth((url) => {
+            if (url === '/api/auth/status')
+                return { ...DUAL_STATUS, authenticated: true };
+            if (url === '/api/auth/v2/refresh')
+                return { ok: false, status: 401 };
+            return undefined;
+        });
+        void bootstrapAccessAuth();
+        await vi.waitFor(() =>
+            expect(document.querySelector('.access-auth-overlay')).toBeTruthy(),
+        );
+        expect(__test__.getAccessState().selectedProtocol).toBe('v2');
+        expect(
+            fetchSpy.mock.calls.some(([url]) => url === '/api/auth/login'),
+        ).toBe(false);
+    });
+
+    it('retries rather than downgrading when the refresh fails transiently', async () => {
+        mockAuth((url) => {
+            if (url === '/api/auth/status') return DUAL_STATUS;
+            if (url === '/api/auth/v2/refresh')
+                return { ok: false, status: 503 };
+            return undefined;
+        });
+        await expect(bootstrapAccessAuth()).rejects.toThrow(
+            'Unable to refresh access session',
+        );
+        expect(__test__.getAccessState().selectedProtocol).toBe('v2');
+        expect(document.querySelector('.access-auth-overlay')).toBeNull();
+    });
+
+    it('does not install a malformed bundle', async () => {
+        mockAuth((url) => {
+            if (url === '/api/auth/status') return DUAL_STATUS;
+            if (url === '/api/auth/v2/refresh')
+                return { token: 'jwt-no-deadlines' };
+            return undefined;
+        });
+        await expect(bootstrapAccessAuth()).rejects.toThrow(
+            'Phi returned invalid access protection settings',
+        );
+        expect(__test__.getAccessState().accessToken).toBeNull();
+        expect(document.querySelector('.access-auth-overlay')).toBeNull();
+    });
+
+    it('coalesces simultaneous refreshes into one request', async () => {
+        const fetchSpy = mockAuth((url) =>
+            url === '/api/auth/v2/refresh'
+                ? { ...BUNDLE, token: 'jwt-once' }
+                : undefined,
+        );
+        const [first, second] = await Promise.all([
+            __test__.refreshSession(),
+            __test__.refreshSession(),
+        ]);
+        expect(first).toBe('installed');
+        expect(second).toBe('installed');
+        expect(
+            fetchSpy.mock.calls.filter(
+                ([url]) => url === '/api/auth/v2/refresh',
+            ),
+        ).toHaveLength(1);
+        expect(__test__.getAccessState().accessToken).toBe('jwt-once');
+    });
+});
+
+describe('strict credential bundle shapes', () => {
+    it('rejects a password response without the deadline fields', async () => {
+        installToken('jwt-a');
+        mockAuth((url) =>
+            url === '/api/auth/v2/password'
+                ? { enabled: true, token: 'jwt-b' }
+                : undefined,
+        );
+        await expect(setAccessPassword('password123')).rejects.toThrow(
+            'Unable to save access password',
+        );
+        expect(__test__.getAccessState().accessToken).toBe('jwt-a');
+    });
+
+    it('rejects a bundle whose absolute deadline precedes the idle one', async () => {
+        mockAuth((url) => {
+            if (url === '/api/auth/status') return DUAL_STATUS;
+            if (url === '/api/auth/v2/refresh')
+                return {
+                    ...BUNDLE,
+                    refresh_idle_expires_at: 1807000000,
+                    refresh_absolute_expires_at: 1802000000,
+                };
+            return undefined;
+        });
+        await expect(bootstrapAccessAuth()).rejects.toThrow(
+            'Phi returned invalid access protection settings',
+        );
+        expect(__test__.getAccessState().accessToken).toBeNull();
+    });
+
+    it('rejects a login response that is not a credential bundle', async () => {
+        mockAuth((url) => {
+            if (url === '/api/auth/status') return DUAL_STATUS;
+            if (url === '/api/auth/v2/login') return { token: 'jwt-only' };
+            return undefined;
+        });
+        void bootstrapAccessAuth();
+        await vi.waitFor(() =>
+            expect(document.querySelector('.access-auth-overlay')).toBeTruthy(),
+        );
+        submitOverlay('password123');
+        await vi.waitFor(() =>
+            expect(
+                document.querySelector('.access-auth-error').textContent,
+            ).toBe('Unable to sign in'),
+        );
+        expect(__test__.getAccessState().accessToken).toBeNull();
+    });
+});
+
+describe('logout', () => {
+    it('revokes the family and drops the in-memory credential', async () => {
+        installToken('jwt-a');
+        const fetchSpy = mockAuth((url) =>
+            url === '/api/auth/v2/logout' ? { json: { ok: true } } : undefined,
+        );
+        await expect(logoutAccess()).resolves.toEqual({ ok: true });
+        const [url, options] = fetchSpy.mock.calls[0];
+        expect(url).toBe('/api/auth/v2/logout');
+        expect(options.headers.Authorization).toBe('Bearer jwt-a');
+        expect(options.headers['X-Phi-Auth']).toBe('v2');
+        expect(options.credentials).toBe('same-origin');
+        expect(JSON.parse(options.body)).toEqual({ all: false });
+        expect(__test__.getAccessState().accessToken).toBeNull();
+    });
+
+    it('asks for every family when logout-all is requested', async () => {
+        installToken('jwt-a');
+        const fetchSpy = mockAuth(() => ({ json: { ok: true } }));
+        await logoutAccess(true);
+        expect(JSON.parse(fetchSpy.mock.calls[0][1].body)).toEqual({
+            all: true,
+        });
+    });
+
+    it('keeps the credential when the server does not confirm', async () => {
+        installToken('jwt-a');
+        mockAuth(() => ({ ok: false, status: 500 }));
+        await expect(logoutAccess()).rejects.toThrow('Unable to logout');
+        expect(__test__.getAccessState().accessToken).toBe('jwt-a');
+    });
+
+    it('requires a live credential', async () => {
+        await expect(logoutAccess()).rejects.toThrow('Sign in to continue');
+    });
+});
+
+describe('protected request failure handling', () => {
+    it('never treats an application 403 as an expired credential', async () => {
+        installToken('jwt-a');
+        const reload = vi.fn();
+        __test__.setReload(reload);
+        mockAuth((url) =>
+            url === '/api/forbidden' ? { ok: false, status: 403 } : undefined,
+        );
+        installAccessFetch();
+        const res = await fetch('/api/forbidden');
+        expect(res.status).toBe(403);
+        // The caller's own refusal reaches the caller: no overlay, no reload.
+        expect(document.querySelector('.access-auth-overlay')).toBeNull();
+        expect(reload).not.toHaveBeenCalled();
+        expect(__test__.getAccessState().accessToken).toBe('jwt-a');
+    });
+
+    it('keeps the credential when a protected request fails with 429 or 500', async () => {
+        installToken('jwt-a');
+        mockAuth((url) =>
+            url === '/api/limited'
+                ? { ok: false, status: 429 }
+                : { ok: false, status: 500 },
+        );
+        installAccessFetch();
+        await fetch('/api/limited');
+        await fetch('/api/other');
+        expect(__test__.getAccessState().accessToken).toBe('jwt-a');
+        expect(document.querySelector('.access-auth-overlay')).toBeNull();
     });
 });
