@@ -12,6 +12,25 @@ func WriteFileAtomic(filename string, data []byte, perm os.FileMode) error {
 	return writeFileAtomic(filename, data, perm, false)
 }
 
+// syncParentDir makes a rename durable by syncing the directory that holds the
+// destination. Windows has no directory fsync: a rename there survives a
+// process crash but not a power loss, so this path stays best-effort there and
+// callers must not claim power-loss durability on Windows.
+func syncParentDir(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	handle, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("failed to open directory for sync: %w", err)
+	}
+	defer handle.Close()
+	if err := handle.Sync(); err != nil {
+		return fmt.Errorf("failed to sync directory: %w", err)
+	}
+	return nil
+}
+
 // WriteFileAtomicPreserveExisting replaces filename like WriteFileAtomic, but
 // never deletes the existing destination. The Windows fallback in
 // WriteFileAtomic removes the destination before retrying the rename, which
@@ -62,7 +81,8 @@ func writeFileAtomic(filename string, data []byte, perm os.FileMode, preserveExi
 		if err := os.Rename(tmpName, filename); err != nil {
 			return fmt.Errorf("failed to rename temp file to %s: %w", filename, err)
 		}
-		return nil
+		// A rename is only durable once the directory entry is synced.
+		return syncParentDir(dir)
 	}
 
 	// Windows: os.Rename replaces atomically (MOVEFILE_REPLACE_EXISTING); fallback handles AV-locked files.
