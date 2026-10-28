@@ -1,11 +1,25 @@
 package system
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 )
+
+// ErrAtomicCommitted reports that the replacement rename already happened and
+// only the directory sync that makes it durable failed. The destination holds
+// the new contents, so a caller must treat the write as committed but
+// unconfirmed: rolling back in memory would leave it serving credentials the
+// disk no longer carries.
+var ErrAtomicCommitted = errors.New("replacement committed but not durable")
+
+// IsAtomicCommitted reports whether err means a strict replacement crossed its
+// rename and is therefore past the commit point.
+func IsAtomicCommitted(err error) bool {
+	return errors.Is(err, ErrAtomicCommitted)
+}
 
 // WriteFileAtomic writes data to a temp file, syncs it, and renames it to the destination.
 func WriteFileAtomic(filename string, data []byte, perm os.FileMode) error {
@@ -100,7 +114,10 @@ func writeFileAtomic(filename string, data []byte, perm os.FileMode, preserveExi
 		// A rename is only durable once the directory entry is synced. A failure
 		// here is reported, not rolled back: the rename already happened, so the
 		// caller must treat the write as committed-but-unconfirmed.
-		return atomicSyncDir(dir)
+		if err := atomicSyncDir(dir); err != nil {
+			return fmt.Errorf("%w: %w", ErrAtomicCommitted, err)
+		}
+		return nil
 	}
 
 	// Windows: os.Rename replaces atomically (MOVEFILE_REPLACE_EXISTING); fallback handles AV-locked files.

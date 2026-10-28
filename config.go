@@ -598,6 +598,20 @@ func saveAccessPasswordHash(encoded string) error {
 	return writeConfigContentsLocked(cfg)
 }
 
+// accessPasswordHashAuthoritative reads the durable record for auth activation.
+// Unlike loadConfig it reports errors, because an unreadable Config must make
+// authentication unavailable instead of looking like "no password set". A
+// missing or empty file keeps first-run semantics.
+func accessPasswordHashAuthoritative() (string, error) {
+	configMu.Lock()
+	defer configMu.Unlock()
+	cfg, err := readConfigLocked()
+	if err != nil {
+		return "", err
+	}
+	return cfg.AccessPasswordHash, nil
+}
+
 // looksLikeTestArtifact returns true if `path` looks like a scratch
 // directory a Go test created via MkdirTemp / os.CreateTemp with a
 // phi-prefixed pattern. Used as a final defense-in-depth check: even
