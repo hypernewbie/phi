@@ -147,6 +147,18 @@ export class App {
             if (scope?.aborted) return;
             await this.tabManager.restoreTabsState(scope);
             if (scope?.aborted) return;
+            // The right-panel endpoints use headerless fetches, which
+            // route through the active-profile pointer. Refresh after
+            // config and restored tabs land so both routing and cwd
+            // belong to this backend. Sync's poller below does its own
+            // immediate refresh.
+            if (this.diffController?.activeTab !== 'sync') {
+                void Promise.resolve(
+                    this.diffController?.refreshDiff?.(false, {
+                        silent: true,
+                    }),
+                ).catch(() => {});
+            }
             this.startFleetPolling(scope);
             this.syncManager?.startPolling?.(scope);
         } finally {
@@ -780,6 +792,10 @@ export class App {
                 const syncData = JSON.parse(store.responses.get('/api/sync/messages'));
                 this.syncManager?.renderMessages?.(syncData);
             } catch {}
+        } else {
+            // The sync panel is persistent DOM in single-tab mode. Never
+            // leave another backend's messages visible on a cache miss.
+            this.syncManager?.renderMessages?.([]);
         }
         return true;
     }
@@ -808,6 +824,7 @@ export class App {
         }
         phaseStart = globalThis.performance?.now?.();
         const prevProfileId = getEmbeddedProfileId();
+        const prevOrigin = getEmbeddedBackendOrigin();
         this.scope?.abort?.();
         if (this._fleetPollTimer) {
             clearInterval(this._fleetPollTimer);
@@ -857,6 +874,18 @@ export class App {
         phaseStart = globalThis.performance?.now?.();
         try {
             this.paintBackendFromStore(nextStore);
+            // The right panel survives an in-page switch as persistent DOM;
+            // reset its backend-scoped surfaces (stream socket, commit list,
+            // markdown/files/cmds lists) from the new store's cache. No
+            // fetches here: they route by the ACTIVE backend until the
+            // /__phi/active POST below lands. A blank previous id is first
+            // boot, not a switch, so its panel has no old backend to clear.
+            if (
+                prevProfileId &&
+                (prevProfileId !== profileId ||
+                    prevOrigin !== (origin || ''))
+            )
+                this.diffController?.onBackendSwitch?.();
         } finally {
             termPerfMeasureBetween('switch-paint', phaseStart);
         }

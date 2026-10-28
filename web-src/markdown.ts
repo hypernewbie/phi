@@ -393,6 +393,42 @@ export class MarkdownManager {
         }
     }
 
+    // paintFromStore renders the file list from the new active
+    // backend's cached response — the switch's synchronous paint phase,
+    // where a fetch is not allowed (headerless fetches route by the
+    // ACTIVE backend, which still points at the old profile). A cache
+    // miss still replaces the previous backend's list with the
+    // scanning placeholder: stale files must never survive a switch,
+    // not even for the frames before the background refresh lands.
+    paintFromStore(): boolean {
+        // Invalidate an old-profile request before it can paint over this
+        // switch while the new backend's active-config fetch is in flight.
+        this.refreshRequestId++;
+        const store = (this.app as any)?.getActiveStore?.();
+        const cwd = this.app.sessionsManager.activeCWD || '';
+        const url = `/api/markdown/files?cwd=${encodeURIComponent(cwd)}`;
+        const raw = store?.responses?.get(url);
+        let files: any = null;
+        if (typeof raw === 'string') {
+            try {
+                files = JSON.parse(raw);
+            } catch {
+                files = null;
+            }
+        }
+        if (!Array.isArray(files)) {
+            this.fileListEl.innerHTML =
+                '<div class="md-list-loading">Scanning...</div>';
+            this._lastRenderedKey = '';
+            return false;
+        }
+        // Same key format as refreshFiles so its silent-diff guard
+        // suppresses a redundant re-render of identical data.
+        this._lastRenderedKey = `${cwd} ${JSON.stringify(files)}`;
+        this._renderFileList(files);
+        return true;
+    }
+
     // onExternalChange handles a 0x07 md-changed push. N open tabs mean N
     // duplicate broadcasts per change, hence the debounce. The dir filter
     // drops events for worktrees this browser isn't looking at.

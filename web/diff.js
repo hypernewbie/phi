@@ -93,6 +93,10 @@ export class DiffController {
     // response must not adopt its socket or paint its checkpoint into a
     // panel the user has already switched away from.
     _diffStreamToken = 0;
+    // Late commit-list requests must not repopulate the selector with
+    // hashes from a backend that has already been switched away from.
+    _commitLoadToken = 0;
+    _switchMarkdownCachePainted = false;
     // Diff review comment state. The map keys are the row's logical
     // identity (file + both line numbers) so switching between unified
     // and side-by-side panes preserves the user's notes; localStorage
@@ -657,16 +661,96 @@ export class DiffController {
             await this.openRichDiffModal();
         await refresh;
     }
+    /**
+     * Backend switch (embedded single-tab mode). The panel's DOM
+     * persists across an in-page switch, but every tab's data is
+     * backend-scoped. This runs in the switch's synchronous paint
+     * phase: it kills the old backend's stream, resets the commit
+     * selector, and repaints the visible tab from the new backend's
+     * cached store. It must not fetch — headerless fetches route by
+     * the ACTIVE backend, which still points at the old profile until
+     * the /__phi/active POST lands. The live refresh happens in
+     * refreshDiff after that POST.
+     */
+    onBackendSwitch() {
+        // Invalidate any old diff fetch before it can paint into this
+        // shared panel after the backend changes.
+        this._diffStreamToken = (this._diffStreamToken || 0) + 1;
+        this._richDiffRequestToken = (this._richDiffRequestToken || 0) + 1;
+        this._switchMarkdownCachePainted = false;
+        this.closeRichDiffModal();
+        this.diffModalBody?.replaceChildren();
+        this.lastRawDiffText = '';
+        this.activeDiffRoot = null;
+        // The old backend's diff stream keeps writing into the shared
+        // term (and holds a socket open) until it is closed here.
+        if (this.currentWs) {
+            try {
+                this.currentWs.close();
+            }
+            catch {
+                /* already closed */
+            }
+            this.currentWs = null;
+        }
+        this._resetCommitSelect();
+        // Reset even while the panel is hidden: opening it immediately
+        // after the switch must not flash the previous backend's DOM.
+        if (this.activeTab === 'markdown') {
+            this._setPanel('markdown');
+            this._switchMarkdownCachePainted =
+                this.app.markdownManager?.paintFromStore?.() === true;
+        }
+        else if (this.activeTab === 'cmd') {
+            this._setPanel('cmd');
+            this.renderCmdPanel();
+        }
+        else if (this.activeTab === 'files') {
+            this._setPanel('files');
+            this.app.fileTreeManager?.resetForBackendSwitch?.();
+        }
+        else if (this.activeTab === 'sync') {
+            // Cached paint already rendered the store's messages; the
+            // sync poller refreshes behind the switch.
+        }
+        else {
+            this._setPanel('git');
+            if (this.term) {
+                this.term.clear();
+                this.term.write('\x1b[90mBackend switched — refreshing…\x1b[0m\r\n');
+            }
+        }
+    }
+    /** The commit list belongs to the old backend's repo; keep only the
+     *  cwd-relative defaults a fresh load would start from. */
+    _resetCommitSelect() {
+        if (!this.commitSelect)
+            return;
+        const unstagedOpt = document.createElement('option');
+        unstagedOpt.value = 'unstaged';
+        unstagedOpt.textContent = 'Unstaged Changes';
+        const stagedOpt = document.createElement('option');
+        stagedOpt.value = 'staged';
+        stagedOpt.textContent = 'Staged Changes';
+        this._commitLoadToken = (this._commitLoadToken || 0) + 1;
+        this.commitSelect.replaceChildren(unstagedOpt, stagedOpt);
+        this.commitSelect.value = 'unstaged';
+        this._syncModalCommitSelect();
+        this.syncCommitTarget = null;
+    }
     async loadCommits() {
         if (!this.commitSelect)
             return;
+        this._commitLoadToken = (this._commitLoadToken || 0) + 1;
+        const requestToken = this._commitLoadToken;
         const cwd = this.app.sessionsManager.activeCWD || '';
         try {
             const res = await fetch(`/api/git/commits?cwd=${encodeURIComponent(cwd)}`);
             if (!res.ok)
                 throw new Error('Failed to load commits');
             const commits = await res.json();
-            if ((this.app.sessionsManager.activeCWD || '') !== cwd)
+            if (requestToken !== this._commitLoadToken ||
+                (this.app.sessionsManager.activeCWD || '') !== cwd)
                 return;
             let currentSelected = this.commitSelect.value || 'unstaged';
             const target = this.syncCommitTarget;
@@ -1368,13 +1452,20 @@ export class DiffController {
         await this.app.importCmdsConfig(btnElement);
         setTimeout(() => this.renderCmdPanel(), 1600);
     }
-    async refreshDiff(skipLoadCommits = false) {
+    async refreshDiff(skipLoadCommits = false, opts = {}) {
         if (!this.isPanelOpen || !this.term)
             return;
-        const streamToken = ++this._diffStreamToken;
+        this._diffStreamToken = (this._diffStreamToken || 0) + 1;
+        const streamToken = this._diffStreamToken;
         if (this.activeTab === 'markdown') {
             this._setPanel('markdown');
-            this.app.markdownManager.refreshFiles();
+            // silent keeps the just-painted cached list on screen; an
+            // identical refresh then skips the re-render entirely.
+            this.app.markdownManager.refreshFiles({
+                force: true,
+                silent: opts.silent === true && this._switchMarkdownCachePainted,
+            });
+            this._switchMarkdownCachePainted = false;
             return;
         }
         if (this.activeTab === 'sync') {
@@ -1403,6 +1494,8 @@ export class DiffController {
         if (this.activeTab === 'diff' && !skipLoadCommits) {
             await this.loadCommits();
         }
+        if (streamToken !== this._diffStreamToken || !this.isPanelOpen)
+            return;
         const cwd = this.app.sessionsManager.activeCWD;
         const commitVal = this.commitSelect
             ? this.commitSelect.value
@@ -1419,6 +1512,8 @@ export class DiffController {
         try {
             if (this.activeTab === 'diff') {
                 const res = await fetch(`/api/git/raw-diff?cwd=${encodeURIComponent(cwd)}&commit=${encodeURIComponent(commitVal)}&context=3&ansi=1`);
+                if (streamToken !== this._diffStreamToken || !this.isPanelOpen)
+                    return;
                 if (!res.ok) {
                     const errText = await res
                         .text()
@@ -1426,6 +1521,8 @@ export class DiffController {
                     throw new Error(errText.trim() || 'Diff fetch error');
                 }
                 const text = await res.text();
+                if (streamToken !== this._diffStreamToken || !this.isPanelOpen)
+                    return;
                 if (text === 'NOT_GIT_REPO')
                     return notAGitRepo('the diff');
                 this._writeStaticTerminalOutput(text, '\x1b[90mNo changes detected.\x1b[0m\r\n');
@@ -1433,6 +1530,8 @@ export class DiffController {
             }
             if (this.activeTab === 'status') {
                 const res = await fetch(`/api/git/raw-status?cwd=${encodeURIComponent(cwd)}`);
+                if (streamToken !== this._diffStreamToken || !this.isPanelOpen)
+                    return;
                 if (!res.ok) {
                     const errText = await res
                         .text()
@@ -1440,12 +1539,16 @@ export class DiffController {
                     throw new Error(errText.trim() || 'Status fetch error');
                 }
                 const text = await res.text();
+                if (streamToken !== this._diffStreamToken || !this.isPanelOpen)
+                    return;
                 if (text === 'NOT_GIT_REPO')
                     return notAGitRepo('the status');
                 this._writeStaticTerminalOutput(text, '\x1b[90mClean working tree.\x1b[0m\r\n');
                 return;
             }
             const res = await fetch(`/api/diff?cwd=${encodeURIComponent(cwd)}&type=${this.activeTab}&commit=${commitVal}`);
+            if (streamToken !== this._diffStreamToken || !this.isPanelOpen)
+                return;
             if (!res.ok) {
                 const errText = await res.text().catch(() => 'unknown error');
                 throw new Error(errText.trim() || 'Spawn error');
@@ -1496,6 +1599,8 @@ export class DiffController {
             this.fitTerminal();
         }
         catch (e) {
+            if (streamToken !== this._diffStreamToken || !this.isPanelOpen)
+                return;
             this.term.write(`\x1b[31mFailed to load: ${e.message}\x1b[0m\r\n`);
         }
     }
