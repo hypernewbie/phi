@@ -124,6 +124,7 @@ function stubXtermGlobals() {
         const dataListeners = [];
         const binaryListeners = [];
         const scrollListeners = [];
+        const bufferChangeListeners = [];
         // xterm flags user-originated data through coreService.onUserInput
         // before onData; the fake keeps that hook so tests can emit as a user.
         let userInputHook = null;
@@ -149,7 +150,17 @@ function stubXtermGlobals() {
                     fn(data);
                 }),
             element: rootEl,
-            buffer: { active: { type: 'normal', viewportY: 100, baseY: 100 } },
+            buffer: {
+                active: { type: 'normal', viewportY: 100, baseY: 100 },
+                onBufferChange: (fn) => {
+                    bufferChangeListeners.push(fn);
+                },
+            },
+            emitBufferChange: (type) => {
+                bufferChangeListeners.forEach((fn) => {
+                    fn({ type });
+                });
+            },
             // Real xterm.js renders term.element into the container passed
             // to open() — without this, .xterm-viewport is never actually a
             // descendant of termContainer, and the capture-phase listener
@@ -718,6 +729,46 @@ describe('only an accepted submit resumes follow', () => {
             expect(tab.userFollowBottom).toBe(false);
         } finally {
             vi.useRealTimers();
+        }
+    });
+});
+
+// The alternate-screen rule must not fire for a pane repainting its own
+// buffer: a history load swaps the buffer and then places the view itself.
+describe('alternate-screen exit resumes follow only for the app', () => {
+    it('the app leaving its full-screen TUI lands at the bottom', () => {
+        const tab = mountRealTab({ coder: 'bash' });
+        const tm = tab.__tm;
+        tm._spamScrollToBottom = vi.fn();
+        tab.userFollowBottom = false;
+        tab.term.emitBufferChange('normal');
+        expect(tm._spamScrollToBottom).toHaveBeenCalledTimes(1);
+        expect(tab.userFollowBottom).toBe(true);
+    });
+
+    it('a pane rewriting its own buffer leaves the view to the loader', () => {
+        const tab = mountRealTab({ coder: 'bash' });
+        const tm = tab.__tm;
+        tm._spamScrollToBottom = vi.fn();
+        tab._ownBufferReset = true;
+        tab.userFollowBottom = false;
+        tab.term.emitBufferChange('normal');
+        tab._ownBufferReset = false;
+        expect(tm._spamScrollToBottom).not.toHaveBeenCalled();
+        expect(tab.userFollowBottom).toBe(false);
+    });
+
+    it('a history load in progress leaves the view to the loader', () => {
+        const tab = mountRealTab({ coder: 'bash' });
+        const tm = tab.__tm;
+        tm._spamScrollToBottom = vi.fn();
+        for (const flag of ['_historyParsing', '_historyBrowsing']) {
+            tab.userFollowBottom = false;
+            tab[flag] = true;
+            tab.term.emitBufferChange('normal');
+            tab[flag] = false;
+            expect(tm._spamScrollToBottom).not.toHaveBeenCalled();
+            expect(tab.userFollowBottom).toBe(false);
         }
     });
 });

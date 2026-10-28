@@ -2502,7 +2502,7 @@ export class TabManager {
                 // damaged local parser and repainting it just repaints garbage.
                 // Older books remain in the archive; a reader's view stays put.
                 this._clearHistoryAnchors(tabInfo);
-                resetTerminalState(tabInfo.term);
+                this._resetPaneBuffer(tabInfo);
                 tabInfo.term.resize(info.ckpt.cols, info.ckpt.rows);
                 pty.decoder = new TextDecoder('utf-8');
                 tabInfo._streamDecoder = pty.decoder;
@@ -2557,7 +2557,7 @@ export class TabManager {
         pty.decoder = new TextDecoder('utf-8');
         tabInfo._streamDecoder = pty.decoder;
         try {
-            resetTerminalState(tabInfo.term);
+            this._resetPaneBuffer(tabInfo);
         } catch (e) {
             console.error('[term] reset on epoch change failed:', e);
         }
@@ -2791,7 +2791,7 @@ export class TabManager {
             if (!range) throw new Error('terminal history temporarily unavailable');
             tabInfo._historyParsing = true;
             this._clearHistoryAnchors(tabInfo);
-            resetTerminalState(tabInfo.term);
+            this._resetPaneBuffer(tabInfo);
             reset = true;
             pty.decoder = new TextDecoder('utf-8');
             tabInfo._streamDecoder = pty.decoder;
@@ -2869,7 +2869,7 @@ export class TabManager {
             tabInfo._bootstrapGate = gate;
             const head = Math.max(saved.head, pty.lastFrameEnd ?? 0);
             this._clearHistoryAnchors(tabInfo);
-            resetTerminalState(tabInfo.term);
+            this._resetPaneBuffer(tabInfo);
             tabInfo.term.resize(saved.cols, saved.rows);
             pty.decoder = new TextDecoder('utf-8');
             tabInfo._streamDecoder = pty.decoder;
@@ -3008,7 +3008,7 @@ export class TabManager {
         if (!state) return { kind: 'failed', error: new Error('no authoritative state') };
         const pty = tabInfo.ws;
         this._clearHistoryAnchors(tabInfo);
-        resetTerminalState(tabInfo.term);
+        this._resetPaneBuffer(tabInfo);
         tabInfo.term.resize(state.cols, state.rows);
         pty.decoder = new TextDecoder('utf-8');
         tabInfo._streamDecoder = pty.decoder;
@@ -4567,6 +4567,15 @@ export class TabManager {
         // from before the TUI took over.
         term.buffer?.onBufferChange?.((buffer) => {
             if (buffer.type !== 'normal') return;
+            // The app exiting its full-screen TUI lands at the bottom. A pane
+            // repainting its own buffer is not the app leaving: the loader
+            // places that view itself, and following here would undo it.
+            if (
+                tabInfo._ownBufferReset ||
+                tabInfo._historyParsing ||
+                tabInfo._historyBrowsing
+            )
+                return;
             this._clearReaderAnchor(tabInfo);
             tabInfo.userFollowBottom = true;
             requestAnimationFrame(() => {
@@ -11417,6 +11426,17 @@ export class TabManager {
 
     _spamScrollToBottom(tabInfo) {
         this._spamScroll(tabInfo, true);
+    }
+
+    // A client-side repaint of this pane's own buffer. The buffer change it
+    // emits must not be read as the app leaving its full-screen TUI.
+    _resetPaneBuffer(tabInfo) {
+        tabInfo._ownBufferReset = true;
+        try {
+            resetTerminalState(tabInfo.term);
+        } finally {
+            tabInfo._ownBufferReset = false;
+        }
     }
 
     // The one user action that resumes follow: an accepted submit drops the
