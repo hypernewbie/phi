@@ -1157,11 +1157,31 @@ describe('DesktopHost fake-Electron lifecycle', () => {
         } as Response;
       }
       if (u.includes('/api/auth/v2/login')) {
+        // A v2 success is the credential bundle plus the rotating refresh
+        // cookie; a bare token is not a success this host may accept.
+        const handle = Buffer.alloc(32, 0x5a).toString('base64url');
+        const body = JSON.stringify({
+          token: 'host-token',
+          expires_at: 1_700_003_600,
+          expires_in: 3_600,
+          refresh_idle_expires_at: 1_702_592_000,
+          refresh_absolute_expires_at: 1_707_776_000,
+        });
         return {
           status: 200,
           ok: true,
-          json: async () => ({ token: 'host-token' }),
-        } as Response;
+          text: async () => body,
+          json: async () => JSON.parse(body),
+          headers: {
+            getSetCookie: () => [
+              `phi_access_refresh=${handle}; Path=/api/auth/v2/refresh; HttpOnly; SameSite=Strict`,
+            ],
+            get: (name: string) =>
+              name.toLowerCase() === 'set-cookie'
+                ? `phi_access_refresh=${handle}; Path=/api/auth/v2/refresh; HttpOnly; SameSite=Strict`
+                : null,
+          },
+        } as unknown as Response;
       }
       if (u.includes('/api/config')) {
         const headers = (init?.headers as Record<string, string>) ?? {};
