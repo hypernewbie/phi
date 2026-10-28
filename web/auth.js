@@ -773,8 +773,19 @@ async function renewIfDue({ ifDue = true } = {}, context) {
     scheduleRenewal(context, state);
 }
 
-export function refreshAccessIfDue() {
-    return renewIfDue();
+// refreshAccessIfDue lets a reconnecting socket bring the credential up to date
+// without a request when the in-memory token is still fresh. It returns
+// undefined synchronously when nothing is due, so a redial is not deferred by a
+// microtask and v1/disabled deployments keep their exact dial behavior.
+export function refreshAccessIfDue(context) {
+    const ownerContext = context ?? activeAuthContext;
+    const state = stateFor(ownerContext);
+    if (!state.accessToken || state.memoryOnly) return undefined;
+    if (!refreshDue(ownerContext)) {
+        scheduleRenewal(ownerContext, state);
+        return undefined;
+    }
+    return renewIfDue({}, ownerContext);
 }
 
 // checkV2Token reports whether the server still accepts token. A rejected
@@ -1551,6 +1562,7 @@ if (typeof window !== 'undefined') {
     bridge.installToken = installToken;
     bridge.getAccessToken = getAccessToken;
     bridge.webSocketURL = webSocketURL;
+    bridge.refreshAccessIfDue = refreshAccessIfDue;
     bridge.assetURL = authAssetURL;
     window.phiAccessAuth = bridge;
 }

@@ -4,6 +4,7 @@ import {
     decodeNotificationDir,
     initMdView,
     mdEventMatchesPath,
+    mdEventRetryDelay,
 } from '../web/md-view.js';
 import { installToken, __test__ } from '../web/auth.js';
 import { Notification } from '../web/proto/events.js';
@@ -211,5 +212,66 @@ describe('initMdView', () => {
         } finally {
             window.phiAccessAuth.assetURL = original;
         }
+    });
+});
+
+describe('mdEventRetryDelay', () => {
+    it('keeps every retry above the floor so a flapping server is not hot-looped', () => {
+        for (let attempt = 1; attempt <= 12; attempt += 1) {
+            expect(mdEventRetryDelay(attempt, () => 0)).toBe(500);
+        }
+    });
+
+    it('grows exponentially and caps at 20s plus the floor', () => {
+        expect(mdEventRetryDelay(1, () => 1)).toBe(1500);
+        expect(mdEventRetryDelay(2, () => 1)).toBe(2500);
+        expect(mdEventRetryDelay(3, () => 1)).toBe(4500);
+        expect(mdEventRetryDelay(9, () => 1)).toBe(20500);
+        expect(mdEventRetryDelay(40, () => 1)).toBe(20500);
+    });
+
+    it('applies full jitter inside the capped window', () => {
+        expect(mdEventRetryDelay(4, () => 0.5)).toBe(4500);
+        // Attempt 0 or a negative attempt cannot invert the exponent.
+        expect(mdEventRetryDelay(0, () => 0)).toBe(500);
+    });
+});
+
+describe('md events reconnect', () => {
+    it('retries a closed events socket on bounded backoff, not a fixed 10s', async () => {
+        vi.useFakeTimers();
+        try {
+            const { sockets } = mdHarness();
+            window.history.replaceState({}, '', '/md.html?path=a.md&cwd=/w');
+            initMdView();
+            await vi.waitFor(() => expect(sockets).toHaveLength(1));
+
+            // Maximum jitter makes the schedule deterministic: attempt 1 waits
+            // floor + 1000, attempt 2 waits floor + 2000.
+            const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(1);
+            sockets[0].onclose();
+            await vi.advanceTimersByTimeAsync(1499);
+            expect(sockets).toHaveLength(1);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(sockets).toHaveLength(2);
+
+            sockets[1].onclose();
+            await vi.advanceTimersByTimeAsync(2499);
+            expect(sockets).toHaveLength(2);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(sockets).toHaveLength(3);
+            randomSpy.mockRestore();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('dials synchronously when no refresh is due', async () => {
+        // A v1 cookie session has no in-memory token, so refreshAccessIfDue
+        // returns undefined and the dial must not be deferred by a microtask.
+        const { sockets } = mdHarness();
+        window.history.replaceState({}, '', '/md.html?path=a.md&cwd=/w');
+        initMdView();
+        expect(sockets).toHaveLength(1);
     });
 });

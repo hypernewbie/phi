@@ -32,12 +32,14 @@ function visibility(value) {
 beforeEach(() => {
     vi.useFakeTimers();
     vi.spyOn(Math, 'random').mockReturnValue(0);
+    document.documentElement.setAttribute('data-phi-desktop', '');
     visibility('visible');
 });
 afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
     vi.restoreAllMocks();
+    document.documentElement.removeAttribute('data-phi-desktop');
     visibility('visible');
 });
 
@@ -62,6 +64,45 @@ describe('all-tab wake and shared scheduler', () => {
             [background, { auto: true }],
         ]);
         expect(healthy.autoReconnectTimer).toBeUndefined();
+    });
+    it('limits background redials to the active pane outside desktop shells', () => {
+        document.documentElement.removeAttribute('data-phi-desktop');
+        const { manager, tab } = harness();
+        manager.activePaneId = tab.paneId;
+        const background = { ...tab, paneId: 'p2' };
+        manager.tabs.set(background.paneId, background);
+
+        manager._reviveActiveTabIfDead();
+        vi.advanceTimersByTime(1000);
+
+        expect(manager.reconnectTab).toHaveBeenCalledOnce();
+        expect(manager.reconnectTab).toHaveBeenCalledWith(tab, { auto: true });
+        expect(manager._showReconnectOverlay).toHaveBeenCalledWith(background);
+    });
+    it('waits for a due auth refresh before redialing a desktop pane', async () => {
+        const { manager, tab } = harness();
+        const previousBridge = window.phiAccessAuth;
+        let releaseRefresh;
+        const refresh = new Promise((resolve) => {
+            releaseRefresh = resolve;
+        });
+        window.phiAccessAuth = {
+            refreshAccessIfDue: vi.fn(() => refresh),
+        };
+
+        try {
+            manager.maybeAutoReconnect(tab);
+            await vi.advanceTimersByTimeAsync(1000);
+            expect(manager.reconnectTab).not.toHaveBeenCalled();
+            releaseRefresh();
+            await vi.advanceTimersByTimeAsync(0);
+            expect(manager.reconnectTab).toHaveBeenCalledWith(tab, {
+                auto: true,
+            });
+        } finally {
+            if (previousBridge === undefined) delete window.phiAccessAuth;
+            else window.phiAccessAuth = previousBridge;
+        }
     });
     it.each([
         { isDead: false },
