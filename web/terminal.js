@@ -11300,13 +11300,6 @@ export class TabManager {
             return;
         }
         if (anchor.marker.isDisposed || anchor.marker.line < 0) {
-            // A width change can dispose the marker of a wrapped continuation
-            // row whose content survives in a merged row. That is a reflow,
-            // not eviction: clear quietly and leave the view where it is.
-            if (anchor.reflow) {
-                this._clearReaderAnchor(tabInfo);
-                return;
-            }
             // The reading row left the buffer. Clearing first keeps the notice to
             // one per reading episode (the next batch has nothing to restore) and
             // the reader stays in read mode at the oldest retained row instead of
@@ -11324,7 +11317,6 @@ export class TabManager {
             );
             return;
         }
-        anchor.reflow = false;
         if (buffer.viewportY !== anchor.marker.line) {
             // The restore's own scroll emits onScroll; skip the capture listener
             // so it cannot re-anchor to a programmatic position.
@@ -11855,9 +11847,6 @@ export class TabManager {
                 scrollY = buffer.viewportY;
             }
 
-            // The fit reflows the buffer. A marker disposed during it was
-            // merged into another row by the new width, not evicted.
-            if (readerAnchor) readerAnchor.reflow = true;
             activeTab.fitAddon.fit();
             const fitMs = termPerfMeasureSince('fit', _fitT0);
             termPerfLogSlowFit(
