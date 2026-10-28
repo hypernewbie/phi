@@ -391,13 +391,7 @@ function invalidationChannel() {
         channel.addEventListener('message', (event) => {
             if (!event.data) return;
             if (event.data.kind === 'logout') {
-                const ownerKey = event.data.ownerKey;
-                if (typeof ownerKey !== 'string') return;
-                const state = authStates.get(ownerKey);
-                if (!state) return;
-                dropCredential(state);
-                if (pendingOverlay?.ownerKey === ownerKey)
-                    pendingOverlay.finish({ enabled: false });
+                receiveLogout(event.data);
                 return;
             }
             if (event.data.kind === 'bundle') receiveBundle(event.data);
@@ -410,9 +404,33 @@ function invalidationChannel() {
     return invalidation;
 }
 
-function broadcastInvalidation(ownerKey) {
+function broadcastInvalidation(ownerKey, family = 0) {
     const channel = invalidationChannel();
-    if (channel) channel.postMessage({ kind: 'logout', ownerKey });
+    if (!channel) return;
+    channel.postMessage({
+        kind: 'logout',
+        origin: location.origin,
+        ownerKey,
+        family,
+    });
+}
+
+function receiveLogout(message) {
+    if (message.origin !== undefined && message.origin !== location.origin)
+        return;
+    const ownerKey =
+        typeof message.ownerKey === 'string'
+            ? message.ownerKey
+            : (activeAuthKey ?? credentialKey());
+    const state = authStates.get(ownerKey);
+    if (!state) return;
+    const family = Number.isInteger(message.family) ? message.family : 0;
+    const currentFamily = state.refreshAbsoluteExpiresAt;
+    if (family && currentFamily && family !== currentFamily) return;
+    state.loggedOut = true;
+    dropCredential(state);
+    if (pendingOverlay?.ownerKey === ownerKey)
+        pendingOverlay.finish({ enabled: false });
 }
 
 function broadcastBundle(context, state) {
@@ -425,10 +443,18 @@ function broadcastBundle(context, state) {
         bundle: {
             token: state.accessToken,
             expiresAt: state.accessExpiresAt,
+            expiresIn: remainingDurationSeconds(state),
             refreshIdleExpiresAt: state.refreshIdleExpiresAt,
             refreshAbsoluteExpiresAt: state.refreshAbsoluteExpiresAt,
         },
     });
+}
+
+function remainingDurationSeconds(state) {
+    if (!state.accessRenewAt) return 0;
+    const remainingMs =
+        state.accessRenewAt - performance.now() + REFRESH_LEAD_MS;
+    return Math.max(1, Math.round(remainingMs / 1000));
 }
 
 function receiveBundle(message) {
@@ -441,6 +467,7 @@ function receiveBundle(message) {
     const bundle = message.bundle;
     if (!bundle || typeof bundle.token !== 'string' || !bundle.token) return;
     if (!Number.isInteger(bundle.expiresAt) || bundle.expiresAt <= 0) return;
+    if (!Number.isInteger(bundle.expiresIn) || bundle.expiresIn <= 0) return;
     if (
         !Number.isInteger(bundle.refreshIdleExpiresAt) ||
         !Number.isInteger(bundle.refreshAbsoluteExpiresAt) ||
@@ -448,9 +475,19 @@ function receiveBundle(message) {
         bundle.refreshAbsoluteExpiresAt < bundle.refreshIdleExpiresAt
     )
         return;
-    if (state.memoryOnly) return;
+    if (state.memoryOnly || state.hostSession || state.loggedOut) return;
+    if (state.selectedProtocol === 'v1') return;
+    const family = bundle.refreshAbsoluteExpiresAt;
+    if (
+        family &&
+        state.refreshAbsoluteExpiresAt &&
+        family !== state.refreshAbsoluteExpiresAt
+    )
+        return;
     if (state.accessToken && bundle.expiresAt <= state.accessExpiresAt) return;
-    adoptToken(bundle.token, bundle, contextForKey(ownerKey), { broadcast: false });
+    adoptToken(bundle.token, bundle, contextForKey(ownerKey), {
+        broadcast: false,
+    });
 }
 
 function contextForKey(ownerKey) {
@@ -467,8 +504,10 @@ function newAuthState() {
         memoryOnly: false,
         hostSession: false,
         accessExpiresAt: 0,
+        accessRenewAt: 0,
         refreshIdleExpiresAt: 0,
         refreshAbsoluteExpiresAt: 0,
+        loggedOut: false,
         epoch: 0,
         reauthInFlight: null,
         refreshInFlight: null,
@@ -568,33 +607,46 @@ const REFRESH_SUPERSEDED = 'superseded';
 
 function refreshDue(context) {
     const state = stateFor(context);
-    if (!state.accessToken || !state.accessExpiresAt) return true;
-    return state.accessExpiresAt * 1000 - Date.now() <= REFRESH_LEAD_MS;
+    if (!state.accessToken) return true;
+    if (!state.accessRenewAt) return false;
+    return performance.now() >= state.accessRenewAt;
 }
 
 function withRefreshLock(origin, run) {
     const locks = typeof navigator !== 'undefined' ? navigator.locks : null;
     if (!locks || typeof locks.request !== 'function')
         return Promise.resolve().then(run);
-    try {
-        return Promise.resolve(
-            locks.request(REFRESH_LOCK_PREFIX + origin, () => run()),
-        );
-    } catch {
-        return Promise.resolve().then(run);
-    }
+    return withAuthDeadline((signal) => {
+        try {
+            return Promise.resolve(
+                locks.request(
+                    REFRESH_LOCK_PREFIX + origin,
+                    { signal },
+                    () =>
+                        signal.aborted ? REFRESH_SUPERSEDED : run(),
+                ),
+            );
+        } catch {
+            return Promise.resolve().then(run);
+        }
+    });
 }
 
 function refreshSession({ ifDue = false } = {}, context) {
     const state = stateFor(context);
     if (state.refreshInFlight) return state.refreshInFlight;
-    if (state.memoryOnly) return Promise.resolve(REFRESH_NONE);
+    if (state.memoryOnly || state.hostSession)
+        return Promise.resolve(REFRESH_NONE);
     const origin = location.origin;
-    const attempt = withRefreshLock(origin, () =>
-        ifDue && !refreshDue(context)
-            ? REFRESH_INSTALLED
-            : runRefresh(context, state, origin),
-    );
+    const epoch = state.epoch;
+    const attempt = withRefreshLock(origin, () => {
+        if (epoch !== state.epoch) return REFRESH_SUPERSEDED;
+        if (state.memoryOnly || state.hostSession)
+            return REFRESH_SUPERSEDED;
+        if (location.origin !== origin) return REFRESH_SUPERSEDED;
+        if (ifDue && !refreshDue(context)) return REFRESH_INSTALLED;
+        return runRefresh(context, state, origin, epoch);
+    });
     state.refreshInFlight = attempt;
     void attempt
         .catch(() => {})
@@ -621,8 +673,7 @@ function refreshFailure(message, waitMs) {
     return err;
 }
 
-async function runRefresh(context, state, origin) {
-    const epoch = state.epoch;
+async function runRefresh(context, state, origin, epoch) {
     let result;
     try {
         result = await withAuthDeadline(async (signal) => {
@@ -674,15 +725,27 @@ async function runRefresh(context, state, origin) {
 // Browser storage holds neither an access token nor a refresh handle.
 function adoptToken(token, bundle, context, { broadcast = true } = {}) {
     const state = stateFor(context);
+    const sameToken = token === state.accessToken;
     state.hostSession = false;
+    state.loggedOut = false;
     state.accessToken = token;
     state.accessEnabled = true;
     state.selectedProtocol = 'v2';
     state.persistedToken = null;
     state.memoryOnly = false;
-    state.accessExpiresAt = bundle?.expiresAt || 0;
-    state.refreshIdleExpiresAt = bundle?.refreshIdleExpiresAt || 0;
-    state.refreshAbsoluteExpiresAt = bundle?.refreshAbsoluteExpiresAt || 0;
+    if (bundle) {
+        state.accessExpiresAt = bundle.expiresAt;
+        state.accessRenewAt = bundle.expiresIn > 0
+            ? performance.now() + bundle.expiresIn * 1000 - REFRESH_LEAD_MS
+            : 0;
+        state.refreshIdleExpiresAt = bundle.refreshIdleExpiresAt;
+        state.refreshAbsoluteExpiresAt = bundle.refreshAbsoluteExpiresAt;
+    } else if (!sameToken) {
+        state.accessExpiresAt = 0;
+        state.accessRenewAt = 0;
+        state.refreshIdleExpiresAt = 0;
+        state.refreshAbsoluteExpiresAt = 0;
+    }
     state.retryDelayMs = 0;
     clearTimeout(state.retryTimer);
     state.retryTimer = null;
@@ -698,6 +761,7 @@ function clearTokenState(state) {
     state.persistedToken = null;
     state.hostSession = false;
     state.accessExpiresAt = 0;
+    state.accessRenewAt = 0;
     state.refreshIdleExpiresAt = 0;
     state.refreshAbsoluteExpiresAt = 0;
     clearTimeout(state.renewalTimer);
@@ -709,6 +773,7 @@ function clearTokenState(state) {
 
 function dropCredential(state) {
     clearTokenState(state);
+    state.loggedOut = true;
     state.selectedProtocol = 'v2';
     state.epoch++;
 }
@@ -718,20 +783,18 @@ function rejectToken(token, context) {
     const state = stateFor(context);
     if (!token || state.accessToken !== token) return;
     clearTokenState(state);
+    state.loggedOut = true;
     state.selectedProtocol = 'v2';
 }
 
 function scheduleRenewal(context, state = stateFor(context)) {
     clearTimeout(state.renewalTimer);
     state.renewalTimer = null;
-    if (!state.accessToken || state.memoryOnly || !state.accessExpiresAt) return;
+    if (!state.accessToken || state.memoryOnly || !state.accessRenewAt) return;
     const epoch = state.epoch;
     const delay = Math.min(
         MAX_TIMEOUT_MS,
-        Math.max(
-            0,
-            state.accessExpiresAt * 1000 - Date.now() - REFRESH_LEAD_MS,
-        ),
+        Math.max(0, state.accessRenewAt - performance.now()),
     );
     state.renewalTimer = setTimeout(() => {
         state.renewalTimer = null;
@@ -761,7 +824,8 @@ function scheduleRetry(err, context, state = stateFor(context)) {
 
 async function renewIfDue({ ifDue = true } = {}, context) {
     const state = stateFor(context);
-    if (!state.accessToken || state.memoryOnly) return;
+    if (!state.accessToken || state.memoryOnly || state.hostSession) return;
+    if (state.retryTimer !== null) return;
     if (ifDue && !refreshDue(context)) {
         scheduleRenewal(context, state);
         return;
@@ -793,6 +857,7 @@ export function refreshAccessIfDue(context) {
     const ownerContext = context ?? activeAuthContext;
     const state = stateFor(ownerContext);
     if (!state.accessToken || state.memoryOnly) return undefined;
+    if (state.retryTimer !== null) return undefined;
     if (!refreshDue(ownerContext)) {
         scheduleRenewal(ownerContext, state);
         return undefined;
@@ -813,7 +878,7 @@ async function checkV2Token(token, context) {
             redirect: 'error',
             signal,
         });
-        if (res.status === 401 || res.status === 403) return 'invalid';
+        if (res.status === 401) return 'invalid';
         if (res.status !== 200)
             throw new Error('Unable to check Phi access protection');
         let payload;
@@ -917,6 +982,7 @@ async function saveV2Password(password, context) {
             throw new Error('Unable to save access password');
         if (epoch === state.epoch) {
             state.hostSession = true;
+            state.loggedOut = false;
             state.accessEnabled = true;
             state.selectedProtocol = 'v2';
             state.epoch++;
@@ -960,15 +1026,17 @@ async function clearV2Password(context) {
     // Never discard a live credential after a successful-looking proxy page.
     if (!payload || payload.enabled !== false)
         throw new Error('Unable to clear access password');
+    const family = state.refreshAbsoluteExpiresAt;
     if (hostAuthenticatedMode()) {
         if (payload.ok !== true)
             throw new Error('Unable to clear access password');
         if (state.epoch !== epoch) return { enabled: false };
+        state.loggedOut = true;
         clearTokenState(state);
         state.accessEnabled = false;
         state.selectedProtocol = 'v2';
         state.epoch++;
-        broadcastInvalidation(credentialKey(context));
+        broadcastInvalidation(credentialKey(context), family);
         if (pendingOverlay?.ownerKey === credentialKey(context))
             pendingOverlay.finish({ enabled: false });
         return { enabled: false };
@@ -976,11 +1044,12 @@ async function clearV2Password(context) {
     // A credential installed while the clear was in flight is newer than
     // this response; never clear it.
     if (state.epoch !== epoch) return { enabled: false };
+    state.loggedOut = true;
     clearTokenState(state);
     state.accessEnabled = false;
     state.selectedProtocol = 'v2';
     state.epoch++;
-    broadcastInvalidation(credentialKey(context));
+    broadcastInvalidation(credentialKey(context), family);
     if (pendingOverlay?.ownerKey === credentialKey(context))
         pendingOverlay.finish({ enabled: false });
     return { enabled: false };
@@ -1079,11 +1148,10 @@ export function installAccessFetch() {
             (input && typeof input.method === 'string' ? input.method : 'GET')
         ).toUpperCase();
         const renewed = state.accessToken;
-        if (
-            outcome !== REFRESH_INSTALLED ||
-            !renewed ||
-            (method !== 'GET' && method !== 'HEAD')
-        )
+        const installed =
+            outcome === REFRESH_INSTALLED ||
+            (outcome === REFRESH_SUPERSEDED && !!renewed && renewed !== token);
+        if (!installed || !renewed || (method !== 'GET' && method !== 'HEAD'))
             return response;
         const retryHeaders = requestHeaders(input, init);
         retryHeaders.set('Authorization', `Bearer ${renewed}`);
@@ -1221,6 +1289,7 @@ function showUnlockPrompt(context, protocol) {
                     if (epoch !== state.epoch) return;
                     if (bundle === HOST_SESSION_TOKEN) {
                         state.hostSession = true;
+                        state.loggedOut = false;
                         state.accessEnabled = true;
                         state.selectedProtocol = 'v2';
                         state.memoryOnly = false;
@@ -1316,6 +1385,7 @@ async function bootstrapHostAuthenticated(context) {
     if (!current()) return { enabled: state.accessEnabled };
     if (verdict === 'valid') {
         state.hostSession = true;
+        state.loggedOut = false;
         return { enabled: true };
     }
     return showUnlockPrompt(context, 'v2');
@@ -1391,6 +1461,18 @@ export async function bootstrapAccessAuth(context) {
             if (verdict === HOST_INSTALL || superseded())
                 return { enabled: state.accessEnabled };
             if (verdict === 'valid') return { enabled: true };
+            let outcome;
+            try {
+                outcome = await wait(refreshSession({}, context));
+            } catch (err) {
+                if (superseded()) return { enabled: state.accessEnabled };
+                throw err;
+            }
+            if (outcome === REFRESH_INSTALLED) return { enabled: true };
+            if (outcome === HOST_INSTALL || superseded())
+                return { enabled: state.accessEnabled };
+            if (outcome === REFRESH_SUPERSEDED && state.accessToken)
+                return { enabled: true };
             rejectToken(token, context);
             // No cookie fallback: an explicit v2 credential decides alone.
             return showUnlockPrompt(context, 'v2');
@@ -1554,6 +1636,8 @@ export function installToken(token) {
     state.retryTimer = null;
     state.accessToken = token;
     state.hostSession = false;
+    state.loggedOut = false;
+    state.accessRenewAt = 0;
     state.accessEnabled = true;
     state.selectedProtocol = 'v2';
     state.epoch++;
@@ -1591,9 +1675,13 @@ export async function logoutAccess(all = false, context) {
         if (!answerOK) throw new Error('Unable to logout');
         if (epoch === state.epoch) {
             state.hostSession = false;
+            state.loggedOut = true;
             state.epoch++;
+            broadcastInvalidation(
+                credentialKey(context),
+                state.refreshAbsoluteExpiresAt,
+            );
         }
-        broadcastInvalidation(credentialKey(context));
         if (pendingOverlay?.ownerKey === credentialKey(context))
             pendingOverlay.finish({ enabled: false });
         return { ok: true };
@@ -1624,10 +1712,12 @@ export async function logoutAccess(all = false, context) {
     if (!result.ok || !result.payload || result.payload.ok !== true)
         throw new Error('Unable to logout');
     if (epoch === state.epoch && state.accessToken === token) {
+        const family = state.refreshAbsoluteExpiresAt;
+        state.loggedOut = true;
         clearTokenState(state);
         state.epoch++;
+        broadcastInvalidation(credentialKey(context), family);
     }
-    broadcastInvalidation(credentialKey(context));
     if (pendingOverlay?.ownerKey === credentialKey(context))
         pendingOverlay.finish({ enabled: false });
     return { ok: true };
@@ -1650,7 +1740,7 @@ export function webSocketURL(url) {
 if (typeof document !== 'undefined' && document.addEventListener) {
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState !== 'visible') return;
-        void renewIfDue();
+        void renewIfDue({}, activeAuthContext);
     });
 }
 if (typeof window !== 'undefined') {
@@ -1681,6 +1771,7 @@ export const __test__ = {
     renewIfDue,
     refreshDue,
     receiveBundle,
+    receiveLogout,
     resetAccessState,
     setReload,
     getAccessState,
@@ -1722,6 +1813,7 @@ function getAccessState() {
         memoryOnly,
         hostSession,
         accessExpiresAt,
+        loggedOut,
     } = activeAuthState();
     return {
         selectedProtocol,
@@ -1731,5 +1823,6 @@ function getAccessState() {
         memoryOnly,
         hostSession,
         accessExpiresAt,
+        loggedOut,
     };
 }
