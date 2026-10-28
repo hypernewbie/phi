@@ -303,9 +303,13 @@ vi.mock('electron', () => ({
   powerMonitor: fake.powerMonitor,
 }));
 
-import { AccessAuth, type StoredCredential } from '../src/access-auth.js';
+import { AccessAuth, type StoredCredential, type V2Bundle } from '../src/access-auth.js';
 import { Controller } from '../src/controller.js';
-import { DesktopHost } from '../src/desktop.js';
+import {
+  DesktopHost,
+  type CredentialStoreFs,
+  realCredentialStoreFs,
+} from '../src/desktop.js';
 import { FORWARD_CHANNEL } from '../src/single-instance.js';
 import { WAKE_PAGE_SCRIPT } from '../src/injected.js';
 
@@ -1765,6 +1769,20 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
     salt: Buffer.alloc(16, 0x11),
     verifier: Buffer.alloc(32, 0x22),
   };
+  /** A stored v2 entry: the whole rotating bundle, never a bare token. */
+  const v2Entry = (
+    jwt: string,
+    overrides: Record<string, unknown> = {},
+  ): Record<string, unknown> => ({
+    version: 'v2',
+    jwt,
+    expiresAt: 1_900_000_000,
+    expiresIn: 3600,
+    refreshHandle: Buffer.alloc(32, 0x33).toString('base64url'),
+    refreshIdleExpiresAt: 1_900_500_000,
+    refreshAbsoluteExpiresAt: 1_900_900_000,
+    ...overrides,
+  });
   type TestHost = {
     storedCredentials: Map<string, unknown>;
     saveStoredCredentials(): void;
@@ -1777,6 +1795,9 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
     ): Promise<void>;
     sessionGeneration: number;
     credentialsPath: string;
+    credentialFs: CredentialStoreFs;
+    watchBundles(auth: AccessAuth): AccessAuth;
+    persistBundle(origin: string, bundle: V2Bundle | null): void;
   };
   const hostOf = (): TestHost => new DesktopHost() as unknown as TestHost;
   const encrypted = (origins: Record<string, unknown>): Buffer =>
@@ -1799,7 +1820,7 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
   it('round-trips mixed v1/v2 entries without writing the v2 plaintext', () => {
     const host = hostOf();
     host.storedCredentials.set(originA, v1Entry);
-    host.storedCredentials.set(originB, { version: 'v2', jwt: 'jwt-secret' });
+    host.storedCredentials.set(originB, v2Entry('jwt-secret'));
     host.saveStoredCredentials();
 
     const onDisk = readFileSync(host.credentialsPath);
@@ -1815,10 +1836,7 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
       version: 'v1',
       iterations: 600_000,
     });
-    expect(reloaded.storedCredentials.get(originB)).toEqual({
-      version: 'v2',
-      jwt: 'jwt-secret',
-    });
+    expect(reloaded.storedCredentials.get(originB)).toEqual(v2Entry('jwt-secret'));
   });
 
   it('loads a legacy v1-only file', () => {
@@ -1861,9 +1879,9 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
           saltBase64: '',
           verifierBase64: 'AAAA',
         },
-        [originB]: { version: 'v2', jwt: 'ok-token' },
-        'https://bad-v2.example.test': { version: 'v2', jwt: 42 },
-        'not a url': { version: 'v2', jwt: 'ignored' },
+        [originB]: v2Entry('ok-token'),
+        'https://bad-v2.example.test': { ...v2Entry('bad'), expiresAt: 'soon' },
+        'not a url': v2Entry('ignored'),
       }),
     );
     host.loadStoredCredentials();
@@ -1885,13 +1903,13 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
     const host = hostOf();
     writeFileSync(
       host.credentialsPath,
-      encrypted({ [originA]: { version: 'v2', jwt: 'tok' } }),
+      encrypted({ [originA]: v2Entry('tok') }),
     );
     host.loadStoredCredentials();
     expect(host.storedCredentials.size).toBe(0);
 
     const before = readFileSync(host.credentialsPath);
-    host.storedCredentials.set(originA, { version: 'v2', jwt: 'new-tok' });
+    host.storedCredentials.set(originA, v2Entry('new-tok') as never);
     host.saveStoredCredentials();
     expect(readFileSync(host.credentialsPath)).toEqual(before);
   });
@@ -1915,7 +1933,7 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
           saltBase64: v1Entry.salt.toString('base64url'),
           verifierBase64: v1Entry.verifier.toString('base64url'),
         },
-        [originB]: { version: 'v2', jwt: 'tok' },
+        [originB]: v2Entry('tok'),
       }),
     );
     host.loadStoredCredentials();
@@ -1923,7 +1941,7 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
     expect(host.storedCredentials.has(originB)).toBe(false);
 
     const before = readFileSync(host.credentialsPath);
-    host.storedCredentials.set(originB, { version: 'v2', jwt: 'new-tok' });
+    host.storedCredentials.set(originB, v2Entry('new-tok') as never);
     host.saveStoredCredentials();
     expect(readFileSync(host.credentialsPath)).toEqual(before);
 
@@ -1939,7 +1957,7 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
     host.saveStoredCredentials();
     const before = readFileSync(host.credentialsPath);
     fake.safeStorage.failEncrypt = true;
-    host.storedCredentials.set(originB, { version: 'v2', jwt: 'tok' });
+    host.storedCredentials.set(originB, v2Entry('tok') as never);
     host.saveStoredCredentials();
     expect(readFileSync(host.credentialsPath)).toEqual(before);
   });
@@ -1947,12 +1965,9 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
   it('swallows a write failure without losing memory state', () => {
     const host = hostOf();
     mkdirSync(host.credentialsPath);
-    host.storedCredentials.set(originB, { version: 'v2', jwt: 'tok' });
+    host.storedCredentials.set(originB, v2Entry('tok') as never);
     expect(() => host.saveStoredCredentials()).not.toThrow();
-    expect(host.storedCredentials.get(originB)).toEqual({
-      version: 'v2',
-      jwt: 'tok',
-    });
+    expect(host.storedCredentials.get(originB)).toEqual(v2Entry('tok'));
     expect(existsSync(host.credentialsPath)).toBe(true);
   });
 
@@ -1969,7 +1984,7 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
       }
       throw new Error('unexpected');
     }) as unknown as typeof fetch);
-    host.storedCredentials.set(originA, { version: 'v2', jwt: 'good' });
+    host.storedCredentials.set(originA, v2Entry('good') as never);
     await host.bootstrapV2Token(originA, 'good', auth, host.sessionGeneration);
     expect(auth.getToken(originA)).toBe('good');
     expect(host.storedCredentials.has(originA)).toBe(true);
@@ -1978,7 +1993,7 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
       (async () =>
         new Response('', { status: 401 })) as unknown as typeof fetch,
     );
-    host.storedCredentials.set(originB, { version: 'v2', jwt: 'bad' });
+    host.storedCredentials.set(originB, v2Entry('bad') as never);
     await host.bootstrapV2Token(
       originB,
       'bad',
@@ -1996,7 +2011,7 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
       (async () =>
         new Response('', { status: 503 })) as unknown as typeof fetch,
     );
-    host.storedCredentials.set(originA, { version: 'v2', jwt: 'restored' });
+    host.storedCredentials.set(originA, v2Entry('restored') as never);
     await host.bootstrapV2Token(
       originA,
       'restored',
@@ -2066,7 +2081,7 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
       (async () =>
         new Response('', { status: 503 })) as unknown as typeof fetch,
     );
-    host.storedCredentials.set(originA, { version: 'v2', jwt: 'kept' });
+    host.storedCredentials.set(originA, v2Entry('kept') as never);
     await host.bootstrapV2Token(
       originA,
       'kept',
@@ -2078,7 +2093,7 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
 
     const newer = new AccessAuth();
     newer.installToken(originB, 'newer');
-    host.storedCredentials.set(originB, { version: 'v2', jwt: 'older' });
+    host.storedCredentials.set(originB, v2Entry('older') as never);
     await host.bootstrapV2Token(
       originB,
       'older',
@@ -2086,10 +2101,7 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
       host.sessionGeneration,
     );
     expect(newer.getToken(originB)).toBe('newer');
-    expect(host.storedCredentials.get(originB)).toEqual({
-      version: 'v2',
-      jwt: 'older',
-    });
+    expect(host.storedCredentials.get(originB)).toEqual(v2Entry('older'));
   });
 
   it('keeps a native unlock ready when a stale token is accepted late', async () => {
@@ -2101,7 +2113,7 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
           release = resolve;
         })) as unknown as typeof fetch,
     );
-    host.storedCredentials.set(originA, { version: 'v2', jwt: 'restored' });
+    host.storedCredentials.set(originA, v2Entry('restored') as never);
     const pending = host.bootstrapV2Token(
       originA,
       'restored',
@@ -2130,7 +2142,7 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
           release = resolve;
         })) as unknown as typeof fetch,
     );
-    host.storedCredentials.set(originA, { version: 'v2', jwt: 'restored' });
+    host.storedCredentials.set(originA, v2Entry('restored') as never);
     const pending = host.bootstrapV2Token(
       originA,
       'restored',
@@ -2143,5 +2155,285 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
     await pending;
     expect(auth.getToken(originA)).toBe('fresh');
     expect(host.bodyTokens.get(originA)).toBe('fresh');
+  });
+  it('round-trips the whole rotating bundle and writes no plaintext', () => {
+    const host = hostOf();
+    const bundle: V2Bundle = {
+      token: 'jwt-roundtrip',
+      expiresAt: 1_900_000_000,
+      expiresIn: 3600,
+      refreshHandle: Buffer.alloc(32, 0x44).toString('base64url'),
+      refreshIdleExpiresAt: 1_900_500_000,
+      refreshAbsoluteExpiresAt: 1_900_900_000,
+    };
+    host.persistBundle(originA, bundle);
+
+    const raw = readFileSync(host.credentialsPath);
+    expect(raw.toString()).not.toContain('jwt-roundtrip');
+    expect(raw.toString()).not.toContain(bundle.refreshHandle);
+
+    const reloaded = hostOf();
+    reloaded.loadStoredCredentials();
+    expect(reloaded.storedCredentials.get(originA)).toEqual({
+      version: 'v2',
+      jwt: 'jwt-roundtrip',
+      expiresAt: 1_900_000_000,
+      expiresIn: 3600,
+      refreshHandle: bundle.refreshHandle,
+      refreshIdleExpiresAt: 1_900_500_000,
+      refreshAbsoluteExpiresAt: 1_900_900_000,
+    });
+  });
+
+  it('drops a legacy jwt-only entry while keeping v1 entries', () => {
+    const host = hostOf();
+    writeFileSync(
+      host.credentialsPath,
+      encrypted({
+        [originA]: {
+          version: 'v1',
+          algorithm: 'pbkdf2-sha256',
+          iterations: 600_000,
+          saltBase64: v1Entry.salt.toString('base64url'),
+          verifierBase64: v1Entry.verifier.toString('base64url'),
+        },
+        [originB]: { version: 'v2', jwt: 'old-bare-token' },
+      }),
+    );
+    host.loadStoredCredentials();
+    expect(host.storedCredentials.has(originA)).toBe(true);
+    // A bare token has no refresh handle, so it cannot be restored.
+    expect(host.storedCredentials.has(originB)).toBe(false);
+    const rewritten = JSON.parse(
+      fake.safeStorage.decryptString(readFileSync(host.credentialsPath)),
+    ) as { origins: Record<string, unknown> };
+    expect(Object.keys(rewritten.origins)).toEqual([originA]);
+  });
+
+  it('renews an expired access token from a live refresh family', async () => {
+    const host = hostOf();
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const oldHandle = Buffer.alloc(32, 0x55).toString('base64url');
+    const newHandle = Buffer.alloc(32, 0x66).toString('base64url');
+    host.storedCredentials.set(
+      originA,
+      v2Entry('expired-access', {
+        expiresAt: nowSeconds - 10,
+        expiresIn: 0,
+        refreshHandle: oldHandle,
+      }) as never,
+    );
+    const calls: string[] = [];
+    const auth = host.watchBundles(
+      new AccessAuth((async (url: URL) => {
+        calls.push(url.pathname);
+        if (url.pathname === '/api/auth/v2/refresh') {
+          return new Response(
+            JSON.stringify({
+              token: 'renewed-access',
+              expires_at: nowSeconds + 3600,
+              expires_in: 3600,
+              refresh_idle_expires_at: nowSeconds + 2_592_000,
+              refresh_absolute_expires_at: nowSeconds + 7_776_000,
+            }),
+            {
+              status: 200,
+              headers: {
+                'content-type': 'application/json',
+                'set-cookie': `phi_access_refresh=${newHandle}; Path=/api/auth/v2/refresh; HttpOnly; SameSite=Strict`,
+              },
+            },
+          );
+        }
+        return new Response(
+          JSON.stringify({ enabled: true, authenticated: true }),
+          { status: 200 },
+        );
+      }) as unknown as typeof fetch),
+    );
+
+    await host.bootstrapV2Token(
+      originA,
+      'expired-access',
+      auth,
+      host.sessionGeneration,
+    );
+
+    // A live family renews: no prompt, and the store now holds the rotation.
+    expect(calls).toContain('/api/auth/v2/refresh');
+    expect(auth.getToken(originA)).toBe('renewed-access');
+    expect(host.storedCredentials.get(originA)).toMatchObject({
+      version: 'v2',
+      jwt: 'renewed-access',
+      refreshHandle: newHandle,
+    });
+  });
+
+  it('requires a fresh login when the stored handle is already dead', async () => {
+    const host = hostOf();
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    host.storedCredentials.set(
+      originA,
+      v2Entry('stale-access', {
+        expiresAt: nowSeconds - 10,
+        expiresIn: 0,
+      }) as never,
+    );
+    const auth = host.watchBundles(
+      new AccessAuth((async () =>
+        new Response('', { status: 401 })) as unknown as typeof fetch),
+    );
+
+    await host.bootstrapV2Token(
+      originA,
+      'stale-access',
+      auth,
+      host.sessionGeneration,
+    );
+
+    // Terminal: the family is gone, so the stored bundle goes away and the
+    // next launch asks for the password. v2 stays selected: no v1 fallback.
+    expect(auth.getToken(originA)).toBeNull();
+    expect(auth.getSelectedProtocol(originA)).toBe('v2');
+    expect(host.storedCredentials.has(originA)).toBe(false);
+  });
+
+  it('keeps the bundle through a non-401 refresh failure', async () => {
+    const host = hostOf();
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    host.storedCredentials.set(
+      originA,
+      v2Entry('stale-access', {
+        expiresAt: nowSeconds - 10,
+        expiresIn: 0,
+      }) as never,
+    );
+    const auth = host.watchBundles(
+      new AccessAuth((async () =>
+        new Response('', { status: 503 })) as unknown as typeof fetch),
+    );
+
+    await host.bootstrapV2Token(
+      originA,
+      'stale-access',
+      auth,
+      host.sessionGeneration,
+    );
+
+    expect(host.storedCredentials.get(originA)).toMatchObject({
+      version: 'v2',
+      jwt: 'stale-access',
+    });
+    expect(auth.getBundle(originA)).not.toBeNull();
+  });
+
+  it('keeps the newest bundle in memory when the store write fails', () => {
+    const host = hostOf();
+    host.persistBundle(originA, {
+      token: 'first-token',
+      expiresAt: 1_900_000_000,
+      expiresIn: 3600,
+      refreshHandle: Buffer.alloc(32, 0x77).toString('base64url'),
+      refreshIdleExpiresAt: 1_900_500_000,
+      refreshAbsoluteExpiresAt: 1_900_900_000,
+    });
+    const before = readFileSync(host.credentialsPath);
+
+    host.credentialFs = {
+      ...realCredentialStoreFs,
+      rename: () => {
+        throw new Error('rename refused');
+      },
+    };
+    host.persistBundle(originA, {
+      token: 'rotated-token',
+      expiresAt: 1_900_003_600,
+      expiresIn: 3600,
+      refreshHandle: Buffer.alloc(32, 0x88).toString('base64url'),
+      refreshIdleExpiresAt: 1_900_500_000,
+      refreshAbsoluteExpiresAt: 1_900_900_000,
+    });
+
+    // The old handle is consumed server-side, so the disk copy is stale; the
+    // in-memory bundle is the newest truth and must survive the failed save.
+    expect(host.storedCredentials.get(originA)).toMatchObject({
+      jwt: 'rotated-token',
+    });
+    expect(readFileSync(host.credentialsPath)).toEqual(before);
+    expect(existsSync(`${host.credentialsPath}.tmp`)).toBe(false);
+  });
+
+  it('reports each credential-store failure and keeps the old file', () => {
+    const host = hostOf();
+    host.storedCredentials.set(originA, v1Entry);
+    host.saveStoredCredentials();
+    const before = readFileSync(host.credentialsPath);
+    host.storedCredentials.set(originA, v2Entry('newer') as never);
+
+    const failures: Array<[string, Partial<CredentialStoreFs>]> = [
+      [
+        'writeNew',
+        {
+          writeNew: () => {
+            throw new Error('disk full');
+          },
+        },
+      ],
+      [
+        'syncFile',
+        {
+          syncFile: () => {
+            throw new Error('sync refused');
+          },
+        },
+      ],
+      [
+        'rename',
+        {
+          rename: () => {
+            throw new Error('rename refused');
+          },
+        },
+      ],
+    ];
+    for (const [label, override] of failures) {
+      host.credentialFs = { ...realCredentialStoreFs, ...override };
+      expect(host.saveStoredCredentials(), label).toBe(false);
+      expect(readFileSync(host.credentialsPath), label).toEqual(before);
+      expect(existsSync(`${host.credentialsPath}.tmp`), label).toBe(false);
+    }
+
+    // A post-rename durability failure is an ambiguous commit: reported, but
+    // the new file is already in place.
+    host.credentialFs = {
+      ...realCredentialStoreFs,
+      syncDir: () => {
+        throw new Error('directory sync refused');
+      },
+    };
+    expect(host.saveStoredCredentials()).toBe(false);
+    expect(readFileSync(host.credentialsPath)).not.toEqual(before);
+  });
+
+  it('refuses a v2 write through the Linux basic_text backend after a rotation', () => {
+    vi.stubGlobal(
+      'process',
+      Object.create(process, { platform: { value: 'linux' } }) as NodeJS.Process,
+    );
+    fake.safeStorage.backend = 'basic_text';
+    const host = hostOf();
+    host.persistBundle(originA, {
+      token: 'never-written',
+      expiresAt: 1_900_000_000,
+      expiresIn: 3600,
+      refreshHandle: Buffer.alloc(32, 0x99).toString('base64url'),
+      refreshIdleExpiresAt: 1_900_500_000,
+      refreshAbsoluteExpiresAt: 1_900_900_000,
+    });
+    expect(existsSync(host.credentialsPath)).toBe(false);
+    // Memory keeps the credential; only the disk copy is refused.
+    expect(host.storedCredentials.get(originA)).toMatchObject({
+      jwt: 'never-written',
+    });
   });
 });
