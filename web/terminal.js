@@ -1818,6 +1818,10 @@ export class TabManager {
                 (t.closest('#tab-overflow-dropdown') ||
                     t.closest('#tab-overflow-btn') ||
                     t.closest('#sort-tabs-btn') ||
+                    // The compact drawer holds buttons, not terminal input:
+                    // its Enter/Tab must activate and move focus, never
+                    // reach the PTY as raw keys.
+                    t.closest('#sidebar-panel') ||
                     // Thinking is UI-only: its Enter/Tab must not reach the
                     // PTY as raw keys on coarse pointers.
                     t.closest('.pi-rpc-thinking-trigger') ||
@@ -1936,6 +1940,17 @@ export class TabManager {
                 // hostname dropdown shows underneath (visible clash).
                 if (typeof this._closeSelfHudNow === 'function') {
                     this._closeSelfHudNow();
+                }
+                // On phones the compact drawer already lists active tabs,
+                // so the brand opens that instead of a second flat list.
+                if (isCompactViewport()) {
+                    const sidebar = document.getElementById('sidebar-panel');
+                    if (sidebar?.classList.contains('drawer-open')) {
+                        sidebar.classList.remove('drawer-open');
+                    } else {
+                        this.app?.openTabsDrawer?.();
+                    }
+                    return;
                 }
                 const dropdown = document.getElementById(
                     'hostname-tabs-dropdown',
@@ -8383,6 +8398,29 @@ export class TabManager {
         if (!this._overflowDropdownHidden()) {
             this._buildOverflowDropdown({ preserveState: true });
         }
+        const drawer = document.getElementById('sidebar-panel');
+        if (
+            drawer?.classList.contains('drawer-open') &&
+            drawer.dataset.panelMode === 'tabs'
+        ) {
+            this._buildDrawerTabsBody({ preserveState: true });
+        }
+    }
+
+    // The mobile drawer renders the same grouped tree as the desktop
+    // dropdown. One owner for the target and its close callback, so a row
+    // tap can never fall through to _closeOverflowDropdown().
+    _buildDrawerTabsBody({ preserveState = false } = {}) {
+        const body = document.getElementById('drawer-tabs-body');
+        if (!body) return null;
+        return this._buildOverflowDropdown({
+            preserveState,
+            target: body,
+            onClose: () =>
+                document
+                    .getElementById('sidebar-panel')
+                    ?.classList.remove('drawer-open'),
+        });
     }
 
     // Builds the shared ● completion-attention marker for tab-list rows
@@ -8397,9 +8435,11 @@ export class TabManager {
         return marker;
     }
 
-    _buildOverflowDropdown({ preserveState = false } = {}) {
-        const dropdown = document.getElementById('tab-overflow-dropdown');
+    _buildOverflowDropdown({ preserveState = false, target, onClose } = {}) {
+        const dropdown =
+            target || document.getElementById('tab-overflow-dropdown');
         if (!dropdown) return null;
+        const close = onClose || (() => this._closeOverflowDropdown());
 
         const collapsedKeys = new Set();
         let savedScrollTop = 0;
@@ -8489,12 +8529,12 @@ export class TabManager {
                 selectBtn.title = 'Undo close';
                 selectBtn.addEventListener('click', () => {
                     this.undoCloseTab(paneId);
-                    this._closeOverflowDropdown();
+                    close();
                 });
             } else {
                 selectBtn.addEventListener('click', () => {
                     this.switchTab(paneId, { userInitiated: true });
-                    this._closeOverflowDropdown();
+                    close();
                 });
             }
             row.appendChild(selectBtn);
@@ -8518,7 +8558,7 @@ export class TabManager {
                 event.stopPropagation();
                 if (closing) {
                     this.undoCloseTab(paneId);
-                    this._closeOverflowDropdown();
+                    close();
                 } else {
                     this.closeTab(paneId);
                 }

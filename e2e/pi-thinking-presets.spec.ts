@@ -10,6 +10,7 @@ import {
     type Request,
 } from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
+import { tabList } from './_tabs.js';
 
 // Real pinned Pi with injection disabled at startup: these panes have no
 // bridge, so they exercise the saved-option fallback end to end.
@@ -455,7 +456,7 @@ test('mobile and touch: the menu fits and its controls are reachable', async ({
         await page.goto(phi.url);
         // Compact layout selects tabs through the hostname dropdown.
         await page.locator('#hostname-display').click({ timeout: 30_000 });
-        const dropdown = page.locator('#hostname-tabs-dropdown');
+        const dropdown = tabList(page);
         await expect(dropdown).toBeVisible({ timeout: 30_000 });
         await dropdown
             .locator(

@@ -15,6 +15,7 @@ import type {
     TerminalServerFrame as TerminalServerMessage,
 } from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+import { tabList } from './_tabs.js';
 
 const ServerCodec: MessageFns<TerminalServerMessage> =
     TerminalServerFrame as unknown as MessageFns<TerminalServerMessage>;
@@ -543,9 +544,9 @@ for (const surface of surfaces) {
                     await page.goto(phi.url);
                     if (surface.isMobile) {
                         await page.locator('#hostname-display').click();
-                        await page
+                        await tabList(page)
                             .locator(
-                                `#hostname-tabs-dropdown [data-pane-id="${paneId}"] .hostname-dropdown-select-btn`,
+                                `[data-pane-id="${paneId}"] .hostname-dropdown-select-btn`,
                             )
                             .click();
                     } else {

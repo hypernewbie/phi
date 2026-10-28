@@ -1897,31 +1897,37 @@ html[data-sync="stale"] .brand .logo {
 .tab-overflow-workspace > summary:focus-visible,
 .tab-overflow-worktree > summary:focus-visible,
 .tab-overflow-dropdown :is(button, summary):focus-visible,
+.drawer-tabs-body :is(button, summary):focus-visible,
 .tab-overflow-dropdown:focus-visible {
     outline: 2px solid var(--accent-bright);
     outline-offset: -2px;
 }
-.tab-overflow-dropdown .hostname-dropdown-row {
+.tab-overflow-dropdown .hostname-dropdown-row,
+.drawer-tabs-body .hostname-dropdown-row {
     min-width: 0;
 }
-.tab-overflow-dropdown .hostname-dropdown-select-btn {
+.tab-overflow-dropdown .hostname-dropdown-select-btn,
+.drawer-tabs-body .hostname-dropdown-select-btn {
     display: grid;
     grid-template-columns: 14px minmax(0, 1fr);
     align-items: start;
     column-gap: 8px;
     min-width: 0;
 }
-.tab-overflow-dropdown .hostname-dropdown-favicon {
+.tab-overflow-dropdown .hostname-dropdown-favicon,
+.drawer-tabs-body .hostname-dropdown-favicon {
     margin-right: 0;
 }
-.tab-overflow-dropdown .hostname-dropdown-title {
+.tab-overflow-dropdown .hostname-dropdown-title,
+.drawer-tabs-body .hostname-dropdown-title {
     min-width: 0;
     width: auto;
     white-space: normal;
     overflow-wrap: anywhere;
     text-overflow: clip;
 }
-.tab-overflow-dropdown .hostname-dropdown-close-btn {
+.tab-overflow-dropdown .hostname-dropdown-close-btn,
+.drawer-tabs-body .hostname-dropdown-close-btn {
     flex: 0 0 auto;
 }
 .tab-overflow-empty {
@@ -2162,7 +2168,8 @@ body.show-tab-shortcuts .tab.has-shortcut .tab-shortcut-badge {
     line-height: 1.4;
 }
 
-.tab-overflow-dropdown .hostname-dropdown-attention {
+.tab-overflow-dropdown .hostname-dropdown-attention,
+.drawer-tabs-body .hostname-dropdown-attention {
     grid-column: 2;
 }
 
@@ -5151,13 +5158,14 @@ html[data-phi-config-page] .settings-modal {
         display: none !important;
     }
 
-    /* Sidebar as a Slide-out Drawer */
+    /* Sidebar as a Slide-out Drawer. Apple HIG: a slide-over panel presents at
+       nearly the full screen width with a narrow peek of the content behind it. */
     .sidebar-panel {
         position: fixed;
         left: 0;
         top: 48px;
         bottom: 0;
-        width: 280px !important; /* Force fixed width on drawer */
+        width: min(420px, calc(100vw - 48px)) !important;
         max-width: none; /* base 25vw cap must not squeeze the drawer on phones */
         height: calc(var(--vv-height) - 48px);
         z-index: 1000;
@@ -5169,6 +5177,50 @@ html[data-phi-config-page] .settings-modal {
 
     .sidebar-panel.drawer-open {
         transform: translateX(0);
+    }
+
+    /* Drawer modes: tab tree by default, sessions block on demand. */
+    [data-panel-mode="tabs"] .drawer-tabs-body {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 auto;
+        overflow-y: auto;
+        min-height: 0;
+    }
+
+    [data-panel-mode="tabs"] .drawer-tabs-toolbar {
+        display: block;
+        flex: 0 0 auto;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--bg-border);
+    }
+
+    [data-panel-mode="tabs"] .drawer-tabs-toolbar .btn {
+        width: 100%;
+    }
+
+    [data-panel-mode="sessions"] .drawer-tabs-toolbar {
+        display: none;
+    }
+
+    [data-panel-mode="tabs"] .coder-selector,
+    [data-panel-mode="tabs"] .new-session-container,
+    [data-panel-mode="tabs"] .session-list-container {
+        display: none;
+    }
+
+    [data-panel-mode="sessions"] .drawer-tabs-body {
+        display: none;
+    }
+
+    [data-panel-mode="tabs"] #drawer-back-to-tabs {
+        display: none !important;
+    }
+
+    .panel-header-actions {
+        display: flex;
+        align-items: center;
+        gap: 4px;
     }
 
     /* Diff panel as a slide-out drawer on mobile if opened */
@@ -8491,6 +8543,13 @@ html[data-phi-config-page] .settings-modal {
 /* GLOBAL MOBILE HELPER CLASS */
 .mobile-only {
     display: none !important;
+}
+
+/* The drawer's tab tree exists only for the compact drawer modes; outside
+   them the sidebar keeps its native sessions content. */
+.drawer-tabs-body,
+.drawer-tabs-toolbar {
+    display: none;
 }
 
 /* HOSTNAME TABS DROPDOWN CLASS */
