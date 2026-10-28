@@ -50,6 +50,21 @@ const fake = vi.hoisted(() => {
   class FakeWebContents extends Events {
     destroyed = false;
     readonly sent: Array<[string, unknown]> = [];
+    /** Recorded cookie-jar traffic: the body asset handle is the only cookie
+     *  a renderer may receive, so tests assert the exact writes. */
+    readonly cookies = {
+      setCalls: [] as Array<Record<string, unknown>>,
+      removeCalls: [] as Array<[string, string]>,
+      set(details: Record<string, unknown>): Promise<void> {
+        this.setCalls.push(details);
+        return Promise.resolve();
+      },
+      remove(url: string, name: string): Promise<void> {
+        this.removeCalls.push([url, name]);
+        return Promise.resolve();
+      },
+    };
+    readonly session = { cookies: this.cookies };
     zoom = 0;
     loadFileCalls: string[] = [];
     url = '';
@@ -1267,6 +1282,13 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     expect(scripts.some((script) => script.includes('/api/auth/login'))).toBe(
       false,
     );
+    // The foreground install also gives that body the scoped asset cookie and
+    // nothing else: the refresh handle stays host-side.
+    expect(bodyView.webContents.cookies.setCalls.at(-1)).toMatchObject({
+      name: 'phi_access_asset',
+      value: 'host-token',
+      path: '/api',
+    });
   });
 
   it('rejects stale old-session main-frame senders for controller mutations and window-minimize (sender trust)', async () => {
@@ -1783,6 +1805,20 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
     refreshAbsoluteExpiresAt: 1_900_900_000,
     ...overrides,
   });
+  /** The body-renderer surface these tests observe: its recorded cookie jar
+   *  and script calls, cast off the fake Electron WebContents. */
+  type BodyContents = {
+    url: string;
+    destroyed: boolean;
+    executeJavaScript: (script: string) => Promise<unknown>;
+    cookies: {
+      setCalls: Array<Record<string, unknown>>;
+      removeCalls: Array<[string, string]>;
+    };
+  };
+  const newBodyContents = (): BodyContents =>
+    new fake.FakeBrowserWindow({}).webContents as unknown as BodyContents;
+
   type TestHost = {
     storedCredentials: Map<string, unknown>;
     saveStoredCredentials(): void;
@@ -1798,6 +1834,19 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
     credentialFs: CredentialStoreFs;
     watchBundles(auth: AccessAuth): AccessAuth;
     persistBundle(origin: string, bundle: V2Bundle | null): void;
+    bodyTokens: Map<string, string>;
+    viewByOrigin: Map<string, { webContents: BodyContents }>;
+    installBodyToken(
+      contents: unknown,
+      origin: string,
+      auth: AccessAuth,
+      generation: number,
+    ): void;
+    tryReauthWithStoredCredential(
+      origin: string,
+      auth: AccessAuth,
+      generation: number,
+    ): Promise<boolean>;
   };
   const hostOf = (): TestHost => new DesktopHost() as unknown as TestHost;
   const encrypted = (origins: Record<string, unknown>): Buffer =>
@@ -2415,8 +2464,7 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
     expect(readFileSync(host.credentialsPath)).not.toEqual(before);
   });
 
-  it('refuses a v2 write through the Linux basic_text backend after a rotation', () => {
-    vi.stubGlobal(
+  it('refuses a v2 write through the Linux basic_text backend after a rotation', () => {    vi.stubGlobal(
       'process',
       Object.create(process, { platform: { value: 'linux' } }) as NodeJS.Process,
     );
@@ -2434,6 +2482,189 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
     // Memory keeps the credential; only the disk copy is refused.
     expect(host.storedCredentials.get(originA)).toMatchObject({
       jwt: 'never-written',
+    });
+  });
+
+  describe('trusted body credential scope (M3c)', () => {
+    /** A host with one authorized v2 bundle whose body may be installed. */
+    const authorizedHost = (
+      origin: string,
+      token: string,
+      overrides: Record<string, unknown> = {},
+    ): { host: TestHost; auth: AccessAuth; contents: BodyContents } => {
+      const host = hostOf();
+      const auth = host.watchBundles(new AccessAuth());
+      const entry = v2Entry(token, overrides);
+      auth.installBundle(origin, {
+        token: entry.jwt as string,
+        expiresAt: entry.expiresAt as number,
+        expiresIn: entry.expiresIn as number,
+        refreshHandle: entry.refreshHandle as string,
+        refreshIdleExpiresAt: entry.refreshIdleExpiresAt as number,
+        refreshAbsoluteExpiresAt: entry
+          .refreshAbsoluteExpiresAt as number,
+      });
+      host.bodyTokens.set(origin, token);
+      const contents = newBodyContents();
+      contents.url = `${origin}/index.html`;
+      return { host, auth, contents };
+    };
+
+    it('installs only the scoped asset cookie, never the refresh handle', () => {
+      const { host, auth, contents } = authorizedHost(originA, 'body-token');
+      const scripts: string[] = [];
+      contents.executeJavaScript = async (script: string) => {
+        scripts.push(script);
+        return 200;
+      };
+
+      host.installBodyToken(
+        contents,
+        originA,
+        auth,
+        host.sessionGeneration,
+      );
+
+      // Exactly one cookie, with the server's own attributes.
+      expect(contents.cookies.setCalls).toEqual([
+        {
+          url: `${originA}/api`,
+          name: 'phi_access_asset',
+          value: 'body-token',
+          path: '/api',
+          httpOnly: true,
+          sameSite: 'strict',
+          secure: true,
+          expirationDate: 1_900_000_000,
+        },
+      ]);
+      expect(contents.cookies.removeCalls).toEqual([]);
+      // The memory install carries the same token; the rotating handle is
+      // host-side only, in the cookie and in every renderer script.
+      expect(scripts).toHaveLength(1);
+      expect(scripts[0]).toContain('"body-token"');
+      const handle = v2Entry('unused').refreshHandle as string;
+      expect(scripts[0]).not.toContain(handle);
+      expect(JSON.stringify(contents.cookies.setCalls)).not.toContain(handle);
+    });
+
+    it('drops the asset cookie when the credential is cleared', () => {
+      const { host, auth, contents } = authorizedHost(originA, 'body-token');
+      host.viewByOrigin.set(originA, { webContents: contents });
+      contents.executeJavaScript = async () => 200;
+      host.installBodyToken(
+        contents,
+        originA,
+        auth,
+        host.sessionGeneration,
+      );
+      expect(contents.cookies.setCalls).toHaveLength(1);
+
+      // A terminal rejection clears the bundle: the asset handle must not
+      // outlive the session it belongs to.
+      auth.rejectToken(originA, 'body-token');
+      expect(contents.cookies.removeCalls).toEqual([
+        [`${originA}/api`, 'phi_access_asset'],
+      ]);
+    });
+
+    it('renews the asset cookie deadline with the rotated token', () => {
+      const { host, auth, contents } = authorizedHost(originA, 'body-token');
+      contents.executeJavaScript = async () => 200;
+      host.installBodyToken(
+        contents,
+        originA,
+        auth,
+        host.sessionGeneration,
+      );
+
+      // A host refresh rotates the bundle; the next install mirrors the new
+      // token and its later deadline instead of leaving the old one behind.
+      auth.installBundle(originA, {
+        token: 'rotated-token',
+        expiresAt: 1_900_003_600,
+        expiresIn: 3600,
+        refreshHandle: Buffer.alloc(32, 0x44).toString('base64url'),
+        refreshIdleExpiresAt: 1_900_500_000,
+        refreshAbsoluteExpiresAt: 1_900_900_000,
+      });
+      host.bodyTokens.set(originA, 'rotated-token');
+      host.installBodyToken(
+        contents,
+        originA,
+        auth,
+        host.sessionGeneration,
+      );
+
+      expect(contents.cookies.setCalls.at(-1)).toMatchObject({
+        value: 'rotated-token',
+        expirationDate: 1_900_003_600,
+      });
+    });
+
+    it('writes no body credential for a redirected, destroyed, or unauthorized frame', () => {
+      const { host, auth, contents } = authorizedHost(originA, 'body-token');
+      const scripts: string[] = [];
+      contents.executeJavaScript = async (script: string) => {
+        scripts.push(script);
+        return 200;
+      };
+
+      // Redirected main frame: the origin check refuses before the mutation.
+      contents.url = `${originB}/index.html`;
+      host.installBodyToken(
+        contents,
+        originA,
+        auth,
+        host.sessionGeneration,
+      );
+      expect(contents.cookies.setCalls).toEqual([]);
+      expect(scripts).toEqual([]);
+
+      // Destroyed view: nothing is written either.
+      contents.url = `${originA}/index.html`;
+      contents.destroyed = true;
+      host.installBodyToken(
+        contents,
+        originA,
+        auth,
+        host.sessionGeneration,
+      );
+      expect(contents.cookies.setCalls).toEqual([]);
+
+      // An unconfirmed token never authorized a native request, so no frame
+      // receives it.
+      const fresh = newBodyContents();
+      fresh.url = `${originA}/index.html`;
+      host.bodyTokens.delete(originA);
+      host.installBodyToken(fresh, originA, auth, host.sessionGeneration);
+      expect(fresh.cookies.setCalls).toEqual([]);
+    });
+
+    it('never falls back to the v1 verifier after a selected-v2 rejection', async () => {
+      const host = hostOf();
+      const auth = host.watchBundles(new AccessAuth());
+      auth.installBundle(originA, {
+        token: 'body-token',
+        expiresAt: 1_900_000_000,
+        expiresIn: 3600,
+        refreshHandle: Buffer.alloc(32, 0x55).toString('base64url'),
+        refreshIdleExpiresAt: 1_900_500_000,
+        refreshAbsoluteExpiresAt: 1_900_900_000,
+      });
+      // A terminal rejection drops the token but keeps v2 selected, so the
+      // legacy cookie and saved verifier stay off the table.
+      auth.rejectToken(originA, 'body-token');
+      expect(auth.getToken(originA)).toBeNull();
+      expect(auth.getSelectedProtocol(originA)).toBe('v2');
+      host.storedCredentials.set(originA, v1Entry);
+      await expect(
+        host.tryReauthWithStoredCredential(
+          originA,
+          auth,
+          host.sessionGeneration,
+        ),
+      ).resolves.toBe(false);
     });
   });
 });
