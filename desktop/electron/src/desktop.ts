@@ -482,8 +482,27 @@ export interface CredentialStoreFs {
   remove(path: string): void;
 }
 
+/** Directory-`fsync` failures that mean "this platform has no such claim to
+ *  make", not "the write did not reach the disk". Anything else is a real I/O
+ *  failure and must travel to the caller. */
+const UNSUPPORTED_DIR_SYNC_CODES = new Set([
+  'EISDIR',
+  'EPERM',
+  'EBADF',
+  'EINVAL',
+  'ENOSYS',
+  'ENOTSUP',
+]);
+
+function isUnsupportedDirSync(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && UNSUPPORTED_DIR_SYNC_CODES.has(code);
+}
+
 /** Real credential-store filesystem. Directory fsync is POSIX-only: Windows
- *  refuses a directory handle, so no durability claim is made there. */
+ *  refuses a directory handle, so no durability claim is made there. Every
+ *  other failure propagates, so a caller never reports a durable commit that
+ *  did not happen. */
 export const realCredentialStoreFs: CredentialStoreFs = {
   writeNew: (file, data) => writeFileSync(file, data, { mode: 0o600 }),
   syncFile: (file) => {
@@ -499,13 +518,15 @@ export const realCredentialStoreFs: CredentialStoreFs = {
     let fd: number;
     try {
       fd = openSync(dir, 'r');
-    } catch {
-      return;
+    } catch (err) {
+      if (isUnsupportedDirSync(err)) return;
+      throw err;
     }
     try {
       fsyncSync(fd);
-    } catch {
-      /* unsupported on this platform: nothing to claim */
+    } catch (err) {
+      if (isUnsupportedDirSync(err)) return;
+      throw err;
     } finally {
       closeSync(fd);
     }
@@ -538,14 +559,88 @@ export function isAllowedNavigationTarget(
   allowedOrigin: string,
   isSameServer: (target: URL) => boolean,
 ): boolean {
-  if (
-    allowedOrigin === EMBEDDED_ORIGIN &&
-    target.protocol === `${EMBEDDED_SCHEME}:` &&
-    target.host === EMBEDDED_HOST
-  ) {
-    return isAppRoute(target.pathname);
+  // The embedded shell is identified by its scheme and host, never by origin:
+  // a non-special scheme reports "null", which `file:` and every other
+  // non-special URL also report. Returning here, without falling through to the
+  // remote-origin predicate, is what keeps `file:///index.html` and
+  // `phi-app://evil/index.html` out of the shell.
+  if (allowedOrigin === EMBEDDED_ORIGIN) {
+    return (
+      target.protocol === `${EMBEDDED_SCHEME}:` &&
+      target.host === EMBEDDED_HOST &&
+      isAppRoute(target.pathname)
+    );
   }
+  // A remote profile view never navigates to a non-special URL either.
+  if (target.origin === 'null') return false;
   return isSameServer(target) && isAppRoute(target.pathname);
+}
+
+/** True when a view's main frame is the embedded shell page.
+ *  `new URL(EMBEDDED_ORIGIN).origin` is "null", so origin equality can never
+ *  identify it, and every non-special URL shares that "null". */
+function isEmbeddedShellView(contents: {
+  getURL(): string;
+  isDestroyed(): boolean;
+}): boolean {
+  if (contents.isDestroyed()) return false;
+  try {
+    const url = new URL(contents.getURL());
+    return url.protocol === `${EMBEDDED_SCHEME}:` && url.host === EMBEDDED_HOST;
+  } catch {
+    return false;
+  }
+}
+
+/** The slice of a WebContents the navigation guard touches. */
+export interface NavGuardTarget {
+  on(
+    event: 'will-navigate' | 'will-redirect',
+    listener: (event: { preventDefault(): void }, url: string) => void,
+  ): unknown;
+  loadURL(url: string, options?: unknown): Promise<unknown>;
+}
+
+/**
+ * Navigation guard (security): one predicate for will-navigate, will-redirect,
+ * window opens, and main-process loadURL targets. A redirect is checked exactly
+ * like a fresh navigation: a permitted URL that redirects to a foreign page must
+ * not become a credential-bearing renderer (the proxy would inject host
+ * credentials into it). A denied target is handed to the OS only when it is a
+ * web or mail URL, and is never loaded in-app.
+ */
+export function attachNavGuard(
+  contents: NavGuardTarget,
+  isAllowedNavigation: (target: URL) => boolean,
+  handOffExternal: (url: string) => void,
+): void {
+  const deny = (event: { preventDefault(): void }, url: string): void => {
+    handOffExternal(url);
+    event.preventDefault();
+  };
+  for (const event of ['will-navigate', 'will-redirect'] as const) {
+    contents.on(event, (navigationEvent, url) => {
+      try {
+        if (isAllowedNavigation(new URL(url))) return;
+      } catch {
+        /* malformed URL: deny below */
+      }
+      deny(navigationEvent, url);
+    });
+  }
+  // A main-process loadURL emits neither event, so its target is validated
+  // explicitly instead of relying on that exemption.
+  const loadURL = contents.loadURL.bind(contents);
+  contents.loadURL = ((url: string, options?: unknown) => {
+    let allowed = false;
+    try {
+      allowed = isAllowedNavigation(new URL(url));
+    } catch {
+      allowed = false;
+    }
+    if (!allowed) return Promise.resolve();
+    return loadURL(url, options);
+  }) as typeof contents.loadURL;
 }
 
 export class DesktopHost {
@@ -3858,8 +3953,11 @@ export class DesktopHost {
         this.viewByOrigin.set(origin, view);
         // The normalized comparison origin: computed once per view so both
         // guard paths (window-open and will-navigate) compare the same
-        // canonical origin string.
-        const allowedOrigin = new URL(origin).origin;
+        // canonical origin string. The embedded shell keeps its own constant:
+        // `new URL('phi-app://app').origin` is the string "null", which every
+        // non-special URL shares, so it can never identify the shell.
+        const allowedOrigin =
+          origin === EMBEDDED_ORIGIN ? EMBEDDED_ORIGIN : new URL(origin).origin;
         const isSameServerOrigin = (
           target: URL,
           allowedOrigin: string,
@@ -3974,7 +4072,11 @@ export class DesktopHost {
                     generation,
                     isCurrent,
                   );
-                  attachNavGuard(child.webContents);
+                  attachNavGuard(
+                    child.webContents,
+                    isAllowedNavigation,
+                    handOffExternal,
+                  );
                   child.webContents.setWindowOpenHandler(
                     ({ url: childUrl }) => {
                       try {
@@ -4022,50 +4124,11 @@ export class DesktopHost {
           }
           return { action: 'deny' };
         });
-        // Navigation guard (security): one predicate for will-navigate,
-        // will-redirect, window opens, and main-process loadURL targets. A
-        // redirect is checked exactly like a fresh navigation: a permitted URL
-        // that redirects to a foreign page must not become a credential-bearing
-        // renderer (the proxy would inject host credentials into it).
-        const attachNavGuard = (contents: typeof view.webContents): void => {
-          const deny = (event: { preventDefault(): void }, url: string) => {
-            handOffExternal(url);
-            event.preventDefault();
-          };
-          contents.on('will-navigate', (event, url) => {
-            try {
-              if (isAllowedNavigation(new URL(url))) return;
-            } catch {
-              /* malformed URL: deny below */
-            }
-            deny(event, url);
-          });
-          contents.on('will-redirect', (event, url) => {
-            try {
-              if (isAllowedNavigation(new URL(url))) return;
-            } catch {
-              /* malformed URL: deny below */
-            }
-            deny(event, url);
-          });
-          // A main-process loadURL emits neither event, so its target is
-          // validated explicitly instead of relying on that exemption.
-          const loadURL = contents.loadURL.bind(contents);
-          contents.loadURL = ((
-            url: string,
-            options?: Parameters<typeof loadURL>[1],
-          ) => {
-            let allowed = false;
-            try {
-              allowed = isAllowedNavigation(new URL(url));
-            } catch {
-              allowed = false;
-            }
-            if (!allowed) return Promise.resolve();
-            return loadURL(url, options);
-          }) as typeof contents.loadURL;
-        };
-        attachNavGuard(view.webContents);
+        attachNavGuard(
+          view.webContents,
+          isAllowedNavigation,
+          handOffExternal,
+        );
         // Rail-selection shortcuts: before-input-event runs in the browser
         // process, so a chord is caught before the renderer. The always-safe
         // digits (Ctrl+1/2/9) produce no PTY byte and switch synchronously.
@@ -4872,6 +4935,23 @@ export class DesktopHost {
       // origin is `phi-app://app`, not the server); it is refused here and
       // keeps its own sign-in until that transport is separately approved.
       if (pending.auth.getSelectedProtocol(pending.origin) === 'v2') {
+        // The embedded shell holds no page credential: every request rides the
+        // main-process proxy, which attaches the host bearer itself. A
+        // host-authorized sign-in is therefore already complete for that view,
+        // and its origin is not the server's, so nothing is injected.
+        if (isEmbeddedShellView(view.webContents)) {
+          if (
+            pending.abort.signal.aborted ||
+            (pendingUnlock !== null && pendingUnlock !== pending) ||
+            pending.epoch !== activeEpoch ||
+            pending.generation !== this.sessionGeneration ||
+            ctrl.state().activeId !== pending.profileId ||
+            !pending.auth.hasToken(pending.origin)
+          ) {
+            return { ok: false, code: 'stale', message: 'Prompt expired.' };
+          }
+          return { ok: true };
+        }
         const token = pending.auth.getToken(pending.origin);
         const canonical =
           toCanonicalAuthOrigin(pending.origin) ?? pending.origin;
