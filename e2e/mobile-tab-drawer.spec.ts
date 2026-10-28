@@ -115,6 +115,25 @@ test('compact drawer shows the tab tree and a row tap switches tabs', async ({
     );
 });
 
+test('the brand opens the drawer on phones, the desktop dropdown on wide screens', async ({
+    page,
+}) => {
+    await openWithTabs(page, 390, 844);
+
+    await page.locator('#hostname-display').click();
+    await expect(page.locator('#sidebar-panel')).toHaveClass(/drawer-open/);
+    await expect(page.locator('#drawer-panel-title')).toHaveText('TABS');
+    await expect(
+        page.locator('#drawer-tabs-body .hostname-dropdown-row'),
+    ).toHaveCount(2);
+    // The phone gets the drawer, not the separate flat active-sessions list.
+    await expect(page.locator('#hostname-tabs-dropdown')).toBeHidden();
+
+    // Tapping the brand again closes it.
+    await page.locator('#hostname-display').click();
+    await expect(page.locator('#sidebar-panel')).not.toHaveClass(/drawer-open/);
+});
+
 test('plus opens the sessions block, back arrow returns to tabs', async ({
     page,
 }) => {
@@ -177,6 +196,11 @@ test('desktop sidebar and tab-bar dropdown are unchanged', async ({ page }) => {
     await expect(dropdown).toBeVisible();
     await expect(dropdown.locator('.hostname-dropdown-row')).toHaveCount(2);
     await expect(page.locator('#drawer-tabs-body')).toBeHidden();
+
+    // The brand keeps its flat active-sessions dropdown on wide screens.
+    await page.locator('#hostname-display').click();
+    await expect(page.locator('#hostname-tabs-dropdown')).toBeVisible();
+    await expect(page.locator('#sidebar-panel')).not.toHaveClass(/drawer-open/);
 });
 
 test('the drawer New Session button spawns a tab and closes the drawer', async ({

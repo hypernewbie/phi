@@ -1937,6 +1937,12 @@ export class TabManager {
                 if (typeof this._closeSelfHudNow === 'function') {
                     this._closeSelfHudNow();
                 }
+                // On phones the compact drawer already lists active tabs,
+                // so the brand opens that instead of a second flat list.
+                if (isCompactViewport()) {
+                    document.getElementById('mobile-sidebar-toggle')?.click();
+                    return;
+                }
                 const dropdown = document.getElementById(
                     'hostname-tabs-dropdown',
                 );
