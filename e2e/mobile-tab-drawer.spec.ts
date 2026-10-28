@@ -76,6 +76,25 @@ test('compact drawer shows the tab tree and a row tap switches tabs', async ({
     await expect(page.locator('#drawer-panel-title')).toHaveText('TABS');
     await expect(page.locator('#drawer-open-sessions')).toBeVisible();
     await expect(page.locator('#drawer-back-to-tabs')).toBeHidden();
+    await expect(page.locator('#drawer-tabs-toolbar')).toBeVisible();
+
+    // Apple HIG slide-over: the panel covers most of the screen, it is not a
+    // narrow fixed strip. 390 - 48px peek = 342px.
+    const drawer = await page
+        .locator('#sidebar-panel')
+        .evaluate((el) => el.getBoundingClientRect().width);
+    expect(drawer).toBeGreaterThan(390 * 0.8);
+
+    // The New Session button spans the drawer, above the tree.
+    const toolbarBox = await page.locator('#drawer-tabs-toolbar').boundingBox();
+    const firstRowBox = await drawerBody
+        .locator('.hostname-dropdown-row')
+        .first()
+        .boundingBox();
+    expect(toolbarBox?.width).toBeGreaterThan(drawer - 30);
+    expect(toolbarBox!.y + toolbarBox!.height).toBeLessThanOrEqual(
+        firstRowBox!.y,
+    );
 
     // Which seeded tab is active depends on the restore order, so derive
     // both ids instead of assuming one.
@@ -108,6 +127,7 @@ test('plus opens the sessions block, back arrow returns to tabs', async ({
     await expect(page.locator('#drawer-panel-title')).toHaveText('SESSIONS');
     await expect(page.locator('.session-list-container')).toBeVisible();
     await expect(page.locator('#drawer-tabs-body')).toBeHidden();
+    await expect(page.locator('#drawer-tabs-toolbar')).toBeHidden();
     await expect(page.locator('#drawer-back-to-tabs')).toBeVisible();
     await expect(page.locator('#drawer-open-sessions')).toBeHidden();
 
@@ -157,4 +177,29 @@ test('desktop sidebar and tab-bar dropdown are unchanged', async ({ page }) => {
     await expect(dropdown).toBeVisible();
     await expect(dropdown.locator('.hostname-dropdown-row')).toHaveCount(2);
     await expect(page.locator('#drawer-tabs-body')).toBeHidden();
+});
+
+test('the drawer New Session button spawns a tab and closes the drawer', async ({
+    page,
+}) => {
+    await openWithTabs(page, 390, 844);
+
+    // Pick the seeded backend while the coder selector is reachable.
+    await page.locator('#mobile-sidebar-toggle').click();
+    await page.locator('#drawer-open-sessions').click();
+    await page.locator('#coder-selector .coder-tab[data-coder="bash"]').click();
+    await page.locator('#drawer-back-to-tabs').click();
+    await expect(page.locator('#drawer-tabs-toolbar')).toBeVisible();
+
+    const spawned = page.waitForResponse(
+        (response) =>
+            response.url().endsWith('/api/terminals') &&
+            response.request().method() === 'POST',
+    );
+    const before = await page.locator('#tabs-container .tab').count();
+    await page.locator('#drawer-new-session-btn').click();
+    const reply = await spawned;
+    expect(reply.ok()).toBe(true);
+    await expect(page.locator('#sidebar-panel')).not.toHaveClass(/drawer-open/);
+    await expect(page.locator('#tabs-container .tab')).toHaveCount(before + 1);
 });

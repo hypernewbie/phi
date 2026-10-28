@@ -226,6 +226,14 @@ export class App {
             document
                 .getElementById('drawer-back-to-tabs')
                 ?.addEventListener('click', () => this.setDrawerMode('tabs'));
+            // Tabs mode carries its own New Session button; delegate to the
+            // real one, then close the drawer so the new terminal shows.
+            document
+                .getElementById('drawer-new-session-btn')
+                ?.addEventListener('click', () => {
+                    document.getElementById('new-session-btn')?.click();
+                    sidebar.classList.remove('drawer-open');
+                });
 
             // Close drawer when clicking outside it
             document.addEventListener('click', (e) => {

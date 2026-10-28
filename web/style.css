@@ -5158,13 +5158,14 @@ html[data-phi-config-page] .settings-modal {
         display: none !important;
     }
 
-    /* Sidebar as a Slide-out Drawer */
+    /* Sidebar as a Slide-out Drawer. Apple HIG: a slide-over panel presents at
+       nearly the full screen width with a narrow peek of the content behind it. */
     .sidebar-panel {
         position: fixed;
         left: 0;
         top: 48px;
         bottom: 0;
-        width: 280px !important; /* Force fixed width on drawer */
+        width: min(420px, calc(100vw - 48px)) !important;
         max-width: none; /* base 25vw cap must not squeeze the drawer on phones */
         height: calc(var(--vv-height) - 48px);
         z-index: 1000;
@@ -5185,6 +5186,21 @@ html[data-phi-config-page] .settings-modal {
         flex: 1 1 auto;
         overflow-y: auto;
         min-height: 0;
+    }
+
+    [data-panel-mode="tabs"] .drawer-tabs-toolbar {
+        display: block;
+        flex: 0 0 auto;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--bg-border);
+    }
+
+    [data-panel-mode="tabs"] .drawer-tabs-toolbar .btn {
+        width: 100%;
+    }
+
+    [data-panel-mode="sessions"] .drawer-tabs-toolbar {
+        display: none;
     }
 
     [data-panel-mode="tabs"] .coder-selector,
@@ -8535,7 +8551,8 @@ html[data-phi-config-page] .settings-modal {
 
 /* The drawer's tab tree exists only for the compact drawer modes; outside
    them the sidebar keeps its native sessions content. */
-.drawer-tabs-body {
+.drawer-tabs-body,
+.drawer-tabs-toolbar {
     display: none;
 }
 
