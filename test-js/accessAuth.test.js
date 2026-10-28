@@ -664,6 +664,97 @@ describe('host-authenticated shell', () => {
         ).toEqual([]);
     });
 
+    it('follows a v1-only server instead of asking for a v2 session', async () => {
+        const fetchSpy = mockFetch((url) => {
+            if (url === '/api/auth/status')
+                return { ...STATUS, authenticated: true, protocols: ['v1'] };
+            throw new Error(`unexpected fetch ${url}`);
+        });
+
+        await expect(bootstrapAccessAuth()).resolves.toEqual({ enabled: true });
+
+        expect(fetchSpy.mock.calls.map(([url]) => String(url))).not.toContain(
+            '/api/auth/v2/status',
+        );
+        expect(document.querySelector('.access-auth-overlay')).toBeNull();
+        expect(__test__.getAccessState()).toMatchObject({
+            selectedProtocol: 'v1',
+            hostSession: true,
+            accessToken: null,
+        });
+    });
+
+    it('prompts with the v1 flow when a v1-only server is still locked', async () => {
+        const fetchSpy = mockFetch((url) => {
+            if (url === '/api/auth/status')
+                return { ...STATUS, authenticated: false, protocols: ['v1'] };
+            throw new Error(`unexpected fetch ${url}`);
+        });
+
+        void bootstrapAccessAuth();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(document.querySelector('.access-auth-overlay')).not.toBeNull();
+        expect(fetchSpy.mock.calls.map(([url]) => String(url))).not.toContain(
+            '/api/auth/v2/status',
+        );
+    });
+
+    it('does not re-prompt for a host 401 outside a protected path', async () => {
+        mockFetch((url) => {
+            if (url === '/api/auth/status')
+                return { ...STATUS, protocols: ['v1', 'v2'] };
+            if (url === '/api/auth/v2/status') return HOST_STATUS;
+            if (url === '/healthz') return { ok: false, status: 401 };
+            throw new Error(`unexpected fetch ${url}`);
+        });
+
+        await bootstrapAccessAuth();
+        await fetch('/healthz');
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        expect(document.querySelector('.access-auth-overlay')).toBeNull();
+    });
+
+    it('re-prompts through v1 after a protected host request returns 401', async () => {
+        const v1Status = {
+            ...STATUS,
+            authenticated: true,
+            iterations: 1,
+            protocols: ['v1'],
+        };
+        const fetchSpy = mockFetch((url) => {
+            if (url === '/api/auth/status') return v1Status;
+            if (url === '/api/terminals') return { ok: false, status: 401 };
+            if (url === '/api/auth/login') return { ok: true };
+            throw new Error(`unexpected fetch ${url}`);
+        });
+        const reload = window.location.reload;
+
+        await bootstrapAccessAuth();
+        await fetch('/api/terminals');
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const overlay = document.querySelector('.access-auth-overlay');
+        expect(overlay).not.toBeNull();
+        overlay.querySelector('input[type="password"]').value = 'correct horse';
+        overlay
+            .querySelector('form')
+            .dispatchEvent(new Event('submit', { cancelable: true }));
+
+        await vi.waitFor(() => expect(reload).toHaveBeenCalled());
+        expect(
+            fetchSpy.mock.calls.map(([url]) => String(url)),
+        ).toContain('/api/auth/login');
+        expect(
+            fetchSpy.mock.calls.some(([url]) =>
+                String(url).startsWith('/api/auth/v2/'),
+            ),
+        ).toBe(false);
+        expect(__test__.getAccessState()).toMatchObject({
+            selectedProtocol: 'v1',
+            hostSession: true,
+        });
+    });
+
     it('saves and clears passwords using token-free host answers', async () => {
         const fetchSpy = mockFetch((url, options) => {
             if (url === '/api/auth/status')
