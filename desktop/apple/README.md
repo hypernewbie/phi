@@ -1,6 +1,6 @@
 # Phi Apple clients
 
-One shared core, two signed apps: `PhiMac` (macOS, AppKit) and `PhiPhone`
+One shared core, two signed apps: `PhiMac` (macOS, AppKit) and `PhiOS`
 (iOS, SwiftUI). Both link the same `PhiCore` package and the same Ghostty VT
 engine build.
 
@@ -17,8 +17,8 @@ Or from the command line:
 
 ```sh
 xcodebuild -scheme PhiMac   -destination 'generic/platform=macOS' build
-xcodebuild -scheme PhiPhone -destination 'generic/platform=iOS'   build   # device
-xcodebuild -scheme PhiPhone -destination 'generic/platform=iOS Simulator' build
+xcodebuild -scheme PhiOS -destination 'generic/platform=iOS'   build   # device
+xcodebuild -scheme PhiOS -destination 'generic/platform=iOS Simulator' build
 ```
 
 `PhiApple.xcodeproj` is generated from `project.yml` and is not committed.

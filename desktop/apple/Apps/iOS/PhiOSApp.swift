@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct PhiPhoneApp: App {
+struct PhiOSApp: App {
   @State private var target: SavedTarget? = SavedTarget.load()
 
   var body: some Scene {
