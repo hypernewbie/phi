@@ -310,10 +310,10 @@ public actor PaneWireClient {
       request.setValue(
         "\(AccessAuth.cookieName)=\(accessToken)", forHTTPHeaderField: "Cookie")
     }
-    // Identity keeps the reply usable through the bounded async byte reader.
+    // Identity keeps the reply body readable as the exact bytes on the wire.
     request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
     let session = currentSession()
-    let (bytes, response) = try await session.bytes(for: request)
+    let (body, response) = try await session.data(for: request)
     guard let http = response as? HTTPURLResponse else {
       throw PaneWireError.protocolViolation("state reply is not HTTP")
     }
@@ -321,13 +321,9 @@ public actor PaneWireClient {
       if http.statusCode == 401 { await auth.invalidate() }
       throw PaneWireError.http(http.statusCode)
     }
-    var body = Data()
-    body.reserveCapacity(1 << 16)
-    for try await byte in bytes {
-      body.append(byte)
-      guard body.count <= Self.maxStateBody else {
-        throw PaneWireError.protocolViolation("state body exceeds bound")
-      }
+    // Checked after the read: URLSession has no bounded incremental body API.
+    guard body.count <= Self.maxStateBody else {
+      throw PaneWireError.protocolViolation("state body exceeds bound")
     }
     return try Self.decodeState(body)
   }

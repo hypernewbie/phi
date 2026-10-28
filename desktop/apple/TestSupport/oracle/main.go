@@ -21,6 +21,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/hypernewbie/phi/internal/termemu"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
@@ -39,17 +41,20 @@ type color struct {
 }
 
 type cell struct {
-	Text          string `json:"text"`
-	Width         int    `json:"width"`
-	Bold          bool   `json:"bold"`
-	Faint         bool   `json:"faint"`
-	Italic        bool   `json:"italic"`
-	Strikethrough bool   `json:"strikethrough"`
-	Inverse       bool   `json:"inverse"`
-	Blink         bool   `json:"blink"`
-	Underline     int    `json:"underline"`
-	Fg            color  `json:"fg"`
-	Bg            color  `json:"bg"`
+	Text           string `json:"text"`
+	Width          int    `json:"width"`
+	Bold           bool   `json:"bold"`
+	Faint          bool   `json:"faint"`
+	Italic         bool   `json:"italic"`
+	Strikethrough  bool   `json:"strikethrough"`
+	Inverse        bool   `json:"inverse"`
+	Blink          bool   `json:"blink"`
+	Underline      int    `json:"underline"`
+	Invisible      bool   `json:"invisible"`
+	Overline       bool   `json:"overline"`
+	UnderlineColor color  `json:"underlineColor"`
+	Fg             color  `json:"fg"`
+	Bg             color  `json:"bg"`
 }
 
 type frame struct {
@@ -153,8 +158,22 @@ func unwrap(body []byte) ([]byte, int, int, error) {
 	if ckpt.Len != len(span) {
 		return nil, 0, 0, fmt.Errorf("checkpoint length %d but span is %d bytes", ckpt.Len, len(span))
 	}
+	if header.Oldest > header.Head {
+		return nil, 0, 0, fmt.Errorf("oldest %d past head %d", header.Oldest, header.Head)
+	}
+	// through == head makes the [oldest, head] range implicit.
 	if ckpt.Through != header.Head {
 		return nil, 0, 0, fmt.Errorf("checkpoint through %d but head %d", ckpt.Through, header.Head)
+	}
+	// Parsed here rather than through the server's own parser: an independent
+	// decoder must not inherit the encoder it checks (§9.2).
+	epoch, pos, _, err := parseEventCursor(ckpt.EventCursor)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	if epoch != header.Epoch || pos != ckpt.Through {
+		return nil, 0, 0, fmt.Errorf("event cursor %q for epoch %d through %d",
+			ckpt.EventCursor, header.Epoch, ckpt.Through)
 	}
 	if ckpt.Cols == 0 || ckpt.Rows == 0 {
 		return nil, 0, 0, errors.New("checkpoint geometry is empty")
@@ -195,17 +214,20 @@ func decode(span []byte, cols, rows int) (frame, error) {
 		cells := make([]cell, len(source))
 		for column, source := range source {
 			cells[column] = cell{
-				Text:          source.Text,
-				Width:         source.Width,
-				Bold:          source.Bold,
-				Faint:         source.Faint,
-				Italic:        source.Italic,
-				Strikethrough: source.Strikethrough,
-				Inverse:       source.Inverse,
-				Blink:         source.Blink,
-				Underline:     int(source.Underline),
-				Fg:            color{Kind: colorKind(source.Fg), Value: source.Fg.Value},
-				Bg:            color{Kind: colorKind(source.Bg), Value: source.Bg.Value},
+				Text:           source.Text,
+				Width:          source.Width,
+				Bold:           source.Bold,
+				Faint:          source.Faint,
+				Italic:         source.Italic,
+				Strikethrough:  source.Strikethrough,
+				Inverse:        source.Inverse,
+				Blink:          source.Blink,
+				Underline:      int(source.Underline),
+				Invisible:      source.Invisible,
+				Overline:       source.Overline,
+				UnderlineColor: color{Kind: colorKind(source.UnderlineColor), Value: source.UnderlineColor.Value},
+				Fg:             color{Kind: colorKind(source.Fg), Value: source.Fg.Value},
+				Bg:             color{Kind: colorKind(source.Bg), Value: source.Bg.Value},
 			}
 		}
 		decoded.Cells[row] = cells
@@ -258,4 +280,21 @@ func countCells(cells [][]cell) int {
 		total += len(row)
 	}
 	return total
+}
+
+// parseEventCursor validates the "v1.epoch.pos.ordinal" cursor the state
+// header uses (pkg/ws/retention.go).
+func parseEventCursor(cursor string) (epoch, pos, ordinal uint64, err error) {
+	parts := strings.Split(cursor, ".")
+	if len(parts) != 4 || parts[0] != "v1" {
+		return 0, 0, 0, fmt.Errorf("invalid event cursor %q", cursor)
+	}
+	vals := make([]uint64, 3)
+	for i, part := range parts[1:] {
+		vals[i], err = strconv.ParseUint(part, 10, 64)
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("invalid event cursor %q", cursor)
+		}
+	}
+	return vals[0], vals[1], vals[2], nil
 }

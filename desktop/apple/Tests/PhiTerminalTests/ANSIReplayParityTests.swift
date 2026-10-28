@@ -29,6 +29,17 @@ final class ANSIReplayParityTests: XCTestCase {
     Fixture(
       name: "cursor-move-and-query", cols: 80, rows: 24,
       bytes: Array("top\r\n\u{1B}[2;5Hmid\u{1B}[6n\u{1B}[?25l".utf8)),
+    Fixture(
+      name: "flags", cols: 80, rows: 24,
+      bytes: Array(
+        "\u{1B}[2mf\u{1B}[3mi\u{1B}[9ms\u{1B}[7mv\u{1B}[8mh\u{1B}[53mo\u{1B}[4m\u{1B}[58;5;196mc\u{1B}[0m"
+          .utf8)),
+    Fixture(
+      name: "pending-wrap", cols: 10, rows: 2,
+      bytes: Array(String(repeating: "W", count: 10).utf8)),
+    Fixture(
+      name: "alt-screen", cols: 80, rows: 24,
+      bytes: Array("\u{1B}[?1049halt".utf8)),
   ]
 
   func testCanonicalTextKeepsTrailingSpacesAndOneLineFeedPerRow() throws {
@@ -56,6 +67,43 @@ final class ANSIReplayParityTests: XCTestCase {
     let cellReport = try XCTUnwrap(evidence.firstDifference(against: other, label: "cell"))
     XCTAssertTrue(cellReport.contains("row 0, column 0"), cellReport)
     XCTAssertTrue(cellReport.contains("bold true"), cellReport)
+
+    other = evidence
+    other.history = 3
+    let historyReport = try XCTUnwrap(evidence.firstDifference(against: other, label: "history"))
+    XCTAssertTrue(historyReport.contains("history 0 versus 3"), historyReport)
+  }
+
+  func testFlagsFixtureSetsEveryStyleFlag() throws {
+    let fixture = try XCTUnwrap(Self.fixtures.first { $0.name == "flags" })
+    let session = try XCTUnwrap(TerminalSession(cols: fixture.cols, rows: fixture.rows))
+    session.feed(fixture.bytes)
+    let frame = try XCTUnwrap(session.readFrame())
+    session.free()
+    let cells = frame.cells[0]
+    XCTAssertTrue(cells[0].faint)
+    XCTAssertTrue(cells[1].italic)
+    XCTAssertTrue(cells[2].strikethrough)
+    XCTAssertTrue(cells[3].inverse)
+    XCTAssertTrue(cells[4].invisible)
+    XCTAssertTrue(cells[5].overline)
+    XCTAssertEqual(cells[6].underline, 1)
+    XCTAssertEqual(cells[6].underlineColor, TerminalColor(kind: .palette, value: 196))
+  }
+
+  func testPendingWrapAndAltScreenFixturesAreActuallySet() throws {
+    for name in ["pending-wrap", "alt-screen"] {
+      let fixture = try XCTUnwrap(Self.fixtures.first { $0.name == name })
+      let session = try XCTUnwrap(TerminalSession(cols: fixture.cols, rows: fixture.rows))
+      session.feed(fixture.bytes)
+      let frame = try XCTUnwrap(session.readFrame(), name)
+      session.free()
+      if name == "pending-wrap" {
+        XCTAssertTrue(frame.pendingWrap, name)
+      } else {
+        XCTAssertTrue(frame.alt, name)
+      }
+    }
   }
 
   func testRawFixtureFramesMatchTheGoOracle() throws {
@@ -66,10 +114,6 @@ final class ANSIReplayParityTests: XCTestCase {
       let frame = try XCTUnwrap(session.readFrame(), fixture.name)
       session.free()
 
-      let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent("phi-oracle-\(UUID().uuidString)")
-      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-      defer { try? FileManager.default.removeItem(at: directory) }
       let oracleFrame = try oracle.decodeRaw(
         fixture.bytes, cols: fixture.cols, rows: fixture.rows)
       let mine = FrameEvidence(frame: frame)

@@ -55,8 +55,11 @@ public struct FrameEvidence: Codable, Equatable, Sendable {
     if alt != other.alt {
       return "\(label): alternate screen \(alt) versus \(other.alt)"
     }
+    if history != other.history {
+      return "\(label): history \(history) versus \(other.history)"
+    }
     if let offset = Self.firstTextDifference(text, other.text) {
-      let (row, column) = Self.position(of: offset, in: text, cols: cols)
+      let (row, column) = position(of: offset)
       return "\(label): text differs at byte \(offset), row \(row), column \(column):"
         + " \(Self.byteDescription(text, at: offset)) versus \(Self.byteDescription(other.text, at: offset))"
     }
@@ -79,6 +82,8 @@ public struct FrameEvidence: Codable, Equatable, Sendable {
       + " bg \(cell.bg.kind.rawValue)/\(cell.bg.value) bold \(cell.bold) faint \(cell.faint)"
       + " italic \(cell.italic) strike \(cell.strikethrough) inverse \(cell.inverse)"
       + " blink \(cell.blink) underline \(cell.underline)"
+      + " invisible \(cell.invisible) overline \(cell.overline)"
+      + " underline_color \(cell.underlineColor.kind.rawValue)/\(cell.underlineColor.value)"
   }
 
   private static func byteDescription(_ text: String, at offset: Int) -> String {
@@ -96,20 +101,20 @@ public struct FrameEvidence: Codable, Equatable, Sendable {
     return left.count == right.count ? nil : min(left.count, right.count)
   }
 
-  /// Byte offset to a row and column. Multi-byte graphemes make columns
-  /// approximate past the first cluster; the byte offset stays exact.
-  private static func position(of offset: Int, in text: String, cols: Int) -> (row: Int, column: Int) {
-    let bytes = Array(text.utf8)
-    var row = 0
-    var column = 0
-    for index in 0..<min(offset, bytes.count) {
-      if bytes[index] == UInt8(ascii: "\n") {
-        row += 1
-        column = 0
-      } else {
-        column += 1
+  /// Byte offset to a row and cell index. Canonical text writes one space per
+  /// empty narrow cell and every other cell's grapheme whole, so the cell
+  /// boundaries come from `cells`, not from counting bytes.
+  private func position(of offset: Int) -> (row: Int, column: Int) {
+    var remaining = offset
+    for (row, rowCells) in cells.enumerated() {
+      for (column, cell) in rowCells.enumerated() where cell.width != 0 {
+        let length = cell.text.isEmpty ? 1 : cell.text.utf8.count
+        if remaining < length { return (row, column) }
+        remaining -= length
       }
+      if remaining == 0 { return (row, max(rowCells.count - 1, 0)) }
+      remaining -= 1  // the row's LF
     }
-    return (row, min(column, max(cols - 1, 0)))
+    return (max(cells.count - 1, 0), 0)
   }
 }

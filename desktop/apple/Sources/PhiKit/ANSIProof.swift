@@ -40,34 +40,53 @@ public enum ANSIProof {
     }
   }
 
-  /// Waits for the pane to attach, settles the frontier, then captures.
+  /// Waits for the pane to attach, settles the frontier, then captures. A
+  /// checkpoint that no longer matches the frozen frontier is retried: one
+  /// unlucky sample must not fail a live capture (§9.2).
   public static func capture(from client: PaneWireClient) async throws -> Capture {
-    let attachDeadline = Date().addingTimeInterval(10)
+    let deadline = Date().addingTimeInterval(10)
     while await !client.status().attached {
-      if Date() > attachDeadline { throw Failure.notAttached }
+      if Date() > deadline { throw Failure.notAttached }
       try? await Task.sleep(for: .milliseconds(50))
     }
 
+    for attempt in 0..<3 {
+      do {
+        return try await captureOnce(from: client, deadline: deadline)
+      } catch {
+        guard attempt < 2, Date() < deadline else { throw error }
+        switch error {
+        case Failure.checkpoint, Failure.mismatch: continue
+        default: throw error
+        }
+      }
+    }
+    throw Failure.checkpoint("capture did not settle")
+  }
+
+  private static func captureOnce(
+    from client: PaneWireClient, deadline: Date
+  ) async throws -> Capture {
     // A quiet frontier is what puts the frozen frame and the fetched span at
     // the same instant; 200 ms helps, the exact-through fetch proves it.
     var frozen = await client.freeze()
-    let settleDeadline = Date().addingTimeInterval(10)
     while true {
       try? await Task.sleep(for: .milliseconds(200))
       let again = await client.freeze()
       let settled = again.status.frontier == frozen.status.frontier
       frozen = again
       if settled, again.frame != nil { break }
-      if Date() > settleDeadline { throw Failure.unsettled(frontier: again.status.frontier) }
+      if Date() > deadline { throw Failure.unsettled(frontier: again.status.frontier) }
     }
 
     guard let live = frozen.frame else { throw Failure.replay("frozen frame unreadable") }
+    let expected = frozen.status.frontier
     let state = try await client.fetchState(
-      through: frozen.status.frontier, kind: PaneWireClient.ansiKind)
+      through: expected, kind: PaneWireClient.ansiKind)
     guard state.epoch == frozen.status.attach?.epoch else {
-      throw Failure.checkpoint("epoch \(state.epoch) for frozen frontier \(frozen.status.frontier)")
+      throw Failure.checkpoint("epoch \(state.epoch) for frozen frontier \(expected)")
     }
-    let checkpoint = try unwrap(state, live: live)
+    let checkpoint = try unwrap(state, live: live, expected: expected)
 
     // A fresh terminal at the envelope geometry is the independent restore
     // path: live bytes versus a replayed checkpoint (§7.2).
@@ -98,7 +117,7 @@ public enum ANSIProof {
   }
 
   private static func unwrap(
-    _ state: PaneWireClient.RemoteState, live: TerminalFrame
+    _ state: PaneWireClient.RemoteState, live: TerminalFrame, expected: UInt64
   ) throws -> PaneWireClient.Checkpoint {
     guard let checkpoint = state.checkpoint else {
       throw Failure.checkpoint("reply carried no checkpoint")
@@ -106,13 +125,36 @@ public enum ANSIProof {
     guard checkpoint.kind == PaneWireClient.ansiKind else {
       throw Failure.checkpoint("kind \(checkpoint.kind)")
     }
-    guard checkpoint.through == state.head else {
-      throw Failure.checkpoint("checkpoint through \(checkpoint.through) but head \(state.head)")
+    // The server echoes our own request into head/through, so the frozen
+    // frontier is the only value that proves the frame and the span are the
+    // same instant (§9.2).
+    guard checkpoint.through == expected, state.head == expected else {
+      throw Failure.checkpoint(
+        "checkpoint through \(checkpoint.through), head \(state.head),"
+          + " frozen frontier \(expected)")
+    }
+    guard let cursor = checkpoint.eventCursor,
+      let at = eventCursorPosition(cursor),
+      at.epoch == state.epoch, at.through == expected else {
+      throw Failure.checkpoint(
+        "event cursor \(checkpoint.eventCursor ?? "none") for epoch \(state.epoch)"
+          + " through \(expected)")
     }
     guard Int(checkpoint.cols) == live.cols, Int(checkpoint.rows) == live.rows else {
       throw Failure.checkpoint(
         "live \(live.cols)x\(live.rows) envelope \(checkpoint.cols)x\(checkpoint.rows)")
     }
     return checkpoint
+  }
+
+  /// `v1.<epoch>.<through>.<ordinal>`: the cursor must pin the same epoch and
+  /// frontier as the checkpoint it travelled with (§9.2).
+  private static func eventCursorPosition(
+    _ cursor: String
+  ) -> (epoch: UInt64, through: UInt64)? {
+    let parts = cursor.split(separator: ".")
+    guard parts.count == 4, parts[0] == "v1",
+      let epoch = UInt64(parts[1]), let through = UInt64(parts[2]) else { return nil }
+    return (epoch, through)
   }
 }

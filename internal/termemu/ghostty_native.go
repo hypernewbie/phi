@@ -247,7 +247,8 @@ static int phi_info(PhiTerminal *p, PhiInfo *out) {
 typedef struct {
 	uint32_t fg_kind, fg_value;
 	uint32_t bg_kind, bg_value;
-	uint8_t bold, faint, italic, underline, strike, inverse, blink, width;
+	uint32_t ul_kind, ul_value;
+	uint8_t bold, faint, italic, underline, strike, inverse, blink, invisible, overline, width;
 	uint32_t text_off, text_len;
 } PhiCellMeta;
 
@@ -327,10 +328,14 @@ static int phi_snapshot(PhiTerminal *p, PhiCellMeta *meta, size_t meta_cap, uint
 				m->inverse = s.inverse ? 1 : 0;
 				m->blink = s.blink ? 1 : 0;
 				m->underline = (uint8_t)s.underline;
+				m->invisible = s.invisible ? 1 : 0;
+				m->overline = s.overline ? 1 : 0;
 				m->fg_kind = (uint32_t)s.fg_color.tag;
 				m->fg_value = phi_color_value(s.fg_color);
 				m->bg_kind = (uint32_t)s.bg_color.tag;
 				m->bg_value = phi_color_value(s.bg_color);
+				m->ul_kind = (uint32_t)s.underline_color.tag;
+				m->ul_value = phi_color_value(s.underline_color);
 			}
 			idx++;
 		}
@@ -702,16 +707,19 @@ func expandCells(meta []C.PhiCellMeta, text []byte, cols int) [][]Cell {
 		m := &meta[i]
 		row := i / cols
 		cell := Cell{
-			Width:         int(m.width),
-			Bold:          m.bold != 0,
-			Faint:         m.faint != 0,
-			Italic:        m.italic != 0,
-			Underline:     underlineFromC(uint8(m.underline)),
-			Strikethrough: m.strike != 0,
-			Inverse:       m.inverse != 0,
-			Blink:         m.blink != 0,
-			Fg:            colorFromC(uint32(m.fg_kind), uint32(m.fg_value)),
-			Bg:            colorFromC(uint32(m.bg_kind), uint32(m.bg_value)),
+			Width:          int(m.width),
+			Bold:           m.bold != 0,
+			Faint:          m.faint != 0,
+			Italic:         m.italic != 0,
+			Underline:      underlineFromC(uint8(m.underline)),
+			Strikethrough:  m.strike != 0,
+			Inverse:        m.inverse != 0,
+			Blink:          m.blink != 0,
+			Invisible:      m.invisible != 0,
+			Overline:       m.overline != 0,
+			Fg:             colorFromC(uint32(m.fg_kind), uint32(m.fg_value)),
+			Bg:             colorFromC(uint32(m.bg_kind), uint32(m.bg_value)),
+			UnderlineColor: colorFromC(uint32(m.ul_kind), uint32(m.ul_value)),
 		}
 		off, ln := int(m.text_off), int(m.text_len)
 		if off >= 0 && ln > 0 && off+ln <= len(text) {

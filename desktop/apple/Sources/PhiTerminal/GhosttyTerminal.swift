@@ -81,14 +81,18 @@ public struct TerminalCellFrame: Codable, Equatable, Sendable {
   public var inverse: Bool
   public var blink: Bool
   public var underline: Int
+  public var invisible: Bool
+  public var overline: Bool
+  public var underlineColor: TerminalColor
   public var fg: TerminalColor
   public var bg: TerminalColor
 
   public init(
     text: String = "", width: Int = 1, bold: Bool = false, faint: Bool = false,
     italic: Bool = false, strikethrough: Bool = false, inverse: Bool = false,
-    blink: Bool = false, underline: Int = 0, fg: TerminalColor = TerminalColor(),
-    bg: TerminalColor = TerminalColor()
+    blink: Bool = false, underline: Int = 0, invisible: Bool = false,
+    overline: Bool = false, underlineColor: TerminalColor = TerminalColor(),
+    fg: TerminalColor = TerminalColor(), bg: TerminalColor = TerminalColor()
   ) {
     self.text = text
     self.width = width
@@ -99,6 +103,9 @@ public struct TerminalCellFrame: Codable, Equatable, Sendable {
     self.inverse = inverse
     self.blink = blink
     self.underline = underline
+    self.invisible = invisible
+    self.overline = overline
+    self.underlineColor = underlineColor
     self.fg = fg
     self.bg = bg
   }
@@ -415,6 +422,9 @@ public final class TerminalSession {
             cell.inverse = style.inverse
             cell.blink = style.blink
             cell.underline = Int(style.underline)
+            cell.invisible = style.invisible
+            cell.overline = style.overline
+            cell.underlineColor = terminalColor(style.underline_color)
             cell.fg = terminalColor(style.fg_color)
             cell.bg = terminalColor(style.bg_color)
           }

@@ -59,10 +59,12 @@ enum OracleRunner {
   }
 
   /// `go build` reuses its cache, so a per-test build costs about a second.
+  /// The output directory is per process: `swift test --parallel` runs several
+  /// test processes, and one shared path would race their builds.
   static func build() throws -> Binary {
     let root = try repositoryRoot()
     let directory = FileManager.default.temporaryDirectory
-      .appendingPathComponent("phi-oracle-build")
+      .appendingPathComponent("phi-oracle-build-\(ProcessInfo.processInfo.processIdentifier)")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let executable = directory.appendingPathComponent("oracle")
     let process = Process()

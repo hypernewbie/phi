@@ -19,13 +19,18 @@ struct CaptureANSI {
       origin: origin, paneID: pane, cols: cols, rows: rows,
       useKeychain: useKeychain, password: password)
     let wire = Task { await client.run() }
-    defer {
-      wire.cancel()
-      Task { await client.close() }
-    }
+    defer { wire.cancel() }
 
-    let capture = try await ANSIProof.capture(from: client)
-    try ANSIProof.write(capture, to: stateDir)
+    let capture: ANSIProof.Capture
+    do {
+      capture = try await ANSIProof.capture(from: client)
+      try ANSIProof.write(capture, to: stateDir)
+    } catch {
+      await client.close()
+      throw error
+    }
+    await client.close()
+
     print("capture epoch \(capture.epoch) through \(capture.through)"
       + " event_cursor \(capture.eventCursor ?? "none")"
       + " geometry \(capture.replayed.cols)x\(capture.replayed.rows)"

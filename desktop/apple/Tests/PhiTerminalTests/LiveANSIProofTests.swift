@@ -3,7 +3,7 @@ import XCTest
 @testable import PhiKit
 @testable import PhiTerminal
 
-/// M1 live gate (§9.2): three owned fixture panes on the isolated server, each
+/// M1 live gate (§9.2): six owned fixture panes on the isolated server, each
 /// captured at an exact frontier, replayed into a fresh terminal and decoded by
 /// the Go oracle. Text equality alone is not proof: cells, cursor and geometry
 /// must match too. The test creates, feeds and deletes its own panes.
@@ -22,12 +22,21 @@ final class LiveANSIProofTests: XCTestCase {
     Fixture(name: "ascii", script: "a", seed: "printf 'alpha\\nbeta\\n'", marker: "beta"),
     Fixture(name: "sgr", script: "s", seed: "printf '\\033[31mred\\033[0m\\n'", marker: "red"),
     Fixture(
+      name: "flags", script: "f",
+      seed: "printf '\\033[2mf\\033[3mi\\033[9ms\\033[7mv\\033[8mh\\033[53mo\\033[4;58;5;196mc\\033[0m FLAGS\\n'",
+      marker: "FLAGS"),
+    Fixture(
       name: "wrap", script: "w",
       seed: "head -c 100 /dev/zero | tr '\\0' 'W'; echo",
       marker: String(repeating: "W", count: 20)),
+    Fixture(
+      name: "pending", script: "p",
+      seed: "head -c 80 /dev/zero | tr '\\0' 'W'",
+      marker: String(repeating: "W", count: 20)),
+    Fixture(name: "alt", script: "l", seed: "printf '\\033[?1049hALT'", marker: "ALT"),
   ]
 
-  func testThreeFixturePanesMatchLiveReplayAndGoOracle() async throws {
+  func testSixFixturePanesMatchLiveReplayAndGoOracle() async throws {
     let server = try isolatedServer()
     let oracle = try OracleRunner.build()
     let directory = FileManager.default.temporaryDirectory
