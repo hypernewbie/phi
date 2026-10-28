@@ -4279,3 +4279,177 @@ func TestAccessFenceValidatorHonoursFamilyDeadline(t *testing.T) {
 		t.Fatal("admission past the family deadline accepted")
 	}
 }
+
+// --- M4a: compatibility and failure matrix ---
+
+// TestAccessV2StateResetAfterOldBinaryReturn covers the rollback row where an
+// older binary ran and ignored the separate v2 state file. Its record is
+// unchanged, so nothing in Config reveals the trip: the missing state file is
+// the only evidence, and it must reset v2 instead of letting an earlier
+// session survive. v1 carries no epoch and keeps working throughout.
+func TestAccessV2StateResetAfterOldBinaryReturn(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+	login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.240:1")
+	handle := testAccessRefreshHandle(t, login)
+	cookie := testAccessCookieFor(t, auth)
+	recordBefore := loadConfig().AccessPasswordHash
+	identityBefore := testAccessStateFile(t).Active.RecordID
+
+	// The old binary exits leaving Config byte-identical and no v2 state: it
+	// neither read nor rewrote a file it does not know about.
+	testAccessReleaseStateOwnership(auth)
+	if err := os.Remove(accessV2StatePath()); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadConfig().AccessPasswordHash; got != recordBefore {
+		t.Fatalf("record changed across the simulated downgrade: %q", got)
+	}
+
+	restarted := testAccessRestart(t)
+	testAccessSwapManager(t, restarted)
+	protected := testAccessProtected()
+
+	// Nothing v2 minted before the return may authorize: the family map and the
+	// epoch that stamped those claims are gone.
+	bearer := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	bearer.Header.Set("Authorization", "Bearer "+token)
+	if got := testAccessServe(protected.ServeHTTP, bearer); got.Code != http.StatusUnauthorized {
+		t.Errorf("pre-return v2 bearer = %d want 401", got.Code)
+	}
+	if got := testAccessV2RefreshRequest(t, handle); got.Code != http.StatusUnauthorized {
+		t.Errorf("pre-return refresh handle = %d want 401", got.Code)
+	}
+
+	// v1 is stateless and unaffected: its cookie still authorizes.
+	v1 := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	v1.AddCookie(cookie)
+	if got := testAccessServe(protected.ServeHTTP, v1); got.Code != http.StatusNoContent {
+		t.Errorf("v1 cookie after the return = %d want 204", got.Code)
+	}
+
+	// A raw password login re-establishes state for the current record, with a
+	// fresh identity, and it is the only way back in.
+	fresh := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.241:1")
+	bundle := testAccessDecodeBundle(t, fresh)
+	if bundle.Token == "" {
+		t.Fatal("login after the return minted no token")
+	}
+	identityAfter := testAccessStateFile(t).Active.RecordID
+	if identityAfter == identityBefore {
+		t.Error("the returned session reused the pre-return record identity")
+	}
+
+	live := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	live.Header.Set("Authorization", "Bearer "+bundle.Token)
+	if got := testAccessServe(protected.ServeHTTP, live); got.Code != http.StatusNoContent {
+		t.Errorf("fresh bearer after the return = %d want 204", got.Code)
+	}
+	// The re-established state must not resurrect what the reset revoked.
+	stale := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	stale.Header.Set("Authorization", "Bearer "+token)
+	if got := testAccessServe(protected.ServeHTTP, stale); got.Code != http.StatusUnauthorized {
+		t.Errorf("pre-return bearer after re-enable = %d want 401", got.Code)
+	}
+	if got := testAccessV2RefreshRequest(t, handle); got.Code != http.StatusUnauthorized {
+		t.Errorf("pre-return handle after re-enable = %d want 401", got.Code)
+	}
+}
+
+// TestAccessV2UnreadableStateFaultsClosed pins the difference between "no
+// state yet" and "state we cannot read". The first is a first run; the second
+// is a fixed failure, because guessing would resurrect sessions the owner
+// revoked. Neither deletes the file, and v1 does not depend on it.
+func TestAccessV2UnreadableStateFaultsClosed(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+	login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.242:1")
+	handle := testAccessRefreshHandle(t, login)
+	cookie := testAccessCookieFor(t, auth)
+
+	testAccessReleaseStateOwnership(auth)
+	if err := os.Remove(accessV2StatePath()); err != nil {
+		t.Fatal(err)
+	}
+	// A directory at the state path is unreadable as a file and cannot be
+	// repaired by writing through it.
+	if err := os.Mkdir(accessV2StatePath(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := testAccessRestart(t)
+	testAccessSwapManager(t, restarted)
+	protected := testAccessProtected()
+
+	bearer := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	bearer.Header.Set("Authorization", "Bearer "+token)
+	if got := testAccessServe(protected.ServeHTTP, bearer); got.Code != http.StatusUnauthorized {
+		t.Errorf("bearer with unreadable state = %d want 401", got.Code)
+	}
+	// A faulted manager reports the persistence fault and mints nothing.
+	faulted := testAccessV2RefreshRequest(t, handle)
+	if faulted.Code != http.StatusInternalServerError {
+		t.Errorf("refresh with unreadable state = %d want 500", faulted.Code)
+	}
+	if cookies := faulted.Result().Cookies(); len(cookies) != 0 {
+		t.Errorf("faulted refresh issued %d cookies", len(cookies))
+	}
+	status := testAccessV2StatusBody(t, restarted)
+	if !status["enabled"] || status["authenticated"] {
+		t.Errorf("status with unreadable state = %v want enabled without authentication", status)
+	}
+
+	// The failure is fixed, not destructive: nothing was removed or created.
+	info, err := os.Stat(accessV2StatePath())
+	if err != nil || !info.IsDir() {
+		t.Fatalf("unreadable state path was rewritten: info=%v err=%v", info, err)
+	}
+
+	// v1 does not use this file and keeps working.
+	v1 := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	v1.AddCookie(cookie)
+	if got := testAccessServe(protected.ServeHTTP, v1); got.Code != http.StatusNoContent {
+		t.Errorf("v1 cookie with unreadable state = %d want 204", got.Code)
+	}
+}
+
+// TestAccessJWTLifetimeRejectedUnderRestoredKey proves the maximum lifetime is
+// enforced by the key the process actually restored, not only by the key that
+// minted the fixture: a restart must not widen what a token may claim.
+func TestAccessJWTLifetimeRejectedUnderRestoredKey(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	testAccessEnableV2(t, testAccessPassword)
+
+	original := mustTestAccessJWTKey(t, auth)
+	testAccessReleaseStateOwnership(auth)
+	restarted := testAccessRestart(t)
+	testAccessSwapManager(t, restarted)
+	restored := mustTestAccessJWTKey(t, restarted)
+	if !bytes.Equal(original, restored) {
+		t.Fatal("the signing key changed across restart, so this test cannot isolate the lifetime rule")
+	}
+
+	now := time.Unix(testAccessJWTIssuedAt, 0)
+	mint := func(lifetime time.Duration) string {
+		return signTestAccessJWT(restored, testAccessJWTValidHeader, testAccessJWTPayloadWith(
+			`"phi"`, strconv.FormatInt(now.Unix(), 10),
+			strconv.FormatInt(now.Add(lifetime).Unix(), 10),
+			`"`+testAccessJWTNonce+`"`, `"`+testAccessJWTRecordID+`"`,
+			strconv.FormatUint(testAccessJWTEpoch, 10), `"`+testAccessJWTFamilyID+`"`))
+	}
+	if _, err := parseAccessJWT(restored, mint(accessJWTLifetime), now, accessJWTClockAllowance); err != nil {
+		t.Fatalf("the documented lifetime was rejected under the restored key: %v", err)
+	}
+	for name, lifetime := range map[string]time.Duration{
+		"one second over":     accessJWTLifetime + time.Second,
+		"thirty seconds over": accessJWTLifetime + 30*time.Second,
+		"one year":            365 * 24 * time.Hour,
+	} {
+		if _, err := parseAccessJWT(restored, mint(lifetime), now, accessJWTClockAllowance); err == nil {
+			t.Errorf("%s lifetime accepted under the restored key", name)
+		}
+	}
+}
