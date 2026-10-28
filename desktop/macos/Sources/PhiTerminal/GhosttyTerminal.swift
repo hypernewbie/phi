@@ -19,11 +19,16 @@ private typealias CResizeFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMu
 private typealias CRemapFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, Int, UInt8, Int, UInt) -> UnsafeMutableRawPointer?
 private typealias CFreeFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, Int, UInt8, UInt) -> Void
 
-private let cAlloc: CAllocFn = { ctx, len, _, _ in
+private let cAlloc: CAllocFn = { ctx, len, alignment, _ in
   guard let c = counters(ctx) else { return nil }
-  let p = malloc(len == 0 ? 1 : len)
-  if p != nil { c.live += len; c.allocs += 1 }
-  return p
+  // The archive passes log2 alignment (allocator.h:108–124), so `malloc`'s
+  // 16-byte guarantee is not enough on its own.
+  let required = 1 << min(Int(alignment), 20)
+  var raw: UnsafeMutableRawPointer?
+  guard posix_memalign(&raw, max(required, 16), len == 0 ? 1 : len) == 0, let raw else { return nil }
+  c.live += len
+  c.allocs += 1
+  return raw
 }
 
 // false/NULL force alloc+copy+free so every move is visible to the accounting.
@@ -59,25 +64,29 @@ public struct TerminalCell: Equatable, Sendable {
 
 /// Owns exactly one Ghostty terminal and its allocator for the lifetime of the object.
 public final class TerminalSession {
-  public let counters = AllocatorCounters()
+  public let counters: AllocatorCounters
   public private(set) var cursorPosition: (x: Int, y: Int)?
 
   private let allocator: UnsafeMutablePointer<GhosttyAllocator>
-  private var vtable: GhosttyAllocatorVtable
+  // Owned so the engine never holds a pointer into Swift-only storage.
+  private let vtable: UnsafeMutablePointer<GhosttyAllocatorVtable>
   private let sink = PtySink()
   private var handle: GhosttyTerminal?
   private var isFreed = false
 
   /// Fresh terminal.
   public init?(cols: UInt16, rows: UInt16) {
+    counters = AllocatorCounters()
     allocator = .allocate(capacity: 1)
-    vtable = GhosttyAllocatorVtable(alloc: cAlloc, resize: cResize, remap: cRemap, free: cFree)
-    allocator.initialize(to: GhosttyAllocator(ctx: nil, vtable: nil))
-    allocator.pointee.ctx = Unmanaged.passUnretained(counters).toOpaque()
-    allocator.pointee.vtable = withUnsafePointer(to: &vtable) { $0 }
+    vtable = .allocate(capacity: 1)
+    vtable.initialize(to: GhosttyAllocatorVtable(alloc: cAlloc, resize: cResize, remap: cRemap, free: cFree))
+    allocator.initialize(to: GhosttyAllocator(
+      ctx: Unmanaged.passUnretained(counters).toOpaque(), vtable: UnsafePointer(vtable)))
+
     var t: GhosttyTerminal?
     guard ghostty_terminal_new(allocator, &t, cols, rows) == GHOSTTY_SUCCESS, let t else {
-      allocator.deinitialize(count: 1); allocator.deallocate()
+      // The object is fully initialized here, so `return nil` runs deinit.
+      free()
       return nil
     }
     handle = t
@@ -86,11 +95,12 @@ public final class TerminalSession {
 
   /// Terminal restored from snapshot bytes that already contain a READY prefix.
   public init?(restoring bytes: [UInt8]) {
+    counters = AllocatorCounters()
     allocator = .allocate(capacity: 1)
-    vtable = GhosttyAllocatorVtable(alloc: cAlloc, resize: cResize, remap: cRemap, free: cFree)
-    allocator.initialize(to: GhosttyAllocator(ctx: nil, vtable: nil))
-    allocator.pointee.ctx = Unmanaged.passUnretained(counters).toOpaque()
-    allocator.pointee.vtable = withUnsafePointer(to: &vtable) { $0 }
+    vtable = .allocate(capacity: 1)
+    vtable.initialize(to: GhosttyAllocatorVtable(alloc: cAlloc, resize: cResize, remap: cRemap, free: cFree))
+    allocator.initialize(to: GhosttyAllocator(
+      ctx: Unmanaged.passUnretained(counters).toOpaque(), vtable: UnsafePointer(vtable)))
 
     var decoder: GhosttySnapshotDecoder?
     var restored: GhosttyTerminal?
@@ -110,11 +120,38 @@ public final class TerminalSession {
       return ghostty_snapshot_decoder_ready(decoder, &restored) == GHOSTTY_SUCCESS
     }
     guard created, let restored else {
-      allocator.deinitialize(count: 1); allocator.deallocate()
+      free()
       return nil
     }
     handle = restored
     install(ptySinkOn: restored)
+  }
+
+  /// Grapheme text for the selected cell; a cluster longer than the first
+  /// buffer grows once instead of hiding the cell and the rest of its row.
+  private func graphemeText(_ cells: GhosttyRenderStateRowCells) -> String? {
+    var size = 64
+    for _ in 0..<2 {
+      var needed = 0
+      var result = GHOSTTY_INVALID_VALUE
+      var text: String?
+      var buf = [UInt8](repeating: 0, count: size)
+      buf.withUnsafeMutableBufferPointer { raw in
+        guard let base = raw.baseAddress else { return }
+        var gb = GhosttyBuffer(ptr: base, cap: raw.count, len: 0)
+        result = ghostty_render_state_row_cells_get(
+          cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8, &gb)
+        needed = gb.len
+        if result == GHOSTTY_SUCCESS, gb.len > 0 {
+          let bytes = UnsafeRawBufferPointer(start: base, count: gb.len)
+          text = String(decoding: bytes, as: UTF8.self)
+        }
+      }
+      if result == GHOSTTY_SUCCESS { return text }
+      guard result == GHOSTTY_OUT_OF_SPACE, needed > size, needed <= 4096 else { return nil }
+      size = needed
+    }
+    return nil
   }
 
   private func install(ptySinkOn t: GhosttyTerminal) {
@@ -186,20 +223,14 @@ public final class TerminalSession {
       var out: [TerminalCell] = []
       var x = 0
       while ghostty_render_state_row_cells_select(cells, UInt16(x)) == GHOSTTY_SUCCESS {
-        var buf = [UInt8](repeating: 0, count: 64)
-        var gb = GhosttyBuffer(ptr: &buf, cap: buf.count, len: 0)
-        let r = ghostty_render_state_row_cells_get(
-          cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_UTF8, &gb)
-        if r != GHOSTTY_SUCCESS { break }
-
-        var fg: (UInt8, UInt8, UInt8)?
-        if r == GHOSTTY_SUCCESS && gb.len > 0 {
+        if let text = graphemeText(cells) {
+          var fg: (UInt8, UInt8, UInt8)?
           var rgb = GhosttyColorRgb(r: 0, g: 0, b: 0)
           if ghostty_render_state_row_cells_get(
             cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR, &rgb) == GHOSTTY_SUCCESS {
             fg = (rgb.r, rgb.g, rgb.b)
           }
-          out.append(TerminalCell(x: x, text: String(decoding: buf[0..<gb.len], as: UTF8.self), foreground: fg))
+          out.append(TerminalCell(x: x, text: text, foreground: fg))
         }
         x += 1
       }
@@ -221,9 +252,13 @@ public final class TerminalSession {
     } ?? nil
   }
 
-  /// Cursor viewport position, or nil when the cursor is off-screen.
+  /// Cursor viewport position, or nil when it is off-screen or the terminal
+  /// is hiding it.
   public func readCursor() -> (x: Int, y: Int)? {
     let pos: (x: Int, y: Int)? = withRenderState { rs in
+      var visible = true
+      if ghostty_render_state_get(rs, GHOSTTY_RENDER_STATE_DATA_CURSOR_VISIBLE, &visible) == GHOSTTY_SUCCESS,
+         !visible { return nil }
       var hasValue = false
       guard ghostty_render_state_get(rs, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_HAS_VALUE, &hasValue) == GHOSTTY_SUCCESS,
             hasValue else { return nil }
@@ -268,9 +303,10 @@ public final class TerminalSession {
     isFreed = true
     if let handle { ghostty_terminal_free(handle) }
     handle = nil
-    allocator.pointee.vtable = nil
     allocator.deinitialize(count: 1)
     allocator.deallocate()
+    vtable.deinitialize(count: 1)
+    vtable.deallocate()
   }
 
   deinit { free() }

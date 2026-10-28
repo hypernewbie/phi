@@ -93,6 +93,9 @@ public actor PaneWireClient {
   private var socket: URLSessionWebSocketTask?
   private var attach: Attach?
   private var frontier: UInt64 = 0
+  /// Geometry the server has been told about; zero until the first resize.
+  private var sentCols: UInt16 = 0
+  private var sentRows: UInt16 = 0
   private var attached = false
   private var stopped = false
   private var backoff = PaneWireClient.initialBackoff
@@ -220,10 +223,12 @@ public actor PaneWireClient {
   }
 
   /// Applies the geometry locally and asks the server to match it. Refused
-  /// before attach so no sizing races the bootstrap.
+  /// before attach so no sizing races the bootstrap. Compared against the last
+  /// geometry the server was told, not against the local one: attach already
+  /// applies the CLI geometry, and comparing to it would suppress the request.
   public func sendResize(cols newCols: UInt16, rows newRows: UInt16) async -> Bool {
     guard newCols >= 1, newRows >= 1, attached, let socket, !stopped else { return false }
-    if newCols == terminal.columnCount(), newRows == terminal.rowCount() {
+    if newCols == sentCols, newRows == sentRows {
       return true
     }
     var frame = Phi_Websocket_Terminal_V1_TerminalClientFrame()
@@ -237,6 +242,8 @@ public actor PaneWireClient {
     } catch {
       return false
     }
+    sentCols = newCols
+    sentRows = newRows
     terminal.resize(cols: newCols, rows: newRows)
     return true
   }
@@ -354,6 +361,9 @@ public actor PaneWireClient {
       throw PaneWireError.protocolViolation("first frame is not attach")
     }
     try applyAttach(wire)
+    // Replies produced while replaying the checkpoint answer history, not the
+    // live PTY; drop them so only live output is answered.
+    _ = terminal.takePtyReplies()
     attached = true
     _ = await sendResize(cols: cols, rows: rows)
 
@@ -363,6 +373,7 @@ public actor PaneWireClient {
       switch payload {
       case .output(let output):
         try apply(output)
+        await flushTerminalReplies(on: task)
       case .pong:
         lastPong = Date()
       case .exit(let exit):
@@ -379,6 +390,18 @@ public actor PaneWireClient {
         continue
       }
     }
+  }
+
+  /// Terminal replies (DSR, DA) belong back on the PTY. Live output only:
+  /// restored snapshot bytes are history and must never answer.
+  // shortcut: no replay/boundary suppression yet, M1 owns the full policy.
+  private func flushTerminalReplies(on task: URLSessionWebSocketTask) async {
+    let replies = terminal.takePtyReplies()
+    guard !replies.isEmpty, replies.count <= 64 << 10, attached, !stopped else { return }
+    var frame = Phi_Websocket_Terminal_V1_TerminalClientFrame()
+    frame.payload = .input(Data(replies))
+    guard let encoded = try? frame.serializedData() else { return }
+    try? await task.send(.data(encoded))
   }
 
   private func applyAttach(_ wire: Phi_Websocket_Terminal_V1_TerminalAttach) throws {

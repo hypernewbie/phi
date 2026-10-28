@@ -94,7 +94,8 @@ public final class TerminalGridView: NSView {
         let rect = cellRect(row: row, column: cell.column)
         background.setFill()
         rect.fill()
-        draw(cell.text, at: rect.origin, colour: NSColor(
+        // Same baseline as the monochrome row pass and the cursor glyph.
+        draw(cell.text, at: cellOrigin(row: row, column: cell.column), colour: NSColor(
           srgbRed: CGFloat(cell.red) / 255, green: CGFloat(cell.green) / 255,
           blue: CGFloat(cell.blue) / 255, alpha: 1), in: ctx)
       }
@@ -105,7 +106,7 @@ public final class TerminalGridView: NSView {
       textColor.setFill()
       rect.fill()
       if let glyph = character(row: cursor.y, column: cursor.x) {
-        draw(glyph, at: rect.origin, colour: background, in: ctx)
+        draw(glyph, at: cellOrigin(row: cursor.y, column: cursor.x), colour: background, in: ctx)
       }
     }
 
