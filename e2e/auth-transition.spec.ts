@@ -45,7 +45,7 @@ const b64url = (buffer: Buffer): string =>
 async function lockServer(url: string, password: string): Promise<string> {
     const res = await fetch(`${url}/api/auth/v2/password`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Phi-Auth': 'v2' },
         body: JSON.stringify({ password }),
     });
     const text = await res.text();
@@ -279,33 +279,91 @@ test.describe('v2 bearer session', () => {
             ),
         ).toBe(false);
 
-        const issued = await page.evaluate(
-            () => localStorage.getItem('phi_access_bearer_v1') ?? '',
+        const issued = await page.evaluate(() =>
+            window.phiAccessAuth.getAccessToken(),
         );
         expect(issued).toBeTruthy();
+        // The access JWT lives in memory only: the superseded standalone
+        // bearer key is gone, and no browser storage holds the token.
+        expect(
+            await page.evaluate(() =>
+                localStorage.getItem('phi_access_bearer_v1'),
+            ),
+        ).toBeNull();
+        expect(
+            await page.evaluate(async (token) => {
+                const stores = [
+                    ...Object.values(localStorage),
+                    ...Object.values(sessionStorage),
+                ];
+                const dbs =
+                    typeof indexedDB.databases === 'function'
+                        ? (await indexedDB.databases()).map((db) => db.name)
+                        : [];
+                return {
+                    stored: stores.some((value) => value.includes(token)),
+                    databases: dbs,
+                };
+            }, issued as string),
+        ).toEqual({ stored: false, databases: [] });
+
+        // The refresh handle is HttpOnly: the page cannot read it, and neither
+        // cookie leaks a value the page JavaScript can see.
+        expect(
+            await page.evaluate(() => document.cookie),
+        ).not.toContain('phi_access');
+        // The refresh and asset cookies are path-scoped, so each is visible
+        // only to its own URL: query the scope that owns it.
+        const sessionCookies = await context.cookies(
+            `${phi.url}/api/auth/v2/refresh`,
+        );
+        const refreshCookie = sessionCookies.find(
+            (cookie) => cookie.name === 'phi_access_refresh',
+        );
+        expect(refreshCookie).toBeTruthy();
+        expect(refreshCookie).toMatchObject({
+            httpOnly: true,
+            sameSite: 'Strict',
+            path: '/api/auth/v2/refresh',
+        });
+        expect(refreshCookie?.secure).toBe(false);
+        const assetCookie = (
+            await context.cookies(`${phi.url}/api/coders`)
+        ).find((cookie) => cookie.name === 'phi_access_asset');
+        expect(assetCookie).toMatchObject({
+            httpOnly: true,
+            sameSite: 'Strict',
+            path: '/api',
+        });
         expect(
             await page.evaluate(
                 async () => (await fetch('/api/coders')).status,
             ),
         ).toBe(200);
 
-        // Reload: the stored bearer is revalidated, not re-minted.
+        // Reload: memory is empty, so the page bootstraps from the HttpOnly
+        // refresh cookie. Exactly one coalesced refresh, no second prompt, and
+        // discovery is the public route because nothing is selected yet.
         v2Logins.length = 0;
-        const statusChecks: number[] = [];
-        page.on('response', (response) => {
-            if (response.url().includes('/api/auth/v2/status')) {
-                statusChecks.push(response.status());
+        let discoveries = 0;
+        let refreshes = 0;
+        page.on('request', (request) => {
+            if (request.url().endsWith('/api/auth/status')) discoveries += 1;
+            if (request.url().includes('/api/auth/v2/refresh')) refreshes += 1;
+            if (request.url().includes('/api/auth/v2/login')) {
+                v2Logins.push(request.postData() ?? '');
             }
         });
         await page.reload();
         await expectSignedIn(page);
         expect(v2Logins).toEqual([]);
-        expect(statusChecks).toContain(200);
-        expect(
-            await page.evaluate(
-                () => localStorage.getItem('phi_access_bearer_v1') ?? '',
-            ),
-        ).toBe(issued);
+        expect(discoveries).toBe(1);
+        expect(refreshes).toBe(1);
+        const renewed = await page.evaluate(() =>
+            window.phiAccessAuth.getAccessToken(),
+        );
+        expect(renewed).toBeTruthy();
+        expect(renewed).not.toBe(issued);
 
         // Settings and the remote keyboard are signed in from the same token.
         const settings = await context.newPage();
@@ -324,33 +382,62 @@ test.describe('v2 bearer session', () => {
         await expect(remote.locator('.access-auth-overlay')).toHaveCount(0);
         await remote.close();
 
-        // Dynamic Markdown: the viewer fetches its image with the bearer and
-        // mounts it from an object URL, because there is no cookie to send.
+        // Dynamic Markdown: the image loads from its ordinary same-origin
+        // asset URL, so the scoped cookie participates and the browser streams
+        // it natively instead of the page buffering it into a blob.
         const dir = join(phi.dir, 'auth-md');
         mkdirSync(dir, { recursive: true });
         writeFileSync(join(dir, 'pic.png'), PNG);
         writeFileSync(join(dir, 'doc.md'), '# doc\n\n![pic](pic.png)\n');
         const md = await context.newPage();
         const assetStatuses: number[] = [];
+        const assetAuth: string[] = [];
         md.on('response', (response) => {
             if (response.url().includes('/api/markdown/asset')) {
                 assetStatuses.push(response.status());
             }
         });
+        md.on('request', async (request) => {
+            if (!request.url().includes('/api/markdown/asset')) return;
+            assetAuth.push((await request.allHeaders()).authorization ?? '');
+        });
         await md.goto(
             `${phi.url}/md.html?path=${encodeURIComponent(join(dir, 'doc.md'))}&cwd=${encodeURIComponent(dir)}`,
         );
         const image = md.locator('.md-rendered img');
-        await expect(image).toHaveAttribute('src', /^blob:/, {
-            timeout: 30_000,
-        });
+        await expect(image).toHaveAttribute(
+            'src',
+            /^\/api\/markdown\/asset\?path=/,
+            { timeout: 30_000 },
+        );
         await expect
             .poll(() =>
                 image.evaluate((el: HTMLImageElement) => el.naturalWidth),
             )
             .toBe(1);
         expect(assetStatuses).toEqual([200]);
+        // Cookie-authenticated: the asset request carries no explicit bearer.
+        expect(assetAuth).toEqual(['']);
         await md.close();
+
+        // The scoped cookie alone authorizes the two asset routes, and the
+        // browser streams them natively: GET, HEAD and a 206 Range all work
+        // without a bearer header. `path` is cwd-relative by contract.
+        const assetPath = `/api/file/asset?path=pic.png&cwd=${encodeURIComponent(dir)}`;
+        const assetGet = await context.request.get(`${phi.url}${assetPath}`);
+        expect(assetGet.status()).toBe(200);
+        expect(Buffer.from(await assetGet.body()).equals(PNG)).toBe(true);
+        const assetHead = await context.request.fetch(
+            `${phi.url}${assetPath}`,
+            { method: 'HEAD' },
+        );
+        expect(assetHead.status()).toBe(200);
+        const assetRange = await context.request.get(`${phi.url}${assetPath}`, {
+            headers: { Range: 'bytes=0-3' },
+        });
+        expect(assetRange.status()).toBe(206);
+        expect((await assetRange.body()).length).toBe(4);
+        expect(assetRange.headers()['content-range']).toContain('bytes 0-3/');
 
         // The same bearer is reusable: two later requests accept it.
         for (let attempt = 0; attempt < 2; attempt++) {
@@ -373,12 +460,13 @@ test.describe('v2 bearer session', () => {
         await page.goto(phi.url);
         await unlock(page, PASSWORD);
         await expectSignedIn(page);
-        const bearer = await page.evaluate(
-            () => localStorage.getItem('phi_access_bearer_v1') ?? '',
+        const bearer = await page.evaluate(() =>
+            window.phiAccessAuth.getAccessToken(),
         );
         expect(bearer).toBeTruthy();
 
-        // Now hold both credentials: the bearer must still win.
+        // Hold both credentials in the same selected-v2 session (no reload):
+        // the bearer must still win, and the cookie still rides along.
         await context.addCookies([
             {
                 name: 'phi_access_session',
@@ -397,8 +485,6 @@ test.describe('v2 bearer session', () => {
                 cookie: headers.cookie ?? '',
             });
         });
-        await page.reload();
-        await expectSignedIn(page);
         expect(
             await page.evaluate(
                 async () => (await fetch('/api/coders')).status,
@@ -662,9 +748,10 @@ test.describe('public pages, sockets, and rotation', () => {
         await unlock(page, PASSWORD);
         await expectSignedIn(page);
 
-        const token = await page.evaluate(
-            () => localStorage.getItem('phi_access_bearer_v1') ?? '',
+        const token = await page.evaluate(() =>
+            window.phiAccessAuth.getAccessToken(),
         );
+        expect(token).toBeTruthy();
         const urls = await socketURLs(page);
         for (const [name, href] of Object.entries(urls)) {
             const parsed = new URL(href);
@@ -690,8 +777,8 @@ test.describe('public pages, sockets, and rotation', () => {
         ).toEqual({ enabled: true });
         await settled(page);
         await expectSignedIn(page);
-        const replacement = await page.evaluate(
-            () => localStorage.getItem('phi_access_bearer_v1') ?? '',
+        const replacement = await page.evaluate(() =>
+            window.phiAccessAuth.getAccessToken(),
         );
         expect(replacement).toBeTruthy();
         expect(replacement).not.toBe(token);
@@ -748,7 +835,7 @@ test.describe('public pages, sockets, and rotation', () => {
         expect(retiredBearer).toBeTruthy();
         const retired = await fetch(`${phi.url}/api/auth/v2/login`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-Phi-Auth': 'v2' },
             body: JSON.stringify({ password: PASSWORD }),
         });
         expect(retired.status).toBe(401);
@@ -761,6 +848,7 @@ test.describe('public pages, sockets, and rotation', () => {
         expect(await oldStatus.json()).toEqual({
             enabled: true,
             authenticated: false,
+            owned: true,
         });
     });
 });
