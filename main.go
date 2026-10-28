@@ -223,6 +223,10 @@ func main() {
 	// Adopt the generation loaded from config so the first upgrade is admitted
 	// and later password changes fence older sockets.
 	wsHub.RotateAuth(accessAuth.accessGeneration())
+	// Re-check every socket admission against live auth state: a family
+	// revocation or an expiring token between the middleware decision and the
+	// upgrade must refuse the connection rather than serve it.
+	wsHub.SetAuthValidator(accessAuth.admitsFence)
 	if err := wsHub.SetRecordingDirectory(filepath.Join(system.PhiDataDir(), "recordings")); err != nil {
 		slog.Error("terminal recording directory unavailable", "err", err)
 	}

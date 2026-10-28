@@ -349,6 +349,9 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 		_ = conn.Close()
 		return
 	}
+	// Every exit path drops the fence registration, so a closed connection never
+	// leaves a timer behind that could close a later one.
+	defer hub.ForgetAuth(conn)
 
 	manager.RegisterWS(inst.ID, fmt.Sprintf("%p", client))
 	client.NativeState = r.URL.Query().Get("state") == "ghostty-ready-v1"
