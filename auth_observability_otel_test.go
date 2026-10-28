@@ -85,6 +85,8 @@ func TestAccessObservabilitySpansCarryNoCredentials(t *testing.T) {
 	mux.HandleFunc("/api/auth/v2/status", handleAccessV2Status)
 	mux.HandleFunc("/api/auth/v2/login", handleAccessV2Login)
 	mux.HandleFunc("/api/auth/v2/password", handleAccessV2Password)
+	mux.HandleFunc("/api/auth/v2/refresh", handleAccessV2Refresh)
+	mux.HandleFunc("/api/auth/v2/logout", handleAccessV2Logout)
 	mux.HandleFunc("/api/config", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -107,6 +109,9 @@ func TestAccessObservabilitySpansCarryNoCredentials(t *testing.T) {
 			t.Fatal(err)
 		}
 		request.Header.Set("Content-Type", "application/json")
+		// The same CSRF guard the browser sends; without it a v2 route
+		// answers 403 before it parses anything.
+		request.Header.Set(accessV2Header, accessV2HeaderValue)
 		if bearer != "" {
 			request.Header.Set("Authorization", "Bearer "+bearer)
 		}
@@ -163,6 +168,50 @@ func TestAccessObservabilitySpansCarryNoCredentials(t *testing.T) {
 		t.Fatalf("v2 login: %d", login.StatusCode)
 	}
 	tokens = append(tokens, decodeToken(login))
+	// The refresh handle is a cookie, not body material: it is the credential
+	// the refresh route carries, so it must be absent from every span too.
+	handle := ""
+	for _, cookie := range login.Cookies() {
+		if cookie.Name == accessRefreshCookie {
+			handle = cookie.Value
+		}
+	}
+	if handle == "" {
+		t.Fatal("v2 login installed no refresh handle")
+	}
+	tokens = append(tokens, handle)
+
+	// The refresh route is the one carrier of the handle, and a rejected
+	// handle must not be echoed back into a span.
+	refresh := func(handle string) *http.Response {
+		request, err := http.NewRequest(http.MethodPost, server.URL+"/api/auth/v2/refresh", strings.NewReader(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set(accessV2Header, accessV2HeaderValue)
+		request.AddCookie(&http.Cookie{Name: accessRefreshCookie, Value: handle})
+		response, err := server.Client().Do(request)
+		if err != nil {
+			t.Fatalf("POST /api/auth/v2/refresh: %v", err)
+		}
+		t.Cleanup(func() { response.Body.Close() })
+		return response
+	}
+	refreshed := refresh(handle)
+	if refreshed.StatusCode != http.StatusOK {
+		t.Fatalf("refresh: %d", refreshed.StatusCode)
+	}
+	for _, cookie := range refreshed.Cookies() {
+		if cookie.Name == accessRefreshCookie {
+			tokens = append(tokens, cookie.Value)
+		}
+	}
+	const unknownHandle = "otel-unknown-handle-0001"
+	if rejected := refresh(unknownHandle); rejected.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unknown refresh handle: %d", rejected.StatusCode)
+	}
+	tokens = append(tokens, unknownHandle)
 
 	// A failed login and an unauthenticated request produce error spans.
 	if response := post("/api/auth/v2/login", "", `{"password":"otel-wrong-pass-0000"}`); response.StatusCode != http.StatusUnauthorized {
@@ -191,7 +240,21 @@ func TestAccessObservabilitySpansCarryNoCredentials(t *testing.T) {
 	if rotated.StatusCode != http.StatusOK {
 		t.Fatalf("rotate password: %d", rotated.StatusCode)
 	}
-	tokens = append(tokens, decodeToken(rotated))
+	rotatedToken := decodeToken(rotated)
+	tokens = append(tokens, rotatedToken)
+
+	// The host-only socket carrier authenticates an upgrade; the stub handlers
+	// answer the GET so the span exists without a real upgrade.
+	for _, path := range []string{"/ws/pane/otel-pane", "/ws/md-events", "/ws/control"} {
+		if response := get(path, map[string]string{accessSocketTokenHeader: rotatedToken}); response.StatusCode != http.StatusNoContent {
+			t.Fatalf("socket carrier on %s: %d", path, response.StatusCode)
+		}
+	}
+
+	// Logout takes the bearer and answers a fixed shape.
+	if logout := post("/api/auth/v2/logout", rotatedToken, `{"all":false}`); logout.StatusCode != http.StatusOK {
+		t.Fatalf("logout: %d", logout.StatusCode)
+	}
 
 	spans := exporter.GetSpans()
 	if len(spans) == 0 {
@@ -223,7 +286,7 @@ func TestAccessObservabilitySpansCarryNoCredentials(t *testing.T) {
 			}
 		}
 	}
-	for _, path := range []string{"/api/auth/v2/login", "/api/auth/v2/password", "/api/config", "/ws/md-events", "/ws/control"} {
+	for _, path := range []string{"/api/auth/v2/login", "/api/auth/v2/password", "/api/auth/v2/refresh", "/api/auth/v2/logout", "/api/config", "/ws/pane/otel-pane", "/ws/md-events", "/ws/control"} {
 		if !paths[path] {
 			t.Errorf("no span recorded url.path %q (paths seen: %s)", path, fmt.Sprint(paths))
 		}
