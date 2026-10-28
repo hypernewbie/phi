@@ -2208,7 +2208,9 @@ export class TabManager {
             tabInfo.queuedSeq = pty.lastFrameEnd;
         }
         if (!tabInfo._historyBrowsing) {
-            this.writeToTerminal(tabInfo, data);
+            // The painted frontier is the source frontier this text completes,
+            // never whatever happens to be received by then.
+            this.writeToTerminal(tabInfo, data, pty?.lastFrameEnd);
             // Decoder-only frames have consumed source bytes but enqueue no
             // xterm write/callback. At quiescence they still own a frontier,
             // including the incomplete UTF-8 prefix retained by the decoder.
@@ -2216,7 +2218,7 @@ export class TabManager {
             if (pty?.mode === 'hot' && data.length === 0 &&
                 !tabInfo.writePending && !tabInfo.writeBuffer?.length &&
                 !tabInfo._bootstrapGate) {
-                tabInfo.drainedSeq = tabInfo.queuedSeq;
+                this._advanceDrained(tabInfo, pty.lastFrameEnd);
                 this._scheduleCheckpointUpload(tabInfo);
             }
         }
@@ -3513,7 +3515,7 @@ export class TabManager {
         );
     }
 
-    writeToTerminal(tabInfo, data) {
+    writeToTerminal(tabInfo, data, frontier) {
         // Disconnection and process exit do not dispose xterm. Already
         // received output still belongs to its history, including exit
         // sequences that leave the alternate screen. Only teardown cancels.
@@ -3561,15 +3563,54 @@ export class TabManager {
             this.updateDocumentTitle();
         }
 
-        this._enqueueTerminalWrite(tabInfo, data);
+        this._enqueueTerminalWrite(tabInfo, data, frontier);
     }
 
     // Local screen text shares the parser FIFO without representing PTY
     // activity or advancing source-sequence accounting.
-    _enqueueTerminalWrite(tabInfo, data) {
+    _enqueueTerminalWrite(tabInfo, data, frontier) {
         if (tabInfo.finalizing) return;
+        this._pushWriteRun(tabInfo, data.length, frontier);
         tabInfo.writeBuffer += data;
         if (!tabInfo.writePending) this._flushTerminalWrite(tabInfo);
+    }
+
+    // Each queued span records the source frontier it completes. Text with no
+    // frontier (a banner, a recorded replay) can never advance the painted
+    // frontier, so P cannot inherit bytes that were only received.
+    _pushWriteRun(tabInfo, length, frontier) {
+        if (!tabInfo.writeRuns) tabInfo.writeRuns = [];
+        const runs = tabInfo.writeRuns;
+        const last = runs[runs.length - 1];
+        const end = (last ? last.end : 0) + length;
+        if (last && last.frontier === frontier) last.end = end;
+        else runs.push({ end, frontier });
+    }
+
+    // Advance the painted frontier. Only source spans that were parsed may
+    // move it, and it never moves backwards.
+    _advanceDrained(tabInfo, frontier) {
+        if (!Number.isSafeInteger(frontier)) return;
+        if (frontier <= (tabInfo.drainedSeq ?? 0)) return;
+        tabInfo.drainedSeq = frontier;
+    }
+
+    // Splits the run list at the batch boundary without mutating it: the
+    // caller commits `rest` only when the batch is admitted.
+    _splitWriteRuns(tabInfo, length) {
+        const runs = tabInfo.writeRuns;
+        if (!runs || runs.length === 0) return { painted: undefined, rest: [] };
+        let painted;
+        let index = 0;
+        while (index < runs.length && runs[index].end <= length) {
+            const run = runs[index++];
+            if (run.frontier !== undefined) painted = run.frontier;
+        }
+        const rest = runs.slice(index).map((run) => ({
+            end: run.end - length,
+            frontier: run.frontier,
+        }));
+        return { painted, rest };
     }
 
     // Resolves bootstrap watermark waiters. Called wherever the pump
@@ -3629,6 +3670,12 @@ export class TabManager {
         if (length < tabInfo.writeBuffer.length && last >= 0xd800 && last <= 0xdbff) length--;
         const data = tabInfo.writeBuffer.slice(0, length);
         tabInfo.writeBuffer = tabInfo.writeBuffer.slice(length);
+        // Runs this batch fully covers are parsed once its callback fires; a
+        // run cut in two keeps its frontier for a later batch. The split is
+        // computed here, captured by the callback, and committed only if the
+        // batch is admitted, so a refused write keeps its provenance intact.
+        const consumed = this._splitWriteRuns(tabInfo, length);
+        const painted = consumed.painted;
         tabInfo.writePending = true;
         let parsed = false;
 
@@ -3667,14 +3714,17 @@ export class TabManager {
 
                         // The parsed frontier is safe to publish only outside xterm's
                         // callback, and never while a bootstrap delta is pending.
+                        // The painted front may advance as soon as a source
+                        // span is parsed; only the upload waits for quiescence.
                         if (
-                            tabInfo.writeBuffer.length === 0 &&
-                            tabInfo.queuedSeq !== undefined &&
                             !tabInfo._bootstrapGate &&
                             (!tabInfo.ws || tabInfo.ws.mode === 'hot')
                         ) {
-                            if (tabInfo.queuedSeq >= (tabInfo.drainedSeq ?? 0)) {
-                                tabInfo.drainedSeq = tabInfo.queuedSeq;
+                            this._advanceDrained(tabInfo, painted);
+                            if (
+                                tabInfo.writeBuffer.length === 0 &&
+                                tabInfo.queuedSeq !== undefined
+                            ) {
                                 this._scheduleCheckpointUpload(tabInfo);
                             }
                         }
@@ -3708,6 +3758,8 @@ export class TabManager {
                     this._flushTerminalWrite(tabInfo);
                 });
             });
+            // Admitted: the batch now owns those runs.
+            tabInfo.writeRuns = consumed.rest;
         } catch (e) {
             console.error('[term] write failed:', e);
             tabInfo.writePending = false;
@@ -11558,6 +11610,7 @@ export class TabManager {
     // A client-side repaint of this pane's own buffer. The buffer change it
     // emits must not be read as the app leaving its full-screen TUI.
     _resetPaneBuffer(tabInfo) {
+        tabInfo.writeRuns = [];
         tabInfo._ownBufferReset = true;
         try {
             resetTerminalState(tabInfo.term);
