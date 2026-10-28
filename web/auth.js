@@ -732,8 +732,15 @@ async function renewIfDue({ ifDue = true } = {}) {
 }
 
 // refreshAccessIfDue lets a reconnecting socket bring the credential up to date
-// without a request when the in-memory token is still fresh.
+// without a request when the in-memory token is still fresh. It returns
+// undefined synchronously when nothing is due, so a redial is not deferred by a
+// microtask and v1/disabled deployments keep their exact dial behavior.
 export function refreshAccessIfDue() {
+    if (!accessToken || memoryOnly) return undefined;
+    if (!refreshDue()) {
+        scheduleRenewal();
+        return undefined;
+    }
     return renewIfDue();
 }
 
@@ -1503,6 +1510,7 @@ if (typeof window !== 'undefined') {
     bridge.installToken = installToken;
     bridge.getAccessToken = getAccessToken;
     bridge.webSocketURL = webSocketURL;
+    bridge.refreshAccessIfDue = refreshAccessIfDue;
     bridge.assetURL = authAssetURL;
     window.phiAccessAuth = bridge;
 }

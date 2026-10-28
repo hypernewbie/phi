@@ -11195,12 +11195,30 @@ export class TabManager {
         tabInfo.autoReconnectTimer = setTimeout(() => {
             tabInfo.autoReconnectTimer = null;
             tabInfo.autoReconnectPending = false;
-            if (
-                tabInfo.isDead &&
-                (isDesktop || tabInfo.paneId === this.activePaneId) &&
-                (tabInfo.exitCode === undefined || tabInfo.exitCode === null)
-            ) {
-                this.reconnectTab(tabInfo, { auto: true });
+            const redial = () => {
+                if (
+                    tabInfo.isDead &&
+                    (isDesktop || tabInfo.paneId === this.activePaneId) &&
+                    (tabInfo.exitCode === undefined ||
+                        tabInfo.exitCode === null)
+                ) {
+                    this.reconnectTab(tabInfo, { auto: true });
+                }
+            };
+            // The server closes a pane socket at the admitted token exp, so an
+            // expiry close leaves the in-memory bearer stale and redialing
+            // with it would be refused again. The timer above still owns the
+            // backoff; this only makes the redial wait for the due refresh.
+            let refresh;
+            try {
+                refresh = window.phiAccessAuth?.refreshAccessIfDue?.();
+            } catch (_e) {}
+            // No auth module (or a v1 session) keeps the redial synchronous:
+            // bridge-free behavior must stay byte-identical.
+            if (refresh && typeof refresh.then === 'function') {
+                void refresh.catch(() => {}).then(redial);
+            } else {
+                redial();
             }
         }, delay);
 
