@@ -371,6 +371,11 @@ async function freshStatus(fallback, startedAt, context) {
 
 const authStates = new Map();
 const HOST_INSTALL = Symbol('host install');
+const REFRESH_LEAD_MS = 60 * 1000;
+const RETRY_BASE_MS = 2000;
+const RETRY_MAX_MS = 60000;
+const MAX_TIMEOUT_MS = 2_147_483_647;
+const REFRESH_LOCK_PREFIX = 'phi-access-refresh:';
 let activeAuthKey = null;
 let activeAuthContext = null;
 
@@ -383,19 +388,18 @@ function invalidationChannel() {
     try {
         const channel = new BroadcastChannel(AUTH_CHANNEL);
         channel.addEventListener('message', (event) => {
-            if (
-                !event.data ||
-                event.data.kind !== 'logout' ||
-                typeof event.data.ownerKey !== 'string'
-            )
+            if (!event.data) return;
+            if (event.data.kind === 'logout') {
+                const ownerKey = event.data.ownerKey;
+                if (typeof ownerKey !== 'string') return;
+                const state = authStates.get(ownerKey);
+                if (!state) return;
+                dropCredential(state);
+                if (pendingOverlay?.ownerKey === ownerKey)
+                    pendingOverlay.finish({ enabled: false });
                 return;
-            const state = authStates.get(event.data.ownerKey);
-            if (!state) return;
-            state.accessToken = null;
-            state.persistedToken = null;
-            state.epoch++;
-            if (pendingOverlay?.ownerKey === event.data.ownerKey)
-                pendingOverlay.finish({ enabled: false });
+            }
+            if (event.data.kind === 'bundle') receiveBundle(event.data);
         });
         invalidation = channel;
     } catch {
@@ -410,6 +414,49 @@ function broadcastInvalidation(ownerKey) {
     if (channel) channel.postMessage({ kind: 'logout', ownerKey });
 }
 
+function broadcastBundle(context, state) {
+    const channel = invalidationChannel();
+    if (!channel || !state.accessToken) return;
+    channel.postMessage({
+        kind: 'bundle',
+        origin: location.origin,
+        ownerKey: credentialKey(context),
+        bundle: {
+            token: state.accessToken,
+            expiresAt: state.accessExpiresAt,
+            refreshIdleExpiresAt: state.refreshIdleExpiresAt,
+            refreshAbsoluteExpiresAt: state.refreshAbsoluteExpiresAt,
+        },
+    });
+}
+
+function receiveBundle(message) {
+    const ownerKey =
+        typeof message.ownerKey === 'string'
+            ? message.ownerKey
+            : (activeAuthKey ?? credentialKey());
+    if (message.origin !== location.origin) return;
+    const state = stateForKey(ownerKey);
+    const bundle = message.bundle;
+    if (!bundle || typeof bundle.token !== 'string' || !bundle.token) return;
+    if (!Number.isInteger(bundle.expiresAt) || bundle.expiresAt <= 0) return;
+    if (
+        !Number.isInteger(bundle.refreshIdleExpiresAt) ||
+        !Number.isInteger(bundle.refreshAbsoluteExpiresAt) ||
+        bundle.refreshIdleExpiresAt <= 0 ||
+        bundle.refreshAbsoluteExpiresAt < bundle.refreshIdleExpiresAt
+    )
+        return;
+    if (state.memoryOnly) return;
+    if (state.accessToken && bundle.expiresAt <= state.accessExpiresAt) return;
+    adoptToken(bundle.token, bundle, contextForKey(ownerKey), { broadcast: false });
+}
+
+function contextForKey(ownerKey) {
+    if (ownerKey === activeAuthKey) return activeAuthContext;
+    return { credentialKey: ownerKey };
+}
+
 function newAuthState() {
     return {
         selectedProtocol: null,
@@ -417,9 +464,15 @@ function newAuthState() {
         accessToken: null,
         persistedToken: null,
         memoryOnly: false,
+        accessExpiresAt: 0,
+        refreshIdleExpiresAt: 0,
+        refreshAbsoluteExpiresAt: 0,
         epoch: 0,
         reauthInFlight: null,
         refreshInFlight: null,
+        renewalTimer: null,
+        retryTimer: null,
+        retryDelayMs: 0,
         pendingBootstrapRelease: null,
     };
 }
@@ -503,10 +556,35 @@ const REFRESH_INSTALLED = 'installed';
 const REFRESH_NONE = 'none';
 const REFRESH_SUPERSEDED = 'superseded';
 
-function refreshSession(context) {
+function refreshDue(context) {
+    const state = stateFor(context);
+    if (!state.accessToken || !state.accessExpiresAt) return true;
+    return state.accessExpiresAt * 1000 - Date.now() <= REFRESH_LEAD_MS;
+}
+
+function withRefreshLock(origin, run) {
+    const locks = typeof navigator !== 'undefined' ? navigator.locks : null;
+    if (!locks || typeof locks.request !== 'function')
+        return Promise.resolve().then(run);
+    try {
+        return Promise.resolve(
+            locks.request(REFRESH_LOCK_PREFIX + origin, () => run()),
+        );
+    } catch {
+        return Promise.resolve().then(run);
+    }
+}
+
+function refreshSession({ ifDue = false } = {}, context) {
     const state = stateFor(context);
     if (state.refreshInFlight) return state.refreshInFlight;
-    const attempt = runRefresh(context, state);
+    if (state.memoryOnly) return Promise.resolve(REFRESH_NONE);
+    const origin = location.origin;
+    const attempt = withRefreshLock(origin, () =>
+        ifDue && !refreshDue(context)
+            ? REFRESH_INSTALLED
+            : runRefresh(context, state, origin),
+    );
     state.refreshInFlight = attempt;
     void attempt
         .catch(() => {})
@@ -517,7 +595,23 @@ function refreshSession(context) {
     return attempt;
 }
 
-async function runRefresh(context, state) {
+function retryAfterMs(res) {
+    const raw =
+        res.headers && typeof res.headers.get === 'function'
+            ? res.headers.get('Retry-After')
+            : null;
+    const seconds = Number.parseInt(raw, 10);
+    if (!Number.isInteger(seconds) || seconds <= 0) return 0;
+    return Math.min(seconds, 300) * 1000;
+}
+
+function refreshFailure(message, waitMs) {
+    const err = new Error(message);
+    if (waitMs > 0) err.retryAfterMs = waitMs;
+    return err;
+}
+
+async function runRefresh(context, state, origin) {
     const epoch = state.epoch;
     let result;
     try {
@@ -533,7 +627,8 @@ async function runRefresh(context, state) {
                 redirect: 'error',
                 signal,
             });
-            if (res.status !== 200) return { status: res.status };
+            if (res.status !== 200)
+                return { status: res.status, retryAfterMs: retryAfterMs(res) };
             try {
                 return { status: res.status, payload: await res.json() };
             } catch {
@@ -550,38 +645,136 @@ async function runRefresh(context, state) {
     }
     if (result.status === 401) return REFRESH_NONE;
     if (result.status !== 200)
-        throw new Error('Unable to refresh access session');
+        throw refreshFailure(
+            'Unable to refresh access session',
+            result.retryAfterMs,
+        );
     if (result.invalid) throw invalidStatusError();
     const bundle = parseCredentialBundle(result.payload);
     if (!bundle) throw invalidStatusError();
     if (bundle.expiresIn <= 0)
         throw new Error('Unable to refresh access session');
-    if (epoch !== state.epoch) return REFRESH_SUPERSEDED;
-    adoptToken(bundle.token, {}, context);
+    if (epoch !== state.epoch || location.origin !== origin)
+        return REFRESH_SUPERSEDED;
+    adoptToken(bundle.token, bundle, context);
     return REFRESH_INSTALLED;
 }
 
-// Tokens obtained from the host, password login, or refresh cookie stay in
-// memory. Browser storage holds neither an access token nor a refresh handle.
-function adoptToken(token, _options = {}, context) {
+// Tokens obtained from password login or the refresh cookie stay in memory.
+// Browser storage holds neither an access token nor a refresh handle.
+function adoptToken(token, bundle, context, { broadcast = true } = {}) {
     const state = stateFor(context);
     state.accessToken = token;
     state.accessEnabled = true;
     state.selectedProtocol = 'v2';
     state.persistedToken = null;
-    state.memoryOnly = true;
+    state.memoryOnly = false;
+    state.accessExpiresAt = bundle?.expiresAt || 0;
+    state.refreshIdleExpiresAt = bundle?.refreshIdleExpiresAt || 0;
+    state.refreshAbsoluteExpiresAt = bundle?.refreshAbsoluteExpiresAt || 0;
+    state.retryDelayMs = 0;
+    clearTimeout(state.retryTimer);
+    state.retryTimer = null;
     state.epoch++;
+    scheduleRenewal(context, state);
+    if (broadcast) broadcastBundle(context, state);
     if (pendingOverlay?.ownerKey === credentialKey(context))
         pendingOverlay.finish({ enabled: true });
+}
+
+function clearTokenState(state) {
+    state.accessToken = null;
+    state.persistedToken = null;
+    state.accessExpiresAt = 0;
+    state.refreshIdleExpiresAt = 0;
+    state.refreshAbsoluteExpiresAt = 0;
+    clearTimeout(state.renewalTimer);
+    clearTimeout(state.retryTimer);
+    state.renewalTimer = null;
+    state.retryTimer = null;
+    state.retryDelayMs = 0;
+}
+
+function dropCredential(state) {
+    clearTokenState(state);
+    state.selectedProtocol = 'v2';
+    state.epoch++;
 }
 
 // A delayed rejection for token A must not clear token B installed after it.
 function rejectToken(token, context) {
     const state = stateFor(context);
-    if (state.accessToken !== token) return;
-    state.accessToken = null;
-    state.persistedToken = null;
+    if (!token || state.accessToken !== token) return;
+    clearTokenState(state);
     state.selectedProtocol = 'v2';
+}
+
+function scheduleRenewal(context, state = stateFor(context)) {
+    clearTimeout(state.renewalTimer);
+    state.renewalTimer = null;
+    if (!state.accessToken || state.memoryOnly || !state.accessExpiresAt) return;
+    const epoch = state.epoch;
+    const delay = Math.min(
+        MAX_TIMEOUT_MS,
+        Math.max(
+            0,
+            state.accessExpiresAt * 1000 - Date.now() - REFRESH_LEAD_MS,
+        ),
+    );
+    state.renewalTimer = setTimeout(() => {
+        state.renewalTimer = null;
+        if (epoch !== state.epoch) return;
+        void renewIfDue({}, context);
+    }, delay);
+}
+
+function scheduleRetry(err, context, state = stateFor(context)) {
+    clearTimeout(state.retryTimer);
+    state.retryTimer = null;
+    if (!state.accessToken || state.memoryOnly) return;
+    const epoch = state.epoch;
+    state.retryDelayMs = state.retryDelayMs
+        ? Math.min(RETRY_MAX_MS, state.retryDelayMs * 2)
+        : RETRY_BASE_MS;
+    const jitter = state.retryDelayMs * 0.2 * Math.random();
+    const honored =
+        err && Number.isFinite(err.retryAfterMs) ? err.retryAfterMs : 0;
+    const delay = Math.max(honored, state.retryDelayMs + jitter);
+    state.retryTimer = setTimeout(() => {
+        state.retryTimer = null;
+        if (epoch !== state.epoch) return;
+        void renewIfDue({ ifDue: false }, context);
+    }, delay);
+}
+
+async function renewIfDue({ ifDue = true } = {}, context) {
+    const state = stateFor(context);
+    if (!state.accessToken || state.memoryOnly) return;
+    if (ifDue && !refreshDue(context)) {
+        scheduleRenewal(context, state);
+        return;
+    }
+    const epoch = state.epoch;
+    let outcome;
+    try {
+        outcome = await refreshSession({ ifDue }, context);
+    } catch (err) {
+        if (epoch !== state.epoch) return;
+        scheduleRetry(err, context, state);
+        return;
+    }
+    if (epoch !== state.epoch) return;
+    if (outcome === REFRESH_INSTALLED) return;
+    if (outcome === REFRESH_NONE) {
+        dropCredential(state);
+        void requestReauth(context);
+        return;
+    }
+    scheduleRenewal(context, state);
+}
+
+export function refreshAccessIfDue() {
+    return renewIfDue();
 }
 
 // checkV2Token reports whether the server still accepts token. A rejected
@@ -641,7 +834,7 @@ async function v2Login(password, context) {
         const bundle = parseCredentialBundle(payload);
         if (!bundle || bundle.expiresIn <= 0)
             throw new Error('Unable to sign in');
-        return bundle.token;
+        return bundle;
     });
 }
 
@@ -691,7 +884,7 @@ async function saveV2Password(password, context) {
     const bundle = parseCredentialBundle(payload);
     if (!payload || payload.enabled !== true || !bundle || bundle.expiresIn <= 0)
         throw new Error('Unable to save access password');
-    if (epoch === state.epoch) adoptToken(bundle.token, {}, context);
+    if (epoch === state.epoch) adoptToken(bundle.token, bundle, context);
     return { enabled: true };
 }
 
@@ -727,10 +920,9 @@ async function clearV2Password(context) {
     // A credential installed while the clear was in flight is newer than
     // this response; never clear it.
     if (state.epoch !== epoch) return { enabled: false };
-    state.accessToken = null;
+    clearTokenState(state);
     state.accessEnabled = false;
     state.selectedProtocol = 'v2';
-    state.persistedToken = null;
     state.epoch++;
     broadcastInvalidation(credentialKey(context));
     if (pendingOverlay?.ownerKey === credentialKey(context))
@@ -777,8 +969,8 @@ function requestHeaders(input, init) {
 }
 
 // installAccessFetch wraps fetch once so same-origin protected API calls carry
-// the in-memory bearer. Only a 401 expires it; route-specific 403 responses
-// reach the caller unchanged. It never replays the request that failed.
+// the in-memory bearer. A stale-token 401 refreshes once and retries only GET
+// or HEAD; mutations are never replayed. Route-specific 403 responses pass on.
 export function installAccessFetch() {
     const baseFetch = globalThis.fetch;
     if (!baseFetch || baseFetch[WRAPPED_FETCH]) return;
@@ -796,15 +988,39 @@ export function installAccessFetch() {
         // and never treat its failure as this module's token being rejected.
         if (headers.has('Authorization')) return baseFetch(input, init);
         headers.set('Authorization', `Bearer ${token}`);
-        const response = await baseFetch(
-            input,
-            init ? { ...init, headers } : { headers },
-        );
-        if (response.status === 401 && state.accessToken === token) {
+        const requestInit = init ? { ...init, headers } : { headers };
+        const response = await baseFetch(input, requestInit);
+        if (response.status !== 401 || state.accessToken !== token)
+            return response;
+        let outcome;
+        try {
+            outcome = await refreshSession({}, context);
+        } catch (err) {
+            scheduleRetry(err, context, state);
+            return response;
+        }
+        if (outcome === REFRESH_NONE) {
             rejectToken(token, context);
             if (activeAuthKey === ownerKey) requestReauth(context);
+            return response;
         }
-        return response;
+        const method = (
+            (init && init.method) ||
+            (input && typeof input.method === 'string' ? input.method : 'GET')
+        ).toUpperCase();
+        const renewed = state.accessToken;
+        if (
+            outcome !== REFRESH_INSTALLED ||
+            !renewed ||
+            (method !== 'GET' && method !== 'HEAD')
+        )
+            return response;
+        const retryHeaders = requestHeaders(input, init);
+        retryHeaders.set('Authorization', `Bearer ${renewed}`);
+        return baseFetch(
+            input,
+            init ? { ...init, headers: retryHeaders } : { headers: retryHeaders },
+        );
     };
     wrapped[WRAPPED_FETCH] = true;
     globalThis.fetch = wrapped;
@@ -931,9 +1147,9 @@ function showUnlockPrompt(context, protocol) {
             });
             try {
                 if (protocol === 'v2') {
-                    const token = await v2Login(input.value, context);
+                    const bundle = await v2Login(input.value, context);
                     if (epoch !== state.epoch) return;
-                    adoptToken(token, { persist: true }, context);
+                    adoptToken(bundle.token, bundle, context);
                     input.value = '';
                     finish({ enabled: true });
                     return;
@@ -1044,13 +1260,13 @@ export async function bootstrapAccessAuth(context) {
         state.selectedProtocol = protocol;
         if (protocol === 'v1' && hadV2Selection) {
             // A v1-only server cannot use the previous bearer.
-            state.accessToken = null;
+            clearTokenState(state);
             state.epoch++;
             epoch = state.epoch;
         }
         if (!status.enabled) {
             if (state.accessToken) {
-                state.accessToken = null;
+                clearTokenState(state);
                 state.epoch++;
                 epoch = state.epoch;
             }
@@ -1068,10 +1284,7 @@ export async function bootstrapAccessAuth(context) {
             }
             if (verdict === HOST_INSTALL || superseded())
                 return { enabled: state.accessEnabled };
-            if (verdict === 'valid') {
-                adoptToken(token, {}, context);
-                return { enabled: true };
-            }
+            if (verdict === 'valid') return { enabled: true };
             rejectToken(token, context);
             // No cookie fallback: an explicit v2 credential decides alone.
             return showUnlockPrompt(context, 'v2');
@@ -1104,7 +1317,7 @@ export async function bootstrapAccessAuth(context) {
         if (protocol === 'v2') {
             let outcome;
             try {
-                outcome = await wait(refreshSession(context));
+                outcome = await wait(refreshSession({}, context));
             } catch (err) {
                 if (superseded()) return { enabled: state.accessEnabled };
                 throw err;
@@ -1225,16 +1438,23 @@ export function getAccessToken() {
 
 // installToken is the host bridge: it installs a memory-only v2 credential
 // (never localStorage), releases a pending unlock overlay, and lets a loaded
-// body continue bootstrap.
+// body continue bootstrap. The host renews its token, so this page does not.
 export function installToken(token) {
     if (typeof token !== 'string' || !token) return false;
     const state = activeAuthState();
+    clearTimeout(state.renewalTimer);
+    clearTimeout(state.retryTimer);
+    state.renewalTimer = null;
+    state.retryTimer = null;
     state.accessToken = token;
     state.accessEnabled = true;
     state.selectedProtocol = 'v2';
     state.epoch++;
     state.persistedToken = null;
     state.memoryOnly = true;
+    state.accessExpiresAt = 0;
+    state.refreshIdleExpiresAt = 0;
+    state.refreshAbsoluteExpiresAt = 0;
     const releaseBootstrap = state.pendingBootstrapRelease;
     state.pendingBootstrapRelease = null;
     if (releaseBootstrap) releaseBootstrap();
@@ -1271,8 +1491,7 @@ export async function logoutAccess(all = false, context) {
     if (!result.ok || !result.payload || result.payload.ok !== true)
         throw new Error('Unable to logout');
     if (epoch === state.epoch && state.accessToken === token) {
-        state.accessToken = null;
-        state.persistedToken = null;
+        clearTokenState(state);
         state.epoch++;
     }
     broadcastInvalidation(credentialKey(context));
@@ -1320,6 +1539,13 @@ export async function authAssetURL(url) {
     return { url: objectURL, revoke: () => URL.revokeObjectURL(objectURL) };
 }
 
+if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'visible') return;
+        void renewIfDue();
+    });
+}
+
 if (typeof window !== 'undefined') {
     const bridge = window.phiAccessAuth || {};
     bridge.installToken = installToken;
@@ -1345,6 +1571,9 @@ export const __test__ = {
     parseProtocols,
     parseCredentialBundle,
     refreshSession,
+    renewIfDue,
+    refreshDue,
+    receiveBundle,
     resetAccessState,
     setReload,
     getAccessState,
@@ -1355,6 +1584,7 @@ export const __test__ = {
 function resetAccessState() {
     for (const state of authStates.values()) {
         state.epoch++;
+        clearTokenState(state);
         state.refreshInFlight = null;
         const releaseBootstrap = state.pendingBootstrapRelease;
         state.pendingBootstrapRelease = null;
@@ -1383,6 +1613,14 @@ function getAccessState() {
         accessToken,
         persistedToken,
         memoryOnly,
+        accessExpiresAt,
     } = activeAuthState();
-    return { selectedProtocol, accessEnabled, accessToken, persistedToken, memoryOnly };
+    return {
+        selectedProtocol,
+        accessEnabled,
+        accessToken,
+        persistedToken,
+        memoryOnly,
+        accessExpiresAt,
+    };
 }
