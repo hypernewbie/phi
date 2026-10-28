@@ -168,7 +168,12 @@ export class App {
         if (typeof window.matchMedia === 'function') {
             window
                 .matchMedia(COMPACT_VIEWPORT_QUERY)
-                .addEventListener('change', () => this.applyFastMode());
+                .addEventListener('change', () => {
+                    this.applyFastMode();
+                    // Leaving the compact layout drops the drawer to its
+                    // sessions content, so the heading must follow.
+                    if (!isCompactViewport()) this.setDrawerMode('sessions');
+                });
         }
 
         // 4. Setup panel resize handles
@@ -226,14 +231,6 @@ export class App {
             document
                 .getElementById('drawer-back-to-tabs')
                 ?.addEventListener('click', () => this.setDrawerMode('tabs'));
-            // Tabs mode carries its own New Session button; delegate to the
-            // real one, then close the drawer so the new terminal shows.
-            document
-                .getElementById('drawer-new-session-btn')
-                ?.addEventListener('click', () => {
-                    document.getElementById('new-session-btn')?.click();
-                    sidebar.classList.remove('drawer-open');
-                });
 
             // Close drawer when clicking outside it
             document.addEventListener('click', (e) => {
@@ -1183,6 +1180,10 @@ export class App {
         if (!isCompactViewport()) mode = 'sessions';
         const sidebar = document.getElementById('sidebar-panel');
         if (!sidebar) return;
+        // Cached pre-drawer markup has no tab body: the mode rules would hide
+        // the sessions controls and the builder would render nothing.
+        if (mode === 'tabs' && !document.getElementById('drawer-tabs-body'))
+            mode = 'sessions';
         sidebar.dataset.panelMode = mode;
         const title = document.getElementById('drawer-panel-title');
         if (title) title.textContent = mode === 'tabs' ? 'TABS' : 'SESSIONS';

@@ -1818,6 +1818,10 @@ export class TabManager {
                 (t.closest('#tab-overflow-dropdown') ||
                     t.closest('#tab-overflow-btn') ||
                     t.closest('#sort-tabs-btn') ||
+                    // The compact drawer holds buttons, not terminal input:
+                    // its Enter/Tab must activate and move focus, never
+                    // reach the PTY as raw keys.
+                    t.closest('#sidebar-panel') ||
                     // Thinking is UI-only: its Enter/Tab must not reach the
                     // PTY as raw keys on coarse pointers.
                     t.closest('.pi-rpc-thinking-trigger') ||

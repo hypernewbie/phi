@@ -5217,10 +5217,6 @@ html[data-phi-config-page] .settings-modal {
         display: none !important;
     }
 
-    [data-panel-mode="sessions"] #drawer-open-sessions {
-        display: none !important;
-    }
-
     .panel-header-actions {
         display: flex;
         align-items: center;

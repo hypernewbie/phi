@@ -1,6 +1,6 @@
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Browser, type Page } from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
 
 let phi: PhiServer;
@@ -57,6 +57,8 @@ test.afterAll(async () => {
     await phi.stop();
 });
 
+// Compact layout means a coarse pointer too: phone chrome, touch events and
+// the mobile key fallback are all part of the behavior under test.
 async function openWithTabs(page: Page, width: number, height: number) {
     await page.setViewportSize({ width, height });
     await page.goto(phi.url);
@@ -64,10 +66,21 @@ async function openWithTabs(page: Page, width: number, height: number) {
     await expect(page.locator('#tabs-container .tab')).toHaveCount(2);
 }
 
+async function touchPage(browser: Browser, width: number, height: number) {
+    const context = await browser.newContext({
+        viewport: { width, height },
+        isMobile: true,
+        hasTouch: true,
+    });
+    const page = await context.newPage();
+    await openWithTabs(page, width, height);
+    return { context, page };
+}
+
 test('compact drawer shows the tab tree and a row tap switches tabs', async ({
-    page,
+    browser,
 }) => {
-    await openWithTabs(page, 390, 844);
+    const { context, page } = await touchPage(browser, 390, 844);
 
     await page.locator('#mobile-sidebar-toggle').click();
     const drawerBody = page.locator('#drawer-tabs-body');
@@ -85,7 +98,7 @@ test('compact drawer shows the tab tree and a row tap switches tabs', async ({
         .evaluate((el) => el.getBoundingClientRect().width);
     expect(drawer).toBeGreaterThan(390 * 0.8);
 
-    // The New Session button spans the drawer, above the tree.
+    // The New or Resume Session button spans the drawer, above the tree.
     const toolbarBox = await page.locator('#drawer-tabs-toolbar').boundingBox();
     const firstRowBox = await drawerBody
         .locator('.hostname-dropdown-row')
@@ -113,12 +126,40 @@ test('compact drawer shows the tab tree and a row tap switches tabs', async ({
         'data-pane-id',
         targetId as string,
     );
+    await context.close();
+});
+
+test('drawer keys never reach the PTY: Enter activates the row', async ({
+    browser,
+}) => {
+    const { context, page } = await touchPage(browser, 390, 844);
+
+    await page.locator('#mobile-sidebar-toggle').click();
+    const drawerBody = page.locator('#drawer-tabs-body');
+    const activeBefore = await page
+        .locator('#tabs-container .tab.active')
+        .getAttribute('data-pane-id');
+    const row = drawerBody
+        .locator(`.hostname-dropdown-row:not([data-pane-id="${activeBefore}"])`)
+        .first();
+    const targetId = await row.getAttribute('data-pane-id');
+
+    // The coarse-pointer key fallback forwards Enter/Tab to the PTY and
+    // preventDefaults them, which would silently swallow this activation.
+    await row.locator('.hostname-dropdown-select-btn').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#sidebar-panel')).not.toHaveClass(/drawer-open/);
+    await expect(page.locator('#tabs-container .tab.active')).toHaveAttribute(
+        'data-pane-id',
+        targetId as string,
+    );
+    await context.close();
 });
 
 test('the brand opens the drawer on phones, the desktop dropdown on wide screens', async ({
-    page,
+    browser,
 }) => {
-    await openWithTabs(page, 390, 844);
+    const { context, page } = await touchPage(browser, 390, 844);
 
     await page.locator('#hostname-display').click();
     await expect(page.locator('#sidebar-panel')).toHaveClass(/drawer-open/);
@@ -132,9 +173,10 @@ test('the brand opens the drawer on phones, the desktop dropdown on wide screens
     // Tapping the brand again closes it.
     await page.locator('#hostname-display').click();
     await expect(page.locator('#sidebar-panel')).not.toHaveClass(/drawer-open/);
+    await context.close();
 });
 
-test('plus opens the sessions block, back arrow returns to tabs', async ({
+test('New or Resume Session swaps to the sessions block, back arrow returns', async ({
     page,
 }) => {
     await openWithTabs(page, 390, 844);
@@ -201,29 +243,4 @@ test('desktop sidebar and tab-bar dropdown are unchanged', async ({ page }) => {
     await page.locator('#hostname-display').click();
     await expect(page.locator('#hostname-tabs-dropdown')).toBeVisible();
     await expect(page.locator('#sidebar-panel')).not.toHaveClass(/drawer-open/);
-});
-
-test('the drawer New Session button spawns a tab and closes the drawer', async ({
-    page,
-}) => {
-    await openWithTabs(page, 390, 844);
-
-    // Pick the seeded backend while the coder selector is reachable.
-    await page.locator('#mobile-sidebar-toggle').click();
-    await page.locator('#drawer-open-sessions').click();
-    await page.locator('#coder-selector .coder-tab[data-coder="bash"]').click();
-    await page.locator('#drawer-back-to-tabs').click();
-    await expect(page.locator('#drawer-tabs-toolbar')).toBeVisible();
-
-    const spawned = page.waitForResponse(
-        (response) =>
-            response.url().endsWith('/api/terminals') &&
-            response.request().method() === 'POST',
-    );
-    const before = await page.locator('#tabs-container .tab').count();
-    await page.locator('#drawer-new-session-btn').click();
-    const reply = await spawned;
-    expect(reply.ok()).toBe(true);
-    await expect(page.locator('#sidebar-panel')).not.toHaveClass(/drawer-open/);
-    await expect(page.locator('#tabs-container .tab')).toHaveCount(before + 1);
 });
