@@ -370,10 +370,30 @@ eager to avoid a first-open unstyled flash. -->
                     class="sidebar-panel"
                     id="sidebar-panel"
                     aria-label="Sessions"
+                    data-panel-mode="tabs"
                 >
                     <div class="panel-header">
-                        <h2>SESSIONS</h2>
+                        <h2 id="drawer-panel-title">SESSIONS</h2>
+                        <div class="panel-header-actions">
+                            <button
+                                id="drawer-open-sessions"
+                                class="header-btn mobile-only"
+                                title="New or resume session"
+                                aria-label="New or resume session"
+                            >+</button>
+                            <button
+                                id="drawer-back-to-tabs"
+                                class="header-btn mobile-only"
+                                title="Show tabs"
+                                aria-label="Show tabs"
+                            >←</button>
+                        </div>
                     </div>
+
+                    <div
+                        id="drawer-tabs-body"
+                        class="drawer-tabs-body"
+                    ></div>
 
                     <div class="coder-selector" id="coder-selector">
                         <button

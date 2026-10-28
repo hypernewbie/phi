@@ -13,6 +13,7 @@ import {
     escapeHtml,
     buildPhiFaviconSvg,
     isCoarseViewport,
+    isCompactViewport,
     isSidebarDrawerViewport,
     isDiffDrawerViewport,
     visibleViewportHeight,
@@ -212,9 +213,19 @@ export class App {
                 // opening the drawer dismisses it. Same call the edge
                 // swipe makes below.
                 if (sidebar.classList.contains('drawer-open')) {
+                    this.setDrawerMode('tabs');
                     this.tabManager?._closeSelfHudNow?.();
                 }
             });
+
+            document
+                .getElementById('drawer-open-sessions')
+                ?.addEventListener('click', () =>
+                    this.setDrawerMode('sessions'),
+                );
+            document
+                .getElementById('drawer-back-to-tabs')
+                ?.addEventListener('click', () => this.setDrawerMode('tabs'));
 
             // Close drawer when clicking outside it
             document.addEventListener('click', (e) => {
@@ -939,6 +950,7 @@ export class App {
                         if (sidebarDrawer && touchStartX < 40) {
                             // Swipe from left edge -> Open Sessions drawer
                             sidebar?.classList.add('drawer-open');
+                            this.setDrawerMode('tabs');
                             // The brand-anchored HUD would float above it.
                             this.tabManager?._closeSelfHudNow?.();
                         } else if (
@@ -1153,6 +1165,24 @@ export class App {
                 }
             }
         });
+    }
+
+    // Drawer mode: the left drawer shows the grouped tab tree by default and
+    // the sessions block on demand. The mode CSS exists only inside the
+    // compact viewport query, so anywhere else the drawer keeps its native
+    // sessions content (it is still a drawer from 769-1023px).
+    setDrawerMode(mode) {
+        if (!isCompactViewport()) mode = 'sessions';
+        const sidebar = document.getElementById('sidebar-panel');
+        if (!sidebar) return;
+        sidebar.dataset.panelMode = mode;
+        const title = document.getElementById('drawer-panel-title');
+        if (title) title.textContent = mode === 'tabs' ? 'TABS' : 'SESSIONS';
+        sidebar.setAttribute(
+            'aria-label',
+            mode === 'tabs' ? 'Tabs' : 'Sessions',
+        );
+        if (mode === 'tabs') this.tabManager?._buildDrawerTabsBody?.();
     }
 
     initResizers() {
