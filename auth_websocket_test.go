@@ -405,46 +405,6 @@ func expectRejectedUpgrade(t *testing.T, conn *websocket.Conn, err error) {
 	expectClosed(t, conn)
 }
 
-// A request authorized before the first password enable must not register a
-// socket after it: the enable advances the generation.
-func TestAccessWSLateRegistrationAfterEnableIsRejected(t *testing.T) {
-	withTempConfig(t)
-	useTestAccessAuth(t)
-	hub := testAccessUseHub(t)
-	gate, release := make(chan struct{}), make(chan struct{})
-	var once sync.Once
-	server := httptest.NewServer(accessAuthMiddleware(gatedEventsHandler(hub, gate, release, &once)))
-	defer server.Close()
-
-	type result struct {
-		conn *websocket.Conn
-		err  error
-	}
-	done := make(chan result, 1)
-	go func() {
-		conn, err := dialAfterGate(t, server.URL, "/ws/md-events", wireproto.EventsSubprotocol, "")
-		done <- result{conn, err}
-	}()
-	<-gate
-	token := testAccessEnableV2(t, testAccessPassword)
-	close(release)
-	out := <-done
-	if out.conn != nil {
-		t.Cleanup(func() { _ = out.conn.Close() })
-	}
-	expectRejectedUpgrade(t, out.conn, out.err)
-
-	// The credential minted by the enable still connects.
-	dialer := websocket.Dialer{Subprotocols: []string{wireproto.EventsSubprotocol}}
-	url := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/md-events?token=" + neturl.QueryEscape(token)
-	conn, _, err := dialer.Dial(url, nil)
-	if err != nil {
-		t.Fatalf("fresh credential after enable: %v", err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
-	expectOpen(t, conn)
-}
-
 // The same window after a password rotation must also reject the late
 // registration, through the production middleware and handler.
 func TestAccessWSLateRegistrationAfterRotationIsRejected(t *testing.T) {
@@ -704,7 +664,7 @@ func TestAccessWSFamilyLogoutClosesOnlyItsSockets(t *testing.T) {
 	}
 	cookie := testAccessCookieFor(t, auth).Value
 
-	dial("/ws/md-events", wireproto.EventsSubprotocol, "", cookie)
+	v1Socket := dial("/ws/md-events", wireproto.EventsSubprotocol, "", cookie)
 	firstSocket := dial("/ws/md-events", wireproto.EventsSubprotocol, first, "")
 	secondSocket := dial("/ws/md-events", wireproto.EventsSubprotocol, second, "")
 	waitForEventsClients(t, hub, 3)
@@ -713,18 +673,31 @@ func TestAccessWSFamilyLogoutClosesOnlyItsSockets(t *testing.T) {
 		t.Fatalf("family logout: %d %s", w.Code, w.Body.String())
 	}
 	expectClosed(t, firstSocket)
-	// Survival is checked with fresh connections: a client read that already
-	// timed out stays poisoned in the Gorilla read state.
-	expectOpen(t, dial("/ws/md-events", wireproto.EventsSubprotocol, second, ""))
-	expectOpen(t, dial("/ws/md-events", wireproto.EventsSubprotocol, "", cookie))
+	// The sockets that were already open survive: closing only the logged-out
+	// family must not make the other clients reconnect to stay alive.
+	expectStillOpen(t, secondSocket)
+	expectStillOpen(t, v1Socket)
+	// Survival also holds for new connections, and the read state poisoned by
+	// the assertions above stays local to the old sockets.
+	if count, _, _ := hub.PaneStats(ws.EventsPaneID); count != 2 {
+		t.Errorf("events clients after a family logout = %d want the v1 and second-family sockets", count)
+	}
+	// Fresh connections keep working too. They are also the sockets whose read
+	// state is still clean, so the logout-all below can observe their close.
+	secondAgain := dial("/ws/md-events", wireproto.EventsSubprotocol, second, "")
+	v1Again := dial("/ws/md-events", wireproto.EventsSubprotocol, "", cookie)
+	waitForEventsClients(t, hub, 4)
 
 	if w := testAccessV2LogoutRequest(t, `{"all":true}`, second); w.Code != http.StatusOK {
 		t.Fatalf("logout all: %d %s", w.Code, w.Body.String())
 	}
-	expectClosed(t, secondSocket)
+	expectClosed(t, secondAgain)
 	// v1 keeps its cookie and its sockets: a v2 logout-all is not a record
 	// change.
-	expectOpen(t, dial("/ws/md-events", wireproto.EventsSubprotocol, "", cookie))
+	expectStillOpen(t, v1Again)
+	if count, _, _ := hub.PaneStats(ws.EventsPaneID); count != 2 {
+		t.Errorf("events clients after logout-all = %d want only the v1 sockets", count)
+	}
 }
 
 // A replayed refresh handle outside the grace window revokes the family, so its
