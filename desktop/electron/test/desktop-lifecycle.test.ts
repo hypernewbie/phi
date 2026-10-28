@@ -2735,7 +2735,6 @@ describe('isAllowedNavigationTarget', () => {
     expect(allows('https://evil.example/md.html', ownOrigin)).toBe(false);
     expect(allows('phi-app://app/', ownOrigin)).toBe(false);
   });
-
 });
 
 describe('resolveV2BodyAuthTarget', () => {
@@ -2745,16 +2744,18 @@ describe('resolveV2BodyAuthTarget', () => {
     // Single-tab mode: one phi-app://app view serves every profile. The host
     // proxy attaches the bearer per request, so a host-authorized sign-in is
     // already complete and no token install is needed.
-    expect(resolveV2BodyAuthTarget(`${EMBEDDED_ORIGIN}/index.html?x=1`, origin)).toBe(
-      'embedded',
-    );
+    expect(
+      resolveV2BodyAuthTarget(`${EMBEDDED_ORIGIN}/index.html?x=1`, origin),
+    ).toBe('embedded');
     expect(resolveV2BodyAuthTarget(EMBEDDED_ORIGIN, origin)).toBe('embedded');
   });
 
   it('refuses a body that is not exactly the authenticated origin', () => {
     // Everything here reports origin "null" or a foreign origin; none of it may
     // receive the bearer.
-    expect(resolveV2BodyAuthTarget('file:///index.html', origin)).toBe('refuse');
+    expect(resolveV2BodyAuthTarget('file:///index.html', origin)).toBe(
+      'refuse',
+    );
     expect(resolveV2BodyAuthTarget('phi-app://evil/index.html', origin)).toBe(
       'refuse',
     );
