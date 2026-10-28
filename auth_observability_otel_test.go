@@ -261,28 +261,30 @@ func TestAccessObservabilitySpansCarryNoCredentials(t *testing.T) {
 		t.Fatal("no spans were exported")
 	}
 	paths := map[string]bool{}
-	for _, span := range spans {
+	for index, span := range spans {
+		// Fail by position, never by value: a leaking span holds the secret in
+		// its own name, and printing that would put it in the test log.
 		for _, attr := range span.Attributes {
 			if attr.Key == "url.path" {
 				paths[attr.Value.AsString()] = true
 			}
 			if attr.Key == "url.query" || attr.Key == "http.target" || attr.Key == "url.full" {
-				t.Errorf("span %q records %q, which can carry a query credential", span.Name, attr.Key)
+				t.Errorf("span %d records %q, which can carry a query credential", index, attr.Key)
 			}
 		}
 		for _, value := range spanStrings(span) {
 			for _, password := range passwords {
 				if strings.Contains(value, password) {
-					t.Errorf("span %q leaked a password", span.Name)
+					t.Errorf("span %d leaked a password", index)
 				}
 			}
 			for _, token := range tokens {
 				if strings.Contains(value, token) {
-					t.Errorf("span %q leaked a token", span.Name)
+					t.Errorf("span %d leaked a token or handle", index)
 				}
 			}
 			if strings.Contains(value, "Bearer ") || strings.Contains(value, "token=") {
-				t.Errorf("span %q leaked a credential-bearing value", span.Name)
+				t.Errorf("span %d leaked a credential-bearing value", index)
 			}
 		}
 	}
