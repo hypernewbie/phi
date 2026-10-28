@@ -147,10 +147,7 @@ export type CookieCapturedListener = (
 /** Notified whenever a host-held v2 bundle appears, rotates, or is dropped, so
  *  the encrypted store can persist it before any renderer sees the credential.
  *  A null bundle means the origin no longer holds a refreshable credential. */
-export type BundleListener = (
-  origin: string,
-  bundle: V2Bundle | null,
-) => void;
+export type BundleListener = (origin: string, bundle: V2Bundle | null) => void;
 
 /** Strict bounds — server-controlled values that must be validated before
  *  handing them to the PBKDF2 primitive (mitigates remote-driven cost
@@ -839,7 +836,10 @@ export class AccessAuth {
         method: 'POST',
         // No browser metadata is forged: the host sends the route-local CSRF
         // header a non-browser client is required to present.
-        headers: { 'Content-Type': 'application/json', [CSRF_HEADER]: CSRF_VALUE },
+        headers: {
+          'Content-Type': 'application/json',
+          [CSRF_HEADER]: CSRF_VALUE,
+        },
         body: JSON.stringify({ password }),
         signal: withTimeout(signal, FETCH_TIMEOUT_MS),
         redirect: 'error',
@@ -991,7 +991,9 @@ export class AccessAuth {
     const nowSeconds = Math.floor(this._now() / 1000);
     // `expiresIn <= 0` means the bundle was already unusable on arrival; the
     // backoff check above keeps that from becoming a retry loop.
-    return bundle.expiresIn <= 0 || nowSeconds >= bundle.expiresAt - RENEW_LEAD_S;
+    return (
+      bundle.expiresIn <= 0 || nowSeconds >= bundle.expiresAt - RENEW_LEAD_S
+    );
   }
 
   /** Forces one host refresh for `origin`, coalescing concurrent callers onto
@@ -1101,7 +1103,11 @@ export class AccessAuth {
       return { kind: 'unauthorized' };
     }
     if (res.status === 429) {
-      return this.failRefresh(canonical, 'refresh rate limited', retryAfterMs(res));
+      return this.failRefresh(
+        canonical,
+        'refresh rate limited',
+        retryAfterMs(res),
+      );
     }
     if (!res.ok) {
       return this.failRefresh(canonical, `refresh http ${res.status}`);
@@ -1183,7 +1189,9 @@ export class AccessAuth {
       until: this._now() + delay,
     });
     const result: RefreshResult = { kind: 'unavailable', reason };
-    return retryAfter !== undefined ? { ...result, retryAfterMs: delay } : result;
+    return retryAfter !== undefined
+      ? { ...result, retryAfterMs: delay }
+      : result;
   }
 
   /** Drops the v2 credential for `canonical` but keeps the protocol selection,
@@ -1544,7 +1552,8 @@ export function parseCredentialBundle(
   const idle = r.refresh_idle_expires_at;
   const absolute = r.refresh_absolute_expires_at;
   if (!isPositiveInt(expiresAt)) return null;
-  if (typeof expiresIn !== 'number' || !Number.isInteger(expiresIn)) return null;
+  if (typeof expiresIn !== 'number' || !Number.isInteger(expiresIn))
+    return null;
   if (!isPositiveInt(idle) || !isPositiveInt(absolute)) return null;
   if (idle > absolute) return null;
   return {
