@@ -60,56 +60,6 @@ export function serverKey(key: string): string {
     return embeddedProfileId ? `${key}:${embeddedProfileId}` : key;
 }
 
-// An asset address the DOM can load, plus the release for anything that
-// authenticatedAsset had to fetch.
-export interface AuthenticatedAsset {
-    url: string;
-    revoke(): void;
-}
-
-// authenticatedAsset turns a protected same-origin asset address into one the
-// DOM can load. A v2 bearer session has no cookie, so <img>, media, download,
-// and iframe loads cannot authenticate themselves; the auth bridge fetches the
-// bytes with that bearer and returns an object URL. A v1 session, a public
-// address, or a page without the bridge keeps the plain address.
-export async function authenticatedAsset(
-    url: string | URL,
-): Promise<AuthenticatedAsset> {
-    const bridge = window.phiAccessAuth;
-    if (!bridge?.assetURL) return { url: String(url), revoke() {} };
-    return bridge.assetURL(url);
-}
-
-// authenticateImages authenticates every <img> in a container and returns the
-// release for the object URLs it created. Callers keep that release beside the
-// content they rendered and run it before replacing or removing the content.
-// A failed load restores the plain address so the element shows its own
-// failure state instead of a blank box.
-export async function authenticateImages(
-    container: ParentNode,
-): Promise<() => void> {
-    const releases: Array<() => void> = [];
-    await Promise.all(
-        Array.from(container.querySelectorAll('img')).map(async (img) => {
-            const src = img.getAttribute('src');
-            if (!src) return;
-            // Drop the protected address before awaiting: the browser must not
-            // request it unauthenticated and paint a broken image first.
-            img.removeAttribute('src');
-            try {
-                const asset = await authenticatedAsset(src);
-                if (asset.url !== src) releases.push(asset.revoke);
-                img.src = asset.url;
-            } catch {
-                img.src = src;
-            }
-        }),
-    );
-    return () => {
-        for (const release of releases) release();
-    };
-}
-
 // A Vikunja kanban bucket shape. The runtime narrows `is_done` with
 // `bucket.is_done === true` rather than a truthy check, so the field
 // can be unknown (string, number, bool at the wire). We type it as

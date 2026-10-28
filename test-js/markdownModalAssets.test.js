@@ -3,9 +3,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mockFetch, setupDomHarness } from './_dom.js';
 import { MarkdownManager } from '../web/markdown.js';
 
-// A v2 bearer session loads markdown images through the auth bridge, which
-// returns an object URL that must be revoked. The image work finishes after
-// the render, so a closed or replaced modal must not adopt its result.
+// Markdown images render at the plain /api/markdown/asset address, so the
+// browser sends the scoped `phi_access_asset` cookie and streams the bytes.
+// Nothing is fetched into a blob, so replacing or closing the modal needs no
+// release bookkeeping; the stale-render guard still keeps a late render out of
+// a body that another view already owns.
 
 setupDomHarness();
 
@@ -24,51 +26,39 @@ function makeMm() {
     });
 }
 
-// The bridge holds every image fetch open until release() runs, so the test
-// controls the order of the close and the image result.
-function stubDeferredBridge(revoke) {
-    const state = { release: null };
+function stubMarkdown() {
     vi.stubGlobal('marked', { parse: (s) => s });
     vi.stubGlobal('DOMPurify', { sanitize: (h) => h });
-    window.phiAccessAuth = {
-        getAccessToken: () => 'jwt',
-        assetURL: () =>
-            new Promise((resolve) => {
-                state.release = () => resolve({ url: 'blob:pic', revoke });
-            }),
-    };
-    return state;
 }
 
 afterEach(() => {
-    delete window.phiAccessAuth;
     vi.unstubAllGlobals();
 });
 
 describe('modal image assets', () => {
-    it('releases a late image result when the modal closed first', async () => {
-        const revoke = vi.fn();
-        const bridge = stubDeferredBridge(revoke);
-        mockFetch(() => ({
+    it('renders images at the scoped-cookie asset path', async () => {
+        stubMarkdown();
+        const fetchSpy = mockFetch(() => ({
             ok: true,
             text: async () => '<img src="pic.png">',
         }));
         const mm = makeMm();
-        const open = mm.openFile({ name: 'x.md', path: '/w/x.md' });
-        await vi.waitFor(() => expect(bridge.release).toBeTypeOf('function'));
-
-        mm.closeModal();
-        bridge.release();
-        await open;
-        expect(revoke).toHaveBeenCalledTimes(1);
-        // Nothing adopted the stale release: a second close has nothing to do.
-        mm.closeModal();
-        expect(revoke).toHaveBeenCalledTimes(1);
+        await mm.openFile({ name: 'x.md', path: '/w/x.md' });
+        const img = document.querySelector('#md-modal-body img');
+        expect(img.getAttribute('src')).toBe(
+            `/api/markdown/asset?path=${encodeURIComponent('/w/pic.png')}&cwd=${encodeURIComponent('/w')}`,
+        );
+        expect(img.getAttribute('src').startsWith('blob:')).toBe(false);
+        // The page never buffers the image itself.
+        expect(
+            fetchSpy.mock.calls.some(([url]) =>
+                String(url).startsWith('/api/markdown/asset'),
+            ),
+        ).toBe(false);
     });
 
-    it('releases a late image result when another view replaces it', async () => {
-        const revoke = vi.fn();
-        const bridge = stubDeferredBridge(revoke);
+    it('leaves no blob URLs behind when another view replaces the modal', async () => {
+        stubMarkdown();
         mockFetch((url) => {
             if (String(url).startsWith('/api/markdown/file'))
                 return { ok: true, text: async () => '<img src="pic.png">' };
@@ -86,15 +76,43 @@ describe('modal image assets', () => {
                 };
             return { ok: true, text: async () => '' };
         });
+        const create = vi.fn();
+        const revoke = vi.fn();
+        URL.createObjectURL = create;
+        URL.revokeObjectURL = revoke;
+        try {
+            const mm = makeMm();
+            await mm.openFile({ name: 'x.md', path: '/w/x.md' });
+            void mm.openDiagModal();
+            mm.closeModal();
+            expect(document.querySelectorAll('img')).toHaveLength(0);
+            expect(create).not.toHaveBeenCalled();
+            expect(revoke).not.toHaveBeenCalled();
+            if (mm._diagInterval) clearInterval(mm._diagInterval);
+        } finally {
+            delete URL.createObjectURL;
+            delete URL.revokeObjectURL;
+        }
+    });
+
+    it('drops a render that resolves after the modal moved on', async () => {
+        stubMarkdown();
+        let releaseFile = () => {};
+        mockFetch((url) => {
+            if (!String(url).startsWith('/api/markdown/file'))
+                return { ok: true, text: async () => '' };
+            return new Promise((resolve) => {
+                releaseFile = () =>
+                    resolve({ ok: true, text: async () => '<p>stale</p>' });
+            });
+        });
         const mm = makeMm();
         const open = mm.openFile({ name: 'x.md', path: '/w/x.md' });
-        await vi.waitFor(() => expect(bridge.release).toBeTypeOf('function'));
-
-        // The Diagnostics view replaces the body while the image is pending.
-        void mm.openDiagModal();
-        bridge.release();
+        await vi.waitFor(() => expect(releaseFile).toBeTypeOf('function'));
+        mm.closeModal();
+        releaseFile();
         await open;
-        expect(revoke).toHaveBeenCalledTimes(1);
-        if (mm._diagInterval) clearInterval(mm._diagInterval);
+        // The guard still holds after the asset plumbing is gone.
+        expect(mm.modalBody.innerHTML).toBe('');
     });
 });

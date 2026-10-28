@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { resolveRelative, rewriteRelativeImages } from '../web/md-render.js';
-import { authenticateImages } from '../web/util.js';
 
 // Local-image rewriting for markdown rendering (web-src/md-render.ts):
 // relative <img> srcs are resolved against the .md file's directory and
@@ -22,63 +21,6 @@ describe('resolveRelative', () => {
 
     it('collapses interior sub/../ segments', () => {
         expect(resolveRelative('/a/b', 'sub/../x.png')).toBe('/a/b/x.png');
-    });
-});
-
-describe('authenticateImages', () => {
-    afterEach(() => {
-        delete window.phiAccessAuth;
-    });
-
-    function containerWith(html) {
-        const div = document.createElement('div');
-        div.innerHTML = html;
-        return div;
-    }
-
-    it('leaves images alone when the page has no auth bridge', async () => {
-        const c = containerWith('<img src="/api/markdown/asset?path=a.png">');
-        const release = await authenticateImages(c);
-        expect(c.querySelector('img').getAttribute('src')).toBe(
-            '/api/markdown/asset?path=a.png',
-        );
-        release();
-    });
-
-    it('swaps in the authenticated address and releases it', async () => {
-        const revoke = vi.fn();
-        const assetURL = vi.fn(async (url) =>
-            url.startsWith('/api/')
-                ? { url: 'blob:phi/a', revoke }
-                : { url, revoke() {} },
-        );
-        window.phiAccessAuth = { assetURL };
-        const c = containerWith(
-            '<img src="/api/markdown/asset?path=a.png"><img src="https://elsewhere.example/a.png">',
-        );
-        const release = await authenticateImages(c);
-        const [first, second] = c.querySelectorAll('img');
-        expect(first.getAttribute('src')).toBe('blob:phi/a');
-        expect(second.getAttribute('src')).toBe(
-            'https://elsewhere.example/a.png',
-        );
-        expect(assetURL).toHaveBeenCalledWith('/api/markdown/asset?path=a.png');
-        release();
-        expect(revoke).toHaveBeenCalledTimes(1);
-    });
-
-    it('restores the plain address when the asset cannot be loaded', async () => {
-        window.phiAccessAuth = {
-            assetURL: vi.fn(async () => {
-                throw new Error('Unable to load asset (401)');
-            }),
-        };
-        const c = containerWith('<img src="/api/markdown/asset?path=a.png">');
-        const release = await authenticateImages(c);
-        expect(c.querySelector('img').getAttribute('src')).toBe(
-            '/api/markdown/asset?path=a.png',
-        );
-        release();
     });
 });
 
@@ -107,6 +49,20 @@ describe('rewriteRelativeImages', () => {
             `/api/markdown/asset?path=${encodeURIComponent('/docs/pic.png')}` +
                 `&cwd=${encodeURIComponent('/docs')}`,
         );
+    });
+
+    it('points images at the same-origin asset path with no credential', () => {
+        const c = containerWith('<img src="pic.png">');
+        rewriteRelativeImages(c, '/docs/readme.md', '/docs');
+        const src = c.querySelector('img').getAttribute('src');
+        expect(src).toBe(
+            `/api/markdown/asset?path=${encodeURIComponent('/docs/pic.png')}` +
+                `&cwd=${encodeURIComponent('/docs')}`,
+        );
+        // The scoped phi_access_asset cookie authorizes the load; a token in
+        // the address would leak it into history, referrers and logs.
+        expect(src).not.toContain('token');
+        expect(src.startsWith('blob:')).toBe(false);
     });
 
     it('leaves absolute and special srcs untouched', () => {

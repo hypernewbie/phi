@@ -153,10 +153,10 @@ describe('initMdView', () => {
         expect(new URL(sockets[0].url).searchParams.get('token')).toBe('jwt-a');
     });
 
-    it('keeps the images of an unchanged render when a refresh lands first', async () => {
-        // An authenticated image is fetched after the Markdown render. A
-        // second, identical refresh must not revoke the object URLs that the
-        // content still on screen owns.
+    it('keeps an unchanged render in place when a refresh lands first', async () => {
+        // Overlapping loads resolve out of order (onopen + 0x07 event). An
+        // identical refresh must leave the content on screen untouched: no
+        // re-render, no scroll jump, and the image node keeps its address.
         document.body.innerHTML = '<main id="md-view-body"></main>';
         const sockets = [];
         vi.stubGlobal(
@@ -185,33 +185,27 @@ describe('initMdView', () => {
             return { ok: true, status: 200, text: async () => raw };
         });
         vi.stubGlobal('fetch', fetchSpy);
-        const original = window.phiAccessAuth.assetURL;
-        const revoke = vi.fn();
-        let releaseAsset = () => {};
-        window.phiAccessAuth.assetURL = () =>
-            new Promise((resolve) => {
-                releaseAsset = () => resolve({ url: 'blob:pic', revoke });
-            });
-        try {
-            window.history.replaceState({}, '', '/md.html?path=a.md&cwd=/w');
-            initMdView();
-            const notReady = releaseAsset;
-            await vi.waitFor(() => expect(releaseAsset).not.toBe(notReady));
-            const img = document.querySelector('.md-rendered img');
-            expect(img.getAttribute('src')).toBeNull();
 
-            // The events socket refreshes while the image is in flight.
-            sockets[0].onopen();
-            await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
-            releaseSecond();
-            releaseAsset();
-            await vi.waitFor(() =>
-                expect(img.getAttribute('src')).toBe('blob:pic'),
-            );
-            expect(revoke).not.toHaveBeenCalled();
-        } finally {
-            window.phiAccessAuth.assetURL = original;
-        }
+        window.history.replaceState({}, '', '/md.html?path=a.md&cwd=/w');
+        initMdView();
+        await vi.waitFor(() =>
+            expect(document.querySelector('.md-rendered img')).toBeTruthy(),
+        );
+        const img = document.querySelector('.md-rendered img');
+        // `a.md` has no directory, so the relative image resolves at the root.
+        const assetSrc = `/api/markdown/asset?path=${encodeURIComponent('/pic.png')}&cwd=${encodeURIComponent('/w')}`;
+        expect(img.getAttribute('src')).toBe(assetSrc);
+
+        // The events socket refreshes while the first load is still on screen.
+        sockets[0].onopen();
+        await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+        releaseSecond();
+        await vi.waitFor(() =>
+            expect(fetchSpy).toHaveBeenCalledTimes(2),
+        );
+        // Same node, same address: the render was not replaced.
+        expect(document.querySelector('.md-rendered img')).toBe(img);
+        expect(img.getAttribute('src')).toBe(assetSrc);
     });
 });
 

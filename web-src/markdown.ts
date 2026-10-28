@@ -1,12 +1,7 @@
 /* Φ phi — Markdown Docs Viewer */
 
 import type { AppLike } from './types.js';
-import {
-    relativeToCwd,
-    escapeHtml,
-    authenticatedAsset,
-    authenticateImages,
-} from './util.js';
+import { relativeToCwd, escapeHtml } from './util.js';
 import {
     renderMarkdownSafe,
     rewriteRelativeImages,
@@ -63,12 +58,8 @@ export class MarkdownManager {
      *  previews don't allocate a handle because renderMarkdownSafe +
      *  innerHTML='' is sufficient cleanup. */
     _currentFileView: FileViewHandle | null;
-    /** Release for the object URLs behind authenticated markdown images in
-     *  the modal body. Markdown content owns no viewer handle, so this is the
-     *  only thing closeModal and the next render must run. */
-    _modalAssetRelease: () => void;
-    /** Bumped by every modal render and by close. A late image result for an
-     *  older render is released instead of adopted. */
+    /** Bumped by every modal render and by close. A render that resolves after
+     *  the body moved on is dropped instead of painted. */
     _modalRenderId: number;
     markdownClipboard: { name: string; dir: string; content: string } | null;
     contextMenuEl: HTMLElement;
@@ -124,7 +115,6 @@ export class MarkdownManager {
         this._pastePending = false;
         this._pasteConflict = false;
         this._currentFileView = null;
-        this._modalAssetRelease = () => {};
         this._modalRenderId = 0;
         this.currentRawContent = '';
         this.markdownClipboard = null;
@@ -658,16 +648,9 @@ export class MarkdownManager {
             this.currentRawContent = raw;
             this._updateModalActions();
             const html = renderMarkdownSafe(raw);
-            this._releaseModalAssets();
             this.modalBody.innerHTML = `<div class="md-rendered">${html}</div>`;
             rewriteRelativeImages(this.modalBody, f.path, cwd);
             highlightCodeIn(this.modalBody);
-            const release = await authenticateImages(this.modalBody);
-            if (render !== this._modalRenderId) {
-                release();
-                return;
-            }
-            this._modalAssetRelease = release;
         } catch (e) {
             if (render !== this._modalRenderId) return;
             this.modalBody.innerHTML = `<div class="md-list-error">Failed to load: ${escapeHtml((e as Error).message)}</div>`;
@@ -696,7 +679,6 @@ export class MarkdownManager {
         }
         this._setModalTitle(f.name);
         this._modalRenderId++;
-        this._releaseModalAssets();
         this.modalBody.innerHTML = '<div class="md-rendering">Loading…</div>';
         this.modal.classList.remove('hidden');
         this.currentRawContent = '';
@@ -748,17 +730,9 @@ export class MarkdownManager {
         this.modalSizeToggleBtn.setAttribute('aria-label', label);
     }
 
-    // _releaseModalAssets drops the object URLs behind the images currently in
-    // the modal body. Run it before replacing that content and on close.
-    _releaseModalAssets(): void {
-        this._modalAssetRelease?.();
-        this._modalAssetRelease = () => {};
-    }
-
     closeModal(): void {
         this._modalRenderId++;
         this.modal.classList.add('hidden');
-        this._releaseModalAssets();
         this.modalBody.innerHTML = '';
         this.currentRawContent = '';
         this._currentModalContext = null;
@@ -826,7 +800,6 @@ export class MarkdownManager {
         this._updateModalActions();
         const html = renderMarkdownSafe(rawMarkdown);
         this._modalRenderId++;
-        this._releaseModalAssets();
         this.modalBody.innerHTML = `<div class="md-rendered">${html}</div>`;
         highlightCodeIn(this.modalBody);
         this.modal.classList.remove('hidden');
@@ -835,7 +808,6 @@ export class MarkdownManager {
     async openHelpModal(): Promise<void> {
         this.modalTitle.innerText = 'Phi Documentation';
         this._modalRenderId++;
-        this._releaseModalAssets();
         this.modalBody.innerHTML =
             '<div class="md-rendering">Loading help...</div>';
         this.currentRawContent = '';
@@ -870,7 +842,6 @@ export class MarkdownManager {
     async openDiagModal(): Promise<void> {
         this.modalTitle.innerText = 'Phi Diagnostics';
         this._modalRenderId++;
-        this._releaseModalAssets();
         this.modalBody.innerHTML =
             '<div class="md-rendering">Loading diagnostics…</div>';
         this.currentRawContent = '';
@@ -960,7 +931,6 @@ export class MarkdownManager {
         const title = version ? `Changelog — ${version}` : 'Changelog';
         this.modalTitle.innerText = title;
         this._modalRenderId++;
-        this._releaseModalAssets();
         this.modalBody.innerHTML =
             '<div class="md-rendering">Loading changelog...</div>';
         this.currentRawContent = '';
@@ -1787,24 +1757,12 @@ export class MarkdownManager {
             this.app.showToast('No file to download', { type: 'error' });
             return;
         }
-        let asset: { url: string; revoke: () => void };
-        try {
-            asset = await authenticatedAsset(url);
-        } catch (e) {
-            this.app.showToast(`Failed to download: ${(e as Error).message}`, {
-                type: 'error',
-            });
-            return;
-        }
         const a = document.createElement('a');
-        a.href = asset.url;
+        a.href = url;
         if (filename) a.download = filename;
         document.body.appendChild(a);
         a.click();
         a.remove();
-        // The browser reads the blob URL after the click; release it once the
-        // download has started, never before.
-        setTimeout(asset.revoke, 30000);
     }
 
     _openInNewWindow(f: any): void {
