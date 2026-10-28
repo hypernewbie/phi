@@ -537,8 +537,12 @@ func (h *Hub) AttachHot(paneID string, client *Client) {
 			Data:    ph.ckpt.Ansi,
 		}
 	}
-	if attach.Checkpoint == nil && ph.recording != nil && !ph.recording.isClosed() {
-		if rf := ph.recording.replayStart(); rf != 0 {
+	// The certified replay window is published with or without a checkpoint:
+	// a client that already holds a coherent parser can resume inside it
+	// instead of repainting the pane, and a client that does not simply keeps
+	// using the checkpoint. Clients that ignore the field are unaffected.
+	if ph.recording != nil && !ph.recording.isClosed() {
+		if rf := ph.recording.replayStart(); rf != 0 && rf <= pos.Head {
 			attach.ReplayFrom = proto.Uint64(rf)
 		}
 	}

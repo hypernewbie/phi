@@ -446,6 +446,7 @@ describe('production sort control and coarse-pointer fallback', () => {
             expect(tm.sendToTab).toHaveBeenCalledWith(
                 tm.tabs.get('bash'),
                 '\r',
+                { submit: true },
             );
         } finally {
             cleanup();

@@ -3111,6 +3111,22 @@ body.has-terminal-bg
 }
 
 /* PI RPC STATUS BAR */
+/* One line, scoped to the input bar: why input is restricted right now. */
+.input-restriction {
+    flex-shrink: 0;
+    padding: 4px 10px;
+    border-top: 1px solid var(--bg-border);
+    background-color: var(--bg-base);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.input-restriction.hidden {
+    display: none;
+}
+
 .pi-rpc-status-bar {
     display: flex;
     flex-direction: row;
