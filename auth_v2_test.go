@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	neturl "net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -4936,5 +4937,37 @@ func TestAccessV2OwnershipHandoffUsesCurrentRecordAndAdmitsSockets(t *testing.T)
 	if err == nil {
 		t.Cleanup(func() { _ = stale.Close() })
 		expectClosed(t, stale)
+	}
+}
+
+// TestAccessFreshInstallTakesOwnership covers the first run of a new install:
+// configure() runs before anything has created the data directory, so taking
+// the state lock has to create it. Failing there made the process report "not
+// owner" and refuse every authenticated request until a second start, which is
+// exactly the fresh-install case a new user hits first.
+func TestAccessFreshInstallTakesOwnership(t *testing.T) {
+	parent := t.TempDir()
+	testConfigPath = filepath.Join(parent, "not-created-yet", "config.json")
+	origAuth := accessAuth
+	t.Cleanup(func() {
+		accessAuth = origAuth
+		accessAuth.owner.release()
+	})
+	accessAuth = newAccessAuthManager()
+
+	if err := accessAuth.configure(""); err != nil {
+		t.Fatalf("configure on a fresh install: %v", err)
+	}
+	if !accessAuth.stateOwned() {
+		t.Fatal("fresh install did not take ownership of the auth state")
+	}
+	decision := accessAuth.authorizeRequest(
+		httptest.NewRequest(http.MethodGet, "/api/version", nil),
+	)
+	if !decision.Authorized {
+		t.Fatal("fresh install refused an API request while auth is disabled")
+	}
+	if _, err := os.Stat(accessV2LockPath()); err != nil {
+		t.Fatalf("lock file: %v", err)
 	}
 }

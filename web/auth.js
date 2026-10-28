@@ -443,6 +443,9 @@ function receiveLogout(message) {
     loggedOut = true;
     dropCredential();
     if (pendingOverlay) pendingOverlay.finish({ enabled: false });
+    // The family is gone server-side, so this tab cannot continue: ask for a
+    // password instead of leaving a silently signed-out page.
+    if (accessEnabled) void requestReauth();
 }
 
 // broadcastBundle shares a renewed bundle with the other tabs of this
