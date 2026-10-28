@@ -410,6 +410,13 @@ func (l *accessStateLock) tryAcquire(path string) bool {
 	if l.file != nil {
 		return true
 	}
+	// A first run has no data directory yet: configure() happens before the
+	// first config save, so creating the lock file must create its directory
+	// too. Without this a fresh install cannot take ownership and refuses every
+	// authenticated request.
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return false
+	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return false

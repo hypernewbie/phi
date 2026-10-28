@@ -1506,14 +1506,19 @@ test.describe('route-local CSRF and credential precedence', () => {
 //   - `503 GET /api/update/status` is the update checker being uninitialized in
 //     an isolated fixture (api_update.go: `updateChecker == nil`), not an auth
 //     path.
+// The coder service is out of scope for this suite and is absent from the
+// fixture: `/api/sessions?coder=opencode` answers 500 when that backend is not
+// running, which says nothing about access auth.
 // Anything else in either list fails the test.
 const EXPECTED_CONSOLE = [
     /^Failed to load resource: the server responded with a status of 401 \(Unauthorized\)$/,
     /^Failed to load resource: the server responded with a status of 503 \(Service Unavailable\)$/,
+    /^Failed to load resource: the server responded with a status of 500 \(Internal Server Error\)$/,
 ];
 const EXPECTED_RESPONSES = [
     /\/api\/auth\/v2\/refresh$/,
     /\/api\/update\/status$/,
+    /\/api\/sessions\?/,
 ];
 
 test.describe('a signed-in session stays quiet', () => {
