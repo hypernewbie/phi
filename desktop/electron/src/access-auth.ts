@@ -149,6 +149,12 @@ export type CookieCapturedListener = (
  *  A null bundle means the origin no longer holds a refreshable credential. */
 export type BundleListener = (origin: string, bundle: V2Bundle | null) => void;
 
+/** A captured handshake fence, see `AccessAuth.captureAttempt`. */
+export interface AuthAttempt {
+  readonly origin: string;
+  readonly isCurrent: () => boolean;
+}
+
 /** Strict bounds — server-controlled values that must be validated before
  *  handing them to the PBKDF2 primitive (mitigates remote-driven cost
  *  amplification and malformed-salt attacks). */
@@ -242,6 +248,10 @@ export class AccessAuth {
     { verifier: Buffer; salt: Buffer; iterations: number }
   >();
   private readonly attemptTokens = new Map<string, number>();
+  /** Monotonic renewal deadline per origin: receipt time plus the server's own
+   *  remaining duration. A wall clock that is wrong cannot make a fresh token
+   *  look due, and cannot postpone a real expiry. */
+  private readonly renewAt = new Map<string, number>();
   private readonly _doFetch: FetchLike;
   private readonly _now: () => number;
   private _cookieProvider: CookieProvider | null = null;
@@ -312,6 +322,7 @@ export class AccessAuth {
       this.bundles.delete(canonical);
       this.refreshes.delete(canonical);
       this.refreshBackoff.delete(canonical);
+      this.renewAt.delete(canonical);
       this.selectedProtocols.delete(canonical);
     }
     this.cookies.delete(origin);
@@ -321,6 +332,7 @@ export class AccessAuth {
     this.bundles.delete(origin);
     this.refreshes.delete(origin);
     this.refreshBackoff.delete(origin);
+    this.renewAt.delete(origin);
     this.selectedProtocols.delete(origin);
   }
 
@@ -336,6 +348,7 @@ export class AccessAuth {
     // A bare token carries no refresh handle, so any older bundle describes a
     // different credential and must not be refreshed against this token.
     this.bundles.delete(canonical);
+    this.renewAt.delete(canonical);
     this.selectedProtocols.set(canonical, 'v2');
     this.bumpAttempt(canonical);
     this.announceBundle(canonical);
@@ -344,14 +357,32 @@ export class AccessAuth {
 
   /** Installs a full v2 credential bundle: access token plus the host-only
    *  refresh handle and the server's deadlines. Returns false when the bundle
-   *  is malformed, so a bad body can never displace a working credential. */
-  installBundle(origin: string, bundle: V2Bundle): boolean {
+   *  is malformed, so a bad body can never displace a working credential.
+   *
+   *  `options.restored` marks a bundle read back from the encrypted store: its
+   *  receipt-relative clock did not survive the restart, so renewal is due at
+   *  once and the host authorizes from a fresh bundle before protected work. */
+  installBundle(
+    origin: string,
+    bundle: V2Bundle,
+    options: { restored?: boolean } = {},
+  ): boolean {
     const canonical = toCanonicalAuthOrigin(origin);
     if (!canonical || !isValidBundle(bundle)) return false;
     this.tokens.set(canonical, bundle.token);
     this.bundles.set(canonical, bundle);
     this.selectedProtocols.set(canonical, 'v2');
     this.refreshBackoff.delete(canonical);
+    // Renewal is measured from this receipt, not from the server's absolute
+    // expiry read through a possibly-wrong local clock: a machine whose clock
+    // runs ahead must not renew in a storm, and one that runs behind must not
+    // miss a real expiry.
+    this.renewAt.set(
+      canonical,
+      options.restored
+        ? this._now()
+        : this._now() + bundle.expiresIn * 1000 - RENEW_LEAD_S * 1000,
+    );
     this.bumpAttempt(canonical);
     // Persist before anyone can install this credential into a renderer.
     this.announceBundle(canonical);
@@ -374,6 +405,7 @@ export class AccessAuth {
     if (this.tokens.get(canonical) === token) {
       this.tokens.delete(canonical);
       this.bundles.delete(canonical);
+      this.renewAt.delete(canonical);
       this.announceBundle(canonical);
     }
     this.selectedProtocols.set(canonical, 'v2');
@@ -388,6 +420,41 @@ export class AccessAuth {
 
   hasToken(origin: string): boolean {
     return this.getToken(origin) !== null;
+  }
+
+  /** Captures the per-origin handshake fence. A caller that awaits between
+   *  reading and writing auth state holds one of these and installs only while
+   *  it is still current, so a slow response cannot displace a newer one. */
+  captureAttempt(origin: string): AuthAttempt | null {
+    const canonical = toCanonicalAuthOrigin(origin);
+    if (!canonical) return null;
+    const attempt = this.attemptTokens.get(canonical) ?? 0;
+    return {
+      origin: canonical,
+      isCurrent: () => (this.attemptTokens.get(canonical) ?? 0) === attempt,
+    };
+  }
+
+  /** Installs a bundle only while `attempt` still owns the origin. This is the
+   *  fence every async credential path uses: a login or password response that
+   *  lost its race must not replace the credential that won it. */
+  installBundleForAttempt(
+    origin: string,
+    bundle: V2Bundle,
+    attempt: AuthAttempt,
+  ): boolean {
+    const canonical = toCanonicalAuthOrigin(origin);
+    if (!canonical || canonical !== attempt.origin) return false;
+    if (!attempt.isCurrent()) return false;
+    return this.installBundle(canonical, bundle);
+  }
+
+  /** Drops the bundle only while `attempt` still owns the origin, so a clear
+   *  cannot revoke a session that was signed in after it started. */
+  clearBundleForAttempt(attempt: AuthAttempt): boolean {
+    if (!attempt.isCurrent()) return false;
+    this.clearBundle(attempt.origin);
+    return true;
   }
 
   /** Advances the per-origin attempt fence so a handshake that started
@@ -988,12 +1055,12 @@ export class AccessAuth {
     if (!bundle) return false;
     const backoff = this.refreshBackoff.get(canonical);
     if (backoff && backoff.until > this._now()) return false;
-    const nowSeconds = Math.floor(this._now() / 1000);
     // `expiresIn <= 0` means the bundle was already unusable on arrival; the
     // backoff check above keeps that from becoming a retry loop.
-    return (
-      bundle.expiresIn <= 0 || nowSeconds >= bundle.expiresAt - RENEW_LEAD_S
-    );
+    if (bundle.expiresIn <= 0) return true;
+    const renewAt = this.renewAt.get(canonical);
+    if (renewAt === undefined) return false;
+    return this._now() >= renewAt;
   }
 
   /** Forces one host refresh for `origin`, coalescing concurrent callers onto
@@ -1141,12 +1208,9 @@ export class AccessAuth {
       // now would resurrect the rotated handle the server just retired.
       return { kind: 'superseded' };
     }
-    this.tokens.set(canonical, installed.token);
-    this.bundles.set(canonical, installed);
-    this.selectedProtocols.set(canonical, 'v2');
-    this.refreshBackoff.delete(canonical);
-    this.bumpAttempt(canonical);
-    this.announceBundle(canonical);
+    // The rotated bundle restarts the receipt-relative renewal clock: the
+    // server's `expires_in` is measured from this response.
+    this.installBundle(canonical, installed);
     return { kind: 'ok', bundle: installed };
   }
 
@@ -1200,6 +1264,7 @@ export class AccessAuth {
     this.tokens.delete(canonical);
     this.bundles.delete(canonical);
     this.refreshBackoff.delete(canonical);
+    this.renewAt.delete(canonical);
     this.selectedProtocols.set(canonical, 'v2');
     // A terminal rejection is the one case the stored bundle must go away.
     this.announceBundle(canonical);
