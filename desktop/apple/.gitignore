@@ -1,0 +1,6 @@
+.build/
+.tools/
+build/
+Apps/Signing.xcconfig
+*.xcodeproj/
+DerivedData/
