@@ -164,7 +164,19 @@ describe('v2 selection', () => {
     });
 
     it('keeps a v2 selection with no token instead of falling back to v1', async () => {
-        installToken('jwt-stale');
+        // A browser-obtained token, not a host install: a host-installed token
+        // is renewed by the host and never refreshed standalone.
+        mockAuth((url) => {
+            if (url === '/api/auth/status')
+                return { ...DUAL_STATUS, authenticated: false };
+            if (url === '/api/auth/v2/refresh')
+                return { ...BUNDLE, token: 'jwt-stale' };
+            return undefined;
+        });
+        await expect(bootstrapAccessAuth()).resolves.toEqual({ enabled: true });
+        expect(__test__.getAccessState().accessToken).toBe('jwt-stale');
+
+        // The server no longer accepts it. Only the credential clears.
         mockAuth((url) => {
             if (url === '/api/auth/status')
                 return { ...DUAL_STATUS, authenticated: true };
@@ -484,7 +496,7 @@ describe('v2 password route', () => {
             return undefined;
         });
         await bootstrapAccessAuth();
-        const fetchSpy = mockAuth((url, options) => {
+        const fetchSpy = mockAuth((url, _options) => {
             if (url === '/api/auth/v2/password')
                 return { ...BUNDLE, token: 'jwt-b' };
             return undefined;
@@ -538,7 +550,11 @@ describe('v2 password route', () => {
     it('rejects a v2 password outside the byte bounds', async () => {
         mockAuth(() => ({ enabled: false, protocols: ['v1', 'v2'] }));
         await bootstrapAccessAuth();
-        const fetchSpy = mockAuth(() => ({ ...BUNDLE, enabled: true, token: 'jwt-new' }));
+        const fetchSpy = mockAuth(() => ({
+            ...BUNDLE,
+            enabled: true,
+            token: 'jwt-new',
+        }));
         await expect(setAccessPassword('short')).rejects.toThrow('at least 8');
         await expect(setAccessPassword('é'.repeat(600))).rejects.toThrow(
             'at most 1024 bytes',
@@ -1319,5 +1335,418 @@ describe('protected request failure handling', () => {
         await fetch('/api/other');
         expect(__test__.getAccessState().accessToken).toBe('jwt-a');
         expect(document.querySelector('.access-auth-overlay')).toBeNull();
+    });
+});
+
+// --- refresh ownership ---------------------------------------------------
+
+const nowSeconds = () => Math.floor(Date.now() / 1000);
+
+// bundleFor builds a complete bundle whose access deadline is relative to now,
+// so a renewal test can place it on either side of the 60-second lead.
+function bundleFor(token, expiresIn = 3600) {
+    const now = nowSeconds();
+    return {
+        enabled: true,
+        token,
+        expires_at: now + expiresIn,
+        expires_in: expiresIn,
+        refresh_idle_expires_at: now + 30 * 86400,
+        refresh_absolute_expires_at: now + 90 * 86400,
+    };
+}
+
+// startV2 bootstraps a browser session from the refresh cookie, which is how a
+// non-host page obtains its in-memory token.
+async function startV2(token, expiresIn = 3600) {
+    mockAuth((url) => {
+        if (url === '/api/auth/status') return DUAL_STATUS;
+        if (url === '/api/auth/v2/refresh') return bundleFor(token, expiresIn);
+        return undefined;
+    });
+    await expect(bootstrapAccessAuth()).resolves.toEqual({ enabled: true });
+}
+
+function refreshCalls(fetchSpy) {
+    return fetchSpy.mock.calls.filter(
+        ([url]) => String(url) === '/api/auth/v2/refresh',
+    );
+}
+
+describe('refresh ownership', () => {
+    it('renews in the background one minute before expiry', async () => {
+        vi.useFakeTimers();
+        try {
+            const fetchSpy = mockAuth((url) => {
+                if (url === '/api/auth/status') return DUAL_STATUS;
+                if (url === '/api/auth/v2/refresh')
+                    return bundleFor('jwt-renewed', 7200);
+                return undefined;
+            });
+            // The first response is the bootstrap credential.
+            fetchSpy.mockImplementationOnce(
+                vi.fn(async () => ({
+                    ok: true,
+                    status: 200,
+                    headers: { get: () => 'application/json' },
+                    json: async () => ({ ...DUAL_STATUS, enabled: true }),
+                    text: async () => '',
+                })),
+            );
+            const boot = bootstrapAccessAuth();
+            await vi.advanceTimersByTimeAsync(0);
+            await boot;
+            expect(__test__.getAccessState().accessToken).toBe('jwt-renewed');
+
+            // Nothing is due yet: the renewal is scheduled, not immediate.
+            expect(refreshCalls(fetchSpy)).toHaveLength(1);
+
+            await vi.advanceTimersByTimeAsync((7200 - 61) * 1000);
+            expect(refreshCalls(fetchSpy)).toHaveLength(1);
+            await vi.advanceTimersByTimeAsync(2000);
+            expect(refreshCalls(fetchSpy)).toHaveLength(2);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('renews a stale token when the tab becomes visible again', async () => {
+        const fetchSpy = await (async () => {
+            await startV2('jwt-first', 3600);
+            return mockAuth((url) => {
+                if (url === '/api/auth/v2/refresh')
+                    return bundleFor('jwt-visible', 3600);
+                return undefined;
+            });
+        })();
+        // A hidden tab's timers are throttled: the clock moves without any
+        // scheduled callback having run.
+        vi.useFakeTimers();
+        try {
+            vi.setSystemTime(Date.now() + 3590 * 1000);
+            document.dispatchEvent(new Event('visibilitychange'));
+            await vi.advanceTimersByTimeAsync(0);
+        } finally {
+            vi.useRealTimers();
+        }
+        expect(refreshCalls(fetchSpy)).toHaveLength(1);
+        expect(__test__.getAccessState().accessToken).toBe('jwt-visible');
+    });
+
+    it('does not renew a token that is not due', async () => {
+        await startV2('jwt-fresh', 3600);
+        const fetchSpy = mockFetch(() => {
+            throw new Error('no request expected');
+        });
+        await __test__.renewIfDue();
+        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(__test__.getAccessState().accessToken).toBe('jwt-fresh');
+    });
+
+    it('serializes renewals through the per-origin lock', async () => {
+        await startV2('jwt-locked', 3600);
+        const request = vi.fn(async (_name, run) => run());
+        vi.stubGlobal('navigator', { locks: { request } });
+        const fetchSpy = mockAuth((url) =>
+            url === '/api/auth/v2/refresh'
+                ? bundleFor('jwt-after-lock', 3600)
+                : undefined,
+        );
+        await __test__.renewIfDue({ ifDue: false });
+        expect(request).toHaveBeenCalledWith(
+            `phi-access-refresh:${location.origin}`,
+            expect.any(Function),
+        );
+        expect(refreshCalls(fetchSpy)).toHaveLength(1);
+        expect(__test__.getAccessState().accessToken).toBe('jwt-after-lock');
+    });
+
+    it('skips the request when another tab refreshed while the lock was held', async () => {
+        vi.useFakeTimers();
+        try {
+            await startV2('jwt-waiting', 3600);
+            // Past the renewal lead, so this caller really is due.
+            vi.setSystemTime(Date.now() + 3590 * 1000);
+            const request = vi.fn(async (_name, run) => {
+                // The sibling tab's bundle lands before this caller runs.
+                __test__.receiveBundle({
+                    kind: 'bundle',
+                    origin: location.origin,
+                    bundle: {
+                        token: 'jwt-sibling',
+                        expiresAt: nowSeconds() + 7200,
+                        refreshIdleExpiresAt: nowSeconds() + 86400,
+                        refreshAbsoluteExpiresAt: nowSeconds() + 172800,
+                    },
+                });
+                return run();
+            });
+            vi.stubGlobal('navigator', { locks: { request } });
+            const fetchSpy = mockAuth(() => {
+                throw new Error('no refresh expected');
+            });
+            const renewal = __test__.renewIfDue({ ifDue: true });
+            await vi.advanceTimersByTimeAsync(0);
+            await renewal;
+            expect(fetchSpy).not.toHaveBeenCalled();
+            expect(__test__.getAccessState().accessToken).toBe('jwt-sibling');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('adopts a bundle broadcast by another tab without a request', async () => {
+        await startV2('jwt-tab-a', 3600);
+        const fetchSpy = mockFetch(() => {
+            throw new Error('no request expected');
+        });
+        __test__.receiveBundle({
+            kind: 'bundle',
+            origin: location.origin,
+            bundle: {
+                token: 'jwt-tab-b',
+                expiresAt: nowSeconds() + 7200,
+                refreshIdleExpiresAt: nowSeconds() + 86400,
+                refreshAbsoluteExpiresAt: nowSeconds() + 172800,
+            },
+        });
+        expect(fetchSpy).not.toHaveBeenCalled();
+        const state = __test__.getAccessState();
+        expect(state.accessToken).toBe('jwt-tab-b');
+        expect(state.memoryOnly).toBe(false);
+        // The bundle never reaches storage.
+        expect(localStorage.getItem(BEARER_KEY)).toBeNull();
+        expect(localStorage.getItem(LEGACY_BEARER_KEY)).toBeNull();
+    });
+
+    it('ignores an older bundle and a foreign-origin bundle', async () => {
+        await startV2('jwt-newer', 7200);
+        __test__.receiveBundle({
+            kind: 'bundle',
+            origin: location.origin,
+            bundle: {
+                token: 'jwt-older',
+                expiresAt: nowSeconds() + 60,
+                refreshIdleExpiresAt: nowSeconds() + 86400,
+                refreshAbsoluteExpiresAt: nowSeconds() + 172800,
+            },
+        });
+        __test__.receiveBundle({
+            kind: 'bundle',
+            origin: 'https://elsewhere.example',
+            bundle: {
+                token: 'jwt-foreign',
+                expiresAt: nowSeconds() + 86400,
+                refreshIdleExpiresAt: nowSeconds() + 86400,
+                refreshAbsoluteExpiresAt: nowSeconds() + 172800,
+            },
+        });
+        expect(__test__.getAccessState().accessToken).toBe('jwt-newer');
+    });
+
+    it('keeps the credential and retries after a 500, with no prompt', async () => {
+        vi.useFakeTimers();
+        try {
+            await startV2('jwt-kept', 3600);
+            const fetchSpy = mockAuth(() => ({ ok: false, status: 500 }));
+            const renewal = __test__.renewIfDue({ ifDue: false });
+            await vi.advanceTimersByTimeAsync(0);
+            await renewal;
+            expect(__test__.getAccessState().accessToken).toBe('jwt-kept');
+            expect(document.querySelector('.access-auth-overlay')).toBeNull();
+            expect(refreshCalls(fetchSpy)).toHaveLength(1);
+
+            // Bounded backoff retries without any user action.
+            await vi.advanceTimersByTimeAsync(3000);
+            expect(refreshCalls(fetchSpy)).toHaveLength(2);
+            expect(__test__.getAccessState().accessToken).toBe('jwt-kept');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('keeps the credential and retries when the network is gone', async () => {
+        vi.useFakeTimers();
+        try {
+            await startV2('jwt-offline', 3600);
+            const fetchSpy = mockFetch(() => {
+                throw new Error('network down');
+            });
+            const renewal = __test__.renewIfDue({ ifDue: false });
+            await vi.advanceTimersByTimeAsync(0);
+            await renewal;
+            expect(__test__.getAccessState().accessToken).toBe('jwt-offline');
+            expect(document.querySelector('.access-auth-overlay')).toBeNull();
+            expect(fetchSpy).toHaveBeenCalledTimes(1);
+            await vi.advanceTimersByTimeAsync(3000);
+            expect(fetchSpy.mock.calls.length).toBeGreaterThan(1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('honors Retry-After on a 429', async () => {
+        vi.useFakeTimers();
+        try {
+            await startV2('jwt-429', 3600);
+            const calls = [];
+            vi.stubGlobal(
+                'fetch',
+                vi.fn(async (url) => {
+                    calls.push(String(url));
+                    return {
+                        ok: false,
+                        status: 429,
+                        headers: {
+                            get: (key) =>
+                                String(key).toLowerCase() === 'retry-after'
+                                    ? '30'
+                                    : null,
+                        },
+                        json: async () => ({}),
+                        text: async () => '',
+                    };
+                }),
+            );
+            const renewal = __test__.renewIfDue({ ifDue: false });
+            await vi.advanceTimersByTimeAsync(0);
+            await renewal;
+            expect(calls).toHaveLength(1);
+            // The server asked for 30 seconds; backoff must not undercut it.
+            await vi.advanceTimersByTimeAsync(10000);
+            expect(calls).toHaveLength(1);
+            await vi.advanceTimersByTimeAsync(21000);
+            expect(calls.length).toBeGreaterThan(1);
+            expect(__test__.getAccessState().accessToken).toBe('jwt-429');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('treats a refresh 401 as terminal and prompts once, staying on v2', async () => {
+        await startV2('jwt-gone', 3600);
+        const fetchSpy = mockAuth((url) => {
+            if (url === '/api/auth/v2/refresh')
+                return { ok: false, status: 401 };
+            if (url === '/api/auth/login')
+                throw new Error('v1 login must not run after a v2 401');
+            return undefined;
+        });
+        await __test__.renewIfDue({ ifDue: false });
+        expect(__test__.getAccessState().accessToken).toBeNull();
+        expect(__test__.getAccessState().selectedProtocol).toBe('v2');
+        expect(document.querySelectorAll('.access-auth-overlay')).toHaveLength(
+            1,
+        );
+        expect(refreshCalls(fetchSpy)).toHaveLength(1);
+    });
+
+    it('never refreshes a host-installed token', async () => {
+        installToken('jwt-host');
+        const fetchSpy = mockAuth(() => {
+            throw new Error('no request expected');
+        });
+        await __test__.renewIfDue();
+        document.dispatchEvent(new Event('visibilitychange'));
+        await Promise.resolve();
+        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(__test__.getAccessState().accessToken).toBe('jwt-host');
+    });
+});
+
+describe('stale-token recovery in the fetch wrapper', () => {
+    it('refreshes once and retries an idempotent GET with the new token', async () => {
+        await startV2('jwt-stale', 3600);
+        const fetchSpy = mockAuth((url, options) => {
+            const auth = options?.headers?.get?.('Authorization');
+            if (url === '/api/auth/v2/refresh')
+                return bundleFor('jwt-fresh', 3600);
+            if (url === '/api/data')
+                return auth === 'Bearer jwt-fresh'
+                    ? { ok: true, status: 200, json: { ok: true } }
+                    : { ok: false, status: 401 };
+            return undefined;
+        });
+        installAccessFetch();
+        const res = await fetch('/api/data');
+        expect(res.status).toBe(200);
+        const dataCalls = fetchSpy.mock.calls.filter(
+            ([url]) => String(url) === '/api/data',
+        );
+        expect(dataCalls).toHaveLength(2);
+        expect(refreshCalls(fetchSpy)).toHaveLength(1);
+        expect(__test__.getAccessState().accessToken).toBe('jwt-fresh');
+    });
+
+    it('retries a HEAD request but never a mutation', async () => {
+        await startV2('jwt-stale', 3600);
+        const fetchSpy = mockAuth((url, options) => {
+            const auth = options?.headers?.get?.('Authorization');
+            if (url === '/api/auth/v2/refresh')
+                return bundleFor('jwt-fresh', 3600);
+            if (url === '/api/data')
+                return auth === 'Bearer jwt-fresh'
+                    ? { ok: true, status: 200, json: { ok: true } }
+                    : { ok: false, status: 401 };
+            return undefined;
+        });
+        installAccessFetch();
+        const head = await fetch('/api/data', { method: 'HEAD' });
+        expect(head.status).toBe(200);
+
+        __test__.resetAccessState();
+        await startV2('jwt-stale', 3600);
+        const postSpy = mockAuth((url) => {
+            if (url === '/api/auth/v2/refresh')
+                return bundleFor('jwt-fresh', 3600);
+            if (url === '/api/data') return { ok: false, status: 401 };
+            return undefined;
+        });
+        installAccessFetch();
+        const post = await fetch('/api/data', {
+            method: 'POST',
+            body: JSON.stringify({ name: 'x' }),
+        });
+        expect(post.status).toBe(401);
+        expect(
+            postSpy.mock.calls.filter(([url]) => String(url) === '/api/data'),
+        ).toHaveLength(1);
+        expect(fetchSpy).toBeTruthy();
+        // The refreshed credential is installed; the caller resubmits.
+        expect(__test__.getAccessState().accessToken).toBe('jwt-fresh');
+    });
+
+    it('does not treat a route-specific 403 as expiry', async () => {
+        await startV2('jwt-live', 3600);
+        const fetchSpy = mockAuth((url) =>
+            url === '/api/data' ? { ok: false, status: 403 } : undefined,
+        );
+        installAccessFetch();
+        const res = await fetch('/api/data');
+        expect(res.status).toBe(403);
+        expect(refreshCalls(fetchSpy)).toHaveLength(0);
+        expect(__test__.getAccessState().accessToken).toBe('jwt-live');
+        expect(document.querySelector('.access-auth-overlay')).toBeNull();
+    });
+
+    it('prompts after the refresh behind a 401 is itself rejected', async () => {
+        await startV2('jwt-stale', 3600);
+        const fetchSpy = mockAuth((url) => {
+            if (url === '/api/auth/v2/refresh')
+                return { ok: false, status: 401 };
+            if (url === '/api/data') return { ok: false, status: 401 };
+            return undefined;
+        });
+        installAccessFetch();
+        const res = await fetch('/api/data');
+        expect(res.status).toBe(401);
+        expect(
+            fetchSpy.mock.calls.filter(([url]) => String(url) === '/api/data'),
+        ).toHaveLength(1);
+        await vi.waitFor(() =>
+            expect(
+                document.querySelectorAll('.access-auth-overlay'),
+            ).toHaveLength(1),
+        );
     });
 });
