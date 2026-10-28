@@ -658,6 +658,64 @@ describe('host-authenticated shell', () => {
         ).toEqual([]);
     });
 
+    it('follows a v1-only server instead of asking for a v2 session', async () => {
+        // A v1-only Phi server advertises no v2 routes. Selecting v2 anyway
+        // would call /api/auth/v2/status and then prompt for a password that
+        // can never be accepted.
+        const fetchSpy = mockFetch((url) => {
+            if (url === '/api/auth/status')
+                return { ...STATUS, authenticated: true, protocols: ['v1'] };
+            throw new Error(`unexpected fetch ${url}`);
+        });
+
+        await expect(bootstrapAccessAuth()).resolves.toEqual({ enabled: true });
+
+        expect(fetchSpy.mock.calls.map(([url]) => String(url))).not.toContain(
+            '/api/auth/v2/status',
+        );
+        expect(document.querySelector('.access-auth-overlay')).toBeNull();
+        const state = __test__.getAccessState();
+        expect(state.selectedProtocol).toBe('v1');
+        // The proxy owns the v1 cookie, so the session is host-owned.
+        expect(state.hostSession).toBe(true);
+        expect(state.accessToken).toBeNull();
+    });
+
+    it('prompts with the v1 flow when a v1-only server is still locked', async () => {
+        const fetchSpy = mockFetch((url) => {
+            if (url === '/api/auth/status')
+                return { ...STATUS, authenticated: false, protocols: ['v1'] };
+            throw new Error(`unexpected fetch ${url}`);
+        });
+
+        void bootstrapAccessAuth();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const overlay = document.querySelector('.access-auth-overlay');
+        expect(overlay).not.toBeNull();
+        expect(fetchSpy.mock.calls.map(([url]) => String(url))).not.toContain(
+            '/api/auth/v2/status',
+        );
+        overlay.remove();
+    });
+
+    it('reports a proxied failure outside a protected path without prompting', async () => {
+        mockFetch((url) => {
+            if (url === '/api/auth/status')
+                return { ...STATUS, protocols: ['v1', 'v2'] };
+            if (url === '/api/auth/v2/status') return HOST_STATUS;
+            // An unprotected route that happens to answer 401 is not a
+            // statement about the host session, so it never opens a prompt.
+            if (url === '/healthz') return { ok: false, status: 401 };
+            throw new Error(`unexpected fetch ${url}`);
+        });
+
+        await bootstrapAccessAuth();
+        await fetch('/healthz');
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        expect(document.querySelector('.access-auth-overlay')).toBeNull();
+    });
+
     it('logs out through the host row and drops the session', async () => {
         const fetchSpy = mockFetch((url) => {
             if (url === '/api/auth/status')

@@ -1108,10 +1108,24 @@ export function installAccessFetch() {
     if (!baseFetch || baseFetch[WRAPPED_FETCH]) return;
     const wrapped = async (input, init) => {
         if (hostSession) {
-            // The host proxy authorizes this request and answers with a fixed
-            // token-free 401 only when its own refresh failed terminally.
+            // The host proxy authorizes this request and recovers a stale token
+            // itself; it answers a fixed token-free 401 only when its own
+            // refresh was refused terminally. The scope and no-replay rules are
+            // the browser's: only a protected API path can mean the session is
+            // gone, and a mutation is never replayed here.
             const answer = await baseFetch(input, init);
-            if (answer.status === 401) requestReauth();
+            const url = requestURL(input);
+            // A non-special scheme has no tuple origin, so the shell's
+            // same-document test is scheme plus host, exactly like the host's.
+            if (
+                answer.status === 401 &&
+                url &&
+                url.protocol === location.protocol &&
+                url.host === location.host &&
+                isProtectedAPIPath(url.pathname)
+            ) {
+                requestReauth();
+            }
             return answer;
         }
         const url = requestURL(input);
@@ -1344,6 +1358,11 @@ function showUnlockPrompt(protocol) {
                     return;
                 }
                 storeCredential(status, verifier);
+                if (hostAuthenticatedMode()) {
+                    // The shell holds no page credential: the proxy owns the v1
+                    // cookie, so the session is host-owned from here on.
+                    hostSession = true;
+                }
                 input.value = '';
                 finish({ enabled: true });
             } catch (err) {
@@ -1372,11 +1391,24 @@ function showUnlockPrompt(protocol) {
 async function bootstrapHostAuthenticated() {
     const status = await discoverAccessStatus();
     accessEnabled = status.enabled;
-    // The shell is v2-only: it has no cookie jar of its own to fall back to.
-    selectedProtocol = 'v2';
+    // The shell follows the server's capability, exactly like a browser page: a
+    // v1-only server has no v2 routes, and asking it for a v2 session would
+    // prompt for a password that can never be accepted. The proxied jar carries
+    // the v1 cookie, so the v1 path works from the shell unchanged.
+    const protocol = preferredProtocol(status.protocols);
+    selectedProtocol = protocol;
     if (!status.enabled) {
         hostSession = false;
         return { enabled: false };
+    }
+    if (protocol === 'v1') {
+        // The proxied status already reports the host's v1 session.
+        if (status.authenticated) {
+            hostSession = true;
+            return { enabled: true };
+        }
+        hostSession = false;
+        return showUnlockPrompt('v1');
     }
     const verdict = await checkV2Token(null);
     if (verdict === 'valid') {
