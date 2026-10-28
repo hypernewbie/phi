@@ -42,7 +42,17 @@ import {
   type Session,
   type WebContents,
 } from 'electron';
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -55,7 +65,8 @@ import {
   EmbeddedTransport,
 } from './embedded-transport.js';
 import { AccessAuth } from './access-auth.js';
-import { toCanonicalAuthOrigin } from './access-auth.js';
+import { parseStoredV2Bundle, toCanonicalAuthOrigin } from './access-auth.js';
+import type { V2Bundle } from './access-auth.js';
 import type {
   ActiveServer,
   HeaderAction,
@@ -392,7 +403,21 @@ const realHealthChecker: HealthChecker = {
 };
 
 /** One persisted access credential. The outer file keeps `{origins}` so an
- *  older build still reads v1 entries; v2 entries are ignored by it. */
+ *  older build still reads v1 entries; v2 entries are ignored by it.
+ *
+ *  A v2 entry carries the whole rotating bundle, not just the access token: a
+ *  bare JWT has no refresh handle, so a restart could only replay it until it
+ *  expired and would have to prompt for a password the user already gave. */
+type StoredV2Credential = {
+  version: 'v2';
+  jwt: string;
+  expiresAt: number;
+  expiresIn: number;
+  refreshHandle: string;
+  refreshIdleExpiresAt: number;
+  refreshAbsoluteExpiresAt: number;
+};
+
 type StoredCredential =
   | {
       version: 'v1';
@@ -401,7 +426,61 @@ type StoredCredential =
       salt: Buffer;
       verifier: Buffer;
     }
-  | { version: 'v2'; jwt: string };
+  | StoredV2Credential;
+
+/** The bundle a stored v2 entry describes. */
+function storedBundle(entry: StoredV2Credential): V2Bundle {
+  return {
+    token: entry.jwt,
+    expiresAt: entry.expiresAt,
+    expiresIn: entry.expiresIn,
+    refreshHandle: entry.refreshHandle,
+    refreshIdleExpiresAt: entry.refreshIdleExpiresAt,
+    refreshAbsoluteExpiresAt: entry.refreshAbsoluteExpiresAt,
+  };
+}
+
+/** Filesystem operations the encrypted credential store uses. Split out so a
+ *  test can prove the pre-rename, rename and durability failures without a
+ *  broken disk; production passes the real ones. */
+export interface CredentialStoreFs {
+  writeNew(path: string, data: Buffer): void;
+  syncFile(path: string): void;
+  rename(from: string, to: string): void;
+  syncDir(path: string): void;
+  remove(path: string): void;
+}
+
+/** Real credential-store filesystem. Directory fsync is POSIX-only: Windows
+ *  refuses a directory handle, so no durability claim is made there. */
+export const realCredentialStoreFs: CredentialStoreFs = {
+  writeNew: (file, data) => writeFileSync(file, data, { mode: 0o600 }),
+  syncFile: (file) => {
+    const fd = openSync(file, 'r');
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  },
+  rename: (from, to) => renameSync(from, to),
+  syncDir: (dir) => {
+    let fd: number;
+    try {
+      fd = openSync(dir, 'r');
+    } catch {
+      return;
+    }
+    try {
+      fsyncSync(fd);
+    } catch {
+      /* unsupported on this platform: nothing to claim */
+    } finally {
+      closeSync(fd);
+    }
+  },
+  remove: (file) => rmSync(file, { force: true }),
+};
 
 export class DesktopHost {
   // --- Host-loop state ---
@@ -502,6 +581,9 @@ export class DesktopHost {
     app.getPath('userData'),
     'access-credentials.bin',
   );
+  /** Credential-store filesystem seam; tests replace it to prove the failure
+   *  and durability paths. */
+  credentialFs: CredentialStoreFs = realCredentialStoreFs;
   /** Per-origin verifier persistence (in-memory mirror of the
    *  decrypted file). Cleared when the corresponding origin is removed
    *  or the stored credential fails a server-side rotation check. */
@@ -1707,16 +1789,27 @@ export class DesktopHost {
     const entries = (parsed as { origins?: Record<string, unknown> }).origins;
     if (!entries || typeof entries !== 'object') return;
     const v2Allowed = this.secureV2StorageAvailable();
+    /** A v2 entry this build cannot honour is dropped from the store, so the
+     *  next launch asks for a password instead of retrying a dead credential. */
+    let dropped = false;
     for (const [origin, rawEntry] of Object.entries(entries)) {
       const canonical = toCanonicalAuthOrigin(origin);
       if (!canonical) continue;
       const c = this.parseStoredCredential(rawEntry);
-      if (!c) continue;
+      if (!c) {
+        // An older build wrote `{version:'v2', jwt}`; that cannot be renewed
+        // and must not be restored. Drop only that entry, keep v1 entries.
+        if ((rawEntry as { version?: unknown })?.version === 'v2') {
+          dropped = true;
+        }
+        continue;
+      }
       // Never load a bearer through an insecure backend: keep the entry on
       // disk (an encrypted backend may return later) but leave it unusable.
       if (c.version === 'v2' && !v2Allowed) continue;
       this.storedCredentials.set(canonical, c);
     }
+    if (dropped) this.saveStoredCredentials();
   }
 
   /** True when the host can encrypt a v2 token at rest. Linux's
@@ -1737,8 +1830,17 @@ export class DesktopHost {
     if (!raw || typeof raw !== 'object') return null;
     const r = raw as Record<string, unknown>;
     if (r.version === 'v2') {
-      if (typeof r.jwt !== 'string' || r.jwt.length === 0) return null;
-      return { version: 'v2', jwt: r.jwt };
+      const bundle = parseStoredV2Bundle(r);
+      if (!bundle) return null;
+      return {
+        version: 'v2',
+        jwt: bundle.token,
+        expiresAt: bundle.expiresAt,
+        expiresIn: bundle.expiresIn,
+        refreshHandle: bundle.refreshHandle,
+        refreshIdleExpiresAt: bundle.refreshIdleExpiresAt,
+        refreshAbsoluteExpiresAt: bundle.refreshAbsoluteExpiresAt,
+      };
     }
     if (r.version !== 'v1' || r.algorithm !== 'pbkdf2-sha256') return null;
     if (typeof r.iterations !== 'number' || !Number.isFinite(r.iterations))
@@ -1822,26 +1924,38 @@ export class DesktopHost {
     );
   }
 
-  /** Writes the encrypted credential file. Captures a single atomic
-   *  snapshot of `this.storedCredentials` so a torn write (kill -9 in
-   *  the middle) leaves either the old or the new file, not a half
-   *  file. Failures are silent: a missing credentials file is the
-   *  normal first-launch state, so a write that fails just means
-   *  the next launch re-prompts. */
-  private saveStoredCredentials(): void {
-    if (!safeStorage.isEncryptionAvailable()) return;
+  /** Replaces the encrypted credential file with a snapshot of
+   *  `this.storedCredentials`. The write is atomic and durable: a fresh
+   *  temporary file is written and synced, then renamed over the old file and
+   *  the parent directory synced. A failure before the rename leaves the old
+   *  file untouched; a failure after it is an ambiguous commit, so the caller
+   *  is told the file could not be confirmed. Returns false when nothing was
+   *  durably written.
+   *
+   *  Silence is not success: a failed save keeps the credential in native
+   *  memory and the next launch simply asks for the password again. */
+  private saveStoredCredentials(): boolean {
+    if (!safeStorage.isEncryptionAvailable()) return false;
     // A v2 token must never be written through Linux's basic_text backend,
     // including a mixed store that also holds legacy v1 entries.
     const hasV2 = Array.from(this.storedCredentials.values()).some(
       (c) => c.version === 'v2',
     );
-    if (hasV2 && !this.secureV2StorageAvailable()) return;
+    if (hasV2 && !this.secureV2StorageAvailable()) return false;
     const origins: Record<string, unknown> = {};
     for (const [origin, c] of this.storedCredentials) {
       const canonical = toCanonicalAuthOrigin(origin) ?? origin;
       origins[canonical] =
         c.version === 'v2'
-          ? { version: 'v2', jwt: c.jwt }
+          ? {
+              version: 'v2',
+              jwt: c.jwt,
+              expiresAt: c.expiresAt,
+              expiresIn: c.expiresIn,
+              refreshHandle: c.refreshHandle,
+              refreshIdleExpiresAt: c.refreshIdleExpiresAt,
+              refreshAbsoluteExpiresAt: c.refreshAbsoluteExpiresAt,
+            }
           : {
               version: c.version,
               algorithm: c.algorithm,
@@ -1855,14 +1969,31 @@ export class DesktopHost {
     try {
       encrypted = safeStorage.encryptString(plaintext);
     } catch {
-      return;
+      return false;
+    }
+    const fs = this.credentialFs;
+    const temp = `${this.credentialsPath}.tmp`;
+    try {
+      fs.writeNew(temp, encrypted);
+      fs.syncFile(temp);
+      fs.rename(temp, this.credentialsPath);
+    } catch {
+      // Pre-rename failure: the previous file is still the whole truth.
+      try {
+        fs.remove(temp);
+      } catch {
+        /* nothing left to clean up */
+      }
+      return false;
     }
     try {
-      writeFileSync(this.credentialsPath, encrypted);
+      fs.syncDir(path.dirname(this.credentialsPath));
     } catch {
-      // Disk full or permission denied; ignore (next launch will
-      // re-prompt, no security loss).
+      // Post-rename failure is an ambiguous committed write: the new file is
+      // in place but its durability is unconfirmed.
+      return false;
     }
+    return true;
   }
 
   /** Captures the verifier AccessAuth cached after a successful
@@ -2182,9 +2313,9 @@ export class DesktopHost {
     }
   }
 
-  /** Persists the bearer AccessAuth installed after a successful native v2
-   *  login. Memory keeps working when encryption is unavailable; the disk
-   *  write is skipped in that case by `saveStoredCredentials`. */
+  /** Marks the token a successful native v2 unlock installed as authorized
+   *  for body install. The bundle itself was already persisted by the store
+   *  listener before this point, so a body failure cannot lose it. */
   private persistTokenAfterUnlock(
     origin: string,
     accessAuth: AccessAuth,
@@ -2197,10 +2328,50 @@ export class DesktopHost {
     // A successful native unlock authorized this token: body install may
     // use it now.
     this.bodyTokens.set(canonical, token);
+    this.persistBundle(canonical, accessAuth.getBundle(canonical));
+  }
+
+  /** Writes one origin's rotating bundle to the encrypted store, or drops the
+   *  entry when the origin no longer holds one. Called for every install,
+   *  rotation and terminal rejection, so what is on disk is always the
+   *  newest bundle the host holds. A failed save keeps the bundle in memory
+   *  and is never reported as persisted. */
+  private persistBundle(origin: string, bundle: V2Bundle | null): void {
+    const canonical = toCanonicalAuthOrigin(origin) ?? origin;
     const existing = this.storedCredentials.get(canonical);
-    if (existing?.version === 'v2' && existing.jwt === token) return;
-    this.storedCredentials.set(canonical, { version: 'v2', jwt: token });
+    if (!bundle) {
+      if (existing?.version !== 'v2') return;
+      this.storedCredentials.delete(canonical);
+      this.saveStoredCredentials();
+      return;
+    }
+    if (
+      existing?.version === 'v2' &&
+      existing.jwt === bundle.token &&
+      existing.refreshHandle === bundle.refreshHandle
+    ) {
+      return;
+    }
+    this.storedCredentials.set(canonical, {
+      version: 'v2',
+      jwt: bundle.token,
+      expiresAt: bundle.expiresAt,
+      expiresIn: bundle.expiresIn,
+      refreshHandle: bundle.refreshHandle,
+      refreshIdleExpiresAt: bundle.refreshIdleExpiresAt,
+      refreshAbsoluteExpiresAt: bundle.refreshAbsoluteExpiresAt,
+    });
     this.saveStoredCredentials();
+  }
+
+  /** Hands the session's credential owner a store listener. Every bundle the
+   *  host installs or rotates is persisted here, before any renderer sees
+   *  the token. */
+  private watchBundles(auth: AccessAuth): AccessAuth {
+    auth.setBundleListener((origin, bundle) => {
+      this.persistBundle(origin, bundle);
+    });
+    return auth;
   }
 
   /** Installs the host bearer into one loaded frame whose main frame is the
@@ -2302,7 +2473,9 @@ export class DesktopHost {
     // must not leave a later profile without its credential when the user
     // activates it. Body installation stays gated on validation.
     for (const [origin, entry] of this.storedCredentials) {
-      if (entry.version === 'v2') accessAuth.installToken(origin, entry.jwt);
+      if (entry.version === 'v2') {
+        accessAuth.installBundle(origin, storedBundle(entry));
+      }
     }
     // Re-authenticate the origins CONCURRENTLY, with a small concurrency
     // cap. Sequentially, every server cost a status round trip plus a
@@ -2352,8 +2525,9 @@ export class DesktopHost {
   }
 
   /** Restores one persisted bearer into native memory and lets the server
-   *  decide whether it is still valid. A rejection clears only that same
-   *  token; a transient failure keeps it for the next poll. */
+   *  decide whether it is still valid. Expiry is not rejection: a live refresh
+   *  family renews the access token, and only the server's refresh `401` ends
+   *  the session. A transient failure keeps the bundle for the next poll. */
   private async bootstrapV2Token(
     origin: string,
     jwt: string,
@@ -2361,31 +2535,68 @@ export class DesktopHost {
     generation: number,
   ): Promise<void> {
     if (generation !== this.sessionGeneration) return;
+    const canonical = toCanonicalAuthOrigin(origin) ?? origin;
     const installed = accessAuth.getToken(origin);
     // A newer in-memory token already won; a stale disk entry must not
     // overwrite it.
     if (installed && installed !== jwt) return;
-    accessAuth.installToken(origin, jwt);
-    const verdict = await accessAuth.checkToken(origin, jwt);
+    const stored = this.storedCredentials.get(canonical);
+    const entry =
+      stored?.version === 'v2' && stored.jwt === jwt ? stored : null;
+    if (!installed) {
+      if (entry) accessAuth.installBundle(canonical, storedBundle(entry));
+      else accessAuth.installToken(origin, jwt);
+    }
+    if (entry && accessAuth.renewalDue(canonical)) {
+      const renewed = await accessAuth.renewIfDue(canonical);
+      if (generation !== this.sessionGeneration) return;
+      if (renewed?.kind === 'unauthorized') {
+        // The family is gone server-side: this is the one terminal signal.
+        this.forgetStoredV2(canonical, jwt);
+        return;
+      }
+      // unavailable/superseded: keep the bundle and let the poll retry.
+      if (renewed?.kind !== 'ok') return;
+    }
+    const current = accessAuth.getToken(canonical);
+    if (!current) return;
+    const verdict = await accessAuth.checkToken(canonical, current);
     if (generation !== this.sessionGeneration) return;
     // A native unlock can install a newer token while this check is in
     // flight. Its readiness must survive the late verdict for the old one.
-    if (accessAuth.getToken(origin) !== jwt) return;
+    if (accessAuth.getToken(canonical) !== current) return;
     if (verdict !== 'invalid') {
       if (verdict === 'valid') {
         // The server accepted this token: it may now reach a renderer.
-        this.bodyTokens.set(origin, jwt);
-        this.reinstallBodyToken(origin, accessAuth, generation);
+        this.bodyTokens.set(canonical, current);
+        this.reinstallBodyToken(canonical, accessAuth, generation);
       }
       return;
     }
-    if (this.bodyTokens.get(origin) === jwt) this.bodyTokens.delete(origin);
-    accessAuth.rejectToken(origin, jwt);
-    const current = this.storedCredentials.get(origin);
-    if (current?.version === 'v2' && current.jwt === jwt) {
-      this.storedCredentials.delete(origin);
-      this.saveStoredCredentials();
+    if (this.bodyTokens.get(canonical) === current) {
+      this.bodyTokens.delete(canonical);
     }
+    // A rejected token is not yet a dead family: one refresh decides, and
+    // only its 401 clears the stored credential.
+    const bundle = accessAuth.getBundle(canonical);
+    if (bundle) {
+      const renewed = await accessAuth.refreshAccess(canonical);
+      if (generation !== this.sessionGeneration) return;
+      if (renewed.kind !== 'unauthorized') return;
+    }
+    accessAuth.rejectToken(canonical, current);
+    this.forgetStoredV2(canonical, current);
+  }
+
+  /** Drops one origin's stored v2 entry after a terminal rejection. The v2
+   *  selection survives in `accessAuth`, so no v1 fallback follows. */
+  private forgetStoredV2(canonical: string, jwt: string): void {
+    const current = this.storedCredentials.get(canonical);
+    if (current?.version !== 'v2') return;
+    // A newer bundle won while this request was in flight: its entry stays.
+    if (current.jwt !== jwt) return;
+    this.storedCredentials.delete(canonical);
+    this.saveStoredCredentials();
   }
 
   /** Injects Phi's error toast into the view for a failed local file action. */
@@ -3335,7 +3546,7 @@ export class DesktopHost {
     } | null = null;
     let unlockInFlight = false;
     let promptSuppressedFor: string | null = null;
-    let accessAuth = new AccessAuth();
+    let accessAuth = this.watchBundles(new AccessAuth());
     /** Reinstalled for each fresh native shell; cancels its prior auth work. */
     const armAuthCancellation = (): void => {
       this.abortCurrentAuth = () => {
@@ -3449,7 +3660,7 @@ export class DesktopHost {
       // Auth and coalescing state belong to this native shell. A late old
       // promise retains its old map/auth object and cannot clear or mutate
       // replacement-session state.
-      accessAuth = new AccessAuth();
+      accessAuth = this.watchBundles(new AccessAuth());
       this.configOpInFlight = new Map<string, Promise<unknown>>();
       this.bodyReauthInFlight = new Map<string, Promise<void>>();
       activeEpoch++;
