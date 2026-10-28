@@ -109,6 +109,19 @@ export class FileTreeManager {
         }
     }
 
+    /** Backend switch (embedded single-tab mode): the tree belongs to
+     *  the old backend's cwd. Reset to the loading splash and re-point
+     *  the toolbar at the new backend's cwd; the post-switch refresh()
+     *  repopulates once the ACTIVE backend has flipped (this runs in
+     *  the switch's synchronous paint phase, where fetching would hit
+     *  the old backend). */
+    resetForBackendSwitch(): void {
+        // Invalidate any response from the backend we just left.
+        this.refreshRequestId++;
+        this.treeEl.innerHTML = '<div class="md-list-loading">Loading...</div>';
+        this._renderToolbar(this.app.sessionsManager?.activeCWD || '');
+    }
+
     /** Update the project-bar buttons to reflect the given root. Disabled
      *  state is set when the root is empty or non-absolute, or when the
      *  remote hostname is missing/invalid (local still works). Called
