@@ -90,10 +90,10 @@ func expectStillOpen(t *testing.T, conn *websocket.Conn) {
 	}
 }
 
-// newAuthSocketFixture serves the three client-facing socket routes behind the
-// production middleware and returns a dialer for them. A credential is passed
-// either as a v2 query token or as a v1 cookie, never both.
-func newAuthSocketFixture(t *testing.T) (*ws.Hub, func(path, subprotocol, token, cookie string) *websocket.Conn) {
+// newAuthSocketServer serves the three client-facing socket routes behind the
+// production middleware. Tests that need to control every header dial it
+// directly; newAuthSocketFixture wraps it for the credential-only cases.
+func newAuthSocketServer(t *testing.T) (*ws.Hub, string) {
 	t.Helper()
 	hub := testAccessUseHub(t)
 	home := t.TempDir()
@@ -118,9 +118,17 @@ func newAuthSocketFixture(t *testing.T) (*ws.Hub, func(path, subprotocol, token,
 	server := httptest.NewServer(accessAuthMiddleware(mux))
 	t.Cleanup(server.Close)
 
+	return hub, "ws" + strings.TrimPrefix(server.URL, "http")
+}
+
+// newAuthSocketFixture serves the same three routes and returns a dialer that
+// carries one credential: a v2 query token or a v1 cookie, never both.
+func newAuthSocketFixture(t *testing.T) (*ws.Hub, func(path, subprotocol, token, cookie string) *websocket.Conn) {
+	t.Helper()
+	hub, socketURL := newAuthSocketServer(t)
 	return hub, func(path, subprotocol, token, cookie string) *websocket.Conn {
 		t.Helper()
-		url := "ws" + strings.TrimPrefix(server.URL, "http") + path
+		url := socketURL + path
 		if token != "" {
 			url += "?token=" + neturl.QueryEscape(token)
 		}
@@ -468,4 +476,388 @@ func TestAccessWSLateRegistrationAfterRotationIsRejected(t *testing.T) {
 		t.Cleanup(func() { _ = out.conn.Close() })
 	}
 	expectRejectedUpgrade(t, out.conn, out.err)
+}
+
+// --- M1c: admission identity, deadlines, and family revocation ---
+
+// testAccessFamilyOf returns the family a v2 token names.
+func testAccessFamilyOf(t *testing.T, auth *accessAuthManager, token string) string {
+	t.Helper()
+	auth.mu.Lock()
+	defer auth.mu.Unlock()
+	claims, err := parseAccessJWT(auth.jwtKey, token, time.Now(), 0)
+	if err != nil {
+		t.Fatalf("parse access token: %v", err)
+	}
+	return claims.FamilyID
+}
+
+// testAccessShortLivedToken mints a token for an existing family that expires
+// after lifetime, so a socket deadline can be observed without waiting an hour.
+func testAccessShortLivedToken(t *testing.T, auth *accessAuthManager, familyID string, lifetime time.Duration) string {
+	t.Helper()
+	auth.mu.Lock()
+	defer auth.mu.Unlock()
+	family, ok := auth.v2.families[familyID]
+	if !ok {
+		t.Fatalf("family %q is not live", familyID)
+	}
+	now := time.Now()
+	issuedAt := now.Unix()
+	expiresAt := now.Add(lifetime).Unix()
+	// exp is a whole second: truncating a sub-second lifetime can land on the
+	// current second, which is already expired. Round up instead.
+	if !time.Unix(expiresAt, 0).After(now) {
+		expiresAt = issuedAt + 1
+	}
+	token, err := formatAccessJWT(auth.jwtKey, issuedAt, expiresAt, family.CurrentAccess.Nonce, accessJWTRevocation{
+		RecordID: auth.v2.recordID,
+		Epoch:    auth.v2.epoch,
+		FamilyID: familyID,
+	})
+	if err != nil {
+		t.Fatalf("sign short-lived token: %v", err)
+	}
+	return token
+}
+
+// testAccessV2LoginOnce logs in and returns the access token and the refresh
+// handle of the new family.
+func testAccessV2LoginOnce(t *testing.T, password string) (string, string) {
+	t.Helper()
+	w := testAccessV2LoginRequest(t, password, "192.0.2.61:1")
+	if w.Code != http.StatusOK {
+		t.Fatalf("v2 login: %d %s", w.Code, w.Body.String())
+	}
+	var response struct {
+		Token string `json:"token"`
+	}
+	testAccessJSONBody(t, w, &response)
+	if response.Token == "" {
+		t.Fatalf("login body = %s", w.Body.String())
+	}
+	return response.Token, testAccessRefreshHandle(t, w)
+}
+
+// Every socket transport must resolve its credential exactly the way the HTTP
+// routes do: one explicit v2 token in the query, a v1 cookie as the fallback,
+// and no acceptance of a wrong-transport or duplicated credential.
+func TestAccessWSCredentialMatrix(t *testing.T) {
+	routes := []struct {
+		path        string
+		subprotocol string
+	}{
+		{"/ws/md-events", wireproto.EventsSubprotocol},
+		{"/ws/control", wireproto.ControlSubprotocol},
+		{"/ws/pane/rotate-pane", wireproto.TerminalSubprotocol},
+	}
+	for _, route := range routes {
+		t.Run(route.path, func(t *testing.T) {
+			withTempConfig(t)
+			auth := useTestAccessAuth(t)
+			_, socketURL := newAuthSocketServer(t)
+			token := testAccessEnableV2(t, testAccessPassword)
+			cookie := testAccessCookieFor(t, auth).Value
+			_, handle := testAccessV2LoginOnce(t, testAccessPassword)
+
+			dial := func(headers http.Header, rawQuery string) (*websocket.Conn, error) {
+				dialer := websocket.Dialer{Subprotocols: []string{route.subprotocol}}
+				conn, response, err := dialer.Dial(socketURL+route.path+rawQuery, headers)
+				if err != nil && response != nil && response.StatusCode == http.StatusForbidden {
+					return nil, err
+				}
+				return conn, err
+			}
+			expectAdmitted := func(conn *websocket.Conn, err error) {
+				t.Helper()
+				if err != nil {
+					t.Fatalf("credential rejected: %v", err)
+				}
+				t.Cleanup(func() { _ = conn.Close() })
+				expectStillOpen(t, conn)
+			}
+			expectRefused := func(conn *websocket.Conn, err error) {
+				t.Helper()
+				if conn != nil {
+					t.Cleanup(func() { _ = conn.Close() })
+					expectClosed(t, conn)
+					return
+				}
+				if err == nil {
+					t.Fatal("credential accepted")
+				}
+			}
+
+			conn, err := dial(nil, "")
+			expectRefused(conn, err)
+
+			conn, err = dial(http.Header{"Cookie": {accessSessionCookie + "=" + cookie}}, "")
+			expectAdmitted(conn, err)
+
+			conn, err = dial(nil, "?token="+neturl.QueryEscape(token))
+			expectAdmitted(conn, err)
+
+			// Same-origin: gorilla compares Origin to the request host, so the
+			// socket's own origin must be accepted.
+			sameOrigin := http.Header{}
+			sameOrigin.Set("Origin", "http://"+strings.TrimPrefix(socketURL, "ws://"))
+			conn, err = dial(sameOrigin, "?token="+neturl.QueryEscape(token))
+			expectAdmitted(conn, err)
+
+			// One explicit token next to a cookie is bearer priority, not a
+			// carrier mix-up: the token decides.
+			conn, err = dial(http.Header{"Cookie": {accessSessionCookie + "=" + cookie}}, "?token="+neturl.QueryEscape(token))
+			expectAdmitted(conn, err)
+
+			for _, tc := range []struct {
+				name    string
+				headers http.Header
+				query   string
+			}{
+				{name: "malformed token", query: "?token=not-a-jwt"},
+				{name: "empty token", query: "?token="},
+				{name: "duplicate token", query: "?token=" + neturl.QueryEscape(token) + "&token=" + neturl.QueryEscape(token)},
+				{name: "refresh handle as bearer", query: "?token=" + neturl.QueryEscape(handle)},
+				{name: "stale token and valid cookie", query: "?token=not-a-jwt"},
+				{name: "foreign origin", query: "?token=" + neturl.QueryEscape(token)},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					headers := tc.headers
+					if headers == nil {
+						headers = http.Header{}
+					}
+					if tc.name == "foreign origin" {
+						headers.Set("Origin", "https://attacker.example")
+					}
+					conn, err := dial(headers, tc.query)
+					expectRefused(conn, err)
+				})
+			}
+		})
+	}
+}
+
+// A socket admitted with a v2 token closes at its admitted exp - exactly, with
+// no HTTP allowance - and a fresh token reconnects afterwards.
+func TestAccessWSSocketClosesAtAdmittedExpiry(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	hub, dial := newAuthSocketFixture(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+	familyID := testAccessFamilyOf(t, auth, token)
+
+	shortLived := testAccessShortLivedToken(t, auth, familyID, 700*time.Millisecond)
+	expiring := dial("/ws/md-events", wireproto.EventsSubprotocol, shortLived, "")
+	waitForEventsClients(t, hub, 1)
+	expectClosed(t, expiring)
+
+	reconnect := dial("/ws/md-events", wireproto.EventsSubprotocol, token, "")
+	expectOpen(t, reconnect)
+}
+
+// The family's own deadline closes a socket earlier than the access token
+// expiry would.
+func TestAccessWSSocketClosesAtFamilyDeadline(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	hub, dial := newAuthSocketFixture(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+	familyID := testAccessFamilyOf(t, auth, token)
+
+	auth.mu.Lock()
+	auth.v2.families[familyID].IdleExpiresAt = time.Now().Add(700 * time.Millisecond).Unix()
+	auth.mu.Unlock()
+
+	socket := dial("/ws/md-events", wireproto.EventsSubprotocol, token, "")
+	waitForEventsClients(t, hub, 1)
+	expectClosed(t, socket)
+}
+
+// A v1 cookie socket has no v2 deadline: the hourly access expiry must not
+// close it.
+func TestAccessWSV1SocketSurvivesV2AdmissionExpiry(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	_, dial := newAuthSocketFixture(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+	familyID := testAccessFamilyOf(t, auth, token)
+	cookie := testAccessCookieFor(t, auth).Value
+
+	v1 := dial("/ws/md-events", wireproto.EventsSubprotocol, "", cookie)
+	v2 := dial("/ws/md-events", wireproto.EventsSubprotocol, testAccessShortLivedToken(t, auth, familyID, 500*time.Millisecond), "")
+	expectClosed(t, v2)
+	expectStillOpen(t, v1)
+}
+
+// A family logout closes that family's sockets and leaves another family's
+// sockets and every v1 socket connected. Logout-all closes the remaining v2
+// sockets and still leaves v1 alone.
+func TestAccessWSFamilyLogoutClosesOnlyItsSockets(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	hub, dial := newAuthSocketFixture(t)
+	first := testAccessEnableV2(t, testAccessPassword)
+	second, _ := testAccessV2LoginOnce(t, testAccessPassword)
+	if testAccessFamilyOf(t, auth, first) == testAccessFamilyOf(t, auth, second) {
+		t.Fatal("two logins shared one family")
+	}
+	cookie := testAccessCookieFor(t, auth).Value
+
+	dial("/ws/md-events", wireproto.EventsSubprotocol, "", cookie)
+	firstSocket := dial("/ws/md-events", wireproto.EventsSubprotocol, first, "")
+	secondSocket := dial("/ws/md-events", wireproto.EventsSubprotocol, second, "")
+	waitForEventsClients(t, hub, 3)
+
+	if w := testAccessV2LogoutRequest(t, `{"all":false}`, first); w.Code != http.StatusOK {
+		t.Fatalf("family logout: %d %s", w.Code, w.Body.String())
+	}
+	expectClosed(t, firstSocket)
+	// Survival is checked with fresh connections: a client read that already
+	// timed out stays poisoned in the Gorilla read state.
+	expectOpen(t, dial("/ws/md-events", wireproto.EventsSubprotocol, second, ""))
+	expectOpen(t, dial("/ws/md-events", wireproto.EventsSubprotocol, "", cookie))
+
+	if w := testAccessV2LogoutRequest(t, `{"all":true}`, second); w.Code != http.StatusOK {
+		t.Fatalf("logout all: %d %s", w.Code, w.Body.String())
+	}
+	expectClosed(t, secondSocket)
+	// v1 keeps its cookie and its sockets: a v2 logout-all is not a record
+	// change.
+	expectOpen(t, dial("/ws/md-events", wireproto.EventsSubprotocol, "", cookie))
+}
+
+// A replayed refresh handle outside the grace window revokes the family, so its
+// sockets close immediately.
+func TestAccessWSReplayRevocationClosesFamilySockets(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	hub, dial := newAuthSocketFixture(t)
+	enableToken := testAccessEnableV2(t, testAccessPassword)
+	unrelatedFamily := testAccessFamilyOf(t, auth, enableToken)
+	token, handle := testAccessV2LoginOnce(t, testAccessPassword)
+	revokedFamily := testAccessFamilyOf(t, auth, token)
+	if revokedFamily == unrelatedFamily {
+		t.Fatal("two logins shared one family")
+	}
+
+	socket := dial("/ws/md-events", wireproto.EventsSubprotocol, token, "")
+	waitForEventsClients(t, hub, 1)
+
+	if w := testAccessV2RefreshRequest(t, handle); w.Code != http.StatusOK {
+		t.Fatalf("first refresh: %d %s", w.Code, w.Body.String())
+	}
+	// Outside the grace window the retired handle is a reuse signal.
+	replayedAt := time.Now().Add(accessRefreshGrace + time.Second)
+	auth.mu.Lock()
+	previous := auth.now
+	auth.now = func() time.Time { return replayedAt }
+	auth.mu.Unlock()
+	t.Cleanup(func() {
+		auth.mu.Lock()
+		auth.now = previous
+		auth.mu.Unlock()
+	})
+	if w := testAccessV2RefreshRequest(t, handle); w.Code != http.StatusUnauthorized {
+		t.Fatalf("replayed refresh: %d %s", w.Code, w.Body.String())
+	}
+	expectClosed(t, socket)
+	if _, ok := authFamilyExists(t, auth, unrelatedFamily); !ok {
+		t.Fatal("unrelated family was revoked")
+	}
+	if _, ok := authFamilyExists(t, auth, revokedFamily); ok {
+		t.Fatal("replayed family survived")
+	}
+}
+
+// Removing a family from durable state closes its sockets. Pruning, expiry, and
+// capacity eviction all remove families through commitActiveLocked, so this is
+// the one closure path for all three.
+func TestAccessWSFamilyRemovalClosesSockets(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	hub, dial := newAuthSocketFixture(t)
+	kept := testAccessEnableV2(t, testAccessPassword)
+	keptFamily := testAccessFamilyOf(t, auth, kept)
+	dropped, _ := testAccessV2LoginOnce(t, testAccessPassword)
+	droppedFamily := testAccessFamilyOf(t, auth, dropped)
+	if keptFamily == droppedFamily {
+		t.Fatal("two logins shared one family")
+	}
+
+	keptSocket := dial("/ws/md-events", wireproto.EventsSubprotocol, kept, "")
+	droppedSocket := dial("/ws/md-events", wireproto.EventsSubprotocol, dropped, "")
+	waitForEventsClients(t, hub, 2)
+
+	auth.mu.Lock()
+	active := auth.snapshotLocked()
+	if !evictAccessFamily(active, droppedFamily) {
+		auth.mu.Unlock()
+		t.Fatal("family was not in the snapshot")
+	}
+	err := auth.commitActiveLocked(active)
+	auth.mu.Unlock()
+	if err != nil {
+		t.Fatalf("commit removal: %v", err)
+	}
+	expectClosed(t, droppedSocket)
+	expectStillOpen(t, keptSocket)
+}
+
+// authFamilyExists reports whether the manager still holds a live family.
+func authFamilyExists(t *testing.T, auth *accessAuthManager, familyID string) (struct{}, bool) {
+	t.Helper()
+	auth.mu.Lock()
+	defer auth.mu.Unlock()
+	_, ok := auth.v2.families[familyID]
+	return struct{}{}, ok
+}
+
+// A fence whose admitted exp has passed must be refused at registration, even
+// when the middleware authorized it earlier: this is the expiry-to-registration
+// window, driven by a clock jump rather than a sleep.
+func TestAccessWSLateExpiryRegistrationIsRejected(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	hub := testAccessUseHub(t)
+	hub.SetAuthValidator(auth.admitsFence)
+	token := testAccessEnableV2(t, testAccessPassword)
+	gate, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	server := httptest.NewServer(accessAuthMiddleware(gatedEventsHandler(hub, gate, release, &once)))
+	defer server.Close()
+
+	type result struct {
+		conn *websocket.Conn
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		conn, err := dialAfterGate(t, server.URL, "/ws/md-events", wireproto.EventsSubprotocol, token)
+		done <- result{conn, err}
+	}()
+	<-gate
+	// The middleware already authorized this request; jump past the admitted exp
+	// before the handler registers, which is what an expired token sees.
+	auth.mu.Lock()
+	previous := auth.now
+	auth.now = func() time.Time { return time.Now().Add(2 * accessJWTLifetime) }
+	auth.mu.Unlock()
+	close(release)
+	out := <-done
+	if out.conn != nil {
+		t.Cleanup(func() { _ = out.conn.Close() })
+	}
+	expectRejectedUpgrade(t, out.conn, out.err)
+	auth.mu.Lock()
+	auth.now = previous
+	auth.mu.Unlock()
+
+	// The clock is restored, so the same credential connects again.
+	dialer := websocket.Dialer{Subprotocols: []string{wireproto.EventsSubprotocol}}
+	conn, _, err := dialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/ws/md-events?token="+neturl.QueryEscape(token), nil)
+	if err != nil {
+		t.Fatalf("reconnect after clock restore: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	expectOpen(t, conn)
 }

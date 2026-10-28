@@ -68,5 +68,6 @@ func HandleEventsWS(w http.ResponseWriter, r *http.Request, hub *Hub) {
 		_ = conn.SetReadDeadline(time.Now().Add(pongTimeout))
 	}
 	hub.Unregister(EventsPaneID, client)
+	hub.ForgetAuth(conn)
 	_ = conn.Close()
 }
