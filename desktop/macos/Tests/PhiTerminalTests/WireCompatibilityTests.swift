@@ -59,7 +59,10 @@ final class WireCompatibilityTests: XCTestCase {
     XCTAssertTrue((attach.oldest...attach.head).contains(checkpoint.through), "checkpoint outside the frontier")
     XCTAssertTrue((1...65535).contains(checkpoint.cols))
     XCTAssertTrue((1...65535).contains(checkpoint.rows))
-    XCTAssertEqual(status.frontier, checkpoint.through, "frontier must start at the checkpoint")
+    // Live frames can land between attach and this read, so the frontier only
+    // has to reach the checkpoint; the gap check below proves ordering.
+    XCTAssertGreaterThanOrEqual(
+      status.frontier, checkpoint.through, "frontier must reach the checkpoint")
 
     // A marker no checkpoint can already hold: only live input produces it.
     let delivery = await client.sendInput(Array("echo wzq\r".utf8))
