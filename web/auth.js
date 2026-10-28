@@ -16,10 +16,21 @@ import { sha256 } from './vendor/noble-hashes/sha2.js';
 import { serverKey } from './util.js';
 
 const CREDENTIAL_KEY = 'phi_access_credential_v1';
-// Standalone-browser storage for the v2 bearer. The desktop body serves every
-// server from one page, so it installs its token in memory instead of writing
-// here (installToken).
-const BEARER_KEY = 'phi_access_bearer_v1';
+// The candidate persisted the v2 bearer under this key. That directive is
+// superseded: no access token or refresh handle is ever written to browser
+// storage, and the refresh handle exists only in its HttpOnly cookie. The old
+// value is removed without being read or sent anywhere.
+const LEGACY_BEARER_KEY = 'phi_access_bearer_v1';
+
+function discardLegacyBearer() {
+    try {
+        localStorage.removeItem(LEGACY_BEARER_KEY);
+    } catch {
+        // Storage is blocked, so nothing was persisted and nothing migrates.
+    }
+}
+
+discardLegacyBearer();
 
 // The desktop's embedded page serves EVERY server from one page, so one
 // localStorage holds every server's credential. A single shared key made
@@ -354,6 +365,35 @@ let stateEpoch = 0; // bumped whenever the selected credential changes
 let pendingBootstrapRelease = null;
 const HOST_INSTALL = Symbol('host install');
 
+// A logout in one tab invalidates the credential in every other tab. The
+// message carries no secret: it only reports that the family is gone.
+const AUTH_CHANNEL = 'phi-access-auth';
+let invalidation = null;
+
+function invalidationChannel() {
+    if (invalidation) return invalidation;
+    if (typeof BroadcastChannel !== 'function') return null;
+    try {
+        const channel = new BroadcastChannel(AUTH_CHANNEL);
+        channel.addEventListener('message', (event) => {
+            if (!event.data || event.data.kind !== 'logout') return;
+            accessToken = null;
+            stateEpoch++;
+            if (pendingOverlay) pendingOverlay.finish({ enabled: false });
+        });
+        invalidation = channel;
+    } catch {
+        // No channel support: this page still clears its own credential.
+        invalidation = null;
+    }
+    return invalidation;
+}
+
+function broadcastInvalidation() {
+    const channel = invalidationChannel();
+    if (channel) channel.postMessage({ kind: 'logout' });
+}
+
 function utf8Length(value) {
     return new TextEncoder().encode(value).length;
 }
@@ -381,40 +421,100 @@ async function withAuthDeadline(run) {
     }
 }
 
-function loadBearer() {
-    try {
-        return localStorage.getItem(BEARER_KEY) || null;
-    } catch {
+// --- credential bundles and the refresh owner ---------------------------
+
+// parseCredentialBundle accepts exactly the frozen credential bundle: an
+// access token plus integer Unix-second deadlines. expires_in is a duration
+// for this response only, so it is never treated as durable freshness.
+function parseCredentialBundle(payload) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload))
         return null;
+    const {
+        token,
+        expires_at: expiresAt,
+        expires_in: expiresIn,
+        refresh_idle_expires_at: refreshIdle,
+        refresh_absolute_expires_at: refreshAbsolute,
+    } = payload;
+    if (typeof token !== 'string' || !token) return null;
+    for (const value of [expiresAt, expiresIn, refreshIdle, refreshAbsolute]) {
+        if (!Number.isInteger(value)) return null;
     }
+    if (expiresAt <= 0 || refreshIdle <= 0 || refreshAbsolute <= 0) return null;
+    if (refreshIdle > refreshAbsolute) return null;
+    return {
+        token,
+        expiresAt,
+        expiresIn,
+        refreshIdleExpiresAt: refreshIdle,
+        refreshAbsoluteExpiresAt: refreshAbsolute,
+    };
 }
 
-function storeBearer(token) {
+const REFRESH_INSTALLED = 'installed';
+const REFRESH_NONE = 'none';
+const REFRESH_SUPERSEDED = 'superseded';
+
+// One refresh per page load. Simultaneous callers share the in-flight request
+// instead of rotating the same handle twice; another tab's refresh is covered
+// by the server's grace window, not by a channel message.
+let refreshInFlight = null;
+
+function refreshSession() {
+    if (refreshInFlight) return refreshInFlight;
+    const attempt = runRefresh();
+    refreshInFlight = attempt;
+    void attempt
+        .catch(() => {})
+        .then(() => {
+            if (refreshInFlight === attempt) refreshInFlight = null;
+        });
+    return attempt;
+}
+
+// Only 401 ends the session. Every other failure keeps the credential, logs
+// nobody out, and stays retryable; a malformed bundle is a server fault, not a
+// reason to prompt for a password.
+async function runRefresh() {
+    const epoch = stateEpoch;
+    const res = await withAuthDeadline((signal) =>
+        fetch('/api/auth/v2/refresh', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Phi-Auth': 'v2' },
+            body: '{}',
+            credentials: 'same-origin',
+            redirect: 'error',
+            signal,
+        }),
+    ).catch(() => {
+        throw new Error('Unable to reach Phi. Try again.');
+    });
+    if (res.status === 401) return REFRESH_NONE;
+    if (!res.ok) throw new Error('Unable to refresh access session');
+    let payload;
     try {
-        localStorage.setItem(BEARER_KEY, token);
+        payload = await res.json();
     } catch {
-        // The in-memory token still works for this page load.
+        throw invalidStatusError();
     }
+    const bundle = parseCredentialBundle(payload);
+    if (!bundle) throw invalidStatusError();
+    // A non-positive duration cannot be used for this page load and is not a
+    // credential failure, so it stays retryable instead of prompting.
+    if (bundle.expiresIn <= 0) throw new Error('Unable to refresh access session');
+    // A host install or logout during the request is newer than this answer.
+    if (epoch !== stateEpoch) return REFRESH_SUPERSEDED;
+    adoptToken(bundle.token);
+    return REFRESH_INSTALLED;
 }
 
-function clearStoredBearer(token) {
-    try {
-        if (localStorage.getItem(BEARER_KEY) === token)
-            localStorage.removeItem(BEARER_KEY);
-    } catch {
-        /* ignored */
-    }
-}
-
-// adoptToken installs a v2 credential this module obtained. A host-installed
-// session stays memory-only for the rest of the page load: later module calls
-// (password change, reauthentication) must not write it to storage.
-function adoptToken(token, { persist = false } = {}) {
+// adoptToken installs a v2 credential this module obtained. It lives in memory
+// for the rest of the page load and is never persisted.
+function adoptToken(token) {
     accessToken = token;
     accessEnabled = true;
     selectedProtocol = 'v2';
     stateEpoch++;
-    if (persist && !memoryOnly) storeBearer(token);
     // A replacement credential makes an open reauthentication prompt moot.
     if (pendingOverlay) pendingOverlay.finish({ enabled: true });
 }
@@ -423,19 +523,10 @@ function adoptToken(token, { persist = false } = {}) {
 // must not clear a token B installed after it, and a rejection never changes
 // the selected protocol.
 function rejectToken(token) {
-    // A host-installed session owns no standalone storage; never delete a
-    // token from another session just because its value matches.
-    if (
-        accessToken !== token &&
-        (memoryOnly || loadBearer() !== token)
-    )
-        return;
-    // A rejection does not supersede a credential operation that is already
-    // in flight: its replacement token is newer than this failure.
-    if (accessToken === token) accessToken = null;
+    if (accessToken !== token) return;
+    accessToken = null;
     // Token absence alone must not select v1: keep the v2 choice.
     selectedProtocol = 'v2';
-    if (!memoryOnly) clearStoredBearer(token);
 }
 
 // checkV2Token reports whether the server still accepts token. A rejected
@@ -473,8 +564,12 @@ async function v2Login(password) {
     return withAuthDeadline(async (signal) => {
         const res = await fetch('/api/auth/v2/login', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Phi-Auth': 'v2',
+            },
             body: JSON.stringify({ password }),
+            credentials: 'same-origin',
             redirect: 'error',
             signal,
         });
@@ -488,9 +583,10 @@ async function v2Login(password) {
         } catch {
             throw new Error('Unable to sign in');
         }
-        if (!payload || typeof payload.token !== 'string' || !payload.token)
+        const bundle = parseCredentialBundle(payload);
+        if (!bundle || bundle.expiresIn <= 0)
             throw new Error('Unable to sign in');
-        return payload.token;
+        return bundle.token;
     });
 }
 
@@ -515,13 +611,17 @@ function v2PasswordError(res) {
 async function saveV2Password(password) {
     validateV2Password(password);
     const epoch = stateEpoch;
-    const headers = { 'Content-Type': 'application/json' };
+    const headers = {
+        'Content-Type': 'application/json',
+        'X-Phi-Auth': 'v2',
+    };
     if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
     const payload = await withAuthDeadline(async (signal) => {
         const res = await fetch('/api/auth/v2/password', {
             method: 'POST',
             headers,
             body: JSON.stringify({ password }),
+            credentials: 'same-origin',
             redirect: 'error',
             signal,
         });
@@ -532,28 +632,32 @@ async function saveV2Password(password) {
             throw new Error('Unable to save access password');
         }
     });
+    const bundle = parseCredentialBundle(payload);
     if (
         !payload ||
         payload.enabled !== true ||
-        typeof payload.token !== 'string' ||
-        !payload.token
+        !bundle ||
+        bundle.expiresIn <= 0
     )
         throw new Error('Unable to save access password');
-    if (epoch === stateEpoch) adoptToken(payload.token, { persist: true });
+    if (epoch === stateEpoch) adoptToken(bundle.token);
     return { enabled: true };
 }
 
 async function clearV2Password() {
     if (!accessEnabled && !accessToken) return { enabled: false };
     const epoch = stateEpoch;
-    const activeToken = accessToken;
-    const headers = { 'Content-Type': 'application/json' };
+    const headers = {
+        'Content-Type': 'application/json',
+        'X-Phi-Auth': 'v2',
+    };
     if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
     const payload = await withAuthDeadline(async (signal) => {
         const res = await fetch('/api/auth/v2/password', {
             method: 'POST',
             headers,
             body: JSON.stringify({ password: '' }),
+            credentials: 'same-origin',
             redirect: 'error',
             signal,
         });
@@ -575,9 +679,7 @@ async function clearV2Password() {
     accessEnabled = false;
     selectedProtocol = 'v2';
     stateEpoch++;
-    // Remove only the token this session owned; a host session and another
-    // standalone token belong to different sessions.
-    if (activeToken && !memoryOnly) clearStoredBearer(activeToken);
+    broadcastInvalidation();
     if (pendingOverlay) pendingOverlay.finish({ enabled: false });
     return { enabled: false };
 }
@@ -622,7 +724,8 @@ function requestHeaders(input, init) {
 }
 
 // installAccessFetch wraps fetch once so same-origin protected API calls carry
-// the in-memory bearer, and a rejected token can trigger one unlock overlay.
+// the in-memory bearer. Only a 401 means the access credential expired or was
+// revoked; a 403 is a route-specific refusal and reaches the caller unchanged.
 // It never replays the request that failed.
 export function installAccessFetch() {
     const baseFetch = globalThis.fetch;
@@ -643,7 +746,7 @@ export function installAccessFetch() {
             init ? { ...init, headers } : { headers },
         );
         if (
-            (response.status === 401 || response.status === 403) &&
+            (response.status === 401) &&
             accessToken === token
         ) {
             rejectToken(token);
@@ -777,7 +880,7 @@ function showUnlockPrompt(protocol) {
                 if (protocol === 'v2') {
                     const token = await v2Login(input.value);
                     if (epoch !== stateEpoch) return;
-                    adoptToken(token, { persist: true });
+                    adoptToken(token);
                     input.value = '';
                     finish({ enabled: true });
                     return;
@@ -843,12 +946,39 @@ function showUnlockPrompt(protocol) {
     });
 }
 
+// recoverV1 returns a bootstrap result when an unselected session still holds
+// a working v1 cookie or saved verifier, or null when it holds neither. A
+// selected v2 session never reaches here: its credential decides alone.
+async function recoverV1(status, wait, installed) {
+    if (status.authenticated) {
+        selectedProtocol = 'v1';
+        return { enabled: true };
+    }
+    // A saved v1 verifier is only usable when the status still carries v1 KDF
+    // metadata; a v2-only status must not be rejected by those bounds.
+    if (!hasV1Metadata(status)) return null;
+    const verifier = savedVerifier(status.raw);
+    if (!verifier) return null;
+    const verdict = await wait(login(status.raw, verifier));
+    if (verdict === HOST_INSTALL || installed()) return HOST_INSTALL;
+    if (verdict === 'ok') {
+        selectedProtocol = 'v1';
+        return { enabled: true };
+    }
+    // A rate limit cannot verify the saved credential either, so it is as
+    // unavailable as a transport failure: never prompt for a password the
+    // server is refusing to check.
+    if (verdict === 'transient' || verdict === 'rate-limited')
+        throw new Error('Unable to check Phi access protection');
+    return null;
+}
+
 // Called before App.init() so the normal UI never starts fetching protected
-// data until either the bearer, the session cookie, or a remembered derived
-// credential works. The selection is fixed for the rest of the page load: a
-// v2 failure never falls back to v1.
+// data until a credential works. The selection is fixed for the rest of the
+// page load: a v2 failure never falls back to v1.
 export async function bootstrapAccessAuth() {
     installAccessFetch();
+    discardLegacyBearer();
     const epoch = stateEpoch;
     const installed = () => epoch !== stateEpoch;
     // A host token can land while discovery or a status check is in flight.
@@ -880,71 +1010,73 @@ export async function bootstrapAccessAuth() {
             ? 'v1'
             : selectedProtocol || advertised;
     accessEnabled = status.enabled;
-    // Fix the protocol before any login attempt; the cookie and saved
+    // Fix the protocol before any login attempt; the refresh and saved
     // verifier branches below are the only v2-to-v1 change.
     selectedProtocol = protocol;
     if (protocol === 'v1' && hadV2Selection) {
-        // A v1-only server cannot use the bearer; keep the stored token for
-        // a server that can, but stop sending it here. This holds even when
-        // the server reports authentication disabled.
+        // A v1-only server cannot use the bearer. This holds even when the
+        // server reports authentication disabled.
         accessToken = null;
     }
-    if (!status.enabled) return { enabled: false };
+    if (!status.enabled) {
+        // Enforcement is off: a credential from before is stale, and a
+        // refresh would rotate a session the server no longer honours.
+        accessToken = null;
+        return { enabled: false };
+    }
+
+    // An in-memory token decides alone; it never deduces back to v1.
+    if (accessToken) {
+        const token = accessToken;
+        let verdict;
+        try {
+            verdict = await wait(checkV2Token(token));
+        } catch (err) {
+            if (installed()) return { enabled: accessEnabled };
+            throw err;
+        }
+        if (verdict === HOST_INSTALL || installed())
+            return { enabled: accessEnabled };
+        if (verdict === 'valid') {
+            adoptToken(token);
+            return { enabled: true };
+        }
+        rejectToken(token);
+        // No cookie fallback: an explicit v2 credential decides alone.
+        return showUnlockPrompt('v2');
+    }
+
+    // An unselected session may still hold a working v1 cookie or verifier.
+    // Trying those first avoids a pointless refresh and a needless prompt.
+    if (protocol === 'v1' || !hadV2Selection) {
+        let recovered;
+        try {
+            recovered = await recoverV1(status, wait, installed);
+        } catch (err) {
+            if (installed()) return { enabled: accessEnabled };
+            throw err;
+        }
+        if (recovered === HOST_INSTALL || installed())
+            return { enabled: accessEnabled };
+        if (recovered) return recovered;
+    }
 
     if (protocol === 'v2') {
-        const stored = loadBearer();
-        const token = accessToken || stored;
-        if (token) {
-            let verdict;
-            try {
-                verdict = await wait(checkV2Token(token));
-            } catch (err) {
-                if (installed()) return { enabled: accessEnabled };
-                throw err;
-            }
-            if (verdict === HOST_INSTALL || installed())
-                return { enabled: accessEnabled };
-            if (verdict === 'valid') {
-                // A stored token is already persisted; a host token is not.
-                adoptToken(token);
-                return { enabled: true };
-            }
-            rejectToken(token);
-            // No cookie fallback: an explicit v2 credential decides alone.
-            return showUnlockPrompt('v2');
+        // The HttpOnly refresh cookie is the only bootstrap credential. A 401
+        // keeps the v2 selection and prompts here, never on v1.
+        let outcome;
+        try {
+            outcome = await wait(refreshSession());
+        } catch (err) {
+            if (installed()) return { enabled: accessEnabled };
+            throw err;
         }
-        if (hadV2Selection) {
-            // The token was cleared after a rejection: token absence alone
-            // must not select v1 on a server that still advertises v2.
-            return showUnlockPrompt('v2');
-        }
+        if (outcome === REFRESH_INSTALLED) return { enabled: true };
+        if (outcome === HOST_INSTALL || installed())
+            return { enabled: accessEnabled };
+        return showUnlockPrompt('v2');
     }
-
-    if (status.authenticated) {
-        selectedProtocol = 'v1';
-        return { enabled: true };
-    }
-
-    // A saved v1 verifier is only usable when the status still carries v1 KDF
-    // metadata; a v2-only status must not be rejected by those bounds.
-    if (hasV1Metadata(status)) {
-        const verifier = savedVerifier(status.raw);
-        if (verifier) {
-            const verdict = await wait(login(status.raw, verifier));
-            if (verdict === HOST_INSTALL || installed())
-                return { enabled: accessEnabled };
-            if (verdict === 'ok') {
-                selectedProtocol = 'v1';
-                return { enabled: true };
-            }
-            // A rate limit cannot verify the saved credential either, so it is
-            // as unavailable as a transport failure: do not prompt for a
-            // password the server is refusing to check.
-            if (verdict === 'transient' || verdict === 'rate-limited')
-                throw new Error('Unable to check Phi access protection');
-        }
-    }
-    return showUnlockPrompt(protocol);
+    return showUnlockPrompt('v1');
 }
 
 async function createPasswordRecord(
@@ -1048,6 +1180,45 @@ export function installToken(token) {
     return true;
 }
 
+// logoutAccess revokes the current family (all=false) or every v2 family
+// (all=true) on the server, then drops the in-memory credential. It claims
+// nothing the server has not confirmed.
+export async function logoutAccess(all = false) {
+    const token = accessToken;
+    if (!token) throw new Error('Sign in to continue');
+    const epoch = stateEpoch;
+    const res = await withAuthDeadline((signal) =>
+        fetch('/api/auth/v2/logout', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Phi-Auth': 'v2',
+                Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ all: all === true }),
+            credentials: 'same-origin',
+            redirect: 'error',
+            signal,
+        }),
+    );
+    if (!res.ok) throw new Error('Unable to logout');
+    let payload;
+    try {
+        payload = await res.json();
+    } catch {
+        throw new Error('Unable to logout');
+    }
+    if (!payload || payload.ok !== true) throw new Error('Unable to logout');
+    // A credential installed while the logout was in flight is newer than it.
+    if (epoch === stateEpoch && accessToken === token) {
+        accessToken = null;
+        stateEpoch++;
+    }
+    broadcastInvalidation();
+    if (pendingOverlay) pendingOverlay.finish({ enabled: false });
+    return { ok: true };
+}
+
 // webSocketURL clones a socket URL and, in v2 mode, appends the bearer as one
 // encoded query parameter. The token only travels to the page's own origin.
 export function webSocketURL(url) {
@@ -1108,6 +1279,8 @@ export const __test__ = {
     resetNativeDerive,
     parseAccessStatus,
     parseProtocols,
+    parseCredentialBundle,
+    refreshSession,
     resetAccessState,
     setReload,
     getAccessState,
@@ -1123,6 +1296,11 @@ function resetAccessState() {
     stateEpoch++;
     reauthInFlight = null;
     pendingOverlay = null;
+    refreshInFlight = null;
+    if (invalidation) {
+        if (typeof invalidation.close === 'function') invalidation.close();
+        invalidation = null;
+    }
     reloadPage = () => location.reload();
 }
 
