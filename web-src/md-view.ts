@@ -34,6 +34,28 @@ export function decodeNotificationDir(bytes: Uint8Array): string | null {
     return notif.kind.value.dir ?? '';
 }
 
+// Markdown events retry: full-jitter exponential backoff with a floor, capped.
+// The fixed 10 s retry this replaced hammered a down server at a constant rate
+// and gave a recovered link no fast path back.
+const MD_EVENT_RETRY_BASE_MS = 1000;
+const MD_EVENT_RETRY_MAX_MS = 20000;
+const MD_EVENT_RETRY_FLOOR_MS = 500;
+
+// mdEventRetryDelay returns the wait before retry `attempt` (1-based). Full
+// jitter: random(0, min(cap, base * 2^(attempt-1))) plus a floor, because full
+// jitter alone can return ~0 ms and turn a flapping server into a hot loop.
+// `random` is injected so tests are deterministic.
+export function mdEventRetryDelay(
+    attempt: number,
+    random: () => number = Math.random,
+): number {
+    const cap = Math.min(
+        MD_EVENT_RETRY_MAX_MS,
+        MD_EVENT_RETRY_BASE_MS * 2 ** Math.max(0, attempt - 1),
+    );
+    return Math.round(MD_EVENT_RETRY_FLOOR_MS + random() * cap);
+}
+
 // mdEventMatchesPath reports whether a 0x07 md-changed event for `dir`
 // concerns the file at `path`.
 export function mdEventMatchesPath(
@@ -166,7 +188,31 @@ export function initMdView(): void {
         }
     }
 
+    // Event-socket retry state lives here, not at module scope: this function
+    // owns one events socket per md.html window.
+    let eventAttempt = 0;
+    let eventTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // connect refreshes a stale bearer before dialing: the server closes an
+    // events socket at the admitted token exp, so a redial with that same
+    // token would only be refused again. The wait is bounded by the module's
+    // own auth deadline and a refresh failure still redials — the retry owner
+    // below decides what happens next, not the refresh.
     function connect(): void {
+        let refresh: Promise<unknown> | undefined;
+        try {
+            refresh = window.phiAccessAuth?.refreshAccessIfDue?.();
+        } catch (_e) {}
+        // No auth module (or a v1 session) dials synchronously: bridge-free
+        // behavior must stay byte-identical.
+        if (refresh && typeof refresh.then === 'function') {
+            void refresh.catch(() => {}).then(dial);
+        } else {
+            dial();
+        }
+    }
+
+    function dial(): void {
         const socketURL = new URL(wsUrl('/ws/md-events'));
         const ws = new WebSocket(
             (window.phiAccessAuth?.webSocketURL?.(socketURL) ?? socketURL).href,
@@ -175,6 +221,7 @@ export function initMdView(): void {
         ws.binaryType = 'arraybuffer';
         // Refresh on open too: content may have changed while disconnected.
         ws.onopen = () => {
+            eventAttempt = 0;
             const negotiated = ws.protocol;
             // Test fakes omit the attribute; real servers must select it.
             if (negotiated !== undefined && negotiated !== eventsSubprotocol) {
@@ -195,7 +242,12 @@ export function initMdView(): void {
             if (mdEventMatchesPath(dir || null, path)) void loadAndRender();
         };
         ws.onclose = () => {
-            setTimeout(connect, 10000);
+            eventAttempt += 1;
+            if (eventTimer !== null) clearTimeout(eventTimer);
+            eventTimer = setTimeout(() => {
+                eventTimer = null;
+                connect();
+            }, mdEventRetryDelay(eventAttempt));
         };
     }
 

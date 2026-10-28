@@ -47,7 +47,7 @@ afterEach(() => {
     document.documentElement.removeAttribute('data-phi-desktop');
 });
 it.each(['browser', 'desktop'])(
-    '%s schedules all dead panes without a manual banner or focus change',
+    '%s redials only the active pane unless the desktop shell owns all panes',
     (mode) => {
         if (mode === 'desktop')
             document.documentElement.setAttribute('data-phi-desktop', '');
@@ -55,20 +55,27 @@ it.each(['browser', 'desktop'])(
         const second = tab('p2');
         tab('healthy', { isDead: false });
         manager.getActiveTab.mockReturnValue(first);
+        manager.activePaneId = first.paneId;
         manager.updateDisconnectBanner();
         expect(banner.textContent).toContain('2 tabs disconnected');
         manager._reviveActiveTabIfDead();
         expect(banner.classList.contains('hidden')).toBe(true);
         expect(manager.reconnectTab).not.toHaveBeenCalled();
         vi.advanceTimersByTime(1000);
-        expect(manager.reconnectTab.mock.calls).toEqual([
-            [first, { auto: true }],
-            [second, { auto: true }],
-        ]);
+        expect(manager.reconnectTab.mock.calls).toEqual(
+            mode === 'desktop'
+                ? [
+                      [first, { auto: true }],
+                      [second, { auto: true }],
+                  ]
+                : [[first, { auto: true }]],
+        );
         expect(manager.activateTabViewport).not.toHaveBeenCalled();
     },
 );
-it('a background-pane close delivered while visible schedules recovery without a toast', () => {
+it('does not redial a background browser pane while visible', () => {
+    manager.activePaneId = 'active';
+    manager._showReconnectOverlay = vi.fn();
     const pane = tab('background', { isDead: false });
     manager._handleTerminalDisconnect(pane);
     expect(pane.autoReconnectPending).toBe(true);
@@ -76,7 +83,8 @@ it('a background-pane close delivered while visible schedules recovery without a
     expect(banner.classList.contains('hidden')).toBe(true);
     expect(manager.app.showToast).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1000);
-    expect(manager.reconnectTab).toHaveBeenCalledOnce();
+    expect(manager.reconnectTab).not.toHaveBeenCalled();
+    expect(manager._showReconnectOverlay).toHaveBeenCalledWith(pane);
 });
 it('off exposes pending panes immediately; the skipped timer clears pending status', () => {
     const pane = tab('p1');
