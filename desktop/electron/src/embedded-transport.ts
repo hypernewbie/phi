@@ -19,7 +19,12 @@ import {
   parseRefreshHandle,
   readSetCookieHeaders,
 } from './access-auth.js';
-import type { LogoutResult, RefreshResult, V2Bundle } from './access-auth.js';
+import type {
+  AuthAttempt,
+  LogoutResult,
+  RefreshResult,
+  V2Bundle,
+} from './access-auth.js';
 
 export const EMBEDDED_SCHEME = 'phi-app';
 export const EMBEDDED_HOST = 'app';
@@ -41,6 +46,10 @@ const COMPAT_CACHE_TTL_MS = 10 * 60 * 1000;
 const COMPAT_NEGATIVE_TTL_MS = 60 * 1000;
 /** The access-auth session cookie the phi server issues. */
 const ACCESS_SESSION_COOKIE = 'phi_access_session';
+/** v2 credentials. They belong to the host auth owner alone: the pathless jar
+ *  is v1-only, because it is replayed on every API row and every socket
+ *  upgrade, which would leak a refresh handle far past its one allowed path. */
+const V2_ONLY_COOKIES = new Set(['phi_access_refresh', 'phi_access_asset']);
 /** How long a proxied request waits for an in-flight unlock. */
 const AUTH_WAIT_CAP_MS = 3_000;
 export const EMBEDDED_PARTITION = 'persist:phi-embedded';
@@ -71,6 +80,14 @@ export interface EmbeddedAuthHost {
   getToken(origin: string): string | null;
   getBundle(origin: string): V2Bundle | null;
   installBundle(origin: string, bundle: V2Bundle): boolean;
+  /** Captures the handshake fence, see `AccessAuth.captureAttempt`. */
+  captureAttempt(origin: string): AuthAttempt | null;
+  installBundleForAttempt(
+    origin: string,
+    bundle: V2Bundle,
+    attempt: AuthAttempt,
+  ): boolean;
+  clearBundleForAttempt(attempt: AuthAttempt): boolean;
   refreshAccess(origin: string): Promise<RefreshResult>;
   logout(origin: string, all: boolean): Promise<LogoutResult>;
 }
@@ -173,6 +190,53 @@ function authProxyRow(pathname: string, method: string): AuthProxyRow {
 
 function isPasswordRoute(pathname: string): boolean {
   return pathname === '/api/auth/v2/password';
+}
+
+/** True when a WebSocket upgrade targets exactly the profile's own origin.
+ *  `ws:`/`wss:` are the socket spellings of `http:`/`https:`, so a scheme
+ *  downgrade or upgrade is a different origin and carries no credential. */
+function isSocketOriginOfProfile(
+  profile: EmbeddedProfile,
+  wsUrl: URL,
+): boolean {
+  let profileUrl: URL;
+  try {
+    profileUrl = new URL(profile.origin);
+  } catch {
+    return false;
+  }
+  if (profileUrl.origin === 'null') return false;
+  const socketScheme = wsUrl.protocol === 'wss:' ? 'https:' : 'http:';
+  return socketScheme === profileUrl.protocol && wsUrl.host === profileUrl.host;
+}
+
+/** The page's logout scope: `{all:true}` revokes every family, anything else
+ *  revokes this session only. An unreadable body is the narrow scope. */
+async function readLogoutScope(req: Request): Promise<boolean> {
+  const body = await readRequestBody(req);
+  if (body === undefined) return false;
+  try {
+    const text =
+      typeof body === 'string'
+        ? body
+        : new TextDecoder().decode(body as ArrayBuffer);
+    const parsed: unknown = JSON.parse(text);
+    return (
+      !!parsed &&
+      typeof parsed === 'object' &&
+      (parsed as Record<string, unknown>).all === true
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** The exact clear answer a v2 password clear must return. `enabled: false`
+ *  alone is also produced by an unrelated config row, so it is not enough. */
+function isClearReply(payload: unknown): boolean {
+  if (!payload || typeof payload !== 'object') return false;
+  const body = payload as Record<string, unknown>;
+  return body.ok === true && body.enabled === false;
 }
 
 function tokenFreeJSON(body: string, status: number): Response {
@@ -512,6 +576,10 @@ export class EmbeddedTransport {
 
   setCookie(profileId: string, name: string, value: string): void {
     if (!name) return;
+    // The jar is v1-only. A v2 refresh handle or asset cookie is parsed and
+    // owned by the host auth owner; keeping a copy here would replay it on
+    // every proxied request and every socket upgrade.
+    if (V2_ONLY_COOKIES.has(name)) return;
     let jar = this.cookieJars.get(profileId);
     if (!jar) {
       jar = new Map();
@@ -523,7 +591,6 @@ export class EmbeddedTransport {
       jar.set(name, value);
     }
   }
-
   applySetCookieHeader(profileId: string, rawSetCookie: string): void {
     if (!rawSetCookie) return;
     const parts = rawSetCookie.split(';');
@@ -680,29 +747,19 @@ export class EmbeddedTransport {
           return;
         }
 
-        let matchedProfile: EmbeddedProfile | null = null;
-        if (this.activeProfileId) {
-          const active = this.resolveProfile(this.activeProfileId);
-          if (active) {
-            try {
-              if (new URL(active.origin).host === wsUrl.host) {
-                matchedProfile = active;
-              }
-            } catch {}
-          }
-        }
-
-        if (!matchedProfile && this.listProfiles) {
-          const all = this.listProfiles();
-          for (const p of all) {
-            try {
-              if (new URL(p.origin).host === wsUrl.host) {
-                matchedProfile = p;
-                break;
-              }
-            } catch {}
-          }
-        }
+        // A socket is credentialed only for the origin the shell is bound to,
+        // and only when the upgrade targets that exact origin. `ws:`/`wss:`
+        // map onto `http:`/`https:`, so a `ws://` upgrade to an `https://`
+        // profile (the bearer over cleartext) or a `wss://` upgrade to an
+        // `http://` profile never matches. Scanning every profile would let a
+        // page pick whose credential it borrows; there is exactly one.
+        const boundProfile = this.activeProfileId
+          ? this.resolveProfile(this.activeProfileId)
+          : null;
+        const matchedProfile =
+          boundProfile && isSocketOriginOfProfile(boundProfile, wsUrl)
+            ? boundProfile
+            : null;
 
         if (!matchedProfile) {
           callback({ requestHeaders: details.requestHeaders });
@@ -1090,6 +1147,9 @@ export class EmbeddedTransport {
     profile: EmbeddedProfile,
   ): Promise<Response> {
     const body = await readRequestBody(req);
+    // The fence is captured before the first await. A slow response must not
+    // replace a credential that a newer attempt already installed.
+    const attempt = this.auth?.captureAttempt(profile.origin) ?? null;
     const headers = this.buildForwardHeaders(req, profile, {
       jsonContentType: true,
       // A login carries no access credential even when the host holds one.
@@ -1098,7 +1158,7 @@ export class EmbeddedTransport {
     });
     // The password route requires a bearer once the server is enabled: without
     // this row the shell could neither change nor clear its own password.
-    const hostToken = this.auth?.getToken(profile.origin) ?? null;
+    const hostToken = attempt ? (this.auth?.getToken(profile.origin) ?? null) : null;
     if (hostToken && isPasswordRoute(targetUrl.pathname)) {
       headers.set('Authorization', `Bearer ${hostToken}`);
     }
@@ -1130,12 +1190,14 @@ export class EmbeddedTransport {
       return tokenFreeError('invalid credential response', 502);
     }
 
-    // Clear: the credential is gone server-side, and the host drops its own.
-    if (
-      payload &&
-      typeof payload === 'object' &&
-      (payload as Record<string, unknown>).enabled === false
-    ) {
+    // Clear: the credential is gone server-side, and the host drops its own
+    // only while this request still owns the origin.
+    if (isClearReply(payload)) {
+      if (attempt && this.auth) {
+        if (!this.auth.clearBundleForAttempt(attempt)) {
+          return tokenFreeError('unable to clear credential', 503);
+        }
+      }
       return tokenFreeJSON(CLEARED_BODY, 200);
     }
 
@@ -1146,41 +1208,33 @@ export class EmbeddedTransport {
     // A malformed or oversized bundle is a host error. It must never reach the
     // page, and it must never displace a working credential.
     if (!bundle) return tokenFreeError('invalid credential response', 502);
-    if (!this.auth?.installBundle(profile.origin, bundle)) {
-      return tokenFreeError('unable to install credential', 503);
+    if (!attempt) return tokenFreeError('unable to install credential', 503);
+    if (!this.auth?.installBundleForAttempt(profile.origin, bundle, attempt)) {
+      // An install that lost its race is not a server error: a newer attempt
+      // owns the credential, and the page must not be told to sign in again.
+      return tokenFreeError('superseded', 409);
     }
     return tokenFreeJSON(ENABLED_BODY, 200);
   }
 
-  /** The logout row: host bearer only, and the bundle drops on confirmation. */
+  /**
+   * The logout row. One request leaves the host: the page's `{all}` decides the
+   * scope, and the host owner sends it with the credential it captured, so a
+   * newer sign-in that landed mid-flight is never revoked by a stale logout.
+   */
   private async handleV2Logout(
     req: Request,
     targetUrl: URL,
     profile: EmbeddedProfile,
   ): Promise<Response> {
-    const body = await readRequestBody(req);
-    const headers = this.buildForwardHeaders(req, profile, {
-      jsonContentType: true,
-      bearer: this.auth?.getToken(profile.origin) ?? null,
-      v2: true,
-    });
-    let upstreamRes: Response;
-    try {
-      upstreamRes = await this.fetchImpl(targetUrl.toString(), {
-        method: req.method,
-        headers,
-        body,
-        redirect: 'manual',
-      });
-    } catch {
-      return tokenFreeError('upstream request failed', 502);
+    void targetUrl;
+    if (!this.auth) return tokenFreeError('unavailable', 503);
+    const all = await readLogoutScope(req);
+    const result = await this.auth.logout(profile.origin, all);
+    if (result.kind === 'ok' || result.kind === 'unauthorized') {
+      return tokenFreeJSON(LOGOUT_OK_BODY, 200);
     }
-    for (const sc of readSetCookieHeaders(upstreamRes)) {
-      this.applySetCookieHeader(profile.id, sc);
-    }
-    if (!upstreamRes.ok) return authFailureResponse(upstreamRes);
-    if (this.auth) await this.auth.logout(profile.origin, false);
-    return tokenFreeJSON(LOGOUT_OK_BODY, 200);
+    return tokenFreeError('upstream request failed', 502);
   }
 
   /**
@@ -1218,6 +1272,41 @@ export class EmbeddedTransport {
         }),
         { status: 502, headers: { 'Content-Type': 'application/json' } },
       );
+    }
+
+    // A stale host token must not reach the page as a sign-in prompt: the host
+    // is the one refresh owner, so recover here. Only an idempotent request is
+    // replayed; a mutation is never replayed and the page resubmits.
+    if (upstreamRes.status === 401 && hostToken && this.auth) {
+      const result = await this.auth.refreshAccess(profile.origin);
+      if (result.kind === 'unauthorized') {
+        return tokenFreeError('unauthorized', 401);
+      }
+      if (result.kind !== 'ok' && result.kind !== 'superseded') {
+        // Non-terminal: keep the bundle and let the page retry with backoff.
+        return tokenFreeError('unavailable', 503);
+      }
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        return tokenFreeError('unavailable', 503);
+      }
+      const retryToken = this.auth.getToken(profile.origin) ?? null;
+      if (!retryToken) return tokenFreeError('unavailable', 503);
+      try {
+        upstreamRes = await this.fetchImpl(targetUrl.toString(), {
+          method: req.method,
+          headers: this.buildForwardHeaders(req, profile, {
+            jsonContentType: false,
+            bearer: retryToken,
+            v2: false,
+          }),
+          redirect: 'manual',
+        });
+      } catch {
+        return tokenFreeError('upstream request failed', 502);
+      }
+      if (upstreamRes.status === 401) {
+        return tokenFreeError('unauthorized', 401);
+      }
     }
 
     for (const sc of readSetCookieHeaders(upstreamRes)) {

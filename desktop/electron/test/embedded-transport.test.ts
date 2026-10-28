@@ -14,7 +14,15 @@ import {
   registerEmbeddedScheme,
   SOCKET_TOKEN_HEADER,
 } from '../src/embedded-transport.js';
-import type { V2Bundle } from '../src/access-auth.js';
+import type { AuthAttempt, V2Bundle } from '../src/access-auth.js';
+
+/** The per-origin attempt counter the fake host fences against. */
+const attemptFence = new Map<string, number>();
+
+/** Simulates a newer credential attempt winning the race for `origin`. */
+function bumpFence(origin: string): void {
+  attemptFence.set(origin, (attemptFence.get(origin) ?? 0) + 1);
+}
 
 /** A canonical refresh handle: 32 base64url bytes. */
 const AUTH_HANDLE = Buffer.alloc(32, 0xc3).toString('base64url');
@@ -60,6 +68,20 @@ function fakeAuthHost(
     getToken: vi.fn(() => AUTH_BUNDLE.token),
     getBundle: vi.fn(() => AUTH_BUNDLE),
     installBundle: vi.fn(() => true),
+    // The fence is a counter: any other attempt (a second login, an install,
+    // a clear) advances it, which is exactly what the transport must respect.
+    captureAttempt: vi.fn((origin: string) => {
+      const attempt = attemptFence.get(origin) ?? 0;
+      return {
+        origin,
+        isCurrent: () => (attemptFence.get(origin) ?? 0) === attempt,
+      };
+    }),
+    installBundleForAttempt: vi.fn(
+      (origin: string, bundle: V2Bundle, attempt: AuthAttempt) =>
+        attempt.isCurrent() && attempt.origin === origin,
+    ),
+    clearBundleForAttempt: vi.fn((attempt: AuthAttempt) => attempt.isCurrent()),
     refreshAccess: vi.fn(async () => ({ kind: 'ok', bundle: AUTH_BUNDLE })),
     logout: vi.fn(async () => ({ kind: 'ok' })),
     ...overrides,
@@ -76,6 +98,7 @@ describe('embedded-transport', () => {
 
   beforeEach(() => {
     tempDir = mkdtempSync(path.join(tmpdir(), 'phi-embedded-test-'));
+    attemptFence.clear();
     profiles = new Map([
       ['prof1', { id: 'prof1', origin: 'http://127.0.0.1:8080' }],
       ['prof2', { id: 'prof2', origin: 'https://backend2.example.com:8443' }],
@@ -622,10 +645,12 @@ describe('embedded-transport', () => {
       );
       expect(init.headers.get('X-Phi-Auth')).toBe('v2');
       expect(Buffer.from(init.body).toString('utf8')).toBe(body);
-      expect(auth.installBundle).toHaveBeenCalledWith(
+      expect(auth.installBundleForAttempt).toHaveBeenCalledWith(
         'http://127.0.0.1:8080',
         expect.objectContaining({ token: 'fresh-access-token' }),
+        expect.objectContaining({ origin: 'http://127.0.0.1:8080' }),
       );
+      expect(auth.installBundle).not.toHaveBeenCalled();
     });
 
     it('sends no bearer on a login even when the host holds a token', async () => {
@@ -639,7 +664,7 @@ describe('embedded-transport', () => {
       const { init } = upstreamCall();
       expect(init.headers.get('Authorization')).toBeNull();
       expect(init.headers.get('X-Phi-Auth')).toBe('v2');
-      expect(auth.installBundle).toHaveBeenCalledTimes(1);
+      expect(auth.installBundleForAttempt).toHaveBeenCalledTimes(1);
     });
 
     it('reports a cleared password as the token-free cleared shape', async () => {
@@ -656,7 +681,8 @@ describe('embedded-transport', () => {
       });
       expect(await res.text()).toBe('{"ok":true,"enabled":false}');
       // Nothing is installed for a clear, and the host bearer authorizes it.
-      expect(auth.installBundle).not.toHaveBeenCalled();
+      expect(auth.installBundleForAttempt).not.toHaveBeenCalled();
+      expect(auth.clearBundleForAttempt).toHaveBeenCalledTimes(1);
       expect(upstreamCall().init.headers.get('Authorization')).toBe(
         `Bearer ${AUTH_BUNDLE.token}`,
       );
@@ -753,25 +779,32 @@ describe('embedded-transport', () => {
       expect(auth.refreshAccess).toHaveBeenCalledTimes(2);
     });
 
-    it('authorizes the logout row with the host bearer and drops the bundle', async () => {
-      mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ ok: true }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        }),
-      );
+    it('delegates the one logout to the host owner with the page\u2019s scope', async () => {
+      const res = await send('/api/auth/v2/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ all: true }),
+      });
+      expect(await res.text()).toBe('{"ok":true}');
+      // Exactly one logout leaves the host: the proxy does not also fetch it,
+      // which would send a second request with whatever token is current then.
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(auth.logout).toHaveBeenCalledTimes(1);
+      expect(auth.logout).toHaveBeenCalledWith('http://127.0.0.1:8080', true);
+    });
+
+    it('reports a failed logout instead of claiming the session ended', async () => {
+      auth.logout.mockResolvedValueOnce({
+        kind: 'unavailable',
+        reason: 'connection reset',
+      });
       const res = await send('/api/auth/v2/logout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ all: false }),
       });
-      expect(await res.text()).toBe('{"ok":true}');
-      const { init } = upstreamCall();
-      expect(init.headers.get('Authorization')).toBe(
-        `Bearer ${AUTH_BUNDLE.token}`,
-      );
-      expect(init.headers.get('X-Phi-Auth')).toBe('v2');
-      expect(auth.logout).toHaveBeenCalledWith('http://127.0.0.1:8080', false);
+      expect(res.status).toBe(502);
+      expect(await res.text()).toBe('{"error":"upstream request failed"}');
     });
 
     it('answers unavailable when no host owner is wired', async () => {
@@ -1045,6 +1078,7 @@ describe('embedded-transport', () => {
       transport.setCookie('prof2', 'ws_token', 'token_99');
 
       // Set active profile to prof1
+      transport.setActiveProfile('prof1');
       transport.setCookie('prof1', 'auth', 'val1');
 
       // Test matched webContentsId and matched prof1 host
@@ -1130,7 +1164,7 @@ describe('embedded-transport', () => {
       expect(resultHeaders).toEqual({ origin: 'phi-app://app' });
     });
 
-    it('matches non-active profile via listProfiles if host matches', () => {
+    it('never borrows another profile\u2019s credential for a socket', () => {
       let listener: ((details: any, callback: any) => void) | undefined;
       const mockSession = {
         webRequest: {
@@ -1141,7 +1175,10 @@ describe('embedded-transport', () => {
       };
 
       transport.attachWebSocketHeaderBridge(mockSession, () => 42);
-      // Active is prof1, but URL connects to prof2: https://backend2.example.com:8443
+      // The shell is bound to prof1 and prof2 is configured with a cookie jar:
+      // a socket to prof2 must still carry nothing, or the page could pick
+      // whose credential it borrows.
+      transport.setActiveProfile('prof1');
       transport.setCookie('prof2', 'cookie2', 'val2');
 
       let resultHeaders: Record<string, string> | undefined;
@@ -1158,10 +1195,20 @@ describe('embedded-transport', () => {
         },
       );
 
-      expect(resultHeaders!['Origin']).toBe(
-        'https://backend2.example.com:8443',
-      );
-      expect(resultHeaders!['Cookie']).toBe('cookie2=val2');
+      expect(resultHeaders).toEqual({ origin: 'phi-app://app' });
+    });
+
+    it('refuses a scheme downgrade so no host token travels cleartext', () => {
+      const bridge = attachWithHostToken('host-socket-token');
+      // The profile is https, the upgrade is cleartext ws: same host, not the
+      // same origin. Sending the bearer here would expose it on the wire.
+      bridge.setProfile('prof1', 'https://127.0.0.1:8080');
+      const headers = bridge.fire({
+        url: 'ws://127.0.0.1:8080/ws',
+        requestHeaders: { origin: 'phi-app://app' },
+      });
+      expect(headers[SOCKET_TOKEN_HEADER]).toBeUndefined();
+      expect(headers['Origin']).toBeUndefined();
     });
 
     /** A transport whose host owner holds a working access token. */
@@ -1173,6 +1220,7 @@ describe('embedded-transport', () => {
         webContentsId?: number;
         requestHeaders: Record<string, string>;
       }) => Record<string, string>;
+      setProfile: (id: string, origin: string) => void;
     } => {
       let listener: ((details: any, callback: any) => void) | undefined;
       const mockSession = {
@@ -1190,6 +1238,7 @@ describe('embedded-transport', () => {
         auth: fakeAuthHost({ getToken: vi.fn(() => token) }),
       });
       socketTransport.attachWebSocketHeaderBridge(mockSession, () => 42);
+      socketTransport.setActiveProfile('prof1');
       return {
         fire: (details) => {
           let result: Record<string, string> | undefined;
@@ -1200,6 +1249,10 @@ describe('embedded-transport', () => {
             },
           );
           return result!;
+        },
+        setProfile: (id, origin) => {
+          profiles.set(id, { id, origin });
+          socketTransport.setActiveProfile(id);
         },
       };
     };
