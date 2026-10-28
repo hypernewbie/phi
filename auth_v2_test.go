@@ -4180,3 +4180,102 @@ func TestAccessPostCommitFailureIssuesNoCredential(t *testing.T) {
 		t.Error("journal survived the restart that promoted it")
 	}
 }
+
+// --- M1c: the socket admission validator ---
+
+// admitsFence is the re-check the hub runs at registration. It must refuse a
+// stale generation, a disabled manager, an expired admission, and any family
+// that is gone, faulted, or past its own deadline.
+func TestAccessFenceValidatorRefusesEveryRevokedAdmission(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+	familyID := testAccessFamilyOf(t, auth, token)
+	auth.mu.Lock()
+	generation := auth.generation
+	expiresAt := time.Now().Add(time.Hour)
+	auth.mu.Unlock()
+
+	live := ws.AuthFence{Generation: generation, FamilyID: familyID, ExpiresAt: expiresAt, Deadline: expiresAt}
+	if !auth.admitsFence(live) {
+		t.Fatal("live v2 admission refused")
+	}
+
+	v1 := ws.AuthFence{Generation: generation}
+	if !auth.admitsFence(v1) {
+		t.Fatal("v1 admission refused")
+	}
+
+	cases := []struct {
+		name  string
+		fence ws.AuthFence
+	}{
+		{name: "stale generation", fence: ws.AuthFence{Generation: generation - 1, FamilyID: familyID, ExpiresAt: expiresAt}},
+		{name: "already expired", fence: ws.AuthFence{Generation: generation, FamilyID: familyID, ExpiresAt: time.Now().Add(-time.Second)}},
+		{name: "unknown family", fence: ws.AuthFence{Generation: generation, FamilyID: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", ExpiresAt: expiresAt}},
+		{name: "v1 fence carrying an expiry", fence: ws.AuthFence{Generation: generation, ExpiresAt: expiresAt}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if auth.admitsFence(tc.fence) {
+				t.Fatal("revoked admission accepted")
+			}
+		})
+	}
+
+	// A faulted manager refuses v2 admissions while its record is still there.
+	auth.mu.Lock()
+	auth.faulted = true
+	auth.mu.Unlock()
+	if auth.admitsFence(live) {
+		t.Fatal("faulted v2 admission accepted")
+	}
+	auth.mu.Lock()
+	auth.faulted = false
+	auth.mu.Unlock()
+
+	// A non-owner authorizes nothing at all.
+	auth.mu.Lock()
+	auth.owned = false
+	auth.mu.Unlock()
+	if auth.admitsFence(live) {
+		t.Fatal("non-owner admission accepted")
+	}
+	auth.mu.Lock()
+	auth.owned = true
+	auth.mu.Unlock()
+
+	// Disabled auth: a v1 admission still passes, a v2 one cannot exist.
+	if err := auth.configure(""); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	auth.mu.Lock()
+	disabledGeneration := auth.generation
+	auth.mu.Unlock()
+	if !auth.admitsFence(ws.AuthFence{Generation: disabledGeneration}) {
+		t.Fatal("disabled v1 admission refused")
+	}
+	if auth.admitsFence(ws.AuthFence{Generation: disabledGeneration, FamilyID: familyID, ExpiresAt: expiresAt}) {
+		t.Fatal("disabled v2 admission accepted")
+	}
+}
+
+// The family's own deadline bounds an admission that the token exp would allow
+// to live longer.
+func TestAccessFenceValidatorHonoursFamilyDeadline(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+	familyID := testAccessFamilyOf(t, auth, token)
+
+	auth.mu.Lock()
+	generation := auth.generation
+	// Move the family's idle deadline into the past, as an idle expiry would.
+	auth.v2.families[familyID].IdleExpiresAt = time.Now().Add(-time.Minute).Unix()
+	auth.mu.Unlock()
+
+	fence := ws.AuthFence{Generation: generation, FamilyID: familyID, ExpiresAt: time.Now().Add(time.Hour)}
+	if auth.admitsFence(fence) {
+		t.Fatal("admission past the family deadline accepted")
+	}
+}
