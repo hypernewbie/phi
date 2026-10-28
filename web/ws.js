@@ -9,6 +9,9 @@ export { terminalSubprotocol };
 const MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
 // Single checkpoint/output span bound, matching the server's 2 MiB cap.
 const MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
+// Bound for the queue that holds live frames behind a bootstrap or a gap.
+const MAX_HELD_BYTES = 2 * 1024 * 1024;
+const MAX_HELD_SPANS = 256;
 // Outbound raw input span; larger pastes go out as ordered frames.
 const MAX_INPUT_CHUNK = 1 * 1024 * 1024;
 // Narrow one 64-bit field to a safe integer. Absent and out-of-range
@@ -82,6 +85,7 @@ export class PTYWebSocket {
     // until applyGapPatch() supplies the missing bytes.
     holding = true;
     held = [];
+    heldBytes = 0;
     /** Retained view: validate and sequence live frames, but store nothing. */
     discarding = false;
     constructor(paneId, onData, onControl, onClose, onOpen, opts) {
@@ -440,12 +444,13 @@ export class PTYWebSocket {
         }
         if (start > this.liveSeq) {
             // Gap: hold delivery until the host patches the missing range.
-            this.held.push({ start, bytes });
+            if (!this._holdFrame(start, bytes))
+                return;
             this._notify(this.onGap, this.liveSeq, start);
             return;
         }
         if (this.holding) {
-            this.held.push({ start, bytes });
+            this._holdFrame(start, bytes);
             return;
         }
         this._deliver(start, bytes);
@@ -492,6 +497,7 @@ export class PTYWebSocket {
             return;
         const frames = this.held;
         this.held = [];
+        this.heldBytes = 0;
         for (let i = 0; i < frames.length; i++) {
             // Seq moved past a held frame's start (patch already covered
             // it); trim or drop it like a duplicate.
@@ -527,6 +533,27 @@ export class PTYWebSocket {
     discard() {
         this.discarding = true;
         this.held = [];
+        this.heldBytes = 0;
+    }
+    /** A hold is bounded: an unbounded queue behind a stalled bootstrap is a
+     * memory leak, and no caller can replay more than the cap in one pass.
+     * Overflow reconnects instead of silently dropping bytes into a parser. */
+    _holdFrame(start, bytes) {
+        const next = this.heldBytes + bytes.byteLength;
+        if (this.held.length >= MAX_HELD_SPANS ||
+            next > MAX_HELD_BYTES) {
+            this.held = [];
+            this.heldBytes = 0;
+            this.holding = false;
+            try {
+                this.ws.close();
+            }
+            catch (_e) { }
+            return false;
+        }
+        this.held.push({ start, bytes });
+        this.heldBytes = next;
+        return true;
     }
     release() {
         this.holding = false;

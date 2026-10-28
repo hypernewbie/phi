@@ -791,3 +791,43 @@ describe('checkpoint upload', () => {
         expect(fetchMock).not.toHaveBeenCalled();
     });
 });
+
+describe('a held live queue is bounded', () => {
+    it('reconnects when held output exceeds the cap instead of growing without limit', () => {
+        const data = vi.fn();
+        const pty = new PTYWebSocket('p', data, null, null, null, {});
+        const ws = pty.ws;
+        ws.emitAttachHead({ epoch: 7, oldest: 0, head: 0 });
+        const close = vi.spyOn(ws, 'close');
+        pty.hold();
+
+        // 2 MiB cap at 256 spans: 300 spans of 8 KiB must trip one of them.
+        const chunk = new Uint8Array(8 * 1024).fill(65);
+        let start = 0;
+        for (let i = 0; i < 300; i++) {
+            ws.emitHot(start, chunk);
+            start += chunk.byteLength;
+        }
+
+        expect(close).toHaveBeenCalled();
+        expect(data).not.toHaveBeenCalled();
+    });
+
+    it('discarding stores nothing and reports no gap', () => {
+        const data = vi.fn();
+        const onGap = vi.fn();
+        const pty = new PTYWebSocket('p', data, null, null, null, { onGap });
+        const ws = pty.ws;
+        ws.emitAttachHead({ epoch: 7, oldest: 0, head: 0 });
+        pty.discard();
+
+        // A skipped range would be a gap on a live parser; a retained view
+        // must absorb it without queuing, decoding, or asking for a patch.
+        ws.emitHot(4096, 'later');
+        ws.emitHot(4100, 'more');
+
+        expect(onGap).not.toHaveBeenCalled();
+        expect(data).not.toHaveBeenCalled();
+        expect(pty.held).toHaveLength(0);
+    });
+});
