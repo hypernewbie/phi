@@ -15,9 +15,20 @@ import (
 func useTestAccessAuth(t *testing.T) *accessAuthManager {
 	t.Helper()
 	previous := accessAuth
-	accessAuth = newAccessAuthManager()
-	t.Cleanup(func() { accessAuth = previous })
-	return accessAuth
+	manager := newAccessAuthManager()
+	accessAuth = manager
+	t.Cleanup(func() {
+		manager.owner.release()
+		accessAuth = previous
+	})
+	// Owning the (temporary) state directory is what lets a manager authorize
+	// anything at all, so a test manager starts as the owner with auth disabled.
+	if testConfigPath != "" {
+		if err := manager.configure(""); err != nil {
+			t.Fatalf("configure test manager: %v", err)
+		}
+	}
+	return manager
 }
 
 func testAccessHash() string {
@@ -60,7 +71,11 @@ func TestAccessPasswordHashRoundTripAndRejectsInvalidValues(t *testing.T) {
 }
 
 func TestAccessAuthMiddlewareDisabledAndEnabledCoverage(t *testing.T) {
+	withTempConfig(t)
 	auth := useTestAccessAuth(t)
+	if err := auth.configure(""); err != nil {
+		t.Fatal(err)
+	}
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	handler := accessAuthMiddleware(next)
 
@@ -91,6 +106,7 @@ func TestAccessAuthMiddlewareDisabledAndEnabledCoverage(t *testing.T) {
 }
 
 func TestAccessLoginUsesOneTimeProofAndIssuesSession(t *testing.T) {
+	withTempConfig(t)
 	auth := useTestAccessAuth(t)
 	if err := auth.configure(testAccessHash()); err != nil {
 		t.Fatal(err)
@@ -212,7 +228,17 @@ func TestAccessPasswordHandlerPersistsAndInvalidatesSessions(t *testing.T) {
 	}
 }
 
+// testAccessReleaseStateOwnership drops the state lock so a test can hand
+// ownership to a replacement manager, which is what a real restart does.
+func testAccessReleaseStateOwnership(auth *accessAuthManager) {
+	auth.owner.release()
+	auth.mu.Lock()
+	auth.owned = false
+	auth.mu.Unlock()
+}
+
 func TestAccessSessionSurvivesServerRestart(t *testing.T) {
+	withTempConfig(t)
 	auth := useTestAccessAuth(t)
 	if err := auth.configure(testAccessHash()); err != nil {
 		t.Fatal(err)
@@ -235,7 +261,9 @@ func TestAccessSessionSurvivesServerRestart(t *testing.T) {
 
 	cookie := &http.Cookie{Name: accessSessionCookie, Value: token}
 
-	// Simulate server process restart: re-create manager with empty in-memory sessions
+	// Simulate server process restart: the first manager must release the state
+	// lock, because a second live process is refused all authentication.
+	testAccessReleaseStateOwnership(auth)
 	restartedAuth := newAccessAuthManager()
 	if err := restartedAuth.configure(testAccessHash()); err != nil {
 		t.Fatal(err)
@@ -265,6 +293,7 @@ func TestAccessSessionSurvivesServerRestart(t *testing.T) {
 }
 
 func TestAccessSessionRejectsTamperedOrInvalidTokens(t *testing.T) {
+	withTempConfig(t)
 	auth := useTestAccessAuth(t)
 	if err := auth.configure(testAccessHash()); err != nil {
 		t.Fatal(err)

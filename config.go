@@ -162,10 +162,15 @@ type Config struct {
 	KanbanURL         string `json:"kanban_url,omitempty"`
 	// AccessPasswordHash is an optional browser-derived password verifier.
 	// An empty string deliberately disables Phi's access-password gate.
-	AccessPasswordHash string       `json:"access_password_hash"`
-	SyncCoordinator    string       `json:"sync_coordinator"`
-	AutoReconnect      string       `json:"auto_reconnect"`
-	Peers              []PeerConfig `json:"peers"`
+	AccessPasswordHash string `json:"access_password_hash"`
+	SyncCoordinator    string `json:"sync_coordinator"`
+
+	// AuthOrigins lists extra origins a browser may present to the v2 auth
+	// routes when a reverse proxy terminates TLS. Same-origin requests never
+	// need an entry. Malformed entries are a startup error, not a skip.
+	AuthOrigins   []string     `json:"auth_origins,omitempty"`
+	AutoReconnect string       `json:"auto_reconnect"`
+	Peers         []PeerConfig `json:"peers"`
 }
 
 type PeerConfig struct {

@@ -148,6 +148,14 @@ func main() {
 		slog.Error("invalid access password configuration", "err", err)
 		os.Exit(1)
 	}
+	if err := accessAuth.validateOrigins(); err != nil {
+		slog.Error("invalid auth_origins configuration", "err", err)
+		os.Exit(1)
+	}
+	if !accessAuth.stateOwned() {
+		slog.Warn("another phi instance owns the access state for this directory; " +
+			"this instance serves the UI but refuses all authentication until it exits")
+	}
 	found := false
 	for _, wsPath := range cfg.Workspaces {
 		if wsPath == activeCWD {
@@ -267,6 +275,8 @@ func main() {
 	http.HandleFunc("/api/auth/v2/status", handleAccessV2Status)
 	http.HandleFunc("/api/auth/v2/login", handleAccessV2Login)
 	http.HandleFunc("/api/auth/v2/password", handleAccessV2Password)
+	http.HandleFunc("/api/auth/v2/refresh", handleAccessV2Refresh)
+	http.HandleFunc("/api/auth/v2/logout", handleAccessV2Logout)
 	http.HandleFunc("/api/coders", handleGetCoders)
 	http.HandleFunc("/api/sessions", handleGetSessions)
 	http.HandleFunc("/api/terminals", handleSpawnTerminal)
