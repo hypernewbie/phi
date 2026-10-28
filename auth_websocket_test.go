@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	neturl "net/url"
@@ -1164,4 +1165,189 @@ func TestAccessWSEnableDisableAdmissionFence(t *testing.T) {
 		// the retired generation and not a severed server.
 		expectStillOpen(t, requireDialed(t, "ws"+strings.TrimPrefix(server.URL, "http"), "/ws/md-events", wireproto.EventsSubprotocol, "", ""))
 	})
+}
+
+// The host-only carrier admits a socket on every transport without touching the
+// negotiated subprotocol or the pane parameters the dialer sent.
+func TestAccessWSSocketTokenHeaderAdmits(t *testing.T) {
+	routes := []struct {
+		path        string
+		subprotocol string
+	}{
+		{"/ws/md-events", wireproto.EventsSubprotocol},
+		{"/ws/control", wireproto.ControlSubprotocol},
+		{"/ws/pane/rotate-pane?state=ansi-v1", wireproto.TerminalSubprotocol},
+	}
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	_, socketURL := newAuthSocketServer(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+
+	for _, route := range routes {
+		t.Run(route.path, func(t *testing.T) {
+			dialer := websocket.Dialer{Subprotocols: []string{route.subprotocol}}
+			header := http.Header{}
+			header.Set(accessSocketTokenHeader, token)
+			conn, response, err := dialer.Dial(socketURL+route.path, header)
+			if err != nil {
+				status := 0
+				if response != nil {
+					status = response.StatusCode
+				}
+				t.Fatalf("host carrier rejected: %v (%d)", err, status)
+			}
+			t.Cleanup(func() { _ = conn.Close() })
+			if got := conn.Subprotocol(); got != route.subprotocol {
+				t.Errorf("subprotocol = %q want %q", got, route.subprotocol)
+			}
+			expectStillOpen(t, conn)
+		})
+	}
+}
+
+// The host carrier is a WebSocket credential and nothing else: every HTTP
+// route refuses to authenticate with it, including the auth routes that make
+// their own carrier decisions.
+func TestAccessSocketTokenHeaderIsNotAnHTTPCredential(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+
+	// Static UI paths are public by design and authorize nothing, so only the
+	// protected API routes can prove the carrier is refused.
+	for _, path := range []string{"/api/config", "/api/config/providers", "/api/file/asset"} {
+		t.Run(path, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, path, nil)
+			request.Header.Set(accessSocketTokenHeader, token)
+			if w := testAccessServe(testAccessProtected().ServeHTTP, request); w.Code != http.StatusUnauthorized {
+				t.Fatalf("%s accepted the host carrier: %d", path, w.Code)
+			}
+			// The refusal must not echo the credential.
+			if body := testAccessServe(testAccessProtected().ServeHTTP, request).Body.String(); strings.Contains(body, token) {
+				t.Fatal("refusal echoed the host carrier value")
+			}
+		})
+	}
+
+	// The v2 status route reports the cached truth instead of trusting it.
+	status := httptest.NewRequest(http.MethodGet, "/api/auth/v2/status", nil)
+	status.Header.Set(accessSocketTokenHeader, token)
+	enabled, authenticated, _ := accessAuth.v2Status(status)
+	if !enabled || authenticated {
+		t.Fatalf("status accepted the host carrier: enabled=%v authenticated=%v", enabled, authenticated)
+	}
+
+	// The refresh route treats it as a carrier mix-up, not a fallback.
+	refresh := testAccessV2Request(http.MethodPost, "/api/auth/v2/refresh", `{}`)
+	refresh.Header.Set(accessSocketTokenHeader, token)
+	if w := testAccessServe(handleAccessV2Refresh, refresh); w.Code != http.StatusUnauthorized {
+		t.Fatalf("refresh accepted the host carrier: %d", w.Code)
+	}
+}
+
+// The host carrier obeys the same carrier rules as the other two
+func TestAccessWSSocketTokenHeaderRefusals(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	_, socketURL := newAuthSocketServer(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+	cookie := testAccessCookieFor(t, auth).Value
+	familyID := testAccessFamilyOf(t, auth, token)
+	// The manager clock, not the wall clock, decides expiry: a fake clock
+	// installed by another test would make a wall-clock token look live.
+	expired := func() string {
+		auth.mu.Lock()
+		defer auth.mu.Unlock()
+		family, ok := auth.v2.families[familyID]
+		if !ok {
+			t.Fatalf("family %q is not live", familyID)
+		}
+		now := auth.now()
+		token, err := formatAccessJWT(
+			auth.jwtKey,
+			now.Add(-2*time.Hour).Unix(),
+			now.Add(-time.Hour).Unix(),
+			family.CurrentAccess.Nonce,
+			accessJWTRevocation{
+				RecordID: auth.v2.recordID,
+				Epoch:    auth.v2.epoch,
+				FamilyID: familyID,
+			},
+		)
+		if err != nil {
+			t.Fatalf("mint expired token: %v", err)
+		}
+		return token
+	}()
+	revoked, _ := testAccessV2LoginOnce(t, testAccessPassword)
+	if w := testAccessV2LogoutRequest(t, `{"all":false}`, revoked); w.Code != http.StatusOK {
+		t.Fatalf("revoke family: %d %s", w.Code, w.Body.String())
+	}
+
+	dial := func(headers http.Header, rawQuery string) (*websocket.Conn, *http.Response, error) {
+		dialer := websocket.Dialer{Subprotocols: []string{wireproto.EventsSubprotocol}}
+		return dialer.Dial(socketURL+"/ws/md-events"+rawQuery, headers)
+	}
+	hostToken := func(value string) http.Header {
+		header := http.Header{}
+		header.Set(accessSocketTokenHeader, value)
+		return header
+	}
+	withCookie := hostToken(token)
+	withCookie.Set("Cookie", accessSessionCookie+"="+cookie)
+	withBearer := hostToken(token)
+	withBearer.Set("Authorization", "Bearer "+token)
+	duplicateSame := http.Header{}
+	duplicateSame.Add(accessSocketTokenHeader, token)
+	duplicateSame.Add(accessSocketTokenHeader, token)
+	duplicateDifferent := http.Header{}
+	duplicateDifferent.Add(accessSocketTokenHeader, token)
+	duplicateDifferent.Add(accessSocketTokenHeader, expired)
+	foreignOrigin := hostToken(token)
+	foreignOrigin.Set("Origin", "https://attacker.example")
+
+	cases := []struct {
+		name    string
+		headers http.Header
+		query   string
+		want    bool
+	}{
+		{name: "valid host token", headers: hostToken(token), want: true},
+		{name: "host token plus valid v1 cookie", headers: withCookie, want: true},
+		{name: "host token plus authorization", headers: withBearer},
+		{name: "host token plus query token", headers: hostToken(token), query: "?token=" + neturl.QueryEscape(token)},
+		{name: "duplicate host token same value", headers: duplicateSame},
+		{name: "duplicate host token different values", headers: duplicateDifferent},
+		{name: "empty host token", headers: hostToken("")},
+		{name: "malformed host token", headers: hostToken("not-a-jwt")},
+		{name: "expired host token", headers: hostToken(expired)},
+		{name: "revoked host token", headers: hostToken(revoked)},
+		{name: "foreign origin", headers: foreignOrigin},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			conn, response, err := dial(tc.headers, tc.query)
+			if conn != nil {
+				t.Cleanup(func() { _ = conn.Close() })
+			}
+			switch {
+			case tc.want && err != nil:
+				t.Fatalf("valid host carrier rejected: %v", err)
+			case tc.want:
+				expectStillOpen(t, conn)
+				return
+			case err == nil:
+				t.Fatal("invalid host carrier admitted")
+			}
+			// A refusal is the fixed text: it never echoes the credential.
+			if response != nil {
+				body, _ := io.ReadAll(response.Body)
+				_ = response.Body.Close()
+				if strings.Contains(string(body), token) || strings.Contains(string(body), expired) {
+					t.Fatalf("refusal echoed the host carrier value: %q", body)
+				}
+			}
+		})
+	}
 }
