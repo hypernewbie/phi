@@ -8,7 +8,8 @@ import SwiftProtobuf
 /// calls, decode work and terminal writes all stay off the UI's context.
 public actor PaneWireClient {
   static let subprotocol = "phi.terminal.protobuf.v1"
-  static let readyKind = "ghostty-ready-v1"
+  public static let readyKind = "ghostty-ready-v1"
+  public static let ansiKind = "ansi-v1"
   static let maxMessage = 4 << 20
   static let maxSpan = 2 << 20
   static let maxInputChunk = 1 << 20
@@ -76,6 +77,9 @@ public actor PaneWireClient {
     public var head: UInt64
     public var checkpoint: Checkpoint?
     public var data: Data
+    /// The exact reply body `[u32 length][JSON header][raw span]`, kept so a
+    /// capture can hand the framing to an independent decoder.
+    public var body: Data = Data()
   }
 
   public struct ColoredCell: Sendable, Equatable {
@@ -231,6 +235,18 @@ public actor PaneWireClient {
     terminal.readCursor()
   }
 
+  /// Frozen comparison point: the frontier and the full styled frame read in
+  /// one actor hop, so output arriving between the two reads cannot be raced
+  /// by an oracle capture (§9.2).
+  public func freeze() -> (status: Status, frame: TerminalFrame?) {
+    (status(), terminal.readFrame())
+  }
+
+  /// Full styled frame of the terminal this client owns.
+  public func readFrame() -> TerminalFrame? {
+    terminal.readFrame()
+  }
+
   /// Sends raw bytes as ≤1 MiB frames. `.sentUnconfirmed` means bytes may have
   /// reached the server, so they must never be resent automatically.
   public func sendInput(_ bytes: [UInt8]) async -> InputDelivery {
@@ -278,14 +294,14 @@ public actor PaneWireClient {
   }
 
   /// Fetches the authoritative screen state over HTTP for this pane's epoch.
-  public func fetchState(through: UInt64? = nil) async throws -> RemoteState {
+  public func fetchState(through: UInt64? = nil, kind: String = readyKind) async throws -> RemoteState {
     guard let attach else { throw PaneWireError.notAttached }
     var comps = URLComponents(url: origin, resolvingAgainstBaseURL: false)
     comps?.path = "/api/terminals/\(escapedPaneID)/state"
     comps?.queryItems = [
       URLQueryItem(name: "epoch", value: String(attach.epoch)),
       URLQueryItem(name: "through", value: through.map(String.init) ?? "latest"),
-      URLQueryItem(name: "kind", value: Self.readyKind),
+      URLQueryItem(name: "kind", value: kind),
     ]
     guard let url = comps?.url else { throw PaneWireError.badOrigin }
     var request = URLRequest(url: url)
@@ -315,7 +331,6 @@ public actor PaneWireClient {
     }
     return try Self.decodeState(body)
   }
-
   /// Message bound applied before protobuf decode: 4 MiB in, +1 out (§6.2).
   static func validateMessage(_ data: Data) throws {
     guard !data.isEmpty else {
@@ -593,7 +608,7 @@ public actor PaneWireClient {
       guard ckpt.len == data.count,
             ckpt.through >= header.oldest, ckpt.through <= header.head,
             ckpt.cols >= 1, ckpt.rows >= 1,
-            kind.isEmpty || kind == readyKind else {
+            kind.isEmpty || kind == readyKind || kind == ansiKind else {
         throw PaneWireError.protocolViolation("state checkpoint rejected")
       }
       checkpoint = Checkpoint(
@@ -603,7 +618,7 @@ public actor PaneWireClient {
     }
     return RemoteState(
       epoch: header.epoch, oldest: header.oldest, head: header.head,
-      checkpoint: checkpoint, data: data
+      checkpoint: checkpoint, data: data, body: body
     )
   }
 
