@@ -70,6 +70,10 @@ export interface PhiAccessAuthBridge {
     getAccessToken(): string | null;
     webSocketURL(url: URL): URL;
     assetURL(url: string | URL): Promise<{ url: string; revoke(): void }>;
+    // refreshAccessIfDue renews a due credential without a round-trip when the
+    // in-memory token is still fresh. Reconnecting sockets call it before a
+    // dial so a socket closed at the admitted exp does not redial stale.
+    refreshAccessIfDue?(): Promise<void>;
 }
 
 declare global {
