@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -75,6 +77,13 @@ type observabilitySecrets struct {
 	passwords []string
 	tokens    []string
 	verifier  string
+	// handles are refresh handles: the wire form of the rotating credential.
+	handles []string
+	// stateValues are the durable forms of the same material — the derived
+	// refresh key, family digests and record binding read back from the state
+	// file. A debug dump of the journal would leak these even though the wire
+	// format never carries them.
+	stateValues []string
 }
 
 func (s observabilitySecrets) check(t *testing.T, where, output string) {
@@ -92,15 +101,37 @@ func (s observabilitySecrets) check(t *testing.T, where, output string) {
 			t.Errorf("%s leaked a token", where)
 		}
 	}
+	for _, handle := range s.handles {
+		if handle == "" {
+			continue
+		}
+		if strings.Contains(output, handle) {
+			t.Errorf("%s leaked a refresh handle", where)
+		}
+	}
+	for _, value := range s.stateValues {
+		if value == "" {
+			continue
+		}
+		if strings.Contains(output, value) {
+			t.Errorf("%s leaked a state-file value", where)
+		}
+	}
 	if s.verifier != "" && strings.Contains(output, s.verifier) {
 		t.Errorf("%s leaked a derived verifier", where)
 	}
 	// The full Authorization value and any token-bearing URL would carry one
 	// of the secrets above, but assert the shapes too so a future redaction
 	// mistake fails here even if the token is not in the list.
-	for _, shape := range []string{"Bearer ", "token="} {
+	for _, shape := range []string{
+		"Bearer ",
+		"token=",
+		accessRefreshCookie + "=",
+		accessAssetCookie + "=",
+		accessSocketTokenHeader + ": ",
+	} {
 		if strings.Contains(output, shape) {
-			t.Errorf("%s leaked a credential-bearing header or URL (%q)", where, shape)
+			t.Errorf("%s leaked a credential-bearing header, cookie or URL (%q)", where, shape)
 		}
 	}
 }
@@ -346,6 +377,291 @@ func TestAccessObservabilityLogsNoCredentials(t *testing.T) {
 		for _, password := range secrets.passwords {
 			if strings.Contains(body, password) {
 				t.Errorf("auth response body leaked a password")
+			}
+		}
+	}
+
+	secrets.check(t, "captured logs", sink.String())
+}
+
+// TestAccessObservabilityLogsNoRefreshOrCookieCredentials covers the credential
+// classes the first log test does not reach: the rotating refresh handle, the
+// two scoped cookies, the host-only socket header carrier, and the persistence
+// failure path. It also asserts the durable side stays out of output — the
+// state file holds the derived refresh key and digest evidence, which a debug
+// dump of the journal would publish even though the wire format never carries
+// it.
+func TestAccessObservabilityLogsNoRefreshOrCookieCredentials(t *testing.T) {
+	withTempConfig(t)
+	useTestAccessAuth(t)
+	hub := testAccessUseHub(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	manager := pty.NewManager()
+	t.Cleanup(func() { manager.Shutdown(2 * time.Second) })
+	shell, args := testMainShell()
+	instance, err := manager.SpawnWithOptions(context.Background(), home, shell, args, "pi", "obs2-sid", pty.SpawnOptions{ID: "obs2-pane"})
+	if err != nil {
+		t.Fatalf("spawn observability pane: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/auth/v2/status", handleAccessV2Status)
+	mux.HandleFunc("/api/auth/v2/login", handleAccessV2Login)
+	mux.HandleFunc("/api/auth/v2/password", handleAccessV2Password)
+	mux.HandleFunc("/api/auth/v2/refresh", handleAccessV2Refresh)
+	mux.HandleFunc("/api/auth/v2/logout", handleAccessV2Logout)
+	mux.HandleFunc("/api/config", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/ws/pane/obs2-pane", func(w http.ResponseWriter, r *http.Request) {
+		ws.HandleWS(w, r, instance, manager, hub)
+	})
+	mux.HandleFunc("/ws/md-events", func(w http.ResponseWriter, r *http.Request) {
+		ws.HandleEventsWS(w, r, hub)
+	})
+	mux.HandleFunc("/ws/control", ws.HandleControl(hub, rpc.NewManager(), func() string { return home }))
+	server := httptest.NewServer(accessAuthMiddleware(mux))
+	defer server.Close()
+
+	sink := captureAccessLogs(t)
+
+	const (
+		enablePassword  = "obs-refresh-pass-51c8"
+		changedPassword = "obs-changed-pass-90ae"
+		unknownHandle   = "obs-unknown-handle-0001"
+	)
+	secrets := observabilitySecrets{passwords: []string{enablePassword, changedPassword}}
+	var bodies []string
+
+	// post drives one v2 route through the production middleware, so the obs
+	// span lines for those requests are captured too.
+	post := func(path, bearer, body string, cookies ...*http.Cookie) (*http.Response, string) {
+		t.Helper()
+		request, err := http.NewRequest(http.MethodPost, server.URL+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set(accessV2Header, accessV2HeaderValue)
+		if bearer != "" {
+			request.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		for _, cookie := range cookies {
+			request.AddCookie(cookie)
+		}
+		response, err := server.Client().Do(request)
+		if err != nil {
+			t.Fatalf("POST %s: %v", path, err)
+		}
+		t.Cleanup(func() { response.Body.Close() })
+		payload, err := io.ReadAll(response.Body)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		bodies = append(bodies, string(payload))
+		return response, string(payload)
+	}
+	tokenOf := func(response *http.Response, body string) string {
+		t.Helper()
+		if response.StatusCode != http.StatusOK {
+			return ""
+		}
+		var payload struct {
+			Token string `json:"token"`
+		}
+		if err := json.Unmarshal([]byte(body), &payload); err != nil {
+			t.Fatalf("decode bundle: %v", err)
+		}
+		return payload.Token
+	}
+	cookieOf := func(response *http.Response, name string) string {
+		for _, cookie := range response.Cookies() {
+			if cookie.Name == name {
+				return cookie.Value
+			}
+		}
+		return ""
+	}
+
+	enableResponse, enableBody := post("/api/auth/v2/password", "", `{"password":"`+enablePassword+`"}`)
+	enableToken := tokenOf(enableResponse, enableBody)
+	if enableToken == "" {
+		t.Fatalf("enable password: %d %s", enableResponse.StatusCode, enableBody)
+	}
+	secrets.tokens = append(secrets.tokens, enableToken, cookieOf(enableResponse, accessAssetCookie))
+	secrets.handles = append(secrets.handles, cookieOf(enableResponse, accessRefreshCookie))
+
+	loginResponse, loginBody := post("/api/auth/v2/login", "", `{"password":"`+enablePassword+`"}`)
+	loginToken := tokenOf(loginResponse, loginBody)
+	if loginToken == "" {
+		t.Fatalf("v2 login: %d %s", loginResponse.StatusCode, loginBody)
+	}
+	firstHandle := cookieOf(loginResponse, accessRefreshCookie)
+	if firstHandle == "" {
+		t.Fatal("v2 login installed no refresh handle")
+	}
+	secrets.tokens = append(secrets.tokens, loginToken, cookieOf(loginResponse, accessAssetCookie))
+	secrets.handles = append(secrets.handles, firstHandle)
+
+	refreshCookie := func(handle string) *http.Cookie {
+		return &http.Cookie{Name: accessRefreshCookie, Value: handle}
+	}
+	refreshResponse, refreshBody := post("/api/auth/v2/refresh", "", `{}`, refreshCookie(firstHandle))
+	rotatedToken := tokenOf(refreshResponse, refreshBody)
+	if rotatedToken == "" {
+		t.Fatalf("refresh: %d %s", refreshResponse.StatusCode, refreshBody)
+	}
+	secrets.tokens = append(secrets.tokens, rotatedToken, cookieOf(refreshResponse, accessAssetCookie))
+	secrets.handles = append(secrets.handles, cookieOf(refreshResponse, accessRefreshCookie))
+
+	// A replay inside the grace window succeeds; the handle in the request and
+	// the one it reissues are both credentials that must stay out of output.
+	replayResponse, replayBody := post("/api/auth/v2/refresh", "", `{}`, refreshCookie(firstHandle))
+	if replayResponse.StatusCode != http.StatusOK {
+		t.Fatalf("grace replay: %d %s", replayResponse.StatusCode, replayBody)
+	}
+	secrets.handles = append(secrets.handles, cookieOf(replayResponse, accessRefreshCookie))
+
+	// An unknown handle is the terminal rejection, and it must not echo the
+	// handle the caller presented.
+	unknownResponse, _ := post("/api/auth/v2/refresh", "", `{}`, refreshCookie(unknownHandle))
+	if unknownResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unknown handle: %d", unknownResponse.StatusCode)
+	}
+	secrets.handles = append(secrets.handles, unknownHandle)
+
+	// A bearer on the refresh route is a carrier mix-up, not a credential.
+	if mixedResponse, _ := post("/api/auth/v2/refresh", rotatedToken, `{}`); mixedResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("bearer on refresh: %d", mixedResponse.StatusCode)
+	}
+
+	// A state write that fails must report failure without issuing or logging
+	// the credential it had prepared.
+	previousWrite := writeAccessV2StateFile
+	writeAccessV2StateFile = func(string, []byte, os.FileMode) error {
+		return errors.New("injected observability state write failure")
+	}
+	failedLogin, _ := post("/api/auth/v2/login", "", `{"password":"`+enablePassword+`"}`)
+	writeAccessV2StateFile = previousWrite
+	if failedLogin.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("failed state write login: %d", failedLogin.StatusCode)
+	}
+	if issued := failedLogin.Cookies(); len(issued) != 0 {
+		t.Errorf("failed state write issued %d cookies", len(issued))
+	}
+
+	// The durable forms of the same material, read back while the families are
+	// still live, are credentials the journal must never print.
+	stateBytes, err := os.ReadFile(accessV2StatePath())
+	if err != nil {
+		t.Fatalf("read state file: %v", err)
+	}
+	var state accessV2StateFile
+	if err := json.Unmarshal(stateBytes, &state); err != nil {
+		t.Fatalf("decode state file: %v", err)
+	}
+	secrets.stateValues = append(secrets.stateValues, state.Active.RecordBinding, state.Active.RecordID)
+	if state.Active.RefreshKey != nil {
+		secrets.stateValues = append(secrets.stateValues, *state.Active.RefreshKey)
+	}
+	for _, family := range state.Active.Families {
+		secrets.stateValues = append(secrets.stateValues, family.ID, family.ActiveDigest)
+		for _, consumed := range family.Consumed {
+			secrets.stateValues = append(secrets.stateValues, consumed.Digest)
+		}
+	}
+
+	// Every socket route accepts the host-only carrier, and none accepts a
+	// bearer: the transports stay separate.
+	socketURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	dial := func(path, subprotocol string, mutate func(http.Header)) (*websocket.Conn, error) {
+		headers := http.Header{}
+		if mutate != nil {
+			mutate(headers)
+		}
+		dialer := websocket.Dialer{Subprotocols: []string{subprotocol}}
+		conn, _, err := dialer.Dial(socketURL+path, headers)
+		if err != nil {
+			return nil, err
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		return conn, nil
+	}
+	for _, route := range []struct {
+		path        string
+		subprotocol string
+		firstFrame  bool
+	}{
+		{"/ws/pane/obs2-pane", wireproto.TerminalSubprotocol, true},
+		{"/ws/md-events", wireproto.EventsSubprotocol, false},
+		{"/ws/control", wireproto.ControlSubprotocol, false},
+	} {
+		conn, err := dial(route.path, route.subprotocol, func(h http.Header) {
+			h.Set(accessSocketTokenHeader, rotatedToken)
+		})
+		if err != nil {
+			t.Fatalf("header carrier on %s: %v", route.path, err)
+		}
+		if route.firstFrame {
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Fatalf("%s did not attach: %v", route.path, err)
+			}
+		} else {
+			expectOpen(t, conn)
+		}
+		if _, err := dial(route.path, route.subprotocol, func(h http.Header) {
+			h.Set("Authorization", "Bearer "+rotatedToken)
+		}); err == nil {
+			t.Fatalf("%s accepted a bearer", route.path)
+		}
+	}
+
+	// The carrier is not an HTTP credential, on the protected route or on a v2
+	// route that reads its own carriers.
+	do := func(path string, mutate func(*http.Request)) int {
+		request, err := http.NewRequest(http.MethodGet, server.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mutate != nil {
+			mutate(request)
+		}
+		response, err := server.Client().Do(request)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		defer response.Body.Close()
+		_, _ = io.Copy(io.Discard, response.Body)
+		return response.StatusCode
+	}
+	if code := do("/api/config", func(r *http.Request) {
+		r.Header.Set(accessSocketTokenHeader, rotatedToken)
+	}); code != http.StatusUnauthorized {
+		t.Fatalf("socket carrier on an API path: %d", code)
+	}
+
+	// Logout current, then everything. Both accept the bearer and neither may
+	// echo a credential.
+	if logoutResponse, body := post("/api/auth/v2/logout", rotatedToken, `{"all":false}`); logoutResponse.StatusCode != http.StatusOK {
+		t.Fatalf("logout current: %d %s", logoutResponse.StatusCode, body)
+	}
+	if allResponse, body := post("/api/auth/v2/logout", enableToken, `{"all":true}`); allResponse.StatusCode != http.StatusOK {
+		t.Fatalf("logout all: %d %s", allResponse.StatusCode, body)
+	}
+
+	for _, body := range bodies {
+		for _, password := range secrets.passwords {
+			if strings.Contains(body, password) {
+				t.Errorf("auth response body leaked a password")
+			}
+		}
+		for _, handle := range secrets.handles {
+			if handle != "" && strings.Contains(body, handle) {
+				t.Errorf("auth response body leaked a refresh handle")
 			}
 		}
 	}
