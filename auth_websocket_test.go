@@ -861,3 +861,307 @@ func TestAccessWSLateExpiryRegistrationIsRejected(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 	expectOpen(t, conn)
 }
+
+// --- M1c gap-fill: logout-all, refresh reconnect, clear/rehash, enable/disable ---
+
+// dialSocketRaw dials one fenced route and returns the handshake error rather
+// than failing: the refusal cases must see the error itself.
+func dialSocketRaw(t *testing.T, socketURL, path, subprotocol, token, cookie string) (*websocket.Conn, error) {
+	t.Helper()
+	url := socketURL + path
+	if token != "" {
+		url += "?token=" + neturl.QueryEscape(token)
+	}
+	header := http.Header{}
+	if cookie != "" {
+		header.Set("Cookie", accessSessionCookie+"="+cookie)
+	}
+	dialer := websocket.Dialer{Subprotocols: []string{subprotocol}}
+	conn, _, err := dialer.Dial(url, header)
+	if conn != nil {
+		t.Cleanup(func() { _ = conn.Close() })
+	}
+	return conn, err
+}
+
+// requireDialed dials one route and fails unless the handshake was accepted.
+// It never reads, so the connection stays usable for a later close check.
+func requireDialed(t *testing.T, socketURL, path, subprotocol, token, cookie string) *websocket.Conn {
+	t.Helper()
+	conn, err := dialSocketRaw(t, socketURL, path, subprotocol, token, cookie)
+	if err != nil {
+		t.Fatalf("dial %s: %v", path, err)
+	}
+	return conn
+}
+
+// testAccessExpiryOf returns the admitted exp a token names.
+func testAccessExpiryOf(t *testing.T, auth *accessAuthManager, token string) time.Time {
+	t.Helper()
+	auth.mu.Lock()
+	defer auth.mu.Unlock()
+	claims, err := parseAccessJWT(auth.jwtKey, token, time.Now(), accessJWTClockAllowance)
+	if err != nil {
+		t.Fatalf("parse access token: %v", err)
+	}
+	return claims.ExpiresAt
+}
+
+// Logout-all is a v2-only revocation: every v2 socket closes, while the v1
+// socket keeps streaming and the v1 cookie keeps authorizing requests. v1 has
+// no epoch, so nothing about it is retired.
+func TestAccessWSLogoutAllClosesOnlyV2Sockets(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	hub, socketURL := newAuthSocketServer(t)
+	first := testAccessEnableV2(t, testAccessPassword)
+	second, _ := testAccessV2LoginOnce(t, testAccessPassword)
+	if testAccessFamilyOf(t, auth, first) == testAccessFamilyOf(t, auth, second) {
+		t.Fatal("two logins shared one family")
+	}
+	cookie := auth.mustTestCookie(t).Value
+
+	firstSocket := requireDialed(t, socketURL, "/ws/md-events", wireproto.EventsSubprotocol, first, "")
+	secondSocket := requireDialed(t, socketURL, "/ws/md-events", wireproto.EventsSubprotocol, second, "")
+	cookieSocket := requireDialed(t, socketURL, "/ws/md-events", wireproto.EventsSubprotocol, "", cookie)
+	waitForEventsClients(t, hub, 3)
+
+	if w := testAccessV2LogoutRequest(t, `{"all":true}`, first); w.Code != http.StatusOK {
+		t.Fatalf("logout all: %d %s", w.Code, w.Body.String())
+	}
+	expectClosed(t, firstSocket)
+	expectClosed(t, secondSocket)
+	expectStillOpen(t, cookieSocket)
+
+	// The v1 credential itself is untouched: a fresh socket still attaches with
+	// the same cookie, and a protected request still authorizes.
+	expectStillOpen(t, requireDialed(t, socketURL, "/ws/md-events", wireproto.EventsSubprotocol, "", cookie))
+	r := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	r.AddCookie(&http.Cookie{Name: accessSessionCookie, Value: cookie})
+	if w := testAccessServe(testAccessProtected().ServeHTTP, r); w.Code != http.StatusNoContent {
+		t.Fatalf("logout-all invalidated the v1 cookie: %d", w.Code)
+	}
+}
+
+// A socket closed at its admitted exp reconnects with the token a refresh
+// issues: the new admission carries the refreshed exp and the current protocol
+// selection, while the expired token stays refused.
+func TestAccessWSReconnectUsesRefreshedToken(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	hub, socketURL := newAuthSocketServer(t)
+	testAccessEnableV2(t, testAccessPassword)
+	token, handle := testAccessV2LoginOnce(t, testAccessPassword)
+	familyID := testAccessFamilyOf(t, auth, token)
+
+	expiring := testAccessShortLivedToken(t, auth, familyID, 700*time.Millisecond)
+	previousExpiry := testAccessExpiryOf(t, auth, expiring)
+	first := requireDialed(t, socketURL, "/ws/md-events", wireproto.EventsSubprotocol, expiring, "")
+	waitForEventsClients(t, hub, 1)
+	expectClosed(t, first)
+
+	// The consumed-token window is over: the same credential cannot come back.
+	if conn, err := dialSocketRaw(t, socketURL, "/ws/md-events", wireproto.EventsSubprotocol, expiring, ""); err == nil {
+		expectClosed(t, conn)
+	}
+
+	w := testAccessV2RefreshRequest(t, handle)
+	if w.Code != http.StatusOK {
+		t.Fatalf("refresh: %d %s", w.Code, w.Body.String())
+	}
+	var refreshed struct {
+		Token string `json:"token"`
+	}
+	testAccessJSONBody(t, w, &refreshed)
+	if refreshed.Token == "" || refreshed.Token == expiring {
+		t.Fatalf("refresh issued no replacement token")
+	}
+
+	reconnected := requireDialed(t, socketURL, "/ws/md-events", wireproto.EventsSubprotocol, refreshed.Token, "")
+	if got := reconnected.Subprotocol(); got != wireproto.EventsSubprotocol {
+		t.Fatalf("reconnect negotiated %q, want %q", got, wireproto.EventsSubprotocol)
+	}
+	waitForEventsClients(t, hub, 1)
+	// The new admission carries the refreshed exp, not the old one: it outlives
+	// the instant the previous admission closed at.
+	_ = reconnected.SetReadDeadline(previousExpiry.Add(500 * time.Millisecond))
+	_, _, err := reconnected.ReadMessage()
+	var netErr interface{ Timeout() bool }
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Fatalf("refreshed admission did not survive the previous exp: %v", err)
+	}
+}
+
+// Clearing the password disables access, and every socket admitted by either
+// credential closes. A same-encoded legacy submission is a state-only record
+// rotation: the epoch and every family are replaced, so v2 sockets for every
+// family close with the v1 sockets the record ownership covers.
+func TestAccessWSClearAndRehashCloseSockets(t *testing.T) {
+	t.Run("clear", func(t *testing.T) {
+		withTempConfig(t)
+		auth := useTestAccessAuth(t)
+		hub, socketURL := newAuthSocketServer(t)
+		token := testAccessEnableV2(t, testAccessPassword)
+		cookie := auth.mustTestCookie(t).Value
+
+		cookieSocket := requireDialed(t, socketURL, "/ws/md-events", wireproto.EventsSubprotocol, "", cookie)
+		bearerSocket := requireDialed(t, socketURL, "/ws/md-events", wireproto.EventsSubprotocol, token, "")
+		waitForEventsClients(t, hub, 2)
+
+		w := testAccessV2PasswordRequest(t, `{"password":""}`, token)
+		if w.Code != http.StatusOK {
+			t.Fatalf("clear: %d %s", w.Code, w.Body.String())
+		}
+		var cleared struct {
+			Enabled bool `json:"enabled"`
+		}
+		testAccessJSONBody(t, w, &cleared)
+		if cleared.Enabled {
+			t.Fatalf("clear reported enabled=%v", cleared.Enabled)
+		}
+		expectClosed(t, cookieSocket)
+		expectClosed(t, bearerSocket)
+
+		// Disabled is not "closed for business": an unauthenticated socket is
+		// admitted again, so the closures above came from the clear itself.
+		expectStillOpen(t, requireDialed(t, socketURL, "/ws/md-events", wireproto.EventsSubprotocol, "", ""))
+	})
+
+	t.Run("same-encoded legacy rehash", func(t *testing.T) {
+		withTempConfig(t)
+		auth := useTestAccessAuth(t)
+		hub, socketURL := newAuthSocketServer(t)
+		first := testAccessEnableV2(t, testAccessPassword)
+		unrelated, _ := testAccessV2LoginOnce(t, testAccessPassword)
+		cookie := auth.mustTestCookie(t).Value
+
+		auth.mu.Lock()
+		encoded := auth.record.encoded()
+		recordID := auth.v2.recordID
+		families := len(auth.v2.families)
+		auth.mu.Unlock()
+		if families != 2 {
+			t.Fatalf("families before rehash = %d, want 2", families)
+		}
+
+		// A same-encoded submission must not touch Config: the deterministic v1
+		// signature cannot rotate, so only the state file changes.
+		previousWriter := writeConfigFile
+		configWrites := 0
+		writeConfigFile = func(path string, data []byte, mode os.FileMode) error {
+			configWrites++
+			return previousWriter(path, data, mode)
+		}
+		t.Cleanup(func() { writeConfigFile = previousWriter })
+
+		cookieSocket := requireDialed(t, socketURL, "/ws/md-events", wireproto.EventsSubprotocol, "", cookie)
+		firstSocket := requireDialed(t, socketURL, "/ws/md-events", wireproto.EventsSubprotocol, first, "")
+		unrelatedSocket := requireDialed(t, socketURL, "/ws/md-events", wireproto.EventsSubprotocol, unrelated, "")
+		waitForEventsClients(t, hub, 3)
+
+		// The bytes already on disk are resubmitted, so this is the same-encoded
+		// case: one state replacement, no Config write.
+		if _, err := auth.setEncodedPassword(encoded, accessCredential{State: accessCredentialPresent, Token: first}); err != nil {
+			t.Fatalf("same-encoded rehash: %v", err)
+		}
+		expectClosed(t, firstSocket)
+		// The epoch advance replaced every family, so the unrelated family goes
+		// too; M1c keeps record rotation as an all-generation revocation.
+		expectClosed(t, unrelatedSocket)
+		expectClosed(t, cookieSocket)
+
+		auth.mu.Lock()
+		nextRecordID := auth.v2.recordID
+		nextFamilies := len(auth.v2.families)
+		auth.mu.Unlock()
+		if configWrites != 0 {
+			t.Fatalf("same-encoded rehash rewrote Config %d times", configWrites)
+		}
+		if nextRecordID == recordID {
+			t.Fatal("record identity survived the rehash")
+		}
+		if nextFamilies != 0 {
+			t.Fatalf("families after rehash = %d, want 0", nextFamilies)
+		}
+
+		// The password itself is unchanged, so a fresh login re-establishes
+		// state and its credentials connect.
+		replacement, _ := testAccessV2LoginOnce(t, testAccessPassword)
+		requireDialed(t, socketURL, "/ws/md-events", wireproto.EventsSubprotocol, replacement, "")
+	})
+}
+
+// The admission fence is generation-based in both directions: a request the
+// middleware authorized before the transition must not register afterwards.
+func TestAccessWSEnableDisableAdmissionFence(t *testing.T) {
+	// A socket authorized while access is disabled must not attach once an
+	// enable retires the generation it snapshotted.
+	t.Run("disabled to enabled", func(t *testing.T) {
+		withTempConfig(t)
+		useTestAccessAuth(t)
+		hub := testAccessUseHub(t)
+		gate, release := make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		server := httptest.NewServer(accessAuthMiddleware(gatedEventsHandler(hub, gate, release, &once)))
+		defer server.Close()
+
+		type result struct {
+			conn *websocket.Conn
+			err  error
+		}
+		done := make(chan result, 1)
+		go func() {
+			conn, err := dialAfterGate(t, server.URL, "/ws/md-events", wireproto.EventsSubprotocol, "")
+			done <- result{conn, err}
+		}()
+		<-gate
+		token := testAccessEnableV2(t, testAccessPassword)
+		close(release)
+		out := <-done
+		expectRejectedUpgrade(t, out.conn, out.err)
+
+		// The credential the enable issued is admitted, so the refusal above was
+		// the stale generation and not a broken server.
+		dialer := websocket.Dialer{Subprotocols: []string{wireproto.EventsSubprotocol}}
+		conn, _, err := dialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/ws/md-events?token="+neturl.QueryEscape(token), nil)
+		if err != nil {
+			t.Fatalf("fresh credential after enable: %v", err)
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		expectOpen(t, conn)
+	})
+
+	// A socket authorized while access is enabled must not attach once a clear
+	// disables it and retires the generation it snapshotted.
+	t.Run("enabled to disabled", func(t *testing.T) {
+		withTempConfig(t)
+		useTestAccessAuth(t)
+		hub := testAccessUseHub(t)
+		token := testAccessEnableV2(t, testAccessPassword)
+		gate, release := make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		server := httptest.NewServer(accessAuthMiddleware(gatedEventsHandler(hub, gate, release, &once)))
+		defer server.Close()
+
+		type result struct {
+			conn *websocket.Conn
+			err  error
+		}
+		done := make(chan result, 1)
+		go func() {
+			conn, err := dialAfterGate(t, server.URL, "/ws/md-events", wireproto.EventsSubprotocol, token)
+			done <- result{conn, err}
+		}()
+		<-gate
+		if w := testAccessV2PasswordRequest(t, `{"password":""}`, token); w.Code != http.StatusOK {
+			t.Fatalf("clear: %d %s", w.Code, w.Body.String())
+		}
+		close(release)
+		out := <-done
+		expectRejectedUpgrade(t, out.conn, out.err)
+
+		// Disabled admits again without a credential, so the rejection above was
+		// the retired generation and not a severed server.
+		expectStillOpen(t, requireDialed(t, "ws"+strings.TrimPrefix(server.URL, "http"), "/ws/md-events", wireproto.EventsSubprotocol, "", ""))
+	})
+}
