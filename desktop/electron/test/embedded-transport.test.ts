@@ -24,7 +24,6 @@ function bumpFence(origin: string): void {
   attemptFence.set(origin, (attemptFence.get(origin) ?? 0) + 1);
 }
 
-
 /** A canonical refresh handle: 32 base64url bytes. */
 const AUTH_HANDLE = Buffer.alloc(32, 0xc3).toString('base64url');
 

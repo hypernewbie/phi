@@ -1158,7 +1158,9 @@ export class EmbeddedTransport {
     });
     // The password route requires a bearer once the server is enabled: without
     // this row the shell could neither change nor clear its own password.
-    const hostToken = attempt ? (this.auth?.getToken(profile.origin) ?? null) : null;
+    const hostToken = attempt
+      ? (this.auth?.getToken(profile.origin) ?? null)
+      : null;
     if (hostToken && isPasswordRoute(targetUrl.pathname)) {
       headers.set('Authorization', `Bearer ${hostToken}`);
     }
