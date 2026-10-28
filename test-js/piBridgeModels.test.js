@@ -66,12 +66,23 @@ function harness(tab) {
     return { tm, dropup };
 }
 
-// Row order: command chips, then Cmds, Models, Skills, Thinking, Keys.
+// Row order: command chips, then Model, Thinking, Skills, Cmds, Keys.
 // Text matching is impossible here: the row sets innerText, which jsdom
-// leaves unreadable, so the position plus the marker class identify it.
-// Models is the second .model-trigger-btn; Cmds comes first.
+// leaves unreadable, so the marker class identifies it. The bridge-live
+// Models button carries the shared class; without the bridge the legacy
+// Models button is the one with its own title.
 function modelsTrigger(tm) {
-    return tm.presetsContainer.querySelectorAll('.model-trigger-btn')[1];
+    const buttons = [
+        ...tm.presetsContainer.querySelectorAll('.model-trigger-btn'),
+    ];
+    return (
+        buttons.find((button) =>
+            button.classList.contains('pi-rpc-model-trigger'),
+        ) ||
+        buttons.find(
+            (button) => button.title === 'Select the model for this session',
+        )
+    );
 }
 
 describe('bridge models trigger', () => {

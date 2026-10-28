@@ -11,9 +11,7 @@ import { startPhi } from './_server.js';
 
 // The composer presets row is one line of buttons that never squeezes a
 // label: a wrapped row or an ellipsised chip is a regression, not a layout
-// preference. Chips differ in height (icons vs text) and are centred, so
-// their tops differ by a pixel or two: compare the row height against one
-// chip instead.
+// preference. Every chip in the row is 24px high and shares one top edge.
 async function expectSingleRowPresets(page: Page) {
     const chips = page.locator('#presets-container > .preset-btn');
     await expect(chips.first()).toBeVisible();
@@ -29,6 +27,10 @@ async function expectSingleRowPresets(page: Page) {
             chipHeight: Math.max(
                 ...els.map((el) => el.getBoundingClientRect().height),
             ),
+            heights: [
+                ...new Set(els.map((el) => el.getBoundingClientRect().height)),
+            ],
+            tops: [...new Set(els.map((el) => el.getBoundingClientRect().top))],
             squeezed: els
                 .filter((el) => el.scrollWidth > el.clientWidth + 1)
                 .map(
@@ -39,6 +41,11 @@ async function expectSingleRowPresets(page: Page) {
     });
     expect(measured.wrap, 'presets row is allowed to wrap').toBe('nowrap');
     expect(measured.shrink, 'presets chips may shrink').toEqual(['0']);
+    expect(measured.heights, 'preset button heights differ').toEqual([24]);
+    expect(
+        measured.tops,
+        'preset buttons are vertically misaligned',
+    ).toHaveLength(1);
     expect(
         measured.rowHeight,
         'presets row wrapped onto more than one line',

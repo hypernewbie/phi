@@ -12442,7 +12442,6 @@ export class TabManager {
                 () => this.renderQuickCmdsDropup(),
             );
         });
-        this.presetsContainer.appendChild(quickCmdsTriggerBtn);
 
         // Built-in shells and restored unknown tabs keep the original
         // Models control. New custom backends without a recipe remain
@@ -12504,8 +12503,6 @@ export class TabManager {
                 );
             });
         }
-        // The pickers keep their place at the end of the single row.
-        this.presetsContainer.appendChild(modelsTriggerBtn);
 
         // Skills picker: only on bridge-live Pi tabs that negotiated
         // the skills capability. Without it the composer keeps exactly
@@ -12540,7 +12537,6 @@ export class TabManager {
                     () => this._renderPiRpcSkillsDropup(),
                 );
             });
-            this.presetsContainer.appendChild(skillsTriggerBtn);
         }
 
         let thinkingTriggerBtn = null;
@@ -12571,7 +12567,6 @@ export class TabManager {
                     () => this._renderPiRpcThinkingDropup(),
                 );
             });
-            this.presetsContainer.appendChild(thinkingTriggerBtn);
         }
 
         // 4b. Render Keys trigger button (keyboard icon only)
@@ -12590,7 +12585,18 @@ export class TabManager {
                 this.renderKeysDropup(),
             );
         });
-        this.presetsContainer.appendChild(keysTriggerBtn);
+
+        // One explicit order for the row: the pickers, then the command
+        // catalog, then the virtual keyboard.
+        for (const button of [
+            modelsTriggerBtn,
+            thinkingTriggerBtn,
+            skillsTriggerBtn,
+            quickCmdsTriggerBtn,
+            keysTriggerBtn,
+        ]) {
+            if (button) this.presetsContainer.appendChild(button);
+        }
 
         // Picker buttons keep their append order; the row scrolls sideways.
 
@@ -12691,7 +12697,7 @@ export class TabManager {
         }
         // Inserting ahead of the divider leaves the arrow keys at the end.
         const anchor = this.presetsContainer.querySelector('.presets-divider');
-        for (const btn of [models, thinking, cmds, skills, keys]) {
+        for (const btn of [models, thinking, skills, cmds, keys]) {
             if (btn) this.presetsContainer.insertBefore(btn, anchor);
         }
     }
