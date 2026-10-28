@@ -31,6 +31,18 @@ func syncParentDir(dir string) error {
 	return nil
 }
 
+// Test seams. The strict replacement path must propagate each fallible step as
+// a real failure, so the three operations that fail in production (chmod, the
+// rename, and the parent-directory sync) are variables. Production values are
+// the os functions; tests replace them to inject failures. WriteFileAtomic's
+// legacy path keeps calling the os functions directly, so this seam cannot
+// change its behavior.
+var (
+	atomicRename  = os.Rename
+	atomicChmod   = os.Chmod
+	atomicSyncDir = syncParentDir
+)
+
 // WriteFileAtomicPreserveExisting replaces filename like WriteFileAtomic, but
 // never deletes the existing destination. The Windows fallback in
 // WriteFileAtomic removes the destination before retrying the rename, which
@@ -73,16 +85,22 @@ func writeFileAtomic(filename string, data []byte, perm os.FileMode, preserveExi
 	tmp = nil // Prevent defer from closing it again
 
 	// Set permissions before renaming
-	if err := os.Chmod(tmpName, perm); err != nil && preserveExisting {
+	chmod := os.Chmod
+	if preserveExisting {
+		chmod = atomicChmod
+	}
+	if err := chmod(tmpName, perm); err != nil && preserveExisting {
 		return fmt.Errorf("failed to set permissions on temp file: %w", err)
 	}
 
 	if preserveExisting {
-		if err := os.Rename(tmpName, filename); err != nil {
+		if err := atomicRename(tmpName, filename); err != nil {
 			return fmt.Errorf("failed to rename temp file to %s: %w", filename, err)
 		}
-		// A rename is only durable once the directory entry is synced.
-		return syncParentDir(dir)
+		// A rename is only durable once the directory entry is synced. A failure
+		// here is reported, not rolled back: the rename already happened, so the
+		// caller must treat the write as committed-but-unconfirmed.
+		return atomicSyncDir(dir)
 	}
 
 	// Windows: os.Rename replaces atomically (MOVEFILE_REPLACE_EXISTING); fallback handles AV-locked files.
