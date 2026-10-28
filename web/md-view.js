@@ -29,6 +29,10 @@ export function decodeNotificationDir(bytes) {
 const MD_EVENT_RETRY_BASE_MS = 1000;
 const MD_EVENT_RETRY_MAX_MS = 20000;
 const MD_EVENT_RETRY_FLOOR_MS = 500;
+// A connection must stay up this long before its attempt counter resets. A
+// proxy that opens and drops immediately would otherwise pin the retry at the
+// first window forever instead of backing off.
+const MD_EVENT_STABLE_MS = 10000;
 // mdEventRetryDelay returns the wait before retry `attempt` (1-based). Full
 // jitter: random(0, min(cap, base * 2^(attempt-1))) plus a floor, because full
 // jitter alone can return ~0 ms and turn a flapping server into a hot loop.
@@ -137,6 +141,7 @@ export function initMdView() {
     // owns one events socket per md.html window.
     let eventAttempt = 0;
     let eventTimer = null;
+    let eventStableTimer = null;
     // connect refreshes a stale bearer before dialing: the server closes an
     // events socket at the admitted token exp, so a redial with that same
     // token would only be refused again. The wait is bounded by the module's
@@ -163,7 +168,14 @@ export function initMdView() {
         ws.binaryType = 'arraybuffer';
         // Refresh on open too: content may have changed while disconnected.
         ws.onopen = () => {
-            eventAttempt = 0;
+            // Reset only once the connection has proven stable, matching the
+            // control owner: a short-lived upgrade must keep backing off.
+            if (eventStableTimer !== null)
+                clearTimeout(eventStableTimer);
+            eventStableTimer = setTimeout(() => {
+                eventStableTimer = null;
+                eventAttempt = 0;
+            }, MD_EVENT_STABLE_MS);
             const negotiated = ws.protocol;
             // Test fakes omit the attribute; real servers must select it.
             if (negotiated !== undefined && negotiated !== eventsSubprotocol) {
@@ -186,6 +198,10 @@ export function initMdView() {
                 void loadAndRender();
         };
         ws.onclose = () => {
+            if (eventStableTimer !== null) {
+                clearTimeout(eventStableTimer);
+                eventStableTimer = null;
+            }
             eventAttempt += 1;
             if (eventTimer !== null)
                 clearTimeout(eventTimer);
