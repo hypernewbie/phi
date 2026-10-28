@@ -2,6 +2,7 @@ import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import { startPhi } from './_server.js';
+import { tabList } from './_tabs.js';
 import { startSkillProvider } from './_pi-skill-provider.js';
 
 // Real pinned Pi, one fixture skill, and a loopback provider: no
@@ -389,7 +390,7 @@ test('the skills picker lists, filters, and sends on a phone', async ({
         await page.goto(phi.url);
         // The phone layout selects tabs through the hostname dropdown.
         await page.locator('#hostname-display').click();
-        const dropdown = page.locator('#hostname-tabs-dropdown');
+        const dropdown = tabList(page);
         await expect(dropdown).toBeVisible({ timeout: 10_000 });
         await dropdown
             .locator(

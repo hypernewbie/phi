@@ -309,6 +309,9 @@ test.describe('mobile', () => {
             if (await sidebarToggle.isVisible()) {
                 await sidebarToggle.tap();
             }
+            // The phone drawer opens on the tab tree; the sessions block
+            // holds the coder selector.
+            await page.locator('#drawer-open-sessions').tap();
             await page
                 .locator('#coder-selector .coder-tab[data-coder="pi"]')
                 .tap();

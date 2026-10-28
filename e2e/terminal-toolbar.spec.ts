@@ -7,6 +7,7 @@ import type {
     TerminalServerFrame as TerminalServerMessage,
 } from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+import { tabList } from './_tabs.js';
 
 // The served bundle carries no types; bind its runtime codecs to the
 // generated declarations so spec-side encoding is fully checked.
@@ -50,7 +51,7 @@ async function selectPane(
 ) {
     if (mobile) {
         await page.locator('#hostname-display').click();
-        const dropdown = page.locator('#hostname-tabs-dropdown');
+        const dropdown = tabList(page);
         await expect(dropdown).toBeVisible();
         await dropdown
             .locator('.hostname-dropdown-select-btn')

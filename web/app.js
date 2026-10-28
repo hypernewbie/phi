@@ -13,6 +13,7 @@ import {
     escapeHtml,
     buildPhiFaviconSvg,
     isCoarseViewport,
+    isCompactViewport,
     isSidebarDrawerViewport,
     isDiffDrawerViewport,
     visibleViewportHeight,
@@ -167,7 +168,12 @@ export class App {
         if (typeof window.matchMedia === 'function') {
             window
                 .matchMedia(COMPACT_VIEWPORT_QUERY)
-                .addEventListener('change', () => this.applyFastMode());
+                .addEventListener('change', () => {
+                    this.applyFastMode();
+                    // Leaving the compact layout drops the drawer to its
+                    // sessions content, so the heading must follow.
+                    if (!isCompactViewport()) this.setDrawerMode('sessions');
+                });
         }
 
         // 4. Setup panel resize handles
@@ -207,14 +213,21 @@ export class App {
         if (mobileSidebarToggle && sidebar) {
             mobileSidebarToggle.addEventListener('click', (e) => {
                 e.stopPropagation();
-                sidebar.classList.toggle('drawer-open');
-                // An open HUD floats above the slide-out (z-index), so
-                // opening the drawer dismisses it. Same call the edge
-                // swipe makes below.
                 if (sidebar.classList.contains('drawer-open')) {
-                    this.tabManager?._closeSelfHudNow?.();
+                    sidebar.classList.remove('drawer-open');
+                } else {
+                    this.openTabsDrawer();
                 }
             });
+
+            document
+                .getElementById('drawer-open-sessions')
+                ?.addEventListener('click', () =>
+                    this.setDrawerMode('sessions'),
+                );
+            document
+                .getElementById('drawer-back-to-tabs')
+                ?.addEventListener('click', () => this.setDrawerMode('tabs'));
 
             // Close drawer when clicking outside it
             document.addEventListener('click', (e) => {
@@ -939,6 +952,7 @@ export class App {
                         if (sidebarDrawer && touchStartX < 40) {
                             // Swipe from left edge -> Open Sessions drawer
                             sidebar?.classList.add('drawer-open');
+                            this.setDrawerMode('tabs');
                             // The brand-anchored HUD would float above it.
                             this.tabManager?._closeSelfHudNow?.();
                         } else if (
@@ -1153,6 +1167,40 @@ export class App {
                 }
             }
         });
+    }
+
+    // Drawer mode: the left drawer shows the grouped tab tree by default and
+    // the sessions block on demand. The mode CSS exists only inside the
+    // compact viewport query, so anywhere else the drawer keeps its native
+    // sessions content (it is still a drawer from 769-1023px).
+    // The single entry point for opening the compact drawer on its tab tree:
+    // the hamburger, the brand and a left-edge swipe all land here.
+    openTabsDrawer() {
+        const sidebar = document.getElementById('sidebar-panel');
+        if (!sidebar) return;
+        sidebar.classList.add('drawer-open');
+        this.setDrawerMode('tabs');
+        // An open HUD floats above the slide-out (z-index), so opening the
+        // drawer dismisses it.
+        this.tabManager?._closeSelfHudNow?.();
+    }
+
+    setDrawerMode(mode) {
+        if (!isCompactViewport()) mode = 'sessions';
+        const sidebar = document.getElementById('sidebar-panel');
+        if (!sidebar) return;
+        // Cached pre-drawer markup has no tab body: the mode rules would hide
+        // the sessions controls and the builder would render nothing.
+        if (mode === 'tabs' && !document.getElementById('drawer-tabs-body'))
+            mode = 'sessions';
+        sidebar.dataset.panelMode = mode;
+        const title = document.getElementById('drawer-panel-title');
+        if (title) title.textContent = mode === 'tabs' ? 'TABS' : 'SESSIONS';
+        sidebar.setAttribute(
+            'aria-label',
+            mode === 'tabs' ? 'Tabs' : 'Sessions',
+        );
+        if (mode === 'tabs') this.tabManager?._buildDrawerTabsBody?.();
     }
 
     initResizers() {

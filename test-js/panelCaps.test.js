@@ -86,12 +86,12 @@ describe('column panel proportional caps', () => {
         );
     });
 
-    it('fixed-width drawer overlays clear max-width so vw caps cannot squeeze them', () => {
+    it('slide-over drawers clear max-width so vw caps cannot squeeze them', () => {
         const compactSidebarDrawer = mediaBlock(
-            '/* Sidebar as a Slide-out Drawer */',
+            '/* Sidebar as a Slide-out Drawer',
         );
         expect(compactSidebarDrawer).toMatch(
-            /\.sidebar-panel\s*\{[^}]*width:\s*280px !important[^}]*max-width:\s*none/s,
+            /\.sidebar-panel\s*\{[^}]*width:\s*min\(420px,\s*calc\(100vw - 48px\)\) !important[^}]*max-width:\s*none/s,
         );
 
         const compactDiffDrawer = mediaBlock(
