@@ -11,12 +11,16 @@ struct Options {
   var rows: UInt16 = 24
   var seconds = 5
   var listPanes = false
+  var captureANSI = false
+  var stateDir = ""
+  var useKeychain = true
 }
 
 func usage() -> Never {
   FileHandle.standardError.write(Data(
     """
     usage: PhiProbe --server <origin> --pane <id> [--cols 80] [--rows 24] [--seconds 5]\n       \
+    PhiProbe --server <origin> --pane <id> --capture-ansi --state-dir <dir> [--no-keychain]\n       \
     PhiProbe --server <origin> --list-panes\n    An access password is read from PHI_ACCESS_PASSWORD or stdin.\n
     """.utf8))
   exit(2)
@@ -25,12 +29,23 @@ func usage() -> Never {
 func parse(_ arguments: [String]) -> Options {
   var server: URL?
   var pane: String?
+  var stateDir: String?
   var options = Options(server: URL(string: "http://127.0.0.1")!, pane: "")
   var index = 0
   while index < arguments.count {
     let flag = arguments[index]
     if flag == "--list-panes" {
       options.listPanes = true
+      index += 1
+      continue
+    }
+    if flag == "--capture-ansi" {
+      options.captureANSI = true
+      index += 1
+      continue
+    }
+    if flag == "--no-keychain" {
+      options.useKeychain = false
       index += 1
       continue
     }
@@ -51,6 +66,8 @@ func parse(_ arguments: [String]) -> Options {
     case "--seconds":
       guard let parsed = Int(value), parsed > 0 else { usage() }
       options.seconds = parsed
+    case "--state-dir":
+      stateDir = value
     default:
       usage()
     }
@@ -61,6 +78,10 @@ func parse(_ arguments: [String]) -> Options {
   if options.listPanes { return options }
   guard let pane, !pane.isEmpty else { usage() }
   options.pane = pane
+  if options.captureANSI {
+    guard let stateDir, !stateDir.isEmpty else { usage() }
+    options.stateDir = stateDir
+  }
   return options
 }
 
@@ -84,9 +105,23 @@ if options.listPanes {
   exit(0)
 }
 
+if options.captureANSI {
+  do {
+    try await CaptureANSI(
+      origin: options.server, pane: options.pane, cols: options.cols, rows: options.rows,
+      stateDir: URL(fileURLWithPath: options.stateDir), useKeychain: options.useKeychain,
+      password: password
+    ).run()
+  } catch {
+    FileHandle.standardError.write(Data("PhiProbe: \(error)\n".utf8))
+    exit(1)
+  }
+  exit(0)
+}
+
 let client = try PaneWireClient(
   origin: options.server, paneID: options.pane, cols: options.cols, rows: options.rows,
-  password: password)
+  useKeychain: options.useKeychain, password: password)
 let wire = Task { await client.run() }
 
 let attachDeadline = Date().addingTimeInterval(10)

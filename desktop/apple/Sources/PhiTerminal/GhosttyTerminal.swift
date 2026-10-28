@@ -51,6 +51,106 @@ private func writePtyTrampoline(_ terminal: GhosttyTerminal?, _ userdata: Unsafe
     .bytes.append(contentsOf: UnsafeBufferPointer(start: data, count: len))
 }
 
+/// How a cell color was declared, kept apart from its resolved RGB so a
+/// comparison can prove indexed/RGB/default parity (§9.2).
+public enum TerminalColorKind: String, Codable, Sendable {
+  case none = "default"
+  case palette
+  case rgb
+}
+
+public struct TerminalColor: Codable, Equatable, Sendable {
+  public var kind: TerminalColorKind
+  /// Palette index, or packed 0xRRGGBB when `kind == .rgb`.
+  public var value: UInt32
+
+  public init(kind: TerminalColorKind = .none, value: UInt32 = 0) {
+    self.kind = kind
+    self.value = value
+  }
+}
+
+public struct TerminalCellFrame: Codable, Equatable, Sendable {
+  public var text: String
+  /// Adapter width: 2 for a wide leader, 0 for its continuation, else 1.
+  public var width: Int
+  public var bold: Bool
+  public var faint: Bool
+  public var italic: Bool
+  public var strikethrough: Bool
+  public var inverse: Bool
+  public var blink: Bool
+  public var underline: Int
+  public var fg: TerminalColor
+  public var bg: TerminalColor
+
+  public init(
+    text: String = "", width: Int = 1, bold: Bool = false, faint: Bool = false,
+    italic: Bool = false, strikethrough: Bool = false, inverse: Bool = false,
+    blink: Bool = false, underline: Int = 0, fg: TerminalColor = TerminalColor(),
+    bg: TerminalColor = TerminalColor()
+  ) {
+    self.text = text
+    self.width = width
+    self.bold = bold
+    self.faint = faint
+    self.italic = italic
+    self.strikethrough = strikethrough
+    self.inverse = inverse
+    self.blink = blink
+    self.underline = underline
+    self.fg = fg
+    self.bg = bg
+  }
+}
+
+/// One complete visible frame: what a renderer draws and what an oracle can
+/// compare cell for cell.
+public struct TerminalFrame: Codable, Equatable, Sendable {
+  public var cols: Int
+  public var rows: Int
+  public var cursorX: Int
+  public var cursorY: Int
+  public var pendingWrap: Bool
+  public var cursorHidden: Bool
+  public var alt: Bool
+  public var history: Int
+  public var cells: [[TerminalCellFrame]]
+
+  public init(
+    cols: Int = 0, rows: Int = 0, cursorX: Int = 0, cursorY: Int = 0,
+    pendingWrap: Bool = false, cursorHidden: Bool = false, alt: Bool = false,
+    history: Int = 0, cells: [[TerminalCellFrame]] = []
+  ) {
+    self.cols = cols
+    self.rows = rows
+    self.cursorX = cursorX
+    self.cursorY = cursorY
+    self.pendingWrap = pendingWrap
+    self.cursorHidden = cursorHidden
+    self.alt = alt
+    self.history = history
+    self.cells = cells
+  }
+
+  /// Byte-exact canonical text (§9.2): every visible row/cell in order, U+0020
+  /// for an empty narrow cell, nothing extra for a wide continuation, grapheme
+  /// bytes unchanged, and a LF after every row including the last.
+  public func canonicalText() -> String {
+    var out = ""
+    out.reserveCapacity((cols + 1) * max(rows, cells.count))
+    for row in cells {
+      for index in 0..<cols {
+        let cell = index < row.count ? row[index] : TerminalCellFrame()
+        if cell.width == 0 { continue }
+        out += cell.text.isEmpty ? " " : cell.text
+      }
+      out += "\n"
+    }
+    return out
+  }
+}
+
 public struct TerminalCell: Equatable, Sendable {
   public let x: Int
   public let text: String
@@ -236,6 +336,97 @@ public final class TerminalSession {
       }
       return out
     } ?? []
+  }
+
+  private func terminalColor(_ color: GhosttyStyleColor) -> TerminalColor {
+    if color.tag == GHOSTTY_STYLE_COLOR_PALETTE {
+      return TerminalColor(kind: .palette, value: UInt32(color.value.palette))
+    }
+    if color.tag == GHOSTTY_STYLE_COLOR_RGB {
+      let rgb = color.value.rgb
+      return TerminalColor(
+        kind: .rgb, value: UInt32(rgb.r) << 16 | UInt32(rgb.g) << 8 | UInt32(rgb.b))
+    }
+    return TerminalColor()
+  }
+
+  /// Every visible cell with its declared style, plus cursor and screen facts.
+  /// Mirrors the Go adapter's snapshot so an oracle can compare cell for cell.
+  public func readFrame() -> TerminalFrame? {
+    guard let handle else { return nil }
+    var cols: UInt16 = 0
+    var rows: UInt16 = 0
+    guard ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_COLS, &cols) == GHOSTTY_SUCCESS,
+          ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_ROWS, &rows) == GHOSTTY_SUCCESS,
+          cols > 0, rows > 0 else { return nil }
+    var cursorX: UInt16 = 0
+    var cursorY: UInt16 = 0
+    var pendingWrap = false
+    var visible = true
+    var screen = GHOSTTY_TERMINAL_SCREEN_PRIMARY
+    var history = 0
+    _ = ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_CURSOR_X, &cursorX)
+    _ = ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_CURSOR_Y, &cursorY)
+    _ = ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_CURSOR_PENDING_WRAP, &pendingWrap)
+    _ = ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_CURSOR_VISIBLE, &visible)
+    _ = ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN, &screen)
+    _ = ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_SCROLLBACK_ROWS, &history)
+
+    return withRenderState { rs -> TerminalFrame? in
+      var it: GhosttyRenderStateRowIterator?
+      guard ghostty_render_state_row_iterator_new(allocator, &it) == GHOSTTY_SUCCESS,
+            ghostty_render_state_get(rs, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR, &it) == GHOSTTY_SUCCESS,
+            let it else { return nil }
+      defer { ghostty_render_state_row_iterator_free(it) }
+      var cellsHandle: GhosttyRenderStateRowCells?
+      guard ghostty_render_state_row_cells_new(allocator, &cellsHandle) == GHOSTTY_SUCCESS,
+            let cells = cellsHandle else { return nil }
+      defer { ghostty_render_state_row_cells_free(cells) }
+
+      var all: [[TerminalCellFrame]] = []
+      all.reserveCapacity(Int(rows))
+      while ghostty_render_state_row_iterator_next(it) {
+        guard ghostty_render_state_row_get(it, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS, &cellsHandle)
+          == GHOSTTY_SUCCESS, let cells = cellsHandle else { return nil }
+        var row: [TerminalCellFrame] = []
+        row.reserveCapacity(Int(cols))
+        while ghostty_render_state_row_cells_next(cells) {
+          var cell = TerminalCellFrame(text: graphemeText(cells) ?? "")
+          var raw: GhosttyCell = 0
+          var wide = GHOSTTY_CELL_WIDE_NARROW
+          if ghostty_render_state_row_cells_get(
+            cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW, &raw) == GHOSTTY_SUCCESS,
+             raw != 0,
+             ghostty_cell_get(raw, GHOSTTY_CELL_DATA_WIDE, &wide) == GHOSTTY_SUCCESS {
+            if wide == GHOSTTY_CELL_WIDE_WIDE {
+              cell.width = 2
+            } else if wide == GHOSTTY_CELL_WIDE_SPACER_TAIL {
+              cell.width = 0
+            }
+          }
+          var style = GhosttyStyle()
+          style.size = MemoryLayout<GhosttyStyle>.size
+          if ghostty_render_state_row_cells_get(
+            cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &style) == GHOSTTY_SUCCESS {
+            cell.bold = style.bold
+            cell.faint = style.faint
+            cell.italic = style.italic
+            cell.strikethrough = style.strikethrough
+            cell.inverse = style.inverse
+            cell.blink = style.blink
+            cell.underline = Int(style.underline)
+            cell.fg = terminalColor(style.fg_color)
+            cell.bg = terminalColor(style.bg_color)
+          }
+          row.append(cell)
+        }
+        all.append(row)
+      }
+      return TerminalFrame(
+        cols: Int(cols), rows: Int(rows), cursorX: Int(cursorX), cursorY: Int(cursorY),
+        pendingWrap: pendingWrap, cursorHidden: !visible,
+        alt: screen == GHOSTTY_TERMINAL_SCREEN_ALTERNATE, history: history, cells: all)
+    } ?? nil
   }
 
   public func paletteEntry(_ index: Int) -> (UInt8, UInt8, UInt8)? {
