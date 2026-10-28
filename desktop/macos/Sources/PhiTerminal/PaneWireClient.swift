@@ -107,8 +107,15 @@ public actor PaneWireClient {
   private var titleRevision: UInt64 = 0
   private var lastPong: Date?
   private var lastError: String?
+  private let auth: AccessAuth
+  /// Session cookie for the current origin, refreshed before every attempt.
+  private var accessToken: String?
 
-  public init(origin: URL, paneID: String, cols: UInt16 = 80, rows: UInt16 = 24) throws {
+  public init(
+    origin: URL, paneID: String, cols: UInt16 = 80, rows: UInt16 = 24,
+    useKeychain: Bool = true, keychainService: String = "phi-access",
+    password: AccessAuth.PasswordProvider? = nil
+  ) throws {
     guard let scheme = origin.scheme?.lowercased(), scheme == "http" || scheme == "https",
           origin.host != nil, cols >= 1, rows >= 1 else {
       throw PaneWireError.badOrigin
@@ -121,6 +128,9 @@ public actor PaneWireClient {
     self.cols = cols
     self.rows = rows
     self.terminal = terminal
+    self.auth = AccessAuth(
+      origin: origin, useKeychain: useKeychain, keychainService: keychainService,
+      password: password)
   }
 
   /// Attach and read until `stop()`/`close()`, re-attaching with backoff. Each
@@ -131,6 +141,9 @@ public actor PaneWireClient {
         try await connect()
       } catch {
         lastError = String(describing: error)
+        // A rejected session must not be retried as-is; the next attempt logs
+        // in again from the cached verifier, which needs no password.
+        await auth.invalidate()
       }
       guard !stopped else { break }
       reconnects += 1
@@ -261,6 +274,10 @@ public actor PaneWireClient {
     guard let url = comps?.url else { throw PaneWireError.badOrigin }
     var request = URLRequest(url: url)
     request.timeoutInterval = 10
+    if let accessToken {
+      request.setValue(
+        "\(AccessAuth.cookieName)=\(accessToken)", forHTTPHeaderField: "Cookie")
+    }
     // Identity keeps the reply usable through the bounded async byte reader.
     request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
     let session = currentSession()
@@ -268,7 +285,10 @@ public actor PaneWireClient {
     guard let http = response as? HTTPURLResponse else {
       throw PaneWireError.protocolViolation("state reply is not HTTP")
     }
-    guard http.statusCode == 200 else { throw PaneWireError.http(http.statusCode) }
+    guard http.statusCode == 200 else {
+      if http.statusCode == 401 { await auth.invalidate() }
+      throw PaneWireError.http(http.statusCode)
+    }
     var body = Data()
     body.reserveCapacity(1 << 16)
     for try await byte in bytes {
@@ -326,6 +346,11 @@ public actor PaneWireClient {
 
   private func connect() async throws {
     let session = currentSession()
+    do {
+      accessToken = try await auth.token()
+    } catch {
+      throw PaneWireError.accessDenied(String(describing: error))
+    }
     var comps = URLComponents(url: origin, resolvingAgainstBaseURL: false)
     comps?.scheme = origin.scheme == "https" ? "wss" : "ws"
     comps?.path = "/ws/pane/\(escapedPaneID)"
@@ -333,6 +358,10 @@ public actor PaneWireClient {
     guard let url = comps?.url else { throw PaneWireError.badOrigin }
     var request = URLRequest(url: url)
     request.setValue(Self.subprotocol, forHTTPHeaderField: "Sec-WebSocket-Protocol")
+    if let accessToken {
+      request.setValue(
+        "\(AccessAuth.cookieName)=\(accessToken)", forHTTPHeaderField: "Cookie")
+    }
     let task = session.webSocketTask(with: request)
     task.maximumMessageSize = Self.maxMessage + 1
     socket = task
@@ -586,6 +615,8 @@ public enum PaneWireError: Error, Equatable {
   case protocolViolation(String)
   case outputGap(from: UInt64, to: UInt64)
   case http(Int)
+  /// Attaching needs an access session and none could be obtained.
+  case accessDenied(String)
 }
 
 /// Whether bytes may already have reached the server. Only `.neverSent` work

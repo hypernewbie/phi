@@ -9,11 +9,15 @@ struct Options {
   var cols: UInt16 = 80
   var rows: UInt16 = 24
   var seconds = 5
+  var listPanes = false
 }
 
 func usage() -> Never {
   FileHandle.standardError.write(Data(
-    "usage: PhiProbe --server <origin> --pane <id> [--cols 80] [--rows 24] [--seconds 5]\n".utf8))
+    """
+    usage: PhiProbe --server <origin> --pane <id> [--cols 80] [--rows 24] [--seconds 5]\n       \
+    PhiProbe --server <origin> --list-panes\n    An access password is read from PHI_ACCESS_PASSWORD or stdin.\n
+    """.utf8))
   exit(2)
 }
 
@@ -24,6 +28,11 @@ func parse(_ arguments: [String]) -> Options {
   var index = 0
   while index < arguments.count {
     let flag = arguments[index]
+    if flag == "--list-panes" {
+      options.listPanes = true
+      index += 1
+      continue
+    }
     guard index + 1 < arguments.count else { usage() }
     let value = arguments[index + 1]
     switch flag {
@@ -46,15 +55,58 @@ func parse(_ arguments: [String]) -> Options {
     }
     index += 2
   }
-  guard let server, let pane, !pane.isEmpty else { usage() }
+  guard let server else { usage() }
   options.server = server
+  if options.listPanes { return options }
+  guard let pane, !pane.isEmpty else { usage() }
   options.pane = pane
   return options
 }
 
+let environmentPassword = ProcessInfo.processInfo.environment["PHI_ACCESS_PASSWORD"]
+let password: AccessAuth.PasswordProvider? = {
+  if let environmentPassword, !environmentPassword.isEmpty { return { environmentPassword } }
+  return { readLine() }
+}()
+
 let options = parse(Array(CommandLine.arguments.dropFirst()))
+
+if options.listPanes {
+  let auth = AccessAuth(origin: options.server, password: password)
+  do {
+    let token = try await auth.token()
+    var comps = URLComponents(url: options.server, resolvingAgainstBaseURL: false)
+    comps?.path = "/api/terminals"
+    var request = URLRequest(url: comps?.url ?? options.server)
+    request.timeoutInterval = 15
+    if let token {
+      request.setValue(
+        "\(AccessAuth.cookieName)=\(token)", forHTTPHeaderField: "Cookie")
+    }
+    let (data, response) = try await URLSession.shared.data(for: request)
+    let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+    guard code == 200 else {
+      FileHandle.standardError.write(Data("PhiProbe: panes failed (\(code))\n".utf8))
+      exit(1)
+    }
+    let panes = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] ?? []
+    for pane in panes {
+      let id = pane["id"] as? String ?? "?"
+      let coder = pane["coder"] as? String ?? "?"
+      let title = pane["title"] as? String ?? ""
+      let cwd = pane["cwd"] as? String ?? ""
+      print("\(id)\t\(coder)\t\(title)\t\(cwd)")
+    }
+  } catch {
+    FileHandle.standardError.write(Data("PhiProbe: \(error)\n".utf8))
+    exit(1)
+  }
+  exit(0)
+}
+
 let client = try PaneWireClient(
-  origin: options.server, paneID: options.pane, cols: options.cols, rows: options.rows)
+  origin: options.server, paneID: options.pane, cols: options.cols, rows: options.rows,
+  password: password)
 let wire = Task { await client.run() }
 
 let attachDeadline = Date().addingTimeInterval(10)
