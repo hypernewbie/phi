@@ -515,9 +515,9 @@ describe('src/desktop.ts (step 6B view manager + rail renderer wiring)', () => {
     expect(
       desktopSource.indexOf("child.once('ready-to-show'", childIdx),
     ).toBeGreaterThan(childIdx);
-    expect(
-      desktopSource.indexOf('attachNavGuard(', childIdx),
-    ).toBeGreaterThan(childIdx);
+    expect(desktopSource.indexOf('attachNavGuard(', childIdx)).toBeGreaterThan(
+      childIdx,
+    );
     const childRegion = desktopSource.slice(
       childIdx,
       desktopSource.indexOf('return child.webContents;', childIdx),
@@ -541,11 +541,9 @@ describe('src/desktop.ts (step 6B view manager + rail renderer wiring)', () => {
     // The shell's origin is the literal string "null", so a caller that
     // normalizes it destroys the only thing that identifies the shell.
     expect(desktopSource).toContain(
-      "origin === EMBEDDED_ORIGIN ? EMBEDDED_ORIGIN : new URL(origin).origin",
+      'origin === EMBEDDED_ORIGIN ? EMBEDDED_ORIGIN : new URL(origin).origin',
     );
-    expect(desktopSource).toContain(
-      'const target = resolveV2BodyAuthTarget(',
-    );
+    expect(desktopSource).toContain('const target = resolveV2BodyAuthTarget(');
     expect(desktopSource).toContain(
       'export function isAllowedNavigationTarget(',
     );
@@ -564,18 +562,15 @@ describe('src/desktop.ts (step 6B view manager + rail renderer wiring)', () => {
     ).toBeGreaterThan(policyIdx);
     const guardIdx = desktopSource.indexOf('export function attachNavGuard(');
     expect(guardIdx).toBeGreaterThan(-1);
-    expect(
-      desktopSource.indexOf("'will-navigate'", guardIdx),
-    ).toBeGreaterThan(guardIdx);
-    expect(
-      desktopSource.indexOf("'will-redirect'", guardIdx),
-    ).toBeGreaterThan(guardIdx);
-    // A main-process loadURL emits neither navigation event, so its target is
-    // validated explicitly rather than treated as exempt.
-    const loadURLIdx = desktopSource.indexOf(
-      'contents.loadURL = ((',
+    expect(desktopSource.indexOf("'will-navigate'", guardIdx)).toBeGreaterThan(
       guardIdx,
     );
+    expect(desktopSource.indexOf("'will-redirect'", guardIdx)).toBeGreaterThan(
+      guardIdx,
+    );
+    // A main-process loadURL emits neither navigation event, so its target is
+    // validated explicitly rather than treated as exempt.
+    const loadURLIdx = desktopSource.indexOf('contents.loadURL = ((', guardIdx);
     expect(loadURLIdx).toBeGreaterThan(guardIdx);
     expect(
       desktopSource.indexOf('isAllowedNavigation(new URL(url))', loadURLIdx),

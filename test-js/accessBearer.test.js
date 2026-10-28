@@ -1380,7 +1380,8 @@ describe('receipt-relative renewal', () => {
         try {
             const fetchSpy = mockAuth((url) => {
                 if (url === '/api/auth/status') return DUAL_STATUS;
-                if (url === '/api/auth/v2/login') return bundleFor('jwt-typed', 3600);
+                if (url === '/api/auth/v2/login')
+                    return bundleFor('jwt-typed', 3600);
                 return undefined;
             });
             const boot = bootstrapAccessAuth();
@@ -1671,7 +1672,10 @@ describe('refresh ownership', () => {
         const older = siblingBundle('jwt-older', 60);
         __test__.receiveBundle(older);
         const foreign = siblingBundle('jwt-foreign', 86400);
-        __test__.receiveBundle({ ...foreign, origin: 'https://elsewhere.example' });
+        __test__.receiveBundle({
+            ...foreign,
+            origin: 'https://elsewhere.example',
+        });
         expect(__test__.getAccessState().accessToken).toBe('jwt-newer');
     });
 

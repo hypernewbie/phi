@@ -4156,11 +4156,7 @@ export class DesktopHost {
           }
           return { action: 'deny' };
         });
-        attachNavGuard(
-          view.webContents,
-          isAllowedNavigation,
-          handOffExternal,
-        );
+        attachNavGuard(view.webContents, isAllowedNavigation, handOffExternal);
         // Rail-selection shortcuts: before-input-event runs in the browser
         // process, so a chord is caught before the renderer. The always-safe
         // digits (Ctrl+1/2/9) produce no PTY byte and switch synchronously.
