@@ -248,10 +248,10 @@ export class AccessAuth {
     { verifier: Buffer; salt: Buffer; iterations: number }
   >();
   private readonly attemptTokens = new Map<string, number>();
-  /** Monotonic renewal deadline per origin: receipt time plus the server's own
-   *  remaining duration. A wall clock that is wrong cannot make a fresh token
-   *  look due, and cannot postpone a real expiry. */
-  private readonly renewAt = new Map<string, number>();
+  /** Access deadline per origin on this machine's clock: the receipt time plus
+   *  the server's own remaining duration. The server's absolute timestamp is
+   *  never compared with a local wall clock, which may be skewed by hours. */
+  private readonly deadlineAt = new Map<string, number>();
   private readonly _doFetch: FetchLike;
   private readonly _now: () => number;
   private _cookieProvider: CookieProvider | null = null;
@@ -322,7 +322,7 @@ export class AccessAuth {
       this.bundles.delete(canonical);
       this.refreshes.delete(canonical);
       this.refreshBackoff.delete(canonical);
-      this.renewAt.delete(canonical);
+      this.deadlineAt.delete(canonical);
       this.selectedProtocols.delete(canonical);
     }
     this.cookies.delete(origin);
@@ -332,7 +332,7 @@ export class AccessAuth {
     this.bundles.delete(origin);
     this.refreshes.delete(origin);
     this.refreshBackoff.delete(origin);
-    this.renewAt.delete(origin);
+    this.deadlineAt.delete(origin);
     this.selectedProtocols.delete(origin);
   }
 
@@ -348,7 +348,7 @@ export class AccessAuth {
     // A bare token carries no refresh handle, so any older bundle describes a
     // different credential and must not be refreshed against this token.
     this.bundles.delete(canonical);
-    this.renewAt.delete(canonical);
+    this.deadlineAt.delete(canonical);
     this.selectedProtocols.set(canonical, 'v2');
     this.bumpAttempt(canonical);
     this.announceBundle(canonical);
@@ -373,15 +373,13 @@ export class AccessAuth {
     this.bundles.set(canonical, bundle);
     this.selectedProtocols.set(canonical, 'v2');
     this.refreshBackoff.delete(canonical);
-    // Renewal is measured from this receipt, not from the server's absolute
-    // expiry read through a possibly-wrong local clock: a machine whose clock
-    // runs ahead must not renew in a storm, and one that runs behind must not
-    // miss a real expiry.
-    this.renewAt.set(
+    // The deadline is measured from this receipt, not from the server's
+    // absolute expiry read through a possibly-wrong local clock: a machine
+    // whose clock runs ahead must not renew in a storm, and one that runs
+    // behind must not miss a real expiry.
+    this.deadlineAt.set(
       canonical,
-      options.restored
-        ? this._now()
-        : this._now() + bundle.expiresIn * 1000 - RENEW_LEAD_S * 1000,
+      options.restored ? this._now() : this._now() + bundle.expiresIn * 1000,
     );
     this.bumpAttempt(canonical);
     // Persist before anyone can install this credential into a renderer.
@@ -397,6 +395,20 @@ export class AccessAuth {
     return this.bundles.get(canonical) ?? null;
   }
 
+  /** The bundle's access deadline on this machine's clock, in unix seconds, or
+   *  null when no bundle with a usable duration is held. A credential consumer
+   *  (the scoped asset cookie) uses this instead of the server's absolute
+   *  timestamp, so a skewed local clock cannot expire it early or late. */
+  getAccessDeadline(origin: string): number | null {
+    const canonical = toCanonicalAuthOrigin(origin);
+    if (!canonical) return null;
+    const bundle = this.bundles.get(canonical);
+    if (!bundle || bundle.expiresIn <= 0) return null;
+    const deadline = this.deadlineAt.get(canonical);
+    if (deadline === undefined) return null;
+    return Math.floor(deadline / 1000);
+  }
+
   /** Drops one rejected token while keeping the v2 selection. A delayed
    *  rejection for token A must not clear a newer token B. */
   rejectToken(origin: string, token: string): void {
@@ -405,7 +417,7 @@ export class AccessAuth {
     if (this.tokens.get(canonical) === token) {
       this.tokens.delete(canonical);
       this.bundles.delete(canonical);
-      this.renewAt.delete(canonical);
+      this.deadlineAt.delete(canonical);
       this.announceBundle(canonical);
     }
     this.selectedProtocols.set(canonical, 'v2');
@@ -1058,9 +1070,10 @@ export class AccessAuth {
     // `expiresIn <= 0` means the bundle was already unusable on arrival; the
     // backoff check above keeps that from becoming a retry loop.
     if (bundle.expiresIn <= 0) return true;
-    const renewAt = this.renewAt.get(canonical);
-    if (renewAt === undefined) return false;
-    return this._now() >= renewAt;
+    const deadline = this.deadlineAt.get(canonical);
+    // An unknown deadline is not evidence of freshness: renew.
+    if (deadline === undefined) return true;
+    return this._now() >= deadline - RENEW_LEAD_S * 1000;
   }
 
   /** Forces one host refresh for `origin`, coalescing concurrent callers onto
@@ -1264,7 +1277,7 @@ export class AccessAuth {
     this.tokens.delete(canonical);
     this.bundles.delete(canonical);
     this.refreshBackoff.delete(canonical);
-    this.renewAt.delete(canonical);
+    this.deadlineAt.delete(canonical);
     this.selectedProtocols.set(canonical, 'v2');
     // A terminal rejection is the one case the stored bundle must go away.
     this.announceBundle(canonical);

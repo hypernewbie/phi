@@ -326,10 +326,12 @@ import {
 import { Controller } from '../src/controller.js';
 import { EMBEDDED_ORIGIN } from '../src/embedded-transport.js';
 import {
+  attachNavGuard,
   DesktopHost,
   type CredentialStoreFs,
   isAllowedNavigationTarget,
   realCredentialStoreFs,
+  resolveV2BodyAuthTarget,
 } from '../src/desktop.js';
 import { FORWARD_CHANNEL } from '../src/single-instance.js';
 import { WAKE_PAGE_SCRIPT } from '../src/injected.js';
@@ -2476,6 +2478,25 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
     expect(readFileSync(host.credentialsPath)).not.toEqual(before);
   });
 
+  it('propagates a real directory-sync failure instead of claiming a commit', () => {
+    // The real adapter decides what is durable. A platform that cannot open a
+    // directory handle has nothing to claim, but a real I/O failure must reach
+    // the caller so an ambiguous commit is never reported as a durable one.
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'phi-fsync-'));
+    try {
+      // A supported directory syncs and stays silent.
+      expect(() => realCredentialStoreFs.syncDir(dir)).not.toThrow();
+      // A directory that cannot be opened is a genuine failure, not a
+      // platform limitation: it must throw so saveStoredCredentials() takes
+      // its ambiguous-commit branch.
+      expect(() =>
+        realCredentialStoreFs.syncDir(path.join(dir, 'missing')),
+      ).toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('refuses a v2 write through the Linux basic_text backend after a rotation', () => {
     vi.stubGlobal(
       'process',
@@ -2501,6 +2522,15 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
   });
 
   describe('trusted body credential scope (M3c)', () => {
+    // A fixed clock makes a receipt-relative deadline assertable at all.
+    const FIXED_NOW = 1_900_000_000_000;
+    beforeEach(() => {
+      vi.useFakeTimers({ now: FIXED_NOW });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     /** A host with one authorized v2 bundle whose body may be installed. */
     const authorizedHost = (
       origin: string,
@@ -2534,7 +2564,9 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
 
       host.installBodyToken(contents, originA, auth, host.sessionGeneration);
 
-      // Exactly one cookie, with the server's own attributes.
+      // Exactly one cookie, with the server's own attributes. Its deadline is
+      // the receipt time plus the server's remaining duration: the absolute
+      // timestamp never meets this machine's clock.
       expect(contents.cookies.setCalls).toEqual([
         {
           url: `${originA}/api`,
@@ -2544,7 +2576,7 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
           httpOnly: true,
           sameSite: 'strict',
           secure: true,
-          expirationDate: 1_900_000_000,
+          expirationDate: Math.floor(FIXED_NOW / 1000) + 3600,
         },
       ]);
       expect(contents.cookies.removeCalls).toEqual([]);
@@ -2579,9 +2611,12 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
 
       // A host refresh rotates the bundle; the next install mirrors the new
       // token and its later deadline instead of leaving the old one behind.
+      // `expiresAt` here is a server clock that disagrees with this machine,
+      // and it must make no difference.
+      vi.setSystemTime(FIXED_NOW + 60_000);
       auth.installBundle(originA, {
         token: 'rotated-token',
-        expiresAt: 1_900_003_600,
+        expiresAt: 1_000_000,
         expiresIn: 3600,
         refreshHandle: Buffer.alloc(32, 0x44).toString('base64url'),
         refreshIdleExpiresAt: 1_900_500_000,
@@ -2592,8 +2627,9 @@ describe('DesktopHost credential persistence (v1 + v2)', () => {
 
       expect(contents.cookies.setCalls.at(-1)).toMatchObject({
         value: 'rotated-token',
-        expirationDate: 1_900_003_600,
+        expirationDate: Math.floor((FIXED_NOW + 60_000) / 1000) + 3600,
       });
+      vi.useRealTimers();
     });
 
     it('writes no body credential for a redirected, destroyed, or unauthorized frame', () => {
@@ -2700,11 +2736,119 @@ describe('isAllowedNavigationTarget', () => {
     expect(allows('phi-app://app/', ownOrigin)).toBe(false);
   });
 
-  it('applies the same rule to a redirect target a permitted page lands on', () => {
-    // will-redirect consults this predicate: a permitted URL that redirects to
-    // a foreign page must be denied, because the proxy would then attach host
-    // credentials to that page's requests.
-    expect(allows('https://evil.example/', embedded)).toBe(false);
-    expect(allows('https://evil.example/', ownOrigin)).toBe(false);
+});
+
+describe('resolveV2BodyAuthTarget', () => {
+  const origin = 'https://phi.example';
+
+  it('accepts the embedded shell without injecting a credential into it', () => {
+    // Single-tab mode: one phi-app://app view serves every profile. The host
+    // proxy attaches the bearer per request, so a host-authorized sign-in is
+    // already complete and no token install is needed.
+    expect(resolveV2BodyAuthTarget(`${EMBEDDED_ORIGIN}/index.html?x=1`, origin)).toBe(
+      'embedded',
+    );
+    expect(resolveV2BodyAuthTarget(EMBEDDED_ORIGIN, origin)).toBe('embedded');
+  });
+
+  it('refuses a body that is not exactly the authenticated origin', () => {
+    // Everything here reports origin "null" or a foreign origin; none of it may
+    // receive the bearer.
+    expect(resolveV2BodyAuthTarget('file:///index.html', origin)).toBe('refuse');
+    expect(resolveV2BodyAuthTarget('phi-app://evil/index.html', origin)).toBe(
+      'refuse',
+    );
+    expect(resolveV2BodyAuthTarget('https://evil.example/', origin)).toBe(
+      'refuse',
+    );
+    expect(resolveV2BodyAuthTarget('', origin)).toBe('refuse');
+    // A loopback spelling of the same server is a different origin.
+    expect(resolveV2BodyAuthTarget('http://127.0.0.1:8080/', origin)).toBe(
+      'refuse',
+    );
+  });
+
+  it('installs into a body whose origin is exactly the credential origin', () => {
+    // The credential origin is canonical by contract (`toCanonicalAuthOrigin`),
+    // so the view's own origin must match it exactly.
+    expect(resolveV2BodyAuthTarget(`${origin}/index.html`, origin)).toBe(
+      'exact',
+    );
+    expect(resolveV2BodyAuthTarget(`${origin}/md.html?x=1`, origin)).toBe(
+      'exact',
+    );
+  });
+});
+
+describe('attachNavGuard', () => {
+  /** Records what a fake WebContents registered and what it loaded. */
+  const guardTarget = () => {
+    const listeners = new Map<string, (event: any, url: string) => void>();
+    const loaded: string[] = [];
+    const contents = {
+      on: (event: string, listener: (event: any, url: string) => void) => {
+        listeners.set(event, listener);
+      },
+      loadURL: async (url: string) => {
+        loaded.push(url);
+      },
+    };
+    const fire = (event: string, url: string) => {
+      const listener = listeners.get(event);
+      if (!listener) throw new Error(`no listener for ${event}`);
+      let prevented = false;
+      listener({ preventDefault: () => (prevented = true) }, url);
+      return prevented;
+    };
+    return { contents, fire, loaded, listeners };
+  };
+
+  const embeddedAllow = (target: URL): boolean =>
+    isAllowedNavigationTarget(target, EMBEDDED_ORIGIN, () => false);
+
+  it('denies a file:// or foreign phi-app redirect in the embedded shell', () => {
+    const { contents, fire, loaded } = guardTarget();
+    const handedOff: string[] = [];
+    attachNavGuard(contents, embeddedAllow, (url) => handedOff.push(url));
+
+    for (const event of ['will-navigate', 'will-redirect']) {
+      // Both report origin "null", exactly like the shell does. Scheme and
+      // host are the only usable identity.
+      expect(fire(event, 'file:///index.html'), event).toBe(true);
+      expect(fire(event, 'phi-app://evil/index.html'), event).toBe(true);
+      // A permitted in-app target is never intercepted.
+      expect(fire(event, 'phi-app://app/index.html'), event).toBe(false);
+    }
+    // A denied target is never loaded in-app. It is offered to the OS opener,
+    // which itself only opens web and mail URLs, so a denied scheme stays
+    // nowhere; the permitted in-app navigation is not offered at all.
+    expect(loaded).toEqual([]);
+    expect(handedOff).toEqual([
+      'file:///index.html',
+      'phi-app://evil/index.html',
+      'file:///index.html',
+      'phi-app://evil/index.html',
+    ]);
+  });
+
+  it('validates a main-process loadURL even though it emits no event', async () => {
+    const { contents, loaded, listeners } = guardTarget();
+    attachNavGuard(
+      contents,
+      (target) =>
+        isAllowedNavigationTarget(
+          target,
+          'https://phi.example',
+          (candidate) => candidate.origin === 'https://phi.example',
+        ),
+      () => {},
+    );
+    // loadURL emits neither will-navigate nor will-redirect.
+    expect(listeners.size).toBe(2);
+    await contents.loadURL('file:///index.html');
+    await contents.loadURL('https://evil.example/');
+    expect(loaded).toEqual([]);
+    await contents.loadURL('https://phi.example/index.html');
+    expect(loaded).toEqual(['https://phi.example/index.html']);
   });
 });

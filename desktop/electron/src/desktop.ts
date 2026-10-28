@@ -576,20 +576,30 @@ export function isAllowedNavigationTarget(
   return isSameServer(target) && isAppRoute(target.pathname);
 }
 
-/** True when a view's main frame is the embedded shell page.
- *  `new URL(EMBEDDED_ORIGIN).origin` is "null", so origin equality can never
- *  identify it, and every non-special URL shares that "null". */
-function isEmbeddedShellView(contents: {
-  getURL(): string;
-  isDestroyed(): boolean;
-}): boolean {
-  if (contents.isDestroyed()) return false;
+/**
+ * How the host authorizes one body view for a v2 credential. The embedded
+ * single-tab shell is a different transport: its page holds no credential at
+ * all (the main-process proxy attaches the host bearer per request), so a
+ * host-authorized sign-in is already complete there and nothing is injected.
+ * `new URL(EMBEDDED_ORIGIN).origin` is the string "null", which `file:` and
+ * every other non-special URL also report, so the shell is identified by scheme
+ * and host; a remote body must be exactly the canonical origin.
+ */
+export function resolveV2BodyAuthTarget(
+  viewUrl: string,
+  canonical: string,
+): 'embedded' | 'exact' | 'refuse' {
+  let url: URL;
   try {
-    const url = new URL(contents.getURL());
-    return url.protocol === `${EMBEDDED_SCHEME}:` && url.host === EMBEDDED_HOST;
+    url = new URL(viewUrl);
   } catch {
-    return false;
+    return 'refuse';
   }
+  if (url.protocol === `${EMBEDDED_SCHEME}:` && url.host === EMBEDDED_HOST) {
+    return 'embedded';
+  }
+  if (url.origin === 'null' || url.origin !== canonical) return 'refuse';
+  return 'exact';
 }
 
 /** The slice of a WebContents the navigation guard touches. */
@@ -2528,7 +2538,9 @@ export class DesktopHost {
     if (!jar) return;
     const token = accessAuth.getToken(canonical);
     if (!token) return;
-    const bundle = accessAuth.getBundle(canonical);
+    // The deadline comes from the response that delivered the bundle, never
+    // from the server's absolute timestamp compared with this machine's clock.
+    const deadline = accessAuth.getAccessDeadline(canonical);
     const cookie = {
       url: `${canonical}${BODY_ASSET_PATH}`,
       name: BODY_ASSET_COOKIE,
@@ -2539,9 +2551,7 @@ export class DesktopHost {
       secure: canonical.startsWith('https://'),
       // A bare host token carries no server deadline: the cookie then dies
       // with the view's session, exactly like the memory token it mirrors.
-      ...(bundle && bundle.expiresAt > 0
-        ? { expirationDate: bundle.expiresAt }
-        : {}),
+      ...(deadline !== null ? { expirationDate: deadline } : {}),
     };
     void jar.set(cookie).catch(() => {});
   }
@@ -2655,7 +2665,12 @@ export class DesktopHost {
     // activates it. Body installation stays gated on validation.
     for (const [origin, entry] of this.storedCredentials) {
       if (entry.version === 'v2') {
-        accessAuth.installBundle(origin, storedBundle(entry));
+        // A restored bundle has no receipt-relative clock: renew as soon as the
+        // host can, instead of trusting an absolute timestamp that a skewed
+        // local clock may read as fresh for hours.
+        accessAuth.installBundle(origin, storedBundle(entry), {
+          restored: true,
+        });
       }
     }
     // Re-authenticate the origins CONCURRENTLY, with a small concurrency
@@ -4931,15 +4946,16 @@ export class DesktopHost {
       // A selected v2 session has no cookie and no verifier: install the
       // host bearer into the trusted body view instead of a v1 proof. The
       // body keeps it in memory, so this runs again after every load.
-      // The embedded single-tab shell is a different transport (its page
-      // origin is `phi-app://app`, not the server); it is refused here and
-      // keeps its own sign-in until that transport is separately approved.
       if (pending.auth.getSelectedProtocol(pending.origin) === 'v2') {
-        // The embedded shell holds no page credential: every request rides the
-        // main-process proxy, which attaches the host bearer itself. A
-        // host-authorized sign-in is therefore already complete for that view,
-        // and its origin is not the server's, so nothing is injected.
-        if (isEmbeddedShellView(view.webContents)) {
+        const canonical =
+          toCanonicalAuthOrigin(pending.origin) ?? pending.origin;
+        const target = resolveV2BodyAuthTarget(
+          view.webContents.getURL(),
+          canonical,
+        );
+        // The embedded shell holds no page credential, so a host-authorized
+        // sign-in is already complete for it and nothing is injected.
+        if (target === 'embedded') {
           if (
             pending.abort.signal.aborted ||
             (pendingUnlock !== null && pendingUnlock !== pending) ||
@@ -4953,8 +4969,6 @@ export class DesktopHost {
           return { ok: true };
         }
         const token = pending.auth.getToken(pending.origin);
-        const canonical =
-          toCanonicalAuthOrigin(pending.origin) ?? pending.origin;
         // The load wait above can span a rail switch, a cancellation, or a
         // session teardown. Reapply every foreground guard before the
         // renderer mutation, not only after it.
@@ -4969,15 +4983,9 @@ export class DesktopHost {
         ) {
           return { ok: false, code: 'stale', message: 'Prompt expired.' };
         }
-        let viewOrigin = '';
-        try {
-          viewOrigin = new URL(view.webContents.getURL()).origin;
-        } catch {
-          /* unreadable or empty URL: refuse below */
-        }
         // The injected script repeats this check; refusing first keeps the
         // bearer out of a redirected or unrelated frame entirely.
-        if (viewOrigin !== canonical) {
+        if (target !== 'exact') {
           return {
             ok: false,
             code: 'unavailable',
