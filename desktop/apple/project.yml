@@ -110,6 +110,18 @@ targets:
       - package: PhiCore
         product: PhiTerminal
 
+  PhiOSUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [Apps/iOSUITests]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.phi.phios.uitests
+        TEST_TARGET_NAME: PhiOS
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: PhiOS
+
 schemes:
   PhiMac:
     build:
@@ -132,5 +144,9 @@ schemes:
     build:
       targets:
         PhiOS: all
+        PhiOSUITests: [test]
+    test:
+      config: Debug
+      targets: [PhiOSUITests]
     run:
       config: Debug
