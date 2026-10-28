@@ -264,6 +264,37 @@ const SYNC_ALARM_MARKER = 'PHI_ALARM ';
 /** Random unguessable id bound to one in-flight access-auth prompt. */
 const randomRequestId = (): string => randomBytes(16).toString('hex');
 
+/** The single cookie a trusted remote body is allowed to hold: the scoped asset
+ *  handle the server itself sets for `/api` asset requests. Its value is the
+ *  current access token, so a renderer can stream images and PDFs natively
+ *  without the host babysitting every asset fetch. The refresh handle never
+ *  enters a renderer's jar. */
+const BODY_ASSET_COOKIE = 'phi_access_asset';
+const BODY_ASSET_PATH = '/api';
+
+/** The slice of Electron's cookie API the body asset handle needs. */
+interface BodyCookieJar {
+  set(details: {
+    url: string;
+    name: string;
+    value: string;
+    path: string;
+    httpOnly: boolean;
+    sameSite: 'strict';
+    secure: boolean;
+    expirationDate?: number;
+  }): Promise<void>;
+  remove(url: string, name: string): Promise<void>;
+}
+
+/** The cookie jar of the renderer that would receive the handle, or null when
+ *  the environment has no jar (tests, a teardown-in-progress view). */
+function bodyCookieJar(contents: WebContents): BodyCookieJar | null {
+  const jar = (contents as unknown as { session?: { cookies?: BodyCookieJar } })
+    .session?.cookies;
+  return jar && typeof jar.set === 'function' ? jar : null;
+}
+
 /** Startup argv has one explicit --server winner; all other URL payloads keep order. */
 function classifyInitialLaunch(argv: string[]): ForwardPayload[] {
   let explicit: string | undefined;
@@ -2343,12 +2374,62 @@ export class DesktopHost {
 
   /** Hands the session's credential owner a store listener. Every bundle the
    *  host installs or rotates is persisted here, before any renderer sees
-   *  the token. */
+   *  the token. A cleared bundle is terminal: the body asset handle goes with
+   *  it so no renderer keeps a dead credential. */
   private watchBundles(auth: AccessAuth): AccessAuth {
     auth.setBundleListener((origin, bundle) => {
       this.persistBundle(origin, bundle);
+      if (!bundle) this.clearBodyAssetCookies(origin);
     });
     return auth;
+  }
+
+  /** Gives one trusted remote body the scoped asset cookie its asset requests
+   *  need, with the server's own attributes. Only the current access token is
+   *  used, so a rotation followed by a reinstall refreshes the deadline too.
+   *  The caller has already proven the frame is the credential origin. */
+  private installBodyAssetCookie(
+    contents: WebContents,
+    canonical: string,
+    accessAuth: AccessAuth,
+  ): void {
+    const jar = bodyCookieJar(contents);
+    if (!jar) return;
+    const token = accessAuth.getToken(canonical);
+    if (!token) return;
+    const bundle = accessAuth.getBundle(canonical);
+    const cookie = {
+      url: `${canonical}${BODY_ASSET_PATH}`,
+      name: BODY_ASSET_COOKIE,
+      value: token,
+      path: BODY_ASSET_PATH,
+      httpOnly: true,
+      sameSite: 'strict' as const,
+      secure: canonical.startsWith('https://'),
+      // A bare host token carries no server deadline: the cookie then dies
+      // with the view's session, exactly like the memory token it mirrors.
+      ...(bundle && bundle.expiresAt > 0
+        ? { expirationDate: bundle.expiresAt }
+        : {}),
+    };
+    void jar.set(cookie).catch(() => {});
+  }
+
+  /** Drops the asset handle from every loaded body of `origin`. Bound to the
+   *  same origins as token installation, so a credential clear cannot leave a
+   *  renderer holding an asset cookie for a dead session. */
+  private clearBodyAssetCookies(origin: string): void {
+    const canonical = toCanonicalAuthOrigin(origin) ?? origin;
+    for (const [key, view] of this.viewByOrigin) {
+      if ((toCanonicalAuthOrigin(key) ?? key) !== canonical) continue;
+      const contents = view?.webContents;
+      if (!contents || contents.isDestroyed()) continue;
+      const jar = bodyCookieJar(contents);
+      if (!jar) continue;
+      void jar
+        .remove(`${canonical}${BODY_ASSET_PATH}`, BODY_ASSET_COOKIE)
+        .catch(() => {});
+    }
   }
 
   /** Installs the host bearer into one loaded frame whose main frame is the
@@ -2374,6 +2455,9 @@ export class DesktopHost {
       return;
     }
     if (viewOrigin !== canonical) return;
+    // The token goes in as a memory install; the asset cookie is the one
+    // credential a remote body may hold, and it mirrors the same token.
+    this.installBodyAssetCookie(contents, canonical, accessAuth);
     void contents
       .executeJavaScript(bodyAuthTokenScript(token, canonical))
       .catch(() => {});
@@ -4771,6 +4855,10 @@ export class DesktopHost {
             message: 'The server view is not the authenticated origin.',
           };
         }
+        // Only the asset cookie accompanies the memory install: the refresh
+        // handle stays host-side, so the body can stream assets and can never
+        // rotate its own session.
+        this.installBodyAssetCookie(view.webContents, canonical, pending.auth);
         let status: unknown;
         try {
           status = await view.webContents.executeJavaScript(
