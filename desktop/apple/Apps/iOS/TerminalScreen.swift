@@ -94,7 +94,7 @@ final class TerminalModel {
     ).first ?? URL(fileURLWithPath: NSTemporaryDirectory())
     session = try PaneSession(
       origin: origin, paneID: pane,
-      stateDir: support.appendingPathComponent("PhiPhone", isDirectory: true))
+      stateDir: support.appendingPathComponent("PhiOS", isDirectory: true))
   }
 
   func start() {

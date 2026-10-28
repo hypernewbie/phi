@@ -74,7 +74,7 @@ targets:
       - package: PhiCore
         product: PhiKit
 
-  PhiPhone:
+  PhiOS:
     type: application
     platform: iOS
     sources:
@@ -84,18 +84,24 @@ targets:
     info:
       path: Apps/iOS/Info.plist
       properties:
-        CFBundleDisplayName: Phi
+        CFBundleDisplayName: PhiOS
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        # Phi servers are reached over a tailnet on plain HTTP.
+        # iOS shows no local-network prompt without this key, and the socket
+        # then fails as "not connected to the internet" on LAN addresses.
+        NSLocalNetworkUsageDescription: PhiOS connects to your Phi server on the local network.
+        # Phi servers are reached over a tailnet on plain HTTP. Arbitrary loads
+        # stays on purpose: NSAllowsLocalNetworking alone does not cover a
+        # tailnet FQDN such as host.tail5a43d4.ts.net, and combining the two
+        # makes iOS ignore NSAllowsArbitraryLoads.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.phi.phone
+        PRODUCT_BUNDLE_IDENTIFIER: dev.phi.phios
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
     dependencies:
@@ -122,9 +128,9 @@ schemes:
     test:
       config: Debug
       targets: [PhiMacTests]
-  PhiPhone:
+  PhiOS:
     build:
       targets:
-        PhiPhone: all
+        PhiOS: all
     run:
       config: Debug
