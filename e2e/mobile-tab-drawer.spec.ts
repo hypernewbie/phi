@@ -77,11 +77,23 @@ test('compact drawer shows the tab tree and a row tap switches tabs', async ({
     await expect(page.locator('#drawer-open-sessions')).toBeVisible();
     await expect(page.locator('#drawer-back-to-tabs')).toBeHidden();
 
-    await drawerBody
-        .locator('.hostname-dropdown-row[data-pane-id="t2"]')
-        .locator('.hostname-dropdown-select-btn')
-        .click();
+    // Which seeded tab is active depends on the restore order, so derive
+    // both ids instead of assuming one.
+    const activeBefore = await page
+        .locator('#tabs-container .tab.active')
+        .getAttribute('data-pane-id');
+    const targetRow = drawerBody
+        .locator(`.hostname-dropdown-row:not([data-pane-id="${activeBefore}"])`)
+        .first();
+    const targetId = await targetRow.getAttribute('data-pane-id');
+    expect(targetId).not.toBeNull();
+
+    await targetRow.locator('.hostname-dropdown-select-btn').click();
     await expect(page.locator('#sidebar-panel')).not.toHaveClass(/drawer-open/);
+    await expect(page.locator('#tabs-container .tab.active')).toHaveAttribute(
+        'data-pane-id',
+        targetId as string,
+    );
 });
 
 test('plus opens the sessions block, back arrow returns to tabs', async ({
@@ -103,6 +115,18 @@ test('plus opens the sessions block, back arrow returns to tabs', async ({
     await expect(page.locator('#drawer-panel-title')).toHaveText('TABS');
     await expect(page.locator('#drawer-tabs-body')).toBeVisible();
     await expect(page.locator('.session-list-container')).toBeHidden();
+
+    // Reopening always lands in tabs mode, whatever the last mode was.
+    await page.locator('#drawer-open-sessions').click();
+    await expect(page.locator('#drawer-panel-title')).toHaveText('SESSIONS');
+    await page.locator('#mobile-sidebar-toggle').click();
+    await expect(page.locator('#sidebar-panel')).not.toHaveClass(/drawer-open/);
+    await page.locator('#mobile-sidebar-toggle').click();
+    await expect(page.locator('#sidebar-panel')).toHaveClass(/drawer-open/);
+    await expect(page.locator('#drawer-panel-title')).toHaveText('TABS');
+    await expect(
+        page.locator('#drawer-tabs-body .hostname-dropdown-row'),
+    ).toHaveCount(2);
 });
 
 test('a tab-sized tablet drawer keeps the sessions content', async ({

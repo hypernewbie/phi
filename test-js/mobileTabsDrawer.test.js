@@ -153,14 +153,13 @@ describe('drawer mode', () => {
         expect(drawerBody().childElementCount).toBe(0);
     });
 
-    it('resets to tabs mode when the drawer reopens', () => {
+    it('rebuilds the tree when tabs mode is entered again', () => {
         const tm = makeTabManager();
         const app = makeApp(tm);
         sidebar().classList.add('drawer-open');
         app.setDrawerMode('sessions');
-        // Close, then reopen the way both open paths do.
-        sidebar().classList.remove('drawer-open');
-        sidebar().classList.add('drawer-open');
+        expect(drawerBody().childElementCount).toBe(0);
+
         app.setDrawerMode('tabs');
 
         expect(sidebar().dataset.panelMode).toBe('tabs');
@@ -174,6 +173,13 @@ describe('drawer row tap', () => {
     it('switches the tab, closes the drawer, and never touches the desktop dropdown', () => {
         const tm = makeTabManager();
         const app = makeApp(tm);
+        // Start with the desktop dropdown open, so a stray
+        // _closeOverflowDropdown() during the row tap would be visible.
+        desktopDropdown().classList.remove('hidden');
+        document
+            .getElementById('tab-overflow-btn')
+            .setAttribute('aria-expanded', 'true');
+        const closeDesktop = vi.spyOn(tm, '_closeOverflowDropdown');
         sidebar().classList.add('drawer-open');
         app.setDrawerMode('tabs');
         const row = drawerBody().querySelector(
@@ -186,13 +192,13 @@ describe('drawer row tap', () => {
             userInitiated: true,
         });
         expect(sidebar().classList.contains('drawer-open')).toBe(false);
+        expect(closeDesktop).not.toHaveBeenCalled();
         expect(
             document
                 .getElementById('tab-overflow-btn')
                 .getAttribute('aria-expanded'),
-        ).toBe('false');
-        expect(desktopDropdown().classList.contains('hidden')).toBe(true);
-        expect(desktopDropdown().childElementCount).toBe(0);
+        ).toBe('true');
+        expect(desktopDropdown().classList.contains('hidden')).toBe(false);
     });
 });
 
@@ -202,15 +208,21 @@ describe('_refreshOverflowDropdown', () => {
         makeApp(tm).setDrawerMode('tabs');
         sidebar().classList.add('drawer-open');
         desktopDropdown().classList.remove('hidden');
+        expect(
+            drawerBody().querySelectorAll('.hostname-dropdown-row'),
+        ).toHaveLength(2);
 
+        // Mutate after the drawer was built: only a real rebuild can show
+        // the new count in both targets.
+        tm.tabs.delete('a2');
         tm._refreshOverflowDropdown();
 
         expect(
             desktopDropdown().querySelectorAll('.hostname-dropdown-row'),
-        ).toHaveLength(2);
+        ).toHaveLength(1);
         expect(
             drawerBody().querySelectorAll('.hostname-dropdown-row'),
-        ).toHaveLength(2);
+        ).toHaveLength(1);
     });
 
     it('leaves the drawer body alone when closed or in sessions mode', () => {
@@ -218,8 +230,9 @@ describe('_refreshOverflowDropdown', () => {
         const app = makeApp(tm);
         app.setDrawerMode('tabs');
         drawerBody().replaceChildren();
+        tm.tabs.delete('a2');
 
-        // Drawer closed.
+        // Drawer closed: the stale body is not touched either way.
         tm._refreshOverflowDropdown();
         expect(drawerBody().childElementCount).toBe(0);
 
