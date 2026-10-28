@@ -144,6 +144,14 @@ export type CookieCapturedListener = (
   cookie: CookieJarEntry,
 ) => void | Promise<void>;
 
+/** Notified whenever a host-held v2 bundle appears, rotates, or is dropped, so
+ *  the encrypted store can persist it before any renderer sees the credential.
+ *  A null bundle means the origin no longer holds a refreshable credential. */
+export type BundleListener = (
+  origin: string,
+  bundle: V2Bundle | null,
+) => void;
+
 /** Strict bounds — server-controlled values that must be validated before
  *  handing them to the PBKDF2 primitive (mitigates remote-driven cost
  *  amplification and malformed-salt attacks). */
@@ -241,6 +249,7 @@ export class AccessAuth {
   private readonly _now: () => number;
   private _cookieProvider: CookieProvider | null = null;
   private _onCookieCaptured: CookieCapturedListener | null = null;
+  private _onBundle: BundleListener | null = null;
 
   constructor(doFetch: FetchLike = fetch, now: () => number = Date.now) {
     this._doFetch = doFetch;
@@ -253,6 +262,22 @@ export class AccessAuth {
 
   setOnCookieCaptured(listener: CookieCapturedListener | null): void {
     this._onCookieCaptured = listener;
+  }
+
+  setBundleListener(listener: BundleListener | null): void {
+    this._onBundle = listener;
+  }
+
+  /** Announces the bundle an origin now holds. A listener failure must never
+   *  break authentication: persistence reports its own failure and the host
+   *  keeps the credential in memory. */
+  private announceBundle(canonical: string): void {
+    if (!this._onBundle) return;
+    try {
+      this._onBundle(canonical, this.bundles.get(canonical) ?? null);
+    } catch {
+      /* persistence is the listener's problem, not the credential's */
+    }
   }
 
   private async safeFetch(url: URL, init: RequestInit): Promise<Response> {
@@ -316,6 +341,7 @@ export class AccessAuth {
     this.bundles.delete(canonical);
     this.selectedProtocols.set(canonical, 'v2');
     this.bumpAttempt(canonical);
+    this.announceBundle(canonical);
     return true;
   }
 
@@ -330,6 +356,8 @@ export class AccessAuth {
     this.selectedProtocols.set(canonical, 'v2');
     this.refreshBackoff.delete(canonical);
     this.bumpAttempt(canonical);
+    // Persist before anyone can install this credential into a renderer.
+    this.announceBundle(canonical);
     return true;
   }
 
@@ -349,6 +377,7 @@ export class AccessAuth {
     if (this.tokens.get(canonical) === token) {
       this.tokens.delete(canonical);
       this.bundles.delete(canonical);
+      this.announceBundle(canonical);
     }
     this.selectedProtocols.set(canonical, 'v2');
   }
@@ -1111,6 +1140,7 @@ export class AccessAuth {
     this.selectedProtocols.set(canonical, 'v2');
     this.refreshBackoff.delete(canonical);
     this.bumpAttempt(canonical);
+    this.announceBundle(canonical);
     return { kind: 'ok', bundle: installed };
   }
 
@@ -1163,6 +1193,8 @@ export class AccessAuth {
     this.bundles.delete(canonical);
     this.refreshBackoff.delete(canonical);
     this.selectedProtocols.set(canonical, 'v2');
+    // A terminal rejection is the one case the stored bundle must go away.
+    this.announceBundle(canonical);
   }
 
   /** Shared post-status-fetch login path: computes the proof, posts
@@ -1523,6 +1555,26 @@ export function parseCredentialBundle(
     refreshIdleExpiresAt: idle,
     refreshAbsoluteExpiresAt: absolute,
   };
+}
+
+/** Validates one persisted credential-store entry. The store keeps the token
+ *  under `jwt` and the rest flat beside it, so an older build's
+ *  `{version:'v2', jwt}` entry is rejected here: a bare token carries no
+ *  refresh handle and must not be restored as if it could be renewed. */
+export function parseStoredV2Bundle(raw: unknown): V2Bundle | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (r.version !== 'v2') return null;
+  return parseCredentialBundle(
+    {
+      token: r.jwt,
+      expires_at: r.expiresAt,
+      expires_in: r.expiresIn,
+      refresh_idle_expires_at: r.refreshIdleExpiresAt,
+      refresh_absolute_expires_at: r.refreshAbsoluteExpiresAt,
+    },
+    r.refreshHandle,
+  );
 }
 
 /** Checks a bundle a caller already holds (a restored store entry) against the
