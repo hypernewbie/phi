@@ -60,4 +60,21 @@ final class GhosttyInteropTests: XCTestCase {
     XCTAssertEqual(term.counters.live, 0, "allocator leak: \(term.counters.live) bytes")
     XCTAssertEqual(restored.counters.live, 0, "restored allocator leak: \(restored.counters.live) bytes")
   }
+
+  /// Blocker regression: a corrupt or truncated snapshot must fail closed
+  /// without leaking the engine, and a hidden cursor must not render.
+  func testTruncatedSnapshotFailsClosedAndHiddenCursorReadsNil() throws {
+    let term = try XCTUnwrap(TerminalSession(cols: 20, rows: 4), "terminal_new failed")
+    term.feed(Array("ab".utf8))
+    term.feed(Array("\u{1b}[?25l".utf8))
+    XCTAssertNil(term.readCursor(), "a hidden cursor must not be drawn")
+
+    let snapshot = try XCTUnwrap(term.snapshotBytes(), "snapshot encode failed")
+    XCTAssertNil(
+      TerminalSession(restoring: Array(snapshot.prefix(snapshot.count / 2))),
+      "a truncated snapshot must not restore")
+
+    term.free()
+    XCTAssertEqual(term.counters.live, 0, "allocator leak: \(term.counters.live) bytes")
+  }
 }

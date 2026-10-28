@@ -20,6 +20,11 @@ public actor ActionJournal {
     public var actions: [Action]
   }
 
+  public enum JournalError: Error, Equatable {
+    case unknownAction
+    case alreadyAttempted
+  }
+
   /// Terminal input has no ack, so the attempted list is a short receipt, not a
   /// full history: an unbounded one would rewrite a growing file per keystroke.
   static let attemptedLimit = 32
@@ -75,11 +80,29 @@ public actor ActionJournal {
   }
 
   /// Persist the attempt before sending: after this a crash or a lost reply can
-  /// only leave the action ambiguous, never silently resendable.
+  /// only leave the action ambiguous, never silently resendable. Refuses an
+  /// action that already left, so a duplicate queue entry cannot send twice.
   public func markAttempted(_ id: String) throws {
-    guard let index = snapshot.actions.firstIndex(where: { $0.id == id }) else { return }
+    guard let index = snapshot.actions.firstIndex(where: { $0.id == id }) else {
+      throw JournalError.unknownAction
+    }
+    guard snapshot.actions[index].delivery == .neverSent else {
+      throw JournalError.alreadyAttempted
+    }
     var actions = snapshot.actions
     actions[index].delivery = .sentUnconfirmed
+    try commit(actions)
+  }
+
+  /// A definite non-send (no transport attempt) returns the action to the only
+  /// resendable state. Never used for work that may have reached the server.
+  public func revertToNeverSent(_ id: String) throws {
+    guard let index = snapshot.actions.firstIndex(where: { $0.id == id }) else {
+      throw JournalError.unknownAction
+    }
+    guard snapshot.actions[index].delivery == .sentUnconfirmed else { return }
+    var actions = snapshot.actions
+    actions[index].delivery = .neverSent
     try commit(actions)
   }
 

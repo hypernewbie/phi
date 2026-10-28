@@ -95,6 +95,28 @@ final class ActionJournalTests: XCTestCase {
     XCTAssertEqual(kept.map(\.text), ["kept"])
   }
 
+  func testSecondAttemptIsRefusedAndDefiniteNonSendBecomesResendable() async throws {
+    let journal = try await ActionJournal.open(directory: directory, pane: "p1")
+    let action = try await journal.reserve("x")
+    try await journal.markAttempted(action.id)
+
+    do {
+      try await journal.markAttempted(action.id)
+      XCTFail("a second attempt must be refused")
+    } catch ActionJournal.JournalError.alreadyAttempted {
+      // Expected: a duplicate queue entry can never send twice.
+    }
+
+    let attempted = await journal.attempted().map(\.id)
+    XCTAssertEqual(attempted, [action.id])
+    let pendingAfterAttempt = await journal.pending().map(\.id)
+    XCTAssertEqual(pendingAfterAttempt, [], "attempted work is never resendable")
+
+    try await journal.revertToNeverSent(action.id)
+    let pendingAfterRevert = await journal.pending().map(\.id)
+    XCTAssertEqual(pendingAfterRevert, [action.id], "definite non-send returns to pending")
+  }
+
   func testActionsAreScopedToOnePane() async throws {
     let journal = try await ActionJournal.open(directory: directory, pane: "pane-a")
     _ = try await journal.reserve("a")
