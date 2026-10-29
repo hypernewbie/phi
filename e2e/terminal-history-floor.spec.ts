@@ -216,15 +216,25 @@ for (const width of [1280, 560]) {
                 intervals: [5_000],
             })
             .toBeGreaterThan(1 << 20);
-        expect(await recordingWindowText(request, pane)).toContain(
-            'FLOOR INITIAL READY',
-        );
+        await expect
+            .poll(
+                async () =>
+                    (await recordingWindowText(request, pane)).includes(
+                        'FLOOR INITIAL READY',
+                    ),
+                { timeout: 60_000, intervals: [2_000] },
+            )
+            .toBe(true);
 
         let paneSockets = 0;
         page.on('websocket', (socket) => {
             if (socket.url().includes(`/ws/pane/${pane}`)) paneSockets++;
         });
         await page.goto(phi.url);
+        // The picker snapshots restored tabs when it opens.
+        await page
+            .locator(`.tab[data-pane-id="${pane}"]`)
+            .waitFor({ state: 'attached', timeout: 30_000 });
         await page.locator('#hostname-display').click();
         await tabList(page)
             .locator(`[data-pane-id="${pane}"] .hostname-dropdown-select-btn`)
@@ -263,9 +273,16 @@ for (const width of [1280, 560]) {
                 intervals: [2_000],
             })
             .toBeGreaterThan(oldFloor + (1 << 20));
-        expect(await recordingWindowText(request, pane)).toContain(
-            'FLOOR LATEST AFTER ROTATION',
-        );
+        // Retention advances before the producer writes the end marker.
+        await expect
+            .poll(
+                async () =>
+                    (await recordingWindowText(request, pane)).includes(
+                        'FLOOR LATEST AFTER ROTATION',
+                    ),
+                { timeout: 60_000, intervals: [2_000] },
+            )
+            .toBe(true);
         expect(await view(page, pane)).toBe(historicalView);
         await page.waitForTimeout(2000);
         expect(await view(page, pane)).toBe(historicalView);

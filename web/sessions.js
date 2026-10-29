@@ -1130,6 +1130,11 @@ export class SessionsManager {
     }
     async spawnNewSession(mini = false) {
         try {
+            if (isCompactViewport()) {
+                document
+                    .getElementById('sidebar-panel')
+                    ?.classList.remove('drawer-open');
+            }
             const coderId = this.activeCoder, cwd = this.activeCWD, workspace = this.activeWorkspace;
             // Preserve the launch target even if the sidebar changes while
             // this request is in flight.

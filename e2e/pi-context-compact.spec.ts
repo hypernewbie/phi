@@ -223,7 +223,10 @@ test('native compact pressed during a turn waits for that turn', async ({
     let cleanupError: unknown = null;
     try {
         const stub = await startCompactStub();
-        closers.push(() => stub.close());
+        closers.push(async () => {
+            stub.release();
+            await stub.close();
+        });
         let seed: CompactSeed | undefined;
         const phi = await startPhi({
             config: { auto_reconnect: 'off' },
@@ -279,6 +282,8 @@ test('native compact pressed during a turn waits for that turn', async ({
                 timeout: 20_000,
             })
             .toMatchObject({ running: true });
+        // Running is published before the provider request reaches the stub.
+        await expect.poll(() => stub.heldCount(), { timeout: 20_000 }).toBe(1);
         expect(stub.count()).toBe(1);
 
         // The control is not greyed out during a run: it offers the
