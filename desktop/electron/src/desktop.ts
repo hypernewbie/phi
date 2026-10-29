@@ -445,6 +445,7 @@ export class DesktopHost {
   /** The desktop-sized rail context popup; the rail view itself is only 72px wide. */
   private railMenuWindow: BrowserWindow | null = null;
   private railMenuProfileId: string | null = null;
+  private railMenuResize: ((height: number) => void) | null = null;
   // before-quit deferral guard: the first before-quit defers the quit
   // until destroyAll() (and the rail view teardown) completes, then
   // re-quits; the guard keeps the re-entrant before-quit from deferring
@@ -1283,6 +1284,7 @@ export class DesktopHost {
     const menu = this.railMenuWindow;
     this.railMenuWindow = null;
     this.railMenuProfileId = null;
+    this.railMenuResize = null;
     if (menu && !menu.isDestroyed()) menu.close();
   }
 
@@ -1334,6 +1336,8 @@ export class DesktopHost {
     }
     this.closeRailMenu();
 
+    const display = screen.getDisplayNearestPoint({ x: screenX, y: screenY });
+    const area = parent.isFullScreen() ? display.bounds : display.workArea;
     const menu = new BrowserWindow({
       title: 'Phi server menu',
       parent,
@@ -1341,7 +1345,7 @@ export class DesktopHost {
       transparent: true,
       backgroundColor: '#00000000',
       width: 320,
-      height: 460,
+      height: Math.max(1, area.height - 16),
       useContentSize: true,
       resizable: false,
       movable: false,
@@ -1378,6 +1382,33 @@ export class DesktopHost {
     installZoomShortcuts(menuContents, (action) =>
       this.requestContentZoom(action),
     );
+    this.railMenuResize = (height: number): void => {
+      if (
+        this.railMenuWindow !== menu ||
+        menu.isDestroyed() ||
+        parent.isDestroyed()
+      ) return;
+      const currentDisplay = screen.getDisplayNearestPoint({
+        x: screenX,
+        y: screenY,
+      });
+      const currentArea = parent.isFullScreen()
+        ? currentDisplay.bounds
+        : currentDisplay.workArea;
+      const nextHeight = Math.max(
+        1,
+        Math.min(Math.ceil(height), currentArea.height - 16),
+      );
+      const [width, currentHeight] = menu.getContentSize();
+      if (
+        width !== 320 ||
+        nextHeight > currentHeight ||
+        currentHeight - nextHeight > 1
+      ) {
+        menu.setContentSize(320, nextHeight);
+      }
+      this.positionRailMenu(menu, screenX, screenY, parent);
+    };
     let shownAt = 0;
     menu.on('blur', () => {
       if (Date.now() - shownAt < 150) return;
@@ -1389,6 +1420,7 @@ export class DesktopHost {
       if (this.railMenuWindow === menu) {
         this.railMenuWindow = null;
         this.railMenuProfileId = null;
+        this.railMenuResize = null;
       }
     });
 
@@ -3935,6 +3967,18 @@ export class DesktopHost {
     ipcMain.on('phi:close-rail-menu', (event) => {
       if (this.railMenuWindow?.webContents !== event.sender) return;
       this.closeRailMenu();
+    });
+    ipcMain.on('phi:rail-menu-size', (event, height: unknown) => {
+      const menu = this.railMenuWindow;
+      if (
+        !menu ||
+        menu.isDestroyed() ||
+        event.sender !== menu.webContents ||
+        typeof height !== 'number' ||
+        !Number.isFinite(height) ||
+        height <= 0
+      ) return;
+      this.railMenuResize?.(height);
     });
     // Rail renderer click handler (window.electron.postSelectProfile):
     // activate the clicked profile.

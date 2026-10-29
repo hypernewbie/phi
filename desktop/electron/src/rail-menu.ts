@@ -226,6 +226,20 @@ function renderRemove(panel: HTMLElement): void {
   panel.append(confirm, actions);
 }
 
+export function measureRailMenuHeight(panel: HTMLElement): number {
+  const style = getComputedStyle(document.body);
+  const paddingTop = Number.parseFloat(style.paddingTop) || 0;
+  const paddingBottom = Number.parseFloat(style.paddingBottom) || 0;
+  return Math.ceil(
+    panel.getBoundingClientRect().height + paddingTop + paddingBottom,
+  );
+}
+
+function reportRailMenuHeight(panel: HTMLElement): void {
+  if (!panel.isConnected) return;
+  window.electron.postRailMenuSize(measureRailMenuHeight(panel));
+}
+
 function render(): void {
   const root = menuRoot();
   if (root === null) return;
@@ -238,6 +252,10 @@ function render(): void {
   else if (mode === 'remove') renderRemove(panel);
   else renderActions(panel);
   root.appendChild(panel);
+  reportRailMenuHeight(panel);
+  if (document.fonts) {
+    void document.fonts.ready.then(() => reportRailMenuHeight(panel));
+  }
 }
 
 export function renderState(state: RailMenuState): void {

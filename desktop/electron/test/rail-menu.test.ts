@@ -2,9 +2,9 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RailMenuState } from '../src/electron.js';
-import { boot, renderState } from '../src/rail-menu.js';
+import { boot, measureRailMenuHeight, renderState } from '../src/rail-menu.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const htmlSource = readFileSync(
@@ -48,6 +48,7 @@ function setup(): {
     copyUrl: ReturnType<typeof vi.fn>;
     copyAll: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
+    size: ReturnType<typeof vi.fn>;
   };
 } {
   document.body.innerHTML = htmlSource.slice(
@@ -65,6 +66,7 @@ function setup(): {
     copyUrl: vi.fn(),
     copyAll: vi.fn(),
     close: vi.fn(),
+    size: vi.fn(),
   };
   (window as { electron?: unknown }).electron = {
     onRailMenuState: (cb: (state: RailMenuState) => void) => {
@@ -79,6 +81,7 @@ function setup(): {
     postCopyServerUrl: calls.copyUrl,
     postCopyAllServers: calls.copyAll,
     postCloseRailMenu: calls.close,
+    postRailMenuSize: calls.size,
   };
   boot();
   renderState(MENU_STATE);
@@ -87,6 +90,16 @@ function setup(): {
 
 beforeEach(() => {
   delete (window as { electron?: unknown }).electron;
+});
+
+afterEach(() => {
+  if (typeof window.electron !== 'undefined') {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+  }
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  document.body.style.cssText = '';
+  delete (document as unknown as { fonts?: unknown }).fonts;
 });
 
 describe('desktop rail context popup', () => {
@@ -209,5 +222,31 @@ describe('desktop rail context popup', () => {
     // CSS file must NOT hardcode purple (#9b8cff or #7c6af7)
     expect(cssSource).not.toContain('#9b8cff');
     expect(cssSource).not.toContain('#7c6af7');
+  });
+
+  it('measures the panel box plus body padding, rounded upward', () => {
+    document.body.style.padding = '8px';
+    const panel = document.createElement('section');
+    vi.spyOn(panel, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(0, 0, 304, 492.25),
+    );
+    expect(measureRailMenuHeight(panel)).toBe(509);
+  });
+
+  it('reports content height for the actions and mode renders', () => {
+    document.body.style.padding = '8px';
+    const box = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect');
+    box.mockReturnValue(new DOMRect(0, 0, 304, 492));
+    const { calls } = setup();
+    expect(calls.size).toHaveBeenLastCalledWith(508);
+    box.mockReturnValue(new DOMRect(0, 0, 304, 270));
+    actionButton('Rename').click();
+    expect(calls.size).toHaveBeenLastCalledWith(286);
+    box.mockReturnValue(new DOMRect(0, 0, 304, 492));
+    actionButton('Cancel').click();
+    expect(calls.size).toHaveBeenLastCalledWith(508);
+    box.mockReturnValue(new DOMRect(0, 0, 304, 235));
+    actionButton('Remove server').click();
+    expect(calls.size).toHaveBeenLastCalledWith(251);
   });
 });
