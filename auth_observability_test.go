@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -12,7 +13,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -387,13 +387,11 @@ func TestAccessObservabilityLogsNoCredentials(t *testing.T) {
 // TestAccessObservabilityLogsNoRefreshOrCookieCredentials covers the credential
 // classes the first log test does not reach: the rotating refresh handle, the
 // two scoped cookies, the host-only socket header carrier, and the persistence
-// failure path. It also asserts the durable side stays out of output — the
-// state file holds the derived refresh key and digest evidence, which a debug
-// dump of the journal would publish even though the wire format never carries
-// it.
+// failure path. It also asserts the normalized database state stays out of
+// output even though the wire format never carries those fields.
 func TestAccessObservabilityLogsNoRefreshOrCookieCredentials(t *testing.T) {
 	withTempConfig(t)
-	useTestAccessAuth(t)
+	auth := useTestAccessAuth(t)
 	hub := testAccessUseHub(t)
 
 	home := t.TempDir()
@@ -538,32 +536,39 @@ func TestAccessObservabilityLogsNoRefreshOrCookieCredentials(t *testing.T) {
 		t.Fatalf("bearer on refresh: %d", mixedResponse.StatusCode)
 	}
 
-	// A state write that fails must report failure without issuing or logging
-	// the credential it had prepared.
-	previousWrite := writeAccessV2StateFile
-	writeAccessV2StateFile = func(string, []byte, os.FileMode) error {
-		return errors.New("injected observability state write failure")
+	// A transaction failure must report failure without issuing or logging the
+	// credential it prepared. The database commit hook is injected at the store
+	// seam used by production mutations.
+	auth.mu.Lock()
+	if auth.db == nil {
+		auth.mu.Unlock()
+		t.Fatal("auth database is unavailable")
 	}
+	previousCommit := auth.db.commit
+	auth.db.commit = func(*sql.Tx) error {
+		return errors.New("injected observability database commit failure")
+	}
+	auth.mu.Unlock()
 	failedLogin, _ := post("/api/auth/v2/login", "", `{"password":"`+enablePassword+`"}`)
-	writeAccessV2StateFile = previousWrite
+	auth.mu.Lock()
+	auth.db.commit = previousCommit
+	auth.mu.Unlock()
 	if failedLogin.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("failed state write login: %d", failedLogin.StatusCode)
+		t.Fatalf("failed database transaction login: %d", failedLogin.StatusCode)
 	}
 	if issued := failedLogin.Cookies(); len(issued) != 0 {
-		t.Errorf("failed state write issued %d cookies", len(issued))
+		t.Errorf("failed database transaction issued %d cookies", len(issued))
 	}
 
-	// The durable forms of the same material, read back while the families are
-	// still live, are credentials the journal must never print.
-	stateBytes, err := os.ReadFile(accessV2StatePath())
+	// Read the normalized durable state while its families are live. These
+	// values must never appear in logs.
+	auth.mu.Lock()
+	state, err := loadAccessDBState(auth.db.db)
+	auth.mu.Unlock()
 	if err != nil {
-		t.Fatalf("read state file: %v", err)
+		t.Fatalf("read auth database state: %v", err)
 	}
-	var state accessV2StateFile
-	if err := json.Unmarshal(stateBytes, &state); err != nil {
-		t.Fatalf("decode state file: %v", err)
-	}
-	secrets.stateValues = append(secrets.stateValues, state.Active.RecordBinding, state.Active.RecordID)
+	secrets.stateValues = append(secrets.stateValues, state.PasswordRecord, state.Active.RecordBinding, state.Active.RecordID)
 	if state.Active.RefreshKey != nil {
 		secrets.stateValues = append(secrets.stateValues, *state.Active.RefreshKey)
 	}

@@ -1,11 +1,44 @@
+// @vitest-environment node
 /**
- * Tests for the AccessAuth module — pure-Node (no Electron import),
- * runs in vitest. Crypto parity is asserted by a fixed Unicode
+ * Tests for AccessAuth and DesktopHost credential recovery in vitest.
+ * Crypto parity is asserted by a fixed Unicode
  * vector: the browser's `web/auth.js` (Noble) and Node's
  * `crypto.pbkdf2`/`crypto.createHmac` produce identical verifier and
  * proof bytes for the same password + salt + iterations + challenge.
  */
-import { describe, expect, it } from 'vitest';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('electron', () => ({
+  app: { getPath: () => '', isPackaged: false },
+  BrowserWindow: class {},
+  clipboard: { readText: () => '', writeText: () => {} },
+  dialog: {},
+  globalShortcut: {},
+  ipcMain: {},
+  Menu: {},
+  nativeImage: {},
+  net: {},
+  Notification: class {},
+  powerMonitor: {},
+  safeStorage: {},
+  screen: {},
+  session: {},
+  shell: {},
+  Tray: class {},
+  WebContentsView: class {},
+}));
+
+import { DesktopHost } from '../src/desktop.js';
 import {
   AccessAuth,
   type CookieJarEntry,
@@ -19,6 +52,196 @@ import {
   toCanonicalAuthOrigin,
   validateStatus,
 } from '../src/access-auth.js';
+
+const desktopSource = readFileSync('src/desktop.ts', 'utf8');
+const preloadSource = readFileSync('src/preload.ts', 'utf8');
+const localRecoveryStart = desktopSource.indexOf(
+  'private tryRecoverLocalCredential(',
+);
+const localRecoveryEnd = desktopSource.indexOf('  /**', localRecoveryStart + 1);
+const localRecoverySource = desktopSource.slice(
+  localRecoveryStart,
+  localRecoveryEnd,
+);
+
+describe('DesktopHost local verifier recovery boundary', () => {
+  it('reads the normalized auth row through read-only node:sqlite and closes it', () => {
+    expect(desktopSource).toContain("from 'node:sqlite'");
+    expect(localRecoverySource).toMatch(
+      /new DatabaseSync\(authDBPath, \{\s*readOnly: true\s*\}\)/,
+    );
+    expect(localRecoverySource).toContain('PRAGMA user_version');
+    expect(localRecoverySource).toContain(
+      "name NOT LIKE 'sqlite_%' ORDER BY name LIMIT 4",
+    );
+    expect(localRecoverySource).toContain(
+      'SELECT singleton_id, password_record, migration_id FROM auth_state LIMIT 2',
+    );
+    expect(localRecoverySource).toContain(
+      'Buffer.from(row.migration_id).equals(expectedID)',
+    );
+    expect(localRecoverySource).toContain('finally {');
+    expect(localRecoverySource).toContain('database?.close()');
+  });
+
+  it('never uses Config fallback for a migration marker or a present database', () => {
+    expect(localRecoverySource).toContain(
+      'if (hasMigrationMarker) return null;',
+    );
+    expect(localRecoverySource).toContain('if (dbInfo) {');
+    expect(localRecoverySource).toContain(
+      'const legacyHash = cfg.access_password_hash || cfg.password_hash;',
+    );
+    expect(
+      localRecoverySource.indexOf('if (hasMigrationMarker) return null;'),
+    ).toBeLessThan(localRecoverySource.indexOf('const legacyHash ='));
+    expect(preloadSource).not.toContain('node:sqlite');
+    expect(preloadSource).not.toContain('auth.db');
+    expect(desktopSource).toContain(
+      "if (accessAuth.getSelectedProtocol(canonical) === 'v2') return false;",
+    );
+  });
+});
+
+describe('DesktopHost local verifier recovery behavior', () => {
+  const origin = 'http://127.0.0.1:7070';
+  const migrationID = Buffer.alloc(16, 0x33);
+  let tempDir = '';
+  let homeDir = '';
+  let phiDir = '';
+
+  type RecoveryCredential = {
+    version: 'v1';
+    algorithm: 'pbkdf2-sha256';
+    iterations: number;
+    salt: Buffer;
+    verifier: Buffer;
+  };
+  type RecoveryHost = {
+    storedCredentials: Map<string, unknown>;
+    saveStoredCredentials: () => boolean;
+    tryRecoverLocalCredential: (origin: string) => RecoveryCredential | null;
+  };
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(path.join(os.tmpdir(), 'phi-auth-recovery-'));
+    homeDir = path.join(tempDir, 'home');
+    phiDir = path.join(homeDir, '.phi');
+    mkdirSync(phiDir, { recursive: true });
+    vi.spyOn(os, 'homedir').mockReturnValue(homeDir);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  function hashRecord(saltByte: number, verifierByte: number): string {
+    return `v1.pbkdf2-sha256.600000.${Buffer.alloc(16, saltByte).toString('base64url')}.${Buffer.alloc(32, verifierByte).toString('base64url')}`;
+  }
+
+  function writeConfig(
+    marker: { state: 'complete' | 'pending'; id: string } | undefined,
+    accessPasswordHash = hashRecord(0xaa, 0xbb),
+  ): void {
+    writeFileSync(
+      path.join(phiDir, 'config.json'),
+      JSON.stringify({
+        access_password_hash: accessPasswordHash,
+        ...(marker ? { access_auth_migration: marker } : {}),
+      }),
+    );
+  }
+
+  function writeAuthDB(record: string, rowMigrationID = migrationID): string {
+    const filename = path.join(phiDir, 'auth.db');
+    const database = new DatabaseSync(filename);
+    database.exec(`
+      CREATE TABLE auth_consumed_handles (id INTEGER);
+      CREATE TABLE auth_families (id INTEGER);
+      CREATE TABLE auth_state (
+        singleton_id INTEGER,
+        password_record TEXT,
+        migration_id BLOB
+      );
+      PRAGMA user_version = 1;
+    `);
+    database
+      .prepare('INSERT INTO auth_state VALUES (1, ?, ?)')
+      .run(record, rowMigrationID);
+    database.close();
+    return filename;
+  }
+
+  function writeQueryErrorDB(): string {
+    const filename = path.join(phiDir, 'auth.db');
+    const database = new DatabaseSync(filename);
+    database.exec(`
+      CREATE TABLE auth_consumed_handles (id INTEGER);
+      CREATE TABLE auth_families (id INTEGER);
+      CREATE TABLE auth_state (singleton_id INTEGER, password_record TEXT);
+      PRAGMA user_version = 1;
+    `);
+    database.close();
+    return filename;
+  }
+
+  function recoveryHost(): RecoveryHost {
+    const host = Object.create(DesktopHost.prototype) as RecoveryHost;
+    host.storedCredentials = new Map();
+    host.saveStoredCredentials = () => true;
+    return host;
+  }
+
+  it('recovers the database verifier and ignores a stale Config hash', () => {
+    const databaseHash = hashRecord(0x11, 0x22);
+    writeConfig({ state: 'complete', id: migrationID.toString('base64url') });
+    writeAuthDB(databaseHash);
+    const host = recoveryHost();
+    expect(os.homedir()).toBe(homeDir);
+
+    const recovered = host.tryRecoverLocalCredential(origin);
+
+    expect(recovered).toEqual({
+      version: 'v1',
+      algorithm: 'pbkdf2-sha256',
+      iterations: 600_000,
+      salt: Buffer.alloc(16, 0x11),
+      verifier: Buffer.alloc(32, 0x22),
+    });
+    expect(host.storedCredentials.get(origin)).toEqual(recovered);
+  });
+
+  it('rejects a mismatched migration ID and closes the opened database', () => {
+    writeConfig({ state: 'complete', id: migrationID.toString('base64url') });
+    writeAuthDB(hashRecord(0x11, 0x22), Buffer.alloc(16, 0x44));
+    const close = vi.spyOn(DatabaseSync.prototype, 'close');
+    const host = recoveryHost();
+
+    expect(host.tryRecoverLocalCredential(origin)).toBeNull();
+    expect(host.storedCredentials.size).toBe(0);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not recover stale Config when a complete migration marker has no database', () => {
+    writeConfig({ state: 'complete', id: migrationID.toString('base64url') });
+    const host = recoveryHost();
+
+    expect(host.tryRecoverLocalCredential(origin)).toBeNull();
+    expect(host.storedCredentials.size).toBe(0);
+  });
+
+  it('rejects a query-error database without Config fallback and closes it', () => {
+    writeConfig({ state: 'complete', id: migrationID.toString('base64url') });
+    writeQueryErrorDB();
+    const close = vi.spyOn(DatabaseSync.prototype, 'close');
+    const host = recoveryHost();
+
+    expect(host.tryRecoverLocalCredential(origin)).toBeNull();
+    expect(host.storedCredentials.size).toBe(0);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+});
 
 // -- crypto parity vector (must stay byte-for-byte equal across platforms) --
 

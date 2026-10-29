@@ -1,5 +1,5 @@
-import { createHmac, pbkdf2Sync } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { createHash, createHmac, hkdfSync, pbkdf2Sync } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
@@ -617,6 +617,148 @@ test.describe('v1 compatibility', () => {
         expect(
             await page.evaluate(() => window.phiAccessAuth.getAccessToken()),
         ).toBeNull();
+        expect(
+            await page.evaluate(
+                async () => (await fetch('/api/coders')).status,
+            ),
+        ).toBe(200);
+        await context.close();
+    });
+});
+
+test.describe('legacy SQLite migration', () => {
+    let phi: PhiServer;
+    let refreshHandle = '';
+
+    test.beforeAll(async () => {
+        const password = 'migration fixture pass';
+        const salt = Buffer.alloc(16, 0x11);
+        const verifier = pbkdf2Sync(password, salt, 600_000, 32, 'sha256');
+        const encoded = `v1.pbkdf2-sha256.600000.${b64url(salt)}.${b64url(verifier)}`;
+        const familyBytes = Buffer.alloc(32, 0x33);
+        const familyID = b64url(familyBytes);
+        const recordID = b64url(Buffer.alloc(32, 0x22));
+        const nonce = b64url(Buffer.alloc(32, 0x44));
+        const refreshKey = Buffer.from(
+            hkdfSync('sha256', verifier, salt, 'phi/refresh-handle/v1', 32),
+        );
+        const generation = Buffer.alloc(8);
+        const handle = createHmac('sha256', refreshKey)
+            .update('phi/refresh-handle/v1\0')
+            .update(familyBytes)
+            .update(generation)
+            .digest();
+        refreshHandle = b64url(handle);
+        const now = Math.floor(Date.now() / 1000);
+        const legacyState = {
+            version: 1,
+            active: {
+                record_binding: createHash('sha256')
+                    .update(encoded)
+                    .digest('hex'),
+                record_id: recordID,
+                epoch: 1,
+                refresh_key: b64url(refreshKey),
+                families: [
+                    {
+                        id: familyID,
+                        generation: 0,
+                        created_at: now - 30,
+                        last_used_at: now - 10,
+                        idle_expires_at: now + 3600,
+                        absolute_expires_at: now + 7200,
+                        active_digest: createHash('sha256')
+                            .update(handle)
+                            .digest('hex'),
+                        current_access: {
+                            iat: now - 30,
+                            exp: now + 1800,
+                            jti: nonce,
+                        },
+                        consumed: [],
+                    },
+                ],
+            },
+        };
+
+        phi = await startPhi({
+            setup: (dir) => {
+                const configDir = join(dir, 'home', '.phi');
+                mkdirSync(configDir, { recursive: true });
+                writeFileSync(
+                    join(configDir, 'config.json'),
+                    JSON.stringify({
+                        access_password_hash: encoded,
+                        sync_coordinator: '',
+                        peers: [],
+                    }),
+                );
+                writeFileSync(
+                    join(configDir, 'auth-v2-state.json'),
+                    JSON.stringify(legacyState),
+                );
+            },
+        });
+    });
+
+    test.afterAll(async () => {
+        await phi.stop();
+    });
+
+    test('migrates a live refresh family before the browser signs in', async ({
+        browser,
+    }) => {
+        const configPath = join(phi.dir, 'home', '.phi', 'config.json');
+        const persisted = JSON.parse(readFileSync(configPath, 'utf8')) as {
+            access_password_hash?: string;
+            access_auth_migration?: { state: string; id: string };
+        };
+        expect(persisted.access_password_hash ?? '').toBe('');
+        expect(persisted.access_auth_migration?.state).toBe('complete');
+        expect(existsSync(join(phi.dir, 'home', '.phi', 'auth.db'))).toBe(true);
+        expect(
+            existsSync(join(phi.dir, 'home', '.phi', 'auth-v2-state.json')),
+        ).toBe(false);
+
+        const context = await browser.newContext();
+        await context.addCookies([
+            {
+                name: 'phi_access_refresh',
+                value: refreshHandle,
+                domain: new URL(phi.url).hostname,
+                path: '/api/auth/v2/refresh',
+                httpOnly: true,
+                sameSite: 'Strict',
+            },
+        ]);
+        const page = await context.newPage();
+        const v1Logins: string[] = [];
+        const v2Logins: string[] = [];
+        const refreshes: string[] = [];
+        let refreshStatus = 0;
+        page.on('response', (response) => {
+            if (response.url().includes('/api/auth/v2/refresh')) {
+                refreshStatus = response.status();
+            }
+        });
+        page.on('request', (request) => {
+            if (request.url().endsWith('/api/auth/login'))
+                v1Logins.push(request.url());
+            if (request.url().includes('/api/auth/v2/login'))
+                v2Logins.push(request.url());
+            if (request.url().includes('/api/auth/v2/refresh'))
+                refreshes.push(request.url());
+        });
+
+        await page.goto(phi.url);
+        await expect.poll(() => refreshStatus).toBe(200);
+        await expectSignedIn(page);
+        expect(v1Logins).toEqual([]);
+        expect(v2Logins).toEqual([]);
+        expect(refreshes.length).toBeGreaterThan(0);
+        expect(
+            await page.evaluate(() => window.phiAccessAuth.getAccessToken()),
+        ).toBeTruthy();
         expect(
             await page.evaluate(
                 async () => (await fetch('/api/coders')).status,
@@ -1551,7 +1693,11 @@ test.describe('a signed-in session stays quiet', () => {
             const unexpectedConsole: string[] = [];
             const pageErrors: string[] = [];
             const failedRequests: string[] = [];
+            const authFailures: string[] = [];
+            const refreshStatuses: number[] = [];
             const unexpectedResponses: string[] = [];
+            let authenticated = false;
+            let watchingReloadRefresh = false;
             page.on('console', (message) => {
                 if (message.type() !== 'error') return;
                 const text = message.text();
@@ -1566,8 +1712,19 @@ test.describe('a signed-in session stays quiet', () => {
                 ),
             );
             page.on('response', (response) => {
-                if (response.status() < 400) return;
                 const url = response.url();
+                if (
+                    watchingReloadRefresh &&
+                    url.includes('/api/auth/v2/refresh')
+                ) {
+                    refreshStatuses.push(response.status());
+                }
+                if (response.status() < 400) return;
+                if (authenticated && url.includes('/api/auth/')) {
+                    authFailures.push(
+                        `${response.status()} ${response.request().method()} ${url}`,
+                    );
+                }
                 if (EXPECTED_RESPONSES.some((pattern) => pattern.test(url)))
                     return;
                 unexpectedResponses.push(
@@ -1577,16 +1734,34 @@ test.describe('a signed-in session stays quiet', () => {
 
             await page.goto(phi.url);
             await unlock(page, PASSWORD);
+            authenticated = true;
             await expectSignedIn(page);
 
-            // The reload exercises the refresh path, which is the one place a
-            // quiet session could regress into a console error.
+            // Reload forces the HttpOnly refresh flow; the event and control
+            // sockets then prove the refreshed bearer reaches both protocols.
+            watchingReloadRefresh = true;
             await page.reload();
             await expectSignedIn(page);
+            expect(refreshStatuses).toContain(200);
+            expect(await openSocket(page, '/ws/md-events', EVENTS)).toBe(
+                'open',
+            );
+            expect(await openSocket(page, '/ws/control', CONTROL)).toBe('open');
+            expect(
+                await page.evaluate(
+                    () =>
+                        document.documentElement.scrollWidth >
+                        window.innerWidth,
+                ),
+                `${profile.name} horizontal overflow`,
+            ).toBe(false);
 
             expect(unexpectedConsole, 'unexpected console errors').toEqual([]);
             expect(pageErrors, 'page errors').toEqual([]);
             expect(failedRequests, 'failed requests').toEqual([]);
+            expect(authFailures, 'failed authenticated auth requests').toEqual(
+                [],
+            );
             expect(unexpectedResponses, 'unexpected bad responses').toEqual([]);
             await context.close();
         });

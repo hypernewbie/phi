@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -147,6 +148,102 @@ func newAuthSocketFixture(t *testing.T) (*ws.Hub, func(path, subprotocol, token,
 	}
 }
 
+func TestAccessRestartFailureClosesAndFencesAdmittedSockets(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+	hub, dial := newAuthSocketFixture(t)
+	hub.SetAuthValidator(auth.admitsFence)
+	hub.RotateAuth(auth.accessGeneration())
+	cookie := testAccessCookieFor(t, auth)
+	v1Socket := dial("/ws/md-events", wireproto.EventsSubprotocol, "", cookie.Value)
+	v2Socket := dial("/ws/md-events", wireproto.EventsSubprotocol, token, "")
+	waitForEventsClients(t, hub, 2)
+	oldGeneration := auth.accessGeneration()
+
+	execFailure := errors.New("injected exec failure")
+	restartOnUnix(auth, func() error {
+		if auth.db != nil || auth.owner.held() {
+			t.Error("Unix replacement started before auth DB and ownership were closed")
+		}
+		status := httptest.NewRecorder()
+		handleAccessAuthStatus(status, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+		if status.Code != http.StatusServiceUnavailable || auth.db != nil || auth.owner.held() || auth.ownedNow() {
+			t.Errorf("status request reopened auth during restart: status=%d db=%v owner=%v owned=%v", status.Code, auth.db != nil, auth.owner.held(), auth.ownedNow())
+		}
+		if err := os.WriteFile(accessDBPath(), []byte("corrupt"), 0o600); err != nil {
+			return err
+		}
+		return execFailure
+	})
+
+	expectClosed(t, v1Socket)
+	expectClosed(t, v2Socket)
+	auth.mu.Lock()
+	recoveryFailedClosed := auth.owned && auth.faulted && auth.record == nil && auth.db == nil && auth.restartInProgress
+	auth.mu.Unlock()
+	if !recoveryFailedClosed {
+		t.Fatal("failed auth recovery did not retain the restart gate and fail closed")
+	}
+	if auth.ensureOwned() {
+		t.Fatal("ordinary ownership retry escaped the restart gate after failed recovery")
+	}
+	if hub.AdmitAuth(&testAuthSocket{}, ws.AuthFence{Generation: oldGeneration}) {
+		t.Fatal("restart-admitted stale generation remained admissible")
+	}
+}
+
+func TestAccessShutdownFencesSocketsBeforeOwnershipHandoff(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	token := testAccessEnableV2(t, testAccessPassword)
+	hub, dial := newAuthSocketFixture(t)
+	hub.SetAuthValidator(auth.admitsFence)
+	hub.RotateAuth(auth.accessGeneration())
+	cookie := testAccessCookieFor(t, auth)
+	v1Socket := dial("/ws/md-events", wireproto.EventsSubprotocol, "", cookie.Value)
+	v2Socket := dial("/ws/md-events", wireproto.EventsSubprotocol, token, "")
+	waitForEventsClients(t, hub, 2)
+
+	cleanupGate := make(chan struct{})
+	shutdownStarted := make(chan struct{})
+	shutdownDone := make(chan struct{})
+	go func() {
+		auth.beginRestart()
+		close(shutdownStarted)
+		<-cleanupGate
+		close(shutdownDone)
+	}()
+	defer func() {
+		select {
+		case <-cleanupGate:
+		default:
+			close(cleanupGate)
+		}
+	}()
+	<-shutdownStarted
+
+	expectClosed(t, v1Socket)
+	expectClosed(t, v2Socket)
+
+	contender := newAccessAuthManager()
+	if err := contender.configure(""); err != nil {
+		contender.close()
+		t.Fatalf("take over auth ownership during shutdown cleanup: %v", err)
+	}
+	t.Cleanup(contender.close)
+	if !contender.ownedNow() {
+		t.Fatal("another instance could not take ownership during post-close cleanup")
+	}
+	select {
+	case <-shutdownDone:
+		t.Fatal("shutdown cleanup was not pending during ownership takeover")
+	default:
+	}
+	close(cleanupGate)
+	<-shutdownDone
+}
+
 func TestAccessWSPaneFenceRejectsStaleUpgrade(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -259,6 +356,60 @@ func TestAccessWSHandlersCloseOnPasswordChange(t *testing.T) {
 // Every successful record replacement retires both credential types, so a v1
 // cookie socket and a v2 bearer socket must close together. A failed write
 // changes nothing and must leave them connected.
+func TestAccessWSSameVerifierUncertainCommitFencesV1Socket(t *testing.T) {
+	withTempConfig(t)
+	auth := useTestAccessAuth(t)
+	if err := setTestAccessRecord(auth, testAccessHash()); err != nil {
+		t.Fatal(err)
+	}
+	hub, dial := newAuthSocketFixture(t)
+	hub.RotateAuth(auth.accessGeneration())
+	cookie := testAccessCookieFor(t, auth)
+	socket := dial("/ws/md-events", wireproto.EventsSubprotocol, "", cookie.Value)
+	waitForEventsClients(t, hub, 1)
+	_, _, challenge, _, err := auth.statusAndChallenge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth.mu.Lock()
+	oldRecordID, oldGeneration := auth.v2.recordID, auth.generation
+	auth.attempts["192.0.2.199"] = accessLoginAttempt{Failures: 1, LastFailure: time.Now(), RetryAt: time.Now().Add(time.Minute)}
+	previousCommit := auth.db.commit
+	auth.db.commit = func(tx *sql.Tx) error {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		return errors.New("injected uncertain committed same-verifier replacement")
+	}
+	auth.mu.Unlock()
+
+	body, err := json.Marshal(map[string]string{"password_hash": testAccessHash()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/password", strings.NewReader(string(body)))
+	request.AddCookie(cookie)
+	response := testAccessServe(handleAccessPassword, request)
+	auth.mu.Lock()
+	auth.db.commit = previousCommit
+	newRecordID, newGeneration := auth.v2.recordID, auth.generation
+	_, sessionCached := auth.sessions[cookie.Value]
+	_, challengeCached := auth.challenges[challenge]
+	attempts := len(auth.attempts)
+	faulted := auth.faulted
+	auth.mu.Unlock()
+	if response.Code != http.StatusInternalServerError || response.Body.String() != "Unable to save access password\n" || len(response.Result().Cookies()) != 0 {
+		t.Fatalf("uncertain same-verifier change = %d cookies=%d body=%q", response.Code, len(response.Result().Cookies()), response.Body.String())
+	}
+	if testAccessDBPasswordRecord(t) != testAccessHash() || oldRecordID == newRecordID || newGeneration == oldGeneration {
+		t.Fatalf("committed same-verifier identity transition missing: recordID %q -> %q generation %d -> %d", oldRecordID, newRecordID, oldGeneration, newGeneration)
+	}
+	if sessionCached || challengeCached || attempts != 0 || faulted {
+		t.Fatalf("identity transition caches/fault: session=%v challenge=%v attempts=%d faulted=%v", sessionCached, challengeCached, attempts, faulted)
+	}
+	expectClosed(t, socket)
+}
+
 func TestAccessWSSocketsFollowEveryRecordChange(t *testing.T) {
 	bearer := func(token string) accessCredential {
 		return accessCredential{State: accessCredentialPresent, Token: token}
@@ -298,11 +449,9 @@ func TestAccessWSSocketsFollowEveryRecordChange(t *testing.T) {
 		{
 			name: "failed write",
 			mutate: func(t *testing.T, auth *accessAuthManager, token string) {
-				previous := writeConfigFile
-				writeConfigFile = func(string, []byte, os.FileMode) error { return errors.New("disk full") }
-				t.Cleanup(func() { writeConfigFile = previous })
+				_ = failAccessDBCommitForTest(t, auth)
 				if _, err := auth.setRawPassword("test-pass-5678", bearer(token)); err == nil {
-					t.Fatal("failed write reported success")
+					t.Fatal("failed database transaction reported success")
 				}
 			},
 		},
@@ -343,7 +492,7 @@ func TestAccessWSSocketsCloseOnStaleRecordRehash(t *testing.T) {
 	withTempConfig(t)
 	auth := useTestAccessAuth(t)
 	hub, dial := newAuthSocketFixture(t)
-	if err := auth.configure(testAccessStaleHash(t)); err != nil {
+	if err := setTestAccessRecord(auth, testAccessStaleHash(t)); err != nil {
 		t.Fatalf("configure stale record: %v", err)
 	}
 	// Production startup syncs the hub to the configured generation; without
@@ -915,6 +1064,30 @@ func TestAccessWSLogoutAllClosesOnlyV2Sockets(t *testing.T) {
 	if w := testAccessServe(testAccessProtected().ServeHTTP, r); w.Code != http.StatusNoContent {
 		t.Fatalf("logout-all invalidated the v1 cookie: %d", w.Code)
 	}
+
+	// A committed-but-reported-failed logout-all reloads its new epoch but must
+	// retire only v2 sockets, not the independent v1 admission.
+	uncertainToken, _ := testAccessV2LoginOnce(t, testAccessPassword)
+	uncertainSocket := requireDialed(t, socketURL, "/ws/md-events", wireproto.EventsSubprotocol, uncertainToken, "")
+	waitForEventsClients(t, hub, 2)
+	auth.mu.Lock()
+	previousCommit := auth.db.commit
+	auth.db.commit = func(tx *sql.Tx) error {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		return errors.New("injected committed-but-reported-failed logout-all")
+	}
+	auth.mu.Unlock()
+	uncertainLogout := testAccessV2LogoutRequest(t, `{"all":true}`, uncertainToken)
+	auth.mu.Lock()
+	auth.db.commit = previousCommit
+	auth.mu.Unlock()
+	if uncertainLogout.Code != http.StatusInternalServerError {
+		t.Fatalf("uncertain logout-all = %d want 500: %s", uncertainLogout.Code, uncertainLogout.Body.String())
+	}
+	expectClosed(t, uncertainSocket)
+	expectStillOpen(t, cookieSocket)
 }
 
 // A socket closed at its admitted exp reconnects with the token a refresh

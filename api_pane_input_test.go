@@ -82,7 +82,7 @@ func TestPaneInput_BadBody(t *testing.T) {
 func TestPaneInput_RequiresAccessAuth(t *testing.T) {
 	withPaneManager(t)
 	auth := useTestAccessAuth(t)
-	if err := auth.configure(testAccessHash()); err != nil {
+	if err := setTestAccessRecord(auth, testAccessHash()); err != nil {
 		t.Fatalf("configure: %v", err)
 	}
 
