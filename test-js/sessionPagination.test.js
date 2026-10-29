@@ -7,6 +7,10 @@ setupDomHarness();
 
 const PAGE_URL = (offset, size = 10) =>
     `/api/sessions?coder=pi&cwd=%2Fwork%2Fdemo&limit=${size}&offset=${offset}`;
+const CACHE_KEY = (url) =>
+    `phi_session_cache_v1:${encodeURIComponent(window.location.origin)}:${encodeURIComponent(url)}:`;
+const CACHE_VALUE = (data) =>
+    JSON.stringify({ v: 1, saved_at: 1, data });
 
 function sessionsPage(from, count) {
     return Array.from({ length: count }, (_, i) => {
@@ -23,32 +27,46 @@ function sessionsPage(from, count) {
 
 function makeCtx(over = {}) {
     const container = document.createElement('div');
-    document.body.appendChild(container);
+    const sessionList = document.createElement('div');
+    document.body.appendChild(sessionList);
+    sessionList.appendChild(container);
     const store = { responses: new Map() };
-    const ctx = {
+    const scope = {
+        profileId: '',
+        origin: window.location.origin,
+        headers: () => ({}),
+    };
+    const ctx = Object.assign(Object.create(SessionsManager.prototype), {
         activeCoder: 'pi',
         activeCWD: '/work/demo',
         activeWorkspace: '/work',
         sessionListPageSize: 10,
         worktreeDirtyRequestId: 0,
+        worktreeLoadRequestId: 0,
+        worktreeRootGeneration: 0,
+        worktreeRootOwner: { scope, coder: 'pi', workspace: '/work' },
+        sessionRequests: new Map(),
+        sessionRefreshPromise: null,
+        sessionRefreshGeneration: 0,
         launchSession: vi.fn(),
         highlightActiveSession: vi.fn(),
         loadWorktreeDirtyStates: vi.fn(),
         saveWorktreeState: vi.fn(async () => {}),
-        sessionList: document.createElement('div'),
+        sessionList,
         app: {
+            scope,
             tabManager: { tabs: new Map(), getActiveTab: vi.fn(() => null) },
             getActiveStore: () => store,
             diffController: { refreshDiff: vi.fn() },
             showToast: vi.fn(),
         },
         ...over,
+    });
+    ctx.worktreeRootOwner = {
+        scope: ctx.app.scope,
+        coder: ctx.activeCoder,
+        workspace: ctx.activeWorkspace,
     };
-    ctx.loadWorktreeSessions = SessionsManager.prototype.loadWorktreeSessions;
-    ctx.renderWorktreeSessionsList =
-        SessionsManager.prototype.renderWorktreeSessionsList;
-    ctx.renderSessionPager = SessionsManager.prototype.renderSessionPager;
-    document.body.appendChild(ctx.sessionList);
     return { ctx, container, store };
 }
 
@@ -224,13 +242,13 @@ describe('sidebar session pagination', () => {
         const { ctx, container, store } = makeCtx();
 
         await ctx.loadWorktreeSessions('/work/demo', container);
-        expect([...store.responses.keys()]).toEqual([PAGE_URL(0)]);
+        expect([...store.responses.keys()]).toEqual([CACHE_KEY(PAGE_URL(0))]);
 
         pageButton(container, '1').click();
         await vi.waitFor(() => expect(pageLabel(container)).toBe('Page 2'));
         expect([...store.responses.keys()]).toEqual([
-            PAGE_URL(0),
-            PAGE_URL(10),
+            CACHE_KEY(PAGE_URL(0)),
+            CACHE_KEY(PAGE_URL(10)),
         ]);
 
         const fetchMock = mockFetch(() => {
@@ -357,13 +375,16 @@ describe('sidebar session pagination', () => {
     it('recovers from corrupt cached rows by refreshing', async () => {
         const fetchMock = mockFetch(() => sessionsPage(0, 10));
         const { ctx, container, store } = makeCtx();
-        store.responses.set(PAGE_URL(0), JSON.stringify([null]));
+        store.responses.set(
+            CACHE_KEY(PAGE_URL(0)),
+            CACHE_VALUE([null]),
+        );
 
         await ctx.loadWorktreeSessions('/work/demo', container);
 
         expect(fetchMock).toHaveBeenCalledTimes(1);
         expect(rows(container)).toHaveLength(10);
-        expect(store.responses.get(PAGE_URL(0))).toContain('session-0');
+        expect(store.responses.get(CACHE_KEY(PAGE_URL(0)))).toContain('session-0');
     });
 
     it('shows one inline note for repeated page failures', async () => {
@@ -390,7 +411,10 @@ describe('sidebar session pagination', () => {
 
     it('keeps rendered rows when a first-page refresh fails', async () => {
         const { ctx, container, store } = makeCtx();
-        store.responses.set(PAGE_URL(0), JSON.stringify(sessionsPage(0, 10)));
+        store.responses.set(
+            CACHE_KEY(PAGE_URL(0)),
+            CACHE_VALUE(sessionsPage(0, 10)),
+        );
         mockFetch(() => ({ ok: false, status: 500, text: 'offline' }));
 
         await ctx.loadWorktreeSessions('/work/demo', container);

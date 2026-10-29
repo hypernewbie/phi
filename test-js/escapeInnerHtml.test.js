@@ -132,15 +132,33 @@ describe('DiffController.loadRichDiff — fetch-error path (diff.ts:~949)', () =
     });
 });
 
+function makeSessionsContext() {
+    const scope = {
+        profileId: '',
+        origin: window.location.origin,
+        headers: () => ({}),
+        signal: new AbortController().signal,
+    };
+    const sessionList = document.createElement('div');
+    document.body.appendChild(sessionList);
+    return Object.assign(Object.create(SessionsManager.prototype), {
+        app: { scope, getActiveStore: () => ({ responses: new Map() }) },
+        sessionList,
+        activeWorkspace: '/ws',
+        activeCWD: '',
+        activeCoder: 'claude',
+        sessionListPageSize: 10,
+        worktreeDirtyRequestId: 0,
+        worktreeLoadRequestId: 0,
+        worktreeRootGeneration: 0,
+        worktreeRootOwner: { scope, coder: 'claude', workspace: '/ws' },
+        sessionRequests: new Map(),
+    });
+}
+
 describe('SessionsManager.loadWorktrees — scan-error path (sessions.ts:~511)', () => {
     it('an error message containing HTML renders as literal text, not markup', async () => {
-        const ctx = {
-            sessionList: document.createElement('div'),
-            activeWorkspace: '/ws',
-            activeCWD: '',
-            activeCoder: 'claude',
-            worktreeDirtyRequestId: 0,
-        };
+        const ctx = makeSessionsContext();
         // The not-ok branch throws a fixed string ("Failed to scan
         // worktrees"), not attacker-controlled text. To reach this catch
         // with a payload we simulate a lower-level fetch rejection instead
@@ -160,8 +178,9 @@ describe('SessionsManager.loadWorktrees — scan-error path (sessions.ts:~511)',
 
 describe('SessionsManager.loadWorktreeSessions — fetch-error path (sessions.ts:~680)', () => {
     it('a fetch-error message containing HTML renders as literal text, not markup', async () => {
-        const ctx = { activeCoder: 'claude' };
+        const ctx = makeSessionsContext();
         const container = document.createElement('div');
+        ctx.sessionList.appendChild(container);
         mockFetch(() => ({ ok: false, status: 500, text: PAYLOAD }));
         await SessionsManager.prototype.loadWorktreeSessions.call(
             ctx,

@@ -17,22 +17,33 @@ setupDomHarness();
 function makeCtx(over = {}) {
     const sessionList = document.createElement('div');
     document.body.appendChild(sessionList);
-    return {
+    return Object.assign(Object.create(SessionsManager.prototype), {
         sessionList,
         activeWorkspace: '/ws',
         activeCWD: '',
         activeCoder: 'opencode',
         worktreeDirtyRequestId: 0,
+        worktreeLoadRequestId: 0,
+        worktreeRootGeneration: 0,
+        worktreeRootOwner: null,
+        sessionRequests: new Map(),
+        sessionRefreshPromise: null,
+        sessionRefreshGeneration: 0,
+        sessionListPageSize: 10,
         loadWorktreeSessions: vi.fn(),
         loadWorktreeDirtyStates: vi.fn(),
         highlightActiveSession: vi.fn(),
         saveWorktreeState: vi.fn(async () => {}),
         app: {
+            scope: null,
             diffController: { refreshDiff: vi.fn() },
-            tabManager: { getActiveTab: vi.fn(() => null) },
+            tabManager: {
+                tabs: new Map(),
+                getActiveTab: vi.fn(() => null),
+            },
         },
         ...over,
-    };
+    });
 }
 
 async function run(ctx, targetCwd, worktrees) {
@@ -79,6 +90,19 @@ const activePath = (ctx) => {
     const s = ctx.sessionList.querySelector('.worktree-section.active');
     return s ? s.getAttribute('data-worktree-path') : null;
 };
+const SESSION_URL = (cwd) =>
+    `/api/sessions?coder=pi&cwd=${encodeURIComponent(cwd)}&limit=10&offset=0`;
+const FEATURE_CACHE_KEY = (url) =>
+    `phi_session_cache_v1:${encodeURIComponent(window.location.origin)}:${encodeURIComponent(url)}:`;
+const FEATURE_CACHE_VALUE = (data) =>
+    JSON.stringify({ v: 1, saved_at: 1, data });
+const fixtureSession = (id) => ({
+    id,
+    title: id,
+    cwd: '/ws/target',
+    coder: 'pi',
+    time_updated: '2026-10-01T12:00:00Z',
+});
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -199,6 +223,142 @@ describe('loadWorktrees — collaborators + side effects', () => {
         );
         expect(calledPaths).toContain('/b');
         expect(calledPaths).not.toContain('/a');
+    });
+});
+
+describe('loadWorktrees — section opening under slow state saves', () => {
+    function setupCollapsedTarget() {
+        const ctx = makeCtx({ activeCWD: '/ws/main', activeCoder: 'pi' });
+        const scope = {
+            profileId: '',
+            origin: window.location.origin,
+            headers: () => ({}),
+            signal: new AbortController().signal,
+        };
+        const store = { responses: new Map() };
+        ctx.app.scope = scope;
+        ctx.app.getActiveStore = () => store;
+        ctx.loadWorktreeSessions = SessionsManager.prototype.loadWorktreeSessions;
+        ctx.saveWorktreeState = SessionsManager.prototype.saveWorktreeState;
+        store.responses.set(
+            FEATURE_CACHE_KEY(SESSION_URL('/ws/target')),
+            FEATURE_CACHE_VALUE([fixtureSession('cached-target')]),
+        );
+        SessionsManager.prototype.renderWorktreesList.call(
+            ctx,
+            [
+                { path: '/ws/main', active: true, expanded: true },
+                { path: '/ws/target', expanded: false },
+            ],
+            '/ws',
+            null,
+            { loadSessions: false, startingCwd: '/ws/main' },
+        );
+        return { ctx, store };
+    }
+
+    it('shows cached rows before a held worktree-state POST resolves', async () => {
+        let releaseSave;
+        let releaseList;
+        const saveGate = new Promise((resolve) => (releaseSave = resolve));
+        const listGate = new Promise((resolve) => (releaseList = resolve));
+        const fetchMock = vi.fn((url) =>
+            String(url) === '/api/config/worktree-state'
+                ? saveGate
+                : listGate,
+        );
+        vi.stubGlobal('fetch', fetchMock);
+        const { ctx } = setupCollapsedTarget();
+
+        ctx.sessionList
+            .querySelector('[data-worktree-path="/ws/target"] .worktree-header')
+            .click();
+
+        expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+            '/api/config/worktree-state',
+            SESSION_URL('/ws/target'),
+        ]);
+        expect(
+            ctx.sessionList.querySelector(
+                '[data-worktree-path="/ws/target"] .session-item',
+            )?.textContent,
+        ).toContain('cached-target');
+
+        releaseSave({ ok: true });
+        releaseList({
+            ok: true,
+            status: 200,
+            json: async () => [fixtureSession('fresh-target')],
+        });
+    });
+
+    it('starts session loading even when the state-save POST fails', async () => {
+        const fetchMock = vi.fn((url) =>
+            String(url) === '/api/config/worktree-state'
+                ? Promise.reject(new Error('offline'))
+                : Promise.resolve({
+                      ok: true,
+                      status: 200,
+                      json: async () => [fixtureSession('fresh-target')],
+                  }),
+        );
+        vi.stubGlobal('fetch', fetchMock);
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        const { ctx } = setupCollapsedTarget();
+
+        ctx.sessionList
+            .querySelector('[data-worktree-path="/ws/target"] .worktree-header')
+            .click();
+        await vi.waitFor(() =>
+            expect(fetchMock.mock.calls.map(([url]) => String(url))).toContain(
+                SESSION_URL('/ws/target'),
+            ),
+        );
+        expect(
+            ctx.sessionList.querySelector(
+                '[data-worktree-path="/ws/target"] .session-item',
+            )?.textContent,
+        ).toContain('cached-target');
+    });
+
+    it('ignores a worktree reply started before session authentication failed', async () => {
+        let releaseWorktrees;
+        const worktreeGate = new Promise((resolve) => {
+            releaseWorktrees = resolve;
+        });
+        const fetchMock = vi.fn((url) =>
+            String(url).startsWith('/api/git/worktrees')
+                ? worktreeGate
+                : Promise.resolve({
+                      ok: false,
+                      status: 401,
+                      text: async () => 'unauthorized',
+                  }),
+        );
+        vi.stubGlobal('fetch', fetchMock);
+        const { ctx, store } = setupCollapsedTarget();
+        const url = '/api/git/worktrees?cwd=%2Fws';
+        const pendingWorktrees = ctx.loadWorktrees();
+        const target = ctx.sessionList.querySelector(
+            '[data-worktree-path="/ws/target"] .worktree-sessions-container',
+        );
+        await expect(
+            ctx.loadWorktreeSessions('/ws/target', target, 0, { refresh: true }),
+        ).resolves.toBe('failed');
+
+        let parsed = false;
+        releaseWorktrees({
+            ok: true,
+            json: async () => {
+                parsed = true;
+                return [{ path: '/ws/replacement' }];
+            },
+        });
+        await pendingWorktrees;
+        expect(parsed).toBe(false);
+        expect(paths(ctx)).toContain('/ws/target');
+        expect(paths(ctx)).not.toContain('/ws/replacement');
+        expect(store.responses.has(FEATURE_CACHE_KEY(url))).toBe(false);
     });
 });
 

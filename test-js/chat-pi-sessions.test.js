@@ -8,18 +8,35 @@ vi.mock('../web/chat-pi/tab.js', () => ({
 import { openPiRpcChatTab } from '../web/chat-pi/tab.js';
 import { SessionsManager } from '../web/sessions.js';
 
-function context(activeCoder) {
+function context(activeCoder, container) {
     const tabManager = {
         tabs: new Map(),
         getActiveTab: vi.fn(() => null),
     };
-    return {
+    const scope = {
+        profileId: '',
+        origin: window.location.origin,
+        headers: () => ({}),
+        signal: new AbortController().signal,
+    };
+    const store = { responses: new Map() };
+    const sessionList = document.createElement('div');
+    sessionList.appendChild(container);
+    document.body.appendChild(sessionList);
+    return Object.assign(Object.create(SessionsManager.prototype), {
         activeCoder,
-        app: { tabManager },
+        activeWorkspace: '/work',
+        activeCWD: '/work/demo',
+        sessionListPageSize: 10,
+        sessionList,
+        sessionRequests: new Map(),
+        worktreeRootGeneration: 0,
+        worktreeRootOwner: { scope, coder: activeCoder, workspace: '/work' },
+        app: { tabManager, scope, getActiveStore: () => store },
         launchSession: vi.fn(),
         _showSessionContextMenu: vi.fn(),
         tabManager,
-    };
+    });
 }
 
 function response(rows) {
@@ -33,6 +50,7 @@ function response(rows) {
 afterEach(() => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    document.body.replaceChildren();
 });
 
 describe('Pi RPC sessions surface', () => {
@@ -50,7 +68,7 @@ describe('Pi RPC sessions surface', () => {
                 },
             ]),
         );
-        const ctx = context('pi');
+        const ctx = context('pi', container);
 
         await SessionsManager.prototype.loadWorktreeSessions.call(
             ctx,
@@ -82,7 +100,7 @@ describe('Pi RPC sessions surface', () => {
                 },
             ]),
         );
-        const ctx = context('pi');
+        const ctx = context('pi', container);
 
         await SessionsManager.prototype.loadWorktreeSessions.call(
             ctx,
@@ -105,7 +123,7 @@ describe('Pi RPC sessions surface', () => {
         const empty = document.createElement('div');
         vi.spyOn(globalThis, 'fetch').mockResolvedValue(response([]));
         await SessionsManager.prototype.loadWorktreeSessions.call(
-            context('pi'),
+            context('pi', empty),
             '/work/demo',
             empty,
         );
@@ -126,7 +144,7 @@ describe('Pi RPC sessions surface', () => {
             ]),
         );
         await SessionsManager.prototype.loadWorktreeSessions.call(
-            context('pi'),
+            context('pi', populated),
             '/work/demo',
             populated,
         );

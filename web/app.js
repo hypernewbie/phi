@@ -809,16 +809,17 @@ export class App {
             this.sessionsManager.activeCWD = store.activeCwd;
         }
         const wsKey = `/api/git/worktrees?cwd=${encodeURIComponent(this.sessionsManager?.activeWorkspace || '')}`;
-        if (store.responses?.has(wsKey)) {
-            try {
-                const worktreesData = JSON.parse(store.responses.get(wsKey));
-                this.sessionsManager?.renderWorktreesList?.(
-                    worktreesData,
-                    this.sessionsManager.activeWorkspace,
-                    store.activeCwd,
-                    { loadSessions: false },
-                );
-            } catch {}
+        const worktreesData = this.sessionsManager?.readCachedWorktrees?.(
+            store,
+            wsKey,
+        );
+        if (worktreesData !== null && worktreesData !== undefined) {
+            this.sessionsManager?.renderWorktreesList?.(
+                worktreesData,
+                this.sessionsManager.activeWorkspace,
+                store.activeCwd,
+                { loadSessions: false },
+            );
         }
         if (store.tabs !== null) {
             this.tabManager?.paintFromStore?.(store);
@@ -926,6 +927,7 @@ export class App {
         termPerfMeasureBetween('switch-prep', phaseStart);
         phaseStart = globalThis.performance?.now?.();
         try {
+            this.sessionsManager?.resetSessionRootForBackendSwitch?.();
             this.paintBackendFromStore(nextStore);
             // The right panel survives an in-page switch as persistent DOM;
             // reset its backend-scoped surfaces (stream socket, commit list,
@@ -985,13 +987,18 @@ export class App {
         if (profileId === getEmbeddedProfileId()) {
             this.getNotifications().clearCurrentContext();
         }
+        this.sessionsManager?.invalidateFeatureCache?.(profileId);
         backendStores.delete(profileId);
         if (typeof localStorage === 'undefined') return true;
         const suffix = `:${profileId}`;
         const keysToRemove = [];
         for (let i = 0; i < localStorage.length; i++) {
             const k = localStorage.key(i);
-            if (k && k.endsWith(suffix)) {
+            if (
+                k &&
+                !k.startsWith('phi_session_cache_v1:') &&
+                k.endsWith(suffix)
+            ) {
                 keysToRemove.push(k);
             }
         }

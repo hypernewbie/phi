@@ -1,8 +1,8 @@
 import { mountDirectoryTree, } from './path-picker.js';
-import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname, isCompactViewport, serverKey, } from './util.js';
+import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname, isCompactViewport, serverKey, getEmbeddedBackendOrigin, getEmbeddedProfileId, } from './util.js';
 import { openPiRpcChatTab } from './chat-pi/tab.js';
 import { createReviewTranscriptView } from './review-transcript.js';
-import { loadCoderRegistry, openCodePaneMode, visibleCoders, getCoder, hasTranscript, hasPiRpc, hasRename, isShell, renderLogo, RESERVED_CODER_IDS, } from './coders.js';
+import { loadCoderRegistry, openCodePaneMode, visibleCoders, getCoder, hasTranscript, hasPiRpc, hasRename, hasSessions, isShell, renderLogo, RESERVED_CODER_IDS, } from './coders.js';
 export function normalizePath(p) {
     if (!p)
         return '';
@@ -45,19 +45,140 @@ const BUILTIN_SESSION_TITLES = new Map([
 function sessionsUrl(coder, cwd, limit, offset = 0) {
     return `/api/sessions?coder=${encodeURIComponent(coder)}&cwd=${encodeURIComponent(cwd)}&limit=${limit}&offset=${offset}`;
 }
-// readCachedSessions returns the last good response for a URL, or null when
-// the cache is empty or corrupt.
-function readCachedSessions(store, url) {
-    const raw = store?.responses?.get?.(url);
-    if (!raw)
-        return null;
+const SESSION_CACHE_PREFIX = 'phi_session_cache_v1';
+const SESSION_REQUEST_TIMEOUT_MS = 45_000;
+const sessionCacheEpochs = new Map();
+const blockedSessionNamespaces = new Set();
+const sessionNamespacesByProfile = new Map();
+function sessionCacheIdentity(scope, url) {
+    const profileId = typeof scope?.profileId === 'string'
+        ? scope.profileId
+        : getEmbeddedProfileId();
+    const rawOrigin = (typeof scope?.origin === 'string' && scope.origin) ||
+        getEmbeddedBackendOrigin() ||
+        (typeof window !== 'undefined' ? window.location?.origin : '');
+    let origin;
     try {
-        const parsed = JSON.parse(raw);
-        return Array.isArray(parsed) ? parsed : null;
+        origin = new URL(rawOrigin).origin;
+        if (!origin || origin === 'null')
+            return null;
     }
     catch {
         return null;
     }
+    const encodedOrigin = encodeURIComponent(origin);
+    const encodedUrl = encodeURIComponent(url);
+    const encodedProfile = encodeURIComponent(profileId);
+    const namespace = `${encodedOrigin}:${encodedProfile}`;
+    let profiles = sessionNamespacesByProfile.get(profileId);
+    if (!profiles) {
+        profiles = new Set();
+        sessionNamespacesByProfile.set(profileId, profiles);
+    }
+    profiles.add(namespace);
+    return {
+        origin,
+        profileId,
+        namespace,
+        key: `${SESSION_CACHE_PREFIX}:${encodedOrigin}:${encodedUrl}:${encodedProfile}`,
+    };
+}
+function sessionCacheEpoch(namespace) {
+    return namespace ? (sessionCacheEpochs.get(namespace) ?? 0) : 0;
+}
+function isSessionPage(value, limit) {
+    if (!Array.isArray(value) || value.length > limit)
+        return false;
+    return value.every((session) => {
+        if (!session || typeof session !== 'object' || Array.isArray(session)) {
+            return false;
+        }
+        if (typeof session.id !== 'string' ||
+            session.id.length === 0 ||
+            typeof session.title !== 'string' ||
+            typeof session.time_updated !== 'string' ||
+            !Number.isFinite(Date.parse(session.time_updated))) {
+            return false;
+        }
+        return ['cwd', 'coder', 'session_path'].every((key) => !(key in session) || typeof session[key] === 'string');
+    });
+}
+function normalizeWorktrees(value) {
+    if (value === null)
+        return [];
+    if (!Array.isArray(value))
+        return null;
+    for (const worktree of value) {
+        if (!worktree ||
+            typeof worktree !== 'object' ||
+            Array.isArray(worktree) ||
+            typeof worktree.path !== 'string' ||
+            worktree.path.length === 0 ||
+            ('branch' in worktree && typeof worktree.branch !== 'string') ||
+            ('active' in worktree && typeof worktree.active !== 'boolean') ||
+            ('expanded' in worktree && typeof worktree.expanded !== 'boolean')) {
+            return null;
+        }
+    }
+    return value;
+}
+function readFeatureCache(store, identity, validate) {
+    if (!identity || blockedSessionNamespaces.has(identity.namespace)) {
+        return null;
+    }
+    try {
+        const raw = store?.responses?.get?.(identity.key);
+        if (typeof raw !== 'string')
+            return null;
+        const envelope = JSON.parse(raw);
+        if (envelope?.v !== 1 ||
+            typeof envelope.saved_at !== 'number' ||
+            !Number.isFinite(envelope.saved_at) ||
+            envelope.saved_at < 0 ||
+            !validate(envelope.data)) {
+            return null;
+        }
+        return envelope.data;
+    }
+    catch {
+        return null;
+    }
+}
+function writeFeatureCache(store, identity, data) {
+    if (!identity || blockedSessionNamespaces.has(identity.namespace))
+        return;
+    try {
+        store?.responses?.set?.(identity.key, JSON.stringify({ v: 1, saved_at: Date.now(), data }));
+    }
+    catch {
+        // A cache failure must not block the live list.
+    }
+}
+function removeFeatureCache(store, namespace) {
+    try {
+        const responses = store?.responses;
+        if (!responses || typeof responses.keys !== 'function')
+            return;
+        const [encodedOrigin, encodedProfile] = namespace.split(':');
+        for (const key of responses.keys()) {
+            if (typeof key !== 'string' || !key.startsWith(`${SESSION_CACHE_PREFIX}:`)) {
+                continue;
+            }
+            const parts = key.split(':');
+            if (parts.length === 4 &&
+                parts[1] === encodedOrigin &&
+                parts[3] === encodedProfile) {
+                responses.delete(key);
+            }
+        }
+    }
+    catch {
+        // Best-effort cleanup; the namespace remains blocked in this page.
+    }
+}
+// readCachedSessions returns the last good, namespaced page or null.
+function readCachedSessions(store, scope, url, limit) {
+    return readFeatureCache(store, sessionCacheIdentity(scope, url), (value) => isSessionPage(value, limit));
 }
 function focusPagerButton(container, delta) {
     const preferred = container.querySelector(`.session-page[data-page="${delta}"]`);
@@ -108,6 +229,11 @@ export class SessionsManager {
     wsModalFocusinHandler;
     worktreeDirtyRequestId;
     worktreeLoadRequestId;
+    worktreeRootGeneration;
+    worktreeRootOwner;
+    sessionRequests;
+    sessionRefreshPromise;
+    sessionRefreshGeneration;
     sessionListPageSize = 10;
     _measureSpan = null;
     _contextMenu;
@@ -154,6 +280,11 @@ export class SessionsManager {
         this.wsModalFocusinHandler = null;
         this.worktreeDirtyRequestId = 0;
         this.worktreeLoadRequestId = 0;
+        this.worktreeRootGeneration = 0;
+        this.worktreeRootOwner = null;
+        this.sessionRequests = new Map();
+        this.sessionRefreshPromise = null;
+        this.sessionRefreshGeneration = 0;
         this._contextMenu = null;
         this._ctxDismissMousedown = null;
         this._ctxDismissKey = null;
@@ -165,6 +296,23 @@ export class SessionsManager {
         // listener to each static .coder-tab in the constructor —
         // that broke once we made the container dynamic. The
         // delegated listener survives re-renders. (R9)
+        const refreshButton = document.getElementById('refresh-sessions-btn');
+        refreshButton?.addEventListener('click', () => {
+            void this.refreshSessions();
+        });
+        refreshButton?.addEventListener('pointerdown', (event) => {
+            if (this.hasSessionDraft())
+                event.preventDefault();
+        });
+        this.sessionList.addEventListener('blur', (event) => {
+            const target = event.target;
+            if (target instanceof HTMLElement &&
+                target.matches('.rename-input') &&
+                event.relatedTarget === refreshButton) {
+                event.stopImmediatePropagation();
+            }
+        }, true);
+        this.updateRefreshButtonVisibility();
         const coderContainer = document.getElementById('coder-selector');
         if (coderContainer) {
             coderContainer.addEventListener('click', (e) => {
@@ -178,7 +326,10 @@ export class SessionsManager {
                     .querySelector('.coder-tab.active')
                     ?.classList.remove('active');
                 target.classList.add('active');
+                if (this.activeCoder !== id)
+                    this.onSessionContextChange();
                 this.activeCoder = id;
+                this.updateRefreshButtonVisibility();
                 if (isShell(id) && this.quickLaunchReady) {
                     this.spawnNewSession();
                 }
@@ -262,6 +413,9 @@ export class SessionsManager {
         });
         // Workspace Toggle and Auto-Width Formatter
         this.workspaceSelect.addEventListener('change', () => {
+            if (this.activeWorkspace !== this.workspaceSelect.value) {
+                this.onSessionContextChange();
+            }
             this.activeWorkspace = this.workspaceSelect.value;
             localStorage.setItem(serverKey('phi_last_chosen_project'), this.activeWorkspace);
             this.updateWorkspaceSelectWidth();
@@ -520,6 +674,128 @@ export class SessionsManager {
             console.error('[config] Failed to remove workspace:', e);
         }
     }
+    setSessionRefreshStatus(message) {
+        const status = document.getElementById('session-refresh-status');
+        if (status)
+            status.textContent = message;
+    }
+    updateRefreshButtonVisibility() {
+        const button = document.getElementById('refresh-sessions-btn');
+        if (button)
+            button.hidden = !hasSessions(this.activeCoder);
+    }
+    hasSessionDraft(container = this.sessionList) {
+        return !!container.querySelector('.rename-input, .args-input-row');
+    }
+    cancelSessionRequests(predicate = () => true) {
+        for (const request of this.sessionRequests.values()) {
+            if (predicate(request))
+                request.cancel('owner');
+        }
+    }
+    onSessionContextChange() {
+        this.sessionRefreshGeneration++;
+        this.sessionRefreshPromise = null;
+        this.cancelSessionRequests();
+        this.setSessionRefreshStatus('');
+        const button = document.getElementById('refresh-sessions-btn');
+        button?.removeAttribute('aria-busy');
+    }
+    resetSessionRootForBackendSwitch() {
+        this.onSessionContextChange();
+        this.worktreeLoadRequestId++;
+        this.worktreeDirtyRequestId++;
+        this.worktreeRootGeneration++;
+        this.worktreeRootOwner = null;
+        this.sessionList.replaceChildren();
+    }
+    invalidateFeatureCache(profileId) {
+        const namespaces = new Set(sessionNamespacesByProfile.get(profileId) ?? []);
+        const store = this.app?.getActiveStore?.(profileId);
+        for (const request of this.sessionRequests.values()) {
+            if (request.profileId === profileId) {
+                namespaces.add(request.namespace);
+                removeFeatureCache(request.store, request.namespace);
+                request.cancel('auth');
+            }
+        }
+        for (const namespace of namespaces) {
+            sessionCacheEpochs.set(namespace, sessionCacheEpoch(namespace) + 1);
+            blockedSessionNamespaces.add(namespace);
+            removeFeatureCache(store, namespace);
+        }
+        sessionNamespacesByProfile.delete(profileId);
+    }
+    invalidateSessionNamespace(namespace, store, except) {
+        sessionCacheEpochs.set(namespace, sessionCacheEpoch(namespace) + 1);
+        blockedSessionNamespaces.add(namespace);
+        removeFeatureCache(store, namespace);
+        for (const [container, request] of this.sessionRequests) {
+            if (container !== except && request.namespace === namespace) {
+                removeFeatureCache(request.store, namespace);
+                request.cancel('auth');
+            }
+        }
+    }
+    readCachedWorktrees(store, url) {
+        const worktrees = readFeatureCache(store, sessionCacheIdentity(this.app?.scope, url), (value) => normalizeWorktrees(value) !== null);
+        return worktrees === null ? null : normalizeWorktrees(worktrees);
+    }
+    async refreshSessions() {
+        if (this.sessionRefreshPromise)
+            return this.sessionRefreshPromise;
+        this.updateRefreshButtonVisibility();
+        if (!hasSessions(this.activeCoder))
+            return;
+        const sections = Array.from(this.sessionList.querySelectorAll('.worktree-section'));
+        const section = sections.find((item) => item.classList.contains('active') &&
+            item.dataset.worktreePath === this.activeCWD) ??
+            sections.find((item) => item.dataset.worktreePath === this.activeCWD);
+        const path = section?.dataset.worktreePath;
+        const container = section?.querySelector('.worktree-sessions-container');
+        if (!path || !container) {
+            this.setSessionRefreshStatus('No worktree to refresh.');
+            return;
+        }
+        const button = document.getElementById('refresh-sessions-btn');
+        const generation = ++this.sessionRefreshGeneration;
+        const coder = this.activeCoder;
+        const workspace = this.activeWorkspace;
+        const scope = this.app?.scope;
+        const refreshUrl = sessionsUrl(coder, path, this.sessionListPageSize ?? 10, 0);
+        const identity = sessionCacheIdentity(scope, refreshUrl);
+        button?.setAttribute('aria-busy', 'true');
+        this.setSessionRefreshStatus('Refreshing sessions…');
+        const pending = (async () => {
+            const result = await this.loadWorktreeSessions(path, container, 0, {
+                refresh: true,
+            });
+            if (generation !== this.sessionRefreshGeneration ||
+                coder !== this.activeCoder ||
+                workspace !== this.activeWorkspace ||
+                scope !== this.app?.scope) {
+                return;
+            }
+            if (result === 'updated') {
+                this.setSessionRefreshStatus('Sessions refreshed.');
+            }
+            else if (result === 'editing') {
+                this.setSessionRefreshStatus('Finish or cancel the edit, then refresh.');
+            }
+            else if (result === 'failed') {
+                this.setSessionRefreshStatus(identity && blockedSessionNamespaces.has(identity.namespace)
+                    ? 'Authentication is required to refresh sessions.'
+                    : 'Refresh failed. Showing the last saved list.');
+            }
+        })().finally(() => {
+            if (this.sessionRefreshPromise === pending) {
+                this.sessionRefreshPromise = null;
+                button?.removeAttribute('aria-busy');
+            }
+        });
+        this.sessionRefreshPromise = pending;
+        return pending;
+    }
     async loadSessions() {
         await this.loadWorktrees();
     }
@@ -533,7 +809,9 @@ export class SessionsManager {
             return;
         if (this.activeCoder === coderId)
             return;
+        this.onSessionContextChange();
         this.activeCoder = coderId;
+        this.updateRefreshButtonVisibility();
         document.querySelectorAll('.coder-tab').forEach((tab) => {
             if (tab.getAttribute('data-coder') === coderId) {
                 tab.classList.add('active');
@@ -577,29 +855,61 @@ export class SessionsManager {
         this.worktreeLoadRequestId = requestId;
         const workspace = this.activeWorkspace;
         const coder = this.activeCoder;
+        const scope = this.app?.scope;
+        const store = this.app?.getActiveStore?.();
         const startingCwd = this.activeCWD;
+        const url = `/api/git/worktrees?cwd=${encodeURIComponent(workspace)}`;
+        const identity = sessionCacheIdentity(scope, url);
+        const epoch = sessionCacheEpoch(identity?.namespace);
+        const sameOwner = this.worktreeRootOwner?.scope === scope &&
+            this.worktreeRootOwner?.coder === coder &&
+            this.worktreeRootOwner?.workspace === workspace;
+        if (scope?.aborted)
+            return;
+        if (sameOwner && this.hasSessionDraft())
+            return;
+        if (!sameOwner) {
+            this.worktreeRootGeneration++;
+            this.cancelSessionRequests();
+            this.worktreeRootOwner = { scope, coder, workspace };
+            this.sessionList.innerHTML =
+                '<div class="scanning-sessions">Scanning git worktrees...</div>';
+        }
+        const rootGeneration = this.worktreeRootGeneration;
         const isCurrentRequest = () => requestId === this.worktreeLoadRequestId &&
             workspace === this.activeWorkspace &&
-            coder === this.activeCoder;
-        this.sessionList.innerHTML =
-            '<div style="padding: 16px; color: var(--text-muted); font-size: 13px;">Scanning git worktrees...</div>';
+            coder === this.activeCoder &&
+            scope === this.app?.scope &&
+            rootGeneration === this.worktreeRootGeneration &&
+            (identity ? epoch === sessionCacheEpoch(identity.namespace) : true);
         try {
-            const fetchFn = this.app?.scope && typeof this.app.scope.fetch === 'function'
-                ? (url, opts) => this.app.scope.fetch(url, opts)
+            if (scope?.aborted)
+                return;
+            const fetchFn = scope && typeof scope.fetch === 'function'
+                ? (requestUrl, opts) => scope.fetch(requestUrl, opts)
                 : fetch;
-            const url = `/api/git/worktrees?cwd=${encodeURIComponent(workspace)}`;
-            const res = await fetchFn(url);
+            const res = await fetchFn(url, { cache: 'no-store' });
             if (!isCurrentRequest())
                 return;
+            if (res.status === 401 || res.status === 403) {
+                this.setSessionRefreshStatus('Authentication is required to refresh sessions.');
+                if (identity) {
+                    this.invalidateSessionNamespace(identity.namespace, store);
+                }
+                return;
+            }
             if (!res.ok)
                 throw new Error('Failed to scan worktrees');
-            const worktrees = await res.json();
+            const parsed = await res.json();
             if (!isCurrentRequest())
                 return;
-            const store = this.app?.getActiveStore?.();
-            if (store) {
-                store.responses.set(url, JSON.stringify(worktrees));
-            }
+            const worktrees = normalizeWorktrees(parsed);
+            if (!worktrees)
+                throw new Error('Invalid worktree response');
+            blockedSessionNamespaces.delete(identity?.namespace ?? '');
+            writeFeatureCache(store, identity, worktrees);
+            if (sameOwner && this.hasSessionDraft())
+                return;
             const renderWorktrees = typeof this.renderWorktreesList === 'function'
                 ? this.renderWorktreesList
                 : SessionsManager.prototype.renderWorktreesList;
@@ -609,14 +919,29 @@ export class SessionsManager {
             });
         }
         catch (e) {
-            if (e?.name === 'AbortError' || this.app?.scope?.aborted)
+            if (e?.name === 'AbortError' || scope?.aborted)
                 return;
             if (isCurrentRequest()) {
-                this.sessionList.innerHTML = `<div style="padding: 16px; color: var(--red); font-size: 13px;">Error scanning worktrees: ${escapeHtml(e.message)}</div>`;
+                const error = document.createElement('div');
+                error.className = 'error-sessions';
+                error.textContent = `Error scanning worktrees: ${e.message}`;
+                if (!sameOwner || !this.sessionList.querySelector('.worktree-section')) {
+                    this.sessionList.replaceChildren(error);
+                }
+                else {
+                    this.sessionList.appendChild(error);
+                }
             }
         }
     }
     renderWorktreesList(worktrees, workspace, targetCwd = null, { loadSessions = true, startingCwd, } = {}) {
+        this.worktreeRootGeneration++;
+        this.cancelSessionRequests();
+        this.worktreeRootOwner = {
+            scope: this.app?.scope,
+            coder: this.activeCoder,
+            workspace,
+        };
         this.sessionList.innerHTML = '';
         if (!worktrees || worktrees.length === 0) {
             this.sessionList.innerHTML =
@@ -701,9 +1026,9 @@ export class SessionsManager {
                     <svg class="icon chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="9 18 15 12 9 6"></polyline>
                     </svg>
-                    <span class="worktree-glyph-cell"><span class="worktree-section-glyph" aria-hidden="true" title="${wt.path}">${wtGlyph}</span></span>
-                    <span class="worktree-name" title="${wt.path}">${baseName}</span>
-                    ${wt.branch ? `<span class="worktree-branch">[${wt.branch}]</span>` : ''}
+                    <span class="worktree-glyph-cell"><span class="worktree-section-glyph" aria-hidden="true" title="${escapeHtml(wt.path)}">${wtGlyph}</span></span>
+                    <span class="worktree-name" title="${escapeHtml(wt.path)}">${escapeHtml(baseName)}</span>
+                    ${wt.branch ? `<span class="worktree-branch">[${escapeHtml(wt.branch)}]</span>` : ''}
                     <span class="worktree-dirty-indicator hidden" title="Unstaged changes" aria-hidden="true">★</span>
                 </div>
                 <div class="worktree-sessions-container">
@@ -729,9 +1054,9 @@ export class SessionsManager {
                 if (activeTab && activeTab.coder === this.activeCoder) {
                     this.highlightActiveSession(activeTab.sessionId);
                 }
-                await this.saveWorktreeState();
+                void this.saveWorktreeState();
                 if (isExpanded) {
-                    await this.loadWorktreeSessions(wt.path, wtSection.querySelector('.worktree-sessions-container'));
+                    void this.loadWorktreeSessions(wt.path, wtSection.querySelector('.worktree-sessions-container'));
                 }
             });
             this.sessionList.appendChild(wtSection);
@@ -743,7 +1068,7 @@ export class SessionsManager {
                     }
                     else {
                         const store = this.app?.getActiveStore?.();
-                        const firstPage = readCachedSessions(store, sessionsUrl(this.activeCoder, wt.path, this.sessionListPageSize ?? 10, 0));
+                        const firstPage = readCachedSessions(store, this.app?.scope, sessionsUrl(this.activeCoder, wt.path, this.sessionListPageSize ?? 10, 0), this.sessionListPageSize ?? 10);
                         if (firstPage) {
                             this.renderWorktreeSessionsList(firstPage, wt.path, container);
                         }
@@ -792,18 +1117,45 @@ export class SessionsManager {
             }
         }
     }
-    async loadWorktreeSessions(wtPath, container, offset = 0) {
+    async loadWorktreeSessions(wtPath, container, offset = 0, { refresh = false } = {}) {
         const size = this.sessionListPageSize ?? 10;
         const coder = this.activeCoder;
+        const workspace = this.activeWorkspace;
         const scope = this.app?.scope;
         const store = this.app?.getActiveStore?.();
         const url = sessionsUrl(coder, wtPath, size, offset);
-        // A duplicate call for the page already in flight must not advance the
-        // request token and orphan the response it replaces.
-        if (container.dataset.sessionPendingOffset === String(offset))
-            return;
-        // Restore focus only when a pager arrow still owns it at render time;
-        // a user who moved on must not be pulled back to the sidebar.
+        const identity = sessionCacheIdentity(scope, url);
+        const namespace = identity?.namespace ?? '';
+        const epoch = sessionCacheEpoch(identity?.namespace);
+        const rootGeneration = this.worktreeRootGeneration;
+        const currentRoot = this.worktreeRootOwner;
+        const ownsRoot = () => !currentRoot ||
+            (currentRoot.scope === scope &&
+                currentRoot.coder === coder &&
+                currentRoot.workspace === workspace);
+        if (scope?.aborted || !ownsRoot())
+            return 'superseded';
+        if (refresh && this.hasSessionDraft(container))
+            return 'editing';
+        const previous = this.sessionRequests.get(container);
+        if (!refresh &&
+            previous &&
+            previous.offset === offset &&
+            container.dataset.sessionPendingOffset === String(offset)) {
+            return 'superseded';
+        }
+        previous?.cancel('owner');
+        const requestId = String(Number(container.dataset.sessionRequestId ?? 0) + 1);
+        container.dataset.sessionRequestId = requestId;
+        container.dataset.sessionPendingOffset = String(offset);
+        const isCurrentRequest = () => container.dataset.sessionRequestId === requestId &&
+            this.activeCoder === coder &&
+            this.activeWorkspace === workspace &&
+            this.app?.scope === scope &&
+            this.worktreeRootGeneration === rootGeneration &&
+            ownsRoot() &&
+            container.isConnected &&
+            sessionCacheEpoch(identity?.namespace) === epoch;
         const focusedPagerPage = () => {
             const active = document.activeElement;
             return active instanceof HTMLElement &&
@@ -813,76 +1165,153 @@ export class SessionsManager {
                 : undefined;
         };
         const renderPage = (sessions) => {
+            if (!isCurrentRequest() || this.hasSessionDraft(container))
+                return false;
             const focusedPage = focusedPagerPage();
             const renderSessions = typeof this.renderWorktreeSessionsList === 'function'
                 ? this.renderWorktreeSessionsList
                 : SessionsManager.prototype.renderWorktreeSessionsList;
             renderSessions.call(this, sessions, wtPath, container, offset);
+            container.dataset.sessionOffset = String(offset);
             if (focusedPage)
                 focusPagerButton(container, focusedPage);
+            return true;
         };
-        // Advance the generation before painting anything: opening a cached
-        // page must invalidate the refresh it interrupts.
-        const requestId = String(Number(container.dataset.sessionRequestId ?? 0) + 1);
-        container.dataset.sessionRequestId = requestId;
-        container.dataset.sessionPendingOffset = String(offset);
-        const isCurrentRequest = () => container.dataset.sessionRequestId === requestId &&
-            this.activeCoder === coder &&
-            this.app?.scope === scope;
-        // Paint the last good answer before any round-trip, then revalidate it
-        // in the background. A failed revalidation keeps the cached rows.
-        let cached = readCachedSessions(store, url);
-        if (cached) {
+        const cached = refresh
+            ? null
+            : readCachedSessions(store, scope, url, size);
+        if (cached && !this.hasSessionDraft(container)) {
             try {
                 renderPage(cached);
             }
             catch {
-                // Corrupt cached rows must not block the refresh.
-                store?.responses?.delete?.(url);
-                container.innerHTML = '';
-                cached = null;
+                if (identity)
+                    store?.responses?.delete?.(identity.key);
             }
         }
-        if (!cached && !container.querySelector('.session-item')) {
-            container.innerHTML =
-                '<div class="scanning-sessions">Scanning sessions...</div>';
+        if (!cached &&
+            !container.querySelector('.session-item, .no-sessions-found') &&
+            !this.hasSessionDraft(container)) {
+            container.innerHTML = refresh
+                ? '<div class="no-sessions-found">No saved session list yet.</div>'
+                : '<div class="scanning-sessions">Scanning sessions...</div>';
         }
+        const controller = new AbortController();
+        let rejectCancel;
+        const cancelled = new Promise((_resolve, reject) => {
+            rejectCancel = reject;
+        });
+        void cancelled.catch(() => { });
+        let settled = false;
+        let cancelKind = '';
+        const cancel = (kind) => {
+            if (settled)
+                return;
+            cancelKind = kind;
+            controller.abort();
+            const error = new DOMException(kind === 'timeout' ? 'Session refresh timed out' : 'Session request superseded', 'AbortError');
+            error.kind = kind;
+            rejectCancel(error);
+        };
+        const request = {
+            controller,
+            cancel,
+            namespace,
+            profileId: identity?.profileId ?? '',
+            requestId,
+            offset,
+            store,
+        };
+        this.sessionRequests.set(container, request);
+        const scopeAbort = () => cancel('owner');
+        if (scope?.signal?.aborted) {
+            cancel('owner');
+        }
+        else {
+            scope?.signal?.addEventListener('abort', scopeAbort, { once: true });
+        }
+        const timeout = setTimeout(() => cancel('timeout'), SESSION_REQUEST_TIMEOUT_MS);
+        const headers = typeof scope?.headers === 'function'
+            ? scope.headers()
+            : identity?.profileId
+                ? { 'X-Phi-Backend': identity.profileId }
+                : {};
         try {
-            const fetchFn = this.app?.scope && typeof this.app.scope.fetch === 'function'
-                ? (url, opts) => this.app.scope.fetch(url, opts)
-                : fetch;
-            const res = await fetchFn(url);
-            if (!res.ok) {
-                const errMsg = await res.text();
-                throw new Error(errMsg || 'Failed to scan sessions');
-            }
-            const sessions = await res.json();
+            if (scope?.signal?.aborted)
+                return 'superseded';
+            const operation = (async () => {
+                const response = await fetch(url, {
+                    headers,
+                    cache: 'no-store',
+                    credentials: 'same-origin',
+                    signal: controller.signal,
+                });
+                if (!isCurrentRequest())
+                    throw new DOMException('Owner changed', 'AbortError');
+                if (response.status === 401 || response.status === 403) {
+                    this.setSessionRefreshStatus('Authentication is required to refresh sessions.');
+                    if (identity) {
+                        this.invalidateSessionNamespace(identity.namespace, store, container);
+                    }
+                    const error = new Error('Authentication required');
+                    error.sessionAuth = true;
+                    throw error;
+                }
+                if (!response.ok) {
+                    const detail = await response.text();
+                    throw new Error(detail || `Session request failed (HTTP ${response.status})`);
+                }
+                const sessions = await response.json();
+                if (!isSessionPage(sessions, size)) {
+                    throw new Error('Invalid session response');
+                }
+                return sessions;
+            })();
+            const sessions = await Promise.race([operation, cancelled]);
             if (!isCurrentRequest())
-                return;
-            if (store) {
-                store.responses.set(url, JSON.stringify(sessions));
-            }
-            renderPage(sessions);
+                return 'superseded';
+            if (identity)
+                blockedSessionNamespaces.delete(identity.namespace);
+            writeFeatureCache(store, identity, sessions);
+            if (this.hasSessionDraft(container))
+                return 'editing';
+            return renderPage(sessions) ? 'updated' : 'editing';
         }
-        catch (e) {
-            if (e?.name === 'AbortError' || this.app?.scope?.aborted)
-                return;
+        catch (error) {
+            if (error?.sessionAuth)
+                return 'failed';
+            if (error?.kind === 'owner' ||
+                (error?.name === 'AbortError' && error?.kind !== 'timeout')) {
+                return 'superseded';
+            }
             if (!isCurrentRequest())
-                return;
-            const message = `Error: ${e.message}`;
+                return 'superseded';
+            if (this.hasSessionDraft(container))
+                return 'editing';
+            const message = `Error: ${error.message}`;
             container.querySelector('.error-sessions')?.remove();
-            if (container.querySelector('.session-item')) {
-                // A failed page must not clear the rows already on screen.
-                const error = document.createElement('div');
-                error.className = 'error-sessions';
-                error.textContent = message;
-                container.appendChild(error);
+            const errorNote = document.createElement('div');
+            errorNote.className = 'error-sessions';
+            errorNote.textContent = message;
+            if (container.querySelector('.session-item, .no-sessions-found')) {
+                container.appendChild(errorNote);
             }
             else {
-                container.innerHTML = `<div class="error-sessions">${escapeHtml(message)}</div>`;
+                container.replaceChildren();
+                const empty = document.createElement('div');
+                empty.className = 'no-sessions-found';
+                empty.textContent = 'No saved session list yet.';
+                container.append(empty, errorNote);
             }
+            return 'failed';
         }
         finally {
+            settled = true;
+            clearTimeout(timeout);
+            scope?.signal?.removeEventListener('abort', scopeAbort);
+            if (this.sessionRequests.get(container) === request) {
+                this.sessionRequests.delete(container);
+            }
             if (container.dataset.sessionRequestId === requestId) {
                 delete container.dataset.sessionPendingOffset;
             }
@@ -1485,41 +1914,58 @@ export class SessionsManager {
         titleEl?.replaceWith(input);
         input.focus({ preventScroll: true });
         input.select();
-        const saveRename = async () => {
-            const newName = input.value.trim();
-            if (newName && newName !== currentTitle) {
-                try {
-                    const res = await fetch('/api/session-meta', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ id: sessionId, name: newName }),
-                    });
-                    if (res.ok) {
-                        this.loadSessions();
-                    }
-                    else {
-                        throw new Error('Failed to save');
-                    }
-                }
-                catch (e) {
-                    alert(`Failed to rename: ${e.message}`);
-                    this.loadSessions();
-                }
+        let state = 'editing';
+        const finish = (title) => {
+            if (state === 'finished')
+                return;
+            state = 'finished';
+            if (input.isConnected) {
+                const replacement = document.createElement('span');
+                replacement.className = 'session-title';
+                replacement.textContent = title;
+                input.replaceWith(replacement);
             }
-            else {
-                this.loadSessions();
+        };
+        const saveRename = async () => {
+            if (state !== 'editing')
+                return;
+            const newName = input.value.trim();
+            if (!newName || newName === currentTitle) {
+                finish(currentTitle);
+                void this.loadSessions();
+                return;
+            }
+            state = 'saving';
+            try {
+                const res = await fetch('/api/session-meta', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: sessionId, name: newName }),
+                });
+                if (!res.ok)
+                    throw new Error('Failed to save');
+                finish(newName);
+                void this.loadSessions();
+            }
+            catch (e) {
+                alert(`Failed to rename: ${e.message}`);
+                finish(currentTitle);
+                void this.loadSessions();
             }
         };
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
-                saveRename();
+                e.preventDefault();
+                void saveRename();
             }
-            else if (e.key === 'Escape') {
-                this.loadSessions();
+            else if (e.key === 'Escape' && state === 'editing') {
+                e.preventDefault();
+                finish(currentTitle);
+                void this.loadSessions();
             }
         });
         input.addEventListener('blur', () => {
-            saveRename();
+            void saveRename();
         });
     }
     openWorkspaceModal() {
@@ -1956,9 +2402,11 @@ export class SessionsManager {
         // user's pick across re-renders is what avoids the
         // jump-back regression the follow-up flagged.
         if (this.activeCoder !== activeId) {
+            this.onSessionContextChange();
             this.activeCoder = activeId;
         }
         this.updateOpenCodeServiceVisibility?.();
+        this.updateRefreshButtonVisibility();
         // loadConfig already calls loadSessions after rendering. Do not
         // make a second request or redraw the sidebar on every config load.
     }
