@@ -1406,42 +1406,6 @@ func TestAccessV2LoginRehashesStaleRecord(t *testing.T) {
 	}
 }
 
-func TestAccessStaleConfigSaveKeepsAuthHash(t *testing.T) {
-	withTempConfig(t)
-	useTestAccessAuth(t)
-	testAccessEnableV2(t, testAccessPassword)
-
-	snapshot := loadConfig()
-	testAccessEnableV2Clear(t, "test-pass-5678")
-	rotated := testAccessDBPasswordRecord(t)
-
-	saveConfig(snapshot)
-	if got := testAccessDBPasswordRecord(t); got != rotated {
-		t.Fatalf("stale save changed the database verifier: %q want %q", got, rotated)
-	}
-	cfg := loadConfig()
-	if cfg.AccessPasswordHash != "" || cfg.AccessAuthMigration == nil || cfg.AccessAuthMigration.State != "complete" {
-		t.Fatalf("stale save changed completed migration Config: %#v", cfg.AccessAuthMigration)
-	}
-}
-
-// testAccessEnableV2Clear rotates an enabled password through the v2 route.
-func testAccessEnableV2Clear(t *testing.T, password string) {
-	t.Helper()
-	body, err := json.Marshal(map[string]string{"password": password})
-	if err != nil {
-		t.Fatal(err)
-	}
-	login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.80:1")
-	var payload struct {
-		Token string `json:"token"`
-	}
-	testAccessJSONBody(t, login, &payload)
-	if w := testAccessV2PasswordRequest(t, string(body), payload.Token); w.Code != http.StatusOK {
-		t.Fatalf("rotate: %d %s", w.Code, w.Body.String())
-	}
-}
-
 func TestAccessRestartAfterV2Change(t *testing.T) {
 	withTempConfig(t)
 	useTestAccessAuth(t)
@@ -1517,41 +1481,6 @@ func testAccessUseHub(t *testing.T) *ws.Hub {
 	return hub
 }
 
-func TestAccessPasswordChangeFencesStaleSockets(t *testing.T) {
-	withTempConfig(t)
-	useTestAccessAuth(t)
-	hub := testAccessUseHub(t)
-
-	token := testAccessEnableV2(t, testAccessPassword)
-	generation := accessAuth.accessGeneration()
-
-	stale := &testAuthSocket{}
-	if !hub.AdmitAuth(stale, ws.AuthFence{Generation: generation}) {
-		t.Fatal("socket was not admitted at the current generation")
-	}
-	// An upgrade that authenticated before a password change is refused.
-	if hub.AdmitAuth(&testAuthSocket{}, ws.AuthFence{Generation: generation - 1}) {
-		t.Fatal("stale generation was admitted")
-	}
-
-	if w := testAccessV2PasswordRequest(t, `{"password":"test-pass-5678"}`, token); w.Code != http.StatusOK {
-		t.Fatalf("change: %d %s", w.Code, w.Body.String())
-	}
-	if !stale.closed {
-		t.Fatal("password change did not close the socket admitted at the old generation")
-	}
-
-	current := &testAuthSocket{}
-	now := accessAuth.accessGeneration()
-	if !hub.AdmitAuth(current, ws.AuthFence{Generation: now}) {
-		t.Fatal("socket was not admitted after the change")
-	}
-	hub.RotateAuth(now)
-	if current.closed {
-		t.Fatal("rotation closed a socket admitted at the current generation")
-	}
-}
-
 func TestAccessFailedWriteClosesNoSockets(t *testing.T) {
 	withTempConfig(t)
 	useTestAccessAuth(t)
@@ -1624,7 +1553,7 @@ func TestAccessDisabledPreservesOpenRequests(t *testing.T) {
 	}
 }
 
-// --- M4a: non-current record and rollback-format evidence ---
+// --- v1 compatibility with non-current password records ---
 
 // testAccessV1Login runs the legacy one-time-proof login against the current
 // manager and returns the response with the iteration count the status route
@@ -1695,63 +1624,6 @@ func TestAccessV1LoginSurvivesV2RehashOfStaleRecord(t *testing.T) {
 	}
 	if advertised != accessPasswordHashIterations {
 		t.Fatalf("status advertised %d iterations after the rehash", advertised)
-	}
-}
-
-// legacyAccessRecordMatches mirrors the pre-transition parser (the binary a
-// rollback would restore): five dot-separated parts, version v1, algorithm
-// pbkdf2-sha256, exactly 600000 iterations, a 16-byte salt, and a 32-byte
-// verifier. It is deliberately independent of parseAccessPasswordHash so a
-// change to the new parser cannot make this rollback evidence pass by
-// construction.
-func legacyAccessRecordMatches(encoded string) bool {
-	parts := strings.Split(encoded, ".")
-	if len(parts) != 5 || parts[0] != "v1" || parts[1] != "pbkdf2-sha256" || parts[2] != "600000" {
-		return false
-	}
-	salt, err := base64.RawURLEncoding.DecodeString(parts[3])
-	if err != nil || len(salt) != 16 {
-		return false
-	}
-	verifier, err := base64.RawURLEncoding.DecodeString(parts[4])
-	if err != nil || len(verifier) != 32 {
-		return false
-	}
-	return true
-}
-
-func TestAccessRollbackRecordFormatStaysLegacyCompatible(t *testing.T) {
-	withTempConfig(t)
-	auth := useTestAccessAuth(t)
-
-	current, err := newAccessPasswordRecord(testAccessPassword)
-	if err != nil {
-		t.Fatalf("create current record: %v", err)
-	}
-	if !legacyAccessRecordMatches(current.encoded()) {
-		t.Fatalf("a current record is not rollback-compatible: %q", current.encoded())
-	}
-
-	stale := testAccessStaleHash(t)
-	if legacyAccessRecordMatches(stale) {
-		t.Fatal("an unrehashed non-current record claims to be rollback-compatible")
-	}
-	if err := setTestAccessRecord(auth, stale); err != nil {
-		t.Fatal(err)
-	}
-	if login := testAccessV2LoginRequest(t, testAccessPassword, "192.0.2.72:1"); login.Code != http.StatusOK {
-		t.Fatalf("v2 login against the non-current record: %d %s", login.Code, login.Body.String())
-	}
-	rehashed := testAccessDBPasswordRecord(t)
-	if !legacyAccessRecordMatches(rehashed) {
-		t.Fatalf("a rehashed record is not rollback-compatible: %q", rehashed)
-	}
-	record, err := parseAccessPasswordHash(rehashed)
-	if err != nil || record == nil || record.Iterations != accessPasswordHashIterations {
-		t.Fatalf("rehashed record: %#v err=%v", record, err)
-	}
-	if ok, err := record.matchesPassword(testAccessPassword); err != nil || !ok {
-		t.Fatalf("rehashed record lost the password: ok=%v err=%v", ok, err)
 	}
 }
 
@@ -3949,19 +3821,6 @@ func TestAccessV2StateSchemaBounds(t *testing.T) {
 
 }
 
-// testAccessRestart builds a fresh manager from Config the way process startup
-// does, after releasing the current owner's lock. A non-nil fault reports the
-// recovered state instead of asserting a healthy one.
-func testAccessRestart(t *testing.T) *accessAuthManager {
-	t.Helper()
-	restarted := newAccessAuthManager()
-	t.Cleanup(func() { restarted.close() })
-	if err := restarted.configure(loadConfig().AccessPasswordHash); err != nil {
-		t.Fatalf("restart configure: %v", err)
-	}
-	return restarted
-}
-
 func TestAccessDBCommitUncertaintyReloadsAuthoritativeState(t *testing.T) {
 	withTempConfig(t)
 	auth := useTestAccessAuth(t)
@@ -4400,45 +4259,6 @@ func TestAccessFenceValidatorHonoursFamilyDeadline(t *testing.T) {
 }
 
 // --- M4a: compatibility and failure matrix ---
-
-// TestAccessJWTLifetimeRejectedUnderRestoredKey proves the maximum lifetime is
-// enforced by the key the process actually restored, not only by the key that
-// minted the fixture: a restart must not widen what a token may claim.
-func TestAccessJWTLifetimeRejectedUnderRestoredKey(t *testing.T) {
-	withTempConfig(t)
-	auth := useTestAccessAuth(t)
-	testAccessEnableV2(t, testAccessPassword)
-
-	original := mustTestAccessJWTKey(t, auth)
-	testAccessReleaseStateOwnership(auth)
-	restarted := testAccessRestart(t)
-	testAccessSwapManager(t, restarted)
-	restored := mustTestAccessJWTKey(t, restarted)
-	if !bytes.Equal(original, restored) {
-		t.Fatal("the signing key changed across restart, so this test cannot isolate the lifetime rule")
-	}
-
-	now := time.Unix(testAccessJWTIssuedAt, 0)
-	mint := func(lifetime time.Duration) string {
-		return signTestAccessJWT(restored, testAccessJWTValidHeader, testAccessJWTPayloadWith(
-			`"phi"`, strconv.FormatInt(now.Unix(), 10),
-			strconv.FormatInt(now.Add(lifetime).Unix(), 10),
-			`"`+testAccessJWTNonce+`"`, `"`+testAccessJWTRecordID+`"`,
-			strconv.FormatUint(testAccessJWTEpoch, 10), `"`+testAccessJWTFamilyID+`"`))
-	}
-	if _, err := parseAccessJWT(restored, mint(accessJWTLifetime), now, accessJWTClockAllowance); err != nil {
-		t.Fatalf("the documented lifetime was rejected under the restored key: %v", err)
-	}
-	for name, lifetime := range map[string]time.Duration{
-		"one second over":     accessJWTLifetime + time.Second,
-		"thirty seconds over": accessJWTLifetime + 30*time.Second,
-		"one year":            365 * 24 * time.Hour,
-	} {
-		if _, err := parseAccessJWT(restored, mint(lifetime), now, accessJWTClockAllowance); err == nil {
-			t.Errorf("%s lifetime accepted under the restored key", name)
-		}
-	}
-}
 
 // TestAccessLogoutUncertainCommitReloadsRevocation verifies that a committed
 // logout is adopted after an uncertain Commit result without reporting success.

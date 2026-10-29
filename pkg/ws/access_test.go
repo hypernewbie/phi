@@ -24,8 +24,13 @@ func TestAccessFencerAdmitsOnlyCurrentGeneration(t *testing.T) {
 	if f.admit(&stubAuthSocket{}, AuthFence{Generation: 2}) {
 		t.Fatal("stale generation admitted")
 	}
-	if !f.admit(&stubAuthSocket{}, AuthFence{Generation: 3}) {
+	socket := &stubAuthSocket{}
+	if !f.admit(socket, AuthFence{Generation: 3}) {
 		t.Fatal("current generation rejected")
+	}
+	f.rotate(3)
+	if socket.closed {
+		t.Fatal("same-generation rotation closed the current socket")
 	}
 }
 
