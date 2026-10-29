@@ -285,19 +285,28 @@ func reportedHostname(cfg Config) string {
 }
 
 func loadConfig() Config {
-	configMu.RLock()
-	defer configMu.RUnlock()
-	cfg, _, err := readConfigLockedWithPresence()
+	cfg, err := loadConfigWithError()
 	if err != nil {
 		logConfigReadError(configFilePath(), err)
-		cfg = Config{CompressionEnabled: true}
+		return applyConfigDefaults(Config{CompressionEnabled: true})
 	}
-	return applyConfigDefaults(cfg)
+	return cfg
+}
+
+// Startup must not turn a config read error into a disabled access-password gate.
+func loadConfigWithError() (Config, error) {
+	configMu.RLock()
+	defer configMu.RUnlock()
+	cfg, err := readConfigLocked()
+	if err != nil {
+		return Config{}, err
+	}
+	return applyConfigDefaults(cfg), nil
 }
 
 func logConfigReadError(path string, err error) {
 	if err != nil && configReadErrorLogged.CompareAndSwap(false, true) {
-		slog.Error("failed to read config; using defaults", "path", path, "err", err)
+		slog.Error("config read or migration failed", "path", path, "err", err)
 	}
 }
 
@@ -480,16 +489,12 @@ func readLegacyConfig() (Config, bool, error) {
 }
 
 func readConfigLocked() (Config, error) {
-	cfg, _, err := readConfigLockedWithPresence()
-	return cfg, err
-}
-
-func readConfigLockedWithPresence() (Config, bool, error) {
 	cfg, present, err := readPrimaryConfig()
 	if err != nil || present {
-		return cfg, present, err
+		return cfg, err
 	}
-	return readLegacyConfig()
+	cfg, _, err = readLegacyConfig()
+	return cfg, err
 }
 
 func writeConfigLocked(cfg Config) error {

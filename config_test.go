@@ -466,6 +466,77 @@ func TestConfigTOMLUsesAbsoluteMapKeys(t *testing.T) {
 	}
 }
 
+func TestConfigStartupLoadRejectsInvalidOrUnreadableConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name, content string
+	}{
+		{"invalid type after verifier", "access_password_hash = \"" + testAccessHash() + "\"\nui_font_size = 'not-an-integer'\n"},
+		{"invalid type before verifier", "ui_font_size = 'not-an-integer'\naccess_password_hash = \"" + testAccessHash() + "\"\n"},
+		{"malformed TOML", "theme_color = [\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			primary := withTempConfig(t)
+			legacy := withTempLegacyConfig(t)
+			if err := os.WriteFile(primary, []byte(tc.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(legacy, []byte(`{"theme_color":"stale-legacy"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := loadConfigWithError(); err == nil {
+				t.Fatal("startup accepted an invalid config and can disable access protection")
+			}
+			if got := mustRead(t, primary); string(got) != tc.content {
+				t.Fatal("startup load modified the invalid primary")
+			}
+		})
+	}
+	t.Run("unreadable primary", func(t *testing.T) {
+		primary := withTempConfig(t)
+		if err := os.Remove(primary); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(primary, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadConfigWithError(); err == nil {
+			t.Fatal("startup accepted a directory as config")
+		}
+	})
+}
+
+func TestConfigStartupLoadDefaultsAndLegacyFallback(t *testing.T) {
+	primary := withTempConfig(t)
+	legacy := withTempLegacyConfig(t)
+	if err := os.Remove(primary); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfigWithError()
+	if err != nil || cfg.ThemeColor != "purple" || !cfg.CompressionEnabled {
+		t.Fatalf("fresh config defaults: cfg=%+v err=%v", cfg, err)
+	}
+	if err := os.WriteFile(legacy, []byte(`{"access_password_hash":"`+testAccessHash()+`","compression_enabled":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = loadConfigWithError()
+	if err != nil || cfg.AccessPasswordHash != testAccessHash() || cfg.CompressionEnabled {
+		t.Fatalf("valid legacy startup config: cfg=%+v err=%v", cfg, err)
+	}
+	if err := os.WriteFile(legacy, []byte(`{"access_password_hash":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadConfigWithError(); err == nil {
+		t.Fatal("startup accepted malformed legacy JSON")
+	}
+	if err := os.WriteFile(primary, []byte("# deliberately empty primary\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = loadConfigWithError()
+	if err != nil || cfg.ThemeColor != "purple" || cfg.AccessPasswordHash != "" {
+		t.Fatalf("blank primary must win over malformed legacy: cfg=%+v err=%v", cfg, err)
+	}
+}
+
 func TestConfigMalformedPrimaryIsNotOverwrittenBySave(t *testing.T) {
 	path := withTempConfig(t)
 	before := []byte("theme_color = [\n")

@@ -171,7 +171,7 @@ State is stored in `~/.phi/`:
 
 Both are created automatically. `config.toml` also holds an optional browser-derived access-password verifier; an empty value disables access protection. Set or clear it from **Config** rather than editing it by hand. Phi's access password protects casual LAN/Tailnet access, but HTTPS is still required against an active hostile-network attacker.
 
-When `config.toml` is missing, Phi reads the existing `config.json` and migrates its values to TOML at startup without deleting or changing the JSON file. Once TOML exists it takes precedence, so legacy JSON becomes stale; downgrading to an older Phi can therefore load stale settings. Comments and unknown keys survive no-op saves, but a real settings change rewrites the complete TOML file and drops them.
+When `config.toml` is missing, Phi reads the existing `config.json` and migrates its values to TOML at startup without deleting or changing the JSON file. Once TOML exists it takes precedence, so legacy JSON becomes stale; downgrading to an older Phi can therefore load stale settings. Comments and unknown keys survive no-op saves, but a real settings change rewrites the complete TOML file and drops them. If the selected config file is unreadable or invalid, Phi stops at startup rather than disable access protection.
 
 ### Terminal history retention
 
