@@ -221,6 +221,31 @@ eager to avoid a first-open unstyled flash. -->
                     </button>
 
                     <button
+                        id="header-notifications-btn"
+                        class="header-btn icon-only"
+                        type="button"
+                        title="Notifications"
+                        aria-label="Notifications"
+                        aria-haspopup="dialog"
+                        aria-controls="notifications-drawer"
+                        aria-expanded="false"
+                    >
+                        <svg
+                            class="icon"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            aria-hidden="true"
+                        >
+                            <path
+                                d="M4 4h16l2 10v5a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1v-5L4 4z M2 14h5l2 3h6l2-3h5"
+                            ></path>
+                        </svg>
+                    </button>
+                    <button
                         id="header-ntfy-btn"
                         class="header-btn icon-only"
                         title="Push Notifications (Pushover)"
@@ -1894,6 +1919,53 @@ eager to avoid a first-open unstyled flash. -->
                 </div>
             </div>
         </div>
+
+        <!-- In-app notification history; independent from push-service settings. -->
+        <div
+            id="notifications-overlay"
+            class="modal-overlay notifications-overlay hidden"
+            aria-hidden="true"
+        >
+            <div
+                id="notifications-drawer"
+                class="modal-content notifications-drawer"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="notifications-title"
+                tabindex="-1"
+            >
+                <div class="modal-header notifications-header">
+                    <h3 id="notifications-title">Notifications</h3>
+                    <div class="notifications-header-actions">
+                        <button
+                            id="notifications-dismiss-all"
+                            class="btn btn-secondary notifications-dismiss-all"
+                            type="button"
+                            disabled
+                        >
+                            Dismiss all
+                        </button>
+                        <button
+                            id="notifications-close"
+                            class="modal-close-btn notifications-close"
+                            type="button"
+                            title="Close notifications"
+                            aria-label="Close notifications"
+                        >
+                            ×
+                        </button>
+                    </div>
+                </div>
+                <div id="notifications-list" class="modal-body notifications-list"></div>
+            </div>
+        </div>
+        <div
+            id="notifications-announcements"
+            class="notifications-announcements"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+        ></div>
 
         <!-- Restart phi confirm modal -->
         <div id="restart-modal" class="md-modal-overlay hidden">

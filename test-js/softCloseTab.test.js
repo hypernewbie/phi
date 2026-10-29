@@ -415,6 +415,21 @@ describe('undoCloseTab - reverse a soft-close', () => {
         capturedCallback();
         expect(tm.tabs.get('a').softClosing).toBe(false);
     });
+
+    it('dismisses the captured toast through the app adapter on Undo', () => {
+        const tm = makeTm({ withTabs: ['a'] });
+        const toastEl = { classList: { add: vi.fn(), remove: vi.fn() } };
+        tm.app.showToast = vi.fn(() => toastEl);
+        tm.app.dismissToast = vi.fn();
+
+        tm.softCloseTab('a');
+        tm.undoCloseTab('a');
+
+        expect(tm.app.dismissToast).toHaveBeenCalledOnce();
+        expect(tm.app.dismissToast).toHaveBeenCalledWith(toastEl);
+        expect(tm.tabs.get('a').softCloseToast).toBeNull();
+        expect(tm.tabs.get('a').softCloseTimer).toBeNull();
+    });
 });
 
 // ---- spawn request context while a tab closes ------------------------
@@ -1063,8 +1078,22 @@ describe('finalizeCloseTab - actually kill the PTY', () => {
         tm.softCloseTab('a');
         expect(tm.tabs.get('a').softCloseToast).toBe(dismissEl);
         tm.finalizeCloseTab('a');
-        // (classList.remove was called for the dismiss animation)
+        // Legacy App doubles keep the existing local fade fallback.
         expect(dismissEl.classList.remove).toHaveBeenCalledWith('show');
+    });
+
+    it('uses dismissToast when durable finalization disposes the tab', () => {
+        const tm = makeTm({ withTabs: ['a'] });
+        const toastEl = { classList: { add: vi.fn(), remove: vi.fn() } };
+        tm.app.showToast = vi.fn(() => toastEl);
+        tm.app.dismissToast = vi.fn();
+        tm.softCloseTab('a');
+
+        tm.finalizeCloseTab('a');
+
+        expect(tm.app.dismissToast).toHaveBeenCalledOnce();
+        expect(tm.app.dismissToast).toHaveBeenCalledWith(toastEl);
+        expect(tm.tabs.has('a')).toBe(false);
     });
 
     it('calls kanbanManager.cleanup() when closing a kanban tab', () => {
@@ -1072,6 +1101,19 @@ describe('finalizeCloseTab - actually kill the PTY', () => {
         tm.softCloseTab('kb');
         tm.finalizeCloseTab('kb');
         expect(tm.app.kanbanManager.cleanup).toHaveBeenCalled();
+    });
+
+    it('removes a ready member only for a real disposal, not a preserved detach', () => {
+        const detached = makeTm({ withTabs: ['a'] });
+        detached.app.removeReadyPane = vi.fn();
+        detached.disposeTabClient('a', { preserveStorage: true });
+        expect(detached.app.removeReadyPane).not.toHaveBeenCalled();
+
+        const closed = makeTm({ withTabs: ['b'] });
+        closed.app.removeReadyPane = vi.fn();
+        closed.disposeTabClient('b', { preserveStorage: false });
+        expect(closed.app.removeReadyPane).toHaveBeenCalledOnce();
+        expect(closed.app.removeReadyPane).toHaveBeenCalledWith('b');
     });
 
     it('does not throw when called on an unknown paneId (idempotent)', () => {

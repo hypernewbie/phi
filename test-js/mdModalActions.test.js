@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { setupDomHarness } from './_dom.js';
 import { MarkdownManager } from '../web/markdown.js';
 
 setupDomHarness();
+
+let toastApp;
+afterEach(() => {
+    toastApp?.notifications?.destroy();
+    toastApp = null;
+});
 
 function stubModalDom() {
     const ids = [
@@ -429,8 +435,8 @@ describe('md-modal context-aware actions', () => {
 
     it('shows Toast with title "Error" instead of "Couldn\'t open session" for generic errors', async () => {
         const { App } = await import('../web/app.js');
-        const app = Object.create(App.prototype);
-        app.showToast('Something went wrong', { type: 'error' });
+        toastApp = Object.create(App.prototype);
+        toastApp.showToast('Something went wrong', { type: 'error' });
 
         const toast = document.querySelector('.toast-error');
         expect(toast).not.toBeNull();

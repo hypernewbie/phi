@@ -59,6 +59,7 @@ export type HeaderActionId =
   | 'header-clipboard-btn'
   | 'header-btop-btn'
   | 'header-ntfy-btn'
+  | 'header-notifications-btn'
   | 'header-config-pill'
   | 'header-export-btn'
   | 'header-import-btn'

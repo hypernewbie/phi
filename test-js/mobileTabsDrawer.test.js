@@ -87,6 +87,7 @@ function makeTabManager() {
 function makeApp(tabManager) {
     const app = Object.create(App.prototype);
     app.tabManager = tabManager;
+    app.notifications = { close: vi.fn() };
     return app;
 }
 
@@ -166,6 +167,45 @@ describe('drawer mode', () => {
         expect(
             drawerBody().querySelectorAll('.hostname-dropdown-row'),
         ).toHaveLength(2);
+    });
+});
+
+describe('ready notification navigation', () => {
+    it('opens the compact TABS drawer without toggling the desktop list', () => {
+        const tm = makeTabManager();
+        tm._overflowDropdownHidden = vi.fn(() => true);
+        tm._toggleOverflowDropdown = vi.fn();
+        const app = makeApp(tm);
+
+        app.openReadyTabs();
+
+        expect(app.notifications.close).toHaveBeenCalledWith({
+            restoreFocus: false,
+        });
+        expect(sidebar().classList.contains('drawer-open')).toBe(true);
+        expect(sidebar().dataset.panelMode).toBe('tabs');
+        expect(tm._toggleOverflowDropdown).not.toHaveBeenCalled();
+    });
+
+    it('opens the desktop overflow list once and focuses it when already open', () => {
+        setViewport(1440, 900);
+        const tm = makeTabManager();
+        tm._overflowDropdownHidden = vi
+            .fn()
+            .mockReturnValueOnce(true)
+            .mockReturnValueOnce(false);
+        tm._toggleOverflowDropdown = vi.fn();
+        tm._focusOverflowDropdownOnOpen = vi.fn();
+        const app = makeApp(tm);
+
+        app.openReadyTabs();
+        app.openReadyTabs();
+
+        expect(tm._toggleOverflowDropdown).toHaveBeenCalledOnce();
+        expect(tm._focusOverflowDropdownOnOpen).toHaveBeenCalledWith(
+            desktopDropdown(),
+        );
+        expect(sidebar().classList.contains('drawer-open')).toBe(false);
     });
 });
 

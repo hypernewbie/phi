@@ -33,11 +33,20 @@ export interface LoadMeta {
     stale: boolean;
 }
 
+export interface NotificationMetadata {
+    id: string;
+    type: 'info' | 'success' | 'error';
+    title: string;
+    message: string;
+    timestamp: number;
+}
+
 export class BackendStore {
     readonly profileId: string;
     responses: Map<string, string> = new Map();
     screens: Map<string, ScreenSnapshot> = new Map();
     tabs: TabMeta[] | null = null;
+    notifications: NotificationMetadata[] | null = null;
     activeCwd: string | null = null;
     registry?: BackendStoreRegistry;
 
@@ -50,6 +59,7 @@ export class BackendStore {
         this.responses.clear();
         this.screens.clear();
         this.tabs = null;
+        this.notifications = null;
         this.activeCwd = null;
     }
 
