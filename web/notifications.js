@@ -129,7 +129,7 @@ function createDialogMarkup(doc, overlay) {
     title.textContent = 'Notifications';
     const controls = doc.createElement('div');
     controls.className = 'notifications-header-actions';
-    const dismissAll = makeButton(doc, 'notifications-dismiss-all', 'btn btn-secondary notifications-dismiss-all', 'Dismiss all');
+    const dismissAll = makeButton(doc, 'notifications-dismiss-all', 'btn btn-primary notifications-dismiss-all', 'Dismiss all');
     dismissAll.disabled = true;
     const close = makeButton(doc, 'notifications-close', 'modal-close-btn notifications-close', '×');
     close.title = 'Close notifications';
@@ -198,7 +198,7 @@ function ensureShell(doc) {
     }
     let dismissAllButton = doc.getElementById('notifications-dismiss-all');
     if (!dismissAllButton) {
-        dismissAllButton = makeButton(doc, 'notifications-dismiss-all', 'btn btn-secondary notifications-dismiss-all', 'Dismiss all');
+        dismissAllButton = makeButton(doc, 'notifications-dismiss-all', 'btn btn-primary notifications-dismiss-all', 'Dismiss all');
         dismissAllButton.disabled = true;
         const header = dialog.querySelector('.notifications-header');
         if (header)
@@ -1432,7 +1432,7 @@ export class NotificationManager {
         controls.className = 'notification-item-controls';
         const actions = document.createElement('div');
         actions.className = 'notification-item-actions';
-        const dismiss = makeButton(document, '', 'btn btn-secondary notification-item-dismiss', 'Dismiss');
+        const dismiss = makeButton(document, '', 'btn btn-primary notification-item-dismiss', 'Dismiss');
         const id = entry.id;
         dismiss.addEventListener('click', (event) => {
             event.stopPropagation();

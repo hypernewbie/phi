@@ -219,7 +219,7 @@ function createDialogMarkup(doc: Document, overlay: HTMLDivElement): void {
     const dismissAll = makeButton(
         doc,
         'notifications-dismiss-all',
-        'btn btn-secondary notifications-dismiss-all',
+        'btn btn-primary notifications-dismiss-all',
         'Dismiss all',
     );
     dismissAll.disabled = true;
@@ -322,7 +322,7 @@ function ensureShell(doc: Document): NotificationShell {
         dismissAllButton = makeButton(
             doc,
             'notifications-dismiss-all',
-            'btn btn-secondary notifications-dismiss-all',
+            'btn btn-primary notifications-dismiss-all',
             'Dismiss all',
         );
         dismissAllButton.disabled = true;
@@ -1671,7 +1671,7 @@ export class NotificationManager {
         const dismiss = makeButton(
             document,
             '',
-            'btn btn-secondary notification-item-dismiss',
+            'btn btn-primary notification-item-dismiss',
             'Dismiss',
         );
         const id = entry.id;

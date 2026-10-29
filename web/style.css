@@ -6299,6 +6299,23 @@ html[data-phi-config-page] .settings-modal {
     gap: 8px;
 }
 
+.notifications-dismiss-all,
+.notification-item-dismiss {
+    flex: 0 0 auto;
+    width: auto;
+    padding: 0 12px;
+    white-space: nowrap;
+}
+
+.notifications-dismiss-all:disabled,
+.notifications-dismiss-all:disabled:hover {
+    background-color: var(--bg-elevated);
+    opacity: 0.55;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
 .notifications-list {
     display: flex;
     flex: 1 1 auto;

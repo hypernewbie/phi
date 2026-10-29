@@ -572,6 +572,37 @@ test('M1 notifications drawer caps compact popups and dismisses locally', async 
             await expect(
                 page.locator('#notifications-dismiss-all'),
             ).toBeDisabled();
+            const dismissAllMetrics = await page
+                .locator('#notifications-dismiss-all')
+                .evaluate((button) => {
+                    const rect = button.getBoundingClientRect();
+                    const range = document.createRange();
+                    range.selectNodeContents(button);
+                    return {
+                        width: rect.width,
+                        textWidth: range.getBoundingClientRect().width,
+                        dialogWidth: button
+                            .closest('.notifications-drawer')
+                            ?.getBoundingClientRect().width,
+                        background: getComputedStyle(button).backgroundColor,
+                        border: getComputedStyle(button).borderStyle,
+                        className: button.className,
+                        disabled: (button as HTMLButtonElement).disabled,
+                    };
+                });
+            expect(
+                dismissAllMetrics.width - dismissAllMetrics.textWidth,
+            ).toBeGreaterThanOrEqual(24);
+            expect(
+                dismissAllMetrics.width - dismissAllMetrics.textWidth,
+            ).toBeLessThan(40);
+            expect(dismissAllMetrics.width).toBeLessThan(
+                (dismissAllMetrics.dialogWidth || 0) / 2,
+            );
+            expect(dismissAllMetrics.background).not.toBe('rgba(0, 0, 0, 0)');
+            expect(dismissAllMetrics.border).toBe('solid');
+            expect(dismissAllMetrics.className).toContain('btn-primary');
+            expect(dismissAllMetrics.disabled).toBe(true);
             await expect(page.locator('#toast-container > .toast')).toHaveCount(
                 0,
             );
