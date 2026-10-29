@@ -21,6 +21,8 @@
  *                            'phi:open-rail-menu').
  *   - postCloseRailMenu(): close the profile context popup (channel
  *                            'phi:close-rail-menu').
+ *   - postRailMenuSize(height): report required popup content height
+ *                            (channel 'phi:rail-menu-size').
  *   - postOpenServerSessions(id): tell the main process to open a saved
  *                            profile's own session selector on its
  *                            retained view (channel
@@ -64,7 +66,8 @@
  *
  * The bridge receives main→renderer pushes (deeplink, forward-payload,
  * rail-state, rail-menu-state, window-state, window-title) and sends renderer→main requests
- * (select-profile, open-rail-menu, close-rail-menu, open-server-sessions,
+ * (select-profile, open-rail-menu, close-rail-menu, rail-menu-size,
+ * open-server-sessions,
  * open-picker, add-server,
  * rename-profile, remove-profile, reorder-profile, window-minimize,
  * window-toggle-maximize, window-close). The renderer→main 'phi:deeplink'
@@ -118,6 +121,9 @@ contextBridge.exposeInMainWorld('electron', {
   },
   postCloseRailMenu: (): void => {
     ipcRenderer.send('phi:close-rail-menu');
+  },
+  postRailMenuSize: (height: number): void => {
+    ipcRenderer.send('phi:rail-menu-size', height);
   },
   postOpenServerSessions: (id: string): void => {
     ipcRenderer.send('phi:open-server-sessions', id);
