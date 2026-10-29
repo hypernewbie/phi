@@ -129,11 +129,16 @@ describe('phic is desktop lite, including the actual desktop input form', () => 
       url: 'file:///rail-menu.html?profile=oracle',
     });
     const oldWindow = globalThis.window,
-      oldDocument = globalThis.document;
+      oldDocument = globalThis.document,
+      oldGetComputedStyle = globalThis.getComputedStyle;
     Object.assign(globalThis, {
       window: dom.window,
       document: dom.window.document,
+      getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
     });
+    (dom.window as unknown as { electron?: unknown }).electron = {
+      postRailMenuSize: () => {},
+    };
     try {
       UI.forEach((row, i) => {
         const profile = {
@@ -163,7 +168,11 @@ describe('phic is desktop lite, including the actual desktop input form', () => 
       });
       expect(canonicalHostname('faß.local')).toBe('FASS');
     } finally {
-      Object.assign(globalThis, { window: oldWindow, document: oldDocument });
+      Object.assign(globalThis, {
+        window: oldWindow,
+        document: oldDocument,
+        getComputedStyle: oldGetComputedStyle,
+      });
       dom.window.close();
     }
   });

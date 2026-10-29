@@ -111,6 +111,9 @@ const fake = vi.hoisted(() => {
     isDestroyed(): boolean {
       return this.destroyed;
     }
+    isFullScreen(): boolean {
+      return false;
+    }
     close(): void {
       if (this.closing) return;
       let prevented = false;
@@ -237,6 +240,12 @@ vi.mock('electron', () => ({
   clipboard: { writeText: vi.fn(), readText: vi.fn(() => '') },
   BrowserWindow: fake.FakeBrowserWindow,
   WebContentsView: fake.FakeWebContentsView,
+  screen: {
+    getDisplayNearestPoint: (_point: { x: number; y: number }) => ({
+      bounds: { x: 0, y: 0, width: 1680, height: 1050 },
+      workArea: { x: 0, y: 31, width: 1680, height: 1019 },
+    }),
+  },
   Menu: { setApplicationMenu: vi.fn(), buildFromTemplate: vi.fn(() => ({})) },
   Notification: class {
     show(): void {}

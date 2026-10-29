@@ -149,6 +149,8 @@ export interface ElectronApi {
   postOpenRailMenu(id: string, screenX: number, screenY: number): void;
   /** Close the desktop-sized rail context popup (channel 'phi:close-rail-menu'). */
   postCloseRailMenu(): void;
+  /** Report the popup's required content height in CSS pixels (channel 'phi:rail-menu-size'). */
+  postRailMenuSize(height: number): void;
   /** Ask the main process to open a saved profile's own session selector on its retained view (channel 'phi:open-server-sessions'). */
   postOpenServerSessions(id: string): void;
   /** Ask the main process to open the add-server picker (channel 'phi:open-picker'). */
