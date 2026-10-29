@@ -231,7 +231,26 @@ test('terminal pane flows over protobuf in Chromium', async ({ page }) => {
             { timeout: 20_000 },
         )
         .not.toBeNull();
+    const [initialRows, initialCols] = initial.split(/\s+/).map(Number);
+    const resizeStart = clientFrames.length;
     await page.setViewportSize({ width: 800, height: 500 });
+    // The viewport changes before the debounced resize reaches the socket.
+    await expect
+        .poll(
+            () =>
+                clientFrames.slice(resizeStart).some((raw) => {
+                    const payload = ClientCodec.decode(
+                        new Uint8Array(raw),
+                    ).payload;
+                    return (
+                        payload?.$case === 'resize' &&
+                        (payload.value.rows !== initialRows ||
+                            payload.value.cols !== initialCols)
+                    );
+                }),
+            { timeout: 20_000 },
+        )
+        .toBe(true);
     await page.keyboard.type('stty size', { delay: 5 });
     await page.keyboard.press('Enter');
     await expect
