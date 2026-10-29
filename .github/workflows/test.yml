@@ -184,6 +184,10 @@ jobs:
           pnpm install --frozen-lockfile
           --filter phi-dev --filter @phi/core --filter @phi/web-react
 
+      # Keep cold Go downloads/compilation outside the JS hooks' 60s limit.
+      - name: Compile Go-backed JS fixtures
+        run: go test ./internal/phic -run '^$'
+
       - name: Run JS Tests
         run: pnpm test
 

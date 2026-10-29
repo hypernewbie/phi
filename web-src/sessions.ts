@@ -1382,6 +1382,11 @@ export class SessionsManager {
 
     async spawnNewSession(mini: boolean = false): Promise<void> {
         try {
+            if (isCompactViewport()) {
+                document
+                    .getElementById('sidebar-panel')
+                    ?.classList.remove('drawer-open');
+            }
             const coderId = this.activeCoder,
                 cwd = this.activeCWD,
                 workspace = this.activeWorkspace;
