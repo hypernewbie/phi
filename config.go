@@ -172,10 +172,11 @@ type Config struct {
 	KanbanPasswordEnc string `json:"kanban_password_enc" toml:"kanban_password_enc"`
 	KanbanUsername    string `json:"kanban_username,omitempty" toml:"kanban_username,omitempty"`
 	KanbanURL         string `json:"kanban_url,omitempty" toml:"kanban_url,omitempty"`
-	// AccessPasswordHash is an optional browser-derived password verifier.
-	// An empty string deliberately disables Phi's access-password gate.
-	AccessPasswordHash string `json:"access_password_hash" toml:"access_password_hash,omitempty"`
-	SyncCoordinator    string `json:"sync_coordinator" toml:"sync_coordinator"`
+	// AccessPasswordHash is the legacy browser-derived verifier. After auth.db
+	// migration it is omitted from TOML; auth.db is authoritative.
+	AccessPasswordHash  string                     `json:"access_password_hash,omitempty" toml:"access_password_hash,omitempty"`
+	AccessAuthMigration *accessAuthMigrationMarker `json:"access_auth_migration,omitempty" toml:"access_auth_migration,omitempty"`
+	SyncCoordinator     string                     `json:"sync_coordinator" toml:"sync_coordinator"`
 
 	// AuthOrigins lists extra origins a browser may present to the v2 auth
 	// routes when a reverse proxy terminates TLS. Same-origin requests never
@@ -434,11 +435,10 @@ func saveConfig(cfg Config) {
 	defer configMu.Unlock()
 
 	// Legacy callers hold a full snapshot from loadConfig, which may be
-	// older than disk. Thinking presets and the access password hash are
-	// owned by their own endpoints, so always keep the latest persisted
-	// values instead of overwriting them with this snapshot. An unreadable
-	// or malformed file is not a safe base: skip the write rather than
-	// destroy it.
+	// older than disk. Thinking presets, the auth verifier, and the internal
+	// migration marker are owned by their own flows, so keep the latest values.
+	// An unreadable or malformed file is not a safe base: skip the write rather
+	// than destroy it.
 	latest, err := readConfigLocked()
 	if err != nil {
 		return
@@ -450,6 +450,7 @@ func saveConfig(cfg Config) {
 	cfg.MobileTerminalFontSize = latest.MobileTerminalFontSize
 	cfg.MobileAppearanceRevision = latest.MobileAppearanceRevision
 	cfg.AccessPasswordHash = latest.AccessPasswordHash
+	cfg.AccessAuthMigration = latest.AccessAuthMigration
 
 	// Defense in depth: never persist a workspace whose path looks
 	// like a test scratch dir (e.g. /tmp/phi-test-alpha). This guards
@@ -530,6 +531,7 @@ func writeConfigLocked(cfg Config) error {
 		return err
 	}
 	cfg.AccessPasswordHash = latest.AccessPasswordHash
+	cfg.AccessAuthMigration = latest.AccessAuthMigration
 	return writeConfigContentsLocked(cfg)
 }
 

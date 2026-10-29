@@ -71,6 +71,15 @@ var (
 	StartedAt = time.Now().Unix()
 )
 
+func rollbackPreviousBinary() (string, error) {
+	release, err := acquireAccessRollbackGuard()
+	if err != nil {
+		return "", err
+	}
+	defer release()
+	return update.Rollback()
+}
+
 func main() {
 	enableVirtualTerminalProcessing()
 	portFlag := flag.Int("port", 7070, "Port to run Go web server on")
@@ -111,7 +120,7 @@ func main() {
 	}
 
 	if *rollbackFlag {
-		restored, err := update.Rollback()
+		restored, err := rollbackPreviousBinary()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Rollback failed: %v\n", err)
 			os.Exit(1)
@@ -172,7 +181,9 @@ func main() {
 	}
 	if !found {
 		cfg.Workspaces = append(cfg.Workspaces, activeCWD)
-		saveConfig(cfg)
+		if accessAuth.stateOwned() {
+			saveConfig(cfg)
+		}
 	}
 
 	// Initialize PTY and WebSocket subsystems
@@ -486,6 +497,7 @@ func main() {
 				envDuration("PHI_SHUTDOWN_PTY_GRACE", ptyGrace),
 				envDuration("PHI_SHUTDOWN_GRACE", httpGrace),
 			)
+			accessAuth.beginRestart()
 			piBridge.Stop()
 			if err := obsShutdown(context.Background()); err != nil {
 				slog.Error("obs shutdown", "err", err)

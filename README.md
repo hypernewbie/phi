@@ -166,12 +166,13 @@ Flags also accept double-dash forms, such as `--web=./web`.
 
 State is stored in `~/.phi/`:
 
-- `config.toml` — registered workspaces, theme color, and per-workspace worktree state. Existing `config.json` is a read-only fallback.
+- `config.toml` — registered workspaces, theme color, and per-workspace worktree state. Existing `config.json` is a read-only fallback used only when TOML is absent.
+- `auth.db` — sensitive access verifier and session state; authoritative after migration.
 - `sessions.json` — local names/timestamps for Antigravity sessions (its conversation files are binary, so Phi keeps a sidecar map).
 
-Both are created automatically. `config.toml` also holds an optional browser-derived access-password verifier; an empty value disables access protection. Set or clear it from **Config** rather than editing it by hand. Phi's access password protects casual LAN/Tailnet access, but HTTPS is still required against an active hostile-network attacker.
+These files are created automatically. Set or clear the optional browser-derived access password from **Config** rather than editing files by hand. During one-time migration, Phi imports the legacy verifier and session state into `auth.db`; after verified completion it omits the verifier from TOML and removes `auth-v2-state.json`. A cleanup failure is logged and does not restore Config as authority. Copy `auth.db` only while Phi is stopped, unless you use a consistent SQLite backup mechanism. If `auth.db` is missing or corrupt, restore a matching backup; Phi will not treat that as disabled authentication. Direct downgrade to an older Phi binary is unsupported, and built-in rollback is blocked after migration. Phi's access password protects casual LAN/Tailnet access, but HTTPS is still required against an active hostile-network attacker.
 
-When `config.toml` is missing, Phi reads the existing `config.json` and migrates its values to TOML at startup without deleting or changing the JSON file. Once TOML exists it takes precedence, so legacy JSON becomes stale; downgrading to an older Phi can therefore load stale settings. Comments and unknown keys survive no-op saves, but a real settings change rewrites the complete TOML file and drops them. If the selected config file is unreadable or invalid, Phi stops at startup rather than disable access protection.
+When `config.toml` exists, it takes precedence over `config.json`; an unreadable or invalid selected config stops startup rather than disabling access protection. TOML comments and unknown keys survive no-op saves, but a real settings change rewrites the complete file and drops them. Once TOML exists, legacy JSON can become stale, so an older Phi may load stale settings.
 
 ### Terminal history retention
 
