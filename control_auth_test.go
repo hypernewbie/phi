@@ -16,7 +16,7 @@ func TestControlAuthRejectsNoCookie(t *testing.T) {
 	// Auth state lives beside config, so this test isolates both.
 	withTempConfig(t)
 	auth := useTestAccessAuth(t)
-	if err := auth.configure(testAccessHash()); err != nil {
+	if err := setTestAccessRecord(auth, testAccessHash()); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()

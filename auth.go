@@ -27,7 +27,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hypernewbie/phi/pkg/system"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/hypernewbie/phi/pkg/ws"
 )
 
@@ -119,9 +119,14 @@ type accessPasswordRecord struct {
 	Iterations int
 	Salt       []byte
 	Verifier   []byte
+	// encodedValue preserves accepted legacy spellings across state-only writes.
+	encodedValue string
 }
 
 func (r accessPasswordRecord) encoded() string {
+	if r.encodedValue != "" {
+		return r.encodedValue
+	}
 	return strings.Join([]string{
 		accessPasswordHashVersion,
 		accessPasswordHashAlgorithm,
@@ -155,7 +160,7 @@ func parseAccessPasswordHash(encoded string) (*accessPasswordRecord, error) {
 	if err != nil || len(verifier) != accessPasswordVerifierBytes {
 		return nil, errors.New("invalid access password hash verifier")
 	}
-	return &accessPasswordRecord{Iterations: iterations, Salt: salt, Verifier: verifier}, nil
+	return &accessPasswordRecord{Iterations: iterations, Salt: salt, Verifier: verifier, encodedValue: encoded}, nil
 }
 
 // deriveAccessVerifier runs PBKDF2-SHA256 at the record's own iteration count.
@@ -222,6 +227,30 @@ type accessJWTPayload struct {
 	RecordID  string `json:"rid"`
 	Epoch     uint64 `json:"epoch"`
 	FamilyID  string `json:"fid"`
+}
+
+func (c *accessJWTPayload) GetExpirationTime() (*jwt.NumericDate, error) {
+	return jwt.NewNumericDate(time.Unix(c.ExpiresAt, 0)), nil
+}
+
+func (c *accessJWTPayload) GetIssuedAt() (*jwt.NumericDate, error) {
+	return jwt.NewNumericDate(time.Unix(c.IssuedAt, 0)), nil
+}
+
+func (*accessJWTPayload) GetNotBefore() (*jwt.NumericDate, error) {
+	return nil, nil
+}
+
+func (c *accessJWTPayload) GetIssuer() (string, error) {
+	return c.Issuer, nil
+}
+
+func (*accessJWTPayload) GetSubject() (string, error) {
+	return "", nil
+}
+
+func (*accessJWTPayload) GetAudience() (jwt.ClaimStrings, error) {
+	return nil, nil
 }
 
 // accessJWTRevocation is the record identity, epoch, and family a token is
@@ -382,8 +411,8 @@ func validAccessDigest(digest string) bool {
 	return err == nil
 }
 
-// accessV2StatePath keeps session state beside the config file, so a test that
-// isolates the config directory also isolates the state file.
+// accessV2StatePath locates the legacy JSON session snapshot used only during
+// the one-time SQLite migration.
 func accessV2StatePath() string {
 	return filepath.Join(filepath.Dir(configFilePath()), accessV2StateFileName)
 }
@@ -393,10 +422,6 @@ func accessV2StatePath() string {
 func accessV2LockPath() string {
 	return filepath.Join(filepath.Dir(configFilePath()), accessV2LockFileName)
 }
-
-// writeAccessV2StateFile is the strict state writer. Tests replace it to inject
-// persistence failures between the journal and the commit point.
-var writeAccessV2StateFile = system.WriteFileAtomicPreserveExisting
 
 // accessStateLock owns the on-disk auth state for this process.
 type accessStateLock struct {
@@ -459,13 +484,16 @@ func loadAccessV2StateFile(path string) (*accessV2StateFile, error) {
 	if len(raw) > maxAccessV2StateBytes {
 		return nil, errors.New("access state exceeds the size bound")
 	}
+	if err := validateOneJSONValue(raw, true); err != nil {
+		return nil, err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	var state accessV2StateFile
 	if err := decoder.Decode(&state); err != nil {
 		return nil, err
 	}
-	if decoder.More() {
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return nil, errors.New("access state has trailing data")
 	}
 	if state.Version != accessV2StateVersion {
@@ -483,6 +511,9 @@ func loadAccessV2StateFile(path string) (*accessV2StateFile, error) {
 		}
 		if _, err := parseAccessPasswordHash(state.Pending.PasswordRecord); err != nil {
 			return nil, err
+		}
+		if state.Pending.Next.RecordBinding != accessRecordBinding(state.Pending.PasswordRecord) {
+			return nil, errors.New("pending journal record binding does not match its verifier")
 		}
 	}
 	return &state, nil
@@ -561,25 +592,39 @@ func validateAccessV2Active(active *accessV2ActiveState) error {
 			}
 		}
 	}
+	return validateAccessV2HandleConsistency(active)
+}
+
+func validateAccessV2HandleConsistency(active *accessV2ActiveState) error {
+	if len(active.Families) == 0 {
+		return nil
+	}
+	if active.RefreshKey == nil {
+		return errors.New("active digests require a refresh key")
+	}
+	key, err := base64.RawURLEncoding.DecodeString(*active.RefreshKey)
+	if err != nil {
+		return err
+	}
+	for _, family := range active.Families {
+		handle, err := accessRefreshHandle(key, family.ID, family.Generation)
+		if err != nil {
+			return err
+		}
+		digest, err := accessHandleDigest(handle)
+		if err != nil {
+			return err
+		}
+		if digest != family.ActiveDigest {
+			return errors.New("active digest does not match its handle")
+		}
+	}
 	return nil
 }
 
 // validAccessJWTHandle reports whether encoded is one canonical 32-byte id.
 func validAccessJWTHandle(encoded string) bool {
 	return validAccessJWTID(encoded)
-}
-
-// saveAccessV2StateFile writes the whole state in one strict replacement. The
-// caller holds the manager lock and owns the state directory.
-func saveAccessV2StateFile(path string, state *accessV2StateFile) error {
-	data, err := json.Marshal(state)
-	if err != nil {
-		return err
-	}
-	if len(data) > maxAccessV2StateBytes {
-		return errors.New("access state exceeds the size bound")
-	}
-	return writeAccessV2StateFile(path, data, 0o600)
 }
 
 // loadRuntimeLocked validates active state into the in-memory runtime and
@@ -601,22 +646,6 @@ func (m *accessAuthManager) loadRuntimeLocked(active *accessV2ActiveState) error
 	}
 	for i := range active.Families {
 		family := active.Families[i]
-		if len(runtime.refreshKey) == accessRefreshKeyBytes {
-			// The stored digest must be the handle this state actually
-			// derives, otherwise a hand-edited file could point a family at a
-			// handle its owner never saw.
-			handle, err := accessRefreshHandle(runtime.refreshKey, family.ID, family.Generation)
-			if err != nil {
-				return err
-			}
-			digest, err := accessHandleDigest(handle)
-			if err != nil {
-				return err
-			}
-			if digest != family.ActiveDigest {
-				return errors.New("active digest does not match its handle")
-			}
-		}
 		runtime.families[family.ID] = &family
 		runtime.active[family.ActiveDigest] = family.ID
 		for _, consumed := range family.Consumed {
@@ -656,27 +685,10 @@ func (m *accessAuthManager) snapshotLocked() *accessV2ActiveState {
 	return active
 }
 
-// persistLocked writes the current state. Callers hold the lock and have
-// already prepared everything fallible, so a failure here means nothing was
-// announced.
-func (m *accessAuthManager) persistLocked() error {
-	if !m.owned {
-		return errAccessPersistence
-	}
-	return saveAccessV2StateFile(accessV2StatePath(), &accessV2StateFile{
-		Version: accessV2StateVersion,
-		Active:  *m.snapshotLocked(),
-	})
-}
-
-// formatAccessJWT signs explicit claims. Production callers use mintAccessJWT,
+// formatAccessJWT signs ordered claims. Production callers use mintAccessJWT,
 // which supplies a random nonce; tests use this form for fixed vectors.
 func formatAccessJWT(key []byte, issuedAt, expiresAt int64, nonce string, revocation accessJWTRevocation) (string, error) {
-	header, err := json.Marshal(accessJWTHeader{Algorithm: accessJWTAlgorithm, Type: accessJWTType})
-	if err != nil {
-		return "", err
-	}
-	payload, err := json.Marshal(accessJWTPayload{
+	claims := accessJWTPayload{
 		Issuer:    accessJWTIssuer,
 		IssuedAt:  issuedAt,
 		ExpiresAt: expiresAt,
@@ -684,14 +696,8 @@ func formatAccessJWT(key []byte, issuedAt, expiresAt int64, nonce string, revoca
 		RecordID:  revocation.RecordID,
 		Epoch:     revocation.Epoch,
 		FamilyID:  revocation.FamilyID,
-	})
-	if err != nil {
-		return "", err
 	}
-	signingInput := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload)
-	mac := hmac.New(sha256.New, key)
-	_, _ = mac.Write([]byte(signingInput))
-	return signingInput + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, &claims).SignedString(key)
 }
 
 func mintAccessJWT(key []byte, now time.Time, revocation accessJWTRevocation) (string, error) {
@@ -702,11 +708,8 @@ func mintAccessJWT(key []byte, now time.Time, revocation accessJWTRevocation) (s
 	return formatAccessJWT(key, now.Unix(), now.Add(accessJWTLifetime).Unix(), base64.RawURLEncoding.EncodeToString(nonce), revocation)
 }
 
-// parseAccessJWT verifies the signature first, then enforces the exact header
-// and payload shape. Every failure returns the same error so callers cannot
-// distinguish a malformed token from a forged one. expiryAllowance widens only
-// the expiry comparison, so a browser request tolerates clock drift while a
-// socket still closes at exp.
+// parseAccessJWT delegates compact parsing, HS256 verification, issuer checks,
+// and clock validation to jwt/v5. Phi then applies its exact wire constraints.
 func parseAccessJWT(key []byte, token string, now time.Time, expiryAllowance time.Duration) (*accessJWTClaims, error) {
 	if len(key) != accessJWTKeyBytes {
 		return nil, errAccessJWTInvalid
@@ -727,9 +730,22 @@ func parseAccessJWT(key []byte, token string, now time.Time, expiryAllowance tim
 	if err != nil || len(signature) != sha256.Size {
 		return nil, errAccessJWTInvalid
 	}
-	mac := hmac.New(sha256.New, key)
-	_, _ = mac.Write([]byte(segments[0] + "." + segments[1]))
-	if subtle.ConstantTimeCompare(signature, mac.Sum(nil)) != 1 {
+
+	claims := &accessJWTPayload{}
+	parsed, err := jwt.ParseWithClaims(token, claims, func(parsed *jwt.Token) (any, error) {
+		if parsed.Method != jwt.SigningMethodHS256 {
+			return nil, errAccessJWTInvalid
+		}
+		return key, nil
+	},
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+		jwt.WithIssuer(accessJWTIssuer),
+		jwt.WithExpirationRequired(),
+		jwt.WithIssuedAt(),
+		jwt.WithLeeway(accessJWTClockAllowance),
+		jwt.WithTimeFunc(func() time.Time { return now }),
+	)
+	if err != nil || parsed == nil || !parsed.Valid {
 		return nil, errAccessJWTInvalid
 	}
 
@@ -738,47 +754,21 @@ func parseAccessJWT(key []byte, token string, now time.Time, expiryAllowance tim
 		return nil, errAccessJWTInvalid
 	}
 	var verifiedHeader accessJWTHeader
-	if err := json.Unmarshal(header, &verifiedHeader); err != nil {
+	if err := json.Unmarshal(header, &verifiedHeader); err != nil ||
+		verifiedHeader.Algorithm != accessJWTAlgorithm || verifiedHeader.Type != accessJWTType {
 		return nil, errAccessJWTInvalid
 	}
-	if verifiedHeader.Algorithm != accessJWTAlgorithm || verifiedHeader.Type != accessJWTType {
-		return nil, errAccessJWTInvalid
-	}
-
 	payloadMembers, err := scanAccessJSONObject(payload)
 	if err != nil || !accessJWTHasExactKeys(payloadMembers, "iss", "iat", "exp", "jti", "rid", "epoch", "fid") {
 		return nil, errAccessJWTInvalid
 	}
-	// null leaves a plain int64 at zero, so decode the timestamps through
-	// pointers and require both to be present as integers.
-	var claims struct {
-		Issuer    string `json:"iss"`
-		IssuedAt  *int64 `json:"iat"`
-		ExpiresAt *int64 `json:"exp"`
-		Nonce     string `json:"jti"`
-		RecordID  string `json:"rid"`
-		FamilyID  string `json:"fid"`
-	}
-	if err := json.Unmarshal(payload, &claims); err != nil || claims.IssuedAt == nil || claims.ExpiresAt == nil {
-		return nil, errAccessJWTInvalid
-	}
-	if claims.Issuer != accessJWTIssuer {
-		return nil, errAccessJWTInvalid
-	}
+
 	nonce, err := decodeAccessJWTSegment(claims.Nonce)
-	if err != nil || len(nonce) != accessJWTNonceBytes {
+	if err != nil || len(nonce) != accessJWTNonceBytes ||
+		!validAccessJWTID(claims.RecordID) || !validAccessJWTID(claims.FamilyID) || claims.Epoch == 0 {
 		return nil, errAccessJWTInvalid
 	}
-	if !validAccessJWTID(claims.RecordID) || !validAccessJWTID(claims.FamilyID) {
-		return nil, errAccessJWTInvalid
-	}
-	// Parse the raw claim text, not a decoded value: a quoted number, a
-	// fraction, or an exponent must fail rather than round into an integer.
-	epoch, err := strconv.ParseUint(string(payloadMembers["epoch"]), 10, 64)
-	if err != nil || epoch == 0 {
-		return nil, errAccessJWTInvalid
-	}
-	issuedAt, expiresAt := *claims.IssuedAt, *claims.ExpiresAt
+	issuedAt, expiresAt := claims.IssuedAt, claims.ExpiresAt
 	// Positive integers keep the lifetime subtraction from overflowing.
 	if issuedAt <= 0 || expiresAt <= 0 || expiresAt <= issuedAt {
 		return nil, errAccessJWTInvalid
@@ -790,6 +780,8 @@ func parseAccessJWT(key []byte, token string, now time.Time, expiryAllowance tim
 		return nil, errAccessJWTInvalid
 	}
 	expiry := time.Unix(expiresAt, 0)
+	// jwt/v5 applies the future-issued-at leeway to expiration too. This
+	// narrower Phi comparison keeps HTTP and WebSocket expiry distinct.
 	if !expiry.Add(expiryAllowance).After(now) {
 		return nil, errAccessJWTInvalid
 	}
@@ -798,7 +790,7 @@ func parseAccessJWT(key []byte, token string, now time.Time, expiryAllowance tim
 		ExpiresAt: expiry,
 		Nonce:     claims.Nonce,
 		RecordID:  claims.RecordID,
-		Epoch:     epoch,
+		Epoch:     claims.Epoch,
 		FamilyID:  claims.FamilyID,
 	}, nil
 }
@@ -1022,19 +1014,23 @@ type accessRefreshBucket struct {
 }
 
 type accessAuthManager struct {
-	mu             sync.Mutex
-	record         *accessPasswordRecord
-	jwtKey         []byte
-	v2             accessV2Runtime
-	owner          accessStateLock
-	owned          bool
-	faulted        bool
-	generation     uint64
-	challenges     map[string]time.Time
-	sessions       map[string]time.Time
-	attempts       map[string]accessLoginAttempt
-	refreshBuckets map[string]accessRefreshBucket
-	now            func() time.Time
+	mu                sync.Mutex
+	record            *accessPasswordRecord
+	jwtKey            []byte
+	v2                accessV2Runtime
+	db                *accessDB
+	v2Available       bool
+	owner             accessStateLock
+	owned             bool
+	faulted           bool
+	restartStarted    bool
+	restartInProgress bool
+	generation        uint64
+	challenges        map[string]time.Time
+	sessions          map[string]time.Time
+	attempts          map[string]accessLoginAttempt
+	refreshBuckets    map[string]accessRefreshBucket
+	now               func() time.Time
 }
 
 func newAccessAuthManager() *accessAuthManager {
@@ -1075,11 +1071,69 @@ func retireAccessV2Sockets() {
 	}
 }
 
-// configure activates the persisted record and reconciles session state. It is
-// the startup entry point, so ownership is taken first: reconciliation writes
-// the state file and a non-owner must never write it.
+// configure acquires ownership before it reads authoritative credentials or
+// migration state. The Config snapshot argument is display-only for a non-owner.
 func (m *accessAuthManager) configure(encoded string) error {
-	record, err := parseAccessPasswordHash(encoded)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.activateLocked(encoded)
+}
+
+func (m *accessAuthManager) activateLocked(displayEncoded string) error {
+	if m.db != nil {
+		_ = m.db.close()
+		m.db = nil
+	}
+	m.owned = m.owner.tryAcquire(accessV2LockPath())
+	m.generation++
+	m.challenges = make(map[string]time.Time)
+	m.sessions = make(map[string]time.Time)
+	m.attempts = make(map[string]accessLoginAttempt)
+	m.refreshBuckets = make(map[string]accessRefreshBucket)
+	m.faulted = true
+	m.record = nil
+	m.jwtKey = nil
+	m.v2Available = false
+	m.v2 = newAccessV2Runtime()
+	if !m.owned {
+		// A non-owner may show a read-only status snapshot, but never uses it to
+		// authorize. A failed snapshot is conservatively displayed as enabled.
+		encoded, err := readOnlyAccessDBVerifier(accessDBPath())
+		if err != nil || encoded == "" {
+			if displayEncoded != "" {
+				encoded = displayEncoded
+			} else if err != nil {
+				m.record = &accessPasswordRecord{}
+				m.v2.recordBinding = accessRecordBinding("")
+				m.v2.epoch = 1
+				return nil
+			}
+		}
+		m.record, _ = parseAccessPasswordHash(encoded)
+		if m.record == nil && err != nil {
+			m.record = &accessPasswordRecord{}
+		}
+		m.v2.recordBinding = accessRecordBinding(encoded)
+		m.v2.epoch = 1
+		return nil
+	}
+	state, store, err := m.openMigratedAccessDB()
+	if err != nil {
+		return err
+	}
+	m.db = store
+	if err := m.installAccessDBStateLocked(state); err != nil {
+		_ = store.close()
+		m.db = nil
+		m.faulted = true
+		return err
+	}
+	revokeAccessSockets(m.generation)
+	return nil
+}
+
+func (m *accessAuthManager) installAccessDBStateLocked(state accessDBState) error {
+	record, err := parseAccessPasswordHash(state.PasswordRecord)
 	if err != nil {
 		return err
 	}
@@ -1087,55 +1141,100 @@ func (m *accessAuthManager) configure(encoded string) error {
 	if err != nil {
 		return err
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.activateLocked(encoded, record, key)
-}
-
-// beginActivationLocked installs the record and ownership decision this
-// process starts with. The caller holds the manager lock.
-func (m *accessAuthManager) beginActivationLocked(owned bool, encoded string, record *accessPasswordRecord, key []byte) {
-	m.record = record
-	m.jwtKey = key
-	m.owned = owned
-	m.generation++
-	m.challenges = make(map[string]time.Time)
-	m.sessions = make(map[string]time.Time)
-	m.attempts = make(map[string]accessLoginAttempt)
-	m.refreshBuckets = make(map[string]accessRefreshBucket)
-}
-
-// activateLocked takes the state lock, reconciles the durable state, and only
-// then publishes ownership. The caller holds the manager lock, so two callers
-// cannot interleave an activation with someone else's reconciliation.
-func (m *accessAuthManager) activateLocked(encoded string, record *accessPasswordRecord, key []byte) error {
-	owned := m.owner.tryAcquire(accessV2LockPath())
-	m.beginActivationLocked(owned, encoded, record, key)
-	if !owned {
-		// A second instance cannot tell whether the owner enabled or revoked
-		// anything since it read Config, so it authorizes nothing at all.
-		m.faulted = true
-		m.v2 = newAccessV2Runtime()
-		m.v2.recordBinding = accessRecordBinding(encoded)
-		m.v2.epoch = 1
-		return nil
-	}
-	return m.finishActivationLocked(encoded)
-}
-
-// finishActivationLocked reconciles the durable state for the record that is
-// already installed and publishes the result to the socket fence.
-func (m *accessAuthManager) finishActivationLocked(encoded string) error {
-	state, loadErr := loadAccessV2StateFile(accessV2StatePath())
-	if err := m.reconcileLocked(encoded, state, loadErr); err != nil {
+	if err := m.loadRuntimeLocked(&state.Active); err != nil {
 		return err
 	}
-	// Publish the reconciled generation to the socket fence. Without this a
-	// recovered owner keeps the fence this process started with and refuses
-	// every upgrade, because the gate compares against a generation the auth
-	// layer already advanced.
-	revokeAccessSockets(m.generation)
+	m.record = record
+	m.jwtKey = key
+	m.v2Available = state.V2Available
+	m.faulted = false
 	return nil
+}
+
+func (m *accessAuthManager) close() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.db != nil {
+		_ = m.db.close()
+		m.db = nil
+	}
+	m.owner.release()
+	m.owned = false
+}
+
+// claimRestartAttempt serializes Windows child creation without closing auth
+// until the child exists.
+func (m *accessAuthManager) claimRestartAttempt() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.restartStarted || m.restartInProgress {
+		return false
+	}
+	m.restartStarted = true
+	return true
+}
+
+func (m *accessAuthManager) cancelRestartAttempt() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.restartInProgress {
+		m.restartStarted = false
+	}
+}
+
+// beginRestart fences admitted sockets before closing the database and releases
+// ownership only after ordinary requests are barred from reacquiring it.
+func (m *accessAuthManager) beginRestart() bool {
+	return m.startRestart(false)
+}
+
+func (m *accessAuthManager) beginClaimedRestart() bool {
+	return m.startRestart(true)
+}
+
+func (m *accessAuthManager) startRestart(claimed bool) bool {
+	m.mu.Lock()
+	if m.restartInProgress || (claimed && !m.restartStarted) || (!claimed && m.restartStarted) {
+		m.mu.Unlock()
+		return false
+	}
+	m.restartStarted = true
+	m.restartInProgress = true
+	m.faulted = true
+	m.generation++
+	generation := m.generation
+	m.mu.Unlock()
+
+	// The generation and gate are visible before closure; RotateAuth closes
+	// connections without holding the manager lock.
+	revokeAccessSockets(generation)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.db != nil {
+		_ = m.db.close()
+		m.db = nil
+	}
+	m.owner.release()
+	m.owned = false
+	return true
+}
+
+// recoverRestart reactivates auth after a failed exec. The restart gate stays
+// set unless the durable state reload succeeds and ownership is restored.
+func (m *accessAuthManager) recoverRestart() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.restartInProgress {
+		return false
+	}
+	if err := m.activateLocked(""); err != nil || !m.owned || m.faulted {
+		m.faulted = true
+		return false
+	}
+	m.restartInProgress = false
+	m.restartStarted = false
+	return true
 }
 
 // stateOwned reports whether this process owns the auth state file, so the
@@ -1160,117 +1259,23 @@ func (m *accessAuthManager) ownedNow() bool {
 // reconciling the authoritative record, so a recovered owner never admits from
 // cache and never activates a record the previous owner already replaced.
 func (m *accessAuthManager) ensureOwned() bool {
-	if m.stateOwned() {
-		return true
-	}
-	// Serialize the handoff: the lock file, the Config read, and reconciliation
-	// must be one step, or two waiters read different records and one of them
-	// activates a stale password.
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.restartInProgress {
+		return false
+	}
 	if m.owned {
-		return true
+		return !m.faulted
 	}
 	if !m.owner.tryAcquire(accessV2LockPath()) {
 		return false
 	}
-	// Read the record only now that the lock is ours: the previous owner may
-	// have committed a password change and exited between an earlier read and
-	// this acquisition, and activating that record would authorize against a
-	// credential the disk no longer carries.
-	encoded, err := accessPasswordHashAuthoritative()
-	if err == nil {
-		var record *accessPasswordRecord
-		record, err = parseAccessPasswordHash(encoded)
-		var key []byte
-		if err == nil {
-			key, err = accessJWTKey(record)
-			if err == nil {
-				m.beginActivationLocked(true, encoded, record, key)
-				if cerr := m.finishActivationLocked(encoded); cerr != nil {
-					return false
-				}
-				return m.owned
-			}
-		}
-	}
-	// The lock is ours but the record is not readable: report unavailable rather
-	// than admitting against a guess, because an unreadable Config is not the
-	// same as "no password set".
-	m.owned = true
-	m.faulted = true
-	return false
-}
-
-// reconcileLocked installs state read from disk and resolves an interrupted
-// password change: the journal decides whether Config or the state file won.
-func (m *accessAuthManager) reconcileLocked(encoded string, state *accessV2StateFile, loadErr error) error {
-	binding := accessRecordBinding(encoded)
-	m.faulted = false
-	if loadErr != nil {
-		// Unreadable state is a fixed failure, not an excuse to start over:
-		// guessing would resurrect sessions the owner revoked. v1 does not
-		// depend on this file and keeps working.
+	if err := m.activateLocked(""); err != nil {
+		m.owned = true
 		m.faulted = true
-		m.v2 = newAccessV2Runtime()
-		m.v2.recordBinding = binding
-		m.v2.epoch = 1
-		return nil
+		return false
 	}
-	if state == nil {
-		// First run: no record identity yet, so no older v2 token can be
-		// accepted. The first raw-password login or enable writes the file.
-		m.v2 = newAccessV2Runtime()
-		m.v2.recordBinding = binding
-		m.v2.epoch = 1
-		return nil
-	}
-	active := state.Active
-	pending := state.Pending
-	reconciled := false
-	switch {
-	case pending != nil && accessRecordBinding(pending.PasswordRecord) == binding:
-		// Config carries the journaled record: the commit happened, so the
-		// journaled state is the truth.
-		active = pending.Next
-		reconciled = true
-	case pending != nil && active.RecordBinding == binding:
-		// Config still carries the previous record: the commit never landed.
-		// Drop the journal and keep the old sessions.
-		reconciled = true
-	case pending != nil:
-		// Neither binding matches: an out-of-band edit or an unsupported
-		// history. Revoke everything rather than restore the journal's
-		// password into Config.
-		active = accessRevokedState(active, binding)
-		reconciled = true
-	case active.RecordBinding != binding:
-		// Out-of-band record edit or a downgraded run: families minted under
-		// another record must not survive.
-		active = accessRevokedState(active, binding)
-		reconciled = true
-	}
-	pruned := pruneExpiredAccessFamilies(&active, m.now())
-	if err := m.loadRuntimeLocked(&active); err != nil {
-		m.faulted = true
-		m.v2 = newAccessV2Runtime()
-		m.v2.recordBinding = binding
-		m.v2.epoch = 1
-		return nil
-	}
-	if reconciled || pruned {
-		// A reset that is only in memory revives the revoked families on the
-		// next start, so it must be durable before this process admits anything.
-		if err := m.persistLocked(); err != nil {
-			// A committed-but-unconfirmed write already holds the bytes; any
-			// other failure leaves the old state on disk, which must fault v2
-			// closed rather than authorize from a reset nobody can see.
-			if !system.IsAtomicCommitted(err) {
-				m.faulted = true
-			}
-		}
-	}
-	return nil
+	return m.owned && !m.faulted
 }
 
 // accessRevokedState keeps the record binding and drops every session, with a
@@ -1352,6 +1357,7 @@ func familyDeadline(family *accessV2Family) time.Time {
 // retired credentials admitted.
 func (m *accessAuthManager) faultAccessClosedLocked(binding string, epoch uint64) {
 	m.faulted = true
+	m.v2Available = false
 	m.v2 = newAccessV2Runtime()
 	m.v2.recordBinding = binding
 	m.v2.epoch = epoch
@@ -1359,58 +1365,79 @@ func (m *accessAuthManager) faultAccessClosedLocked(binding string, epoch uint64
 	revokeAccessSockets(m.generation)
 }
 
-// adoptDurableRecordLocked points v1 at the record the durable Config carries.
-// After a Config write that crossed its rename the new record is on disk even
-// though the write is unconfirmed, so v1 must follow it instead of authorizing
-// against the record this process still has in memory.
-func (m *accessAuthManager) adoptDurableRecordLocked() {
-	encoded, err := accessPasswordHashAuthoritative()
-	if err != nil {
-		return
-	}
-	record, err := parseAccessPasswordHash(encoded)
-	if err != nil {
-		return
-	}
-	key, err := accessJWTKey(record)
-	if err != nil {
-		return
-	}
-	m.record = record
-	m.jwtKey = key
-	m.challenges = make(map[string]time.Time)
-	m.sessions = make(map[string]time.Time)
-}
-
-// commitActiveLocked persists next and only then installs it. Nothing is
-// announced before the write succeeds, so a failed write leaves the live state,
-// credentials, and sockets untouched.
-func (m *accessAuthManager) commitActiveLocked(next *accessV2ActiveState) error {
-	if !m.owned || m.faulted {
+func (m *accessAuthManager) saveDBStateLocked(next accessV2ActiveState, encoded string, v2Available, passwordTransition bool) error {
+	if !m.owned || m.faulted || m.db == nil || next.RecordBinding != accessRecordBinding(encoded) {
 		return errAccessPersistence
 	}
-	pruneExpiredAccessFamilies(next, m.now())
-	if err := saveAccessV2StateFile(accessV2StatePath(), &accessV2StateFile{
-		Version: accessV2StateVersion,
-		Active:  *next,
-	}); err != nil {
-		if system.IsAtomicCommitted(err) {
-			// The revocation is already on disk and cannot be rolled back, so
-			// continuing to authorize from memory would serve a family the
-			// durable state dropped.
-			m.faultAccessClosedLocked(next.RecordBinding, next.Epoch)
+	state := accessDBState{
+		PasswordRecord: encoded,
+		MigrationID:    m.db.migrationID,
+		V2Available:    v2Available,
+		Active:         next,
+	}
+	if err := m.db.save(state); err != nil {
+		if errors.Is(err, errAccessDBCommitUncertain) {
+			if reloadErr := m.reloadDBLocked(passwordTransition); reloadErr != nil {
+				m.faultAccessClosedLocked(next.RecordBinding, next.Epoch)
+			}
 		}
 		return err
 	}
-	// The retired set must be captured before the new runtime is installed:
-	// after that the live map no longer remembers the families next dropped.
-	retired := m.retiredFamiliesLocked(next)
-	if err := m.loadRuntimeLocked(next); err != nil {
+	return nil
+}
+
+func (m *accessAuthManager) reloadDBLocked(passwordTransition bool) error {
+	if m.db == nil {
+		return errors.New("auth database is unavailable")
+	}
+	previousRecord := ""
+	if m.record != nil {
+		previousRecord = m.record.encoded()
+	}
+	previousRecordID, previousEpoch := m.v2.recordID, m.v2.epoch
+	state, err := m.db.verify(m.db.migrationID)
+	if err != nil {
 		return err
 	}
-	// Every durable family removal closes that family's sockets: expiry, replay
-	// revocation, logout, and capacity eviction all pass through here, so the
-	// closure cannot be forgotten by one of them.
+	retired := m.retiredFamiliesLocked(&state.Active)
+	if err := m.installAccessDBStateLocked(state); err != nil {
+		return err
+	}
+	if previousRecord != state.PasswordRecord || (passwordTransition && (previousRecordID != state.Active.RecordID || previousEpoch != state.Active.Epoch)) {
+		m.generation++
+		m.challenges = make(map[string]time.Time)
+		m.sessions = make(map[string]time.Time)
+		m.attempts = make(map[string]accessLoginAttempt)
+		revokeAccessSockets(m.generation)
+	} else if previousEpoch != state.Active.Epoch {
+		retireAccessV2Sockets()
+	}
+	for _, familyID := range retired {
+		retireAccessFamilySockets(familyID)
+	}
+	return nil
+}
+
+// commitActiveLocked commits next before installing it. A Commit error is
+// uncertain, so saveDBStateLocked reloads once and the caller still returns no
+// credentials for that operation.
+func (m *accessAuthManager) commitActiveLocked(next *accessV2ActiveState) error {
+	if !m.owned || m.faulted || !m.v2Available || m.db == nil {
+		return errAccessPersistence
+	}
+	pruneExpiredAccessFamilies(next, m.now())
+	encoded := ""
+	if m.record != nil {
+		encoded = m.record.encoded()
+	}
+	if err := m.saveDBStateLocked(*next, encoded, m.v2Available, false); err != nil {
+		return err
+	}
+	retired := m.retiredFamiliesLocked(next)
+	if err := m.loadRuntimeLocked(next); err != nil {
+		m.faulted = true
+		return err
+	}
 	for _, familyID := range retired {
 		retireAccessFamilySockets(familyID)
 	}
@@ -1616,6 +1643,9 @@ func (m *accessAuthManager) enabled() bool {
 func (m *accessAuthManager) statusAndChallenge() (enabled bool, salt, challenge string, iterations int, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if !m.owned || m.faulted {
+		return false, "", "", 0, errAccessPersistence
+	}
 	if m.record == nil {
 		return false, "", "", 0, nil
 	}
@@ -1645,7 +1675,7 @@ func (m *accessAuthManager) authenticated(r *http.Request) bool {
 // cookieValidLocked verifies a v1 session token against the current verifier.
 // Callers hold the mutex.
 func (m *accessAuthManager) cookieValidLocked(token string, now time.Time) bool {
-	if m.record == nil || token == "" {
+	if !m.owned || m.faulted || m.record == nil || token == "" {
 		return false
 	}
 	expiresAt, ok := m.sessions[token]
@@ -1697,7 +1727,7 @@ func (m *accessAuthManager) jwtValidLocked(token string, now time.Time, expiryAl
 // jwtClaimsLocked is jwtValidLocked plus the verified claims, so logout can act
 // on the family the bearer names. Callers hold the mutex.
 func (m *accessAuthManager) jwtClaimsLocked(token string, now time.Time, expiryAllowance time.Duration) (*accessJWTClaims, bool) {
-	if m.faulted || len(m.jwtKey) != accessJWTKeyBytes || token == "" || m.record == nil || m.v2.recordID == "" {
+	if m.faulted || !m.v2Available || len(m.jwtKey) != accessJWTKeyBytes || token == "" || m.record == nil || m.v2.recordID == "" {
 		return nil, false
 	}
 	claims, err := parseAccessJWT(m.jwtKey, token, now, expiryAllowance)
@@ -1733,9 +1763,9 @@ func (m *accessAuthManager) authorizeRequest(r *http.Request) accessDecision {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	decision := accessDecision{Generation: m.generation}
-	if !m.owned {
+	if !m.owned || m.faulted || m.restartInProgress {
 		// A non-owner cannot tell "disabled" from "enabled since my last read",
-		// so it admits nothing rather than trust its own stale view.
+		// and a faulted owner cannot trust its loaded state, so neither admits.
 		return decision
 	}
 	if m.record == nil {
@@ -1788,7 +1818,7 @@ func (m *accessAuthManager) describeSocketLocked(decision *accessDecision, claim
 func (m *accessAuthManager) admitsFence(fence ws.AuthFence) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.owned || fence.Generation != m.generation {
+	if !m.owned || m.restartInProgress || fence.Generation != m.generation {
 		return false
 	}
 	if m.record == nil {
@@ -1827,6 +1857,9 @@ func accessExpiryAllowance(path string) time.Duration {
 func (m *accessAuthManager) login(challenge, proof, remoteAddr string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if !m.owned || m.faulted {
+		return "", errAccessPersistence
+	}
 	now := time.Now()
 	m.cleanExpiredLocked(now)
 	if m.record == nil {
@@ -1923,6 +1956,9 @@ func (m *accessAuthManager) loginPassword(password, remoteAddr string) (accessV2
 	m.cleanExpiredLocked(now)
 	if m.record == nil {
 		return accessV2Bundle{}, errAccessUnauthorized
+	}
+	if !m.v2Available {
+		return accessV2Bundle{}, errAccessPersistence
 	}
 
 	client := accessClientIP(remoteAddr)
@@ -2067,98 +2103,28 @@ func (m *accessAuthManager) prepareRecordPlanLocked(record *accessPasswordRecord
 	return plan, nil
 }
 
-// commitPasswordLocked persists the replacement before activating it, so a
-// failed write leaves the old record, key, credentials, and sockets valid.
-//
-// A changed record touches two files (Config and the state file) and one
-// rename cannot cover both, so the journal makes a crash at any single
-// instruction recoverable: prepare, commit Config, promote. The same encoded
-// record needs only one state replacement, because the deterministic v1
-// signature cannot be rotated anyway.
+// commitPasswordLocked stores the new record and its session state in one
+// SQLite transaction before activating it.
 func (m *accessAuthManager) commitPasswordLocked(record *accessPasswordRecord, now time.Time, withFamily bool) (accessPasswordOutcome, error) {
-	if !m.owned {
-		// A non-owner must never write the state file, and a password change is
-		// a state write.
+	if !m.owned || m.faulted || m.db == nil {
 		return accessPasswordOutcome{}, fmt.Errorf("%w: %v", errAccessPersistence, errAccessForbidden)
 	}
 	plan, err := m.prepareRecordPlanLocked(record, now, withFamily)
 	if err != nil {
 		return accessPasswordOutcome{}, err
 	}
-	current := m.snapshotLocked()
-	journaled := current.RecordBinding != plan.next.RecordBinding
-
-	if journaled {
-		journal := &accessV2StateFile{
-			Version: accessV2StateVersion,
-			Active:  *current,
-			Pending: &accessV2Pending{
-				FromRecordBinding: current.RecordBinding,
-				PasswordRecord:    plan.encoded,
-				Next:              plan.next,
-			},
-		}
-		if err := saveAccessV2StateFile(accessV2StatePath(), journal); err != nil {
-			if !system.IsAtomicCommitted(err) {
-				// Known pre-commit failure: Config still carries the old record, so
-				// the old credentials and sockets stay valid.
-				return accessPasswordOutcome{}, fmt.Errorf("%w: %v", errAccessPersistence, err)
-			}
-			// The journal is on disk even though its durability is unconfirmed.
-			// Proceeding keeps the recovery table valid either way: a restart
-			// that cannot see the journal keeps the old record, and one that can
-			// resolves it against Config.
-		}
-		if err := saveAccessPasswordHash(plan.encoded); err != nil {
-			if system.IsAtomicCommitted(err) {
-				// The commit point crossed its rename: Config carries the new
-				// record, so v1 follows the durable copy, and v2 stays closed
-				// until reconciliation promotes the journal.
-				m.adoptDurableRecordLocked()
-				m.faultAccessClosedLocked(plan.next.RecordBinding, plan.next.Epoch)
-			}
-			// Otherwise the commit point did not happen. The pending entry is
-			// cleaned up by reconciliation on the next start.
-			return accessPasswordOutcome{}, fmt.Errorf("%w: %v", errAccessPersistence, err)
-		}
-		// Config now carries the new record. v1 must follow it even if the
-		// promotion fails, or v1 would authorize against an older durable
-		// record than the one on disk.
-		m.record = plan.record
-		m.jwtKey = plan.key
-		m.sessions = make(map[string]time.Time)
-		m.challenges = make(map[string]time.Time)
-		if err := saveAccessV2StateFile(accessV2StatePath(), &accessV2StateFile{
-			Version: accessV2StateVersion,
-			Active:  plan.next,
-		}); err != nil {
-			// Ambiguous: the record is committed but the journal is not
-			// promoted. Fault v2 closed until reconciliation instead of
-			// claiming success or promising a rollback.
-			m.faultAccessClosedLocked(plan.next.RecordBinding, plan.next.Epoch)
-			return accessPasswordOutcome{}, fmt.Errorf("%w: %v", errAccessPersistence, err)
-		}
-	} else if err := saveAccessV2StateFile(accessV2StatePath(), &accessV2StateFile{
-		Version: accessV2StateVersion,
-		Active:  plan.next,
-	}); err != nil {
-		if system.IsAtomicCommitted(err) {
-			// The state-only commit crossed its rename, so the durable state no
-			// longer matches the record this process is still holding.
-			m.faultAccessClosedLocked(plan.next.RecordBinding, plan.next.Epoch)
-		}
+	retired := m.retiredFamiliesLocked(&plan.next)
+	if err := m.saveDBStateLocked(plan.next, plan.encoded, true, true); err != nil {
 		return accessPasswordOutcome{}, fmt.Errorf("%w: %v", errAccessPersistence, err)
 	}
-
 	if err := m.loadRuntimeLocked(&plan.next); err != nil {
-		// The durable state was written; keep it authoritative and refuse v2
-		// until reconciliation rather than serve from a half-built runtime.
-		m.faulted = true
+		m.faultAccessClosedLocked(plan.next.RecordBinding, plan.next.Epoch)
 		return accessPasswordOutcome{}, fmt.Errorf("%w: %v", errAccessPersistence, err)
 	}
 	m.faulted = false
 	m.record = plan.record
 	m.jwtKey = plan.key
+	m.v2Available = true
 	m.generation++
 	m.challenges = make(map[string]time.Time)
 	m.sessions = make(map[string]time.Time)
@@ -2166,10 +2132,10 @@ func (m *accessAuthManager) commitPasswordLocked(record *accessPasswordRecord, n
 	if plan.cookie != "" {
 		m.sessions[plan.cookie] = now.Add(accessSessionTTL)
 	}
-	// Fence client-facing sockets to the new generation while the record
-	// change is still under the lock. A socket admitted at the old
-	// generation cannot outlive the credential that authorized it.
 	revokeAccessSockets(m.generation)
+	for _, familyID := range retired {
+		retireAccessFamilySockets(familyID)
+	}
 	outcome := accessPasswordOutcome{CookieToken: plan.cookie}
 	if plan.bundle.Token != "" {
 		bundle := plan.bundle
@@ -2190,7 +2156,7 @@ func (m *accessAuthManager) refresh(handle, client string, now time.Time) (acces
 	if m.record == nil {
 		return accessV2Bundle{}, errAccessUnauthorized
 	}
-	if m.faulted {
+	if m.faulted || !m.v2Available {
 		return accessV2Bundle{}, errAccessPersistence
 	}
 	if !m.takeRefreshToken(client, now) {
@@ -2544,6 +2510,7 @@ func handleAccessAuthStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	accessAuth.ensureOwned()
 	enabled, salt, challenge, iterations, err := accessAuth.statusAndChallenge()
 	if err != nil {
 		http.Error(w, "Unable to start login: "+err.Error(), http.StatusServiceUnavailable)
@@ -2670,7 +2637,8 @@ func (m *accessAuthManager) v2Status(r *http.Request) (enabled, authenticated, o
 	now := m.now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	enabled = m.record != nil
+	// A faulted owner cannot prove authentication is disabled.
+	enabled = m.record != nil || (m.owned && m.faulted)
 	owned = m.owned
 	if !owned || !enabled || credential.State != accessCredentialPresent {
 		return enabled, false, owned
