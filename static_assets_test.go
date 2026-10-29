@@ -212,7 +212,7 @@ func TestStaticRangeServedIdentity(t *testing.T) {
 
 func TestStaticCompressionDisabledByConfig(t *testing.T) {
 	cfgPath := setupStaticAssets(t)
-	if err := os.WriteFile(cfgPath, []byte(`{"compression_enabled":false}`), 0o644); err != nil {
+	if err := os.WriteFile(cfgPath, []byte("compression_enabled = false\n"), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	// The flag is captured at startup, not per request — re-init to

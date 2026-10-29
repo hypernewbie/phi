@@ -2,21 +2,25 @@ package main
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
+	"github.com/BurntSushi/toml"
 	"github.com/hypernewbie/phi/pkg/system"
 )
 
 type QuickCommand struct {
-	Name    string `json:"name"`
-	Command string `json:"command"`
+	Name    string `json:"name" toml:"name"`
+	Command string `json:"command" toml:"command"`
 }
 
 type ModelPresetsMap map[string][]string
@@ -40,56 +44,56 @@ func (m *ModelPresetsMap) UnmarshalJSON(data []byte) error {
 }
 
 type Config struct {
-	Workspaces        []string          `json:"workspaces"`
-	ThemeColor        string            `json:"theme_color"`
-	ExpandedWorktrees map[string]bool   `json:"expanded_worktrees"`
-	ActiveWorktrees   map[string]string `json:"active_worktrees"`
-	ModelPresets      ModelPresetsMap   `json:"model_presets"`
-	ThinkingPresets   []string          `json:"thinking_presets"`
-	QuickCommands     []QuickCommand    `json:"quick_commands"`
-	TerminalCommands  []QuickCommand    `json:"terminal_commands"`
-	MarkdownDirs      []string          `json:"markdown_dirs"`
+	Workspaces        []string          `json:"workspaces" toml:"workspaces"`
+	ThemeColor        string            `json:"theme_color" toml:"theme_color"`
+	ExpandedWorktrees map[string]bool   `json:"expanded_worktrees" toml:"expanded_worktrees"`
+	ActiveWorktrees   map[string]string `json:"active_worktrees" toml:"active_worktrees"`
+	ModelPresets      ModelPresetsMap   `json:"model_presets" toml:"model_presets"`
+	ThinkingPresets   []string          `json:"thinking_presets" toml:"thinking_presets"`
+	QuickCommands     []QuickCommand    `json:"quick_commands" toml:"quick_commands"`
+	TerminalCommands  []QuickCommand    `json:"terminal_commands" toml:"terminal_commands"`
+	MarkdownDirs      []string          `json:"markdown_dirs" toml:"markdown_dirs"`
 
 	// UIFontFamily, UIFontSize, and TerminalFontFamily drive the
 	// Settings modal's appearance fields. Empty values mean "use the
 	// built-in default" (set on the client). Size is clamped server-side
 	// in handleAppearanceUpdate. All three are optional — old config
 	// files load fine without them.
-	UIFontFamily       string `json:"ui_font_family,omitempty"`
-	UIFontSize         int    `json:"ui_font_size,omitempty"`
-	TerminalFontFamily string `json:"terminal_font_family,omitempty"`
-	TerminalFontSize   int    `json:"terminal_font_size,omitempty"`
+	UIFontFamily       string `json:"ui_font_family,omitempty" toml:"ui_font_family,omitempty"`
+	UIFontSize         int    `json:"ui_font_size,omitempty" toml:"ui_font_size,omitempty"`
+	TerminalFontFamily string `json:"terminal_font_family,omitempty" toml:"terminal_font_family,omitempty"`
+	TerminalFontSize   int    `json:"terminal_font_size,omitempty" toml:"terminal_font_size,omitempty"`
 
 	// SessionListPageSize controls how many sessions the sidebar shows per
 	// page. 0 uses 10; nonzero values are clamped to 5..100 when the
 	// /api/config payload is built. Optional: old config files load fine
 	// without it.
-	SessionListPageSize int `json:"session_list_page_size,omitempty"`
+	SessionListPageSize int `json:"session_list_page_size,omitempty" toml:"session_list_page_size,omitempty"`
 
 	// HostnameOverride replaces the page host in socket URLs. Blank
 	// (default, backwards compatible) means location.host. Persisted so
 	// devices share it; each browser's localStorage still wins locally.
 	// It is also the machine identity the backend reports (config
 	// payload, status dump, push titles) — see reportedHostname.
-	HostnameOverride string `json:"hostname_override,omitempty"`
+	HostnameOverride string `json:"hostname_override,omitempty" toml:"hostname_override,omitempty"`
 
 	// MobileScrollbackRows shrinks xterm history on mobile ONLY (the
 	// fast-mode gate, forced on for mobile viewports). 0/unset means
 	// full history, same as desktop. Desktop never reads this field.
 	// Applies to new tabs; clamped server-side in handleAppearanceUpdate.
-	MobileScrollbackRows int `json:"mobile_scrollback_rows,omitempty"`
+	MobileScrollbackRows int `json:"mobile_scrollback_rows,omitempty" toml:"mobile_scrollback_rows,omitempty"`
 
 	// UseExistingTerminalTab, when true, makes the command panel route
 	// terminal commands to the first alive bash/pwsh tab instead of
 	// spawning a new one. Defaults to false (preserves prior behavior
 	// of "spawn new tab unless a shell tab is currently focused").
 	// Backwards compatible: missing in old config files means false.
-	UseExistingTerminalTab bool `json:"use_existing_terminal_tab"`
+	UseExistingTerminalTab bool `json:"use_existing_terminal_tab" toml:"use_existing_terminal_tab"`
 
 	// UseHiddenTerminal, when true, runs terminal commands in a separate
 	// hidden background terminal instead of creating or reusing visible
 	// interactive tabs. When enabled, it overrides UseExistingTerminalTab.
-	UseHiddenTerminal bool `json:"use_hidden_terminal"`
+	UseHiddenTerminal bool `json:"use_hidden_terminal" toml:"use_hidden_terminal"`
 
 	// FastMode is a LEGACY migration source, not the live setting. The
 	// effects profile (low power mode) is browser-stored now (localStorage
@@ -99,31 +103,31 @@ type Config struct {
 	// once and ignore the server afterwards. The field and its endpoint
 	// stay so old clients/exports keep working.
 	// (perf crutch — see research/2026-08-01-2019-ui-idle-cpu-burn.md).
-	FastMode bool `json:"fast_mode"`
+	FastMode bool `json:"fast_mode" toml:"fast_mode"`
 
 	// PiOffline passes --offline when spawning the pi coder. Applies to pi
 	// only; the flag is pi's, and other coders would reject it. Off by
 	// default, so a missing key in an existing config file changes nothing.
-	PiOffline bool `json:"pi_offline"`
+	PiOffline bool `json:"pi_offline" toml:"pi_offline"`
 
 	// PiBridgeNoInject skips the --extension injection when spawning the
 	// pi coder, for users who install the bridge extension into Pi
 	// manually. The lease and child credentials are still provisioned
 	// (a manual install needs them); only the flag is omitted. Off by
 	// default, so existing configs inject as before.
-	PiBridgeNoInject bool `json:"pi_bridge_no_inject"`
+	PiBridgeNoInject bool `json:"pi_bridge_no_inject" toml:"pi_bridge_no_inject"`
 
 	// OpenCode defaults to v2's full TUI; Mini is a per-launch option.
 	// Legacy selects v1's full-screen TUI. These startup-only options require a
 	// Phi restart; they never change the mode of a live terminal.
-	OpenCodeLegacy        bool   `json:"opencode_legacy"`
-	OpenCodeCommand       string `json:"opencode_command,omitempty"`
-	OpenCodeLegacyCommand string `json:"opencode_legacy_command,omitempty"`
+	OpenCodeLegacy        bool   `json:"opencode_legacy" toml:"opencode_legacy"`
+	OpenCodeCommand       string `json:"opencode_command,omitempty" toml:"opencode_command,omitempty"`
+	OpenCodeLegacyCommand string `json:"opencode_legacy_command,omitempty" toml:"opencode_legacy_command,omitempty"`
 
 	// OpenCodeIdleStopMinutes stops the OpenCode background service after this
 	// many minutes of inactivity across all OpenCode tabs in Phi. 0 disables it.
 	// Clamped between 5 and 1440 when enabled.
-	OpenCodeIdleStopMinutes int `json:"opencode_idle_stop_minutes"`
+	OpenCodeIdleStopMinutes int `json:"opencode_idle_stop_minutes" toml:"opencode_idle_stop_minutes"`
 
 	// ClaudeDangerouslySkipPermissions passes --dangerously-skip-permissions
 	// to the claude coder. Opt-in because the flag's name is honest about
@@ -133,12 +137,12 @@ type Config struct {
 	// Off by default, so a missing key in an existing config file changes
 	// nothing. Applies at spawn time, so it cannot affect a claude tab
 	// that is already running.
-	ClaudeDangerouslySkipPermissions bool `json:"claude_dangerously_skip_permissions"`
+	ClaudeDangerouslySkipPermissions bool `json:"claude_dangerously_skip_permissions" toml:"claude_dangerously_skip_permissions"`
 
 	// AgyThemeAnsi dynamically adapts xterm's ANSI colour palette to match
 	// Phi's active accent theme for agy tabs. Scoped specifically to agy;
 	// off by default so normal shell tabs and other coders remain untouched.
-	AgyThemeAnsi bool `json:"agy_theme_ansi"`
+	AgyThemeAnsi bool `json:"agy_theme_ansi" toml:"agy_theme_ansi"`
 
 	// CompressionEnabled gates gzip/brotli encoding of embedded web
 	// assets. Defaults to true, seeded in loadConfig before unmarshal
@@ -146,31 +150,31 @@ type Config struct {
 	// running phi behind a reverse proxy that owns compression set this
 	// to false. Caching headers (ETag/no-cache) are unaffected. Read
 	// once at startup (initStaticAssets) — changing it needs a restart.
-	CompressionEnabled bool `json:"compression_enabled"`
+	CompressionEnabled bool `json:"compression_enabled" toml:"compression_enabled"`
 
-	ReplayBufferBytes *int `json:"replay_buffer_bytes"`
+	ReplayBufferBytes *int `json:"replay_buffer_bytes" toml:"replay_buffer_bytes"`
 
-	PushoverUserKey   string `json:"pushover_user_key"`
-	PushoverAppToken  string `json:"pushover_app_token"`
-	PushoverEnabled   bool   `json:"pushover_enabled"`
-	WebhookURL        string `json:"webhook_url"`
-	WebhookEnabled    bool   `json:"webhook_enabled"`
-	SimplepushKey     string `json:"simplepush_key"`
-	SimplepushEnabled bool   `json:"simplepush_enabled"`
-	KanbanPasswordEnc string `json:"kanban_password_enc"`
-	KanbanUsername    string `json:"kanban_username,omitempty"`
-	KanbanURL         string `json:"kanban_url,omitempty"`
+	PushoverUserKey   string `json:"pushover_user_key" toml:"pushover_user_key"`
+	PushoverAppToken  string `json:"pushover_app_token" toml:"pushover_app_token"`
+	PushoverEnabled   bool   `json:"pushover_enabled" toml:"pushover_enabled"`
+	WebhookURL        string `json:"webhook_url" toml:"webhook_url"`
+	WebhookEnabled    bool   `json:"webhook_enabled" toml:"webhook_enabled"`
+	SimplepushKey     string `json:"simplepush_key" toml:"simplepush_key"`
+	SimplepushEnabled bool   `json:"simplepush_enabled" toml:"simplepush_enabled"`
+	KanbanPasswordEnc string `json:"kanban_password_enc" toml:"kanban_password_enc"`
+	KanbanUsername    string `json:"kanban_username,omitempty" toml:"kanban_username,omitempty"`
+	KanbanURL         string `json:"kanban_url,omitempty" toml:"kanban_url,omitempty"`
 	// AccessPasswordHash is an optional browser-derived password verifier.
 	// An empty string deliberately disables Phi's access-password gate.
-	AccessPasswordHash string       `json:"access_password_hash"`
-	SyncCoordinator    string       `json:"sync_coordinator"`
-	AutoReconnect      string       `json:"auto_reconnect"`
-	Peers              []PeerConfig `json:"peers"`
+	AccessPasswordHash string       `json:"access_password_hash" toml:"access_password_hash"`
+	SyncCoordinator    string       `json:"sync_coordinator" toml:"sync_coordinator"`
+	AutoReconnect      string       `json:"auto_reconnect" toml:"auto_reconnect"`
+	Peers              []PeerConfig `json:"peers" toml:"peers"`
 }
 
 type PeerConfig struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
+	Name string `json:"name" toml:"name"`
+	URL  string `json:"url" toml:"url"`
 }
 
 var configMu sync.RWMutex
@@ -187,8 +191,10 @@ func expandHome(path string) string {
 
 // testConfigPath points configFilePath() at a temp file during tests.
 // Set this (via withTempConfig or directly) so tests never touch
-// ~/.phi/config.json. Anything else will trigger the guard below.
+// ~/.phi/config.toml. Anything else will trigger the guard below.
 var testConfigPath string
+var testLegacyConfigPath string
+var configReadErrorLogged atomic.Bool
 
 // testCustomBackendsDir points customBackendsDir() at a temp dir
 // during tests. Same isolation contract as testConfigPath: an unset
@@ -199,7 +205,7 @@ var testCustomBackendsDir string
 
 // configFilePath returns the active config path. Tests MUST override
 // testConfigPath to point at a temp file — otherwise the guard in
-// this function refuses to return the live ~/.phi/config.json path.
+// this function refuses to return the live ~/.phi/config.toml path.
 // Without this guard, a test that forgets withTempConfig(t) silently
 // reads/writes the user's real config (as happened with the
 // `phi-test-alpha/beta/gamma` workspace poisoning on 2026-07-14).
@@ -210,8 +216,19 @@ func configFilePath() string {
 	if testing.Testing() {
 		panic("configFilePath() called under `go test` without testConfigPath set. " +
 			"Use withTempConfig(t) (or set testConfigPath directly) to " +
-			"isolate this test from ~/.phi/config.json — see the doc comment on " +
+			"isolate this test from ~/.phi/config.toml — see the doc comment on " +
 			"testConfigPath.")
+	}
+	return filepath.Join(system.PhiDataDir(), "config.toml")
+}
+
+// legacyConfigFilePath returns the read-only JSON fallback. Tests must opt in explicitly.
+func legacyConfigFilePath() string {
+	if testLegacyConfigPath != "" {
+		return testLegacyConfigPath
+	}
+	if testing.Testing() {
+		return ""
 	}
 	return filepath.Join(system.PhiDataDir(), "config.json")
 }
@@ -270,26 +287,27 @@ func reportedHostname(cfg Config) string {
 func loadConfig() Config {
 	configMu.RLock()
 	defer configMu.RUnlock()
-
-	path := configFilePath()
-	var cfg Config
-	// Seed defaults that must survive an absent key: json.Unmarshal only
-	// touches fields present in the file, so a missing key keeps the seed
-	// and an explicit false wins. (Bools can't be defaulted after the
-	// fact — false is a meaningful user value.)
-	cfg.CompressionEnabled = true
-	b, err := os.ReadFile(path)
-	if err == nil {
-		_ = json.Unmarshal(b, &cfg)
+	cfg, _, err := readConfigLockedWithPresence()
+	if err != nil {
+		logConfigReadError(configFilePath(), err)
+		cfg = Config{CompressionEnabled: true}
 	}
+	return applyConfigDefaults(cfg)
+}
+
+func logConfigReadError(path string, err error) {
+	if err != nil && configReadErrorLogged.CompareAndSwap(false, true) {
+		slog.Error("failed to read config; using defaults", "path", path, "err", err)
+	}
+}
+
+func applyConfigDefaults(cfg Config) Config {
 	if cfg.Workspaces == nil {
 		cfg.Workspaces = []string{}
 	}
 	if cfg.ThemeColor == "" {
 		cfg.ThemeColor = "purple"
 	}
-	// Font fields: zero/empty values mean "use built-in defaults on
-	// the client". No server-side coercion needed beyond this.
 	if cfg.UIFontSize < 0 {
 		cfg.UIFontSize = 0
 	}
@@ -307,19 +325,10 @@ func loadConfig() Config {
 		cfg.ThinkingPresets = []string{}
 	}
 	if cfg.QuickCommands == nil {
-		cfg.QuickCommands = []QuickCommand{
-			{Name: "status", Command: "git status"},
-			{Name: "diff", Command: "git diff"},
-			{Name: "commit", Command: `git commit -m "{}"`},
-		}
+		cfg.QuickCommands = []QuickCommand{{Name: "status", Command: "git status"}, {Name: "diff", Command: "git diff"}, {Name: "commit", Command: `git commit -m "{}"`}}
 	}
 	if cfg.TerminalCommands == nil {
-		cfg.TerminalCommands = []QuickCommand{
-			{Name: "vim", Command: "vim"},
-			{Name: "nvim", Command: "nvim"},
-			{Name: "git push", Command: "git push"},
-			{Name: "git pull --rebase", Command: "git pull --rebase"},
-		}
+		cfg.TerminalCommands = []QuickCommand{{Name: "vim", Command: "vim"}, {Name: "nvim", Command: "nvim"}, {Name: "git push", Command: "git push"}, {Name: "git pull --rebase", Command: "git pull --rebase"}}
 	}
 	if cfg.MarkdownDirs == nil {
 		cfg.MarkdownDirs = []string{".", "./temp", "./tmp"}
@@ -416,45 +425,119 @@ func saveConfig(cfg Config) {
 	// Defense in depth: never persist a workspace whose path looks
 	// like a test scratch dir (e.g. /tmp/phi-test-alpha). This guards
 	// against the earlier poisoning incident where a test wrote three
-	// fake workspaces into the live ~/.phi/config.json.
+	// fake workspaces into the live ~/.phi/config.toml.
 	_ = writeConfigLocked(cfg)
 }
 
-// readConfigLocked reads the raw config file without taking configMu.
-// Callers must hold it. A missing file is an empty config, not an error,
-// so first-run callers behave as before; malformed JSON is reported.
-func readConfigLocked() (Config, error) {
+// readPrimaryConfig decodes TOML and reports physical presence independently of contents.
+func readPrimaryConfig() (Config, bool, error) {
 	var cfg Config
 	cfg.CompressionEnabled = true
-	b, err := os.ReadFile(configFilePath())
-	if err != nil {
+	path := configFilePath()
+	if _, err := os.Lstat(path); err != nil {
 		if os.IsNotExist(err) {
-			return cfg, nil
+			return cfg, false, nil
 		}
-		return cfg, err
+		return cfg, true, err
 	}
-	if len(b) == 0 || strings.TrimSpace(string(b)) == "" {
-		return cfg, nil
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return cfg, true, err
 	}
-	if err := json.Unmarshal(b, &cfg); err != nil {
-		return cfg, err
+	if strings.TrimSpace(string(b)) == "" {
+		return cfg, true, nil
 	}
-	return cfg, nil
+	if err := toml.Unmarshal(b, &cfg); err != nil {
+		return cfg, true, err
+	}
+	return cfg, true, nil
 }
 
-// writeConfigLocked persists cfg without taking configMu. Callers must
-// hold it.
+func readLegacyConfig() (Config, bool, error) {
+	var cfg Config
+	cfg.CompressionEnabled = true
+	path := legacyConfigFilePath()
+	if path == "" {
+		return cfg, false, nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return cfg, false, nil
+		}
+		return cfg, true, err
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return cfg, true, err
+	}
+	if len(b) == 0 || strings.TrimSpace(string(b)) == "" {
+		return cfg, true, nil
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return cfg, true, err
+	}
+	return cfg, true, nil
+}
+
+func readConfigLocked() (Config, error) {
+	cfg, _, err := readConfigLockedWithPresence()
+	return cfg, err
+}
+
+func readConfigLockedWithPresence() (Config, bool, error) {
+	cfg, present, err := readPrimaryConfig()
+	if err != nil || present {
+		return cfg, present, err
+	}
+	return readLegacyConfig()
+}
+
 func writeConfigLocked(cfg Config) error {
 	cfg.Workspaces = filterOutTestPaths(cfg.Workspaces)
-	path := configFilePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(cfg, "", "  ")
+	before, present, err := readPrimaryConfig()
 	if err != nil {
 		return err
 	}
-	return system.WriteFileAtomic(path, b, 0644)
+	if present && reflect.DeepEqual(applyConfigDefaults(before), applyConfigDefaults(cfg)) {
+		return nil
+	}
+	path := configFilePath()
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	// MkdirAll preserves existing directory permissions; a new path is private.
+	b, err := toml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return system.WriteFileAtomic(path, b, 0600)
+}
+
+func migrateLegacyConfig() {
+	configMu.Lock()
+	defer configMu.Unlock()
+	_, present, err := readPrimaryConfig()
+	if err != nil {
+		logConfigReadError(configFilePath(), err)
+		return
+	}
+	if present {
+		return
+	}
+	legacy, legacyPresent, err := readLegacyConfig()
+	if err != nil {
+		logConfigReadError(legacyConfigFilePath(), err)
+		return
+	}
+	if !legacyPresent {
+		return
+	}
+	if err := writeConfigLocked(legacy); err != nil {
+		logConfigReadError(configFilePath(), err)
+		return
+	}
+	slog.Info("migrated legacy config", "from", legacyConfigFilePath(), "to", configFilePath())
 }
 
 // looksLikeTestArtifact returns true if `path` looks like a scratch

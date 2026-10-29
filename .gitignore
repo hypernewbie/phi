@@ -5,6 +5,7 @@
 *.pb
 sessions.json
 config.json
+config.toml
 temp/
 /webdist/
 coverage/

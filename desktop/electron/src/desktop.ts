@@ -42,7 +42,13 @@ import {
   type Session,
   type WebContents,
 } from 'electron';
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -1887,7 +1893,7 @@ export class DesktopHost {
    *  password-typed unlock, stores the salt+iterations alongside, and
    *  flushes the encrypted credentials file. Called by the unlock
    *  IPC handler right after a `tryUnlock` returns `ok`. */
-  /** Attempts to recover a credential for a local server origin from ~/.phi/config.json.
+  /** Attempts to recover a credential for a local server origin from ~/.phi/config.toml.
    *  Allows silent authentication on fresh installs or after app data clears. */
   private tryRecoverLocalCredential(origin: string): {
     verifier: Buffer;
@@ -1908,15 +1914,44 @@ export class DesktopHost {
         host === '0.0.0.0';
       if (!isLocal) return null;
 
-      const phiConfigPath = path.join(os.homedir(), '.phi', 'config.json');
-      if (!existsSync(phiConfigPath)) return null;
-
-      const content = readFileSync(phiConfigPath, 'utf8');
-      const cfg = JSON.parse(content) as {
-        password_hash?: string;
-        access_password_hash?: string;
-      };
-      const hash = cfg.access_password_hash || cfg.password_hash;
+      const phiDir = path.join(os.homedir(), '.phi');
+      const tomlPath = path.join(phiDir, 'config.toml');
+      let hash: string | undefined;
+      let tomlPresent = false;
+      try {
+        lstatSync(tomlPath);
+        tomlPresent = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+      }
+      if (tomlPresent) {
+        const content = readFileSync(tomlPath, 'utf8');
+        // This narrow reader cannot distinguish assignments inside multiline strings.
+        if (/'''|"""/.test(content)) return null;
+        const lines = content.split(/\r?\n/);
+        let inTable = false;
+        let assignments = 0;
+        for (const line of lines) {
+          if (/^\s*\[/.test(line)) inTable = true;
+          const match = line.match(
+            /^\s*access_password_hash\s*=\s*(.*?)\s*(?:#.*)?$/,
+          );
+          if (!match) continue;
+          assignments++;
+          if (inTable || assignments > 1) return null;
+          const value = match[1].match(/^(?:"([^"\\]*)"|'([^'\\]*)')$/);
+          if (!value) return null;
+          hash = value[1] ?? value[2];
+        }
+      } else {
+        const jsonPath = path.join(phiDir, 'config.json');
+        if (!existsSync(jsonPath)) return null;
+        const cfg = JSON.parse(readFileSync(jsonPath, 'utf8')) as {
+          password_hash?: string;
+          access_password_hash?: string;
+        };
+        hash = cfg.access_password_hash || cfg.password_hash;
+      }
       if (!hash || typeof hash !== 'string') return null;
 
       const parts = hash.split('.');

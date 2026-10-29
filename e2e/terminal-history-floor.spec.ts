@@ -75,8 +75,12 @@ interface Observed {
 async function observeTerminals(page: Page): Promise<void> {
     await page.addInitScript(() => {
         type Constructor = new (opts: Record<string, unknown>) => Observed;
-        const capture = window as unknown as { floorTerms: Observed[] };
+        const capture = window as unknown as {
+            floorTerms: Observed[];
+            __phiRevalidated: boolean;
+        };
         capture.floorTerms = [];
+        capture.__phiRevalidated = false;
         let base: Constructor;
         Object.defineProperty(window, 'Terminal', {
             configurable: true,
@@ -90,6 +94,35 @@ async function observeTerminals(page: Page): Promise<void> {
                 };
             },
         });
+
+        let rootObserver: MutationObserver | undefined;
+        const watchRoot = (root: HTMLElement) => {
+            let sawStale = root.dataset.sync === 'stale';
+            const syncObserver = new MutationObserver(() => {
+                if (root.dataset.sync === 'stale') {
+                    sawStale = true;
+                } else if (sawStale) {
+                    capture.__phiRevalidated = true;
+                    syncObserver.disconnect();
+                    rootObserver?.disconnect();
+                }
+            });
+            syncObserver.observe(root, {
+                attributes: true,
+                attributeFilter: ['data-sync'],
+            });
+        };
+        if (document.documentElement) {
+            watchRoot(document.documentElement);
+        } else {
+            rootObserver = new MutationObserver(() => {
+                const root = document.documentElement;
+                if (!root) return;
+                watchRoot(root);
+                rootObserver?.disconnect();
+            });
+            rootObserver.observe(document, { childList: true, subtree: true });
+        }
     });
 }
 
@@ -112,28 +145,31 @@ async function view(page: Page, pane: string): Promise<string> {
 
 // The retained window spans multiple 2 MiB responses, so head markers are
 // only reachable by following the response cursors through the whole window.
-async function recordingWindowText(
+async function recordingWindow(
     request: APIRequestContext,
     pane: string,
-): Promise<string> {
+    from = 0,
+): Promise<{ text: string; end: number }> {
     const chunks: string[] = [];
-    let cursor = 0;
+    let cursor = from;
+    let end = from;
     for (let attempt = 0; attempt < 40; attempt++) {
         const response = await request.get(
             `${phi.url}/api/terminals/${encodeURIComponent(pane)}/recording?from=${cursor}&through=18446744073709551615`,
         );
-        if (!response.ok()) return '';
+        if (!response.ok()) return { text: '', end: cursor };
         const body = await response.body();
         const headerLength = body.readUInt32BE(0);
         const header = JSON.parse(
             body.subarray(4, 4 + headerLength).toString('utf8'),
         ) as { end: number };
+        end = header.end;
         const data = body.subarray(4 + headerLength);
         chunks.push(data.toString('utf8'));
         if (data.length < 2 << 20 || header.end <= cursor) break;
         cursor = header.end;
     }
-    return chunks.join('');
+    return { text: chunks.join(''), end };
 }
 
 // The floor is one byte wide, so polling it costs a header, not a window.
@@ -216,29 +252,37 @@ for (const width of [1280, 560]) {
                 intervals: [5_000],
             })
             .toBeGreaterThan(1 << 20);
+        let initialRecording = { text: '', end: 0 };
         await expect
             .poll(
-                async () =>
-                    (await recordingWindowText(request, pane)).includes(
-                        'FLOOR INITIAL READY',
-                    ),
+                async () => {
+                    initialRecording = await recordingWindow(request, pane);
+                    return initialRecording.text;
+                },
                 { timeout: 60_000, intervals: [2_000] },
             )
-            .toBe(true);
+            .toContain('FLOOR INITIAL READY');
 
         let paneSockets = 0;
         page.on('websocket', (socket) => {
             if (socket.url().includes(`/ws/pane/${pane}`)) paneSockets++;
         });
         await page.goto(phi.url);
+        await page.waitForFunction(
+            () =>
+                (window as Window & { __phiRevalidated?: boolean })
+                    .__phiRevalidated === true,
+        );
         // The picker snapshots restored tabs when it opens.
         await page
             .locator(`.tab[data-pane-id="${pane}"]`)
             .waitFor({ state: 'attached', timeout: 30_000 });
         await page.locator('#hostname-display').click();
-        await tabList(page)
-            .locator(`[data-pane-id="${pane}"] .hostname-dropdown-select-btn`)
-            .click();
+        const selectPane = tabList(page).locator(
+            `[data-pane-id="${pane}"] .hostname-dropdown-select-btn`,
+        );
+        await expect(selectPane).toBeVisible();
+        await selectPane.click();
         await expect
             .poll(() => view(page, pane))
             .toContain('FLOOR INITIAL READY');
@@ -273,16 +317,17 @@ for (const width of [1280, 560]) {
                 intervals: [2_000],
             })
             .toBeGreaterThan(oldFloor + (1 << 20));
-        // Retention advances before the producer writes the end marker.
+        // The input endpoint confirms that A was accepted, not that the PTY
+        // finished the second burst. Poll only the new recording suffix until
+        // its completion marker is durable before checking retained history.
         await expect
             .poll(
                 async () =>
-                    (await recordingWindowText(request, pane)).includes(
-                        'FLOOR LATEST AFTER ROTATION',
-                    ),
-                { timeout: 60_000, intervals: [2_000] },
+                    (await recordingWindow(request, pane, initialRecording.end))
+                        .text,
+                { timeout: 60_000, intervals: [1_000, 2_000] },
             )
-            .toBe(true);
+            .toContain('FLOOR LATEST AFTER ROTATION');
         expect(await view(page, pane)).toBe(historicalView);
         await page.waitForTimeout(2000);
         expect(await view(page, pane)).toBe(historicalView);

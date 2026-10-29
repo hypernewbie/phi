@@ -29,7 +29,7 @@ import (
 // of the test, then restores the original override.
 func withTempConfig(t *testing.T) string {
 	t.Helper()
-	f, err := os.CreateTemp(t.TempDir(), "phi-test-config-*.json")
+	f, err := os.CreateTemp(t.TempDir(), "phi-test-config-*.toml")
 	if err != nil {
 		t.Fatalf("create temp config: %v", err)
 	}
@@ -38,6 +38,15 @@ func withTempConfig(t *testing.T) string {
 	testConfigPath = f.Name()
 	t.Cleanup(func() { testConfigPath = orig })
 	return f.Name()
+}
+
+func withTempLegacyConfig(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.json")
+	orig := testLegacyConfigPath
+	testLegacyConfigPath = path
+	t.Cleanup(func() { testLegacyConfigPath = orig })
+	return path
 }
 
 // withTempBackends points customBackendsDir() at a fresh temp dir
@@ -283,18 +292,12 @@ func TestUseExistingTerminalTab_DefaultIsFalse(t *testing.T) {
 	}
 }
 
-func TestUseExistingTerminalTab_StaysFalseOnLegacyConfig(t *testing.T) {
+func TestUseExistingTerminalTab_MissingTOMLFieldStaysFalse(t *testing.T) {
 	// Simulate a config file from a previous version that does NOT contain
 	// the use_existing_terminal_tab field. Backwards compatibility requires
 	// the field to default to false after load.
 	configPath := withTempConfig(t)
-	legacy := `{
-		"workspaces": ["/tmp/legacy"],
-		"theme_color": "amber",
-		"quick_commands": [],
-		"terminal_commands": [],
-		"markdown_dirs": []
-	}`
+	legacy := "workspaces = [\"/tmp/legacy\"]\ntheme_color = \"amber\"\nquick_commands = []\nterminal_commands = []\nmarkdown_dirs = []\n"
 	if err := os.WriteFile(configPath, []byte(legacy), 0644); err != nil {
 		t.Fatalf("write legacy config: %v", err)
 	}
@@ -485,7 +488,7 @@ func TestAutoReconnect_PreservesExplicitOff(t *testing.T) {
 	// Locked decision: an on-disk "off" (whether user-chosen or persisted by
 	// an unrelated settings save) is respected as-is — no migration.
 	configPath := withTempConfig(t)
-	legacy := `{"workspaces": [], "auto_reconnect": "off"}`
+	legacy := "workspaces = []\nauto_reconnect = \"off\"\n"
 	if err := os.WriteFile(configPath, []byte(legacy), 0644); err != nil {
 		t.Fatalf("write legacy config: %v", err)
 	}
@@ -2682,7 +2685,7 @@ func TestPeersStatusMethodNotAllowed(t *testing.T) {
 
 func TestConfigPeersCRUD(t *testing.T) {
 	// Use a temp config file so we don't touch the user's live
-	// ~/.phi/config.json. See config.go:testConfigPath.
+	// ~/.phi/config.toml. See config.go:testConfigPath.
 	withTempConfig(t)
 
 	// POST peers
@@ -3020,7 +3023,7 @@ func TestThinkingPresets_PutPersistsAndClears(t *testing.T) {
 
 func TestThinkingPresets_PutPreservesCompressionDefault(t *testing.T) {
 	path := withTempConfig(t)
-	if err := os.WriteFile(path, []byte(`{}`), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("\n"), 0644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	if w := thinkingPresetsRequest(t, http.MethodPut, `{"thinking_presets":["high"]}`); w.Code != http.StatusOK {
@@ -3030,7 +3033,7 @@ func TestThinkingPresets_PutPreservesCompressionDefault(t *testing.T) {
 		t.Fatal("missing compression_enabled key must keep its true default")
 	}
 
-	if err := os.WriteFile(path, []byte(`{"compression_enabled":false}`), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("compression_enabled = false\n"), 0644); err != nil {
 		t.Fatalf("write explicit false config: %v", err)
 	}
 	if w := thinkingPresetsRequest(t, http.MethodPut, `{"thinking_presets":["low"]}`); w.Code != http.StatusOK {

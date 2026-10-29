@@ -166,10 +166,12 @@ Flags also accept double-dash forms, such as `--web=./web`.
 
 State is stored in `~/.phi/`:
 
-- `config.json` — registered workspaces, theme color, and per-workspace worktree state.
+- `config.toml` — registered workspaces, theme color, and per-workspace worktree state. Existing `config.json` is a read-only fallback.
 - `sessions.json` — local names/timestamps for Antigravity sessions (its conversation files are binary, so Phi keeps a sidecar map).
 
-Both are created automatically. `config.json` also holds an optional browser-derived access-password verifier; an empty value disables access protection. Set or clear it from **Config** rather than editing it by hand. Phi's access password protects casual LAN/Tailnet access, but HTTPS is still required against an active hostile-network attacker.
+Both are created automatically. `config.toml` also holds an optional browser-derived access-password verifier; an empty value disables access protection. Set or clear it from **Config** rather than editing it by hand. Phi's access password protects casual LAN/Tailnet access, but HTTPS is still required against an active hostile-network attacker.
+
+When `config.toml` is missing, Phi reads the existing `config.json` and migrates its values to TOML at startup without deleting or changing the JSON file. Once TOML exists it takes precedence, so legacy JSON becomes stale; downgrading to an older Phi can therefore load stale settings. Comments and unknown keys survive no-op saves, but a real settings change rewrites the complete TOML file and drops them.
 
 ### Terminal history retention
 
@@ -179,22 +181,20 @@ Phi runs a retention sweep at startup and hourly: terminal histories older than 
 
 Phi starts OpenCode 2's full-screen TUI with `opencode` by default. To use Mini for one launch, right-click the OpenCode sidebar or quick-launch button, **New Session**, or a saved OpenCode session, then choose **Open Mini**. This does not change the default. Both v1 and v2 use the `opencode` executable name. Install v2 on the machine that runs Phi, following the [official migration guide](https://opencode.ai/v2/docs/migrate-v1/). Phi does not install or replace either CLI.
 
-The default in `~/.phi/config.json` is:
+The default in `~/.phi/config.toml` is:
 
-```json
-{ "opencode_legacy": false }
+```toml
+opencode_legacy = false
 ```
 
 To keep using v1:
 
-```json
-{
-  "opencode_legacy": true,
-  "opencode_legacy_command": "opencode-v1"
-}
+```toml
+opencode_legacy = true
+opencode_legacy_command = "opencode-v1"
 ```
 
-If v1 is still the `opencode` on Phi's `PATH`, only `"opencode_legacy": true` is needed. For separate installations, set `opencode_command` to the v2 executable and `opencode_legacy_command` to the v1 executable. These values are executable names or absolute paths, not shell commands. Keep a working v1 installation before replacing it; copying a package-manager wrapper alone may not preserve its dependencies.
+If v1 is still the `opencode` on Phi's `PATH`, only `opencode_legacy = true` is needed. For separate installations, set `opencode_command` to the v2 executable and `opencode_legacy_command` to the v1 executable. These values are executable names or absolute paths, not shell commands. Keep a working v1 installation before replacing it; copying a package-manager wrapper alone may not preserve its dependencies.
 
 Restart Phi and refresh the browser after changing these options or installing v2. Phi checks the selected CLI generation before launch. It does not silently fall back to v1. An explicit Mini launch never falls back to the full TUI.
 

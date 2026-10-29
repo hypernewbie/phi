@@ -459,7 +459,7 @@ Phi's config directory is `~/.phi/` (or `%USERPROFILE%\.phi\` on Windows). Impor
 - `tabs.json` — live tab tuples (coder, session_id, cwd, title) for post-restart restore. Written atomically (temp + rename), debounced 500ms.
 - `syncboard.json` — AI Sync Board messages. Same atomic-write pattern.
 - `phi_update.json` — update-check cache (last-checked timestamp, latest known version).
-- `config.json` — main config (workspaces, themes, presets, peers, notification settings, Kanban vault). Written atomically.
+- `config.toml` — main config (workspaces, themes, presets, peers, notification settings, Kanban vault). Written atomically.
 - `phi.old` — previous binary after a self-update (retained 10 minutes).
 - `phi.rejected` — bad binary after a rollback (preserved, not auto-deleted).
 

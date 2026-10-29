@@ -161,18 +161,17 @@ it('owns local coordinator/config, sanitized children, bounded logs, and idempot
     expect(stack.reactUrl).toBe('http://127.0.0.1:5173');
     const phiOptions = fake.spawn.mock.calls[1]?.[2];
     const dir = join(phiOptions.cwd, '..');
-    const config = JSON.parse(
-        readFileSync(join(dir, 'home/.phi/config.json'), 'utf8'),
-    );
-    expect(config).toMatchObject({
-        auto_reconnect: 'off',
-        peers: [],
-        pushover_enabled: false,
-        webhook_enabled: false,
-        simplepush_enabled: false,
-    });
-    expect(config.sync_coordinator).toMatch(/^http:\/\/127\.0\.0\.1:18\d+$/);
-    expect(config.sync_coordinator).not.toContain(':7070');
+    const config = readFileSync(join(dir, 'home/.phi/config.toml'), 'utf8');
+    const value = (key: string) =>
+        config.match(new RegExp(`^${key}\\s*=\\s*(.*)$`, 'm'))?.[1];
+    expect(value('auto_reconnect')).toBe('"off"');
+    expect(value('peers')).toBe('[]');
+    expect(value('pushover_enabled')).toBe('false');
+    expect(value('webhook_enabled')).toBe('false');
+    expect(value('simplepush_enabled')).toBe('false');
+    const coordinatorUrl = JSON.parse(value('sync_coordinator') ?? 'null');
+    expect(coordinatorUrl).toMatch(/^http:\/\/127\.0\.0\.1:18\d+$/);
+    expect(coordinatorUrl).not.toContain(':7070');
     const coordinator = fake.createServer.mock.calls[0]?.[0];
     const response = { writeHead: vi.fn(), end: vi.fn() };
     coordinator({ method: 'GET', url: '/api/sync/messages' }, response);

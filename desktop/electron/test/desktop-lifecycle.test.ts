@@ -4,7 +4,14 @@
  * real host instance while keeping every Electron object recording-only.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -310,6 +317,7 @@ describe('DesktopHost fake-Electron lifecycle', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     globalThis.fetch = originalFetch;
     rmSync(temp, { recursive: true, force: true });
     if (previousLowMemory === undefined) {
@@ -317,6 +325,64 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     } else {
       process.env.PHI_DESKTOP_LOW_MEMORY = previousLowMemory;
     }
+  });
+
+  it('recovers credentials from root-level TOML and only falls back when TOML is absent', () => {
+    const phiDir = path.join(temp, '.phi');
+    mkdirSync(phiDir, { recursive: true });
+    vi.spyOn(os, 'homedir').mockReturnValue(temp);
+    const host = new DesktopHost();
+    const recovery = host as unknown as {
+      tryRecoverLocalCredential(origin: string): unknown;
+    };
+    const verifier = Buffer.alloc(32, 1).toString('base64url');
+    const hash = `v1.pbkdf2-sha256.1000.c2FsdA.${verifier}`;
+    const config = path.join(phiDir, 'config.toml');
+    const legacy = path.join(phiDir, 'config.json');
+    const recover = () =>
+      recovery.tryRecoverLocalCredential('http://localhost:7070');
+
+    for (const syntax of [
+      `access_password_hash = "${hash}"`,
+      `  access_password_hash = '${hash}'  # note\r\n`,
+    ]) {
+      writeFileSync(config, syntax);
+      expect(recover()).not.toBeNull();
+    }
+    for (const invalid of [
+      `access_password_hash = "${hash}"\naccess_password_hash = '${hash}'`,
+      `[auth]\naccess_password_hash = "${hash}"`,
+      `access_password_hash = ${hash}`,
+      `notes = '''\naccess_password_hash = "${hash}"\n'''`,
+    ]) {
+      writeFileSync(config, invalid);
+      expect(recover()).toBeNull();
+    }
+    writeFileSync(
+      legacy,
+      JSON.stringify({ access_password_hash: hash, password_hash: hash }),
+    );
+    for (const content of ['', `theme_color = 'purple'`]) {
+      writeFileSync(config, content);
+      expect(recover()).toBeNull();
+    }
+    rmSync(config);
+    expect(recover()).not.toBeNull();
+    expect(
+      recovery.tryRecoverLocalCredential('https://example.com') as null,
+    ).toBeNull();
+    rmSync(config, { force: true });
+    mkdirSync(config);
+    expect(recover()).toBeNull();
+    rmSync(config, { recursive: true, force: true });
+    try {
+      symlinkSync(path.join(phiDir, 'missing-config.toml'), config);
+    } catch (error) {
+      if (process.platform === 'win32') return;
+      throw error;
+    }
+    expect(recover()).toBeNull();
+    expect(lstatSync(config).isSymbolicLink()).toBe(true);
   });
 
   it('pins config/workspace requests and header actions to the requested server', async () => {
