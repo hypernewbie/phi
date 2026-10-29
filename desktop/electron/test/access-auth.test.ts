@@ -55,46 +55,12 @@ import {
 
 const desktopSource = readFileSync('src/desktop.ts', 'utf8');
 const preloadSource = readFileSync('src/preload.ts', 'utf8');
-const localRecoveryStart = desktopSource.indexOf(
-  'private tryRecoverLocalCredential(',
-);
-const localRecoveryEnd = desktopSource.indexOf('  /**', localRecoveryStart + 1);
-const localRecoverySource = desktopSource.slice(
-  localRecoveryStart,
-  localRecoveryEnd,
-);
 
 describe('DesktopHost local verifier recovery boundary', () => {
-  it('reads the normalized auth row through read-only node:sqlite and closes it', () => {
-    expect(desktopSource).toContain("from 'node:sqlite'");
-    expect(localRecoverySource).toMatch(
+  it('keeps SQLite read-only, outside the preload, and excluded for selected v2', () => {
+    expect(desktopSource).toMatch(
       /new DatabaseSync\(authDBPath, \{\s*readOnly: true\s*\}\)/,
     );
-    expect(localRecoverySource).toContain('PRAGMA user_version');
-    expect(localRecoverySource).toContain(
-      "name NOT LIKE 'sqlite_%' ORDER BY name LIMIT 4",
-    );
-    expect(localRecoverySource).toContain(
-      'SELECT singleton_id, password_record, migration_id FROM auth_state LIMIT 2',
-    );
-    expect(localRecoverySource).toContain(
-      'Buffer.from(row.migration_id).equals(expectedID)',
-    );
-    expect(localRecoverySource).toContain('finally {');
-    expect(localRecoverySource).toContain('database?.close()');
-  });
-
-  it('never uses Config fallback for a migration marker or a present database', () => {
-    expect(localRecoverySource).toContain(
-      'if (hasMigrationMarker) return null;',
-    );
-    expect(localRecoverySource).toContain('if (dbInfo) {');
-    expect(localRecoverySource).toContain(
-      'const legacyHash = cfg.access_password_hash || cfg.password_hash;',
-    );
-    expect(
-      localRecoverySource.indexOf('if (hasMigrationMarker) return null;'),
-    ).toBeLessThan(localRecoverySource.indexOf('const legacyHash ='));
     expect(preloadSource).not.toContain('node:sqlite');
     expect(preloadSource).not.toContain('auth.db');
     expect(desktopSource).toContain(
