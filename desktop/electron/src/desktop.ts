@@ -46,6 +46,7 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  lstatSync,
   openSync,
   readFileSync,
   renameSync,
@@ -53,6 +54,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -2168,12 +2170,8 @@ export class DesktopHost {
     return true;
   }
 
-  /** Captures the verifier AccessAuth cached after a successful
-   *  password-typed unlock, stores the salt+iterations alongside, and
-   *  flushes the encrypted credentials file. Called by the unlock
-   *  IPC handler right after a `tryUnlock` returns `ok`. */
-  /** Attempts to recover a credential for a local server origin from ~/.phi/config.json.
-   *  Allows silent authentication on fresh installs or after app data clears. */
+  /** Attempts to recover a v1 credential for a local origin. Migrated homes
+   *  use the server's normalized SQLite record; Config is legacy-only. */
   private tryRecoverLocalCredential(origin: string): {
     verifier: Buffer;
     salt: Buffer;
@@ -2193,17 +2191,107 @@ export class DesktopHost {
         host === '0.0.0.0';
       if (!isLocal) return null;
 
-      const phiConfigPath = path.join(os.homedir(), '.phi', 'config.json');
-      if (!existsSync(phiConfigPath)) return null;
+      const phiDir = path.join(os.homedir(), '.phi');
+      const phiConfigPath = path.join(phiDir, 'config.json');
+      const authDBPath = path.join(phiDir, 'auth.db');
+      const cfg = JSON.parse(readFileSync(phiConfigPath, 'utf8')) as Record<
+        string,
+        unknown
+      > | null;
+      if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return null;
 
-      const content = readFileSync(phiConfigPath, 'utf8');
-      const cfg = JSON.parse(content) as {
-        password_hash?: string;
-        access_password_hash?: string;
-      };
-      const hash = cfg.access_password_hash || cfg.password_hash;
-      if (!hash || typeof hash !== 'string') return null;
+      const hasMigrationMarker = Object.prototype.hasOwnProperty.call(
+        cfg,
+        'access_auth_migration',
+      );
+      let dbInfo: ReturnType<typeof lstatSync> | undefined;
+      try {
+        dbInfo = lstatSync(authDBPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+      }
 
+      let hash: string | undefined;
+      if (dbInfo) {
+        if (!dbInfo.isFile() || dbInfo.isSymbolicLink()) return null;
+        const marker = cfg.access_auth_migration;
+        if (
+          !marker ||
+          typeof marker !== 'object' ||
+          Array.isArray(marker) ||
+          Object.keys(marker).length !== 2 ||
+          !('state' in marker) ||
+          !('id' in marker)
+        )
+          return null;
+        const migration = marker as { state: unknown; id: unknown };
+        if (
+          (migration.state !== 'pending' && migration.state !== 'complete') ||
+          typeof migration.id !== 'string'
+        )
+          return null;
+        const expectedID = Buffer.from(migration.id, 'base64url');
+        if (
+          expectedID.length !== 16 ||
+          expectedID.toString('base64url') !== migration.id
+        )
+          return null;
+
+        let database: DatabaseSync | undefined;
+        try {
+          database = new DatabaseSync(authDBPath, { readOnly: true });
+          const schema = database.prepare('PRAGMA user_version').get() as
+            | { user_version?: unknown }
+            | undefined;
+          const tables = database
+            .prepare(
+              "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name LIMIT 4",
+            )
+            .all() as { name?: unknown }[];
+          if (
+            schema?.user_version !== 1 ||
+            tables.length !== 3 ||
+            tables[0]?.name !== 'auth_consumed_handles' ||
+            tables[1]?.name !== 'auth_families' ||
+            tables[2]?.name !== 'auth_state'
+          )
+            return null;
+          const rows = database
+            .prepare(
+              'SELECT singleton_id, password_record, migration_id FROM auth_state LIMIT 2',
+            )
+            .all() as {
+            singleton_id?: unknown;
+            password_record?: unknown;
+            migration_id?: unknown;
+          }[];
+          const row = rows[0];
+          if (
+            rows.length !== 1 ||
+            row?.singleton_id !== 1 ||
+            typeof row.password_record !== 'string' ||
+            !(row.migration_id instanceof Uint8Array) ||
+            !Buffer.from(row.migration_id).equals(expectedID)
+          )
+            return null;
+          hash = row.password_record;
+        } catch {
+          return null;
+        } finally {
+          try {
+            database?.close();
+          } catch {
+            /* failed reads are never a reason to use stale Config */
+          }
+        }
+      } else {
+        if (hasMigrationMarker) return null;
+        const legacyHash = cfg.access_password_hash || cfg.password_hash;
+        if (typeof legacyHash !== 'string') return null;
+        hash = legacyHash;
+      }
+
+      if (!hash) return null;
       const parts = hash.split('.');
       if (
         parts.length !== 5 ||
@@ -2214,10 +2302,18 @@ export class DesktopHost {
 
       const iterations = Number(parts[2]);
       if (!Number.isFinite(iterations) || iterations < 1) return null;
-
       const salt = Buffer.from(parts[3], 'base64url');
       const verifier = Buffer.from(parts[4], 'base64url');
-      if (salt.length === 0 || verifier.length !== 32) return null;
+      if (
+        salt.length === 0 ||
+        verifier.length !== 32 ||
+        (dbInfo &&
+          (!Number.isSafeInteger(iterations) ||
+            iterations < 100_000 ||
+            iterations > 10_000_000 ||
+            salt.length !== 16))
+      )
+        return null;
 
       const cred = {
         version: 'v1' as const,

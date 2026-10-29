@@ -167,9 +167,10 @@ Flags also accept double-dash forms, such as `--web=./web`.
 State is stored in `~/.phi/`:
 
 - `config.json` — registered workspaces, theme color, and per-workspace worktree state.
+- `auth.db` — sensitive, authoritative access verifier and session state.
 - `sessions.json` — local names/timestamps for Antigravity sessions (its conversation files are binary, so Phi keeps a sidecar map).
 
-Both are created automatically. `config.json` also holds an optional browser-derived access-password verifier; an empty value disables access protection. Set or clear it from **Config** rather than editing it by hand. Phi's access password protects casual LAN/Tailnet access, but HTTPS is still required against an active hostile-network attacker.
+These files are created automatically. Set or clear the optional browser-derived access password from **Config** rather than editing files by hand. During one-time migration, Phi imports the verifier and session state into `auth.db`; after verified completion it removes `auth-v2-state.json` (a cleanup failure is logged as a warning and does not restore Config as authority). Copy `auth.db` only while Phi is stopped, unless you use a consistent SQLite backup mechanism. If `auth.db` is missing or corrupt, restore a matching backup; Phi will not treat that as disabled authentication. Direct downgrade to an older Phi binary is unsupported, and built-in rollback is blocked after migration. Phi's access password protects casual LAN/Tailnet access, but HTTPS is still required against an active hostile-network attacker.
 
 ### Terminal history retention
 
