@@ -35,17 +35,20 @@ const (
 // their source kind so the renderer can resolve indexed/RGB/default through
 // the Phi terminal palette without re-deriving them.
 type Cell struct {
-	Text          string
-	Width         int
-	Bold          bool
-	Faint         bool
-	Italic        bool
-	Underline     Underline
-	Strikethrough bool
-	Inverse       bool
-	Blink         bool
-	Fg            Color
-	Bg            Color
+	Text           string
+	Width          int
+	Bold           bool
+	Faint          bool
+	Italic         bool
+	Underline      Underline
+	Strikethrough  bool
+	Inverse        bool
+	Blink          bool
+	Invisible      bool
+	Overline       bool
+	Fg             Color
+	Bg             Color
+	UnderlineColor Color
 }
 
 // Color captures a cell color from the emulator. Kind is what the C API
