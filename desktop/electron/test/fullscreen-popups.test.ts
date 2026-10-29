@@ -128,6 +128,8 @@ const fake = vi.hoisted(() => {
     destroyed = false;
     fullscreen = false;
     hidden = false;
+    showCalls = 0;
+    focusCalls = 0;
     options: any;
     visibleOnAllWorkspaces = false;
     visibleOnAllWorkspacesOptions: any = null;
@@ -140,6 +142,8 @@ const fake = vi.hoisted(() => {
     constructor(options: any) {
       super();
       this.options = options;
+      this.size = [options.width ?? 320, options.height ?? 380];
+      this.hidden = options.show === false;
       FakeBrowserWindow.instances.push(this);
     }
     isDestroyed(): boolean {
@@ -168,6 +172,12 @@ const fake = vi.hoisted(() => {
     getSize(): [number, number] {
       return [this.size[0], this.size[1]];
     }
+    getContentSize(): [number, number] {
+      return this.getSize();
+    }
+    setContentSize(width: number, height: number): void {
+      this.size = [width, height];
+    }
     setPosition(x: number, y: number): void {
       this.position = { x, y };
     }
@@ -181,9 +191,12 @@ const fake = vi.hoisted(() => {
       this.hidden = true;
     }
     show(): void {
+      this.showCalls++;
       this.hidden = false;
     }
-    focus(): void {}
+    focus(): void {
+      this.focusCalls++;
+    }
     setTitle(): void {}
     setProgressBar(): void {}
     isFocused(): boolean {
@@ -318,12 +331,226 @@ describe('fullscreen popups & context menu UX stability', () => {
   });
 
   afterEach(() => {
+    for (const win of fake.FakeBrowserWindow.instances) {
+      if (!win.isDestroyed()) win.close();
+    }
+    vi.restoreAllMocks();
+    vi.useRealTimers();
     rmSync(temp, { recursive: true, force: true });
     if (previousLowMemory === undefined) {
       delete process.env.PHI_DESKTOP_LOW_MEMORY;
     } else {
       process.env.PHI_DESKTOP_LOW_MEMORY = previousLowMemory;
     }
+  });
+
+  async function openSizingMenu() {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const host = new DesktopHost();
+    await host.start(primary);
+    const win = fake.FakeBrowserWindow.instances[0];
+    win.webContents.emit('did-finish-load');
+    await flush();
+    const profile = host.controller!.add('http://127.0.0.1:7070/');
+    host.controller!.setActive(profile.id);
+    fake.ipcEvents.get('phi:open-rail-menu')!(
+      { sender: win.webContents },
+      profile.id,
+      200,
+      900,
+    );
+    await flush();
+    const menu = fake.FakeBrowserWindow.instances.find(
+      (candidate) => candidate.options?.title === 'Phi server menu',
+    )!;
+    return {
+      host,
+      win,
+      profile,
+      menu,
+      size: fake.ipcEvents.get('phi:rail-menu-size')!,
+    };
+  }
+
+  it('accepts only current-popup finite positive heights and shows after fitting', async () => {
+    const { win, menu, size } = await openSizingMenu();
+    const resize = vi.spyOn(menu, 'setContentSize');
+    expect(menu.hidden).toBe(true);
+    for (const value of [0, -1, NaN, Infinity, '508', null]) {
+      size({ sender: menu.webContents }, value);
+    }
+    size({ sender: win.webContents }, 508);
+    expect(resize).not.toHaveBeenCalled();
+    expect(menu.hidden).toBe(true);
+    size({ sender: menu.webContents }, 508);
+    expect(menu.getContentSize()).toEqual([320, 508]);
+    expect(menu.hidden).toBe(false);
+    resize.mockClear();
+    size({ sender: menu.webContents }, 508);
+    expect(resize).not.toHaveBeenCalled();
+    size({ sender: menu.webContents }, 509);
+    expect(menu.getContentSize()).toEqual([320, 509]);
+    resize.mockClear();
+    size({ sender: menu.webContents }, 508);
+    expect(resize).not.toHaveBeenCalled();
+    size({ sender: menu.webContents }, 286);
+    expect(menu.getContentSize()).toEqual([320, 286]);
+    expect(menu.showCalls).toBe(1);
+    expect(menu.focusCalls).toBe(1);
+  });
+
+  it('clamps to the selected display and reuses the original click anchor', async () => {
+    const { menu, size } = await openSizingMenu();
+    size({ sender: menu.webContents }, 508);
+    expect(menu.position).toEqual({ x: 210, y: 534 });
+    size({ sender: menu.webContents }, 286);
+    expect(menu.position).toEqual({ x: 210, y: 756 });
+    size({ sender: menu.webContents }, 508);
+    expect(menu.position).toEqual({ x: 210, y: 534 });
+    size({ sender: menu.webContents }, 100000);
+    expect(menu.getContentSize()).toEqual([320, 1003]);
+    expect(menu.position.y).toBe(39);
+  });
+
+  it('shows after 500ms without a report, then accepts a late report', async () => {
+    const { menu, size } = await openSizingMenu();
+    await vi.advanceTimersByTimeAsync(499);
+    expect(menu.hidden).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(menu.hidden).toBe(false);
+    expect(menu.getContentSize()).toEqual([320, 1003]);
+    size({ sender: menu.webContents }, 508);
+    expect(menu.getContentSize()).toEqual([320, 508]);
+    expect(menu.showCalls).toBe(1);
+  });
+
+  it('ignores closed-popup reports and cancels its fallback', async () => {
+    const { win, profile, menu, size } = await openSizingMenu();
+    const staleSender = menu.webContents;
+    fake.ipcEvents.get('phi:open-rail-menu')!(
+      { sender: win.webContents },
+      profile.id,
+      200,
+      20,
+    );
+    expect(menu.isDestroyed()).toBe(true);
+    size({ sender: staleSender }, 508);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(menu.showCalls).toBe(0);
+    fake.ipcEvents.get('phi:open-rail-menu')!(
+      { sender: win.webContents },
+      profile.id,
+      200,
+      20,
+    );
+    await flush();
+    const replacement = fake.FakeBrowserWindow.instances.at(-1)!;
+    const resize = vi.spyOn(replacement, 'setContentSize');
+    size({ sender: staleSender }, 508);
+    expect(resize).not.toHaveBeenCalled();
+    size({ sender: replacement.webContents }, 508);
+    expect(replacement.getContentSize()).toEqual([320, 508]);
+  });
+
+  it.each(['active', 'inactive', 'last'] as const)(
+    'destroys the removed retained view (%s profile)',
+    async (scenario) => {
+      const host = new DesktopHost();
+      await host.start(primary);
+      const win = fake.FakeBrowserWindow.instances[0];
+      win.webContents.emit('did-finish-load');
+      await flush();
+      const ctrl = host.controller!;
+      const a = ctrl.add('http://alpha.example.test:7070/');
+      host.profileViews!.addProfile(a.id, a.origin);
+      ctrl.setActive(a.id);
+      const view = host.profileViews!.getView(a.id)!;
+      let survivor = '';
+      if (scenario !== 'last') {
+        const b = ctrl.add('http://beta.example.test:7070/');
+        host.profileViews!.addProfile(b.id, b.origin);
+        ctrl.setActive(b.id);
+        survivor = b.id;
+        if (scenario === 'active') ctrl.setActive(a.id);
+      }
+      const remove = vi.spyOn(host.profileViews!, 'removeProfile');
+      fake.ipcEvents.get('phi:remove-profile')!(
+        { sender: win.webContents },
+        a.id,
+      );
+      expect(remove).toHaveBeenCalledWith(a.id);
+      expect(ctrl.state().profiles.some((profile) => profile.id === a.id)).toBe(
+        false,
+      );
+      expect(host.profileViews!.getView(a.id)).toBeNull();
+      expect(view.webContents.isDestroyed()).toBe(true);
+      expect(host.profileViews!.getActive()).toBe(survivor || null);
+    },
+  );
+
+  it('keeps the retained view when profile persistence fails', async () => {
+    const host = new DesktopHost();
+    await host.start(primary);
+    const win = fake.FakeBrowserWindow.instances[0];
+    win.webContents.emit('did-finish-load');
+    await flush();
+    const ctrl = host.controller!;
+    const profile = ctrl.add('http://alpha.example.test:7070/');
+    host.profileViews!.addProfile(profile.id, profile.origin);
+    ctrl.setActive(profile.id);
+    const view = host.profileViews!.getView(profile.id)!;
+    const remove = vi.spyOn(host.profileViews!, 'removeProfile');
+    vi.spyOn(ctrl, 'remove').mockImplementation(() => {
+      throw new Error('save failed');
+    });
+    fake.ipcEvents.get('phi:remove-profile')!(
+      { sender: win.webContents },
+      profile.id,
+    );
+    expect(remove).not.toHaveBeenCalled();
+    expect(view.webContents.isDestroyed()).toBe(false);
+    expect(
+      ctrl.state().profiles.some((candidate) => candidate.id === profile.id),
+    ).toBe(true);
+  });
+
+  it('forgets one single-tab profile and destroys only the final shared view', async () => {
+    process.env.PHI_DESKTOP_LOW_MEMORY = '1';
+    const host = new DesktopHost();
+    await host.start(primary);
+    vi.spyOn(host.embeddedTransport!, 'checkCompatibility').mockResolvedValue(
+      true,
+    );
+    const win = fake.FakeBrowserWindow.instances[0];
+    win.webContents.emit('did-finish-load');
+    await flush();
+    const ctrl = host.controller!;
+    const a = ctrl.add('http://alpha.example.test:7070/');
+    host.profileViews!.addProfile(a.id, a.origin);
+    ctrl.setActive(a.id);
+    const shared = host.profileViews!.getView(a.id)!;
+    const b = ctrl.add('http://beta.example.test:7070/');
+    host.profileViews!.addProfile(b.id, b.origin);
+    ctrl.setActive(b.id);
+    const execute = vi.spyOn(shared.webContents, 'executeJavaScript');
+    fake.ipcEvents.get('phi:remove-profile')!(
+      { sender: win.webContents },
+      a.id,
+    );
+    expect(
+      execute.mock.calls.some(([code]) =>
+        String(code).includes('window.__phiEmbed.forget'),
+      ),
+    ).toBe(true);
+    expect(shared.webContents.isDestroyed()).toBe(false);
+    expect(host.profileViews!.getActive()).toBe(b.id);
+    fake.ipcEvents.get('phi:remove-profile')!(
+      { sender: win.webContents },
+      b.id,
+    );
+    expect(shared.webContents.isDestroyed()).toBe(true);
+    expect(host.profileViews!.getActive()).toBeNull();
   });
 
   it('denies internal window popouts when in fullscreen mode so the in-page modal is used', async () => {
@@ -422,6 +649,10 @@ describe('fullscreen popups & context menu UX stability', () => {
       (w) => w.options?.title === 'Phi server menu',
     );
     expect(menuWin).toBeDefined();
+    fake.ipcEvents.get('phi:rail-menu-size')!(
+      { sender: menuWin!.webContents },
+      508,
+    );
     // In fullscreen, top is screenY + 4 = 14 (clamped to bounds.y + 8 = 8, NOT workArea.y + 8 = 39)
     expect(menuWin!.position.y).toBe(14);
   });

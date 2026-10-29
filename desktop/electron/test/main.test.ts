@@ -1032,6 +1032,19 @@ describe('src/desktop.ts (observed rail identity + accent)', () => {
     expect(desktopSource).toContain('refreshWindowTitle();');
   });
 
+  it('removes the retained view after persistence and before explicit active fallback', () => {
+    const start = desktopSource.indexOf("ipcMain.on('phi:remove-profile'");
+    const end = desktopSource.indexOf("'phi:reorder-profile'", start);
+    const handler = desktopSource.slice(start, end);
+    const persisted = handler.indexOf('ctrl.remove(id)');
+    const removed = handler.indexOf('this.profileViews?.removeProfile(id)');
+    const fallback = handler.indexOf('const activeId = ctrl.state().activeId;');
+    expect(persisted).toBeGreaterThan(-1);
+    expect(removed).toBeGreaterThan(persisted);
+    expect(fallback).toBeGreaterThan(removed);
+    expect(handler).toContain('this.clearStoredCredential(authOrigin)');
+  });
+
   it('drops the observed identity when its profile is removed', () => {
     const handlerIdx = desktopSource.indexOf("ipcMain.on('phi:remove-profile'");
     expect(handlerIdx).toBeGreaterThan(-1);

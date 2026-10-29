@@ -132,6 +132,37 @@ try {
     assert.ok(short.top >= 0 && short.bottom <= short.viewport);
     assert.equal(short.reported, actions);
     console.log('RAIL_SCROLL ' + JSON.stringify({ touch, ...short }));
+    if (touch) await remove.tap();
+    else await remove.click();
+    await page.getByRole('menuitem', { name: 'Keep server', exact: true }).click();
+
+    const longState = {
+      ...state,
+      profile: {
+        ...state.profile,
+        name: 'N'.repeat(120),
+        hostname: 'H'.repeat(63),
+        origin: `https://${'a'.repeat(63)}.example.test:17073/`,
+      },
+    };
+    await page.evaluate((value) => window.__railState(value), longState);
+    await geometry('long-actions');
+    await page.getByRole('menuitem', { name: 'Rename', exact: true }).click();
+    const input = page.getByRole('textbox', { name: 'Server name' });
+    await input.fill('Unconfirmed draft');
+    await page.evaluate((value) => window.__railState(value), {
+      ...longState, health: 'down',
+    });
+    assert.equal(await input.inputValue(), 'Unconfirmed draft');
+    assert.ok(await input.evaluate(element => document.activeElement === element));
+    await page.getByRole('menuitem', { name: 'Cancel', exact: true }).click();
+    await remove.click();
+    await geometry('long-remove');
+    const confirm = await page.locator('.rail-menu-confirm').evaluate(element => ({
+      width: element.clientWidth, scrollWidth: element.scrollWidth,
+    }));
+    assert.ok(confirm.scrollWidth <= confirm.width,
+      'long confirmation text must fit the capped width');
     assert.deepEqual(errors, []);
     await context.close();
   }

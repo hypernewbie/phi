@@ -1382,12 +1382,32 @@ export class DesktopHost {
     installZoomShortcuts(menuContents, (action) =>
       this.requestContentZoom(action),
     );
+    let shownAt = 0;
+    let showTimer: ReturnType<typeof setTimeout> | null = null;
+    const showMenu = (): void => {
+      if (
+        this.railMenuWindow !== menu ||
+        menu.isDestroyed() ||
+        parent.isDestroyed()
+      )
+        return;
+      if (showTimer !== null) {
+        clearTimeout(showTimer);
+        showTimer = null;
+      }
+      this.positionRailMenu(menu, screenX, screenY, parent);
+      if (shownAt !== 0) return;
+      shownAt = Date.now();
+      menu.show();
+      menu.focus();
+    };
     this.railMenuResize = (height: number): void => {
       if (
         this.railMenuWindow !== menu ||
         menu.isDestroyed() ||
         parent.isDestroyed()
-      ) return;
+      )
+        return;
       const currentDisplay = screen.getDisplayNearestPoint({
         x: screenX,
         y: screenY,
@@ -1407,14 +1427,15 @@ export class DesktopHost {
       ) {
         menu.setContentSize(320, nextHeight);
       }
-      this.positionRailMenu(menu, screenX, screenY, parent);
+      showMenu();
     };
-    let shownAt = 0;
     menu.on('blur', () => {
-      if (Date.now() - shownAt < 150) return;
+      if (shownAt === 0 || Date.now() - shownAt < 150) return;
       if (this.railMenuWindow === menu) this.closeRailMenu();
     });
     menu.on('closed', () => {
+      if (showTimer !== null) clearTimeout(showTimer);
+      showTimer = null;
       this.sessionChildren.delete(menu);
       this.trustedSessionSenders.delete(menuContents);
       if (this.railMenuWindow === menu) {
@@ -1430,11 +1451,8 @@ export class DesktopHost {
       })
       .then(() => {
         if (this.railMenuWindow !== menu || menu.isDestroyed()) return;
-        this.positionRailMenu(menu, screenX, screenY, parent);
         this.pushRailState();
-        shownAt = Date.now();
-        menu.show();
-        menu.focus();
+        if (shownAt === 0) showTimer = setTimeout(showMenu, 500);
       })
       .catch((err) => {
         console.log(`phi-desktop: rail menu loadFile failed: ${String(err)}`);
@@ -3977,7 +3995,8 @@ export class DesktopHost {
         typeof height !== 'number' ||
         !Number.isFinite(height) ||
         height <= 0
-      ) return;
+      )
+        return;
       this.railMenuResize?.(height);
     });
     // Rail renderer click handler (window.electron.postSelectProfile):
@@ -4160,6 +4179,7 @@ export class DesktopHost {
         console.log(`phi-desktop: phi:remove-profile ${id}: ${String(err)}`);
         return;
       }
+      this.profileViews?.removeProfile(id);
       const activeId = ctrl.state().activeId;
       if (activeId !== '') this.profileViews?.setActive(activeId);
       else this.profileViews?.setActive(null);

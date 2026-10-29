@@ -15,6 +15,7 @@ let health: RailHealth = 'unknown';
 let unread = 0;
 let mode: MenuMode = 'actions';
 let booted = false;
+let panelObserver: ResizeObserver | null = null;
 
 function closeMenu(): void {
   mode = 'actions';
@@ -107,7 +108,9 @@ function makeHeader(panel: HTMLElement): void {
   }
 
   header.append(kicker, title, close, identity, origin, status);
-  panel.appendChild(header);
+  const previous = panel.querySelector('.rail-menu-header');
+  if (previous) previous.replaceWith(header);
+  else panel.appendChild(header);
 }
 
 function renderActions(panel: HTMLElement): void {
@@ -237,12 +240,26 @@ export function measureRailMenuHeight(panel: HTMLElement): number {
 
 function reportRailMenuHeight(panel: HTMLElement): void {
   if (!panel.isConnected) return;
-  window.electron.postRailMenuSize(measureRailMenuHeight(panel));
+  const height = measureRailMenuHeight(panel);
+  if (document.fonts?.status === 'loading') return;
+  window.electron.postRailMenuSize(height);
+}
+
+function observeRailMenuHeight(panel: HTMLElement): void {
+  const report = (): void => reportRailMenuHeight(panel);
+  report();
+  if (typeof ResizeObserver !== 'undefined') {
+    panelObserver = new ResizeObserver(report);
+    panelObserver.observe(panel);
+  }
+  if (document.fonts) void document.fonts.ready.then(report);
 }
 
 function render(): void {
   const root = menuRoot();
   if (root === null) return;
+  panelObserver?.disconnect();
+  panelObserver = null;
   root.replaceChildren();
   if (selected === null) return;
   const panel = document.createElement('section');
@@ -252,10 +269,7 @@ function render(): void {
   else if (mode === 'remove') renderRemove(panel);
   else renderActions(panel);
   root.appendChild(panel);
-  reportRailMenuHeight(panel);
-  if (document.fonts) {
-    void document.fonts.ready.then(() => reportRailMenuHeight(panel));
-  }
+  observeRailMenuHeight(panel);
 }
 
 export function renderState(state: RailMenuState): void {
@@ -276,7 +290,12 @@ export function renderState(state: RailMenuState): void {
     document.documentElement.style.removeProperty('--menu-accent');
     document.documentElement.style.removeProperty('--menu-accent-soft');
   }
-  render();
+  const renamePanel =
+    mode === 'rename'
+      ? menuRoot()?.querySelector<HTMLElement>('.rail-menu-panel')
+      : null;
+  if (renamePanel) makeHeader(renamePanel);
+  else render();
 }
 
 export function boot(): void {
