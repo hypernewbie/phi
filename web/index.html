@@ -399,7 +399,16 @@ eager to avoid a first-open unstyled flash. -->
                 >
                     <div class="panel-header">
                         <h2 id="drawer-panel-title">SESSIONS</h2>
-                        <div class="panel-header-actions">
+                        <div class="panel-header-actions" id="desktop-sidebar-toggle-home">
+                            <button
+                                id="desktop-sidebar-toggle"
+                                type="button"
+                                class="tab-action-btn desktop-sidebar-toggle hidden"
+                                aria-controls="sidebar-panel"
+                                aria-expanded="true"
+                                title="Hide sessions"
+                                aria-label="Hide sessions"
+                            >&lt;&lt;</button>
                             <button
                                 id="drawer-back-to-tabs"
                                 class="header-btn mobile-only"
@@ -603,6 +612,10 @@ eager to avoid a first-open unstyled flash. -->
                 <main class="terminal-panel">
                     <!-- TABS HEADER -->
                     <div class="terminal-tabs-bar" style="position: relative">
+                        <div
+                            id="desktop-sidebar-restore-slot"
+                            class="hidden"
+                        ></div>
                         <div id="tabs-container" class="tabs-container"></div>
                         <button
                             id="tab-overflow-btn"
@@ -2020,6 +2033,7 @@ eager to avoid a first-open unstyled flash. -->
         <!-- Main Entry Point -->
         <script src="vendor/Sortable.min.js"></script>
         <script src="vendor/jsdiff.min.js"></script>
+        <script type="module" src="desktop-sidebar.js"></script>
         <script type="module" src="app.js"></script>
     </body>
 </html>

@@ -889,7 +889,15 @@ html[data-sync="stale"] .brand .logo {
     height: 42px;
 }
 
-.panel-header h2 {
+#desktop-sidebar-restore-slot {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.panel-header h2,
+.tab-action-btn.desktop-sidebar-toggle {
+    font-family: var(--font-ui);
     font-size: 11px;
     font-weight: 600;
     color: var(--text-muted);
@@ -7453,6 +7461,16 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 }
 
 .sidebar-narrow .panel-header {
+    display: none;
+}
+
+.sidebar-panel.sidebar-narrow:has(#desktop-sidebar-toggle:not(.hidden)) .panel-header {
+    display: flex;
+    justify-content: flex-end;
+    padding: 6px;
+}
+
+.sidebar-narrow .panel-header h2 {
     display: none;
 }
 
@@ -14190,4 +14208,10 @@ html[data-theme-color="white"] .pi-export-scope {
     --warning: #e3cea3;
     --white: #e3e3e4;
 }
+
+html.desktop-sidebar-hidden #sidebar-panel,
+html.desktop-sidebar-hidden #left-resize-handle {
+    display: none !important;
+}
+
 /* stylelint-enable custom-property-pattern */
