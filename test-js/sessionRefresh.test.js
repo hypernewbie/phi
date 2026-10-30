@@ -699,6 +699,76 @@ describe('Refresh Sessions complete batch behavior', () => {
         ).toBe('');
     });
 
+    it('retires an interrupted refresh before replacing the sidebar root', async () => {
+        const button = document.createElement('button');
+        button.id = 'refresh-sessions-btn';
+        document.body.appendChild(button);
+        const { manager, list } = makeManager();
+        const gate = deferred();
+        mockFetch(() => gate.promise);
+        const interrupted = manager.refreshSessions();
+        expect(button.getAttribute('aria-busy')).toBe('true');
+
+        manager.renderWorktreesList(
+            [{ path: '/work/demo', active: true, branch: 'changed' }],
+            '/work',
+            null,
+            { loadSessions: false },
+        );
+        expect(manager.sessionRefreshPromise).toBeNull();
+        expect(button.hasAttribute('aria-busy')).toBe(false);
+        expect(
+            document.getElementById('session-refresh-status').textContent,
+        ).toBe('');
+
+        const nextGate = deferred();
+        mockFetch(() => nextGate.promise);
+        const next = manager.refreshSessions();
+        await interrupted;
+        expect(manager.sessionRefreshPromise).not.toBeNull();
+        expect(button.getAttribute('aria-busy')).toBe('true');
+        nextGate.resolve([session('new-root')]);
+        await next;
+        expect(list.textContent).toContain('new-root');
+        expect(
+            document.getElementById('session-refresh-status').textContent,
+        ).toBe('Sessions refreshed.');
+        gate.resolve([session('obsolete-root')]);
+        await Promise.resolve();
+        expect(list.textContent).not.toContain('obsolete-root');
+    });
+
+    it('clears refresh state immediately on a cache-miss workspace change from a tab', async () => {
+        const button = document.createElement('button');
+        button.id = 'refresh-sessions-btn';
+        document.body.appendChild(button);
+        const { manager } = makeManager();
+        const sessions = deferred();
+        const worktrees = deferred();
+        mockFetch((url) =>
+            url.startsWith('/api/sessions')
+                ? sessions.promise
+                : worktrees.promise,
+        );
+        const interrupted = manager.refreshSessions();
+        // Tab activation assigns the workspace directly before loading its tree.
+        manager.activeWorkspace = '/other';
+        const loading = manager.loadWorktrees();
+        expect(manager.sessionRefreshPromise).toBeNull();
+        expect(button.hasAttribute('aria-busy')).toBe(false);
+        expect(
+            document.getElementById('session-refresh-status').textContent,
+        ).toBe('');
+        await interrupted;
+        worktrees.resolve([]);
+        await loading;
+        sessions.resolve([session('obsolete-workspace')]);
+        await Promise.resolve();
+        expect(manager.sessionList.textContent).not.toContain(
+            'obsolete-workspace',
+        );
+    });
+
     it('lets manual refresh supersede ordinary same-page reads, then lets page navigation win', async () => {
         const { manager, container, store } = makeManager();
         const gates = [deferred(), deferred()];

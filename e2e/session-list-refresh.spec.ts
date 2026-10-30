@@ -243,7 +243,7 @@ async function installSessionGates(
     };
 }
 
-async function assertNoHorizontalOverflow(page: Page): Promise<void> {
+async function assertSidebarBounds(page: Page): Promise<void> {
     const widths = await page.evaluate(() => {
         const panelElement = document.getElementById('sidebar-panel');
         if (!panelElement) throw new Error('Sidebar panel is missing');
@@ -279,6 +279,27 @@ async function assertNoHorizontalOverflow(page: Page): Promise<void> {
             true,
         );
     }
+    const controls = await page
+        .locator('#sidebar-panel .panel-header')
+        .evaluate((header) => {
+            const bounds = header.getBoundingClientRect();
+            return Array.from(header.querySelectorAll('button')).map(
+                (button) => {
+                    const rect = button.getBoundingClientRect();
+                    return {
+                        id: button.id,
+                        fits:
+                            rect.width === 0 ||
+                            (rect.top >= bounds.top - 1 &&
+                                rect.bottom <= bounds.bottom + 1 &&
+                                rect.left >= bounds.left - 1 &&
+                                rect.right <= bounds.right + 1),
+                    };
+                },
+            );
+        });
+    for (const control of controls)
+        expect(control.fits, `${control.id} fits its header`).toBe(true);
 }
 
 test('refreshes Pi and Claude sessions across desktop and touch without reloading', async ({
@@ -580,7 +601,7 @@ test('refreshes Pi and Claude sessions across desktop and touch without reloadin
                     await expect(page.locator('#sidebar-panel')).toHaveClass(
                         /drawer-open/,
                     );
-                await assertNoHorizontalOverflow(page);
+                await assertSidebarBounds(page);
                 if (!touch) {
                     for (const color of ['amber', 'purple']) {
                         await page
@@ -605,7 +626,7 @@ test('refreshes Pi and Claude sessions across desktop and touch without reloadin
                             .click();
                         await refresh.click();
                         await expect(status).toHaveText('Sessions refreshed.');
-                        await assertNoHorizontalOverflow(page);
+                        await assertSidebarBounds(page);
                     }
                 }
                 expect(page.url()).toBe(pageURL);
@@ -654,6 +675,12 @@ for (const mode of ['desktop', 'touch'] as const) {
             const injected503 = new Map<string, number>();
             const errors = collectBrowserErrors(page, injected503, phi.url);
             const openPi = async () => {
+                // The static toggle exists before initOnce wires its click handler.
+                await expect(page.locator('.worktree-section')).toHaveCount(1);
+                await expect(page.locator('html')).not.toHaveAttribute(
+                    'data-sync',
+                    'stale',
+                );
                 if (touch) {
                     await page.locator('#mobile-sidebar-toggle').tap();
                     await page.locator('#drawer-open-sessions').tap();
@@ -749,7 +776,7 @@ for (const mode of ['desktop', 'touch'] as const) {
                 'out of date',
             );
             await expect(section.locator('.error-sessions')).toBeVisible();
-            await assertNoHorizontalOverflow(page);
+            await assertSidebarBounds(page);
             if (touch)
                 await expect(page.locator('#sidebar-panel')).toHaveClass(
                     /drawer-open/,

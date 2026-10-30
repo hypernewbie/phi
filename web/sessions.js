@@ -1144,7 +1144,7 @@ export class SessionsManager {
             return;
         if (!sameOwner) {
             this.worktreeRootGeneration++;
-            this.cancelSessionRequests();
+            this.onSessionContextChange();
             this.worktreeRootOwner = { scope, coder, workspace };
             const cached = this.readCachedWorktrees(store, url);
             if (cached) {
@@ -1243,7 +1243,7 @@ export class SessionsManager {
             return;
         this.worktreeRootGeneration++;
         this.worktreeDirtyRequestId++;
-        this.cancelSessionRequests();
+        this.onSessionContextChange();
         this.worktreeRootOwner = {
             scope: this.app?.scope,
             coder: this.activeCoder,

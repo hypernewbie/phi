@@ -904,6 +904,12 @@ html[data-sync="stale"] .brand .logo {
     letter-spacing: 1px;
 }
 
+#sidebar-panel .panel-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
 .session-refresh-status {
     padding: 4px 12px;
     color: var(--text-muted);
