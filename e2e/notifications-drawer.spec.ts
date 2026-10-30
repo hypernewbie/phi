@@ -7,6 +7,7 @@ import {
     test,
     type APIRequestContext,
     type BrowserContext,
+    type Request as PlaywrightRequest,
 } from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
 import { syntheticPiSource } from './_pi-bridge.js';
@@ -1626,13 +1627,11 @@ test('M3b keeps notification actions local and blocked until an explicit route i
             const httpFailures: string[] = [];
             const failedRequests: string[] = [];
             const intentionalAbortFailures: string[] = [];
-            const scopedSwitchAbortFailures: string[] = [];
+            const scopedSwitchAbortFailures: PlaywrightRequest[] = [];
             const externalRequests: string[] = [];
             const socketEvents: string[] = [];
             let abortFailureBudget = 0;
             let abortConsoleBudget = 0;
-            let explicitSwitchCount = 0;
-            let lastExplicitSwitchAt = 0;
             const activeUrl = `${phiA.url}/__phi/active`;
 
             const context = await browser.newContext({
@@ -1647,6 +1646,29 @@ test('M3b keeps notification actions local and blocked until an explicit route i
                 try {
                     localStorage.setItem('phi_diff_panel_open', 'false');
                 } catch {}
+                const canceled: string[] = [];
+                Object.defineProperty(window, '__m3bCanceledFetches', {
+                    value: canceled,
+                });
+                const originalFetch = window.fetch.bind(window);
+                let nextRequestId = 0;
+                window.fetch = (input, init) => {
+                    const headers = new Headers(init?.headers);
+                    if (
+                        !init?.signal ||
+                        !headers.has('x-phi-backend') ||
+                        (init.method || 'GET').toUpperCase() !== 'GET'
+                    )
+                        return originalFetch(input, init);
+                    const id = String(++nextRequestId);
+                    headers.set('x-m3b-fetch-id', id);
+                    init.signal.addEventListener(
+                        'abort',
+                        () => canceled.push(id),
+                        { once: true },
+                    );
+                    return originalFetch(input, { ...init, headers });
+                };
             }, allowedOrigin);
             const page = await context.newPage();
             page.on('pageerror', (error) => pageErrors.push(error.message));
@@ -1666,16 +1688,11 @@ test('M3b keeps notification actions local and blocked until an explicit route i
             page.on('requestfailed', (requestInfo) => {
                 const error = requestInfo.failure()?.errorText || 'failed';
                 const failure = `${requestInfo.method()} ${requestInfo.url()}: ${error}`;
-                const failedUrl = new URL(requestInfo.url());
                 const scopedSwitchAbort =
-                    Date.now() - lastExplicitSwitchAt < 2_000 &&
-                    requestInfo.method() === 'GET' &&
-                    error === 'net::ERR_ABORTED' &&
-                    (failedUrl.pathname === '/api/git/worktrees' ||
-                        failedUrl.pathname === '/api/config/thinking-presets' ||
-                        failedUrl.pathname === '/api/peers/status');
+                    Boolean(requestInfo.headers()['x-m3b-fetch-id']) &&
+                    error === 'net::ERR_ABORTED';
                 if (scopedSwitchAbort) {
-                    scopedSwitchAbortFailures.push(failure);
+                    scopedSwitchAbortFailures.push(requestInfo);
                 } else if (
                     requestInfo.url() === activeUrl &&
                     abortFailureBudget > 0 &&
@@ -1729,6 +1746,7 @@ test('M3b keeps notification actions local and blocked until an explicit route i
                         'connection',
                         'content-length',
                         'x-phi-backend',
+                        'x-m3b-fetch-id',
                     ])
                         delete headers[name];
                     headers.origin = new URL(profile.url).origin;
@@ -1815,8 +1833,6 @@ test('M3b keeps notification actions local and blocked until an explicit route i
                 profileId: string,
                 mode: ActiveMode = 'success',
             ): Promise<number> => {
-                explicitSwitchCount += 1;
-                lastExplicitSwitchAt = Date.now();
                 nextMode = mode;
                 return page.evaluate(
                     ({ id, origin }) => {
@@ -2278,17 +2294,19 @@ test('M3b keeps notification actions local and blocked until an explicit route i
             expect(unknownProfiles).toEqual([]);
             expect(routeErrors).toEqual([]);
             expect(intentionalAbortFailures).toHaveLength(2);
-            expect(
-                scopedSwitchAbortFailures.every(
-                    (failure) =>
-                        failure.endsWith(': net::ERR_ABORTED') &&
-                        (failure.includes('/api/git/worktrees?') ||
-                            failure.includes('/api/config/thinking-presets:') ||
-                            failure.includes('/api/peers/status:')),
-                ),
-            ).toBe(true);
+            const canceledBySwitch = await page.evaluate(
+                () =>
+                    (window as Window & { __m3bCanceledFetches?: string[] })
+                        .__m3bCanceledFetches || [],
+            );
+            for (const canceled of scopedSwitchAbortFailures) {
+                expect(canceledBySwitch).toContain(
+                    canceled.headers()['x-m3b-fetch-id'],
+                );
+                expect(canceled.failure()?.errorText).toBe('net::ERR_ABORTED');
+            }
             expect(scopedSwitchAbortFailures.length).toBeLessThanOrEqual(
-                explicitSwitchCount * 2,
+                canceledBySwitch.length,
             );
             expect(failedRequests).toEqual([]);
             expect(socketEvents).toEqual([]);
