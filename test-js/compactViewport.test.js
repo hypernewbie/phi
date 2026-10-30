@@ -279,6 +279,28 @@ describe('style.css keyboard-aware app root', () => {
 });
 
 describe('style.css terminal-first side panels', () => {
+    it.each([
+        ['sidebar-panel', '(max-width: 1023px)', '(max-aspect-ratio: 10 / 11)'],
+        ['diff-panel', '(max-width: 1279px)', null],
+    ])(
+        '%s drawer handle follows the compact viewport contract',
+        (panel, width, aspect) => {
+            const escaped = panel.replace('-', '\\-');
+            const media = CSS.match(
+                new RegExp(
+                    `@media[^{}]+\\{\\s*\\.${escaped} \\.drawer-resize-handle\\s*\\{`,
+                ),
+            );
+            expect(media).toBeTruthy();
+            const prelude = media[0].slice(0, media[0].indexOf('{'));
+            expect(prelude).toContain(width);
+            if (aspect) expect(prelude).toContain(aspect);
+            expect(prelude).toContain('(max-height: 500px)');
+            expect(prelude).toContain('(orientation: landscape)');
+            expect(prelude).toContain('(pointer: coarse)');
+        },
+    );
+
     it('769–1279px turns Diff into a slide-over drawer', () => {
         const m = CSS.match(
             /@media \(min-width: 769px\) and \(max-width: 1279px\) \{[\s\S]*?\n\}/,

@@ -457,7 +457,12 @@ export class DiffController {
     }
     togglePanel(isOpen) {
         this.isPanelOpen = isOpen;
-        localStorage.setItem('phi_diff_panel_open', String(isOpen));
+        try {
+            localStorage.setItem('phi_diff_panel_open', String(isOpen));
+        }
+        catch {
+            /* Storage can be unavailable; panel visibility still applies. */
+        }
         if (isOpen) {
             this.diffPanel.classList.remove('hidden');
             // mobile-open is the mobile-only opt-in that slides the

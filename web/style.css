@@ -1435,10 +1435,9 @@ html[data-sync="stale"] .brand .logo {
 /* DRAGGABLE RESIZE HANDLE */
 .resize-handle {
     position: relative;
-    width: 4px;
+    width: 24px;
     cursor: col-resize;
-    background-color: transparent;
-    transition: background-color 0.2s;
+    background-color: var(--bg-panel);
     flex-shrink: 0;
     z-index: 10;
     touch-action: none;
@@ -1449,14 +1448,23 @@ html[data-sync="stale"] .brand .logo {
     position: absolute;
     top: 0;
     bottom: 0;
-    left: -8px;
-    right: -8px;
+    left: 50%;
+    width: 8px;
+    transform: translateX(-50%);
+    background-color: var(--text-muted);
+    transition:
+        background-color 0.2s,
+        box-shadow 0.2s;
 }
 
-.resize-handle:hover,
-.resize-handle.dragging {
+.resize-handle:hover::before,
+.resize-handle.dragging::before {
     background-color: var(--accent);
     box-shadow: 0 0 14px var(--accent-glow);
+}
+
+#right-resize-handle:has(+ .diff-panel.hidden) {
+    display: none;
 }
 
 /* DRAWER RESIZE HANDLES (MOBILE & TABLET SLIDE-OUTS) */
@@ -1470,7 +1478,9 @@ html[data-sync="stale"] .brand .logo {
     user-select: none;
 }
 
-@media (max-width: 1023px), (min-width: 1024px) and (max-aspect-ratio: 10 / 11) {
+@media (max-width: 1023px),
+    (min-width: 1024px) and (max-aspect-ratio: 10 / 11),
+    (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
     .sidebar-panel .drawer-resize-handle {
         display: block;
         position: absolute;
@@ -1490,27 +1500,21 @@ html[data-sync="stale"] .brand .logo {
         top: 50%;
         left: 10px;
         transform: translateY(-50%);
-        width: 3px;
+        width: 8px;
         height: 40px;
         border-radius: 3px;
         background-color: var(--text-muted);
-        opacity: 0.35;
-        transition:
-            opacity 0.2s,
-            background-color 0.2s,
-            width 0.2s;
     }
 
     .sidebar-panel .drawer-resize-handle:hover::after,
     .sidebar-panel .drawer-resize-handle.dragging::after {
-        opacity: 1;
-        width: 4px;
         background-color: var(--accent);
         box-shadow: 0 0 10px var(--accent-glow);
     }
 }
 
-@media (max-width: 1279px) {
+@media (max-width: 1279px),
+    (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
     .diff-panel .drawer-resize-handle {
         display: block;
         position: absolute;
@@ -1530,24 +1534,24 @@ html[data-sync="stale"] .brand .logo {
         top: 50%;
         right: 10px;
         transform: translateY(-50%);
-        width: 3px;
+        width: 8px;
         height: 40px;
         border-radius: 3px;
         background-color: var(--text-muted);
-        opacity: 0.35;
-        transition:
-            opacity 0.2s,
-            background-color 0.2s,
-            width 0.2s;
     }
 
     .diff-panel .drawer-resize-handle:hover::after,
     .diff-panel .drawer-resize-handle.dragging::after {
-        opacity: 1;
-        width: 4px;
         background-color: var(--accent);
         box-shadow: 0 0 10px var(--accent-glow);
     }
+}
+
+.sidebar-panel:not(.drawer-open) #sidebar-drawer-resizer,
+.diff-panel:not(.mobile-open) #diff-drawer-resizer,
+.diff-panel.hidden #diff-drawer-resizer {
+    visibility: hidden;
+    pointer-events: none;
 }
 
 /* MIDDLE PANEL: TERMINAL & TAB SECTION */
