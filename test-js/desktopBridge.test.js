@@ -36,6 +36,41 @@ describe('tryNative (desktop bridge)', () => {
         expect(tryNative('config', {})).toBe(false);
     });
 
+    it('binds encoded embedded config popouts to their owner and editing view', () => {
+        const origin = 'http://a.test:7070',
+            profile = 'profile /A';
+        window.history.replaceState(
+            null,
+            '',
+            `/?${new URLSearchParams({ desktop: '1', embedded: '1', profile, origin })}`,
+        );
+        const popup = { opener: {} };
+        const open = vi.spyOn(window, 'open').mockReturnValue(popup);
+        expect(tryNative('config', { page: 'mobile' })).toBe(true);
+        const [path, name, geometry] = open.mock.calls[0];
+        const url = new URL(path, location.origin);
+        expect(url.searchParams.get('profile')).toBe(profile);
+        expect(url.searchParams.get('origin')).toBe(origin);
+        expect(url.searchParams.get('embedded')).toBe('1');
+        expect(url.searchParams.get('desktop-popout')).toBe('1');
+        expect(url.searchParams.get('page')).toBe('mobile');
+        expect(name).toBe(
+            `phi-config-${encodeURIComponent(profile)}-${encodeURIComponent(origin)}`,
+        );
+        expect(geometry).toBe('width=860,height=1000');
+        expect(popup.opener).toBeNull();
+    });
+
+    it('keeps ownerless and legacy-bridge embedded config requests in-page', () => {
+        window.history.replaceState(null, '', '/?desktop=1&embedded=1');
+        const open = vi.spyOn(window, 'open');
+        expect(tryNative('config', {})).toBe(false);
+        expect(open).not.toHaveBeenCalled();
+        window.__phiDesktop = { request: vi.fn() };
+        expect(tryNative('config', {})).toBe(false);
+        expect(window.__phiDesktop.request).not.toHaveBeenCalled();
+    });
+
     describe('?desktop=1 marker without a bridge', () => {
         const popouts = [
             ['config', '/config.html?desktop-popout=1', 'phi-config'],

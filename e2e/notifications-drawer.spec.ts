@@ -1356,6 +1356,20 @@ test('M3a restores bounded notification previews and keeps local dismissal usabl
                 .toBe(5);
 
             await initialized;
+            // initOnce() runs before revalidate() so Settings mounts
+            // early; wait for the background config load and sync window
+            // to finish before going offline, or revalidate's fetches fail
+            // with custom console.error messages.
+            await page.waitForResponse(
+                (resp) =>
+                    resp.url().includes('/api/config') && resp.status() < 400,
+                { timeout: 30_000 },
+            );
+            await expect
+                .poll(() =>
+                    page.evaluate(() => document.documentElement.dataset.sync),
+                )
+                .toBeUndefined();
             offline = true;
             await context.setOffline(true);
             await page

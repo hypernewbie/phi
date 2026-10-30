@@ -327,6 +327,8 @@ func main() {
 	http.HandleFunc("/api/fs/browse", handleFSBrowse)
 	http.HandleFunc("/api/config/theme", handleThemeUpdate)
 	http.HandleFunc("/api/config/appearance", handleAppearanceUpdate)
+	http.HandleFunc("/api/config/mobile-appearance", handleMobileAppearance)
+	http.HandleFunc("/api/config/mobile-appearance/fence", handleMobileAppearanceFence)
 	http.HandleFunc("/api/git/worktrees", handleGetWorktrees)
 	http.HandleFunc("/api/git/worktree-dirty", handleGetWorktreeDirtyStates)
 	http.HandleFunc("/api/config/worktree-state", handleWorktreeStateUpdate)

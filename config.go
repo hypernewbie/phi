@@ -64,6 +64,14 @@ type Config struct {
 	TerminalFontFamily string `json:"terminal_font_family,omitempty" toml:"terminal_font_family,omitempty"`
 	TerminalFontSize   int    `json:"terminal_font_size,omitempty" toml:"terminal_font_size,omitempty"`
 
+	// Mobile overrides are owned by the revisioned mobile appearance endpoint.
+	// Nil families inherit desktop; nil sizes use mobile defaults.
+	MobileUIFontFamily       *string `json:"mobile_ui_font_family,omitempty"`
+	MobileUIFontSize         *int    `json:"mobile_ui_font_size,omitempty"`
+	MobileTerminalFontFamily *string `json:"mobile_terminal_font_family,omitempty"`
+	MobileTerminalFontSize   *int    `json:"mobile_terminal_font_size,omitempty"`
+	MobileAppearanceRevision uint64  `json:"mobile_appearance_revision,omitempty"`
+
 	// SessionListPageSize controls how many sessions the sidebar shows per
 	// page. 0 uses 10; nonzero values are clamped to 5..100 when the
 	// /api/config payload is built. Optional: old config files load fine
@@ -430,6 +438,11 @@ func saveConfig(cfg Config) {
 		return
 	}
 	cfg.ThinkingPresets = latest.ThinkingPresets
+	cfg.MobileUIFontFamily = latest.MobileUIFontFamily
+	cfg.MobileUIFontSize = latest.MobileUIFontSize
+	cfg.MobileTerminalFontFamily = latest.MobileTerminalFontFamily
+	cfg.MobileTerminalFontSize = latest.MobileTerminalFontSize
+	cfg.MobileAppearanceRevision = latest.MobileAppearanceRevision
 
 	// Defense in depth: never persist a workspace whose path looks
 	// like a test scratch dir (e.g. /tmp/phi-test-alpha). This guards

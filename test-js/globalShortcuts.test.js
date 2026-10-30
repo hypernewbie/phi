@@ -77,9 +77,12 @@ describe('App.initGlobalShortcuts', () => {
 
     it('is actually called from App.init() so the shortcut is live', async () => {
         // Regression guard for the exact bug found in review: the method
-        // existed but init() never called it. Assert the source of init()
-        // references initGlobalShortcuts so this can't silently regress.
-        const src = App.prototype.init.toString();
-        expect(src).toContain('initGlobalShortcuts');
+        // existed but init() never called it. init() delegates to initOnce()
+        // so Settings mounts before background reads; initOnce() must call
+        // initGlobalShortcuts.
+        const initSrc = App.prototype.init.toString();
+        expect(initSrc).toContain('initOnce');
+        const onceSrc = App.prototype.initOnce.toString();
+        expect(onceSrc).toContain('initGlobalShortcuts');
     });
 });
