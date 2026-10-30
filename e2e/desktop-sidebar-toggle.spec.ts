@@ -1301,6 +1301,30 @@ test('M2 responsive mouse and touch layouts preserve desktop state and keyboard 
         const mobileToggle = desktop.page.locator('#mobile-sidebar-toggle');
         await expect(desktopToggle).toHaveText('<<');
         await expectRightAligned(desktopToggle);
+        const appearance = await desktopToggle.evaluate((button) => {
+            const heading = document.querySelector('#drawer-panel-title');
+            if (!heading) throw new Error('Missing sessions heading');
+            const typography = (element: Element) => {
+                const style = getComputedStyle(element);
+                return {
+                    fontFamily: style.fontFamily,
+                    fontSize: style.fontSize,
+                    fontWeight: style.fontWeight,
+                    letterSpacing: style.letterSpacing,
+                    color: style.color,
+                };
+            };
+            const style = getComputedStyle(button);
+            return {
+                toggle: typography(button),
+                heading: typography(heading),
+                border: style.borderTopWidth,
+                background: style.backgroundColor,
+            };
+        });
+        expect(appearance.toggle).toEqual(appearance.heading);
+        expect(appearance.border).toBe('0px');
+        expect(appearance.background).toBe('rgba(0, 0, 0, 0)');
         await desktopToggle.hover();
         await desktopToggle.focus();
         await expect(desktop.page.locator('#self-hud-popover')).toBeHidden();
@@ -1326,7 +1350,7 @@ test('M2 responsive mouse and touch layouts preserve desktop state and keyboard 
                         document.querySelector('#desktop-sidebar-toggle')!,
                     ).borderRadius,
                     peer: getComputedStyle(
-                        document.querySelector('#header-clipboard-btn')!,
+                        document.querySelector('#refresh-console-btn')!,
                     ).borderRadius,
                 }));
                 expect(radii.toggle).toBe(radii.peer);

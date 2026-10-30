@@ -895,7 +895,9 @@ html[data-sync="stale"] .brand .logo {
     flex-shrink: 0;
 }
 
-.panel-header h2 {
+.panel-header h2,
+.tab-action-btn.desktop-sidebar-toggle {
+    font-family: var(--font-ui);
     font-size: 11px;
     font-weight: 600;
     color: var(--text-muted);
