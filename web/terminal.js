@@ -3877,7 +3877,7 @@ export class TabManager {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ pinned: true }),
-            }).catch((err) =>
+            }).then((response) => response.text()).catch((err) =>
                 console.error('[term] Failed to sync pin on backend:', err),
             );
         }
@@ -7515,7 +7515,7 @@ export class TabManager {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ pinned: pinned }),
-        }).catch((err) =>
+        }).then((response) => response.text()).catch((err) =>
             console.error('[term] Failed to sync pin on backend:', err),
         );
     }

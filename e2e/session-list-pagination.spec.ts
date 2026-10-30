@@ -12,7 +12,7 @@ import {
     type APIRequestContext,
     type Page,
 } from '@playwright/test';
-import { startPhi, type PhiServer } from './_server.js';
+import { configToToml, startPhi, type PhiServer } from './_server.js';
 
 // The sidebar must scan and render sessions in pages: the server reads titles
 // only for the requested window, and the arrows move between pages. The
@@ -76,8 +76,8 @@ async function startFixture(
             const home = join(dir, 'home');
             mkdirSync(join(home, '.phi'), { recursive: true });
             writeFileSync(
-                join(home, '.phi', 'config.json'),
-                JSON.stringify({
+                join(home, '.phi', 'config.toml'),
+                configToToml({
                     workspaces: [fixtureCwd],
                     active_cwd: fixtureCwd,
                     ...(pageSize === undefined

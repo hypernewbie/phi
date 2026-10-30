@@ -44,7 +44,6 @@ import {
 } from 'electron';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ProfileViewManager } from './views.js';
@@ -1883,72 +1882,6 @@ export class DesktopHost {
     }
   }
 
-  /** Captures the verifier AccessAuth cached after a successful
-   *  password-typed unlock, stores the salt+iterations alongside, and
-   *  flushes the encrypted credentials file. Called by the unlock
-   *  IPC handler right after a `tryUnlock` returns `ok`. */
-  /** Attempts to recover a credential for a local server origin from ~/.phi/config.json.
-   *  Allows silent authentication on fresh installs or after app data clears. */
-  private tryRecoverLocalCredential(origin: string): {
-    verifier: Buffer;
-    salt: Buffer;
-    iterations: number;
-    version: 'v1';
-    algorithm: 'pbkdf2-sha256';
-  } | null {
-    try {
-      const canonical = toCanonicalAuthOrigin(origin);
-      if (!canonical) return null;
-      const url = new URL(canonical);
-      const host = url.hostname.toLowerCase();
-      const isLocal =
-        host === 'localhost' ||
-        host === '127.0.0.1' ||
-        host === '::1' ||
-        host === '0.0.0.0';
-      if (!isLocal) return null;
-
-      const phiConfigPath = path.join(os.homedir(), '.phi', 'config.json');
-      if (!existsSync(phiConfigPath)) return null;
-
-      const content = readFileSync(phiConfigPath, 'utf8');
-      const cfg = JSON.parse(content) as {
-        password_hash?: string;
-        access_password_hash?: string;
-      };
-      const hash = cfg.access_password_hash || cfg.password_hash;
-      if (!hash || typeof hash !== 'string') return null;
-
-      const parts = hash.split('.');
-      if (
-        parts.length !== 5 ||
-        parts[0] !== 'v1' ||
-        parts[1] !== 'pbkdf2-sha256'
-      )
-        return null;
-
-      const iterations = Number(parts[2]);
-      if (!Number.isFinite(iterations) || iterations < 1) return null;
-
-      const salt = Buffer.from(parts[3], 'base64url');
-      const verifier = Buffer.from(parts[4], 'base64url');
-      if (salt.length === 0 || verifier.length !== 32) return null;
-
-      const cred = {
-        version: 'v1' as const,
-        algorithm: 'pbkdf2-sha256' as const,
-        iterations,
-        salt,
-        verifier,
-      };
-      this.storedCredentials.set(canonical, cred);
-      this.saveStoredCredentials();
-      return cred;
-    } catch {
-      return null;
-    }
-  }
-
   /**
    * Recovers a saved access credential candidate from the body view's localStorage.
    * If the user previously logged into this origin in the browser or body view,
@@ -2041,7 +1974,7 @@ export class DesktopHost {
     }
   }
 
-  /** Resolves a stored credential from memory, loading from disk or local config fallback. */
+  /** Resolves a cached credential from memory or the encrypted credential file. */
   private getOrRecoverCredential(origin: string): {
     verifier: Buffer;
     salt: Buffer;
@@ -2058,12 +1991,6 @@ export class DesktopHost {
       cred =
         this.storedCredentials.get(canonical) ??
         this.storedCredentials.get(origin);
-    }
-    if (!cred) {
-      cred =
-        this.tryRecoverLocalCredential(canonical) ??
-        this.tryRecoverLocalCredential(origin) ??
-        undefined;
     }
     return cred ?? null;
   }
@@ -2194,8 +2121,8 @@ export class DesktopHost {
     }
   }
 
-  /** Iterates every saved profile at startup and re-authenticates
-   *  any that have a persisted credential. Called once during
+  /** Re-authenticates origins with cached credentials at startup.
+   *  Called once during
    *  `start()` after the view manager is ready and before the first
    *  `/api/config` poll. */
   async bootstrapStoredCredentials(
@@ -2204,17 +2131,6 @@ export class DesktopHost {
   ): Promise<void> {
     if (generation !== this.sessionGeneration) return;
     this.loadStoredCredentials();
-    const profiles = this.controller?.state().profiles ?? [];
-    for (const p of profiles) {
-      try {
-        const canonicalOrigin = toCanonicalAuthOrigin(p.origin);
-        if (canonicalOrigin && !this.storedCredentials.has(canonicalOrigin)) {
-          this.tryRecoverLocalCredential(canonicalOrigin);
-        }
-      } catch {
-        /* malformed profile origin */
-      }
-    }
     if (this.storedCredentials.size === 0) return;
     const origins = Array.from(this.storedCredentials.keys());
     // Re-authenticate the origins CONCURRENTLY, with a small concurrency

@@ -296,8 +296,8 @@ export async function startFoundationStack(): Promise<FoundationStack> {
         cleanups.push(() => closeServer(coordinator));
         const coordinatorPort = await listen(coordinator);
         writeFileSync(
-            join(dir, 'home/.phi/config.json'),
-            JSON.stringify({
+            join(dir, 'home/.phi/config.toml'),
+            Object.entries({
                 auto_reconnect: 'off',
                 peers: [],
                 workspaces: [join(dir, 'work')],
@@ -306,7 +306,9 @@ export async function startFoundationStack(): Promise<FoundationStack> {
                 pushover_enabled: false,
                 webhook_enabled: false,
                 simplepush_enabled: false,
-            }),
+            })
+                .map(([key, value]) => `${key} = ${JSON.stringify(value)}`)
+                .join('\n') + '\n',
         );
         const binary = join(dir, 'phi');
         const build = launch(

@@ -14,7 +14,7 @@ Every write is an upsert (no need to check existence first).
 
 Resolve the coordinator URL using the first available source:
 1. A non-empty `$PHI_COORDINATOR` environment variable.
-2. A non-empty `sync_coordinator` field from `~/.phi/config.json` (or `%USERPROFILE%\.phi\config.json` on Windows).
+2. A non-empty `sync_coordinator` field from `~/.phi/config.toml` (or `%USERPROFILE%\.phi\config.toml` on Windows).
 3. Otherwise, use `http://127.0.0.1:7070` only for a local default-port install. The web UI uses `window.location.origin` when the config value is empty, but a shell agent cannot infer that origin. For a custom port or remote server, set `$PHI_COORDINATOR` to the server's reachable address.
 
 In the commands below, `$PHI_COORDINATOR` refers to this resolved address.
@@ -161,6 +161,6 @@ Existing preview, link, and diff cards retain their behavior.
 
 ## Coordinator Address Reference
 
-- **`~/.phi/config.json`** — `sync_coordinator` field (configured coordinator address).
+- **`~/.phi/config.toml`** — `sync_coordinator` field (configured coordinator address).
 - **Welcome banner** — printed when `phi` starts.
 - **Local default** — `http://127.0.0.1:7070` when running locally.

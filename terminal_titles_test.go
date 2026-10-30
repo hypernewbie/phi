@@ -632,6 +632,16 @@ func TestPiTitleServiceReconcileReleasesDeadRemovedAndReplacementReaders(t *test
 	if err := dead.Pty.Kill(); err != nil {
 		t.Fatal(err)
 	}
+	// Kill requests termination; the PTY waiter publishes death asynchronously.
+	// Reconcile must see a dead pane, not race that notification.
+	deadline := time.After(3 * time.Second)
+	for !dead.IsPtyDead() {
+		select {
+		case <-deadline:
+			t.Fatal("killed pane did not become dead")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
 	if err := manager.Kill(removed.ID); err != nil {
 		t.Fatal(err)
 	}

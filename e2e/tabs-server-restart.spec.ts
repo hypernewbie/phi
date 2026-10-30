@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { expect, test } from '@playwright/test';
-import { startPhi, type PhiServer } from './_server.js';
+import { configToToml, startPhi, type PhiServer } from './_server.js';
 
 let phi: PhiServer;
 const uuids = {
@@ -79,8 +79,8 @@ exec cat
                     );
             }
             put(
-                join(home, '.phi', 'config.json'),
-                JSON.stringify({
+                join(home, '.phi', 'config.toml'),
+                configToToml({
                     workspaces: [cwd],
                     opencode_legacy_command: join(dir, 'fixture-opencode-v1'),
                 }),

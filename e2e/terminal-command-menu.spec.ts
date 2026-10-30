@@ -7,7 +7,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
-import { startPhi } from './_server.js';
+import { configToToml, startPhi } from './_server.js';
 
 // The composer presets row is one line of buttons that never squeezes a
 // label: a wrapped row or an ellipsised chip is a regression, not a layout
@@ -170,8 +170,8 @@ test('low-frequency Pi presets move to Cmds on desktop and mobile', async ({
             mkdirSync(cwd, { recursive: true });
             mkdirSync(join(home, '.phi', 'backends'), { recursive: true });
             writeFileSync(
-                join(home, '.phi', 'config.json'),
-                JSON.stringify({ workspaces: [realpathSync(cwd)] }),
+                join(home, '.phi', 'config.toml'),
+                configToToml({ workspaces: [realpathSync(cwd)] }),
             );
             const command = join(dir, 'fake-pi');
             writeFileSync(

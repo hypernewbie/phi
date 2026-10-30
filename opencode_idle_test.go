@@ -268,7 +268,7 @@ func TestOpenCodeIdleStopAPI(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	testConfigPath = filepath.Join(tmpDir, "config.json")
+	testConfigPath = filepath.Join(tmpDir, "config.toml")
 	defer func() { testConfigPath = "" }()
 
 	// Save initial config

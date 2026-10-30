@@ -39,6 +39,8 @@ test.afterAll(async () => {
 
 interface CapturedTerm {
     element?: HTMLElement;
+    cols: number;
+    rows: number;
     buffer: {
         active: {
             length: number;
@@ -63,6 +65,17 @@ async function termText(page: Page, paneId: string): Promise<string> {
                 term.buffer.active.getLine(i)?.translateToString(true) ?? '',
             );
         return lines.join('\n');
+    }, paneId);
+}
+
+async function termGrid(page: Page, paneId: string): Promise<string | null> {
+    return page.evaluate((id: string) => {
+        const terms = (window as unknown as { wsTerms?: CapturedTerm[] })
+            .wsTerms;
+        const term = terms?.find(
+            (t) => t.element?.closest('.term-container')?.id === `term-${id}`,
+        );
+        return term ? `${term.rows} ${term.cols}` : null;
     }, paneId);
 }
 
@@ -231,9 +244,15 @@ test('terminal pane flows over protobuf in Chromium', async ({ page }) => {
             { timeout: 20_000 },
         )
         .not.toBeNull();
+    const initialGrid = await termGrid(page, pane.pane_id);
+    expect(initialGrid).toBe(initial);
     const [initialRows, initialCols] = initial.split(/\s+/).map(Number);
     const resizeStart = clientFrames.length;
     await page.setViewportSize({ width: 800, height: 500 });
+    // Wait for both the local fit and its debounced resize frame.
+    await expect
+        .poll(() => termGrid(page, pane.pane_id), { timeout: 20_000 })
+        .not.toBe(initialGrid);
     // The viewport changes before the debounced resize reaches the socket.
     await expect
         .poll(
@@ -251,25 +270,25 @@ test('terminal pane flows over protobuf in Chromium', async ({ page }) => {
             { timeout: 20_000 },
         )
         .toBe(true);
+    const resizedGrid = await termGrid(page, pane.pane_id);
+    expect(resizedGrid).not.toBeNull();
+    if (!resizedGrid) throw new Error('terminal grid did not resize');
+
     await page.keyboard.type('stty size', { delay: 5 });
     await page.keyboard.press('Enter');
     await expect
         .poll(
             async () => {
                 const pairs = [
-                    ...new Set(
-                        [
-                            ...(await termText(page, pane.pane_id)).matchAll(
-                                /(\d+)\s+(\d+)/g,
-                            ),
-                        ].map((m) => m[0]),
+                    ...(await termText(page, pane.pane_id)).matchAll(
+                        /(\d+)\s+(\d+)/g,
                     ),
-                ].filter((pair) => pair !== initial);
-                return pairs.length ? pairs[0] : null;
+                ].map((match) => match[0]);
+                return pairs.includes(resizedGrid);
             },
             { timeout: 20_000 },
         )
-        .not.toBeNull();
+        .toBe(true);
 
     // Every captured server frame decodes with the pane codec. The first
     // is the attach head; output starts run in order behind it.

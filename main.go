@@ -142,8 +142,15 @@ func main() {
 
 	log.Printf("[main] Starting Phi in CWD: %s", activeCWD)
 
+	// Migrate the read-only legacy JSON config before loading startup settings.
+	migrateLegacyConfig()
+
 	// Ensure config directory exists and contains CWD as a workspace
-	cfg := loadConfig()
+	cfg, err := loadConfigWithError()
+	if err != nil {
+		logConfigReadError(configFilePath(), err)
+		os.Exit(1)
+	}
 	if err := accessAuth.configure(cfg.AccessPasswordHash); err != nil {
 		slog.Error("invalid access password configuration", "err", err)
 		os.Exit(1)

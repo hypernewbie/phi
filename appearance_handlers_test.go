@@ -47,16 +47,16 @@ func TestHandleAppearanceUpdate_PersistsFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read persisted config: %v", err)
 	}
-	if !strings.Contains(string(raw), `"ui_font_family"`) {
+	if !strings.Contains(string(raw), `ui_font_family =`) {
 		t.Errorf("ui_font_family not in persisted file: %s", raw)
 	}
-	if !strings.Contains(string(raw), `"ui_font_size"`) {
+	if !strings.Contains(string(raw), `ui_font_size =`) {
 		t.Errorf("ui_font_size not in persisted file: %s", raw)
 	}
-	if !strings.Contains(string(raw), `"terminal_font_family"`) {
+	if !strings.Contains(string(raw), `terminal_font_family =`) {
 		t.Errorf("terminal_font_family not in persisted file: %s", raw)
 	}
-	if !strings.Contains(string(raw), `"terminal_font_size"`) {
+	if !strings.Contains(string(raw), `terminal_font_size =`) {
 		t.Errorf("terminal_font_size not in persisted file: %s", raw)
 	}
 }

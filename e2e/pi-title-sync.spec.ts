@@ -13,7 +13,7 @@ import {
     type APIRequestContext,
     type WebSocketRoute,
 } from '@playwright/test';
-import { startPhi } from './_server.js';
+import { configToToml, startPhi } from './_server.js';
 
 const secondSessionID = 'e2e-second-worktree-native-id';
 const promptTitle = 'Implement Pi title synchronization';
@@ -80,8 +80,8 @@ test('Pi terminal labels follow native file titles through reload and reconnect'
             const backends = join(home, '.phi', 'backends');
             mkdirSync(backends, { recursive: true });
             writeFileSync(
-                join(home, '.phi', 'config.json'),
-                JSON.stringify({
+                join(home, '.phi', 'config.toml'),
+                configToToml({
                     workspaces: [realpathSync(cwdA), realpathSync(cwdB)],
                     theme_color: 'purple',
                 }),

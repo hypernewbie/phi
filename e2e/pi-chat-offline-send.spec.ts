@@ -1,7 +1,7 @@
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
-import { startPhi } from './_server.js';
+import { configToToml, startPhi } from './_server.js';
 
 // A prompt typed while the control socket is down must appear in the
 // transcript at once, survive the outage, and reach Pi when the link returns.
@@ -60,8 +60,8 @@ test('a prompt typed while the control socket is down is queued and delivered', 
             );
             mkdirSync(join(home, '.phi'), { recursive: true });
             writeFileSync(
-                join(home, '.phi', 'config.json'),
-                JSON.stringify({
+                join(home, '.phi', 'config.toml'),
+                configToToml({
                     workspaces: [fixtureCwd],
                     active_cwd: fixtureCwd,
                 }),

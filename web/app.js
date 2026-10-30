@@ -1775,11 +1775,12 @@ export class App {
 
     async saveTheme(colorKey) {
         try {
-            await fetch('/api/config/theme', {
+            const response = await fetch('/api/config/theme', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ color: colorKey }),
             });
+            await response.text();
         } catch (e) {
             console.error('[theme] Failed to save theme:', e);
         }

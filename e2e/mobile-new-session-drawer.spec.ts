@@ -8,7 +8,7 @@ import {
     type Page,
     type Request,
 } from '@playwright/test';
-import { startPhi, type PhiServer } from './_server.js';
+import { configToToml, startPhi, type PhiServer } from './_server.js';
 
 let phi: PhiServer | undefined;
 let context: BrowserContext | undefined;
@@ -161,8 +161,8 @@ test.beforeEach(async () => {
                 JSON.stringify({ id: 'bash', command }),
             );
             writeFileSync(
-                join(configDir, 'config.json'),
-                JSON.stringify({ workspaces: [workspace] }),
+                join(configDir, 'config.toml'),
+                configToToml({ workspaces: [workspace] }),
             );
         },
     });

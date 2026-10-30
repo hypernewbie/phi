@@ -150,39 +150,11 @@ func TestListGitWorktrees(t *testing.T) {
 }
 
 func TestClaudeSessionRename(t *testing.T) {
-	metaPath := getMetaFilePath()
-	// Backup original file
-	var backup []byte
-	var backupExists bool
-	if b, err := os.ReadFile(metaPath); err == nil {
-		backup = b
-		backupExists = true
-	}
-
-	defer func() {
-		if backupExists {
-			_ = os.WriteFile(metaPath, backup, 0644)
-		} else {
-			_ = os.Remove(metaPath)
-		}
-	}()
-
-	// Setup mock Claude projects directory
+	// Isolate both platform home variables before any sidecar access.
 	tempHome := t.TempDir()
-	homeKey := "USERPROFILE"
-	if os.Getenv(homeKey) == "" {
-		homeKey = "HOME"
-	}
-	origHomeVal := os.Getenv(homeKey)
-	err := os.Setenv(homeKey, tempHome)
-	if err != nil {
-		t.Fatalf("setenv failed: %v", err)
-	}
-	defer os.Setenv(homeKey, origHomeVal)
-
-	origConfigDir := os.Getenv("CLAUDE_CONFIG_DIR")
-	os.Setenv("CLAUDE_CONFIG_DIR", "") // force the ~/.claude fallback under the mock HOME
-	defer os.Setenv("CLAUDE_CONFIG_DIR", origConfigDir)
+	t.Setenv("HOME", tempHome)
+	t.Setenv("USERPROFILE", tempHome)
+	t.Setenv("CLAUDE_CONFIG_DIR", "") // force ~/.claude under the mock HOME
 
 	// Create project directory path: ~ / .claude / projects / C--mock-path
 	projectDirName := "C--mock-path"

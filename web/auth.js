@@ -432,7 +432,7 @@ async function createPasswordRecord(
 }
 
 // Called from the existing Config modal. The returned password record is the
-// only thing written to config.json; the raw password is discarded immediately.
+// only thing written to config.toml; the raw password is discarded immediately.
 export async function setAccessPassword(password) {
     const { passwordHash, status, verifier } =
         await createPasswordRecord(password);
