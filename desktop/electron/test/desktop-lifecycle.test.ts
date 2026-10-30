@@ -4,14 +4,8 @@
  * real host instance while keeping every Electron object recording-only.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  lstatSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { safeStorage } from 'electron';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -257,7 +251,11 @@ vi.mock('electron', () => ({
   Notification: class {
     show(): void {}
   },
-  safeStorage: { isEncryptionAvailable: () => false },
+  safeStorage: {
+    isEncryptionAvailable: () => false,
+    encryptString: (value: string) => Buffer.from(value),
+    decryptString: (value: Buffer) => value.toString('utf8'),
+  },
   session: { defaultSession: {} },
   shell: { openExternal: vi.fn(), openPath: vi.fn() },
   Tray: class {
@@ -271,6 +269,8 @@ vi.mock('electron', () => ({
   powerMonitor: { on: vi.fn(), emit: vi.fn() },
 }));
 
+import { AccessAuth, type StoredCredential } from '../src/access-auth.js';
+import { Controller } from '../src/controller.js';
 import { DesktopHost } from '../src/desktop.js';
 import { FORWARD_CHANNEL } from '../src/single-instance.js';
 
@@ -327,62 +327,172 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     }
   });
 
-  it('recovers credentials from root-level TOML and only falls back when TOML is absent', () => {
-    const phiDir = path.join(temp, '.phi');
-    mkdirSync(phiDir, { recursive: true });
-    vi.spyOn(os, 'homedir').mockReturnValue(temp);
-    const host = new DesktopHost();
-    const recovery = host as unknown as {
-      tryRecoverLocalCredential(origin: string): unknown;
-    };
-    const verifier = Buffer.alloc(32, 1).toString('base64url');
-    const hash = `v1.pbkdf2-sha256.1000.c2FsdA.${verifier}`;
-    const config = path.join(phiDir, 'config.toml');
-    const legacy = path.join(phiDir, 'config.json');
-    const recover = () =>
-      recovery.tryRecoverLocalCredential('http://localhost:7070');
+  it.each(['config.toml', 'config.json'])(
+    'ignores %s server config during credential lookup and bootstrap',
+    async (filename) => {
+      const phiDir = path.join(temp, '.phi');
+      mkdirSync(phiDir, { recursive: true });
+      vi.spyOn(os, 'homedir').mockReturnValue(temp);
+      const verifier = Buffer.alloc(32, 1).toString('base64url');
+      const salt = Buffer.alloc(16, 2).toString('base64url');
+      const hash = `v1.pbkdf2-sha256.100000.${salt}.${verifier}`;
+      writeFileSync(
+        path.join(phiDir, filename),
+        filename === 'config.toml'
+          ? `access_password_hash = "${hash}"\n`
+          : JSON.stringify({ access_password_hash: hash, password_hash: hash }),
+      );
+      const host = new DesktopHost();
+      const recovery = host as unknown as {
+        getOrRecoverCredential(origin: string): unknown;
+        storedCredentials: Map<string, unknown>;
+      };
+      const origin = 'http://localhost:7070';
+      host.controller = new Controller({
+        persistPath: path.join(temp, 'profiles.json'),
+      });
+      host.controller.add(origin);
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockRejectedValue(new Error('offline'));
+      globalThis.fetch = fetcher;
 
-    for (const syntax of [
-      `access_password_hash = "${hash}"`,
-      `  access_password_hash = '${hash}'  # note\r\n`,
-    ]) {
-      writeFileSync(config, syntax);
-      expect(recover()).not.toBeNull();
-    }
-    for (const invalid of [
-      `access_password_hash = "${hash}"\naccess_password_hash = '${hash}'`,
-      `[auth]\naccess_password_hash = "${hash}"`,
-      `access_password_hash = ${hash}`,
-      `notes = '''\naccess_password_hash = "${hash}"\n'''`,
-    ]) {
-      writeFileSync(config, invalid);
-      expect(recover()).toBeNull();
-    }
-    writeFileSync(
-      legacy,
-      JSON.stringify({ access_password_hash: hash, password_hash: hash }),
+      expect(recovery.getOrRecoverCredential(origin) === null).toBe(true);
+      expect(recovery.storedCredentials.size).toBe(0);
+      await host.bootstrapStoredCredentials(new AccessAuth(fetcher), 0);
+      expect(recovery.storedCredentials.size).toBe(0);
+      expect(fetcher).not.toHaveBeenCalled();
+    },
+  );
+
+  describe('cached credentials', () => {
+    const origin = 'http://localhost:7070';
+    let host: DesktopHost;
+    let credential: StoredCredential;
+    let cache: {
+      storedCredentials: Map<string, StoredCredential>;
+      getOrRecoverCredential(origin: string): StoredCredential | null;
+      persistVerifierAfterUnlock(
+        origin: string,
+        auth: AccessAuth,
+        generation: number,
+      ): void;
+    };
+
+    beforeEach(() => {
+      host = new DesktopHost();
+      cache = host as unknown as typeof cache;
+      credential = {
+        version: 'v1',
+        algorithm: 'pbkdf2-sha256',
+        iterations: 100_000,
+        salt: Buffer.from('synthetic-salt'),
+        verifier: Buffer.alloc(32, 1),
+      };
+    });
+
+    it('looks up an in-memory credential by canonical origin', () => {
+      cache.storedCredentials.set(origin, credential);
+      expect(cache.getOrRecoverCredential('http://LOCALHOST:7070/')).toBe(
+        credential,
+      );
+    });
+
+    it('persists a password unlock and reloads it from the desktop credential file', async () => {
+      // Exercise serialization and disk I/O; safeStorage encryption is faked above.
+      vi.spyOn(safeStorage, 'isEncryptionAvailable').mockReturnValue(true);
+      const auth = new AccessAuth(async (input) => {
+        const url = input.toString();
+        if (url.endsWith('/api/auth/status')) {
+          return new Response(
+            JSON.stringify({
+              enabled: true,
+              version: 'v1',
+              algorithm: credential.algorithm,
+              iterations: credential.iterations,
+              salt: credential.salt.toString('base64url'),
+              challenge: 'synthetic-challenge',
+            }),
+          );
+        }
+        if (url.endsWith('/api/auth/login')) {
+          return new Response(null, {
+            headers: {
+              'set-cookie': 'phi_access_session=synthetic; Path=/; HttpOnly',
+            },
+          });
+        }
+        return new Response('{}');
+      });
+      expect((await auth.tryUnlock(origin, 'synthetic-password')).kind).toBe(
+        'ok',
+      );
+      cache.persistVerifierAfterUnlock(origin, auth, 0);
+      const saved = cache.getOrRecoverCredential(origin);
+      expect(saved).not.toBeNull();
+      expect(saved?.verifier.length).toBe(32);
+
+      const restarted = new DesktopHost() as unknown as typeof cache;
+      expect(restarted.getOrRecoverCredential(`${origin}/`)).toEqual(saved);
+    });
+
+    it.each([
+      'ok',
+      'offline',
+      'http-error',
+      'unavailable',
+      'rate-limited',
+      'invalid-password',
+      'rotated-salt',
+    ] as const)(
+      'handles %s during cached startup reauthentication',
+      async (outcome) => {
+        cache.storedCredentials.set(origin, credential);
+        const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => {
+          if (outcome === 'offline') throw new TypeError('offline');
+          if (outcome === 'http-error')
+            return new Response(null, { status: 503 });
+          return new Response(
+            JSON.stringify({
+              enabled: true,
+              algorithm: credential.algorithm,
+              iterations: credential.iterations,
+              salt: (outcome === 'rotated-salt'
+                ? Buffer.from('rotated-salt')
+                : credential.salt
+              ).toString('base64url'),
+            }),
+          );
+        });
+        globalThis.fetch = fetcher;
+        const auth = new AccessAuth(fetcher);
+        const unlock = vi
+          .spyOn(auth, 'tryUnlockWithVerifier')
+          .mockImplementation(async () => {
+            if (outcome === 'ok') return { kind: 'ok', config: null };
+            if (outcome === 'invalid-password')
+              return { kind: 'invalid-password', message: 'rejected' };
+            if (outcome === 'rate-limited')
+              return { kind: 'rate-limited', message: 'retry later' };
+            return { kind: 'unavailable', message: 'offline' };
+          });
+
+        await host.bootstrapStoredCredentials(auth, 0);
+        const cleared =
+          outcome === 'invalid-password' || outcome === 'rotated-salt';
+        expect(cache.storedCredentials.has(origin)).toBe(!cleared);
+        expect(credential.verifier.equals(Buffer.alloc(32, 1))).toBe(true);
+        const skipped =
+          outcome === 'offline' ||
+          outcome === 'http-error' ||
+          outcome === 'rotated-salt';
+        expect(unlock).toHaveBeenCalledTimes(skipped ? 0 : 1);
+        if (!skipped) {
+          expect(unlock.mock.calls[0][0]).toBe(origin);
+          expect(unlock.mock.calls[0][1].equals(Buffer.alloc(32))).toBe(true);
+        }
+      },
     );
-    for (const content of ['', `theme_color = 'purple'`]) {
-      writeFileSync(config, content);
-      expect(recover()).toBeNull();
-    }
-    rmSync(config);
-    expect(recover()).not.toBeNull();
-    expect(
-      recovery.tryRecoverLocalCredential('https://example.com') as null,
-    ).toBeNull();
-    rmSync(config, { force: true });
-    mkdirSync(config);
-    expect(recover()).toBeNull();
-    rmSync(config, { recursive: true, force: true });
-    try {
-      symlinkSync(path.join(phiDir, 'missing-config.toml'), config);
-    } catch (error) {
-      if (process.platform === 'win32') return;
-      throw error;
-    }
-    expect(recover()).toBeNull();
-    expect(lstatSync(config).isSymbolicLink()).toBe(true);
   });
 
   it('pins config/workspace requests and header actions to the requested server', async () => {
