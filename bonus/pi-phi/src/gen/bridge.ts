@@ -74,6 +74,14 @@ export enum CompactOutcome {
   UNRECOGNIZED = -1,
 }
 
+export enum AttachmentPromptOutcome {
+  ATTACHMENT_PROMPT_OUTCOME_UNSPECIFIED = 0,
+  ATTACHMENT_PROMPT_OUTCOME_REFUSED = 1,
+  ATTACHMENT_PROMPT_OUTCOME_DISPATCHED = 2,
+  ATTACHMENT_PROMPT_OUTCOME_UNKNOWN = 3,
+  UNRECOGNIZED = -1,
+}
+
 export enum ProtocolErrorCode {
   PROTOCOL_ERROR_UNSPECIFIED = 0,
   PROTOCOL_ERROR_UNSUPPORTED_VERSION = 1,
@@ -105,6 +113,7 @@ export interface PiToPhi {
     | { $case: "compactResult"; value: CompactResult }
     | { $case: "skillsResponse"; value: SkillsResponse }
     | { $case: "invokeSkillAck"; value: InvokeSkillAck }
+    | { $case: "attachmentPromptAck"; value: AttachmentPromptAck }
     | undefined;
 }
 
@@ -124,6 +133,7 @@ export interface PhiToPi {
     | { $case: "compactRequest"; value: CompactRequest }
     | { $case: "skillsRequest"; value: SkillsRequest }
     | { $case: "invokeSkillRequest"; value: InvokeSkillRequest }
+    | { $case: "attachmentPromptRequest"; value: AttachmentPromptRequest }
     | undefined;
 }
 
@@ -213,7 +223,14 @@ export interface StateSnapshot {
    * isIdle/hasPendingMessages plus local compaction tracking.
    * Absent when the pi.compact.v1 APIs are unavailable.
    */
-  compactReadiness: CompactReadiness | undefined;
+  compactReadiness:
+    | CompactReadiness
+    | undefined;
+  /**
+   * Optional Pi attachment readiness. It is independent of Compact APIs.
+   * Absence means unavailable, never idle.
+   */
+  attachmentReadiness: AttachmentReadiness | undefined;
 }
 
 /**
@@ -502,6 +519,53 @@ export interface InvokeSkillAck {
   reason: string;
 }
 
+/**
+ * Optional readiness for native attachment dispatch. This sample is
+ * independent of compact_readiness and is refreshed at lifecycle edges.
+ */
+export interface AttachmentReadiness {
+  idle: boolean;
+  hasPendingMessages: boolean;
+  compactionActive: boolean;
+  bridgePending: boolean;
+  imageAvailable?: boolean | undefined;
+}
+
+/**
+ * One checked process-scoped handoff reference. basename is a generated
+ * leaf name, never a browser path. The host verifies size, type, and digest.
+ */
+export interface AttachmentRef {
+  basename: string;
+  sizeBytes: bigint;
+  mimeType: string;
+  kind: string;
+  sha256: string;
+}
+
+/**
+ * One user-triggered attachment prompt. The host rechecks identity and
+ * readiness immediately before its synchronous sendUserMessage call.
+ */
+export interface AttachmentPromptRequest {
+  requestId: string;
+  expectedSessionId: string;
+  expectedLeafId: string;
+  expectedModel: ModelSnapshot | undefined;
+  text: string;
+  attachments: AttachmentRef[];
+}
+
+/**
+ * DISPATCHED means the public host call returned synchronously and its
+ * matching acknowledgment was emitted. It does not mean model receipt.
+ */
+export interface AttachmentPromptAck {
+  requestId: string;
+  outcome: AttachmentPromptOutcome;
+  reason: string;
+}
+
 /** Terminal protocol-level rejection. Ends the stream attempt. */
 export interface ProtocolError {
   code: ProtocolErrorCode;
@@ -562,6 +626,9 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         break;
       case "invokeSkillAck":
         InvokeSkillAck.encode(message.payload.value, writer.uint32(194).fork()).join();
+        break;
+      case "attachmentPromptAck":
+        AttachmentPromptAck.encode(message.payload.value, writer.uint32(202).fork()).join();
         break;
     }
     return writer;
@@ -703,6 +770,17 @@ export const PiToPhi: MessageFns<PiToPhi> = {
             message.payload = { $case: "invokeSkillAck", value: InvokeSkillAck.decode(reader, reader.uint32()) };
             continue;
           }
+          case 25: {
+            if (tag !== 202) {
+              break;
+            }
+
+            message.payload = {
+              $case: "attachmentPromptAck",
+              value: AttachmentPromptAck.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -801,6 +879,15 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         }
         break;
       }
+      case "attachmentPromptAck": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = {
+            $case: "attachmentPromptAck",
+            value: AttachmentPromptAck.fromPartial(object.payload.value),
+          };
+        }
+        break;
+      }
     }
     return message;
   },
@@ -854,6 +941,9 @@ export const PhiToPi: MessageFns<PhiToPi> = {
         break;
       case "invokeSkillRequest":
         InvokeSkillRequest.encode(message.payload.value, writer.uint32(170).fork()).join();
+        break;
+      case "attachmentPromptRequest":
+        AttachmentPromptRequest.encode(message.payload.value, writer.uint32(178).fork()).join();
         break;
     }
     return writer;
@@ -985,6 +1075,17 @@ export const PhiToPi: MessageFns<PhiToPi> = {
             };
             continue;
           }
+          case 22: {
+            if (tag !== 178) {
+              break;
+            }
+
+            message.payload = {
+              $case: "attachmentPromptRequest",
+              value: AttachmentPromptRequest.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1073,6 +1174,15 @@ export const PhiToPi: MessageFns<PhiToPi> = {
           message.payload = {
             $case: "invokeSkillRequest",
             value: InvokeSkillRequest.fromPartial(object.payload.value),
+          };
+        }
+        break;
+      }
+      case "attachmentPromptRequest": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = {
+            $case: "attachmentPromptRequest",
+            value: AttachmentPromptRequest.fromPartial(object.payload.value),
           };
         }
         break;
@@ -1665,6 +1775,7 @@ function createBaseStateSnapshot(): StateSnapshot {
     thinkingLevel: "",
     contextUsage: undefined,
     compactReadiness: undefined,
+    attachmentReadiness: undefined,
   };
 }
 
@@ -1702,6 +1813,9 @@ export const StateSnapshot: MessageFns<StateSnapshot> = {
     }
     if (message.compactReadiness !== undefined) {
       CompactReadiness.encode(message.compactReadiness, writer.uint32(90).fork()).join();
+    }
+    if (message.attachmentReadiness !== undefined) {
+      AttachmentReadiness.encode(message.attachmentReadiness, writer.uint32(98).fork()).join();
     }
     return writer;
   },
@@ -1799,6 +1913,14 @@ export const StateSnapshot: MessageFns<StateSnapshot> = {
             message.compactReadiness = CompactReadiness.decode(reader, reader.uint32());
             continue;
           }
+          case 12: {
+            if (tag !== 98) {
+              break;
+            }
+
+            message.attachmentReadiness = AttachmentReadiness.decode(reader, reader.uint32());
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1833,6 +1955,9 @@ export const StateSnapshot: MessageFns<StateSnapshot> = {
       : undefined;
     message.compactReadiness = (object.compactReadiness !== undefined && object.compactReadiness !== null)
       ? CompactReadiness.fromPartial(object.compactReadiness)
+      : undefined;
+    message.attachmentReadiness = (object.attachmentReadiness !== undefined && object.attachmentReadiness !== null)
+      ? AttachmentReadiness.fromPartial(object.attachmentReadiness)
       : undefined;
     return message;
   },
@@ -3367,6 +3492,424 @@ export const InvokeSkillAck: MessageFns<InvokeSkillAck> = {
     const message = createBaseInvokeSkillAck();
     message.requestId = object.requestId ?? "";
     message.ok = object.ok ?? false;
+    message.reason = object.reason ?? "";
+    return message;
+  },
+};
+
+function createBaseAttachmentReadiness(): AttachmentReadiness {
+  return {
+    idle: false,
+    hasPendingMessages: false,
+    compactionActive: false,
+    bridgePending: false,
+    imageAvailable: undefined,
+  };
+}
+
+export const AttachmentReadiness: MessageFns<AttachmentReadiness> = {
+  encode(message: AttachmentReadiness, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.idle !== false) {
+      writer.uint32(8).bool(message.idle);
+    }
+    if (message.hasPendingMessages !== false) {
+      writer.uint32(16).bool(message.hasPendingMessages);
+    }
+    if (message.compactionActive !== false) {
+      writer.uint32(24).bool(message.compactionActive);
+    }
+    if (message.bridgePending !== false) {
+      writer.uint32(32).bool(message.bridgePending);
+    }
+    if (message.imageAvailable !== undefined) {
+      writer.uint32(40).bool(message.imageAvailable);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AttachmentReadiness {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseAttachmentReadiness();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.idle = reader.bool();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.hasPendingMessages = reader.bool();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.compactionActive = reader.bool();
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.bridgePending = reader.bool();
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.imageAvailable = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<AttachmentReadiness>, I>>(base?: I): AttachmentReadiness {
+    return AttachmentReadiness.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<AttachmentReadiness>, I>>(object: I): AttachmentReadiness {
+    const message = createBaseAttachmentReadiness();
+    message.idle = object.idle ?? false;
+    message.hasPendingMessages = object.hasPendingMessages ?? false;
+    message.compactionActive = object.compactionActive ?? false;
+    message.bridgePending = object.bridgePending ?? false;
+    message.imageAvailable = object.imageAvailable ?? undefined;
+    return message;
+  },
+};
+
+function createBaseAttachmentRef(): AttachmentRef {
+  return { basename: "", sizeBytes: 0n, mimeType: "", kind: "", sha256: "" };
+}
+
+export const AttachmentRef: MessageFns<AttachmentRef> = {
+  encode(message: AttachmentRef, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.basename !== "") {
+      writer.uint32(10).string(message.basename);
+    }
+    if (message.sizeBytes !== 0n) {
+      if (BigInt.asUintN(64, message.sizeBytes) !== message.sizeBytes) {
+        throw new globalThis.Error("value provided for field message.sizeBytes of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.sizeBytes);
+    }
+    if (message.mimeType !== "") {
+      writer.uint32(26).string(message.mimeType);
+    }
+    if (message.kind !== "") {
+      writer.uint32(34).string(message.kind);
+    }
+    if (message.sha256 !== "") {
+      writer.uint32(42).string(message.sha256);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AttachmentRef {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseAttachmentRef();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.basename = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.sizeBytes = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.mimeType = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.kind = reader.string();
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.sha256 = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<AttachmentRef>, I>>(base?: I): AttachmentRef {
+    return AttachmentRef.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<AttachmentRef>, I>>(object: I): AttachmentRef {
+    const message = createBaseAttachmentRef();
+    message.basename = object.basename ?? "";
+    message.sizeBytes = (object.sizeBytes !== undefined && object.sizeBytes !== null) ? BigInt(object.sizeBytes) : 0n;
+    message.mimeType = object.mimeType ?? "";
+    message.kind = object.kind ?? "";
+    message.sha256 = object.sha256 ?? "";
+    return message;
+  },
+};
+
+function createBaseAttachmentPromptRequest(): AttachmentPromptRequest {
+  return {
+    requestId: "",
+    expectedSessionId: "",
+    expectedLeafId: "",
+    expectedModel: undefined,
+    text: "",
+    attachments: [],
+  };
+}
+
+export const AttachmentPromptRequest: MessageFns<AttachmentPromptRequest> = {
+  encode(message: AttachmentPromptRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.expectedSessionId !== "") {
+      writer.uint32(18).string(message.expectedSessionId);
+    }
+    if (message.expectedLeafId !== "") {
+      writer.uint32(26).string(message.expectedLeafId);
+    }
+    if (message.expectedModel !== undefined) {
+      ModelSnapshot.encode(message.expectedModel, writer.uint32(34).fork()).join();
+    }
+    if (message.text !== "") {
+      writer.uint32(42).string(message.text);
+    }
+    for (const v of message.attachments) {
+      AttachmentRef.encode(v!, writer.uint32(50).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AttachmentPromptRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseAttachmentPromptRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.expectedSessionId = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.expectedLeafId = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.expectedModel = ModelSnapshot.decode(reader, reader.uint32());
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.text = reader.string();
+            continue;
+          }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+
+            message.attachments.push(AttachmentRef.decode(reader, reader.uint32()));
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<AttachmentPromptRequest>, I>>(base?: I): AttachmentPromptRequest {
+    return AttachmentPromptRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<AttachmentPromptRequest>, I>>(object: I): AttachmentPromptRequest {
+    const message = createBaseAttachmentPromptRequest();
+    message.requestId = object.requestId ?? "";
+    message.expectedSessionId = object.expectedSessionId ?? "";
+    message.expectedLeafId = object.expectedLeafId ?? "";
+    message.expectedModel = (object.expectedModel !== undefined && object.expectedModel !== null)
+      ? ModelSnapshot.fromPartial(object.expectedModel)
+      : undefined;
+    message.text = object.text ?? "";
+    message.attachments = object.attachments?.map((e) => AttachmentRef.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseAttachmentPromptAck(): AttachmentPromptAck {
+  return { requestId: "", outcome: 0, reason: "" };
+}
+
+export const AttachmentPromptAck: MessageFns<AttachmentPromptAck> = {
+  encode(message: AttachmentPromptAck, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.outcome !== 0) {
+      writer.uint32(16).int32(message.outcome);
+    }
+    if (message.reason !== "") {
+      writer.uint32(26).string(message.reason);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AttachmentPromptAck {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseAttachmentPromptAck();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.outcome = reader.int32() as any;
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<AttachmentPromptAck>, I>>(base?: I): AttachmentPromptAck {
+    return AttachmentPromptAck.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<AttachmentPromptAck>, I>>(object: I): AttachmentPromptAck {
+    const message = createBaseAttachmentPromptAck();
+    message.requestId = object.requestId ?? "";
+    message.outcome = object.outcome ?? 0;
     message.reason = object.reason ?? "";
     return message;
   },

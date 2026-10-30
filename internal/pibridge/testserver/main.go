@@ -16,17 +16,33 @@ import (
 	"time"
 
 	"github.com/hypernewbie/phi/internal/pibridge"
+	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
 )
 
 type request struct {
-	Op         string `json:"op"`
-	Pane       string `json:"pane"`
-	Process    string `json:"process"`
-	Count      int    `json:"count"`
-	Generation uint64 `json:"generation"`
-	Revision   uint64 `json:"revision"`
-	TimeoutMs  int    `json:"timeoutMs"`
-	Call       string `json:"call"`
+	Op            string                 `json:"op"`
+	Pane          string                 `json:"pane"`
+	Process       string                 `json:"process"`
+	Count         int                    `json:"count"`
+	Generation    uint64                 `json:"generation"`
+	Revision      uint64                 `json:"revision"`
+	TimeoutMs     int                    `json:"timeoutMs"`
+	Call          string                 `json:"call"`
+	Session       string                 `json:"session"`
+	Leaf          string                 `json:"leaf"`
+	Provider      string                 `json:"provider"`
+	Model         string                 `json:"model"`
+	Text          string                 `json:"text"`
+	ImageRequired bool                   `json:"imageRequired"`
+	Attachments   []attachmentRefRequest `json:"attachments"`
+}
+
+type attachmentRefRequest struct {
+	Basename  string `json:"basename"`
+	SizeBytes uint64 `json:"size_bytes"`
+	MIMEType  string `json:"mime_type"`
+	Kind      string `json:"kind"`
+	SHA256    string `json:"sha256"`
 }
 
 type response struct {
@@ -176,6 +192,35 @@ func run() error {
 				PubRev: strconv.FormatUint(view.PubRev, 10),
 				Caps:   view.Caps, Session: view.SessionID, Leaf: view.LeafID, Model: view.Model,
 			})
+		case "attachment":
+			var model *pibridgepb.ModelSnapshot
+			if req.Provider != "" || req.Model != "" {
+				model = &pibridgepb.ModelSnapshot{Provider: req.Provider, Model: req.Model}
+			}
+			refs := make([]pibridge.AttachmentRef, 0, len(req.Attachments))
+			for _, ref := range req.Attachments {
+				refs = append(refs, pibridge.AttachmentRef{
+					Basename: ref.Basename, SizeBytes: ref.SizeBytes, MIMEType: ref.MIMEType,
+					Kind: ref.Kind, SHA256: ref.SHA256,
+				})
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), clampTimeout(req.TimeoutMs))
+			result, err := srv.RequestAttachmentPrompt(ctx, req.Process, req.Generation, req.Session, req.Leaf, model, req.Text, refs, req.ImageRequired)
+			cancel()
+			if err == nil {
+				_ = enc.Encode(response{OK: true, RequestID: result.RequestID, Outcome: result.Outcome.String(), Reason: result.Reason})
+				continue
+			}
+			var refusal *pibridge.AttachmentPromptRefusal
+			var unknown *pibridge.AttachmentPromptUnknown
+			switch {
+			case errors.As(err, &refusal):
+				_ = enc.Encode(response{OK: false, Error: "refusal:" + refusal.Reason, Outcome: pibridgepb.AttachmentPromptOutcome_ATTACHMENT_PROMPT_OUTCOME_REFUSED.String(), Reason: refusal.Reason})
+			case errors.As(err, &unknown):
+				_ = enc.Encode(response{OK: false, Error: "unknown:" + unknown.RequestID, RequestID: unknown.RequestID, Outcome: pibridgepb.AttachmentPromptOutcome_ATTACHMENT_PROMPT_OUTCOME_UNKNOWN.String(), Reason: "uncertain"})
+			default:
+				_ = enc.Encode(response{OK: false, Error: "unavailable", Outcome: pibridgepb.AttachmentPromptOutcome_ATTACHMENT_PROMPT_OUTCOME_REFUSED.String(), Reason: "unavailable"})
+			}
 		case "compact":
 			callsMu.Lock()
 			callSeq++

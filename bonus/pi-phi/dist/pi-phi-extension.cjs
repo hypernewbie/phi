@@ -586,7 +586,7 @@ var require_call_credentials = __commonJS({
           if (isCurrentOauth2Client(googleCredentials)) {
             getHeaders = googleCredentials.getRequestHeaders(options.service_url);
           } else {
-            getHeaders = new Promise((resolve, reject) => {
+            getHeaders = new Promise((resolve2, reject) => {
               googleCredentials.getRequestMetadata(options.service_url, (err, headers) => {
                 if (err) {
                   reject(err);
@@ -596,7 +596,7 @@ var require_call_credentials = __commonJS({
                   reject(new Error("Headers not set by metadata plugin"));
                   return;
                 }
-                resolve(headers);
+                resolve2(headers);
               });
             });
           }
@@ -652,10 +652,10 @@ var require_call_credentials = __commonJS({
         this.metadataGenerator = metadataGenerator;
       }
       generateMetadata(options) {
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve2, reject) => {
           this.metadataGenerator(options, (err, metadata) => {
             if (metadata !== void 0) {
-              resolve(metadata);
+              resolve2(metadata);
             } else {
               reject(err);
             }
@@ -1040,14 +1040,14 @@ var require_channel_credentials = __commonJS({
       }
       connect(socket) {
         const tlsConnectOptions = Object.assign({ socket }, this.connectionOptions);
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve2, reject) => {
           const tlsSocket = (0, tls_1.connect)(tlsConnectOptions, () => {
             var _a;
             if (((_a = this.connectionOptions.rejectUnauthorized) !== null && _a !== void 0 ? _a : true) && !tlsSocket.authorized) {
               reject(tlsSocket.authorizationError);
               return;
             }
-            resolve({
+            resolve2({
               socket: tlsSocket,
               secure: true
             });
@@ -1166,8 +1166,8 @@ var require_channel_credentials = __commonJS({
         if (this.hasReceivedUpdates()) {
           return Promise.resolve(this.getLatestSecureContext());
         } else {
-          return new Promise((resolve) => {
-            this.secureContextWatchers.push(resolve);
+          return new Promise((resolve2) => {
+            this.secureContextWatchers.push(resolve2);
           });
         }
       }
@@ -1200,7 +1200,7 @@ var require_channel_credentials = __commonJS({
         this.callCredentials = callCredentials;
       }
       connect(socket) {
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve2, reject) => {
           const secureContext = this.parent.getLatestSecureContext();
           if (!secureContext) {
             reject(new Error("Failed to load credentials"));
@@ -1225,7 +1225,7 @@ var require_channel_credentials = __commonJS({
               reject(tlsSocket.authorizationError);
               return;
             }
-            resolve({
+            resolve2({
               socket: tlsSocket,
               secure: true
             });
@@ -4819,7 +4819,7 @@ var require_aspromise = __commonJS({
       var params = new Array(arguments.length - 1), offset = 0, index = 2, pending = true;
       while (index < arguments.length)
         params[offset++] = arguments[index++];
-      return new Promise(function executor(resolve, reject) {
+      return new Promise(function executor(resolve2, reject) {
         params[offset] = function callback(err) {
           if (pending) {
             pending = false;
@@ -4829,7 +4829,7 @@ var require_aspromise = __commonJS({
               var params2 = new Array(arguments.length - 1), offset2 = 0;
               while (offset2 < params2.length)
                 params2[offset2++] = arguments[offset2];
-              resolve.apply(null, params2);
+              resolve2.apply(null, params2);
             }
           }
         };
@@ -7352,13 +7352,13 @@ var require_path = __commonJS({
   "../../node_modules/.pnpm/@protobufjs+path@1.1.2/node_modules/@protobufjs/path/index.js"(exports2) {
     "use strict";
     var path = exports2;
-    var isAbsolute = (
+    var isAbsolute3 = (
       /**
        * Tests if the specified path is absolute.
        * @param {string} path Path to test
        * @returns {boolean} `true` if path is absolute
        */
-      path.isAbsolute = function isAbsolute2(path2) {
+      path.isAbsolute = function isAbsolute4(path2) {
         return /^(?:\/|\w+:)/.test(path2);
       }
     );
@@ -7370,7 +7370,7 @@ var require_path = __commonJS({
        */
       path.normalize = function normalize2(path2) {
         path2 = path2.replace(/\\/g, "/").replace(/\/{2,}/g, "/");
-        var parts = path2.split("/"), absolute = isAbsolute(path2), prefix = "";
+        var parts = path2.split("/"), absolute = isAbsolute3(path2), prefix = "";
         if (absolute)
           prefix = parts.shift() + "/";
         for (var i = 0; i < parts.length; ) {
@@ -7389,10 +7389,10 @@ var require_path = __commonJS({
         return prefix + parts.join("/");
       }
     );
-    path.resolve = function resolve(originPath, includePath, alreadyNormalized) {
+    path.resolve = function resolve2(originPath, includePath, alreadyNormalized) {
       if (!alreadyNormalized)
         includePath = normalize(includePath);
-      if (isAbsolute(includePath))
+      if (isAbsolute3(includePath))
         return includePath;
       if (!alreadyNormalized)
         originPath = normalize(originPath);
@@ -7746,7 +7746,7 @@ var require_mapfield = __commonJS({
         keepComments ? this.comment : void 0
       ]);
     };
-    MapField.prototype.resolve = function resolve() {
+    MapField.prototype.resolve = function resolve2() {
       if (this.resolved)
         return this;
       if (types.mapKey[this.keyType] === void 0)
@@ -7823,7 +7823,7 @@ var require_method = __commonJS({
         this.parsedOptions
       ]);
     };
-    Method.prototype.resolve = function resolve() {
+    Method.prototype.resolve = function resolve2() {
       if (this.resolved)
         return this;
       this.resolvedRequestType = this.parent.lookupType(this.requestType);
@@ -9441,7 +9441,7 @@ var require_field = __commonJS({
         keepComments ? this.comment : void 0
       ]);
     };
-    Field.prototype.resolve = function resolve() {
+    Field.prototype.resolve = function resolve2() {
       if (this.resolved)
         return this;
       if ((this.typeDefault = types.defaults[this.type]) === void 0) {
@@ -9714,7 +9714,7 @@ var require_object = __commonJS({
       this.parent = null;
       this.resolved = false;
     };
-    ReflectionObject.prototype.resolve = function resolve() {
+    ReflectionObject.prototype.resolve = function resolve2() {
       if (this.resolved)
         return this;
       if (this.root instanceof Root)
@@ -14686,18 +14686,18 @@ var require_compression_filter = __commonJS({
         this.maxRecvMessageLength = maxRecvMessageLength;
       }
       compressMessage(message) {
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve2, reject) => {
           zlib.deflate(message, (err, output) => {
             if (err) {
               reject(err);
             } else {
-              resolve(output);
+              resolve2(output);
             }
           });
         });
       }
       decompressMessage(message) {
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve2, reject) => {
           let totalLength = 0;
           const messageParts = [];
           const decompresser = zlib.createInflate();
@@ -14719,7 +14719,7 @@ var require_compression_filter = __commonJS({
             }
           });
           decompresser.on("end", () => {
-            resolve(Buffer.concat(messageParts));
+            resolve2(Buffer.concat(messageParts));
           });
           decompresser.write(message);
           decompresser.end();
@@ -14732,18 +14732,18 @@ var require_compression_filter = __commonJS({
         this.maxRecvMessageLength = maxRecvMessageLength;
       }
       compressMessage(message) {
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve2, reject) => {
           zlib.gzip(message, (err, output) => {
             if (err) {
               reject(err);
             } else {
-              resolve(output);
+              resolve2(output);
             }
           });
         });
       }
       decompressMessage(message) {
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve2, reject) => {
           let totalLength = 0;
           const messageParts = [];
           const decompresser = zlib.createGunzip();
@@ -14765,7 +14765,7 @@ var require_compression_filter = __commonJS({
             }
           });
           decompresser.on("end", () => {
-            resolve(Buffer.concat(messageParts));
+            resolve2(Buffer.concat(messageParts));
           });
           decompresser.write(message);
           decompresser.end();
@@ -16115,7 +16115,7 @@ var require_http_proxy = __commonJS({
       options.headers = headers;
       const proxyAddressString = (0, subchannel_address_1.subchannelAddressToString)(address);
       trace("Using proxy " + proxyAddressString + " to connect to " + options.path);
-      return new Promise((resolve, reject) => {
+      return new Promise((resolve2, reject) => {
         const request = http.request(options);
         request.once("connect", (res, socket, head) => {
           request.removeAllListeners();
@@ -16126,7 +16126,7 @@ var require_http_proxy = __commonJS({
               socket.unshift(head);
             }
             trace("Successfully established a plaintext connection to " + options.path + " through proxy " + proxyAddressString);
-            resolve(socket);
+            resolve2(socket);
           } else {
             (0, logging_1.log)(constants_1.LogVerbosity.ERROR, "Failed to connect to " + options.path + " through proxy " + proxyAddressString + " with status " + res.statusCode);
             reject();
@@ -17109,7 +17109,7 @@ var require_transport = __commonJS({
         if (secureConnectResult.socket.closed) {
           return Promise.reject("Connection closed before starting HTTP/2 handshake");
         }
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve2, reject) => {
           var _a, _b, _c, _d, _e, _f, _g, _h;
           let remoteName = null;
           let realTarget = this.channelTarget;
@@ -17180,7 +17180,7 @@ var require_transport = __commonJS({
             session.removeAllListeners();
             secureConnectResult.socket.removeListener("close", closeHandler);
             secureConnectResult.socket.removeListener("error", errorHandler);
-            resolve(new Http2Transport(session, address, options, remoteName));
+            resolve2(new Http2Transport(session, address, options, remoteName));
             this.session = null;
           });
           session.once("close", closeHandler);
@@ -17194,7 +17194,7 @@ var require_transport = __commonJS({
           if (proxiedSocket) {
             return proxiedSocket;
           } else {
-            return new Promise((resolve, reject) => {
+            return new Promise((resolve2, reject) => {
               const closeCallback = () => {
                 reject(new Error("Socket closed"));
               };
@@ -17204,7 +17204,7 @@ var require_transport = __commonJS({
               const socket = net.connect(address, () => {
                 socket.removeListener("close", closeCallback);
                 socket.removeListener("error", errorCallback);
-                resolve(socket);
+                resolve2(socket);
               });
               socket.once("close", closeCallback);
               socket.once("error", errorCallback);
@@ -20645,7 +20645,7 @@ var require_server_interceptors = __commonJS({
           } else {
             decompresser = zlib.createGunzip();
           }
-          return new Promise((resolve, reject) => {
+          return new Promise((resolve2, reject) => {
             let totalLength = 0;
             const messageParts = [];
             decompresser.on("error", (error) => {
@@ -20666,7 +20666,7 @@ var require_server_interceptors = __commonJS({
               }
             });
             decompresser.on("end", () => {
-              resolve(Buffer.concat(messageParts));
+              resolve2(Buffer.concat(messageParts));
             });
             decompresser.write(messageContents);
             decompresser.end();
@@ -21277,10 +21277,10 @@ var require_server = __commonJS({
         bindOneAddress(address, boundPortObject) {
           this.trace("Attempting to bind " + (0, subchannel_address_1.subchannelAddressToString)(address));
           const http2Server = this.createHttp2Server(boundPortObject.credentials);
-          return new Promise((resolve, reject) => {
+          return new Promise((resolve2, reject) => {
             const onError = (err) => {
               this.trace("Failed to bind " + (0, subchannel_address_1.subchannelAddressToString)(address) + " with error " + err.message);
-              resolve({
+              resolve2({
                 port: "port" in address ? address.port : 1,
                 error: err.message
               });
@@ -21308,7 +21308,7 @@ var require_server = __commonJS({
               });
               boundPortObject.listeningServers.add(http2Server);
               this.trace("Successfully bound " + (0, subchannel_address_1.subchannelAddressToString)(boundSubchannelAddress));
-              resolve({
+              resolve2({
                 port: "port" in boundSubchannelAddress ? boundSubchannelAddress.port : 1
               });
               http2Server.removeListener("error", onError);
@@ -21361,7 +21361,7 @@ var require_server = __commonJS({
           }
         }
         resolvePort(port) {
-          return new Promise((resolve, reject) => {
+          return new Promise((resolve2, reject) => {
             let seenResolution = false;
             const resolverListener = (endpointList, attributes, serviceConfig, resolutionNote) => {
               if (seenResolution) {
@@ -21377,7 +21377,7 @@ var require_server = __commonJS({
                 reject(new Error(`No addresses resolved for port ${port}`));
                 return true;
               }
-              resolve(addressList);
+              resolve2(addressList);
               return true;
             };
             const resolver = (0, resolver_1.createResolver)(port, resolverListener, this.options);
@@ -24591,6 +24591,7 @@ var MAX_THINKING_LEVEL_BYTES = 16;
 var CAPABILITY_CONTEXT = "pi.context.v1";
 var CAPABILITY_COMPACT = "pi.compact.v1";
 var CAPABILITY_SKILLS = "pi.skills.v1";
+var CAPABILITY_ATTACHMENTS = "pi.attachments.v1";
 var MAX_SKILL_ENTRIES = 200;
 var MAX_SKILL_NAME_BYTES = 64;
 var MAX_SKILL_DESCRIPTION_BYTES = 1024;
@@ -24714,8 +24715,165 @@ var BoundedQueue = class {
   }
 };
 
-// src/runtime.ts
+// src/extension.ts
+var import_node_path2 = require("node:path");
+
+// src/attachments.ts
 var import_node_crypto = require("node:crypto");
+var import_node_fs = require("node:fs");
+var import_node_path = require("node:path");
+function freshAttachmentLatch() {
+  return { highWater: null, active: null };
+}
+var MAX_FILE_BYTES = 25 * 1024 * 1024;
+var MAX_NAME_BYTES = 128;
+var MAX_REFS = 8;
+var MAX_TOTAL_BYTES = 50 * 1024 * 1024;
+var MAX_TEXT_BYTES = 64 * 1024;
+var CHUNK_BYTES = 64 * 1024;
+function hasSafeAttachmentRoot(root) {
+  if (!root || !(0, import_node_path.isAbsolute)(root)) return false;
+  if (!Number.isInteger(import_node_fs.constants.O_NOFOLLOW) || !import_node_fs.constants.O_NOFOLLOW) return false;
+  if (!Number.isInteger(import_node_fs.constants.O_NONBLOCK) || !import_node_fs.constants.O_NONBLOCK) return false;
+  try {
+    const stat = (0, import_node_fs.lstatSync)(root);
+    return stat.isDirectory() && !stat.isSymbolicLink() && (0, import_node_path.isAbsolute)(import_node_fs.realpathSync.native(root));
+  } catch {
+    return false;
+  }
+}
+function validBasename(name) {
+  if (!name || name.length > MAX_NAME_BYTES || name === "." || name === "..") return false;
+  if (name.includes("/") || name.includes("\\") || name.includes("..")) return false;
+  return /^[A-Za-z0-9._-]+$/.test(name);
+}
+function isPNG(data) {
+  return data.length >= 8 && data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+}
+function isJPEG(data) {
+  return data.length >= 3 && data[0] === 255 && data[1] === 216 && data[2] === 255;
+}
+function looksLikeImage(data) {
+  if (isPNG(data) || isJPEG(data)) return true;
+  if (data.length >= 6 && (data.subarray(0, 6).toString("ascii") === "GIF87a" || data.subarray(0, 6).toString("ascii") === "GIF89a")) return true;
+  if (data.length >= 12 && data.subarray(0, 4).toString("ascii") === "RIFF" && data.subarray(8, 12).toString("ascii") === "WEBP") return true;
+  if (data.length >= 2 && data.subarray(0, 2).toString("ascii") === "BM") return true;
+  if (data.length >= 12 && data.subarray(4, 8).toString("ascii") === "ftyp") {
+    const brand = data.subarray(8, 12).toString("ascii");
+    if (["heic", "heix", "hevc", "hevx", "mif1", "msf1", "avif", "avis"].includes(brand)) return true;
+  }
+  return data.subarray(0, Math.min(data.length, 1 << 20)).toString("utf8").toLowerCase().includes("<svg");
+}
+function readChecked(root, ref) {
+  if (!validBasename(ref.basename) || !Number.isSafeInteger(ref.sizeBytes) || ref.sizeBytes < 0 || ref.sizeBytes > MAX_FILE_BYTES) {
+    throw new Error("invalid-item");
+  }
+  if (ref.kind !== "file" && ref.kind !== "image") throw new Error("invalid-item");
+  if (ref.kind === "image" && (ref.mimeType !== "image/png" && ref.mimeType !== "image/jpeg")) {
+    throw new Error("unsupported-image");
+  }
+  if (ref.kind === "file" && ref.mimeType !== "application/octet-stream") throw new Error("invalid-item");
+  const rootPath = import_node_fs.realpathSync.native(root);
+  const target = (0, import_node_path.resolve)(rootPath, ref.basename);
+  if ((0, import_node_path.dirname)(target) !== rootPath) throw new Error("invalid-item");
+  const before = (0, import_node_fs.lstatSync)(target);
+  if (!before.isFile() || before.isSymbolicLink() || before.size !== ref.sizeBytes) throw new Error("invalid-item");
+  const fd = (0, import_node_fs.openSync)(target, import_node_fs.constants.O_RDONLY | import_node_fs.constants.O_NOFOLLOW | import_node_fs.constants.O_NONBLOCK);
+  try {
+    const opened = (0, import_node_fs.fstatSync)(fd);
+    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== ref.sizeBytes) {
+      throw new Error("invalid-item");
+    }
+    const chunks = [];
+    let total = 0;
+    let position = 0;
+    while (total <= MAX_FILE_BYTES) {
+      const chunk = Buffer.allocUnsafe(Math.min(CHUNK_BYTES, MAX_FILE_BYTES + 1 - total));
+      const count = (0, import_node_fs.readSync)(fd, chunk, 0, chunk.length, position);
+      if (count === 0) break;
+      chunks.push(chunk.subarray(0, count));
+      total += count;
+      position += count;
+    }
+    if (total !== ref.sizeBytes) throw new Error("invalid-item");
+    const after = (0, import_node_fs.fstatSync)(fd);
+    if (after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs) {
+      throw new Error("invalid-item");
+    }
+    const data = Buffer.concat(chunks, total);
+    const digest = (0, import_node_crypto.createHash)("sha256").update(data).digest("hex");
+    if (digest !== ref.sha256) throw new Error("invalid-item");
+    if (ref.kind === "image") {
+      if (ref.mimeType === "image/png" && !isPNG(data)) throw new Error("unsupported-image");
+      if (ref.mimeType === "image/jpeg" && !isJPEG(data)) throw new Error("unsupported-image");
+    } else if (looksLikeImage(data)) {
+      throw new Error("unsupported-image");
+    }
+    return data;
+  } finally {
+    (0, import_node_fs.closeSync)(fd);
+  }
+}
+function prepareAttachmentContent(root, text, refs) {
+  if (!hasSafeAttachmentRoot(root)) throw new Error("unavailable");
+  if (Buffer.byteLength(text, "utf8") > MAX_TEXT_BYTES || refs.length < 1 || refs.length > MAX_REFS) {
+    throw new Error("limit");
+  }
+  const seen = /* @__PURE__ */ new Set();
+  let total = 0;
+  const content = [
+    { type: "text", text }
+  ];
+  let hasImage = false;
+  for (const ref of refs) {
+    if (seen.has(ref.basename)) throw new Error("invalid-item");
+    seen.add(ref.basename);
+    total += ref.sizeBytes;
+    if (total > MAX_TOTAL_BYTES) throw new Error("limit");
+    const bytes = readChecked(root, ref);
+    if (ref.kind === "image") {
+      hasImage = true;
+      content.push({ type: "image", mimeType: ref.mimeType, data: bytes.toString("base64") });
+    } else {
+      const absolutePath = (0, import_node_path.resolve)(root, ref.basename);
+      content.push({ type: "text", text: `Attached file path (JSON-quoted): ${JSON.stringify(absolutePath)}` });
+    }
+  }
+  return { content, hasImage };
+}
+function safeAttachmentFailureReason(error) {
+  const raw = error instanceof Error ? error.message : "";
+  const allowed = /* @__PURE__ */ new Set([
+    "unavailable",
+    "stale",
+    "busy",
+    "queued",
+    "compaction-active",
+    "pending",
+    "command",
+    "unsupported-image",
+    "unsupported-model",
+    "missing-item",
+    "invalid-item",
+    "limit",
+    "storage",
+    "uncertain",
+    "error"
+  ]);
+  return allowed.has(raw) ? raw : "invalid-item";
+}
+function parseAttachmentRequestID(value) {
+  if (!/^[1-9][0-9]{0,19}$/.test(value)) return null;
+  try {
+    const parsed = BigInt(value);
+    return parsed <= 0xffffffffffffffffn ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+// src/runtime.ts
+var import_node_crypto2 = require("node:crypto");
 
 // ../../node_modules/.pnpm/@earendil-works+pi-ai@1.0.1_@aws-sdk+credential-provider-node@3.972.84_@smithy+signatur_63728df7274c44e9f652e9f97f4c91c5/node_modules/@earendil-works/pi-ai/dist/models.js
 var EXTENDED_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -25673,6 +25831,9 @@ var PiToPhi = {
       case "invokeSkillAck":
         InvokeSkillAck.encode(message.payload.value, writer.uint32(194).fork()).join();
         break;
+      case "attachmentPromptAck":
+        AttachmentPromptAck.encode(message.payload.value, writer.uint32(202).fork()).join();
+        break;
     }
     return writer;
   },
@@ -25797,6 +25958,16 @@ var PiToPhi = {
             message.payload = { $case: "invokeSkillAck", value: InvokeSkillAck.decode(reader, reader.uint32()) };
             continue;
           }
+          case 25: {
+            if (tag !== 202) {
+              break;
+            }
+            message.payload = {
+              $case: "attachmentPromptAck",
+              value: AttachmentPromptAck.decode(reader, reader.uint32())
+            };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -25892,6 +26063,15 @@ var PiToPhi = {
         }
         break;
       }
+      case "attachmentPromptAck": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = {
+            $case: "attachmentPromptAck",
+            value: AttachmentPromptAck.fromPartial(object.payload.value)
+          };
+        }
+        break;
+      }
     }
     return message;
   }
@@ -25943,6 +26123,9 @@ var PhiToPi = {
         break;
       case "invokeSkillRequest":
         InvokeSkillRequest.encode(message.payload.value, writer.uint32(170).fork()).join();
+        break;
+      case "attachmentPromptRequest":
+        AttachmentPromptRequest.encode(message.payload.value, writer.uint32(178).fork()).join();
         break;
     }
     return writer;
@@ -26060,6 +26243,16 @@ var PhiToPi = {
             };
             continue;
           }
+          case 22: {
+            if (tag !== 178) {
+              break;
+            }
+            message.payload = {
+              $case: "attachmentPromptRequest",
+              value: AttachmentPromptRequest.decode(reader, reader.uint32())
+            };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -26145,6 +26338,15 @@ var PhiToPi = {
           message.payload = {
             $case: "invokeSkillRequest",
             value: InvokeSkillRequest.fromPartial(object.payload.value)
+          };
+        }
+        break;
+      }
+      case "attachmentPromptRequest": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = {
+            $case: "attachmentPromptRequest",
+            value: AttachmentPromptRequest.fromPartial(object.payload.value)
           };
         }
         break;
@@ -26675,7 +26877,8 @@ function createBaseStateSnapshot() {
     stateRevision: 0n,
     thinkingLevel: "",
     contextUsage: void 0,
-    compactReadiness: void 0
+    compactReadiness: void 0,
+    attachmentReadiness: void 0
   };
 }
 var StateSnapshot = {
@@ -26712,6 +26915,9 @@ var StateSnapshot = {
     }
     if (message.compactReadiness !== void 0) {
       CompactReadiness.encode(message.compactReadiness, writer.uint32(90).fork()).join();
+    }
+    if (message.attachmentReadiness !== void 0) {
+      AttachmentReadiness.encode(message.attachmentReadiness, writer.uint32(98).fork()).join();
     }
     return writer;
   },
@@ -26798,6 +27004,13 @@ var StateSnapshot = {
             message.compactReadiness = CompactReadiness.decode(reader, reader.uint32());
             continue;
           }
+          case 12: {
+            if (tag !== 98) {
+              break;
+            }
+            message.attachmentReadiness = AttachmentReadiness.decode(reader, reader.uint32());
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -26824,6 +27037,7 @@ var StateSnapshot = {
     message.thinkingLevel = object.thinkingLevel ?? "";
     message.contextUsage = object.contextUsage !== void 0 && object.contextUsage !== null ? ContextUsageSnapshot.fromPartial(object.contextUsage) : void 0;
     message.compactReadiness = object.compactReadiness !== void 0 && object.compactReadiness !== null ? CompactReadiness.fromPartial(object.compactReadiness) : void 0;
+    message.attachmentReadiness = object.attachmentReadiness !== void 0 && object.attachmentReadiness !== null ? AttachmentReadiness.fromPartial(object.attachmentReadiness) : void 0;
     return message;
   }
 };
@@ -28223,6 +28437,387 @@ var InvokeSkillAck = {
     return message;
   }
 };
+function createBaseAttachmentReadiness() {
+  return {
+    idle: false,
+    hasPendingMessages: false,
+    compactionActive: false,
+    bridgePending: false,
+    imageAvailable: void 0
+  };
+}
+var AttachmentReadiness = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.idle !== false) {
+      writer.uint32(8).bool(message.idle);
+    }
+    if (message.hasPendingMessages !== false) {
+      writer.uint32(16).bool(message.hasPendingMessages);
+    }
+    if (message.compactionActive !== false) {
+      writer.uint32(24).bool(message.compactionActive);
+    }
+    if (message.bridgePending !== false) {
+      writer.uint32(32).bool(message.bridgePending);
+    }
+    if (message.imageAvailable !== void 0) {
+      writer.uint32(40).bool(message.imageAvailable);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseAttachmentReadiness();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+            message.idle = reader.bool();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+            message.hasPendingMessages = reader.bool();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+            message.compactionActive = reader.bool();
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+            message.bridgePending = reader.bool();
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+            message.imageAvailable = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return AttachmentReadiness.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseAttachmentReadiness();
+    message.idle = object.idle ?? false;
+    message.hasPendingMessages = object.hasPendingMessages ?? false;
+    message.compactionActive = object.compactionActive ?? false;
+    message.bridgePending = object.bridgePending ?? false;
+    message.imageAvailable = object.imageAvailable ?? void 0;
+    return message;
+  }
+};
+function createBaseAttachmentRef() {
+  return { basename: "", sizeBytes: 0n, mimeType: "", kind: "", sha256: "" };
+}
+var AttachmentRef = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.basename !== "") {
+      writer.uint32(10).string(message.basename);
+    }
+    if (message.sizeBytes !== 0n) {
+      if (BigInt.asUintN(64, message.sizeBytes) !== message.sizeBytes) {
+        throw new globalThis.Error("value provided for field message.sizeBytes of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.sizeBytes);
+    }
+    if (message.mimeType !== "") {
+      writer.uint32(26).string(message.mimeType);
+    }
+    if (message.kind !== "") {
+      writer.uint32(34).string(message.kind);
+    }
+    if (message.sha256 !== "") {
+      writer.uint32(42).string(message.sha256);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseAttachmentRef();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.basename = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+            message.sizeBytes = reader.uint64();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+            message.mimeType = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+            message.kind = reader.string();
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+            message.sha256 = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return AttachmentRef.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseAttachmentRef();
+    message.basename = object.basename ?? "";
+    message.sizeBytes = object.sizeBytes !== void 0 && object.sizeBytes !== null ? BigInt(object.sizeBytes) : 0n;
+    message.mimeType = object.mimeType ?? "";
+    message.kind = object.kind ?? "";
+    message.sha256 = object.sha256 ?? "";
+    return message;
+  }
+};
+function createBaseAttachmentPromptRequest() {
+  return {
+    requestId: "",
+    expectedSessionId: "",
+    expectedLeafId: "",
+    expectedModel: void 0,
+    text: "",
+    attachments: []
+  };
+}
+var AttachmentPromptRequest = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.expectedSessionId !== "") {
+      writer.uint32(18).string(message.expectedSessionId);
+    }
+    if (message.expectedLeafId !== "") {
+      writer.uint32(26).string(message.expectedLeafId);
+    }
+    if (message.expectedModel !== void 0) {
+      ModelSnapshot.encode(message.expectedModel, writer.uint32(34).fork()).join();
+    }
+    if (message.text !== "") {
+      writer.uint32(42).string(message.text);
+    }
+    for (const v of message.attachments) {
+      AttachmentRef.encode(v, writer.uint32(50).fork()).join();
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseAttachmentPromptRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+            message.expectedSessionId = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+            message.expectedLeafId = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+            message.expectedModel = ModelSnapshot.decode(reader, reader.uint32());
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+            message.text = reader.string();
+            continue;
+          }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+            message.attachments.push(AttachmentRef.decode(reader, reader.uint32()));
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return AttachmentPromptRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseAttachmentPromptRequest();
+    message.requestId = object.requestId ?? "";
+    message.expectedSessionId = object.expectedSessionId ?? "";
+    message.expectedLeafId = object.expectedLeafId ?? "";
+    message.expectedModel = object.expectedModel !== void 0 && object.expectedModel !== null ? ModelSnapshot.fromPartial(object.expectedModel) : void 0;
+    message.text = object.text ?? "";
+    message.attachments = object.attachments?.map((e) => AttachmentRef.fromPartial(e)) || [];
+    return message;
+  }
+};
+function createBaseAttachmentPromptAck() {
+  return { requestId: "", outcome: 0, reason: "" };
+}
+var AttachmentPromptAck = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.outcome !== 0) {
+      writer.uint32(16).int32(message.outcome);
+    }
+    if (message.reason !== "") {
+      writer.uint32(26).string(message.reason);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseAttachmentPromptAck();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+            message.outcome = reader.int32();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return AttachmentPromptAck.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseAttachmentPromptAck();
+    message.requestId = object.requestId ?? "";
+    message.outcome = object.outcome ?? 0;
+    message.reason = object.reason ?? "";
+    return message;
+  }
+};
 function createBaseProtocolError() {
   return { code: 0, safeMessage: "" };
 }
@@ -28377,15 +28972,15 @@ var BridgeChannel = class {
     });
     this.enqueue(hello);
     void this.pumpWriter();
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       const timer = setTimeout(() => {
-        this.removeWaiter(resolve);
+        this.removeWaiter(resolve2);
         reject(new Error("accepted deadline"));
       }, HELLO_DEADLINE_MS);
       this.acceptedWaiters.push({
         resolve: (a) => {
           clearTimeout(timer);
-          resolve(a);
+          resolve2(a);
         },
         reject: (e) => {
           clearTimeout(timer);
@@ -28439,11 +29034,11 @@ var BridgeChannel = class {
       return Promise.resolve();
     }
     const deadline = Date.now() + Math.max(0, timeoutMs);
-    return new Promise((resolve) => {
+    return new Promise((resolve2) => {
       const tick = () => {
         if (this.closed || this.stream === null || this.writerError || this.queue.outstanding === 0 || Date.now() >= deadline) {
           this.close();
-          resolve();
+          resolve2();
           return;
         }
         setTimeout(tick, DRAIN_POLL_MS);
@@ -28482,9 +29077,9 @@ var BridgeChannel = class {
     this.acceptedWaiters = [];
     for (const w of waiters) w.reject(err);
   }
-  removeWaiter(resolve) {
+  removeWaiter(resolve2) {
     this.acceptedWaiters = this.acceptedWaiters.filter(
-      (w) => w.resolve !== resolve
+      (w) => w.resolve !== resolve2
     );
   }
   async pumpWriter() {
@@ -28511,7 +29106,7 @@ var BridgeChannel = class {
   writeWithDrain(msg) {
     const stream = this.stream;
     if (stream === null) return Promise.resolve();
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       let settled = false;
       const timer = setTimeout(() => {
         if (settled) return;
@@ -28529,7 +29124,7 @@ var BridgeChannel = class {
         settled = true;
         clearTimeout(timer);
         if (err) reject(err);
-        else resolve();
+        else resolve2();
       };
       try {
         const writable = stream.write(msg, () => done());
@@ -28698,7 +29293,7 @@ var Runtime = class {
     this.backoffMs = opts.backoffBaseMs ?? RECONNECT_BASE_MS;
   }
   opts;
-  runtimeId = (0, import_node_crypto.randomUUID)();
+  runtimeId = (0, import_node_crypto2.randomUUID)();
   channel = null;
   running = false;
   seq = 0n;
@@ -28721,6 +29316,7 @@ var Runtime = class {
   thinkingAccepted = false;
   compactAccepted = false;
   skillsAccepted = false;
+  attachmentsAccepted = false;
   /** getContextUsage present on the latest event context. */
   contextApi = false;
   /** compact/isIdle/hasPendingMessages present on the latest context. */
@@ -28729,6 +29325,9 @@ var Runtime = class {
   contextSample = null;
   /** Latest idle/queued sample; null when the trio is unavailable. */
   readinessSample = null;
+  attachmentApi = false;
+  attachmentReadinessSample = null;
+  localAttachmentState = freshAttachmentLatch();
   /** Native compaction start observed without its end. */
   compactionActive = false;
   /** Final assistant stop reason of the current run, if observed. */
@@ -28743,6 +29342,9 @@ var Runtime = class {
   /** Process-owned compaction latch, shared across runtimes. */
   get compact() {
     return this.opts.compactState;
+  }
+  get attachments() {
+    return this.opts.attachmentState ?? this.localAttachmentState;
   }
   /** Begin connecting; never throws, never blocks Pi startup. */
   start(ctx) {
@@ -28835,7 +29437,7 @@ var Runtime = class {
    */
   publishContextOnly() {
     if (this.lastCtx) this.sampleTelemetry(this.lastCtx);
-    if (!this.contextApi && !this.compactApi) return;
+    if (!this.contextApi && !this.compactApi && !this.attachmentApi) return;
     if (!this.channel) return;
     try {
       this.channel.sendNonfatal({
@@ -29050,6 +29652,24 @@ var Runtime = class {
     } else {
       this.readinessSample = null;
     }
+    this.attachmentApi = typeof this.opts.sendUserMessage === "function" && typeof ctx.isIdle === "function" && typeof ctx.hasPendingMessages === "function" && hasSafeAttachmentRoot(this.opts.attachmentRoot);
+    this.attachmentReadinessSample = null;
+    if (this.attachmentApi) {
+      try {
+        const model = ctx.model;
+        const imageAvailable = model ? model.api !== "pi-virtual" && model.input.includes("image") : void 0;
+        this.attachmentReadinessSample = {
+          idle: ctx.isIdle() === true,
+          hasPendingMessages: ctx.hasPendingMessages() !== false,
+          compactionActive: this.compactionActive,
+          bridgePending: this.compact.pending !== null || this.attachments.active !== null,
+          ...imageAvailable === void 0 ? {} : { imageAvailable }
+        };
+      } catch {
+        this.attachmentApi = false;
+        this.attachmentReadinessSample = null;
+      }
+    }
   }
   refreshIdentities(ctx) {
     this.view = ctx;
@@ -29152,6 +29772,13 @@ var Runtime = class {
         hasPendingMessages: this.readinessSample.hasPendingMessages,
         compactionActive: this.compactionActive,
         bridgePending: this.compact.pending !== null
+      }) : void 0,
+      attachmentReadiness: this.attachmentReadinessSample ? AttachmentReadiness.create({
+        idle: this.attachmentReadinessSample.idle,
+        hasPendingMessages: this.attachmentReadinessSample.hasPendingMessages,
+        compactionActive: this.attachmentReadinessSample.compactionActive,
+        bridgePending: this.attachmentReadinessSample.bridgePending,
+        imageAvailable: this.attachmentReadinessSample.imageAvailable
       }) : void 0
     });
   }
@@ -29174,6 +29801,7 @@ var Runtime = class {
       caps.push(CAPABILITY_THINKING);
     if (this.opts.getSkills && this.opts.invokeSkill)
       caps.push(CAPABILITY_SKILLS);
+    if (this.attachmentApi) caps.push(CAPABILITY_ATTACHMENTS);
     return caps;
   }
   hello() {
@@ -29224,6 +29852,7 @@ var Runtime = class {
     this.thinkingAccepted = false;
     this.compactAccepted = false;
     this.skillsAccepted = false;
+    this.attachmentsAccepted = false;
     if (this.lastCtx) this.sampleTelemetry(this.lastCtx);
     const channel = make(this.opts.creds, {
       onMessage: (msg) => {
@@ -29244,6 +29873,7 @@ var Runtime = class {
         this.thinkingAccepted = accepted.capabilities.includes(CAPABILITY_THINKING);
         this.compactAccepted = accepted.capabilities.includes(CAPABILITY_COMPACT);
         this.skillsAccepted = accepted.capabilities.includes(CAPABILITY_SKILLS);
+        this.attachmentsAccepted = accepted.capabilities.includes(CAPABILITY_ATTACHMENTS);
       }
     } catch (err) {
       channel.close();
@@ -29285,6 +29915,8 @@ var Runtime = class {
         msg.payload.value.requestId,
         msg.payload.value.name
       );
+    } else if (msg.payload?.$case === "attachmentPromptRequest" && this.attachmentsAccepted) {
+      void this.onAttachmentPromptRequest(msg.payload.value);
     }
   }
   /**
@@ -29662,6 +30294,116 @@ var Runtime = class {
       }
     };
   }
+  onAttachmentPromptRequest(req) {
+    const requestId = req.requestId;
+    const id = parseAttachmentRequestID(requestId);
+    if (id === null || !this.channel || !this.attachmentsAccepted) return;
+    const highWater = this.attachments.highWater;
+    if (highWater !== null && id <= highWater) {
+      this.sendAttachmentAck(requestId, 1 /* ATTACHMENT_PROMPT_OUTCOME_REFUSED */, "duplicate");
+      return;
+    }
+    this.attachments.highWater = id;
+    if (this.attachments.active !== null) {
+      this.sendAttachmentAck(requestId, 1 /* ATTACHMENT_PROMPT_OUTCOME_REFUSED */, "pending");
+      return;
+    }
+    const operation = { requestId, runtimeId: this.runtimeId };
+    this.attachments.active = operation;
+    this.publishContextOnly();
+    let outcome = 1 /* ATTACHMENT_PROMPT_OUTCOME_REFUSED */;
+    let reason = "unavailable";
+    let invoking = false;
+    try {
+      const prepared = prepareAttachmentContent(
+        this.opts.attachmentRoot,
+        req.text,
+        req.attachments.map((ref) => ({
+          basename: ref.basename,
+          sizeBytes: Number(ref.sizeBytes),
+          mimeType: ref.mimeType,
+          kind: ref.kind,
+          sha256: ref.sha256
+        }))
+      );
+      reason = this.attachmentRefusalReason(req, prepared.hasImage, operation);
+      if (reason !== "") return;
+      const sendUserMessage = this.opts.sendUserMessage;
+      if (typeof sendUserMessage !== "function") {
+        reason = "unavailable";
+        return;
+      }
+      invoking = true;
+      sendUserMessage(prepared.content, { expandPromptTemplates: false });
+      outcome = 2 /* ATTACHMENT_PROMPT_OUTCOME_DISPATCHED */;
+      reason = "";
+    } catch (error) {
+      if (invoking) {
+        outcome = 3 /* ATTACHMENT_PROMPT_OUTCOME_UNKNOWN */;
+        reason = "uncertain";
+      } else {
+        outcome = 1 /* ATTACHMENT_PROMPT_OUTCOME_REFUSED */;
+        reason = safeAttachmentFailureReason(error);
+      }
+    } finally {
+      this.sendAttachmentAck(requestId, outcome, reason);
+      if (this.attachments.active === operation) this.attachments.active = null;
+      this.publishContextOnly();
+    }
+  }
+  attachmentRefusalReason(req, hasImage, operation) {
+    if (this.shutdownRequested || this.runtimeId !== operation.runtimeId || this.attachments.active !== operation || typeof this.opts.sendUserMessage !== "function" || !hasSafeAttachmentRoot(this.opts.attachmentRoot) || !this.lastCtx) return "unavailable";
+    const text = req.text.trimStart();
+    if (text.startsWith("/") || text.startsWith("!")) return "command";
+    const ctx = this.lastCtx;
+    if (typeof ctx.isIdle !== "function" || typeof ctx.hasPendingMessages !== "function") return "unavailable";
+    let session;
+    let leaf;
+    let model;
+    let idle = false;
+    let queued = true;
+    try {
+      session = ctx.sessionManager.getSessionId();
+      leaf = ctx.sessionManager.getLeafId() ?? "";
+      model = ctx.model;
+      idle = ctx.isIdle() === true;
+      queued = ctx.hasPendingMessages() !== false;
+    } catch {
+      return "stale";
+    }
+    if (session !== req.expectedSessionId || leaf !== req.expectedLeafId) return "stale";
+    if (req.expectedModel) {
+      if (!model || model.provider !== req.expectedModel.provider || model.id !== req.expectedModel.model) return "stale";
+    } else if (model) {
+      return "stale";
+    }
+    if (!idle) return "busy";
+    if (queued) return "queued";
+    if (this.compactionActive) return "compaction-active";
+    if (this.compact.pending !== null || this.attachments.active !== operation) return "pending";
+    if (hasImage) {
+      try {
+        if (!model || model.api === "pi-virtual" || !Array.isArray(model.input) || !model.input.includes("image")) {
+          return "unsupported-model";
+        }
+      } catch {
+        return "unsupported-model";
+      }
+    }
+    return "";
+  }
+  sendAttachmentAck(requestId, outcome, reason) {
+    if (!this.channel) return;
+    this.channel.sendNonfatal({
+      paneId: this.opts.creds.pane,
+      processId: this.opts.creds.process,
+      runtimeGeneration: this.opts.generation,
+      payload: {
+        $case: "attachmentPromptAck",
+        value: AttachmentPromptAck.create({ requestId, outcome, reason })
+      }
+    });
+  }
   /**
    * Answer one Compact request. Every guard runs before invoking
    * the host; any failure refuses with a terminal result. Only a
@@ -29924,6 +30666,7 @@ var ENV_TARGET = "PHI_PI_BRIDGE_ENDPOINT";
 var ENV_PANE = "PHI_PI_BRIDGE_PANE_ID";
 var ENV_PROCESS = "PHI_PI_BRIDGE_PROCESS_ID";
 var ENV_TOKEN = "PHI_PI_BRIDGE_TOKEN";
+var ENV_ATTACHMENT_ROOT = "PHI_PI_ATTACHMENT_ROOT";
 var SKILL_COMMAND_PREFIX = "skill:";
 var OWNER_KEY = /* @__PURE__ */ Symbol.for("phi.pi-phi.owner");
 function ownerSlot() {
@@ -29932,6 +30675,11 @@ function ownerSlot() {
   const fresh = { active: false, generation: 0n };
   globalThis[OWNER_KEY] = fresh;
   return fresh;
+}
+function ownerAttachmentState() {
+  const slot = ownerSlot();
+  if (!slot.attachments) slot.attachments = freshAttachmentLatch();
+  return slot.attachments;
 }
 function ownerCompactState() {
   const slot = ownerSlot();
@@ -29946,7 +30694,12 @@ function readCredsFromEnv(env = process.env) {
   if (!target || !pane || !process2 || !token) return null;
   return { target, pane, process: process2, token };
 }
+function readAttachmentRootFromEnv(env = process.env) {
+  const root = env[ENV_ATTACHMENT_ROOT];
+  return typeof root === "string" && (0, import_node_path2.isAbsolute)(root) ? root : null;
+}
 function clearCredsFromEnv(env = process.env) {
+  delete env[ENV_ATTACHMENT_ROOT];
   delete env[ENV_TARGET];
   delete env[ENV_PANE];
   delete env[ENV_PROCESS];
@@ -30023,13 +30776,21 @@ function createExtension(pi, deps = {}) {
     ...hasSkillsApi ? { getSkills: () => hostSkills(pi) } : {},
     ...hasInvokeApi ? {
       invokeSkill: (name) => hostInvokeSkill(pi, name)
-    } : {}
+    } : {},
+    ...hasInvokeApi ? {
+      sendUserMessage: (content, options) => nativeSkills.sendUserMessage(content, options)
+    } : {},
+    attachmentRoot: ownerSlot().attachmentRoot,
+    attachmentState: ownerAttachmentState()
   }));
   pi.on("session_start", (_event, ctx) => {
     const slot = ownerSlot();
+    const provisionedRoot = readAttachmentRootFromEnv();
+    if (provisionedRoot) slot.attachmentRoot = provisionedRoot;
     if (bridgeDisabled(pi)) {
       clearCredsFromEnv();
       slot.creds = void 0;
+      slot.attachmentRoot = void 0;
       if (runtime !== null) {
         runtime.shutdown();
         runtime = null;

@@ -132,7 +132,7 @@ func (s *Server) RequestCompact(ctx context.Context, processID string, generatio
 		l.mu.Unlock()
 		return CompactResult{}, &CompactRefusal{Reason: "stale"}
 	}
-	if l.compact != nil {
+	if l.compact != nil || l.attachment != nil {
 		l.mu.Unlock()
 		return CompactResult{}, &CompactRefusal{Reason: "pending"}
 	}

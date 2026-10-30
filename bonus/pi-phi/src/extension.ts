@@ -8,7 +8,9 @@ import type {
     ExtensionAPI,
     ExtensionContext,
 } from '@earendil-works/pi-coding-agent';
+import { isAbsolute } from 'node:path';
 import type { ChannelCreds } from './channel.js';
+import { type AttachmentLatchState, freshAttachmentLatch } from './attachments.js';
 import {
     type CompactLatchState,
     type PiContextView,
@@ -22,6 +24,7 @@ export const ENV_TARGET = 'PHI_PI_BRIDGE_ENDPOINT';
 export const ENV_PANE = 'PHI_PI_BRIDGE_PANE_ID';
 export const ENV_PROCESS = 'PHI_PI_BRIDGE_PROCESS_ID';
 export const ENV_TOKEN = 'PHI_PI_BRIDGE_TOKEN';
+export const ENV_ATTACHMENT_ROOT = 'PHI_PI_ATTACHMENT_ROOT';
 
 /** Pi exposes every skill as a slash command with this prefix. */
 const SKILL_COMMAND_PREFIX = 'skill:';
@@ -33,6 +36,8 @@ interface OwnerSlot {
     generation: bigint;
     creds?: ChannelCreds | undefined;
     compact?: CompactLatchState | undefined;
+    attachments?: AttachmentLatchState | undefined;
+    attachmentRoot?: string | undefined;
 }
 
 function ownerSlot(): OwnerSlot {
@@ -45,11 +50,13 @@ function ownerSlot(): OwnerSlot {
     return fresh;
 }
 
-/**
- * Process-owned compaction latch: single-flight and Compact-ID
- * high-water protection shared by every runtime in the process.
- * Created once; reconnect and runtime replacement keep it.
- */
+/** Keep attachment request identity and single-flight state across reloads. */
+export function ownerAttachmentState(): AttachmentLatchState {
+    const slot = ownerSlot();
+    if (!slot.attachments) slot.attachments = freshAttachmentLatch();
+    return slot.attachments;
+}
+
 export function ownerCompactState(): CompactLatchState {
     const slot = ownerSlot();
     if (!slot.compact) slot.compact = freshCompactLatch();
@@ -76,8 +83,15 @@ export function readCredsFromEnv(
     return { target, pane, process, token };
 }
 
-/** Remove provisioned credentials so later tools cannot inherit them. */
+/** Read the provisioned private root before clearing child environment. */
+export function readAttachmentRootFromEnv(env: NodeJS.ProcessEnv = process.env): string | null {
+    const root = env[ENV_ATTACHMENT_ROOT];
+    return typeof root === 'string' && isAbsolute(root) ? root : null;
+}
+
+/** Remove bridge credentials and attachment paths before tools inherit them. */
 export function clearCredsFromEnv(env: NodeJS.ProcessEnv = process.env): void {
+    delete env[ENV_ATTACHMENT_ROOT];
     delete env[ENV_TARGET];
     delete env[ENV_PANE];
     delete env[ENV_PROCESS];
@@ -247,16 +261,27 @@ export function createExtension(
                               hostInvokeSkill(pi, name),
                       }
                     : {}),
+                ...(hasInvokeApi
+                    ? {
+                          sendUserMessage: (content, options) =>
+                              nativeSkills.sendUserMessage!(content, options),
+                      }
+                    : {}),
+                attachmentRoot: ownerSlot().attachmentRoot,
+                attachmentState: ownerAttachmentState(),
             }));
 
     pi.on('session_start', (_event, ctx) => {
         const slot = ownerSlot();
+        const provisionedRoot = readAttachmentRootFromEnv();
+        if (provisionedRoot) slot.attachmentRoot = provisionedRoot;
         if (bridgeDisabled(pi)) {
             // Disabled in Pi settings: scrub every credential copy and
             // stay inert. Checked here, not in the factory, because
             // getSettings is not callable until the runtime is bound.
             clearCredsFromEnv();
             slot.creds = undefined;
+            slot.attachmentRoot = undefined;
             if (runtime !== null) {
                 runtime.shutdown();
                 runtime = null;

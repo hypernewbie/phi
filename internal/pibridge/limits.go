@@ -49,6 +49,8 @@ const (
 	CapabilityCompact = "pi.compact.v1"
 	// CapabilitySkills is the on-demand skill list/invocation capability name.
 	CapabilitySkills = "pi.skills.v1"
+	// CapabilityAttachments is the user-triggered native attachment capability.
+	CapabilityAttachments = "pi.attachments.v1"
 
 	// maxHistoryPending bounds history requests awaiting replies per
 	// peer. Excess callers fail fast into fallback; the map never
@@ -69,6 +71,9 @@ const (
 	// peer, each, independently. Excess callers fail fast; the maps
 	// never grow under a wedged or silent extension.
 	maxSkillsPending = 4
+	// Attachment prompts are single-flight per Pi process. A second
+	// request refuses rather than growing a prompt queue.
+	maxAttachmentPending = 1
 	// maxSkillEntries caps one skill list; a longer list is truncated
 	// and flagged, never silently partial.
 	maxSkillEntries = 200

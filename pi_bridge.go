@@ -26,10 +26,11 @@ import (
 // them at session start and deletes them so agent-spawned tools cannot
 // inherit credentials. Keep in sync with bonus/pi-phi and PROTOCOL.md.
 const (
-	piBridgeEnvTarget  = "PHI_PI_BRIDGE_ENDPOINT"
-	piBridgeEnvPane    = "PHI_PI_BRIDGE_PANE_ID"
-	piBridgeEnvProcess = "PHI_PI_BRIDGE_PROCESS_ID"
-	piBridgeEnvToken   = "PHI_PI_BRIDGE_TOKEN"
+	piBridgeEnvTarget         = "PHI_PI_BRIDGE_ENDPOINT"
+	piBridgeEnvPane           = "PHI_PI_BRIDGE_PANE_ID"
+	piBridgeEnvProcess        = "PHI_PI_BRIDGE_PROCESS_ID"
+	piBridgeEnvToken          = "PHI_PI_BRIDGE_TOKEN"
+	piBridgeEnvAttachmentRoot = "PHI_PI_ATTACHMENT_ROOT"
 )
 
 // piBridgeArtifactName is the materialized runtime filename inside the
@@ -313,6 +314,11 @@ func (b *Bridge) Provision(paneID string, inject bool) (env map[string]string, a
 		piBridgeEnvProcess: processID,
 		piBridgeEnvToken:   token,
 	}
+	if attachmentStore != nil {
+		if root, err := attachmentStore.ProcessRoot(processID); err == nil {
+			env[piBridgeEnvAttachmentRoot] = root
+		}
+	}
 	if inject {
 		args = []string{"--extension", b.artifact}
 	}
@@ -341,6 +347,51 @@ func (b *Bridge) Complete(inst *pty.PTYInstance) {
 		return
 	}
 	b.server.Complete(processID)
+}
+
+// AttachmentPaneView returns one coherent nonsecret bridge state for a
+// managed pane. The process record is rechecked after the lease snapshot so
+// a replaced pane cannot supply a mixed context.
+func (b *Bridge) AttachmentPaneView(paneID string) (string, pibridge.StateView, bool) {
+	if b == nil {
+		return "", pibridge.StateView{}, false
+	}
+	b.mu.Lock()
+	pane, ok := b.panes[paneID]
+	if !ok || !pane.managed {
+		b.mu.Unlock()
+		return "", pibridge.StateView{}, false
+	}
+	processID := pane.processID
+	b.mu.Unlock()
+	view, ok := b.server.PaneState(processID)
+	if !ok {
+		return "", pibridge.StateView{}, false
+	}
+	b.mu.Lock()
+	current, stillCurrent := b.panes[paneID]
+	stillCurrent = stillCurrent && current == pane && current.managed && current.processID == processID
+	b.mu.Unlock()
+	if !stillCurrent {
+		return "", pibridge.StateView{}, false
+	}
+	return processID, view, true
+}
+
+// RequestPaneAttachmentPrompt rechecks the process owner before forwarding
+// one prepared user message to the current bridge lease.
+func (b *Bridge) RequestPaneAttachmentPrompt(ctx context.Context, paneID, processID string, generation uint64, sessionID, leafID string, model *pibridgepb.ModelSnapshot, text string, refs []pibridge.AttachmentRef, imageRequired bool) (pibridge.AttachmentPromptResult, error) {
+	if b == nil {
+		return pibridge.AttachmentPromptResult{}, &pibridge.AttachmentPromptRefusal{Reason: "unavailable"}
+	}
+	b.mu.Lock()
+	pane, ok := b.panes[paneID]
+	same := ok && pane.managed && pane.processID == processID
+	b.mu.Unlock()
+	if !same {
+		return pibridge.AttachmentPromptResult{}, &pibridge.AttachmentPromptRefusal{Reason: "stale"}
+	}
+	return b.server.RequestAttachmentPrompt(ctx, processID, generation, sessionID, leafID, model, text, refs, imageRequired)
 }
 
 // RequestPaneHistory resolves a pane to its bridge process and reads

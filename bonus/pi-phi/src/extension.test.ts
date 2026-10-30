@@ -4,6 +4,7 @@ import type {
     ExtensionContext,
 } from '@earendil-works/pi-coding-agent';
 import {
+    ENV_ATTACHMENT_ROOT,
     ENV_PANE,
     ENV_PROCESS,
     ENV_TARGET,
@@ -12,11 +13,14 @@ import {
     createExtension,
     hostInvokeSkill,
     hostSkills,
+    ownerAttachmentState,
     ownerCompactState,
+    readAttachmentRootFromEnv,
     readCredsFromEnv,
     resetOwnerSlotForTest,
     type FactoryRuntime,
 } from './extension.js';
+import type { AttachmentLatchState } from './attachments.js';
 import type { CompactLatchState, PiContextView } from './runtime.js';
 
 const SAVED = { ...process.env };
@@ -105,7 +109,7 @@ function recordingRuntime(): { calls: string[]; runtime: FactoryRuntime } {
 
 beforeEach(() => {
     resetOwnerSlotForTest();
-    for (const key of [ENV_TARGET, ENV_PANE, ENV_PROCESS, ENV_TOKEN])
+    for (const key of [ENV_TARGET, ENV_PANE, ENV_PROCESS, ENV_TOKEN, ENV_ATTACHMENT_ROOT])
         delete process.env[key];
 });
 
@@ -131,10 +135,13 @@ describe('credential environment', () => {
         expect(readCredsFromEnv()).toBeNull();
     });
 
-    it('clears all four keys', () => {
+    it('reads and scrubs the private attachment root', () => {
         setEnv();
+        process.env[ENV_ATTACHMENT_ROOT] = '/tmp/phi-attachments/pane';
+        expect(readAttachmentRootFromEnv()).toBe('/tmp/phi-attachments/pane');
         clearCredsFromEnv();
         expect(readCredsFromEnv()).toBeNull();
+        expect(readAttachmentRootFromEnv()).toBeNull();
     });
 });
 
@@ -510,6 +517,13 @@ describe('telemetry view and compaction latch', () => {
         expect(latches).toHaveLength(2);
         expect(latches[0]).toBe(latches[1]);
         expect(latches[0]).toBe(ownerCompactState());
+    });
+
+    it('shares attachment duplicate state across replacement runtimes', () => {
+        const first: AttachmentLatchState = ownerAttachmentState();
+        first.highWater = 4n;
+        expect(ownerAttachmentState()).toBe(first);
+        expect(ownerAttachmentState().highWater).toBe(4n);
     });
 
     it('creates the latch once per process', () => {

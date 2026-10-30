@@ -1,4 +1,143 @@
 /* Φ phi — staged-input attachments (drag-drop + clipboard image paste) */
+export class AttachmentRequestError extends Error {
+    status;
+    reason;
+    uncertain;
+    constructor(message, status, reason, uncertain) {
+        super(message);
+        this.status = status;
+        this.reason = reason;
+        this.uncertain = uncertain;
+        this.name = 'AttachmentRequestError';
+    }
+}
+const ATTACHMENT_READ_TIMEOUT_MS = 10_000;
+const ATTACHMENT_UPLOAD_TIMEOUT_MS = 11 * 60_000;
+export function newAttachmentID() {
+    const cryptoApi = globalThis.crypto;
+    if (!cryptoApi?.getRandomValues)
+        throw new Error('secure-random-unavailable');
+    if (typeof cryptoApi.randomUUID === 'function')
+        return cryptoApi.randomUUID();
+    const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+async function attachmentFetch(owner, url, init, timeoutMs, externalSignal) {
+    const controller = new AbortController();
+    let rejectAbort;
+    const aborted = new Promise((_resolve, reject) => {
+        rejectAbort = reject;
+    });
+    let settled = false;
+    const cancel = (reason) => {
+        if (settled)
+            return;
+        controller.abort();
+        rejectAbort(new AttachmentRequestError(reason, 0, 'uncertain', true));
+    };
+    const onScopeAbort = () => cancel('Attachment owner changed');
+    const onExternalAbort = () => cancel('Attachment request cancelled');
+    owner.scope?.signal?.addEventListener('abort', onScopeAbort, { once: true });
+    externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
+    const timer = setTimeout(() => cancel('Attachment request timed out'), timeoutMs);
+    if (owner.scope?.signal?.aborted)
+        onScopeAbort();
+    if (externalSignal?.aborted)
+        onExternalAbort();
+    const headers = owner.scope?.headers?.(init.headers) ?? {};
+    if (owner.profileId)
+        headers['X-Phi-Backend'] = owner.profileId;
+    const operation = (async () => {
+        if (controller.signal.aborted)
+            throw new DOMException('Attachment request aborted', 'AbortError');
+        const response = await fetch(url, {
+            ...init,
+            headers,
+            cache: 'no-store',
+            credentials: 'same-origin',
+            signal: controller.signal,
+        });
+        const text = await response.text();
+        if (!response.ok) {
+            let reason = 'error';
+            try {
+                const parsed = JSON.parse(text);
+                if (typeof parsed.reason === 'string')
+                    reason = parsed.reason;
+            }
+            catch {
+                // The body is consumed, but a malformed response does not
+                // prove that a mutation was refused.
+                throw new AttachmentRequestError('Attachment result unknown', response.status, 'uncertain', true);
+            }
+            const uncertain = response.status === 503 || response.status >= 500;
+            throw new AttachmentRequestError(uncertain ? 'Attachment result unknown' : `Attachment refused: ${reason}`, response.status, reason, uncertain);
+        }
+        try {
+            return JSON.parse(text);
+        }
+        catch {
+            throw new AttachmentRequestError('Attachment result unknown', response.status, 'uncertain', true);
+        }
+    })();
+    try {
+        return await Promise.race([operation, aborted]);
+    }
+    catch (error) {
+        if (error instanceof AttachmentRequestError)
+            throw error;
+        throw new AttachmentRequestError('Attachment result unknown', 0, 'uncertain', true);
+    }
+    finally {
+        settled = true;
+        clearTimeout(timer);
+        owner.scope?.signal?.removeEventListener('abort', onScopeAbort);
+        externalSignal?.removeEventListener('abort', onExternalAbort);
+    }
+}
+export async function uploadAttachmentItem(file, id, owner, signal) {
+    const form = new FormData();
+    form.append('pane', owner.paneId);
+    form.append('name', file.name);
+    form.append('file', file, file.name || 'attachment');
+    const item = await attachmentFetch(owner, `/api/attachments/v2/items/${encodeURIComponent(id)}`, { method: 'PUT', body: form }, ATTACHMENT_UPLOAD_TIMEOUT_MS, signal);
+    return { ...item, source: 'device' };
+}
+export function getAttachmentItemStatus(id, owner, signal) {
+    const query = new URLSearchParams({ pane: owner.paneId });
+    return attachmentFetch(owner, `/api/attachments/v2/items/${encodeURIComponent(id)}?${query}`, { method: 'GET' }, ATTACHMENT_READ_TIMEOUT_MS, signal);
+}
+export function getAttachmentPiContext(owner, signal) {
+    const query = new URLSearchParams({ pane: owner.paneId });
+    return attachmentFetch(owner, `/api/pi-bridge/attachments/context?${query}`, { method: 'GET' }, ATTACHMENT_READ_TIMEOUT_MS, signal);
+}
+export function sendAttachmentPrompt(owner, body, signal) {
+    return attachmentFetch(owner, '/api/pi-bridge/attachments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 45_000, signal);
+}
+export function getAttachmentSendStatus(owner, id, signal) {
+    const query = new URLSearchParams({ pane: owner.paneId, id });
+    return attachmentFetch(owner, `/api/pi-bridge/attachments?${query}`, { method: 'GET' }, ATTACHMENT_READ_TIMEOUT_MS, signal);
+}
+export function browseServerFiles(owner, path, signal) {
+    const query = new URLSearchParams({ pane: owner.paneId, path });
+    return attachmentFetch(owner, `/api/attachments/v2/browse?${query}`, { method: 'GET' }, ATTACHMENT_READ_TIMEOUT_MS, signal);
+}
+export async function snapshotServerFile(owner, snapshot, signal) {
+    const item = await attachmentFetch(owner, '/api/attachments/v2/server-items', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            id: snapshot.id,
+            pane: owner.paneId,
+            path: snapshot.path,
+            expected_fingerprint: snapshot.fingerprint,
+        }),
+    }, ATTACHMENT_READ_TIMEOUT_MS, signal);
+    return { ...item, source: 'server' };
+}
 // formatAttachment is the single source of truth for coder-specific
 // path formatting. Delegates to the registry-aware implementation in
 // web-src/coders.ts so every call site (markdown.ts, filetree.ts,

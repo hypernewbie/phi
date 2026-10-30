@@ -1023,3 +1023,95 @@ describe('embedded directory tree', () => {
         expect(host.childElementCount).toBe(0);
     });
 });
+
+describe('directory tree file mode', () => {
+    const listing = {
+        '/ws': response('/ws', '/', [
+            { name: 'docs', path: '/ws/docs', kind: 'directory' },
+            { name: 'photo.png', path: '/ws/photo.png', kind: 'file', sizeBytes: 12, fingerprint: 'fp-photo' },
+        ]),
+        '/ws/docs': response('/ws/docs', '/ws', [
+            { name: 'note.txt', path: '/ws/docs/note.txt', kind: 'file', sizeBytes: 4, fingerprint: 'fp-note' },
+        ]),
+    };
+
+    function mountFiles(onSelect = vi.fn()) {
+        mockFetch(() => {
+            throw new Error('file mode must use the injected browse');
+        });
+        document.body.innerHTML = '<div id="tree-host"></div>';
+        const host = document.getElementById('tree-host');
+        const controller = mountDirectoryTree(host, {
+            startPath: '/ws',
+            onSelect,
+            files: true,
+            browse: async (path) => listing[path] ?? response(path, '/ws', []),
+        });
+        return { controller, host, onSelect };
+    }
+
+    it('renders files as leaves and selects only files', async () => {
+        const { controller, onSelect } = mountFiles();
+        await waitForItem('/ws/photo.png');
+
+        const file = item('/ws/photo.png');
+        expect(file.hasAttribute('aria-expanded')).toBe(false);
+        expect(file.querySelector('.directory-tree-disclosure').textContent).toBe('');
+
+        item('/ws/docs').querySelector('.directory-tree-name').click();
+        expect(onSelect).not.toHaveBeenCalled();
+        expect(item('/ws/docs').getAttribute('aria-selected')).toBe('true');
+
+        file.querySelector('.directory-tree-name').click();
+        expect(onSelect).toHaveBeenCalledExactlyOnceWith('/ws/photo.png');
+        expect(file.getAttribute('aria-selected')).toBe('true');
+        controller.destroy();
+    });
+
+    it('notifies on Enter for files but not for directories', async () => {
+        const { controller, onSelect } = mountFiles();
+        await waitForItem('/ws/photo.png');
+
+        const pressEnter = (path) => {
+            item(path).dispatchEvent(
+                new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+            );
+        };
+        pressEnter('/ws/docs');
+        expect(onSelect).not.toHaveBeenCalled();
+        pressEnter('/ws/photo.png');
+        expect(onSelect).toHaveBeenCalledExactlyOnceWith('/ws/photo.png');
+        controller.destroy();
+    });
+
+    it('expands directories with arrows while files stay inert', async () => {
+        const { controller, onSelect } = mountFiles();
+        await waitForItem('/ws/photo.png');
+
+        const docs = item('/ws/docs');
+        docs.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }),
+        );
+        await waitForItem('/ws/docs/note.txt');
+        expect(item('/ws/docs/note.txt').hasAttribute('aria-expanded')).toBe(false);
+
+        const file = item('/ws/photo.png');
+        file.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }),
+        );
+        expect(onSelect).not.toHaveBeenCalled();
+        controller.destroy();
+    });
+
+    it('double-clicking a file never submits or closes a dialog', async () => {
+        const { controller, onSelect } = mountFiles();
+        await waitForItem('/ws/photo.png');
+
+        const file = item('/ws/photo.png');
+        file.querySelector('.directory-tree-name').dispatchEvent(
+            new MouseEvent('dblclick', { bubbles: true, cancelable: true }),
+        );
+        expect(onSelect).not.toHaveBeenCalled();
+        controller.destroy();
+    });
+});

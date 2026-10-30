@@ -17,6 +17,9 @@ export interface BridgeProxy {
     // Reject new connections and destroy both halves of every live
     // forwarded pair. Either endpoint sees EOF; neither process dies.
     drop: () => Promise<void>;
+    // Pause Pi-to-Phi bytes without inspecting them. The returned
+    // function resumes those bytes. Phi-to-Pi requests still flow.
+    pausePiToPhi: () => () => void;
     // Accept connections again on the same socket path.
     resume: () => Promise<void>;
     close: () => Promise<void>;
@@ -57,6 +60,7 @@ export function startBridgeProxy(
         throw new Error('bridge proxy upstream is not a private socket');
     }
     let forwarded = 0;
+    let piToPhiPaused = false;
     const pairs = new Set<{ a: net.Socket; b: net.Socket }>();
     const unlinkProxy = () => {
         try {
@@ -86,6 +90,7 @@ export function startBridgeProxy(
         upstream.on('error', () => {});
         downstream.pipe(upstream);
         upstream.pipe(downstream);
+        if (piToPhiPaused) downstream.pause();
     });
     server.on('error', () => {
         // Accept-loop errors surface through drop/resume/close callers.
@@ -104,7 +109,19 @@ export function startBridgeProxy(
         await listen();
         return {
             forwarded: () => forwarded,
+            pausePiToPhi: () => {
+                piToPhiPaused = true;
+                for (const pair of pairs) pair.a.pause();
+                let resumed = false;
+                return () => {
+                    if (resumed) return;
+                    resumed = true;
+                    piToPhiPaused = false;
+                    for (const pair of pairs) pair.a.resume();
+                };
+            },
             drop: async () => {
+                piToPhiPaused = false;
                 destroyPairs();
                 await new Promise<void>((resolve, reject) => {
                     server.close((err) => (err ? reject(err) : resolve()));

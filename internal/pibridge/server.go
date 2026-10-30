@@ -36,6 +36,7 @@ type Server struct {
 	setThinkingSeq atomic.Uint64
 	skillsSeq      atomic.Uint64
 	invokeSkillSeq atomic.Uint64
+	attachmentSeq  atomic.Uint64
 	// compactSeq allocates monotonic server-side Compact request
 	// IDs. IDs are positive canonical decimal uint64 strings,
 	// never wrap, and are never reused or browser-supplied.
@@ -221,6 +222,16 @@ type Readiness struct {
 	BridgePending      bool
 }
 
+// AttachmentReadiness is sampled independently of Compact. A nil image
+// modality means that the current model is unknown.
+type AttachmentReadiness struct {
+	Idle               bool
+	HasPendingMessages bool
+	CompactionActive   bool
+	BridgePending      bool
+	ImageAvailable     *bool
+}
+
 // copyContextUsage copies validated telemetry out of a snapshot. A
 // nil snapshot or absent sample yields nil (unknown), never zero.
 func copyContextUsage(snap *pibridgepb.StateSnapshot) *ContextUsage {
@@ -243,6 +254,23 @@ func copyContextUsage(snap *pibridgepb.StateSnapshot) *ContextUsage {
 
 // copyReadiness copies the readiness sample out of a snapshot. A nil
 // snapshot or absent sample yields nil, never an invented sample.
+func copyAttachmentReadiness(snap *pibridgepb.StateSnapshot) *AttachmentReadiness {
+	r := snap.GetAttachmentReadiness()
+	if r == nil {
+		return nil
+	}
+	var imageAvailable *bool
+	if r.ImageAvailable != nil {
+		v := *r.ImageAvailable
+		imageAvailable = &v
+	}
+	return &AttachmentReadiness{
+		Idle: r.GetIdle(), HasPendingMessages: r.GetHasPendingMessages(),
+		CompactionActive: r.GetCompactionActive(), BridgePending: r.GetBridgePending(),
+		ImageAvailable: imageAvailable,
+	}
+}
+
 func copyReadiness(snap *pibridgepb.StateSnapshot) *Readiness {
 	r := snap.GetCompactReadiness()
 	if r == nil {
@@ -275,12 +303,15 @@ type StateView struct {
 	SessionID     string
 	LeafID        string
 	Model         string
+	ModelProvider string
+	ModelID       string
 	ThinkingLevel string
 	// Context and Readiness are copies of the retained snapshot's
 	// telemetry, nil when it carried none. Unknown usage is
 	// distinct from zero and from an absent capability.
-	Context   *ContextUsage
-	Readiness *Readiness
+	Context             *ContextUsage
+	Readiness           *Readiness
+	AttachmentReadiness *AttachmentReadiness
 }
 
 // PaneState returns the nonsecret lease view for one process. It reports
@@ -304,10 +335,16 @@ func (s *Server) paneStateLocked(l *lease) StateView {
 		view.LeafID = l.lastState.LeafId
 		if m := l.lastState.Model; m != nil {
 			view.Model = m.Provider + "/" + m.Model
+			view.ModelProvider = m.Provider
+			view.ModelID = m.Model
 		}
 		view.ThinkingLevel = l.lastState.GetThinkingLevel()
 		view.Context = copyContextUsage(l.lastState)
 		view.Readiness = copyReadiness(l.lastState)
+		view.AttachmentReadiness = copyAttachmentReadiness(l.lastState)
+		if l.attachment != nil && view.AttachmentReadiness != nil {
+			view.AttachmentReadiness.BridgePending = true
+		}
 	}
 	return view
 }
@@ -468,6 +505,7 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 		// runtime. Unresolved process-owned native work still
 		// reports through the fresh authoritative readiness.
 		l.compact = nil
+		l.attachment = nil
 	}
 	type pendingSettlement struct {
 		runID   uint64
@@ -725,6 +763,9 @@ func (s *Server) handleMessage(l *lease, p *peer, msg *pibridgepb.PiToPhi) error
 	case msg.GetInvokeSkillAck() != nil:
 		s.deliverInvokeSkill(l, p, msg.GetInvokeSkillAck())
 		return nil
+	case msg.GetAttachmentPromptAck() != nil:
+		s.deliverAttachmentPrompt(l, p, msg.GetAttachmentPromptAck())
+		return nil
 	default:
 		return status.Error(codes.InvalidArgument, "unsupported payload")
 	}
@@ -757,6 +798,12 @@ func validateSnapshot(snap *pibridgepb.StateSnapshot, sessionID string) error {
 	// the whole bridge.
 	if err := validateContextUsage(snap.GetContextUsage()); err != nil {
 		return err
+	}
+	if readiness := snap.GetAttachmentReadiness(); readiness != nil && readiness.GetImageAvailable() {
+		model := snap.GetModel()
+		if model == nil || model.GetProvider() == "" || model.GetModel() == "" {
+			return fmt.Errorf("attachment image availability without model")
+		}
 	}
 	return nil
 }

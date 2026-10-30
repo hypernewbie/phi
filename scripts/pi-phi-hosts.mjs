@@ -8,6 +8,7 @@
 // Unprovisioned and bad-credential runs must not prevent startup,
 // input, or output. Exits nonzero with all failures.
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import {
     copyFileSync,
@@ -41,22 +42,83 @@ function run(cmd, args, opts = {}) {
 // gRPC dial time to complete: without it, a warmed-up Pi can exit in
 // ~35ms, before the handshake finishes (observed flake).
 let stubHits = 0;
+const stubBodies = [];
+let holdNextProviderResponse = false;
+let heldProviderResponse = null;
+const releaseHeldProviderResponse = () => {
+    const release = heldProviderResponse;
+    heldProviderResponse = null;
+    release?.();
+};
 const stub = createServer((req, res) => {
-    req.resume();
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
     req.on('end', () => {
         stubHits += 1;
-        setTimeout(() => {
+        try {
+            stubBodies.push(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+        } catch {
+            stubBodies.push(null);
+        }
+        const deny = () => {
             res.writeHead(401, { 'content-type': 'application/json' });
             res.end(
                 JSON.stringify({
                     error: { message: 'hosts stub denies all completions' },
                 }),
             );
-        }, 2000);
+        };
+        if (holdNextProviderResponse) {
+            holdNextProviderResponse = false;
+            heldProviderResponse = deny;
+        } else {
+            setTimeout(deny, 2000);
+        }
     });
 });
 await new Promise((resolve) => stub.listen(0, '127.0.0.1', resolve));
 const stubPort = stub.address().port;
+
+async function waitForHost(predicate, timeoutMs, label) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        if (predicate()) return;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error(`timeout waiting for ${label}`);
+}
+
+function imageDataUris(value, out = []) {
+    if (typeof value === 'string') {
+        if (/^data:image\/(png|jpeg);base64,/i.test(value)) out.push(value);
+        return out;
+    }
+    if (Array.isArray(value)) {
+        for (const item of value) imageDataUris(item, out);
+    } else if (value && typeof value === 'object') {
+        for (const item of Object.values(value)) imageDataUris(item, out);
+    }
+    return out;
+}
+
+function makeAttachmentHandoff(name) {
+    const handoffRoot = join(tmp, `handoff-${name}`);
+    mkdirSync(handoffRoot, { recursive: true, mode: 0o700 });
+    const basename = 'att-0123456789abcdef.png';
+    const bytes = readFileSync(join(root, 'web', 'vendor', 'logos', 'pi.png'));
+    writeFileSync(join(handoffRoot, basename), bytes, { mode: 0o600 });
+    return {
+        root: handoffRoot,
+        bytes,
+        reference: {
+            basename,
+            size_bytes: bytes.length,
+            mime_type: 'image/png',
+            kind: 'image',
+            sha256: createHash('sha256').update(bytes).digest('hex'),
+        },
+    };
+}
 
 // Per-version isolated identity: HOME, agent dir with the stub provider,
 // and work dir. Pi versions must not share config and cache locations;
@@ -69,6 +131,17 @@ function makeVersionDirs(name) {
     mkdirSync(agentDir, { recursive: true });
     mkdirSync(workDir, { recursive: true });
     writeFileSync(
+        join(agentDir, 'settings.json'),
+        JSON.stringify({
+            defaultProjectTrust: 'never',
+            quietStartup: true,
+            enableInstallTelemetry: false,
+            cacheWarming: 'off',
+            retry: { enabled: false },
+            compaction: { enabled: false },
+        }),
+    );
+    writeFileSync(
         join(agentDir, 'models.json'),
         JSON.stringify({
             providers: {
@@ -76,7 +149,7 @@ function makeVersionDirs(name) {
                     baseUrl: `http://127.0.0.1:${stubPort}/v1`,
                     api: 'openai-completions',
                     apiKey: 'hosts-dummy',
-                    models: [{ id: 'probe' }],
+                    models: [{ id: 'probe', input: ['text', 'image'] }],
                 },
             },
         }),
@@ -192,6 +265,8 @@ writeFileSync(
         `    await waitFor(settled(4), 90000, 'settled-4');\n` +
         `    await sleep(800);\n` +
         `    fs.writeFileSync(DONE, JSON.stringify({ ok: true }));\n` +
+        `    if (process.env.ATTACHMENT_READY) fs.writeFileSync(process.env.ATTACHMENT_READY, 'ready');\n` +
+        `    if (process.env.ATTACHMENT_DONE) await waitFor(() => fs.existsSync(process.env.ATTACHMENT_DONE), 120000, 'attachment completion');\n` +
         `    process.stdout.write('\\x03\\x03');\n` +
         `    await sleep(3000);\n` +
         `}\n` +
@@ -267,9 +342,9 @@ async function startTestserver() {
             });
         });
     }
-    async function control(op) {
+    async function control(op, timeoutMs = 15_000) {
         server.stdin.write(JSON.stringify(op) + '\n');
-        return JSON.parse(await readLine());
+        return JSON.parse(await readLine(timeoutMs));
     }
     const ready = JSON.parse(await readLine());
     async function stop() {
@@ -435,10 +510,8 @@ let cli130 = '';
             fail('setup', 'pi 1.3.0 bundle missing', cli130);
     }
 }
-const versions = [
-    { name: '1.0.1', cmd: process.execPath, args: [localCli] },
-    { name: '1.3.0', cmd: process.execPath, args: [cli130] },
-];
+const versions = [{ name: '1.0.1', cmd: process.execPath, args: [localCli] }];
+if (cli130) versions.push({ name: '1.3.0', cmd: process.execPath, args: [cli130] });
 
 for (const version of versions) {
     const pane = `hosts-${version.name}`;
@@ -497,6 +570,7 @@ for (const version of versions) {
         'say hello',
     ];
     stubHits = 0;
+    stubBodies.length = 0;
     const run = await spawnPi(
         version.cmd,
         [...version.args, ...printArgs],
@@ -581,7 +655,7 @@ for (const version of versions) {
         if (!view.runtimeId) fail(version.name, 'runtime id missing');
         if (
             (view.caps || []).join(',') !==
-            'pi.compact.v1,pi.context.v1,pi.lifecycle.v1,pi.models.v1,pi.thinking.v1'
+            'pi.compact.v1,pi.context.v1,pi.lifecycle.v1,pi.models.v1,pi.skills.v1,pi.thinking.v1'
         ) {
             fail(version.name, 'accepted caps', (view.caps || []).join(','));
         }
@@ -653,6 +727,7 @@ for (const version of versions) {
         ],
     ]) {
         stubHits = 0;
+        stubBodies.length = 0;
         const contained = await spawnPi(
             version.cmd,
             [...version.args, ...bundleArgs],
@@ -697,7 +772,11 @@ for (const version of versions) {
         } else {
             await control({ op: 'complete', process: tuiReg.process });
             const historyLog = join(tmp, `history-${version.name}.log`);
+            const tuiProbeLog = join(tmp, `tui-probe-${version.name}.log`);
             const writerDone = join(tmp, `writer-${version.name}.json`);
+            const attachmentDone = join(tmp, `attachment-done-${version.name}`);
+            const attachmentReady = join(tmp, `attachment-ready-${version.name}`);
+            const handoff = makeAttachmentHandoff(version.name);
             const tuiEnv = {
                 ...env,
                 PHI_PI_BRIDGE_PANE_ID: tuiPane,
@@ -705,6 +784,10 @@ for (const version of versions) {
                 PHI_PI_BRIDGE_TOKEN: tuiReg.token,
                 HISTORY_LOG: historyLog,
                 HISTORY_WRITER_DONE: writerDone,
+                PROBE_LOG: tuiProbeLog,
+                ATTACHMENT_DONE: attachmentDone,
+                ATTACHMENT_READY: attachmentReady,
+                PHI_PI_ATTACHMENT_ROOT: handoff.root,
             };
             const tuiArgs = [
                 '--no-session',
@@ -717,13 +800,78 @@ for (const version of versions) {
                 '--extension',
                 probeHistoryPath,
             ];
-            const tui = await spawnInteractiveTui(
+            const tuiPromise = spawnInteractiveTui(
                 [writerPath],
                 version.cmd,
                 [...version.args, ...tuiArgs],
                 tuiEnv,
                 workDir,
             );
+            try {
+                await waitForHost(() => existsSync(writerDone), 180_000, 'history writer readiness');
+                const writerState = JSON.parse(readFileSync(writerDone, 'utf8'));
+                if (writerState.ok !== true) throw new Error(writerState.error || 'history writer failed');
+                await waitForHost(() => existsSync(attachmentReady), 10_000, 'attachment writer readiness');
+                const view = await control({ op: 'inspect', process: tuiReg.process });
+                if (!view.ok || !(view.caps || []).includes('pi.attachments.v1')) {
+                    fail(version.name, 'attachment capability missing', (view.caps || []).join(','));
+                } else {
+                    const before = stubBodies.length;
+                    holdNextProviderResponse = true;
+                    const started = Date.now();
+                    const dispatched = await control({
+                        op: 'attachment',
+                        process: tuiReg.process,
+                        generation: Number(view.generation),
+                        session: view.session,
+                        leaf: view.leaf,
+                        provider: 'hosts-stub',
+                        model: 'probe',
+                        text: 'Inspect this public image fixture.',
+                        attachments: [handoff.reference],
+                        imageRequired: true,
+                        timeoutMs: 20_000,
+                    }, 25_000);
+                    const ackMs = Date.now() - started;
+                    if (!dispatched.ok || dispatched.outcome !== 'ATTACHMENT_PROMPT_OUTCOME_DISPATCHED') {
+                        fail(version.name, 'attachment dispatch', `${dispatched.error || dispatched.outcome || 'no outcome'} (${dispatched.reason || ''})`);
+                    }
+                    if (ackMs >= 2_000) {
+                        fail(version.name, 'attachment ack waited for provider response', `${ackMs}ms`);
+                    }
+                    await waitForHost(
+                        () => stubBodies.slice(before).some((request) => imageDataUris(request).length > 0),
+                        30_000,
+                        'native image provider payload',
+                    );
+                    const imageRequests = stubBodies.slice(before).filter((request) => imageDataUris(request).length > 0);
+                    if (imageRequests.length !== 1) {
+                        fail(version.name, 'native image request count', String(imageRequests.length));
+                    }
+                    const uri = imageDataUris(imageRequests[0])[0] || '';
+                    const encoded = uri.match(/^data:image\/(png|jpeg);base64,(.+)$/i);
+                    const decoded = encoded ? Buffer.from(encoded[2], 'base64') : Buffer.alloc(0);
+                    const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+                    if (!encoded || !decoded.subarray(0, 8).equals(pngSignature)) {
+                        fail(version.name, 'native image payload missing or invalid', uri.slice(0, 32));
+                    }
+                    if (heldProviderResponse === null) {
+                        fail(version.name, 'provider response was not held during dispatch');
+                    }
+                    releaseHeldProviderResponse();
+                    await new Promise((resolve) => setTimeout(resolve, 2_100));
+                    if (stubBodies.slice(before).filter((request) => imageDataUris(request).length > 0).length !== 1) {
+                        fail(version.name, 'duplicate native image provider request');
+                    }
+                }
+            } catch (err) {
+                fail(version.name, 'attachment smoke', String(err));
+            } finally {
+                holdNextProviderResponse = false;
+                releaseHeldProviderResponse();
+                writeFileSync(attachmentDone, 'done');
+            }
+            const tui = await tuiPromise;
             let writerOk = false;
             let writerError = '';
             try {
@@ -819,7 +967,7 @@ for (const version of versions) {
                 }
                 if (
                     (tuiView.caps || []).join(',') !==
-                    'pi.compact.v1,pi.context.v1,pi.history.v1,pi.lifecycle.v1,pi.models.v1,pi.thinking.v1'
+                    'pi.attachments.v1,pi.compact.v1,pi.context.v1,pi.history.v1,pi.lifecycle.v1,pi.models.v1,pi.skills.v1,pi.thinking.v1'
                 ) {
                     fail(
                         version.name,
@@ -857,5 +1005,5 @@ if (failures.length > 0) {
 }
 rmSync(tmp, { recursive: true, force: true });
 console.log(
-    'pi-phi-hosts: both pinned hosts load, flow, and identify; inert and bad-credential runs contained; interactive editor history proven',
+    'pi-phi-hosts: both pinned hosts load, flow, and identify; inert and bad-credential runs contained; interactive history and native image dispatch proven',
 );

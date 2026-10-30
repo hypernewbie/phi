@@ -222,6 +222,13 @@ func main() {
 	if err := wsHub.SetRecordingDirectory(filepath.Join(system.PhiDataDir(), "recordings")); err != nil {
 		slog.Error("terminal recording directory unavailable", "err", err)
 	}
+	attachmentStore, err = OpenAttachmentStore()
+	if err != nil {
+		slog.Warn("Pi attachments unavailable", "err", err)
+		attachmentStore = nil
+	} else {
+		defer func() { _ = attachmentStore.Close() }()
+	}
 	// The Pi bridge serves before saved Pi tabs restore so relaunched
 	// panes provision against a live listener. A nil bridge (listener
 	// failure) leaves every launch on the unmanaged path.
@@ -370,6 +377,11 @@ func main() {
 	http.HandleFunc("/api/pi-bridge/compact", handlePiBridgeCompact)
 	http.HandleFunc("/api/pi-bridge/skills", handlePiBridgeSkills)
 	http.HandleFunc("/api/pi-bridge/skill", handlePiBridgeInvokeSkill)
+	http.HandleFunc("/api/pi-bridge/attachments/context", handlePiBridgeAttachmentContext)
+	http.HandleFunc("/api/pi-bridge/attachments", handlePiBridgeAttachments)
+	http.HandleFunc("/api/attachments/v2/browse", handleAttachmentsV2Browse)
+	http.HandleFunc("/api/attachments/v2/server-items", handleAttachmentsV2ServerItem)
+	http.HandleFunc("/api/attachments/v2/items/", handleAttachmentsV2Item)
 	http.HandleFunc("/api/attachments", handleAttachments)
 	http.HandleFunc("/api/clipboard", handleGetClipboard)
 	http.HandleFunc("/api/system/cpu", handleSystemCPU)

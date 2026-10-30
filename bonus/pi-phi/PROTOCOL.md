@@ -37,13 +37,14 @@ Child environment (exact names):
 | `PHI_PI_BRIDGE_PANE_ID`    | Pane ID                                  |
 | `PHI_PI_BRIDGE_PROCESS_ID` | Process nonce                            |
 | `PHI_PI_BRIDGE_TOKEN`      | 64 lowercase hex chars, 32 bytes         |
+| `PHI_PI_ATTACHMENT_ROOT`   | Absolute private handoff directory for this Pi process |
 
 gRPC metadata carries pane, process, and token on every stream. The
-extension deletes all four variables from `process.env` after reading
-them at session start, so agent-spawned tools cannot inherit them. A
-copy stays in the process owner slot so a reload in the same process
-can reconnect. The token never appears in logs, persistence, argv,
-browser data, or result artifacts.
+extension deletes all five variables from `process.env` after reading
+them at session start, so agent-spawned tools cannot inherit them. The
+process owner slot retains the bridge credentials and handoff root across
+extension reloads in the same process. The token never appears in logs,
+persistence, argv, browser data, or result artifacts.
 
 ## Handshake
 
@@ -78,6 +79,7 @@ Runtime identity binds `(generation, runtime_id, session_id)`:
 | `pi.context.v1`   | Context usage telemetry in snapshots             |
 | `pi.compact.v1`   | Native compaction on explicit user action        |
 | `pi.skills.v1`    | On-demand skill list and skill invocation        |
+| `pi.attachments.v1` | Explicit user-triggered attachment prompt dispatch |
 
 Context and compact negotiate independently on every Hello from
 checked public API availability: `pi.context.v1` needs
@@ -176,6 +178,57 @@ lands in a runtime that replaced the one the list came from. Queue,
 admission, drop, and timeout semantics match history
 reads; Phi shows the picker only while the capability is live and
 shows nothing at all without it.
+
+## Attachment prompt dispatch
+
+`pi.attachments.v1` is advertised only when the provisioned absolute
+`PHI_PI_ATTACHMENT_ROOT` is a checked directory and the public host exposes
+`sendUserMessage`, session identity, `isIdle`, and `hasPendingMessages`.
+Attachment readiness is independent of `pi.compact.v1`; it samples compact
+activity and unresolved bridge work without requiring the Compact API.
+If any required facility is absent, the extension does not advertise this
+capability. Other capabilities and the ordinary Pi input path remain usable.
+
+Phi sends `AttachmentPromptRequest` (field 22) only after an explicit user
+Send action. It contains one complete user message: bounded text plus checked
+references, not file bytes. Each reference carries a generated basename,
+size, MIME type, kind, and SHA-256. The extension accepts basenames only
+inside the provisioned process root; it rejects traversal, symlinks,
+non-regular files, changed size, wrong digest, and unsupported image data.
+`PHI_PI_ATTACHMENT_ROOT` points to
+`<PhiDataDir>/attachments-v2/handoff/<process-id>/`. The host opens a checked
+descriptor and reads at most 25 MiB per file. It never reads a browser path.
+
+PNG and JPEG are the only native image formats. The host sends their bytes as
+Pi image content. A file is represented by labelled text containing its
+JSON-quoted absolute private snapshot path; Pi's ordinary file tools can read
+that snapshot. Unknown or unsupported image types are refused and are never
+silently converted to a path. The current Phi MVP allows one file per send;
+the bridge/runtime bounds are at most eight references and 50 MiB total, with
+64 KiB of UTF-8 prompt text. No image bytes travel in the bridge message.
+
+Before the host call, the extension rechecks runtime, session, leaf, model,
+readiness, and image-input support. Image sends refuse unknown, text-only, or
+`pi-virtual` models. Commands beginning with `/` or `!`, busy/queued work,
+active compaction, and unresolved bridge work are also refused. No attachment
+prompt enters Pi's follow-up queue. One handler may be active per Pi process;
+request IDs are monotonic decimal values retained across reconnects. Duplicate
+or older IDs are refused, and reconnect never replays an operation.
+
+`AttachmentPromptAck` (field 25) echoes the request ID. `REFUSED` means a
+known refusal before `sendUserMessage`. `DISPATCHED` means the public
+`sendUserMessage(content, { expandPromptTemplates: false })` call returned
+normally and Phi received the matching acknowledgment. It does **not** prove
+that Pi accepted the input, that hooks preserved the content, that the model
+received an image, or that a provider completed. A synchronous throw after
+invocation begins, a lost acknowledgment, or peer loss is `UNKNOWN`; it is
+never converted to refusal or retried. Later asynchronous Pi errors cannot be
+correlated to this request. Phi displays “Submitted to Pi,” not “Model
+received images.” Pi's input/context hooks and later model changes can still
+transform the request.
+
+The bridge envelope remains bounded to 256 KiB. The request contains only
+text and references; no base64 or file contents are placed on IPC.
 
 ## Context telemetry
 
@@ -289,6 +342,10 @@ model text.
 | Send queue per peer          | 16 messages and 256 KiB    |
 | Pending history reads per peer | 4 (including awaiting replies) |
 | Pending compact per process    | 1, no waiting queue            |
+| Pending attachment prompt per process | 1, no waiting queue      |
+| Attachment references in one bridge request | 8 max, 50 MiB total |
+| Attachment prompt text         | 64 KiB UTF-8 max               |
+| Attachment handoff file        | 25 MiB max                     |
 | Compact caller wait            | 120 s server, 125 s browser; expiry reports unknown |
 | Blocked send                 | 5 s, then the stream ends  |
 | Journal rows retained        | 64, then gap latches       |
@@ -320,7 +377,8 @@ Other failures retry with bounded backoff on the same generation.
 
 - The packaged-host check covers pinned Pi 1.0.1 and 1.3.0: extension factory,
   `session_start`, `agent_start`, `agent_settled`, `session_shutdown`,
-  `ReadonlySessionManager` identity readers, `ctx.model`.
+  `ReadonlySessionManager` identity readers, `ctx.model`, and interactive
+  attachment dispatch with native image content.
 - The `aborted` bit on `agent_settled` exists on 1.3.0 only. Code must
   read it defensively and behave on 1.0.1 without it. Both hosts
   emit `agent_end` with assistant stop reasons for classification.
@@ -331,7 +389,8 @@ Other failures retry with bounded backoff on the same generation.
 - Both pinned hosts expose the context and compact host APIs in print
   and interactive modes: print runs advertise `pi.compact.v1`,
   `pi.context.v1`, `pi.lifecycle.v1`, `pi.models.v1`; interactive runs
-  add `pi.history.v1`.
+  add `pi.history.v1` and `pi.attachments.v1` when the private handoff root
+  and attachment host APIs are available.
 - Other Pi versions and installed-release behavior with existing user
   profiles remain unverified.
 

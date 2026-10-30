@@ -53,7 +53,8 @@ type lease struct {
 	// retained until its terminal host result, a new runtime
 	// generation, or lease revoke. A departed waiter never clears
 	// it: native work outlives caller timeouts and reconnects.
-	compact *compactOp
+	compact    *compactOp
+	attachment *attachmentPromptOp
 }
 
 type leaseState int
@@ -146,6 +147,7 @@ func (r *registry) revoke(processID string) {
 	l.peer = nil
 	// Process exit releases unresolved Compact work with it.
 	l.compact = nil
+	l.attachment = nil
 	l.mu.Unlock()
 
 	if peer != nil {
