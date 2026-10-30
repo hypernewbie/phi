@@ -129,6 +129,69 @@ test('compact drawer shows the tab tree and a row tap switches tabs', async ({
     await context.close();
 });
 
+test('tapping the terminal dismisses either mobile drawer screen', async ({
+    browser,
+}) => {
+    const { context, page } = await touchPage(browser, 390, 844);
+    try {
+        const sidebar = page.locator('#sidebar-panel');
+        for (const mode of ['tabs', 'sessions']) {
+            await page.locator('#mobile-sidebar-toggle').tap();
+            await expect(sidebar).toHaveClass(/drawer-open/);
+            if (mode === 'sessions') {
+                await page.locator('#drawer-open-sessions').tap();
+            }
+            await expect(sidebar).toHaveAttribute('data-panel-mode', mode);
+            await page.locator('#drawer-panel-title').tap();
+            await expect(sidebar).toHaveClass(/drawer-open/);
+            await expect
+                .poll(() =>
+                    sidebar.evaluate((el) => el.getBoundingClientRect().right),
+                )
+                .toBeGreaterThan(340);
+            expect(
+                await page.evaluate(() =>
+                    Boolean(
+                        document
+                            .elementFromPoint(370, 400)
+                            ?.closest('.terminal-content .xterm'),
+                    ),
+                ),
+            ).toBe(true);
+
+            if (mode === 'tabs') {
+                const cdp = await context.newCDPSession(page);
+                await cdp.send('Input.dispatchTouchEvent', {
+                    type: 'touchStart',
+                    touchPoints: [{ x: 370, y: 440 }],
+                });
+                await cdp.send('Input.dispatchTouchEvent', {
+                    type: 'touchMove',
+                    touchPoints: [{ x: 370, y: 400 }],
+                });
+                await cdp.send('Input.dispatchTouchEvent', {
+                    type: 'touchEnd',
+                    touchPoints: [],
+                });
+                await cdp.detach();
+                await expect(sidebar).toHaveClass(/drawer-open/);
+            }
+
+            await page.touchscreen.tap(370, 400);
+            await expect(sidebar).not.toHaveClass(/drawer-open/);
+        }
+        expect(
+            await page.evaluate(
+                () =>
+                    document.documentElement.scrollWidth -
+                    document.documentElement.clientWidth,
+            ),
+        ).toBeLessThanOrEqual(1);
+    } finally {
+        await context.close();
+    }
+});
+
 test('drawer keys never reach the PTY: Enter activates the row', async ({
     browser,
 }) => {
@@ -249,20 +312,41 @@ test('New or Resume Session swaps to the sessions block, back arrow returns', as
     ).toHaveCount(2);
 });
 
-test('a tab-sized tablet drawer keeps the sessions content', async ({
-    page,
+test('a tablet drawer keeps sessions content and closes on a terminal tap', async ({
+    browser,
 }) => {
-    await openWithTabs(page, 820, 1180);
-
-    await page.locator('#mobile-sidebar-toggle').click();
-    await expect(page.locator('#sidebar-panel')).toHaveClass(/drawer-open/);
-    await expect(page.locator('#sidebar-panel')).toHaveAttribute(
-        'data-panel-mode',
-        'sessions',
-    );
-    await expect(page.locator('#drawer-panel-title')).toHaveText('SESSIONS');
-    await expect(page.locator('.session-list-container')).toBeVisible();
-    await expect(page.locator('#drawer-tabs-body')).toBeHidden();
+    const { context, page } = await touchPage(browser, 820, 1180);
+    try {
+        const sidebar = page.locator('#sidebar-panel');
+        await page.locator('#mobile-sidebar-toggle').tap();
+        await expect(sidebar).toHaveClass(/drawer-open/);
+        await expect(sidebar).toHaveAttribute('data-panel-mode', 'sessions');
+        await expect(page.locator('#drawer-panel-title')).toHaveText(
+            'SESSIONS',
+        );
+        await expect(page.locator('.session-list-container')).toBeVisible();
+        await expect(page.locator('#drawer-tabs-body')).toBeHidden();
+        expect(
+            await page.evaluate(() =>
+                Boolean(
+                    document
+                        .elementFromPoint(700, 400)
+                        ?.closest('.terminal-content .xterm'),
+                ),
+            ),
+        ).toBe(true);
+        await page.touchscreen.tap(700, 400);
+        await expect(sidebar).not.toHaveClass(/drawer-open/);
+        expect(
+            await page.evaluate(
+                () =>
+                    document.documentElement.scrollWidth -
+                    document.documentElement.clientWidth,
+            ),
+        ).toBeLessThanOrEqual(1);
+    } finally {
+        await context.close();
+    }
 });
 
 test('desktop sidebar and tab-bar dropdown are unchanged', async ({ page }) => {

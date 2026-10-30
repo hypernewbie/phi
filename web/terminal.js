@@ -1819,6 +1819,7 @@ export class TabManager {
                 (t.closest('#tab-overflow-dropdown') ||
                     t.closest('#tab-overflow-btn') ||
                     t.closest('#sort-tabs-btn') ||
+                    t.closest('#desktop-sidebar-toggle') ||
                     // The compact drawer holds buttons, not terminal input:
                     // its Enter/Tab must activate and move focus, never
                     // reach the PTY as raw keys.
