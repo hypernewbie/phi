@@ -369,6 +369,11 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
                     session.id,
                     writePiSession(home, cwd, session.id, session.title),
                 );
+                // Close/undo can leave either worktree selected. Both must
+                // contain the session used to check desktop title styling.
+                if (tabCwd !== cwd) {
+                    writePiSession(home, tabCwd, session.id, session.title);
+                }
             }
         },
     });
