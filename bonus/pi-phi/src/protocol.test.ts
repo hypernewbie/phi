@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+    CAPABILITY_ATTACHMENTS,
     CAPABILITY_COMPACT,
     CAPABILITY_CONTEXT,
     CAPABILITY_HISTORY,
@@ -51,6 +52,12 @@ describe('negotiateCapabilities', () => {
         ).toEqual([CAPABILITY_COMPACT, CAPABILITY_CONTEXT]);
         expect(isKnownCapability(CAPABILITY_CONTEXT)).toBe(true);
         expect(isKnownCapability(CAPABILITY_COMPACT)).toBe(true);
+    });
+    it('negotiates attachment capability independently', () => {
+        expect(negotiateCapabilities([CAPABILITY_ATTACHMENTS])).toEqual([
+            CAPABILITY_ATTACHMENTS,
+        ]);
+        expect(isKnownCapability(CAPABILITY_ATTACHMENTS)).toBe(true);
     });
     it('yields empty for empty', () => {
         expect(negotiateCapabilities([])).toEqual([]);

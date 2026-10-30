@@ -29,6 +29,7 @@ import {
     installTerminalLinkProvider,
     serverKey,
     getEmbeddedProfileId,
+    getEmbeddedBackendOrigin,
 } from './util.js';
 import { SNAPSHOT_SCROLLBACK_ROWS } from './backend-store.js';
 import {
@@ -36,6 +37,7 @@ import {
     thinkingPresetTokens,
     THINKING_PRESET_LEVELS,
 } from './thinking-presets.js';
+import { AttachmentStore, attachmentOwnerKey } from './attachment-store.js';
 import {
     applyBrandCpuTier,
     applyTerminalActivityIndicator,
@@ -45,8 +47,18 @@ import {
     extractImageItems,
     extractImageFiles,
     uploadClipboardImage,
+    uploadAttachmentItem,
+    getAttachmentItemStatus,
+    getAttachmentPiContext,
+    sendAttachmentPrompt,
+    getAttachmentSendStatus,
+    browseServerFiles,
+    snapshotServerFile,
+    newAttachmentID,
+    AttachmentRequestError,
     formatChipName,
 } from './attachments.js';
+import { mountDirectoryTree } from './path-picker.js';
 import {
     executeRecipe,
     recipeFor,
@@ -688,7 +700,27 @@ export class TabManager {
         this.inputBarContainer = document.getElementById('input-bar-container');
         this.inputTextArea = document.getElementById('input-textarea');
         this.attachmentStrip = document.getElementById('attachment-strip');
-        this.stagedAttachments = []; // Attachment[] — populated by drop/paste, drained by send
+        this.attachmentStatus = document.getElementById('attachment-status');
+        this.attachInputBtn = document.getElementById('attach-input-btn');
+        this.attachmentFileInput = document.getElementById('attachment-file-input');
+        this.attachmentPhotoInput = document.getElementById('attachment-photo-input');
+        this.attachmentCameraInput = document.getElementById('attachment-camera-input');
+        this.attachmentSourceDropup = document.getElementById('attachment-source-dropup');
+        this.attachmentServerModal = document.getElementById('attach-server-modal');
+        this.attachmentServerTree = document.getElementById('attach-server-modal-tree');
+        this.attachmentServerStatus = document.getElementById('attach-server-modal-status');
+        this._attachmentPickerOwner = null;
+        this._attachmentServerDialog = null;
+        this._attachmentServerCache = new Map();
+        this._attachmentRequestScopes = new Map();
+        this.attachmentStore = new AttachmentStore();
+        this.attachmentStore.bind(this.app?.scope);
+        this._attachmentStorageWarning = this.attachmentStore.storageWarning;
+        this.attachmentStore.subscribe((warning) => {
+            this._attachmentStorageWarning = warning;
+            this._renderAttachmentStatus(this.getActiveTab());
+        });
+        this.stagedAttachments = []; // Legacy and v2 items share the chip strip.
         this.lastCpuPercent = null; // updated by applyCPUIndicator; read by the self-HUD popover
         // Last-seen window dims for classifyGeometryChange. On touch
         // shells a height-only change is the software keyboard, which
@@ -837,7 +869,7 @@ export class TabManager {
         // Network restore, bfcache restore and window focus are the "we may have
         // silently lost the socket" signals. The helper is idempotent (config
         // gate + reconnectInFlight guard), so overlapping firings are harmless.
-        const resumeViewport = () => { this._reviveActiveTabIfDead(); this._queueActiveRefresh(); };
+        const resumeViewport = () => { this._reviveActiveTabIfDead(); this._queueActiveRefresh(); this._wakeAttachmentRecovery(); };
         for (const event of ['online', 'pageshow', 'focus', 'phi:desktop-wake']) window.addEventListener(event, resumeViewport);
         document.addEventListener('resume', resumeViewport);
         document.fonts?.ready?.then(() => this._queueActiveRefresh());
@@ -927,18 +959,19 @@ export class TabManager {
         } catch { return {}; }
     }
 
-    saveTabDraft(tab) {
+    _writeLegacyTabDraft(tab) {
         if (!tab || tab.coder === 'review' || tab.coder === 'kanban') return true;
         const hadRecovery = !!tab.pasteRecovery;
         if (!tab.draft) tab.pasteRecovery = undefined;
+        const legacy = (tab.draftAttachments || []).filter((item) => !item.phiAttachment);
         let saved = false;
         try {
             const key = serverKey(`phi_tab_draft_${tab.paneId}`);
-            if (!tab.draft && !tab.draftAttachments?.length) {
+            if (!tab.draft && !legacy.length) {
                 localStorage.removeItem(key);
                 saved = true;
             } else {
-                const record = {text: tab.draft || '', attachments: tab.draftAttachments || []};
+                const record = {text: tab.draft || '', attachments: legacy};
                 if (tab.pasteRecovery) record.pasteRecovery = tab.pasteRecovery;
                 const serialized = JSON.stringify(record);
                 if (serialized.length <= 1024 * 1024) {
@@ -953,6 +986,88 @@ export class TabManager {
             this._renderInputRestriction();
         }
         return saved;
+    }
+
+    saveTabDraft(tab) {
+        if (!tab || tab.coder === 'review' || tab.coder === 'kanban') return;
+        tab._attachmentEditVersion = (tab._attachmentEditVersion || 0) + 1;
+        this._writeLegacyTabDraft(tab);
+        return this._persistAttachmentDraft(tab);
+    }
+
+    async _persistAttachmentDraft(tab) {
+        const items = (tab?.draftAttachments || []).filter((item) => item.phiAttachment);
+        const owner = tab?._attachmentDraftOwner || items[0]?.owner;
+        if (!tab || tab.coder !== 'pi' || !owner) return null;
+        tab._attachmentDraftOwner = owner;
+        const ownerKey = this._attachmentOwnerKey(owner);
+        const pendingPersists = tab._attachmentPendingPersists || (tab._attachmentPendingPersists = new Map());
+        pendingPersists.set(ownerKey, (pendingPersists.get(ownerKey) || 0) + 1);
+        // Same-tab saves run one at a time. Overlapping persists would
+        // present stale expected revisions to the store and report a false
+        // cross-tab conflict, which blocks Send. An idle tab saves
+        // synchronously, preserving the existing save/upload ordering; a
+        // queued run re-reads fresh items, text, and revision at execution
+        // time. Genuine cross-tab conflicts are still detected by the
+        // store-side revision check.
+        const previous = tab._attachmentPersistChain;
+        const run = previous
+            ? previous.catch(() => {}).then(() => this._runAttachmentDraftPersist(tab, owner))
+            : this._runAttachmentDraftPersist(tab, owner);
+        tab._attachmentPersistChain = run;
+        try {
+            return await run;
+        } finally {
+            const remaining = (pendingPersists.get(ownerKey) || 1) - 1;
+            if (remaining > 0) pendingPersists.set(ownerKey, remaining);
+            else pendingPersists.delete(ownerKey);
+            if (tab._attachmentPersistChain === run) tab._attachmentPersistChain = null;
+        }
+    }
+
+    async _runAttachmentDraftPersist(tab, owner) {
+        const items = (tab?.draftAttachments || []).filter((item) => item.phiAttachment);
+        const expectedRevision = Number.isSafeInteger(tab._attachmentRevision) ? tab._attachmentRevision : 0;
+        const revision = expectedRevision + 1;
+        tab._attachmentRevision = revision;
+        const storedItems = items.map((item) => ({
+            id: item.id,
+            name: item.name,
+            type: item.type || 'application/octet-stream',
+            sizeBytes: item.sizeBytes,
+            kind: item.kind || 'file',
+            sha256: item.sha256 || '',
+            path: item.path || '',
+            uploadState: item.uploadState === 'uploading' ? 'attempted' : item.uploadState || 'waiting',
+            errorReason: item.errorReason || '',
+        }));
+        const blobs = items.flatMap((item) => {
+            const blob = item.file || item.blob;
+            if (!blob || typeof blob.size !== 'number' || typeof blob.slice !== 'function' || blob.size > 25 * 1024 * 1024) return [];
+            return [{ id: item.id, name: item.name, type: item.type || '', sizeBytes: item.sizeBytes, blob }];
+        });
+        const result = await this.attachmentStore.saveDraft(
+            owner,
+            expectedRevision,
+            tab.draft || '',
+            storedItems,
+            blobs,
+        );
+        if (tab._attachmentRevision !== revision) return result;
+        if (result.conflict) {
+            tab._attachmentConflict = true;
+            tab._attachmentNotice = result.warning || 'Draft changed in another tab. Keep this copy open; it was not overwritten.';
+        } else {
+            tab._attachmentConflict = false;
+            tab._attachmentDurable = result.durable;
+            if (result.warning) tab._attachmentNotice = result.warning;
+            else if (
+                tab._attachmentNotice === result.warning ||
+                tab._attachmentNotice === 'Saving attachment to this device…'
+            ) tab._attachmentNotice = '';
+        }
+        this._renderAttachmentStatus(tab);
+        return result;
     }
 
     saveActiveDraft() {
@@ -1893,6 +2008,7 @@ export class TabManager {
         // .input-bar-container (not document) so tab-reorder drags on the
         // tabs strip don't conflict. Paste handler is on #input-textarea
         // so Cmd+V in the terminal pane still flows raw bytes to the PTY.
+        this._initAttachmentControl();
         this._initAttachmentDropZone();
         this._initAttachmentPasteHandler();
         this._initPromptHistoryKeydown();
@@ -2114,6 +2230,11 @@ export class TabManager {
 
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
+                if (this._closeAttachmentOverlays()) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return;
+                }
                 const quickCommands = document.getElementById(
                     'quick-commands-dropup',
                 );
@@ -2127,6 +2248,7 @@ export class TabManager {
                             '#presets-container .preset-btn[title="Open quick commands"]',
                         )
                         ?.focus({ preventScroll: true });
+
                     e.preventDefault();
                     e.stopPropagation();
                     return;
@@ -2216,6 +2338,21 @@ export class TabManager {
                     !e.target.closest('.pi-rpc-skills-trigger')
                 ) {
                     piSkillsDropup.classList.add('hidden');
+                }
+            }
+
+            const attachmentSourceDropup = document.getElementById(
+                'attachment-source-dropup',
+            );
+            if (
+                attachmentSourceDropup &&
+                !attachmentSourceDropup.classList.contains('hidden')
+            ) {
+                if (
+                    !e.target.closest('#attachment-source-dropup') &&
+                    !e.target.closest('#attach-input-btn')
+                ) {
+                    attachmentSourceDropup.classList.add('hidden');
                 }
             }
 
@@ -6907,6 +7044,181 @@ export class TabManager {
         this.thinkingPresetStore?.bind?.(scope);
     }
 
+    _bindAttachmentStore(scope = this.app?.scope) {
+        this.attachmentStore?.bind?.(scope);
+        const active = this.getActiveTab();
+        if (active?.coder === 'pi') void this._restoreAttachmentDraft(active, scope);
+    }
+
+    _attachmentNetworkOffline() {
+        return typeof navigator !== 'undefined' && navigator.onLine === false;
+    }
+
+    _scheduleAttachmentRecovery(tab, owner, scope) {
+        if (
+            !tab || this.getActiveTab() !== tab ||
+            !this.attachmentStore.isActive(owner) ||
+            this._attachmentNetworkOffline() ||
+            tab._attachmentRecoveryTimer
+        ) return;
+        const delays = [1000, 2000, 4000, 8000, 16000, 30000];
+        const attempt = tab._attachmentRecoveryAttempt || 0;
+        const base = delays[Math.min(attempt, delays.length - 1)];
+        const delay = Math.round(base * (0.8 + Math.random() * 0.4));
+        tab._attachmentRecoveryAttempt = attempt + 1;
+        tab._attachmentRecoveryTimer = setTimeout(() => {
+            tab._attachmentRecoveryTimer = null;
+            if (
+                this.getActiveTab() !== tab ||
+                !this.attachmentStore.isActive(owner) ||
+                this._attachmentNetworkOffline()
+            ) return;
+            void this._refreshAttachmentContext(tab, owner, scope);
+            for (const item of tab.draftAttachments || []) {
+                if (item.uploadState === 'attempted' || item.uploadState === 'unknown') void this._checkAttachmentItemStatus(tab, item, scope);
+            }
+            if (tab._attachmentPendingSnapshot?.state === 'unknown') void this._checkAttachmentSendStatus(tab, tab._attachmentPendingSnapshot);
+        }, delay);
+    }
+
+    _cancelAttachmentRecovery(tab) {
+        if (!tab?._attachmentRecoveryTimer) return;
+        clearTimeout(tab._attachmentRecoveryTimer);
+        tab._attachmentRecoveryTimer = null;
+    }
+
+    _wakeAttachmentRecovery(tab = this.getActiveTab()) {
+        if (!tab || tab.coder !== 'pi') return;
+        this._cancelAttachmentRecovery(tab);
+        tab._attachmentRecoveryAttempt = 0;
+        void this._restoreAttachmentDraft(tab, this.app?.scope);
+        const owner = this._captureAttachmentOwner(tab, this.app?.scope);
+        void this._refreshAttachmentContext(tab, owner, this.app?.scope);
+    }
+
+    async _restoreAttachmentDraft(tab, scope = this.app?.scope) {
+        if (!tab || tab.coder !== 'pi' || tab.isDead === true) return;
+        const owner = this._captureAttachmentOwner(tab, scope);
+        const key = this._attachmentOwnerKey(owner);
+        if (tab._attachmentRestoredOwnerKey === key || tab._attachmentRestorePending === key) return;
+        if (tab._attachmentPendingPersists?.get(key)) return;
+        const editVersion = tab._attachmentEditVersion || 0;
+        tab._attachmentRestorePending = key;
+        try {
+            const loaded = await this.attachmentStore.loadDraft(owner);
+            if (
+                this.tabs?.get(tab.paneId) !== tab ||
+                this._attachmentOwnerKey(this._captureAttachmentOwner(tab, this.app?.scope)) !== key ||
+                (tab._attachmentEditVersion || 0) !== editVersion ||
+                tab._attachmentPendingPersists?.get(key)
+            ) return;
+            tab._attachmentDraftOwner = owner;
+            tab._attachmentRestoredOwnerKey = key;
+            tab._attachmentDurable = loaded.durable;
+            if (loaded.draft) {
+                tab._attachmentRevision = loaded.draft.revision;
+                tab.draft = loaded.draft.text;
+                tab.draftAttachments = loaded.draft.items.map((saved) => {
+                    const blob = loaded.blobs.get(saved.id);
+                    let file = null;
+                    try {
+                        if (blob && typeof File === 'function') file = new File([blob], saved.name, { type: saved.type });
+                    } catch { /* Keep metadata; the lost blob is shown as a retained error. */ }
+                    return {
+                        ...saved,
+                        path: saved.path || '',
+                        source: 'device',
+                        phiAttachment: true,
+                        owner,
+                        file,
+                        uploadState: saved.uploadState === 'attempted' ? 'unknown' : saved.uploadState,
+                        errorReason: blob || saved.uploadState === 'ready' ? saved.errorReason : 'storage',
+                    };
+                });
+                for (const item of tab.draftAttachments) {
+                    if (!item.file && item.uploadState !== 'ready') {
+                        item.uploadState = 'error';
+                        item.errorReason = 'storage';
+                    }
+                    this._attachmentRequestScopes.set(item.id, { scope, controller: new AbortController() });
+                }
+                if (this.getActiveTab() === tab && this.attachmentStore.isActive(owner)) {
+                    for (const item of tab.draftAttachments) {
+                        if (item.uploadState === 'waiting' && item.file) void this._startAttachmentUpload(tab, item, scope, false);
+                        else if (item.uploadState === 'attempted' || item.uploadState === 'unknown') void this._checkAttachmentItemStatus(tab, item, scope);
+                    }
+                }
+                if (this.getActiveTab() === tab) {
+                    this.inputTextArea.value = tab.draft || '';
+                    this.lastInputValue = this.inputTextArea.value;
+                    this.stagedAttachments = tab.draftAttachments;
+                    this._renderAttachmentStrip();
+                    this.adjustInputHeight();
+                }
+            } else {
+                tab._attachmentRevision = 0;
+                tab.draftAttachments = tab.draftAttachments || [];
+            }
+            if (!loaded.durable) tab._attachmentNotice = this.attachmentStore.storageWarning || 'Not saved on this device; keep this tab open.';
+            this._renderAttachmentStatus(tab);
+            const outbox = await this.attachmentStore.outboxForOwner(owner);
+            if (this.tabs?.get(tab.paneId) !== tab || this._attachmentOwnerKey(this._captureAttachmentOwner(tab, this.app?.scope)) !== key) return;
+            const orderedOutbox = [...outbox].sort((a, b) => b.updatedAt - a.updatedAt);
+            const lastSubmitted = orderedOutbox.find((record) => record.state === 'dispatched');
+            if (lastSubmitted && !tab._attachmentLastSubmitted) {
+                tab._attachmentLastSubmitted = { ...lastSubmitted, owner, scope, state: 'dispatched' };
+                if (!tab._attachmentNotice) tab._attachmentNotice = 'Submitted to Pi; model receipt is not confirmed.';
+            }
+            const pending = orderedOutbox.find((record) => record.state === 'waiting' || record.state === 'attempted' || record.state === 'unknown' || record.state === 'refused' || record.state === 'cancelled');
+            if (!pending || tab._attachmentPendingSnapshot) {
+                this._renderAttachmentStatus(tab);
+                return;
+            }
+            const blobs = await this.attachmentStore.loadBlobs(owner, pending.items.map((item) => item.id));
+            const items = pending.items.map((saved) => {
+                const blob = blobs.get(saved.id);
+                let file = null;
+                try {
+                    if (blob && typeof File === 'function') file = new File([blob], saved.name, { type: saved.type });
+                } catch { /* The status remains recoverable as metadata. */ }
+                return { ...saved, source: 'device', phiAttachment: true, owner, file, uploadState: saved.uploadState, errorReason: saved.errorReason };
+            });
+            const snapshot = {
+                id: pending.id,
+                pane: pending.paneId,
+                owner,
+                ownerKey: key,
+                draftRevision: pending.revision,
+                scope,
+                context: pending.context,
+                text: pending.text,
+                items,
+                state: pending.state === 'waiting' ? 'sending' : pending.state,
+                outboxState: pending.state,
+                reason: pending.reason,
+            };
+            tab._attachmentPendingSnapshot = snapshot;
+            tab._attachmentNotice = pending.state === 'waiting'
+                ? 'Waiting to submit the saved attachment snapshot.'
+                : pending.state === 'refused'
+                  ? `Pi refused the attachment: ${pending.reason || 'unavailable'}. Restore it to edit and send again.`
+                  : pending.state === 'cancelled'
+                    ? 'Waiting send canceled. Restore it to edit or forget the local copy.'
+                    : 'Submission not confirmed. Check Pi before resending.';
+            this._renderAttachmentStripForTab(tab);
+            this._renderAttachmentStatus(tab);
+            if (pending.state === 'waiting') void this._recoverAttachmentOutbox(tab, snapshot);
+            else if (pending.state === 'attempted' || pending.state === 'unknown') void this._checkAttachmentSendStatus(tab, snapshot);
+        } catch {
+            if (this.tabs?.get(tab.paneId) === tab && (tab._attachmentEditVersion || 0) === editVersion) {
+                tab._attachmentNotice = 'Not saved on this device; keep this tab open.';
+                this._renderAttachmentStatus(tab);
+            }
+        } finally {
+            if (tab._attachmentRestorePending === key) tab._attachmentRestorePending = null;
+        }
+    }
+
     _thinkingFallbackContext(tab) {
         return {
             tab,
@@ -7478,6 +7790,11 @@ export class TabManager {
         // Deactivate current active tab
         const prevTab = this.getActiveTab();
         if (prevTab) {
+            this._cancelAttachmentRecovery(prevTab);
+            if (prevTab._attachmentContextController) prevTab._attachmentContextController.abort();
+            for (const item of prevTab.draftAttachments || []) {
+                if (item.uploadState === 'uploading') this._attachmentRequestScopes.get(item.id)?.controller?.abort();
+            }
             if (prevTab.term) {
                 prevTab.isAtBottom =
                     prevTab.term.buffer.active.viewportY >=
@@ -7509,6 +7826,7 @@ export class TabManager {
         const newTab = this.getActiveTab();
         if (!newTab) return;
         this._setPiRpcActionVisibility(newTab);
+        this._updateAttachmentControl(newTab);
 
         newTab.tabEl.classList.add('active');
         newTab.termContainer.classList.add('active');
@@ -9127,6 +9445,947 @@ export class TabManager {
         return true;
     }
 
+    _initAttachmentControl() {
+        this.attachInputBtn?.addEventListener('click', () => {
+            const tab = this.getActiveTab();
+            if (!tab || tab.coder !== 'pi') return;
+            if (tab.directMode) {
+                tab.directMode = false;
+                this.updateDirectModeUI(tab);
+            }
+            const scope = this.app?.scope || null;
+            this._attachmentPickerOwner = {
+                tab,
+                scope,
+                owner: this._captureAttachmentOwner(tab, scope),
+            };
+            this._toggleDropup(
+                'attachment-source-dropup',
+                this.attachInputBtn,
+                () => this._renderAttachmentSourceDropup(),
+            );
+        });
+        this.attachmentFileInput?.addEventListener('change', () => {
+            this._takeAttachmentPickerFiles(this.attachmentFileInput);
+        });
+        this.attachmentPhotoInput?.addEventListener('change', () => {
+            this._takeAttachmentPickerFiles(this.attachmentPhotoInput);
+        });
+        this.attachmentCameraInput?.addEventListener('change', () => {
+            this._takeAttachmentPickerFiles(this.attachmentCameraInput);
+        });
+        document.getElementById('attach-server-modal-close')?.addEventListener('click', () => {
+            this._closeAttachmentServerModal();
+        });
+        document.getElementById('attach-server-modal-cancel-btn')?.addEventListener('click', () => {
+            this._closeAttachmentServerModal();
+        });
+        this.attachmentServerModal?.addEventListener('click', (event) => {
+            if (event.target === this.attachmentServerModal) this._closeAttachmentServerModal();
+        });
+        this._updateAttachmentControl(this.getActiveTab());
+    }
+
+    _renderAttachmentSourceDropup() {
+        const dropup = this.attachmentSourceDropup;
+        const selection = this._attachmentPickerOwner;
+        if (!dropup || !selection) return;
+        const mobile = prefersInputBarFocus();
+        const header = document.createElement('div');
+        header.className = 'dropup-header';
+        header.textContent = 'Attach from';
+        dropup.replaceChildren(header);
+        const sources = mobile
+            ? [
+                { label: 'Photos', input: this.attachmentPhotoInput },
+                { label: 'Take Photo', input: this.attachmentCameraInput },
+                { label: 'Files', input: this.attachmentFileInput },
+              ]
+            : [
+                { label: 'Device Files', input: this.attachmentFileInput },
+              ];
+        for (const source of sources) {
+            const row = document.createElement('div');
+            row.className = 'dropup-row';
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'dropup-model-btn';
+            btn.textContent = source.label;
+            btn.setAttribute('role', 'menuitem');
+            btn.addEventListener('click', () => {
+                // The native picker must open in this user activation.
+                // Do not await bridge state or an upload before click().
+                dropup.classList.add('hidden');
+                if (!source.input) return;
+                source.input.value = '';
+                source.input.click();
+            });
+            row.appendChild(btn);
+            dropup.appendChild(row);
+        }
+        if (!mobile) {
+            const row = document.createElement('div');
+            row.className = 'dropup-row';
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'dropup-model-btn';
+            btn.textContent = 'Server Files';
+            btn.setAttribute('role', 'menuitem');
+            btn.addEventListener('click', () => {
+                dropup.classList.add('hidden');
+                this._openAttachmentServerModal(
+                    selection.tab,
+                    selection.owner,
+                    selection.scope,
+                );
+            });
+            row.appendChild(btn);
+            dropup.appendChild(row);
+        }
+    }
+
+    _takeAttachmentPickerFiles(input) {
+        const files = input?.files ? Array.from(input.files) : [];
+        const selection = this._attachmentPickerOwner;
+        this._attachmentPickerOwner = null;
+        if (input) input.value = '';
+        // Cancellation changes nothing: an empty selection keeps the draft.
+        if (files.length === 0 || !selection) return;
+        this._stageDeviceAttachments(
+            selection.tab,
+            selection.owner,
+            selection.scope,
+            files,
+        );
+    }
+
+    _closeAttachmentSourceDropup() {
+        const dropup = this.attachmentSourceDropup;
+        if (!dropup || dropup.classList.contains('hidden')) return false;
+        dropup.classList.add('hidden');
+        return true;
+    }
+
+    _closeAttachmentOverlays() {
+        let changed = this._closeAttachmentSourceDropup();
+        if (this.attachmentServerModal && !this.attachmentServerModal.classList.contains('hidden')) {
+            this._closeAttachmentServerModal();
+            changed = true;
+        }
+        return changed;
+    }
+
+    _openAttachmentServerModal(tab, owner, scope) {
+        const modal = this.attachmentServerModal;
+        const host = this.attachmentServerTree;
+        if (!modal || !host || this.tabs?.get(owner.paneId) !== tab) return;
+        const generation = (this._attachmentServerGeneration || 0) + 1;
+        this._attachmentServerGeneration = generation;
+        const selection = { tab, owner, scope, generation };
+        this._attachmentServerSelection = selection;
+        this._attachmentServerEntries = new Map();
+        try { this._attachmentServerTree?.destroy?.(); } catch {}
+        this._attachmentServerTree = null;
+        modal.classList.remove('hidden');
+        this._setAttachmentServerStatus('');
+        this._attachmentServerTree = mountDirectoryTree(host, {
+            startPath: owner.cwd || tab.cwd || '~',
+            files: true,
+            browse: (path) => this._browseAttachmentServer(selection, path),
+            onSelect: (path) => this._selectAttachmentServerFile(selection, path),
+        });
+        document.getElementById('attach-server-modal-cancel-btn')?.focus({ preventScroll: true });
+    }
+
+    _closeAttachmentServerModal() {
+        this._attachmentServerGeneration = (this._attachmentServerGeneration || 0) + 1;
+        this._attachmentServerSelection = null;
+        try { this._attachmentServerTree?.destroy?.(); } catch {}
+        this._attachmentServerTree = null;
+        this.attachmentServerModal?.classList.add('hidden');
+        if (this.attachInputBtn?.isConnected) this.attachInputBtn.focus({ preventScroll: true });
+    }
+
+    _setAttachmentServerStatus(text) {
+        if (this.attachmentServerStatus) this.attachmentServerStatus.textContent = text || '';
+    }
+
+    _attachmentServerCacheKey(owner, path) {
+        return `phi_attach_browse_${this._attachmentOwnerKey(owner)} ${path}`;
+    }
+
+    _readAttachmentServerCache(owner, path) {
+        const memoryKey = `${this._attachmentOwnerKey(owner)} ${path}`;
+        const memory = this._attachmentServerMemory?.get(memoryKey);
+        if (memory?.listing && Array.isArray(memory.listing.entries)) return memory;
+        try {
+            const raw = localStorage.getItem(this._attachmentServerCacheKey(owner, path));
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            if (!parsed?.listing || !Array.isArray(parsed.listing.entries)) return null;
+            return parsed;
+        } catch {
+            return null;
+        }
+    }
+
+    async _browseAttachmentServer(selection, path) {
+        const record = (listing) => {
+            for (const entry of listing.entries || []) {
+                if (entry && entry.kind === 'file' && typeof entry.path === 'string') {
+                    this._attachmentServerEntries.set(entry.path, entry);
+                }
+            }
+        };
+        const current = () => this._attachmentServerSelection === selection;
+        const serveCached = (why) => {
+            const cached = this._readAttachmentServerCache(selection.owner, path);
+            if (!cached) return null;
+            record(cached.listing);
+            if (current()) this._setAttachmentServerStatus(`${why} Showing a cached listing.`);
+            return cached.listing;
+        };
+        if (this._attachmentNetworkOffline()) {
+            const cached = serveCached('Offline.');
+            if (cached) return cached;
+            throw new Error('offline');
+        }
+        try {
+            const listing = await browseServerFiles({ ...selection.owner, scope: selection.scope }, path);
+            record(listing);
+            const cached = { at: Date.now(), listing };
+            if (!this._attachmentServerMemory) this._attachmentServerMemory = new Map();
+            this._attachmentServerMemory.set(`${this._attachmentOwnerKey(selection.owner)} ${path}`, cached);
+            try {
+                const raw = JSON.stringify(cached);
+                if (raw.length < 200000) localStorage.setItem(this._attachmentServerCacheKey(selection.owner, path), raw);
+            } catch {}
+            if (current()) this._setAttachmentServerStatus(listing.truncated ? 'Showing the first entries; the listing was truncated.' : '');
+            return listing;
+        } catch (error) {
+            const cached = serveCached('Refresh failed.');
+            if (cached) return cached;
+            throw error;
+        }
+    }
+
+    _selectAttachmentServerFile(selection, path) {
+        if (this._attachmentServerSelection !== selection) return;
+        const entry = this._attachmentServerEntries.get(path);
+        if (!entry || entry.kind !== 'file' || !entry.fingerprint) return;
+        this._closeAttachmentServerModal();
+        this._stageServerAttachment(selection.tab, selection.owner, selection.scope, entry);
+    }
+
+    _stageServerAttachment(tab, owner, scope, entry) {
+        if (this.tabs?.get(owner.paneId) !== tab || tab.isDead === true) {
+            this.app?.showToast?.('The original Pi pane is no longer available.', { type: 'error' });
+            return;
+        }
+        tab._attachmentDraftOwner = owner;
+        const current = Array.isArray(tab.draftAttachments)
+            ? tab.draftAttachments.slice()
+            : [];
+        const staged = current.filter((attachment) => attachment.phiAttachment);
+        const stagedBytes = staged.reduce((sum, attachment) => sum + (attachment.sizeBytes || 0), 0);
+        const size = Number.isFinite(entry.sizeBytes) ? entry.sizeBytes : 0;
+        const item = {
+            id: newAttachmentID(),
+            name: entry.name || 'attachment',
+            path: '',
+            type: 'application/octet-stream',
+            sizeBytes: size,
+            kind: 'file',
+            sha256: '',
+            source: 'server',
+            phiAttachment: true,
+            uploadState: 'waiting',
+            errorReason: '',
+            serverPath: entry.path,
+            serverFingerprint: entry.fingerprint,
+            owner,
+        };
+        if (size > 25 * 1024 * 1024 || staged.length >= 8 || stagedBytes + size > 50 * 1024 * 1024) {
+            item.uploadState = 'error';
+            item.errorReason = 'limit';
+        }
+        current.push(item);
+        tab.draftAttachments = current;
+        if (this.getActiveTab() === tab) {
+            this.stagedAttachments = current;
+            if (this.inputTextArea) {
+                tab.draft = this.inputTextArea.value;
+            }
+            this._renderAttachmentStrip();
+        } else if (this.inputTextArea) {
+            tab.draft = this.inputTextArea.value;
+        }
+        tab._attachmentNotice = this._attachmentStorageWarning || 'Saving attachment to this device…';
+        this._renderAttachmentStatus(tab);
+        const save = this.saveTabDraft(tab);
+        if (item.uploadState === 'error') {
+            this._attachmentToast('Each file is limited to 25 MiB, with at most 8 files and 50 MiB per send.');
+            return;
+        }
+        void this._refreshAttachmentContext(tab, owner, scope);
+        void Promise.resolve(save).then(async (result) => {
+            if (!this._attachmentItemIsCurrent(tab, item)) return;
+            if (result?.conflict) {
+                item.uploadState = 'error';
+                item.errorReason = 'storage';
+                this._saveAttachmentTab(tab);
+                return;
+            }
+            void this._snapshotServerAttachment(tab, item, scope);
+        });
+    }
+
+    async _snapshotServerAttachment(tab, item, scope) {
+        if (!item?.owner || !item.serverPath || !item.serverFingerprint || !this._attachmentItemIsCurrent(tab, item)) return;
+        if (
+            this.getActiveTab() !== tab ||
+            !this.attachmentStore.isActive(item.owner) ||
+            !this._attachmentOwnerCurrent(tab, item.owner, scope)
+        ) {
+            tab._attachmentNotice = 'Upload is parked for its original Phi backend. Switch back to continue.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        if (this._attachmentNetworkOffline()) {
+            item.uploadState = 'unknown';
+            item.errorReason = 'uncertain';
+            tab._attachmentNotice = 'Upload is waiting for a network connection. Your draft is still here.';
+            this._saveAttachmentTab(tab);
+            return;
+        }
+        // Staging leaves the item waiting while the direct snapshot call
+        // and a context-refresh recovery race to start it; the pending
+        // flag serializes them like _attachmentUploadPending does.
+        if (item._attachmentSnapshotPending) return;
+        item._attachmentSnapshotPending = true;
+        // The server admits two concurrent ingestions (device PUT or
+        // server snapshot) per its store pool; extras stay waiting and
+        // start as slots free, so a batch is never refused by its own
+        // concurrency. The take is synchronous: starters run their guard
+        // prefix without awaiting, so the pump loop sees each taken slot.
+        if (!this._takeAttachmentIngestSlot(tab)) {
+            item._attachmentSnapshotPending = false;
+            item.uploadState = 'waiting';
+            item.errorReason = '';
+            this._saveAttachmentTab(tab);
+            return;
+        }
+        const controller = new AbortController();
+        this._attachmentRequestScopes.set(item.id, { scope, controller });
+        item.uploadState = 'uploading';
+        item.errorReason = '';
+        this._saveAttachmentTab(tab);
+        try {
+            const snap = await snapshotServerFile(
+                { ...item.owner, scope },
+                { id: item.id, path: item.serverPath, fingerprint: item.serverFingerprint },
+                controller.signal,
+            );
+            if (!this._attachmentItemIsCurrent(tab, item)) return;
+            Object.assign(item, {
+                name: snap.name || item.name,
+                path: snap.path || '',
+                type: snap.mimeType || snap.type || item.type,
+                sizeBytes: snap.sizeBytes ?? item.sizeBytes,
+                kind: snap.kind || 'file',
+                sha256: snap.sha256 || '',
+                uploadState: 'ready',
+                errorReason: '',
+            });
+            this._saveAttachmentTab(tab);
+        } catch (error) {
+            if (!this._attachmentItemIsCurrent(tab, item)) return;
+            if (error instanceof AttachmentRequestError && error.uncertain) {
+                item.uploadState = 'unknown';
+                item.errorReason = 'uncertain';
+            } else {
+                item.uploadState = 'error';
+                item.errorReason = error instanceof AttachmentRequestError ? error.reason : 'unavailable';
+            }
+            this._saveAttachmentTab(tab);
+        } finally {
+            item._attachmentSnapshotPending = false;
+            this._releaseAttachmentIngestSlot(tab, scope);
+        }
+    }
+
+    _takeAttachmentIngestSlot(tab) {
+        const active = tab._attachmentIngestActive || 0;
+        if (active >= 2) return false;
+        tab._attachmentIngestActive = active + 1;
+        return true;
+    }
+
+    _releaseAttachmentIngestSlot(tab, scope) {
+        tab._attachmentIngestActive = Math.max(0, (tab._attachmentIngestActive || 1) - 1);
+        this._pumpAttachmentIngest(tab, scope);
+    }
+
+    _pumpAttachmentIngest(tab, scope) {
+        if (!tab || this.getActiveTab() !== tab) return;
+        for (const item of tab.draftAttachments || []) {
+            if (!item.phiAttachment || item.uploadState !== 'waiting') continue;
+            if ((tab._attachmentIngestActive || 0) >= 2) return;
+            if (item.file) {
+                const queued = item._attachmentQueuedExplicit === true;
+                item._attachmentQueuedExplicit = false;
+                void this._startAttachmentUpload(tab, item, scope, queued);
+            }
+            else if (item.serverPath) void this._snapshotServerAttachment(tab, item, scope);
+        }
+    }
+
+    async _retryServerAttachment(tab, item) {
+        if (!item?.owner || !item.serverPath || !this._attachmentItemIsCurrent(tab, item)) return;
+        const scope = this.app?.scope || null;
+        if (!this._attachmentOwnerCurrent(tab, item.owner, scope)) {
+            tab._attachmentNotice = 'This upload belongs to another Phi backend. Switch back to check it.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        void this._snapshotServerAttachment(tab, item, scope);
+    }
+
+    _captureAttachmentOwner(tab, scope = this.app?.scope || null) {
+        return {
+            profileId: scope?.profileId || getEmbeddedProfileId() || '',
+            origin:
+                scope?.origin ||
+                getEmbeddedBackendOrigin() ||
+                (typeof window !== 'undefined' ? window.location.origin : ''),
+            paneId: tab.paneId,
+            cwd: tab.cwd || this.app?.sessionsManager?.activeCWD || '',
+        };
+    }
+
+    _attachmentOwnerKey(owner) {
+        return JSON.stringify([
+            owner.profileId,
+            owner.origin,
+            owner.paneId,
+            owner.cwd,
+        ]);
+    }
+
+    _attachmentOwnerCurrent(tab, owner, scope) {
+        if (
+            !tab ||
+            tab.isDead === true ||
+            this.tabs?.get(owner.paneId) !== tab ||
+            tab.paneId !== owner.paneId ||
+            scope?.signal?.aborted
+        )
+            return false;
+        const currentProfile =
+            this.app?.scope?.profileId || getEmbeddedProfileId() || '';
+        const currentOrigin =
+            this.app?.scope?.origin ||
+            getEmbeddedBackendOrigin() ||
+            (typeof window !== 'undefined' ? window.location.origin : '');
+        return currentProfile === owner.profileId && currentOrigin === owner.origin;
+    }
+
+    _updateAttachmentControl(tab) {
+        if (!this.attachInputBtn) return;
+        this.attachInputBtn.classList.toggle('hidden', tab?.coder !== 'pi');
+        if (tab?.coder === 'pi') void this._restoreAttachmentDraft(tab, this.app?.scope);
+        if (
+            tab?.coder === 'pi' &&
+            tab.piBridge?.connected === true &&
+            (tab.piBridge.capabilities || []).includes('pi.attachments.v1')
+        ) {
+            void this._refreshAttachmentContext(
+                tab,
+                this._captureAttachmentOwner(tab),
+                this.app?.scope,
+            );
+        }
+        this._renderAttachmentStatus(tab);
+    }
+
+    _renderAttachmentStatus(tab = this.getActiveTab()) {
+        const el = this.attachmentStatus;
+        if (!el || this.getActiveTab() !== tab) return;
+        if (!tab || tab.coder !== 'pi') {
+            el.replaceChildren();
+            el.classList.add('hidden');
+            return;
+        }
+        const snapshot = tab._attachmentPendingSnapshot;
+        const message = snapshot
+            ? snapshot.state === 'sending'
+                ? snapshot.outboxState === 'waiting'
+                    ? 'Waiting to send the saved attachment snapshot.'
+                    : 'Submitting attachment to Pi…'
+                : snapshot.state === 'unknown'
+                  ? 'Submission not confirmed. Check Pi before resending.'
+                  : snapshot.state === 'refused'
+                    ? `Pi refused the attachment: ${snapshot.reason || 'unavailable'}. Restore it to edit and send again.`
+                    : snapshot.state === 'cancelled'
+                      ? 'Waiting send canceled. Restore it to edit or forget the local copy.'
+                      : tab._attachmentNotice || ''
+            : tab._attachmentNotice || '';
+        el.replaceChildren();
+        if (!message) {
+            el.classList.add('hidden');
+            return;
+        }
+        el.classList.remove('hidden');
+        const label = document.createElement('span');
+        label.textContent = message;
+        el.appendChild(label);
+        if (snapshot?.outboxState === 'waiting' && snapshot.id) {
+            const cancel = document.createElement('button');
+            cancel.type = 'button';
+            cancel.className = 'btn btn-primary attachment-status-action';
+            cancel.textContent = 'Cancel waiting send';
+            cancel.addEventListener('click', () => void this._cancelWaitingAttachmentSnapshot(tab, snapshot));
+            el.appendChild(cancel);
+        }
+        if (snapshot?.state === 'unknown') {
+            const check = document.createElement('button');
+            check.type = 'button';
+            check.className = 'btn btn-primary attachment-status-action';
+            check.textContent = 'Check status';
+            check.addEventListener('click', () =>
+                void this._checkAttachmentSendStatus(tab, snapshot),
+            );
+            el.appendChild(check);
+            const restore = document.createElement('button');
+            restore.type = 'button';
+            restore.className = 'btn btn-primary attachment-status-action';
+            restore.textContent = 'Restore to draft';
+            restore.addEventListener('click', () =>
+                this._restoreAttachmentSnapshot(tab, snapshot, true),
+            );
+            el.appendChild(restore);
+            this._appendForgetAttachmentButton(el, tab, snapshot);
+        } else if (snapshot?.state === 'refused' || snapshot?.state === 'cancelled') {
+            const restore = document.createElement('button');
+            restore.type = 'button';
+            restore.className = 'btn btn-primary attachment-status-action';
+            restore.textContent = 'Restore to draft';
+            restore.addEventListener('click', () =>
+                this._restoreAttachmentSnapshot(tab, snapshot, false),
+            );
+            el.appendChild(restore);
+            this._appendForgetAttachmentButton(el, tab, snapshot);
+        } else if (tab._attachmentLastSubmitted) {
+            const restore = document.createElement('button');
+            restore.type = 'button';
+            restore.className = 'btn btn-primary attachment-status-action';
+            restore.textContent = 'Restore to draft';
+            restore.addEventListener('click', () =>
+                this._restoreAttachmentSnapshot(tab, tab._attachmentLastSubmitted, true),
+            );
+            el.appendChild(restore);
+            this._appendForgetAttachmentButton(el, tab, tab._attachmentLastSubmitted);
+        }
+    }
+
+    _appendForgetAttachmentButton(el, tab, snapshot) {
+        const forget = document.createElement('button');
+        forget.type = 'button';
+        forget.className = 'btn btn-primary attachment-status-action';
+        forget.textContent = 'Forget local copy';
+        forget.addEventListener('click', () => void this._forgetAttachmentSnapshot(tab, snapshot));
+        el.appendChild(forget);
+    }
+
+    async _cancelWaitingAttachmentSnapshot(tab, snapshot) {
+        if (tab._attachmentPendingSnapshot !== snapshot || snapshot.outboxState !== 'waiting') return;
+        if (!await this.attachmentStore.cancelWaitingSend(snapshot.id)) return;
+        snapshot.state = 'cancelled';
+        snapshot.outboxState = 'cancelled';
+        snapshot.reason = 'cancelled';
+        tab._attachmentNotice = 'Waiting send canceled. Restore it to edit or forget the local copy.';
+        this._renderAttachmentStatus(tab);
+    }
+
+    async _forgetAttachmentSnapshot(tab, snapshot) {
+        if ((tab._attachmentPendingSnapshot !== snapshot && tab._attachmentLastSubmitted !== snapshot) || !window.confirm('Forget the local attachment copy? This cannot be undone and does not delete the server file.')) return;
+        if (snapshot.id && !await this.attachmentStore.forgetOutbox(snapshot.id)) {
+            tab._attachmentNotice = this.attachmentStore.storageWarning || 'The local copy could not be forgotten.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        if (tab._attachmentPendingSnapshot === snapshot) tab._attachmentPendingSnapshot = null;
+        if (tab._attachmentLastSubmitted === snapshot) tab._attachmentLastSubmitted = null;
+        tab._attachmentNotice = 'Local attachment copy forgotten. This does not delete the server-side file.';
+        this._renderAttachmentStripForTab(tab);
+        this._renderAttachmentStatus(tab);
+    }
+
+    _stageDeviceAttachments(tab, owner, scope, files) {
+        if (this.tabs?.get(owner.paneId) !== tab || tab.isDead === true) {
+            this.app?.showToast?.('The original Pi pane is no longer available.', { type: 'error' });
+            return;
+        }
+        tab._attachmentDraftOwner = owner;
+        const current = Array.isArray(tab.draftAttachments)
+            ? tab.draftAttachments.slice()
+            : [];
+        let stagedCount = current.filter((attachment) => attachment.phiAttachment).length;
+        let stagedBytes = current.reduce((sum, attachment) => attachment.phiAttachment ? sum + (attachment.sizeBytes || 0) : sum, 0);
+        const staged = [];
+        let limited = false;
+        for (const file of files) {
+            const item = {
+                id: newAttachmentID(),
+                name: file.name || 'attachment',
+                path: '',
+                type: file.type || 'application/octet-stream',
+                sizeBytes: file.size,
+                kind: 'file',
+                sha256: '',
+                source: 'device',
+                phiAttachment: true,
+                uploadState: 'waiting',
+                errorReason: '',
+                file,
+                owner,
+            };
+            if (file.size > 25 * 1024 * 1024 || stagedCount >= 8 || stagedBytes + file.size > 50 * 1024 * 1024) {
+                item.uploadState = 'error';
+                item.errorReason = 'limit';
+                limited = true;
+            } else {
+                stagedCount += 1;
+                stagedBytes += file.size;
+                staged.push(item);
+            }
+            current.push(item);
+        }
+        tab.draftAttachments = current;
+        if (this.getActiveTab() === tab) {
+            this.stagedAttachments = current;
+            if (this.inputTextArea) {
+                tab.draft = this.inputTextArea.value;
+            }
+            this._renderAttachmentStrip();
+        } else if (this.inputTextArea) {
+            tab.draft = this.inputTextArea.value;
+        }
+        tab._attachmentNotice = this._attachmentStorageWarning || 'Saving attachment to this device…';
+        this._renderAttachmentStatus(tab);
+        const save = this.saveTabDraft(tab);
+        if (limited) {
+            this._attachmentToast('Each file is limited to 25 MiB, with at most 8 files and 50 MiB per send.');
+        }
+        if (staged.length === 0) return;
+        void this._refreshAttachmentContext(tab, owner, scope);
+        void Promise.resolve(save).then(async (result) => {
+            for (const item of staged) {
+                if (!this._attachmentItemIsCurrent(tab, item)) continue;
+                if (result?.conflict) {
+                    item.uploadState = 'error';
+                    item.errorReason = 'storage';
+                    this._saveAttachmentTab(tab);
+                    continue;
+                }
+                void this._startAttachmentUpload(tab, item, scope, true);
+            }
+        });
+    }
+
+    async _startAttachmentUpload(tab, item, scope, explicit) {
+        if (!item?.owner || !item.file || !this._attachmentItemIsCurrent(tab, item)) return;
+        if (
+            this.getActiveTab() !== tab ||
+            !this.attachmentStore.isActive(item.owner) ||
+            !this._attachmentOwnerCurrent(tab, item.owner, scope)
+        ) {
+            tab._attachmentNotice = 'Upload is parked for its original Phi backend. Switch back to continue.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        if (this._attachmentNetworkOffline()) {
+            tab._attachmentNotice = 'Upload is waiting for a network connection. Your draft is still here.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        if (item._attachmentUploadPending) return;
+        item._attachmentUploadPending = true;
+        if (!this._takeAttachmentIngestSlot(tab)) {
+            item._attachmentUploadPending = false;
+            // A queued explicit request (picker selection, Retry) keeps
+            // its explicit intent: deferral is a local slot limit, not a
+            // background retry. Background starters stay non-explicit so
+            // memory-only auto-flush still pauses per M2.
+            if (explicit) item._attachmentQueuedExplicit = true;
+            return;
+        }
+        item._attachmentQueuedExplicit = false;
+        try {
+            const claim = await this.attachmentStore.claimUpload(item.owner, item.id, explicit);
+            if (!claim.claimed) {
+                void this._checkAttachmentItemStatus(tab, item, scope);
+                return;
+            }
+            const controller = new AbortController();
+            this._attachmentRequestScopes.set(item.id, { scope, controller });
+            item.uploadState = 'uploading';
+            item.errorReason = '';
+            this._saveAttachmentTab(tab);
+            await this._uploadDeviceAttachment(tab, item, scope, controller);
+        } finally {
+            item._attachmentUploadPending = false;
+            this._releaseAttachmentIngestSlot(tab, scope);
+        }
+    }
+
+    _attachmentItemIsCurrent(tab, item) {
+        return (
+            this.tabs?.get(item.owner.paneId) === tab &&
+            (tab.draftAttachments || []).some((candidate) => candidate.id === item.id)
+        );
+    }
+
+    async _uploadDeviceAttachment(tab, item, scope, controller) {
+        const requestOwner = { ...item.owner, scope };
+        try {
+            const uploaded = await uploadAttachmentItem(
+                item.file,
+                item.id,
+                requestOwner,
+                controller.signal,
+            );
+            if (!this._attachmentItemIsCurrent(tab, item)) return;
+            Object.assign(item, uploaded, {
+                phiAttachment: true,
+                source: 'device',
+                uploadState: 'ready',
+                file: item.file,
+                owner: item.owner,
+            });
+            this._saveAttachmentTab(tab);
+        } catch (error) {
+            if (!this._attachmentItemIsCurrent(tab, item)) return;
+            if (error instanceof AttachmentRequestError && error.uncertain) {
+                if (this.getActiveTab() === tab && this._attachmentOwnerCurrent(tab, item.owner, scope)) {
+                    await this._checkAttachmentItemStatus(tab, item, scope);
+                } else {
+                    item.uploadState = 'unknown';
+                    item.errorReason = 'uncertain';
+                    this._saveAttachmentTab(tab);
+                }
+                return;
+            }
+            item.uploadState = 'error';
+            item.errorReason =
+                error instanceof AttachmentRequestError
+                    ? error.reason
+                    : 'unavailable';
+            this._saveAttachmentTab(tab);
+        }
+    }
+
+    async _checkAttachmentItemStatus(tab, item, scope = this.app?.scope) {
+        if (
+            this.getActiveTab() !== tab ||
+            this._attachmentNetworkOffline() ||
+            !item?.owner ||
+            !this._attachmentItemIsCurrent(tab, item)
+        ) return;
+        if (!this._attachmentOwnerCurrent(tab, item.owner, scope)) {
+            tab._attachmentNotice = 'This upload belongs to another Phi backend. Switch back to check it.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        if (item._attachmentStatusPending) return;
+        item._attachmentStatusPending = true;
+        try {
+            const status = await getAttachmentItemStatus(item.id, { ...item.owner, scope });
+            if (!this._attachmentItemIsCurrent(tab, item)) return;
+            if (status.state === 'ready' && status.item) {
+                Object.assign(item, status.item, { phiAttachment: true, source: 'device', uploadState: 'ready', owner: item.owner });
+            } else if (status.state === 'receiving') {
+                item.uploadState = 'attempted';
+                item.errorReason = '';
+                this._scheduleAttachmentRecovery(tab, item.owner, scope);
+            } else {
+                item.uploadState = 'unknown';
+                item.errorReason = 'uncertain';
+                this._scheduleAttachmentRecovery(tab, item.owner, scope);
+            }
+        } catch {
+            if (!this._attachmentItemIsCurrent(tab, item)) return;
+            item.uploadState = 'unknown';
+            item.errorReason = 'uncertain';
+            this._scheduleAttachmentRecovery(tab, item.owner, scope);
+        } finally {
+            item._attachmentStatusPending = false;
+        }
+        this._saveAttachmentTab(tab);
+    }
+
+    async _retryDeviceAttachment(tab, item) {
+        if (item?.source === 'server') {
+            void this._retryServerAttachment(tab, item);
+            return;
+        }
+        if (!item?.owner || !item.file || !this._attachmentItemIsCurrent(tab, item)) return;
+        const scope = this.app?.scope || null;
+        if (!this._attachmentOwnerCurrent(tab, item.owner, scope)) {
+            tab._attachmentNotice = 'This upload belongs to another Phi backend. Switch back to check it.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        void this._startAttachmentUpload(tab, item, scope, true);
+    }
+
+    _saveAttachmentTab(tab) {
+        this.saveTabDraft(tab);
+        if (this.getActiveTab() === tab) {
+            this.stagedAttachments = tab.draftAttachments || [];
+            this._renderAttachmentStrip();
+            this.adjustInputHeight();
+        }
+        this._renderAttachmentStatus(tab);
+    }
+
+    async _refreshAttachmentContext(tab, owner, scope) {
+        const key = this._attachmentOwnerKey(owner);
+        if (this._attachmentNetworkOffline()) {
+            tab._attachmentContextNeedsRefresh = true;
+            return;
+        }
+        if (this.getActiveTab() !== tab || !this.attachmentStore.isActive(owner)) {
+            tab._attachmentContextNeedsRefresh = true;
+            return;
+        }
+        // Tab restoration may briefly activate the first row before restoring
+        // the saved active pane. Defer one microtask so that transient tab does
+        // not start a request that switchTab would immediately abort.
+        await Promise.resolve();
+        if (
+            this.getActiveTab() !== tab ||
+            !this.attachmentStore.isActive(owner) ||
+            !this._attachmentOwnerCurrent(tab, owner, scope)
+        ) {
+            tab._attachmentContextNeedsRefresh = true;
+            return;
+        }
+        if (tab._attachmentContextPending === key) return;
+        const controller = new AbortController();
+        tab._attachmentContextController = controller;
+        tab._attachmentContextPending = key;
+        tab._attachmentContextNeedsRefresh = false;
+        try {
+            const context = await getAttachmentPiContext({ ...owner, scope }, controller.signal);
+            if (
+                this.tabs?.get(owner.paneId) !== tab ||
+                this._attachmentOwnerKey(this._captureAttachmentOwner(tab)) !== key
+            )
+                return;
+            tab._attachmentContext = context;
+            tab._attachmentContextOwnerKey = key;
+            if (context.available) {
+                this._cancelAttachmentRecovery(tab);
+                tab._attachmentRecoveryAttempt = 0;
+            }
+            const defaultNotice =
+                !tab._attachmentNotice ||
+                tab._attachmentNotice === 'Native Pi attachments are unavailable for this pane.' ||
+                tab._attachmentNotice === 'Pi attachment status is unavailable. Your draft is still here.' ||
+                tab._attachmentNotice === 'Attachment drafts are kept in memory until durable recovery is added.' ||
+                tab._attachmentNotice === 'Saving attachment to this device…';
+            if (defaultNotice && !tab._attachmentPendingSnapshot) {
+                tab._attachmentNotice = context.available
+                    ? this.attachmentStore.storageWarning
+                    : 'Native Pi attachments are unavailable for this pane.';
+            }
+            if (context.available) void this._recoverAttachmentWork(tab, owner, scope);
+            else this._scheduleAttachmentRecovery(tab, owner, scope);
+        } catch {
+            if (!controller.signal.aborted && this.tabs?.get(owner.paneId) === tab) {
+                tab._attachmentNotice = 'Pi attachment status is unavailable. Your draft is still here.';
+                this._scheduleAttachmentRecovery(tab, owner, scope);
+            }
+        } finally {
+            if (tab._attachmentContextPending === key) tab._attachmentContextPending = null;
+            if (tab._attachmentContextController === controller) tab._attachmentContextController = null;
+            if (this.getActiveTab() === tab) this._renderAttachmentStatus(tab);
+        }
+    }
+
+    async _recoverAttachmentWork(tab, owner, scope) {
+        if (
+            this.getActiveTab() !== tab ||
+            this._attachmentNetworkOffline() ||
+            !this.attachmentStore.isActive(owner) ||
+            !this._attachmentOwnerCurrent(tab, owner, scope)
+        ) return;
+        for (const item of tab.draftAttachments || []) {
+            if (!item.phiAttachment) continue;
+            if (item.uploadState === 'waiting' && (item.file || item.serverPath)) {
+                if (item.file) void this._startAttachmentUpload(tab, item, scope, false);
+                else void this._snapshotServerAttachment(tab, item, scope);
+            }
+            else if (item.uploadState === 'attempted' || item.uploadState === 'unknown') void this._checkAttachmentItemStatus(tab, item, scope);
+        }
+        const snapshot = tab._attachmentPendingSnapshot;
+        if (!snapshot || snapshot.ownerKey !== this._attachmentOwnerKey(owner)) return;
+        if (snapshot.state === 'unknown') void this._checkAttachmentSendStatus(tab, snapshot);
+        else if (snapshot.outboxState === 'waiting') void this._recoverAttachmentOutbox(tab, snapshot);
+    }
+
+    async _recoverAttachmentOutbox(tab, snapshot) {
+        const owner = snapshot.owner;
+        if (
+            tab._attachmentPendingSnapshot !== snapshot ||
+            this.getActiveTab() !== tab ||
+            this._attachmentNetworkOffline() ||
+            !this.attachmentStore.isActive(owner) ||
+            !this._attachmentOwnerCurrent(tab, owner, snapshot.scope)
+        ) return;
+        if (snapshot.items.some((item) => item.uploadState !== 'ready')) return;
+        try {
+            const context = await getAttachmentPiContext({ ...owner, scope: snapshot.scope });
+            if (tab._attachmentPendingSnapshot !== snapshot) return;
+            if (!context.available || !context.process_id || !context.generation) {
+                tab._attachmentNotice = 'Waiting for the original Pi target to reconnect. The saved send has not been attempted.';
+                this._renderAttachmentStatus(tab);
+                this._scheduleAttachmentRecovery(tab, owner, snapshot.scope);
+                return;
+            }
+            const sameModel = (context.model?.provider || '') === (snapshot.context.model?.provider || '') &&
+                (context.model?.id || '') === (snapshot.context.model?.id || '');
+            if (
+                context.process_id !== snapshot.context.process_id ||
+                context.generation !== snapshot.context.generation ||
+                context.session_id !== snapshot.context.session_id ||
+                context.leaf_id !== snapshot.context.leaf_id || !sameModel
+            ) {
+                await this.attachmentStore.updateOutbox(snapshot.id, 'refused', 'stale');
+                this._finishAttachmentSnapshot(tab, snapshot, 'refused', 'stale');
+                return;
+            }
+            if (context.idle !== true || context.queued !== false) {
+                tab._attachmentNotice = context.queued ? 'Pi has queued messages. Press Send again after Pi is idle.' : 'Pi is busy. Press Send again after the current turn.';
+                this._renderAttachmentStatus(tab);
+                return;
+            }
+            if (snapshot.items.some((item) => item.kind === 'image') && context.image_available !== true) {
+                await this.attachmentStore.updateOutbox(snapshot.id, 'refused', 'unsupported-model');
+                this._finishAttachmentSnapshot(tab, snapshot, 'refused', 'unsupported-model');
+                return;
+            }
+            tab._attachmentContext = context;
+            tab._attachmentContextOwnerKey = this._attachmentOwnerKey(owner);
+            await this._dispatchAttachmentSnapshot(tab, snapshot, false);
+        } catch {
+            tab._attachmentNotice = 'Waiting for the original Pi target to reconnect. The saved send has not been attempted.';
+            this._renderAttachmentStatus(tab);
+            this._scheduleAttachmentRecovery(tab, owner, snapshot.scope);
+        }
+    }
+
     // _initAttachmentDropZone wires drag-and-drop file ingestion. The drop
     // zone is intentionally broader than just the input bar: users drop
     // where their cursor is, which is usually the terminal pane, not the
@@ -9297,6 +10556,13 @@ export class TabManager {
 
     // _removeAttachmentChip removes a single attachment by id.
     _removeAttachmentChip(id) {
+        const attachment = this.stagedAttachments.find((item) => item.id === id);
+        if (attachment?.phiAttachment) {
+            if (typeof window.confirm !== 'function' || !window.confirm('Remove this attachment and forget its local copy?')) return;
+        }
+        const request = this._attachmentRequestScopes?.get(id);
+        if (request) request.controller.abort();
+        this._attachmentRequestScopes?.delete(id);
         this.stagedAttachments = this.stagedAttachments.filter(
             (a) => a.id !== id,
         );
@@ -9309,16 +10575,24 @@ export class TabManager {
     _renderAttachmentStrip() {
         if (!this.attachmentStrip) return;
         this.attachmentStrip.innerHTML = '';
-        if (this.stagedAttachments.length === 0) {
+        const activeTab = this.getActiveTab();
+        const snapshot = activeTab?._attachmentPendingSnapshot;
+        const visible = this.stagedAttachments.slice();
+        for (const item of snapshot?.items || []) {
+            if (!visible.some((a) => a.id === item.id)) visible.push(item);
+        }
+        if (visible.length === 0) {
             this.attachmentStrip.classList.add('hidden');
             return;
         }
         this.attachmentStrip.classList.remove('hidden');
-        for (const a of this.stagedAttachments) {
+        for (const a of visible) {
             const chip = document.createElement('span');
             chip.className = 'attachment-chip';
+            if (a.phiAttachment && a.uploadState === 'error') chip.classList.add('is-error');
+            if (a.phiAttachment && a.uploadState !== 'ready') chip.classList.add('is-pending');
             chip.setAttribute('data-id', a.id);
-            chip.title = a.path;
+            chip.title = a.path || a.errorReason || a.name;
 
             const icon = document.createElement('span');
             icon.className = 'attachment-icon';
@@ -9335,13 +10609,52 @@ export class TabManager {
             size.textContent = this._formatSize(a.sizeBytes);
             chip.appendChild(size);
 
+            if (a.phiAttachment) {
+                const state = document.createElement('span');
+                state.className = 'attachment-state';
+                state.textContent = a.uploadState === 'ready'
+                    ? 'Ready'
+                    : a.uploadState === 'uploading' || a.uploadState === 'attempted'
+                      ? 'Uploading'
+                      : a.uploadState === 'waiting'
+                        ? 'Waiting to upload'
+                        : a.uploadState === 'unknown'
+                          ? 'Unconfirmed'
+                          : `Error: ${a.errorReason || 'unavailable'}`;
+                chip.appendChild(state);
+                if (a.uploadState === 'unknown' || a.uploadState === 'attempted') {
+                    const check = document.createElement('button');
+                    check.type = 'button';
+                    check.className = 'attachment-retry';
+                    check.textContent = 'Check';
+                    check.setAttribute('aria-label', `Check upload status for ${a.name}`);
+                    check.addEventListener('click', () => void this._checkAttachmentItemStatus(activeTab, a, this.app?.scope));
+                    chip.appendChild(check);
+                    if (a.uploadState === 'unknown') {
+                        const retry = document.createElement('button');
+                        retry.type = 'button';
+                        retry.className = 'attachment-retry';
+                        retry.textContent = 'Retry';
+                        retry.setAttribute('aria-label', `Retry upload for ${a.name}`);
+                        retry.addEventListener('click', () => void this._retryDeviceAttachment(activeTab, a));
+                        chip.appendChild(retry);
+                    }
+                }
+            }
+
             const remove = document.createElement('button');
             remove.className = 'attachment-remove';
             remove.setAttribute('aria-label', 'Remove attachment');
             remove.textContent = '✕';
-            remove.addEventListener('click', () =>
-                this._removeAttachmentChip(a.id),
-            );
+            const isFrozen = snapshot?.items?.some((item) => item.id === a.id);
+            if (isFrozen) {
+                remove.disabled = true;
+                remove.title = 'This attachment is part of a submitted snapshot';
+            } else {
+                remove.addEventListener('click', () =>
+                    this._removeAttachmentChip(a.id),
+                );
+            }
             chip.appendChild(remove);
 
             this.attachmentStrip.appendChild(chip);
@@ -9657,6 +10970,11 @@ export class TabManager {
         // this, "drop a screenshot, hit Send with no text" silently
         // does nothing — a confusing dead end.
         if (!val && attachments.length === 0) return;
+        const itemAttachments = attachments.filter((item) => item.phiAttachment);
+        if (itemAttachments.length > 0) {
+            this._sendAttachmentSnapshot(activeTab, val, attachments, itemAttachments);
+            return;
+        }
 
         // A send abandons Pi recall; a deferred arrow flushes first so
         // Pi sees the keys in the order they were pressed.
@@ -9758,6 +11076,289 @@ export class TabManager {
         }
 
         this.inputTextArea.focus({ preventScroll: true });
+    }
+
+    _sendAttachmentSnapshot(tab, text, attachments, items) {
+        const legacy = attachments.filter((item) => !item.phiAttachment);
+        if (legacy.length > 0) {
+            tab._attachmentNotice = 'Send legacy path attachments separately from new attachments.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        if (tab.coder !== 'pi') {
+            tab._attachmentNotice = 'Native attachment sending is available only in regular Pi panes.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        if (items.length < 1 || items.length > 8) {
+            tab._attachmentNotice = 'Send between 1 and 8 attachments at a time.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        if (items.reduce((sum, item) => sum + (item.sizeBytes || 0), 0) > 50 * 1024 * 1024) {
+            tab._attachmentNotice = 'The attachment batch is over the 50 MiB send limit. Remove a file and send again.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        if (tab._attachmentConflict) {
+            tab._attachmentNotice = 'This draft changed in another tab. Keep this copy open; reload or resolve the conflict before sending.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        if (tab._attachmentPendingSnapshot) {
+            tab._attachmentNotice = 'Resolve the earlier attachment submission before sending another attachment.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        const notReady = items.find((item) => item.uploadState !== 'ready');
+        if (notReady) {
+            tab._attachmentNotice = notReady.uploadState === 'unknown'
+                ? 'Upload is not confirmed. Check its status before selecting it again.'
+                : 'Wait for the attachment upload to finish or remove the failed item.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        const owner = items[0].owner;
+        const scope = this._attachmentRequestScopes.get(items[0].id)?.scope || null;
+        const foreign = items.find((item) => !item.owner || item.owner.paneId !== tab.paneId || this._attachmentOwnerKey(item.owner) !== this._attachmentOwnerKey(owner) || !this._attachmentOwnerCurrent(tab, item.owner, this._attachmentRequestScopes.get(item.id)?.scope || null));
+        if (!owner || foreign) {
+            tab._attachmentNotice = 'This attachment belongs to another pane or Phi server. Select it again here.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        if (!tab.piBridge || tab.piBridge.connected !== true || !(tab.piBridge.capabilities || []).includes('pi.attachments.v1')) {
+            tab._attachmentNotice = 'Pi attachment sending is unavailable for this pane. Existing text and paste/drop behavior is unchanged.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        const ownerKey = this._attachmentOwnerKey(owner);
+        const context = tab._attachmentContext;
+        if (!context || tab._attachmentContextOwnerKey !== ownerKey) {
+            void this._refreshAttachmentContext(tab, owner, scope);
+            tab._attachmentNotice = 'Checking Pi state. Press Send again when the attachment control is ready.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        if (!context.available || !context.process_id || !context.generation || context.session_id === null || context.leaf_id === null) {
+            tab._attachmentNotice = 'Pi attachment sending is unavailable or its target state is unknown. Keep this draft and press Send again after reconnect.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        if (items.some((item) => item.kind === 'image') && context.image_available !== true) {
+            tab._attachmentNotice = 'The current Pi model is not confirmed to support image input.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        const snapshot = {
+            id: '',
+            pane: tab.paneId,
+            owner: { ...owner },
+            ownerKey,
+            draftRevision: Number.isSafeInteger(tab._attachmentRevision) ? tab._attachmentRevision : 0,
+            scope,
+            context: {
+                process_id: context.process_id,
+                generation: context.generation,
+                session_id: context.session_id,
+                leaf_id: context.leaf_id,
+                model: context.model ? { ...context.model } : null,
+            },
+            text: text.trim(),
+            items: items.slice(),
+            state: 'sending',
+            outboxState: 'waiting',
+            reason: '',
+        };
+        this._resetPiRecall({ flush: true });
+        tab._attachmentPendingSnapshot = snapshot;
+        tab.draft = '';
+        tab.draftAttachments = [];
+        this.inputTextArea.value = '';
+        this.lastInputValue = '';
+        this.stagedAttachments = [];
+        tab._attachmentEditVersion = (tab._attachmentEditVersion || 0) + 1;
+        tab._attachmentRevision = snapshot.draftRevision + 1;
+        this._writeLegacyTabDraft(tab);
+        this._renderAttachmentStrip();
+        tab._attachmentNotice = 'Saving an attachment snapshot before sending.';
+        this._renderAttachmentStatus(tab);
+        void this._freezeAndDispatchAttachmentSnapshot(tab, snapshot);
+    }
+
+    async _freezeAndDispatchAttachmentSnapshot(tab, snapshot) {
+        try {
+            const frozen = await this.attachmentStore.freezeDraft(
+                snapshot.owner,
+                snapshot.draftRevision,
+                { text: snapshot.text, context: snapshot.context, items: snapshot.items },
+            );
+            if (tab._attachmentPendingSnapshot !== snapshot) return;
+            if (frozen.conflict) {
+                this._finishAttachmentSnapshot(tab, snapshot, 'refused', 'stale');
+                return;
+            }
+            snapshot.id = frozen.outbox.id;
+            snapshot.outboxState = frozen.outbox.state;
+            tab._attachmentRevision = Math.max(tab._attachmentRevision || 0, snapshot.draftRevision + 1);
+            tab._attachmentNotice = frozen.warning || 'Submitting this snapshot to Pi. Model receipt is not confirmed.';
+            this._renderAttachmentStatus(tab);
+            if (frozen.outbox.state === 'waiting') {
+                await this._dispatchAttachmentSnapshot(tab, snapshot, true);
+            } else if (frozen.outbox.state === 'attempted' || frozen.outbox.state === 'unknown') {
+                snapshot.state = 'unknown';
+                tab._attachmentNotice = 'Submission not confirmed. Check Pi before resending.';
+                this._renderAttachmentStatus(tab);
+                await this._checkAttachmentSendStatus(tab, snapshot);
+            }
+        } catch {
+            if (tab._attachmentPendingSnapshot === snapshot) {
+                this._finishAttachmentSnapshot(tab, snapshot, 'refused', 'storage');
+            }
+        }
+    }
+
+    async _dispatchAttachmentSnapshot(tab, snapshot, explicit = false) {
+        if (!snapshot.id || tab._attachmentPendingSnapshot !== snapshot) return;
+        if (
+            this.getActiveTab() !== tab ||
+            !this.attachmentStore.isActive(snapshot.owner) ||
+            !this._attachmentOwnerCurrent(tab, snapshot.owner, snapshot.scope)
+        ) {
+            snapshot.state = 'sending';
+            snapshot.outboxState = 'waiting';
+            tab._attachmentNotice = 'Attachment send is parked for its original pane and backend.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        if (this._attachmentNetworkOffline()) {
+            snapshot.state = 'sending';
+            snapshot.outboxState = 'waiting';
+            tab._attachmentNotice = 'Waiting to submit the saved attachment snapshot.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        const claim = await this.attachmentStore.claimSend(snapshot.id, explicit);
+        if (!claim.claimed) {
+            if (claim.outbox?.state === 'attempted' || claim.outbox?.state === 'unknown') {
+                snapshot.outboxState = claim.outbox.state;
+                snapshot.state = 'unknown';
+                tab._attachmentNotice = 'Submission not confirmed. Check Pi before resending.';
+                this._renderAttachmentStatus(tab);
+                void this._checkAttachmentSendStatus(tab, snapshot);
+            }
+            return;
+        }
+        snapshot.outboxState = 'attempted';
+        const body = {
+            id: snapshot.id,
+            pane: snapshot.pane,
+            context: snapshot.context,
+            text: snapshot.text,
+            attachment_ids: snapshot.items.map((item) => item.id),
+        };
+        try {
+            const result = await sendAttachmentPrompt(
+                { ...snapshot.owner, scope: snapshot.scope },
+                body,
+            );
+            if (result.state === 'dispatched') {
+                this._finishAttachmentSnapshot(tab, snapshot, 'dispatched', '');
+                return;
+            }
+            if (result.state === 'refused') {
+                this._finishAttachmentSnapshot(tab, snapshot, 'refused', result.reason);
+                return;
+            }
+            this._finishAttachmentSnapshot(tab, snapshot, 'unknown', 'uncertain');
+            await this._checkAttachmentSendStatus(tab, snapshot);
+        } catch (error) {
+            if (error instanceof AttachmentRequestError && !error.uncertain) {
+                this._finishAttachmentSnapshot(tab, snapshot, 'refused', error.reason);
+                return;
+            }
+            this._finishAttachmentSnapshot(tab, snapshot, 'unknown', 'uncertain');
+            await this._checkAttachmentSendStatus(tab, snapshot);
+        }
+    }
+
+    _finishAttachmentSnapshot(tab, snapshot, state, reason) {
+        if (tab._attachmentPendingSnapshot !== snapshot) return;
+        snapshot.state = state;
+        snapshot.outboxState = state;
+        snapshot.reason = reason;
+        if (snapshot.id) void this.attachmentStore.updateOutbox(snapshot.id, state, reason);
+        if (state === 'dispatched') {
+            tab._attachmentPendingSnapshot = null;
+            tab._attachmentLastSubmitted = snapshot;
+            for (const item of snapshot.items) this._attachmentRequestScopes.delete(item.id);
+            tab._attachmentNotice = 'Submitted to Pi; model receipt is not confirmed.';
+        } else if (state === 'unknown') {
+            tab._attachmentNotice = 'Submission not confirmed. Check Pi before resending.';
+        } else {
+            tab._attachmentNotice = `Pi refused the attachment: ${reason || 'unavailable'}. Restore it to edit and send again.`;
+        }
+        this._renderAttachmentStripForTab(tab);
+        this._renderAttachmentStatus(tab);
+    }
+
+    _renderAttachmentStripForTab(tab) {
+        if (this.getActiveTab() !== tab) return;
+        this.stagedAttachments = tab.draftAttachments || [];
+        this._renderAttachmentStrip();
+    }
+
+    async _checkAttachmentSendStatus(tab, snapshot) {
+        if (this.getActiveTab() !== tab || this._attachmentNetworkOffline() || snapshot._statusPending) return;
+        snapshot._statusPending = true;
+        try {
+            const status = await getAttachmentSendStatus(
+                { ...snapshot.owner, scope: snapshot.scope },
+                snapshot.id,
+            );
+            if (tab._attachmentPendingSnapshot !== snapshot) return;
+            if (status.state === 'dispatched' || status.state === 'refused') {
+                this._finishAttachmentSnapshot(tab, snapshot, status.state, status.reason);
+            } else {
+                this._finishAttachmentSnapshot(tab, snapshot, 'unknown', 'uncertain');
+                this._scheduleAttachmentRecovery(tab, snapshot.owner, snapshot.scope);
+            }
+        } catch {
+            if (tab._attachmentPendingSnapshot === snapshot) {
+                this._finishAttachmentSnapshot(tab, snapshot, 'unknown', 'uncertain');
+                this._scheduleAttachmentRecovery(tab, snapshot.owner, snapshot.scope);
+            }
+        } finally {
+            snapshot._statusPending = false;
+        }
+    }
+
+    _restoreAttachmentSnapshot(tab, snapshot, warnDuplicate) {
+        if (tab._attachmentPendingSnapshot !== snapshot && tab._attachmentLastSubmitted !== snapshot) return;
+        if (warnDuplicate && !window.confirm('Pi may already have received this attachment. Restoring it and sending again can create a duplicate. Continue?')) return;
+        const currentText = this.getActiveTab() === tab ? this.inputTextArea.value : tab.draft || '';
+        const currentAttachments = this.getActiveTab() === tab ? this.stagedAttachments : tab.draftAttachments || [];
+        if (currentText || currentAttachments.length) {
+            tab._attachmentNotice = 'Clear the next draft before restoring this attachment snapshot.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
+        if (tab._attachmentPendingSnapshot === snapshot) tab._attachmentPendingSnapshot = null;
+        if (tab._attachmentLastSubmitted === snapshot) tab._attachmentLastSubmitted = null;
+        tab.draft = snapshot.text;
+        tab.draftAttachments = snapshot.items.slice();
+        if (this.getActiveTab() === tab) {
+            this.inputTextArea.value = snapshot.text;
+            this.lastInputValue = snapshot.text;
+            this.stagedAttachments = tab.draftAttachments;
+            this.saveActiveDraft();
+            this._renderAttachmentStrip();
+            this.adjustInputHeight();
+            this.inputTextArea.focus({ preventScroll: true });
+        } else {
+            this.saveTabDraft(tab);
+        }
+        tab._attachmentNotice = 'Snapshot restored. Review it and press Send to create a new submission.';
+        this._renderAttachmentStatus(tab);
     }
 
     sendRawInput(bytes, { focusInputOnMobile = true, submit = false } = {}) {
@@ -11334,8 +12935,19 @@ export class TabManager {
         // alone, so a per-turn telemetry frame never rebuilds the row
         // (and never takes the keyboard user's focus with it).
         // Rejected (stale) frames move neither key.
-        if (prevKeys.row !== nextKeys.row) this._refreshPiBridgeModels(tabInfo);
-        else if (prevKeys.bar !== nextKeys.bar && this.getActiveTab() === tabInfo)
+        if (prevKeys.row !== nextKeys.row) {
+            this._refreshPiBridgeModels(tabInfo);
+            if (
+                tabInfo.piBridge?.connected === true &&
+                (tabInfo.piBridge?.capabilities || []).includes('pi.attachments.v1')
+            ) {
+                void this._refreshAttachmentContext(
+                    tabInfo,
+                    this._captureAttachmentOwner(tabInfo),
+                    this.app?.scope,
+                );
+            }
+        } else if (prevKeys.bar !== nextKeys.bar && this.getActiveTab() === tabInfo)
             this.renderPiRpcStatusBar?.();
         // A held Reload press flushes only from accepted
         // current-socket state; rejected frames move nothing.
@@ -13163,8 +14775,10 @@ export class TabManager {
 
     renderPresets(coderId, { refreshQuickCommands = true } = {}) {
         const activeTab = this.getActiveTab();
-        if (activeTab?.coder === 'pi')
+        if (activeTab?.coder === 'pi') {
             this._bindThinkingPresetStore(this.app?.scope);
+            this._bindAttachmentStore(this.app?.scope);
+        }
         if (activeTab?.coder === 'pi-rpc') {
             // Pi RPC renders its own row: parked chips must go, or their
             // callbacks keep firing at the newly active pane.

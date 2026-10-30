@@ -115,6 +115,7 @@ function makeNode(name, path, parent = '') {
         expanded: false,
         pending: false,
         error: '',
+        isFile: false,
         requestId: 0,
         pendingRequest: null,
         element: null,
@@ -147,8 +148,12 @@ function mountDirectoryTree(host, options) {
     const tree = document.createElement('div');
     tree.className = 'directory-tree-scroll';
     tree.setAttribute('role', 'tree');
-    tree.setAttribute('aria-label', 'Directories on this server');
+    tree.setAttribute('aria-label', options.files
+        ? 'Files and directories on this server'
+        : 'Directories on this server');
     host.replaceChildren(controls, status, tree);
+    const browseFiles = options.files === true;
+    const browseFn = options.browse ?? browse;
     const nodes = new Map();
     let root = makeNode(pathName(options.startPath), options.startPath);
     root.expanded = true;
@@ -204,16 +209,18 @@ function mountDirectoryTree(host, options) {
         node.group = group;
         return element;
     };
-    const nodeForPath = (name, path, parent) => {
+    const nodeForPath = (name, path, parent, isFile = false) => {
         const key = pathKey(path);
         const node = nodes.get(key);
         if (node) {
             node.name = name;
             node.path = path;
             node.parent = parent;
+            node.isFile = isFile;
             return node;
         }
         const created = makeNode(name, path, parent);
+        created.isFile = isFile;
         nodes.set(created.key, created);
         return created;
     };
@@ -226,15 +233,16 @@ function mountDirectoryTree(host, options) {
         nodes.set(node.key, node);
         node.parent = data.parent;
         node.truncated = data.truncated;
-        node.children = data.entries.map((entry) => nodeForPath(entry.name, entry.path, data.path));
+        node.children = data.entries.map((entry) => nodeForPath(entry.name, entry.path, data.path, browseFiles && entry.kind === 'file'));
         node.loaded = true;
         node.pending = false;
         node.error = '';
     };
-    const isExpandable = (node) => !node.loaded ||
-        node.pending ||
-        !!node.error ||
-        node.children.length > 0;
+    const isExpandable = (node) => !node.isFile &&
+        (!node.loaded ||
+            node.pending ||
+            !!node.error ||
+            node.children.length > 0);
     const syncChildren = (parent, desired) => {
         for (const child of Array.from(parent.children)) {
             if (!desired.includes(child))
@@ -302,7 +310,9 @@ function mountDirectoryTree(host, options) {
                 node.emptyState ??= document.createElement('div');
                 node.emptyState.className = 'directory-tree-empty';
                 node.emptyState.setAttribute('role', 'note');
-                node.emptyState.textContent = 'No visible subdirectories.';
+                node.emptyState.textContent = browseFiles
+                    ? 'No visible files or subdirectories.'
+                    : 'No visible subdirectories.';
                 desired.push(node.emptyState);
             }
             if (node.truncated) {
@@ -356,7 +366,7 @@ function mountDirectoryTree(host, options) {
         node.error = '';
         const request = (async () => {
             try {
-                const data = await browse(node.path);
+                const data = await browseFn(node.path);
                 if (disposed ||
                     generation !== rootGeneration ||
                     requestId !== node.requestId ||
@@ -411,6 +421,7 @@ function mountDirectoryTree(host, options) {
         entries: node.children.map((child) => ({
             name: child.name,
             path: child.path,
+            kind: child.isFile ? 'file' : 'directory',
         })),
     });
     const setRootFromListing = (data, explanation = '') => {
@@ -491,7 +502,7 @@ function mountDirectoryTree(host, options) {
             return;
         if (event.detail >= 2)
             return;
-        selectNode(node, true);
+        selectNode(node, !browseFiles || node.isFile);
     };
     const onTreeDoubleClick = (event) => {
         if (!(event.target instanceof Element))
@@ -594,7 +605,7 @@ function mountDirectoryTree(host, options) {
         }
         if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
-            selectNode(node, true);
+            selectNode(node, !browseFiles || node.isFile);
             return;
         }
         if (event.key.length !== 1)
@@ -634,7 +645,7 @@ function mountDirectoryTree(host, options) {
         status.textContent = 'Loading parent directory…';
         renderTree();
         try {
-            const data = await browse(parent);
+            const data = await browseFn(parent);
             if (disposed ||
                 navigation !== rootNavigationGeneration ||
                 generation !== rootGeneration) {
@@ -682,7 +693,7 @@ function mountDirectoryTree(host, options) {
                 target = cachedListing(pendingNode);
             }
             else {
-                target = await browse(path);
+                target = await browseFn(path);
             }
         }
         catch {
@@ -732,7 +743,7 @@ function mountDirectoryTree(host, options) {
             }
             else {
                 try {
-                    parentListing = await browse(parentPath);
+                    parentListing = await browseFn(parentPath);
                 }
                 catch {
                     omitted = true;

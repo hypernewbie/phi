@@ -5,6 +5,7 @@ import type {
     ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
 import {
+    ENV_ATTACHMENT_ROOT,
     ENV_PANE,
     ENV_PROCESS,
     ENV_TARGET,
@@ -13,13 +14,16 @@ import {
     createExtension,
     hostInvokeSkill,
     hostSkills,
+    ownerAttachmentState,
     ownerCompactState,
     ownerReloadState,
+    readAttachmentRootFromEnv,
     readCredsFromEnv,
     resetOwnerSlotForTest,
     type FactoryRuntime,
 } from './extension.js';
 import type { ReloadLatchState } from './native-reload.js';
+import type { AttachmentLatchState } from './attachments.js';
 import type { CompactLatchState, PiContextView } from './runtime.js';
 
 const SAVED = { ...process.env };
@@ -150,7 +154,7 @@ function recordingRuntime(): { calls: string[]; runtime: FactoryRuntime } {
 
 beforeEach(() => {
     resetOwnerSlotForTest();
-    for (const key of [ENV_TARGET, ENV_PANE, ENV_PROCESS, ENV_TOKEN])
+    for (const key of [ENV_TARGET, ENV_PANE, ENV_PROCESS, ENV_TOKEN, ENV_ATTACHMENT_ROOT])
         delete process.env[key];
 });
 
@@ -176,10 +180,13 @@ describe('credential environment', () => {
         expect(readCredsFromEnv()).toBeNull();
     });
 
-    it('clears all four keys', () => {
+    it('reads and scrubs the private attachment root', () => {
         setEnv();
+        process.env[ENV_ATTACHMENT_ROOT] = '/tmp/phi-attachments/pane';
+        expect(readAttachmentRootFromEnv()).toBe('/tmp/phi-attachments/pane');
         clearCredsFromEnv();
         expect(readCredsFromEnv()).toBeNull();
+        expect(readAttachmentRootFromEnv()).toBeNull();
     });
 });
 
@@ -619,6 +626,13 @@ describe('telemetry view and compaction latch', () => {
         expect(latches[0]).toBe(ownerCompactState());
     });
 
+    it('shares attachment duplicate state across replacement runtimes', () => {
+        const first: AttachmentLatchState = ownerAttachmentState();
+        first.highWater = 4n;
+        expect(ownerAttachmentState()).toBe(first);
+        expect(ownerAttachmentState().highWater).toBe(4n);
+    });
+
     it('creates each process latch once', () => {
         const compact = ownerCompactState();
         const reload = ownerReloadState();
@@ -636,6 +650,7 @@ describe('telemetry view and compaction latch', () => {
             drain: null,
             active: null,
         });
+
         resetOwnerSlotForTest();
         expect(ownerCompactState()).not.toBe(compact);
         expect(ownerReloadState()).not.toBe(reload);

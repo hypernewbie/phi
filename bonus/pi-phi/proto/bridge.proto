@@ -46,6 +46,7 @@ message PiToPhi {
     InvokeSkillAck invoke_skill_ack = 24;
     ReloadAck reload_ack = 25;
     SyncboardRequest syncboard_request = 26;
+    AttachmentPromptAck attachment_prompt_ack = 27;
   }
 }
 
@@ -69,6 +70,7 @@ message PhiToPi {
     InvokeSkillRequest invoke_skill_request = 21;
     ReloadRequest reload_request = 22;
     SyncboardResponse syncboard_response = 23;
+    AttachmentPromptRequest attachment_prompt_request = 24;
   }
 }
 
@@ -175,6 +177,9 @@ message StateSnapshot {
   // Optional native Reload readiness. Missing counters mean unknown;
   // they are never inferred to be zero.
   ReloadReadiness reload_readiness = 12;
+  // Optional Pi attachment readiness. It is independent of Compact APIs.
+  // Absence means unavailable, never idle.
+  AttachmentReadiness attachment_readiness = 14;
 }
 
 // Optional context telemetry. Scalar presence is explicit: an absent
@@ -480,6 +485,52 @@ message InvokeSkillRequest {
 message InvokeSkillAck {
   string request_id = 1;
   bool ok = 2;
+  string reason = 3;
+}
+
+// Optional readiness for native attachment dispatch. This sample is
+// independent of compact_readiness and is refreshed at lifecycle edges.
+message AttachmentReadiness {
+  bool idle = 1;
+  bool has_pending_messages = 2;
+  bool compaction_active = 3;
+  bool bridge_pending = 4;
+  optional bool image_available = 5;
+}
+
+// One checked process-scoped handoff reference. basename is a generated
+// leaf name, never a browser path. The host verifies size, type, and digest.
+message AttachmentRef {
+  string basename = 1;
+  uint64 size_bytes = 2;
+  string mime_type = 3;
+  string kind = 4;
+  string sha256 = 5;
+}
+
+// One user-triggered attachment prompt. The host rechecks identity and
+// readiness immediately before its synchronous sendUserMessage call.
+message AttachmentPromptRequest {
+  string request_id = 1;
+  string expected_session_id = 2;
+  string expected_leaf_id = 3;
+  ModelSnapshot expected_model = 4;
+  string text = 5;
+  repeated AttachmentRef attachments = 6;
+}
+
+enum AttachmentPromptOutcome {
+  ATTACHMENT_PROMPT_OUTCOME_UNSPECIFIED = 0;
+  ATTACHMENT_PROMPT_OUTCOME_REFUSED = 1;
+  ATTACHMENT_PROMPT_OUTCOME_DISPATCHED = 2;
+  ATTACHMENT_PROMPT_OUTCOME_UNKNOWN = 3;
+}
+
+// DISPATCHED means the public host call returned synchronously and its
+// matching acknowledgment was emitted. It does not mean model receipt.
+message AttachmentPromptAck {
+  string request_id = 1;
+  AttachmentPromptOutcome outcome = 2;
   string reason = 3;
 }
 

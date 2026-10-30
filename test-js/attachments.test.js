@@ -5,6 +5,13 @@ import {
     formatAttachment,
     extractImageItems,
     extractImageFiles,
+    newAttachmentID,
+    uploadAttachmentItem,
+    getAttachmentItemStatus,
+    getAttachmentPiContext,
+    sendAttachmentPrompt,
+    getAttachmentSendStatus,
+    AttachmentRequestError,
     formatChipName,
 } from '../web/attachments.js';
 
@@ -123,6 +130,14 @@ describe('formatChipName', () => {
     });
 });
 
+describe('newAttachmentID', () => {
+    it('returns a canonical UUIDv4', () => {
+        expect(newAttachmentID()).toMatch(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+        );
+    });
+});
+
 // uploadClipboardImage touches fetch — test the network boundary directly.
 describe('uploadClipboardImage', () => {
     let lastUrl;
@@ -183,5 +198,116 @@ describe('uploadClipboardImage', () => {
         const a = await uploadClipboardImage(blob, 'x.jpg');
         expect(a.type).toBe('image/jpeg');
         expect(a.sizeBytes).toBe(8);
+    });
+});
+
+describe('attachment v2 request helpers', () => {
+    let lastUrl;
+    let lastInit;
+    let fetchResponse;
+    const owner = {
+        profileId: 'profile-a',
+        origin: 'https://phi-a.example',
+        paneId: 'pane-a',
+        cwd: '/project-a',
+        scope: {
+            signal: new AbortController().signal,
+            headers: () => ({ 'X-Phi-Backend': 'wrong-profile' }),
+        },
+    };
+
+    beforeEach(() => {
+        lastUrl = null;
+        lastInit = null;
+        fetchResponse = null;
+        mockFetch((url, options) => {
+            lastUrl = url;
+            lastInit = options;
+            return fetchResponse;
+        });
+    });
+
+    it('uploads one file to the captured pane with the captured backend header', async () => {
+        fetchResponse = {
+            id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            name: 'note.txt', path: '/private/note.bin', sizeBytes: 3,
+            mimeType: 'application/octet-stream', kind: 'file', sha256: 'a'.repeat(64),
+        };
+        const file = new File(['abc'], 'note.txt', { type: 'text/plain' });
+        const item = await uploadAttachmentItem(
+            file,
+            'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            owner,
+        );
+        expect(lastUrl).toBe('/api/attachments/v2/items/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+        expect(lastInit.method).toBe('PUT');
+        expect(lastInit.credentials).toBe('same-origin');
+        expect(lastInit.headers['X-Phi-Backend']).toBe('profile-a');
+        expect(lastInit.body.get('pane')).toBe('pane-a');
+        expect(lastInit.body.get('name')).toBe('note.txt');
+        expect(lastInit.body.get('file')).toBeInstanceOf(File);
+        expect(item.source).toBe('device');
+    });
+
+    it('uses read-only status and context requests', async () => {
+        fetchResponse = { state: 'missing' };
+        await expect(getAttachmentItemStatus('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', owner)).resolves.toEqual({ state: 'missing' });
+        expect(lastInit.method).toBe('GET');
+        expect(lastUrl).toContain('pane=pane-a');
+        fetchResponse = { available: false };
+        await getAttachmentPiContext(owner);
+        expect(lastUrl).toBe('/api/pi-bridge/attachments/context?pane=pane-a');
+        expect(lastInit.method).toBe('GET');
+    });
+
+    it('posts the frozen snapshot and reads its status without replay', async () => {
+        const body = {
+            id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+            pane: 'pane-a',
+            context: {
+                process_id: 'proc', generation: '1', session_id: 'sess', leaf_id: '',
+                model: null,
+            },
+            text: 'inspect', attachment_ids: ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
+        };
+        fetchResponse = { id: body.id, state: 'unknown', reason: 'uncertain' };
+        await sendAttachmentPrompt(owner, body);
+        expect(lastUrl).toBe('/api/pi-bridge/attachments');
+        expect(lastInit.method).toBe('POST');
+        expect(JSON.parse(lastInit.body)).toEqual(body);
+        fetchResponse = { id: body.id, state: 'unknown', reason: 'uncertain' };
+        await getAttachmentSendStatus(owner, body.id);
+        expect(lastInit.method).toBe('GET');
+        expect(lastUrl).toContain('pane=pane-a');
+        expect(lastUrl).toContain(`id=${body.id}`);
+    });
+
+    it('keeps a timed-out mutation unknown and does not send again', async () => {
+        let calls = 0;
+        const abortController = new AbortController();
+        mockFetch(() => {
+            calls += 1;
+            return new Promise(() => {});
+        });
+        const pending = sendAttachmentPrompt(owner, {
+            id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', pane: owner.paneId,
+            context: { process_id: 'proc', generation: '1', session_id: 's', leaf_id: 'l', model: null },
+            text: '', attachment_ids: ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
+        }, abortController.signal);
+        abortController.abort();
+        await expect(pending).rejects.toMatchObject({
+            status: 0, reason: 'uncertain', uncertain: true,
+        });
+        expect(calls).toBe(1);
+        expect(AttachmentRequestError).toBeDefined();
+    });
+
+    it('classifies malformed mutation responses as uncertain', async () => {
+        mockFetch(() => ({ ok: true, status: 200, text: '{bad json' }));
+        await expect(sendAttachmentPrompt(owner, {
+            id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', pane: owner.paneId,
+            context: { process_id: 'proc', generation: '1', session_id: 's', leaf_id: 'l', model: null },
+            text: '', attachment_ids: ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
+        })).rejects.toMatchObject({ status: 200, reason: 'uncertain', uncertain: true });
     });
 });

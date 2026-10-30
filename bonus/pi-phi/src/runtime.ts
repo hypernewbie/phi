@@ -9,6 +9,7 @@ import type { ServiceError } from '@grpc/grpc-js';
 import type {
     CompactOptions,
     ContextUsage,
+    ExtensionAPI,
     ExtensionContext,
 } from '@earendil-works/pi-coding-agent';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai/models';
@@ -16,6 +17,10 @@ import {
     AgentSettled,
     AgentStarted,
     CompactOutcome,
+    AttachmentPromptAck,
+    AttachmentPromptOutcome,
+    AttachmentPromptRequest,
+    AttachmentReadiness,
     CompactReadiness,
     CompactResult,
     ContextUsageSnapshot,
@@ -43,6 +48,7 @@ import {
 import { BridgeChannel, type ChannelCreds } from './channel.js';
 import { InvalidTargetError } from './endpoint.js';
 import { PROTOCOL_VERSION } from './protocol.js';
+import { CAPABILITY_ATTACHMENTS } from './protocol.js';
 import { CAPABILITY_COMPACT } from './protocol.js';
 import { CAPABILITY_CONTEXT } from './protocol.js';
 import { CAPABILITY_HISTORY } from './protocol.js';
@@ -74,6 +80,15 @@ import { isHistoryReaderAvailable } from './history-reader.js';
 import { readEditorHistory } from './history-reader.js';
 import { invokeNativeReload } from './native-reload.js';
 import type { ReloadLatchState } from './native-reload.js';
+import {
+    type AttachmentLatchState,
+    type AttachmentPromptRef,
+    freshAttachmentLatch,
+    hasSafeAttachmentRoot,
+    parseAttachmentRequestID,
+    prepareAttachmentContent,
+    safeAttachmentFailureReason,
+} from './attachments.js';
 
 /** Structural Pi session view; satisfied by both pinned host versions. */
 export interface PiSessionView {
@@ -195,6 +210,14 @@ interface ReloadOp {
 }
 
 /** Latest validated context sample; null means no current measurement. */
+interface AttachmentReadinessSample {
+    readonly idle: boolean;
+    readonly hasPendingMessages: boolean;
+    readonly compactionActive: boolean;
+    readonly bridgePending: boolean;
+    readonly imageAvailable?: boolean;
+}
+
 interface ContextSample {
     readonly tokens?: number | undefined;
     readonly contextWindow?: number | undefined;
@@ -213,6 +236,9 @@ export interface RuntimeOptions {
     readonly compactState: CompactLatchState;
     /** Process-owned native Reload baseline and operation latch. */
     readonly reloadState?: ReloadLatchState | undefined;
+    readonly attachmentRoot?: string | undefined;
+    readonly attachmentState?: AttachmentLatchState | undefined;
+    readonly sendUserMessage?: ExtensionAPI['sendUserMessage'] | undefined;
     /** Host model switch; absent in tests that never switch. */
     readonly setModel?: (model: PiModelView) => Promise<boolean>;
     /** Native thinking APIs; both are required to advertise the capability. */
@@ -501,6 +527,7 @@ export class Runtime {
     private syncboardAccepted = false;
     private syncboardSeq = 0n;
     private syncboardPending = new Map<string, SyncboardWaiter>();
+    private attachmentsAccepted = false;
     /** getContextUsage present on the latest event context. */
     private contextApi = false;
     /** compact/isIdle/hasPendingMessages present on the latest context. */
@@ -519,6 +546,9 @@ export class Runtime {
         readonly idle: boolean;
         readonly hasPendingMessages: boolean;
     } | null = null;
+    private attachmentApi = false;
+    private attachmentReadinessSample: AttachmentReadinessSample | null = null;
+    private readonly localAttachmentState = freshAttachmentLatch();
     /** Native compaction start observed without its end. */
     private compactionActive = false;
     /** Final assistant stop reason of the current run, if observed. */
@@ -548,6 +578,10 @@ export class Runtime {
     /** Process-owned Reload latch; null in runtimes without one. */
     private get reload(): ReloadLatchState | null {
         return this.opts.reloadState ?? null;
+    }
+
+    private get attachments(): AttachmentLatchState {
+        return this.opts.attachmentState ?? this.localAttachmentState;
     }
 
     /** Begin connecting; never throws, never blocks Pi startup. */
@@ -677,7 +711,7 @@ export class Runtime {
      */
     private publishContextOnly(): void {
         if (this.lastCtx) this.sampleTelemetry(this.lastCtx);
-        if (!this.contextApi && !this.compactApi && !this.reloadApi) return;
+        if (!this.contextApi && !this.compactApi && !this.reloadApi && !this.attachmentApi) return;
         if (!this.channel) return;
         try {
             this.channel.sendNonfatal({
@@ -1084,6 +1118,34 @@ export class Runtime {
         } else {
             this.reloadSample = null;
         }
+
+        this.attachmentApi =
+            typeof this.opts.sendUserMessage === 'function' &&
+            typeof ctx.isIdle === 'function' &&
+            typeof ctx.hasPendingMessages === 'function' &&
+            hasSafeAttachmentRoot(this.opts.attachmentRoot);
+        this.attachmentReadinessSample = null;
+        if (this.attachmentApi) {
+            try {
+                const model = ctx.model;
+                const imageAvailable = model
+                    ? model.api !== 'pi-virtual' && model.input.includes('image')
+                    : undefined;
+                this.attachmentReadinessSample = {
+                    idle: ctx.isIdle!() === true,
+                    hasPendingMessages: ctx.hasPendingMessages!() !== false,
+                    compactionActive: this.compactionActive,
+                    bridgePending:
+                        this.compact.pending !== null ||
+                        this.attachments.active !== null,
+                    ...(imageAvailable === undefined ? {} : { imageAvailable }),
+                };
+            } catch {
+                // Missing or throwing readiness data never means idle.
+                this.attachmentApi = false;
+                this.attachmentReadinessSample = null;
+            }
+        }
     }
 
     private refreshIdentities(ctx: PiContextView): void {
@@ -1225,6 +1287,9 @@ export class Runtime {
                       bridgePending: this.compact.pending !== null,
                   })
                 : undefined,
+            attachmentReadiness: this.attachmentReadinessSample
+                ? AttachmentReadiness.create(this.attachmentReadinessSample)
+                : undefined,
             reloadReadiness: this.reloadReadiness(),
         });
     }
@@ -1280,6 +1345,7 @@ export class Runtime {
         if (this.opts.getSkills && this.opts.invokeSkill)
             caps.push(CAPABILITY_SKILLS);
         if (this.opts.syncboardEnabled) caps.push(CAPABILITY_SYNCBOARD);
+        if (this.attachmentApi) caps.push(CAPABILITY_ATTACHMENTS);
         return caps;
     }
 
@@ -1345,6 +1411,7 @@ export class Runtime {
         this.reloadAccepted = false;
         this.skillsAccepted = false;
         this.setSyncboardAccepted(false);
+        this.attachmentsAccepted = false;
         // Reconnect carries a fresh baseline: resample through the
         // latest context so the Hello never replays a stale reading.
         if (this.lastCtx) this.sampleTelemetry(this.lastCtx);
@@ -1378,6 +1445,8 @@ export class Runtime {
                     this.opts.syncboardEnabled === true &&
                         accepted.capabilities.includes(CAPABILITY_SYNCBOARD),
                 );
+                this.attachmentsAccepted =
+                    accepted.capabilities.includes(CAPABILITY_ATTACHMENTS);
             }
         } catch (err) {
             channel.close();
@@ -1463,6 +1532,11 @@ export class Runtime {
                 msg.payload.value.requestId,
                 msg.payload.value.name,
             );
+        } else if (
+            msg.payload?.$case === 'attachmentPromptRequest' &&
+            this.attachmentsAccepted
+        ) {
+            void this.onAttachmentPromptRequest(msg.payload.value);
         } else if (
             msg.payload?.$case === 'syncboardResponse' &&
             this.syncboardAccepted
@@ -2087,6 +2161,133 @@ export class Runtime {
                 value: InvokeSkillAck.create({ requestId, ok, reason }),
             },
         };
+    }
+
+    private onAttachmentPromptRequest(req: AttachmentPromptRequest): void {
+        const requestId = req.requestId;
+        const id = parseAttachmentRequestID(requestId);
+        if (id === null || !this.channel || !this.attachmentsAccepted) return;
+        const highWater = this.attachments.highWater;
+        if (highWater !== null && id <= highWater) {
+            this.sendAttachmentAck(requestId, AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_REFUSED, 'duplicate');
+            return;
+        }
+        this.attachments.highWater = id;
+        if (this.attachments.active !== null) {
+            this.sendAttachmentAck(requestId, AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_REFUSED, 'pending');
+            return;
+        }
+        const operation = { requestId, runtimeId: this.runtimeId };
+        this.attachments.active = operation;
+        this.publishContextOnly();
+
+        let outcome = AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_REFUSED;
+        let reason = 'unavailable';
+        let invoking = false;
+        try {
+            const prepared = prepareAttachmentContent(
+                this.opts.attachmentRoot,
+                req.text,
+                req.attachments.map((ref) => ({
+                    basename: ref.basename,
+                    sizeBytes: Number(ref.sizeBytes),
+                    mimeType: ref.mimeType,
+                    kind: ref.kind,
+                    sha256: ref.sha256,
+                })) as readonly AttachmentPromptRef[],
+            );
+            reason = this.attachmentRefusalReason(req, prepared.hasImage, operation);
+            if (reason !== '') return;
+            const sendUserMessage = this.opts.sendUserMessage;
+            if (typeof sendUserMessage !== 'function') {
+                reason = 'unavailable';
+                return;
+            }
+            // This public API returns void. Its normal return is the
+            // synchronous dispatch boundary, not host or model acceptance.
+            invoking = true;
+            sendUserMessage(prepared.content, { expandPromptTemplates: false });
+            outcome = AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_DISPATCHED;
+            reason = '';
+        } catch (error) {
+            if (invoking) {
+                outcome = AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_UNKNOWN;
+                reason = 'uncertain';
+            } else {
+                outcome = AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_REFUSED;
+                reason = safeAttachmentFailureReason(error);
+            }
+        } finally {
+            this.sendAttachmentAck(requestId, outcome, reason);
+            if (this.attachments.active === operation) this.attachments.active = null;
+            this.publishContextOnly();
+        }
+    }
+
+    private attachmentRefusalReason(
+        req: AttachmentPromptRequest,
+        hasImage: boolean,
+        operation: { readonly requestId: string; readonly runtimeId: string },
+    ): string {
+        if (
+            this.shutdownRequested ||
+            this.runtimeId !== operation.runtimeId ||
+            this.attachments.active !== operation ||
+            typeof this.opts.sendUserMessage !== 'function' ||
+            !hasSafeAttachmentRoot(this.opts.attachmentRoot) ||
+            !this.lastCtx
+        ) return 'unavailable';
+        const text = req.text.trimStart();
+        if (text.startsWith('/') || text.startsWith('!')) return 'command';
+        const ctx = this.lastCtx;
+        if (typeof ctx.isIdle !== 'function' || typeof ctx.hasPendingMessages !== 'function') return 'unavailable';
+        let session: string;
+        let leaf: string;
+        let model: PiModelView | undefined;
+        let idle = false;
+        let queued = true;
+        try {
+            session = ctx.sessionManager.getSessionId();
+            leaf = ctx.sessionManager.getLeafId() ?? '';
+            model = ctx.model;
+            idle = ctx.isIdle() === true;
+            queued = ctx.hasPendingMessages() !== false;
+        } catch {
+            return 'stale';
+        }
+        if (session !== req.expectedSessionId || leaf !== req.expectedLeafId) return 'stale';
+        if (req.expectedModel) {
+            if (!model || model.provider !== req.expectedModel.provider || model.id !== req.expectedModel.model) return 'stale';
+        } else if (model) {
+            return 'stale';
+        }
+        if (!idle) return 'busy';
+        if (queued) return 'queued';
+        if (this.compactionActive) return 'compaction-active';
+        if (this.compact.pending !== null || this.attachments.active !== operation) return 'pending';
+        if (hasImage) {
+            try {
+                if (!model || model.api === 'pi-virtual' || !Array.isArray(model.input) || !model.input.includes('image')) {
+                    return 'unsupported-model';
+                }
+            } catch {
+                return 'unsupported-model';
+            }
+        }
+        return '';
+    }
+
+    private sendAttachmentAck(requestId: string, outcome: AttachmentPromptOutcome, reason: string): void {
+        if (!this.channel) return;
+        this.channel.sendNonfatal({
+            paneId: this.opts.creds.pane,
+            processId: this.opts.creds.process,
+            runtimeGeneration: this.opts.generation,
+            payload: {
+                $case: 'attachmentPromptAck',
+                value: AttachmentPromptAck.create({ requestId, outcome, reason }),
+            },
+        });
     }
 
     /**

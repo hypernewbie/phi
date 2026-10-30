@@ -1,6 +1,8 @@
 export interface DirectoryTreeOptions {
     startPath: string;
     onSelect(path: string): void;
+    files?: boolean;
+    browse?: (path: string) => Promise<BrowseResponse>;
 }
 
 export interface DirectoryTreeController {
@@ -9,12 +11,15 @@ export interface DirectoryTreeController {
     destroy(): void;
 }
 
-interface BrowseEntry {
+export interface BrowseEntry {
     name: string;
     path: string;
+    kind?: string;
+    sizeBytes?: number;
+    fingerprint?: string;
 }
 
-interface BrowseResponse {
+export interface BrowseResponse {
     path: string;
     parent: string;
     truncated: boolean;
@@ -32,6 +37,7 @@ interface DirectoryNode {
     expanded: boolean;
     pending: boolean;
     error: string;
+    isFile: boolean;
     requestId: number;
     pendingRequest: Promise<boolean> | null;
     element: HTMLDivElement | null;
@@ -184,6 +190,7 @@ function makeNode(name: string, path: string, parent = ''): DirectoryNode {
         expanded: false,
         pending: false,
         error: '',
+        isFile: false,
         requestId: 0,
         pendingRequest: null,
         element: null,
@@ -222,8 +229,15 @@ function mountDirectoryTree(
     const tree = document.createElement('div');
     tree.className = 'directory-tree-scroll';
     tree.setAttribute('role', 'tree');
-    tree.setAttribute('aria-label', 'Directories on this server');
+    tree.setAttribute(
+        'aria-label',
+        options.files
+            ? 'Files and directories on this server'
+            : 'Directories on this server',
+    );
     host.replaceChildren(controls, status, tree);
+    const browseFiles = options.files === true;
+    const browseFn = options.browse ?? browse;
 
     const nodes = new Map<string, DirectoryNode>();
     let root = makeNode(pathName(options.startPath), options.startPath);
@@ -287,6 +301,7 @@ function mountDirectoryTree(
         name: string,
         path: string,
         parent: string,
+        isFile = false,
     ): DirectoryNode => {
         const key = pathKey(path);
         const node = nodes.get(key);
@@ -294,9 +309,11 @@ function mountDirectoryTree(
             node.name = name;
             node.path = path;
             node.parent = parent;
+            node.isFile = isFile;
             return node;
         }
         const created = makeNode(name, path, parent);
+        created.isFile = isFile;
         nodes.set(created.key, created);
         return created;
     };
@@ -311,7 +328,12 @@ function mountDirectoryTree(
         node.parent = data.parent;
         node.truncated = data.truncated;
         node.children = data.entries.map((entry) =>
-            nodeForPath(entry.name, entry.path, data.path),
+            nodeForPath(
+                entry.name,
+                entry.path,
+                data.path,
+                browseFiles && entry.kind === 'file',
+            ),
         );
         node.loaded = true;
         node.pending = false;
@@ -319,10 +341,11 @@ function mountDirectoryTree(
     };
 
     const isExpandable = (node: DirectoryNode): boolean =>
-        !node.loaded ||
-        node.pending ||
-        !!node.error ||
-        node.children.length > 0;
+        !node.isFile &&
+        (!node.loaded ||
+            node.pending ||
+            !!node.error ||
+            node.children.length > 0);
 
     const syncChildren = (
         parent: HTMLElement,
@@ -400,7 +423,9 @@ function mountDirectoryTree(
                 node.emptyState ??= document.createElement('div');
                 node.emptyState.className = 'directory-tree-empty';
                 node.emptyState.setAttribute('role', 'note');
-                node.emptyState.textContent = 'No visible subdirectories.';
+                node.emptyState.textContent = browseFiles
+                    ? 'No visible files or subdirectories.'
+                    : 'No visible subdirectories.';
                 desired.push(node.emptyState);
             }
             if (node.truncated) {
@@ -457,7 +482,7 @@ function mountDirectoryTree(
         node.error = '';
         const request = (async (): Promise<boolean> => {
             try {
-                const data = await browse(node.path);
+                const data = await browseFn(node.path);
                 if (
                     disposed ||
                     generation !== rootGeneration ||
@@ -521,6 +546,7 @@ function mountDirectoryTree(
         entries: node.children.map((child) => ({
             name: child.name,
             path: child.path,
+            kind: child.isFile ? 'file' : 'directory',
         })),
     });
 
@@ -610,7 +636,7 @@ function mountDirectoryTree(
         }
         if (event.target.closest('.directory-tree-retry')) return;
         if (event.detail >= 2) return;
-        selectNode(node, true);
+        selectNode(node, !browseFiles || node.isFile);
     };
 
     const onTreeDoubleClick = (event: MouseEvent): void => {
@@ -721,7 +747,7 @@ function mountDirectoryTree(
         }
         if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
-            selectNode(node, true);
+            selectNode(node, !browseFiles || node.isFile);
             return;
         }
         if (event.key.length !== 1) return;
@@ -765,7 +791,7 @@ function mountDirectoryTree(
         status.textContent = 'Loading parent directory…';
         renderTree();
         try {
-            const data = await browse(parent);
+            const data = await browseFn(parent);
             if (
                 disposed ||
                 navigation !== rootNavigationGeneration ||
@@ -820,7 +846,7 @@ function mountDirectoryTree(
                 }
                 target = cachedListing(pendingNode);
             } else {
-                target = await browse(path);
+                target = await browseFn(path);
             }
         } catch {
             if (current()) status.textContent = '';
@@ -870,7 +896,7 @@ function mountDirectoryTree(
                 parentListing = cachedListing(parentNode);
             } else {
                 try {
-                    parentListing = await browse(parentPath);
+                    parentListing = await browseFn(parentPath);
                 } catch {
                     omitted = true;
                     break;

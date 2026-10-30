@@ -1,7 +1,13 @@
+import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { ServiceError } from '@grpc/grpc-js';
 import {
     type AgentSettled,
+    AttachmentPromptOutcome,
+    AttachmentPromptRequest,
     CompactOutcome,
     LogicalState,
     type PhiToPi,
@@ -15,8 +21,9 @@ import {
 } from './gen/bridge.js';
 import { LIFECYCLE_HEADROOM_BYTES } from './protocol.js';
 import { SHUTDOWN_DRAIN_MS } from './protocol.js';
-import { CAPABILITY_COMPACT, CAPABILITY_CONTEXT } from './protocol.js';
+import { CAPABILITY_ATTACHMENTS, CAPABILITY_COMPACT, CAPABILITY_CONTEXT } from './protocol.js';
 import { CAPABILITY_RELOAD } from './protocol.js';
+import { freshAttachmentLatch } from './attachments.js';
 import { CAPABILITY_HISTORY, CAPABILITY_LIFECYCLE } from './protocol.js';
 import { CAPABILITY_MODELS } from './protocol.js';
 import { CAPABILITY_SKILLS } from './protocol.js';
@@ -288,6 +295,82 @@ describe('Runtime hello', () => {
             CAPABILITY_MODELS,
         ]);
         rt.shutdown();
+    });
+});
+
+describe('Runtime attachment prompts', () => {
+    it('advertises only with a safe root and APIs, then acknowledges the synchronous call', async () => {
+        const root = mkdtempSync(join(tmpdir(), 'phi-attachment-runtime-'));
+        const basename = 'att-0123456789abcdef.png';
+        const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+        writeFileSync(join(root, basename), bytes, { mode: 0o600 });
+        const model = {
+            provider: 'p', id: 'm', api: 'openai-completions', input: ['text', 'image'],
+        } as unknown as PiContextView['model'];
+        const ch = mockChannel();
+        let sendCalls = 0;
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            attachmentRoot: root,
+            attachmentState: freshAttachmentLatch(),
+            sendUserMessage: (() => {
+                sendCalls += 1;
+                return new Promise(() => {});
+            }) as never,
+            makeChannel: wired(ch),
+        });
+        try {
+            rt.start(ctx({ model, isIdle: () => true, hasPendingMessages: () => false }));
+            await sleep(10);
+            const hello = payloadOf(ch.hellos[0]!);
+            if (hello.$case !== 'hello') throw new Error('missing hello');
+            expect(hello.value.capabilities).toContain(CAPABILITY_ATTACHMENTS);
+            const request = AttachmentPromptRequest.create({
+                requestId: '1', expectedSessionId: 'sess', expectedLeafId: 'leaf',
+                expectedModel: { provider: 'p', model: 'm' }, text: 'look',
+                attachments: [{
+                    basename, sizeBytes: BigInt(bytes.length), mimeType: 'image/png',
+                    kind: 'image', sha256: createHash('sha256').update(bytes).digest('hex'),
+                }],
+            });
+            ch.hooks!.onMessage({
+                paneId: CREDS.pane, processId: CREDS.process, runtimeGeneration: 1n,
+                payload: { $case: 'attachmentPromptRequest', value: request },
+            });
+            expect(sendCalls).toBe(1);
+            const ack = ch.nonfatalSends
+                .map((msg) => msg.payload)
+                .find((payload) => payload?.$case === 'attachmentPromptAck');
+            expect(ack?.$case).toBe('attachmentPromptAck');
+            if (ack?.$case === 'attachmentPromptAck') {
+                expect(ack.value.outcome).toBe(AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_DISPATCHED);
+            }
+        } finally {
+            rt.shutdown();
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it('keeps the capability unavailable when readiness APIs are missing', async () => {
+        const root = mkdtempSync(join(tmpdir(), 'phi-attachment-runtime-'));
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS, generation: 1n, compactState: freshCompactLatch(),
+            attachmentRoot: root, attachmentState: freshAttachmentLatch(),
+            sendUserMessage: () => {}, makeChannel: wired(ch),
+        });
+        try {
+            rt.start(ctx());
+            await sleep(10);
+            const hello = payloadOf(ch.hellos[0]!);
+            if (hello.$case !== 'hello') throw new Error('missing hello');
+            expect(hello.value.capabilities).not.toContain(CAPABILITY_ATTACHMENTS);
+        } finally {
+            rt.shutdown();
+            rmSync(root, { recursive: true, force: true });
+        }
     });
 });
 

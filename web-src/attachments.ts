@@ -12,6 +12,303 @@ export interface Attachment {
     source: 'drop' | 'paste';
 }
 
+export interface AttachmentOwner {
+    readonly profileId: string;
+    readonly origin: string;
+    readonly paneId: string;
+    readonly cwd: string;
+    readonly scope?: {
+        readonly signal?: AbortSignal;
+        headers?(extra?: HeadersInit): Record<string, string>;
+    };
+}
+
+export interface AttachmentItem {
+    readonly id: string;
+    readonly name: string;
+    readonly path: string;
+    readonly type: string;
+    readonly sizeBytes: number;
+    readonly kind: 'image' | 'file';
+    readonly sha256: string;
+    readonly source: 'device' | 'server';
+}
+
+export interface AttachmentItemStatus {
+    readonly state: 'ready' | 'receiving' | 'missing';
+    readonly item?: AttachmentItem;
+}
+
+export interface AttachmentPiContext {
+    readonly process_id: string | null;
+    readonly generation: string | null;
+    readonly session_id: string | null;
+    readonly leaf_id: string | null;
+    readonly model: { readonly provider: string; readonly id: string } | null;
+    readonly idle: boolean | null;
+    readonly queued: boolean | null;
+    readonly image_available: boolean | null;
+    readonly available: boolean;
+}
+
+export class AttachmentRequestError extends Error {
+    constructor(
+        message: string,
+        readonly status: number,
+        readonly reason: string,
+        readonly uncertain: boolean,
+    ) {
+        super(message);
+        this.name = 'AttachmentRequestError';
+    }
+}
+
+const ATTACHMENT_READ_TIMEOUT_MS = 10_000;
+const ATTACHMENT_UPLOAD_TIMEOUT_MS = 11 * 60_000;
+
+export function newAttachmentID(): string {
+    const cryptoApi = globalThis.crypto;
+    if (!cryptoApi?.getRandomValues) throw new Error('secure-random-unavailable');
+    if (typeof cryptoApi.randomUUID === 'function') return cryptoApi.randomUUID();
+    const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+    bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+async function attachmentFetch<T>(
+    owner: AttachmentOwner,
+    url: string,
+    init: RequestInit,
+    timeoutMs: number,
+    externalSignal?: AbortSignal,
+): Promise<T> {
+    const controller = new AbortController();
+    let rejectAbort!: (error: AttachmentRequestError) => void;
+    const aborted = new Promise<never>((_resolve, reject) => {
+        rejectAbort = reject;
+    });
+    let settled = false;
+    const cancel = (reason: string) => {
+        if (settled) return;
+        controller.abort();
+        rejectAbort(new AttachmentRequestError(reason, 0, 'uncertain', true));
+    };
+    const onScopeAbort = () => cancel('Attachment owner changed');
+    const onExternalAbort = () => cancel('Attachment request cancelled');
+    owner.scope?.signal?.addEventListener('abort', onScopeAbort, { once: true });
+    externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
+    const timer = setTimeout(() => cancel('Attachment request timed out'), timeoutMs);
+    if (owner.scope?.signal?.aborted) onScopeAbort();
+    if (externalSignal?.aborted) onExternalAbort();
+    const headers = owner.scope?.headers?.(init.headers) ?? {};
+    if (owner.profileId) headers['X-Phi-Backend'] = owner.profileId;
+    const operation = (async () => {
+        if (controller.signal.aborted) throw new DOMException('Attachment request aborted', 'AbortError');
+        const response = await fetch(url, {
+            ...init,
+            headers,
+            cache: 'no-store',
+            credentials: 'same-origin',
+            signal: controller.signal,
+        });
+        const text = await response.text();
+        if (!response.ok) {
+            let reason = 'error';
+            try {
+                const parsed = JSON.parse(text) as { reason?: unknown };
+                if (typeof parsed.reason === 'string') reason = parsed.reason;
+            } catch {
+                // The body is consumed, but a malformed response does not
+                // prove that a mutation was refused.
+                throw new AttachmentRequestError('Attachment result unknown', response.status, 'uncertain', true);
+            }
+            const uncertain = response.status === 503 || response.status >= 500;
+            throw new AttachmentRequestError(
+                uncertain ? 'Attachment result unknown' : `Attachment refused: ${reason}`,
+                response.status,
+                reason,
+                uncertain,
+            );
+        }
+        try {
+            return JSON.parse(text) as T;
+        } catch {
+            throw new AttachmentRequestError('Attachment result unknown', response.status, 'uncertain', true);
+        }
+    })();
+    try {
+        return await Promise.race([operation, aborted]);
+    } catch (error) {
+        if (error instanceof AttachmentRequestError) throw error;
+        throw new AttachmentRequestError('Attachment result unknown', 0, 'uncertain', true);
+    } finally {
+        settled = true;
+        clearTimeout(timer);
+        owner.scope?.signal?.removeEventListener('abort', onScopeAbort);
+        externalSignal?.removeEventListener('abort', onExternalAbort);
+    }
+}
+
+export async function uploadAttachmentItem(
+    file: File,
+    id: string,
+    owner: AttachmentOwner,
+    signal?: AbortSignal,
+): Promise<AttachmentItem> {
+    const form = new FormData();
+    form.append('pane', owner.paneId);
+    form.append('name', file.name);
+    form.append('file', file, file.name || 'attachment');
+    const item = await attachmentFetch<AttachmentItem>(
+        owner,
+        `/api/attachments/v2/items/${encodeURIComponent(id)}`,
+        { method: 'PUT', body: form },
+        ATTACHMENT_UPLOAD_TIMEOUT_MS,
+        signal,
+    );
+    return { ...item, source: 'device' };
+}
+
+export function getAttachmentItemStatus(
+    id: string,
+    owner: AttachmentOwner,
+    signal?: AbortSignal,
+): Promise<AttachmentItemStatus> {
+    const query = new URLSearchParams({ pane: owner.paneId });
+    return attachmentFetch<AttachmentItemStatus>(
+        owner,
+        `/api/attachments/v2/items/${encodeURIComponent(id)}?${query}`,
+        { method: 'GET' },
+        ATTACHMENT_READ_TIMEOUT_MS,
+        signal,
+    );
+}
+
+export function getAttachmentPiContext(
+    owner: AttachmentOwner,
+    signal?: AbortSignal,
+): Promise<AttachmentPiContext> {
+    const query = new URLSearchParams({ pane: owner.paneId });
+    return attachmentFetch<AttachmentPiContext>(
+        owner,
+        `/api/pi-bridge/attachments/context?${query}`,
+        { method: 'GET' },
+        ATTACHMENT_READ_TIMEOUT_MS,
+        signal,
+    );
+}
+
+export interface AttachmentSendBody {
+    readonly id: string;
+    readonly pane: string;
+    readonly context: {
+        readonly process_id: string;
+        readonly generation: string;
+        readonly session_id: string;
+        readonly leaf_id: string;
+        readonly model: { readonly provider: string; readonly id: string } | null;
+    };
+    readonly text: string;
+    readonly attachment_ids: readonly string[];
+}
+
+export interface AttachmentSendResult {
+    readonly id: string;
+    readonly state: 'refused' | 'dispatched' | 'unknown' | 'missing';
+    readonly reason: string;
+}
+
+export function sendAttachmentPrompt(
+    owner: AttachmentOwner,
+    body: AttachmentSendBody,
+    signal?: AbortSignal,
+): Promise<AttachmentSendResult> {
+    return attachmentFetch<AttachmentSendResult>(
+        owner,
+        '/api/pi-bridge/attachments',
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+        45_000,
+        signal,
+    );
+}
+
+export function getAttachmentSendStatus(
+    owner: AttachmentOwner,
+    id: string,
+    signal?: AbortSignal,
+): Promise<AttachmentSendResult> {
+    const query = new URLSearchParams({ pane: owner.paneId, id });
+    return attachmentFetch<AttachmentSendResult>(
+        owner,
+        `/api/pi-bridge/attachments?${query}`,
+        { method: 'GET' },
+        ATTACHMENT_READ_TIMEOUT_MS,
+        signal,
+    );
+}
+
+export interface ServerFileEntry {
+    readonly name: string;
+    readonly path: string;
+    readonly kind: string;
+    readonly sizeBytes?: number;
+    readonly fingerprint?: string;
+}
+
+export interface ServerFileListing {
+    readonly path: string;
+    readonly parent: string;
+    readonly truncated: boolean;
+    readonly entries: readonly ServerFileEntry[];
+}
+
+export function browseServerFiles(
+    owner: AttachmentOwner,
+    path: string,
+    signal?: AbortSignal,
+): Promise<ServerFileListing> {
+    const query = new URLSearchParams({ pane: owner.paneId, path });
+    return attachmentFetch<ServerFileListing>(
+        owner,
+        `/api/attachments/v2/browse?${query}`,
+        { method: 'GET' },
+        ATTACHMENT_READ_TIMEOUT_MS,
+        signal,
+    );
+}
+
+export interface ServerFileSnapshot {
+    readonly id: string;
+    readonly path: string;
+    readonly fingerprint: string;
+}
+
+export async function snapshotServerFile(
+    owner: AttachmentOwner,
+    snapshot: ServerFileSnapshot,
+    signal?: AbortSignal,
+): Promise<AttachmentItem> {
+    const item = await attachmentFetch<AttachmentItem>(
+        owner,
+        '/api/attachments/v2/server-items',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                id: snapshot.id,
+                pane: owner.paneId,
+                path: snapshot.path,
+                expected_fingerprint: snapshot.fingerprint,
+            }),
+        },
+        ATTACHMENT_READ_TIMEOUT_MS,
+        signal,
+    );
+    return { ...item, source: 'server' };
+}
+
 // formatAttachment is the single source of truth for coder-specific
 // path formatting. Delegates to the registry-aware implementation in
 // web-src/coders.ts so every call site (markdown.ts, filetree.ts,
