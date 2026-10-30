@@ -466,11 +466,12 @@ async function contrast(page: Page, events: BrowserEvents) {
         const result = await measure(id);
         console.log(`contrast ${state} ${id}: ${JSON.stringify(result)}`);
         expect(result.selfCheck).toBeCloseTo(21, 5);
+        const hovered = state !== 'idle';
         expect(result.foreground.alpha).toBe(1);
-        expect(result.background.alpha).toBe(1);
-        expect(result.barOpacity).toBe(1);
+        expect(result.background.alpha).toBe(0);
+        expect(result.barOpacity).toBe(hovered ? 1 : 0.35);
         expect(result.gutterOpacity).toBe(1);
-        expect(result.width).toBe('8px');
+        expect(result.width).toBe(hovered ? '4px' : '3px');
         expect(result.contrast).toBeGreaterThanOrEqual(3);
     };
     await page.mouse.move(0, 0);
