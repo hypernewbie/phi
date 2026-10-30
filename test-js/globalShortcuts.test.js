@@ -75,11 +75,34 @@ describe('App.initGlobalShortcuts', () => {
         expect(a.markdownManager.openDiagModal).not.toHaveBeenCalled();
     });
 
+    it('mounts controls early but reports readiness only after background initialization', async () => {
+        const a = makeApp();
+        let finish;
+        a.applyFastMode = vi.fn();
+        a.initOnce = vi.fn();
+        a.revalidate = vi.fn(
+            () =>
+                new Promise((resolve) => {
+                    finish = resolve;
+                }),
+        );
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        const initializing = a.init();
+        expect(a.initOnce).toHaveBeenCalledOnce();
+        expect(log).not.toHaveBeenCalled();
+        finish();
+        await initializing;
+        expect(log).toHaveBeenCalledWith('[app] Phi initialized successfully');
+    });
+
     it('is actually called from App.init() so the shortcut is live', async () => {
         // Regression guard for the exact bug found in review: the method
-        // existed but init() never called it. Assert the source of init()
-        // references initGlobalShortcuts so this can't silently regress.
-        const src = App.prototype.init.toString();
-        expect(src).toContain('initGlobalShortcuts');
+        // existed but init() never called it. init() delegates to initOnce()
+        // so Settings mounts before background reads; initOnce() must call
+        // initGlobalShortcuts.
+        const initSrc = App.prototype.init.toString();
+        expect(initSrc).toContain('initOnce');
+        const onceSrc = App.prototype.initOnce.toString();
+        expect(onceSrc).toContain('initGlobalShortcuts');
     });
 });

@@ -1,5 +1,5 @@
 import { mountDirectoryTree, } from './path-picker.js';
-import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname, isCompactViewport, setServerHostOverride, serverKey, } from './util.js';
+import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname, isCompactViewport, serverKey, } from './util.js';
 import { openPiRpcChatTab } from './chat-pi/tab.js';
 import { createReviewTranscriptView } from './review-transcript.js';
 import { loadCoderRegistry, openCodePaneMode, visibleCoders, getCoder, hasTranscript, hasPiRpc, hasRename, isShell, renderLogo, RESERVED_CODER_IDS, } from './coders.js';
@@ -427,41 +427,11 @@ export class SessionsManager {
             this.app.useExistingTerminalTab = !!data.use_existing_terminal_tab;
             this.app.useHiddenTerminal = !!data.use_hidden_terminal;
             this.app.applyFastMode?.();
-            let ls = null;
-            try {
-                ls = JSON.parse(localStorage.getItem('phi_appearance') || 'null');
-            }
-            catch {
-                /* ignore */
-            }
-            this.app.uiFontFamily =
-                (ls?.ui_font_family ?? data.ui_font_family) || '';
-            this.app.uiFontSize =
-                Number(ls?.ui_font_size ?? data.ui_font_size) || 0;
+            this.app.ingestAppearance?.(data);
             // Server resolves and clamps the page size; missing/older config
-            // falls back to 10. Not part of phi_appearance.
+            // falls back to 10. Not part of appearance preferences.
             this.sessionListPageSize =
                 Number(data.session_list_page_size) || 10;
-            this.app.terminalFontFamily =
-                (ls?.terminal_font_family ??
-                    data.terminal_font_family) || '';
-            this.app.terminalFontSize =
-                Number(ls?.terminal_font_size ?? data.terminal_font_size) || 0;
-            this.app.hostnameOverride =
-                (ls?.hostname_override ?? data.hostname_override) ||
-                    '';
-            setServerHostOverride(this.app.hostnameOverride);
-            this.app.customFontName = ls?.custom_font_name || '';
-            this.app.terminalBgName = ls?.terminal_bg_name || '';
-            this.app.terminalBgDarkness =
-                typeof ls?.terminal_bg_darkness === 'number'
-                    ? ls.terminal_bg_darkness
-                    : 98;
-            this.app.terminalBgBlur =
-                typeof ls?.terminal_bg_blur === 'number'
-                    ? ls.terminal_bg_blur
-                    : 0;
-            this.app.applyUIFont?.();
             void this.app.loadCustomFont?.();
             void this.app.loadCustomBg?.();
         }
@@ -485,6 +455,12 @@ export class SessionsManager {
             }
         }
         this.updateOpenCodeServiceVisibility?.();
+        if (this.app) {
+            this.app.settingsReady = true;
+            document
+                .querySelector('.settings-overlay')
+                ?.dispatchEvent(new Event('phi-settings-refresh'));
+        }
     }
     async loadConfig() {
         try {

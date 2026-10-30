@@ -13655,6 +13655,8 @@ export class TabManager {
                         /* tolerate closed term */
                     }
                 }
+            } else if (tab.coder === 'pi-rpc' && tab.termContainer) {
+                tab.termContainer.style.fontFamily = safe;
             }
         }
         // Diff panel xterm lives on app.diffController (not in this.tabs), so
@@ -13671,7 +13673,11 @@ export class TabManager {
         const preferred = terminalPreferredFontSize(size);
         const activeTab = this.getActiveTab();
         for (const tab of this.tabs.values()) {
-            if (!tab.term) continue;
+            if (!tab.term) {
+                if (tab.coder === 'pi-rpc' && tab.termContainer)
+                    tab.termContainer.style.fontSize = `${preferred}px`;
+                continue;
+            }
             // A hidden xterm has no meaningful proposed dimensions. Keep its
             // preferred scale; activation resolves it once it has a viewport.
             const resolved =

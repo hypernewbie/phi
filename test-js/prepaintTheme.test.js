@@ -94,8 +94,12 @@ describe('theme.js & prepaint parity', () => {
 
         const styleEl = document.getElementById('phi-prepaint-appearance');
         expect(styleEl).not.toBeNull();
-        expect(styleEl?.textContent).toContain('font-family:Inter, sans-serif');
-        expect(styleEl?.textContent).toContain('font-size:14px');
+        expect(styleEl.sheet.cssRules).toHaveLength(1);
+        expect(styleEl.sheet.cssRules[0].selectorText).toBe('body');
+        expect(styleEl.sheet.cssRules[0].style.fontFamily).toBe(
+            'Inter, sans-serif',
+        );
+        expect(styleEl.sheet.cssRules[0].style.fontSize).toBe('14px');
     });
 
     it('all html entry pages load prepaint.js, fonts.css, and style.css', () => {

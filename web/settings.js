@@ -4,14 +4,18 @@ import {
     readLowPowerLocal,
     writeLowPowerLocal,
 } from './util.js';
-import { setAccessPassword, clearAccessPassword } from './auth.js';
+import { setAccessPassword, clearAccessPassword, bootstrapAccessAuth } from './auth.js';
 import { tryNative } from './desktop.js';
+import {
+    currentAppearanceProfile, readProfileOverride, writeProfileOverride,
+    appearanceOwner, captureAppearanceScope, legacyAppearanceKey,
+} from './mobile-appearance.js';
 
 export function broadcastConfigSync(type, payload = {}) {
     try {
         if (typeof BroadcastChannel !== 'undefined') {
             const ch = new BroadcastChannel('phi_config_sync');
-            ch.postMessage({ type, ...payload });
+            ch.postMessage({ type, owner: appearanceOwner(captureAppearanceScope()), ...payload });
             ch.close();
         }
     } catch {}
@@ -19,13 +23,27 @@ export function broadcastConfigSync(type, payload = {}) {
 
 export function openSettingsModal(app, accentColors, opts = {}) {
     if (document.querySelector('.settings-overlay')) return;
-    if (!opts.standalone && tryNative('config', {})) return;
+    if (!opts.standalone && tryNative('config', { page: opts.page })) return;
+    const scope = app.scope || captureAppearanceScope();
+    const context = app.authContext;
+    const request = context?.fetch || ((...args) => fetch(...args));
+    const owner = appearanceOwner(scope);
+    const broadcast = (type, payload = {}) => broadcastConfigSync(type, { owner, ...payload });
+    const opener = opts.opener || document.activeElement;
+    const desktop = app.desktopAppearance || {
+        ui_font_family: app.uiFontFamily, ui_font_size: app.uiFontSize,
+        terminal_font_family: app.terminalFontFamily, terminal_font_size: app.terminalFontSize,
+    };
 
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay settings-overlay hidden';
 
     const modal = document.createElement('div');
     modal.className = 'modal-content settings-modal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-label', 'Phi Settings');
+    modal.tabIndex = -1;
 
     const header = document.createElement('div');
     header.className = 'modal-header settings-header';
@@ -65,6 +83,35 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     const body = document.createElement('div');
     body.className = 'modal-body settings-body';
 
+    const navigation = document.createElement('div');
+    navigation.className = 'settings-navigation';
+    const desktopButton = document.createElement('button');
+    desktopButton.className = 'btn btn-primary'; desktopButton.type = 'button'; desktopButton.textContent = 'Settings';
+    desktopButton.id = 'settings-desktop-view';
+    const mobileButton = document.createElement('button');
+    mobileButton.className = 'btn btn-primary'; mobileButton.type = 'button'; mobileButton.textContent = 'Mobile Settings';
+    mobileButton.id = 'settings-mobile-view';
+    navigation.append(desktopButton, mobileButton);
+    body.appendChild(navigation);
+
+    const profileGroup = _buildSettingsGroup('This browser');
+    const profileRow = _buildSelectRow('Appearance profile', 'settings-appearance-profile', [
+        { value: 'auto', label: 'Auto' }, { value: 'desktop', label: 'Desktop' }, { value: 'mobile', label: 'Mobile' },
+    ], readProfileOverride());
+    profileGroup.appendChild(profileRow);
+    const profileWarning = document.createElement('p');
+    profileWarning.className = 'settings-row-hint';
+    profileGroup.appendChild(profileWarning);
+    const profileSelect = profileRow.querySelector('select');
+    if (new URLSearchParams(location.search).get('desktop') === '1' || new URLSearchParams(location.search).get('desktop-popout') === '1' || window.__phiDesktop || location.protocol === 'phi-app:') {
+        profileSelect.disabled = true;
+        profileWarning.textContent = 'Native desktop always uses the desktop appearance.';
+    }
+    body.appendChild(profileGroup);
+    const mobileGroup = _buildSettingsGroup('Mobile appearance');
+    mobileGroup.id = 'settings-mobile-appearance';
+    body.appendChild(mobileGroup);
+
     const appGroup = _buildSettingsGroup('Appearance');
     body.appendChild(appGroup);
 
@@ -97,14 +144,14 @@ export function openSettingsModal(app, accentColors, opts = {}) {
         'UI font',
         'settings-ui-font',
         uiFontOptions,
-        app.uiFontFamily,
+        desktop.ui_font_family,
     );
     appGroup.appendChild(uiFontRow);
 
     const uiSizeRow = _buildNumberRow(
         'UI font size',
         'settings-ui-font-size',
-        app.uiFontSize || 14,
+        desktop.ui_font_size || 14,
         10,
         24,
     );
@@ -171,18 +218,19 @@ export function openSettingsModal(app, accentColors, opts = {}) {
         'Terminal font',
         'settings-term-font',
         termFontOptions,
-        app.terminalFontFamily,
+        desktop.terminal_font_family,
     );
     appGroup.appendChild(termFontRow);
 
     const termSizeRow = _buildNumberRow(
         'Terminal font size',
         'settings-term-font-size',
-        app.terminalFontSize || 14,
+        desktop.terminal_font_size || 14,
         8,
         32,
     );
     appGroup.appendChild(termSizeRow);
+    const mobile = _buildMobileAppearance(app, mobileGroup, context, uiFontOptions, termFontOptions);
 
     // Mobile-only lane: shrinks xterm history under the fast-mode gate
     // (forced on for mobile viewports). 0 = full history, same as
@@ -200,7 +248,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     uploadRow.className = 'settings-row';
     const uploadLabel = document.createElement('label');
     uploadLabel.htmlFor = 'settings-font-upload';
-    uploadLabel.textContent = 'Upload font…';
+    uploadLabel.textContent = 'Upload font (this browser only)…';
     uploadRow.appendChild(uploadLabel);
     const fileInput = document.createElement('input');
     fileInput.type = 'file';
@@ -260,6 +308,10 @@ export function openSettingsModal(app, accentColors, opts = {}) {
         40,
     );
     appGroup.appendChild(bgBlurRow);
+    const assetHint = document.createElement('p');
+    assetHint.className = 'settings-row-hint';
+    assetHint.textContent = 'Font and background files stay in this browser. Saving preferences does not upload them to other devices.';
+    appGroup.appendChild(assetHint);
 
     const resetRow = document.createElement('div');
     resetRow.className = 'settings-row';
@@ -296,7 +348,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
         app.hostnameOverride = hostInput.value.trim();
         setServerHostOverride(app.hostnameOverride);
         app._saveAppearanceLocal();
-        debouncedPersist();
+        debouncedPersist({ hostname_override: app.hostnameOverride });
     });
     const hiddenRow = _buildCheckboxRow(
         'Use separate hidden terminal for commands',
@@ -458,7 +510,12 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     document.body.appendChild(overlay);
 
     const close = () => {
-        document.removeEventListener('keydown', onKeydown);
+        document.removeEventListener('keydown', onKeydown, true);
+        document.removeEventListener('focusin', onFocusin, true);
+        overlay.removeEventListener('phi-settings-refresh', refreshShared);
+        mobile.unsubscribe();
+        clearTimeout(persistTimer);
+        flushLegacy();
         // config.html fills an Electron child BrowserWindow. Removing its
         // only overlay leaves the native window alive but black; close the
         // owning popup instead. The marker is attached only by tryNative(),
@@ -469,30 +526,61 @@ export function openSettingsModal(app, accentColors, opts = {}) {
         }
         overlay.classList.add('hidden');
         overlay.remove();
+        const bounds = opener?.isConnected ? opener.getBoundingClientRect() : null;
+        const visible = bounds && bounds.width > 0 && bounds.height > 0 &&
+            bounds.right > 0 && bounds.left < innerWidth && bounds.bottom > 0 && bounds.top < innerHeight;
+        const focusTarget = visible ? opener : document.getElementById('mobile-sidebar-toggle');
+        focusTarget?.focus();
+    };
+    const onFocusin = (e) => {
+        if (!overlay.classList.contains('hidden') && !modal.contains(e.target) &&
+            !document.querySelector('.access-auth-overlay')) closeBtn.focus({ preventScroll: true });
     };
     const onKeydown = (e) => {
-        if (e.key === 'Escape') close();
+        if (document.querySelector('.access-auth-overlay')) return;
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            close();
+        } else if (e.key === 'Tab') {
+            e.stopPropagation();
+            const controls = Array.from(modal.querySelectorAll(
+                'button, input, textarea, select, [tabindex="0"]',
+            )).filter(el => !el.disabled && !el.closest('[hidden], .hidden') && getComputedStyle(el).display !== 'none');
+            const index = controls.indexOf(document.activeElement);
+            if ((e.shiftKey && index <= 0) || (!e.shiftKey && (index < 0 || index === controls.length - 1))) {
+                e.preventDefault();
+                (e.shiftKey ? controls.at(-1) : controls[0])?.focus();
+            }
+        }
     };
     closeBtn.addEventListener('click', close);
     doneBtn.addEventListener('click', close);
     overlay.addEventListener('click', (e) => {
         if (e.target === overlay) close();
     });
-    document.addEventListener('keydown', onKeydown);
+    document.addEventListener('keydown', onKeydown, true);
+    document.addEventListener('focusin', onFocusin, true);
 
     let persistTimer = null;
-    const debouncedPersist = () => {
+    let legacyPatch = {};
+    const flushLegacy = () => {
+        if (!Object.keys(legacyPatch).length) return;
+        const fields = legacyPatch;
+        legacyPatch = {};
+        app.persistAppearance(fields);
+        broadcast('appearance');
+    };
+    const debouncedPersist = (fields) => {
+        Object.assign(legacyPatch, fields);
         clearTimeout(persistTimer);
-        persistTimer = setTimeout(() => {
-            app.persistAppearance();
-            broadcastConfigSync('appearance');
-        }, 300);
+        persistTimer = setTimeout(flushLegacy, 300);
     };
     uiFontRow.querySelector('select')?.addEventListener('change', (e) => {
         app.uiFontFamily = e.target.value;
         app.applyUIFont();
         app._saveAppearanceLocal();
-        debouncedPersist();
+        debouncedPersist({ ui_font_family: app.uiFontFamily });
     });
     uiSizeRow.querySelector('input')?.addEventListener('input', (e) => {
         const n = parseInt(e.target.value, 10);
@@ -500,7 +588,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
         app.uiFontSize = n;
         app.applyUIFont();
         app._saveAppearanceLocal();
-        debouncedPersist();
+        debouncedPersist({ ui_font_size: app.uiFontSize });
     });
     termFontRow.querySelector('select')?.addEventListener('change', (e) => {
         app.terminalFontFamily = e.target.value;
@@ -508,7 +596,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             app.terminalFontFamily || 'JetBrains Mono, monospace',
         );
         app._saveAppearanceLocal();
-        debouncedPersist();
+        debouncedPersist({ terminal_font_family: app.terminalFontFamily });
     });
     termSizeRow.querySelector('input')?.addEventListener('input', (e) => {
         const n = parseInt(e.target.value, 10);
@@ -516,7 +604,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
         app.terminalFontSize = n;
         app.tabManager?.applyTerminalFontSizeToAll(n);
         app._saveAppearanceLocal();
-        debouncedPersist();
+        debouncedPersist({ terminal_font_size: app.terminalFontSize });
     });
     mobileScrollRow.querySelector('input')?.addEventListener('input', (e) => {
         const raw = e.target.value.trim();
@@ -532,7 +620,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             app.mobileScrollbackRows = n;
         }
         app._saveAppearanceLocal();
-        debouncedPersist();
+        debouncedPersist({ mobile_scrollback_rows: app.mobileScrollbackRows });
     });
     fileInput.addEventListener('change', async (e) => {
         const file = e.target.files?.[0];
@@ -546,6 +634,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             await app._putCustomFont(file.name, file);
             app._injectCustomFontFace(file);
             app.customFontName = file.name;
+            mobile.refresh();
             app._saveAppearanceLocal();
             broadcastConfigSync('appearance');
             app.showToast(
@@ -635,7 +724,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
 
     resetBtn.addEventListener('click', async () => {
         try {
-            localStorage.removeItem('phi_appearance');
+            localStorage.removeItem(legacyAppearanceKey(scope));
         } catch {}
         document.getElementById('phi-prepaint-appearance')?.remove();
         await app.clearCustomFont?.();
@@ -661,8 +750,9 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             'JetBrains Mono, monospace',
         );
         app.tabManager?.applyTerminalFontSizeToAll(0);
-        app.persistAppearance();
-        broadcastConfigSync('appearance');
+        app._saveAppearanceLocal();
+        app.persistAppearance({ ui_font_family: '', ui_font_size: 0, terminal_font_family: '', terminal_font_size: 0 });
+        broadcast('appearance');
         document.getElementById('settings-ui-font').value = '';
         document.getElementById('settings-ui-font-size').value = '14';
         document.getElementById('settings-term-font').value = '';
@@ -679,7 +769,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             if (rInput) rInput.disabled = false;
         }
         try {
-            await fetch('/api/config/use-hidden-terminal', {
+            await request('/api/config/use-hidden-terminal', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ enabled: app.useHiddenTerminal }),
@@ -695,7 +785,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     reuseRow.querySelector('input')?.addEventListener('change', async (e) => {
         app.useExistingTerminalTab = !!e.target.checked;
         try {
-            await fetch('/api/config/use-existing-terminal-tab', {
+            await request('/api/config/use-existing-terminal-tab', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ enabled: app.useExistingTerminalTab }),
@@ -713,7 +803,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
                 app.config.auto_reconnect = enabled ? 'visible' : 'off';
             app.tabManager?.updateDisconnectBanner?.();
             try {
-                await fetch('/api/config/auto-reconnect', {
+                await request('/api/config/auto-reconnect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ enabled }),
@@ -764,7 +854,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             const enabled = !!e.target.checked;
             if (app.config) app.config.pi_offline = enabled;
             try {
-                await fetch('/api/config/pi-offline', {
+                await request('/api/config/pi-offline', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ enabled }),
@@ -789,7 +879,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             const enabled = !!e.target.checked;
             if (app.config) app.config.pi_bridge_no_inject = enabled;
             try {
-                await fetch('/api/config/pi-bridge-no-inject', {
+                await request('/api/config/pi-bridge-no-inject', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ enabled }),
@@ -815,7 +905,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             if (app.config)
                 app.config.claude_dangerously_skip_permissions = enabled;
             try {
-                await fetch('/api/config/claude-dangerously-skip-permissions', {
+                await request('/api/config/claude-dangerously-skip-permissions', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ enabled }),
@@ -841,7 +931,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             if (app.config) app.config.agy_theme_ansi = enabled;
             app.tabManager?.applyThemeToAllActiveTerminals?.();
             try {
-                await fetch('/api/config/agy-theme-ansi', {
+                await request('/api/config/agy-theme-ansi', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ enabled }),
@@ -885,7 +975,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             const minutes = parseInt(e.target.value, 10) || 0;
             if (app.config) app.config.opencode_idle_stop_minutes = minutes;
             try {
-                await fetch('/api/config/opencode-idle-stop', {
+                await request('/api/config/opencode-idle-stop', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ minutes }),
@@ -914,7 +1004,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
         setPasswordBtn.disabled = true;
         showError('');
         try {
-            await setAccessPassword(newPw);
+            await setAccessPassword(newPw, context);
             clearInputs();
             app.accessAuthEnabled = true;
             stateDot.className = 'settings-access-dot is-on';
@@ -943,7 +1033,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     confirmRemoveBtn.addEventListener('click', async () => {
         confirmRemoveBtn.disabled = true;
         try {
-            await clearAccessPassword();
+            await clearAccessPassword(context);
             app.accessAuthEnabled = false;
             stateDot.className = 'settings-access-dot is-off';
             stateText.textContent = 'Disabled';
@@ -967,11 +1057,214 @@ export function openSettingsModal(app, accentColors, opts = {}) {
         el.addEventListener('input', () => showError(''));
     });
 
-    if (opts.standalone) {
+    const desktopRows = [uiFontRow, uiSizeRow, termFontRow, termSizeRow, resetRow];
+    let page = opts.page === 'mobile' || currentAppearanceProfile() === 'mobile' ? 'mobile' : 'desktop';
+    const selectView = (selected) => {
+        page = currentAppearanceProfile() === 'mobile' ? 'mobile' : selected;
+        desktopButton.hidden = currentAppearanceProfile() === 'mobile';
+        desktopButton.setAttribute('aria-pressed', String(page === 'desktop'));
+        desktopButton.classList.toggle('btn-accent', page === 'desktop');
+        mobileButton.classList.toggle('btn-accent', page === 'mobile');
+        mobileButton.setAttribute('aria-pressed', String(page === 'mobile'));
+        mobileGroup.hidden = page !== 'mobile';
+        for (const row of desktopRows) row.hidden = page === 'mobile';
+        appGroup.querySelector('h4').textContent = page === 'mobile' ? 'Shared appearance' : 'Appearance';
+        if (page === 'mobile') mobileGroup.appendChild(mobileScrollRow);
+        else appGroup.insertBefore(mobileScrollRow, uploadRow);
+    };
+    desktopButton.addEventListener('click', () => selectView('desktop'));
+    mobileButton.addEventListener('click', () => { selectView('mobile'); void app.mobileAppearanceStore?.refresh(); });
+    profileSelect.addEventListener('change', () => {
+        profileWarning.textContent = writeProfileOverride(profileSelect.value) ? '' : 'Profile choice is memory-only; browser storage is unavailable.';
+        app.applyAppearanceProfile?.();
+        selectView(page);
+    });
+    selectView(page);
+
+    // Reconcile authorized shared controls in place; never erase an edited input.
+    const sharedNote = document.createElement('p');
+    sharedNote.className = 'settings-row-hint';
+    body.insertBefore(sharedNote, behGroup);
+    body.addEventListener('input', event => { event.target.dataset.settingsEdited = '1'; });
+    body.addEventListener('change', event => { event.target.dataset.settingsEdited = '1'; });
+    const refreshShared = () => {
+        mobile.refresh?.();
+        const ready = app.settingsReady !== false;
+        sharedNote.textContent = ready ? '' : 'Shared server settings are unavailable until the background refresh succeeds.';
+        for (const group of [behGroup, securityGroup]) for (const control of group.querySelectorAll('input, select, button')) control.disabled = !ready;
+        mobileScrollRow.querySelector('input').disabled = !ready;
+        if (ready && app.config) {
+            for (const [id, key] of Object.entries({
+                'settings-use-hidden-terminal': 'use_hidden_terminal', 'settings-reuse-shell-tab': 'use_existing_terminal_tab',
+                'settings-pi-offline': 'pi_offline', 'settings-pi-bridge-no-inject': 'pi_bridge_no_inject',
+                'settings-claude-skip-permissions': 'claude_dangerously_skip_permissions', 'settings-agy-theme-ansi': 'agy_theme_ansi',
+            })) {
+                const control = overlay.querySelector(`#${id}`);
+                if (!control.dataset.settingsEdited) control.checked = !!app.config[key];
+            }
+            if (!hostInput.dataset.settingsEdited) hostInput.value = app.hostnameOverride || '';
+            const scroll = mobileScrollRow.querySelector('input');
+            if (!scroll.dataset.settingsEdited) scroll.value = String(app.mobileScrollbackRows || 0);
+            const reconnect = autoReconnectRow.querySelector('input');
+            if (!reconnect.dataset.settingsEdited) reconnect.checked = (app.config.auto_reconnect || 'visible') === 'visible';
+            const idle = openCodeIdleRow.querySelector('select');
+            if (!idle.dataset.settingsEdited) idle.value = String(app.config.opencode_idle_stop_minutes || 0);
+            const lowPower = fastModeRow.querySelector('input');
+            if (!lowPower.dataset.settingsEdited && storedLowPower === null) lowPower.checked = !!app.config.fast_mode;
+            if (app.useHiddenTerminal) reuseRow.querySelector('input').disabled = true;
+        }
+    };
+    overlay.addEventListener('phi-settings-refresh', refreshShared);
+    refreshShared();
+    void app.mobileAppearanceStore?.refresh();
+    const reveal = () => {
+        if (!overlay.isConnected) return;
         overlay.classList.remove('hidden');
-    } else {
-        requestAnimationFrame(() => overlay.classList.remove('hidden'));
+        closeBtn.focus({ preventScroll: true });
+    };
+    if (opts.standalone) reveal();
+    else requestAnimationFrame(reveal);
+}
+
+function _buildMobileAppearance(app, group, context, uiFontOptions, termFontOptions) {
+    const store = app.mobileAppearanceStore;
+    const invalidSizes = new Set();
+    const edit = (fields) => {
+        store.edit(fields);
+        if (invalidSizes.size) store.invalidateInput();
+    };
+    const families = [
+        { key: 'ui_font_family', label: 'Mobile UI font', id: 'settings-mobile-ui-font', options: uiFontOptions },
+        { key: 'terminal_font_family', label: 'Mobile terminal font', id: 'settings-mobile-term-font', options: termFontOptions },
+    ].map(field => {
+        const row = _buildSelectRow(field.label, field.id, [
+            { value: 'null', label: 'Inherit desktop' },
+            ...field.options.map(option => ({ ...option, value: JSON.stringify(option.value) })),
+        ], JSON.stringify(store?.values[field.key] ?? null));
+        const control = row.querySelector('select');
+        control.addEventListener('change', () => edit({ [field.key]: JSON.parse(control.value) }));
+        group.appendChild(row);
+        return { ...field, control };
+    });
+    const sizes = [
+        { key: 'ui_font_size', label: 'Mobile UI font size', id: 'settings-mobile-ui-font-size', resetId: 'settings-mobile-size-reset', fallback: 17, min: 10, max: 24 },
+        { key: 'terminal_font_size', label: 'Mobile terminal font size', id: 'settings-mobile-term-font-size', resetId: 'settings-mobile-term-size-reset', fallback: 14, min: 8, max: 32 },
+    ].map(field => {
+        const row = _buildNumberRow(field.label, field.id, store?.values[field.key] ?? field.fallback, field.min, field.max);
+        const control = row.querySelector('input');
+        const reset = document.createElement('button');
+        reset.type = 'button'; reset.className = 'btn btn-primary'; reset.id = field.resetId; reset.textContent = `Default (${field.fallback})`;
+        row.appendChild(reset);
+        group.appendChild(row);
+        control.addEventListener('input', () => {
+            const n = Number(control.value);
+            if (!control.value.trim() || !Number.isInteger(n) || n < field.min || n > field.max) {
+                invalidSizes.add(field.key);
+                control.setAttribute('aria-invalid', 'true');
+                store.invalidateInput();
+                return;
+            }
+            invalidSizes.delete(field.key);
+            control.removeAttribute('aria-invalid');
+            edit({ [field.key]: n });
+        });
+        reset.addEventListener('click', () => {
+            invalidSizes.delete(field.key);
+            control.removeAttribute('aria-invalid');
+            control.value = String(field.fallback);
+            edit({ [field.key]: null });
+        });
+        return { ...field, control, reset };
+    });
+    const fontNote = document.createElement('p'); fontNote.className = 'settings-row-hint'; fontNote.id = 'settings-mobile-font-note'; group.appendChild(fontNote);
+    const resetAll = document.createElement('button');
+    resetAll.type = 'button'; resetAll.className = 'btn btn-primary'; resetAll.id = 'settings-mobile-reset'; resetAll.textContent = 'Reset mobile appearance';
+    resetAll.addEventListener('click', () => {
+        invalidSizes.clear();
+        for (const field of sizes) { field.control.removeAttribute('aria-invalid'); field.control.value = String(field.fallback); }
+        edit({ ui_font_family: null, ui_font_size: null, terminal_font_family: null, terminal_font_size: null });
+    });
+    group.appendChild(resetAll);
+    const status = document.createElement('p');
+    status.id = 'settings-mobile-status'; status.className = 'settings-row-hint'; status.setAttribute('role', 'status');
+    group.appendChild(status);
+    const desired = document.createElement('p'); desired.className = 'settings-row-hint'; group.appendChild(desired);
+    const actions = document.createElement('div'); actions.className = 'settings-row-controls'; group.appendChild(actions);
+    const action = (id, label, run) => {
+        const button = document.createElement('button');
+        button.id = id; button.type = 'button'; button.className = 'btn btn-primary'; button.textContent = label;
+        button.addEventListener('click', () => { void Promise.resolve(run()).catch(error => {
+            status.textContent = error instanceof Error ? error.message : 'Changes are retained; action failed.';
+        }); });
+        actions.appendChild(button); return button;
+    };
+    const save = action('settings-mobile-save', 'Save my changes', () => store.saveMyChanges());
+    const useServer = action('settings-mobile-use-server', 'Use server values', () => store.useServerValues());
+    const resolve = action('settings-mobile-resolve', 'Resolve', () => store.resolve());
+    const refresh = action('settings-mobile-refresh', 'Refresh', () => store.refresh(true));
+    const signIn = action('settings-mobile-sign-in', 'Sign in again', async () => {
+        await bootstrapAccessAuth(context);
+        await store.refresh(true);
+    });
+    const drafts = document.createElement('div'); drafts.id = 'settings-mobile-drafts'; group.appendChild(drafts);
+    if (!store) {
+        for (const control of group.querySelectorAll('input, select, button')) control.disabled = true;
+        actions.hidden = true;
+        status.textContent = 'Mobile settings are unavailable in this view.';
+        return { unsubscribe() {}, refresh() {} };
     }
+    let deadlineTimer = null;
+    const render = () => {
+        if (deadlineTimer) clearTimeout(deadlineTimer);
+        status.textContent = store.status;
+        for (const field of sizes)
+            if (document.activeElement !== field.control && !invalidSizes.has(field.key)) field.control.value = String(store.values[field.key] ?? field.fallback);
+        for (const field of families) {
+            const value = store.values[field.key];
+            const inherited = store.inheritance?.[field.key] || (field.key === 'ui_font_family' ? 'System default' : 'Default (JetBrains Mono)');
+            field.control.options[0].textContent = `Inherit desktop — ${inherited}`;
+            const encoded = JSON.stringify(value);
+            if (![...field.control.options].some(option => option.value === encoded)) field.control.add(new Option(`Current: ${value}`, encoded));
+            if (app.customFontName && ![...field.control.options].some(option => option.value === JSON.stringify('Phi Custom Font'))) field.control.add(new Option(`Custom: ${app.customFontName}`, JSON.stringify('Phi Custom Font')));
+            field.control.value = encoded;
+        }
+        const missingCustom = families.some(field => (store.values[field.key] ?? store.inheritance?.[field.key]) === 'Phi Custom Font') && !document.getElementById('phi-custom-fonts');
+        fontNote.textContent = [missingCustom ? 'Saved font unavailable on this device. Using a readable fallback; the saved choice is unchanged.' : '', store.inheritanceWarning || ''].filter(Boolean).join(' ');
+        const attempt = store.attempt;
+        desired.textContent = attempt ? `Desired values: ${JSON.stringify(attempt.fields)}. The save may already have applied. Resolve checks the server and blocks older pending saves.` : '';
+        save.hidden = !store.pending;
+        save.disabled = !!attempt || store.invalid || !!store.storageWarning;
+        useServer.hidden = !store.pending; useServer.disabled = !!attempt;
+        resolve.hidden = !attempt;
+        resolve.textContent = attempt?.fences.length ? 'Resolve again' : 'Resolve';
+        const remaining = (attempt?.fences.at(-1)?.deadline || 0) - Date.now();
+        resolve.disabled = remaining > 0;
+        if (remaining > 0) deadlineTimer = setTimeout(render, remaining + 1);
+        refresh.hidden = !store.unavailable && !store.storageWarning && !store.error;
+        signIn.hidden = !store.error.includes('Sign in');
+        drafts.replaceChildren();
+        for (const draft of store.records.drafts) {
+            if (draft.id === store.draft.id || !Object.keys(draft.fields).length) continue;
+            const row = document.createElement('div'); row.className = 'settings-recovery-entry';
+            const label = document.createElement('p');
+            const owned = draft.owner === store.owner;
+            label.textContent = `${owned ? 'Retained draft' : 'Other backend (read-only)'} #${draft.id}: ${JSON.stringify(draft.fields)}${owned ? '' : ` — ${draft.owner}`}`;
+            row.appendChild(label);
+            if (owned) {
+                const restore = document.createElement('button'); restore.type = 'button'; restore.className = 'btn btn-primary'; restore.textContent = 'Restore';
+                restore.dataset.draftId = String(draft.id);
+                restore.addEventListener('click', () => { void store.restore(draft.id); });
+                const discard = document.createElement('button'); discard.type = 'button'; discard.className = 'btn btn-primary'; discard.textContent = 'Discard';
+                discard.disabled = attempt?.draftId === draft.id;
+                discard.addEventListener('click', () => { void store.discard(draft.id); });
+                row.append(restore, discard);
+            }
+            drafts.appendChild(row);
+        }
+    };
+    render();
+    const unsubscribe = store.subscribe(render);
+    return { refresh: render, unsubscribe() { unsubscribe(); if (deadlineTimer) clearTimeout(deadlineTimer); } };
 }
 
 function _buildSettingsGroup(title) {

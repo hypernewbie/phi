@@ -55,7 +55,11 @@ describe('Cross-window config and theme sync via BroadcastChannel', () => {
 
         broadcastConfigSync('theme', { color: 'green' });
         expect(messages).toHaveLength(1);
-        expect(messages[0]).toEqual({ type: 'theme', color: 'green' });
+        expect(messages[0]).toEqual({
+            type: 'theme',
+            color: 'green',
+            owner: JSON.stringify([location.origin, '', location.origin]),
+        });
     });
 
     it('swatch click in settings modal triggers broadcastConfigSync', () => {

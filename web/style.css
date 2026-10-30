@@ -4723,6 +4723,157 @@ body.has-terminal-bg
 
 /* ── Settings modal (.settings-modal) ─────────────────────────────────── */
 
+#drawer-settings-btn {
+    min-height: 44px;
+    width: 100%;
+}
+
+.settings-modal [hidden] {
+    display: none !important;
+}
+
+.settings-navigation,
+.settings-modal .settings-row-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.settings-navigation {
+    margin-bottom: 16px;
+}
+
+.settings-modal input,
+.settings-modal select,
+.settings-modal .settings-row-controls {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.settings-recovery-entry {
+    overflow-wrap: anywhere;
+    margin: 12px 0;
+}
+
+/* Functional UI text follows the mobile profile, not compact layout width.
+   Terminal, diff and Pi chat content retain their terminal preference path. */
+html[data-appearance-profile="mobile"] {
+    --mobile-header-height: max(44px, calc(var(--mobile-ui-size, 17px) * 1.5));
+}
+
+html[data-appearance-profile="mobile"] :is(
+    #drawer-settings-btn, .drawer-tabs-toolbar .btn,
+    .drawer-tabs-body .hostname-dropdown-title,
+    .drawer-tabs-body .tab-overflow-summary-label,
+    .sidebar-panel .panel-header h2, .sidebar-panel .session-title,
+    .tab-title, .header-config-pill .pill-label, .brand .hostname-display,
+    .settings-modal .settings-row label, .settings-modal .settings-identity h3
+) {
+    font-size: var(--mobile-ui-size, 17px);
+}
+
+html[data-appearance-profile="mobile"] :is(
+    .drawer-tabs-body .tab-overflow-count, .drawer-tabs-body .hostname-dropdown-meta,
+    .sidebar-panel .session-meta, .settings-modal .settings-row-hint,
+    .settings-modal .settings-access-hint, .settings-modal .settings-access-error,
+    .settings-modal .settings-access-state-text, .settings-modal .settings-version,
+    .settings-modal .settings-about, #settings-mobile-status
+) {
+    font-size: calc(var(--mobile-ui-size, 17px) * 0.8);
+}
+
+html[data-appearance-profile="mobile"] .workspace-area select {
+    font-size: max(16px, var(--mobile-ui-size, 17px)) !important;
+}
+
+html[data-appearance-profile="mobile"] .app-header {
+    height: var(--mobile-header-height) !important;
+}
+
+html[data-appearance-profile="mobile"] :is(.terminal-tabs-bar, .tab) {
+    height: auto !important;
+    min-height: max(42px, calc(var(--mobile-ui-size, 17px) * 1.5));
+}
+
+html[data-appearance-profile="mobile"] .sidebar-panel .panel-header {
+    height: auto;
+    min-height: 44px;
+}
+
+html[data-appearance-profile="mobile"] .sidebar-footer {
+    flex-wrap: wrap;
+    flex-shrink: 0;
+}
+
+html[data-appearance-profile="mobile"] #drawer-settings-btn {
+    flex: 1 0 100%;
+    height: auto;
+    white-space: normal;
+    min-width: 44px;
+}
+
+html[data-appearance-profile="mobile"] .settings-body {
+    min-height: 0;
+    overflow-wrap: anywhere;
+}
+
+html[data-appearance-profile="mobile"] .settings-modal :is(
+    .settings-access-header, .settings-access-hint-row,
+    .settings-access-actions-row, .settings-about-row
+) {
+    flex-wrap: wrap;
+}
+
+html[data-appearance-profile="mobile"] .settings-modal :is(
+    .settings-row, .settings-row label, .settings-row-controls, .settings-access-primary
+) {
+    min-width: 0;
+}
+
+html[data-appearance-profile="mobile"] .settings-modal button:not(.settings-swatch) {
+    height: auto !important;
+    min-height: 44px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+html[data-appearance-profile="mobile"] .settings-modal .modal-close-btn {
+    min-width: 44px;
+    font-size: 24px !important;
+}
+
+@media (max-width: 768px),
+    (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
+    html[data-appearance-profile="mobile"] .sidebar-panel {
+        top: var(--mobile-header-height);
+        height: calc(var(--vv-height, 100dvh) - var(--mobile-header-height));
+    }
+}
+
+html[data-appearance-profile="mobile"] .settings-modal .settings-group-title {
+    font-size: calc(var(--mobile-ui-size, 17px) * 0.8);
+}
+
+html[data-appearance-profile="mobile"] .settings-modal .settings-row {
+    flex-wrap: wrap;
+}
+
+html[data-appearance-profile="mobile"] .settings-modal .settings-row label {
+    flex-basis: 100%;
+    white-space: normal;
+}
+
+/* Safari can propagate a native select's option width past its constrained box. */
+html[data-appearance-profile="mobile"] .settings-modal select {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+html[data-appearance-profile="mobile"] .settings-modal :is(input, select, textarea, button) {
+    font-size: max(16px, var(--mobile-ui-size, 17px)) !important;
+}
+
+
 .settings-modal {
     width: min(560px, calc(100vw - 24px));
     max-height: 80vh;

@@ -577,8 +577,14 @@ describe('fullscreen popups & context menu UX stability', () => {
     });
     expect(windowedResult.action).toBe('allow');
 
-    // 2. Fullscreen mode: popout is denied to prevent OS Space switching
+    // 2. Fullscreen mode: popout is denied to prevent OS Space switching.
+    // The renderer must also know before reusing an existing named popup.
+    const execute = vi.spyOn(view.webContents, 'executeJavaScript');
     win.setFullScreen(true);
+    win.emit('enter-full-screen');
+    expect(execute).toHaveBeenCalledWith(
+      "document.documentElement.dataset.phiDesktopFullscreen = 'true'",
+    );
     const fullscreenResult = openHandler({
       url: 'http://127.0.0.1:7070/config.html?desktop-popout=1',
       features: 'width=860,height=1000',
@@ -591,6 +597,11 @@ describe('fullscreen popups & context menu UX stability', () => {
       features: 'width=860,height=1000',
     });
     expect(mdResult.action).toBe('deny');
+    win.setFullScreen(false);
+    win.emit('leave-full-screen');
+    expect(execute).toHaveBeenCalledWith(
+      "document.documentElement.dataset.phiDesktopFullscreen = 'false'",
+    );
   });
 
   it('configures rail context menu as fullscreen auxiliary with always-on-top pop-up-menu', async () => {

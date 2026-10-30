@@ -22,6 +22,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
+    "test:e2e:desktop": "pnpm build:web && pnpm --dir desktop/electron build && playwright test -c playwright.desktop.config.ts",
     "sync:vendors": "node scripts/sync-frontend-vendors.mjs",
     "check:vendors": "node scripts/sync-frontend-vendors.mjs --check",
     "build:desktop": "pnpm --filter phi-desktop-electron run build",
