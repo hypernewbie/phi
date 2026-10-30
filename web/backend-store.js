@@ -11,6 +11,7 @@ export class BackendStore {
     responses = new Map();
     screens = new Map();
     tabs = null;
+    notifications = null;
     activeCwd = null;
     registry;
     constructor(profileId, registry) {
@@ -21,6 +22,7 @@ export class BackendStore {
         this.responses.clear();
         this.screens.clear();
         this.tabs = null;
+        this.notifications = null;
         this.activeCwd = null;
     }
     async load(url, scope, render) {

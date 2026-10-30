@@ -7234,6 +7234,7 @@ export class TabManager {
 
     switchTab(paneId, { userInitiated = false } = {}) {
         this._closePiRpcDropups();
+        if (this.tabs?.has?.(paneId)) this.app?.removeReadyPane?.(paneId);
         if (this.activePaneId === paneId) {
             const activeTab = this.getActiveTab();
             if (activeTab) {
@@ -7684,6 +7685,7 @@ export class TabManager {
     softCloseTab(paneId) {
         const tab = this.tabs.get(paneId);
         if (!tab || tab.softClosing) return;
+        this.app?.removeReadyPane?.(paneId);
 
         const wasActive = this.activePaneId === paneId;
         tab.softClosing = true;
@@ -7837,9 +7839,14 @@ export class TabManager {
             tab.softCloseTimer = null;
         }
         if (tab.softCloseToast) {
-            tab.softCloseToast.classList.remove('show');
-            setTimeout(() => tab.softCloseToast?.remove(), 200);
+            const toastEl = tab.softCloseToast;
             tab.softCloseToast = null;
+            if (typeof this.app?.dismissToast === 'function') {
+                this.app.dismissToast(toastEl);
+            } else {
+                toastEl.classList.remove('show');
+                setTimeout(() => toastEl.remove?.(), 200);
+            }
         }
         this._stopSoftCloseCountdown(tab);
 
@@ -7856,6 +7863,7 @@ export class TabManager {
     disposeTabClient(paneId, { preserveStorage = false } = {}) {
         const tab = this.tabs.get(paneId);
         if (!tab) return;
+        if (!preserveStorage) this.app?.removeReadyPane?.(paneId);
         tab.finalizing = true;
         this._clearReaderAnchor(tab);
 
@@ -7896,9 +7904,14 @@ export class TabManager {
             tab.softCloseTimer = null;
         }
         if (tab.softCloseToast) {
-            tab.softCloseToast.classList.remove('show');
-            setTimeout(() => tab.softCloseToast?.remove(), 200);
+            const toastEl = tab.softCloseToast;
             tab.softCloseToast = null;
+            if (typeof this.app?.dismissToast === 'function') {
+                this.app.dismissToast(toastEl);
+            } else {
+                toastEl.classList.remove('show');
+                setTimeout(() => toastEl.remove?.(), 200);
+            }
         }
         this._stopSoftCloseCountdown?.(tab);
 
@@ -8023,6 +8036,12 @@ export class TabManager {
         // network blip, or 5xx). The 30-min detach grace timer is the
         // server-side backstop either way.
         if (tab.coder !== 'pi-rpc' && !tab.isKanban && !tab.isReview) {
+            const capturedToast =
+                typeof this.app?.captureToastContext === 'function'
+                    ? this.app.captureToastContext()
+                    : typeof this.app?.showToast === 'function'
+                      ? (message, options) => this.app.showToast(message, options)
+                      : null;
             const targetBackend = backendId || getEmbeddedProfileId();
             const init = targetBackend
                 ? { method: 'DELETE', headers: { 'X-Phi-Backend': targetBackend } }
@@ -8038,12 +8057,10 @@ export class TabManager {
                 })
                 .catch((err) => {
                     console.error('[tab] failed to kill PTY for', paneId, err);
-                    if (this.app?.showToast) {
-                        this.app.showToast(
-                            `Could not close "${tab.title || paneId}" on the server — the underlying process may still be running. Try "Restart phi" if it persists.`,
-                            { type: 'error', duration: 8000 },
-                        );
-                    }
+                    capturedToast?.(
+                        `Could not close "${tab.title || paneId}" on the server — the underlying process may still be running. Try "Restart phi" if it persists.`,
+                        { type: 'error', duration: 8000 },
+                    );
                 });
         }
 
@@ -13955,6 +13972,7 @@ export class TabManager {
                 title: 'Task Done',
                 type: 'info',
                 duration: 6000,
+                readyPaneId: tab.paneId,
                 action: {
                     text: 'Go to tab',
                     callback: () =>

@@ -234,6 +234,7 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
   const ACTION_BUTTONS = [
     'header-clipboard-btn',
     'header-ntfy-btn',
+    'header-notifications-btn',
     'header-btop-btn',
     'header-kanban-btn',
     'header-diff-toggle-btn',

@@ -436,6 +436,36 @@ describe('TBAR wedge and race condition prevention', () => {
     );
   });
 
+  it('relays the notifications button before the active config resolves', async () => {
+    let resolveConfig: ((value: unknown) => void) | undefined;
+    fakeBridge.fetchServerConfig = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveConfig = resolve;
+        }),
+    );
+    const doc = await loadMainView();
+    recordedActiveServer?.({
+      id: 'jupiter',
+      origin: 'http://jupiter:7070/',
+    });
+    expect(fakeBridge.fetchServerConfig).toHaveBeenCalledWith('jupiter');
+
+    const button = doc.getElementById(
+      'header-notifications-btn',
+    ) as HTMLButtonElement;
+    expect(button).not.toBeNull();
+    button.click();
+
+    expect(fakeBridge.postHeaderAction).toHaveBeenCalledOnce();
+    expect(fakeBridge.postHeaderAction).toHaveBeenCalledWith({
+      kind: 'click',
+      id: 'header-notifications-btn',
+      profileId: 'jupiter',
+    });
+    resolveConfig?.({ hostname: 'JUPITER', workspaces: [] });
+  });
+
   it('right clicking on TBAR opens the rail menu for the active server', async () => {
     fakeBridge.fetchServerConfig = vi.fn(async () => ({
       hostname: 'CHARON',

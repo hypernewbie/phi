@@ -3,6 +3,7 @@ export interface ToastOptions {
     title?: string;
     duration?: number;
     action?: { text: string; callback: () => void };
+    readyPaneId?: string;
 }
 
 // AppLike is the minimal slice of the (unconverted) App class that
@@ -12,7 +13,7 @@ export interface ToastOptions {
 // model is the responsibility of the deferred terminal.js / app.js
 // conversions.
 export interface AppLike {
-    showToast(message: string, opts?: ToastOptions): void;
+    showToast(message: string, opts?: ToastOptions): HTMLElement;
     sessionsManager: any;
     tabManager: any;
     diffController: any;

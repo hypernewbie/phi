@@ -249,6 +249,15 @@ describe('Half-Phase 3A: BackendStore & Terminal Snapshot Write-Through', () => 
         const store = registry.get('locked-server');
         store.responses.set('/api/secret', JSON.stringify({ secret: '123' }));
         store.screens.set('pane-1', { ansi: 'hello', cols: 80, rows: 24 });
+        store.notifications = [
+            {
+                id: 'notice-1',
+                type: 'info',
+                title: 'Ready',
+                message: 'Cached notification',
+                timestamp: 1,
+            },
+        ];
         const scope = new BackendScope('locked-server');
 
         const fetchStub = mockFetch(() => ({
@@ -269,6 +278,7 @@ describe('Half-Phase 3A: BackendStore & Terminal Snapshot Write-Through', () => 
         expect(store.responses.size).toBe(0);
         expect(store.screens.size).toBe(0);
         expect(store.tabs).toBeNull();
+        expect(store.notifications).toBeNull();
 
         // Evicted from registry
         expect(registry.has('locked-server')).toBe(false);

@@ -5496,6 +5496,39 @@ html[data-phi-config-page] .settings-modal {
         padding-top: 5px !important;
     }
 
+    .toast-container > .toast:nth-last-child(n + 4) {
+        display: none;
+    }
+
+    .modal-overlay.notifications-overlay {
+        z-index: 10001 !important;
+        align-items: stretch !important;
+        justify-content: flex-end !important;
+    }
+    .notifications-overlay .notifications-drawer {
+        width: min(420px, 100vw) !important;
+        max-width: 420px !important;
+        height: var(--vv-height, 100dvh) !important;
+        max-height: none !important;
+        border-radius: 0 !important;
+        border-bottom: 1px solid var(--bg-border) !important;
+        animation: kanbanSlideInFromRight 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .notifications-overlay .notifications-header {
+        padding: 12px 14px !important;
+    }
+    .notifications-overlay .notifications-header::before {
+        display: none;
+    }
+    .notifications-close,
+    .notifications-dismiss-all,
+    .notification-item-dismiss {
+        min-height: 44px;
+    }
+    .notifications-close {
+        min-width: 44px;
+    }
+
     /* Bottom sheet modals on mobile */
     .modal-overlay,
     .md-modal-overlay {
@@ -6206,6 +6239,173 @@ html[data-phi-config-page] .settings-modal {
 
 .toast-close:hover {
     color: var(--text-primary);
+}
+
+@media (max-width: 768px),
+    (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
+    .toast-container {
+        top: calc(env(safe-area-inset-top, 0px) + 48px) !important;
+    }
+}
+
+.notifications-overlay {
+    z-index: 10001;
+    align-items: stretch;
+    justify-content: flex-end;
+}
+
+.notifications-drawer {
+    width: min(420px, 100vw);
+    max-width: 420px;
+    height: var(--vv-height, 100dvh);
+    max-height: none;
+    margin: 0;
+    border: 0;
+    border-left: 1px solid var(--bg-border);
+    border-radius: 0;
+    box-shadow: -8px 0 32px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+    animation: kanbanSlideInFromRight 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.notifications-overlay:not(.hidden) .notifications-drawer {
+    animation: kanbanSlideInFromRight 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.notifications-header {
+    gap: 12px;
+}
+
+.notifications-header h3 {
+    min-width: 0;
+    margin: 0;
+}
+
+.notifications-routing-status {
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--bg-border);
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.notifications-header-actions,
+.notification-item-controls,
+.notification-item-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.notifications-dismiss-all,
+.notification-item-dismiss {
+    flex: 0 0 auto;
+    width: auto;
+    padding: 0 12px;
+    white-space: nowrap;
+}
+
+.notifications-dismiss-all:disabled,
+.notifications-dismiss-all:disabled:hover {
+    background-color: var(--bg-elevated);
+    opacity: 0.55;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+.notifications-list {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 0;
+    min-height: 0;
+    padding: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.notifications-disclosure {
+    display: block;
+    flex-shrink: 0;
+    margin: 0;
+    padding: 10px 16px;
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.notifications-empty {
+    margin: 0;
+    padding: 20px 16px;
+    color: var(--text-muted);
+    text-align: center;
+}
+
+.notification-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 12px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--bg-border);
+}
+
+.notification-item-content {
+    min-width: 0;
+}
+
+.notification-item-title {
+    margin: 0 0 4px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.notification-item-message {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+.notification-item-controls {
+    align-items: flex-start;
+    flex-direction: column;
+}
+
+.notification-item-error .notification-item-title {
+    color: var(--red);
+}
+
+.notification-item-success .notification-item-title {
+    color: var(--green);
+}
+
+.notifications-announcements {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip-path: inset(50%) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .notifications-overlay:not(.hidden) .notifications-drawer {
+        animation: none;
+    }
+}
+
+body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
+    animation: none;
 }
 
 /* ═══════════════════════════════════════════════════════════

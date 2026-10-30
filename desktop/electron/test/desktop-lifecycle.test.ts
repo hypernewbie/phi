@@ -364,6 +364,42 @@ describe('DesktopHost fake-Electron lifecycle', () => {
       profileId: b.id,
     });
     expect(execute).toHaveBeenCalledTimes(1);
+
+    execute.mockClear();
+    const focus = vi.spyOn(view.webContents, 'focus');
+    const headerAction = fake.ipcHandlers.get('phi:header-action')!;
+    headerAction(event, {
+      kind: 'click',
+      id: 'header-notifications-btn',
+      profileId: b.id,
+    });
+    expect(focus).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0][0]).toContain('header-notifications-btn');
+
+    headerAction(event, {
+      kind: 'click',
+      id: 'header-notifications-btn',
+      profileId: a.id,
+    });
+    headerAction(event, { kind: 'click', id: 'unknown-header-action' });
+    headerAction(
+      { sender: view.webContents },
+      {
+        kind: 'click',
+        id: 'header-notifications-btn',
+        profileId: b.id,
+      },
+    );
+    expect(focus).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledTimes(1);
+    headerAction(event, {
+      kind: 'click',
+      id: 'header-config-pill',
+      profileId: b.id,
+    });
+    expect(focus).toHaveBeenCalledTimes(2);
+
     host.pushHeaderState(0, false, '/beta/code');
     expect(
       win.webContents.sent
