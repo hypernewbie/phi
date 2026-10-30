@@ -60,6 +60,21 @@ afterEach(() => {
 });
 
 describe('pi-bridge settled bell', () => {
+    it('does not require a bridge capability for ready grouping metadata', () => {
+        const { manager, showToast } = bridgeManager();
+        const tab = piTab({
+            piBridge: { state: 'managed', capabilities: [] },
+            _piBridgeLive: true,
+        });
+        manager._acceptPiBridgeSettled(tab, {
+            type: 'pi-bridge-settled',
+            pane_id: 'pane-1',
+            run: '1',
+            outcome: 'completed',
+        });
+        expect(showToast.mock.calls[0][1].readyPaneId).toBe(tab.paneId);
+    });
+
     it('rings once per run and ignores duplicates', () => {
         const { manager, showToast } = bridgeManager();
         const tab = piTab();
@@ -312,6 +327,7 @@ describe('pi-bridge attach state', () => {
             last_outcome: 'completed',
         });
         expect(showToast).toHaveBeenCalledTimes(1);
+        expect(showToast.mock.calls[0][1].readyPaneId).toBe(tab.paneId);
         // Re-attach replays without a second bell.
         manager._acceptPiBridgeState(tab, {
             type: 'pi-bridge-state',
@@ -364,6 +380,7 @@ describe('pi-bridge always-ring policy', () => {
         expect(tab.userTaskActive).toBe(false);
         expect(tab.isAttention).toBe(true);
         expect(showToast).toHaveBeenCalledTimes(1);
+        expect(showToast.mock.calls[0][1].readyPaneId).toBe(tab.paneId);
         expect(tab._piBridgeLastRun).toBe('7');
     });
 
@@ -457,5 +474,28 @@ describe('heuristic suppression for managed panes', () => {
         const manager = idleManager(tab);
         TabManager.prototype.pollTerminalIdleAndNotifications.call(manager);
         expect(manager.triggerAttentionNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps ready grouping available without a live bridge', () => {
+        for (const piBridge of [
+            undefined,
+            { state: 'unavailable' },
+            { state: 'managed' },
+        ]) {
+            const tab = quietPiTab({ piBridge, _piBridgeLive: false });
+            const manager = idleManager(tab);
+            const showToast = vi.fn();
+            manager.app = { showToast };
+            manager.triggerAttentionNotification =
+                TabManager.prototype.triggerAttentionNotification;
+            manager.switchTab = vi.fn();
+
+            TabManager.prototype.pollTerminalIdleAndNotifications.call(manager);
+
+            expect(showToast).toHaveBeenCalledWith(
+                expect.stringContaining('waiting at a prompt'),
+                expect.objectContaining({ readyPaneId: tab.paneId }),
+            );
+        }
     });
 });

@@ -107,12 +107,16 @@ export function lowPowerApplyScript(enabled: boolean): string {
 /**
  * Builds a toast script for a file-action failure. The message is
  * embedded as a JSON.stringify literal (never raw text) and rendered
- * with textContent only. Mirrors the page's own toast DOM
- * (.toast-container > .toast.toast-error, close button, 6s auto-dismiss).
+ * with textContent only. Prefer the page's shared notification manager
+ * when present; retain the legacy toast DOM fallback for older pages.
  */
 export function toastErrorScript(message: string): string {
   return `(() => {
     const message = ${JSON.stringify(message)};
+    if (typeof window.__phiShowToast === 'function') {
+      window.__phiShowToast(message, { type: 'error', title: "Couldn't open" });
+      return;
+    }
     let container = document.getElementById('toast-container');
     if (!container) {
       container = document.createElement('div');

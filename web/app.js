@@ -32,6 +32,7 @@ import {
 } from './util.js';
 import { BackendScope } from './backend-scope.js';
 import { BackendStore, backendStores } from './backend-store.js';
+import { NotificationManager } from './notifications.js';
 import { SyncManager } from './sync.js';
 import { initQuotaButton } from './quota.js';
 import { bootstrapAccessAuth } from './auth.js';
@@ -40,6 +41,33 @@ import { markDesktopView } from './desktop.js';
 import { formatPickedDir, mountDirectoryTree } from './path-picker.js';
 import { ACCENT_COLORS, applyThemeTokens } from './theme.js';
 export { ACCENT_COLORS };
+
+function inertBodyExceptNotifications() {
+    const body = document.body;
+    if (!body) return () => {};
+    const exemptRoots = [
+        document.getElementById('header-notifications-btn'),
+        document.getElementById('notifications-overlay'),
+    ].filter((element) => element instanceof HTMLElement);
+    const saved = [];
+    const inertBranch = (element) => {
+        if (exemptRoots.includes(element)) return;
+        if (exemptRoots.some((root) => element.contains(root))) {
+            for (const child of Array.from(element.children)) {
+                if (child instanceof HTMLElement) inertBranch(child);
+            }
+            return;
+        }
+        saved.push({ element, inert: element.inert });
+        element.inert = true;
+    };
+    for (const child of Array.from(body.children)) {
+        if (child instanceof HTMLElement) inertBranch(child);
+    }
+    return () => {
+        for (const entry of saved) entry.element.inert = entry.inert;
+    };
+}
 
 markDesktopView();
 
@@ -91,6 +119,10 @@ export class App {
         this._terminalBgObjectUrl = null;
         this.accessAuthEnabled = false;
         this._isDraggingDrawer = false;
+        this.notifications = null;
+        if (document.getElementById('header-notifications-btn')) {
+            this.getNotifications();
+        }
 
         // Instantiate controllers
         this.tabManager = new TabManager(this);
@@ -802,6 +834,7 @@ export class App {
 
     switchToBackend(profileId, origin = '') {
         if (!profileId) return Promise.resolve(false);
+        this.getNotifications().setActionsBlocked(true);
         const switchStart = globalThis.performance?.now?.();
         termPerfMark('switch-start');
         const seq = ++this._switchSeq;
@@ -816,6 +849,8 @@ export class App {
     }
 
     async _performSwitch(profileId, origin, seq) {
+        const notifications = this.getNotifications();
+        notifications.setActionsBlocked(true);
         let phaseStart = globalThis.performance?.now?.();
         try {
             this.initOnce();
@@ -841,6 +876,7 @@ export class App {
                 prevStore.activeCwd = this.sessionsManager.activeCWD;
             }
         }
+        notifications.endContext();
         this.tabManager?.detachAll?.({
             flushBackendId: prevProfileId || undefined,
         });
@@ -870,6 +906,8 @@ export class App {
         this.scope = scope;
         this.tabManager?._bindThinkingPresetStore?.(scope);
         const nextStore = backendStores.get(profileId);
+        notifications.setContext(serverKey('phi_notifications_v1'), nextStore);
+        const targetNotificationContext = notifications.getContextIdentity();
         termPerfMeasureBetween('switch-prep', phaseStart);
         phaseStart = globalThis.performance?.now?.();
         try {
@@ -895,16 +933,26 @@ export class App {
         if (seq !== this._switchSeq || scope.aborted) return true;
 
         const activePostStart = globalThis.performance?.now?.();
-        if (document.body) document.body.inert = true;
+        const restoreInert = inertBodyExceptNotifications();
+        let response;
         try {
-            await fetch('/__phi/active', {
+            response = await fetch('/__phi/active', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ profileId }),
             });
         } catch {} finally {
-            if (document.body) document.body.inert = false;
+            restoreInert();
             termPerfMeasureBetween('switch-active-post', activePostStart);
+        }
+        if (
+            response?.ok === true &&
+            seq === this._switchSeq &&
+            this.scope === scope &&
+            !scope.aborted &&
+            notifications.isCurrentContext(targetNotificationContext)
+        ) {
+            notifications.setActionsBlocked(false);
         }
         if (seq !== this._switchSeq || scope.aborted) return true;
         // The cached paint above IS the switch: it is already on screen.
@@ -919,6 +967,9 @@ export class App {
 
     forgetBackend(profileId) {
         if (!profileId) return true;
+        if (profileId === getEmbeddedProfileId()) {
+            this.getNotifications().clearCurrentContext();
+        }
         backendStores.delete(profileId);
         if (typeof localStorage === 'undefined') return true;
         const suffix = `:${profileId}`;
@@ -946,6 +997,7 @@ export class App {
             'touchstart',
             (e) => {
                 if (this._isDraggingDrawer) return;
+                if (e.target?.closest?.('.notifications-overlay')) return;
                 if (e.target?.closest?.('.drawer-resize-handle')) return;
                 // Drawer topology is content-first: sessions yields below
                 // 1024px, diff below 1280px, plus the compact layout.
@@ -962,6 +1014,7 @@ export class App {
             'touchend',
             (e) => {
                 if (this._isDraggingDrawer) return;
+                if (e.target?.closest?.('.notifications-overlay')) return;
                 if (e.target?.closest?.('.drawer-resize-handle')) return;
                 const sidebarDrawer = isSidebarDrawerViewport();
                 const diffDrawer = isDiffDrawerViewport();
@@ -1204,6 +1257,26 @@ export class App {
     // sessions content (it is still a drawer from 769-1023px).
     // The single entry point for opening the compact drawer on its tab tree:
     // the hamburger, the brand and a left-edge swipe all land here.
+    openReadyTabs() {
+        this.getNotifications().close({ restoreFocus: false });
+        if (isCompactViewport()) {
+            this.openTabsDrawer();
+            return;
+        }
+        const tabManager = this.tabManager;
+        if (!tabManager) return;
+        if (tabManager._overflowDropdownHidden?.()) {
+            tabManager._toggleOverflowDropdown?.();
+            return;
+        }
+        const dropdown = document.getElementById('tab-overflow-dropdown');
+        if (dropdown) tabManager._focusOverflowDropdownOnOpen?.(dropdown);
+    }
+
+    removeReadyPane(paneId) {
+        this.getNotifications().removeReadyPane(paneId);
+    }
+
     openTabsDrawer() {
         const sidebar = document.getElementById('sidebar-panel');
         if (!sidebar) return;
@@ -2166,95 +2239,42 @@ export class App {
      * @param {string} [opts.title] - bold heading; defaults based on type
      * @param {number} [opts.duration=6000] - ms before auto-dismiss; 0 to persist
      */
+    getNotifications() {
+        if (this.notifications) return this.notifications;
+        if (!this._defaultStore) {
+            this._defaultStore = new BackendStore('__default__');
+        }
+        const showToast = (message, opts) => this.showToast(message, opts);
+        const manager = new NotificationManager({
+            storageKey: serverKey('phi_notifications_v1'),
+            store: this.getActiveStore(),
+            onReadyTabs: () => this.openReadyTabs(),
+            onDestroy: () => {
+                if (
+                    typeof window !== 'undefined' &&
+                    window.__phiShowToast === showToast
+                ) {
+                    delete window.__phiShowToast;
+                }
+            },
+        });
+        this.notifications = manager;
+        if (typeof window !== 'undefined') {
+            window.__phiShowToast = showToast;
+        }
+        return manager;
+    }
+
     showToast(message, opts = {}) {
-        const { type = 'info', duration = 6000 } = opts;
-        const title =
-            opts.title ||
-            (type === 'error'
-                ? 'Error'
-                : type === 'success'
-                  ? 'Done'
-                  : 'Notice');
+        return this.getNotifications().show(message, opts);
+    }
 
-        let container = document.getElementById('toast-container');
-        if (!container) {
-            container = document.createElement('div');
-            container.id = 'toast-container';
-            container.className = 'toast-container';
-            document.body.appendChild(container);
-        }
+    captureToastContext() {
+        return this.getNotifications().captureNotifier();
+    }
 
-        const toast = document.createElement('div');
-        toast.className = `toast toast-${type}`;
-
-        const icon = document.createElement('span');
-        icon.className = 'toast-icon';
-        // Scarab (𓆣) for success = cyclical completion in the
-        // Egyptian corpus. Replaces the generic checkmark for explicit
-        // task-done toasts only; info/error keep their glyphs.
-        icon.textContent =
-            type === 'error' ? '⚠' : type === 'success' ? '𓆣' : 'ℹ';
-
-        const body = document.createElement('div');
-        body.className = 'toast-body';
-        const titleEl = document.createElement('div');
-        titleEl.className = 'toast-title';
-        titleEl.textContent = title;
-        const msgEl = document.createElement('div');
-        msgEl.className = 'toast-message';
-        msgEl.textContent = message;
-        body.appendChild(titleEl);
-        body.appendChild(msgEl);
-
-        let dismissTimer;
-        const dismiss = () => {
-            if (dismissTimer) clearTimeout(dismissTimer);
-            toast.classList.remove('show');
-            setTimeout(() => toast.remove(), 200);
-        };
-
-        if (opts.action) {
-            const actionBtn = document.createElement('button');
-            actionBtn.className = 'toast-action-btn';
-            actionBtn.textContent = opts.action.text;
-            actionBtn.style.marginTop = '6px';
-            actionBtn.style.padding = '3px 8px';
-            actionBtn.style.backgroundColor = 'var(--accent, #7c6af7)';
-            actionBtn.style.color = '#ffffff';
-            actionBtn.style.border = 'none';
-            actionBtn.style.borderRadius = '4px';
-            actionBtn.style.cursor = 'pointer';
-            actionBtn.style.fontSize = '12px';
-            actionBtn.style.fontWeight = 'bold';
-            actionBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                opts.action.callback();
-                dismiss();
-            });
-            body.appendChild(actionBtn);
-        }
-
-        const closeBtn = document.createElement('button');
-        closeBtn.className = 'toast-close';
-        closeBtn.innerHTML = '×';
-        closeBtn.title = 'Dismiss';
-
-        toast.appendChild(icon);
-        toast.appendChild(body);
-        toast.appendChild(closeBtn);
-        container.appendChild(toast);
-
-        // Animate in on next frame
-        requestAnimationFrame(() => toast.classList.add('show'));
-
-        closeBtn.addEventListener('click', dismiss);
-        if (duration > 0) {
-            dismissTimer = setTimeout(dismiss, duration);
-        }
-
-        // Return the toast element so callers can dismiss it externally
-        // (e.g. soft-close undo race). Internal code uses `dismiss()`.
-        return toast;
+    dismissToast(element) {
+        this.getNotifications().dismissToast(element);
     }
 
     openConfigEditor({

@@ -5037,6 +5037,7 @@ export class DesktopHost {
       'header-clipboard-btn',
       'header-btop-btn',
       'header-ntfy-btn',
+      'header-notifications-btn',
       'header-config-pill',
       'header-export-btn',
       'header-import-btn',
@@ -5064,7 +5065,10 @@ export class DesktopHost {
         typeof action.id === 'string' &&
         HEADER_ACTION_BUTTONS.has(action.id)
       ) {
-        if (action.id === 'header-config-pill') {
+        if (
+          action.id === 'header-config-pill' ||
+          action.id === 'header-notifications-btn'
+        ) {
           view.webContents.focus();
         }
         void view.webContents

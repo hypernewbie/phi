@@ -25,6 +25,23 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('completion attention presentation', () => {
+    it('removes a ready member on a valid already-active selection', () => {
+        const active = tab('active');
+        const removeReadyPane = vi.fn();
+        manager.tabs = new Map([['active', active]]);
+        manager.app = { removeReadyPane };
+        manager.getActiveTab = () => active;
+        manager._closePiRpcDropups = vi.fn();
+        manager._setPiRpcActionVisibility = vi.fn();
+        manager.activateTabViewport = vi.fn();
+        manager.renderPiRpcStatusBar = vi.fn();
+
+        manager.switchTab('active', { userInitiated: true });
+
+        expect(removeReadyPane).toHaveBeenCalledOnce();
+        expect(removeReadyPane).toHaveBeenCalledWith('active');
+    });
+
     it('adds one accessible status outside the title and removes it on acknowledgement', () => {
         const entry = tab('one');
         expect(manager._setTabAttention(entry, true)).toBe(true);

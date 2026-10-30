@@ -228,6 +228,22 @@ describe('toastErrorScript', () => {
     );
     expect(toast.querySelector<HTMLElement>('.toast-close')).not.toBeNull();
   });
+
+  it('uses the shared notification manager when the page exposes its hook', () => {
+    document.body.innerHTML = '';
+    const showToast = vi.fn();
+    windowField().__phiShowToast = showToast;
+
+    window.eval(toastErrorScript('failure <img src=x>'));
+
+    expect(showToast).toHaveBeenCalledOnce();
+    expect(showToast).toHaveBeenCalledWith('failure <img src=x>', {
+      type: 'error',
+      title: "Couldn't open",
+    });
+    expect(document.getElementById('toast-container')).toBeNull();
+    delete windowField().__phiShowToast;
+  });
 });
 
 describe('the divider-width page scripts', () => {

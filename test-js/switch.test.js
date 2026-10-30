@@ -99,6 +99,8 @@ describe('Single-Tab Embedded Backend Switching', () => {
         setupVendorStubs();
         stubWebSocket();
         setupHtml();
+        localStorage.clear();
+        sessionStorage.clear();
         window.history.replaceState(null, '', '/');
         setEmbeddedBackend('', '');
         fetchCalls = [];
@@ -518,5 +520,252 @@ describe('Single-Tab Embedded Backend Switching', () => {
         );
         expect(app.tabManager.tabs.has('p-live')).toBe(true);
         expect(document.documentElement.dataset.sync).toBeUndefined();
+    });
+
+    it('keeps actions blocked after HTTP 503, restores inert state, and recovers only after explicit success', async () => {
+        setEmbeddedBackend('profile-current', '');
+        app = new App();
+        const notifications = app.getNotifications();
+        const mainLayout = document.querySelector('.main-layout');
+        const toastContainer = document.getElementById('toast-container');
+        const trigger = document.getElementById('header-notifications-btn');
+        const overlay = document.getElementById('notifications-overlay');
+        mainLayout.inert = false;
+        toastContainer.inert = true;
+        trigger.inert = false;
+        overlay.inert = false;
+        const originalFetch = globalThis.fetch;
+        const gates = [];
+        const startResolvers = [];
+        const started = [0, 1].map(
+            (index) =>
+                new Promise((resolve) => {
+                    startResolvers[index] = resolve;
+                }),
+        );
+        const activeFetch = vi.fn((url, options) => {
+            if (String(url) === '/__phi/active') {
+                const index = gates.length;
+                let resolve;
+                const response = new Promise((done) => {
+                    resolve = done;
+                });
+                gates.push({ resolve, options });
+                startResolvers[index]?.();
+                return response;
+            }
+            return originalFetch(url, options);
+        });
+        globalThis.fetch = activeFetch;
+        window.fetch = activeFetch;
+
+        const firstCallback = vi.fn();
+        const failedSwitch = app.switchToBackend('profile-unconfirmed');
+        expect(notifications['actionsBlocked']).toBe(true);
+        await started[0];
+        const firstPopup = notifications.show('While routing is pending', {
+            duration: 50_000,
+            action: { text: 'Open', callback: firstCallback },
+        });
+        notifications.open();
+        const firstEntry = notifications['entries'][0];
+        const firstDeadline = firstEntry.deadline;
+        expect(firstPopup.querySelector('.toast-action-btn').disabled).toBe(
+            true,
+        );
+        expect(
+            document.querySelector('.notification-item-action').disabled,
+        ).toBe(true);
+        expect(
+            document.querySelector('#notifications-routing-status').classList,
+        ).not.toContain('hidden');
+        notifications.activate(firstEntry.id);
+        expect(firstCallback).not.toHaveBeenCalled();
+        expect(firstEntry.callback).toBe(firstCallback);
+        expect(firstEntry.deadline).toBe(firstDeadline);
+        expect(mainLayout.inert).toBe(true);
+        expect(toastContainer.inert).toBe(true);
+        expect(trigger.inert).toBe(false);
+        expect(overlay.inert).toBe(false);
+        expect(document.getElementById('toast-container').inert).toBe(true);
+        expect(
+            document.getElementById('notifications-dismiss-all').disabled,
+        ).toBe(false);
+        expect(document.getElementById('notifications-close').disabled).toBe(
+            false,
+        );
+        const localNotice = notifications.show('Dismiss while blocked', {
+            duration: 0,
+        });
+        const localRow = [
+            ...document.querySelectorAll('.notification-item'),
+        ].find((row) => row.textContent.includes('Dismiss while blocked'));
+        localRow.querySelector('.notification-item-dismiss').click();
+        expect(localNotice.isConnected).toBe(false);
+        notifications.closeButton.click();
+        notifications.trigger.click();
+        expect(overlay.classList).not.toContain('hidden');
+
+        gates[0].resolve({ ok: false, status: 503 });
+        await failedSwitch;
+        expect(
+            activeFetch.mock.calls.filter(
+                ([url]) => String(url) === '/__phi/active',
+            ),
+        ).toHaveLength(1);
+        expect(notifications['actionsBlocked']).toBe(true);
+        expect(firstPopup.querySelector('.toast-action-btn').disabled).toBe(
+            true,
+        );
+        expect(mainLayout.inert).toBe(false);
+        expect(toastContainer.inert).toBe(true);
+        expect(trigger.inert).toBe(false);
+        expect(overlay.inert).toBe(false);
+
+        const secondCallback = vi.fn();
+        const recoveredSwitch = app.switchToBackend('profile-recovered');
+        await started[1];
+        const secondPopup = notifications.show('New target action', {
+            duration: 50_000,
+            action: { text: 'Open target', callback: secondCallback },
+        });
+        const secondEntry = notifications['entries'][0];
+        expect(secondPopup.querySelector('.toast-action-btn').disabled).toBe(
+            true,
+        );
+        expect(overlay.classList).not.toContain('hidden');
+        gates[1].resolve({ ok: true, status: 200 });
+        await recoveredSwitch;
+        expect(notifications['actionsBlocked']).toBe(false);
+        expect(
+            document.querySelector('#notifications-routing-status').classList,
+        ).toContain('hidden');
+        expect(secondPopup.querySelector('.toast-action-btn').disabled).toBe(
+            false,
+        );
+        notifications.activate(secondEntry.id);
+        expect(secondCallback).toHaveBeenCalledOnce();
+        expect(firstCallback).not.toHaveBeenCalled();
+        expect(
+            activeFetch.mock.calls.filter(
+                ([url]) => String(url) === '/__phi/active',
+            ),
+        ).toHaveLength(2);
+        notifications.destroy();
+        globalThis.fetch = originalFetch;
+        window.fetch = originalFetch;
+    });
+
+    it('does not unblock for a superseded response or an invalidated target store', async () => {
+        app = new App();
+        const notifications = app.getNotifications();
+        const gates = [];
+        const startResolvers = [];
+        const started = [0, 1, 2].map(
+            (index) =>
+                new Promise((resolve) => {
+                    startResolvers[index] = resolve;
+                }),
+        );
+        const originalFetch = globalThis.fetch;
+        const activeFetch = vi.fn((url, options) => {
+            if (String(url) === '/__phi/active') {
+                const index = gates.length;
+                let resolve;
+                const response = new Promise((done) => {
+                    resolve = done;
+                });
+                gates.push({ resolve, options });
+                startResolvers[index]?.();
+                return response;
+            }
+            return originalFetch(url, options);
+        });
+        globalThis.fetch = activeFetch;
+        window.fetch = activeFetch;
+
+        const first = app.switchToBackend('profile-A');
+        await started[0];
+        const second = app.switchToBackend('profile-B');
+        gates[0].resolve({ ok: true, status: 200 });
+        await first;
+        await started[1];
+        expect(getEmbeddedProfileId()).toBe('profile-B');
+        expect(notifications['actionsBlocked']).toBe(true);
+
+        backendStores.delete('profile-B');
+        gates[1].resolve({ ok: true, status: 200 });
+        await second;
+        expect(notifications['actionsBlocked']).toBe(true);
+        expect(
+            sessionStorage.getItem('phi_notification_actions_blocked_v1'),
+        ).toBe('1');
+
+        const third = app.switchToBackend('profile-B');
+        await started[2];
+        const callback = vi.fn();
+        const popup = notifications.show('Confirmed target action', {
+            duration: 50_000,
+            action: { text: 'Open', callback },
+        });
+        gates[2].resolve({ ok: true, status: 200 });
+        await third;
+        expect(
+            activeFetch.mock.calls.filter(
+                ([url]) => String(url) === '/__phi/active',
+            ),
+        ).toHaveLength(3);
+        expect(notifications['actionsBlocked']).toBe(false);
+        expect(popup.querySelector('.toast-action-btn').disabled).toBe(false);
+        notifications.activate(notifications['entries'][0].id);
+        expect(callback).toHaveBeenCalledOnce();
+        notifications.destroy();
+        globalThis.fetch = originalFetch;
+        window.fetch = originalFetch;
+    });
+
+    it('clears only the forgotten notification store before deleting its cache', () => {
+        setEmbeddedBackend('forget-active', '');
+        app = new App();
+        const notifications = app.getNotifications();
+        const activeStore = app.getActiveStore();
+        const inactiveId = 'forget-inactive';
+        const inactiveStore = backendStores.get(inactiveId);
+        inactiveStore.notifications = [
+            {
+                id: 'inactive-1',
+                type: 'info',
+                title: 'Inactive',
+                message: 'Keep for inactive before delete',
+                timestamp: 1,
+            },
+        ];
+        localStorage.setItem(
+            `phi_notifications_v1:${inactiveId}`,
+            JSON.stringify({
+                version: 1,
+                entries: inactiveStore.notifications,
+            }),
+        );
+        notifications.show('Active history', { duration: 0 });
+        localStorage.setItem(
+            'phi_notifications_v1:forget-active',
+            JSON.stringify({ version: 1, entries: activeStore.notifications }),
+        );
+
+        app.forgetBackend(inactiveId);
+        expect(inactiveStore.notifications).toBeNull();
+        expect(
+            localStorage.getItem(`phi_notifications_v1:${inactiveId}`),
+        ).toBeNull();
+        expect(notifications['entries']).toHaveLength(1);
+
+        app.forgetBackend('forget-active');
+        expect(activeStore.notifications).toBeNull();
+        expect(notifications['entries']).toHaveLength(0);
+        expect(
+            localStorage.getItem('phi_notifications_v1:forget-active'),
+        ).toBeNull();
+        notifications.destroy();
     });
 });
