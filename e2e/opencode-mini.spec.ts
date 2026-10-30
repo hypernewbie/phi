@@ -102,6 +102,17 @@ for (const mode of ['tui', 'mini', 'legacy']) {
                     ? '\n'
                     : `${mode === 'mini' ? 'mini ' : ''}--session ${pane.session_id}\n`,
             );
+        // Attach after the complete burst, so this test always exercises the
+        // compact checkpoint and manual history path, even when run alone.
+        await expect
+            .poll(async () => {
+                const recording = await request.get(
+                    `${phi.url}/api/terminals/${pane.pane_id}/recording?from=0&through=18446744073709551615`,
+                );
+                expect(recording.ok()).toBe(true);
+                return (await recording.body()).toString('utf8');
+            })
+            .toContain('ready');
         await page.addInitScript(() => {
             type BufferView = {
                 type: string;
@@ -195,7 +206,12 @@ for (const mode of ['tui', 'mini', 'legacy']) {
             return event.defaultPrevented;
         });
         if (mode === 'mini') {
-            await terminal.locator('.load-history-btn').click();
+            const historyButton = terminal.locator('.load-history-btn');
+            await terminal.locator('.xterm-screen').hover();
+            await page.mouse.wheel(0, -4000);
+            await expect(historyButton).toBeVisible();
+            await historyButton.click();
+            await expect(historyButton).toHaveAttribute('aria-busy', 'false');
             await expect
                 .poll(async () => (await buffer()).baseY)
                 .toBeGreaterThan(100);

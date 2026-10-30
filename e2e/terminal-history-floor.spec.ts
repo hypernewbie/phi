@@ -294,6 +294,11 @@ for (const width of [1280, 560]) {
         await expect(historyButton).toBeEnabled();
         await historyButton.focus();
         await historyButton.press('Enter');
+        // The first old row can paint while the rest of the book still parses.
+        // Wait for completion before measuring a stable historical viewport.
+        await expect(historyButton).toHaveAttribute('aria-busy', 'false', {
+            timeout: 30_000,
+        });
         await expect.poll(() => view(page, pane)).toContain('FLOOR OLD');
         await expect(historyButton).toBeEnabled();
         // The baseline must be the settled view. A late panel fit can still be
