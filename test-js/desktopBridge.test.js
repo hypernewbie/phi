@@ -7,6 +7,7 @@ const ORIGINAL_HREF = window.location.href;
 afterEach(() => {
     window.history.replaceState(null, '', ORIGINAL_HREF);
     delete window.__phiDesktop;
+    delete document.documentElement.dataset.phiDesktopFullscreen;
     vi.restoreAllMocks();
 });
 
@@ -59,6 +60,18 @@ describe('tryNative (desktop bridge)', () => {
         );
         expect(geometry).toBe('width=860,height=1000');
         expect(popup.opener).toBeNull();
+    });
+
+    it('keeps Settings in-page in fullscreen even if a named popup already exists', () => {
+        window.history.replaceState(null, '', '/?desktop=1');
+        const open = vi.spyOn(window, 'open').mockReturnValue({ opener: null });
+        expect(tryNative('config', {})).toBe(true);
+        document.documentElement.dataset.phiDesktopFullscreen = 'true';
+        expect(tryNative('config', {})).toBe(false);
+        expect(open).toHaveBeenCalledTimes(1);
+        document.documentElement.dataset.phiDesktopFullscreen = 'false';
+        expect(tryNative('config', {})).toBe(true);
+        expect(open).toHaveBeenCalledTimes(2);
     });
 
     it('keeps ownerless and legacy-bridge embedded config requests in-page', () => {

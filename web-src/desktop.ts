@@ -14,6 +14,11 @@ export function markDesktopView(): void {
 }
 
 export function tryNative(kind: string, payload: unknown): boolean {
+    if (
+        NATIVE_POPOUT_PAGES[kind] &&
+        document.documentElement.dataset.phiDesktopFullscreen === 'true'
+    )
+        return false;
     const params = new URLSearchParams(location.search);
     const embedded =
         params.get('embedded') === '1' || location.protocol === 'phi-app:';

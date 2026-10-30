@@ -569,6 +569,15 @@ test.describe('native ownership', () => {
                 // Delayed-save ownership: hold A's save response, switch to
                 // B, then release. B must stay unchanged; A retains its
                 // attempt/draft until the reply lands.
+                await electronApp.evaluate(
+                    async (_api: unknown, id: string) => {
+                        (globalThis as any).__phiMsHost.controller.setActive(
+                            id,
+                        );
+                    },
+                    ids.aId,
+                );
+                let heldSave = false;
                 let releaseA: (() => void) | null = null;
                 const gate = new Promise<void>((resolve) => {
                     releaseA = resolve;
@@ -577,16 +586,55 @@ test.describe('native ownership', () => {
                     '**/api/config/mobile-appearance',
                     async (route) => {
                         if (route.request().method() === 'POST') {
+                            heldSave = true;
                             await gate;
                         }
                         await route.continue();
                     },
                 );
+                // phi-app requests are proxied in the main process, outside
+                // Playwright routing. Hold that transport's real fetch too.
+                await electronApp.evaluate((_api: unknown, origin: string) => {
+                    const g = globalThis as any;
+                    const transport = g.__phiMsHost.embeddedTransport;
+                    const original = transport.fetchImpl;
+                    let release!: () => void;
+                    const gate = new Promise<void>((resolve) => {
+                        release = resolve;
+                    });
+                    g.__phiMsHeldSave = false;
+                    transport.fetchImpl = async (
+                        url: string,
+                        init: RequestInit,
+                    ) => {
+                        if (
+                            url === origin + '/api/config/mobile-appearance' &&
+                            init?.method === 'POST'
+                        ) {
+                            g.__phiMsHeldSave = true;
+                            await gate;
+                        }
+                        return original(url, init);
+                    };
+                    g.__phiMsReleaseSave = () => {
+                        release();
+                        transport.fetchImpl = original;
+                    };
+                }, phiA.url);
                 await pageA.locator('#settings-mobile-ui-font-size').fill('24');
-                // Wait for the POST to be held (status leaves Saved).
-                await expect(
-                    pageA.locator('#settings-mobile-status'),
-                ).not.toHaveText('Saved', { timeout: 15_000 });
+                // Require a dispatched POST, not merely the debounce's Pending state.
+                await expect
+                    .poll(
+                        async () =>
+                            heldSave ||
+                            (await electronApp!.evaluate(
+                                () =>
+                                    (globalThis as any).__phiMsHeldSave ===
+                                    true,
+                            )),
+                        { timeout: 15_000 },
+                    )
+                    .toBe(true);
                 // Switch shell to B while A's save is in flight.
                 await electronApp.evaluate(
                     async (_electronApi: unknown, bId: string) => {
@@ -606,6 +654,9 @@ test.describe('native ownership', () => {
                 ).toHaveValue('20');
                 // Release A's response; only A changes.
                 releaseA!();
+                await electronApp.evaluate(() =>
+                    (globalThis as any).__phiMsReleaseSave(),
+                );
                 await expect(
                     pageA.locator('#settings-mobile-status'),
                 ).toHaveText('Saved', { timeout: 30_000 });
@@ -668,30 +719,78 @@ test.describe('native ownership', () => {
                 // fullscreen, native config popups are denied and Settings
                 // falls back in-page. Toggle via the real window, attempt
                 // an open from B's view, then restore.
-                await electronApp.evaluate(async () => {
+                await electronApp.evaluate(async ({ app }) => {
+                    app.focus({ steal: true });
                     const g = globalThis as unknown as {
                         __phiMsHost: {
                             window: () => {
+                                show: () => void;
+                                focus: () => void;
                                 setFullScreen: (b: boolean) => void;
                                 isFullScreen: () => boolean;
+                                once: (
+                                    event: string,
+                                    listener: () => void,
+                                ) => void;
                             } | null;
                         };
                     };
-                    g.__phiMsHost.window()?.setFullScreen(true);
+                    const win = g.__phiMsHost.window();
+                    if (!win) throw new Error('main window is missing');
+                    win.show();
+                    win.focus();
+                    await new Promise<void>((resolve, reject) => {
+                        const timer = setTimeout(
+                            () =>
+                                reject(
+                                    new Error(
+                                        `native fullscreen transition timed out (state=${win.isFullScreen()})`,
+                                    ),
+                                ),
+                            15_000,
+                        );
+                        win.once('enter-full-screen', () => {
+                            clearTimeout(timer);
+                            resolve();
+                        });
+                        win.setFullScreen(true);
+                    });
                 });
-                const fsOn = await electronApp.evaluate(async () => {
-                    const g = globalThis as unknown as {
-                        __phiMsHost: {
-                            window: () => {
-                                isFullScreen: () => boolean;
-                            } | null;
-                        };
-                    };
-                    return g.__phiMsHost.window()?.isFullScreen() ?? false;
-                });
-                // In headless CI fullscreen may not engage; only assert the
-                // fallback when the window reports fullscreen.
-                if (fsOn) {
+                await expect
+                    .poll(
+                        () =>
+                            electronApp!.evaluate(async () => {
+                                const g = globalThis as unknown as {
+                                    __phiMsHost: {
+                                        window: () => {
+                                            isFullScreen: () => boolean;
+                                        } | null;
+                                    };
+                                };
+                                return (
+                                    g.__phiMsHost.window()?.isFullScreen() ??
+                                    false
+                                );
+                            }),
+                        {
+                            message: 'native window entered fullscreen',
+                            timeout: 15_000,
+                        },
+                    )
+                    .toBe(true);
+                await waitFor(async () =>
+                    electronApp!.evaluate(
+                        async (_electronApi: unknown, id: string) => {
+                            const host = (globalThis as any).__phiMsHost;
+                            const view = host.profileViews.getView(id);
+                            return view.webContents.executeJavaScript(
+                                `document.documentElement.dataset.phiDesktopFullscreen === 'true'`,
+                            );
+                        },
+                        ids.bId,
+                    ),
+                );
+                {
                     const winsBefore = windows.length;
                     const clicked = await electronApp.evaluate(
                         async (_electronApi: unknown, id: string) => {
@@ -758,15 +857,11 @@ test.describe('native ownership', () => {
                         if (!inPage)
                             await new Promise((r) => setTimeout(r, 500));
                     }
-                    // Fullscreen fallback is required, but headless window.open
-                    // denial timing is flaky. Record and continue when the
-                    // modal does not appear; core ownership checks below must
-                    // still pass. A persistent failure here blocks M4.
-                    if (!inPage) {
-                        console.log(
-                            'fullscreen in-page fallback did not trigger; continuing',
-                        );
-                    } else {
+                    expect(
+                        inPage,
+                        'fullscreen Settings uses the in-page modal',
+                    ).toBe(true);
+                    {
                         // Close the in-page modal via its Close button.
                         await electronApp.evaluate(
                             async (_electronApi: unknown, id: string) => {
@@ -1092,8 +1187,17 @@ test.describe('native ownership', () => {
                     },
                     readded.id,
                 );
-                const beforeCount = windows.length;
-                await waitFor(async () => windows.length > beforeCount, 30_000);
+                await waitFor(
+                    async () =>
+                        windows.some(
+                            (page) =>
+                                page !== pageA &&
+                                page !== pageB &&
+                                !page.isClosed() &&
+                                page.url().includes('/config.html'),
+                        ),
+                    30_000,
+                );
                 let popupC: Page | null = null;
                 for (let i = windows.length - 1; i >= 0; i--) {
                     try {
@@ -1219,23 +1323,10 @@ test.describe('native ownership', () => {
 
                 // Close behavior: popup Close buttons close their windows.
                 // Close the fresh popup via its UI and assert it disappears.
-                const winsBeforeClose = windows.length;
                 await popupC!
                     .locator('.settings-overlay .modal-close-btn')
                     .click();
-                await waitFor(async () => {
-                    let alive = 0;
-                    for (const w of windows) {
-                        try {
-                            if (
-                                !w.isClosed() &&
-                                w.url().includes('/config.html')
-                            )
-                                alive++;
-                        } catch {}
-                    }
-                    return alive < winsBeforeClose;
-                }, 15_000);
+                await waitFor(async () => popupC!.isClosed(), 15_000);
 
                 // Normal quit tears down owned views and polling. Close via
                 // the app (not kill) and assert Electron exits.

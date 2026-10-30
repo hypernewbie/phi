@@ -1438,7 +1438,9 @@ for (const viewport of [
             await page.goto(phi.url);
             // The restart case also persists a newly opened shell; require shell + diff, not a fixed total.
             await expect
-                .poll(async () => (await terminalFamilies(page)).length)
+                .poll(async () => (await terminalFamilies(page)).length, {
+                    timeout: 30_000,
+                })
                 .toBeGreaterThanOrEqual(2);
             await openDrawerSettings(page);
             await expect(

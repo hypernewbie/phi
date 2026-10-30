@@ -110,6 +110,60 @@ const settleEdit = () => vi.advanceTimersByTimeAsync(301);
 const posts = (fetch) =>
     fetch.mock.calls.filter(([, init]) => init?.method === 'POST');
 
+it('keeps durable edits usable when BroadcastChannel notifications fail', async () => {
+    vi.stubGlobal(
+        'BroadcastChannel',
+        class {
+            postMessage() {
+                throw new DOMException(
+                    'channel unavailable',
+                    'InvalidStateError',
+                );
+            }
+            close() {}
+        },
+    );
+    const f = fixture();
+    await f.store.start();
+    await f.store.refresh();
+    f.store.edit({ ui_font_size: 21 });
+    await settleEdit();
+    expect(f.store.storageWarning).toBe('');
+    expect(f.server.ui_font_size).toBe(21);
+    expect(f.store.pending).toBe(false);
+});
+
+it('finishes an aborted save without posting to its disposed channel', async () => {
+    vi.stubGlobal(
+        'BroadcastChannel',
+        class {
+            closed = false;
+            postMessage() {
+                if (this.closed)
+                    throw new DOMException(
+                        'channel closed',
+                        'InvalidStateError',
+                    );
+            }
+            close() {
+                this.closed = true;
+            }
+        },
+    );
+    const f = fixture();
+    await f.store.start();
+    await f.store.refresh();
+    f.fetch.mockImplementation(() => new Promise(() => {}));
+    f.store.edit({ ui_font_size: 21 });
+    await vi.advanceTimersByTimeAsync(0);
+    const saving = f.store.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    f.scope.abort();
+    await expect(saving).resolves.toBeUndefined();
+    expect(f.db.owners.get(f.store.owner).attempt).not.toBeNull();
+    expect(f.db.drafts.get(f.store.draft.id).fields.ui_font_size).toBe(21);
+});
+
 it('debounces only valid edits and keeps blank/invalid input from sending the previous value', async () => {
     const { store, fetch } = fixture();
     await store.sync();

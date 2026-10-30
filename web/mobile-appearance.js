@@ -471,7 +471,14 @@ export class MobileAppearanceStore {
                 listener();
     }
     broadcast() {
-        this.channel?.postMessage({ owner: this.owner });
+        if (this.disposed)
+            return;
+        try {
+            this.channel?.postMessage({ owner: this.owner });
+        }
+        catch {
+            // Notifications are hints; persisted drafts and polling remain usable.
+        }
     }
     async start() {
         try {

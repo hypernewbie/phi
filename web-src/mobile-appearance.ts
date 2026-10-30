@@ -603,7 +603,12 @@ export class MobileAppearanceStore {
         if (!this.disposed) for (const listener of this.listeners) listener();
     }
     private broadcast() {
-        this.channel?.postMessage({ owner: this.owner });
+        if (this.disposed) return;
+        try {
+            this.channel?.postMessage({ owner: this.owner });
+        } catch {
+            // Notifications are hints; persisted drafts and polling remain usable.
+        }
     }
     async start(): Promise<void> {
         try {

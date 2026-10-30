@@ -12,6 +12,9 @@ export function markDesktopView() {
     }
 }
 export function tryNative(kind, payload) {
+    if (NATIVE_POPOUT_PAGES[kind] &&
+        document.documentElement.dataset.phiDesktopFullscreen === 'true')
+        return false;
     const params = new URLSearchParams(location.search);
     const embedded = params.get('embedded') === '1' || location.protocol === 'phi-app:';
     const bridge = window.__phiDesktop;
