@@ -9,7 +9,7 @@ import {
     type BrowserContext,
     type Request as PlaywrightRequest,
 } from '@playwright/test';
-import { startPhi, type PhiServer } from './_server.js';
+import { configToToml, startPhi, type PhiServer } from './_server.js';
 import { syntheticPiSource } from './_pi-bridge.js';
 import { toastErrorScript } from '../desktop/electron/src/injected.js';
 
@@ -1530,8 +1530,8 @@ test('M3b keeps notification actions local and blocked until an explicit route i
                 mkdirSync(workspace, { recursive: true });
                 mkdirSync(join(dir, 'home', '.phi'), { recursive: true });
                 writeFileSync(
-                    join(dir, 'home', '.phi', 'config.json'),
-                    JSON.stringify({
+                    join(dir, 'home', '.phi', 'config.toml'),
+                    configToToml({
                         pushover_enabled: false,
                         simplepush_enabled: false,
                         webhook_enabled: false,
