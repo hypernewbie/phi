@@ -2,215 +2,193 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TabManager } from '../web/terminal.js';
 
-// Harness idiom (matches deadTabClickReconnect.test.js): bare prototype +
-// hand-mocked collaborators, calling prototype methods with an explicit ctx.
-
-function ctx(config = { auto_reconnect: 'visible' }) {
-    const c = Object.create(TabManager.prototype);
-    c.app = { config };
-    c.reconnectTab = vi.fn();
-    c.getActiveTab = vi.fn(() => null);
-    return c;
-}
-
-function deadTab(overrides = {}) {
-    return {
+function harness(overrides = {}) {
+    const tab = {
         paneId: 'p1',
         isDead: true,
-        coder: 'opencode',
-        reconnectInFlight: false,
+        coder: 'bash',
         exitCode: null,
         reconnectAttempts: 0,
-        termContainer: { querySelector: () => null },
+        termContainer: document.createElement('div'),
         ...overrides,
     };
+    const manager = Object.assign(Object.create(TabManager.prototype), {
+        tabs: new Map([[tab.paneId, tab]]),
+        app: { config: { auto_reconnect: 'visible' } },
+        reconnectTab: vi.fn(),
+        updateDisconnectBanner: vi.fn(),
+        _showReconnectOverlay: vi.fn(),
+        _queuePanelFit: vi.fn(),
+        getActiveTab: () => tab,
+    });
+    return { manager, tab };
 }
-
-describe('_reviveActiveTabIfDead (wake / online / pageshow trigger)', () => {
-    it('revives a dead active tab and resets the attempt budget', () => {
-        const c = ctx();
-        const tab = deadTab({ reconnectAttempts: 7 });
-        c.getActiveTab = vi.fn(() => tab);
-        TabManager.prototype._reviveActiveTabIfDead.call(c);
-        expect(tab.reconnectAttempts).toBe(0);
-        expect(c.reconnectTab).toHaveBeenCalledWith(tab, { auto: true });
+function visibility(value) {
+    Object.defineProperty(document, 'visibilityState', {
+        value,
+        configurable: true,
     });
+}
+beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    visibility('visible');
+});
+afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    visibility('visible');
+});
 
-    it('does nothing when auto_reconnect is off', () => {
-        const c = ctx({ auto_reconnect: 'off' });
-        c.getActiveTab = vi.fn(() => deadTab());
-        TabManager.prototype._reviveActiveTabIfDead.call(c);
-        expect(c.reconnectTab).not.toHaveBeenCalled();
+describe('all-tab wake and shared scheduler', () => {
+    it('schedules both dead panes, preserves a healthy pane, and deduplicates overlapping hints', () => {
+        const { manager, tab } = harness({ reconnectAttempts: 10 });
+        const background = { ...tab, paneId: 'p2' };
+        const healthy = { ...tab, paneId: 'p3', isDead: false };
+        manager.tabs.set('p2', background).set('p3', healthy);
+        manager._reviveActiveTabIfDead();
+        const timer = tab.autoReconnectTimer;
+        expect(tab.reconnectAttempts).toBe(1);
+        expect(background.reconnectAttempts).toBe(1);
+        manager._reviveActiveTabIfDead();
+        manager.activateTabViewport(tab, { scrollToBottom: false });
+        expect(tab.autoReconnectTimer).toBe(timer);
+        expect(tab.reconnectAttempts).toBe(1);
+        expect(manager.reconnectTab).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(1000);
+        expect(manager.reconnectTab.mock.calls).toEqual([
+            [tab, { auto: true }],
+            [background, { auto: true }],
+        ]);
+        expect(healthy.autoReconnectTimer).toBeUndefined();
     });
-
-    it('does nothing while the document is hidden (online fires in background windows)', () => {
-        const c = ctx();
-        c.getActiveTab = vi.fn(() => deadTab());
-        Object.defineProperty(document, 'visibilityState', {
-            value: 'hidden',
-            configurable: true,
-        });
-        try {
-            TabManager.prototype._reviveActiveTabIfDead.call(c);
-            expect(c.reconnectTab).not.toHaveBeenCalled();
-        } finally {
-            Object.defineProperty(document, 'visibilityState', {
-                value: 'visible',
-                configurable: true,
-            });
+    it.each([
+        { isDead: false },
+        { reconnectInFlight: true },
+        { softClosing: true },
+        { finalizing: true },
+        { coder: 'review' },
+        { coder: 'kanban' },
+        { coder: 'pi-rpc' },
+        { isReview: true },
+        { isKanban: true },
+        { exitCode: 0 },
+    ])('does not schedule excluded pane %j', (state) => {
+        const { manager, tab } = harness(state);
+        manager._reviveActiveTabIfDead();
+        expect(manager.maybeAutoReconnect(tab)).toBe(false);
+        expect(vi.getTimerCount()).toBe(0);
+    });
+    it.each(['off', undefined])('does not schedule with config %s', (value) => {
+        const { manager, tab } = harness();
+        manager.app.config.auto_reconnect = value;
+        manager._reviveActiveTabIfDead();
+        expect(manager.maybeAutoReconnect(tab)).toBe(false);
+    });
+    it('does not schedule hidden pages or an empty catalog', () => {
+        const { manager, tab } = harness();
+        visibility('hidden');
+        manager._reviveActiveTabIfDead();
+        expect(manager.maybeAutoReconnect(tab)).toBe(false);
+        visibility('visible');
+        manager.tabs.clear();
+        manager._reviveActiveTabIfDead();
+        expect(manager.maybeAutoReconnect(tab)).toBe(false);
+        expect(vi.getTimerCount()).toBe(0);
+    });
+    it.each([
+        'hidden',
+        'off',
+        'removed',
+        'replaced',
+        'softClosing',
+        'finalizing',
+        'exit',
+    ])('rechecks %s before dialing', (change) => {
+        const { manager, tab } = harness();
+        manager.maybeAutoReconnect(tab);
+        if (change === 'hidden') visibility('hidden');
+        else if (change === 'off') manager.app.config.auto_reconnect = 'off';
+        else if (change === 'removed') manager.tabs.clear();
+        else if (change === 'replaced') manager.tabs.set('p1', { ...tab });
+        else if (change === 'exit') tab.exitCode = 0;
+        else tab[change] = true;
+        vi.advanceTimersByTime(1000);
+        expect(manager.reconnectTab).not.toHaveBeenCalled();
+        if (change !== 'removed' && change !== 'replaced') {
+            expect(tab.autoReconnectPending).toBe(false);
+            expect(tab.autoReconnectTimer).toBeNull();
+            expect(manager.updateDisconnectBanner).toHaveBeenCalled();
         }
     });
-
-    it('does nothing when config never loaded (app.config undefined)', () => {
-        const c = ctx(undefined);
-        c.app = {};
-        c.getActiveTab = vi.fn(() => deadTab());
-        TabManager.prototype._reviveActiveTabIfDead.call(c);
-        expect(c.reconnectTab).not.toHaveBeenCalled();
-    });
-
-    it('skips a live tab', () => {
-        const c = ctx();
-        c.getActiveTab = vi.fn(() => deadTab({ isDead: false }));
-        TabManager.prototype._reviveActiveTabIfDead.call(c);
-        expect(c.reconnectTab).not.toHaveBeenCalled();
-    });
-
-    it('skips when no active tab exists', () => {
-        const c = ctx();
-        TabManager.prototype._reviveActiveTabIfDead.call(c);
-        expect(c.reconnectTab).not.toHaveBeenCalled();
-    });
-
-    it('skips while a reconnect is already in flight', () => {
-        const c = ctx();
-        c.getActiveTab = vi.fn(() => deadTab({ reconnectInFlight: true }));
-        TabManager.prototype._reviveActiveTabIfDead.call(c);
-        expect(c.reconnectTab).not.toHaveBeenCalled();
-    });
-
-    it('skips review/kanban panels', () => {
-        for (const coder of ['review', 'kanban']) {
-            const c = ctx();
-            c.getActiveTab = vi.fn(() => deadTab({ coder }));
-            TabManager.prototype._reviveActiveTabIfDead.call(c);
-            expect(c.reconnectTab).not.toHaveBeenCalled();
-        }
-    });
-
-    it('does not resurrect a tab whose process exited', () => {
-        const c = ctx();
-        c.getActiveTab = vi.fn(() => deadTab({ exitCode: 0 }));
-        TabManager.prototype._reviveActiveTabIfDead.call(c);
-        expect(c.reconnectTab).not.toHaveBeenCalled();
+    it('an obsolete retry callback cannot erase a newer timer', () => {
+        const { manager, tab } = harness();
+        const schedule = vi.spyOn(globalThis, 'setTimeout');
+        manager.maybeAutoReconnect(tab);
+        const oldCallback = schedule.mock.calls[0][0];
+        expect(typeof oldCallback).toBe('function');
+        clearTimeout(tab.autoReconnectTimer);
+        tab.autoReconnectTimer = null;
+        tab.autoReconnectPending = false;
+        manager.maybeAutoReconnect(tab);
+        const currentTimer = tab.autoReconnectTimer;
+        const attempts = tab.reconnectAttempts;
+        oldCallback();
+        expect(tab.autoReconnectTimer).toBe(currentTimer);
+        expect(tab.autoReconnectPending).toBe(true);
+        expect(tab.reconnectAttempts).toBe(attempts);
+        expect(manager.reconnectTab).not.toHaveBeenCalled();
     });
 });
 
-describe('maybeAutoReconnect retry policy (full jitter, 10 attempts, 20s cap)', () => {
-    beforeEach(() => vi.useFakeTimers());
-    afterEach(() => {
-        vi.useRealTimers();
-        vi.restoreAllMocks();
-    });
-
-    function armedCtx(tab) {
-        const c = ctx();
-        c.activePaneId = tab.paneId;
-        c.reconnectTab = vi.fn();
-        return c;
-    }
-
-    // Every delay is now AUTO_RECONNECT_GRACE_MS (1000) + jittered backoff.
-    // The grace is a floor: full jitter alone can return ~0ms, which let a
-    // flapping pane redial almost instantly.
-    it('attempt 1 with jitter=1 schedules 1000ms grace + 1000ms backoff', () => {
-        vi.spyOn(Math, 'random').mockReturnValue(1);
-        const tab = deadTab();
-        const c = armedCtx(tab);
-        expect(TabManager.prototype.maybeAutoReconnect.call(c, tab)).toBe(true);
-        vi.advanceTimersByTime(1999);
-        expect(c.reconnectTab).not.toHaveBeenCalled();
+describe('grace, jitter, budget, and manual intent', () => {
+    it.each([
+        [0, 1, 2000],
+        [5, 1, 21000],
+        [1, 0.5, 2000],
+        [0, 0, 1000],
+    ])('attempts=%i jitter=%f waits %i ms', (attempts, jitter, delay) => {
+        vi.mocked(Math.random).mockReturnValue(jitter);
+        const { manager, tab } = harness({ reconnectAttempts: attempts });
+        expect(manager.maybeAutoReconnect(tab)).toBe(true);
+        vi.advanceTimersByTime(delay - 1);
+        expect(manager.reconnectTab).not.toHaveBeenCalled();
         vi.advanceTimersByTime(1);
-        expect(c.reconnectTab).toHaveBeenCalledWith(tab, { auto: true });
+        expect(manager.reconnectTab).toHaveBeenCalledWith(tab, { auto: true });
     });
-
-    it('never redials inside the grace window, even with zero jitter', () => {
-        vi.spyOn(Math, 'random').mockReturnValue(0);
-        const tab = deadTab();
-        const c = armedCtx(tab);
-        expect(TabManager.prototype.maybeAutoReconnect.call(c, tab)).toBe(true);
-        vi.advanceTimersByTime(999);
-        expect(c.reconnectTab).not.toHaveBeenCalled();
-        vi.advanceTimersByTime(1);
-        expect(c.reconnectTab).toHaveBeenCalled();
-    });
-
-    it('attempt 6+ is capped at 20s pre-jitter (not 32s, not the old 30s)', () => {
-        vi.spyOn(Math, 'random').mockReturnValue(1);
-        const tab = deadTab({ reconnectAttempts: 5 });
-        const c = armedCtx(tab);
-        expect(TabManager.prototype.maybeAutoReconnect.call(c, tab)).toBe(true);
-        expect(tab.reconnectAttempts).toBe(6);
-        vi.advanceTimersByTime(20999); // 1000 grace + 20000 cap
-        expect(c.reconnectTab).not.toHaveBeenCalled();
-        vi.advanceTimersByTime(1);
-        expect(c.reconnectTab).toHaveBeenCalled();
-    });
-
-    it('jitter scales the delay (random=0.5 halves it)', () => {
-        vi.spyOn(Math, 'random').mockReturnValue(0.5);
-        const tab = deadTab({ reconnectAttempts: 1 });
-        const c = armedCtx(tab);
-        TabManager.prototype.maybeAutoReconnect.call(c, tab); // attempt 2: 2000ms pre-jitter
-        vi.advanceTimersByTime(1999); // 1000 grace + 2000*0.5
-        expect(c.reconnectTab).not.toHaveBeenCalled();
-        vi.advanceTimersByTime(1);
-        expect(c.reconnectTab).toHaveBeenCalled();
-    });
-
-    it('hard-stops after 10 attempts and resets the counter', () => {
-        const tab = deadTab({ reconnectAttempts: 10 });
-        const c = armedCtx(tab);
-        expect(TabManager.prototype.maybeAutoReconnect.call(c, tab)).toBe(
-            false,
-        );
-        expect(tab.reconnectAttempts).toBe(0);
-        expect(vi.getTimerCount()).toBe(0);
-    });
-
-    it('allows attempt 10 itself (only >= 10 pre-increment blocks)', () => {
-        vi.spyOn(Math, 'random').mockReturnValue(1);
-        const tab = deadTab({ reconnectAttempts: 9 });
-        const c = armedCtx(tab);
-        expect(TabManager.prototype.maybeAutoReconnect.call(c, tab)).toBe(true);
+    it('executes attempt ten, refuses eleven, and leaves manual recovery actionable', () => {
+        const { manager, tab } = harness({ reconnectAttempts: 9 });
+        tab.termContainer.innerHTML =
+            '<div class="reconnect-overlay"><span class="reconnect-msg"></span><button class="reconnect-btn" disabled></button><button class="restart-btn" disabled></button></div>';
+        expect(manager.maybeAutoReconnect(tab)).toBe(true);
+        vi.advanceTimersByTime(1000);
+        expect(manager.reconnectTab).toHaveBeenCalledOnce();
         expect(tab.reconnectAttempts).toBe(10);
-    });
-
-    it('overlay message reports the 10-attempt budget', () => {
-        vi.spyOn(Math, 'random').mockReturnValue(1);
-        const msgEl = { innerText: '' };
-        const overlay = {
-            querySelector: (sel) => (sel === '.reconnect-msg' ? msgEl : null),
-        };
-        const tab = deadTab({
-            reconnectAttempts: 2,
-            termContainer: {
-                querySelector: (sel) =>
-                    sel === '.reconnect-overlay' ? overlay : null,
-            },
-        });
-        const c = armedCtx(tab);
-        TabManager.prototype.maybeAutoReconnect.call(c, tab);
-        expect(msgEl.innerText).toBe('auto-reconnecting (attempt 3/10)...');
-    });
-
-    it('stays gated off when auto_reconnect is off', () => {
-        const tab = deadTab();
-        const c = armedCtx(tab);
-        c.app = { config: { auto_reconnect: 'off' } };
-        expect(TabManager.prototype.maybeAutoReconnect.call(c, tab)).toBe(
+        expect(manager.maybeAutoReconnect(tab)).toBe(false);
+        expect(tab.reconnectAttempts).toBe(10);
+        expect(vi.getTimerCount()).toBe(0);
+        expect(
+            tab.termContainer.querySelector('.reconnect-msg').innerText,
+        ).toBe('Auto-reconnect failed. Please retry manually.');
+        expect(tab.termContainer.querySelector('.reconnect-btn').disabled).toBe(
             false,
         );
-        expect(vi.getTimerCount()).toBe(0);
+        expect(tab.termContainer.querySelector('.restart-btn').disabled).toBe(
+            false,
+        );
+        manager.activateTabViewport(tab, { scrollToBottom: false });
+        expect(tab.reconnectAttempts).toBe(10);
+        manager._reviveActiveTabIfDead();
+        expect(tab.reconnectAttempts).toBe(1);
+    });
+    it('keeps the scheduled attempt number in the overlay', () => {
+        const { manager, tab } = harness({ reconnectAttempts: 2 });
+        tab.termContainer.innerHTML =
+            '<div class="reconnect-overlay"><span class="reconnect-msg"></span></div>';
+        manager.maybeAutoReconnect(tab);
+        expect(
+            tab.termContainer.querySelector('.reconnect-msg').innerText,
+        ).toBe('auto-reconnecting (attempt 3/10)...');
     });
 });

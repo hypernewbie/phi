@@ -563,6 +563,71 @@ describe('A3 dispatch and focus match the old preset buttons', () => {
 });
 
 describe('A4 custom commands and bridge fallback are untouched', () => {
+    it.each(
+        ['staged', 'quick'].flatMap((mode) =>
+            ['dead', 'false', 'partial', 'retained'].map((failure) => [
+                mode,
+                failure,
+            ]),
+        ),
+    )(
+        '%s retains its exact saved draft and attachments after %s',
+        (mode, failure) => {
+            const tm = makeTm();
+            const tab = makeTab('failed-send', 'bash');
+            tm.tabs.set(tab.paneId, tab);
+            tm.activePaneId = tab.paneId;
+            tm.saveActiveDraft = TabManager.prototype.saveActiveDraft;
+            tm._resyncRetainedView = vi.fn();
+            tm.inputTextArea.value = tm.lastInputValue =
+                'keep this unsent draft';
+            tm.stagedAttachments = [
+                {
+                    id: 'a',
+                    name: 'a.png',
+                    path: '/tmp/a.png',
+                    type: 'image/png',
+                    sizeBytes: 5,
+                    source: 'paste',
+                },
+            ];
+            tm.saveActiveDraft();
+            const saved = tm.loadTabDraft(tab.paneId);
+            let prefix;
+            tab.ws.sendInput.mockImplementation((payload) => {
+                if (failure === 'partial') prefix = payload.slice(0, 4);
+                return false;
+            });
+            if (failure === 'dead') tab.isDead = true;
+            if (failure === 'retained') tab._resyncNeeded = true;
+            tm.inputTextArea.focus();
+            if (mode === 'staged') tm.sendStagedInput();
+            else {
+                tm.renderQuickCmdsDropup();
+                document
+                    .querySelector(
+                        '#quick-commands-dropup > .dropup-row:has(.dropup-row-actions) .dropup-model-btn',
+                    )
+                    .click();
+            }
+            expect(tm.inputTextArea.value).toBe('keep this unsent draft');
+            expect(tm.lastInputValue).toBe('keep this unsent draft');
+            expect(tm.stagedAttachments).toEqual(saved.draftAttachments);
+            expect(tm.loadTabDraft(tab.paneId)).toEqual(saved);
+            expect(tm._spamScrollToBottom).not.toHaveBeenCalled();
+            expect(document.activeElement).toBe(tm.inputTextArea);
+            expect(tab.ws.sendInput).toHaveBeenCalledTimes(
+                ['false', 'partial'].includes(failure) ? 1 : 0,
+            );
+            if (failure === 'partial') expect(prefix).toBeTruthy();
+            if (['false', 'partial'].includes(failure))
+                expect(tm.app.showToast).toHaveBeenCalledWith(
+                    'Send failed — delivery not confirmed. Check the terminal before retrying.',
+                    { type: 'error' },
+                );
+        },
+    );
+
     it('user commands keep order, draft/{}, and clearing behavior', () => {
         const tm = makeTm();
         const tab = makeTab('pi-1', 'pi');
