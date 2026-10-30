@@ -197,6 +197,155 @@ test('narrow desktop keeps desktop identity and standalone font saves preserve s
     }
 });
 
+test('mobile shared edits preserve newer desktop cache values when broadcasts are unavailable', async ({
+    browser,
+}) => {
+    const context = await browser.newContext({
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+        userAgent: IPHONE,
+    });
+    try {
+        await context.addInitScript(() => {
+            BroadcastChannel.prototype.postMessage = () => {
+                throw new DOMException(
+                    'fixture channel unavailable',
+                    'InvalidStateError',
+                );
+            };
+        });
+        const phone = await context.newPage();
+        await mobileSettings(phone);
+        const desktop = await context.newPage();
+        await desktop.goto(`${phi.url}/config.html?desktop=1`);
+        await desktop.locator('#settings-ui-font-size').fill('24');
+        await expect.poll(() => fontSize(desktop)).toBe('24px');
+        await phone.locator('#settings-bg-blur').fill('8');
+        await phone.locator('.settings-overlay .modal-close-btn').click();
+        await desktop.reload();
+        await expect.poll(() => fontSize(desktop)).toBe('24px');
+        await expect(desktop.locator('#settings-ui-font-size')).toHaveValue(
+            '24',
+        );
+    } finally {
+        await context.close();
+    }
+});
+
+for (const touch of [false, true]) {
+    for (const choice of ['invalid input', 'server values']) {
+        test(`${choice} cancels a save waiting for actual IndexedDB (${touch ? 'touch' : 'desktop'})`, async ({
+            browser,
+        }) => {
+            const context = await browser.newContext(
+                touch
+                    ? {
+                          viewport: { width: 390, height: 844 },
+                          isMobile: true,
+                          hasTouch: true,
+                          userAgent: IPHONE,
+                      }
+                    : { viewport: { width: 1440, height: 900 } },
+            );
+            try {
+                const page = await context.newPage();
+                await mobileSettings(page);
+                const writes: string[] = [];
+                page.on('request', (request) => {
+                    if (
+                        request.method() === 'POST' &&
+                        request.url().endsWith('/api/config/mobile-appearance')
+                    )
+                        writes.push(request.postData() || '');
+                });
+                const input = page.locator('#settings-mobile-ui-font-size');
+                await input.fill('21');
+                await expect
+                    .poll(async () =>
+                        (await persistedDrafts(page)).some(
+                            (draft) => draft.fields.ui_font_size === 21,
+                        ),
+                    )
+                    .toBe(true);
+                await page.evaluate(
+                    () =>
+                        new Promise<void>((resolve, reject) => {
+                            const open = indexedDB.open(
+                                'phi-mobile-appearance-v1',
+                                1,
+                            );
+                            open.onerror = () => reject(open.error);
+                            open.onsuccess = () => {
+                                const db = open.result;
+                                const tx = db.transaction(
+                                    ['owners', 'drafts'],
+                                    'readwrite',
+                                );
+                                const store = tx.objectStore('owners');
+                                let held = true;
+                                (
+                                    window as Window & {
+                                        releaseMobileStorage?: () => void;
+                                    }
+                                ).releaseMobileStorage = () => {
+                                    held = false;
+                                };
+                                tx.oncomplete = () => db.close();
+                                tx.onabort = () => db.close();
+                                const keepAlive = () => {
+                                    const request = store.get('fixture-lock');
+                                    request.onsuccess = () => {
+                                        resolve();
+                                        if (held) keepAlive();
+                                    };
+                                };
+                                keepAlive();
+                            };
+                        }),
+                );
+                // Let the 300ms debounce queue its transaction behind the real lock.
+                await page.waitForTimeout(400);
+                if (choice === 'invalid input') await input.fill('');
+                else {
+                    await page
+                        .locator('#settings-mobile-save')
+                        [touch ? 'tap' : 'click']();
+                    await page
+                        .locator('#settings-mobile-use-server')
+                        [touch ? 'tap' : 'click']();
+                }
+                await page.evaluate(() =>
+                    (
+                        window as Window & { releaseMobileStorage?: () => void }
+                    ).releaseMobileStorage?.(),
+                );
+                if (choice === 'invalid input') {
+                    await expect(input).toHaveAttribute('aria-invalid', 'true');
+                    await expect(
+                        page.locator('#settings-mobile-status'),
+                    ).toContainText('whole number');
+                } else
+                    await expect(
+                        page.locator('#settings-mobile-status'),
+                    ).toHaveText('Saved');
+                // Await the queued transaction, not just the synchronous input event.
+                await persistedDrafts(page);
+                expect(writes).toHaveLength(0);
+                await input.fill('22');
+                await expect(
+                    page.locator('#settings-mobile-status'),
+                ).toHaveText('Saved');
+                expect(writes.map((body) => JSON.parse(body).fields)).toEqual([
+                    { ui_font_size: 22 },
+                ]);
+            } finally {
+                await context.close();
+            }
+        });
+    }
+}
+
 async function mobileSettings(page: Page) {
     await page.goto(`${phi.url}/config.html?page=mobile`);
     await expect(page.locator('#settings-mobile-status')).toHaveText('Saved');

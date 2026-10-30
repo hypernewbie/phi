@@ -398,6 +398,7 @@ export class MobileAppearanceStore {
     backoff = 5000;
     read = null;
     lane = Promise.resolve();
+    choiceGeneration = 0;
     listeners = new Set();
     channel = null;
     stop = new AbortController();
@@ -793,12 +794,16 @@ export class MobileAppearanceStore {
     async useServerValues() {
         if (this.attempt)
             return;
+        const choice = ++this.choiceGeneration;
         const active = this.draft;
         const selected = copy(active);
         this.draft.explicit = true;
         if (this.timer)
             clearTimeout(this.timer);
-        if (!(await this.refresh()) || this.attempt || active !== this.draft)
+        if (!(await this.refresh()) ||
+            this.attempt ||
+            active !== this.draft ||
+            choice !== this.choiceGeneration)
             return;
         for (const key of KEYS)
             if (this.draft.versions[key] === selected.versions[key]) {
@@ -813,6 +818,7 @@ export class MobileAppearanceStore {
     async saveMyChanges() {
         if (this.attempt || this.invalid)
             return;
+        const choice = ++this.choiceGeneration;
         const active = this.draft;
         const selected = copy(active);
         this.draft.explicit = true;
@@ -821,14 +827,15 @@ export class MobileAppearanceStore {
         if (!hasFields(selected) ||
             !(await this.refresh()) ||
             this.attempt ||
-            active !== this.draft)
+            active !== this.draft ||
+            choice !== this.choiceGeneration)
             return;
         selected.base = this.confirmed.revision;
         selected.explicit = false;
         // Persist the explicit rebase, but do not send any edits made during the read.
         this.draft.base = selected.base;
         await this.persistDraft();
-        if (active === this.draft)
+        if (active === this.draft && choice === this.choiceGeneration)
             await this.flush(true, selected);
     }
     async flush(explicit = false, selected = copy(this.draft)) {
@@ -843,6 +850,7 @@ export class MobileAppearanceStore {
             (!explicit && selected.explicit))
             return;
         const active = this.draft;
+        const choice = this.choiceGeneration;
         await this.lane;
         if (active !== this.draft)
             return;
@@ -852,7 +860,19 @@ export class MobileAppearanceStore {
         let attempt = null;
         try {
             attempt = await this.storage.change(this.owner, (record, drafts) => {
-                if (record.attempt ||
+                // Storage may have waited behind another transaction since flush began.
+                // Recheck local intent before claiming a durable, possibly unconfirmed write.
+                if (this.disposed ||
+                    this.scope.aborted ||
+                    this.invalid ||
+                    this.unavailable ||
+                    this.resetDetected ||
+                    this.storageWarning ||
+                    navigator.onLine === false ||
+                    active !== this.draft ||
+                    choice !== this.choiceGeneration ||
+                    (!explicit && active.explicit) ||
+                    record.attempt ||
                     !record.confirmed ||
                     record.confirmed.revision !== selected.base)
                     return null;

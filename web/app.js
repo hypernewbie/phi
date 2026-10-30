@@ -2022,10 +2022,13 @@ export class App {
             terminal_font_family: this.terminalFontFamily || '', terminal_font_size: this.terminalFontSize || 0,
         };
         try {
+            const scope = this.scope || captureAppearanceScope();
             localStorage.setItem(
-                legacyAppearanceKey(this.scope || captureAppearanceScope()),
+                legacyAppearanceKey(scope),
                 JSON.stringify({
                     ...this.desktopAppearance,
+                    // A mobile page owns no desktop fonts. Keep newer values from other documents.
+                    ...(currentAppearanceProfile() === 'mobile' ? readDesktopAppearance(scope) : {}),
                     mobile_scrollback_rows: this.mobileScrollbackRows || 0,
                     hostname_override: this.hostnameOverride || '',
                     custom_font_name: this.customFontName || '',

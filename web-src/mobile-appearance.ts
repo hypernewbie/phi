@@ -533,6 +533,7 @@ export class MobileAppearanceStore {
     private backoff = 5000;
     private read: Promise<boolean> | null = null;
     private lane: Promise<unknown> = Promise.resolve();
+    private choiceGeneration = 0;
     private readonly listeners = new Set<() => void>();
     private channel: BroadcastChannel | null = null;
     private readonly stop = new AbortController();
@@ -927,11 +928,17 @@ export class MobileAppearanceStore {
     }
     async useServerValues(): Promise<void> {
         if (this.attempt) return;
+        const choice = ++this.choiceGeneration;
         const active = this.draft;
         const selected = copy(active);
         this.draft.explicit = true;
         if (this.timer) clearTimeout(this.timer);
-        if (!(await this.refresh()) || this.attempt || active !== this.draft)
+        if (
+            !(await this.refresh()) ||
+            this.attempt ||
+            active !== this.draft ||
+            choice !== this.choiceGeneration
+        )
             return;
         for (const key of KEYS)
             if (this.draft.versions[key] === selected.versions[key]) {
@@ -945,6 +952,7 @@ export class MobileAppearanceStore {
     }
     async saveMyChanges(): Promise<void> {
         if (this.attempt || this.invalid) return;
+        const choice = ++this.choiceGeneration;
         const active = this.draft;
         const selected = copy(active);
         this.draft.explicit = true;
@@ -953,7 +961,8 @@ export class MobileAppearanceStore {
             !hasFields(selected) ||
             !(await this.refresh()) ||
             this.attempt ||
-            active !== this.draft
+            active !== this.draft ||
+            choice !== this.choiceGeneration
         )
             return;
         selected.base = this.confirmed!.revision;
@@ -961,7 +970,8 @@ export class MobileAppearanceStore {
         // Persist the explicit rebase, but do not send any edits made during the read.
         this.draft.base = selected.base;
         await this.persistDraft();
-        if (active === this.draft) await this.flush(true, selected);
+        if (active === this.draft && choice === this.choiceGeneration)
+            await this.flush(true, selected);
     }
     async flush(explicit = false, selected = copy(this.draft)): Promise<void> {
         if (
@@ -977,6 +987,7 @@ export class MobileAppearanceStore {
         )
             return;
         const active = this.draft;
+        const choice = this.choiceGeneration;
         await this.lane;
         if (active !== this.draft) return;
         selected.id = active.id;
@@ -986,7 +997,19 @@ export class MobileAppearanceStore {
             attempt = await this.storage.change(
                 this.owner,
                 (record, drafts) => {
+                    // Storage may have waited behind another transaction since flush began.
+                    // Recheck local intent before claiming a durable, possibly unconfirmed write.
                     if (
+                        this.disposed ||
+                        this.scope.aborted ||
+                        this.invalid ||
+                        this.unavailable ||
+                        this.resetDetected ||
+                        this.storageWarning ||
+                        navigator.onLine === false ||
+                        active !== this.draft ||
+                        choice !== this.choiceGeneration ||
+                        (!explicit && active.explicit) ||
                         record.attempt ||
                         !record.confirmed ||
                         record.confirmed.revision !== selected.base

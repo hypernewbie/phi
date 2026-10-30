@@ -438,6 +438,26 @@ describe('existing Settings mobile event handlers', () => {
             JSON.parse(localStorage.getItem('phi_appearance')),
         ).toMatchObject({ ui_font_size: 16, terminal_font_size: 18 });
     });
+    it('preserves newer desktop fonts when mobile saves a shared setting', () => {
+        const { app } = mobileApp();
+        const newerFonts = {
+            ui_font_size: 24,
+            terminal_font_size: 28,
+            ui_font_family: 'Georgia, serif',
+            terminal_font_family: 'Courier New, monospace',
+        };
+        // Another document saved these after this page read its desktop snapshot.
+        localStorage.setItem('phi_appearance', JSON.stringify(newerFonts));
+        app.hostnameOverride = 'mobile label';
+        app._saveAppearanceLocal();
+        expect(
+            JSON.parse(localStorage.getItem('phi_appearance')),
+        ).toMatchObject({
+            ...newerFonts,
+            hostname_override: 'mobile label',
+        });
+        expect(app.uiFontSize).toBe(21);
+    });
     it('leaves mobile rendering unchanged when desktop opens the mobile editing view', () => {
         writeProfileOverride('desktop');
         const app = Object.create(App.prototype);

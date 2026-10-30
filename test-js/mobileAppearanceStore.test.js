@@ -183,6 +183,100 @@ it('debounces only valid edits and keeps blank/invalid input from sending the pr
     expect(store.attempt).toBeNull();
 });
 
+it.each(['invalid', 'disposed', 'offline', 'use-server'])(
+    'does not claim a queued save after %s while storage is busy',
+    async (state) => {
+        const f = fixture();
+        await f.store.sync();
+        f.store.edit({ ui_font_size: 21 });
+        await vi.advanceTimersByTimeAsync(0);
+        const change = f.db.change.bind(f.db);
+        let release;
+        const gate = new Promise((resolve) => {
+            release = resolve;
+        });
+        f.db.change = async (...args) => {
+            await gate;
+            return change(...args);
+        };
+        const saving = f.store.flush();
+        await vi.advanceTimersByTimeAsync(0);
+        let choosing;
+        if (state === 'invalid') f.store.invalidateInput();
+        else if (state === 'disposed') f.store.dispose();
+        else if (state === 'offline')
+            vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+        else choosing = f.store.useServerValues();
+        release();
+        await saving;
+        await choosing;
+        expect(posts(f.fetch)).toHaveLength(0);
+        expect(f.db.owners.get(f.store.owner).attempt).toBeNull();
+        if (state !== 'use-server')
+            expect(f.db.drafts.get(f.store.draft.id).fields.ui_font_size).toBe(
+                21,
+            );
+    },
+);
+
+it('lets a newer server-values choice cancel an explicit save queued behind storage', async () => {
+    const f = fixture();
+    await f.store.sync();
+    f.store.edit({ ui_font_size: 21 });
+    await vi.advanceTimersByTimeAsync(0);
+    f.store.draft.explicit = true;
+    const change = f.db.change.bind(f.db);
+    let release;
+    const gate = new Promise((resolve) => {
+        release = resolve;
+    });
+    f.db.change = async (...args) => {
+        await gate;
+        return change(...args);
+    };
+    const saving = f.store.flush(true);
+    await vi.advanceTimersByTimeAsync(0);
+    const choosing = f.store.useServerValues();
+    release();
+    await Promise.all([saving, choosing]);
+    expect(posts(f.fetch)).toHaveLength(0);
+    expect(f.db.owners.get(f.store.owner).attempt).toBeNull();
+    expect(f.store.pending).toBe(false);
+});
+
+it.each(['save', 'server'])(
+    'honors the newer %s choice while both reads are pending',
+    async (latest) => {
+        const f = fixture();
+        await f.store.sync();
+        f.store.edit({ ui_font_size: 21 });
+        await vi.advanceTimersByTimeAsync(0);
+        let release;
+        const gate = new Promise((resolve) => {
+            release = resolve;
+        });
+        const refresh = f.store.refresh.bind(f.store);
+        vi.spyOn(f.store, 'refresh').mockImplementation(async () => {
+            await gate;
+            return refresh();
+        });
+        const older =
+            latest === 'save'
+                ? f.store.useServerValues()
+                : f.store.saveMyChanges();
+        const newer =
+            latest === 'save'
+                ? f.store.saveMyChanges()
+                : f.store.useServerValues();
+        release();
+        await Promise.all([older, newer]);
+        expect(
+            posts(f.fetch).map(([, init]) => JSON.parse(init.body).fields),
+        ).toEqual(latest === 'save' ? [{ ui_font_size: 21 }] : []);
+        expect(f.store.pending).toBe(false);
+    },
+);
+
 it('retains offline work, allocates distinct cloned-tab drafts, and requires a choice with competitors', async () => {
     const first = fixture();
     const second = fixture(first.db);
