@@ -719,42 +719,25 @@ test.describe('native ownership', () => {
                 // fullscreen, native config popups are denied and Settings
                 // falls back in-page. Toggle via the real window, attempt
                 // an open from B's view, then restore.
-                await electronApp.evaluate(async ({ app }) => {
-                    app.focus({ steal: true });
+                await electronApp.evaluate(({ app }) => {
                     const g = globalThis as unknown as {
                         __phiMsHost: {
                             window: () => {
                                 show: () => void;
                                 focus: () => void;
                                 setFullScreen: (b: boolean) => void;
-                                isFullScreen: () => boolean;
-                                once: (
-                                    event: string,
-                                    listener: () => void,
-                                ) => void;
                             } | null;
                         };
                     };
                     const win = g.__phiMsHost.window();
                     if (!win) throw new Error('main window is missing');
-                    win.show();
-                    win.focus();
-                    await new Promise<void>((resolve, reject) => {
-                        const timer = setTimeout(
-                            () =>
-                                reject(
-                                    new Error(
-                                        `native fullscreen transition timed out (state=${win.isFullScreen()})`,
-                                    ),
-                                ),
-                            15_000,
-                        );
-                        win.once('enter-full-screen', () => {
-                            clearTimeout(timer);
-                            resolve();
-                        });
+                    // Let the inspector evaluation return before AppKit handles the transition.
+                    setTimeout(() => {
+                        app.focus({ steal: true });
+                        win.show();
+                        win.focus();
                         win.setFullScreen(true);
-                    });
+                    }, 0);
                 });
                 await expect
                     .poll(
