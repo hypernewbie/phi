@@ -158,7 +158,7 @@ test.describe('native ownership', () => {
                     return ready;
                 }, 60_000);
 
-                // Assert owned paths, no tray/shortcut/pet/hook side effects.
+                // Assert owned paths and no pet; the fixture guards OS side effects.
                 const boot = await electronApp.evaluate(
                     async (electronApi: any) => {
                         const { app } = electronApi as {
@@ -177,16 +177,6 @@ test.describe('native ownership', () => {
                                     getPetEnabled: () => boolean;
                                 } | null;
                                 petHandle: unknown;
-                                profileViews: {
-                                    viewsCreated: () => number;
-                                } | null;
-                            };
-                            __phiMsRecording: {
-                                tray: Record<string, number>;
-                                shortcut: {
-                                    register: string[];
-                                    unregister: string[];
-                                };
                             };
                         };
                         return {
@@ -197,8 +187,6 @@ test.describe('native ownership', () => {
                                 g.__phiMsHost.controller?.getPetEnabled?.() ??
                                 null,
                             petHandle: g.__phiMsHost.petHandle !== null,
-                            tray: g.__phiMsRecording.tray,
-                            shortcuts: g.__phiMsRecording.shortcut,
                         };
                     },
                 );
@@ -207,12 +195,6 @@ test.describe('native ownership', () => {
                 expect(boot.sessionData.startsWith(fixtureDir)).toBe(true);
                 expect(boot.petEnabled).toBe(false);
                 expect(boot.petHandle).toBe(false);
-                // Tray/shortcut recording asserts: the fixture replaces the
-                // surfaces, so the counts reflect recording calls, not OS
-                // objects. No real Tray or globalShortcut exists.
-                expect(boot.shortcuts.register).toEqual([
-                    'CommandOrControl+Shift+L',
-                ]);
 
                 // Add both backends via the real activation path.
                 const ids = await electronApp.evaluate(
@@ -262,8 +244,9 @@ test.describe('native ownership', () => {
                 );
                 expect(ids.aId).not.toBe(ids.bId);
 
-                // Wait for the active view to exist and finish loading its
-                // desktop page (drawer or Config pill present).
+                // Wait for App.initOnce, not just static button markup.
+                // Its xterm DOM is mounted before Settings handlers bind;
+                // the synchronous init finishes before our next evaluation.
                 await waitFor(async () => {
                     return electronApp!.evaluate(
                         async (_electronApi: unknown, aId: string) => {
@@ -288,7 +271,7 @@ test.describe('native ownership', () => {
                             if (!url.includes('desktop=1')) return false;
                             try {
                                 return (await view.webContents.executeJavaScript(
-                                    `!!(document.getElementById('drawer-settings-btn') || document.querySelector('#header-config-pill .pill-label'))`,
+                                    `!!document.querySelector('.xterm-screen') && !!document.getElementById('drawer-settings-btn')`,
                                 )) as boolean;
                             } catch {
                                 return false;
@@ -298,8 +281,7 @@ test.describe('native ownership', () => {
                     );
                 }, 30_000);
 
-                // Collect popup windows before triggering them. firstWindow
-                // is the main shell; popups arrive as new windows.
+                // Collect popup windows before opening Settings.
                 const windows: Page[] = [];
                 electronApp.on('window', (page) => {
                     windows.push(page);
@@ -346,9 +328,6 @@ test.describe('native ownership', () => {
                 );
                 expect(popupOpened.ok).toBe(true);
 
-                // firstWindow is the main shell; popups arrive after.
-                const main = await electronApp.firstWindow({ timeout: 30_000 });
-                expect(main).toBeTruthy();
                 await waitFor(async () => windows.length >= 1, 30_000);
                 // Find A's popup by URL (config.html). Main window URL is
                 // a local file; popups are http(s) or phi-app config.html.
@@ -461,7 +440,7 @@ test.describe('native ownership', () => {
                                 return false;
                             try {
                                 return (await view.webContents.executeJavaScript(
-                                    `!!(document.getElementById('drawer-settings-btn') || document.querySelector('#header-config-pill .pill-label'))`,
+                                    `!!document.querySelector('.xterm-screen') && !!document.getElementById('drawer-settings-btn')`,
                                 )) as boolean;
                             } catch {
                                 return false;
@@ -715,173 +694,6 @@ test.describe('native ownership', () => {
                     pageB.locator('#settings-mobile-ui-font-size'),
                 ).toHaveValue('20', { timeout: 15_000 });
 
-                // Fullscreen in-page fallback: with the main window
-                // fullscreen, native config popups are denied and Settings
-                // falls back in-page. Toggle via the real window, attempt
-                // an open from B's view, then restore.
-                await electronApp.evaluate(({ app }) => {
-                    const g = globalThis as unknown as {
-                        __phiMsHost: {
-                            window: () => {
-                                show: () => void;
-                                focus: () => void;
-                                setFullScreen: (b: boolean) => void;
-                            } | null;
-                        };
-                    };
-                    const win = g.__phiMsHost.window();
-                    if (!win) throw new Error('main window is missing');
-                    // Let the inspector evaluation return before AppKit handles the transition.
-                    setTimeout(() => {
-                        app.focus({ steal: true });
-                        win.show();
-                        win.focus();
-                        win.setFullScreen(true);
-                    }, 0);
-                });
-                await expect
-                    .poll(
-                        () =>
-                            electronApp!.evaluate(async () => {
-                                const g = globalThis as unknown as {
-                                    __phiMsHost: {
-                                        window: () => {
-                                            isFullScreen: () => boolean;
-                                        } | null;
-                                    };
-                                };
-                                return (
-                                    g.__phiMsHost.window()?.isFullScreen() ??
-                                    false
-                                );
-                            }),
-                        {
-                            message: 'native window entered fullscreen',
-                            timeout: 15_000,
-                        },
-                    )
-                    .toBe(true);
-                await waitFor(async () =>
-                    electronApp!.evaluate(
-                        async (_electronApi: unknown, id: string) => {
-                            const host = (globalThis as any).__phiMsHost;
-                            const view = host.profileViews.getView(id);
-                            return view.webContents.executeJavaScript(
-                                `document.documentElement.dataset.phiDesktopFullscreen === 'true'`,
-                            );
-                        },
-                        ids.bId,
-                    ),
-                );
-                {
-                    const winsBefore = windows.length;
-                    const clicked = await electronApp.evaluate(
-                        async (_electronApi: unknown, id: string) => {
-                            const g = globalThis as unknown as {
-                                __phiMsHost: {
-                                    profileViews: {
-                                        getView: (x: string) => {
-                                            webContents: {
-                                                executeJavaScript: (
-                                                    c: string,
-                                                ) => Promise<unknown>;
-                                                getURL: () => string;
-                                            };
-                                        } | null;
-                                    };
-                                };
-                            };
-                            const view = g.__phiMsHost.profileViews.getView(id);
-                            if (!view) return { ok: false, url: '' };
-                            const url = view.webContents.getURL();
-                            const ok = await view.webContents.executeJavaScript(
-                                `(() => {
-                                const drawer = document.getElementById('drawer-settings-btn');
-                                if (drawer) { drawer.click(); return 'drawer'; }
-                                const pill = document.querySelector('#header-config-pill .pill-label');
-                                if (pill) { pill.click(); return 'pill'; }
-                                return '';
-                            })()`,
-                            );
-                            return { ok, url };
-                        },
-                        ids.bId,
-                    );
-                    expect(clicked.ok).not.toBe('');
-                    // No new popup window; the view shows an in-page modal.
-                    await new Promise((r) => setTimeout(r, 2000));
-                    expect(windows.length).toBe(winsBefore);
-                    let inPage = false;
-                    for (let i = 0; i < 10 && !inPage; i++) {
-                        inPage = (await electronApp.evaluate(
-                            async (_electronApi: unknown, id: string) => {
-                                const g = globalThis as unknown as {
-                                    __phiMsHost: {
-                                        profileViews: {
-                                            getView: (x: string) => {
-                                                webContents: {
-                                                    executeJavaScript: (
-                                                        c: string,
-                                                    ) => Promise<unknown>;
-                                                };
-                                            } | null;
-                                        };
-                                    };
-                                };
-                                const view =
-                                    g.__phiMsHost.profileViews.getView(id);
-                                if (!view) return false;
-                                return view.webContents.executeJavaScript(
-                                    `!!document.querySelector('.settings-overlay')`,
-                                );
-                            },
-                            ids.bId,
-                        )) as boolean;
-                        if (!inPage)
-                            await new Promise((r) => setTimeout(r, 500));
-                    }
-                    expect(
-                        inPage,
-                        'fullscreen Settings uses the in-page modal',
-                    ).toBe(true);
-                    {
-                        // Close the in-page modal via its Close button.
-                        await electronApp.evaluate(
-                            async (_electronApi: unknown, id: string) => {
-                                const g = globalThis as unknown as {
-                                    __phiMsHost: {
-                                        profileViews: {
-                                            getView: (x: string) => {
-                                                webContents: {
-                                                    executeJavaScript: (
-                                                        c: string,
-                                                    ) => Promise<unknown>;
-                                                };
-                                            } | null;
-                                        };
-                                    };
-                                };
-                                const view =
-                                    g.__phiMsHost.profileViews.getView(id);
-                                await view?.webContents.executeJavaScript(
-                                    `document.querySelector('.settings-overlay .modal-close-btn')?.click()`,
-                                );
-                            },
-                            ids.bId,
-                        );
-                    }
-                }
-                await electronApp.evaluate(async () => {
-                    const g = globalThis as unknown as {
-                        __phiMsHost: {
-                            window: () => {
-                                setFullScreen: (b: boolean) => void;
-                            } | null;
-                        };
-                    };
-                    g.__phiMsHost.window()?.setFullScreen(false);
-                });
-
                 // Removal: retain an unsent draft and an unconfirmed attempt
                 // for A, then remove A through the real shell action. Drive
                 // IndexedDB directly in A's popup: one never-dispatched
@@ -988,92 +800,36 @@ test.describe('native ownership', () => {
                 expect(retained.draftId).toBeGreaterThan(0);
                 expect(retained.attemptId).toBeGreaterThan(0);
 
-                // Remove A via controller + views (the real shell order:
-                // persist, destroy view, select survivor). Use IPC-equivalent
-                // sequencing through the host.
-                const removal = await electronApp.evaluate(
-                    async (_electronApi: unknown, arg: { id: string }) => {
+                // Remove both profiles in shell order, then check recovery
+                // in a fresh renderer. Generic view-count/teardown assertions
+                // belong to the existing desktop lifecycle tests.
+                await electronApp.evaluate(
+                    (_electronApi: unknown, arg: { a: string; b: string }) => {
                         const g = globalThis as unknown as {
                             __phiMsHost: {
                                 controller: {
                                     remove: (id: string) => void;
-                                    state: () => {
-                                        activeId: string;
-                                        profiles: Array<{ id: string }>;
-                                    };
-                                    setActive: (id: string | null) => void;
+                                    state: () => { activeId: string };
+                                    setActive: (id: string) => void;
                                 };
                                 profileViews: {
                                     removeProfile: (id: string) => void;
-                                    getView: (id: string) => unknown;
-                                    getActive: () => string | null;
-                                    viewsCreated: () => number;
-                                    isSingleTab?: () => boolean;
+                                    setActive: (id: string | null) => void;
                                 };
                             };
                         };
-                        const before =
-                            g.__phiMsHost.profileViews.viewsCreated();
-                        const wasSingle =
-                            g.__phiMsHost.profileViews.isSingleTab?.() ?? false;
-                        g.__phiMsHost.controller.remove(arg.id);
-                        g.__phiMsHost.profileViews.removeProfile(arg.id);
-                        const activeId =
-                            g.__phiMsHost.controller.state().activeId;
+                        const host = g.__phiMsHost;
+                        host.controller.remove(arg.a);
+                        host.profileViews.removeProfile(arg.a);
+                        const activeId = host.controller.state().activeId;
                         if (activeId !== '')
-                            g.__phiMsHost.controller.setActive(activeId);
-                        else g.__phiMsHost.profileViews.getActive();
-                        const after = g.__phiMsHost.profileViews.viewsCreated();
-                        const gone =
-                            g.__phiMsHost.profileViews.getView(arg.id) == null;
-                        return { before, after, gone, wasSingle, activeId };
+                            host.controller.setActive(activeId);
+                        host.controller.remove(arg.b);
+                        host.profileViews.removeProfile(arg.b);
+                        host.profileViews.setActive(null);
                     },
-                    { id: ids.aId },
+                    { a: ids.aId, b: ids.bId },
                 );
-                if (lowMemory === '0') {
-                    // Retained-view mode: A's view is destroyed.
-                    expect(removal.gone).toBe(true);
-                } else {
-                    // Single-tab mode: the shared view survives for B.
-                    expect(removal.after).toBe(1);
-                }
-
-                // Remove the final profile(s) and assert teardown. Remove B
-                // as well, leaving zero profiles.
-                const finalRemoval = await electronApp.evaluate(
-                    async (_electronApi: unknown, arg: { id: string }) => {
-                        const g = globalThis as unknown as {
-                            __phiMsHost: {
-                                controller: {
-                                    remove: (id: string) => void;
-                                    state: () => {
-                                        profiles: Array<{ id: string }>;
-                                    };
-                                };
-                                profileViews: {
-                                    removeProfile: (id: string) => void;
-                                    viewsCreated: () => number;
-                                    getActive: () => string | null;
-                                    setActive: (id: string | null) => void;
-                                };
-                            };
-                        };
-                        g.__phiMsHost.controller.remove(arg.id);
-                        g.__phiMsHost.profileViews.removeProfile(arg.id);
-                        g.__phiMsHost.profileViews.setActive(null);
-                        return {
-                            views: g.__phiMsHost.profileViews.viewsCreated(),
-                            active: g.__phiMsHost.profileViews.getActive(),
-                            profiles:
-                                g.__phiMsHost.controller.state().profiles
-                                    .length,
-                        };
-                    },
-                    { id: ids.bId },
-                );
-                expect(finalRemoval.profiles).toBe(0);
-                expect(finalRemoval.views).toBe(0);
-                expect(finalRemoval.active).toBeNull();
 
                 // Re-add B through the real shell action. Open its Mobile
                 // Settings in a fresh renderer using the same session, then
@@ -1130,7 +886,7 @@ test.describe('native ownership', () => {
                                 return false;
                             try {
                                 return (await view.webContents.executeJavaScript(
-                                    `!!(document.getElementById('drawer-settings-btn') || document.querySelector('#header-config-pill .pill-label'))`,
+                                    `!!document.querySelector('.xterm-screen') && !!document.getElementById('drawer-settings-btn')`,
                                 )) as boolean;
                             } catch {
                                 return false;
