@@ -28,6 +28,7 @@ function geometryHarness() {
     );
     const desired = { cols: 80, rows: 24 };
     const tab = {
+        paneId: 'geometry',
         termContainer: document.createElement('div'),
         term: {
             cols: 80,
@@ -52,6 +53,7 @@ function geometryHarness() {
     let active = tab;
     const m = Object.assign(Object.create(TabManager.prototype), {
         app: { config: {} },
+        tabs: new Map([[tab.paneId, tab]]),
         getActiveTab: () => active,
         resolveTerminalFontSize: () => 14,
         _spamScroll: vi.fn(),
