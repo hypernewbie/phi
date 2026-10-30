@@ -11464,13 +11464,17 @@ export class TabManager {
     _resyncViewportScroll(tabInfo) {
         const term = tabInfo?.term;
         const buffer = term?.buffer?.active;
-        if (!term || !buffer || tabInfo._historyBrowsing) return;
+        if (!term || !buffer) return;
+        const readingHistory = Boolean(tabInfo._historyBrowsing);
         // Alternate-screen apps own the visible screen; normal scrollback is
         // not what their viewport is showing.
-        if (buffer.baseY <= 0 || buffer.viewportY < buffer.baseY) return;
+        if (buffer.baseY <= 0 || (!readingHistory && buffer.viewportY < buffer.baseY))
+            return;
+        const viewportY = buffer.viewportY;
         try {
             term.scrollToTop();
             term.scrollToBottom();
+            if (readingHistory) term.scrollToLine(viewportY);
         } catch (_e) {
             /* xterm not open yet; a later fit resyncs */
         }

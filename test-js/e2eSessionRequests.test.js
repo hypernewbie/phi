@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { isCancelledWorktreeRead } from '../e2e/_session-requests.ts';
+import {
+    isCancelledSessionListRead,
+    isCancelledWorktreeRead,
+} from '../e2e/_session-requests.ts';
 
 const origin = 'http://127.0.0.1:17777';
 const request = (url, method = 'GET', errorText = 'net::ERR_ABORTED') => ({
@@ -35,6 +38,29 @@ describe('expected background worktree cancellation diagnostics', () => {
     ])('does not exempt %s %s %s', (url, method, errorText) => {
         expect(
             isCancelledWorktreeRead(request(url, method, errorText), origin),
+        ).toBe(false);
+    });
+});
+
+describe('expected background session-list cancellation diagnostics', () => {
+    it('recognizes only canceled same-origin GET /api/sessions', () => {
+        expect(
+            isCancelledSessionListRead(
+                request(`${origin}/api/sessions?coder=pi&offset=0`),
+                origin,
+            ),
+        ).toBe(true);
+    });
+
+    it.each([
+        [`${origin}/api/sessions`, 'POST', 'net::ERR_ABORTED'],
+        [`${origin}/api/sessions`, 'GET', 'net::ERR_FAILED'],
+        [`${origin}/api/sessions/extra`, 'GET', 'net::ERR_ABORTED'],
+        [`${origin}/api/git/worktrees`, 'GET', 'net::ERR_ABORTED'],
+        ['http://127.0.0.1:17778/api/sessions', 'GET', 'net::ERR_ABORTED'],
+    ])('does not exempt %s %s %s', (url, method, errorText) => {
+        expect(
+            isCancelledSessionListRead(request(url, method, errorText), origin),
         ).toBe(false);
     });
 });

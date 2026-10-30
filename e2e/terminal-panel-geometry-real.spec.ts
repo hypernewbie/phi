@@ -2,6 +2,7 @@ import { copyFileSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
+import { isCancelledWorktreeRead } from './_session-requests.js';
 
 interface FitAddon {
     proposeDimensions?(): { cols: number; rows: number } | undefined;
@@ -155,6 +156,7 @@ function observeBrowser(page: Page, origin: string): BrowserEvents {
             events.themePosts++;
     });
     page.on('requestfailed', (request) => {
+        if (isCancelledWorktreeRead(request, origin)) return;
         const url = new URL(request.url());
         events.failedRequests.push(
             `${request.method()} ${url.pathname}${url.search}: ${request.failure()?.errorText}`,
