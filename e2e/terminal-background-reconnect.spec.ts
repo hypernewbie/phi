@@ -286,7 +286,7 @@ for (const mobile of [false, true]) {
                     await selectPane(page, pane);
                     await sendUI(page, 'echo READY');
                     await expect
-                        .poll(async () => (await screen(page, pane)).lines, {
+                        .poll(() => recorded(context.request, phi.url, pane), {
                             timeout: 30000,
                         })
                         .toContain('READY');
