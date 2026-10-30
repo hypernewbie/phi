@@ -192,6 +192,30 @@ eager to avoid a first-open unstyled flash. -->
                     </button>
 
                     <button
+                        id="desktop-sidebar-toggle"
+                        type="button"
+                        class="header-btn icon-only hidden"
+                        aria-controls="sidebar-panel"
+                        aria-expanded="true"
+                        title="Hide sessions"
+                        aria-label="Hide sessions"
+                    >
+                        <svg
+                            class="icon"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            aria-hidden="true"
+                        >
+                            <line x1="3" y1="12" x2="21" y2="12"></line>
+                            <line x1="3" y1="6" x2="21" y2="6"></line>
+                            <line x1="3" y1="18" x2="21" y2="18"></line>
+                        </svg>
+                    </button>
+                    <button
                         id="header-clipboard-btn"
                         class="header-btn icon-only"
                         title="Sync Remote Clipboard to Local Clipboard"
@@ -2020,6 +2044,7 @@ eager to avoid a first-open unstyled flash. -->
         <!-- Main Entry Point -->
         <script src="vendor/Sortable.min.js"></script>
         <script src="vendor/jsdiff.min.js"></script>
+        <script type="module" src="desktop-sidebar.js"></script>
         <script type="module" src="app.js"></script>
     </body>
 </html>

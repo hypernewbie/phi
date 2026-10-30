@@ -14190,4 +14190,10 @@ html[data-theme-color="white"] .pi-export-scope {
     --warning: #e3cea3;
     --white: #e3e3e4;
 }
+
+html.desktop-sidebar-hidden #sidebar-panel,
+html.desktop-sidebar-hidden #left-resize-handle {
+    display: none !important;
+}
+
 /* stylelint-enable custom-property-pattern */
