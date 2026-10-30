@@ -92,11 +92,13 @@ test('M1 notifications drawer caps compact popups and dismisses locally', async 
         });
         expect(shellResponse.ok()).toBe(true);
         const shell = (await shellResponse.json()) as { pane_id: string };
-        const unpinResponse = await request.post(
+        // Keep terminal activity out of this notification UI test: an
+        // unpinned shell writes both busy=true and idle=false pin updates.
+        const pinResponse = await request.post(
             `${phi.url}/api/terminals/${shell.pane_id}/pin`,
-            { data: { pinned: false } },
+            { data: { pinned: true } },
         );
-        expect(unpinResponse.ok()).toBe(true);
+        expect(pinResponse.ok()).toBe(true);
         const terminalsResponse = await request.get(`${phi.url}/api/terminals`);
         expect(terminalsResponse.ok()).toBe(true);
         const terminalViews = (await terminalsResponse.json()) as Array<{
@@ -106,7 +108,7 @@ test('M1 notifications drawer caps compact popups and dismisses locally', async 
         expect(
             terminalViews.find((terminal) => terminal.id === shell.pane_id)
                 ?.pinned,
-        ).toBe(false);
+        ).toBe(true);
         const allowedOrigin = new URL(phi.url).origin;
 
         const viewports = [
@@ -201,6 +203,7 @@ test('M1 notifications drawer caps compact popups and dismisses locally', async 
                     page.locator('.tab.active').getAttribute('data-pane-id'),
                 )
                 .toBe(shell.pane_id);
+            await expect(page.locator('.tab.active')).toHaveClass(/pinned/);
             await expect(page.locator('#input-textarea')).toHaveCount(1);
             await expect
                 .poll(() =>
@@ -821,6 +824,14 @@ test('M2 real bridge settlements group distinct ready panes and open the existin
             piResponses.map((response) => response.json()),
         )) as Array<{ pane_id: string }>;
         const paneIds = [shell.pane_id, piA.pane_id, piB.pane_id];
+        // Notification settlements do not exercise dynamic busy/idle pins.
+        for (const paneId of paneIds) {
+            const pinResponse = await request.post(
+                `${phi.url}/api/terminals/${paneId}/pin`,
+                { data: { pinned: true } },
+            );
+            expect(pinResponse.ok()).toBe(true);
+        }
         const pinUrls = new Set(
             paneIds.map((paneId) => `${phi.url}/api/terminals/${paneId}/pin`),
         );
@@ -921,6 +932,9 @@ test('M2 real bridge settlements group distinct ready panes and open the existin
                     page.locator('.tab.active').getAttribute('data-pane-id'),
                 )
                 .toBe(shell.pane_id);
+            await expect(page.locator('.tab.pinned')).toHaveCount(
+                paneIds.length,
+            );
             await expect
                 .poll(() =>
                     page.evaluate(
