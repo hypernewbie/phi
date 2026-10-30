@@ -435,14 +435,15 @@ async function panelGeometry(page: Page, paneId: string) {
 }
 
 async function dragSidebar(page: Page, width: number): Promise<void> {
-    const layout = await page.locator('.main-layout').boundingBox();
+    const sidebar = await page.locator('#sidebar-panel').boundingBox();
     const handle = await page.locator('#left-resize-handle').boundingBox();
-    expect(layout).not.toBeNull();
+    expect(sidebar).not.toBeNull();
     expect(handle).not.toBeNull();
+    const x = handle!.x + 1;
     const y = handle!.y + handle!.height / 2;
-    await page.mouse.move(handle!.x + handle!.width / 2, y);
+    await page.mouse.move(x, y);
     await page.mouse.down();
-    await page.mouse.move(layout!.x + width, y, { steps: 5 });
+    await page.mouse.move(x + width - sidebar!.width, y, { steps: 5 });
     await page.mouse.up();
     await expect
         .poll(
@@ -758,6 +759,14 @@ test('M2 saved visibility and widths survive reloads and rapid toggles', async (
                     .locator('#sidebar-panel')
                     .evaluate((el) => el.classList.contains('sidebar-narrow')),
             ).toBe(width < 120);
+            if (width === 96) {
+                const header = page.locator('#sidebar-panel .panel-header');
+                await expect(header).toBeVisible();
+                await page.setViewportSize({ width: 390, height: 844 });
+                await expect(header).toBeHidden();
+                await page.setViewportSize({ width: 1440, height: 900 });
+                await expect(header).toBeVisible();
+            }
         }
         expect(original.sidebar).toBeGreaterThan(0);
 
@@ -1270,11 +1279,17 @@ test('M2 responsive mouse and touch layouts preserve desktop state and keyboard 
         await closeDiffPanelForSidebarCoverage(desktop.page);
         const desktopToggle = desktop.page.locator('#desktop-sidebar-toggle');
         const mobileToggle = desktop.page.locator('#mobile-sidebar-toggle');
-        expect(
-            await desktopToggle.evaluate(
-                (button) => button.closest('.brand') === null,
-            ),
-        ).toBe(true);
+        await expect(desktopToggle).toHaveText('<<');
+        const headerGap = await desktopToggle.evaluate((button) => {
+            const heading = document.querySelector('#drawer-panel-title');
+            if (!heading) throw new Error('Missing sessions heading');
+            return (
+                button.getBoundingClientRect().left -
+                heading.getBoundingClientRect().right
+            );
+        });
+        expect(headerGap).toBeGreaterThanOrEqual(0);
+        expect(headerGap).toBeLessThanOrEqual(12);
         await desktopToggle.hover();
         await desktopToggle.focus();
         await expect(desktop.page.locator('#self-hud-popover')).toBeHidden();
@@ -1311,6 +1326,17 @@ test('M2 responsive mouse and touch layouts preserve desktop state and keyboard 
         await expect(desktop.page.locator('html')).toHaveClass(
             /desktop-sidebar-hidden/,
         );
+        await expect(desktopToggle).toHaveText('>>');
+        const restoreGap = await desktopToggle.evaluate((button) => {
+            const tabs = document.querySelector('#tabs-container');
+            if (!tabs) throw new Error('Missing terminal tabs');
+            return (
+                tabs.getBoundingClientRect().left -
+                button.getBoundingClientRect().right
+            );
+        });
+        expect(restoreGap).toBeGreaterThanOrEqual(0);
+        expect(restoreGap).toBeLessThanOrEqual(12);
         for (const viewport of [
             { width: 1023, height: 800 },
             { width: 1024, height: 800 },

@@ -192,30 +192,6 @@ eager to avoid a first-open unstyled flash. -->
                     </button>
 
                     <button
-                        id="desktop-sidebar-toggle"
-                        type="button"
-                        class="header-btn icon-only hidden"
-                        aria-controls="sidebar-panel"
-                        aria-expanded="true"
-                        title="Hide sessions"
-                        aria-label="Hide sessions"
-                    >
-                        <svg
-                            class="icon"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="2"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            aria-hidden="true"
-                        >
-                            <line x1="3" y1="12" x2="21" y2="12"></line>
-                            <line x1="3" y1="6" x2="21" y2="6"></line>
-                            <line x1="3" y1="18" x2="21" y2="18"></line>
-                        </svg>
-                    </button>
-                    <button
                         id="header-clipboard-btn"
                         class="header-btn icon-only"
                         title="Sync Remote Clipboard to Local Clipboard"
@@ -422,7 +398,20 @@ eager to avoid a first-open unstyled flash. -->
                     data-panel-mode="tabs"
                 >
                     <div class="panel-header">
-                        <h2 id="drawer-panel-title">SESSIONS</h2>
+                        <div class="panel-header-title">
+                            <h2 id="drawer-panel-title">SESSIONS</h2>
+                            <div id="desktop-sidebar-toggle-home">
+                                <button
+                                    id="desktop-sidebar-toggle"
+                                    type="button"
+                                    class="header-btn icon-only hidden"
+                                    aria-controls="sidebar-panel"
+                                    aria-expanded="true"
+                                    title="Hide sessions"
+                                    aria-label="Hide sessions"
+                                >&lt;&lt;</button>
+                            </div>
+                        </div>
                         <div class="panel-header-actions">
                             <button
                                 id="drawer-back-to-tabs"
@@ -627,6 +616,10 @@ eager to avoid a first-open unstyled flash. -->
                 <main class="terminal-panel">
                     <!-- TABS HEADER -->
                     <div class="terminal-tabs-bar" style="position: relative">
+                        <div
+                            id="desktop-sidebar-restore-slot"
+                            class="hidden"
+                        ></div>
                         <div id="tabs-container" class="tabs-container"></div>
                         <button
                             id="tab-overflow-btn"

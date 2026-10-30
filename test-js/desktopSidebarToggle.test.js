@@ -27,20 +27,27 @@ function setViewport(width = 1440, height = 900) {
 
 function mount() {
     document.body.innerHTML = `
-        <div class="header-actions">
-            <button
-                id="desktop-sidebar-toggle"
-                class="header-btn icon-only hidden"
-                aria-controls="sidebar-panel"
-                aria-expanded="true"
-                aria-label="Hide sessions"
-                title="Hide sessions"
-            ></button>
-        </div>
         <button id="mobile-sidebar-toggle"></button>
-        <aside id="sidebar-panel"><button id="inside-sidebar"></button></aside>
+        <aside id="sidebar-panel">
+            <div id="desktop-sidebar-toggle-home">
+                <button
+                    id="desktop-sidebar-toggle"
+                    class="header-btn icon-only hidden"
+                    aria-controls="sidebar-panel"
+                    aria-expanded="true"
+                    aria-label="Hide sessions"
+                    title="Hide sessions"
+                >&lt;&lt;</button>
+            </div>
+            <button id="inside-sidebar"></button>
+        </aside>
         <div id="left-resize-handle"></div>
-        <main class="terminal-panel"><button id="outside-sidebar"></button></main>
+        <main class="terminal-panel">
+            <div class="terminal-tabs-bar">
+                <div id="desktop-sidebar-restore-slot" class="hidden"></div>
+                <button id="outside-sidebar"></button>
+            </div>
+        </main>
     `;
     const fetchMock = mockFetch();
     stubWebSocket();
@@ -59,6 +66,8 @@ describe('desktop sessions-panel toggle', () => {
         const { button, fetchMock, dispose } = mount();
         try {
             expect(button.classList.contains('hidden')).toBe(false);
+            expect(button.parentElement.id).toBe('desktop-sidebar-toggle-home');
+            expect(button.textContent).toBe('<<');
             expect(button.getAttribute('aria-controls')).toBe('sidebar-panel');
             expect(button.getAttribute('aria-expanded')).toBe('true');
             expect(button.getAttribute('aria-label')).toBe('Hide sessions');
@@ -71,6 +80,10 @@ describe('desktop sessions-panel toggle', () => {
             expect(button.getAttribute('aria-expanded')).toBe('false');
             expect(button.getAttribute('aria-label')).toBe('Show sessions');
             expect(button.title).toBe('Show sessions');
+            expect(button.parentElement.id).toBe(
+                'desktop-sidebar-restore-slot',
+            );
+            expect(button.textContent).toBe('>>');
 
             button.click();
             expect(
@@ -78,6 +91,8 @@ describe('desktop sessions-panel toggle', () => {
             ).toBe(false);
             expect(button.getAttribute('aria-expanded')).toBe('true');
             expect(button.getAttribute('aria-label')).toBe('Hide sessions');
+            expect(button.parentElement.id).toBe('desktop-sidebar-toggle-home');
+            expect(button.textContent).toBe('<<');
             expect(fetchMock).not.toHaveBeenCalled();
         } finally {
             dispose();
