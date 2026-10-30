@@ -25,7 +25,7 @@ import type {
     MessageFns,
     StateChangedEvent,
 } from '../web-src/proto/control.js';
-import { startPhi, type PhiServer } from './_server.js';
+import { configToToml, startPhi, type PhiServer } from './_server.js';
 
 // The served codec carries no types; bind its runtime decoders to the
 // generated declarations so spec-side decoding is fully checked.
@@ -502,8 +502,8 @@ async function startFixture(sessionID: string): Promise<Fixture> {
             );
             mkdirSync(join(home, '.phi'), { recursive: true });
             writeFileSync(
-                join(home, '.phi', 'config.json'),
-                JSON.stringify({
+                join(home, '.phi', 'config.toml'),
+                configToToml({
                     workspaces: [fixtureCwd],
                     active_cwd: fixtureCwd,
                 }),

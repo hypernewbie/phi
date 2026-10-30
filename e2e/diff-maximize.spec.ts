@@ -47,6 +47,7 @@ for (const width of [1400, 420]) {
         await size.click();
         await expect(size).toHaveAttribute('aria-pressed', 'true');
         await expect(size).toHaveAccessibleName('Restore diff viewer size');
+        await expect(content).toHaveCSS('transform', 'none');
         const box = (await content.boundingBox())!;
         expect(box.x).toBeCloseTo(0, 0);
         expect(box.y).toBeCloseTo(0, 0);

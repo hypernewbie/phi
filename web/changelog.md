@@ -2,6 +2,11 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## Unreleased
+
+### Changed
+- Configuration now lives in `~/.phi/config.toml`; legacy JSON is read-only fallback and no-op saves preserve user comments and formatting.
+
 ## v0.26.0 — 2026-10-25
 
 ### Added

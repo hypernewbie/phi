@@ -93,7 +93,7 @@ func TestHandleGetCodersIsObjectShape(t *testing.T) {
 
 // TestCustomBackendsNotInConfigSave verifies that adding a custom
 // backend and saving the config does not absorb the custom profile
-// into config.json. R3: saveConfig must serialize user-set fields
+// into config.toml. R3: saveConfig must serialize user-set fields
 // only; backend files and resolved profiles are write-only to the
 // loader, never round-tripped via the config writer.
 func TestCustomBackendsNotInConfigSave(t *testing.T) {
@@ -119,10 +119,10 @@ func TestCustomBackendsNotInConfigSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(data), "leaky-agent") {
-		t.Fatalf("saveConfig absorbed a custom backend into config.json: %s", data)
+		t.Fatalf("saveConfig absorbed a custom backend into config.toml: %s", data)
 	}
-	if strings.Contains(string(data), `"backends"`) {
-		t.Fatalf("config.json contains a backends key after save: %s", data)
+	if strings.Contains(string(data), `backends =`) {
+		t.Fatalf("config.toml contains a backends key after save: %s", data)
 	}
 }
 

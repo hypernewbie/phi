@@ -13,15 +13,15 @@ func TestSessionListPageSizeConfig(t *testing.T) {
 		config string
 		want   float64
 	}{
-		{"unset", `{}`, 10},
-		{"zero", `{"session_list_page_size":0}`, 10},
-		{"negative", `{"session_list_page_size":-1}`, 5},
-		{"below minimum", `{"session_list_page_size":1}`, 5},
-		{"minimum", `{"session_list_page_size":5}`, 5},
-		{"configured", `{"session_list_page_size":7}`, 7},
-		{"default value", `{"session_list_page_size":10}`, 10},
-		{"maximum", `{"session_list_page_size":100}`, 100},
-		{"above maximum", `{"session_list_page_size":101}`, 100},
+		{"unset", ``, 10},
+		{"zero", `session_list_page_size = 0`, 10},
+		{"negative", `session_list_page_size = -1`, 5},
+		{"below minimum", `session_list_page_size = 1`, 5},
+		{"minimum", `session_list_page_size = 5`, 5},
+		{"configured", `session_list_page_size = 7`, 7},
+		{"default value", `session_list_page_size = 10`, 10},
+		{"maximum", `session_list_page_size = 100`, 100},
+		{"above maximum", `session_list_page_size = 101`, 100},
 	}
 
 	for _, tc := range cases {
@@ -65,7 +65,7 @@ func TestSessionListPageSizeConfig(t *testing.T) {
 
 	t.Run("raw value round trip", func(t *testing.T) {
 		path := withTempConfig(t)
-		if err := os.WriteFile(path, []byte(`{"session_list_page_size":7}`), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(`session_list_page_size = 7`), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if raw := loadConfig().SessionListPageSize; raw != 7 {

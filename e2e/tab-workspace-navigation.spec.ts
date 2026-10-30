@@ -8,7 +8,7 @@ import {
     type Request,
     type TestInfo,
 } from '@playwright/test';
-import { startPhi, type PhiServer } from './_server.js';
+import { configToToml, startPhi, type PhiServer } from './_server.js';
 
 const seedOrder = ['b1', 'a1', 'b2'];
 
@@ -36,8 +36,8 @@ async function startNavigationFixture(): Promise<PhiServer> {
                 JSON.stringify({ id: 'bash', command }),
             );
             writeFileSync(
-                join(home, '.phi', 'config.json'),
-                JSON.stringify({ workspaces: [betaRoot, alphaRoot] }),
+                join(home, '.phi', 'config.toml'),
+                configToToml({ workspaces: [betaRoot, alphaRoot] }),
             );
             writeFileSync(
                 join(home, '.phi', 'tabs.json'),

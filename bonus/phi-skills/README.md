@@ -58,7 +58,7 @@ Copy-Item -Recurse bonus/phi-skills/phi-sync-board "$HOME\.claude\skills\"
 Skills resolve the coordinator at use time, in this order:
 
 1. Non-empty `$PHI_COORDINATOR`
-2. Non-empty `sync_coordinator` in `~/.phi/config.json`
+2. Non-empty `sync_coordinator` in `~/.phi/config.toml`
 3. `http://127.0.0.1:7070` for a local default-port install
 
 An empty coordinator makes the Phi web UI use its current origin. Shell agents

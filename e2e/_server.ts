@@ -17,6 +17,14 @@ import net from 'node:net';
 // with cwd + HOME inside a tmp dir (clean config, no access password,
 // file tree rooted at the tmp dir).
 
+export function configToToml(config: Record<string, unknown>): string {
+    return (
+        Object.entries(config)
+            .map(([key, value]) => `${key} = ${JSON.stringify(value)}`)
+            .join('\n') + '\n'
+    );
+}
+
 export interface PhiServer {
     url: string;
     dir: string;
@@ -198,8 +206,8 @@ export async function startPhi(
         if (options.config) {
             mkdirSync(join(home, '.phi'), { recursive: true });
             writeFileSync(
-                join(home, '.phi', 'config.json'),
-                JSON.stringify(options.config),
+                join(home, '.phi', 'config.toml'),
+                configToToml(options.config),
             );
         }
 

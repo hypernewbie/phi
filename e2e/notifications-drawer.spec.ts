@@ -9,7 +9,7 @@ import {
     type BrowserContext,
     type Request as PlaywrightRequest,
 } from '@playwright/test';
-import { startPhi, type PhiServer } from './_server.js';
+import { configToToml, startPhi, type PhiServer } from './_server.js';
 import { syntheticPiSource } from './_pi-bridge.js';
 import { toastErrorScript } from '../desktop/electron/src/injected.js';
 
@@ -108,7 +108,6 @@ test('M1 notifications drawer caps compact popups and dismisses locally', async 
                 ?.pinned,
         ).toBe(false);
         const allowedOrigin = new URL(phi.url).origin;
-        const shellPinUrl = `${phi.url}/api/terminals/${shell.pane_id}/pin`;
 
         const viewports = [
             {
@@ -169,7 +168,6 @@ test('M1 notifications drawer caps compact popups and dismisses locally', async 
             const pageErrors: string[] = [];
             const consoleErrors: string[] = [];
             const failedRequests: string[] = [];
-            const pinResponseStatuses: number[] = [];
             const httpFailures: string[] = [];
             const externalRequests: string[] = [];
             page.on('pageerror', (error) => pageErrors.push(error.message));
@@ -183,12 +181,6 @@ test('M1 notifications drawer caps compact popups and dismisses locally', async 
                 );
             });
             page.on('response', (response) => {
-                if (
-                    response.url() === shellPinUrl &&
-                    response.request().method() === 'POST'
-                ) {
-                    pinResponseStatuses.push(response.status());
-                }
                 if (response.status() >= 400) {
                     httpFailures.push(`${response.status()} ${response.url()}`);
                 }
@@ -638,17 +630,7 @@ test('M1 notifications drawer caps compact popups and dismisses locally', async 
                 'Failed to load resource: the server responded with a status of 503 (Service Unavailable)',
             ]);
 
-            const expectedShellPinAbort = `POST ${shellPinUrl}: net::ERR_ABORTED`;
-            expect(
-                failedRequests.filter(
-                    (failure) => failure !== expectedShellPinAbort,
-                ),
-                `${view.name} unexplained failed requests`,
-            ).toEqual([]);
-            expect(failedRequests.length).toBeLessThanOrEqual(1);
-            if (failedRequests.length > 0) {
-                expect(pinResponseStatuses).toContain(200);
-            }
+            expect(failedRequests, `${view.name} failed requests`).toEqual([]);
             expect(externalRequests, `${view.name} external requests`).toEqual(
                 [],
             );
@@ -665,7 +647,6 @@ test('M1 notifications drawer caps compact popups and dismisses locally', async 
         const coldPageErrors: string[] = [];
         const coldConsoleErrors: string[] = [];
         const coldFailedRequests: string[] = [];
-        const coldPinResponseStatuses: number[] = [];
         const coldHttpFailures: string[] = [];
         const coldExternalRequests: string[] = [];
         coldPage.on('pageerror', (error) => coldPageErrors.push(error.message));
@@ -679,12 +660,6 @@ test('M1 notifications drawer caps compact popups and dismisses locally', async 
             );
         });
         coldPage.on('response', (response) => {
-            if (
-                response.url() === shellPinUrl &&
-                response.request().method() === 'POST'
-            ) {
-                coldPinResponseStatuses.push(response.status());
-            }
             if (response.status() >= 400) {
                 coldHttpFailures.push(`${response.status()} ${response.url()}`);
             }
@@ -761,16 +736,7 @@ test('M1 notifications drawer caps compact popups and dismisses locally', async 
             expect(coldConsoleErrors).toEqual([
                 'Failed to load resource: the server responded with a status of 503 (Service Unavailable)',
             ]);
-            const expectedShellPinAbort = `POST ${shellPinUrl}: net::ERR_ABORTED`;
-            expect(
-                coldFailedRequests.filter(
-                    (failure) => failure !== expectedShellPinAbort,
-                ),
-            ).toEqual([]);
-            expect(coldFailedRequests.length).toBeLessThanOrEqual(1);
-            if (coldFailedRequests.length > 0) {
-                expect(coldPinResponseStatuses).toContain(200);
-            }
+            expect(coldFailedRequests).toEqual([]);
             expect(coldExternalRequests).toEqual([]);
         } finally {
             versionSignals.release?.();
@@ -1530,8 +1496,8 @@ test('M3b keeps notification actions local and blocked until an explicit route i
                 mkdirSync(workspace, { recursive: true });
                 mkdirSync(join(dir, 'home', '.phi'), { recursive: true });
                 writeFileSync(
-                    join(dir, 'home', '.phi', 'config.json'),
-                    JSON.stringify({
+                    join(dir, 'home', '.phi', 'config.toml'),
+                    configToToml({
                         pushover_enabled: false,
                         simplepush_enabled: false,
                         webhook_enabled: false,
