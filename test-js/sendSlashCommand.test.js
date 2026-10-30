@@ -477,9 +477,9 @@ describe('WS drop mid-chain: toast + no cross-tab fallback', () => {
         );
         expect(() => btn.click()).not.toThrow();
 
-        // First send failed → toast fired → reconnect overlay shown.
+        // First send failed → delivery is unknown → reconnect overlay shown.
         expect(tm.app.showToast).toHaveBeenCalledWith(
-            'Tab is disconnected — input not sent',
+            'Send failed — delivery not confirmed. Check the terminal before retrying.',
             expect.objectContaining({ type: 'error' }),
         );
         expect(tm._showReconnectOverlay).toHaveBeenCalledWith(tabA);

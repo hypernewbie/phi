@@ -19,6 +19,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, WebContentsView } from 'electron';
 import { ProfileViewManager } from '../src/views.js';
+import { WAKE_PAGE_SCRIPT } from '../src/injected.js';
 import type { ZoomAction } from '../src/zoom.js';
 
 interface ViewBounds {
@@ -282,6 +283,20 @@ describe('ProfileViewManager (retained per-profile views)', () => {
     // (first activation stays unfocused until its did-finish-load).
     expect(views[0].focusCalls).toBe(1);
     expect(manager.getActive()).toBe('p1');
+  });
+
+  it('returning to a loaded retained profile dispatches wake without reloading', () => {
+    const { manager, views } = makeManager();
+    manager.addProfile('p1', 'http://127.0.0.1:7070/');
+    manager.addProfile('p2', 'http://127.0.0.1:8080/');
+    manager.setActive('p1');
+    for (const loaded of views[0].loadHandlers) loaded();
+    manager.setActive('p2');
+    views[0].executeJavaScriptCalls.length = 0;
+    manager.setActive('p1');
+    expect(views[0].executeJavaScriptCalls).toContain(WAKE_PAGE_SCRIPT);
+    expect(views[0].loadURLCalls).toHaveLength(1);
+    expect(views[0].reloadCalls + views[0].reloadIgnoringCacheCalls).toBe(0);
   });
 
   it('removeProfile destroys the retained view and removes it from the internal map', () => {
