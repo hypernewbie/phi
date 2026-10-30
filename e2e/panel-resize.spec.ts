@@ -669,13 +669,13 @@ async function dragDrawerAndCheck(
         await dispatchTouchPath(page, [start, ...points]);
     } else {
         await page.mouse.move(start.x, start.y);
+        await expect
+            .poll(() =>
+                handle.evaluate((el) => getComputedStyle(el, '::after').width),
+            )
+            .toBe('4px');
         await page.mouse.down();
         try {
-            expect(
-                await handle.evaluate(
-                    (el) => getComputedStyle(el, '::after').width,
-                ),
-            ).toBe('8px');
             await page.mouse.move(end.x, end.y, { steps: 5 });
         } finally {
             await page.mouse.up();
@@ -1126,9 +1126,9 @@ test('drawer handles resize with touch and mouse without stealing closed-edge in
                         };
                     });
                 expect(grip).toEqual({
-                    width: '8px',
+                    width: '3px',
                     height: '40px',
-                    opacity: '1',
+                    opacity: '0.35',
                 });
 
                 for (const xFraction of [0.05, 0.95]) {

@@ -183,8 +183,11 @@ export const terminalHistoryMethods = {
                     tabInfo._streamDecoder = pty.decoder;
                     tabInfo.queuedSeq = pty.lastFrameEnd ?? head;
                     tabInfo.drainedSeq = tabInfo._historyLiveState.through;
+                    // scrollToTop subtracts the current buffer row, which can
+                    // leave the old grid's scrollbar offset after replayed
+                    // resizes. Clamp the public scroll API to the real top.
+                    tabInfo.term.scrollLines(-Number.MAX_SAFE_INTEGER);
                     tabInfo.userFollowBottom = false;
-                    tabInfo.term.scrollToTop();
                 } else {
                     // Frames delivered while the request was in flight remain
                     // in the recording. Recover just that small concurrent tail.

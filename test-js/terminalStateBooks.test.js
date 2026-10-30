@@ -100,6 +100,8 @@ it('a book starts from server parser state, preserving rendition and split UTF-8
         ).toBe(String(archive.length));
         expect(h.tab._historyWindowStart).toBe(archive.length);
         expect(h.tab._historyBrowsing).toBe(true);
+        expect(h.term.buffer.active.viewportY).toBe(0);
+        expect(h.tab.userFollowBottom).toBe(false);
         expect(h.tab.drainedSeq).toBe(source.length);
         expect(h.manager._queuePanelFit).toHaveBeenLastCalledWith(h.tab, {
             forceResize: true,
