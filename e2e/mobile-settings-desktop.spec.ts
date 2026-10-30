@@ -210,9 +210,9 @@ test.describe('native ownership', () => {
                 // Tray/shortcut recording asserts: the fixture replaces the
                 // surfaces, so the counts reflect recording calls, not OS
                 // objects. No real Tray or globalShortcut exists.
-                expect(boot.shortcuts.register.length).toBeGreaterThanOrEqual(
-                    0,
-                );
+                expect(boot.shortcuts.register).toEqual([
+                    'CommandOrControl+Shift+L',
+                ]);
 
                 // Add both backends via the real activation path.
                 const ids = await electronApp.evaluate(
@@ -1291,35 +1291,6 @@ test.describe('native ownership', () => {
                 }
                 const bAfter = await mobileState(phiB.url);
                 expect(bAfter).toEqual(bBefore);
-
-                // Fullscreen in-page fallback: when the main window is
-                // fullscreen, native config popups are denied and Settings
-                // falls back in-page. Verify the guard exists by checking
-                // the production handler denies in fullscreen. Drive via
-                // main-process window state (no OS fullscreen dependency:
-                // assert the code path, then close behavior).
-                const closeCheck = await electronApp.evaluate(
-                    async (_electronApi: unknown) => {
-                        const g = globalThis as unknown as {
-                            __phiMsHost: {
-                                window: () => {
-                                    isDestroyed: () => boolean;
-                                } | null;
-                                profileViews: {
-                                    viewsCreated: () => number;
-                                } | null;
-                            };
-                        };
-                        return {
-                            hasWindow: g.__phiMsHost.window() !== null,
-                            views:
-                                g.__phiMsHost.profileViews?.viewsCreated() ??
-                                -1,
-                        };
-                    },
-                );
-                expect(closeCheck.hasWindow).toBe(true);
-                expect(closeCheck.views).toBeGreaterThanOrEqual(0);
 
                 // Close behavior: popup Close buttons close their windows.
                 // Close the fresh popup via its UI and assert it disappears.

@@ -152,6 +152,7 @@ export class App {
         // Settings and local controls are usable while background reads run.
         this.initOnce();
         await this.revalidate(this.scope);
+        console.log('[app] Phi initialized successfully');
     }
 
     async revalidate(scope = this.scope) {
@@ -774,8 +775,6 @@ export class App {
 
         // 11. Sidebar quota button (footer pill, next to ?).
         initQuotaButton();
-
-        console.log('[app] Phi initialized successfully');
     }
 
     getActiveStore(profileId = getEmbeddedProfileId()) {
