@@ -1594,7 +1594,7 @@ export class App {
                     sidebar.classList.toggle('sidebar-narrow', newWidth < 120);
                 };
 
-                const cleanup = (event) => {
+                const cleanup = () => {
                     document.removeEventListener(moveEvt, doDrag);
                     document.removeEventListener(endEvt, finishDrag);
                     if (hasPointer) {
@@ -1613,7 +1613,7 @@ export class App {
                 const finishDrag = (upEvent) => {
                     if (!ownsPointer(upEvent, pointerId)) return;
                     const dismiss = upEvent.clientX < 100;
-                    cleanup(upEvent);
+                    cleanup();
                     if (dismiss) {
                         sidebar.classList.remove('drawer-open');
                         restoreAcceptedWidth();
@@ -1623,7 +1623,7 @@ export class App {
                 };
                 const cancelDrag = (event) => {
                     if (!ownsPointer(event, pointerId)) return;
-                    cleanup(event);
+                    cleanup();
                     restoreAcceptedWidth();
                 };
 
