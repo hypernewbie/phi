@@ -198,6 +198,7 @@ const fake = vi.hoisted(() => {
   }
 
   const appEvents = new Events();
+  const powerMonitor = new Events();
   const ipcEvents = new Map<string, Listener>();
   const ipcHandlers = new Map<string, Listener>();
   let userData = '';
@@ -222,6 +223,7 @@ const fake = vi.hoisted(() => {
     FakeWebContentsView,
     app,
     ipcMain,
+    powerMonitor,
     ipcEvents,
     ipcHandlers,
     setUserData: (value: string) => (userData = value),
@@ -229,6 +231,7 @@ const fake = vi.hoisted(() => {
       FakeBrowserWindow.instances.length = 0;
       FakeWebContentsView.instances.length = 0;
       appEvents.listeners.clear();
+      powerMonitor.listeners.clear();
       ipcEvents.clear();
       ipcHandlers.clear();
     },
@@ -266,13 +269,14 @@ vi.mock('electron', () => ({
   },
   nativeImage: { createFromPath: () => ({ isEmpty: () => true }) },
   globalShortcut: { register: () => true, unregister: () => {} },
-  powerMonitor: { on: vi.fn(), emit: vi.fn() },
+  powerMonitor: fake.powerMonitor,
 }));
 
 import { AccessAuth, type StoredCredential } from '../src/access-auth.js';
 import { Controller } from '../src/controller.js';
 import { DesktopHost } from '../src/desktop.js';
 import { FORWARD_CHANNEL } from '../src/single-instance.js';
+import { WAKE_PAGE_SCRIPT } from '../src/injected.js';
 
 const flush = async (): Promise<void> => {
   for (let i = 0; i < 12; i++) await Promise.resolve();
@@ -493,6 +497,33 @@ describe('DesktopHost fake-Electron lifecycle', () => {
         }
       },
     );
+  });
+
+  it('power resume wakes only the active retained view and tolerates absent/destroyed views', async () => {
+    const host = new DesktopHost();
+    await host.start(primary);
+    expect(fake.powerMonitor.listeners.get('resume')).toHaveLength(1);
+    const ctrl = host.controller!;
+    const a = ctrl.add('http://alpha.example.test:7070/');
+    const b = ctrl.add('http://beta.example.test:7070/');
+    host.profileViews!.addProfile(a.id, a.origin);
+    host.profileViews!.addProfile(b.id, b.origin);
+    ctrl.setActive(a.id);
+    const first = host.profileViews!.getView(a.id)!;
+    ctrl.setActive(b.id);
+    const active = host.profileViews!.getView(b.id)!;
+    await flush();
+    const inactiveExecute = vi.spyOn(first.webContents, 'executeJavaScript');
+    const activeExecute = vi.spyOn(active.webContents, 'executeJavaScript');
+    fake.powerMonitor.emit('resume');
+    expect(activeExecute).toHaveBeenCalledExactlyOnceWith(WAKE_PAGE_SCRIPT);
+    expect(inactiveExecute).not.toHaveBeenCalled();
+    activeExecute.mockClear();
+    vi.spyOn(active.webContents, 'isDestroyed').mockReturnValue(true);
+    expect(() => fake.powerMonitor.emit('resume')).not.toThrow();
+    host.profileViews!.setActive(null);
+    expect(() => fake.powerMonitor.emit('resume')).not.toThrow();
+    expect(activeExecute).not.toHaveBeenCalled();
   });
 
   it('pins config/workspace requests and header actions to the requested server', async () => {

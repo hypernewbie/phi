@@ -43,6 +43,7 @@ function fakeTerm() {
 function ctx() {
     const c = Object.create(TabManager.prototype);
     c.app = { config: { auto_reconnect: 'off' }, showToast: vi.fn() };
+    c.tabs = new Map();
     c.updateDocumentTitle = vi.fn();
     c.updateDisconnectBanner = vi.fn();
     c._showReconnectOverlay = vi.fn();
@@ -69,9 +70,10 @@ function tab() {
 beforeEach(() => vi.clearAllMocks());
 
 describe('disconnect no longer writes into the scrollback', () => {
-    it('reports a lost connection through the overlay, banner and toast only', () => {
+    it('reports a lost connection through the overlay and banner without a toast', () => {
         const c = ctx();
         const t = tab();
+        c.tabs.set(t.paneId, t);
 
         TabManager.prototype._handleTerminalDisconnect.call(c, t);
 
@@ -79,7 +81,7 @@ describe('disconnect no longer writes into the scrollback', () => {
         expect(t.term.written.join('')).not.toMatch(/Connection lost/);
         expect(c._showReconnectOverlay).toHaveBeenCalledWith(t);
         expect(c.updateDisconnectBanner).toHaveBeenCalled();
-        expect(c.app.showToast).toHaveBeenCalled();
+        expect(c.app.showToast).not.toHaveBeenCalled();
         expect(t.isDead).toBe(true);
     });
 

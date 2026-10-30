@@ -23,6 +23,9 @@ const terminalJsSrc = readFileSync(
 function ctx(config = { auto_reconnect: 'off' }) {
     const c = Object.create(TabManager.prototype);
     c.app = { config };
+    c.tabs = new Map();
+    c._queuePanelFit = vi.fn();
+    c.maybeAutoReconnect = vi.fn();
     c.reconnectTab = vi.fn();
     c.getActiveTab = vi.fn(() => null);
     return c;
@@ -42,34 +45,39 @@ describe('activateTabViewport force option', () => {
     it('reconnects a dead tab when force=true even if auto_reconnect is off', () => {
         const c = ctx();
         const tab = deadTab();
+        c.tabs.set(tab.paneId, tab);
         TabManager.prototype.activateTabViewport.call(c, tab, {
             scrollToBottom: false,
             force: true,
         });
-        expect(c.reconnectTab).toHaveBeenCalledWith(tab, { auto: true });
+        expect(c.reconnectTab).toHaveBeenCalledWith(tab, { auto: false });
     });
 
     it('does not reconnect a dead tab without force when auto_reconnect is off', () => {
         const c = ctx();
         const tab = deadTab();
+        c.tabs.set(tab.paneId, tab);
         TabManager.prototype.activateTabViewport.call(c, tab, {
             scrollToBottom: false,
         });
         expect(c.reconnectTab).not.toHaveBeenCalled();
     });
 
-    it('still reconnects without force when auto_reconnect is visible (unchanged passive behavior)', () => {
+    it('passive activation uses scheduling rather than resetting the budget', () => {
         const c = ctx({ auto_reconnect: 'visible' });
         const tab = deadTab();
+        c.tabs.set(tab.paneId, tab);
         TabManager.prototype.activateTabViewport.call(c, tab, {
             scrollToBottom: false,
         });
-        expect(c.reconnectTab).toHaveBeenCalledWith(tab, { auto: true });
+        expect(c.maybeAutoReconnect).toHaveBeenCalledWith(tab);
+        expect(c.reconnectTab).not.toHaveBeenCalled();
     });
 
     it('force does not resurrect a tab whose process actually exited', () => {
         const c = ctx();
         const tab = deadTab({ exitCode: 0 });
+        c.tabs.set(tab.paneId, tab);
         TabManager.prototype.activateTabViewport.call(c, tab, {
             scrollToBottom: false,
             force: true,
@@ -80,6 +88,7 @@ describe('activateTabViewport force option', () => {
     it('force is ignored for review/kanban panels', () => {
         const c = ctx();
         const tab = deadTab({ coder: 'kanban' });
+        c.tabs.set(tab.paneId, tab);
         TabManager.prototype.activateTabViewport.call(c, tab, {
             scrollToBottom: false,
             force: true,
@@ -90,6 +99,7 @@ describe('activateTabViewport force option', () => {
     it('force does not double-fire while a reconnect is already in flight', () => {
         const c = ctx();
         const tab = deadTab({ reconnectInFlight: true });
+        c.tabs.set(tab.paneId, tab);
         TabManager.prototype.activateTabViewport.call(c, tab, {
             scrollToBottom: false,
             force: true,

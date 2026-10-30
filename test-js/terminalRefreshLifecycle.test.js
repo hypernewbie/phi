@@ -15,6 +15,7 @@ function harness() {
     };
     const ws = { mode: 'hot', sendResize: vi.fn(() => true) };
     const tab = {
+        paneId: 'p1',
         term,
         ws,
         _sizedWs: ws,
@@ -26,6 +27,7 @@ function harness() {
     };
     const manager = Object.assign(Object.create(TabManager.prototype), {
         app: {},
+        tabs: new Map([['p1', tab]]),
         getActiveTab: () => tab,
         resolveTerminalFontSize: () => 14,
         _resyncViewportScroll: vi.fn(),
@@ -242,3 +244,36 @@ it('zero-delta reconnect refreshes both renderers before releasing live delivery
         release.mock.invocationCallOrder[0],
     );
 });
+
+it.each(['switch', 'close', 'other-input'])(
+    'delayed mobile focus does not steal focus after %s',
+    (change) => {
+        vi.useFakeTimers();
+        try {
+            const h = harness();
+            vi.stubGlobal('innerWidth', 390);
+            Object.defineProperty(document, 'visibilityState', {
+                value: 'visible',
+                configurable: true,
+            });
+            const input = document.createElement('textarea');
+            const menu = document.createElement('button');
+            document.body.append(input, menu);
+            h.manager.inputTextArea = input;
+            const focus = vi.spyOn(input, 'focus');
+            h.manager.activateTabViewport(h.tab, {
+                scrollToBottom: false,
+                autoReconnect: false,
+            });
+            if (change === 'switch')
+                h.manager.getActiveTab = () => ({ paneId: 'other' });
+            else if (change === 'close') h.tab.softClosing = true;
+            else menu.focus();
+            vi.advanceTimersByTime(80);
+            expect(focus).not.toHaveBeenCalled();
+        } finally {
+            vi.clearAllTimers();
+            vi.useRealTimers();
+        }
+    },
+);

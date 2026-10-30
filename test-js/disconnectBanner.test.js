@@ -34,7 +34,7 @@ describe('Disconnect Banner UX', () => {
     });
 
     it.each([undefined, null, 0, -1])(
-        'disconnect notifications have no action for exit code %s',
+        'disconnect keeps actionable state without a toast for exit code %s',
         (exitCode) => {
             const tab = makeTab({ exitCode });
             tabManager.tabs.set(tab.paneId, tab);
@@ -45,14 +45,7 @@ describe('Disconnect Banner UX', () => {
 
             tabManager._handleTerminalDisconnect(tab);
 
-            const [message, options] = tabManager.app.showToast.mock.calls[0];
-            expect(message).toBe('Connection lost on "bash"');
-            expect(options).toEqual({
-                type: 'error',
-                title: 'Terminal disconnected',
-                duration: 8000,
-            });
-            expect(options).not.toHaveProperty('action');
+            expect(tabManager.app.showToast).not.toHaveBeenCalled();
             expect(tabManager._updateHistoryButton).toHaveBeenCalledWith(tab);
             expect(tabManager.updateDocumentTitle).toHaveBeenCalledOnce();
             expect(tabManager.maybeAutoReconnect).toHaveBeenCalledWith(tab);
@@ -87,6 +80,7 @@ describe('Disconnect Banner UX', () => {
 
     it('does not report an expected WebSocket close during tab finalization', () => {
         const tab = makeTab({ finalizing: true });
+        tabManager.tabs.set(tab.paneId, tab);
         tabManager.app.showToast = vi.fn();
         tabManager.updateDocumentTitle = vi.fn();
         tabManager._showReconnectOverlay = vi.fn();

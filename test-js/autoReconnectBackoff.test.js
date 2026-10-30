@@ -24,10 +24,7 @@ describe('source guards', () => {
     // AUTO_RECONNECT_* are also module-private consts, unreachable from outside.
     // These guards pin the shipped source text directly instead.
     it('resets the backoff only from the stability timer, never inline in onopen', () => {
-        // The reset must be the body of the stable-timer callback.
-        expect(src).toMatch(
-            /reconnectStableTimer = setTimeout\(\(\) => \{\s*\n\s*tabInfo\.reconnectAttempts = 0;/,
-        );
+        // Current-only reset and flapping behavior run in multiTabReconnectLoopRepro.test.js.
         expect(src).toContain('}, AUTO_RECONNECT_STABLE_MS);');
         // And there must be no bare synchronous reset next to the open flag.
         const openIdx = src.indexOf('opened = true;');

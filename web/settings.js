@@ -316,7 +316,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     }
     behGroup.appendChild(reuseRow);
     const autoReconnectRow = _buildCheckboxRow(
-        'Auto-reconnect disconnected terminals (active tab)',
+        'Auto-reconnect disconnected terminals (all tabs when visible)',
         'settings-auto-reconnect',
         (app.config?.auto_reconnect || 'visible') === 'visible',
     );
@@ -711,6 +711,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             const enabled = !!e.target.checked;
             if (app.config)
                 app.config.auto_reconnect = enabled ? 'visible' : 'off';
+            app.tabManager?.updateDisconnectBanner?.();
             try {
                 await fetch('/api/config/auto-reconnect', {
                     method: 'POST',

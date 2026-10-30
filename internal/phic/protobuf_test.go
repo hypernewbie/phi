@@ -360,7 +360,7 @@ func TestWebSocketProtobufPasteReassemblyE2E(t *testing.T) {
 	hub := ws.NewHub(1 << 20)
 	manager := pty.NewManager()
 	t.Cleanup(func() { manager.Shutdown(100 * time.Millisecond) })
-	inst, err := manager.Spawn(context.Background(), t.TempDir(), "/bin/sh", []string{"-c", "stty -icanon; echo READY; cat > /dev/null"}, "drain", "")
+	inst, err := manager.Spawn(context.Background(), t.TempDir(), "/bin/sh", []string{"-c", "read -r _ && stty -icanon && echo READY && cat > /dev/null"}, "drain", "")
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
@@ -389,11 +389,22 @@ func TestWebSocketProtobufPasteReassemblyE2E(t *testing.T) {
 		t.Fatalf("first frame is not an attach: %v", err)
 	}
 
-	// Wait for the slave to finish stty before pasting. Bytes sent
-	// earlier would fill the canonical queue and be discarded.
+	if head := attach.GetAttach().GetHead(); head != 0 {
+		t.Fatalf("output before startup input: head = %d, want 0", head)
+	}
+	// Live-only attach cannot replay an earlier READY. Release the shell
+	// after attach, then consume the full readiness line before pasting.
+	start, err := wireproto.EncodeInputFrame([]byte("\n"))
+	if err != nil {
+		t.Fatalf("encode startup input: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.BinaryMessage, start); err != nil {
+		t.Fatalf("write startup input: %v", err)
+	}
 	var ready []byte
+	readyMarker := []byte("READY\r\n")
 	readyDeadline := time.Now().Add(10 * time.Second)
-	for !bytes.Contains(ready, []byte("READY")) && time.Now().Before(readyDeadline) {
+	for !bytes.Contains(ready, readyMarker) && time.Now().Before(readyDeadline) {
 		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
@@ -409,7 +420,7 @@ func TestWebSocketProtobufPasteReassemblyE2E(t *testing.T) {
 		}
 		ready = append(ready, out.GetData()...)
 	}
-	if !bytes.Contains(ready, []byte("READY")) {
+	if !bytes.Contains(ready, readyMarker) {
 		t.Fatal("slave never signaled ready")
 	}
 

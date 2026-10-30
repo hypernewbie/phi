@@ -36,6 +36,35 @@ function buildApp() {
 }
 
 describe('standalone Config surface routing', () => {
+    it.each([true, false])(
+        'auto-reconnect applies locally before persistence (banner method=%s)',
+        (hasBanner) => {
+            vi.stubGlobal(
+                'fetch',
+                vi.fn(() => new Promise(() => {})),
+            );
+            const app = buildApp();
+            const update = vi.fn();
+            if (hasBanner) app.tabManager.updateDisconnectBanner = update;
+            openSettingsModal(app, ACCENTS, { standalone: true });
+            const row = [...document.querySelectorAll('.settings-row')].find(
+                (element) =>
+                    element.textContent.includes(
+                        'Auto-reconnect disconnected terminals (all tabs when visible)',
+                    ),
+            );
+            expect(row).toBeTruthy();
+            const toggle = row.querySelector('input');
+            toggle.checked = false;
+            toggle.dispatchEvent(new Event('change', { bubbles: true }));
+            expect(app.config.auto_reconnect).toBe('off');
+            if (hasBanner) expect(update).toHaveBeenCalledOnce();
+            expect(fetch).toHaveBeenCalledWith(
+                '/api/config/auto-reconnect',
+                expect.objectContaining({ method: 'POST' }),
+            );
+        },
+    );
     it('renders the settings surface in-page when standalone, even under ?desktop=1', () => {
         window.history.replaceState(null, '', '/config.html?desktop=1');
         const open = vi.spyOn(window, 'open');

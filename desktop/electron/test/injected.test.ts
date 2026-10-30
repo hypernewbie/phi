@@ -22,7 +22,23 @@ import {
   bodyAuthLoginScript,
   LOW_POWER_STORAGE_KEY,
   lowPowerApplyScript,
+  WAKE_PAGE_SCRIPT,
 } from '../src/injected.js';
+
+it('wake script dispatches the existing desktop-wake and focus events', () => {
+  const wake = vi.fn();
+  const focus = vi.fn();
+  window.addEventListener('phi:desktop-wake', wake);
+  window.addEventListener('focus', focus);
+  try {
+    window.eval(WAKE_PAGE_SCRIPT);
+    expect(wake).toHaveBeenCalledOnce();
+    expect(focus).toHaveBeenCalledOnce();
+  } finally {
+    window.removeEventListener('phi:desktop-wake', wake);
+    window.removeEventListener('focus', focus);
+  }
+});
 
 /** The injected scripts' recording surface (window.__phiFileAction / guard). */
 function windowField(): Record<string, unknown> {

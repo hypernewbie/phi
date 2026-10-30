@@ -728,6 +728,7 @@ export class TabManager {
         // gate + reconnectInFlight guard), so overlapping firings are harmless.
         const resumeViewport = () => { this._reviveActiveTabIfDead(); this._queueActiveRefresh(); };
         for (const event of ['online', 'pageshow', 'focus', 'phi:desktop-wake']) window.addEventListener(event, resumeViewport);
+        document.addEventListener('resume', resumeViewport);
         document.fonts?.ready?.then(() => this._queueActiveRefresh());
         document.fonts?.addEventListener?.('loadingdone', () => this._queueActiveRefresh());
 
@@ -3885,19 +3886,20 @@ export class TabManager {
         const ws = new PTYWebSocket(
             tabInfo.paneId,
             (data) => {
-                if (tabInfo.ws !== ws) return;
+                if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing || tabInfo.ws !== ws) return;
                 this._paneData(tabInfo, data);
             },
             (control) => {
-                if (tabInfo.ws !== ws) return;
+                if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing || tabInfo.ws !== ws) return;
                 this.handleControlMessage(tabInfo, control, ws);
             },
             () => {
-                if (tabInfo.ws !== ws) return;
+                if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing || tabInfo.ws !== ws) return;
                 this._handleTerminalDisconnect(tabInfo);
             },
             () => {
-                if (tabInfo.ws !== ws) return;
+                if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing ||
+                    tabInfo.exitCode != null || tabInfo.ws !== ws) return;
                 tabInfo._perfAttachAt = performance.now();
                 tabInfo._perfWrote = false;
                 termPerfMark('ws-open');
@@ -4915,11 +4917,16 @@ export class TabManager {
     // onclose callback is asynchronous, so it can arrive after the tab
     // teardown starts; that expected close must not masquerade as a lost
     // terminal or offer to reconnect a tab the user just closed.
-    _handleTerminalDisconnect(tabInfo) {
-        if (tabInfo.finalizing) return;
+    _handleTerminalDisconnect(tabInfo, message = 'Connection lost') {
+        if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing) return;
+        for (const timer of ['reconnectWatchdogTimer', 'reconnectStableTimer']) {
+            clearTimeout(tabInfo[timer]);
+            tabInfo[timer] = null;
+        }
+        tabInfo.reconnectInFlight = false;
 
-        // Deliberately not written into the terminal buffer: the overlay,
-        // the disconnect banner and the toast below all say this already,
+        // Deliberately not written into the terminal buffer: the overlay
+        // and disconnect banner already report the lost connection,
         // and unlike them a buffer write is permanent scrollback that
         // survives every later reconnect.
         tabInfo.isDead = true;
@@ -4931,21 +4938,10 @@ export class TabManager {
         tabInfo.tabEl.classList.add('dead');
         this.updateDocumentTitle();
         this._showReconnectOverlay(tabInfo);
+        const msg = tabInfo.termContainer?.querySelector('.reconnect-msg');
+        if (msg && tabInfo.exitCode == null) msg.innerText = message;
         this.maybeAutoReconnect(tabInfo);
         this.updateDisconnectBanner();
-        // Toast so the user notices the drop even when they're focused on
-        // a different tab. The on-terminal reconnect overlay stays for the
-        // local UX; this toast covers the peripheral case.
-        if (this.app?.showToast) {
-            this.app.showToast(
-                `Connection lost on "${tabInfo.title || tabInfo.coder || 'tab'}"`,
-                {
-                    type: 'error',
-                    title: 'Terminal disconnected',
-                    duration: 8000,
-                },
-            );
-        }
     }
 
     renderPiRpcStatusBar() {
@@ -8895,7 +8891,7 @@ export class TabManager {
 
         const ok = tabInfo.ws.sendInput(payload);
         if (!ok) {
-            this.app.showToast('Tab is disconnected — input not sent', {
+            this.app.showToast('Send failed — delivery not confirmed. Check the terminal before retrying.', {
                 type: 'error',
             });
             this._showReconnectOverlay(tabInfo);
@@ -10300,6 +10296,13 @@ export class TabManager {
         } else if (control.type === 'pi-bridge-settled') {
             this._acceptPiBridgeSettled(tabInfo, control);
         } else if (control.type === 'pty-exited') {
+            if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing || socket !== tabInfo.ws) return;
+            for (const timer of ['autoReconnectTimer', 'reconnectWatchdogTimer', 'reconnectStableTimer']) {
+                clearTimeout(tabInfo[timer]);
+                tabInfo[timer] = null;
+            }
+            tabInfo.autoReconnectPending = false;
+            tabInfo.reconnectInFlight = false;
             tabInfo.exitCode = control.code;
             tabInfo.isDead = true;
             tabInfo.tabEl.classList.add('dead');
@@ -10312,6 +10315,7 @@ export class TabManager {
             // like any other interrupted wait it reports unknown once
             // (PROTOCOL.md), never a silent drop and never a retry.
             this._invalidatePiBridgeCompact?.(tabInfo, true);
+            this.updateDisconnectBanner();
         } else if (control.type === 'replay-complete') {
             // An empty replay still ends here, so drop the pending reset or
             // the next live byte would clear the terminal underneath the user.
@@ -10585,7 +10589,8 @@ export class TabManager {
     }
 
     reconnectTab(tabInfo, { auto = false } = {}) {
-        if (tabInfo.coder === 'pi-rpc') return;
+        if (!this._canReconnectTab(tabInfo)) return;
+        if (!auto) tabInfo.reconnectAttempts = 0;
         if (tabInfo.reconnectInFlight) {
             if (auto) return;
             // Manual retry forces recovery from stalled in-flight attempt
@@ -10601,6 +10606,8 @@ export class TabManager {
             }
             tabInfo.reconnectInFlight = false;
         }
+        clearTimeout(tabInfo.reconnectStableTimer);
+        tabInfo.reconnectStableTimer = null;
         tabInfo.reconnectInFlight = true;
         if (tabInfo.autoReconnectTimer) {
             clearTimeout(tabInfo.autoReconnectTimer);
@@ -10630,11 +10637,8 @@ export class TabManager {
             tabInfo.ws = null;
         }
 
-        // The server replays the whole ring buffer on every attach, so without
-        // clearing first a reconnect appends a second copy of the scrollback.
-        // Reset on the first replayed byte rather than up front: when the
-        // replay buffer is disabled server-side no data arrives, and blanking
-        // the terminal would throw away history nothing is going to restore.
+        // Hot attach resumes the proven parser frontier through checkpoint/delta recovery.
+        // Keep the visible screen until that recovery owns a replacement.
         tabInfo.awaitingReplay = true;
 
         let opened = false;
@@ -10642,50 +10646,21 @@ export class TabManager {
             const newWs = new PTYWebSocket(
                 tabInfo.paneId,
                 (data) => {
-                    if (tabInfo.ws !== newWs) return;
+                    if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing || tabInfo.ws !== newWs) return;
                     this._paneData(tabInfo, data);
                 },
                 (control) => {
-                    if (tabInfo.ws !== newWs) return;
+                    if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing || tabInfo.ws !== newWs) return;
                     this.handleControlMessage(tabInfo, control, newWs);
                 },
                 () => {
-                    if (tabInfo.ws !== newWs) return;
-                    if (tabInfo.reconnectWatchdogTimer) {
-                        clearTimeout(tabInfo.reconnectWatchdogTimer);
-                        tabInfo.reconnectWatchdogTimer = null;
-                    }
-                    tabInfo.reconnectInFlight = false;
-                    // Died before proving itself: cancel the pending success
-                    // reset so this attempt still counts against the backoff.
-                    clearTimeout(tabInfo.reconnectStableTimer);
-                    tabInfo.reconnectStableTimer = null;
-                    if (opened) {
-                        tabInfo.isDead = true;
-                        tabInfo.tabEl.classList.add('dead');
-                        this.updateDocumentTitle();
-                        this._showReconnectOverlay(tabInfo);
-                        this.maybeAutoReconnect(tabInfo);
-                        this.updateDisconnectBanner();
-                    } else {
-                        tabInfo.isDead = true;
-                        if (msgEl)
-                            msgEl.innerText = 'Session expired (PTY gone)';
-                        if (btnEl) {
-                            btnEl.disabled = false;
-                            btnEl.innerText = '⟳ Retry';
-                        }
-                        if (restartBtn) restartBtn.disabled = false;
-                        this.maybeAutoReconnect(tabInfo);
-                        this.updateDisconnectBanner();
-                    }
-                    // Same contract as _handleTerminalDisconnect: a dead
-                    // socket orphans the pending native Compact waiter.
-                    this._invalidatePiBridgeCompact?.(tabInfo, true);
-                    this._refreshPiBridgeModels(tabInfo);
+                    if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing || tabInfo.ws !== newWs) return;
+                    this._handleTerminalDisconnect(tabInfo, opened ? 'Connection lost' :
+                        'Connection failed. Retry or check your connection.');
                 },
                 () => {
-                    if (tabInfo.ws !== newWs) return;
+                    if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing ||
+                        tabInfo.exitCode != null || tabInfo.ws !== newWs) return;
                     if (tabInfo.reconnectWatchdogTimer) {
                         clearTimeout(tabInfo.reconnectWatchdogTimer);
                         tabInfo.reconnectWatchdogTimer = null;
@@ -10700,10 +10675,14 @@ export class TabManager {
                     // exponential backoff never engaged and the attempt cap was
                     // unreachable. A flapping pane redialled forever at ~500ms.
                     clearTimeout(tabInfo.reconnectStableTimer);
-                    tabInfo.reconnectStableTimer = setTimeout(() => {
+                    const stableTimer = setTimeout(() => {
+                        if (this.tabs.get(tabInfo.paneId) !== tabInfo ||
+                            tabInfo.ws !== newWs || tabInfo.reconnectStableTimer !== stableTimer ||
+                            tabInfo.isDead || tabInfo.finalizing || tabInfo.exitCode != null) return;
                         tabInfo.reconnectAttempts = 0;
                         tabInfo.reconnectStableTimer = null;
                     }, AUTO_RECONNECT_STABLE_MS);
+                    tabInfo.reconnectStableTimer = stableTimer;
                     tabInfo.reconnectInFlight = false;
                     tabInfo.isDead = false;
                     // A reconnect starts quiet. Without this reset, a PTY
@@ -10718,59 +10697,29 @@ export class TabManager {
                     this.updateDocumentTitle();
                     if (overlay) overlay.remove();
                     this.updateDisconnectBanner();
-                    setTimeout(() => {
-                        try {
-                            if (tabInfo === this.getActiveTab()) {
-                                tabInfo.term.refresh(0, tabInfo.term.rows - 1);
-                            }
-                        } catch (e) {
-                            console.error(
-                                '[term] Fit/refresh error on reconnect:',
-                                e,
-                            );
-                        }
-                        this.activateTabViewport(tabInfo, {
-                            scrollToBottom: true,
+                    if (this._canReconnectTab(tabInfo) && tabInfo === this.getActiveTab()) {
+                        if (auto) this._queuePanelFit(tabInfo, { forceResize: true });
+                        else this.activateTabViewport(tabInfo, {
+                            scrollToBottom: tabInfo.userFollowBottom !== false,
                             autoReconnect: false,
                         });
-                    }, 100);
+                    }
                 },
                 this._hotOptions(tabInfo),
             );
             this._setCurrentTabSocket(tabInfo, newWs);
-            tabInfo.reconnectWatchdogTimer = setTimeout(() => {
-                tabInfo.reconnectWatchdogTimer = null;
-                if (tabInfo.reconnectInFlight && tabInfo.ws === newWs) {
-                    console.warn(
-                        '[term] Reconnect attempt timed out after 10s',
-                    );
-                    tabInfo.reconnectInFlight = false;
-                    try {
-                        newWs.close();
-                    } catch (_e) {}
-                    if (tabInfo.ws === newWs) tabInfo.ws = null;
-                    tabInfo.isDead = true;
-                    if (msgEl) msgEl.innerText = 'Connection timed out';
-                    if (btnEl) {
-                        btnEl.disabled = false;
-                        btnEl.innerText = '⟳ Retry';
-                    }
-                    if (restartBtn) restartBtn.disabled = false;
-                    this.updateDisconnectBanner();
-                }
+            const watchdog = setTimeout(() => {
+                if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing ||
+                    tabInfo.ws !== newWs || tabInfo.reconnectWatchdogTimer !== watchdog ||
+                    !tabInfo.reconnectInFlight) return;
+                console.warn('[term] Reconnect attempt timed out after 10s');
+                newWs.close();
+                tabInfo.ws = null;
+                this._handleTerminalDisconnect(tabInfo, 'Connection timed out');
             }, 10_000);
+            tabInfo.reconnectWatchdogTimer = watchdog;
         } catch (e) {
-            if (tabInfo.reconnectWatchdogTimer) {
-                clearTimeout(tabInfo.reconnectWatchdogTimer);
-                tabInfo.reconnectWatchdogTimer = null;
-            }
-            tabInfo.reconnectInFlight = false;
-            if (msgEl) msgEl.innerText = `failed: ${e.message}`;
-            if (btnEl) {
-                btnEl.disabled = false;
-                btnEl.innerText = '⟳ Retry';
-            }
-            if (restartBtn) restartBtn.disabled = false;
+            this._handleTerminalDisconnect(tabInfo, 'Connection failed. Retry or check your connection.');
             console.error('[term] PTYWebSocket instantiation threw:', e);
         }
     }
@@ -10895,7 +10844,7 @@ export class TabManager {
                         } else {
                             tabInfo.isDead = true;
                             if (msgEl)
-                                msgEl.innerText = 'Session expired (PTY gone)';
+                                msgEl.innerText = 'Connection failed. Retry or check your connection.';
                             if (reconnectBtn) reconnectBtn.disabled = false;
                             if (restartBtn) restartBtn.disabled = false;
                             this.updateDisconnectBanner();
@@ -10949,29 +10898,12 @@ export class TabManager {
             });
     }
 
-    _isDesktop() {
-        return Boolean(
-            this.app?.isDesktop ||
-                (typeof document !== 'undefined' &&
-                    document.documentElement?.hasAttribute(
-                        'data-phi-desktop',
-                    )) ||
-                (typeof window !== 'undefined' &&
-                    (window.__phiDesktop ||
-                        new URLSearchParams(window.location?.search || '').get(
-                            'desktop',
-                        ) === '1')),
-        );
-    }
-
     updateDisconnectBanner() {
         const banner = document.getElementById('disconnect-banner');
         if (!banner) return;
 
-        const isDesktop = this._isDesktop();
         const autoReconnectConfig = this.app?.config?.auto_reconnect;
         const autoReconnectActive =
-            isDesktop &&
             autoReconnectConfig === 'visible' &&
             (typeof document === 'undefined' ||
                 document.visibilityState === 'visible');
@@ -10979,11 +10911,7 @@ export class TabManager {
         const deadTabs = [];
         for (const tabInfo of this.tabs.values()) {
             if (
-                tabInfo.isDead &&
-                (tabInfo.exitCode === undefined || tabInfo.exitCode === null) &&
-                tabInfo.coder !== 'review' &&
-                tabInfo.coder !== 'kanban' &&
-                tabInfo.coder !== 'pi-rpc'
+                tabInfo.isDead && this._canReconnectTab(tabInfo)
             ) {
                 if (
                     autoReconnectActive &&
@@ -11036,18 +10964,8 @@ export class TabManager {
         let count = 0;
         for (const tabInfo of this.tabs.values()) {
             if (
-                tabInfo.isDead &&
-                (tabInfo.exitCode === undefined || tabInfo.exitCode === null) &&
-                tabInfo.coder !== 'review' &&
-                tabInfo.coder !== 'kanban' &&
-                tabInfo.coder !== 'pi-rpc'
+                tabInfo.isDead && this._canReconnectTab(tabInfo)
             ) {
-                tabInfo.reconnectAttempts = 0;
-                if (tabInfo.autoReconnectTimer) {
-                    clearTimeout(tabInfo.autoReconnectTimer);
-                    tabInfo.autoReconnectTimer = null;
-                }
-                tabInfo.autoReconnectPending = false;
                 this.reconnectTab(tabInfo, { auto: false });
                 count++;
             }
@@ -11084,76 +11002,29 @@ export class TabManager {
         }
     }
 
-    // Revive the active tab after a wake-style signal (visibility return,
-    // network restore, bfcache restore). Config- and visibility-gated like
-    // the passive loop ('online' fires in hidden windows too — without the
-    // visibility check, a network restore would dial from every background
-    // window), but resets the attempt budget: a wake is a fresh start, not a
-    // continuation of an exhausted backoff run.
+    _canReconnectTab(tabInfo) {
+        return Boolean(tabInfo && this.tabs.get(tabInfo.paneId) === tabInfo &&
+            !tabInfo.finalizing && !tabInfo.softClosing && tabInfo.exitCode == null &&
+            !tabInfo.isReview && !tabInfo.isKanban &&
+            !['review', 'kanban', 'pi-rpc'].includes(tabInfo.coder));
+    }
+
+    // Wake hints start a fresh series only when the pane has no recovery work.
     _reviveActiveTabIfDead() {
-        const autoReconnect = this.app?.config?.auto_reconnect;
-        if (autoReconnect !== 'visible') return;
-        if (
-            typeof document !== 'undefined' &&
-            document.visibilityState !== 'visible'
-        )
-            return;
-
-        if (this._isDesktop()) {
-            let revived = 0;
-            for (const tabInfo of this.tabs.values()) {
-                if (
-                    tabInfo.isDead &&
-                    !tabInfo.reconnectInFlight &&
-                    (tabInfo.exitCode === undefined ||
-                        tabInfo.exitCode === null) &&
-                    tabInfo.coder !== 'review' &&
-                    tabInfo.coder !== 'kanban' &&
-                    tabInfo.coder !== 'pi-rpc'
-                ) {
-                    tabInfo.reconnectAttempts = 0;
-                    if (tabInfo.autoReconnectTimer) {
-                        clearTimeout(tabInfo.autoReconnectTimer);
-                        tabInfo.autoReconnectTimer = null;
-                    }
-                    tabInfo.autoReconnectPending = false;
-                    this.reconnectTab(tabInfo, { auto: true });
-                    revived++;
-                }
-            }
-            if (revived > 0) {
-                const activeTab = this.getActiveTab();
-                if (activeTab) {
-                    this.activateTabViewport(activeTab, {
-                        scrollToBottom: true,
-                        autoReconnect: false,
-                    });
-                }
-            }
-            this.updateDisconnectBanner();
-            return;
+        if (this.app?.config?.auto_reconnect !== 'visible' ||
+            document.visibilityState !== 'visible') return;
+        for (const tabInfo of this.tabs.values()) {
+            if (!this._canReconnectTab(tabInfo) || !tabInfo.isDead ||
+                tabInfo.autoReconnectTimer || tabInfo.autoReconnectPending || tabInfo.reconnectInFlight) continue;
+            tabInfo.reconnectAttempts = 0;
+            this.maybeAutoReconnect(tabInfo);
         }
-
-        const tabInfo = this.getActiveTab();
-        if (!tabInfo?.isDead || tabInfo.reconnectInFlight) return;
-        if (
-            tabInfo.coder === 'review' ||
-            tabInfo.coder === 'kanban' ||
-            tabInfo.coder === 'pi-rpc'
-        )
-            return;
-        if (tabInfo.exitCode !== undefined && tabInfo.exitCode !== null) return;
-        tabInfo.reconnectAttempts = 0;
-        if (tabInfo.autoReconnectTimer) {
-            clearTimeout(tabInfo.autoReconnectTimer);
-            tabInfo.autoReconnectTimer = null;
-        }
-        tabInfo.autoReconnectPending = false;
-        this.reconnectTab(tabInfo, { auto: true });
+        this.updateDisconnectBanner();
     }
 
     maybeAutoReconnect(tabInfo) {
-        if (tabInfo.coder === 'pi-rpc') return false;
+        if (!this._canReconnectTab(tabInfo) || !tabInfo.isDead ||
+            tabInfo.autoReconnectTimer || tabInfo.autoReconnectPending || tabInfo.reconnectInFlight) return false;
         const autoReconnect = this.app?.config?.auto_reconnect;
         if (autoReconnect !== 'visible') return false;
 
@@ -11162,26 +11033,15 @@ export class TabManager {
             document.visibilityState !== 'visible'
         )
             return false;
-        const isDesktop = this._isDesktop();
-        if (!isDesktop && tabInfo.paneId !== this.activePaneId) return false;
-        if (tabInfo.exitCode !== undefined && tabInfo.exitCode !== null)
-            return false;
-
-        if (tabInfo.autoReconnectTimer) {
-            clearTimeout(tabInfo.autoReconnectTimer);
-            tabInfo.autoReconnectTimer = null;
-        }
-
         if (!tabInfo.reconnectAttempts) tabInfo.reconnectAttempts = 0;
         if (tabInfo.reconnectAttempts >= AUTO_RECONNECT_MAX_ATTEMPTS) {
-            tabInfo.reconnectAttempts = 0;
             tabInfo.autoReconnectPending = false;
             const overlay =
                 tabInfo.termContainer?.querySelector('.reconnect-overlay');
             const msgEl = overlay?.querySelector('.reconnect-msg');
             const btnEl = overlay?.querySelector('.reconnect-btn');
             const restartBtn = overlay?.querySelector('.restart-btn');
-            if (msgEl) msgEl.innerText = 'Auto-reconnect failed (disconnected)';
+            if (msgEl) msgEl.innerText = 'Auto-reconnect failed. Please retry manually.';
             if (btnEl) {
                 btnEl.disabled = false;
                 btnEl.innerText = '⟳ Retry';
@@ -11209,18 +11069,20 @@ export class TabManager {
         if (msgEl)
             msgEl.innerText = `auto-reconnecting (attempt ${tabInfo.reconnectAttempts}/${AUTO_RECONNECT_MAX_ATTEMPTS})...`;
 
-        tabInfo.autoReconnectTimer = setTimeout(() => {
+        const timer = setTimeout(() => {
+            if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.autoReconnectTimer !== timer) return;
             tabInfo.autoReconnectTimer = null;
             tabInfo.autoReconnectPending = false;
-            if (
-                tabInfo.isDead &&
-                (isDesktop || tabInfo.paneId === this.activePaneId) &&
-                (tabInfo.exitCode === undefined || tabInfo.exitCode === null)
-            ) {
+            if (this._canReconnectTab(tabInfo) && tabInfo.isDead && !tabInfo.reconnectInFlight &&
+                this.app?.config?.auto_reconnect === 'visible' && document.visibilityState === 'visible') {
                 this.reconnectTab(tabInfo, { auto: true });
+            } else {
+                if (tabInfo.isDead && !tabInfo.finalizing) this._showReconnectOverlay(tabInfo);
+                this.updateDisconnectBanner();
             }
         }, delay);
-
+        tabInfo.autoReconnectTimer = timer;
+        this.updateDisconnectBanner();
         return true;
     }
 
@@ -12171,7 +12033,8 @@ export class TabManager {
         tabInfo,
         { scrollToBottom = true, autoReconnect = true, force = false } = {},
     ) {
-        if (!tabInfo) return;
+        if (!tabInfo || this.tabs.get(tabInfo.paneId) !== tabInfo ||
+            tabInfo.finalizing || tabInfo.softClosing) return;
 
         // Fit after layout, not after a guessed 50ms settling interval.
         // Coalescing retains the force bit through bootstrap/history gates.
@@ -12206,32 +12069,22 @@ export class TabManager {
                 '.modal-overlay:not(.hidden), .md-modal-overlay:not(.hidden)',
             )
         ) {
-            setTimeout(
-                () => this.inputTextArea.focus({ preventScroll: true }),
-                80,
-            );
+            const ws = tabInfo.ws;
+            const focused = document.activeElement;
+            setTimeout(() => {
+                if (this._canReconnectTab(tabInfo) && tabInfo.ws === ws &&
+                    !tabInfo.isDead && tabInfo === this.getActiveTab() &&
+                    document.visibilityState === 'visible' && document.activeElement === focused &&
+                    !document.querySelector('.modal-overlay:not(.hidden), .md-modal-overlay:not(.hidden)')) {
+                    this.inputTextArea.focus({ preventScroll: true });
+                }
+            }, 80);
         }
 
         // force=true bypasses the passive auto_reconnect gate for explicit user actions.
-        const configAutoReconnect = this.app.config?.auto_reconnect;
-        if (
-            autoReconnect &&
-            (force || configAutoReconnect === 'visible') &&
-            tabInfo.isDead &&
-            tabInfo.coder !== 'review' &&
-            tabInfo.coder !== 'kanban' &&
-            tabInfo.coder !== 'pi-rpc' &&
-            !tabInfo.reconnectInFlight
-        ) {
-            if (tabInfo.exitCode === undefined || tabInfo.exitCode === null) {
-                tabInfo.reconnectAttempts = 0;
-                if (tabInfo.autoReconnectTimer) {
-                    clearTimeout(tabInfo.autoReconnectTimer);
-                    tabInfo.autoReconnectTimer = null;
-                }
-                tabInfo.autoReconnectPending = false;
-                this.reconnectTab(tabInfo, { auto: true });
-            }
+        if (autoReconnect && tabInfo.isDead && this._canReconnectTab(tabInfo) && !tabInfo.reconnectInFlight) {
+            if (force) this.reconnectTab(tabInfo, { auto: false });
+            else this.maybeAutoReconnect(tabInfo);
         }
     }
 
@@ -13480,7 +13333,7 @@ export class TabManager {
                 ) {
                     payload = `\x1b[200~${combined}\x1b[201~`;
                 }
-                this.sendInput(activeTab, `${payload}\r`);
+                if (this.sendInput(activeTab, `${payload}\r`) === false) return;
                 this.inputTextArea.value = '';
                 this.lastInputValue = '';
                 this.saveActiveDraft();
