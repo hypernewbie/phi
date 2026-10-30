@@ -579,7 +579,11 @@ export class DiffController {
 
     togglePanel(isOpen: boolean): void {
         this.isPanelOpen = isOpen;
-        localStorage.setItem('phi_diff_panel_open', String(isOpen));
+        try {
+            localStorage.setItem('phi_diff_panel_open', String(isOpen));
+        } catch {
+            /* Storage can be unavailable; panel visibility still applies. */
+        }
 
         if (isOpen) {
             this.diffPanel.classList.remove('hidden');
