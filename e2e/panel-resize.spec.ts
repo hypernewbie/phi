@@ -582,6 +582,58 @@ async function dispatchTouchPath(
     }
 }
 
+// The handle's inner strip overlaps drawer content, and a 1px test touch
+// directly over an underlying button (e.g. a tab close button) can be
+// retargeted to that button instead of starting a drag. Scan the handle
+// for the y with the most clearance from drawer clickables.
+async function drawerTouchPoint(
+    page: Page,
+    handleId: string,
+    xFraction: number,
+) {
+    return page.locator(`#${handleId}`).evaluate((handle, fraction) => {
+        const rect = handle.getBoundingClientRect();
+        const x = rect.x + rect.width * fraction;
+        const panel = handle.closest('.sidebar-panel, .diff-panel');
+        const obstacles: {
+            left: number;
+            right: number;
+            top: number;
+            bottom: number;
+        }[] = [];
+        if (panel) {
+            for (const el of panel.querySelectorAll(
+                'button, a[href], input, select, textarea, .hostname-dropdown-row, .session-item',
+            )) {
+                const r = el.getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) obstacles.push(r);
+            }
+        }
+        const clearance = (y: number) => {
+            let best = Infinity;
+            for (const r of obstacles) {
+                const dx = Math.max(r.left - x, 0, x - r.right);
+                const dy = Math.max(r.top - y, 0, y - r.bottom);
+                best = Math.min(best, Math.hypot(dx, dy));
+            }
+            return best;
+        };
+        let point = {
+            x,
+            y: rect.y + rect.height / 2,
+            clearance: -1,
+            width: rect.width,
+        };
+        for (let f = 0.05; f <= 0.95; f += 0.05) {
+            const y = rect.y + rect.height * f;
+            const c = clearance(y);
+            if (c > point.clearance)
+                point = { x, y, clearance: c, width: rect.width };
+        }
+        return point;
+    }, xFraction);
+}
+
 async function dragDrawerAndCheck(
     page: Page,
     side: 'left' | 'right',
@@ -597,7 +649,10 @@ async function dragDrawerAndCheck(
     const handle = page.locator(`#${handleId}`);
     const rect = await handle.boundingBox();
     if (!rect) throw new Error(`${handleId} has no rendered bounds`);
-    const start = {
+    const touchStart = touch
+        ? await drawerTouchPoint(page, handleId, xFraction)
+        : null;
+    const start = touchStart ?? {
         x: rect.x + rect.width * xFraction,
         y: rect.y + rect.height / 2,
     };
@@ -634,7 +689,7 @@ async function dragDrawerAndCheck(
     const error = Math.abs(after - before - expectedDelta);
     if (process.env.RESIZE_EVIDENCE)
         console.log(
-            `drawer ${side} ${touch ? 'touch' : 'mouse'} ${JSON.stringify(page.viewportSize())}: hit ${rect.width}px, x=${xFraction}, delta=${delta}px, error=${error}px`,
+            `drawer ${side} ${touch ? 'touch' : 'mouse'} ${JSON.stringify(page.viewportSize())}: hit ${rect.width}px, x=${xFraction}, delta=${delta}px, error=${error}px${touchStart ? `, clearance=${touchStart.clearance.toFixed(1)}px` : ''}`,
         );
     expect(error).toBeLessThan(1.5);
     const saved = await page.evaluate(
@@ -659,7 +714,13 @@ async function dismissDrawerAndCheckRestore(
     const handle = page.locator(`#${handleId}`);
     const rect = await handle.boundingBox();
     if (!rect) throw new Error(`${handleId} has no rendered bounds`);
-    const start = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    const touchStart = touch
+        ? await drawerTouchPoint(page, handleId, 0.5)
+        : null;
+    const start = touchStart ?? {
+        x: rect.x + rect.width / 2,
+        y: rect.y + rect.height / 2,
+    };
     const end = {
         x: side === 'left' ? 50 : (await page.evaluate(() => innerWidth)) - 100,
         y: start.y,
@@ -724,7 +785,7 @@ async function cancelDrawerPreview(page: Page, side: 'left' | 'right') {
     const handle = page.locator(`#${handleId}`);
     const rect = await handle.boundingBox();
     if (!rect) throw new Error(`${handleId} has no rendered bounds`);
-    const start = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    const start = await drawerTouchPoint(page, handleId, 0.5);
     const end = {
         x: side === 'left' ? 50 : (await page.evaluate(() => innerWidth)) - 100,
         y: start.y,
