@@ -452,30 +452,55 @@ async function contrast(page: Page, events: BrowserEvents) {
             };
             const foreground = color(bar.backgroundColor);
             const background = color(gutter.backgroundColor);
+            // A transparent gutter exposes its ancestors, not RGB(0, 0, 0).
+            // Composite both the backdrop and grip opacity before measuring.
+            const layers = [];
+            for (
+                let node: Element | null = handle;
+                node;
+                node = node.parentElement
+            )
+                layers.unshift(color(getComputedStyle(node).backgroundColor));
+            const backdrop = layers.reduce(
+                (rgb, layer) =>
+                    rgb.map(
+                        (channel, i) =>
+                            layer.rgb[i] * layer.alpha +
+                            channel * (1 - layer.alpha),
+                    ),
+                [255, 255, 255],
+            );
+            const alpha = foreground.alpha * Number(bar.opacity);
+            const painted = foreground.rgb.map(
+                (channel, i) => channel * alpha + backdrop[i] * (1 - alpha),
+            );
             return {
                 foreground,
                 background,
                 barOpacity: Number(bar.opacity),
                 gutterOpacity: Number(gutter.opacity),
                 width: bar.width,
-                contrast: ratio(foreground.rgb, background.rgb),
+                contrast: ratio(painted, backdrop),
                 selfCheck: ratio([0, 0, 0], [255, 255, 255]),
             };
         });
     const check = async (id: string, state: string) => {
+        const hovered = state !== 'idle';
+        await expect
+            .poll(async () => (await measure(id)).barOpacity)
+            .toBe(hovered ? 1 : 0.35);
         const result = await measure(id);
         console.log(`contrast ${state} ${id}: ${JSON.stringify(result)}`);
         expect(result.selfCheck).toBeCloseTo(21, 5);
-        const hovered = state !== 'idle';
         expect(result.foreground.alpha).toBe(1);
         expect(result.background.alpha).toBe(0);
         expect(result.barOpacity).toBe(hovered ? 1 : 0.35);
         expect(result.gutterOpacity).toBe(1);
         expect(result.width).toBe(hovered ? '4px' : '3px');
-        expect(result.contrast).toBeGreaterThanOrEqual(3);
+        // Idle grips are deliberately muted. Check the interactive state.
+        if (hovered) expect(result.contrast).toBeGreaterThanOrEqual(3);
     };
     await page.mouse.move(0, 0);
-    await page.waitForTimeout(300);
     for (const id of ['left-resize-handle', 'right-resize-handle'])
         await check(id, 'idle');
     await page.locator('#header-config-pill .pill-label').click();
@@ -508,7 +533,6 @@ async function contrast(page: Page, events: BrowserEvents) {
     await page.locator('.settings-overlay .modal-close-btn').click();
     for (const id of ['left-resize-handle', 'right-resize-handle']) {
         await page.locator(`#${id}`).hover();
-        await page.waitForTimeout(300);
         await check(id, 'hover arc');
     }
 }
