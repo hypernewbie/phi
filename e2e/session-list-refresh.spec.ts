@@ -9,6 +9,7 @@ import {
     type Request,
     type Route,
 } from '@playwright/test';
+import { isCancelledWorktreeRead } from './_session-requests.js';
 import { startPhi } from './_server.js';
 
 function piProjectDirectory(home: string, cwd: string): string {
@@ -33,10 +34,10 @@ function writePiSession(
     const timestamp = new Date(time).toISOString();
     writeFileSync(
         path,
-        [
+        `${[
             JSON.stringify({ type: 'session', version: 3, id, cwd, timestamp }),
             JSON.stringify({ type: 'session_info', name: title }),
-        ].join('\n') + '\n',
+        ].join('\n')}\n`,
     );
     const mtime = new Date(time);
     utimesSync(path, mtime, mtime);
@@ -130,6 +131,7 @@ async function ensureActiveSection(page: Page, cwd: string, touch: boolean) {
 function collectBrowserErrors(
     page: Page,
     injected503: Map<string, number>,
+    origin: string,
 ): string[] {
     const errors: string[] = [];
     const successfulEmptyThemeSaves = new WeakSet<Request>();
@@ -165,6 +167,7 @@ function collectBrowserErrors(
             request.failure()?.errorText === 'net::ERR_ABORTED'
         )
             return;
+        if (isCancelledWorktreeRead(request, origin)) return;
         errors.push(
             `request: ${request.method()} ${request.url()} ${request.failure()?.errorText}`,
         );
@@ -242,9 +245,9 @@ async function installSessionGates(
 
 async function assertNoHorizontalOverflow(page: Page): Promise<void> {
     const widths = await page.evaluate(() => {
-        const panel = document
-            .getElementById('sidebar-panel')!
-            .getBoundingClientRect();
+        const panelElement = document.getElementById('sidebar-panel');
+        if (!panelElement) throw new Error('Sidebar panel is missing');
+        const panel = panelElement.getBoundingClientRect();
         // The existing resize handle intentionally protrudes 10px beyond the drawer.
         return [
             document.documentElement,
@@ -278,310 +281,350 @@ async function assertNoHorizontalOverflow(page: Page): Promise<void> {
     }
 }
 
-for (const mode of ['desktop', 'touch'] as const) {
-    test(`refreshes Pi and Claude sessions on ${mode} without reloading`, async ({
-        browser,
-    }) => {
-        test.setTimeout(300_000);
-        const touch = mode === 'touch';
-        const fixture = await startFixture();
-        const { phi, cwd } = fixture;
-        let context: BrowserContext | null = null;
-        let gates: Awaited<ReturnType<typeof installSessionGates>> | null =
-            null;
-        let releaseWorktrees: (() => void) | undefined;
-        try {
-            context = await browser.newContext({
-                viewport: touch
-                    ? { width: 390, height: 844 }
-                    : { width: 1440, height: 900 },
-                isMobile: touch,
-                hasTouch: touch,
-            });
-            const page = await context.newPage();
-            await page.route('**/api/update/status', (route) =>
-                route.request().method() === 'GET'
-                    ? route.fulfill({
-                          json: { current: 'dev', update_available: false },
-                      })
-                    : route.continue(),
-            );
-            const injected503 = new Map<string, number>();
-            const errors = collectBrowserErrors(page, injected503);
-            const navigations: string[] = [];
-            const sessionRequests: string[] = [];
-            const statePosts: string[] = [];
-            page.on('framenavigated', (frame) => {
-                if (frame === page.mainFrame()) navigations.push(frame.url());
-            });
-            page.on('request', (request) => {
-                const url = new URL(request.url());
-                if (url.pathname === '/api/sessions')
-                    sessionRequests.push(request.url());
-                if (
-                    url.pathname === '/api/config/worktree-state' &&
-                    request.method() === 'POST'
-                ) {
-                    statePosts.push(request.url());
-                }
-            });
-            await page.goto(phi.url);
-            navigations.length = 0;
-            const pageURL = page.url();
-            const refresh = page.locator('#refresh-sessions-btn');
-            if (touch) {
-                await page.locator('#mobile-sidebar-toggle').tap();
-                await expect(page.locator('#drawer-tabs-body')).toBeVisible();
-                await expect(refresh).toBeHidden();
-                await page.locator('#drawer-open-sessions').tap();
-                await expect(page.locator('#drawer-panel-title')).toHaveText(
-                    'SESSIONS',
+test('refreshes Pi and Claude sessions across desktop and touch without reloading', async ({
+    browser,
+}) => {
+    test.setTimeout(300_000);
+    const fixture = await startFixture();
+    const { phi, cwd } = fixture;
+    try {
+        for (const mode of ['desktop', 'touch'] as const) {
+            const touch = mode === 'touch';
+            let context: BrowserContext | null = null;
+            let gates: Awaited<ReturnType<typeof installSessionGates>> | null =
+                null;
+            let releaseWorktrees: (() => void) | undefined;
+            try {
+                context = await browser.newContext({
+                    viewport: touch
+                        ? { width: 390, height: 844 }
+                        : { width: 1440, height: 900 },
+                    isMobile: touch,
+                    hasTouch: touch,
+                });
+                const page = await context.newPage();
+                await page.route('**/api/update/status', (route) =>
+                    route.request().method() === 'GET'
+                        ? route.fulfill({
+                              json: { current: 'dev', update_available: false },
+                          })
+                        : route.continue(),
                 );
-            }
-            await activate(
-                page.locator('#coder-selector .coder-tab[data-coder="pi"]'),
-                touch,
-            );
-            const piSection = await ensureActiveSection(page, cwd, touch);
-            const piRows = piSection.locator('.session-item');
-            const status = page.locator('#session-refresh-status');
-            await expect(piRows).toHaveCount(1);
-            await expect(piRows.first()).toContainText('Pi initial session');
-            await expect(refresh).toBeVisible();
+                const injected503 = new Map<string, number>();
+                const errors = collectBrowserErrors(page, injected503, phi.url);
+                const navigations: string[] = [];
+                const sessionRequests: string[] = [];
+                const statePosts: string[] = [];
+                page.on('framenavigated', (frame) => {
+                    if (frame === page.mainFrame())
+                        navigations.push(frame.url());
+                });
+                page.on('request', (request) => {
+                    const url = new URL(request.url());
+                    if (url.pathname === '/api/sessions')
+                        sessionRequests.push(request.url());
+                    if (
+                        url.pathname === '/api/config/worktree-state' &&
+                        request.method() === 'POST'
+                    ) {
+                        statePosts.push(request.url());
+                    }
+                });
+                await page.goto(phi.url);
+                navigations.length = 0;
+                const pageURL = page.url();
+                const refresh = page.locator('#refresh-sessions-btn');
+                if (touch) {
+                    await page.locator('#mobile-sidebar-toggle').tap();
+                    await expect(
+                        page.locator('#drawer-tabs-body'),
+                    ).toBeVisible();
+                    await expect(refresh).toBeHidden();
+                    await page.locator('#drawer-open-sessions').tap();
+                    await expect(
+                        page.locator('#drawer-panel-title'),
+                    ).toHaveText('SESSIONS');
+                }
+                await activate(
+                    page.locator('#coder-selector .coder-tab[data-coder="pi"]'),
+                    touch,
+                );
+                const piSection = await ensureActiveSection(page, cwd, touch);
+                const piRows = piSection.locator('.session-item');
+                const piTitles = piSection.locator('.session-title');
+                const status = page.locator('#session-refresh-status');
+                const priorPiTitles = touch
+                    ? [
+                          'Pi delayed refresh',
+                          'Pi pointer refresh',
+                          'Pi desktop refresh',
+                          'Pi initial session',
+                      ]
+                    : ['Pi initial session'];
+                await expect(piTitles).toHaveText(priorPiTitles);
+                await expect(refresh).toBeVisible();
 
-            fixture.pi('pi-new', `Pi ${mode} refresh`);
-            await expect(piRows).toHaveCount(1);
-            await expect(piSection).not.toContainText(`Pi ${mode} refresh`);
-            if (touch) await refresh.tap();
-            else {
-                await refresh.focus();
-                await page.keyboard.press('Enter');
-            }
-            await expect(piRows.first()).toContainText(`Pi ${mode} refresh`);
-            await expect(status).toHaveText('Sessions refreshed.');
-            const params = new URL(sessionRequests.at(-1)!).searchParams;
-            expect(Object.fromEntries(params)).toEqual({
-                coder: 'pi',
-                cwd,
-                limit: '10',
-                offset: '0',
-            });
-            if (!touch) {
-                fixture.pi('pi-pointer', 'Pi pointer refresh');
-                await expect(piSection).not.toContainText('Pi pointer refresh');
-                await refresh.click();
+                fixture.pi('pi-new', `Pi ${mode} refresh`);
+                await expect(piTitles).toHaveText(priorPiTitles);
+                await expect(piSection).not.toContainText(`Pi ${mode} refresh`);
+                if (touch) await refresh.tap();
+                else {
+                    await refresh.focus();
+                    await page.keyboard.press('Enter');
+                }
                 await expect(piRows.first()).toContainText(
-                    'Pi pointer refresh',
+                    `Pi ${mode} refresh`,
                 );
                 await expect(status).toHaveText('Sessions refreshed.');
-            }
-            expect(statePosts).toEqual([]);
-
-            gates = await installSessionGates(page, injected503);
-            const previousTitle = await piRows.first().textContent();
-            fixture.pi('pi-delayed', 'Pi delayed refresh');
-            const delayedStarted = gates.holdNextSession();
-            await activate(refresh, touch);
-            await delayedStarted;
-            await expect(piRows.first()).toHaveText(previousTitle!);
-            await expect(refresh).toBeEnabled();
-            await expect(
-                page.locator('#coder-selector .coder-tab[data-coder="pi"]'),
-            ).toBeEnabled();
-            gates.releaseHeldSession();
-            await expect(piRows.first()).toContainText('Pi delayed refresh');
-            await expect(status).toHaveText('Sessions refreshed.');
-
-            gates.failNextSession();
-            const failedResponse = page.waitForResponse(
-                (response) =>
-                    new URL(response.url()).pathname === '/api/sessions' &&
-                    response.status() === 503,
-            );
-            await activate(refresh, touch);
-            expect((await failedResponse).status()).toBe(503);
-            await expect(status).toContainText('Refresh failed');
-            await expect(piRows.first()).toContainText('Pi delayed refresh');
-            await activate(refresh, touch);
-            await expect(status).toHaveText('Sessions refreshed.');
-            expect(gates.savePostCount).toBe(0);
-
-            const piHeader = piSection.locator('.worktree-header');
-            await activate(piHeader, touch);
-            await expect(piSection).not.toHaveClass(/expanded/);
-            await expect.poll(() => gates?.savePostCount ?? 0).toBe(1);
-            const revalidation = gates.holdNextSession();
-            await activate(piHeader, touch);
-            await expect(piSection).toHaveClass(/expanded/);
-            await revalidation;
-            await expect(piRows.first()).toContainText('Pi delayed refresh');
-            await expect.poll(() => gates?.savePostCount ?? 0).toBe(2);
-            const revalidationFinished = page.waitForEvent(
-                'requestfinished',
-                (request) => {
-                    const url = new URL(request.url());
-                    return (
-                        url.pathname === '/api/sessions' &&
-                        url.searchParams.get('coder') === 'pi'
-                    );
-                },
-            );
-            gates.releaseHeldSession();
-            gates.releaseStateSaves();
-            await revalidationFinished;
-            await expect(piSection.locator('.error-sessions')).toHaveCount(0);
-
-            await activate(
-                page.locator('#coder-selector .coder-tab[data-coder="claude"]'),
-                touch,
-            );
-            const claudeSection = await ensureActiveSection(page, cwd, touch);
-            const claudeRows = claudeSection.locator('.session-item');
-            await expect(claudeRows).toHaveCount(1);
-            await expect(claudeRows.first()).toContainText(
-                'Claude initial session',
-            );
-            fixture.claude('claude-new', `Claude ${mode} refresh`);
-            await expect(claudeSection).not.toContainText(
-                `Claude ${mode} refresh`,
-            );
-            await activate(refresh, touch);
-            await expect(claudeRows.first()).toContainText(
-                `Claude ${mode} refresh`,
-            );
-            await expect(status).toHaveText('Sessions refreshed.');
-            const editSideEffects: string[] = [];
-            page.on('request', (request) => {
-                if (
-                    request.method() === 'POST' &&
-                    ['/api/session-meta', '/api/terminals'].includes(
-                        new URL(request.url()).pathname,
-                    )
-                ) {
-                    editSideEffects.push(request.url());
+                const lastSessionRequest = sessionRequests.at(-1);
+                if (!lastSessionRequest) {
+                    throw new Error('Expected a session list request');
                 }
-            });
-            // The legacy hover-only rename opener is inaccessible to touch.
-            // Only edit setup uses a DOM click; refresh itself stays a real activation.
-            await claudeRows
-                .first()
-                .locator('.rename-btn')
-                .evaluate((button: HTMLButtonElement) => button.click());
-            const rename = claudeSection.locator('.rename-input');
-            await rename.fill('Unsaved rename');
-            await activate(refresh, touch);
-            await expect(status).toHaveText(
-                'Finish or cancel the edit, then refresh.',
-            );
-            await expect(rename).toHaveValue('Unsaved rename');
-            if (!touch) {
-                await refresh.focus();
-                await page.keyboard.press('Enter');
-                await expect(rename).toHaveValue('Unsaved rename');
-            }
-            let holdWorktrees = true;
-            let worktreesStarted!: () => void;
-            const worktreesHeld = new Promise<void>((resolve) => {
-                worktreesStarted = resolve;
-            });
-            await page.route('**/api/git/worktrees?*', async (route) => {
-                if (holdWorktrees) {
-                    holdWorktrees = false;
-                    worktreesStarted();
-                    await new Promise<void>((resolve) => {
-                        releaseWorktrees = resolve;
-                    });
-                }
-                await route.continue();
-            });
-            await rename.press('Escape');
-            await worktreesHeld;
-            await expect(rename).toHaveCount(0);
-            await expect(claudeRows.first()).toContainText(
-                `Claude ${mode} refresh`,
-            );
-            await claudeRows
-                .first()
-                .dispatchEvent('contextmenu', { clientX: 80, clientY: 250 });
-            // Legacy context menus can be offscreen and bubble an outside click
-            // that closes the touch drawer. Only this edit opener bypasses it.
-            await page
-                .getByText('⚙ Launch with args…', { exact: true })
-                .evaluate((item) =>
-                    item.dispatchEvent(
-                        new MouseEvent('click', { bubbles: false }),
-                    ),
-                );
-            const args = claudeSection.locator('.args-input');
-            await args.fill('--unsaved-argument');
-            const worktreesFinished = page.waitForEvent(
-                'requestfinished',
-                (request) =>
-                    new URL(request.url()).pathname === '/api/git/worktrees',
-            );
-            releaseWorktrees?.();
-            await worktreesFinished;
-            await expect(args).toHaveValue('--unsaved-argument');
-            await activate(refresh, touch);
-            await expect(status).toHaveText(
-                'Finish or cancel the edit, then refresh.',
-            );
-            await expect(args).toHaveValue('--unsaved-argument');
-            await args.press('Escape');
-            await expect(args).toHaveCount(0);
-            expect(editSideEffects).toEqual([]);
-            await activate(refresh, touch);
-            await expect(status).toHaveText('Sessions refreshed.');
-            if (touch)
-                await expect(page.locator('#sidebar-panel')).toHaveClass(
-                    /drawer-open/,
-                );
-            await assertNoHorizontalOverflow(page);
-            if (!touch) {
-                for (const color of ['amber', 'purple']) {
-                    await page
-                        .locator('#header-config-pill .pill-label')
-                        .click();
-                    const savedTheme = page.waitForResponse(
-                        (response) =>
-                            new URL(response.url()).pathname ===
-                                '/api/config/theme' &&
-                            response.request().method() === 'POST',
+                const params = new URL(lastSessionRequest).searchParams;
+                expect(Object.fromEntries(params)).toEqual({
+                    coder: 'pi',
+                    cwd,
+                    limit: '10',
+                    offset: '0',
+                });
+                if (!touch) {
+                    fixture.pi('pi-pointer', 'Pi pointer refresh');
+                    await expect(piSection).not.toContainText(
+                        'Pi pointer refresh',
                     );
-                    await page
-                        .locator(`.settings-swatch[data-color="${color}"]`)
-                        .click();
-                    expect((await savedTheme).ok()).toBe(true);
-                    await expect(page.locator('html')).toHaveAttribute(
-                        'data-theme-color',
-                        color,
-                    );
-                    await page
-                        .locator('.settings-overlay .modal-close-btn')
-                        .click();
                     await refresh.click();
+                    await expect(piRows.first()).toContainText(
+                        'Pi pointer refresh',
+                    );
                     await expect(status).toHaveText('Sessions refreshed.');
-                    await assertNoHorizontalOverflow(page);
                 }
-            }
-            expect(page.url()).toBe(pageURL);
-            expect(navigations).toEqual([]);
-            expect(errors).toEqual([]);
-        } finally {
-            releaseWorktrees?.();
-            gates?.releaseHeldSession();
-            gates?.releaseStateSaves();
-            try {
+                expect(statePosts).toEqual([]);
+
+                gates = await installSessionGates(page, injected503);
+                const previousTitle = await piRows.first().textContent();
+                if (previousTitle === null) {
+                    throw new Error('Expected a previous Pi session title');
+                }
+                fixture.pi('pi-delayed', 'Pi delayed refresh');
+                const delayedStarted = gates.holdNextSession();
+                await activate(refresh, touch);
+                await delayedStarted;
+                await expect(piRows.first()).toHaveText(previousTitle);
+                await expect(refresh).toBeEnabled();
+                await expect(
+                    page.locator('#coder-selector .coder-tab[data-coder="pi"]'),
+                ).toBeEnabled();
+                gates.releaseHeldSession();
+                await expect(piRows.first()).toContainText(
+                    'Pi delayed refresh',
+                );
+                await expect(status).toHaveText('Sessions refreshed.');
+
+                gates.failNextSession();
+                const failedResponse = page.waitForResponse(
+                    (response) =>
+                        new URL(response.url()).pathname === '/api/sessions' &&
+                        response.status() === 503,
+                );
+                await activate(refresh, touch);
+                expect((await failedResponse).status()).toBe(503);
+                await expect(status).toContainText('Refresh failed');
+                await expect(piRows.first()).toContainText(
+                    'Pi delayed refresh',
+                );
+                await activate(refresh, touch);
+                await expect(status).toHaveText('Sessions refreshed.');
+                expect(gates.savePostCount).toBe(0);
+
+                const piHeader = piSection.locator('.worktree-header');
+                await activate(piHeader, touch);
+                await expect(piSection).not.toHaveClass(/expanded/);
+                await expect.poll(() => gates?.savePostCount ?? 0).toBe(1);
+                const revalidation = gates.holdNextSession();
+                await activate(piHeader, touch);
+                await expect(piSection).toHaveClass(/expanded/);
+                await revalidation;
+                await expect(piRows.first()).toContainText(
+                    'Pi delayed refresh',
+                );
+                await expect.poll(() => gates?.savePostCount ?? 0).toBe(2);
+                const revalidationFinished = page.waitForEvent(
+                    'requestfinished',
+                    (request) => {
+                        const url = new URL(request.url());
+                        return (
+                            url.pathname === '/api/sessions' &&
+                            url.searchParams.get('coder') === 'pi'
+                        );
+                    },
+                );
+                gates.releaseHeldSession();
+                gates.releaseStateSaves();
+                await revalidationFinished;
+                await expect(piSection.locator('.error-sessions')).toHaveCount(
+                    0,
+                );
+
+                await activate(
+                    page.locator(
+                        '#coder-selector .coder-tab[data-coder="claude"]',
+                    ),
+                    touch,
+                );
+                const claudeSection = await ensureActiveSection(
+                    page,
+                    cwd,
+                    touch,
+                );
+                const claudeRows = claudeSection.locator('.session-item');
+                const priorClaudeTitles = touch
+                    ? ['Claude desktop refresh', 'Claude initial session']
+                    : ['Claude initial session'];
+                await expect(
+                    claudeSection.locator('.session-title'),
+                ).toHaveText(priorClaudeTitles);
+                fixture.claude('claude-new', `Claude ${mode} refresh`);
+                await expect(claudeSection).not.toContainText(
+                    `Claude ${mode} refresh`,
+                );
+                await activate(refresh, touch);
+                await expect(claudeRows.first()).toContainText(
+                    `Claude ${mode} refresh`,
+                );
+                await expect(status).toHaveText('Sessions refreshed.');
+                const editSideEffects: string[] = [];
+                page.on('request', (request) => {
+                    if (
+                        request.method() === 'POST' &&
+                        ['/api/session-meta', '/api/terminals'].includes(
+                            new URL(request.url()).pathname,
+                        )
+                    ) {
+                        editSideEffects.push(request.url());
+                    }
+                });
+                // The legacy hover-only rename opener is inaccessible to touch.
+                // Only edit setup uses a DOM click; refresh itself stays a real activation.
+                await claudeRows
+                    .first()
+                    .locator('.rename-btn')
+                    .evaluate((button: HTMLButtonElement) => button.click());
+                const rename = claudeSection.locator('.rename-input');
+                await rename.fill('Unsaved rename');
+                await activate(refresh, touch);
+                await expect(status).toHaveText(
+                    'Finish or cancel the edit, then refresh.',
+                );
+                await expect(rename).toHaveValue('Unsaved rename');
+                if (!touch) {
+                    await refresh.focus();
+                    await page.keyboard.press('Enter');
+                    await expect(rename).toHaveValue('Unsaved rename');
+                }
+                let holdWorktrees = true;
+                let worktreesStarted!: () => void;
+                const worktreesHeld = new Promise<void>((resolve) => {
+                    worktreesStarted = resolve;
+                });
+                await page.route('**/api/git/worktrees?*', async (route) => {
+                    if (holdWorktrees) {
+                        holdWorktrees = false;
+                        worktreesStarted();
+                        await new Promise<void>((resolve) => {
+                            releaseWorktrees = resolve;
+                        });
+                    }
+                    await route.continue();
+                });
+                await rename.press('Escape');
+                await worktreesHeld;
+                await expect(rename).toHaveCount(0);
+                await expect(claudeRows.first()).toContainText(
+                    `Claude ${mode} refresh`,
+                );
+                await claudeRows.first().dispatchEvent('contextmenu', {
+                    clientX: 80,
+                    clientY: 250,
+                });
+                // Legacy context menus can be offscreen and bubble an outside click
+                // that closes the touch drawer. Only this edit opener bypasses it.
+                await page
+                    .getByText('⚙ Launch with args…', { exact: true })
+                    .evaluate((item) =>
+                        item.dispatchEvent(
+                            new MouseEvent('click', { bubbles: false }),
+                        ),
+                    );
+                const args = claudeSection.locator('.args-input');
+                await args.fill('--unsaved-argument');
+                const worktreesFinished = page.waitForEvent(
+                    'requestfinished',
+                    (request) =>
+                        new URL(request.url()).pathname ===
+                        '/api/git/worktrees',
+                );
+                releaseWorktrees?.();
+                await worktreesFinished;
+                await expect(args).toHaveValue('--unsaved-argument');
+                await activate(refresh, touch);
+                await expect(status).toHaveText(
+                    'Finish or cancel the edit, then refresh.',
+                );
+                await expect(args).toHaveValue('--unsaved-argument');
+                await args.press('Escape');
+                await expect(args).toHaveCount(0);
+                expect(editSideEffects).toEqual([]);
+                await activate(refresh, touch);
+                await expect(status).toHaveText('Sessions refreshed.');
+                if (touch)
+                    await expect(page.locator('#sidebar-panel')).toHaveClass(
+                        /drawer-open/,
+                    );
+                await assertNoHorizontalOverflow(page);
+                if (!touch) {
+                    for (const color of ['amber', 'purple']) {
+                        await page
+                            .locator('#header-config-pill .pill-label')
+                            .click();
+                        const savedTheme = page.waitForResponse(
+                            (response) =>
+                                new URL(response.url()).pathname ===
+                                    '/api/config/theme' &&
+                                response.request().method() === 'POST',
+                        );
+                        await page
+                            .locator(`.settings-swatch[data-color="${color}"]`)
+                            .click();
+                        expect((await savedTheme).ok()).toBe(true);
+                        await expect(page.locator('html')).toHaveAttribute(
+                            'data-theme-color',
+                            color,
+                        );
+                        await page
+                            .locator('.settings-overlay .modal-close-btn')
+                            .click();
+                        await refresh.click();
+                        await expect(status).toHaveText('Sessions refreshed.');
+                        await assertNoHorizontalOverflow(page);
+                    }
+                }
+                expect(page.url()).toBe(pageURL);
+                expect(navigations).toEqual([]);
+                expect(errors).toEqual([]);
+            } finally {
+                releaseWorktrees?.();
+                gates?.releaseHeldSession();
+                gates?.releaseStateSaves();
                 if (context) {
                     await context.unrouteAll({ behavior: 'wait' });
                     await context.close();
                 }
-            } finally {
-                await phi.stop();
             }
         }
-    });
-}
+    } finally {
+        await phi.stop();
+    }
+});
 
 for (const mode of ['desktop', 'touch'] as const) {
     test(`restores saved Pi pages on ${mode} while list requests fail`, async ({
@@ -609,7 +652,7 @@ for (const mode of ['desktop', 'touch'] as const) {
                 }),
             );
             const injected503 = new Map<string, number>();
-            const errors = collectBrowserErrors(page, injected503);
+            const errors = collectBrowserErrors(page, injected503, phi.url);
             const openPi = async () => {
                 if (touch) {
                     await page.locator('#mobile-sidebar-toggle').tap();
