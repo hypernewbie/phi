@@ -66,11 +66,11 @@ type Config struct {
 
 	// Mobile overrides are owned by the revisioned mobile appearance endpoint.
 	// Nil families inherit desktop; nil sizes use mobile defaults.
-	MobileUIFontFamily       *string `json:"mobile_ui_font_family,omitempty"`
-	MobileUIFontSize         *int    `json:"mobile_ui_font_size,omitempty"`
-	MobileTerminalFontFamily *string `json:"mobile_terminal_font_family,omitempty"`
-	MobileTerminalFontSize   *int    `json:"mobile_terminal_font_size,omitempty"`
-	MobileAppearanceRevision uint64  `json:"mobile_appearance_revision,omitempty"`
+	MobileUIFontFamily       *string `json:"mobile_ui_font_family,omitempty" toml:"mobile_ui_font_family,omitempty"`
+	MobileUIFontSize         *int    `json:"mobile_ui_font_size,omitempty" toml:"mobile_ui_font_size,omitempty"`
+	MobileTerminalFontFamily *string `json:"mobile_terminal_font_family,omitempty" toml:"mobile_terminal_font_family,omitempty"`
+	MobileTerminalFontSize   *int    `json:"mobile_terminal_font_size,omitempty" toml:"mobile_terminal_font_size,omitempty"`
+	MobileAppearanceRevision uint64  `json:"mobile_appearance_revision,omitempty" toml:"mobile_appearance_revision,omitempty"`
 
 	// SessionListPageSize controls how many sessions the sidebar shows per
 	// page. 0 uses 10; nonzero values are clamped to 5..100 when the

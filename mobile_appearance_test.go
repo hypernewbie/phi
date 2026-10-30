@@ -37,7 +37,7 @@ func mobileRequest(t *testing.T, fence bool, body string, want int) mobileAppear
 }
 
 func TestMobileAppearancePersistenceAndReset(t *testing.T) {
-	path := withTempConfig(t)
+	withTempConfig(t)
 	legacy := loadConfig()
 	legacy.UIFontFamily, legacy.TerminalFontFamily = "Desktop UI", "Desktop terminal"
 	legacy.UIFontSize, legacy.TerminalFontSize = 16, 18
@@ -58,13 +58,9 @@ func TestMobileAppearancePersistenceAndReset(t *testing.T) {
 		t.Fatalf("partial reset lost fields: %+v", state)
 	}
 	mobileRequest(t, false, `{"revision":3,"fields":{"ui_font_family":null,"ui_font_size":null,"terminal_font_family":null,"terminal_font_size":null}}`, 200)
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var disk Config
-	if err := json.Unmarshal(raw, &disk); err != nil {
-		t.Fatal(err)
+	disk, present, err := readPrimaryConfig()
+	if err != nil || !present {
+		t.Fatalf("read persisted TOML config: present=%v err=%v", present, err)
 	}
 	if disk.MobileAppearanceRevision != 4 || disk.MobileUIFontSize != nil || disk.MobileTerminalFontFamily != nil || disk.UIFontFamily != "Desktop UI" || disk.TerminalFontFamily != "Desktop terminal" || disk.UIFontSize != 16 || disk.TerminalFontSize != 18 {
 		t.Fatalf("reset crossed profile boundary: %+v", disk)
