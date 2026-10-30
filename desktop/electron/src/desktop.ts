@@ -2488,6 +2488,20 @@ export class DesktopHost {
     this.hooks?.trigger('switch', true);
   }
 
+  private applyFullscreenToContents(
+    contents: WebContents,
+    fullscreen: boolean,
+  ): void {
+    if (contents.isDestroyed()) return;
+    // A named popup can be reused without invoking setWindowOpenHandler.
+    // Tell the page before it tries window.open, including on reload.
+    void contents
+      .executeJavaScript(
+        `document.documentElement.dataset.phiDesktopFullscreen = '${fullscreen}'`,
+      )
+      .catch(() => {});
+  }
+
   /**
    * Broadcasts fullscreen state changes immediately to window-state listeners and user hooks.
    */
@@ -2499,6 +2513,9 @@ export class DesktopHost {
         : Boolean(win && !win.isDestroyed() && win.isFullScreen());
     this.fullscreenOverride = isFs;
     this.lastRecordedFullscreen = isFs;
+    for (const view of new Set(this.viewByOrigin.values())) {
+      this.applyFullscreenToContents(view.webContents, isFs);
+    }
     this.pushWindowState();
     this.hooks?.trigger(isFs ? 'fullscreen' : 'leave-fullscreen', true);
     setTimeout(() => {
@@ -3590,6 +3607,7 @@ export class DesktopHost {
         view.webContents.on('did-finish-load', () => {
           if (!isCurrent()) return;
           this.loadedViews.add(view);
+          this.applyFullscreenToContents(view.webContents, win.isFullScreen());
           this.pushRailState();
           void view.webContents
             .executeJavaScript(INSTALL_FILE_ACTION_SCRIPT)

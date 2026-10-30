@@ -1,6 +1,10 @@
 /* Φ phi — Accent Theme & Prepaint Utilities */
 
 import { serverKey } from './util.js';
+import {
+    captureAppearanceScope, currentAppearanceProfile, readAppearanceCache,
+    readDesktopAppearance, readInheritanceCache, effectiveAppearance, EMPTY_MOBILE, applyAppearanceFonts,
+} from './mobile-appearance.js';
 
 export const ACCENT_COLORS = {
     purple: {
@@ -193,20 +197,9 @@ export function applyThemeTokens(colorKey) {
 
 export function applyPrepaintAppearance() {
     try {
-        const a = JSON.parse(localStorage.getItem('phi_appearance') || 'null');
-        if (a && (a.ui_font_family || a.ui_font_size >= 10)) {
-            let s = document.getElementById('phi-prepaint-appearance');
-            if (!s) {
-                s = document.createElement('style');
-                s.id = 'phi-prepaint-appearance';
-                document.head.appendChild(s);
-            }
-            s.textContent =
-                'body{' +
-                (a.ui_font_family ? `font-family:${a.ui_font_family};` : '') +
-                (a.ui_font_size >= 10 ? `font-size:${a.ui_font_size}px;` : '') +
-                '}';
-        }
+        const scope = captureAppearanceScope();
+        const profile = currentAppearanceProfile();
+        applyAppearanceFonts(profile, effectiveAppearance(profile, readDesktopAppearance(scope), readAppearanceCache(scope) || EMPTY_MOBILE, readInheritanceCache(scope) || {}));
     } catch {
         /* ignore */
     }

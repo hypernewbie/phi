@@ -6,8 +6,13 @@ vi.mock('../web/vendor/noble-hashes/pbkdf2.js', () => ({
     pbkdf2Async: vi.fn(async () => new Uint8Array(32).fill(9)),
 }));
 
-const { setAccessPassword } = await import('../web/auth.js');
+const { setAccessPassword, clearAccessPassword, bootstrapAccessAuth } =
+    await import('../web/auth.js');
 const { setEmbeddedBackend } = await import('../web/util.js');
+const { appearanceRequestContext } = await import(
+    '../web/mobile-appearance.js'
+);
+const { BackendScope } = await import('../web/backend-scope.js');
 
 setupDomHarness();
 
@@ -45,5 +50,105 @@ describe('access credential storage', () => {
         await setAccessPassword('correct horse battery staple');
         expect(localStorage.getItem('phi_access_credential_v1')).toBeTruthy();
         expect(localStorage.getItem('phi_access_credential_v1:')).toBeNull();
+    });
+
+    it('binds password writes and credential cleanup to the opener after an active-backend switch', async () => {
+        const context = appearanceRequestContext(
+            new BackendScope('server-a', 'http://a.test'),
+        );
+        let release;
+        const request = vi.fn(
+            () =>
+                new Promise((resolve) => {
+                    release = resolve;
+                }),
+        );
+        vi.stubGlobal('fetch', request);
+        localStorage.setItem(
+            'phi_access_credential_v1:server-b',
+            'fixture B credential',
+        );
+        const save = setAccessPassword('fixture password', context);
+        await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+        setEmbeddedBackend('server-b', 'http://b.test');
+        expect(request.mock.calls[0][1].headers['X-Phi-Backend']).toBe(
+            'server-a',
+        );
+        release(Response.json({ enabled: true }));
+        await save;
+        expect(
+            localStorage.getItem('phi_access_credential_v1:server-a'),
+        ).toBeTruthy();
+        expect(localStorage.getItem('phi_access_credential_v1:server-b')).toBe(
+            'fixture B credential',
+        );
+        request.mockResolvedValue(Response.json({ enabled: false }));
+        await clearAccessPassword(context);
+        expect(
+            localStorage.getItem('phi_access_credential_v1:server-a'),
+        ).toBeNull();
+        expect(localStorage.getItem('phi_access_credential_v1:server-b')).toBe(
+            'fixture B credential',
+        );
+        expect(request.mock.calls[1][1].headers['X-Phi-Backend']).toBe(
+            'server-a',
+        );
+    });
+
+    it('keeps owner-bound reauthentication and the unlock prompt on A after switching to B', async () => {
+        const context = appearanceRequestContext(
+            new BackendScope('server-a', 'http://a.test'),
+        );
+        localStorage.setItem(
+            'phi_access_credential_v1:server-a',
+            'stale fixture credential',
+        );
+        localStorage.setItem(
+            'phi_access_credential_v1:server-b',
+            'fixture B credential',
+        );
+        let release;
+        const request = vi.fn(
+            () =>
+                new Promise((resolve) => {
+                    release = resolve;
+                }),
+        );
+        vi.stubGlobal('fetch', request);
+        const boot = bootstrapAccessAuth(context);
+        setEmbeddedBackend('server-b', 'http://b.test');
+        release(
+            Response.json({
+                enabled: true,
+                version: 'v1',
+                algorithm: 'pbkdf2-sha256',
+                iterations: 600000,
+                salt: 'EREREREREREREREREREREQ',
+                challenge: 'fixture challenge',
+            }),
+        );
+        await vi.waitFor(() =>
+            expect(
+                document.querySelector('.access-auth-overlay'),
+            ).not.toBeNull(),
+        );
+        expect(
+            localStorage.getItem('phi_access_credential_v1:server-a'),
+        ).toBeNull();
+        expect(localStorage.getItem('phi_access_credential_v1:server-b')).toBe(
+            'fixture B credential',
+        );
+        request.mockResolvedValue(Response.json({ enabled: false }));
+        document
+            .querySelector('.access-auth-dialog')
+            .dispatchEvent(
+                new Event('submit', { bubbles: true, cancelable: true }),
+            );
+        await boot;
+        expect(
+            request.mock.calls.every(
+                ([, init]) => init.headers['X-Phi-Backend'] === 'server-a',
+            ),
+        ).toBe(true);
     });
 });

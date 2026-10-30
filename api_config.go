@@ -5,11 +5,15 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // resolvedSessionListPageSize defaults 0 (unset) to 10 and clamps every other
@@ -488,6 +492,170 @@ func sanitizeHostnameOverride(v string) (string, bool) {
 		}
 	}
 	return v, true
+}
+
+const maxMobileAppearanceRevision uint64 = 9007199254740991
+
+type mobileAppearanceState struct {
+	Revision           uint64  `json:"revision"`
+	UIFontSize         *int    `json:"ui_font_size"`
+	TerminalFontSize   *int    `json:"terminal_font_size"`
+	UIFontFamily       *string `json:"ui_font_family"`
+	TerminalFontFamily *string `json:"terminal_font_family"`
+}
+
+func mobileAppearanceFromConfig(cfg Config) mobileAppearanceState {
+	return mobileAppearanceState{cfg.MobileAppearanceRevision, cfg.MobileUIFontSize,
+		cfg.MobileTerminalFontSize, cfg.MobileUIFontFamily, cfg.MobileTerminalFontFamily}
+}
+
+func handleMobileAppearance(w http.ResponseWriter, r *http.Request) {
+	serveMobileAppearance(w, r, false, writeConfigLocked)
+}
+
+func handleMobileAppearanceFence(w http.ResponseWriter, r *http.Request) {
+	serveMobileAppearance(w, r, true, writeConfigLocked)
+}
+
+// The writer argument permits deterministic disk-failure tests without a global hook.
+func serveMobileAppearance(w http.ResponseWriter, r *http.Request, fence bool, write func(Config) error) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method == http.MethodGet && !fence {
+		configMu.RLock()
+		cfg, err := readConfigLocked()
+		state := mobileAppearanceFromConfig(cfg)
+		configMu.RUnlock()
+		if err != nil || state.Revision > maxMobileAppearanceRevision {
+			http.Error(w, "Failed to read config", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(state)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		http.Error(w, "Expected application/json", http.StatusUnsupportedMediaType)
+		return
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	var body map[string]json.RawMessage
+	decodeErr := decoder.Decode(&body)
+	if decodeErr == nil {
+		if err := decoder.Decode(new(any)); err != io.EOF {
+			if err == nil {
+				decodeErr = errors.New("trailing JSON")
+			} else {
+				decodeErr = err
+			}
+		}
+	}
+	if decodeErr != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(decodeErr, &tooLarge) {
+			http.Error(w, "Body too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		}
+		return
+	}
+	var revision uint64
+	var fields map[string]json.RawMessage
+	valid := body != nil
+	if fence {
+		valid = valid && len(body) == 0
+	} else {
+		rawRevision := body["revision"]
+		valid = valid && len(body) == 2 && len(rawRevision) > 0 && string(rawRevision) != "null" &&
+			json.Unmarshal(rawRevision, &revision) == nil && revision <= maxMobileAppearanceRevision &&
+			json.Unmarshal(body["fields"], &fields) == nil && len(fields) > 0
+	}
+	// Decode the patch before locking. Map presence distinguishes omission from null.
+	var patch mobileAppearanceState
+	for key, raw := range fields {
+		switch key {
+		case "ui_font_size", "terminal_font_size":
+			var size *int
+			if err := json.Unmarshal(raw, &size); err != nil {
+				valid = false
+			}
+			min, max := 10, 24
+			if key == "terminal_font_size" {
+				min, max = 8, 32
+			}
+			if size != nil && (*size < min || *size > max) {
+				valid = false
+			}
+			if key == "ui_font_size" {
+				patch.UIFontSize = size
+			} else {
+				patch.TerminalFontSize = size
+			}
+		case "ui_font_family", "terminal_font_family":
+			if !utf8.Valid(raw) {
+				valid = false
+			}
+			var family *string
+			if err := json.Unmarshal(raw, &family); err != nil {
+				valid = false
+			}
+			if family != nil && (len(*family) > 512 || !utf8.ValidString(*family) || strings.ContainsFunc(*family, unicode.IsControl)) {
+				valid = false
+			}
+			if key == "ui_font_family" {
+				patch.UIFontFamily = family
+			} else {
+				patch.TerminalFontFamily = family
+			}
+		default:
+			valid = false
+		}
+	}
+	if !valid {
+		http.Error(w, "Invalid mobile appearance update", http.StatusBadRequest)
+		return
+	}
+
+	configMu.Lock()
+	cfg, err := readConfigLocked()
+	status := http.StatusOK
+	if err == nil {
+		if cfg.MobileAppearanceRevision > maxMobileAppearanceRevision {
+			err = errors.New("invalid stored revision")
+		} else if !fence && cfg.MobileAppearanceRevision != revision {
+			status = http.StatusConflict
+		} else if cfg.MobileAppearanceRevision == maxMobileAppearanceRevision {
+			err = errors.New("revision exhausted")
+		} else {
+			if _, ok := fields["ui_font_size"]; ok {
+				cfg.MobileUIFontSize = patch.UIFontSize
+			}
+			if _, ok := fields["terminal_font_size"]; ok {
+				cfg.MobileTerminalFontSize = patch.TerminalFontSize
+			}
+			if _, ok := fields["ui_font_family"]; ok {
+				cfg.MobileUIFontFamily = patch.UIFontFamily
+			}
+			if _, ok := fields["terminal_font_family"]; ok {
+				cfg.MobileTerminalFontFamily = patch.TerminalFontFamily
+			}
+			cfg.MobileAppearanceRevision++
+			err = write(cfg)
+		}
+	}
+	state := mobileAppearanceFromConfig(cfg)
+	configMu.Unlock()
+	if err != nil {
+		http.Error(w, "Failed to save config", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(state)
 }
 
 // handleAppearanceUpdate persists font + UI display settings from the

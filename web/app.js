@@ -31,6 +31,12 @@ import {
     getEmbeddedBackendOrigin,
 } from './util.js';
 import { BackendScope } from './backend-scope.js';
+import {
+    MobileAppearanceStore, EMPTY_MOBILE, captureAppearanceScope,
+    appearanceRequestContext, appearanceOwner, currentAppearanceProfile,
+    effectiveAppearance, applyAppearanceFonts, legacyAppearanceKey,
+    readDesktopAppearance,
+} from './mobile-appearance.js';
 import { BackendStore, backendStores } from './backend-store.js';
 import { NotificationManager } from './notifications.js';
 import { SyncManager } from './sync.js';
@@ -72,7 +78,7 @@ function inertBodyExceptNotifications() {
 markDesktopView();
 
 export class App {
-    constructor() {
+    constructor(scope) {
         if (typeof window !== 'undefined' && window.location?.search) {
             const params = new URLSearchParams(window.location.search);
             const profileId = params.get('profile');
@@ -81,7 +87,7 @@ export class App {
                 setEmbeddedBackend(profileId, origin || '');
             }
         }
-        this.scope = new BackendScope(
+        this.scope = scope || new BackendScope(
             getEmbeddedProfileId() || '',
             getEmbeddedBackendOrigin() || '',
         );
@@ -132,6 +138,7 @@ export class App {
         this.fileTreeManager = new FileTreeManager(this);
         this.kanbanManager = new KanbanManager(this);
         this.syncManager = new SyncManager(this);
+        this.initAppearance();
     }
 
     async init() {
@@ -142,10 +149,10 @@ export class App {
         // (phone rotation, window resize).
         this.applyFastMode();
 
-        await this.revalidate(this.scope);
-
-        // Wire one-time DOM listeners (initResizers, initGlobalShortcuts, etc.).
+        // Settings and local controls are usable while background reads run.
         this.initOnce();
+        await this.revalidate(this.scope);
+        console.log('[app] Phi initialized successfully');
     }
 
     async revalidate(scope = this.scope) {
@@ -245,6 +252,11 @@ export class App {
                 this.openSettingsModal();
             });
         }
+
+        document.getElementById('drawer-settings-btn')?.addEventListener('click', () => {
+            document.getElementById('sidebar-panel')?.classList.remove('drawer-open');
+            this.openSettingsModal({ opener: document.getElementById('drawer-settings-btn') });
+        });
 
         // 6.2 Listen for cross-window settings/theme sync (e.g. from standalone /config.html)
         this.initCrossWindowConfigSync();
@@ -763,8 +775,6 @@ export class App {
 
         // 11. Sidebar quota button (footer pill, next to ?).
         initQuotaButton();
-
-        console.log('[app] Phi initialized successfully');
     }
 
     getActiveStore(profileId = getEmbeddedProfileId()) {
@@ -880,7 +890,11 @@ export class App {
         this.tabManager?.detachAll?.({
             flushBackendId: prevProfileId || undefined,
         });
-        document.querySelector('.settings-overlay')?.remove();
+        const settingsClose = document.querySelector(
+            '.settings-overlay .modal-close-btn',
+        );
+        if (settingsClose) settingsClose.click();
+        else document.querySelector('.settings-overlay')?.remove();
         this.sessionsManager?.closeWorkspaceModal?.();
         this.markdownManager?.closeModal?.();
         this.markdownManager?.closeViewer?.();
@@ -904,6 +918,7 @@ export class App {
         }
         const scope = new BackendScope(profileId, origin || '');
         this.scope = scope;
+        this.initAppearance();
         this.tabManager?._bindThinkingPresetStore?.(scope);
         const nextStore = backendStores.get(profileId);
         notifications.setContext(serverKey('phi_notifications_v1'), nextStore);
@@ -1874,7 +1889,8 @@ export class App {
 
     async saveTheme(colorKey) {
         try {
-            const response = await fetch('/api/config/theme', {
+            const request = this.authContext?.fetch || fetch;
+            const response = await request('/api/config/theme', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ color: colorKey }),
@@ -1931,6 +1947,55 @@ export class App {
         openSettingsModal(this, ACCENT_COLORS, opts);
     }
 
+    initAppearance(data = {}) {
+        this.settingsReady = Object.keys(data).length > 0;
+        this.mobileAppearanceStore?.dispose();
+        this.scope ||= captureAppearanceScope();
+        this.authContext = appearanceRequestContext(this.scope);
+        this.desktopAppearance = null;
+        const store = new MobileAppearanceStore(this.scope);
+        this.mobileAppearanceStore = store;
+        this.ingestAppearance(data);
+        store.subscribe(() => {
+            if (this.mobileAppearanceStore === store) this.applyAppearanceProfile();
+        });
+        this.applyAppearanceProfile();
+        void store.start();
+    }
+
+    ingestAppearance(data) {
+        // Only authorized server fields seed mobile inheritance, before desktop cache precedence.
+        this.mobileAppearanceStore?.ingestInheritance(data);
+        const ls = readDesktopAppearance(this.scope || captureAppearanceScope());
+        this.desktopAppearance = {
+            ui_font_family: ls.ui_font_family ?? data.ui_font_family ?? '',
+            ui_font_size: Number(ls.ui_font_size ?? data.ui_font_size) || 0,
+            terminal_font_family: ls.terminal_font_family ?? data.terminal_font_family ?? '',
+            terminal_font_size: Number(ls.terminal_font_size ?? data.terminal_font_size) || 0,
+        };
+        this.mobileScrollbackRows = Number(ls.mobile_scrollback_rows ?? data.mobile_scrollback_rows) || 0;
+        this.hostnameOverride = ls.hostname_override ?? data.hostname_override ?? '';
+        setServerHostOverride(this.hostnameOverride);
+        this.customFontName = ls.custom_font_name || '';
+        this.terminalBgName = ls.terminal_bg_name || '';
+        this.terminalBgDarkness = ls.terminal_bg_darkness ?? 98;
+        this.terminalBgBlur = ls.terminal_bg_blur ?? 0;
+        this.applyAppearanceProfile();
+    }
+
+    applyAppearanceProfile() {
+        const profile = currentAppearanceProfile();
+        const values = effectiveAppearance(profile, this.desktopAppearance || {}, this.mobileAppearanceStore?.values || EMPTY_MOBILE, this.mobileAppearanceStore?.inheritance || {});
+        const previousFamily = this.terminalFontFamily, previousSize = this.terminalFontSize;
+        this.uiFontFamily = values.ui_font_family;
+        this.uiFontSize = values.ui_font_size;
+        this.terminalFontFamily = values.terminal_font_family;
+        this.terminalFontSize = values.terminal_font_size;
+        this.applyUIFont();
+        if (previousFamily !== this.terminalFontFamily) this.tabManager?.applyFontToAllActiveTerminals?.(this.terminalFontFamily || 'JetBrains Mono, monospace');
+        if (previousSize !== this.terminalFontSize) this.tabManager?.applyTerminalFontSizeToAll?.(this.terminalFontSize);
+    }
+
     _buildInputRow(labelText, id, placeholder, current) {
         const row = document.createElement('div');
         row.className = 'settings-row';
@@ -1952,14 +2017,18 @@ export class App {
     // authoritative; server is the secondary mirror). Mirrors the
     // phi_theme_color pre-paint precedent.
     _saveAppearanceLocal() {
+        if (currentAppearanceProfile() === 'desktop') this.desktopAppearance = {
+            ui_font_family: this.uiFontFamily || '', ui_font_size: this.uiFontSize || 0,
+            terminal_font_family: this.terminalFontFamily || '', terminal_font_size: this.terminalFontSize || 0,
+        };
         try {
+            const scope = this.scope || captureAppearanceScope();
             localStorage.setItem(
-                'phi_appearance',
+                legacyAppearanceKey(scope),
                 JSON.stringify({
-                    ui_font_family: this.uiFontFamily || '',
-                    ui_font_size: this.uiFontSize || 0,
-                    terminal_font_family: this.terminalFontFamily || '',
-                    terminal_font_size: this.terminalFontSize || 0,
+                    ...this.desktopAppearance,
+                    // A mobile page owns no desktop fonts. Keep newer values from other documents.
+                    ...(currentAppearanceProfile() === 'mobile' ? readDesktopAppearance(scope) : {}),
                     mobile_scrollback_rows: this.mobileScrollbackRows || 0,
                     hostname_override: this.hostnameOverride || '',
                     custom_font_name: this.customFontName || '',
@@ -2180,13 +2249,14 @@ export class App {
     // loadCustomFont re-injects the @font-face from IndexedDB on boot.
     // Called from the sessions ingest after customFontName is set.
     async loadCustomFont() {
-        if (!this.customFontName) return;
+        if (!this.customFontName && ![this.uiFontFamily, this.terminalFontFamily].some(family => family?.includes('Phi Custom Font'))) return;
         try {
             const rec = await this._getCustomFont();
             if (rec?.blob) this._injectCustomFontFace(rec.blob);
         } catch (e) {
             console.warn('[font] load custom failed', e);
         }
+        document.querySelector('.settings-overlay')?.dispatchEvent(new Event('phi-settings-refresh'));
     }
     // clearCustomFont drops the IndexedDB entry + <style> + name, and
     // falls back either surface that was using the custom font.
@@ -2208,41 +2278,22 @@ export class App {
         }
     }
 
-    // applyUIFont writes the current uiFontFamily / uiFontSize to
-    // document.body as inline style. We avoid introducing CSS custom
-    // properties (per AGENTS.md) — inline styles keep the change
-    // scoped and require no new tokens.
     applyUIFont() {
-        const body = document.body;
-        if (!body) return;
-        if (this.uiFontFamily) {
-            body.style.fontFamily = this.uiFontFamily;
-        } else {
-            body.style.removeProperty('font-family');
-        }
-        if (this.uiFontSize >= 10) {
-            body.style.fontSize = `${this.uiFontSize}px`;
-        } else {
-            body.style.removeProperty('font-size');
-        }
+        applyAppearanceFonts(currentAppearanceProfile(), {
+            ui_font_family: this.uiFontFamily || '', ui_font_size: this.uiFontSize || 0,
+            terminal_font_family: this.terminalFontFamily || '', terminal_font_size: this.terminalFontSize || 0,
+        });
     }
 
-    // persistAppearance POSTs the current uiFontFamily / uiFontSize /
-    // terminalFontFamily to /api/config/appearance. Debounced at the
-    // call site (300ms after the last input change).
-    async persistAppearance() {
+    // Legacy/shared settings retain their endpoint; only edited fields are sent.
+    async persistAppearance(fields = {}) {
+        if (!Object.keys(fields).length) return;
+        const context = this.authContext || appearanceRequestContext(this.scope || captureAppearanceScope());
         try {
-            await fetch('/api/config/appearance', {
+            await context.fetch('/api/config/appearance', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    ui_font_family: this.uiFontFamily || '',
-                    ui_font_size: this.uiFontSize || 0,
-                    terminal_font_family: this.terminalFontFamily || '',
-                    terminal_font_size: this.terminalFontSize || 0,
-                    mobile_scrollback_rows: this.mobileScrollbackRows || 0,
-                    hostname_override: this.hostnameOverride || '',
-                }),
+                body: JSON.stringify(fields),
             });
         } catch (e) {
             console.warn('[appearance] failed to persist:', e);
@@ -2258,20 +2309,18 @@ export class App {
             this._configBroadcastChannel.onmessage = async (e) => {
                 const msg = e.data;
                 if (!msg || typeof msg !== 'object') return;
+                if (msg.type !== 'low-power') {
+                    const owner = appearanceOwner(this.scope || captureAppearanceScope());
+                    if ((msg.owner && msg.owner !== owner) || (!msg.owner && this.scope?.profileId)) return;
+                }
                 if (msg.type === 'theme' && typeof msg.color === 'string') {
                     this.applyAccentTheme(msg.color);
                     this.tabManager?.applyThemeToAllActiveTerminals?.();
                 } else if (msg.type === 'appearance') {
-                    let ls = null;
-                    try {
-                        ls = JSON.parse(
-                            localStorage.getItem('phi_appearance') || 'null',
-                        );
-                    } catch {}
-                    this.uiFontFamily = ls?.ui_font_family || '';
-                    this.uiFontSize = Number(ls?.ui_font_size) || 0;
-                    this.terminalFontFamily = ls?.terminal_font_family || '';
-                    this.terminalFontSize = Number(ls?.terminal_font_size) || 0;
+                    const ls = readDesktopAppearance(this.scope || captureAppearanceScope());
+                    // Broadcasts are hints, not authoritative server inheritance.
+                    this.ingestAppearance({});
+                    void this.mobileAppearanceStore?.refreshInheritance();
                     this.mobileScrollbackRows =
                         Number(ls?.mobile_scrollback_rows) || 0;
                     this.hostnameOverride = ls?.hostname_override || '';
@@ -3492,8 +3541,9 @@ export class App {
 window.addEventListener('DOMContentLoaded', async () => {
     if (document.documentElement.hasAttribute('data-phi-config-page')) return;
     try {
-        const auth = await bootstrapAccessAuth();
-        const app = new App();
+        const scope = captureAppearanceScope();
+        const auth = await bootstrapAccessAuth(appearanceRequestContext(scope));
+        const app = new App(scope);
         app.accessAuthEnabled = auth.enabled;
         app.init();
     } catch (err) {

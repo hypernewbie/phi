@@ -24,8 +24,12 @@ const CREDENTIAL_KEY = 'phi_access_credential_v1';
 // for the password again. The key is namespaced per server instead. In a
 // plain browser tab each server has its own origin (and its own
 // localStorage), so the key stays unchanged there.
-function credentialKey() {
-    return serverKey(CREDENTIAL_KEY);
+function credentialKey(context) {
+    return context?.credentialKey || serverKey(CREDENTIAL_KEY);
+}
+
+function authFetch(context, url, init) {
+    return (context?.fetch || fetch)(url, init);
 }
 const PASSWORD_MIN_LENGTH = 8;
 
@@ -62,8 +66,8 @@ function validStatus(status) {
     );
 }
 
-async function getStatus() {
-    const res = await fetch('/api/auth/status', { cache: 'no-store' });
+async function getStatus(context) {
+    const res = await authFetch(context, '/api/auth/status', { cache: 'no-store' });
     if (!res.ok) throw new Error('Unable to check Phi access protection');
     const status = await res.json();
     if (status.enabled && !validStatus(status))
@@ -163,10 +167,10 @@ async function deriveVerifier(password, status) {
     });
 }
 
-function storeCredential(status, verifier) {
+function storeCredential(status, verifier, context) {
     try {
         localStorage.setItem(
-            credentialKey(),
+            credentialKey(context),
             JSON.stringify({
                 version: status.version,
                 algorithm: status.algorithm,
@@ -181,18 +185,18 @@ function storeCredential(status, verifier) {
     }
 }
 
-function clearCredential() {
+function clearCredential(context) {
     try {
-        localStorage.removeItem(credentialKey());
+        localStorage.removeItem(credentialKey(context));
     } catch {
         /* ignored */
     }
 }
 
-function savedVerifier(status) {
+function savedVerifier(status, context) {
     try {
         const saved = JSON.parse(
-            localStorage.getItem(credentialKey()) || 'null',
+            localStorage.getItem(credentialKey(context)) || 'null',
         );
         if (
             !saved ||
@@ -201,13 +205,13 @@ function savedVerifier(status) {
             saved.iterations !== status.iterations ||
             saved.salt !== status.salt
         ) {
-            clearCredential();
+            clearCredential(context);
             return null;
         }
         const verifier = base64URLToBytes(saved.verifier);
         return verifier.length === 32 ? verifier : null;
     } catch {
-        clearCredential();
+        clearCredential(context);
         return null;
     }
 }
@@ -219,11 +223,11 @@ const challengeRefreshAfterMs = 4 * 60 * 1000;
 const challengeLifetimeMs = 5 * 60 * 1000;
 const statusFetchTimeoutMs = 15000;
 
-async function login(status, verifier) {
+async function login(status, verifier, context) {
     const proof = bytesToBase64URL(
         hmac(sha256, verifier, new TextEncoder().encode(status.challenge)),
     );
-    const res = await fetch('/api/auth/login', {
+    const res = await authFetch(context, '/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ challenge: status.challenge, proof }),
@@ -236,12 +240,12 @@ async function login(status, verifier) {
 // enough to have expired, in which case there is no challenge to post and
 // the caller must not send the login at all. Age is measured at the moment of
 // the decision, so time spent refreshing counts against the lifetime too.
-async function freshStatus(fallback, startedAt) {
+async function freshStatus(fallback, startedAt, context) {
     if (performance.now() - startedAt < challengeRefreshAfterMs) return fallback;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), statusFetchTimeoutMs);
     try {
-        const res = await fetch('/api/auth/status', {
+        const res = await authFetch(context, '/api/auth/status', {
             cache: 'no-store',
             signal: controller.signal,
         });
@@ -257,7 +261,7 @@ async function freshStatus(fallback, startedAt) {
         : null;
 }
 
-function showUnlockPrompt() {
+function showUnlockPrompt(context) {
     return new Promise((resolve) => {
         const overlay = document.createElement('div');
         overlay.className = 'access-auth-overlay';
@@ -326,14 +330,14 @@ function showUnlockPrompt() {
                 ticker = requestAnimationFrame(tick);
             });
             try {
-                const status = await getStatus();
+                const status = await getStatus(context);
                 if (!status.enabled) {
                     overlay.remove();
                     resolve({ enabled: false });
                     return;
                 }
                 const verifier = await deriveVerifier(input.value, status);
-                const challenge = await freshStatus(status, started);
+                const challenge = await freshStatus(status, started, context);
                 if (!challenge) {
                     // The derivation outlived the challenge and the refresh
                     // failed. Posting it would count as a failed attempt and
@@ -342,7 +346,7 @@ function showUnlockPrompt() {
                     input.select();
                     return;
                 }
-                const result = await login(challenge, verifier);
+                const result = await login(challenge, verifier, context);
                 if (result.status === 429) {
                     // Rate limited, not a wrong password: the server refuses
                     // every attempt until its backoff ends, so saying "Wrong
@@ -358,7 +362,7 @@ function showUnlockPrompt() {
                     input.select();
                     return;
                 }
-                storeCredential(status, verifier);
+                storeCredential(status, verifier, context);
                 input.value = '';
                 overlay.remove();
                 resolve({ enabled: true });
@@ -380,16 +384,16 @@ function showUnlockPrompt() {
 
 // Called before App.init() so the normal UI never starts fetching protected
 // data until either the session cookie or remembered derived credential works.
-export async function bootstrapAccessAuth() {
-    const status = await getStatus();
+export async function bootstrapAccessAuth(context) {
+    const status = await getStatus(context);
     if (!status.enabled) return { enabled: false };
     if (status.authenticated === true) return { enabled: true };
 
-    const verifier = savedVerifier(status);
-    if (verifier && (await login(status, verifier)).ok) {
+    const verifier = savedVerifier(status, context);
+    if (verifier && (await login(status, verifier, context)).ok) {
         return { enabled: true };
     }
-    return showUnlockPrompt();
+    return showUnlockPrompt(context);
 }
 
 async function createPasswordRecord(
@@ -433,22 +437,22 @@ async function createPasswordRecord(
 
 // Called from the existing Config modal. The returned password record is the
 // only thing written to config.toml; the raw password is discarded immediately.
-export async function setAccessPassword(password) {
+export async function setAccessPassword(password, context) {
     const { passwordHash, status, verifier } =
         await createPasswordRecord(password);
-    const res = await fetch('/api/auth/password', {
+    const res = await authFetch(context, '/api/auth/password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password_hash: passwordHash }),
     });
     if (!res.ok)
         throw new Error((await res.text()) || 'Unable to save access password');
-    storeCredential(status, verifier);
+    storeCredential(status, verifier, context);
     return { enabled: true };
 }
 
-export async function clearAccessPassword() {
-    const res = await fetch('/api/auth/password', {
+export async function clearAccessPassword(context) {
+    const res = await authFetch(context, '/api/auth/password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password_hash: '' }),
@@ -457,7 +461,7 @@ export async function clearAccessPassword() {
         throw new Error(
             (await res.text()) || 'Unable to clear access password',
         );
-    clearCredential();
+    clearCredential(context);
     return { enabled: false };
 }
 

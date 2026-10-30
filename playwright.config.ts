@@ -7,6 +7,9 @@ import { defineConfig } from '@playwright/test';
 // server, so they run on demand: `npx playwright test`.
 export default defineConfig({
     testDir: './e2e',
+    // Native acceptance needs a desktop display + built Electron assets.
+    // Run it explicitly with pnpm test:e2e:desktop, not in Chromium CI.
+    testIgnore: '**/mobile-settings-desktop.spec.ts',
     timeout: 120_000,
     retries: 0,
     // Sibling paths, not the shared parents: each suite wipes its own

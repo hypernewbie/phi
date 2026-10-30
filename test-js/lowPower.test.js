@@ -72,7 +72,17 @@ describe('App.setLowPowerMode (single writer)', () => {
             expect(localStorage.getItem(LOW_POWER_STORAGE_KEY)).toBe('1');
             expect(app.config.fast_mode).toBe(true);
             expect(document.body.classList.contains('fast-mode')).toBe(true);
-            expect(posted).toEqual([{ type: 'low-power', enabled: true }]);
+            expect(posted).toEqual([
+                {
+                    type: 'low-power',
+                    enabled: true,
+                    owner: JSON.stringify([
+                        location.origin,
+                        '',
+                        location.origin,
+                    ]),
+                },
+            ]);
             app.setLowPowerMode(false);
             expect(localStorage.getItem(LOW_POWER_STORAGE_KEY)).toBe('0');
             expect(document.body.classList.contains('fast-mode')).toBe(false);
