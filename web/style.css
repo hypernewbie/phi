@@ -889,12 +889,6 @@ html[data-sync="stale"] .brand .logo {
     height: 42px;
 }
 
-.panel-header-title {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
 #desktop-sidebar-restore-slot {
     display: flex;
     align-items: center;
@@ -7470,7 +7464,7 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 
 .sidebar-panel.sidebar-narrow:has(#desktop-sidebar-toggle:not(.hidden)) .panel-header {
     display: flex;
-    justify-content: center;
+    justify-content: flex-end;
     padding: 6px;
 }
 

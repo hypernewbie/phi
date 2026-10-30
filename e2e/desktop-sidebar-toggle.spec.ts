@@ -12,6 +12,7 @@ import {
     test,
     type APIRequestContext,
     type Browser,
+    type Locator,
     type Page,
     type Route,
     type TestInfo,
@@ -712,6 +713,22 @@ test('MVP desktop hides and restores a live terminal', async ({
     }
 });
 
+async function expectRightAligned(toggle: Locator) {
+    const alignment = await toggle.evaluate((button) => {
+        const header = button.closest('.panel-header');
+        if (!header) throw new Error('Missing sessions header');
+        return {
+            rightInset:
+                header.getBoundingClientRect().right -
+                button.getBoundingClientRect().right,
+            paddingRight: parseFloat(getComputedStyle(header).paddingRight),
+        };
+    });
+    expect(
+        Math.abs(alignment.rightInset - alignment.paddingRight),
+    ).toBeLessThanOrEqual(1);
+}
+
 test('M2 saved visibility and widths survive reloads and rapid toggles', async ({
     browser,
     request,
@@ -762,6 +779,9 @@ test('M2 saved visibility and widths survive reloads and rapid toggles', async (
             if (width === 96) {
                 const header = page.locator('#sidebar-panel .panel-header');
                 await expect(header).toBeVisible();
+                await expectRightAligned(
+                    page.locator('#desktop-sidebar-toggle'),
+                );
                 await page.setViewportSize({ width: 390, height: 844 });
                 await expect(header).toBeHidden();
                 await page.setViewportSize({ width: 1440, height: 900 });
@@ -1280,16 +1300,7 @@ test('M2 responsive mouse and touch layouts preserve desktop state and keyboard 
         const desktopToggle = desktop.page.locator('#desktop-sidebar-toggle');
         const mobileToggle = desktop.page.locator('#mobile-sidebar-toggle');
         await expect(desktopToggle).toHaveText('<<');
-        const headerGap = await desktopToggle.evaluate((button) => {
-            const heading = document.querySelector('#drawer-panel-title');
-            if (!heading) throw new Error('Missing sessions heading');
-            return (
-                button.getBoundingClientRect().left -
-                heading.getBoundingClientRect().right
-            );
-        });
-        expect(headerGap).toBeGreaterThanOrEqual(0);
-        expect(headerGap).toBeLessThanOrEqual(12);
+        await expectRightAligned(desktopToggle);
         await desktopToggle.hover();
         await desktopToggle.focus();
         await expect(desktop.page.locator('#self-hud-popover')).toBeHidden();
@@ -1529,6 +1540,7 @@ test('M2 responsive mouse and touch layouts preserve desktop state and keyboard 
             'aria-expanded',
             'true',
         );
+        await expectRightAligned(touchDesktopToggle);
         expect(
             await touchDesktopToggle.evaluate((button) =>
                 button.matches(':focus-visible'),
