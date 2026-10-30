@@ -1919,7 +1919,8 @@ html[data-sync="stale"] .brand .logo {
     margin-right: 0;
 }
 .tab-overflow-dropdown .hostname-dropdown-title,
-.drawer-tabs-body .hostname-dropdown-title {
+.drawer-tabs-body .hostname-dropdown-title,
+.hostname-tabs-dropdown .hostname-dropdown-title {
     min-width: 0;
     width: auto;
     white-space: normal;
@@ -5192,6 +5193,7 @@ html[data-phi-config-page] .settings-modal {
         flex: 1 1 auto;
         overflow-y: auto;
         min-height: 0;
+        padding-right: 16px;
     }
 
     [data-panel-mode="tabs"] .drawer-tabs-toolbar {
@@ -6105,6 +6107,40 @@ html[data-phi-config-page] .settings-modal {
     font-weight: 400;
     font-style: italic;
     color: var(--text-muted);
+}
+
+@media (max-width: 768px),
+    (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
+    .session-title {
+        min-width: 0;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    .session-actions {
+        position: static;
+        transform: none;
+        align-self: flex-end;
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    .worktree-name,
+    .worktree-branch {
+        min-width: 0;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    .worktree-branch {
+        flex: 1 1 0;
+    }
+
+    .worktree-header .chevron-icon,
+    .worktree-glyph-cell,
+    .worktree-dirty-indicator {
+        flex-shrink: 0;
+    }
 }
 
 /* Sidebar page arrows: compose .btn .btn-primary and only override the
@@ -8771,7 +8807,9 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    max-height: 60vh;
+    overflow-x: hidden;
+    overflow-y: auto;
     animation: slideDown 0.15s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -8863,6 +8901,13 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 160px;
+}
+
+.hostname-tabs-dropdown .hostname-dropdown-meta {
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
 }
 
 .hostname-dropdown-marker-btn {
