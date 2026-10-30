@@ -9,8 +9,7 @@ const PAGE_URL = (offset, size = 10) =>
     `/api/sessions?coder=pi&cwd=%2Fwork%2Fdemo&limit=${size}&offset=${offset}`;
 const CACHE_KEY = (url) =>
     `phi_session_cache_v1:${encodeURIComponent(window.location.origin)}:${encodeURIComponent(url)}:`;
-const CACHE_VALUE = (data) =>
-    JSON.stringify({ v: 1, saved_at: 1, data });
+const CACHE_VALUE = (data) => JSON.stringify({ v: 1, saved_at: 1, data });
 
 function sessionsPage(from, count) {
     return Array.from({ length: count }, (_, i) => {
@@ -46,6 +45,7 @@ function makeCtx(over = {}) {
         worktreeRootGeneration: 0,
         worktreeRootOwner: { scope, coder: 'pi', workspace: '/work' },
         sessionRequests: new Map(),
+        worktreeReads: new Map(),
         sessionRefreshPromise: null,
         sessionRefreshGeneration: 0,
         launchSession: vi.fn(),
@@ -375,16 +375,15 @@ describe('sidebar session pagination', () => {
     it('recovers from corrupt cached rows by refreshing', async () => {
         const fetchMock = mockFetch(() => sessionsPage(0, 10));
         const { ctx, container, store } = makeCtx();
-        store.responses.set(
-            CACHE_KEY(PAGE_URL(0)),
-            CACHE_VALUE([null]),
-        );
+        store.responses.set(CACHE_KEY(PAGE_URL(0)), CACHE_VALUE([null]));
 
         await ctx.loadWorktreeSessions('/work/demo', container);
 
         expect(fetchMock).toHaveBeenCalledTimes(1);
         expect(rows(container)).toHaveLength(10);
-        expect(store.responses.get(CACHE_KEY(PAGE_URL(0)))).toContain('session-0');
+        expect(store.responses.get(CACHE_KEY(PAGE_URL(0)))).toContain(
+            'session-0',
+        );
     });
 
     it('shows one inline note for repeated page failures', async () => {

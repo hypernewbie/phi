@@ -912,7 +912,8 @@ html[data-sync="stale"] .brand .logo {
     overflow-wrap: anywhere;
 }
 
-.session-refresh-status:empty {
+.session-refresh-status:empty,
+#refresh-sessions-btn[hidden] {
     display: none;
 }
 

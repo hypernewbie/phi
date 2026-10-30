@@ -27,6 +27,7 @@ function makeCtx(over = {}) {
         worktreeRootGeneration: 0,
         worktreeRootOwner: null,
         sessionRequests: new Map(),
+        worktreeReads: new Map(),
         sessionRefreshPromise: null,
         sessionRefreshGeneration: 0,
         sessionListPageSize: 10,
@@ -238,7 +239,8 @@ describe('loadWorktrees — section opening under slow state saves', () => {
         const store = { responses: new Map() };
         ctx.app.scope = scope;
         ctx.app.getActiveStore = () => store;
-        ctx.loadWorktreeSessions = SessionsManager.prototype.loadWorktreeSessions;
+        ctx.loadWorktreeSessions =
+            SessionsManager.prototype.loadWorktreeSessions;
         ctx.saveWorktreeState = SessionsManager.prototype.saveWorktreeState;
         store.responses.set(
             FEATURE_CACHE_KEY(SESSION_URL('/ws/target')),
@@ -263,9 +265,7 @@ describe('loadWorktrees — section opening under slow state saves', () => {
         const saveGate = new Promise((resolve) => (releaseSave = resolve));
         const listGate = new Promise((resolve) => (releaseList = resolve));
         const fetchMock = vi.fn((url) =>
-            String(url) === '/api/config/worktree-state'
-                ? saveGate
-                : listGate,
+            String(url) === '/api/config/worktree-state' ? saveGate : listGate,
         );
         vi.stubGlobal('fetch', fetchMock);
         const { ctx } = setupCollapsedTarget();
@@ -343,7 +343,9 @@ describe('loadWorktrees — section opening under slow state saves', () => {
             '[data-worktree-path="/ws/target"] .worktree-sessions-container',
         );
         await expect(
-            ctx.loadWorktreeSessions('/ws/target', target, 0, { refresh: true }),
+            ctx.loadWorktreeSessions('/ws/target', target, 0, {
+                refresh: true,
+            }),
         ).resolves.toBe('failed');
 
         let parsed = false;

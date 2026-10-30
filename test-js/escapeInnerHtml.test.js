@@ -153,6 +153,7 @@ function makeSessionsContext() {
         worktreeRootGeneration: 0,
         worktreeRootOwner: { scope, coder: 'claude', workspace: '/ws' },
         sessionRequests: new Map(),
+        worktreeReads: new Map(),
     });
 }
 

@@ -989,21 +989,17 @@ export class App {
         }
         this.sessionsManager?.invalidateFeatureCache?.(profileId);
         backendStores.delete(profileId);
-        if (typeof localStorage === 'undefined') return true;
-        const suffix = `:${profileId}`;
-        const keysToRemove = [];
-        for (let i = 0; i < localStorage.length; i++) {
-            const k = localStorage.key(i);
-            if (
-                k &&
-                !k.startsWith('phi_session_cache_v1:') &&
-                k.endsWith(suffix)
-            ) {
-                keysToRemove.push(k);
+        try {
+            if (typeof localStorage === 'undefined') return true;
+            const suffix = `:${profileId}`;
+            const keysToRemove = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && !k.startsWith('phi_session_cache_v1:') && k.endsWith(suffix)) keysToRemove.push(k);
             }
-        }
-        for (const k of keysToRemove) {
-            localStorage.removeItem(k);
+            for (const k of keysToRemove) localStorage.removeItem(k);
+        } catch {
+            console.warn('[backend] Browser storage cleanup was not confirmed.');
         }
         return true;
     }

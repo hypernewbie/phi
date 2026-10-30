@@ -30,6 +30,7 @@ function context(activeCoder, container) {
         sessionListPageSize: 10,
         sessionList,
         sessionRequests: new Map(),
+        worktreeReads: new Map(),
         worktreeRootGeneration: 0,
         worktreeRootOwner: { scope, coder: activeCoder, workspace: '/work' },
         app: { tabManager, scope, getActiveStore: () => store },

@@ -163,7 +163,17 @@ describe('default coder UI parity', () => {
         // A stale preference written by the registry release must not
         // override the original OpenCode-on-reload behavior.
         localStorage.setItem('phi_active_coder', 'claude');
-        const sidebar = { activeCoder: 'opencode', loadSessions: vi.fn() };
+        const sidebar = Object.assign(
+            Object.create(SessionsManager.prototype),
+            {
+                activeCoder: 'opencode',
+                loadSessions: vi.fn(),
+                sessionRequests: new Map(),
+                worktreeReads: new Map(),
+                sessionRefreshGeneration: 0,
+                sessionRefreshPromise: null,
+            },
+        );
         SessionsManager.prototype.renderCoderTabs.call(sidebar);
         SessionsManager.prototype.renderQuickLaunchButtons.call(sidebar);
         expectBuiltInSidebar();
@@ -197,7 +207,14 @@ describe('default coder UI parity', () => {
     it('delegates exactly one click to static and rebuilt quick-launch buttons', () => {
         document.body.innerHTML = `${staticSidebar}${staticQuickLaunch}`;
         const button = document.createElement('button');
-        const ctx = {
+        const sessionList = document.createElement('div');
+        document.body.appendChild(sessionList);
+        const ctx = Object.assign(Object.create(SessionsManager.prototype), {
+            sessionList,
+            sessionRequests: new Map(),
+            worktreeReads: new Map(),
+            sessionRefreshGeneration: 0,
+            sessionRefreshPromise: null,
             newSessionBtn: button,
             workspaceSelect: document.createElement('select'),
             addWorkspaceBtn: button,
@@ -212,7 +229,7 @@ describe('default coder UI parity', () => {
             spawnNewSession: vi.fn(),
             activeCoder: 'opencode',
             quickLaunchReady: false,
-        };
+        });
         SessionsManager.prototype.setupEventListeners.call(ctx);
         document.querySelector('.coder-tab[data-coder="claude"]').click();
         expect(ctx.activeCoder).toBe('claude');

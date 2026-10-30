@@ -6,6 +6,7 @@ import {
     type BrowserContext,
     type Locator,
     type Page,
+    type Request,
     type Route,
 } from '@playwright/test';
 import { startPhi } from './_server.js';
@@ -64,10 +65,14 @@ async function startFixture() {
     let cwd = '';
     let home = '';
     let nextTime = Date.UTC(2026, 9, 1, 12);
-    const pi = (id: string, title: string) =>
-        writePiSession(home, cwd, id, title, (nextTime += 1_000));
-    const claude = (id: string, title: string) =>
-        writeClaudeSession(home, cwd, id, title, (nextTime += 1_000));
+    const pi = (id: string, title: string) => {
+        nextTime += 1_000;
+        writePiSession(home, cwd, id, title, nextTime);
+    };
+    const claude = (id: string, title: string) => {
+        nextTime += 1_000;
+        writeClaudeSession(home, cwd, id, title, nextTime);
+    };
     const phi = await startPhi({
         setup(dir) {
             cwd = realpathSync(dir);
@@ -102,8 +107,8 @@ async function startFixture() {
 }
 
 async function activate(locator: Locator, touch: boolean): Promise<void> {
-    if (touch) await locator.tap();
-    else await locator.click();
+    if (touch) await locator.tap({ timeout: 15_000 });
+    else await locator.click({ timeout: 15_000 });
 }
 
 async function ensureActiveSection(page: Page, cwd: string, touch: boolean) {
@@ -127,6 +132,18 @@ function collectBrowserErrors(
     injected503: Map<string, number>,
 ): string[] {
     const errors: string[] = [];
+    const successfulEmptyThemeSaves = new WeakSet<Request>();
+    page.on('response', (response) => {
+        const request = response.request();
+        if (
+            response.status() === 200 &&
+            response.headers()['content-length'] === '0' &&
+            request.method() === 'POST' &&
+            new URL(request.url()).pathname === '/api/config/theme'
+        ) {
+            successfulEmptyThemeSaves.add(request);
+        }
+    });
     page.on('pageerror', (error) => errors.push(`page: ${error.message}`));
     page.on('console', (message) => {
         if (message.type() !== 'error') return;
@@ -142,6 +159,12 @@ function collectBrowserErrors(
         errors.push(`console: ${url} ${message.text()}`);
     });
     page.on('requestfailed', (request) => {
+        // Chromium can flag a successful empty POST body as aborted after headers.
+        if (
+            successfulEmptyThemeSaves.has(request) &&
+            request.failure()?.errorText === 'net::ERR_ABORTED'
+        )
+            return;
         errors.push(
             `request: ${request.method()} ${request.url()} ${request.failure()?.errorText}`,
         );
@@ -266,6 +289,7 @@ for (const mode of ['desktop', 'touch'] as const) {
         let context: BrowserContext | null = null;
         let gates: Awaited<ReturnType<typeof installSessionGates>> | null =
             null;
+        let releaseWorktrees: (() => void) | undefined;
         try {
             context = await browser.newContext({
                 viewport: touch
@@ -426,19 +450,275 @@ for (const mode of ['desktop', 'touch'] as const) {
                 `Claude ${mode} refresh`,
             );
             await expect(status).toHaveText('Sessions refreshed.');
+            const editSideEffects: string[] = [];
+            page.on('request', (request) => {
+                if (
+                    request.method() === 'POST' &&
+                    ['/api/session-meta', '/api/terminals'].includes(
+                        new URL(request.url()).pathname,
+                    )
+                ) {
+                    editSideEffects.push(request.url());
+                }
+            });
+            // The legacy hover-only rename opener is inaccessible to touch.
+            // Only edit setup uses a DOM click; refresh itself stays a real activation.
+            await claudeRows
+                .first()
+                .locator('.rename-btn')
+                .evaluate((button: HTMLButtonElement) => button.click());
+            const rename = claudeSection.locator('.rename-input');
+            await rename.fill('Unsaved rename');
+            await activate(refresh, touch);
+            await expect(status).toHaveText(
+                'Finish or cancel the edit, then refresh.',
+            );
+            await expect(rename).toHaveValue('Unsaved rename');
+            if (!touch) {
+                await refresh.focus();
+                await page.keyboard.press('Enter');
+                await expect(rename).toHaveValue('Unsaved rename');
+            }
+            let holdWorktrees = true;
+            let worktreesStarted!: () => void;
+            const worktreesHeld = new Promise<void>((resolve) => {
+                worktreesStarted = resolve;
+            });
+            await page.route('**/api/git/worktrees?*', async (route) => {
+                if (holdWorktrees) {
+                    holdWorktrees = false;
+                    worktreesStarted();
+                    await new Promise<void>((resolve) => {
+                        releaseWorktrees = resolve;
+                    });
+                }
+                await route.continue();
+            });
+            await rename.press('Escape');
+            await worktreesHeld;
+            await expect(rename).toHaveCount(0);
+            await expect(claudeRows.first()).toContainText(
+                `Claude ${mode} refresh`,
+            );
+            await claudeRows
+                .first()
+                .dispatchEvent('contextmenu', { clientX: 80, clientY: 250 });
+            // Legacy context menus can be offscreen and bubble an outside click
+            // that closes the touch drawer. Only this edit opener bypasses it.
+            await page
+                .getByText('⚙ Launch with args…', { exact: true })
+                .evaluate((item) =>
+                    item.dispatchEvent(
+                        new MouseEvent('click', { bubbles: false }),
+                    ),
+                );
+            const args = claudeSection.locator('.args-input');
+            await args.fill('--unsaved-argument');
+            const worktreesFinished = page.waitForEvent(
+                'requestfinished',
+                (request) =>
+                    new URL(request.url()).pathname === '/api/git/worktrees',
+            );
+            releaseWorktrees?.();
+            await worktreesFinished;
+            await expect(args).toHaveValue('--unsaved-argument');
+            await activate(refresh, touch);
+            await expect(status).toHaveText(
+                'Finish or cancel the edit, then refresh.',
+            );
+            await expect(args).toHaveValue('--unsaved-argument');
+            await args.press('Escape');
+            await expect(args).toHaveCount(0);
+            expect(editSideEffects).toEqual([]);
+            await activate(refresh, touch);
+            await expect(status).toHaveText('Sessions refreshed.');
             if (touch)
                 await expect(page.locator('#sidebar-panel')).toHaveClass(
                     /drawer-open/,
                 );
             await assertNoHorizontalOverflow(page);
+            if (!touch) {
+                for (const color of ['amber', 'purple']) {
+                    await page
+                        .locator('#header-config-pill .pill-label')
+                        .click();
+                    const savedTheme = page.waitForResponse(
+                        (response) =>
+                            new URL(response.url()).pathname ===
+                                '/api/config/theme' &&
+                            response.request().method() === 'POST',
+                    );
+                    await page
+                        .locator(`.settings-swatch[data-color="${color}"]`)
+                        .click();
+                    expect((await savedTheme).ok()).toBe(true);
+                    await expect(page.locator('html')).toHaveAttribute(
+                        'data-theme-color',
+                        color,
+                    );
+                    await page
+                        .locator('.settings-overlay .modal-close-btn')
+                        .click();
+                    await refresh.click();
+                    await expect(status).toHaveText('Sessions refreshed.');
+                    await assertNoHorizontalOverflow(page);
+                }
+            }
             expect(page.url()).toBe(pageURL);
             expect(navigations).toEqual([]);
             expect(errors).toEqual([]);
         } finally {
+            releaseWorktrees?.();
             gates?.releaseHeldSession();
             gates?.releaseStateSaves();
-            if (context) await context.close();
-            await phi.stop();
+            try {
+                if (context) {
+                    await context.unrouteAll({ behavior: 'wait' });
+                    await context.close();
+                }
+            } finally {
+                await phi.stop();
+            }
+        }
+    });
+}
+
+for (const mode of ['desktop', 'touch'] as const) {
+    test(`restores saved Pi pages on ${mode} while list requests fail`, async ({
+        browser,
+    }) => {
+        test.setTimeout(300_000);
+        const touch = mode === 'touch';
+        const fixture = await startFixture();
+        const { phi, cwd } = fixture;
+        let context: BrowserContext | undefined;
+        try {
+            for (let i = 0; i < 11; i++)
+                fixture.pi(`saved-${i}`, `Saved session ${i}`);
+            context = await browser.newContext({
+                viewport: touch
+                    ? { width: 390, height: 844 }
+                    : { width: 1440, height: 900 },
+                isMobile: touch,
+                hasTouch: touch,
+            });
+            const page = await context.newPage();
+            await page.route('**/api/update/status', (route) =>
+                route.fulfill({
+                    json: { current: 'dev', update_available: false },
+                }),
+            );
+            const injected503 = new Map<string, number>();
+            const errors = collectBrowserErrors(page, injected503);
+            const openPi = async () => {
+                if (touch) {
+                    await page.locator('#mobile-sidebar-toggle').tap();
+                    await page.locator('#drawer-open-sessions').tap();
+                }
+                await activate(
+                    page.locator('#coder-selector .coder-tab[data-coder="pi"]'),
+                    touch,
+                );
+                return await ensureActiveSection(page, cwd, touch);
+            };
+            await page.goto(phi.url);
+            let section = await openPi();
+            await expect(section.locator('.session-item')).toHaveCount(10);
+            await activate(
+                section.locator('.session-page[data-page="1"]'),
+                touch,
+            );
+            await expect(section.locator('.session-page-label')).toHaveText(
+                'Page 2',
+            );
+            const savedTitles = await section
+                .locator('.session-title')
+                .allTextContents();
+            expect(savedTitles).toHaveLength(2);
+            const pageTwoURL = `/api/sessions?coder=pi&cwd=${encodeURIComponent(cwd)}&limit=10&offset=10`;
+            const pageTwoKey = `phi_session_cache_v1:${encodeURIComponent(phi.url)}:${encodeURIComponent(pageTwoURL)}:`;
+            await page.waitForFunction(
+                (key) => localStorage.getItem(key) !== null,
+                pageTwoKey,
+                { timeout: 15_000 },
+            );
+            const blockList = async (route: Route) => {
+                const url = route.request().url();
+                injected503.set(url, (injected503.get(url) ?? 0) + 1);
+                await route.fulfill({ status: 503, body: 'fixture offline' });
+            };
+            await page.route('**/api/sessions?*', blockList);
+            await page.route('**/api/git/worktrees?*', blockList);
+            // Auth/bootstrap remain online. Only the two list endpoints fail.
+            await page.reload();
+            // Background revalidation finishes while the touch drawer is still closed.
+            await expect(
+                page.locator('#session-list > .error-sessions'),
+            ).toBeAttached();
+            section = await openPi();
+            await expect(section.locator('.session-item')).toHaveCount(10);
+            await activate(
+                section.locator('.session-page[data-page="1"]'),
+                touch,
+            );
+            await expect(section.locator('.session-page-label')).toHaveText(
+                'Page 2',
+            );
+            await expect(section.locator('.session-title')).toHaveText(
+                savedTitles,
+            );
+            await expect(section.locator('.session-cache-note')).toContainText(
+                'out of date',
+            );
+            await expect(section.locator('.error-sessions')).toBeVisible();
+            await activate(page.locator('#refresh-sessions-btn'), touch);
+            await expect(page.locator('#session-refresh-status')).toContainText(
+                'Refresh failed',
+            );
+            await expect(section.locator('.session-title')).toHaveText(
+                savedTitles,
+            );
+            await expect(section.locator('.session-page-label')).toHaveText(
+                'Page 2',
+            );
+            await page.unroute('**/api/sessions?*', blockList);
+            fixture.pi('after-reconnect', 'Pi after reconnect');
+            await activate(page.locator('#refresh-sessions-btn'), touch);
+            await expect(section.locator('.session-title').first()).toHaveText(
+                'Pi after reconnect',
+            );
+            await expect(section.locator('.session-page-label')).toHaveText(
+                'Page 1',
+            );
+            await expect(section.locator('.session-cache-note')).toHaveCount(0);
+            await page.route('**/api/sessions?*', blockList);
+            await activate(
+                section.locator('.session-page[data-page="1"]'),
+                touch,
+            );
+            await expect(section.locator('.session-page-label')).toHaveText(
+                'Page 2',
+            );
+            await expect(section.locator('.session-title')).toHaveText(
+                savedTitles,
+            );
+            await expect(section.locator('.session-cache-note')).toContainText(
+                'out of date',
+            );
+            await expect(section.locator('.error-sessions')).toBeVisible();
+            await assertNoHorizontalOverflow(page);
+            if (touch)
+                await expect(page.locator('#sidebar-panel')).toHaveClass(
+                    /drawer-open/,
+                );
+            expect(errors).toEqual([]);
+        } finally {
+            try {
+                await context?.unrouteAll({ behavior: 'wait' });
+                await context?.close();
+            } finally {
+                await phi.stop();
+            }
         }
     });
 }
