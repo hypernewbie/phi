@@ -6,12 +6,14 @@ import {
     LogicalState,
     type PhiToPi,
     PiToPhi,
+    ReloadDispatchOutcome,
     RunOutcome,
     type StateSnapshot,
 } from './gen/bridge.js';
 import { LIFECYCLE_HEADROOM_BYTES } from './protocol.js';
 import { SHUTDOWN_DRAIN_MS } from './protocol.js';
 import { CAPABILITY_COMPACT, CAPABILITY_CONTEXT } from './protocol.js';
+import { CAPABILITY_RELOAD } from './protocol.js';
 import { CAPABILITY_HISTORY, CAPABILITY_LIFECYCLE } from './protocol.js';
 import { CAPABILITY_MODELS } from './protocol.js';
 import { CAPABILITY_SKILLS } from './protocol.js';
@@ -32,6 +34,11 @@ import {
     type RuntimeChannel,
     freshCompactLatch,
 } from './runtime.js';
+import {
+    captureNativeReloadBaseline,
+    freshReloadLatch,
+    type ReloadLatchState,
+} from './native-reload.js';
 import type {
     PiModelView,
     PiRegistryView,
@@ -64,6 +71,7 @@ interface MockChannel extends RuntimeChannel {
     nonfatalSends: PiToPhi[];
     closed: number;
     drainCalls: number[];
+    events: string[];
     hooks: ChannelHooks | null;
     sendResult: boolean;
     nonfatalResult: boolean;
@@ -77,6 +85,7 @@ function mockChannel(): MockChannel {
         nonfatalSends: [],
         closed: 0,
         drainCalls: [],
+        events: [],
         hooks: null,
         sendResult: true,
         nonfatalResult: true,
@@ -100,6 +109,9 @@ function mockChannel(): MockChannel {
         },
         sendNonfatal: (msg: PiToPhi) => {
             m.nonfatalSends.push(msg);
+            m.events.push(
+                msg.payload?.$case === 'reloadAck' ? 'reload-ack' : 'send',
+            );
             return m.nonfatalResult;
         },
         close: () => {
@@ -109,6 +121,7 @@ function mockChannel(): MockChannel {
             // The mock has no async queue: sends land
             // synchronously, so the drain is instant and closes.
             m.drainCalls.push(timeoutMs);
+            m.events.push('drain');
             m.closed += 1;
             return Promise.resolve();
         },
@@ -3644,6 +3657,433 @@ describe('Runtime skill invocations', () => {
         ch.hooks!.onMessage(invokeSkillRequest('i6', 'demo-skill'));
         expect(ch.nonfatalSends).toHaveLength(0);
         expect(ch.closed).toBe(0);
+        rt.shutdown();
+    });
+});
+
+class StockEditor {
+    history: string[] = [];
+    calls: string[] = [];
+    onSubmit = async (text: string): Promise<void> => {
+        this.calls.push(text);
+    };
+}
+// The adapter matches Pi's stock editor constructor name.
+Object.defineProperty(StockEditor, 'name', { value: 'CustomEditor' });
+
+function reloadUi(holder: { current: unknown }): unknown {
+    return {
+        getEditorComponent: () => undefined,
+        setWidget: (
+            _key: string,
+            factory: ((tui: unknown, theme: unknown) => unknown) | undefined,
+        ) => {
+            if (factory !== undefined) {
+                factory({ getFocusedComponent: () => holder.current }, {});
+            }
+        },
+    };
+}
+
+interface ReloadFixture {
+    ch: MockChannel;
+    rt: Runtime;
+    latch: ReloadLatchState;
+    compact: CompactLatchState;
+    holder: { current: unknown };
+    editor: StockEditor;
+}
+
+async function startedReload(
+    over: Partial<PiContextView> = {},
+    latch?: ReloadLatchState,
+    setup?: (editor: StockEditor) => void,
+): Promise<ReloadFixture> {
+    const editor = new StockEditor();
+    setup?.(editor);
+    const holder: { current: unknown } = { current: editor };
+    const l = latch ?? freshReloadLatch();
+    const compact = freshCompactLatch();
+    const startCtx = telemetryCtx({ ui: reloadUi(holder), ...over });
+    // Mirror the extension: capture the baseline at session_start,
+    // before the runtime starts.
+    captureNativeReloadBaseline(startCtx, l);
+    const ch = mockChannel();
+    const rt = new Runtime({
+        creds: CREDS,
+        generation: 1n,
+        compactState: compact,
+        reloadState: l,
+        makeChannel: wired(ch),
+    });
+    rt.start(startCtx);
+    await sleep(10);
+    return { ch, rt, latch: l, compact, holder, editor };
+}
+
+function reloadRequest(
+    id: string,
+    over: {
+        session?: string;
+        leaf?: string;
+        model?: { provider: string; model: string } | null;
+        run?: bigint;
+        context?: bigint;
+        noCounters?: boolean;
+    } = {},
+): PhiToPi {
+    return {
+        paneId: 'pane',
+        processId: 'proc',
+        runtimeGeneration: 1n,
+        payload: {
+            $case: 'reloadRequest',
+            value: {
+                requestId: id,
+                expectedSessionId: over.session ?? 'sess',
+                expectedLeafId: over.leaf ?? 'leaf',
+                expectedModel:
+                    over.model === null
+                        ? undefined
+                        : (over.model ?? { provider: 'p', model: 'm' }),
+                ...(over.noCounters
+                    ? {}
+                    : {
+                          expectedRunId: over.run ?? 0n,
+                          expectedContextRevision: over.context ?? 0n,
+                      }),
+            },
+        },
+    };
+}
+
+function reloadAckOf(msg: PiToPhi): {
+    requestId: string;
+    outcome: ReloadDispatchOutcome;
+    reason: string;
+} {
+    const payload = payloadOf(msg);
+    if (payload.$case !== 'reloadAck') {
+        throw new Error(`not a reload ack: ${payload.$case}`);
+    }
+    return payload.value;
+}
+
+function reloadAcks(ch: MockChannel): Array<{
+    requestId: string;
+    outcome: ReloadDispatchOutcome;
+    reason: string;
+}> {
+    return ch.nonfatalSends
+        .filter((m) => payloadOf(m).$case === 'reloadAck')
+        .map(reloadAckOf);
+}
+
+function reloadReadinessOf(
+    msg: PiToPhi,
+): NonNullable<StateSnapshot['reloadReadiness']> {
+    const readiness = snapshotOf(msg).reloadReadiness;
+    if (!readiness) throw new Error('missing reload readiness');
+    return readiness;
+}
+
+function lastSnapshot(ch: MockChannel): PiToPhi {
+    const snaps = ch.sends.filter(
+        (m) => payloadOf(m).$case === 'stateSnapshot',
+    );
+    const last = snaps[snaps.length - 1];
+    if (!last) throw new Error('no snapshot sent');
+    return last;
+}
+
+describe('Runtime reload dispatch', () => {
+    it('keeps the reload outcome vocabulary stable', () => {
+        expect(ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_UNSPECIFIED).toBe(
+            0,
+        );
+        expect(ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_DISPATCHED).toBe(
+            1,
+        );
+        expect(ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_REFUSED).toBe(2);
+    });
+
+    it('advertises reload with the idle pair, without the compact API', async () => {
+        const { ch, rt } = await startedReload({ compact: undefined });
+        const hello = ch.hellos[0]!;
+        const payload = payloadOf(hello);
+        if (payload.$case !== 'hello') throw new Error('no hello sent');
+        expect(payload.value.capabilities).toContain(CAPABILITY_RELOAD);
+        expect(payload.value.capabilities).not.toContain(CAPABILITY_COMPACT);
+        rt.shutdown();
+    });
+
+    it('omits reload without a captured baseline', async () => {
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            reloadState: freshReloadLatch(),
+            makeChannel: wired(ch),
+        });
+        rt.start(telemetryCtx());
+        await sleep(10);
+        const payload = payloadOf(ch.hellos[0]!);
+        if (payload.$case !== 'hello') throw new Error('no hello sent');
+        expect(payload.value.capabilities).not.toContain(CAPABILITY_RELOAD);
+        rt.shutdown();
+    });
+
+    it('dispatches idle, acks entry, and releases on settle', async () => {
+        const { ch, rt, latch, editor } = await startedReload();
+        ch.hooks!.onMessage(reloadRequest('1'));
+        expect(editor.calls).toEqual(['/reload']);
+        expect(latch.pending?.requestId).toBe('1');
+        expect(reloadAcks(ch)).toEqual([
+            {
+                requestId: '1',
+                outcome:
+                    ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_DISPATCHED,
+                reason: '',
+            },
+        ]);
+        // A pending readiness frame precedes the receipt.
+        const frames = ch.nonfatalSends.filter(
+            (m) => payloadOf(m).$case === 'stateSnapshot',
+        );
+        expect(
+            reloadReadinessOf(frames[frames.length - 1]!).reloadPending,
+        ).toBe(true);
+        await sleep(10);
+        expect(latch.pending).toBeNull();
+        // Release publishes readiness, never a second receipt.
+        expect(reloadAcks(ch)).toHaveLength(1);
+        expect(reloadReadinessOf(lastSnapshot(ch)).reloadPending).toBe(false);
+        expect(reloadReadinessOf(lastSnapshot(ch)).highWater).toBe(1n);
+        rt.shutdown();
+    });
+
+    it('accepts a new empty session with a null leaf', async () => {
+        const { ch, rt, editor } = await startedReload({
+            sessionManager: {
+                getSessionId: () => 'sess',
+                getLeafId: () => null,
+            },
+        });
+        ch.hooks!.onMessage(reloadRequest('1', { leaf: '' }));
+        expect(editor.calls).toEqual(['/reload']);
+        expect(reloadAcks(ch)).toEqual([
+            {
+                requestId: '1',
+                outcome:
+                    ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_DISPATCHED,
+                reason: '',
+            },
+        ]);
+        rt.shutdown();
+    });
+
+    it('refuses stale identity and context fences', async () => {
+        const { ch, rt, editor } = await startedReload();
+        const cases: Array<[string, Parameters<typeof reloadRequest>[1]]> = [
+            ['1', { session: 'other' }],
+            ['2', { leaf: 'other' }],
+            ['3', { model: { provider: 'p', model: 'other' } }],
+            ['4', { run: 7n }],
+            ['5', { context: 7n }],
+            ['6', { noCounters: true }],
+        ];
+        for (const [id, over] of cases)
+            ch.hooks!.onMessage(reloadRequest(id, over));
+        expect(reloadAcks(ch).map((a) => a.reason)).toEqual([
+            'stale',
+            'stale',
+            'stale',
+            'stale',
+            'stale',
+            'stale',
+        ]);
+        expect(editor.calls).toEqual([]);
+        rt.shutdown();
+    });
+
+    it('refuses busy, queued, and compaction-active states', async () => {
+        const { ch, rt, editor } = await startedReload();
+        rt.onSessionStart(telemetryCtx({ isIdle: () => false }));
+        ch.hooks!.onMessage(reloadRequest('1'));
+        rt.onSessionStart(telemetryCtx({ hasPendingMessages: () => true }));
+        ch.hooks!.onMessage(reloadRequest('2'));
+        rt.onSessionStart(telemetryCtx());
+        rt.onCompactStart(telemetryCtx());
+        ch.hooks!.onMessage(reloadRequest('3', { context: 1n }));
+        expect(reloadAcks(ch).map((a) => a.reason)).toEqual([
+            'busy',
+            'queued',
+            'compaction-active',
+        ]);
+        expect(editor.calls).toEqual([]);
+        rt.shutdown();
+    });
+
+    it('refuses while a reload is pending, then dispatches after release', async () => {
+        const { ch, rt, editor } = await startedReload();
+        ch.hooks!.onMessage(reloadRequest('1'));
+        ch.hooks!.onMessage(reloadRequest('2'));
+        expect(reloadAcks(ch).map((a) => a.reason)).toEqual(['', 'pending']);
+        await sleep(10);
+        ch.hooks!.onMessage(reloadRequest('3'));
+        expect(reloadAcks(ch).map((a) => a.reason)).toEqual([
+            '',
+            'pending',
+            '',
+        ]);
+        expect(editor.calls).toEqual(['/reload', '/reload']);
+        rt.shutdown();
+    });
+
+    it('excludes reload and compact in both directions', async () => {
+        const { ch, rt, latch, compact, editor } = await startedReload();
+        compact.pending = {
+            requestId: 'c1',
+            runtimeId: 'other',
+            sessionId: 'sess',
+            reported: false,
+        };
+        ch.hooks!.onMessage(reloadRequest('1'));
+        expect(reloadAcks(ch).map((a) => a.reason)).toEqual(['pending']);
+        compact.pending = null;
+        ch.hooks!.onMessage(reloadRequest('2'));
+        expect(editor.calls).toEqual(['/reload']);
+        ch.hooks!.onMessage(compactRequest('9'));
+        expect(results(ch).map((r) => r.reason)).toEqual(['pending']);
+        expect(latch.pending?.requestId).toBe('2');
+        rt.shutdown();
+    });
+
+    it('consumes refused IDs and drops malformed ones', async () => {
+        const { ch, rt, editor } = await startedReload();
+        ch.hooks!.onMessage(reloadRequest('1', { session: 'other' }));
+        ch.hooks!.onMessage(reloadRequest('1'));
+        ch.hooks!.onMessage(reloadRequest('not-an-id'));
+        expect(reloadAcks(ch).map((a) => a.reason)).toEqual([
+            'stale',
+            'duplicate',
+        ]);
+        expect(editor.calls).toEqual([]);
+        rt.shutdown();
+    });
+
+    it('refuses on selector focus and dispatches after restoration', async () => {
+        const { ch, rt, latch, holder, editor } = await startedReload();
+        holder.current = {
+            onSubmit: async (text: string) => {
+                editor.calls.push(`selector:${text}`);
+            },
+        };
+        ch.hooks!.onMessage(reloadRequest('1'));
+        expect(reloadAcks(ch).map((a) => a.reason)).toEqual(['unavailable']);
+        expect(editor.calls).toEqual([]);
+        expect(latch.pending).toBeNull();
+        holder.current = editor;
+        ch.hooks!.onMessage(reloadRequest('2'));
+        expect(reloadAcks(ch).map((a) => a.reason)).toEqual([
+            'unavailable',
+            '',
+        ]);
+        expect(editor.calls).toEqual(['/reload']);
+        rt.shutdown();
+    });
+
+    it('tracks the context fence across message, compact, and tree edges', async () => {
+        const { ch, rt } = await startedReload();
+        const baseline = ch.nonfatalSends.length;
+        rt.onMessageStart(telemetryCtx(), 'assistant');
+        expect(ch.nonfatalSends.length).toBe(baseline);
+        rt.onMessageStart(telemetryCtx(), 'user');
+        const userFrame = ch.nonfatalSends[ch.nonfatalSends.length - 1]!;
+        expect(reloadReadinessOf(userFrame).contextRevision).toBe(1n);
+        rt.onCompactStart(telemetryCtx());
+        rt.onSessionTree(telemetryCtx());
+        expect(reloadReadinessOf(lastSnapshot(ch)).contextRevision).toBe(3n);
+        rt.shutdown();
+    });
+
+    it('publishes explicit zero counters and absent high-water', async () => {
+        const { ch, rt } = await startedReload();
+        const payload = payloadOf(ch.hellos[0]!);
+        if (payload.$case !== 'hello') throw new Error('no hello sent');
+        const readiness = payload.value.currentState?.reloadReadiness;
+        expect(readiness?.runId).toBe(0n);
+        expect(readiness?.contextRevision).toBe(0n);
+        expect(readiness?.highWater).toBeUndefined();
+        rt.shutdown();
+    });
+
+    it('releases through the replacement runtime after reload', async () => {
+        let gate: (() => void) | null = null;
+        const first = await startedReload({}, undefined, (editor) => {
+            editor.onSubmit = async (text: string) => {
+                editor.calls.push(text);
+                await new Promise<void>((resolve) => {
+                    gate = resolve;
+                });
+            };
+        });
+        first.ch.hooks!.onMessage(reloadRequest('1'));
+        expect(first.latch.pending?.requestId).toBe('1');
+        const ch2 = mockChannel();
+        const rt2 = new Runtime({
+            creds: CREDS,
+            generation: 2n,
+            compactState: freshCompactLatch(),
+            reloadState: first.latch,
+            makeChannel: wired(ch2),
+        });
+        rt2.start(telemetryCtx());
+        await sleep(10);
+        gate!();
+        await sleep(10);
+        expect(first.latch.pending).toBeNull();
+        expect(reloadAcks(first.ch)).toHaveLength(1);
+        expect(reloadReadinessOf(lastSnapshot(ch2)).reloadPending).toBe(false);
+        expect(reloadReadinessOf(lastSnapshot(ch2)).highWater).toBe(1n);
+        first.rt.shutdown();
+        rt2.shutdown();
+    });
+
+    it('queues the receipt before draining on reentrant shutdown', async () => {
+        let hook: (() => void) | null = null;
+        const { ch, rt, latch, editor } = await startedReload(
+            {},
+            undefined,
+            (e) => {
+                e.onSubmit = async (text: string) => {
+                    e.calls.push(text);
+                    hook?.();
+                };
+            },
+        );
+        hook = () => rt.shutdown();
+        ch.hooks!.onMessage(reloadRequest('1'));
+        // Models Pi emitting session_shutdown from inside its native
+        // callback. The receipt must enter the writer before draining.
+        expect(editor.calls).toEqual(['/reload']);
+        expect(reloadAcks(ch)).toEqual([
+            {
+                requestId: '1',
+                outcome:
+                    ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_DISPATCHED,
+                reason: '',
+            },
+        ]);
+        expect(ch.events.lastIndexOf('reload-ack')).toBeGreaterThanOrEqual(0);
+        expect(ch.events.lastIndexOf('drain')).toBeGreaterThan(
+            ch.events.lastIndexOf('reload-ack'),
+        );
+        expect(ch.drainCalls).toEqual([SHUTDOWN_DRAIN_MS]);
+        expect(latch.pending?.requestId).toBe('1');
+        await sleep(10);
+        expect(latch.pending).toBeNull();
         rt.shutdown();
     });
 });

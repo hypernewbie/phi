@@ -100,6 +100,15 @@ message TerminalBridgeState {
   optional bool compact_queued = 17;
   optional bool compact_active = 18;
   optional bool compact_pending = 19;
+  optional string process_id = 20;
+  optional uint64 run_id = 21;
+  optional uint64 context_revision = 22;
+  optional bool reload_idle = 23;
+  optional bool reload_queued = 24;
+  optional bool reload_active = 25;
+  optional bool reload_compact_pending = 26;
+  optional bool reload_pending = 27;
+  optional uint64 reload_high_water = 28;
 }
 
 // TerminalSettlement reports one observed Pi run outcome.

@@ -140,7 +140,7 @@ func TestBridgeCompactTelemetryViews(t *testing.T) {
 	usage := &pibridge.ContextUsage{Tokens: 1500.5, Window: 128000, Percent: 12.5, HasTokens: true, HasWindow: true, HasPercent: true}
 	ready := &pibridge.Readiness{Idle: true}
 	b.onState("pane-1", proc, 1, floor+1, false, true, "p/m",
-		"", []string{"pi.lifecycle.v1", "pi.context.v1", "pi.compact.v1"}, usage, ready)
+		"", []string{"pi.lifecycle.v1", "pi.context.v1", "pi.compact.v1"}, usage, ready, nil)
 
 	st := b.PaneSnapshot("pane-1")
 	if st.ContextTokens == nil || *st.ContextTokens != 1500.5 || st.ContextWindow == nil || *st.ContextWindow != 128000 || st.ContextPercent == nil || *st.ContextPercent != 12.5 {
@@ -178,7 +178,7 @@ func TestBridgeCompactTelemetryViews(t *testing.T) {
 	env2, _, _ := b.Provision("pane-2", true)
 	proc2 := env2[piBridgeEnvProcess]
 	floor2, _ := b.server.PublicationRevision(proc2)
-	b.onState("pane-2", proc2, 1, floor2+1, false, true, "p/m", "", []string{"pi.lifecycle.v1"}, nil, nil)
+	b.onState("pane-2", proc2, 1, floor2+1, false, true, "p/m", "", []string{"pi.lifecycle.v1"}, nil, nil, nil)
 	stU := b.PaneSnapshot("pane-2")
 	if stU.ContextTokens != nil || stU.ContextWindow != nil || stU.ContextPercent != nil || stU.CompactIdle != nil {
 		t.Fatalf("unknown telemetry leaked %+v", stU)
@@ -188,7 +188,7 @@ func TestBridgeCompactTelemetryViews(t *testing.T) {
 		t.Fatalf("unknown telemetry serialized: %s", raw)
 	}
 	b.onState("pane-2", proc2, 1, floor2+2, false, true, "p/m", "", []string{"pi.lifecycle.v1", "pi.context.v1"},
-		&pibridge.ContextUsage{Tokens: 0, HasTokens: true}, nil)
+		&pibridge.ContextUsage{Tokens: 0, HasTokens: true}, nil, nil)
 	stZ := b.PaneSnapshot("pane-2")
 	if stZ.ContextTokens == nil || *stZ.ContextTokens != 0 || stZ.ContextWindow != nil || stZ.CompactIdle != nil {
 		t.Fatalf("zero telemetry %+v, want present zero tokens only", stZ)
@@ -196,13 +196,13 @@ func TestBridgeCompactTelemetryViews(t *testing.T) {
 
 	// A delayed older publication cannot refresh stale telemetry.
 	b.onState("pane-1", proc, 1, floor+1, false, true, "old/m", "",
-		[]string{"pi.lifecycle.v1"}, &pibridge.ContextUsage{Tokens: 1, HasTokens: true}, &pibridge.Readiness{})
+		[]string{"pi.lifecycle.v1"}, &pibridge.ContextUsage{Tokens: 1, HasTokens: true}, &pibridge.Readiness{}, nil)
 	stOld := b.PaneSnapshot("pane-1")
 	if *stOld.ContextTokens != 1500.5 || stOld.Model != "p/m" || !*stOld.CompactIdle {
 		t.Fatalf("stale publication refreshed %+v", stOld)
 	}
 	// A new generation clears old context with the old state.
-	b.onState("pane-1", proc, 2, floor+2, false, false, "", "", []string{"pi.lifecycle.v1"}, nil, nil)
+	b.onState("pane-1", proc, 2, floor+2, false, false, "", "", []string{"pi.lifecycle.v1"}, nil, nil, nil)
 	stGen := b.PaneSnapshot("pane-1")
 	if stGen.ContextTokens != nil || stGen.CompactIdle != nil || stGen.Model != "" {
 		t.Fatalf("new generation kept %+v", stGen)

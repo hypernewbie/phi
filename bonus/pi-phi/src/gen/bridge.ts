@@ -74,6 +74,13 @@ export enum CompactOutcome {
   UNRECOGNIZED = -1,
 }
 
+export enum ReloadDispatchOutcome {
+  RELOAD_DISPATCH_OUTCOME_UNSPECIFIED = 0,
+  RELOAD_DISPATCH_OUTCOME_DISPATCHED = 1,
+  RELOAD_DISPATCH_OUTCOME_REFUSED = 2,
+  UNRECOGNIZED = -1,
+}
+
 export enum ProtocolErrorCode {
   PROTOCOL_ERROR_UNSPECIFIED = 0,
   PROTOCOL_ERROR_UNSUPPORTED_VERSION = 1,
@@ -105,6 +112,7 @@ export interface PiToPhi {
     | { $case: "compactResult"; value: CompactResult }
     | { $case: "skillsResponse"; value: SkillsResponse }
     | { $case: "invokeSkillAck"; value: InvokeSkillAck }
+    | { $case: "reloadAck"; value: ReloadAck }
     | undefined;
 }
 
@@ -124,6 +132,7 @@ export interface PhiToPi {
     | { $case: "compactRequest"; value: CompactRequest }
     | { $case: "skillsRequest"; value: SkillsRequest }
     | { $case: "invokeSkillRequest"; value: InvokeSkillRequest }
+    | { $case: "reloadRequest"; value: ReloadRequest }
     | undefined;
 }
 
@@ -213,7 +222,14 @@ export interface StateSnapshot {
    * isIdle/hasPendingMessages plus local compaction tracking.
    * Absent when the pi.compact.v1 APIs are unavailable.
    */
-  compactReadiness: CompactReadiness | undefined;
+  compactReadiness:
+    | CompactReadiness
+    | undefined;
+  /**
+   * Optional native Reload readiness. Missing counters mean unknown;
+   * they are never inferred to be zero.
+   */
+  reloadReadiness: ReloadReadiness | undefined;
 }
 
 /**
@@ -442,6 +458,45 @@ export interface CompactResult {
 }
 
 /**
+ * ReloadRequest asks Pi's native interactive editor to run its fixed
+ * /reload command. Identity/readiness are rechecked immediately before
+ * callback entry. A lost receipt means unknown, never permission to retry.
+ */
+export interface ReloadRequest {
+  requestId: string;
+  expectedSessionId: string;
+  expectedLeafId: string;
+  expectedModel: ModelSnapshot | undefined;
+  expectedRunId?: bigint | undefined;
+  expectedContextRevision?: bigint | undefined;
+}
+
+/**
+ * ReloadAck reports callback entry only. DISPATCHED does not mean that
+ * Pi completed the reload. reason uses a bounded safe vocabulary.
+ */
+export interface ReloadAck {
+  requestId: string;
+  outcome: ReloadDispatchOutcome;
+  reason: string;
+}
+
+/**
+ * ReloadReadiness carries exact current identity fences and process-owned
+ * mutation state. Counter presence distinguishes known zero from unknown.
+ */
+export interface ReloadReadiness {
+  runId?: bigint | undefined;
+  contextRevision?: bigint | undefined;
+  idle: boolean;
+  hasPendingMessages: boolean;
+  compactionActive: boolean;
+  compactPending: boolean;
+  reloadPending: boolean;
+  highWater?: bigint | undefined;
+}
+
+/**
  * One skill entry. name is the bare Pi skill name without the "skill:"
  * command prefix. Both fields are UTF-8 byte bounds enforced by the
  * bridge, not by Pi: name <= 64 bytes, description <= 1024 bytes. Pi
@@ -562,6 +617,9 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         break;
       case "invokeSkillAck":
         InvokeSkillAck.encode(message.payload.value, writer.uint32(194).fork()).join();
+        break;
+      case "reloadAck":
+        ReloadAck.encode(message.payload.value, writer.uint32(202).fork()).join();
         break;
     }
     return writer;
@@ -703,6 +761,14 @@ export const PiToPhi: MessageFns<PiToPhi> = {
             message.payload = { $case: "invokeSkillAck", value: InvokeSkillAck.decode(reader, reader.uint32()) };
             continue;
           }
+          case 25: {
+            if (tag !== 202) {
+              break;
+            }
+
+            message.payload = { $case: "reloadAck", value: ReloadAck.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -801,6 +867,12 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         }
         break;
       }
+      case "reloadAck": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "reloadAck", value: ReloadAck.fromPartial(object.payload.value) };
+        }
+        break;
+      }
     }
     return message;
   },
@@ -854,6 +926,9 @@ export const PhiToPi: MessageFns<PhiToPi> = {
         break;
       case "invokeSkillRequest":
         InvokeSkillRequest.encode(message.payload.value, writer.uint32(170).fork()).join();
+        break;
+      case "reloadRequest":
+        ReloadRequest.encode(message.payload.value, writer.uint32(178).fork()).join();
         break;
     }
     return writer;
@@ -985,6 +1060,14 @@ export const PhiToPi: MessageFns<PhiToPi> = {
             };
             continue;
           }
+          case 22: {
+            if (tag !== 178) {
+              break;
+            }
+
+            message.payload = { $case: "reloadRequest", value: ReloadRequest.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1074,6 +1157,12 @@ export const PhiToPi: MessageFns<PhiToPi> = {
             $case: "invokeSkillRequest",
             value: InvokeSkillRequest.fromPartial(object.payload.value),
           };
+        }
+        break;
+      }
+      case "reloadRequest": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "reloadRequest", value: ReloadRequest.fromPartial(object.payload.value) };
         }
         break;
       }
@@ -1665,6 +1754,7 @@ function createBaseStateSnapshot(): StateSnapshot {
     thinkingLevel: "",
     contextUsage: undefined,
     compactReadiness: undefined,
+    reloadReadiness: undefined,
   };
 }
 
@@ -1702,6 +1792,9 @@ export const StateSnapshot: MessageFns<StateSnapshot> = {
     }
     if (message.compactReadiness !== undefined) {
       CompactReadiness.encode(message.compactReadiness, writer.uint32(90).fork()).join();
+    }
+    if (message.reloadReadiness !== undefined) {
+      ReloadReadiness.encode(message.reloadReadiness, writer.uint32(98).fork()).join();
     }
     return writer;
   },
@@ -1799,6 +1892,14 @@ export const StateSnapshot: MessageFns<StateSnapshot> = {
             message.compactReadiness = CompactReadiness.decode(reader, reader.uint32());
             continue;
           }
+          case 12: {
+            if (tag !== 98) {
+              break;
+            }
+
+            message.reloadReadiness = ReloadReadiness.decode(reader, reader.uint32());
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1833,6 +1934,9 @@ export const StateSnapshot: MessageFns<StateSnapshot> = {
       : undefined;
     message.compactReadiness = (object.compactReadiness !== undefined && object.compactReadiness !== null)
       ? CompactReadiness.fromPartial(object.compactReadiness)
+      : undefined;
+    message.reloadReadiness = (object.reloadReadiness !== undefined && object.reloadReadiness !== null)
+      ? ReloadReadiness.fromPartial(object.reloadReadiness)
       : undefined;
     return message;
   },
@@ -3009,6 +3113,381 @@ export const CompactResult: MessageFns<CompactResult> = {
     message.requestId = object.requestId ?? "";
     message.outcome = object.outcome ?? 0;
     message.reason = object.reason ?? "";
+    return message;
+  },
+};
+
+function createBaseReloadRequest(): ReloadRequest {
+  return {
+    requestId: "",
+    expectedSessionId: "",
+    expectedLeafId: "",
+    expectedModel: undefined,
+    expectedRunId: undefined,
+    expectedContextRevision: undefined,
+  };
+}
+
+export const ReloadRequest: MessageFns<ReloadRequest> = {
+  encode(message: ReloadRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.expectedSessionId !== "") {
+      writer.uint32(18).string(message.expectedSessionId);
+    }
+    if (message.expectedLeafId !== "") {
+      writer.uint32(26).string(message.expectedLeafId);
+    }
+    if (message.expectedModel !== undefined) {
+      ModelSnapshot.encode(message.expectedModel, writer.uint32(34).fork()).join();
+    }
+    if (message.expectedRunId !== undefined) {
+      if (BigInt.asUintN(64, message.expectedRunId) !== message.expectedRunId) {
+        throw new globalThis.Error("value provided for field message.expectedRunId of type uint64 too large");
+      }
+      writer.uint32(40).uint64(message.expectedRunId);
+    }
+    if (message.expectedContextRevision !== undefined) {
+      if (BigInt.asUintN(64, message.expectedContextRevision) !== message.expectedContextRevision) {
+        throw new globalThis.Error("value provided for field message.expectedContextRevision of type uint64 too large");
+      }
+      writer.uint32(48).uint64(message.expectedContextRevision);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ReloadRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseReloadRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.expectedSessionId = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.expectedLeafId = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.expectedModel = ModelSnapshot.decode(reader, reader.uint32());
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.expectedRunId = reader.uint64() as bigint;
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+
+            message.expectedContextRevision = reader.uint64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<ReloadRequest>, I>>(base?: I): ReloadRequest {
+    return ReloadRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ReloadRequest>, I>>(object: I): ReloadRequest {
+    const message = createBaseReloadRequest();
+    message.requestId = object.requestId ?? "";
+    message.expectedSessionId = object.expectedSessionId ?? "";
+    message.expectedLeafId = object.expectedLeafId ?? "";
+    message.expectedModel = (object.expectedModel !== undefined && object.expectedModel !== null)
+      ? ModelSnapshot.fromPartial(object.expectedModel)
+      : undefined;
+    message.expectedRunId = (object.expectedRunId !== undefined && object.expectedRunId !== null)
+      ? BigInt(object.expectedRunId)
+      : undefined;
+    message.expectedContextRevision =
+      (object.expectedContextRevision !== undefined && object.expectedContextRevision !== null)
+        ? BigInt(object.expectedContextRevision)
+        : undefined;
+    return message;
+  },
+};
+
+function createBaseReloadAck(): ReloadAck {
+  return { requestId: "", outcome: 0, reason: "" };
+}
+
+export const ReloadAck: MessageFns<ReloadAck> = {
+  encode(message: ReloadAck, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.outcome !== 0) {
+      writer.uint32(16).int32(message.outcome);
+    }
+    if (message.reason !== "") {
+      writer.uint32(26).string(message.reason);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ReloadAck {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseReloadAck();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.outcome = reader.int32() as any;
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<ReloadAck>, I>>(base?: I): ReloadAck {
+    return ReloadAck.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ReloadAck>, I>>(object: I): ReloadAck {
+    const message = createBaseReloadAck();
+    message.requestId = object.requestId ?? "";
+    message.outcome = object.outcome ?? 0;
+    message.reason = object.reason ?? "";
+    return message;
+  },
+};
+
+function createBaseReloadReadiness(): ReloadReadiness {
+  return {
+    runId: undefined,
+    contextRevision: undefined,
+    idle: false,
+    hasPendingMessages: false,
+    compactionActive: false,
+    compactPending: false,
+    reloadPending: false,
+    highWater: undefined,
+  };
+}
+
+export const ReloadReadiness: MessageFns<ReloadReadiness> = {
+  encode(message: ReloadReadiness, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.runId !== undefined) {
+      if (BigInt.asUintN(64, message.runId) !== message.runId) {
+        throw new globalThis.Error("value provided for field message.runId of type uint64 too large");
+      }
+      writer.uint32(8).uint64(message.runId);
+    }
+    if (message.contextRevision !== undefined) {
+      if (BigInt.asUintN(64, message.contextRevision) !== message.contextRevision) {
+        throw new globalThis.Error("value provided for field message.contextRevision of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.contextRevision);
+    }
+    if (message.idle !== false) {
+      writer.uint32(24).bool(message.idle);
+    }
+    if (message.hasPendingMessages !== false) {
+      writer.uint32(32).bool(message.hasPendingMessages);
+    }
+    if (message.compactionActive !== false) {
+      writer.uint32(40).bool(message.compactionActive);
+    }
+    if (message.compactPending !== false) {
+      writer.uint32(48).bool(message.compactPending);
+    }
+    if (message.reloadPending !== false) {
+      writer.uint32(56).bool(message.reloadPending);
+    }
+    if (message.highWater !== undefined) {
+      if (BigInt.asUintN(64, message.highWater) !== message.highWater) {
+        throw new globalThis.Error("value provided for field message.highWater of type uint64 too large");
+      }
+      writer.uint32(64).uint64(message.highWater);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ReloadReadiness {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseReloadReadiness();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.runId = reader.uint64() as bigint;
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.contextRevision = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.idle = reader.bool();
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.hasPendingMessages = reader.bool();
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.compactionActive = reader.bool();
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+
+            message.compactPending = reader.bool();
+            continue;
+          }
+          case 7: {
+            if (tag !== 56) {
+              break;
+            }
+
+            message.reloadPending = reader.bool();
+            continue;
+          }
+          case 8: {
+            if (tag !== 64) {
+              break;
+            }
+
+            message.highWater = reader.uint64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<ReloadReadiness>, I>>(base?: I): ReloadReadiness {
+    return ReloadReadiness.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ReloadReadiness>, I>>(object: I): ReloadReadiness {
+    const message = createBaseReloadReadiness();
+    message.runId = (object.runId !== undefined && object.runId !== null) ? BigInt(object.runId) : undefined;
+    message.contextRevision = (object.contextRevision !== undefined && object.contextRevision !== null)
+      ? BigInt(object.contextRevision)
+      : undefined;
+    message.idle = object.idle ?? false;
+    message.hasPendingMessages = object.hasPendingMessages ?? false;
+    message.compactionActive = object.compactionActive ?? false;
+    message.compactPending = object.compactPending ?? false;
+    message.reloadPending = object.reloadPending ?? false;
+    message.highWater = (object.highWater !== undefined && object.highWater !== null)
+      ? BigInt(object.highWater)
+      : undefined;
     return message;
   },
 };

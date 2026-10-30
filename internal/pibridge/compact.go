@@ -132,7 +132,9 @@ func (s *Server) RequestCompact(ctx context.Context, processID string, generatio
 		l.mu.Unlock()
 		return CompactResult{}, &CompactRefusal{Reason: "stale"}
 	}
-	if l.compact != nil {
+	// Cross-mutation exclusion: neither native mutation runs
+	// while the other remains unresolved.
+	if l.compact != nil || l.reload != nil {
 		l.mu.Unlock()
 		return CompactResult{}, &CompactRefusal{Reason: "pending"}
 	}

@@ -599,3 +599,67 @@ describe('pi bridge ordered views', () => {
         expect(bash.piBridge).toBeUndefined();
     });
 });
+
+describe('pi bridge reload identity ordering', () => {
+    const frame = (over = {}) => ({
+        type: 'pi-bridge-state',
+        pane_id: 'pane-1',
+        state: 'managed',
+        generation: '2',
+        telemetry_revision: '6',
+        capabilities: 'pi.lifecycle.v1,pi.reload.v1',
+        process_id: 'proc-1',
+        run_id: '0',
+        context_revision: '0',
+        reload_idle: 'true',
+        reload_queued: 'false',
+        reload_active: 'false',
+        reload_compact_pending: 'false',
+        reload_pending: 'false',
+        ...over,
+    });
+
+    it('rejects equal-revision conflicts on reload identity and readiness', () => {
+        const tm = testManager();
+        const tab = addPiTab(tm);
+        tm.activePaneId = tab.paneId;
+
+        tm._acceptPiBridgeState(tab, frame(), tab.ws);
+        expect(tab.piBridge.process_id).toBe('proc-1');
+        expect(tab.piBridge.run_id).toBe('0');
+        tm._acceptPiBridgeState(tab, frame({ process_id: 'proc-2' }), tab.ws);
+        expect(tab.piBridge.process_id).toBe('proc-1');
+        tm._acceptPiBridgeState(tab, frame({ run_id: '1' }), tab.ws);
+        expect(tab.piBridge.run_id).toBe('0');
+        tm._acceptPiBridgeState(tab, frame({ context_revision: '1' }), tab.ws);
+        expect(tab.piBridge.context_revision).toBe('0');
+        tm._acceptPiBridgeState(tab, frame({ reload_pending: 'true' }), tab.ws);
+        expect(tab.piBridge.reload_pending).toBe(false);
+        tm._acceptPiBridgeState(tab, frame({ reload_high_water: '1' }), tab.ws);
+        expect(tab.piBridge.reload_high_water).toBeUndefined();
+    });
+
+    it('adopts reload identity and readiness on a newer revision', () => {
+        const tm = testManager();
+        const tab = addPiTab(tm);
+        tm.activePaneId = tab.paneId;
+
+        tm._acceptPiBridgeState(tab, frame(), tab.ws);
+        tm._acceptPiBridgeState(
+            tab,
+            frame({
+                telemetry_revision: '7',
+                run_id: '4',
+                context_revision: '5',
+                reload_idle: 'false',
+                reload_high_water: '6',
+            }),
+            tab.ws,
+        );
+        expect(tab.piBridge.run_id).toBe('4');
+        expect(tab.piBridge.context_revision).toBe('5');
+        expect(tab.piBridge.reload_idle).toBe(false);
+        expect(tab.piBridge.reload_high_water).toBe('6');
+        expect(tab._piBridgeRev).toBe(7n);
+    });
+});

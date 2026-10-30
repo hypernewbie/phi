@@ -10,6 +10,11 @@ import type {
 } from '@earendil-works/pi-coding-agent';
 import type { ChannelCreds } from './channel.js';
 import {
+    type ReloadLatchState,
+    captureNativeReloadBaseline,
+    freshReloadLatch,
+} from './native-reload.js';
+import {
     type CompactLatchState,
     type PiContextView,
     type PiSkillView,
@@ -33,6 +38,7 @@ interface OwnerSlot {
     generation: bigint;
     creds?: ChannelCreds | undefined;
     compact?: CompactLatchState | undefined;
+    reload?: ReloadLatchState | undefined;
 }
 
 function ownerSlot(): OwnerSlot {
@@ -54,6 +60,13 @@ export function ownerCompactState(): CompactLatchState {
     const slot = ownerSlot();
     if (!slot.compact) slot.compact = freshCompactLatch();
     return slot.compact;
+}
+
+/** Process-owned native Reload baseline and single-flight state. */
+export function ownerReloadState(): ReloadLatchState {
+    const slot = ownerSlot();
+    if (!slot.reload) slot.reload = freshReloadLatch();
+    return slot.reload;
 }
 
 /** Visible for tests to reset process-global ownership. */
@@ -178,6 +191,7 @@ export interface FactoryRuntime {
     onAgentEnd(stopReason: string | null): void;
     onTurnEnd(ctx: PiContextView): void;
     onAgentSettled(ctx: PiContextView, aborted: boolean): void;
+    onMessageStart(ctx: PiContextView, role: unknown): void;
     onModelSelect(ctx: PiContextView): void;
     onThinkingLevelSelect(ctx: PiContextView): void;
     onSessionTree(ctx: PiContextView): void;
@@ -191,6 +205,7 @@ export interface FactoryDeps {
         creds: ChannelCreds,
         generation: bigint,
         compact: CompactLatchState,
+        reload: ReloadLatchState,
     ) => FactoryRuntime;
 }
 
@@ -232,11 +247,12 @@ export function createExtension(
     const hasInvokeApi = typeof nativeSkills.sendUserMessage === 'function';
     const make =
         deps.makeRuntime ??
-        ((c, g, compact) =>
+        ((c, g, compact, reload) =>
             new Runtime({
                 creds: c,
                 generation: g,
                 compactState: compact,
+                reloadState: reload,
                 setModel: (model) => pi.setModel(model),
                 ...(getThinkingLevel ? { getThinkingLevel } : {}),
                 ...(setThinkingLevel ? { setThinkingLevel } : {}),
@@ -278,13 +294,21 @@ export function createExtension(
                 next = null;
             }
             if (next === null || next === sessionId) {
+                captureNativeReloadBaseline(ctx, ownerReloadState());
                 runtime.onSessionStart(contextView(ctx));
                 return;
             }
             runtime.shutdown();
+            const reloadState = ownerReloadState();
+            captureNativeReloadBaseline(ctx, reloadState);
             slot.generation += 1n;
             sessionId = next;
-            runtime = make(slot.creds!, slot.generation, ownerCompactState());
+            runtime = make(
+                slot.creds!,
+                slot.generation,
+                ownerCompactState(),
+                reloadState,
+            );
             runtime.start(contextView(ctx));
             return;
         }
@@ -300,7 +324,14 @@ export function createExtension(
         } catch {
             sessionId = null;
         }
-        runtime = make(creds, slot.generation, ownerCompactState());
+        const reloadState = ownerReloadState();
+        captureNativeReloadBaseline(ctx, reloadState);
+        runtime = make(
+            creds,
+            slot.generation,
+            ownerCompactState(),
+            reloadState,
+        );
         runtime.start(contextView(ctx));
     });
 
@@ -318,6 +349,12 @@ export function createExtension(
 
     pi.on('agent_settled', (event, ctx) => {
         runtime?.onAgentSettled(contextView(ctx), settledAborted(event));
+    });
+
+    pi.on('message_start', (event, ctx) => {
+        // Role only: message contents never cross the bridge.
+        const role = (event as { message?: { role?: unknown } }).message?.role;
+        runtime?.onMessageStart(contextView(ctx), role);
     });
 
     pi.on('model_select', (_event, ctx) => {

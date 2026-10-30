@@ -25,6 +25,8 @@ type request struct {
 	Count      int    `json:"count"`
 	Generation uint64 `json:"generation"`
 	Revision   uint64 `json:"revision"`
+	RunID      uint64 `json:"runId"`
+	ContextRev uint64 `json:"contextRev"`
 	TimeoutMs  int    `json:"timeoutMs"`
 	Call       string `json:"call"`
 }
@@ -97,6 +99,31 @@ func compactResponse(out compactOutcome) response {
 	}
 }
 
+type reloadCall struct {
+	done chan reloadOutcome
+}
+
+type reloadOutcome struct {
+	result pibridge.ReloadResult
+	err    error
+}
+
+func reloadResponse(out reloadOutcome) response {
+	if out.err == nil {
+		return response{OK: true, RequestID: out.result.RequestID, Outcome: out.result.Outcome.String(), Reason: out.result.Reason}
+	}
+	var refusal *pibridge.ReloadRefusal
+	var unknown *pibridge.ReloadUnknown
+	switch {
+	case errors.As(out.err, &refusal):
+		return response{OK: false, Error: "refusal:" + refusal.Reason}
+	case errors.As(out.err, &unknown):
+		return response{OK: false, Error: "unknown:" + unknown.RequestID, RequestID: unknown.RequestID}
+	default:
+		return response{OK: false, Error: "unavailable:" + out.err.Error()}
+	}
+}
+
 func main() {
 	if err := run(); err != nil {
 		enc := json.NewEncoder(os.Stdout)
@@ -120,7 +147,9 @@ func run() error {
 	go func() { serveErr <- srv.GRPCServer().Serve(lis) }()
 	var callsMu sync.Mutex
 	calls := map[string]*compactCall{}
+	reloadCalls := map[string]*reloadCall{}
 	var callSeq uint64
+	var reloadCallSeq uint64
 
 	enc := json.NewEncoder(os.Stdout)
 	// Ready line first; integration asserts the target shape.
@@ -204,6 +233,39 @@ func run() error {
 				delete(calls, req.Call)
 				callsMu.Unlock()
 				_ = enc.Encode(compactResponse(out))
+			case <-time.After(clampTimeout(req.TimeoutMs)):
+				_ = enc.Encode(fail("wait-timeout"))
+			}
+		case "reload":
+			callsMu.Lock()
+			reloadCallSeq++
+			id := "r" + strconv.FormatUint(reloadCallSeq, 10)
+			call := &reloadCall{done: make(chan reloadOutcome, 1)}
+			reloadCalls[id] = call
+			process, generation, revision := req.Process, req.Generation, req.Revision
+			runID, contextRev, timeoutMs := req.RunID, req.ContextRev, req.TimeoutMs
+			callsMu.Unlock()
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), clampTimeout(timeoutMs))
+				defer cancel()
+				res, err := srv.RequestReload(ctx, process, generation, revision, runID, contextRev)
+				call.done <- reloadOutcome{result: res, err: err}
+			}()
+			_ = enc.Encode(response{OK: true, Call: id})
+		case "reload-wait":
+			callsMu.Lock()
+			call, ok := reloadCalls[req.Call]
+			callsMu.Unlock()
+			if !ok {
+				_ = enc.Encode(fail("unknown call %q", req.Call))
+				continue
+			}
+			select {
+			case out := <-call.done:
+				callsMu.Lock()
+				delete(reloadCalls, req.Call)
+				callsMu.Unlock()
+				_ = enc.Encode(reloadResponse(out))
 			case <-time.After(clampTimeout(req.TimeoutMs)):
 				_ = enc.Encode(fail("wait-timeout"))
 			}
