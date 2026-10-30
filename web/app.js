@@ -1045,6 +1045,36 @@ export class App {
         }
     }
 
+    readPanelWidthPreference(key) {
+        this._panelWidthPreferences ??= new Map();
+        if (this._panelWidthPreferences.has(key)) {
+            return this._panelWidthPreferences.get(key);
+        }
+        try {
+            const value =
+                typeof localStorage !== 'undefined'
+                    ? localStorage.getItem(key)
+                    : null;
+            if (value !== null) this._panelWidthPreferences.set(key, value);
+            return value;
+        } catch {
+            return null;
+        }
+    }
+
+    writePanelWidthPreference(key, width) {
+        this._panelWidthPreferences ??= new Map();
+        const value = String(width);
+        this._panelWidthPreferences.set(key, value);
+        try {
+            if (typeof localStorage !== 'undefined') {
+                localStorage.setItem(key, value);
+            }
+        } catch {
+            // Panel resizing stays usable when browser storage is blocked.
+        }
+    }
+
     adjustLeftPanelWidth(delta) {
         const sidebar = document.getElementById('sidebar-panel');
         if (!sidebar) return;
@@ -1064,7 +1094,7 @@ export class App {
                 Math.min(currentWidth + delta, maxWidth),
             );
             sidebar.style.setProperty('width', `${clamped}px`, 'important');
-            localStorage.setItem('phi_drawer_left_width', clamped);
+            this.writePanelWidthPreference('phi_drawer_left_width', clamped);
             if (clamped < 120) {
                 sidebar.classList.add('sidebar-narrow');
             } else {
@@ -1082,7 +1112,7 @@ export class App {
 
         sidebar.style.removeProperty('width');
         sidebar.style.width = `${clamped}px`;
-        localStorage.setItem('phi_panel_left_width', clamped);
+        this.writePanelWidthPreference('phi_panel_left_width', clamped);
 
         if (clamped < 120) {
             sidebar.classList.add('sidebar-narrow');
@@ -1116,7 +1146,7 @@ export class App {
                 Math.min(currentWidth + delta, maxWidth),
             );
             diffPanel.style.setProperty('width', `${clamped}px`, 'important');
-            localStorage.setItem('phi_drawer_right_width', clamped);
+            this.writePanelWidthPreference('phi_drawer_right_width', clamped);
             return;
         }
 
@@ -1129,7 +1159,7 @@ export class App {
 
         diffPanel.style.removeProperty('width');
         diffPanel.style.width = `${clamped}px`;
-        localStorage.setItem('phi_panel_right_width', clamped);
+        this.writePanelWidthPreference('phi_panel_right_width', clamped);
 
         if (this.tabManager) {
             this.tabManager.startResize();
@@ -1237,7 +1267,6 @@ export class App {
         const rightHandle = document.getElementById('right-resize-handle');
         const sidebar = document.getElementById('sidebar-panel');
         const diffPanel = document.getElementById('diff-panel');
-        const layout = document.querySelector('.main-layout');
 
         // Inject dedicated drawer touch resizers if not already in DOM
         let leftDrawerHandle = document.getElementById(
@@ -1267,7 +1296,7 @@ export class App {
 
             // Left panel: drawer vs docked
             if (isSidebarDrawerViewport()) {
-                const savedDrawerLeft = localStorage.getItem(
+                const savedDrawerLeft = this.readPanelWidthPreference(
                     'phi_drawer_left_width',
                 );
                 if (savedDrawerLeft) {
@@ -1283,7 +1312,7 @@ export class App {
                 }
             } else {
                 sidebar.style.removeProperty('width');
-                const savedLeftWidth = localStorage.getItem(
+                const savedLeftWidth = this.readPanelWidthPreference(
                     'phi_panel_left_width',
                 );
                 if (savedLeftWidth) {
@@ -1302,7 +1331,7 @@ export class App {
 
             // Right panel: drawer vs docked
             if (isDiffDrawerViewport()) {
-                const savedDrawerRight = localStorage.getItem(
+                const savedDrawerRight = this.readPanelWidthPreference(
                     'phi_drawer_right_width',
                 );
                 if (savedDrawerRight) {
@@ -1318,7 +1347,7 @@ export class App {
                 }
             } else {
                 diffPanel.style.removeProperty('width');
-                const savedRightWidth = localStorage.getItem(
+                const savedRightWidth = this.readPanelWidthPreference(
                     'phi_panel_right_width',
                 );
                 if (savedRightWidth) {
@@ -1333,29 +1362,53 @@ export class App {
         applyResponsivePanelWidths();
         window.addEventListener('resize', applyResponsivePanelWidths);
 
+        let activeResize = false;
         const hasPointer =
             typeof window !== 'undefined' && 'PointerEvent' in window;
         const startEvt = hasPointer ? 'pointerdown' : 'mousedown';
+        const acceptsStart = (e) =>
+            !activeResize &&
+            (hasPointer
+                ? e.isPrimary && e.button === 0
+                : e.button === 0);
+        const ownsPointer = (e, pointerId) =>
+            !hasPointer || e.pointerId === pointerId;
         const moveEvt = hasPointer ? 'pointermove' : 'mousemove';
         const endEvt = hasPointer ? 'pointerup' : 'mouseup';
+        let drawerResetTimer = null;
+        const beginDrawerResize = () => {
+            if (drawerResetTimer !== null) clearTimeout(drawerResetTimer);
+            drawerResetTimer = null;
+            this._isDraggingDrawer = true;
+        };
+        const endDrawerResize = () => {
+            drawerResetTimer = setTimeout(() => {
+                drawerResetTimer = null;
+                this._isDraggingDrawer = false;
+            }, 50);
+        };
 
         // Desktop Left resizing handler
-        if (leftHandle) {
+        if (leftHandle && sidebar) {
             leftHandle.addEventListener(startEvt, (e) => {
+                if (!acceptsStart(e)) return;
+                activeResize = true;
+                const pointerId = hasPointer ? e.pointerId : null;
+                const startX = e.clientX;
+                const startWidth = sidebar.getBoundingClientRect().width;
                 e.preventDefault();
                 leftHandle.classList.add('dragging');
                 document.body.style.cursor = 'col-resize';
-                if (leftHandle.setPointerCapture && e.pointerId != null) {
+                if (leftHandle.setPointerCapture && pointerId != null) {
                     try {
-                        leftHandle.setPointerCapture(e.pointerId);
+                        leftHandle.setPointerCapture(pointerId);
                     } catch (_) {}
                 }
                 this.tabManager?.startResize();
 
                 const doDrag = (moveEvent) => {
-                    if (!layout) return;
-                    const width =
-                        moveEvent.clientX - layout.getBoundingClientRect().left;
+                    if (!ownsPointer(moveEvent, pointerId)) return;
+                    const width = startWidth + moveEvent.clientX - startX;
                     const capPx = clampPanelWidth(
                         SIDEBAR_PANEL_CAP.max,
                         SIDEBAR_PANEL_CAP,
@@ -1363,7 +1416,10 @@ export class App {
                     if (width > SIDEBAR_PANEL_CAP.min && width < capPx) {
                         sidebar.style.removeProperty('width');
                         sidebar.style.width = `${width}px`;
-                        localStorage.setItem('phi_panel_left_width', width);
+                        this.writePanelWidthPreference(
+                            'phi_panel_left_width',
+                            width,
+                        );
 
                         if (width < 120) {
                             sidebar.classList.add('sidebar-narrow');
@@ -1375,52 +1431,61 @@ export class App {
                     }
                 };
 
-                const stopDrag = (upEvent) => {
+                const finishDrag = (event) => {
+                    if (!ownsPointer(event, pointerId)) return;
+                    document.removeEventListener(moveEvt, doDrag);
+                    document.removeEventListener(endEvt, finishDrag);
+                    if (hasPointer) {
+                        document.removeEventListener(
+                            'pointercancel',
+                            cancelDrag,
+                        );
+                    }
                     leftHandle.classList.remove('dragging');
                     document.body.style.cursor = '';
-                    if (
-                        leftHandle.releasePointerCapture &&
-                        upEvent?.pointerId != null
-                    ) {
+                    if (leftHandle.releasePointerCapture && pointerId != null) {
                         try {
-                            leftHandle.releasePointerCapture(upEvent.pointerId);
+                            leftHandle.releasePointerCapture(pointerId);
                         } catch (_) {}
                     }
-                    document.removeEventListener(moveEvt, doDrag);
-                    document.removeEventListener(endEvt, stopDrag);
-                    if (hasPointer) {
-                        document.removeEventListener('pointercancel', stopDrag);
+                    activeResize = false;
+                    try {
+                        this.tabManager?.fitActiveTerminal();
+                    } finally {
+                        this.tabManager?.endResize();
                     }
-                    this.tabManager?.fitActiveTerminal();
-                    this.tabManager?.endResize();
                 };
+                const cancelDrag = (event) => finishDrag(event);
 
                 document.addEventListener(moveEvt, doDrag);
-                document.addEventListener(endEvt, stopDrag);
+                document.addEventListener(endEvt, finishDrag);
                 if (hasPointer) {
-                    document.addEventListener('pointercancel', stopDrag);
+                    document.addEventListener('pointercancel', cancelDrag);
                 }
             });
         }
 
         // Desktop Right resizing handler
-        if (rightHandle) {
+        if (rightHandle && diffPanel) {
             rightHandle.addEventListener(startEvt, (e) => {
+                if (!acceptsStart(e)) return;
+                activeResize = true;
+                const pointerId = hasPointer ? e.pointerId : null;
+                const startX = e.clientX;
+                const startWidth = diffPanel.getBoundingClientRect().width;
                 e.preventDefault();
                 rightHandle.classList.add('dragging');
                 document.body.style.cursor = 'col-resize';
-                if (rightHandle.setPointerCapture && e.pointerId != null) {
+                if (rightHandle.setPointerCapture && pointerId != null) {
                     try {
-                        rightHandle.setPointerCapture(e.pointerId);
+                        rightHandle.setPointerCapture(pointerId);
                     } catch (_) {}
                 }
                 this.tabManager?.startResize();
 
                 const doDrag = (moveEvent) => {
-                    if (!layout) return;
-                    const width =
-                        layout.getBoundingClientRect().right -
-                        moveEvent.clientX;
+                    if (!ownsPointer(moveEvent, pointerId)) return;
+                    const width = startWidth - (moveEvent.clientX - startX);
                     const capPx = clampPanelWidth(
                         DIFF_PANEL_CAP.max,
                         DIFF_PANEL_CAP,
@@ -1428,39 +1493,49 @@ export class App {
                     if (width > DIFF_PANEL_CAP.min && width < capPx) {
                         diffPanel.style.removeProperty('width');
                         diffPanel.style.width = `${width}px`;
-                        localStorage.setItem('phi_panel_right_width', width);
+                        this.writePanelWidthPreference(
+                            'phi_panel_right_width',
+                            width,
+                        );
                         this.tabManager?.fitActiveTerminal();
                         this.diffController?.fitTerminal();
                     }
                 };
 
-                const stopDrag = (upEvent) => {
+                const finishDrag = (event) => {
+                    if (!ownsPointer(event, pointerId)) return;
+                    document.removeEventListener(moveEvt, doDrag);
+                    document.removeEventListener(endEvt, finishDrag);
+                    if (hasPointer) {
+                        document.removeEventListener(
+                            'pointercancel',
+                            cancelDrag,
+                        );
+                    }
                     rightHandle.classList.remove('dragging');
                     document.body.style.cursor = '';
-                    if (
-                        rightHandle.releasePointerCapture &&
-                        upEvent?.pointerId != null
-                    ) {
+                    if (rightHandle.releasePointerCapture && pointerId != null) {
                         try {
-                            rightHandle.releasePointerCapture(
-                                upEvent.pointerId,
-                            );
+                            rightHandle.releasePointerCapture(pointerId);
                         } catch (_) {}
                     }
-                    document.removeEventListener(moveEvt, doDrag);
-                    document.removeEventListener(endEvt, stopDrag);
-                    if (hasPointer) {
-                        document.removeEventListener('pointercancel', stopDrag);
+                    activeResize = false;
+                    try {
+                        this.tabManager?.fitActiveTerminal();
+                    } finally {
+                        try {
+                            this.diffController?.fitTerminal();
+                        } finally {
+                            this.tabManager?.endResize();
+                        }
                     }
-                    this.tabManager?.fitActiveTerminal();
-                    this.diffController?.fitTerminal();
-                    this.tabManager?.endResize();
                 };
+                const cancelDrag = (event) => finishDrag(event);
 
                 document.addEventListener(moveEvt, doDrag);
-                document.addEventListener(endEvt, stopDrag);
+                document.addEventListener(endEvt, finishDrag);
                 if (hasPointer) {
-                    document.addEventListener('pointercancel', stopDrag);
+                    document.addEventListener('pointercancel', cancelDrag);
                 }
             });
         }
@@ -1468,88 +1543,94 @@ export class App {
         // Mobile / Drawer Left resizing handler
         if (leftDrawerHandle && sidebar) {
             leftDrawerHandle.addEventListener(startEvt, (e) => {
+                if (!acceptsStart(e)) return;
+                activeResize = true;
+                beginDrawerResize();
+                const pointerId = hasPointer ? e.pointerId : null;
+                const startX = e.clientX;
+                const startWidth = sidebar.getBoundingClientRect().width;
+                let acceptedWidth = startWidth;
+                let previewing = false;
                 e.preventDefault();
                 e.stopPropagation();
-                this._isDraggingDrawer = true;
                 leftDrawerHandle.classList.add('dragging');
                 sidebar.classList.add('resizing');
 
-                if (leftDrawerHandle.setPointerCapture && e.pointerId != null) {
+                if (leftDrawerHandle.setPointerCapture && pointerId != null) {
                     try {
-                        leftDrawerHandle.setPointerCapture(e.pointerId);
+                        leftDrawerHandle.setPointerCapture(pointerId);
                     } catch (_) {}
                 }
 
+                const restoreAcceptedWidth = () => {
+                    sidebar.style.setProperty(
+                        'width',
+                        `${acceptedWidth}px`,
+                        'important',
+                    );
+                    sidebar.classList.toggle('sidebar-narrow', acceptedWidth < 120);
+                };
                 const doDrag = (moveEvent) => {
-                    const clientX = moveEvent.clientX;
+                    if (!ownsPointer(moveEvent, pointerId)) return;
                     const minWidth = 160;
                     const maxWidth = Math.max(minWidth, window.innerWidth - 24);
-                    if (clientX < 100) {
-                        sidebar.style.setProperty(
-                            'width',
-                            `${minWidth}px`,
-                            'important',
-                        );
+                    if (moveEvent.clientX < 100) {
+                        previewing = true;
+                        sidebar.style.setProperty('width', `${minWidth}px`, 'important');
                         sidebar.classList.add('sidebar-narrow');
                         return;
                     }
+                    previewing = false;
                     const newWidth = Math.max(
                         minWidth,
-                        Math.min(clientX, maxWidth),
+                        Math.min(
+                            startWidth + moveEvent.clientX - startX,
+                            maxWidth,
+                        ),
                     );
-                    sidebar.style.setProperty(
-                        'width',
-                        `${newWidth}px`,
-                        'important',
-                    );
-                    localStorage.setItem('phi_drawer_left_width', newWidth);
-                    if (newWidth < 120) {
-                        sidebar.classList.add('sidebar-narrow');
-                    } else {
-                        sidebar.classList.remove('sidebar-narrow');
-                    }
+                    acceptedWidth = newWidth;
+                    sidebar.style.setProperty('width', `${newWidth}px`, 'important');
+                    this.writePanelWidthPreference('phi_drawer_left_width', newWidth);
+                    sidebar.classList.toggle('sidebar-narrow', newWidth < 120);
                 };
 
-                const stopDrag = (upEvent) => {
+                const cleanup = (event) => {
+                    document.removeEventListener(moveEvt, doDrag);
+                    document.removeEventListener(endEvt, finishDrag);
+                    if (hasPointer) {
+                        document.removeEventListener('pointercancel', cancelDrag);
+                    }
                     leftDrawerHandle.classList.remove('dragging');
                     sidebar.classList.remove('resizing');
-                    if (
-                        leftDrawerHandle.releasePointerCapture &&
-                        upEvent?.pointerId != null
-                    ) {
+                    if (leftDrawerHandle.releasePointerCapture && pointerId != null) {
                         try {
-                            leftDrawerHandle.releasePointerCapture(
-                                upEvent.pointerId,
-                            );
+                            leftDrawerHandle.releasePointerCapture(pointerId);
                         } catch (_) {}
                     }
-                    document.removeEventListener(moveEvt, doDrag);
-                    document.removeEventListener(endEvt, stopDrag);
-                    if (hasPointer) {
-                        document.removeEventListener('pointercancel', stopDrag);
-                    }
-
-                    if (upEvent && upEvent.clientX < 100) {
+                    activeResize = false;
+                    endDrawerResize();
+                };
+                const finishDrag = (upEvent) => {
+                    if (!ownsPointer(upEvent, pointerId)) return;
+                    const dismiss = upEvent.clientX < 100;
+                    cleanup(upEvent);
+                    if (dismiss) {
                         sidebar.classList.remove('drawer-open');
-                        const saved =
-                            localStorage.getItem('phi_drawer_left_width') ||
-                            280;
-                        sidebar.style.setProperty(
-                            'width',
-                            `${saved}px`,
-                            'important',
-                        );
+                        restoreAcceptedWidth();
+                    } else if (previewing) {
+                        restoreAcceptedWidth();
                     }
-
-                    setTimeout(() => {
-                        this._isDraggingDrawer = false;
-                    }, 50);
+                };
+                const cancelDrag = (event) => {
+                    if (!ownsPointer(event, pointerId)) return;
+                    cleanup(event);
+                    restoreAcceptedWidth();
                 };
 
                 document.addEventListener(moveEvt, doDrag);
-                document.addEventListener(endEvt, stopDrag);
+                document.addEventListener(endEvt, finishDrag);
                 if (hasPointer) {
-                    document.addEventListener('pointercancel', stopDrag);
+                    document.addEventListener('pointercancel', cancelDrag);
                 }
             });
         }
@@ -1557,89 +1638,94 @@ export class App {
         // Mobile / Drawer Right resizing handler
         if (rightDrawerHandle && diffPanel) {
             rightDrawerHandle.addEventListener(startEvt, (e) => {
+                if (!acceptsStart(e)) return;
+                activeResize = true;
+                beginDrawerResize();
+                const pointerId = hasPointer ? e.pointerId : null;
+                const startX = e.clientX;
+                const startWidth = diffPanel.getBoundingClientRect().width;
+                let acceptedWidth = startWidth;
+                let previewing = false;
                 e.preventDefault();
                 e.stopPropagation();
-                this._isDraggingDrawer = true;
                 rightDrawerHandle.classList.add('dragging');
                 diffPanel.classList.add('resizing');
 
-                if (
-                    rightDrawerHandle.setPointerCapture &&
-                    e.pointerId != null
-                ) {
+                if (rightDrawerHandle.setPointerCapture && pointerId != null) {
                     try {
-                        rightDrawerHandle.setPointerCapture(e.pointerId);
+                        rightDrawerHandle.setPointerCapture(pointerId);
                     } catch (_) {}
                 }
 
-                const doDrag = (moveEvent) => {
-                    const clientX = moveEvent.clientX;
-                    const dragWidth = window.innerWidth - clientX;
-                    const minWidth = 200;
-                    const maxWidth = Math.max(minWidth, window.innerWidth - 24);
-                    if (dragWidth < 120) {
-                        diffPanel.style.setProperty(
-                            'width',
-                            `${minWidth}px`,
-                            'important',
-                        );
-                        return;
-                    }
-                    const newWidth = Math.max(
-                        minWidth,
-                        Math.min(dragWidth, maxWidth),
-                    );
+                const restoreAcceptedWidth = () => {
                     diffPanel.style.setProperty(
                         'width',
-                        `${newWidth}px`,
+                        `${acceptedWidth}px`,
                         'important',
                     );
-                    localStorage.setItem('phi_drawer_right_width', newWidth);
+                };
+                const doDrag = (moveEvent) => {
+                    if (!ownsPointer(moveEvent, pointerId)) return;
+                    const minWidth = 200;
+                    const maxWidth = Math.max(minWidth, window.innerWidth - 24);
+                    if (window.innerWidth - moveEvent.clientX < 120) {
+                        previewing = true;
+                        diffPanel.style.setProperty('width', `${minWidth}px`, 'important');
+                        return;
+                    }
+                    previewing = false;
+                    const newWidth = Math.max(
+                        minWidth,
+                        Math.min(
+                            startWidth - (moveEvent.clientX - startX),
+                            maxWidth,
+                        ),
+                    );
+                    acceptedWidth = newWidth;
+                    diffPanel.style.setProperty('width', `${newWidth}px`, 'important');
+                    this.writePanelWidthPreference('phi_drawer_right_width', newWidth);
                 };
 
-                const stopDrag = (upEvent) => {
+                const cleanup = () => {
+                    document.removeEventListener(moveEvt, doDrag);
+                    document.removeEventListener(endEvt, finishDrag);
+                    if (hasPointer) {
+                        document.removeEventListener('pointercancel', cancelDrag);
+                    }
                     rightDrawerHandle.classList.remove('dragging');
                     diffPanel.classList.remove('resizing');
-                    if (
-                        rightDrawerHandle.releasePointerCapture &&
-                        upEvent?.pointerId != null
-                    ) {
+                    if (rightDrawerHandle.releasePointerCapture && pointerId != null) {
                         try {
-                            rightDrawerHandle.releasePointerCapture(
-                                upEvent.pointerId,
-                            );
+                            rightDrawerHandle.releasePointerCapture(pointerId);
                         } catch (_) {}
                     }
-                    document.removeEventListener(moveEvt, doDrag);
-                    document.removeEventListener(endEvt, stopDrag);
-                    if (hasPointer) {
-                        document.removeEventListener('pointercancel', stopDrag);
+                    activeResize = false;
+                    endDrawerResize();
+                };
+                const finishDrag = (upEvent) => {
+                    if (!ownsPointer(upEvent, pointerId)) return;
+                    const dismiss = window.innerWidth - upEvent.clientX < 120;
+                    cleanup();
+                    if (dismiss) {
+                        try {
+                            this.diffController?.togglePanel(false);
+                        } finally {
+                            restoreAcceptedWidth();
+                        }
+                    } else if (previewing) {
+                        restoreAcceptedWidth();
                     }
-
-                    const finalDragWidth = upEvent
-                        ? window.innerWidth - upEvent.clientX
-                        : 300;
-                    if (finalDragWidth < 120) {
-                        this.diffController?.togglePanel(false);
-                        const saved =
-                            localStorage.getItem('phi_drawer_right_width') ||
-                            320;
-                        diffPanel.style.setProperty(
-                            'width',
-                            `${saved}px`,
-                            'important',
-                        );
-                    }
-
-                    setTimeout(() => {
-                        this._isDraggingDrawer = false;
-                    }, 50);
+                };
+                const cancelDrag = (event) => {
+                    if (!ownsPointer(event, pointerId)) return;
+                    cleanup();
+                    restoreAcceptedWidth();
                 };
 
                 document.addEventListener(moveEvt, doDrag);
-                document.addEventListener(endEvt, stopDrag);
+                document.addEventListener(endEvt, finishDrag);
                 if (hasPointer) {
-                    document.addEventListener('pointercancel', stopDrag);
+                    document.addEventListener('pointercancel', cancelDrag);
                 }
             });
         }
