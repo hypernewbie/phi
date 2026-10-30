@@ -23,6 +23,11 @@ import type {
 } from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
 
+test.skip(
+    process.platform === 'win32',
+    'fixture requires a POSIX shell and stty',
+);
+
 const ClientCodec: MessageFns<TerminalClientMessage> =
     TerminalClientFrame as unknown as MessageFns<TerminalClientMessage>;
 
@@ -233,11 +238,16 @@ async function newFeaturePage(
         viewport,
         ...(touch ? { isMobile: true, hasTouch: true } : {}),
     });
-    const page = await context.newPage();
-    page.setDefaultTimeout(15_000);
-    const diagnostics = await watchPage(page, new URL(phi.url).origin);
-    await instrumentTerminals(page);
-    return { context, page, diagnostics };
+    try {
+        const page = await context.newPage();
+        page.setDefaultTimeout(15_000);
+        const diagnostics = await watchPage(page, new URL(phi.url).origin);
+        await instrumentTerminals(page);
+        return { context, page, diagnostics };
+    } catch (error) {
+        await context.close();
+        throw error;
+    }
 }
 
 async function waitForAppConsole(page: Page): Promise<void> {
@@ -424,13 +434,6 @@ async function panelGeometry(page: Page, paneId: string) {
     }, paneId);
 }
 
-async function sendMarker(page: Page, paneId: string, marker: string) {
-    const input = page.locator(`#term-${paneId} .xterm-helper-textarea`);
-    await input.focus();
-    await page.keyboard.type(marker);
-    await page.keyboard.press('Enter');
-}
-
 async function dragSidebar(page: Page, width: number): Promise<void> {
     const layout = await page.locator('.main-layout').boundingBox();
     const handle = await page.locator('#left-resize-handle').boundingBox();
@@ -592,95 +595,16 @@ test('MVP desktop hides and restores a live terminal', async ({
     request,
 }, testInfo) => {
     test.setTimeout(180_000);
-    test.skip(
-        process.platform === 'win32',
-        'fixture requires a POSIX shell and stty',
-    );
-
-    const phi = await startPhi({
-        env: { PHI_SHUTDOWN_PTY_GRACE: '150ms', PHI_SHUTDOWN_GRACE: '1s' },
-        setup(dir) {
-            const workspace = realpathSync(dir);
-            const home = join(dir, 'home');
-            const backendDir = join(home, '.phi', 'backends');
-            mkdirSync(backendDir, { recursive: true });
-            const command = join(dir, 'fixture-shell');
-            writeFileSync(
-                command,
-                `#!/bin/sh
-printf 'sidebar fixture ready\\r\\n'
-while IFS= read -r line; do
-    printf '%s\\n' "$line" >> "$HOME/sidebar-input.log"
-    size=$(stty size) || exit 1
-    printf 'SIZE:%s:%s\\r\\n' "$line" "$size"
-    printf 'ACK:%s\\r\\n' "$line"
-done
-`,
-                { mode: 0o755 },
-            );
-            writeFileSync(
-                join(backendDir, 'bash.json'),
-                JSON.stringify({ id: 'bash', command }),
-            );
-            writeFileSync(
-                join(home, '.phi', 'config.json'),
-                JSON.stringify({ workspaces: [workspace] }),
-            );
-        },
-    });
-    const context = await browser.newContext({
-        viewport: { width: 1440, height: 900 },
-    });
-    const page = await context.newPage();
-    page.setDefaultTimeout(15_000);
-    const diagnostics = await watchPage(page, new URL(phi.url).origin);
-    await page.addInitScript(() => {
-        const w = window as unknown as TerminalWindow;
-        w.desktopSidebarTerms = [];
-        let base: typeof w.Terminal;
-        Object.defineProperty(window, 'Terminal', {
-            configurable: true,
-            get: () => base,
-            set: (TerminalClass: typeof w.Terminal) => {
-                base = class extends TerminalClass {
-                    constructor(options: Record<string, unknown>) {
-                        super(options);
-                        w.desktopSidebarTerms.push(this);
-                    }
-                };
-            },
-        });
-    });
-
+    const phi = await startDesktopFixture();
+    let context: Awaited<ReturnType<Browser['newContext']>> | undefined;
+    let diagnostics: PageDiagnostics | undefined;
     try {
-        const initialized = waitForAppConsole(page);
-        await Promise.all([page.goto(phi.url), initialized]);
-        const workspace = realpathSync(phi.dir);
-        await expect(page.locator('#workspace-select')).toHaveValue(workspace);
-        await expect(page.locator('#sidebar-drawer-resizer')).toBeAttached();
-
-        const [spawnResponse] = await Promise.all([
-            page.waitForResponse(
-                (response) =>
-                    response.url().endsWith('/api/terminals') &&
-                    response.request().method() === 'POST',
-                { timeout: 30_000 },
-            ),
-            page.locator('#empty-quick-launch [data-coder="bash"]').click(),
-        ]);
-        expect(spawnResponse.status()).toBe(200);
-        const { pane_id: paneId } = (await spawnResponse.json()) as {
-            pane_id: string;
-        };
-        const term = page.locator(`#term-${paneId}`);
-        await expect(term.locator('.xterm')).toBeVisible();
-        await expect
-            .poll(
-                async () =>
-                    (await terminalState(page, paneId))?.lines.join('\n') ?? '',
-                { timeout: 15_000 },
-            )
-            .toContain('sidebar fixture ready');
+        const feature = await newFeaturePage(browser, phi);
+        context = feature.context;
+        diagnostics = feature.diagnostics;
+        const { page } = feature;
+        await waitForInitialized(page, phi);
+        const paneId = await launchShell(page);
         await page.evaluate(() => document.fonts.ready);
 
         const before = await panelGeometry(page, paneId);
@@ -718,30 +642,10 @@ done
             )
             .toBe(true);
         const hiddenGeometry = await panelGeometry(page, paneId);
+        const hiddenMarker = `sidebar-hidden-${Date.now()}`;
+        await sendAndCheckMarker(page, phi, paneId, hiddenMarker, diagnostics);
         const hiddenTerm = await terminalState(page, paneId);
         expect(hiddenTerm).not.toBeNull();
-        const hiddenMarker = `sidebar-hidden-${Date.now()}`;
-        await sendMarker(page, paneId, hiddenMarker);
-        const inputLog = join(phi.dir, 'home', 'sidebar-input.log');
-        await expect
-            .poll(
-                () =>
-                    existsSync(inputLog)
-                        ? readFileSync(inputLog, 'utf8').trim().split('\n')
-                        : [],
-                { timeout: 15_000 },
-            )
-            .toContain(hiddenMarker);
-        await expect
-            .poll(
-                async () => (await terminalState(page, paneId))?.lines ?? [],
-                { timeout: 15_000 },
-            )
-            .toContain(`ACK:${hiddenMarker}`);
-        const hiddenOutput = (await terminalState(page, paneId))!.lines;
-        expect(hiddenOutput).toContain(
-            `SIZE:${hiddenMarker}:${hiddenTerm!.rows} ${hiddenTerm!.cols}`,
-        );
 
         await page.getByRole('button', { name: 'Show sessions' }).click();
         await expect
@@ -768,25 +672,17 @@ done
         expect(restoredTerm?.active).toBe(true);
         expect(restoredTerm?.dead).toBe(false);
         const restoredMarker = `sidebar-restored-${Date.now()}`;
-        await sendMarker(page, paneId, restoredMarker);
-        await expect
-            .poll(() => readFileSync(inputLog, 'utf8').trim().split('\n'), {
-                timeout: 15_000,
-            })
-            .toContain(restoredMarker);
-        await expect
-            .poll(
-                async () => (await terminalState(page, paneId))?.lines ?? [],
-                { timeout: 15_000 },
-            )
-            .toContain(`ACK:${restoredMarker}`);
-        const restoredOutput = (await terminalState(page, paneId))!.lines;
-        expect(restoredOutput).toContain(
-            `SIZE:${restoredMarker}:${restoredTerm!.rows} ${restoredTerm!.cols}`,
+        await sendAndCheckMarker(
+            page,
+            phi,
+            paneId,
+            restoredMarker,
+            diagnostics,
         );
+
         await expect(page.locator('#tabs-container .tab')).toHaveCount(1);
         await expect(page.locator(`#term-${paneId}.active`)).toBeVisible();
-        expect(readFileSync(inputLog, 'utf8').trim().split('\n')).toEqual([
+        expect(readInputLog(inputLog(phi)).trim().split('\n')).toEqual([
             hiddenMarker,
             restoredMarker,
         ]);
@@ -811,15 +707,7 @@ done
             contentType: 'application/json',
         });
     } finally {
-        try {
-            await context.close();
-        } finally {
-            try {
-                await attachDiagnostics(testInfo, diagnostics, phi);
-            } finally {
-                await phi.stop();
-            }
-        }
+        await cleanupFeatureFixture(context, diagnostics, phi, testInfo);
     }
 });
 
@@ -828,10 +716,6 @@ test('M2 saved visibility and widths survive reloads and rapid toggles', async (
     request,
 }, testInfo) => {
     test.setTimeout(180_000);
-    test.skip(
-        process.platform === 'win32',
-        'fixture requires a POSIX shell and stty',
-    );
     const phi = await startDesktopFixture();
     let context: Awaited<ReturnType<Browser['newContext']>> | undefined;
     let page: Page | undefined;
@@ -971,8 +855,11 @@ test('M2 saved visibility and widths survive reloads and rapid toggles', async (
         expect(readInputLog(inputLog(phi))).toBe(`${marker}\n`);
         await verifyPinDiagnostics(diagnostics, request, phi, paneId);
     } finally {
-        await configGate?.remove();
-        await cleanupFeatureFixture(context, diagnostics, phi, testInfo);
+        try {
+            await configGate?.remove();
+        } finally {
+            await cleanupFeatureFixture(context, diagnostics, phi, testInfo);
+        }
     }
 });
 
@@ -1020,8 +907,11 @@ test('M2 local toggles work while coder startup is delayed', async ({
         );
         expectCleanDiagnostics(diagnostics);
     } finally {
-        await gate?.remove();
-        await cleanupFeatureFixture(context, diagnostics, phi, testInfo);
+        try {
+            await gate?.remove();
+        } finally {
+            await cleanupFeatureFixture(context, diagnostics, phi, testInfo);
+        }
     }
 });
 
@@ -1068,10 +958,62 @@ test('M2 local toggles work before authentication status returns', async ({
         );
         expectCleanDiagnostics(diagnostics);
     } finally {
-        await gate?.remove();
-        await cleanupFeatureFixture(context, diagnostics, phi, testInfo);
+        try {
+            await gate?.remove();
+        } finally {
+            await cleanupFeatureFixture(context, diagnostics, phi, testInfo);
+        }
     }
 });
+
+for (const viewport of [
+    { width: 900, height: 900, touch: false },
+    { width: 390, height: 844, touch: true },
+]) {
+    test(`hidden desktop sidebar recovers focus from a ${viewport.width}px drawer`, async ({
+        browser,
+    }, testInfo) => {
+        test.setTimeout(180_000);
+        const phi = await startDesktopFixture();
+        let context: Awaited<ReturnType<Browser['newContext']>> | undefined;
+        let diagnostics: PageDiagnostics | undefined;
+        try {
+            const feature = await newFeaturePage(
+                browser,
+                phi,
+                { width: 1440, height: 900 },
+                viewport.touch,
+            );
+            context = feature.context;
+            diagnostics = feature.diagnostics;
+            const { page } = feature;
+            await waitForInitialized(page, phi);
+            await closeDiffPanelForSidebarCoverage(page);
+            const toggle = page.locator('#desktop-sidebar-toggle');
+            await toggle.click();
+            await page.setViewportSize(viewport);
+            const mobile = page.locator('#mobile-sidebar-toggle');
+            if (viewport.touch) await mobile.tap();
+            else await mobile.click();
+            if (viewport.touch)
+                await page.locator('#drawer-open-sessions').tap();
+            const inside = page.locator('#new-session-btn');
+            await expect(inside).toBeVisible();
+            await inside.focus();
+            await expect(inside).toBeFocused();
+            await page.setViewportSize({ width: 1440, height: 900 });
+            await expect(page.locator('#sidebar-panel')).toBeHidden();
+            await expect(toggle).toBeFocused();
+            await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+            await page.keyboard.press('Enter');
+            await expect(page.locator('#sidebar-panel')).toBeVisible();
+            await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+            expectCleanDiagnostics(diagnostics);
+        } finally {
+            await cleanupFeatureFixture(context, diagnostics, phi, testInfo);
+        }
+    });
+}
 
 test('M2 coder 503 does not block local visibility toggles', async ({
     browser,
@@ -1187,10 +1129,6 @@ test('M2 offline visibility changes preserve a staged draft', async ({
     request,
 }, testInfo) => {
     test.setTimeout(180_000);
-    test.skip(
-        process.platform === 'win32',
-        'fixture requires a POSIX shell and stty',
-    );
     const phi = await startDesktopFixture();
     let context: Awaited<ReturnType<Browser['newContext']>> | undefined;
     let page: Page | undefined;
@@ -1287,13 +1225,13 @@ test('M2 locked authentication still blocks protected APIs and the toggle', asyn
             .locator('#desktop-sidebar-toggle')
             .evaluate((button) => {
                 const rect = button.getBoundingClientRect();
-                return (
+                return Boolean(
                     document
                         .elementFromPoint(
                             rect.x + rect.width / 2,
                             rect.y + rect.height / 2,
                         )
-                        ?.closest('.access-auth-overlay') !== null
+                        ?.closest('.access-auth-overlay'),
                 );
             });
         expect(hitTarget).toBe(true);
@@ -1319,10 +1257,6 @@ test('M2 responsive mouse and touch layouts preserve desktop state and keyboard 
     request,
 }, testInfo) => {
     test.setTimeout(180_000);
-    test.skip(
-        process.platform === 'win32',
-        'fixture requires a POSIX shell and stty',
-    );
     const phi = await startDesktopFixture();
     const contexts: Awaited<ReturnType<Browser['newContext']>>[] = [];
     const diagnosticsList: PageDiagnostics[] = [];

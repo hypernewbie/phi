@@ -18,6 +18,7 @@ export function initDesktopSidebarToggle() {
     const render = () => {
         const drawer = isSidebarDrawerViewport();
         const focusedButton = button.contains(document.activeElement);
+        const focusInSidebar = sidebar.contains(document.activeElement);
         root.classList.toggle('desktop-sidebar-hidden', hidden && !drawer);
         button.classList.toggle('hidden', drawer);
         button.setAttribute('aria-expanded', String(!hidden));
@@ -25,15 +26,13 @@ export function initDesktopSidebarToggle() {
         button.title = hidden ? 'Show sessions' : 'Hide sessions';
         if (drawer && wasDrawer === false && focusedButton)
             mobileToggle?.focus({ preventScroll: true });
+        else if (hidden && !drawer && focusInSidebar)
+            button.focus({ preventScroll: true });
         wasDrawer = drawer;
-        return drawer;
     };
     const toggle = () => {
-        const focusInSidebar = sidebar.contains(document.activeElement);
         hidden = !hidden;
-        const drawer = render();
-        if (hidden && !drawer && focusInSidebar)
-            button.focus({ preventScroll: true });
+        render();
         try {
             window.localStorage.setItem(SIDEBAR_HIDDEN_KEY, hidden ? '1' : '0');
         }

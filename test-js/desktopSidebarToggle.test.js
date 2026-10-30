@@ -306,6 +306,43 @@ describe('desktop sessions-panel toggle', () => {
         }
     });
 
+    it('recovers focus when returning from a drawer to a hidden desktop panel', () => {
+        setViewport();
+        vi.stubGlobal('matchMedia', undefined);
+        const { button, dispose } = mount();
+        const inside = document.getElementById('inside-sidebar');
+        const outside = document.getElementById('outside-sidebar');
+        try {
+            button.click();
+            window.innerWidth = 900;
+            window.dispatchEvent(new Event('resize'));
+            inside.focus();
+            window.innerWidth = 1440;
+            window.dispatchEvent(new Event('resize'));
+            expect(document.activeElement).toBe(button);
+            expect(
+                document.documentElement.classList.contains(HIDDEN_CLASS),
+            ).toBe(true);
+
+            // Repeated viewport events must not steal focus from elsewhere.
+            outside.focus();
+            window.dispatchEvent(new Event('resize'));
+            expect(document.activeElement).toBe(outside);
+
+            // A visible docked sidebar does not need focus recovery.
+            button.click();
+            window.innerWidth = 900;
+            window.dispatchEvent(new Event('resize'));
+            inside.focus();
+            window.innerWidth = 1440;
+            window.dispatchEvent(new Event('resize'));
+            expect(document.activeElement).toBe(inside);
+        } finally {
+            dispose();
+            clearFeatureState();
+        }
+    });
+
     it('rerenders on both viewport media-query changes and removes listeners', () => {
         const state = new Map([
             [COMPACT_VIEWPORT_QUERY, false],
