@@ -46,7 +46,7 @@ curl --fail-with-body --max-time 5 --config "$DIAG_SESSION/client.curl" "$DIAG_U
 - `started_at`, `elapsed_seconds`, `pid`, and `build_commit`: process identity and age.
 - `unavailable`: stable reason codes for process fields that could not be read. Other fields remain available.
 
-RSS and Go heap values overlap. Do not add them together. The existing `/api/diag` and `/api/system/cpu` application endpoints are unchanged; `/api/system/cpu` reports host CPU, not Phi process CPU.
+RSS and Go heap values overlap. Do not add them together. One snapshot is served at a time; a competing request gets HTTP 503 and can retry. The existing `/api/diag` and `/api/system/cpu` application endpoints are unchanged; `/api/system/cpu` reports host CPU, not Phi process CPU.
 
 For snapshots from the same `pid`, `started_at`, and build, calculate CPU over an interval as:
 

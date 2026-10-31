@@ -84,7 +84,7 @@ func main() {
 	// Registered unconditionally (not behind //go:build otel) so a default
 	// build parses identical args — it just never has anywhere to send the
 	// endpoint. obs.Init's body is the only tag-split part (plan §B).
-	otelEndpointFlag := flag.String("otel-endpoint", "", "OTLP/gRPC collector endpoint for OpenTelemetry export (host:port). Only takes effect in a binary built with -tags otel. Falls back to PHI_OTEL_ENDPOINT.")
+	otelEndpointFlag := flag.String("otel-endpoint", "", "OTLP/gRPC collector endpoint for OpenTelemetry export (host:port). Only takes effect in a binary built with -tags=otel. Falls back to PHI_OTEL_ENDPOINT.")
 	flag.Parse()
 
 	if *diagnosticsDirFlag != "" && !filepath.IsAbs(*diagnosticsDirFlag) {
