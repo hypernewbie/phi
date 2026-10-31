@@ -891,9 +891,9 @@ describe('host-authenticated shell', () => {
             .dispatchEvent(new Event('submit', { cancelable: true }));
 
         await vi.waitFor(() => expect(reload).toHaveBeenCalled());
-        expect(
-            fetchSpy.mock.calls.map(([url]) => String(url)),
-        ).toContain('/api/auth/login');
+        expect(fetchSpy.mock.calls.map(([url]) => String(url))).toContain(
+            '/api/auth/login',
+        );
         expect(
             fetchSpy.mock.calls.some(([url]) =>
                 String(url).startsWith('/api/auth/v2/'),

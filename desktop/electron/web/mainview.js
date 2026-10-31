@@ -306,6 +306,7 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
   const authSubmitBtn = document.getElementById('desktop-auth-submit');
   const authCard = authModal?.querySelector('.desktop-auth-card');
   let authRequestId = null;
+  let authSubmission = null;
   let authProfileId = null; // first push after launch initializes this; we accept any first push
 
   const closeAuthModal = () => {
@@ -313,6 +314,7 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
     if (authInputEl) authInputEl.value = '';
     if (authErrorEl) authErrorEl.textContent = '';
     authRequestId = null;
+    authSubmission = null;
     authProfileId = null;
   };
   const openAuthModal = (info) => {
@@ -325,8 +327,9 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
       authErrorEl.textContent = '';
       authInputEl.value = '';
     }
-    authSubmitBtn.disabled = false;
-    authCancelBtn.disabled = false;
+    const submitting = authSubmission?.requestId === info.requestId;
+    authSubmitBtn.disabled = submitting;
+    authCancelBtn.disabled = submitting;
     authModal.hidden = false;
     if (!isSameRequest) {
       requestAnimationFrame(() => authInputEl.focus());
@@ -342,34 +345,46 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
   };
 
   const submitAuth = async () => {
-    if (authRequestId === null) return;
+    if (authRequestId === null || authSubmission !== null) return;
     const password = authInputEl?.value ?? '';
     if (password.length < 8) {
       if (authErrorEl) authErrorEl.textContent = 'Password is at least 8 characters.';
       return;
     }
+    const submission = { requestId: authRequestId };
+    authSubmission = submission;
     if (authSubmitBtn) authSubmitBtn.disabled = true;
     if (authCancelBtn) authCancelBtn.disabled = true;
-    const result = await window.electron.submitAccessPassword(authRequestId, password);
-    if (authSubmitBtn) authSubmitBtn.disabled = false;
-    if (authCancelBtn) authCancelBtn.disabled = false;
-    if (!result || result.ok === undefined) {
-      closeAuthModal();
-      return;
-    }
-    if (result.ok) {
-      closeAuthModal();
-      // Re-pull /api/config with the captured cookie.
-      void refreshConfig();
-      return;
-    }
-    // Failures keep the modal open with an inline error and clear the input.
-    const code = result.code ?? 'unavailable';
-    const msg = (result.message ?? '').slice(0, 200);
-    if (authErrorEl) authErrorEl.textContent = msg !== '' ? msg : codeErrorText(code);
-    if (authInputEl) {
-      authInputEl.value = '';
-      authInputEl.focus();
+    if (authErrorEl) authErrorEl.textContent = '';
+    try {
+      let result;
+      try {
+        result = await window.electron.submitAccessPassword(submission.requestId, password);
+      } catch {
+        result = { ok: false, code: 'unavailable', message: 'Sign-in was not confirmed. Try again.' };
+      }
+      if (authSubmission !== submission || authRequestId !== submission.requestId) return;
+      if (result?.ok === true) {
+        closeAuthModal();
+        // Re-pull /api/config with the captured cookie.
+        void refreshConfig();
+        return;
+      }
+      const code = result?.code ?? 'unavailable';
+      const msg = typeof result?.message === 'string' ? result.message.slice(0, 200) : '';
+      if (authErrorEl) authErrorEl.textContent = msg !== '' ? msg : codeErrorText(code);
+      // Only a confirmed password rejection clears input. A transport failure
+      // or unconfirmed reply leaves it in memory for an explicit retry.
+      if (authInputEl) {
+        if (code === 'invalid-password') authInputEl.value = '';
+        authInputEl.focus();
+      }
+    } finally {
+      if (authSubmission === submission) {
+        authSubmission = null;
+        if (authSubmitBtn) authSubmitBtn.disabled = false;
+        if (authCancelBtn) authCancelBtn.disabled = false;
+      }
     }
   };
 

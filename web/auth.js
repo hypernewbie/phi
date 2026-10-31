@@ -404,7 +404,7 @@ function invalidationChannel() {
     return invalidation;
 }
 
-function broadcastInvalidation(ownerKey, family = 0) {
+function broadcastInvalidation(ownerKey, family = 0, disabled = false) {
     const channel = invalidationChannel();
     if (!channel) return;
     channel.postMessage({
@@ -412,6 +412,7 @@ function broadcastInvalidation(ownerKey, family = 0) {
         origin: location.origin,
         ownerKey,
         family,
+        disabled,
     });
 }
 
@@ -430,10 +431,19 @@ function receiveLogout(message) {
     const hasPrompt = pendingOverlay?.ownerKey === ownerKey;
     state.loggedOut = true;
     dropCredential(state);
-    // The family is gone server-side. Keep an existing prompt open, or ask the
-    // active tab to sign in again instead of leaving it silently signed out.
-    if (state.accessEnabled && activeAuthKey === ownerKey && !hasPrompt)
-        void requestReauth(contextForKey(ownerKey));
+    if (message.disabled === true) {
+        if (hasPrompt) pendingOverlay.finish({ enabled: false });
+        if (activeAuthKey === ownerKey) {
+            const bootstrap = hostAuthenticatedMode()
+                ? bootstrapHostAuthenticated(activeAuthContext)
+                : bootstrapAccessAuth(activeAuthContext);
+            void bootstrap.catch(() => {});
+        }
+    } else if (activeAuthKey === ownerKey && !hasPrompt) {
+        if (hostAuthenticatedMode())
+            void bootstrapHostAuthenticated(activeAuthContext).catch(() => {});
+        else void requestReauth(contextForKey(ownerKey));
+    }
 }
 
 function broadcastBundle(context, state) {
@@ -1039,7 +1049,7 @@ async function clearV2Password(context) {
         state.accessEnabled = false;
         state.selectedProtocol = 'v2';
         state.epoch++;
-        broadcastInvalidation(credentialKey(context), family);
+        broadcastInvalidation(credentialKey(context), family, true);
         if (pendingOverlay?.ownerKey === credentialKey(context))
             pendingOverlay.finish({ enabled: false });
         return { enabled: false };
@@ -1052,7 +1062,7 @@ async function clearV2Password(context) {
     state.accessEnabled = false;
     state.selectedProtocol = 'v2';
     state.epoch++;
-    broadcastInvalidation(credentialKey(context), family);
+    broadcastInvalidation(credentialKey(context), family, true);
     if (pendingOverlay?.ownerKey === credentialKey(context))
         pendingOverlay.finish({ enabled: false });
     return { enabled: false };

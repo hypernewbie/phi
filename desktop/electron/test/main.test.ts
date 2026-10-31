@@ -1002,8 +1002,8 @@ describe('src/desktop.ts (observed rail identity + accent)', () => {
       "document.getElementById('hostname-display')",
     );
     expect(desktopSource).toContain("getPropertyValue('--accent')");
-    expect(desktopSource).toMatch(
-      /executeJavaScript\(\s*REMOTE_IDENTITY_SCRIPT/,
+    expect(desktopSource).toContain(
+      'executeRendererRead(view.webContents, REMOTE_IDENTITY_SCRIPT)',
     );
   });
 
@@ -1594,8 +1594,11 @@ describe('src/desktop.ts (per-server CPU observation: rail intensity + taskbar p
     expect(desktopSource).toContain(
       "document.querySelector('.brand .logo')?.dataset.cpuPct",
     );
-    expect(desktopSource).toContain('executeJavaScript(REMOTE_CPU_SCRIPT)');
-    // The script is a fixed constant — page data is never interpolated into it.
+    expect(desktopSource).toContain('REMOTE_PROFILE_POLL_SCRIPT)');
+    expect(desktopSource).toMatch(/cpu: \$\{REMOTE_CPU_SCRIPT\}/);
+    expect(desktopSource).toMatch(/activity: \$\{REMOTE_ACTIVITY_SCRIPT\}/);
+    expect(desktopSource).toMatch(/workspace: \$\{READ_WORKSPACE_SCRIPT\}/);
+    // The scripts are fixed constants — page data is never interpolated.
     expect(desktopSource).toContain('const REMOTE_CPU_SCRIPT = `(() => {');
   });
 
@@ -1652,6 +1655,8 @@ describe('src/desktop.ts (per-server CPU observation: rail intensity + taskbar p
     expect(
       desktopSource.indexOf('Number.isFinite(cpu)', pollIdx),
     ).toBeGreaterThan(pollIdx);
+    expect(desktopSource).toContain('pendingRendererReads.has(contents)');
+    expect(desktopSource).toContain('contents.isLoading()');
   });
 
   it('merges each profile CPU reading into the rail snapshot and clears it when the view or profile is gone', () => {

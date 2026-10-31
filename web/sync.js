@@ -196,6 +196,10 @@ export class SyncManager {
         return res;
     }
     async refreshMessages() {
+        if (window.location.protocol === 'phi-app:' &&
+            !this.app.sessionsManager.config?.sync_coordinator) {
+            return;
+        }
         try {
             if (document.activeElement !== this.coordinatorInput) {
                 this.coordinatorInput.value = await this.getCoordinatorUrl();

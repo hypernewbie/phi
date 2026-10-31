@@ -489,6 +489,167 @@ describe('desktop auth modal (mainview.js)', () => {
     expect(input.value).toBe('');
   });
 
+  it.each(['unavailable', 'rate-limited'])(
+    'retains the password after %s and permits an explicit retry',
+    async (code) => {
+      fakeBridge.submitAccessPassword = vi
+        .fn()
+        .mockResolvedValueOnce({ ok: false, code })
+        .mockResolvedValueOnce({ ok: true });
+      const doc = await loadMainView();
+      recordedAuthRequired?.({
+        requestId: 'retry',
+        profileId: 'a',
+        origin: 'http://a/',
+      });
+      const input = doc.getElementById(
+        'desktop-auth-input',
+      ) as HTMLInputElement;
+      const submit = doc.getElementById(
+        'desktop-auth-submit',
+      ) as HTMLButtonElement;
+      const cancel = doc.getElementById(
+        'desktop-auth-cancel',
+      ) as HTMLButtonElement;
+      input.value = 'synthetic-password';
+      submit.click();
+      await vi.waitFor(() =>
+        expect(doc.getElementById('desktop-auth-error')?.textContent).not.toBe(
+          '',
+        ),
+      );
+      expect(input.value === 'synthetic-password').toBe(true);
+      expect(submit.disabled).toBe(false);
+      expect(cancel.disabled).toBe(false);
+      expect(
+        doc.getElementById('desktop-auth-modal')?.hasAttribute('hidden'),
+      ).toBe(false);
+      expect(fakeBridge.submitAccessPassword).toHaveBeenCalledOnce();
+      submit.click();
+      await vi.waitFor(() =>
+        expect(
+          doc.getElementById('desktop-auth-modal')?.hasAttribute('hidden'),
+        ).toBe(true),
+      );
+      expect(fakeBridge.submitAccessPassword).toHaveBeenCalledTimes(2);
+      expect(input.value).toBe('');
+    },
+  );
+
+  it.each(['rejected IPC', 'unconfirmed reply'])(
+    'keeps the prompt retryable after %s',
+    async (failure) => {
+      fakeBridge.submitAccessPassword =
+        failure === 'rejected IPC'
+          ? vi.fn().mockRejectedValue(new Error('synthetic IPC failure'))
+          : vi.fn().mockResolvedValue(undefined);
+      const doc = await loadMainView();
+      recordedAuthRequired?.({
+        requestId: 'ipc',
+        profileId: 'a',
+        origin: 'http://a/',
+      });
+      const input = doc.getElementById(
+        'desktop-auth-input',
+      ) as HTMLInputElement;
+      const submit = doc.getElementById(
+        'desktop-auth-submit',
+      ) as HTMLButtonElement;
+      input.value = 'synthetic-password';
+      submit.click();
+      await vi.waitFor(() =>
+        expect(doc.getElementById('desktop-auth-error')?.textContent).not.toBe(
+          '',
+        ),
+      );
+      expect(input.value === 'synthetic-password').toBe(true);
+      expect(
+        doc.getElementById('desktop-auth-modal')?.hasAttribute('hidden'),
+      ).toBe(false);
+      expect(submit.disabled).toBe(false);
+      expect(
+        (doc.getElementById('desktop-auth-cancel') as HTMLButtonElement)
+          .disabled,
+      ).toBe(false);
+      expect(fakeBridge.submitAccessPassword).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('coalesces click, form submit, and re-pushed prompts while IPC is pending', async () => {
+    let finish!: (result: unknown) => void;
+    fakeBridge.submitAccessPassword = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const doc = await loadMainView();
+    const prompt = {
+      requestId: 'pending',
+      profileId: 'a',
+      origin: 'http://a/',
+    };
+    recordedAuthRequired?.(prompt);
+    const input = doc.getElementById('desktop-auth-input') as HTMLInputElement;
+    const submit = doc.getElementById(
+      'desktop-auth-submit',
+    ) as HTMLButtonElement;
+    input.value = 'synthetic-password';
+    submit.click();
+    recordedAuthRequired?.(prompt);
+    const form = doc.querySelector('.desktop-auth-card') as HTMLFormElement;
+    if (!doc.defaultView) throw new Error('Fixture document has no window');
+    form.dispatchEvent(
+      new doc.defaultView.Event('submit', { bubbles: true, cancelable: true }),
+    );
+    expect(fakeBridge.submitAccessPassword).toHaveBeenCalledOnce();
+    expect(submit.disabled).toBe(true);
+    finish({ ok: false, code: 'unavailable' });
+    await vi.waitFor(() => expect(submit.disabled).toBe(false));
+  });
+
+  it.each([true, false])(
+    'ignores a late ok=%s answer after a profile switch',
+    async (ok) => {
+      let finish!: (result: unknown) => void;
+      fakeBridge.submitAccessPassword = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      );
+      const doc = await loadMainView();
+      recordedAuthRequired?.({
+        requestId: 'old',
+        profileId: 'a',
+        origin: 'http://a/',
+      });
+      const input = doc.getElementById(
+        'desktop-auth-input',
+      ) as HTMLInputElement;
+      input.value = 'synthetic-old-password';
+      (doc.getElementById('desktop-auth-submit') as HTMLButtonElement).click();
+      recordedActiveServer?.({ id: 'b', origin: 'http://b/', accent: 'teal' });
+      recordedAuthRequired?.({
+        requestId: 'new',
+        profileId: 'b',
+        origin: 'http://b/',
+      });
+      input.value = 'synthetic-new-password';
+      finish({ ok, code: 'invalid-password' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(
+        doc.getElementById('desktop-auth-modal')?.hasAttribute('hidden'),
+      ).toBe(false);
+      expect(input.value === 'synthetic-new-password').toBe(true);
+      expect(doc.getElementById('desktop-auth-error')?.textContent).toBe('');
+      expect(
+        (doc.getElementById('desktop-auth-submit') as HTMLButtonElement)
+          .disabled,
+      ).toBe(false);
+    },
+  );
+
   it('cancel posts submitAccessPassword(requestId, null) and closes the modal', async (ctx) => {
     if (!hasGenerated) {
       ctx.skip('web/index.html missing — run `pnpm run build` first');

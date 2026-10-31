@@ -232,12 +232,12 @@ async function readLogoutScope(req: Request): Promise<boolean> {
   }
 }
 
-/** The exact clear answer a v2 password clear must return. `enabled: false`
- *  alone is also produced by an unrelated config row, so it is not enough. */
+/** The server's exact password-clear answer, before the host adds `ok`. */
 function isClearReply(payload: unknown): boolean {
-  if (!payload || typeof payload !== 'object') return false;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload))
+    return false;
   const body = payload as Record<string, unknown>;
-  return body.ok === true && body.enabled === false;
+  return body.enabled === false && Object.keys(body).length === 1;
 }
 
 function tokenFreeJSON(body: string, status: number): Response {
@@ -1147,10 +1147,13 @@ export class EmbeddedTransport {
     targetUrl: URL,
     profile: EmbeddedProfile,
   ): Promise<Response> {
-    const body = await readRequestBody(req);
-    // The fence is captured before the first await. A slow response must not
-    // replace a credential that a newer attempt already installed.
+    // Capture before reading the body: a newer sign-in can win during either
+    // request or response streaming. Never send a superseded mutation.
     const attempt = this.auth?.captureAttempt(profile.origin) ?? null;
+    const body = await readRequestBody(req);
+    if (attempt && !attempt.isCurrent()) {
+      return tokenFreeError('superseded', 409);
+    }
     const headers = this.buildForwardHeaders(req, profile, {
       jsonContentType: true,
       // A login carries no access credential even when the host holds one.
@@ -1195,7 +1198,7 @@ export class EmbeddedTransport {
 
     // Clear: the credential is gone server-side, and the host drops its own
     // only while this request still owns the origin.
-    if (isClearReply(payload)) {
+    if (isPasswordRoute(targetUrl.pathname) && isClearReply(payload)) {
       if (attempt && this.auth) {
         if (!this.auth.clearBundleForAttempt(attempt)) {
           return tokenFreeError('unable to clear credential', 503);
@@ -1232,7 +1235,11 @@ export class EmbeddedTransport {
   ): Promise<Response> {
     void targetUrl;
     if (!this.auth) return tokenFreeError('unavailable', 503);
+    const attempt = this.auth.captureAttempt(profile.origin);
     const all = await readLogoutScope(req);
+    if (attempt && !attempt.isCurrent()) {
+      return tokenFreeError('superseded', 409);
+    }
     const result = await this.auth.logout(profile.origin, all);
     if (result.kind === 'ok' || result.kind === 'unauthorized') {
       return tokenFreeJSON(LOGOUT_OK_BODY, 200);

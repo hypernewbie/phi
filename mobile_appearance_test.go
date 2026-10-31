@@ -259,7 +259,7 @@ func TestMobileAppearanceMethodsAndAuthorization(t *testing.T) {
 	if w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" || !strings.Contains(w.Body.String(), `"ui_font_size":null`) {
 		t.Fatalf("GET=%d %s", w.Code, w.Body.String())
 	}
-	if err := auth.configure(testAccessHash()); err != nil {
+	if err := setTestAccessRecord(auth, testAccessHash()); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()

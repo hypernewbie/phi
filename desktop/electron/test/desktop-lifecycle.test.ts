@@ -558,6 +558,62 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     );
   });
 
+  it('keeps a timed-out identity read from queuing poll scripts', async () => {
+    const host = new DesktopHost();
+    await host.start(primary);
+    const win = fake.FakeBrowserWindow.instances[0];
+    win.webContents.emit('did-finish-load');
+    await flush();
+    const ctrl = host.controller!;
+    const profile = ctrl.add('http://alpha.example.test:7070/');
+    host.profileViews!.addProfile(profile.id, profile.origin);
+    ctrl.setActive(profile.id);
+    const view = host.viewByOrigin.get(profile.origin)!;
+    let finish: (value: unknown) => void = () => {};
+    const execute = vi
+      .spyOn(view.webContents, 'executeJavaScript')
+      .mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      );
+
+    vi.useFakeTimers();
+    try {
+      const identity = host.observeProfileIdentity(view, profile.origin);
+      await flush();
+      expect(execute).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await identity).toBeNull();
+
+      host.pollCpu();
+      host.pollCpu();
+      host.pollFileAction();
+      host.pollFileAction();
+      expect(execute).toHaveBeenCalledTimes(1);
+
+      finish({ hostname: 'ALPHA', accent: '#123456' });
+      await flush();
+
+      host.pollFileAction();
+      host.pollFileAction();
+      expect(execute).toHaveBeenCalledTimes(2);
+      expect(execute.mock.calls[1][0]).toContain('__phiFileAction');
+      finish(null);
+      await flush();
+
+      host.pollCpu();
+      expect(execute).toHaveBeenCalledTimes(3);
+      expect(execute.mock.calls[2][0]).toContain('cpu:');
+      finish({ cpu: 62, activity: true, workspace: '/alpha/code' });
+      await flush();
+      expect(host.observedCpu.get(profile.id)).toBe(62);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('power resume wakes only the active retained view and tolerates absent/destroyed views', async () => {
     const host = new DesktopHost();
     await host.start(primary);

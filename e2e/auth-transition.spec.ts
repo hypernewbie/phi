@@ -6,10 +6,25 @@ import {
     randomBytes,
 } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
+import {
+    existsSync,
+    mkdirSync,
+    readFileSync,
+    unlinkSync,
+    writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
-import { expect, test, type Browser, type Page } from '@playwright/test';
+import {
+    expect,
+    test,
+    type Browser,
+    type Page,
+    type Route,
+} from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
+
+test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 
 // Permanent auth-transition coverage (plan M4c). Five groups, each against a
 // real phi binary in its own temporary HOME:
@@ -53,6 +68,45 @@ function preissuedLegacySession(verifier: Buffer): string {
     const payload = `${b64url(randomBytes(32))}.${expiresAt}`;
     const signature = createHmac('sha256', verifier).update(payload).digest();
     return `${payload}.${b64url(signature)}`;
+}
+
+function readV2DbState(server: PhiServer): {
+    maxGeneration: bigint;
+    consumedHandles: number;
+} {
+    const database = new DatabaseSync(
+        join(server.dir, 'home', '.phi', 'auth.db'),
+        { readOnly: true },
+    );
+    try {
+        const rows = database
+            .prepare('SELECT hex(generation) AS generation FROM auth_families')
+            .all() as { generation: string }[];
+        if (rows.length === 0)
+            throw new Error('auth family is missing from fixture DB');
+        let maxGeneration = 0n;
+        for (const row of rows) {
+            const generation = BigInt(`0x${row.generation}`);
+            if (generation > maxGeneration) maxGeneration = generation;
+        }
+        const consumed = database
+            .prepare('SELECT COUNT(*) AS count FROM auth_consumed_handles')
+            .get() as { count: number };
+        return { maxGeneration, consumedHandles: consumed.count };
+    } finally {
+        database.close();
+    }
+}
+
+function jwtJti(token: string): string {
+    const payload = token.split('.')[1];
+    if (!payload) throw new Error('fixture JWT has no payload');
+    const claims = JSON.parse(
+        Buffer.from(payload, 'base64url').toString('utf8'),
+    ) as { jti?: unknown };
+    if (typeof claims.jti !== 'string')
+        throw new Error('fixture JWT has no JTI');
+    return claims.jti;
 }
 
 /** Locks a fresh server through the public v2 route and returns its bearer. */
@@ -322,21 +376,14 @@ test.describe('v2 bearer session', () => {
             ),
         ).toBeNull();
         expect(
-            await page.evaluate(async (token) => {
+            await page.evaluate((token) => {
                 const stores = [
                     ...Object.values(localStorage),
                     ...Object.values(sessionStorage),
                 ];
-                const dbs =
-                    typeof indexedDB.databases === 'function'
-                        ? (await indexedDB.databases()).map((db) => db.name)
-                        : [];
-                return {
-                    stored: stores.some((value) => value.includes(token)),
-                    databases: dbs,
-                };
+                return stores.some((value) => value.includes(token));
             }, issued as string),
-        ).toEqual({ stored: false, databases: [] });
+        ).toBe(false);
 
         // The refresh handle is HttpOnly: the page cannot read it, and neither
         // cookie leaks a value the page JavaScript can see.
@@ -387,6 +434,15 @@ test.describe('v2 bearer session', () => {
         });
         await page.reload();
         await expectSignedIn(page);
+        await expect
+            .poll(
+                () =>
+                    page.evaluate(() =>
+                        Boolean(window.phiAccessAuth?.getAccessToken()),
+                    ),
+                { timeout: 30_000 },
+            )
+            .toBe(true);
         expect(v2Logins).toEqual([]);
         expect(discoveries).toBe(1);
         expect(refreshes).toBe(1);
@@ -688,6 +744,7 @@ test.describe('MVP legacy home', () => {
             ],
             sync_coordinator: '',
             peers: [],
+            opencode_legacy: true,
         });
         const familyBytes = Buffer.alloc(32, 0x33);
         const familyID = b64url(familyBytes);
@@ -780,6 +837,7 @@ test.describe('MVP legacy home', () => {
             );
             expect(persistedToml).not.toMatch(/^access_password_hash\s*=/m);
             expect(persistedToml).toContain('theme_color = "teal"');
+            expect(persistedToml).toContain('opencode_legacy = true');
             expect(persistedToml).toContain('name = "auth fixture"');
             expect(persistedToml).toContain('command = "printf auth-mvp"');
             const marker = persistedToml.match(
@@ -1060,6 +1118,88 @@ test.describe('MVP legacy home', () => {
     });
 });
 
+test.describe('migration failure', () => {
+    let phi: PhiServer;
+
+    test.beforeEach(async () => {
+        phi = await startPhi();
+        const token = await lockServer(phi.url, PASSWORD);
+        const protectedResponse = await fetch(`${phi.url}/api/coders`, {
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        expect(protectedResponse.status).toBe(200);
+    });
+
+    test.afterEach(async () => {
+        await phi.stop();
+    });
+
+    async function expectDatabaseFailure(state: 'missing' | 'corrupt') {
+        const configDir = join(phi.dir, 'home', '.phi');
+        const configPath = join(configDir, 'config.toml');
+        const databasePath = join(configDir, 'auth.db');
+        const configBefore = readFileSync(configPath);
+        const databaseBefore = readFileSync(databasePath);
+        const backupDir = join(phi.dir, 'auth-backup');
+        mkdirSync(backupDir);
+        const backupConfigPath = join(backupDir, 'config.toml');
+        const backupDatabasePath = join(backupDir, 'auth.db');
+        writeFileSync(backupConfigPath, configBefore);
+        writeFileSync(backupDatabasePath, databaseBefore);
+        expect(configBefore.toString()).toMatch(
+            /\[access_auth_migration\][\s\S]*?state\s*=\s*"complete"/,
+        );
+        expect(readFileSync(backupConfigPath)).toEqual(configBefore);
+        expect(readFileSync(backupDatabasePath)).toEqual(databaseBefore);
+
+        const corruptBytes = Buffer.from('synthetic corrupt auth database');
+        let startupFailure: unknown;
+        try {
+            await phi.restart(() => {
+                if (state === 'missing') unlinkSync(databasePath);
+                else writeFileSync(databasePath, corruptBytes);
+            });
+        } catch (error) {
+            startupFailure = error;
+        }
+
+        if (startupFailure !== undefined) {
+            expect(String(startupFailure)).toMatch(
+                /fixture server exited before health|fixture server exited during identity check|phi server never came up/,
+            );
+            expect(readFileSync(phi.logPath, 'utf8')).toContain(
+                'invalid access password configuration',
+            );
+        } else {
+            phi.verify();
+            const statusResponse = await fetch(`${phi.url}/api/auth/v2/status`);
+            expect(statusResponse.status).toBe(200);
+            const status = (await statusResponse.json()) as {
+                enabled: boolean;
+            };
+            expect(status.enabled).toBe(true);
+            const protectedResponse = await fetch(`${phi.url}/api/coders`);
+            expect(protectedResponse.status).not.toBe(200);
+        }
+
+        expect(readFileSync(backupConfigPath)).toEqual(configBefore);
+        expect(readFileSync(backupDatabasePath)).toEqual(databaseBefore);
+        if (state === 'missing') {
+            expect(existsSync(databasePath)).toBe(false);
+        } else {
+            expect(readFileSync(databasePath)).toEqual(corruptBytes);
+        }
+    }
+
+    test('/ missing DB', async () => {
+        await expectDatabaseFailure('missing');
+    });
+
+    test('/ corrupt DB', async () => {
+        await expectDatabaseFailure('corrupt');
+    });
+});
+
 test.describe('v1-only capability', () => {
     let phi: PhiServer;
 
@@ -1331,6 +1471,509 @@ test.describe('public pages, sockets, and rotation', () => {
             owned: true,
         });
     });
+});
+
+async function provePoorNetworkRecovery(
+    browser: Browser,
+    server: PhiServer,
+    options: Parameters<Browser['newContext']>[0],
+): Promise<void> {
+    const context = await browser.newContext(options);
+    const mobile = Boolean(options?.hasTouch);
+    const activate = async (page: Page, selector: string) => {
+        if (mobile) await page.locator(selector).tap();
+        else await page.locator(selector).click();
+    };
+    let release = () => {};
+    try {
+        const page = await context.newPage();
+        await page.goto(server.url);
+        await unlockMvp(page, PASSWORD, mobile);
+        await expectSignedIn(page);
+        const openSettings = async () => {
+            if (mobile) {
+                await activate(page, '#mobile-sidebar-toggle');
+                await activate(page, '#drawer-settings-btn');
+            } else {
+                await activate(page, '#header-config-pill .pill-label');
+            }
+            await expect(page.locator('.settings-overlay')).toBeVisible();
+        };
+        // Populate the normal local Settings cache before injecting faults.
+        await openSettings();
+        await expect(page.locator('#settings-access-new')).toBeEnabled();
+        await activate(page, '.settings-overlay .modal-close-btn');
+        const failed: string[] = [];
+        const errors: string[] = [];
+        const exceptions: string[] = [];
+        const httpFailures: string[] = [];
+        const writes: string[] = [];
+        let refreshPosts = 0;
+        page.on('request', (request) => {
+            const path = new URL(request.url()).pathname;
+            if (request.method() === 'POST' && path === '/api/auth/v2/refresh')
+                refreshPosts++;
+            else if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method()))
+                writes.push(`${request.method()} ${path}`);
+        });
+        page.on('requestfailed', (request) =>
+            failed.push(
+                `${request.method()} ${new URL(request.url()).pathname}`,
+            ),
+        );
+        page.on('console', (message) => {
+            if (message.type() === 'error') errors.push(message.text());
+        });
+        page.on('pageerror', (error) => exceptions.push(error.name));
+        page.on('response', (response) => {
+            if (response.status() < 400) return;
+            const path = new URL(response.url()).pathname;
+            if (
+                response.status() === 503 &&
+                response.request().method() === 'GET' &&
+                path === '/api/update/status'
+            )
+                return;
+            httpFailures.push(
+                `${response.status()} ${response.request().method()} ${path}`,
+            );
+        });
+        const beforeLatency = await page.evaluate(() =>
+            window.phiAccessAuth.getAccessToken(),
+        );
+        let markHeld!: () => void;
+        const held = new Promise<void>((resolve) => {
+            markHeld = resolve;
+        });
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        await page.route('**/api/auth/v2/refresh', async (route) => {
+            markHeld();
+            await gate;
+            await route.continue();
+        });
+        await page.evaluate(async () => {
+            const auth = await import(new URL('./auth.js', location.href).href);
+            void auth.__test__.renewIfDue({ ifDue: false });
+        });
+        await held;
+        const heldAt = Date.now();
+        await openSettings();
+        const draft = page.locator('#settings-access-new');
+        await draft.fill('unsent-network-fixture');
+        await expect(draft).toHaveValue('unsent-network-fixture');
+        expect(Date.now() - heldAt).toBeLessThan(2_000);
+        expect(refreshPosts).toBe(1);
+        expect(
+            (await page.evaluate(() =>
+                window.phiAccessAuth.getAccessToken(),
+            )) === beforeLatency,
+        ).toBe(true);
+        release();
+        await expect
+            .poll(
+                async () =>
+                    (await page.evaluate(() =>
+                        window.phiAccessAuth.getAccessToken(),
+                    )) !== beforeLatency,
+            )
+            .toBe(true);
+        await page.unroute('**/api/auth/v2/refresh');
+
+        // Assets are already loaded: exercise real offline bootstrap, not an
+        // uncached navigation that could never reach the auth code.
+        const beforeOffline = await page.evaluate(() =>
+            window.phiAccessAuth.getAccessToken(),
+        );
+        await context.setOffline(true);
+        try {
+            const result = await page.evaluate(async () => {
+                const auth = await import(
+                    new URL('./auth.js', location.href).href
+                );
+                try {
+                    await auth.bootstrapAccessAuth();
+                    return 'unexpected success';
+                } catch {
+                    return 'unavailable';
+                }
+            });
+            expect(result).toBe('unavailable');
+            await expect(draft).toHaveValue('unsent-network-fixture');
+            expect(
+                (await page.evaluate(() =>
+                    window.phiAccessAuth.getAccessToken(),
+                )) === beforeOffline,
+            ).toBe(true);
+            await expect(page.locator('.access-auth-overlay')).toHaveCount(0);
+        } finally {
+            await context.setOffline(false);
+        }
+        await page.evaluate(async () => {
+            const auth = await import(new URL('./auth.js', location.href).href);
+            await auth.bootstrapAccessAuth();
+        });
+
+        for (const status of [429, 500, 200]) {
+            const before = await page.evaluate(() =>
+                window.phiAccessAuth.getAccessToken(),
+            );
+            const postsBefore = refreshPosts;
+            let injected = 0;
+            await page.route('**/api/auth/v2/refresh', async (route) => {
+                if (injected > 0) {
+                    await route.continue();
+                    return;
+                }
+                injected++;
+                await route.fulfill({
+                    status,
+                    headers: status === 429 ? { 'Retry-After': '2' } : {},
+                    contentType: 'application/json',
+                    body: status === 200 ? '{malformed' : '{}',
+                });
+            });
+            try {
+                await page.evaluate(async () => {
+                    const auth = await import(
+                        new URL('./auth.js', location.href).href
+                    );
+                    await auth.__test__.renewIfDue({ ifDue: false });
+                });
+                expect(injected).toBe(1);
+                expect(refreshPosts - postsBefore).toBe(1);
+                expect(
+                    (await page.evaluate(() =>
+                        window.phiAccessAuth.getAccessToken(),
+                    )) === before,
+                ).toBe(true);
+                expect(
+                    await page.evaluate(async () => {
+                        const auth = await import(
+                            new URL('./auth.js', location.href).href
+                        );
+                        return auth.__test__.getAccessState().selectedProtocol;
+                    }),
+                ).toBe('v2');
+                await expect(draft).toHaveValue('unsent-network-fixture');
+                await expect(page.locator('.access-auth-overlay')).toHaveCount(
+                    0,
+                );
+                // No tight retry loop; a 429 must honor its two-second delay.
+                await page.waitForTimeout(status === 429 ? 1_800 : 500);
+                expect(refreshPosts - postsBefore).toBe(1);
+                await expect
+                    .poll(
+                        async () =>
+                            (await page.evaluate(() =>
+                                window.phiAccessAuth.getAccessToken(),
+                            )) !== before,
+                    )
+                    .toBe(true);
+                expect(refreshPosts - postsBefore).toBe(2);
+            } finally {
+                await page.unroute('**/api/auth/v2/refresh');
+            }
+        }
+        await expect(draft).toHaveValue('unsent-network-fixture');
+        await activate(page, '.settings-overlay .modal-close-btn');
+        expect(
+            await page.evaluate(
+                async () => (await fetch('/api/coders')).status,
+            ),
+        ).toBe(200);
+        expect(await openSocket(page, '/ws/md-events', EVENTS)).toBe('open');
+        expect(await openSocket(page, '/ws/control', CONTROL)).toBe('open');
+        expect(
+            await page.evaluate(
+                () => document.documentElement.scrollWidth <= window.innerWidth,
+            ),
+        ).toBe(true);
+        expect(writes).toEqual([]);
+        expect(failed).toEqual(['GET /api/auth/status']);
+        expect(httpFailures).toEqual([
+            '429 POST /api/auth/v2/refresh',
+            '500 POST /api/auth/v2/refresh',
+        ]);
+        expect(errors).toEqual([
+            'Failed to load resource: net::ERR_INTERNET_DISCONNECTED',
+            'Failed to load resource: the server responded with a status of 429 (Too Many Requests)',
+            'Failed to load resource: the server responded with a status of 500 (Internal Server Error)',
+        ]);
+        expect(exceptions).toEqual([]);
+    } finally {
+        release();
+        await context.close();
+    }
+}
+
+test.describe('poor network', () => {
+    let phi: PhiServer;
+    test.beforeEach(async () => {
+        phi = await startPhi({
+            config: { sync_coordinator: '', peers: [], opencode_legacy: true },
+        });
+        await lockServer(phi.url, PASSWORD);
+    });
+    test.afterEach(async () => {
+        await phi.stop();
+    });
+    for (const profile of [
+        {
+            name: 'desktop',
+            options: { viewport: { width: 1440, height: 900 } },
+        },
+        {
+            name: 'mobile touch',
+            options: {
+                viewport: { width: 390, height: 844 },
+                isMobile: true,
+                hasTouch: true,
+                deviceScaleFactor: 3,
+            },
+        },
+    ]) {
+        test(`/ ${profile.name}`, async ({ browser }) => {
+            await provePoorNetworkRecovery(browser, phi, profile.options);
+        });
+    }
+});
+
+async function provePostCommitRefreshLoss(
+    browser: Browser,
+    server: PhiServer,
+    options: Parameters<Browser['newContext']>[0],
+): Promise<void> {
+    const context = await browser.newContext(options);
+    try {
+        const page = await context.newPage();
+        await page.goto(server.url);
+        await unlock(page, PASSWORD);
+        await expectSignedIn(page);
+
+        const tokenBefore = await page.evaluate(() =>
+            window.phiAccessAuth.getAccessToken(),
+        );
+        expect(tokenBefore).toBeTruthy();
+        const dbBefore = readV2DbState(server);
+        expect(dbBefore.maxGeneration === 0n).toBe(true);
+        expect(dbBefore.consumedHandles === 0).toBe(true);
+
+        const refreshCookieURL = `${server.url}/api/auth/v2/refresh`;
+        const previous = (await context.cookies(refreshCookieURL)).find(
+            (cookie) => cookie.name === 'phi_access_refresh',
+        );
+        expect(previous).toBeTruthy();
+        if (!previous) throw new Error('refresh cookie is missing');
+        const previousCookie = {
+            name: previous.name,
+            value: previous.value,
+            domain: previous.domain,
+            path: previous.path,
+            expires: previous.expires,
+            httpOnly: previous.httpOnly,
+            secure: previous.secure,
+            sameSite: previous.sameSite,
+        };
+
+        let refreshPosts = 0;
+        let unrelatedAuthWrites = 0;
+        const failedRequests: string[] = [];
+        const consoleErrors: string[] = [];
+        const pageErrors: string[] = [];
+        const unexpectedResponses: string[] = [];
+        const authWritePaths = new Set([
+            '/api/auth/v2/login',
+            '/api/auth/v2/password',
+            '/api/auth/v2/logout',
+        ]);
+        page.on('request', (request) => {
+            const path = new URL(request.url()).pathname;
+            if (request.method() !== 'POST') return;
+            if (path === '/api/auth/v2/refresh') refreshPosts++;
+            else if (authWritePaths.has(path)) unrelatedAuthWrites++;
+        });
+        page.on('requestfailed', (request) => {
+            failedRequests.push(
+                `${request.method()} ${new URL(request.url()).pathname}`,
+            );
+        });
+        page.on('console', (message) => {
+            if (message.type() === 'error') consoleErrors.push(message.text());
+        });
+        page.on('pageerror', (error) => pageErrors.push(error.name));
+        page.on('response', (response) => {
+            if (response.status() < 400) return;
+            const path = new URL(response.url()).pathname;
+            if (
+                response.status() === 503 &&
+                response.request().method() === 'GET' &&
+                path === '/api/update/status'
+            ) {
+                return;
+            }
+            unexpectedResponses.push(
+                `${response.status()} ${response.request().method()} ${path}`,
+            );
+        });
+        const authWritesBefore = unrelatedAuthWrites;
+        let resolveCommit!: (commit: {
+            withheld: { token: string; jti: string; refreshHandle: string };
+            dbAfterCommit: {
+                maxGeneration: bigint;
+                consumedHandles: number;
+            };
+        }) => void;
+        let rejectCommit!: (error: unknown) => void;
+        const committed = new Promise<{
+            withheld: { token: string; jti: string; refreshHandle: string };
+            dbAfterCommit: {
+                maxGeneration: bigint;
+                consumedHandles: number;
+            };
+        }>((resolve, reject) => {
+            resolveCommit = resolve;
+            rejectCommit = reject;
+        });
+        const interceptRefresh = async (route: Route) => {
+            try {
+                const response = await route.fetch({ maxRetries: 0 });
+                const refreshHandle = response
+                    .headersArray()
+                    .filter(({ name }) => name.toLowerCase() === 'set-cookie')
+                    .map(
+                        ({ value }) =>
+                            /^phi_access_refresh=([^;]+)/.exec(value)?.[1],
+                    )
+                    .find((value) => value);
+                const bundle = (await response.json()) as {
+                    token?: unknown;
+                };
+                if (typeof bundle.token !== 'string' || !refreshHandle) {
+                    throw new Error('committed refresh response is incomplete');
+                }
+                resolveCommit({
+                    withheld: {
+                        token: bundle.token,
+                        jti: jwtJti(bundle.token),
+                        refreshHandle,
+                    },
+                    dbAfterCommit: readV2DbState(server),
+                });
+                await context.addCookies([previousCookie]);
+                await response.dispose();
+                await route.abort('failed');
+            } catch (error) {
+                rejectCommit(error);
+                await route.abort('failed').catch(() => undefined);
+            }
+        };
+        await page.route('**/api/auth/v2/refresh', interceptRefresh);
+
+        const firstRefresh = await page.evaluate(async () => {
+            const auth = await import(new URL('./auth.js', location.href).href);
+            try {
+                await auth.__test__.refreshSession();
+                return 'resolved';
+            } catch {
+                return 'unavailable';
+            }
+        });
+        expect(firstRefresh).toBe('unavailable');
+        expect(refreshPosts).toBe(1);
+        // The abort only fires after the interceptor settles, so this never
+        // hangs once the refresh above failed through the interceptor.
+        const { withheld, dbAfterCommit } = await committed;
+        expect(dbAfterCommit.maxGeneration === 1n).toBe(true);
+        expect(dbAfterCommit.consumedHandles === 1).toBe(true);
+        expect(
+            (await page.evaluate(() =>
+                window.phiAccessAuth.getAccessToken(),
+            )) === tokenBefore,
+        ).toBe(true);
+        await expect(page.locator('.access-auth-overlay')).toHaveCount(0);
+        expect(
+            await page.evaluate(
+                async () => (await fetch('/api/coders')).status,
+            ),
+        ).toBe(200);
+
+        await page.unroute('**/api/auth/v2/refresh', interceptRefresh);
+        const replay = await page.evaluate(async () => {
+            const auth = await import(new URL('./auth.js', location.href).href);
+            await auth.__test__.refreshSession();
+            return window.phiAccessAuth.getAccessToken();
+        });
+        expect(replay === withheld.token).toBe(true);
+        expect(
+            typeof replay === 'string' && jwtJti(replay) === withheld.jti,
+        ).toBe(true);
+        const dbAfterReplay = readV2DbState(server);
+        expect(
+            dbAfterReplay.maxGeneration === dbAfterCommit.maxGeneration,
+        ).toBe(true);
+        expect(
+            dbAfterReplay.consumedHandles === dbAfterCommit.consumedHandles,
+        ).toBe(true);
+        const replayedCookie = (await context.cookies(refreshCookieURL)).find(
+            (cookie) => cookie.name === 'phi_access_refresh',
+        );
+        expect(replayedCookie?.value === withheld.refreshHandle).toBe(true);
+
+        expect(refreshPosts).toBe(2);
+        expect(unrelatedAuthWrites).toBe(authWritesBefore);
+        await expect(page.locator('.access-auth-overlay')).toHaveCount(0);
+        expect(
+            await page.evaluate(
+                async () => (await fetch('/api/coders')).status,
+            ),
+        ).toBe(200);
+        expect(await openSocket(page, '/ws/md-events', EVENTS)).toBe('open');
+        expect(await openSocket(page, '/ws/control', CONTROL)).toBe('open');
+        expect(failedRequests).toEqual(['POST /api/auth/v2/refresh']);
+        // The aborted refresh echoes once in the console; nothing else may.
+        expect(consoleErrors).toEqual([
+            'Failed to load resource: net::ERR_FAILED',
+        ]);
+        expect(pageErrors).toEqual([]);
+        expect(unexpectedResponses).toEqual([]);
+    } finally {
+        await context.close();
+    }
+}
+
+test.describe('post-commit response loss', () => {
+    let phi: PhiServer;
+
+    test.beforeEach(async () => {
+        phi = await startPhi({ config: { sync_coordinator: '', peers: [] } });
+        await lockServer(phi.url, PASSWORD);
+    });
+
+    test.afterEach(async () => {
+        await phi.stop();
+    });
+
+    for (const profile of [
+        {
+            name: 'desktop',
+            options: { viewport: { width: 1440, height: 900 } },
+        },
+        {
+            name: 'mobile touch',
+            options: {
+                viewport: { width: 390, height: 844 },
+                isMobile: true,
+                hasTouch: true,
+                deviceScaleFactor: 3,
+            },
+        },
+    ]) {
+        test(`/ ${profile.name}`, async ({ browser }) => {
+            await provePostCommitRefreshLoss(browser, phi, profile.options);
+        });
+    }
 });
 
 test.describe('two same-origin tabs', () => {
@@ -1955,7 +2598,7 @@ const EXPECTED_RESPONSES = [
 ];
 
 function monitorMvpPage(page: Page) {
-    const unexpectedConsole: number[] = [];
+    const unexpectedConsole: string[] = [];
     const pageErrors: string[] = [];
     const failedRequests: string[] = [];
     const unexpectedResponses: string[] = [];
@@ -1964,7 +2607,7 @@ function monitorMvpPage(page: Page) {
     page.on('console', (message) => {
         if (message.type() !== 'error') return;
         if (!EXPECTED_CONSOLE.some((pattern) => pattern.test(message.text()))) {
-            unexpectedConsole.push(1);
+            unexpectedConsole.push(message.text());
         }
     });
     page.on('pageerror', (error) => pageErrors.push(error.name));
@@ -2001,12 +2644,17 @@ function monitorMvpPage(page: Page) {
             restarting = value;
         },
         assertQuiet() {
-            expect(unexpectedConsole, 'unexpected console errors').toEqual([]);
-            expect(pageErrors, 'page errors').toEqual([]);
-            expect(failedRequests, 'failed network requests').toEqual([]);
-            expect(unexpectedResponses, 'unexpected error responses').toEqual(
-                [],
-            );
+            expect({
+                console: unexpectedConsole,
+                pageErrors,
+                failedRequests,
+                responses: unexpectedResponses,
+            }).toEqual({
+                console: [],
+                pageErrors: [],
+                failedRequests: [],
+                responses: [],
+            });
         },
     };
 }
@@ -2015,7 +2663,15 @@ test.describe('a signed-in session stays quiet', () => {
     let phi: PhiServer;
 
     test.beforeAll(async () => {
-        phi = await startPhi({ config: { sync_coordinator: '', peers: [] } });
+        // The isolated auth diagnostic does not install OpenCode 2. Select the
+        // legacy adapter so the sessions panel returns its normal empty list.
+        phi = await startPhi({
+            config: {
+                sync_coordinator: '',
+                peers: [],
+                opencode_legacy: true,
+            },
+        });
         await lockServer(phi.url, PASSWORD);
     });
 

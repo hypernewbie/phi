@@ -16,6 +16,7 @@ import { userInfo } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { _electron, expect, test, type Page } from '@playwright/test';
+import type { AccessAuth } from '../desktop/electron/src/access-auth.js';
 import {
     electronFixtureEnv,
     startPhi,
@@ -72,6 +73,18 @@ interface OwnedElectron {
 interface Diagnostics {
     markAuthenticated: () => void;
     assertClean: () => void;
+}
+
+interface AuthNetworkFixture {
+    path: string;
+    remaining: number;
+    failures: Record<string, number>;
+    owner(origin: string): AccessAuth;
+    restore(): void;
+}
+
+declare global {
+    var phiAuthNetworkFixture: AuthNetworkFixture;
 }
 
 let phi: PhiServer | null = null;
@@ -198,7 +211,7 @@ function seedSingleTab(paths: ElectronPaths, origin?: string): void {
     );
 }
 
-function launcherSource(paths: ElectronPaths): string {
+function launcherSource(paths: ElectronPaths, networkFaults: boolean): string {
     const desktopPath = realpathSync(
         join(electronProject, 'dist', 'desktop.js'),
     );
@@ -283,6 +296,42 @@ const testShortcut = {
   unregister() {},
 };
 setTestHotkeyShortcut(testShortcut);
+if (${JSON.stringify(networkFaults)}) {
+  const originalFetch = globalThis.fetch;
+  const originalWatch = DesktopHost.prototype.watchBundles;
+  if (typeof originalWatch !== 'function') throw new Error('Auth owner observer is unavailable');
+  const owners = new Set();
+  const identifiedOwners = new Map();
+  const faults = {
+    path: '', remaining: 0, failures: {},
+    owner(origin) {
+      const owner = identifiedOwners.get(origin) ?? [...owners].find((auth) => auth.getBundle(origin));
+      if (!owner) throw new Error('Fixture auth owner has no bundle');
+      identifiedOwners.set(origin, owner);
+      return owner;
+    },
+    restore() {
+      globalThis.fetch = originalFetch;
+      DesktopHost.prototype.watchBundles = originalWatch;
+    },
+  };
+  globalThis.fetch = (input, init) => {
+    const path = new URL(input instanceof Request ? input.url : input).pathname;
+    if (faults.remaining > 0 && init?.method === 'POST' && path === faults.path) {
+      faults.remaining--;
+      faults.failures[path] = (faults.failures[path] ?? 0) + 1;
+      return Promise.reject(new TypeError('synthetic offline auth request'));
+    }
+    return originalFetch(input, init);
+  };
+  DesktopHost.prototype.watchBundles = function (auth) {
+    const owner = originalWatch.call(this, auth);
+    owners.add(owner);
+    return owner;
+  };
+  globalThis.phiAuthNetworkFixture = faults;
+  app.once('will-quit', () => faults.restore());
+}
 if (app.isReady()) {
   throw new Error('Electron became ready before embedded scheme registration');
 }
@@ -322,9 +371,10 @@ function verifyElectronProcess(
 async function launchElectron(
     paths: ElectronPaths,
     serverUrl?: string,
+    networkFaults = false,
 ): Promise<OwnedElectron> {
     const { executable } = electronRuntime();
-    const source = launcherSource(paths);
+    const source = launcherSource(paths, networkFaults);
     writeFileSync(paths.launcher, source, { mode: 0o600 });
     if (readFileSync(paths.launcher, 'utf8') !== source) {
         throw new Error('Could not verify the isolated Electron launcher');
@@ -465,7 +515,10 @@ async function terminateOwnedElectron(owned: OwnedElectron): Promise<void> {
     await waitForChildExit(owned.child, 10_000);
 }
 
-function diagnostics(application: ElectronApplication): Diagnostics {
+function diagnostics(
+    application: ElectronApplication,
+    sourceBuild: boolean,
+): Diagnostics {
     let authenticated = false;
     const result = {
         mainConsoleErrors: [] as string[],
@@ -482,11 +535,21 @@ function diagnostics(application: ElectronApplication): Diagnostics {
         page.on('console', (message) => {
             if (message.type() !== 'error') return;
             const source = message.location();
+            const text = message.text();
             const status =
-                /status of ([0-9]{3})\b/.exec(message.text())?.[1] ?? 'console';
-            result.pageConsoleErrors.push(
-                `${status} ${safePath(source.url || page.url())}`,
-            );
+                /status of ([0-9]{3})\b/.exec(text)?.[1] ?? 'console';
+            const path = safePath(source.url || page.url());
+            if (
+                (!authenticated &&
+                    status === '401' &&
+                    path === '/api/config') ||
+                (sourceBuild &&
+                    status === '503' &&
+                    path === '/api/update/status')
+            ) {
+                return;
+            }
+            result.pageConsoleErrors.push(`${status} ${path}`);
         });
         page.on('pageerror', () =>
             result.pageErrors.push(safePath(page.url())),
@@ -495,16 +558,26 @@ function diagnostics(application: ElectronApplication): Diagnostics {
             result.requestFailures.push(safePath(request.url()));
         });
         page.on('response', (response) => {
-            if (response.status() < 400) return;
+            const status = response.status();
+            if (status < 400) return;
             const path = safePath(response.url());
+            const method = response.request().method();
             if (
                 !authenticated &&
-                response.status() === 401 &&
-                path.startsWith('/api/')
+                status === 401 &&
+                method === 'GET' &&
+                path === '/api/config'
             ) {
                 result.expectedPreAuth401++;
+            } else if (
+                sourceBuild &&
+                status === 503 &&
+                method === 'GET' &&
+                path === '/api/update/status'
+            ) {
+                // Source builds have no update checker; the fixture asserts 503.
             } else {
-                result.unexpectedResponses.push(`${response.status()} ${path}`);
+                result.unexpectedResponses.push(`${status} ${path}`);
             }
         });
     };
@@ -519,8 +592,10 @@ function diagnostics(application: ElectronApplication): Diagnostics {
             /\b(DeprecationWarning|ExperimentalWarning)\b/.exec(text)?.[1] ??
             'console';
         const code = /\bDEP[0-9]{4}\b/.exec(text)?.[0] ?? '';
+        const listenerWarning =
+            /\bMaxListenersExceededWarning: [^\n]*/.exec(text)?.[0] ?? '';
         result.mainConsoleErrors.push(
-            `${kind} ${code} ${safePath(source.url)}:${source.lineNumber + 1}`,
+            `${kind} ${code} ${listenerWarning} ${safePath(source.url)}:${source.lineNumber + 1}`,
         );
     });
     return {
@@ -988,6 +1063,7 @@ function seedLegacyServer(dir: string): void {
                 { name: 'auth fixture', command: 'printf auth-mvp' },
             ],
             sync_coordinator: '',
+            opencode_legacy: true,
             peers: [],
         }),
         { mode: 0o600 },
@@ -1069,8 +1145,14 @@ test.afterEach(async () => {
 });
 
 test('MVP Electron / v2 login and restart', async () => {
-    phi = await startPhi();
+    phi = await startPhi({ config: { opencode_legacy: true } });
     const server = phi;
+    const versionResponse = await fetch(`${server.url}/api/version`);
+    expect(versionResponse.status).toBe(200);
+    expect((await versionResponse.json()).build_source).toBe('source');
+    const updateStatusResponse = await fetch(`${server.url}/api/update/status`);
+    expect(updateStatusResponse.status).toBe(503);
+    await updateStatusResponse.body?.cancel();
     const passwordResponse = await fetch(`${server.url}/api/auth/v2/password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Phi-Auth': 'v2' },
@@ -1078,11 +1160,14 @@ test('MVP Electron / v2 login and restart', async () => {
     });
     expect(passwordResponse.status).toBe(200);
     await passwordResponse.body?.cancel();
+    const preAuthConfigResponse = await fetch(`${server.url}/api/config`);
+    expect(preAuthConfigResponse.status).toBe(401);
+    await preAuthConfigResponse.body?.cancel();
 
     const paths = createPaths(server);
     seedSingleTab(paths);
     let owned = await launchElectron(paths, server.url);
-    let appDiagnostics = diagnostics(owned.application);
+    let appDiagnostics = diagnostics(owned.application, true);
     let main = await mainPage(owned.application);
     await main.waitForLoadState('domcontentloaded');
     let body = await bodyPage(owned.application);
@@ -1114,7 +1199,7 @@ test('MVP Electron / v2 login and restart', async () => {
     await closeElectron();
 
     owned = await launchElectron(paths, server.url);
-    appDiagnostics = diagnostics(owned.application);
+    appDiagnostics = diagnostics(owned.application, true);
     main = await mainPage(owned.application);
     await main.waitForLoadState('domcontentloaded');
     body = await bodyPage(owned.application);
@@ -1158,6 +1243,210 @@ test('MVP Electron / v2 login and restart', async () => {
     await closeElectron();
 });
 
+test('poor network Electron / recovery and password removal', async () => {
+    const testInfo = test.info();
+    phi = await startPhi({ config: { opencode_legacy: true } });
+    const server = phi;
+    const passwordResponse = await fetch(`${server.url}/api/auth/v2/password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Phi-Auth': 'v2' },
+        body: JSON.stringify({ password: v2Password }),
+    });
+    expect(passwordResponse.status).toBe(200);
+    await passwordResponse.body?.cancel();
+    const paths = createPaths(server);
+    seedSingleTab(paths);
+    const owned = await launchElectron(paths, server.url, true);
+    const appDiagnostics = diagnostics(owned.application, true);
+    try {
+        const main = await mainPage(owned.application);
+        const body = await bodyPage(owned.application);
+        const modal = main.locator('#desktop-auth-modal');
+        await expect(modal).toBeVisible();
+        // Capture appearance with empty input only; never record credentials.
+        for (const theme of ['purple', 'teal']) {
+            await main.evaluate(async (theme) => {
+                const { App } = await import(
+                    new URL('./vendor/app.js', location.href).href
+                );
+                const shim = Object.create(App.prototype);
+                shim.updateFavicon = () => {};
+                App.prototype.applyAccentTheme.call(shim, theme);
+            }, theme);
+            await modal.screenshot({
+                path: testInfo.outputPath(`unlock-${theme}.png`),
+            });
+        }
+        await owned.application.evaluate(() => {
+            phiAuthNetworkFixture.path = '/api/auth/v2/login';
+            phiAuthNetworkFixture.remaining = 1;
+        });
+        const input = main.locator('#desktop-auth-input');
+        await input.fill(v2Password);
+        await input.press('Enter');
+        await expect(main.locator('#desktop-auth-error')).not.toBeEmpty();
+        await expect(input).toHaveValue(v2Password);
+        await expect(main.locator('#desktop-auth-submit')).toBeEnabled();
+        await expect(main.locator('#desktop-auth-cancel')).toBeEnabled();
+        expect(
+            await owned.application.evaluate(
+                () => phiAuthNetworkFixture.failures,
+            ),
+        ).toEqual({
+            '/api/auth/v2/login': 1,
+        });
+        // Only the user's explicit retry resubmits the password.
+        await main.locator('#desktop-auth-submit').click();
+        await expect(modal).toBeHidden();
+        await expectProtectedAPI(body);
+        appDiagnostics.markAuthenticated();
+        await assertEmbeddedCredentialBoundary(owned.application, body);
+        const failure = await owned.application.evaluate(async (_, origin) => {
+            const fixture = phiAuthNetworkFixture;
+            const auth = fixture.owner(origin);
+            const before = auth.getBundle(origin);
+            fixture.path = '/api/auth/v2/refresh';
+            fixture.remaining = 1;
+            const result = await auth.refreshAccess(origin);
+            const after = auth.getBundle(origin);
+            return {
+                kind: result.kind,
+                sameToken: before?.token === after?.token,
+                sameHandle: before?.refreshHandle === after?.refreshHandle,
+                v2Selected: auth.getSelectedProtocol(origin) === 'v2',
+                retryAfterMs:
+                    result.kind === 'unavailable' ? result.retryAfterMs : 0,
+            };
+        }, server.url);
+        expect(failure).toMatchObject({
+            kind: 'unavailable',
+            sameToken: true,
+            sameHandle: true,
+            v2Selected: true,
+        });
+        await expect(modal).toBeHidden();
+        await expect(body.locator('.access-auth-overlay')).toBeHidden();
+        await expectProtectedAPI(body);
+        await main.waitForTimeout(Math.max(1_000, failure.retryAfterMs ?? 0));
+        const recovered = await owned.application.evaluate(
+            async (_, origin) => {
+                const auth = phiAuthNetworkFixture.owner(origin);
+                const before = auth.getBundle(origin);
+                const result = await auth.refreshAccess(origin);
+                return {
+                    kind: result.kind,
+                    changedHandle:
+                        before?.refreshHandle !==
+                        auth.getBundle(origin)?.refreshHandle,
+                    failures: phiAuthNetworkFixture.failures,
+                };
+            },
+            server.url,
+        );
+        expect(recovered).toEqual({
+            kind: 'ok',
+            changedHandle: true,
+            failures: { '/api/auth/v2/login': 1, '/api/auth/v2/refresh': 1 },
+        });
+        await expectProtectedAPI(body);
+        await openSocket(body, '/ws/md-events', 'phi.events.protobuf.v1');
+        await openSocket(body, '/ws/control', 'phi.control.protobuf.v1');
+        await expect
+            .poll(async () => {
+                const store = await inspectCredentialStore(
+                    owned.application,
+                    server.url,
+                );
+                return (
+                    store.version === 'v2' &&
+                    store.privateMode &&
+                    store.secureBackend &&
+                    store.ciphertextHidesCredentials
+                );
+            })
+            .toBe(true);
+        const persistedMatches = await owned.application.evaluate(
+            ({ app, safeStorage }, origin) => {
+                const fs = process.getBuiltinModule(
+                    'node:fs',
+                ) as typeof import('node:fs');
+                const path = process.getBuiltinModule(
+                    'node:path',
+                ) as typeof import('node:path');
+                const stored = JSON.parse(
+                    safeStorage.decryptString(
+                        fs.readFileSync(
+                            path.join(
+                                app.getPath('userData'),
+                                'access-credentials.bin',
+                            ),
+                        ),
+                    ),
+                );
+                const bundle = phiAuthNetworkFixture
+                    .owner(origin)
+                    .getBundle(origin);
+                return (
+                    stored.origins?.[origin]?.jwt === bundle?.token &&
+                    stored.origins?.[origin]?.refreshHandle ===
+                        bundle?.refreshHandle
+                );
+            },
+            server.url,
+        );
+        expect(persistedMatches).toBe(true);
+        await assertEmbeddedCredentialBoundary(owned.application, body);
+
+        // Removing a password must show success, not a proxy error after the
+        // server already disabled auth. Exercise the real Settings controls.
+        const settingsPagePromise = owned.application
+            .context()
+            .waitForEvent('page');
+        await body
+            .getByRole('button', { name: 'Settings', exact: true })
+            .click();
+        const settingsPage = await settingsPagePromise;
+        await settingsPage.waitForURL((url) => url.pathname === '/config.html');
+        const settings = settingsPage.locator('.settings-overlay');
+        await expect(settings).toBeVisible();
+        await settings.locator('.settings-access-remove-link').click();
+        await settings.locator('.settings-access-confirm-remove').click();
+        await expect(
+            settings.locator('.settings-access-state-text'),
+        ).toHaveText('Disabled');
+        const status = await fetch(`${server.url}/api/auth/v2/status`);
+        expect(status.status).toBe(200);
+        expect((await status.json()).enabled).toBe(false);
+        await expect
+            .poll(() =>
+                owned.application.evaluate((_, origin) => {
+                    const auth = phiAuthNetworkFixture.owner(origin);
+                    return (
+                        auth.getBundle(origin) === null &&
+                        !auth.hasToken(origin)
+                    );
+                }, server.url),
+            )
+            .toBe(true);
+        await expect
+            .poll(async () => {
+                const store = await inspectCredentialStore(
+                    owned.application,
+                    server.url,
+                );
+                return store.jwtChars === 0 && store.refreshHandleChars === 0;
+            })
+            .toBe(true);
+        await expectProtectedAPI(body);
+        await expect(modal).toBeHidden();
+        await expect(body.locator('.access-auth-overlay')).toBeHidden();
+        appDiagnostics.assertClean();
+    } finally {
+        await owned.application.evaluate(() => phiAuthNetworkFixture.restore());
+        await closeElectron();
+    }
+});
+
 test('MVP Electron / saved v1', async () => {
     phi = await startPhi({ setup: seedLegacyServer });
     const server = phi;
@@ -1166,7 +1455,7 @@ test('MVP Electron / saved v1', async () => {
     seedSingleTab(paths);
 
     let owned = await launchElectron(paths);
-    let appDiagnostics = diagnostics(owned.application);
+    let appDiagnostics = diagnostics(owned.application, true);
     const blankMain = await mainPage(owned.application);
     await blankMain.waitForLoadState('domcontentloaded');
     await assertOwnedAppPaths(owned.application, paths);
@@ -1178,12 +1467,21 @@ test('MVP Electron / saved v1', async () => {
     // A returning user has both the saved credential and its saved server.
     seedSingleTab(paths, server.url);
     owned = await launchElectron(paths, server.url);
-    appDiagnostics = diagnostics(owned.application);
+    appDiagnostics = diagnostics(owned.application, true);
     const main = await mainPage(owned.application);
     await main.waitForLoadState('domcontentloaded');
     const body = await bodyPage(owned.application);
     await expect(body.locator('#sidebar-panel')).toBeVisible();
     await expectProtectedAPI(body);
+    const sourceBuild = await body.evaluate(async () => {
+        const response = await fetch('/api/version');
+        return response.ok ? response.json() : null;
+    });
+    expect(sourceBuild?.build_source).toBe('source');
+    const updateStatus = await body.evaluate(
+        async () => (await fetch('/api/update/status')).status,
+    );
+    expect(updateStatus).toBe(503);
     appDiagnostics.markAuthenticated();
     await expect(main.locator('#desktop-auth-modal')).toBeHidden();
     await assertOwnedAppPaths(owned.application, paths);

@@ -975,6 +975,95 @@ describe('request deadlines and credential retention', () => {
         }
     });
 
+    it.each(['headers', 'body'])(
+        'releases a refresh with stalled %s at 30 seconds without adopting a late answer',
+        async (stage) => {
+            vi.useFakeTimers();
+            let release;
+            const stalled = new Promise((resolve) => {
+                release = resolve;
+            });
+            try {
+                mockAuth((url) => {
+                    if (url === '/api/auth/status') return DUAL_STATUS;
+                    if (url === '/api/auth/v2/refresh') return BUNDLE;
+                    return undefined;
+                });
+                await bootstrapAccessAuth();
+                const original = __test__.getAccessState().accessToken;
+                let holding = true;
+                const fetchSpy = mockAuth((url) => {
+                    if (url !== '/api/auth/v2/refresh')
+                        throw new Error('unexpected auth request');
+                    if (!holding)
+                        return { ...BUNDLE, token: 'recovered-token' };
+                    return stage === 'headers'
+                        ? stalled
+                        : { status: 200, json: stalled };
+                });
+                const observed = { settled: false };
+                const pending = __test__.refreshSession().then(
+                    () => {
+                        observed.settled = true;
+                        observed.failed = false;
+                    },
+                    () => {
+                        observed.settled = true;
+                        observed.failed = true;
+                    },
+                );
+                await vi.advanceTimersByTimeAsync(29999);
+                expect(observed.settled).toBe(false);
+                await vi.advanceTimersByTimeAsync(1);
+                expect(observed).toEqual({ settled: true, failed: true });
+                expect(__test__.getAccessState().accessToken === original).toBe(
+                    true,
+                );
+                expect(__test__.getAccessState().selectedProtocol).toBe('v2');
+                expect(
+                    document.querySelector('.access-auth-overlay'),
+                ).toBeNull();
+                expect(fetchSpy).toHaveBeenCalledOnce();
+                holding = false;
+                await __test__.refreshSession();
+                release({ ...BUNDLE, token: 'late-token' });
+                await vi.advanceTimersByTimeAsync(0);
+                await pending;
+                expect(
+                    __test__.getAccessState().accessToken === 'recovered-token',
+                ).toBe(true);
+                expect(fetchSpy).toHaveBeenCalledTimes(2);
+            } finally {
+                release(BUNDLE);
+                __test__.resetAccessState();
+                vi.useRealTimers();
+            }
+        },
+    );
+
+    it('bounds discovery body parsing, not just response headers', async () => {
+        vi.useFakeTimers();
+        let release;
+        const body = new Promise((resolve) => {
+            release = resolve;
+        });
+        try {
+            mockAuth(() => ({ status: 200, json: body }));
+            const failure = expect(bootstrapAccessAuth()).rejects.toThrow(
+                'Phi did not respond. Try again.',
+            );
+            await vi.advanceTimersByTimeAsync(30000);
+            await failure;
+            release(DUAL_STATUS);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(__test__.getAccessState().selectedProtocol).toBeNull();
+            expect(document.querySelector('.access-auth-overlay')).toBeNull();
+        } finally {
+            release(DUAL_STATUS);
+            vi.useRealTimers();
+        }
+    });
+
     it('never follows a redirect on a module-owned auth request', async () => {
         installToken('jwt-a');
         const fetchSpy = mockAuth((url) =>
@@ -1653,6 +1742,32 @@ describe('refresh ownership', () => {
         const state = __test__.getAccessState();
         expect(state.accessToken).toBe('jwt-current');
         expect(state.loggedOut).toBe(false);
+    });
+
+    it('rebootstraps without a prompt when another tab disables access', async () => {
+        await startV2('jwt-disabled', 3600);
+        const fetchSpy = mockAuth((url) => {
+            if (url === '/api/auth/status')
+                return { enabled: false, protocols: ['v1', 'v2'] };
+            throw new Error(`unexpected fetch ${url}`);
+        });
+        __test__.receiveLogout({
+            kind: 'logout',
+            origin: location.origin,
+            disabled: true,
+        });
+        await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() =>
+            expect(__test__.getAccessState()).toMatchObject({
+                accessEnabled: false,
+                accessToken: null,
+                selectedProtocol: 'v2',
+            }),
+        );
+        expect(fetchSpy.mock.calls.map(([url]) => String(url))).toEqual([
+            '/api/auth/status',
+        ]);
+        expect(document.querySelector('.access-auth-overlay')).toBeNull();
     });
 
     it('stays logged out when a delayed bundle arrives after logout', async () => {
