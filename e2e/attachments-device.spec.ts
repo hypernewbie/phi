@@ -605,17 +605,50 @@ test('idle extension metadata does not falsely stale a fresh attachment send', a
                 expect((await sent).postDataJSON().context.leaf_id).toBe(
                     liveLeaf,
                 );
-                await expect(page.locator('#attachment-status')).toContainText(
-                    'Submitted to Pi',
+                await expect(page.locator('#attachment-status')).toHaveText(
+                    'Submitted to Pi.',
                 );
+                await expect(
+                    page.locator('#attachment-status button'),
+                ).toHaveCount(0);
                 await expect(page.locator('#input-textarea')).toHaveValue(
                     'newer typing stays visible',
                 );
+                await page
+                    .locator('#input-textarea')
+                    .fill('next draft after submission');
+                await expect(page.locator('#attachment-status')).toBeHidden();
                 await waitForProvider(provider, before + 1);
                 expect(
                     anthropicImages(provider.requests[before]!, true),
                 ).toHaveLength(1);
                 await waitForIdle(request, phi.url, pane);
+                expect(provider.requests).toHaveLength(before + 1);
+                await page.reload();
+                await selectPane(page, pane, mobile);
+                await expect(page.locator('#input-textarea')).toHaveValue(
+                    'next draft after submission',
+                );
+                if (mobile) await page.locator('#attach-input-btn').tap();
+                else await page.locator('#attach-input-btn').click();
+                await expect(
+                    page.getByRole('menuitem', {
+                        name: 'Restore last attachment',
+                    }),
+                ).toBeVisible();
+                await expect(page.locator('#attachment-status')).toBeHidden();
+                let duplicateWarning = '';
+                page.once('dialog', (dialog) => {
+                    duplicateWarning = dialog.message();
+                    void dialog.dismiss();
+                });
+                await page
+                    .getByRole('menuitem', { name: 'Restore last attachment' })
+                    .click();
+                expect(duplicateWarning).toContain('can create a duplicate');
+                await expect(page.locator('#input-textarea')).toHaveValue(
+                    'next draft after submission',
+                );
                 expect(provider.requests).toHaveLength(before + 1);
                 expect(
                     await page.evaluate(

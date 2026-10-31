@@ -1008,13 +1008,14 @@ export class TabManager {
         // present stale expected revisions to the store and report a false
         // cross-tab conflict, which blocks Send. An idle tab saves
         // synchronously, preserving the existing save/upload ordering; a
-        // queued run re-reads fresh items, text, and revision at execution
-        // time. Genuine cross-tab conflicts are still detected by the
-        // store-side revision check.
+        // queued run uses the revision at execution time, but captures its
+        // draft now so a later Send cannot replace it with the next draft.
+        // Genuine cross-tab conflicts still use the store's revision check.
+        const draft = { text: tab.draft || '', items: items.slice() };
         const previous = tab._attachmentPersistChain;
         const run = previous
-            ? previous.catch(() => {}).then(() => this._runAttachmentDraftPersist(tab, owner))
-            : this._runAttachmentDraftPersist(tab, owner);
+            ? previous.catch(() => {}).then(() => this._runAttachmentDraftPersist(tab, owner, draft))
+            : this._runAttachmentDraftPersist(tab, owner, draft);
         tab._attachmentPersistChain = run;
         try {
             return await run;
@@ -1026,8 +1027,8 @@ export class TabManager {
         }
     }
 
-    async _runAttachmentDraftPersist(tab, owner) {
-        const items = (tab?.draftAttachments || []).filter((item) => item.phiAttachment);
+    async _runAttachmentDraftPersist(tab, owner, draft) {
+        const items = draft.items;
         const expectedRevision = Number.isSafeInteger(tab._attachmentRevision) ? tab._attachmentRevision : 0;
         const revision = expectedRevision + 1;
         tab._attachmentRevision = revision;
@@ -1053,7 +1054,7 @@ export class TabManager {
         const result = await this.attachmentStore.saveDraft(
             owner,
             expectedRevision,
-            tab.draft || '',
+            draft.text,
             storedItems,
             blobs,
         );
@@ -4122,8 +4123,12 @@ export class TabManager {
             this.inputBarContainer.classList.add('direct-mode-active');
             this.inputBarContainer.classList.remove('hidden');
             this.presetsContainer.classList.add('hidden');
-            // The presets row is gone, so its parked chips go with it.
+            // Keep only the paperclip available for Pi in direct mode.
             this._placeCompactQuickChips([]);
+            if (tab.coder === 'pi' && this.attachInputBtn) {
+                this.presetsContainer.replaceChildren(this.attachInputBtn);
+                this.presetsContainer.classList.remove('hidden');
+            }
         } else {
             this.directModeToggle.classList.remove('active');
             this.inputBarContainer.classList.remove('direct-mode-active');
@@ -7170,7 +7175,6 @@ export class TabManager {
             const lastSubmitted = orderedOutbox.find((record) => record.state === 'dispatched');
             if (lastSubmitted && !tab._attachmentLastSubmitted) {
                 tab._attachmentLastSubmitted = { ...lastSubmitted, owner, scope, state: 'dispatched' };
-                if (!tab._attachmentNotice) tab._attachmentNotice = 'Submitted to Pi; model receipt is not confirmed.';
             }
             const pending = orderedOutbox.find((record) => record.state === 'waiting' || record.state === 'attempted' || record.state === 'unknown' || record.state === 'refused' || record.state === 'cancelled');
             if (!pending || tab._attachmentPendingSnapshot) {
@@ -9486,6 +9490,13 @@ export class TabManager {
             event.preventDefault();
             items[nextIndex]?.focus({ preventScroll: true });
         });
+        this.inputTextArea?.addEventListener('input', () => {
+            const tab = this.getActiveTab();
+            if (tab?._attachmentNotice === 'Submitted to Pi.') {
+                tab._attachmentNotice = '';
+                this._renderAttachmentStatus(tab);
+            }
+        });
         this.attachInputBtn?.addEventListener('click', () => {
             const tab = this.getActiveTab();
             if (!tab || tab.coder !== 'pi') return;
@@ -9591,6 +9602,32 @@ export class TabManager {
             });
             row.appendChild(btn);
             dropup.appendChild(row);
+        }
+        const submitted = selection.tab._attachmentLastSubmitted;
+        if (submitted) {
+            const header = document.createElement('div');
+            header.className = 'dropup-header';
+            header.textContent = 'Last submitted attachment';
+            dropup.appendChild(header);
+            for (const [label, action] of [
+                ['Restore last attachment', () => this._restoreAttachmentSnapshot(selection.tab, submitted, true)],
+                ['Forget local copy', () => void this._forgetAttachmentSnapshot(selection.tab, submitted)],
+            ]) {
+                const row = document.createElement('div');
+                row.className = 'dropup-row';
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'dropup-model-btn';
+                btn.textContent = label;
+                btn.setAttribute('role', 'menuitem');
+                btn.addEventListener('click', () => {
+                    this._closeAttachmentSourceDropup();
+                    this.attachInputBtn?.focus({ preventScroll: true });
+                    action();
+                });
+                row.appendChild(btn);
+                dropup.appendChild(row);
+            }
         }
         dropup.querySelector('[role="menuitem"]')?.focus({
             preventScroll: true,
@@ -10032,16 +10069,6 @@ export class TabManager {
             );
             el.appendChild(restore);
             this._appendForgetAttachmentButton(el, tab, snapshot);
-        } else if (tab._attachmentLastSubmitted) {
-            const restore = document.createElement('button');
-            restore.type = 'button';
-            restore.className = 'btn btn-primary attachment-status-action';
-            restore.textContent = 'Restore to draft';
-            restore.addEventListener('click', () =>
-                this._restoreAttachmentSnapshot(tab, tab._attachmentLastSubmitted, true),
-            );
-            el.appendChild(restore);
-            this._appendForgetAttachmentButton(el, tab, tab._attachmentLastSubmitted);
         }
     }
 
@@ -11241,7 +11268,6 @@ export class TabManager {
         this.lastInputValue = '';
         this.stagedAttachments = [];
         tab._attachmentEditVersion = (tab._attachmentEditVersion || 0) + 1;
-        tab._attachmentRevision = snapshot.draftRevision + 1;
         this._writeLegacyTabDraft(tab);
         this._renderAttachmentStrip();
         tab._attachmentNotice = 'Saving an attachment snapshot before sending.';
@@ -11250,59 +11276,22 @@ export class TabManager {
     }
 
     async _freezeAndDispatchAttachmentSnapshot(tab, snapshot) {
+        // Freeze shares the draft-write queue. New typing stays local at once,
+        // then persists after this atomic snapshot, not with a future revision.
+        // Only preparation is queued; dispatch must not delay the next save.
+        const previous = tab._attachmentPersistChain;
+        const freezing = (previous || Promise.resolve()).catch(() => {}).then(() =>
+            this._freezeAttachmentSnapshot(tab, snapshot),
+        );
+        tab._attachmentPersistChain = freezing;
         try {
-            if (!snapshot.refreshContextBeforeDispatch) {
-                // Bind a NEW online send to a live leaf, not an event-time
-                // cache. Never change the origin or rebind a saved outbox.
-                // The composer has already responded locally to this click.
-                tab._attachmentNotice = 'Checking Pi state before submitting the attachment.';
-                this._renderAttachmentStatus(tab);
-                try {
-                    const context = await getAttachmentPiContext({ ...snapshot.owner, scope: snapshot.scope });
-                    if (tab._attachmentPendingSnapshot !== snapshot || snapshot.outboxState !== 'waiting') return;
-                    if (
-                        !context.available ||
-                        context.process_id !== snapshot.context.process_id ||
-                        context.generation !== snapshot.context.generation ||
-                        context.session_id !== snapshot.context.session_id ||
-                        context.model?.provider !== snapshot.context.model?.provider ||
-                        context.model?.id !== snapshot.context.model?.id ||
-                        context.leaf_id === null
-                    ) {
-                        this._finishAttachmentSnapshot(tab, snapshot, 'refused', context.available ? 'stale' : 'unavailable');
-                        return;
-                    }
-                    snapshot.context = { ...snapshot.context, leaf_id: context.leaf_id };
-                } catch {
-                    // Keep the original target if this read fails. Save the
-                    // snapshot locally and use the existing strict recovery.
-                    snapshot.refreshContextBeforeDispatch = true;
-                }
-            }
-            if (tab._attachmentPendingSnapshot !== snapshot || snapshot.outboxState !== 'waiting') return;
-            const frozen = await this.attachmentStore.freezeDraft(
-                snapshot.owner,
-                snapshot.draftRevision,
-                { text: snapshot.text, context: snapshot.context, items: snapshot.items },
-            );
-            if (snapshot.outboxState === 'cancelled') {
-                if (!frozen.conflict) {
-                    snapshot.id = frozen.outbox.id;
-                    await this.attachmentStore.cancelWaitingSend(snapshot.id);
-                }
-                return;
-            }
-            if (tab._attachmentPendingSnapshot !== snapshot) return;
-            if (frozen.conflict) {
-                this._finishAttachmentSnapshot(tab, snapshot, 'refused', 'stale');
-                return;
-            }
-            snapshot.id = frozen.outbox.id;
-            snapshot.outboxState = frozen.outbox.state;
-            tab._attachmentRevision = Math.max(tab._attachmentRevision || 0, snapshot.draftRevision + 1);
-            tab._attachmentNotice = frozen.warning || 'Submitting this snapshot to Pi. Model receipt is not confirmed.';
+            const frozen = await freezing;
+            if (!frozen || tab._attachmentPendingSnapshot !== snapshot) return;
+            tab._attachmentNotice = frozen.warning || 'Submitting attachment to Pi…';
             this._renderAttachmentStatus(tab);
-            if (frozen.outbox.state === 'waiting') {
+            if (['dispatched', 'refused', 'cancelled'].includes(frozen.outbox.state)) {
+                this._finishAttachmentSnapshot(tab, snapshot, frozen.outbox.state, frozen.outbox.reason);
+            } else if (frozen.outbox.state === 'waiting') {
                 if (snapshot.refreshContextBeforeDispatch) {
                     await this._recoverAttachmentOutbox(tab, snapshot, true);
                 } else {
@@ -11318,7 +11307,64 @@ export class TabManager {
             if (tab._attachmentPendingSnapshot === snapshot) {
                 this._finishAttachmentSnapshot(tab, snapshot, 'refused', 'storage');
             }
+        } finally {
+            if (tab._attachmentPersistChain === freezing) tab._attachmentPersistChain = null;
         }
+    }
+
+    async _freezeAttachmentSnapshot(tab, snapshot) {
+        if (tab._attachmentPendingSnapshot !== snapshot || snapshot.outboxState !== 'waiting') return;
+        snapshot.draftRevision = Number.isSafeInteger(tab._attachmentRevision) ? tab._attachmentRevision : 0;
+        if (!snapshot.refreshContextBeforeDispatch) {
+            // Bind a NEW online send to a live leaf, not an event-time
+            // cache. Never change the origin or rebind a saved outbox.
+            // The composer has already responded locally to this click.
+            tab._attachmentNotice = 'Checking Pi state before submitting the attachment.';
+            this._renderAttachmentStatus(tab);
+            try {
+                const context = await getAttachmentPiContext({ ...snapshot.owner, scope: snapshot.scope });
+                if (tab._attachmentPendingSnapshot !== snapshot || snapshot.outboxState !== 'waiting') return;
+                if (
+                    !context.available ||
+                    context.process_id !== snapshot.context.process_id ||
+                    context.generation !== snapshot.context.generation ||
+                    context.session_id !== snapshot.context.session_id ||
+                    context.model?.provider !== snapshot.context.model?.provider ||
+                    context.model?.id !== snapshot.context.model?.id ||
+                    context.leaf_id === null
+                ) {
+                    this._finishAttachmentSnapshot(tab, snapshot, 'refused', context.available ? 'stale' : 'unavailable');
+                    return;
+                }
+                snapshot.context = { ...snapshot.context, leaf_id: context.leaf_id };
+            } catch {
+                // Keep the original target if this read fails. Save the
+                // snapshot locally and use the existing strict recovery.
+                snapshot.refreshContextBeforeDispatch = true;
+            }
+        }
+        if (tab._attachmentPendingSnapshot !== snapshot || snapshot.outboxState !== 'waiting') return;
+        const frozen = await this.attachmentStore.freezeDraft(
+            snapshot.owner,
+            snapshot.draftRevision,
+            { text: snapshot.text, context: snapshot.context, items: snapshot.items },
+        );
+        if (snapshot.outboxState === 'cancelled') {
+            if (!frozen.conflict) {
+                snapshot.id = frozen.outbox.id;
+                await this.attachmentStore.cancelWaitingSend(snapshot.id);
+            }
+            return;
+        }
+        if (tab._attachmentPendingSnapshot !== snapshot) return;
+        if (frozen.conflict) {
+            this._finishAttachmentSnapshot(tab, snapshot, 'refused', 'stale');
+            return;
+        }
+        snapshot.id = frozen.outbox.id;
+        snapshot.outboxState = frozen.outbox.state;
+        tab._attachmentRevision = Math.max(tab._attachmentRevision || 0, snapshot.draftRevision + 1);
+        return frozen;
     }
 
     async _dispatchAttachmentSnapshot(tab, snapshot, explicit = false) {
@@ -11343,7 +11389,9 @@ export class TabManager {
         }
         const claim = await this.attachmentStore.claimSend(snapshot.id, explicit);
         if (!claim.claimed) {
-            if (claim.outbox?.state === 'attempted' || claim.outbox?.state === 'unknown') {
+            if (['dispatched', 'refused', 'cancelled'].includes(claim.outbox?.state)) {
+                this._finishAttachmentSnapshot(tab, snapshot, claim.outbox.state, claim.outbox.reason);
+            } else if (claim.outbox?.state === 'attempted' || claim.outbox?.state === 'unknown') {
                 snapshot.outboxState = claim.outbox.state;
                 snapshot.state = 'unknown';
                 tab._attachmentNotice = 'Submission not confirmed. Check Pi before resending.';
@@ -11395,7 +11443,7 @@ export class TabManager {
             tab._attachmentPendingSnapshot = null;
             tab._attachmentLastSubmitted = snapshot;
             for (const item of snapshot.items) this._attachmentRequestScopes.delete(item.id);
-            tab._attachmentNotice = 'Submitted to Pi; model receipt is not confirmed.';
+            tab._attachmentNotice = 'Submitted to Pi.';
         } else if (state === 'unknown') {
             tab._attachmentNotice = 'Submission not confirmed. Check Pi before resending.';
         } else {
@@ -14934,9 +14982,13 @@ export class TabManager {
         );
         const hasCoderPresets = visiblePresets.length > 0;
 
-        // If direct mode, do not render presets
+        // Reuse the original button so rerenders keep its picker handlers.
+        const attachmentButton = coderId === 'pi' ? this.attachInputBtn : null;
+        if (attachmentButton) this.presetsContainer.appendChild(attachmentButton);
+
+        // Direct mode has no presets, but Pi still needs its attachment entry.
         if (activeTab?.directMode) {
-            this.presetsContainer.classList.add('hidden');
+            this.presetsContainer.classList.toggle('hidden', !attachmentButton);
             return;
         }
 
