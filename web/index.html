@@ -950,18 +950,6 @@ eager to avoid a first-open unstyled flash. -->
                                 ></textarea>
                                 <div class="input-actions">
                                     <button
-                                        id="attach-input-btn"
-                                        class="btn btn-primary attachment-button"
-                                        type="button"
-                                        aria-label="Attach files"
-                                        aria-haspopup="menu"
-                                        aria-expanded="false"
-                                        aria-controls="attachment-source-dropup"
-                                        title="Attach files to this Pi prompt"
-                                    >
-                                        Attach
-                                    </button>
-                                    <button
                                         id="direct-mode-toggle"
                                         title="Toggle Direct Input Mode (Direct keyboard input vs staged text bar)"
                                         class="direct-mode-btn"
@@ -1098,7 +1086,33 @@ eager to avoid a first-open unstyled flash. -->
                         <div
                             id="presets-container"
                             class="presets-container hidden"
-                        ></div>
+                        >
+                            <button
+                                id="attach-input-btn"
+                                class="preset-btn btn-icon"
+                                type="button"
+                                aria-label="Attach files"
+                                aria-haspopup="menu"
+                                aria-expanded="false"
+                                aria-controls="attachment-source-dropup"
+                                title="Attach files to this Pi prompt"
+                            >
+                                <svg
+                                    class="icon"
+                                    aria-hidden="true"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                >
+                                    <path
+                                        d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
+                                    ></path>
+                                </svg>
+                            </button>
+                        </div>
 
                         <!-- Floating Drop-up for Model Presets -->
                         <div

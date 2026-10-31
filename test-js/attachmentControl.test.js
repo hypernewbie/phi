@@ -101,6 +101,125 @@ function png(name = 'public.png') {
 }
 
 describe('attachment control', () => {
+    it('keeps submitted recovery in the paperclip menu, not beside the next draft', () => {
+        const { tm, tabA } = makeManager();
+        const snapshot = {
+            items: [],
+            text: 'submitted prompt',
+            state: 'sending',
+            outboxState: 'attempted',
+        };
+        tabA._attachmentPendingSnapshot = snapshot;
+        tm._finishAttachmentSnapshot(tabA, snapshot, 'dispatched', '');
+        expect(tm.attachmentStatus.textContent).toBe('Submitted to Pi.');
+        expect(tm.attachmentStatus.querySelectorAll('button')).toHaveLength(0);
+        expect(tabA._attachmentLastSubmitted).toBe(snapshot);
+
+        tm.inputTextArea.value = 'next draft';
+        tm.inputTextArea.dispatchEvent(new Event('input'));
+        expect(tm.attachmentStatus.classList.contains('hidden')).toBe(true);
+        tm.attachInputBtn.click();
+        const restore = [
+            ...tm.attachmentSourceDropup.querySelectorAll('[role="menuitem"]'),
+        ].find((button) => button.textContent === 'Restore last attachment');
+        expect(restore).toBeDefined();
+        const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+        restore.click();
+        expect(confirm).toHaveBeenCalledWith(
+            expect.stringContaining('can create a duplicate'),
+        );
+        expect(tm.inputTextArea.value).toBe('next draft');
+        expect(tabA._attachmentLastSubmitted).toBe(snapshot);
+        expect(tm.sendInput).not.toHaveBeenCalled();
+        confirm.mockRestore();
+    });
+
+    it.each(['unknown', 'refused'])(
+        'keeps %s sends visible and recoverable while typing',
+        (state) => {
+            const { tm, tabA } = makeManager();
+            const snapshot = {
+                items: [],
+                state: 'sending',
+                outboxState: 'attempted',
+            };
+            tabA._attachmentPendingSnapshot = snapshot;
+            tm._finishAttachmentSnapshot(
+                tabA,
+                snapshot,
+                state,
+                state === 'refused' ? 'stale' : 'uncertain',
+            );
+            tm.inputTextArea.value = 'next draft';
+            tm.inputTextArea.dispatchEvent(new Event('input'));
+            expect(tm.attachmentStatus.classList.contains('hidden')).toBe(
+                false,
+            );
+            expect(tm.attachmentStatus.textContent).toContain(
+                state === 'unknown'
+                    ? 'Submission not confirmed'
+                    : 'Attachment not sent',
+            );
+            expect(
+                [...tm.attachmentStatus.querySelectorAll('button')].map(
+                    (button) => button.textContent,
+                ),
+            ).toContain('Restore to draft');
+            expect(tabA._attachmentPendingSnapshot).toBe(snapshot);
+        },
+    );
+
+    it.each(['dispatched', 'refused', 'cancelled'])(
+        'observes an already-%s snapshot without dispatching it again',
+        async (state) => {
+            const { tm, tabA } = makeManager();
+            const snapshot = {
+                items: [],
+                state: 'sending',
+                outboxState: 'waiting',
+            };
+            tabA._attachmentPendingSnapshot = snapshot;
+            vi.spyOn(tm, '_freezeAttachmentSnapshot').mockResolvedValue({
+                outbox: { state, reason: '' },
+            });
+            const dispatch = vi.spyOn(tm, '_dispatchAttachmentSnapshot');
+            await tm._freezeAndDispatchAttachmentSnapshot(tabA, snapshot);
+            expect(dispatch).not.toHaveBeenCalled();
+            expect(snapshot.state).toBe(state);
+            expect(tabA._attachmentPendingSnapshot).toBe(
+                state === 'dispatched' ? null : snapshot,
+            );
+        },
+    );
+
+    it.each(['dispatched', 'refused', 'cancelled'])(
+        'observes a %s result when another tab wins the claim',
+        async (state) => {
+            const { tm, tabA } = makeManager();
+            const snapshot = {
+                id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+                items: [],
+                state: 'sending',
+                outboxState: 'waiting',
+                owner: tm._captureAttachmentOwner(tabA),
+                scope: tm.app.scope,
+            };
+            tabA._attachmentPendingSnapshot = snapshot;
+            vi.spyOn(tm.attachmentStore, 'claimSend').mockResolvedValue({
+                claimed: false,
+                outbox: { state, reason: '' },
+            });
+            const fetch = vi.fn();
+            mockFetch(fetch);
+            await tm._dispatchAttachmentSnapshot(tabA, snapshot);
+            expect(fetch).not.toHaveBeenCalled();
+            expect(snapshot.state).toBe(state);
+            expect(tabA._attachmentPendingSnapshot).toBe(
+                state === 'dispatched' ? null : snapshot,
+            );
+        },
+    );
+
     it('opens the picker synchronously and stages in the pane that opened it', async () => {
         const { tm, tabA, tabB } = makeManager();
         const click = vi
@@ -339,7 +458,15 @@ describe('attachment control', () => {
         expect(tm.inputTextArea.value).toBe('');
         expect(tabA._attachmentPendingSnapshot.state).toBe('sending');
         tm.inputTextArea.value = 'new draft while Pi handles the snapshot';
+        tm.saveActiveDraft();
         await vi.waitFor(() => expect(finishSend).toBeTypeOf('function'));
+        // The next draft must persist before the dispatch response arrives.
+        await vi.waitFor(async () => {
+            expect(
+                (await tm.attachmentStore.loadDraft(owner)).draft?.text,
+            ).toBe('new draft while Pi handles the snapshot');
+        });
+        expect(tabA._attachmentConflict).toBe(false);
         finishSend();
         await vi.waitFor(() =>
             expect(tabA._attachmentPendingSnapshot).toBeNull(),

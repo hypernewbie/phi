@@ -3141,15 +3141,12 @@ body.has-terminal-bg
     white-space: nowrap;
 }
 
-.attachment-button {
-    flex-shrink: 0;
+#attachment-source-dropup {
+    max-width: calc(100vw - 24px);
 }
 
 @media (pointer: coarse) {
-    .attachment-button {
-        min-height: 44px;
-    }
-
+    #attach-input-btn,
     #attachment-source-dropup .dropup-model-btn {
         min-height: 44px;
     }

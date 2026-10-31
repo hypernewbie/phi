@@ -1495,6 +1495,7 @@ test('mobile source menu supports keyboard, distinct inputs, and cancel drafts',
         );
         const watched = watchPage(page, 'mobile-sources');
         try {
+            await page.setViewportSize({ width: 320, height: 740 });
             await expect(
                 page.locator('#attachment-camera-input'),
             ).toHaveAttribute('capture', 'environment');

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { setupDomHarness } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
 import terminalJsSrc from '../web/terminal.js?raw';
+import indexHtml from '../web/index.html?raw';
 
 // The presets row is a single line: command chips, then the pickers.
 // Control-key presets send a bare byte, so they render as icon-only
@@ -58,6 +59,72 @@ beforeEach(() => {
 });
 
 describe('presets row', () => {
+    it.each([390, 1440])(
+        'keeps one icon-only paperclip in the bottom bar at %ipx',
+        (width) => {
+            Object.defineProperty(window, 'innerWidth', {
+                value: width,
+                configurable: true,
+            });
+            const tm = makeTm();
+            document.body.insertAdjacentHTML(
+                'afterbegin',
+                '<div id="input-bar-container"><div class="input-actions"></div></div>',
+            );
+            const markup = new DOMParser().parseFromString(
+                indexHtml,
+                'text/html',
+            );
+            tm.attachInputBtn = markup.getElementById('attach-input-btn');
+            expect(
+                tm.attachInputBtn.closest('#presets-container'),
+            ).not.toBeNull();
+            expect(tm.attachInputBtn.querySelector('svg.icon')).not.toBeNull();
+            expect(tm.attachInputBtn.textContent.trim()).toBe('');
+            expect(tm.attachInputBtn.getAttribute('aria-label')).toBe(
+                'Attach files',
+            );
+            const clicked = vi.fn();
+            tm.attachInputBtn.addEventListener('click', clicked);
+            tm.renderPresets('pi');
+            tm.renderPresets('pi');
+            expect(tm.presetsContainer.firstElementChild).toBe(
+                tm.attachInputBtn,
+            );
+            expect(
+                tm.presetsContainer.querySelectorAll('#attach-input-btn'),
+            ).toHaveLength(1);
+            tm.attachInputBtn.click();
+            expect(clicked).toHaveBeenCalledTimes(1);
+            tm.renderPresets('bash');
+            expect(
+                tm.presetsContainer.querySelector('#attach-input-btn'),
+            ).toBeNull();
+            tm.renderPresets('pi');
+            expect(tm.presetsContainer.firstElementChild).toBe(
+                tm.attachInputBtn,
+            );
+            tm.attachInputBtn.click();
+            expect(clicked).toHaveBeenCalledTimes(2);
+        },
+    );
+
+    it('keeps the paperclip reachable when Pi enters direct mode', () => {
+        const tm = makeTm();
+        tm.attachInputBtn = new DOMParser()
+            .parseFromString(indexHtml, 'text/html')
+            .getElementById('attach-input-btn');
+        tm.directModeToggle = document.createElement('button');
+        tm.inputBarContainer = document.createElement('div');
+        tm.renderPresets('pi');
+        tm.updateDirectModeUI(
+            { coder: 'pi', directMode: true, isAtBottom: true },
+            true,
+        );
+        expect(tm.presetsContainer.classList.contains('hidden')).toBe(false);
+        expect([...tm.presetsContainer.children]).toEqual([tm.attachInputBtn]);
+    });
+
     it('renders no ctrl+shift+x chip for any coder', () => {
         const tm = makeTm();
         for (const coder of ['pi', 'bash']) {
