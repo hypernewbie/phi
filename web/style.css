@@ -904,6 +904,25 @@ html[data-sync="stale"] .brand .logo {
     letter-spacing: 1px;
 }
 
+#sidebar-panel .panel-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.session-refresh-status {
+    padding: 4px 12px;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+.session-refresh-status:empty,
+#refresh-sessions-btn[hidden] {
+    display: none;
+}
+
 .coder-selector {
     display: flex;
     flex-wrap: wrap;
@@ -5395,8 +5414,10 @@ html[data-phi-config-page] .settings-modal {
 
     [data-panel-mode="tabs"] .coder-selector,
     [data-panel-mode="tabs"] .new-session-container,
-    [data-panel-mode="tabs"] .session-list-container {
-        display: none;
+    [data-panel-mode="tabs"] .session-list-container,
+    [data-panel-mode="tabs"] #refresh-sessions-btn,
+    [data-panel-mode="tabs"] #session-refresh-status {
+        display: none !important;
     }
 
     [data-panel-mode="sessions"] .drawer-tabs-body {

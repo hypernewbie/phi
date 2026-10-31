@@ -8,6 +8,7 @@ import {
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { configToToml, startPhi } from './_server.js';
+import { isCancelledWorktreeRead } from './_session-requests.js';
 
 // The composer presets row is one line of buttons that never squeezes a
 // label: a wrapped row or an ellipsised chip is a regression, not a layout
@@ -65,6 +66,7 @@ async function watchPage(page: Page, serverOrigin: string) {
     });
     page.on('pageerror', (error) => pageErrors.push(error.message));
     page.on('requestfailed', (request) => {
+        if (isCancelledWorktreeRead(request, serverOrigin)) return;
         const url = new URL(request.url());
         if (url.origin === serverOrigin) {
             localFailures.push(

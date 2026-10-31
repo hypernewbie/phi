@@ -339,12 +339,12 @@ describe('Switch latency: the cache is the switch', () => {
 
         app = new App();
         await app.switchToBackend('profile-remote', 'http://remote:7070');
-        await new Promise((r) => setTimeout(r, 200));
-
-        expect(document.getElementById('hostname-display')?.innerText).toBe(
-            'remote-host',
-        );
-        expect(document.documentElement.dataset.sync).toBeUndefined();
+        await vi.waitFor(() => {
+            expect(document.getElementById('hostname-display')?.innerText).toBe(
+                'remote-host',
+            );
+            expect(document.documentElement.dataset.sync).toBeUndefined();
+        });
     });
 
     it('runs the refresh probes concurrently, not one after another', async () => {
