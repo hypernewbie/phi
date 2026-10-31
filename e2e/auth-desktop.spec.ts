@@ -1261,7 +1261,7 @@ test('embedded session / cross-window logout', async () => {
     const body = await bodyPage(owned.application);
     await unlockV2(main, body, v2Password, appDiagnostics);
     const opened = owned.application.context().waitForEvent('page');
-    await body.getByRole('button', { name: 'Settings', exact: true }).click();
+    await main.locator('#header-config-pill .pill-label').click();
     const peer = await opened;
     await peer.waitForURL((url) => url.pathname === '/config.html');
 
@@ -1450,9 +1450,7 @@ test('poor network Electron / recovery and password removal', async () => {
         const settingsPagePromise = owned.application
             .context()
             .waitForEvent('page');
-        await body
-            .getByRole('button', { name: 'Settings', exact: true })
-            .click();
+        await main.locator('#header-config-pill .pill-label').click();
         const settingsPage = await settingsPagePromise;
         await settingsPage.waitForURL((url) => url.pathname === '/config.html');
         const settings = settingsPage.locator('.settings-overlay');

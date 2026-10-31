@@ -563,25 +563,18 @@ test.describe('v2 bearer session', () => {
                 httpOnly: true,
             },
         ]);
-        const protectedRequests: Array<{ auth: string; cookie: string }> = [];
-        page.on('request', async (request) => {
-            if (!request.url().endsWith('/api/coders')) return;
-            const headers = await request.allHeaders();
-            protectedRequests.push({
-                auth: headers.authorization ?? '',
-                cookie: headers.cookie ?? '',
-            });
-        });
+        const protectedRequest = page.waitForRequest((request) =>
+            request.url().endsWith('/api/coders'),
+        );
         expect(
             await page.evaluate(
                 async () => (await fetch('/api/coders')).status,
             ),
         ).toBe(200);
-        expect(protectedRequests.length).toBeGreaterThan(0);
-        for (const request of protectedRequests) {
-            expect(request.auth).toBe(`Bearer ${bearer}`);
-            expect(request.cookie).toContain('phi_access_session=');
-        }
+        // Header reads can finish after fetch; await the observed request.
+        const headers = await (await protectedRequest).allHeaders();
+        expect(headers.authorization).toBe(`Bearer ${bearer}`);
+        expect(headers.cookie).toContain('phi_access_session=');
         // The bearer is authoritative: an explicit bad bearer is rejected even
         // though the same request carries a valid legacy cookie.
         expect(
