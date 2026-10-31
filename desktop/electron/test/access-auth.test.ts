@@ -2048,6 +2048,60 @@ describe('AccessAuth v2 refresh bundle', () => {
     },
   );
 
+  it.each(['401', '429', 'network', 'body'] as const)(
+    'does not sign out or delay a newer login after a stale refresh %s',
+    async (failure) => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let waiting = false;
+      const doFetch = vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          if (failure === 'body') {
+            const response = bundleResponse('stale-token', handleA);
+            vi.spyOn(response, 'text').mockImplementation(async () => {
+              waiting = true;
+              await gate;
+              throw new Error('response body lost');
+            });
+            return response;
+          }
+          waiting = true;
+          await gate;
+          if (failure === 'network') throw new Error('connection lost');
+          return new Response('', {
+            status: Number(failure),
+            headers: { 'Retry-After': '300' },
+          });
+        })
+        .mockImplementation(() => bundleResponse('renewed-token', handleB));
+      const auth = new AccessAuth(doFetch, now);
+      install(auth, 'old-token', handleA);
+      const pending = auth.refreshAccess(origin);
+      await vi.waitFor(() => expect(waiting).toBe(true));
+      const previous = auth.getBundle(origin);
+      if (!previous) throw new Error('installed bundle missing');
+      const current = {
+        ...previous,
+        token: 'new-login',
+        refreshHandle: handleB,
+        expiresIn: 60,
+      };
+      expect(auth.installBundle(origin, current)).toBe(true);
+      release();
+
+      // The proxy maps unauthorized to a password prompt. Stale failures must
+      // instead let it use the newer login, without imposing the old backoff.
+      expect((await pending).kind).toBe('superseded');
+      expect(auth.getBundle(origin) === current).toBe(true);
+      expect(auth.getSelectedProtocol(origin)).toBe('v2');
+      expect((await auth.renewIfDue(origin))?.kind).toBe('ok');
+      expect(doFetch).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it('never installs a late refresh response over a newer bundle', async () => {
     let release!: (res: Response) => void;
     const pending = new Promise<Response>((resolve) => {

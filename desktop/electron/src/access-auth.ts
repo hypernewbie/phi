@@ -1200,14 +1200,14 @@ export class AccessAuth {
     return { kind: 'ok' };
   }
 
-  /** Runs one refresh request and applies its outcome under the same fencing
-   *  rules as a login: only a response that still owns the current handle may
-   *  install, and only the current handle's 401 may clear. */
+  /** Runs one refresh request. Every outcome belongs to the bundle it sent:
+   *  a replaced bundle cannot sign out or back off the newer session. */
   private async runRefresh(
     canonical: string,
     bundle: V2Bundle,
     signal?: AbortSignal,
   ): Promise<RefreshResult> {
+    const current = () => this.bundles.get(canonical) === bundle;
     let res: Response;
     try {
       signal = withTimeout(signal);
@@ -1223,18 +1223,15 @@ export class AccessAuth {
         redirect: 'error',
       });
     } catch (err) {
+      if (!current()) return { kind: 'superseded' };
       return this.failRefresh(
         canonical,
         err instanceof Error ? err.message : String(err),
       );
     }
+    if (!current()) return { kind: 'superseded' };
     if (res.status === 401) {
-      // Only a 401 for the handle this request sent is terminal. A newer
-      // login may have replaced it while this was in flight.
-      const current = this.bundles.get(canonical);
-      if (current && current.refreshHandle === bundle.refreshHandle) {
-        this.clearBundle(canonical);
-      }
+      this.clearBundle(canonical);
       return { kind: 'unauthorized' };
     }
     if (res.status === 429) {
@@ -1258,23 +1255,15 @@ export class AccessAuth {
     try {
       installed = await this.readBundle(res, handle, signal);
     } catch (err) {
+      if (!current()) return { kind: 'superseded' };
       return this.failRefresh(
         canonical,
         err instanceof Error ? err.message : String(err),
       );
     }
+    if (!current()) return { kind: 'superseded' };
     if (installed === null) {
       return this.failRefresh(canonical, 'refresh returned a bad bundle');
-    }
-    const current = this.bundles.get(canonical);
-    if (
-      !current ||
-      current.refreshHandle !== bundle.refreshHandle ||
-      current.token !== bundle.token
-    ) {
-      // A newer credential won while this refresh was in flight: installing
-      // now would resurrect the rotated handle the server just retired.
-      return { kind: 'superseded' };
     }
     // The rotated bundle restarts the receipt-relative renewal clock: the
     // server's `expires_in` is measured from this response.

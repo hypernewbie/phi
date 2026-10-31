@@ -1243,6 +1243,54 @@ test('MVP Electron / v2 login and restart', async () => {
     await closeElectron();
 });
 
+test('embedded session / cross-window logout', async () => {
+    phi = await startPhi({ config: { opencode_legacy: true } });
+    const server = phi;
+    const locked = await fetch(`${server.url}/api/auth/v2/password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Phi-Auth': 'v2' },
+        body: JSON.stringify({ password: v2Password }),
+    });
+    expect(locked.status).toBe(200);
+    await locked.body?.cancel();
+    const paths = createPaths(server);
+    seedSingleTab(paths);
+    const owned = await launchElectron(paths, server.url);
+    const appDiagnostics = diagnostics(owned.application, true);
+    const main = await mainPage(owned.application);
+    const body = await bodyPage(owned.application);
+    await unlockV2(main, body, v2Password, appDiagnostics);
+    const opened = owned.application.context().waitForEvent('page');
+    await body.getByRole('button', { name: 'Settings', exact: true }).click();
+    const peer = await opened;
+    await peer.waitForURL((url) => url.pathname === '/config.html');
+
+    // Keep both real embedded windows free of background protected polling.
+    // The auth channel alone must deliver logout, not a later API rejection.
+    for (const page of [body, peer]) {
+        await page.goto('phi-app://app/md.html?page=help');
+        await page.evaluate(async () => {
+            const auth = await import(new URL('./auth.js', location.href).href);
+            await auth.bootstrapAccessAuth();
+        });
+    }
+    await body.evaluate(async () => {
+        const auth = await import(new URL('./auth.js', location.href).href);
+        await auth.logoutAccess();
+    });
+    const prompt = peer.locator('.access-auth-overlay');
+    await expect(prompt).toBeVisible();
+    await expect(prompt.locator('input[type="password"]')).toBeFocused();
+    // The existing prompt can sign in again through the host-owned transport.
+    await prompt.locator('input[type="password"]').fill(v2Password);
+    await prompt.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await expect(prompt).toBeHidden();
+    await expectProtectedAPI(peer);
+    await assertEmbeddedCredentialBoundary(owned.application, peer);
+    appDiagnostics.assertClean();
+    await closeElectron();
+});
+
 test('poor network Electron / recovery and password removal', async () => {
     const testInfo = test.info();
     phi = await startPhi({ config: { opencode_legacy: true } });

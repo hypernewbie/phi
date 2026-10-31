@@ -434,14 +434,11 @@ function receiveLogout(message) {
     if (message.disabled === true) {
         if (hasPrompt) pendingOverlay.finish({ enabled: false });
         if (activeAuthKey === ownerKey) {
-            const bootstrap = hostAuthenticatedMode()
-                ? bootstrapHostAuthenticated(activeAuthContext)
-                : bootstrapAccessAuth(activeAuthContext);
-            void bootstrap.catch(() => {});
+            void bootstrapAccessAuth(activeAuthContext).catch(() => {});
         }
     } else if (activeAuthKey === ownerKey && !hasPrompt) {
         if (hostAuthenticatedMode())
-            void bootstrapHostAuthenticated(activeAuthContext).catch(() => {});
+            void bootstrapAccessAuth(activeAuthContext).catch(() => {});
         else void requestReauth(contextForKey(ownerKey));
     }
 }
@@ -471,6 +468,7 @@ function remainingDurationSeconds(state) {
 }
 
 function receiveBundle(message) {
+    if (hostAuthenticatedMode()) return;
     const ownerKey =
         typeof message.ownerKey === 'string'
             ? message.ownerKey
@@ -1395,6 +1393,7 @@ function showUnlockPrompt(context, protocol) {
 // The embedded shell owns the v2 bundle in the main process. The page sees
 // only the host's token-free status and login answers.
 async function bootstrapHostAuthenticated(context, wait) {
+    invalidationChannel();
     const state = stateFor(context);
     clearTokenState(state);
     state.memoryOnly = false;

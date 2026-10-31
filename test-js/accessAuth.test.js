@@ -600,6 +600,64 @@ describe('host-authenticated shell', () => {
         ).toEqual([]);
     });
 
+    it.each([false, true])(
+        'updates the embedded page after cross-tab logout (password disabled=%s)',
+        async (disabled) => {
+            let receive;
+            vi.stubGlobal(
+                'BroadcastChannel',
+                class {
+                    addEventListener(_event, listener) {
+                        receive = listener;
+                    }
+                    close() {}
+                },
+            );
+            let signedOut = false;
+            const fetchSpy = mockFetch((url) => {
+                const enabled = !(signedOut && disabled);
+                if (url === '/api/auth/status')
+                    return { ...STATUS, enabled, protocols: ['v1', 'v2'] };
+                expect(url).toBe('/api/auth/v2/status');
+                return { ...HOST_STATUS, enabled, authenticated: !signedOut };
+            });
+            await bootstrapAccessAuth();
+            expect(receive).toBeTypeOf('function');
+            signedOut = true;
+            receive({
+                data: {
+                    kind: 'logout',
+                    origin: window.location.origin,
+                    disabled,
+                },
+            });
+
+            await vi.waitFor(() =>
+                expect(__test__.getAccessState().accessEnabled).toBe(!disabled),
+            );
+            if (!disabled)
+                await vi.waitFor(() =>
+                    expect(
+                        document.querySelector('.access-auth-overlay'),
+                    ).not.toBeNull(),
+                );
+            else
+                expect(
+                    document.querySelector('.access-auth-overlay'),
+                ).toBeNull();
+            expect(__test__.getAccessState()).toMatchObject({
+                hostSession: false,
+                accessToken: null,
+            });
+            expect(
+                fetchSpy.mock.calls.filter(
+                    ([url]) => url === '/api/auth/status',
+                ),
+            ).toHaveLength(2);
+            expect(localStorage.length).toBe(0);
+        },
+    );
+
     const hostStatusResponse = (protocol, authenticated = true) =>
         new Response(
             JSON.stringify({
