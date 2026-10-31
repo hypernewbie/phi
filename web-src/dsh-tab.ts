@@ -300,11 +300,14 @@ async function resolveMount(
             },
         );
     }
+    // Concurrent retries can share a response, but must own only one timer.
     // Status refresh never navigates a live frame or replays DSH traffic.
-    if (current())
+    if (current()) {
+        clearTimeout(view.timer);
         view.timer = setTimeout(() => {
             void resolveMount(tm, view);
         }, REFRESH_INTERVAL);
+    }
 }
 
 /** Create/select synchronously, then reconcile routing in the background. */

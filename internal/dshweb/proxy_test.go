@@ -92,6 +92,8 @@ func TestRewriteRedirect(t *testing.T) {
 		"/app%5c..%5cescape",
 		"/%252e%252e/escape",
 		"http://127.0.0.1:54321/?token=abc",
+		"http://127.0.0.1:54321/?token=abc;ignored=1",
+		"http://127.0.0.1:54321/?token=%zz",
 		"http://127.0.0.1:54321/%2e%2e/x",
 	} {
 		resp := newResp(target)

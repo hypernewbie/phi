@@ -238,9 +238,11 @@ func TestCheckCarrierRequest(t *testing.T) {
 	if err := CheckCarrierRequest(meta, origin); err == nil {
 		t.Error("cross-site fetch metadata must fail")
 	}
-	tokenReq := newReq(http.MethodGet, "127.0.0.1:8080", "")
-	tokenReq.URL.RawQuery = "token=abc"
-	if err := CheckCarrierRequest(tokenReq, origin); err == nil {
-		t.Error("token query must fail")
+	for _, query := range []string{"token=abc", "token=abc;ignored=1", "%74oken=abc;ignored=1", "token=%zz"} {
+		tokenReq := newReq(http.MethodGet, "127.0.0.1:8080", "")
+		tokenReq.URL.RawQuery = query
+		if err := CheckCarrierRequest(tokenReq, origin); err == nil {
+			t.Errorf("query %q must fail", query)
+		}
 	}
 }

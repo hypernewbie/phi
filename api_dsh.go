@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -112,7 +113,12 @@ func dshPathGuard(next http.Handler) http.Handler {
 				http.Error(w, "invalid dsh path", http.StatusBadRequest)
 				return
 			}
-			if r.URL.Query().Has("token") {
+			query, err := url.ParseQuery(r.URL.RawQuery)
+			if err != nil {
+				http.Error(w, "invalid dsh query", http.StatusBadRequest)
+				return
+			}
+			if query.Has("token") {
 				http.Error(w, "token query not allowed", http.StatusBadRequest)
 				return
 			}

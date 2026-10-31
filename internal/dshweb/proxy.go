@@ -70,7 +70,8 @@ func CheckCarrierRequest(r *http.Request, origin Origin) error {
 	if !origin.MatchHost(r.Host) {
 		return errBadHost
 	}
-	if r.URL.Query().Has("token") {
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil || query.Has("token") {
 		return errTokenQuery
 	}
 	upgrading := IsUpgrade(r)
@@ -257,7 +258,8 @@ func rewriteRedirect(resp *http.Response, upstream *url.URL, mount string) error
 	if dest.Scheme != upstream.Scheme || dest.Host != upstream.Host {
 		return errRedirectLeap
 	}
-	if dest.Query().Has("token") {
+	query, err := url.ParseQuery(dest.RawQuery)
+	if err != nil || query.Has("token") {
 		return errRedirectLeap
 	}
 	// Emit the verified escaped form verbatim. Routing dest.Path

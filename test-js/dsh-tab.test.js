@@ -414,7 +414,7 @@ describe('TabManager DSH lifecycle', () => {
 });
 
 describe('fetchStatus resilience', () => {
-    it('times out a stalled JSON body and permits retry', async () => {
+    it('times out stalled JSON and owns one refresh timer after repeated retries', async () => {
         vi.useFakeTimers();
         const fetchMock = vi.fn(async (_url, init) => ({
             ok: true,
@@ -438,12 +438,17 @@ describe('fetchStatus resilience', () => {
         expect(document.querySelector('.dsh-shell-text').textContent).toMatch(
             /unreachable/,
         );
-        mockFetch(() => readyStatus());
-        document.querySelector('.dsh-retry').click();
+        const retryFetch = mockFetch(() => readyStatus());
+        const retry = document.querySelector('.dsh-retry');
+        for (let i = 0; i < 5; i++) retry.click();
         await vi.advanceTimersByTimeAsync(0);
         expect(
             document.querySelector('iframe.dsh-frame').getAttribute('src'),
         ).toBe(MOUNT);
+        expect(retryFetch).toHaveBeenCalledTimes(1);
+        expect(vi.getTimerCount()).toBe(1);
+        destroyDshPreview(DSH_PANE_ID);
+        expect(vi.getTimerCount()).toBe(0);
     });
 
     it('disposal aborts the pending request and a reopened tab gets a new request', async () => {
