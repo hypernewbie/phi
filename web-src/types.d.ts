@@ -66,6 +66,7 @@ export interface AppLike {
 // that token as one query parameter.
 export interface PhiAccessAuthBridge {
     installToken(token: string): boolean;
+    completeHostSession?(): Promise<boolean>;
     getAccessToken(): string | null;
     webSocketURL(url: URL): URL;
     // refreshAccessIfDue renews a due credential without a round-trip when the

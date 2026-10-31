@@ -1161,7 +1161,15 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     }
   });
 
-  it('installs a host v2 bearer into the trusted body view without a v1 proof', async () => {
+  it.each([
+    'remote',
+    'embedded',
+    'embedded-rejected',
+    'embedded-cancelled',
+    'embedded-destroyed',
+  ])('completes the v2 body handoff without a v1 proof: %s', async (mode) => {
+    const embedded = mode !== 'remote';
+    process.env.PHI_DESKTOP_LOW_MEMORY = embedded ? '1' : '0';
     const salt = Buffer.from('0123456789abcdef0123456789abcdef', 'hex');
     vi.stubGlobal('fetch', async (url: string | URL, init?: RequestInit) => {
       const u = url.toString();
@@ -1253,6 +1261,19 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     const scripts: string[] = [];
     bodyView.webContents.executeJavaScript = async (script: string) => {
       scripts.push(script);
+      if (script.includes('completeHostSession')) {
+        if (mode === 'embedded-destroyed')
+          bodyView.webContents.destroyed = true;
+        if (mode === 'embedded-cancelled') {
+          const cancel = fake.ipcHandlers.get('phi:auth-unlock');
+          if (!cancel) throw new Error('auth-unlock handler missing');
+          await cancel(
+            { sender: win.webContents },
+            { requestId, password: null },
+          );
+        }
+        return mode !== 'embedded-rejected';
+      }
       if (script.includes('installToken')) return 200;
       return null;
     };
@@ -1278,6 +1299,34 @@ describe('DesktopHost fake-Electron lifecycle', () => {
       { sender: win.webContents },
       { requestId, password: 'a long enough password' },
     )) as unknown as { ok: boolean; code?: string };
+    if (embedded) {
+      expect(result).toMatchObject(
+        mode === 'embedded'
+          ? { ok: true }
+          : {
+              ok: false,
+              code: mode === 'embedded-rejected' ? 'unavailable' : 'stale',
+            },
+      );
+      expect(scripts).toContain(
+        'window.phiAccessAuth?.completeHostSession?.()',
+      );
+      expect(
+        scripts.some(
+          (script) =>
+            script.includes('host-token') ||
+            script.includes('installToken') ||
+            script.includes('/api/auth/login'),
+        ),
+      ).toBe(false);
+      expect(bodyView.webContents.cookies.setCalls).toEqual([]);
+      expect(
+        win.webContents.sent.some(
+          ([channel]) => channel === 'phi:auth-resolved',
+        ),
+      ).toBe(mode === 'embedded');
+      return;
+    }
     expect(result).toEqual({ ok: true, config: expect.anything() });
 
     // The v2 body receives the bearer; the legacy one-time proof is never

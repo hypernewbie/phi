@@ -477,7 +477,11 @@ func readPrimaryConfig() (Config, bool, error) {
 	if strings.TrimSpace(string(b)) == "" {
 		return cfg, true, nil
 	}
-	if err := toml.Unmarshal(b, &cfg); err != nil {
+	metadata, err := toml.Decode(string(b), &cfg)
+	if err != nil {
+		return cfg, true, err
+	}
+	if err := validateAccessMigrationTOML(metadata, cfg); err != nil {
 		return cfg, true, err
 	}
 	return cfg, true, nil
@@ -503,7 +507,7 @@ func readLegacyConfig() (Config, bool, error) {
 	if len(b) == 0 || strings.TrimSpace(string(b)) == "" {
 		return cfg, true, nil
 	}
-	if err := json.Unmarshal(b, &cfg); err != nil {
+	if err := decodeAccessMigrationJSON(b, &cfg); err != nil {
 		return cfg, true, err
 	}
 	return cfg, true, nil
@@ -558,32 +562,6 @@ func writeConfigContentsLocked(cfg Config) error {
 	}
 	// PreserveExisting keeps the old config on a failed replacement.
 	return writeConfigFile(path, b, 0600)
-}
-
-func migrateLegacyConfig() {
-	configMu.Lock()
-	defer configMu.Unlock()
-	_, present, err := readPrimaryConfig()
-	if err != nil {
-		logConfigReadError(configFilePath(), err)
-		return
-	}
-	if present {
-		return
-	}
-	legacy, legacyPresent, err := readLegacyConfig()
-	if err != nil {
-		logConfigReadError(legacyConfigFilePath(), err)
-		return
-	}
-	if !legacyPresent {
-		return
-	}
-	if err := writeConfigLocked(legacy); err != nil {
-		logConfigReadError(configFilePath(), err)
-		return
-	}
-	slog.Info("migrated legacy config", "from", legacyConfigFilePath(), "to", configFilePath())
 }
 
 // saveAccessPasswordHash persists only the access verifier, so a password

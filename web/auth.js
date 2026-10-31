@@ -1203,7 +1203,13 @@ async function discoverAccessStatus(context) {
         } catch {
             throw invalidStatusError();
         }
-        return parseAccessStatus(payload);
+        const status = parseAccessStatus(payload);
+        if (hostAuthenticatedMode()) {
+            const protocol = res.headers.get('X-Phi-Host-Auth-Protocol');
+            if (protocol === 'v1' || protocol === 'v2')
+                status.hostProtocol = protocol;
+        }
+        return status;
     });
 }
 
@@ -1378,7 +1384,7 @@ function showUnlockPrompt(context, protocol) {
 
 // The embedded shell owns the v2 bundle in the main process. The page sees
 // only the host's token-free status and login answers.
-async function bootstrapHostAuthenticated(context) {
+async function bootstrapHostAuthenticated(context, wait) {
     const state = stateFor(context);
     clearTokenState(state);
     state.memoryOnly = false;
@@ -1388,35 +1394,50 @@ async function bootstrapHostAuthenticated(context) {
 
     let status;
     try {
-        status = await discoverAccessStatus(context);
+        status = await wait(discoverAccessStatus(context));
     } catch (err) {
         if (!current()) return { enabled: state.accessEnabled };
         throw err;
     }
-    if (!current()) return { enabled: state.accessEnabled };
+    if (status === HOST_INSTALL || !current())
+        return { enabled: state.accessEnabled };
     state.accessEnabled = status.enabled;
-    const protocol = preferredProtocol(status.protocols);
+    // The host's selected credential wins over capability preference. Older
+    // hosts without this metadata retain capability-based negotiation.
+    const protocol = status.protocols.includes(status.hostProtocol)
+        ? status.hostProtocol
+        : preferredProtocol(status.protocols);
     state.selectedProtocol = protocol;
-    if (!status.enabled) return { enabled: false };
+    if (!status.enabled) {
+        state.hostSession = false;
+        return { enabled: false };
+    }
 
     if (protocol === 'v1') {
-        // A v1-only server has no v2 route. The host proxy owns the cookie;
-        // page code only follows its token-free status and login answers.
         if (status.authenticated) {
             state.hostSession = true;
             state.loggedOut = false;
             return { enabled: true };
         }
+        state.hostSession = false;
         return showUnlockPrompt(context, 'v1');
     }
 
-    const verdict = await checkV2Token(null, context);
-    if (!current()) return { enabled: state.accessEnabled };
+    let verdict;
+    try {
+        verdict = await wait(checkV2Token(null, context));
+    } catch (err) {
+        if (!current()) return { enabled: state.accessEnabled };
+        throw err;
+    }
+    if (verdict === HOST_INSTALL || !current())
+        return { enabled: state.accessEnabled };
     if (verdict === 'valid') {
         state.hostSession = true;
         state.loggedOut = false;
         return { enabled: true };
     }
+    state.hostSession = false;
     return showUnlockPrompt(context, 'v2');
 }
 
@@ -1428,7 +1449,6 @@ export async function bootstrapAccessAuth(context) {
     const state = activateAuthContext(context);
     discardLegacyBearer(context);
     installAccessFetch();
-    if (hostAuthenticatedMode()) return bootstrapHostAuthenticated(context);
     const ownerKey = activeAuthKey;
     let epoch = state.epoch;
     const superseded = () =>
@@ -1441,6 +1461,8 @@ export async function bootstrapAccessAuth(context) {
     const wait = (promise) => Promise.race([promise, hostInstall]);
 
     try {
+        if (hostAuthenticatedMode())
+            return await bootstrapHostAuthenticated(context, wait);
         let status;
         try {
             status = await wait(discoverAccessStatus(context));
@@ -1683,6 +1705,27 @@ export function installToken(token) {
     return true;
 }
 
+// A native v2 login owns the credential, but this page may still be waiting
+// at its prompt. Verify through the host proxy before releasing bootstrap.
+export async function completeHostSession(context) {
+    if (!hostAuthenticatedMode()) return false;
+    const state = stateFor(context);
+    const epoch = state.epoch;
+    const verdict = await checkV2Token(null, context);
+    if (epoch !== state.epoch || verdict !== 'valid') return false;
+    state.hostSession = true;
+    state.accessEnabled = true;
+    state.selectedProtocol = 'v2';
+    state.loggedOut = false;
+    state.epoch++;
+    const releaseBootstrap = state.pendingBootstrapRelease;
+    state.pendingBootstrapRelease = null;
+    if (releaseBootstrap) releaseBootstrap();
+    if (pendingOverlay?.ownerKey === credentialKey(context))
+        pendingOverlay.finish({ enabled: true });
+    return true;
+}
+
 export async function logoutAccess(all = false, context) {
     const state = stateFor(context);
     if (state.hostSession) {
@@ -1775,6 +1818,7 @@ if (typeof document !== 'undefined' && document.addEventListener) {
 if (typeof window !== 'undefined') {
     const bridge = window.phiAccessAuth || {};
     bridge.installToken = installToken;
+    bridge.completeHostSession = completeHostSession;
     bridge.getAccessToken = getAccessToken;
     bridge.webSocketURL = webSocketURL;
     bridge.refreshAccessIfDue = refreshAccessIfDue;

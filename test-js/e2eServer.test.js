@@ -1,9 +1,18 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, accessSync, statSync } from 'node:fs';
+import {
+    mkdtempSync,
+    mkdirSync,
+    rmSync,
+    accessSync,
+    statSync,
+    writeFileSync,
+    readFileSync,
+    realpathSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import net from 'node:net';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { startPhi } from '../e2e/_server.ts';
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -14,11 +23,11 @@ vi.mock('node:fs', async (importOriginal) => {
         mkdirSync: vi.fn(),
         writeFileSync: vi.fn(),
         appendFileSync: vi.fn(),
+        readFileSync: vi.fn(),
+        realpathSync: vi.fn(),
         rmSync: vi.fn(),
         accessSync: vi.fn(),
         statSync: vi.fn(),
-        readFileSync: vi.fn(() => Buffer.from('fixture binary')),
-        realpathSync: vi.fn((path) => path),
     };
 });
 
@@ -33,15 +42,19 @@ vi.mock('node:net', () => ({
 }));
 
 vi.mock('node:child_process', () => ({
-    spawn: vi.fn(),
+    execFile: vi.fn(),
     execFileSync: vi.fn(),
+    spawn: vi.fn(),
 }));
+
 let nextPid = 100;
+const fakeChildren = new Map();
 
 class FakeChild {
-    constructor() {
+    constructor(executable) {
         this.pid = nextPid++;
-        queueMicrotask(() => this.emit('spawn'));
+        this.executable = executable;
+        fakeChildren.set(this.pid, this);
         this.exitCode = null;
         this.signalCode = null;
         this.killCalls = [];
@@ -58,15 +71,20 @@ class FakeChild {
     }
 
     once(event, cb) {
-        const list = this.handlers.get(event) || [];
-        list.push((...args) => {
-            this.handlers.set(
-                event,
-                (this.handlers.get(event) || []).filter((h) => h !== cb),
-            );
+        const wrapped = (...args) => {
+            this.off(event, wrapped);
             cb(...args);
-        });
-        this.handlers.set(event, list);
+        };
+        return this.on(event, wrapped);
+    }
+
+    off(event, cb) {
+        this.handlers.set(
+            event,
+            (this.handlers.get(event) || []).filter(
+                (handler) => handler !== cb,
+            ),
+        );
         return this;
     }
 
@@ -97,28 +115,117 @@ let realFetch;
 
 beforeEach(() => {
     vi.clearAllMocks();
+    fakeChildren.clear();
+    nextPid = 100;
     realFetch = global.fetch;
     tmpdir.mockReturnValue('/fake-tmp');
     mkdtempSync.mockImplementation((prefix) => `${prefix}ABCDEF`);
     mkdirSync.mockReturnValue(undefined);
     accessSync.mockReturnValue(undefined);
     statSync.mockReturnValue({ isDirectory: () => true, mode: 0o40700 });
+    readFileSync.mockReturnValue(Buffer.from('fixture binary'));
+    realpathSync.mockImplementation((path) => path);
     execFileSync.mockImplementation((cmd, args) => {
-        if (cmd === 'git')
-            return args[0] === 'status' ? '' : 'fixture-revision';
-        if (cmd === 'go') return 'fixture-go-build';
-        if (cmd === 'ps') return `start-${args[1]}`;
-        if (args.includes('-d')) return `n${join(DIR, 'phi')}\n`;
-        return 'n127.0.0.1:45678\n';
+        if (cmd === 'ps') return `start-${args[1]}\n`;
+        if (cmd === 'lsof' && args.includes('-d')) {
+            const pid = Number(args[args.indexOf('-p') + 1]);
+            const child = fakeChildren.get(pid);
+            return child ? `p${pid}\nf txt\nn${child.executable}\n` : '';
+        }
+        if (cmd === 'lsof' && args.includes('-Fp')) {
+            const pid = Number(args[args.indexOf('-p') + 1]);
+            return fakeChildren.has(pid) ? `p${pid}\n` : '';
+        }
+        throw new Error(`unexpected execFileSync: ${cmd}`);
     });
     net.createServer.mockImplementation(() => ({
         listen: (_port, _host, cb) => cb(),
         address: () => ({ port: 45678 }),
         close: (cb) => cb(),
     }));
-    spawn.mockImplementation((cmd) => {
-        const child = new FakeChild();
+    execFile.mockImplementation((cmd, args, _options, callback) => {
+        let stdout = '';
+        let error = null;
+        if (cmd === 'git' && args[0] === 'rev-parse') {
+            stdout = 'fixture-revision\n';
+        } else if (cmd === 'git' && args[0] === 'status') {
+            stdout = '';
+        } else if (cmd === 'go' && args[0] === 'version') {
+            stdout = 'go version go1.27.2 fixture\n';
+        } else if (cmd === 'ps') {
+            const pid = Number(args[1]);
+            stdout = `start-${pid}\n`;
+        } else if (cmd === 'lsof' && args.includes('-d')) {
+            const pid = Number(args[args.indexOf('-p') + 1]);
+            const child = fakeChildren.get(pid);
+            stdout = child ? `p${pid}\nf txt\nn${child.executable}\n` : '';
+            if (!stdout)
+                error = Object.assign(new Error('no process'), { code: 1 });
+        } else if (cmd === 'lsof' && args.includes('-Fp')) {
+            const portArg = args.find((arg) =>
+                arg.startsWith('-iTCP@127.0.0.1:'),
+            );
+            const port = Number(portArg?.split(':').at(-1));
+            const child = [...fakeChildren.values()].find(
+                (entry) =>
+                    entry.executable !== 'go' &&
+                    entry.exitCode === null &&
+                    entry.signalCode === null &&
+                    entry.port === port,
+            );
+            stdout = child ? `p${child.pid}\n` : '';
+            if (!stdout)
+                error = Object.assign(new Error('no listener'), { code: 1 });
+        } else if (cmd === 'lsof' && args.includes('-sTCP:LISTEN')) {
+            const pid = Number(args[args.indexOf('-p') + 1]);
+            const child = fakeChildren.get(pid);
+            stdout = child
+                ? `p${pid}\nf3\nn127.0.0.1:${args
+                      .find((arg) => arg.startsWith('-iTCP@'))
+                      ?.split(':')
+                      .at(-1)}\n`
+                : '';
+            if (!stdout)
+                error = Object.assign(new Error('no listener'), { code: 1 });
+        } else if (cmd === 'powershell.exe') {
+            const script = args.at(-1);
+            if (script.includes('Get-CimInstance')) {
+                const pid = Number(/ProcessId = (\d+)/.exec(script)?.[1]);
+                const child = fakeChildren.get(pid);
+                stdout = JSON.stringify({
+                    CreationDate: `start-${pid}`,
+                    ExecutablePath: child?.executable ?? '',
+                });
+            } else {
+                const port = Number(/-LocalPort (\d+)/.exec(script)?.[1]);
+                const child = [...fakeChildren.values()].find(
+                    (entry) =>
+                        entry.executable !== 'go' &&
+                        entry.exitCode === null &&
+                        entry.signalCode === null &&
+                        entry.port === port,
+                );
+                stdout = JSON.stringify(
+                    child
+                        ? [
+                              {
+                                  OwningProcess: child.pid,
+                                  LocalAddress: '127.0.0.1',
+                                  LocalPort: port,
+                              },
+                          ]
+                        : [],
+                );
+            }
+        }
+        if (error) callback(error, '', '');
+        else callback(null, stdout, '');
+        return {};
+    });
+    spawn.mockImplementation((cmd, args = []) => {
+        const child = new FakeChild(cmd);
         if (cmd === 'go') queueMicrotask(() => child.emit('exit', 0));
+        else child.port = Number(args[args.indexOf('--port') + 1]);
         return child;
     });
     global.fetch = vi.fn().mockResolvedValue({ ok: true });
@@ -137,28 +244,30 @@ function serverSpawn() {
 }
 
 describe('startPhi fixture isolation', () => {
-    test('setup failure removes the dir and spawns nothing', async () => {
+    test('setup failure retains the dir and spawns nothing', async () => {
         const boom = new Error('setup boom');
         await expect(
             startPhi({ setup: () => Promise.reject(boom) }),
         ).rejects.toThrow('setup boom');
         expect(spawn).not.toHaveBeenCalled();
-        expect(rmSync).toHaveBeenCalledTimes(1);
+        expect(rmSync).not.toHaveBeenCalled();
+        rmSync(DIR, { recursive: true, force: true });
         expect(rmSync).toHaveBeenCalledWith(
             DIR,
             expect.objectContaining({ recursive: true }),
         );
     });
 
-    test('build failure removes the dir and never launches', async () => {
+    test('build failure retains the dir and never launches', async () => {
         spawn.mockImplementation((cmd) => {
-            const child = new FakeChild();
+            const child = new FakeChild(cmd);
             if (cmd === 'go') queueMicrotask(() => child.emit('exit', 1));
             return child;
         });
         await expect(startPhi()).rejects.toThrow('go exited 1');
         expect(spawn.mock.calls.every(([cmd]) => cmd === 'go')).toBe(true);
-        expect(rmSync).toHaveBeenCalledTimes(1);
+        expect(rmSync).not.toHaveBeenCalled();
+        rmSync(DIR, { recursive: true, force: true });
     });
 
     // Unix-only: Windows uses named pipes with no socket budget.
@@ -170,7 +279,8 @@ describe('startPhi fixture isolation', () => {
                 /cannot host a 100-byte bridge socket/,
             );
             expect(spawn).not.toHaveBeenCalled();
-            expect(rmSync).toHaveBeenCalledTimes(1);
+            expect(rmSync).not.toHaveBeenCalled();
+            rmSync(DIR, { recursive: true, force: true });
         },
     );
 
@@ -201,7 +311,8 @@ describe('startPhi fixture isolation', () => {
         });
         await expect(startPhi()).rejects.toThrow('EACCES');
         expect(spawn).not.toHaveBeenCalled();
-        expect(rmSync).toHaveBeenCalledTimes(1);
+        expect(rmSync).not.toHaveBeenCalled();
+        rmSync(DIR, { recursive: true, force: true });
     });
 
     // Unix-only: Windows has no POSIX privacy bit.
@@ -214,11 +325,12 @@ describe('startPhi fixture isolation', () => {
             });
             await expect(startPhi()).rejects.toThrow(/not a private dir/);
             expect(spawn).not.toHaveBeenCalled();
-            expect(rmSync).toHaveBeenCalledTimes(1);
+            expect(rmSync).not.toHaveBeenCalled();
+            rmSync(DIR, { recursive: true, force: true });
         },
     );
 
-    test('health failure reaps the child, removes the dir, returns no handle', async () => {
+    test('health failure reaps the child and retains the dir without a handle', async () => {
         vi.useFakeTimers();
         global.fetch = vi.fn().mockRejectedValue(new Error('down'));
         const pending = startPhi();
@@ -234,21 +346,20 @@ describe('startPhi fixture isolation', () => {
             .find((c) => c.killCalls.length > 0);
         expect(child).toBeDefined();
         expect(child.killCalls).toEqual(['SIGTERM']);
-        expect(rmSync).toHaveBeenCalledTimes(1);
+        expect(rmSync).not.toHaveBeenCalled();
+        rmSync(DIR, { recursive: true, force: true });
     });
 
-    test('health failure after a signal exit still removes the dir', async () => {
-        vi.useFakeTimers();
-        global.fetch = vi.fn().mockRejectedValue(new Error('down'));
+    test('startup child exit retains evidence without signaling', async () => {
         let serverChild;
-        spawn.mockImplementation((cmd) => {
-            const child = new FakeChild();
+        spawn.mockImplementation((cmd, args = []) => {
+            const child = new FakeChild(cmd);
             if (cmd === 'go') queueMicrotask(() => child.emit('exit', 0));
             else {
+                child.port = Number(args[args.indexOf('--port') + 1]);
                 serverChild = child;
-                // The OS reaped the child by signal before health
-                // failed: exitCode stays null, signalCode is set, and
-                // the exit event already fired.
+                // The OS reaped the child before identity capture:
+                // signalCode is set and the exit event has fired.
                 queueMicrotask(() => {
                     child.signalCode = 'SIGTERM';
                     child.emit('exit', null, 'SIGTERM');
@@ -257,13 +368,10 @@ describe('startPhi fixture isolation', () => {
             return child;
         });
         const pending = startPhi();
-        const assertion = expect(pending).rejects.toThrow(
-            /exited during startup/,
-        );
-        await vi.advanceTimersByTimeAsync(91_000);
-        await assertion;
+        await expect(pending).rejects.toThrow('fixture server exited');
         expect(serverChild.killCalls).toEqual([]);
-        expect(rmSync).toHaveBeenCalledTimes(1);
+        expect(rmSync).not.toHaveBeenCalled();
+        rmSync(DIR, { recursive: true, force: true });
     });
 
     test('server env is allowlisted with owned paths winning', async () => {
@@ -275,7 +383,29 @@ describe('startPhi fixture isolation', () => {
                 TMPDIR: '/evil',
             },
         });
-        const [, , opts] = serverSpawn();
+        const [executable, args, opts] = serverSpawn();
+        const child = spawn.mock.results[1].value;
+        expect(phi.identity).toMatchObject({
+            pid: child.pid,
+            executable,
+            binaryPath: executable,
+            binaryHash: phi.identity.binarySha256,
+            dirtyBuild: false,
+            dir: DIR,
+            buildRevision: 'fixture-revision',
+            buildDirty: false,
+            goVersion: 'go version go1.27.2 fixture',
+            bindAddress: '127.0.0.1',
+            port: Number(args[args.indexOf('--port') + 1]),
+            directory: DIR,
+        });
+        expect(phi.identity.binarySha256).toMatch(/^[a-f0-9]{64}$/);
+        const identityRecord = writeFileSync.mock.calls.find(([path]) =>
+            String(path).endsWith('server-identity.json'),
+        );
+        expect(identityRecord).toBeDefined();
+        expect(JSON.parse(identityRecord[1])).toEqual(phi.identity);
+        expect(identityRecord[2]).toEqual({ mode: 0o600 });
         expect(opts.env.PATH).toBe(process.env.PATH);
         expect(opts.env.F1_PROBE_OUTER).toBeUndefined();
         expect(opts.env.PHI_SHUTDOWN_GRACE).toBe('1s');
@@ -289,6 +419,20 @@ describe('startPhi fixture isolation', () => {
         expect(buildCall).toBeDefined();
         expect('env' in buildCall[2]).toBe(false);
         await phi.stop();
+    });
+
+    test('pid and verify follow the owned child across restart', async () => {
+        const phi = await startPhi();
+        const first = spawn.mock.results[1].value;
+        expect(phi.pid()).toBe(first.pid);
+        expect(() => phi.verify()).not.toThrow();
+        await phi.restart();
+        const second = spawn.mock.results[2].value;
+        expect(phi.pid()).toBe(second.pid);
+        expect(() => phi.verify()).not.toThrow();
+        await phi.stop();
+        expect(phi.pid()).toBeUndefined();
+        expect(() => phi.verify()).toThrow('phi fixture is not running');
     });
 
     test('stop terminates the child and removes the dir exactly once', async () => {
@@ -317,12 +461,13 @@ describe('startPhi fixture isolation', () => {
             startTime: `start-${second.pid}`,
         });
         expect(second.exitCode).toBeNull();
+        expect(phi.identity.pid).toBe(second.pid);
         await phi.stop();
         expect(second.killCalls).toEqual(['SIGTERM']);
         expect(rmSync).toHaveBeenCalledTimes(1);
     });
 
-    test('failed restart reaps the new child and removes the dir', async () => {
+    test('failed restart reaps the new child and retains the dir until stop', async () => {
         const phi = await startPhi();
         vi.useFakeTimers();
         global.fetch = vi.fn().mockRejectedValue(new Error('down'));
@@ -334,7 +479,7 @@ describe('startPhi fixture isolation', () => {
         await assertion;
         const second = spawn.mock.results[2].value;
         expect(second.killCalls).toEqual(['SIGTERM']);
-        expect(rmSync).toHaveBeenCalledTimes(1);
+        expect(rmSync).not.toHaveBeenCalled();
         await phi.stop();
         expect(rmSync).toHaveBeenCalledTimes(1);
         await expect(phi.restart()).rejects.toThrow('already disposed');
@@ -343,30 +488,18 @@ describe('startPhi fixture isolation', () => {
     test.skipIf(process.platform === 'win32')(
         'foreign listener cannot pass readiness',
         async () => {
-            vi.useFakeTimers();
-            execFileSync.mockImplementation((cmd, args) => {
-                if (cmd === 'git')
-                    return args[0] === 'status' ? '' : 'revision';
-                if (cmd === 'go') return 'fixture-go-build';
-                if (cmd === 'ps') return `start-${args[1]}`;
-                if (args.includes('-d')) return `n${join(DIR, 'phi')}\n`;
-                const err = new Error('owned child has no listener');
-                err.status = 1;
-                throw err;
+            const runCommand = execFile.getMockImplementation();
+            execFile.mockImplementation((cmd, args, options, callback) => {
+                if (cmd === 'lsof' && args.includes('-Fp')) {
+                    callback(null, 'p9999\n', '');
+                    return {};
+                }
+                return runCommand(cmd, args, options, callback);
             });
-            const pending = startPhi();
-            const assertion = expect(pending).rejects.toThrow(
-                /exited during startup/,
-            );
-            await vi.advanceTimersByTimeAsync(500);
-            const child = spawn.mock.results[1].value;
-            child.signalCode = 'SIGTERM';
-            child.emit('exit', null, 'SIGTERM');
-            await vi.advanceTimersByTimeAsync(500);
-            await assertion;
+            await expect(startPhi()).rejects.toThrow(/foreign listener/);
             expect(global.fetch).not.toHaveBeenCalled();
-            expect(child.killCalls).toEqual([]);
-            expect(rmSync).toHaveBeenCalledOnce();
+            expect(spawn.mock.results[1].value.killCalls).toEqual([]);
+            expect(rmSync).not.toHaveBeenCalled();
         },
     );
 
@@ -374,10 +507,15 @@ describe('startPhi fixture isolation', () => {
         'identity change prevents cleanup from signaling or deleting',
         async () => {
             const phi = await startPhi();
-            execFileSync.mockImplementation((cmd, args) =>
-                cmd === 'ps' ? 'reused-pid-start' : `n${join(DIR, 'phi')}\n`,
-            );
-            await expect(phi.stop()).rejects.toThrow(/PID was reused/);
+            const runCommand = execFile.getMockImplementation();
+            execFile.mockImplementation((cmd, args, options, callback) => {
+                if (cmd === 'ps') {
+                    callback(null, 'reused-pid-start', '');
+                    return {};
+                }
+                return runCommand(cmd, args, options, callback);
+            });
+            await expect(phi.stop()).rejects.toThrow(/identity mismatch/);
             expect(spawn.mock.results[1].value.killCalls).toEqual([]);
             expect(rmSync).not.toHaveBeenCalled();
         },
@@ -390,8 +528,8 @@ describe('startPhi fixture isolation', () => {
             child.emit('exit', null, 'SIGTERM');
             return { ok: true };
         });
-        await expect(startPhi()).rejects.toThrow(/exited during startup/);
-        expect(rmSync).toHaveBeenCalledOnce();
+        await expect(startPhi()).rejects.toThrow(/exited before health/);
+        expect(rmSync).not.toHaveBeenCalled();
     });
 
     test('restart after stop fails fast without spawning', async () => {

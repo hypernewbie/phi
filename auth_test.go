@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/BurntSushi/toml"
 )
 
 func useTestAccessAuth(t *testing.T) *accessAuthManager {
@@ -62,7 +64,7 @@ func testAccessDBPasswordRecord(t *testing.T) string {
 
 func seedTestLegacyConfig(t *testing.T, encoded string) {
 	t.Helper()
-	data, err := json.Marshal(Config{AccessPasswordHash: encoded})
+	data, err := toml.Marshal(Config{AccessPasswordHash: encoded})
 	if err != nil {
 		t.Fatal(err)
 	}

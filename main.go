@@ -151,9 +151,6 @@ func main() {
 
 	log.Printf("[main] Starting Phi in CWD: %s", activeCWD)
 
-	// Migrate the read-only legacy JSON config before loading startup settings.
-	migrateLegacyConfig()
-
 	// Ensure config directory exists and contains CWD as a workspace
 	cfg, err := loadConfigWithError()
 	if err != nil {

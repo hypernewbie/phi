@@ -1,7 +1,14 @@
-import { createHash, createHmac, hkdfSync, pbkdf2Sync } from 'node:crypto';
+import {
+    createHash,
+    createHmac,
+    hkdfSync,
+    pbkdf2Sync,
+    randomBytes,
+} from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Browser, type Page } from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
 
 // Permanent auth-transition coverage (plan M4c). Five groups, each against a
@@ -40,6 +47,13 @@ const b64url = (buffer: Buffer): string =>
         .replace(/\+/g, '-')
         .replace(/\//g, '_')
         .replace(/=+$/, '');
+
+function preissuedLegacySession(verifier: Buffer): string {
+    const expiresAt = Math.floor(Date.now() / 1000) + 100 * 365 * 24 * 60 * 60;
+    const payload = `${b64url(randomBytes(32))}.${expiresAt}`;
+    const signature = createHmac('sha256', verifier).update(payload).digest();
+    return `${payload}.${b64url(signature)}`;
+}
 
 /** Locks a fresh server through the public v2 route and returns its bearer. */
 async function lockServer(url: string, password: string): Promise<string> {
@@ -124,6 +138,23 @@ async function unlock(page: Page, password: string): Promise<void> {
     await expect(overlay).toBeVisible({ timeout: 30_000 });
     await overlay.locator('#access-auth-password').fill(password);
     await overlay.locator('button[type="submit"]').click();
+    await expect(overlay).toHaveCount(0, { timeout: 60_000 });
+}
+
+async function unlockMvp(
+    page: Page,
+    password: string,
+    mobile: boolean,
+): Promise<void> {
+    const overlay = page.locator('.access-auth-overlay');
+    await expect(overlay).toBeVisible({ timeout: 30_000 });
+    const input = overlay.locator('#access-auth-password');
+    await input.fill(password);
+    if (mobile) {
+        await overlay.locator('button[type="submit"]').tap();
+    } else {
+        await input.press('Enter');
+    }
     await expect(overlay).toHaveCount(0, { timeout: 60_000 });
 }
 
@@ -626,15 +657,38 @@ test.describe('v1 compatibility', () => {
     });
 });
 
-test.describe('legacy SQLite migration', () => {
+test.describe('MVP legacy home', () => {
     let phi: PhiServer;
     let refreshHandle = '';
+    let preissuedSession = '';
+    let mvpPassword = '';
+    let savedVerifier: Record<string, unknown> = {};
+    let legacyConfigBytes = '';
 
-    test.beforeAll(async () => {
-        const password = 'migration fixture pass';
+    test.describe.configure({ mode: 'serial' });
+
+    test.beforeEach(async () => {
+        mvpPassword = 'migration fixture pass';
         const salt = Buffer.alloc(16, 0x11);
-        const verifier = pbkdf2Sync(password, salt, 600_000, 32, 'sha256');
+        const verifier = pbkdf2Sync(mvpPassword, salt, 600_000, 32, 'sha256');
         const encoded = `v1.pbkdf2-sha256.600000.${b64url(salt)}.${b64url(verifier)}`;
+        preissuedSession = preissuedLegacySession(verifier);
+        savedVerifier = {
+            version: 'v1',
+            algorithm: 'pbkdf2-sha256',
+            iterations: 600_000,
+            salt: b64url(salt),
+            verifier: b64url(verifier),
+        };
+        legacyConfigBytes = JSON.stringify({
+            access_password_hash: encoded,
+            theme_color: 'teal',
+            quick_commands: [
+                { name: 'auth fixture', command: 'printf auth-mvp' },
+            ],
+            sync_coordinator: '',
+            peers: [],
+        });
         const familyBytes = Buffer.alloc(32, 0x33);
         const familyID = b64url(familyBytes);
         const recordID = b64url(Buffer.alloc(32, 0x22));
@@ -685,13 +739,10 @@ test.describe('legacy SQLite migration', () => {
             setup: (dir) => {
                 const configDir = join(dir, 'home', '.phi');
                 mkdirSync(configDir, { recursive: true });
+                expect(existsSync(join(configDir, 'config.toml'))).toBe(false);
                 writeFileSync(
                     join(configDir, 'config.json'),
-                    JSON.stringify({
-                        access_password_hash: encoded,
-                        sync_coordinator: '',
-                        peers: [],
-                    }),
+                    legacyConfigBytes,
                 );
                 writeFileSync(
                     join(configDir, 'auth-v2-state.json'),
@@ -701,27 +752,147 @@ test.describe('legacy SQLite migration', () => {
         });
     });
 
-    test.afterAll(async () => {
+    test.afterEach(async () => {
         await phi.stop();
     });
 
-    test('migrates a live refresh family before the browser signs in', async ({
-        browser,
-    }) => {
-        const configPath = join(phi.dir, 'home', '.phi', 'config.json');
-        const persisted = JSON.parse(readFileSync(configPath, 'utf8')) as {
-            access_password_hash?: string;
-            access_auth_migration?: { state: string; id: string };
-        };
-        expect(persisted.access_password_hash ?? '').toBe('');
-        expect(persisted.access_auth_migration?.state).toBe('complete');
-        expect(existsSync(join(phi.dir, 'home', '.phi', 'auth.db'))).toBe(true);
-        expect(
-            existsSync(join(phi.dir, 'home', '.phi', 'auth-v2-state.json')),
-        ).toBe(false);
+    async function exerciseMvpProfile(browser: Browser, mobile: boolean) {
+        const profileOptions = mobile
+            ? {
+                  viewport: { width: 390, height: 844 },
+                  isMobile: true,
+                  hasTouch: true,
+                  deviceScaleFactor: 3,
+              }
+            : { viewport: { width: 1440, height: 900 } };
+        console.log(
+            `M1 browser: ${browser.browserType().name()} ${browser.version()}`,
+        );
 
-        const context = await browser.newContext();
-        await context.addCookies([
+        const configDir = join(phi.dir, 'home', '.phi');
+        const configPath = join(configDir, 'config.json');
+        const databasePath = join(configDir, 'auth.db');
+        const assertMigration = () => {
+            expect(readFileSync(configPath, 'utf8')).toBe(legacyConfigBytes);
+            const persistedToml = readFileSync(
+                join(configDir, 'config.toml'),
+                'utf8',
+            );
+            expect(persistedToml).not.toMatch(/^access_password_hash\s*=/m);
+            expect(persistedToml).toContain('theme_color = "teal"');
+            expect(persistedToml).toContain('name = "auth fixture"');
+            expect(persistedToml).toContain('command = "printf auth-mvp"');
+            const marker = persistedToml.match(
+                /\[access_auth_migration\]\s+state\s*=\s*"complete"\s+id\s*=\s*"([^"]+)"/,
+            );
+            expect(marker).not.toBeNull();
+            if (!marker?.[1])
+                throw new Error('completed migration ID is missing');
+            const databaseID = execFileSync(
+                'sqlite3',
+                [
+                    '-readonly',
+                    databasePath,
+                    'SELECT hex(migration_id) FROM auth_state WHERE singleton_id=1;',
+                ],
+                { encoding: 'utf8' },
+            ).trim();
+            expect(
+                Buffer.from(marker[1], 'base64url')
+                    .toString('hex')
+                    .toUpperCase(),
+            ).toBe(databaseID);
+            expect(existsSync(databasePath)).toBe(true);
+            expect(existsSync(join(configDir, 'auth-v2-state.json'))).toBe(
+                false,
+            );
+            return persistedToml;
+        };
+        assertMigration();
+        expect((await fetch(`${phi.url}/healthz`)).status).toBe(200);
+        expect((await fetch(`${phi.url}/api/coders`)).status).toBe(401);
+
+        const legacyContext = await browser.newContext(profileOptions);
+        await legacyContext.addCookies([
+            {
+                name: 'phi_access_session',
+                value: preissuedSession,
+                domain: new URL(phi.url).hostname,
+                path: '/',
+                httpOnly: true,
+                sameSite: 'Strict',
+            },
+        ]);
+        const legacyPage = await legacyContext.newPage();
+        const legacyQuiet = monitorMvpPage(legacyPage);
+        let legacyLogins = 0;
+        let legacyV2Requests = 0;
+        legacyPage.on('request', (request) => {
+            const pathname = new URL(request.url()).pathname;
+            if (pathname === '/api/auth/login') legacyLogins += 1;
+            if (pathname.startsWith('/api/auth/v2/')) legacyV2Requests += 1;
+        });
+        await legacyPage.goto(phi.url);
+        await expectSignedIn(legacyPage);
+        expect(legacyLogins).toBe(0);
+        expect(legacyV2Requests).toBe(0);
+        expect(
+            await legacyPage.evaluate(
+                async () => (await fetch('/api/coders')).status,
+            ),
+        ).toBe(200);
+        expect(
+            await legacyPage.evaluate(() =>
+                window.phiAccessAuth.getAccessToken(),
+            ),
+        ).toBeNull();
+        expect(
+            await legacyPage.evaluate(
+                async () =>
+                    (
+                        await fetch('/api/coders', {
+                            headers: {
+                                Authorization: 'Bearer invalid-mvp-token',
+                            },
+                        })
+                    ).status,
+            ),
+        ).toBe(401);
+
+        const savedContext = await browser.newContext(profileOptions);
+        await savedContext.addInitScript((saved) => {
+            localStorage.setItem(
+                'phi_access_credential_v1',
+                JSON.stringify(saved),
+            );
+        }, savedVerifier);
+        const savedPage = await savedContext.newPage();
+        const savedQuiet = monitorMvpPage(savedPage);
+        let savedV1Logins = 0;
+        let savedV2Requests = 0;
+        savedPage.on('request', (request) => {
+            const pathname = new URL(request.url()).pathname;
+            if (pathname === '/api/auth/login') savedV1Logins += 1;
+            if (pathname.startsWith('/api/auth/v2/')) savedV2Requests += 1;
+        });
+        await savedPage.goto(phi.url);
+        await expectSignedIn(savedPage);
+        expect(savedV1Logins).toBe(1);
+        expect(savedV2Requests).toBe(0);
+        expect(
+            await savedPage.evaluate(() =>
+                window.phiAccessAuth.getAccessToken(),
+            ),
+        ).toBeNull();
+        expect(
+            await savedPage.evaluate(
+                async () => (await fetch('/api/coders')).status,
+            ),
+        ).toBe(200);
+        await savedContext.close();
+
+        const migratedContext = await browser.newContext(profileOptions);
+        await migratedContext.addCookies([
             {
                 name: 'phi_access_refresh',
                 value: refreshHandle,
@@ -731,40 +902,161 @@ test.describe('legacy SQLite migration', () => {
                 sameSite: 'Strict',
             },
         ]);
-        const page = await context.newPage();
-        const v1Logins: string[] = [];
-        const v2Logins: string[] = [];
-        const refreshes: string[] = [];
-        let refreshStatus = 0;
-        page.on('response', (response) => {
-            if (response.url().includes('/api/auth/v2/refresh')) {
-                refreshStatus = response.status();
+        const migratedPage = await migratedContext.newPage();
+        const migratedQuiet = monitorMvpPage(migratedPage);
+        let migratedV1Logins = 0;
+        let migratedV2Logins = 0;
+        let migratedRefreshStatus = 0;
+        migratedPage.on('request', (request) => {
+            const pathname = new URL(request.url()).pathname;
+            if (pathname === '/api/auth/login') migratedV1Logins += 1;
+            if (pathname === '/api/auth/v2/login') migratedV2Logins += 1;
+        });
+        migratedPage.on('response', (response) => {
+            if (new URL(response.url()).pathname === '/api/auth/v2/refresh') {
+                migratedRefreshStatus = response.status();
             }
         });
-        page.on('request', (request) => {
-            if (request.url().endsWith('/api/auth/login'))
-                v1Logins.push(request.url());
-            if (request.url().includes('/api/auth/v2/login'))
-                v2Logins.push(request.url());
-            if (request.url().includes('/api/auth/v2/refresh'))
-                refreshes.push(request.url());
-        });
-
-        await page.goto(phi.url);
-        await expect.poll(() => refreshStatus).toBe(200);
-        await expectSignedIn(page);
-        expect(v1Logins).toEqual([]);
-        expect(v2Logins).toEqual([]);
-        expect(refreshes.length).toBeGreaterThan(0);
+        await migratedPage.goto(phi.url);
+        await expect.poll(() => migratedRefreshStatus).toBe(200);
+        await expectSignedIn(migratedPage);
+        expect(migratedV1Logins).toBe(0);
+        expect(migratedV2Logins).toBe(0);
         expect(
-            await page.evaluate(() => window.phiAccessAuth.getAccessToken()),
-        ).toBeTruthy();
-        expect(
-            await page.evaluate(
+            await migratedPage.evaluate(
                 async () => (await fetch('/api/coders')).status,
             ),
         ).toBe(200);
-        await context.close();
+        expect(
+            await migratedPage.evaluate(() =>
+                Boolean(window.phiAccessAuth.getAccessToken()),
+            ),
+        ).toBe(true);
+        migratedQuiet.assertQuiet();
+        await migratedContext.close();
+
+        const v2Context = await browser.newContext(profileOptions);
+        const v2Page = await v2Context.newPage();
+        const v2Quiet = monitorMvpPage(v2Page);
+        let v1Logins = 0;
+        let v2Logins = 0;
+        const refreshStatuses: number[] = [];
+        v2Page.on('request', (request) => {
+            const pathname = new URL(request.url()).pathname;
+            if (pathname === '/api/auth/login') v1Logins += 1;
+            if (pathname === '/api/auth/v2/login') v2Logins += 1;
+        });
+        v2Page.on('response', (response) => {
+            if (new URL(response.url()).pathname === '/api/auth/v2/refresh') {
+                refreshStatuses.push(response.status());
+            }
+        });
+        await v2Page.goto(phi.url);
+        await unlockMvp(v2Page, mvpPassword, mobile);
+        await expectSignedIn(v2Page);
+        expect(v1Logins).toBe(0);
+        expect(v2Logins).toBe(1);
+        expect(
+            await v2Page.evaluate(() =>
+                Boolean(window.phiAccessAuth.getAccessToken()),
+            ),
+        ).toBe(true);
+        const apiConfig = await v2Page.evaluate(async () => {
+            const response = await fetch('/api/config');
+            const config = (await response.json()) as Record<string, unknown>;
+            return {
+                status: response.status,
+                theme: config.theme_color,
+                hasMigrationMarker: Object.hasOwn(
+                    config,
+                    'access_auth_migration',
+                ),
+                hasVerifier: Object.hasOwn(config, 'access_password_hash'),
+            };
+        });
+        expect(apiConfig).toEqual({
+            status: 200,
+            theme: 'teal',
+            hasMigrationMarker: false,
+            hasVerifier: false,
+        });
+        expect(
+            await v2Page.evaluate(
+                async () => (await fetch('/api/coders')).status,
+            ),
+        ).toBe(200);
+        await expect.poll(() => refreshStatuses).not.toContain(200);
+
+        await v2Page.reload();
+        await expectSignedIn(v2Page);
+        await expect.poll(() => refreshStatuses).toContain(200);
+        expect(v2Logins).toBe(1);
+        expect(
+            await v2Page.evaluate(() =>
+                Boolean(window.phiAccessAuth.getAccessToken()),
+            ),
+        ).toBe(true);
+        expect(await openSocket(v2Page, '/ws/md-events', EVENTS)).toBe('open');
+        expect(await openSocket(v2Page, '/ws/control', CONTROL)).toBe('open');
+
+        const beforeRestart = phi.identity;
+        legacyQuiet.setRestarting(true);
+        v2Quiet.setRestarting(true);
+        await phi.restart();
+        legacyQuiet.setRestarting(false);
+        v2Quiet.setRestarting(false);
+        expect(phi.identity.directory).toBe(beforeRestart.directory);
+        expect(phi.identity.port).toBe(beforeRestart.port);
+        expect(phi.identity.binarySha256).toBe(beforeRestart.binarySha256);
+        assertMigration();
+
+        await legacyPage.reload();
+        await expectSignedIn(legacyPage);
+        expect(legacyLogins).toBe(0);
+        expect(
+            await legacyPage.evaluate(
+                async () => (await fetch('/api/coders')).status,
+            ),
+        ).toBe(200);
+        expect(
+            await legacyPage.evaluate(() =>
+                window.phiAccessAuth.getAccessToken(),
+            ),
+        ).toBeNull();
+        refreshStatuses.length = 0;
+        await v2Page.reload();
+        await expectSignedIn(v2Page);
+        await expect.poll(() => refreshStatuses).toContain(200);
+        expect(v2Logins).toBe(1);
+        expect(
+            await v2Page.evaluate(
+                async () => (await fetch('/api/coders')).status,
+            ),
+        ).toBe(200);
+        expect(await openSocket(v2Page, '/ws/md-events', EVENTS)).toBe('open');
+        expect(await openSocket(v2Page, '/ws/control', CONTROL)).toBe('open');
+        expect(
+            await v2Page.evaluate(
+                () => document.documentElement.scrollWidth > window.innerWidth,
+            ),
+            mobile
+                ? 'mobile horizontal overflow'
+                : 'desktop horizontal overflow',
+        ).toBe(false);
+
+        legacyQuiet.assertQuiet();
+        savedQuiet.assertQuiet();
+        v2Quiet.assertQuiet();
+        await legacyContext.close();
+        await v2Context.close();
+    }
+
+    test('MVP legacy home / desktop', async ({ browser }) => {
+        await exerciseMvpProfile(browser, false);
+    });
+
+    test('MVP legacy home / mobile touch', async ({ browser }) => {
+        await exerciseMvpProfile(browser, true);
     });
 });
 
@@ -1237,6 +1529,10 @@ test.describe('two same-origin tabs', () => {
         // a write is never re-sent behind the user's back.
         let writes = 0;
         await page.route('**/api/terminals', async (route) => {
+            if (route.request().method() !== 'POST') {
+                await route.continue();
+                return;
+            }
             writes += 1;
             await route.fulfill({ status: 401, body: 'stale' });
         });
@@ -1658,6 +1954,63 @@ const EXPECTED_RESPONSES = [
     /\/api\/update\/status$/,
 ];
 
+function monitorMvpPage(page: Page) {
+    const unexpectedConsole: number[] = [];
+    const pageErrors: string[] = [];
+    const failedRequests: string[] = [];
+    const unexpectedResponses: string[] = [];
+    let restarting = false;
+
+    page.on('console', (message) => {
+        if (message.type() !== 'error') return;
+        if (!EXPECTED_CONSOLE.some((pattern) => pattern.test(message.text()))) {
+            unexpectedConsole.push(1);
+        }
+    });
+    page.on('pageerror', (error) => pageErrors.push(error.name));
+    page.on('requestfailed', (request) => {
+        const pathname = new URL(request.url()).pathname;
+        if (restarting && pathname.startsWith('/ws/')) return;
+        failedRequests.push(`${request.method()} ${pathname}`);
+    });
+    page.on('response', (response) => {
+        if (response.status() < 400) return;
+        const request = response.request();
+        const url = new URL(response.url());
+        const method = request.method();
+        if (
+            (response.status() === 401 &&
+                method === 'POST' &&
+                url.pathname === '/api/auth/v2/refresh') ||
+            (response.status() === 401 &&
+                method === 'GET' &&
+                url.pathname === '/api/coders') ||
+            EXPECTED_RESPONSES.some((pattern) =>
+                pattern.test(url.pathname + url.search),
+            )
+        ) {
+            return;
+        }
+        unexpectedResponses.push(
+            `${response.status()} ${method} ${url.pathname}`,
+        );
+    });
+
+    return {
+        setRestarting(value: boolean) {
+            restarting = value;
+        },
+        assertQuiet() {
+            expect(unexpectedConsole, 'unexpected console errors').toEqual([]);
+            expect(pageErrors, 'page errors').toEqual([]);
+            expect(failedRequests, 'failed network requests').toEqual([]);
+            expect(unexpectedResponses, 'unexpected error responses').toEqual(
+                [],
+            );
+        },
+    };
+}
+
 test.describe('a signed-in session stays quiet', () => {
     let phi: PhiServer;
 
@@ -1742,7 +2095,7 @@ test.describe('a signed-in session stays quiet', () => {
             watchingReloadRefresh = true;
             await page.reload();
             await expectSignedIn(page);
-            expect(refreshStatuses).toContain(200);
+            await expect.poll(() => refreshStatuses).toContain(200);
             expect(await openSocket(page, '/ws/md-events', EVENTS)).toBe(
                 'open',
             );
