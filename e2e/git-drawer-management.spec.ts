@@ -462,6 +462,12 @@ async function exerciseCommitStaged(
         'Commit completed.',
     );
     await expect(page.locator('#git-commit-message')).toHaveValue('');
+    await page.locator('#git-commit-message').fill('Draft after commit');
+    await expect(page.locator('#git-commit-hint')).toBeVisible();
+    await expect(page.locator('#git-commit-hint')).toHaveText(
+        'Stage changes in Git before committing.',
+    );
+    await expect(page.locator('#git-commit-btn')).toBeDisabled();
     await expect
         .poll(() => readGitTerminal(page))
         .toContain('Commit staged version A');
@@ -618,6 +624,50 @@ async function exerciseLostCommitResponse(
     expect(overflow.scroll).toBeLessThanOrEqual(overflow.client + 1);
 }
 
+async function expectTouchTargets(page: Page): Promise<void> {
+    const targets = await page
+        .locator('#git-management button.git-management-btn:visible')
+        .evaluateAll((buttons) =>
+            buttons.map((button) => {
+                const rect = button.getBoundingClientRect();
+                return {
+                    id: button.id,
+                    clientWidth: button.clientWidth,
+                    scrollWidth: button.scrollWidth,
+                    left: rect.left,
+                    top: rect.top,
+                    right: rect.right,
+                    bottom: rect.bottom,
+                    width: rect.width,
+                    height: rect.height,
+                };
+            }),
+        );
+    expect(targets.length).toBeGreaterThan(0);
+    for (const target of targets) {
+        expect(target.width, `${target.id} width`).toBeGreaterThanOrEqual(44);
+        expect(target.height, `${target.id} height`).toBeGreaterThanOrEqual(44);
+        expect(
+            target.scrollWidth,
+            `${target.id} label clipped`,
+        ).toBeLessThanOrEqual(target.clientWidth);
+    }
+    for (let i = 0; i < targets.length; i++) {
+        for (let j = i + 1; j < targets.length; j++) {
+            const a = targets[i];
+            const b = targets[j];
+            const overlapX =
+                Math.min(a.right, b.right) - Math.max(a.left, b.left);
+            const overlapY =
+                Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+            expect(
+                overlapX <= 0 || overlapY <= 0,
+                `${a.id} overlaps ${b.id}`,
+            ).toBe(true);
+        }
+    }
+}
+
 async function exerciseNetworkSafety(
     page: Page,
     options: { mode: 'keyboard' | 'touch'; cancel: boolean },
@@ -697,6 +747,18 @@ async function exerciseNetworkSafety(
     if (options.cancel) {
         await navigateToProject(page);
         await expect(page.locator('#git-action-resume-btn')).toBeVisible();
+        await expect(page.locator('#git-action-resume-btn')).toHaveText(
+            'Resume Pull',
+        );
+        await expect(page.locator('#git-action-status')).toHaveText(
+            'Queued Pull paused. Resume Pull to verify before sending.',
+        );
+        if (options.mode === 'touch') {
+            await expectTouchTargets(page);
+            await page.setViewportSize({ width: 320, height: 568 });
+            await expectTouchTargets(page);
+            await page.setViewportSize({ width: 390, height: 844 });
+        }
         await expect(page.locator('#git-action-cancel-btn')).toBeVisible();
         expect(actionPosts).toBe(0);
         await activate(page, '#git-action-cancel-btn', options.mode);

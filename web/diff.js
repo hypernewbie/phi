@@ -82,6 +82,10 @@ function normalizeGitManageInfo(info) {
 function gitManageActionLabel(action) {
     return action === 'pull' ? 'Pull' : action === 'push' ? 'Push' : 'Commit';
 }
+function gitManagePausedStatus(action) {
+    const label = gitManageActionLabel(action);
+    return `Queued ${label} paused. Resume ${label} to verify before sending.`;
+}
 function isGitManageActionRecord(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value))
         return false;
@@ -223,11 +227,13 @@ export class DiffController {
     gitCommitBtn;
     gitCommitMessageInput;
     gitCommitDraftStatusElement;
+    gitCommitHint;
     gitCommitDraftKey = '';
     gitCommitDraftMemory = new Map();
     gitCommitDraftStatus = '';
     gitTargetLabel;
     gitActionStatus;
+    gitActionRecovery;
     gitActionResumeBtn;
     gitActionCancelBtn;
     gitActionDismissBtn;
@@ -316,8 +322,10 @@ export class DiffController {
         this.gitCommitBtn = document.getElementById('git-commit-btn');
         this.gitCommitMessageInput = document.getElementById('git-commit-message');
         this.gitCommitDraftStatusElement = document.getElementById('git-commit-draft-status');
+        this.gitCommitHint = document.getElementById('git-commit-hint');
         this.gitTargetLabel = document.getElementById('git-target-label');
         this.gitActionStatus = document.getElementById('git-action-status');
+        this.gitActionRecovery = document.getElementById('git-management-recovery');
         this.gitActionResumeBtn = document.getElementById('git-action-resume-btn');
         this.gitActionCancelBtn = document.getElementById('git-action-cancel-btn');
         this.gitActionDismissBtn = document.getElementById('git-action-dismiss-btn');
@@ -841,8 +849,7 @@ export class DiffController {
             this.persistGitCommitDraft();
             if (this.gitManageRecord?.phase === 'queued') {
                 this.gitManageRecord.phase = 'paused';
-                this.gitManageRecord.status =
-                    'Queued Git action paused. Resume to verify before sending.';
+                this.gitManageRecord.status = gitManagePausedStatus(this.gitManageRecord.action);
                 this.writeGitManageAction(this.gitManageRecordKey, this.gitManageRecord);
             }
             this.clearGitManageRetry();
@@ -978,7 +985,17 @@ export class DiffController {
                     record = {
                         ...record,
                         phase: 'paused',
-                        status: 'Queued Git action paused. Resume to verify before sending.',
+                        status: gitManagePausedStatus(record.action),
+                    };
+                }
+                else if (record.phase === 'paused' &&
+                    record.status ===
+                        'Queued Git action paused. Resume to verify before sending.') {
+                    // Records stored by an older build carry one generic
+                    // sentence; name the queued command without resending.
+                    record = {
+                        ...record,
+                        status: gitManagePausedStatus(record.action),
                     };
                 }
                 candidates.push({
@@ -1048,11 +1065,24 @@ export class DiffController {
                 this.gitCommitDraftStatus;
             this.gitCommitDraftStatusElement.classList.toggle('hidden', !this.gitCommitDraftStatus);
         }
+        if (this.gitCommitHint) {
+            const prerequisite = this.gitCommitPrerequisite(info, target, actionWaiting);
+            this.gitCommitHint.textContent = prerequisite;
+            this.gitCommitHint.classList.toggle('hidden', !prerequisite);
+        }
         const paused = this.gitManageRecord?.phase === 'paused';
         const unconfirmed = this.gitManageRecord?.phase === 'unconfirmed';
-        this.gitActionResumeBtn?.classList.toggle('hidden', !paused);
+        if (this.gitActionResumeBtn) {
+            this.gitActionResumeBtn.textContent = this.gitManageRecord
+                ? `Resume ${gitManageActionLabel(this.gitManageRecord.action)}`
+                : 'Resume';
+            this.gitActionResumeBtn.classList.toggle('hidden', !paused);
+        }
         this.gitActionCancelBtn?.classList.toggle('hidden', !(paused || this.gitManageRecord?.phase === 'queued'));
         this.gitActionDismissBtn?.classList.toggle('hidden', !unconfirmed);
+        this.gitActionRecovery?.classList.toggle('hidden', !(paused ||
+            unconfirmed ||
+            this.gitManageRecord?.phase === 'queued'));
         if (this.gitActionStatus) {
             this.gitActionStatus.textContent =
                 this.gitManageStatus || info?.reason || '';
@@ -1060,6 +1090,26 @@ export class DiffController {
         document
             .getElementById('git-management')
             ?.setAttribute('aria-busy', String(this.gitManageBusy));
+    }
+    gitCommitPrerequisite(info, target, actionWaiting) {
+        if (!info) {
+            return this.app.sessionsManager?.activeCWD
+                ? 'No cached Git information.'
+                : 'Select a workspace to view Git actions.';
+        }
+        if (info.notGitRepo)
+            return 'Not a Git repository.';
+        if (actionWaiting)
+            return 'Resolve the pending Git action before committing.';
+        if (!info.can_commit ||
+            !target ||
+            !/^[0-9a-f]{64}$/i.test(info.index_token || '')) {
+            return (info.commit_reason ||
+                'Commit information is unavailable. Refresh to try again.');
+        }
+        if (!this.gitCommitMessageInput?.value.trim())
+            return 'Enter a commit message.';
+        return '';
     }
     isCurrentGitManageContext(context) {
         return (this.gitManageContextKey === context.key &&
@@ -1286,11 +1336,10 @@ export class DiffController {
             if (!this.isCurrentGitManageContext(context))
                 return;
             this.gitManageStatus =
-                this.gitManageRecord?.phase === 'queued'
-                    ? this.gitManageRecord.status
-                    : this.gitManageInfo
+                this.gitManageRecord?.status ||
+                    (this.gitManageInfo
                         ? 'Git information refresh failed; showing the last saved target.'
-                        : 'Git information is unavailable. Refresh to try again.';
+                        : 'Git information is unavailable. Refresh to try again.');
             this.renderGitManagement();
         })
             .finally(() => {
@@ -1810,8 +1859,7 @@ export class DiffController {
     onBackendSwitch() {
         if (this.gitManageRecord?.phase === 'queued') {
             this.gitManageRecord.phase = 'paused';
-            this.gitManageRecord.status =
-                'Queued Git action paused. Resume to verify before sending.';
+            this.gitManageRecord.status = gitManagePausedStatus(this.gitManageRecord.action);
             this.writeGitManageAction(this.gitManageRecordKey, this.gitManageRecord);
         }
         this.clearGitManageRetry();
