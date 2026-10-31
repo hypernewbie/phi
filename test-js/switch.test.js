@@ -92,10 +92,19 @@ function setupVendorStubs() {
 }
 
 describe('Single-Tab Embedded Backend Switching', () => {
+    const realSetInterval = globalThis.setInterval.bind(globalThis);
+    const realClearInterval = globalThis.clearInterval.bind(globalThis);
     let app;
+    let appIntervals = [];
     let fetchCalls = [];
 
     beforeEach(() => {
+        appIntervals = [];
+        vi.spyOn(globalThis, 'setInterval').mockImplementation((...args) => {
+            const interval = realSetInterval(...args);
+            appIntervals.push(interval);
+            return interval;
+        });
         setupVendorStubs();
         stubWebSocket();
         setupHtml();
@@ -138,6 +147,10 @@ describe('Single-Tab Embedded Backend Switching', () => {
     });
 
     afterEach(() => {
+        app?.scope?.abort?.();
+        for (const interval of appIntervals) realClearInterval(interval);
+        appIntervals = [];
+        app = undefined;
         setEmbeddedBackend('', '');
         backendStores.clear();
     });
