@@ -1141,6 +1141,16 @@ test('four font overrides update real terminals, inherit remote desktop families
         );
         // Edit inactive mobile values from desktop; desktop terminal and UI must not preview them.
         await pc.locator('#settings-mobile-view').click();
+        // Observe the phone's saved revision before editing; otherwise the
+        // conflict fence correctly rejects a draft based on the older read.
+        await expect(pc.locator('#settings-mobile-ui-font-size')).toHaveValue(
+            '20',
+            { timeout: 15000 },
+        );
+        await expect(pc.locator('#settings-mobile-term-font-size')).toHaveValue(
+            '22',
+            { timeout: 15000 },
+        );
         await pc
             .locator('#settings-mobile-ui-font')
             .selectOption(JSON.stringify('Inter, system-ui, sans-serif'));

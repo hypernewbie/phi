@@ -8,13 +8,19 @@ import {
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { configToToml, startPhi } from './_server.js';
-import { isCancelledWorktreeRead } from './_session-requests.js';
+import {
+    isCancelledSessionListRead,
+    isCancelledWorktreeRead,
+} from './_session-requests.js';
 
 // The composer presets row is one line of buttons that never squeezes a
 // label: a wrapped row or an ellipsised chip is a regression, not a layout
-// preference. Every chip in the row is 24px high and shares one top edge.
+// preference. Command chips are 24px high and share one top edge; the
+// paperclip has a larger touch target, covered by the attachment specs.
 async function expectSingleRowPresets(page: Page) {
-    const chips = page.locator('#presets-container > .preset-btn');
+    const chips = page.locator(
+        '#presets-container > .preset-btn:not(#attach-input-btn)',
+    );
     await expect(chips.first()).toBeVisible();
     const measured = await chips.evaluateAll((els) => {
         const container = els[0].closest('#presets-container');
@@ -58,7 +64,11 @@ async function watchPage(page: Page, serverOrigin: string) {
     });
     page.on('pageerror', (error) => pageErrors.push(error.message));
     page.on('requestfailed', (request) => {
-        if (isCancelledWorktreeRead(request, serverOrigin)) return;
+        if (
+            isCancelledWorktreeRead(request, serverOrigin) ||
+            isCancelledSessionListRead(request, serverOrigin)
+        )
+            return;
         const url = new URL(request.url());
         if (url.origin === serverOrigin) {
             localFailures.push(

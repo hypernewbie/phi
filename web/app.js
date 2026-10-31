@@ -921,6 +921,7 @@ export class App {
         this.scope = scope;
         this.initAppearance();
         this.tabManager?._bindThinkingPresetStore?.(scope);
+        this.tabManager?._bindAttachmentStore?.(scope);
         const nextStore = backendStores.get(profileId);
         notifications.setContext(serverKey('phi_notifications_v1'), nextStore);
         const targetNotificationContext = notifications.getContextIdentity();

@@ -53,6 +53,11 @@ const (
 	CapabilitySkills = "pi.skills.v1"
 	// CapabilitySyncboard is the fixed Syncboard REST capability.
 	CapabilitySyncboard = "pi.syncboard.v1"
+	// CapabilityAttachments is the user-triggered native attachment capability.
+	CapabilityAttachments = "pi.attachments.v3"
+	// CapabilityState is the read-only live snapshot refresh capability.
+	CapabilityState = "pi.state.v2"
+	maxStatePending = 4
 
 	// maxHistoryPending bounds history requests awaiting replies per
 	// peer. Excess callers fail fast into fallback; the map never
@@ -81,6 +86,9 @@ const (
 	// Syncboard responses preserve room for lifecycle traffic in the peer queue.
 	syncboardLifecycleHeadroomBytes    = 16 * 1024
 	syncboardLifecycleHeadroomMessages = 2
+	// Attachment prompts are single-flight per Pi process. A second
+	// request refuses rather than growing a prompt queue.
+	maxAttachmentPending = 1
 	// maxSkillEntries caps one skill list; a longer list is truncated
 	// and flagged, never silently partial.
 	maxSkillEntries = 200
