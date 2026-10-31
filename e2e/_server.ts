@@ -337,7 +337,11 @@ export async function startPhi(
         const bin = join(dir, process.platform === 'win32' ? 'phi.exe' : 'phi');
         // The carrier is opt-in behind -tags dsh; the fixture enables the
         // preview, so its server must be built with the tag.
-        await run('go', ['build', '-tags', 'dsh', '-o', bin, '.'], process.cwd());
+        await run(
+            'go',
+            ['build', '-tags', 'dsh', '-o', bin, '.'],
+            process.cwd(),
+        );
         const args = ['--port', String(port), '--ip', '127.0.0.1'];
         if (options.web !== undefined) args.push('--web', options.web);
         const launch = (): ChildProcess =>
