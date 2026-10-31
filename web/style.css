@@ -3199,6 +3199,7 @@ body.has-terminal-bg
 @media (pointer: coarse) {
     #attach-input-btn,
     #attachment-source-dropup .dropup-model-btn {
+        min-width: 44px;
         min-height: 44px;
     }
 }

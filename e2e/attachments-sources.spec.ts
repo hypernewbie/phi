@@ -1574,6 +1574,11 @@ test('mobile source menu supports keyboard, distinct inputs, and cancel drafts',
                         (element) => element.getBoundingClientRect().height,
                     ),
                 ).toBeGreaterThanOrEqual(44);
+                expect(
+                    await target.evaluate(
+                        (element) => element.getBoundingClientRect().width,
+                    ),
+                ).toBeGreaterThanOrEqual(44);
             }
             await page.keyboard.press('Escape');
             await expect(sourceMenu).toBeHidden();
