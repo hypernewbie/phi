@@ -729,7 +729,7 @@ func printWelcomeBanner(cfg Config, addrs []bindaddr.Addr, port int) {
 // returns the servers so the shutdown path can drain them. Blocks until all
 // listeners exit; ErrServerClosed (from Shutdown) is a clean stop, not fatal.
 func serveAll(listeners []net.Listener) ([]*http.Server, <-chan error) {
-	handler := obs.WrapHTTP(accessAuthMiddleware(http.DefaultServeMux))
+	handler := obs.WrapHTTP(accessAuthMiddleware(obs.WrapTimingHTTP(http.DefaultServeMux)))
 	servers := make([]*http.Server, len(listeners))
 	errCh := make(chan error, len(listeners))
 	for i, ln := range listeners {

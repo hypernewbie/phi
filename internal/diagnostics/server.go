@@ -156,6 +156,8 @@ func start(parentDir string, startedAt time.Time, commit string, readers snapsho
 	s.mux.HandleFunc("/debug/pprof/profile", s.handleCPUProfile)
 	s.mux.HandleFunc("/debug/pprof/heap", s.handleHeapProfile)
 	s.mux.HandleFunc("/debug/pprof/goroutine", s.handleGoroutineProfile)
+	s.mux.HandleFunc("/debug/phi/timing", s.handleTiming)
+	s.mux.HandleFunc("/debug/phi/timing/status", s.handleTimingStatus)
 	s.httpServer = &http.Server{
 		Handler:           s,
 		ReadHeaderTimeout: readHeaderTimeout,

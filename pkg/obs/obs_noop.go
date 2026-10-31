@@ -29,7 +29,11 @@ import (
 // it costs nothing at the default Info level.
 func Span(ctx context.Context, name string, attrs ...any) (context.Context, func(error)) {
 	start := time.Now()
+	ctx, gen, id, recorded := timingSpanStart(ctx, name)
 	return ctx, func(err error) {
+		if recorded {
+			timingSpanEnd(gen, id)
+		}
 		if !slog.Default().Enabled(ctx, slog.LevelDebug) {
 			return
 		}
