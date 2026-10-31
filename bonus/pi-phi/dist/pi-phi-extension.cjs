@@ -24733,8 +24733,10 @@ var MAX_TEXT_BYTES = 64 * 1024;
 var CHUNK_BYTES = 64 * 1024;
 function hasSafeAttachmentRoot(root) {
   if (!root || !(0, import_node_path.isAbsolute)(root)) return false;
-  if (!Number.isInteger(import_node_fs.constants.O_NOFOLLOW) || !import_node_fs.constants.O_NOFOLLOW) return false;
-  if (!Number.isInteger(import_node_fs.constants.O_NONBLOCK) || !import_node_fs.constants.O_NONBLOCK) return false;
+  if (!Number.isInteger(import_node_fs.constants.O_NOFOLLOW) || !import_node_fs.constants.O_NOFOLLOW)
+    return false;
+  if (!Number.isInteger(import_node_fs.constants.O_NONBLOCK) || !import_node_fs.constants.O_NONBLOCK)
+    return false;
   try {
     const stat = (0, import_node_fs.lstatSync)(root);
     return stat.isDirectory() && !stat.isSymbolicLink() && (0, import_node_path.isAbsolute)(import_node_fs.realpathSync.native(root));
@@ -24743,24 +24745,41 @@ function hasSafeAttachmentRoot(root) {
   }
 }
 function validBasename(name) {
-  if (!name || name.length > MAX_NAME_BYTES || name === "." || name === "..") return false;
-  if (name.includes("/") || name.includes("\\") || name.includes("..")) return false;
+  if (!name || name.length > MAX_NAME_BYTES || name === "." || name === "..")
+    return false;
+  if (name.includes("/") || name.includes("\\") || name.includes(".."))
+    return false;
   return /^[A-Za-z0-9._-]+$/.test(name);
 }
 function isPNG(data) {
-  return data.length >= 8 && data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  return data.length >= 8 && data.subarray(0, 8).equals(
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+  );
 }
 function isJPEG(data) {
   return data.length >= 3 && data[0] === 255 && data[1] === 216 && data[2] === 255;
 }
 function looksLikeImage(data) {
   if (isPNG(data) || isJPEG(data)) return true;
-  if (data.length >= 6 && (data.subarray(0, 6).toString("ascii") === "GIF87a" || data.subarray(0, 6).toString("ascii") === "GIF89a")) return true;
-  if (data.length >= 12 && data.subarray(0, 4).toString("ascii") === "RIFF" && data.subarray(8, 12).toString("ascii") === "WEBP") return true;
-  if (data.length >= 2 && data.subarray(0, 2).toString("ascii") === "BM") return true;
+  if (data.length >= 6 && (data.subarray(0, 6).toString("ascii") === "GIF87a" || data.subarray(0, 6).toString("ascii") === "GIF89a"))
+    return true;
+  if (data.length >= 12 && data.subarray(0, 4).toString("ascii") === "RIFF" && data.subarray(8, 12).toString("ascii") === "WEBP")
+    return true;
+  if (data.length >= 2 && data.subarray(0, 2).toString("ascii") === "BM")
+    return true;
   if (data.length >= 12 && data.subarray(4, 8).toString("ascii") === "ftyp") {
     const brand = data.subarray(8, 12).toString("ascii");
-    if (["heic", "heix", "hevc", "hevx", "mif1", "msf1", "avif", "avis"].includes(brand)) return true;
+    if ([
+      "heic",
+      "heix",
+      "hevc",
+      "hevx",
+      "mif1",
+      "msf1",
+      "avif",
+      "avis"
+    ].includes(brand))
+      return true;
   }
   return data.subarray(0, Math.min(data.length, 1 << 20)).toString("utf8").toLowerCase().includes("<svg");
 }
@@ -24768,17 +24787,23 @@ function readChecked(root, ref) {
   if (!validBasename(ref.basename) || !Number.isSafeInteger(ref.sizeBytes) || ref.sizeBytes < 0 || ref.sizeBytes > MAX_FILE_BYTES) {
     throw new Error("invalid-item");
   }
-  if (ref.kind !== "file" && ref.kind !== "image") throw new Error("invalid-item");
-  if (ref.kind === "image" && (ref.mimeType !== "image/png" && ref.mimeType !== "image/jpeg")) {
+  if (ref.kind !== "file" && ref.kind !== "image")
+    throw new Error("invalid-item");
+  if (ref.kind === "image" && ref.mimeType !== "image/png" && ref.mimeType !== "image/jpeg") {
     throw new Error("unsupported-image");
   }
-  if (ref.kind === "file" && ref.mimeType !== "application/octet-stream") throw new Error("invalid-item");
+  if (ref.kind === "file" && ref.mimeType !== "application/octet-stream")
+    throw new Error("invalid-item");
   const rootPath = import_node_fs.realpathSync.native(root);
   const target = (0, import_node_path.resolve)(rootPath, ref.basename);
   if ((0, import_node_path.dirname)(target) !== rootPath) throw new Error("invalid-item");
   const before = (0, import_node_fs.lstatSync)(target);
-  if (!before.isFile() || before.isSymbolicLink() || before.size !== ref.sizeBytes) throw new Error("invalid-item");
-  const fd = (0, import_node_fs.openSync)(target, import_node_fs.constants.O_RDONLY | import_node_fs.constants.O_NOFOLLOW | import_node_fs.constants.O_NONBLOCK);
+  if (!before.isFile() || before.isSymbolicLink() || before.size !== ref.sizeBytes)
+    throw new Error("invalid-item");
+  const fd = (0, import_node_fs.openSync)(
+    target,
+    import_node_fs.constants.O_RDONLY | import_node_fs.constants.O_NOFOLLOW | import_node_fs.constants.O_NONBLOCK
+  );
   try {
     const opened = (0, import_node_fs.fstatSync)(fd);
     if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== ref.sizeBytes) {
@@ -24788,7 +24813,9 @@ function readChecked(root, ref) {
     let total = 0;
     let position = 0;
     while (total <= MAX_FILE_BYTES) {
-      const chunk = Buffer.allocUnsafe(Math.min(CHUNK_BYTES, MAX_FILE_BYTES + 1 - total));
+      const chunk = Buffer.allocUnsafe(
+        Math.min(CHUNK_BYTES, MAX_FILE_BYTES + 1 - total)
+      );
       const count = (0, import_node_fs.readSync)(fd, chunk, 0, chunk.length, position);
       if (count === 0) break;
       chunks.push(chunk.subarray(0, count));
@@ -24804,8 +24831,10 @@ function readChecked(root, ref) {
     const digest = (0, import_node_crypto.createHash)("sha256").update(data).digest("hex");
     if (digest !== ref.sha256) throw new Error("invalid-item");
     if (ref.kind === "image") {
-      if (ref.mimeType === "image/png" && !isPNG(data)) throw new Error("unsupported-image");
-      if (ref.mimeType === "image/jpeg" && !isJPEG(data)) throw new Error("unsupported-image");
+      if (ref.mimeType === "image/png" && !isPNG(data))
+        throw new Error("unsupported-image");
+      if (ref.mimeType === "image/jpeg" && !isJPEG(data))
+        throw new Error("unsupported-image");
     } else if (looksLikeImage(data)) {
       throw new Error("unsupported-image");
     }
@@ -24821,9 +24850,7 @@ function prepareAttachmentContent(root, text, refs) {
   }
   const seen = /* @__PURE__ */ new Set();
   let total = 0;
-  const content = [
-    { type: "text", text }
-  ];
+  const content = [{ type: "text", text }];
   let hasImage = false;
   for (const ref of refs) {
     if (seen.has(ref.basename)) throw new Error("invalid-item");
@@ -24833,10 +24860,17 @@ function prepareAttachmentContent(root, text, refs) {
     const bytes = readChecked(root, ref);
     if (ref.kind === "image") {
       hasImage = true;
-      content.push({ type: "image", mimeType: ref.mimeType, data: bytes.toString("base64") });
+      content.push({
+        type: "image",
+        mimeType: ref.mimeType,
+        data: bytes.toString("base64")
+      });
     } else {
       const absolutePath = (0, import_node_path.resolve)(root, ref.basename);
-      content.push({ type: "text", text: `Attached file path (JSON-quoted): ${JSON.stringify(absolutePath)}` });
+      content.push({
+        type: "text",
+        text: `Attached file path (JSON-quoted): ${JSON.stringify(absolutePath)}`
+      });
     }
   }
   return { content, hasImage };
@@ -29873,7 +29907,9 @@ var Runtime = class {
         this.thinkingAccepted = accepted.capabilities.includes(CAPABILITY_THINKING);
         this.compactAccepted = accepted.capabilities.includes(CAPABILITY_COMPACT);
         this.skillsAccepted = accepted.capabilities.includes(CAPABILITY_SKILLS);
-        this.attachmentsAccepted = accepted.capabilities.includes(CAPABILITY_ATTACHMENTS);
+        this.attachmentsAccepted = accepted.capabilities.includes(
+          CAPABILITY_ATTACHMENTS
+        );
       }
     } catch (err) {
       channel.close();
@@ -30300,12 +30336,20 @@ var Runtime = class {
     if (id === null || !this.channel || !this.attachmentsAccepted) return;
     const highWater = this.attachments.highWater;
     if (highWater !== null && id <= highWater) {
-      this.sendAttachmentAck(requestId, 1 /* ATTACHMENT_PROMPT_OUTCOME_REFUSED */, "duplicate");
+      this.sendAttachmentAck(
+        requestId,
+        1 /* ATTACHMENT_PROMPT_OUTCOME_REFUSED */,
+        "duplicate"
+      );
       return;
     }
     this.attachments.highWater = id;
     if (this.attachments.active !== null) {
-      this.sendAttachmentAck(requestId, 1 /* ATTACHMENT_PROMPT_OUTCOME_REFUSED */, "pending");
+      this.sendAttachmentAck(
+        requestId,
+        1 /* ATTACHMENT_PROMPT_OUTCOME_REFUSED */,
+        "pending"
+      );
       return;
     }
     const operation = { requestId, runtimeId: this.runtimeId };
@@ -30326,7 +30370,11 @@ var Runtime = class {
           sha256: ref.sha256
         }))
       );
-      reason = this.attachmentRefusalReason(req, prepared.hasImage, operation);
+      reason = this.attachmentRefusalReason(
+        req,
+        prepared.hasImage,
+        operation
+      );
       if (reason !== "") return;
       const sendUserMessage = this.opts.sendUserMessage;
       if (typeof sendUserMessage !== "function") {
@@ -30347,16 +30395,19 @@ var Runtime = class {
       }
     } finally {
       this.sendAttachmentAck(requestId, outcome, reason);
-      if (this.attachments.active === operation) this.attachments.active = null;
+      if (this.attachments.active === operation)
+        this.attachments.active = null;
       this.publishContextOnly();
     }
   }
   attachmentRefusalReason(req, hasImage, operation) {
-    if (this.shutdownRequested || this.runtimeId !== operation.runtimeId || this.attachments.active !== operation || typeof this.opts.sendUserMessage !== "function" || !hasSafeAttachmentRoot(this.opts.attachmentRoot) || !this.lastCtx) return "unavailable";
+    if (this.shutdownRequested || this.runtimeId !== operation.runtimeId || this.attachments.active !== operation || typeof this.opts.sendUserMessage !== "function" || !hasSafeAttachmentRoot(this.opts.attachmentRoot) || !this.lastCtx)
+      return "unavailable";
     const text = req.text.trimStart();
     if (text.startsWith("/") || text.startsWith("!")) return "command";
     const ctx = this.lastCtx;
-    if (typeof ctx.isIdle !== "function" || typeof ctx.hasPendingMessages !== "function") return "unavailable";
+    if (typeof ctx.isIdle !== "function" || typeof ctx.hasPendingMessages !== "function")
+      return "unavailable";
     let session;
     let leaf;
     let model;
@@ -30371,16 +30422,19 @@ var Runtime = class {
     } catch {
       return "stale";
     }
-    if (session !== req.expectedSessionId || leaf !== req.expectedLeafId) return "stale";
+    if (session !== req.expectedSessionId || leaf !== req.expectedLeafId)
+      return "stale";
     if (req.expectedModel) {
-      if (!model || model.provider !== req.expectedModel.provider || model.id !== req.expectedModel.model) return "stale";
+      if (!model || model.provider !== req.expectedModel.provider || model.id !== req.expectedModel.model)
+        return "stale";
     } else if (model) {
       return "stale";
     }
     if (!idle) return "busy";
     if (queued) return "queued";
     if (this.compactionActive) return "compaction-active";
-    if (this.compact.pending !== null || this.attachments.active !== operation) return "pending";
+    if (this.compact.pending !== null || this.attachments.active !== operation)
+      return "pending";
     if (hasImage) {
       try {
         if (!model || model.api === "pi-virtual" || !Array.isArray(model.input) || !model.input.includes("image")) {
@@ -30400,7 +30454,11 @@ var Runtime = class {
       runtimeGeneration: this.opts.generation,
       payload: {
         $case: "attachmentPromptAck",
-        value: AttachmentPromptAck.create({ requestId, outcome, reason })
+        value: AttachmentPromptAck.create({
+          requestId,
+          outcome,
+          reason
+        })
       }
     });
   }

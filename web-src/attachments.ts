@@ -68,12 +68,16 @@ const ATTACHMENT_UPLOAD_TIMEOUT_MS = 11 * 60_000;
 
 export function newAttachmentID(): string {
     const cryptoApi = globalThis.crypto;
-    if (!cryptoApi?.getRandomValues) throw new Error('secure-random-unavailable');
-    if (typeof cryptoApi.randomUUID === 'function') return cryptoApi.randomUUID();
+    if (!cryptoApi?.getRandomValues)
+        throw new Error('secure-random-unavailable');
+    if (typeof cryptoApi.randomUUID === 'function')
+        return cryptoApi.randomUUID();
     const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
     bytes[6] = (bytes[6]! & 0x0f) | 0x40;
     bytes[8] = (bytes[8]! & 0x3f) | 0x80;
-    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    const hex = Array.from(bytes, (byte) =>
+        byte.toString(16).padStart(2, '0'),
+    ).join('');
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
@@ -97,15 +101,21 @@ async function attachmentFetch<T>(
     };
     const onScopeAbort = () => cancel('Attachment owner changed');
     const onExternalAbort = () => cancel('Attachment request cancelled');
-    owner.scope?.signal?.addEventListener('abort', onScopeAbort, { once: true });
+    owner.scope?.signal?.addEventListener('abort', onScopeAbort, {
+        once: true,
+    });
     externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
-    const timer = setTimeout(() => cancel('Attachment request timed out'), timeoutMs);
+    const timer = setTimeout(
+        () => cancel('Attachment request timed out'),
+        timeoutMs,
+    );
     if (owner.scope?.signal?.aborted) onScopeAbort();
     if (externalSignal?.aborted) onExternalAbort();
     const headers = owner.scope?.headers?.(init.headers) ?? {};
     if (owner.profileId) headers['X-Phi-Backend'] = owner.profileId;
     const operation = (async () => {
-        if (controller.signal.aborted) throw new DOMException('Attachment request aborted', 'AbortError');
+        if (controller.signal.aborted)
+            throw new DOMException('Attachment request aborted', 'AbortError');
         const response = await fetch(url, {
             ...init,
             headers,
@@ -122,11 +132,18 @@ async function attachmentFetch<T>(
             } catch {
                 // The body is consumed, but a malformed response does not
                 // prove that a mutation was refused.
-                throw new AttachmentRequestError('Attachment result unknown', response.status, 'uncertain', true);
+                throw new AttachmentRequestError(
+                    'Attachment result unknown',
+                    response.status,
+                    'uncertain',
+                    true,
+                );
             }
             const uncertain = response.status === 503 || response.status >= 500;
             throw new AttachmentRequestError(
-                uncertain ? 'Attachment result unknown' : `Attachment refused: ${reason}`,
+                uncertain
+                    ? 'Attachment result unknown'
+                    : `Attachment refused: ${reason}`,
                 response.status,
                 reason,
                 uncertain,
@@ -135,14 +152,24 @@ async function attachmentFetch<T>(
         try {
             return JSON.parse(text) as T;
         } catch {
-            throw new AttachmentRequestError('Attachment result unknown', response.status, 'uncertain', true);
+            throw new AttachmentRequestError(
+                'Attachment result unknown',
+                response.status,
+                'uncertain',
+                true,
+            );
         }
     })();
     try {
         return await Promise.race([operation, aborted]);
     } catch (error) {
         if (error instanceof AttachmentRequestError) throw error;
-        throw new AttachmentRequestError('Attachment result unknown', 0, 'uncertain', true);
+        throw new AttachmentRequestError(
+            'Attachment result unknown',
+            0,
+            'uncertain',
+            true,
+        );
     } finally {
         settled = true;
         clearTimeout(timer);
@@ -208,7 +235,10 @@ export interface AttachmentSendBody {
         readonly generation: string;
         readonly session_id: string;
         readonly leaf_id: string;
-        readonly model: { readonly provider: string; readonly id: string } | null;
+        readonly model: {
+            readonly provider: string;
+            readonly id: string;
+        } | null;
     };
     readonly text: string;
     readonly attachment_ids: readonly string[];
@@ -228,7 +258,11 @@ export function sendAttachmentPrompt(
     return attachmentFetch<AttachmentSendResult>(
         owner,
         '/api/pi-bridge/attachments',
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        },
         45_000,
         signal,
     );

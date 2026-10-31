@@ -929,6 +929,9 @@ export class TabManager {
             path: item.path || '',
             uploadState: item.uploadState === 'uploading' ? 'attempted' : item.uploadState || 'waiting',
             errorReason: item.errorReason || '',
+            source: item.source,
+            serverPath: item.serverPath,
+            serverFingerprint: item.serverFingerprint,
         }));
         const blobs = items.flatMap((item) => {
             const blob = item.file || item.blob;
@@ -1954,6 +1957,9 @@ export class TabManager {
                     t.closest('#tab-overflow-btn') ||
                     t.closest('#sort-tabs-btn') ||
                     t.closest('#desktop-sidebar-toggle') ||
+                    // Attachment menu keys belong to the UI, not the PTY.
+                    t.closest('#attach-input-btn') ||
+                    t.closest('#attachment-source-dropup') ||
                     // The compact drawer holds buttons, not terminal input:
                     // its Enter/Tab must activate and move focus, never
                     // reach the PTY as raw keys.
@@ -2203,14 +2209,10 @@ export class TabManager {
             );
             if (
                 attachmentSourceDropup &&
-                !attachmentSourceDropup.classList.contains('hidden')
+                !e.target.closest('#attachment-source-dropup') &&
+                !e.target.closest('#attach-input-btn')
             ) {
-                if (
-                    !e.target.closest('#attachment-source-dropup') &&
-                    !e.target.closest('#attach-input-btn')
-                ) {
-                    attachmentSourceDropup.classList.add('hidden');
-                }
+                this._closeAttachmentSourceDropup();
             }
 
             const hostDropdown = document.getElementById(
@@ -6944,16 +6946,16 @@ export class TabManager {
                     return {
                         ...saved,
                         path: saved.path || '',
-                        source: 'device',
+                        source: saved.source || 'device',
                         phiAttachment: true,
                         owner,
                         file,
                         uploadState: saved.uploadState === 'attempted' ? 'unknown' : saved.uploadState,
-                        errorReason: blob || saved.uploadState === 'ready' ? saved.errorReason : 'storage',
+                        errorReason: blob || saved.source === 'server' || saved.uploadState === 'ready' ? saved.errorReason : 'storage',
                     };
                 });
                 for (const item of tab.draftAttachments) {
-                    if (!item.file && item.uploadState !== 'ready') {
+                    if (!item.file && item.source !== 'server' && item.uploadState !== 'ready') {
                         item.uploadState = 'error';
                         item.errorReason = 'storage';
                     }
@@ -6998,7 +7000,7 @@ export class TabManager {
                 try {
                     if (blob && typeof File === 'function') file = new File([blob], saved.name, { type: saved.type });
                 } catch { /* The status remains recoverable as metadata. */ }
-                return { ...saved, source: 'device', phiAttachment: true, owner, file, uploadState: saved.uploadState, errorReason: saved.errorReason };
+                return { ...saved, source: saved.source || 'device', phiAttachment: true, owner, file, uploadState: saved.uploadState, errorReason: saved.errorReason };
             });
             const snapshot = {
                 id: pending.id,
@@ -7632,9 +7634,13 @@ export class TabManager {
                 prevTab.coder !== 'review' &&
                 prevTab.coder !== 'kanban'
             ) {
+                const changed = prevTab.draft !== this.inputTextArea.value ||
+                    prevTab.draftAttachments !== this.stagedAttachments;
                 prevTab.draft = this.inputTextArea.value;
                 prevTab.draftAttachments = this.stagedAttachments;
-                this.saveTabDraft(prevTab);
+                // Startup briefly switches through each tab. An unchanged
+                // parked draft must not invalidate its pending IDB restore.
+                if (changed || !prevTab._attachmentRestorePending) this.saveTabDraft(prevTab);
             }
             prevTab.tabEl.classList.remove('active');
             prevTab.termContainer.classList.remove('active');
@@ -9266,6 +9272,39 @@ export class TabManager {
     }
 
     _initAttachmentControl() {
+        const dropup = this.attachmentSourceDropup;
+        dropup?.addEventListener('keydown', (event) => {
+            const items = Array.from(
+                dropup.querySelectorAll('[role="menuitem"]'),
+            );
+            if (items.length === 0) return;
+            const currentIndex = items.indexOf(document.activeElement);
+            let nextIndex;
+            switch (event.key) {
+                case 'ArrowDown':
+                    nextIndex =
+                        currentIndex < 0
+                            ? 0
+                            : (currentIndex + 1) % items.length;
+                    break;
+                case 'ArrowUp':
+                    nextIndex =
+                        currentIndex < 0
+                            ? items.length - 1
+                            : (currentIndex - 1 + items.length) % items.length;
+                    break;
+                case 'Home':
+                    nextIndex = 0;
+                    break;
+                case 'End':
+                    nextIndex = items.length - 1;
+                    break;
+                default:
+                    return;
+            }
+            event.preventDefault();
+            items[nextIndex]?.focus({ preventScroll: true });
+        });
         this.attachInputBtn?.addEventListener('click', () => {
             const tab = this.getActiveTab();
             if (!tab || tab.coder !== 'pi') return;
@@ -9283,6 +9322,15 @@ export class TabManager {
                 'attachment-source-dropup',
                 this.attachInputBtn,
                 () => this._renderAttachmentSourceDropup(),
+            );
+            this.attachInputBtn.setAttribute(
+                'aria-expanded',
+                String(
+                    !!this.attachmentSourceDropup &&
+                        !this.attachmentSourceDropup.classList.contains(
+                            'hidden',
+                        ),
+                ),
             );
         });
         this.attachmentFileInput?.addEventListener('change', () => {
@@ -9335,7 +9383,8 @@ export class TabManager {
             btn.addEventListener('click', () => {
                 // The native picker must open in this user activation.
                 // Do not await bridge state or an upload before click().
-                dropup.classList.add('hidden');
+                this._closeAttachmentSourceDropup();
+                this.attachInputBtn?.focus({ preventScroll: true });
                 if (!source.input) return;
                 source.input.value = '';
                 source.input.click();
@@ -9352,7 +9401,7 @@ export class TabManager {
             btn.textContent = 'Server Files';
             btn.setAttribute('role', 'menuitem');
             btn.addEventListener('click', () => {
-                dropup.classList.add('hidden');
+                this._closeAttachmentSourceDropup();
                 this._openAttachmentServerModal(
                     selection.tab,
                     selection.owner,
@@ -9362,6 +9411,9 @@ export class TabManager {
             row.appendChild(btn);
             dropup.appendChild(row);
         }
+        dropup.querySelector('[role="menuitem"]')?.focus({
+            preventScroll: true,
+        });
     }
 
     _takeAttachmentPickerFiles(input) {
@@ -9381,13 +9433,16 @@ export class TabManager {
 
     _closeAttachmentSourceDropup() {
         const dropup = this.attachmentSourceDropup;
-        if (!dropup || dropup.classList.contains('hidden')) return false;
+        if (!dropup) return false;
+        const wasOpen = !dropup.classList.contains('hidden');
         dropup.classList.add('hidden');
-        return true;
+        this.attachInputBtn?.setAttribute('aria-expanded', 'false');
+        return wasOpen;
     }
 
     _closeAttachmentOverlays() {
         let changed = this._closeAttachmentSourceDropup();
+        if (changed) this.attachInputBtn?.focus({ preventScroll: true });
         if (this.attachmentServerModal && !this.attachmentServerModal.classList.contains('hidden')) {
             this._closeAttachmentServerModal();
             changed = true;
@@ -9750,14 +9805,15 @@ export class TabManager {
                       ? 'Waiting send canceled. Restore it to edit or forget the local copy.'
                       : tab._attachmentNotice || ''
             : tab._attachmentNotice || '';
+        const warning = this._attachmentStorageWarning || '';
         el.replaceChildren();
-        if (!message) {
+        if (!message && !warning) {
             el.classList.add('hidden');
             return;
         }
         el.classList.remove('hidden');
         const label = document.createElement('span');
-        label.textContent = message;
+        label.textContent = [message, message.includes(warning) ? '' : warning].filter(Boolean).join(' ');
         el.appendChild(label);
         if (snapshot?.outboxState === 'waiting' && snapshot.id) {
             const cancel = document.createElement('button');
@@ -10023,7 +10079,7 @@ export class TabManager {
             const status = await getAttachmentItemStatus(item.id, { ...item.owner, scope });
             if (!this._attachmentItemIsCurrent(tab, item)) return;
             if (status.state === 'ready' && status.item) {
-                Object.assign(item, status.item, { phiAttachment: true, source: 'device', uploadState: 'ready', owner: item.owner });
+                Object.assign(item, status.item, { phiAttachment: true, source: item.source, uploadState: 'ready', owner: item.owner });
             } else if (status.state === 'receiving') {
                 item.uploadState = 'attempted';
                 item.errorReason = '';
@@ -10155,12 +10211,18 @@ export class TabManager {
         else if (snapshot.outboxState === 'waiting') void this._recoverAttachmentOutbox(tab, snapshot);
     }
 
-    async _recoverAttachmentOutbox(tab, snapshot) {
+    async _recoverAttachmentOutbox(tab, snapshot, explicit = false) {
         const owner = snapshot.owner;
+        if (this._attachmentNetworkOffline()) {
+            snapshot.state = 'sending';
+            snapshot.outboxState = 'waiting';
+            tab._attachmentNotice = 'Waiting to submit the saved attachment snapshot.';
+            this._renderAttachmentStatus(tab);
+            return;
+        }
         if (
             tab._attachmentPendingSnapshot !== snapshot ||
             this.getActiveTab() !== tab ||
-            this._attachmentNetworkOffline() ||
             !this.attachmentStore.isActive(owner) ||
             !this._attachmentOwnerCurrent(tab, owner, snapshot.scope)
         ) return;
@@ -10198,7 +10260,7 @@ export class TabManager {
             }
             tab._attachmentContext = context;
             tab._attachmentContextOwnerKey = this._attachmentOwnerKey(owner);
-            await this._dispatchAttachmentSnapshot(tab, snapshot, false);
+            await this._dispatchAttachmentSnapshot(tab, snapshot, explicit);
         } catch {
             tab._attachmentNotice = 'Waiting for the original Pi target to reconnect. The saved send has not been attempted.';
             this._renderAttachmentStatus(tab);
@@ -10983,6 +11045,7 @@ export class TabManager {
                 leaf_id: context.leaf_id,
                 model: context.model ? { ...context.model } : null,
             },
+            refreshContextBeforeDispatch: this._attachmentNetworkOffline(),
             text: text.trim(),
             items: items.slice(),
             state: 'sending',
@@ -11023,7 +11086,11 @@ export class TabManager {
             tab._attachmentNotice = frozen.warning || 'Submitting this snapshot to Pi. Model receipt is not confirmed.';
             this._renderAttachmentStatus(tab);
             if (frozen.outbox.state === 'waiting') {
-                await this._dispatchAttachmentSnapshot(tab, snapshot, true);
+                if (snapshot.refreshContextBeforeDispatch) {
+                    await this._recoverAttachmentOutbox(tab, snapshot, true);
+                } else {
+                    await this._dispatchAttachmentSnapshot(tab, snapshot, true);
+                }
             } else if (frozen.outbox.state === 'attempted' || frozen.outbox.state === 'unknown') {
                 snapshot.state = 'unknown';
                 tab._attachmentNotice = 'Submission not confirmed. Check Pi before resending.';
@@ -13858,7 +13925,11 @@ export class TabManager {
             let left = btnRect.left - containerRect.left;
             const dropupWidth = isCompactViewport()
                 ? Math.min(
-                      dropupId === 'pi-rpc-model-dropup' ? 480 : 280,
+                      dropupId === 'pi-rpc-model-dropup'
+                          ? 480
+                          : dropupId === 'attachment-source-dropup'
+                            ? 320
+                            : 280,
                       containerRect.width - 24,
                       window.innerWidth - 24,
                   )

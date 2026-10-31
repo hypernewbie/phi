@@ -109,7 +109,13 @@ function recordingRuntime(): { calls: string[]; runtime: FactoryRuntime } {
 
 beforeEach(() => {
     resetOwnerSlotForTest();
-    for (const key of [ENV_TARGET, ENV_PANE, ENV_PROCESS, ENV_TOKEN, ENV_ATTACHMENT_ROOT])
+    for (const key of [
+        ENV_TARGET,
+        ENV_PANE,
+        ENV_PROCESS,
+        ENV_TOKEN,
+        ENV_ATTACHMENT_ROOT,
+    ])
         delete process.env[key];
 });
 

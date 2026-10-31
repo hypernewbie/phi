@@ -842,7 +842,8 @@ export class Runtime {
             try {
                 const model = ctx.model;
                 const imageAvailable = model
-                    ? model.api !== 'pi-virtual' && model.input.includes('image')
+                    ? model.api !== 'pi-virtual' &&
+                      model.input.includes('image')
                     : undefined;
                 this.attachmentReadinessSample = {
                     idle: ctx.isIdle!() === true,
@@ -1128,8 +1129,9 @@ export class Runtime {
                     accepted.capabilities.includes(CAPABILITY_COMPACT);
                 this.skillsAccepted =
                     accepted.capabilities.includes(CAPABILITY_SKILLS);
-                this.attachmentsAccepted =
-                    accepted.capabilities.includes(CAPABILITY_ATTACHMENTS);
+                this.attachmentsAccepted = accepted.capabilities.includes(
+                    CAPABILITY_ATTACHMENTS,
+                );
             }
         } catch (err) {
             channel.close();
@@ -1711,12 +1713,20 @@ export class Runtime {
         if (id === null || !this.channel || !this.attachmentsAccepted) return;
         const highWater = this.attachments.highWater;
         if (highWater !== null && id <= highWater) {
-            this.sendAttachmentAck(requestId, AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_REFUSED, 'duplicate');
+            this.sendAttachmentAck(
+                requestId,
+                AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_REFUSED,
+                'duplicate',
+            );
             return;
         }
         this.attachments.highWater = id;
         if (this.attachments.active !== null) {
-            this.sendAttachmentAck(requestId, AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_REFUSED, 'pending');
+            this.sendAttachmentAck(
+                requestId,
+                AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_REFUSED,
+                'pending',
+            );
             return;
         }
         const operation = { requestId, runtimeId: this.runtimeId };
@@ -1738,7 +1748,11 @@ export class Runtime {
                     sha256: ref.sha256,
                 })) as readonly AttachmentPromptRef[],
             );
-            reason = this.attachmentRefusalReason(req, prepared.hasImage, operation);
+            reason = this.attachmentRefusalReason(
+                req,
+                prepared.hasImage,
+                operation,
+            );
             if (reason !== '') return;
             const sendUserMessage = this.opts.sendUserMessage;
             if (typeof sendUserMessage !== 'function') {
@@ -1749,19 +1763,23 @@ export class Runtime {
             // synchronous dispatch boundary, not host or model acceptance.
             invoking = true;
             sendUserMessage(prepared.content, { expandPromptTemplates: false });
-            outcome = AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_DISPATCHED;
+            outcome =
+                AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_DISPATCHED;
             reason = '';
         } catch (error) {
             if (invoking) {
-                outcome = AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_UNKNOWN;
+                outcome =
+                    AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_UNKNOWN;
                 reason = 'uncertain';
             } else {
-                outcome = AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_REFUSED;
+                outcome =
+                    AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_REFUSED;
                 reason = safeAttachmentFailureReason(error);
             }
         } finally {
             this.sendAttachmentAck(requestId, outcome, reason);
-            if (this.attachments.active === operation) this.attachments.active = null;
+            if (this.attachments.active === operation)
+                this.attachments.active = null;
             this.publishContextOnly();
         }
     }
@@ -1778,11 +1796,16 @@ export class Runtime {
             typeof this.opts.sendUserMessage !== 'function' ||
             !hasSafeAttachmentRoot(this.opts.attachmentRoot) ||
             !this.lastCtx
-        ) return 'unavailable';
+        )
+            return 'unavailable';
         const text = req.text.trimStart();
         if (text.startsWith('/') || text.startsWith('!')) return 'command';
         const ctx = this.lastCtx;
-        if (typeof ctx.isIdle !== 'function' || typeof ctx.hasPendingMessages !== 'function') return 'unavailable';
+        if (
+            typeof ctx.isIdle !== 'function' ||
+            typeof ctx.hasPendingMessages !== 'function'
+        )
+            return 'unavailable';
         let session: string;
         let leaf: string;
         let model: PiModelView | undefined;
@@ -1797,19 +1820,34 @@ export class Runtime {
         } catch {
             return 'stale';
         }
-        if (session !== req.expectedSessionId || leaf !== req.expectedLeafId) return 'stale';
+        if (session !== req.expectedSessionId || leaf !== req.expectedLeafId)
+            return 'stale';
         if (req.expectedModel) {
-            if (!model || model.provider !== req.expectedModel.provider || model.id !== req.expectedModel.model) return 'stale';
+            if (
+                !model ||
+                model.provider !== req.expectedModel.provider ||
+                model.id !== req.expectedModel.model
+            )
+                return 'stale';
         } else if (model) {
             return 'stale';
         }
         if (!idle) return 'busy';
         if (queued) return 'queued';
         if (this.compactionActive) return 'compaction-active';
-        if (this.compact.pending !== null || this.attachments.active !== operation) return 'pending';
+        if (
+            this.compact.pending !== null ||
+            this.attachments.active !== operation
+        )
+            return 'pending';
         if (hasImage) {
             try {
-                if (!model || model.api === 'pi-virtual' || !Array.isArray(model.input) || !model.input.includes('image')) {
+                if (
+                    !model ||
+                    model.api === 'pi-virtual' ||
+                    !Array.isArray(model.input) ||
+                    !model.input.includes('image')
+                ) {
                     return 'unsupported-model';
                 }
             } catch {
@@ -1819,7 +1857,11 @@ export class Runtime {
         return '';
     }
 
-    private sendAttachmentAck(requestId: string, outcome: AttachmentPromptOutcome, reason: string): void {
+    private sendAttachmentAck(
+        requestId: string,
+        outcome: AttachmentPromptOutcome,
+        reason: string,
+    ): void {
         if (!this.channel) return;
         this.channel.sendNonfatal({
             paneId: this.opts.creds.pane,
@@ -1827,7 +1869,11 @@ export class Runtime {
             runtimeGeneration: this.opts.generation,
             payload: {
                 $case: 'attachmentPromptAck',
-                value: AttachmentPromptAck.create({ requestId, outcome, reason }),
+                value: AttachmentPromptAck.create({
+                    requestId,
+                    outcome,
+                    reason,
+                }),
             },
         });
     }
