@@ -899,7 +899,8 @@ if (cli130Override) {
     }
 }
 const versions = [{ name: '1.0.1', cmd: process.execPath, args: [localCli] }];
-if (cli130) versions.push({ name: '1.3.0', cmd: process.execPath, args: [cli130] });
+if (cli130)
+    versions.push({ name: '1.3.0', cmd: process.execPath, args: [cli130] });
 
 for (const version of versions) {
     const pane = `hosts-${version.name}`;
@@ -1411,7 +1412,10 @@ for (const version of versions) {
             const tuiProbeLog = join(tmp, `tui-probe-${version.name}.log`);
             const writerDone = join(tmp, `writer-${version.name}.json`);
             const attachmentDone = join(tmp, `attachment-done-${version.name}`);
-            const attachmentReady = join(tmp, `attachment-ready-${version.name}`);
+            const attachmentReady = join(
+                tmp,
+                `attachment-ready-${version.name}`,
+            );
             const handoff = makeAttachmentHandoff(version.name);
             const tuiEnv = {
                 ...env,
@@ -1444,60 +1448,135 @@ for (const version of versions) {
                 workDir,
             );
             try {
-                await waitForHost(() => existsSync(writerDone), 180_000, 'history writer readiness');
-                const writerState = JSON.parse(readFileSync(writerDone, 'utf8'));
-                if (writerState.ok !== true) throw new Error(writerState.error || 'history writer failed');
-                await waitForHost(() => existsSync(attachmentReady), 10_000, 'attachment writer readiness');
-                const view = await control({ op: 'inspect', process: tuiReg.process });
-                if (!view.ok || !(view.caps || []).includes('pi.attachments.v1')) {
-                    fail(version.name, 'attachment capability missing', (view.caps || []).join(','));
+                await waitForHost(
+                    () => existsSync(writerDone),
+                    180_000,
+                    'history writer readiness',
+                );
+                const writerState = JSON.parse(
+                    readFileSync(writerDone, 'utf8'),
+                );
+                if (writerState.ok !== true)
+                    throw new Error(
+                        writerState.error || 'history writer failed',
+                    );
+                await waitForHost(
+                    () => existsSync(attachmentReady),
+                    10_000,
+                    'attachment writer readiness',
+                );
+                const view = await control({
+                    op: 'inspect',
+                    process: tuiReg.process,
+                });
+                if (
+                    !view.ok ||
+                    !(view.caps || []).includes('pi.attachments.v1')
+                ) {
+                    fail(
+                        version.name,
+                        'attachment capability missing',
+                        (view.caps || []).join(','),
+                    );
                 } else {
                     const before = stubBodies.length;
                     holdNextProviderResponse = true;
                     const started = Date.now();
-                    const dispatched = await control({
-                        op: 'attachment',
-                        process: tuiReg.process,
-                        generation: Number(view.generation),
-                        session: view.session,
-                        leaf: view.leaf,
-                        provider: 'hosts-stub',
-                        model: 'probe',
-                        text: 'Inspect this public image fixture.',
-                        attachments: [handoff.reference],
-                        imageRequired: true,
-                        timeoutMs: 20_000,
-                    }, 25_000);
+                    const dispatched = await control(
+                        {
+                            op: 'attachment',
+                            process: tuiReg.process,
+                            generation: Number(view.generation),
+                            session: view.session,
+                            leaf: view.leaf,
+                            provider: 'hosts-stub',
+                            model: 'probe',
+                            text: 'Inspect this public image fixture.',
+                            attachments: [handoff.reference],
+                            imageRequired: true,
+                            timeoutMs: 20_000,
+                        },
+                        25_000,
+                    );
                     const ackMs = Date.now() - started;
-                    if (!dispatched.ok || dispatched.outcome !== 'ATTACHMENT_PROMPT_OUTCOME_DISPATCHED') {
-                        fail(version.name, 'attachment dispatch', `${dispatched.error || dispatched.outcome || 'no outcome'} (${dispatched.reason || ''})`);
+                    if (
+                        !dispatched.ok ||
+                        dispatched.outcome !==
+                            'ATTACHMENT_PROMPT_OUTCOME_DISPATCHED'
+                    ) {
+                        fail(
+                            version.name,
+                            'attachment dispatch',
+                            `${dispatched.error || dispatched.outcome || 'no outcome'} (${dispatched.reason || ''})`,
+                        );
                     }
                     if (ackMs >= 2_000) {
-                        fail(version.name, 'attachment ack waited for provider response', `${ackMs}ms`);
+                        fail(
+                            version.name,
+                            'attachment ack waited for provider response',
+                            `${ackMs}ms`,
+                        );
                     }
                     await waitForHost(
-                        () => stubBodies.slice(before).some((request) => imageDataUris(request).length > 0),
+                        () =>
+                            stubBodies
+                                .slice(before)
+                                .some(
+                                    (request) =>
+                                        imageDataUris(request).length > 0,
+                                ),
                         30_000,
                         'native image provider payload',
                     );
-                    const imageRequests = stubBodies.slice(before).filter((request) => imageDataUris(request).length > 0);
+                    const imageRequests = stubBodies
+                        .slice(before)
+                        .filter((request) => imageDataUris(request).length > 0);
                     if (imageRequests.length !== 1) {
-                        fail(version.name, 'native image request count', String(imageRequests.length));
+                        fail(
+                            version.name,
+                            'native image request count',
+                            String(imageRequests.length),
+                        );
                     }
                     const uri = imageDataUris(imageRequests[0])[0] || '';
-                    const encoded = uri.match(/^data:image\/(png|jpeg);base64,(.+)$/i);
-                    const decoded = encoded ? Buffer.from(encoded[2], 'base64') : Buffer.alloc(0);
-                    const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-                    if (!encoded || !decoded.subarray(0, 8).equals(pngSignature)) {
-                        fail(version.name, 'native image payload missing or invalid', uri.slice(0, 32));
+                    const encoded = uri.match(
+                        /^data:image\/(png|jpeg);base64,(.+)$/i,
+                    );
+                    const decoded = encoded
+                        ? Buffer.from(encoded[2], 'base64')
+                        : Buffer.alloc(0);
+                    const pngSignature = Buffer.from([
+                        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+                    ]);
+                    if (
+                        !encoded ||
+                        !decoded.subarray(0, 8).equals(pngSignature)
+                    ) {
+                        fail(
+                            version.name,
+                            'native image payload missing or invalid',
+                            uri.slice(0, 32),
+                        );
                     }
                     if (heldProviderResponse === null) {
-                        fail(version.name, 'provider response was not held during dispatch');
+                        fail(
+                            version.name,
+                            'provider response was not held during dispatch',
+                        );
                     }
                     releaseHeldProviderResponse();
                     await new Promise((resolve) => setTimeout(resolve, 2_100));
-                    if (stubBodies.slice(before).filter((request) => imageDataUris(request).length > 0).length !== 1) {
-                        fail(version.name, 'duplicate native image provider request');
+                    if (
+                        stubBodies
+                            .slice(before)
+                            .filter(
+                                (request) => imageDataUris(request).length > 0,
+                            ).length !== 1
+                    ) {
+                        fail(
+                            version.name,
+                            'duplicate native image provider request',
+                        );
                     }
                 }
             } catch (err) {

@@ -3196,6 +3196,16 @@ body.has-terminal-bg
     flex-shrink: 0;
 }
 
+@media (pointer: coarse) {
+    .attachment-button {
+        min-height: 44px;
+    }
+
+    #attachment-source-dropup .dropup-model-btn {
+        min-height: 44px;
+    }
+}
+
 /* Pi-coding-agent keyboard shortcut chip. Only visible when the
    active coder is pi. Shows the Ctrl+Shift+X keybinding visually
    so the user can discover/learn it. Clicking the chip sends the

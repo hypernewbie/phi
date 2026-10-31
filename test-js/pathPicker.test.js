@@ -1028,10 +1028,22 @@ describe('directory tree file mode', () => {
     const listing = {
         '/ws': response('/ws', '/', [
             { name: 'docs', path: '/ws/docs', kind: 'directory' },
-            { name: 'photo.png', path: '/ws/photo.png', kind: 'file', sizeBytes: 12, fingerprint: 'fp-photo' },
+            {
+                name: 'photo.png',
+                path: '/ws/photo.png',
+                kind: 'file',
+                sizeBytes: 12,
+                fingerprint: 'fp-photo',
+            },
         ]),
         '/ws/docs': response('/ws/docs', '/ws', [
-            { name: 'note.txt', path: '/ws/docs/note.txt', kind: 'file', sizeBytes: 4, fingerprint: 'fp-note' },
+            {
+                name: 'note.txt',
+                path: '/ws/docs/note.txt',
+                kind: 'file',
+                sizeBytes: 4,
+                fingerprint: 'fp-note',
+            },
         ]),
     };
 
@@ -1056,7 +1068,9 @@ describe('directory tree file mode', () => {
 
         const file = item('/ws/photo.png');
         expect(file.hasAttribute('aria-expanded')).toBe(false);
-        expect(file.querySelector('.directory-tree-disclosure').textContent).toBe('');
+        expect(
+            file.querySelector('.directory-tree-disclosure').textContent,
+        ).toBe('');
 
         item('/ws/docs').querySelector('.directory-tree-name').click();
         expect(onSelect).not.toHaveBeenCalled();
@@ -1074,7 +1088,11 @@ describe('directory tree file mode', () => {
 
         const pressEnter = (path) => {
             item(path).dispatchEvent(
-                new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+                new KeyboardEvent('keydown', {
+                    key: 'Enter',
+                    bubbles: true,
+                    cancelable: true,
+                }),
             );
         };
         pressEnter('/ws/docs');
@@ -1090,14 +1108,24 @@ describe('directory tree file mode', () => {
 
         const docs = item('/ws/docs');
         docs.dispatchEvent(
-            new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }),
+            new KeyboardEvent('keydown', {
+                key: 'ArrowRight',
+                bubbles: true,
+                cancelable: true,
+            }),
         );
         await waitForItem('/ws/docs/note.txt');
-        expect(item('/ws/docs/note.txt').hasAttribute('aria-expanded')).toBe(false);
+        expect(item('/ws/docs/note.txt').hasAttribute('aria-expanded')).toBe(
+            false,
+        );
 
         const file = item('/ws/photo.png');
         file.dispatchEvent(
-            new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }),
+            new KeyboardEvent('keydown', {
+                key: 'ArrowRight',
+                bubbles: true,
+                cancelable: true,
+            }),
         );
         expect(onSelect).not.toHaveBeenCalled();
         controller.destroy();

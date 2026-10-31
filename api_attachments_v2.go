@@ -15,7 +15,6 @@ import (
 
 const (
 	attachmentMultipartOverhead = 64 << 10
-	attachmentFieldMaxBytes     = 1_024
 	attachmentPaneMaxBytes      = 256
 )
 

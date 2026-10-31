@@ -41,16 +41,15 @@ const (
 )
 
 var (
-	errAttachmentInvalid      = errors.New("attachment: invalid request")
-	errAttachmentConflict     = errors.New("attachment: id conflict")
-	errAttachmentReceiving    = errors.New("attachment: item is receiving")
-	errAttachmentNotFound     = errors.New("attachment: item not found")
-	errAttachmentForbidden    = errors.New("attachment: owner mismatch")
-	errAttachmentLimit        = errors.New("attachment: limit reached")
-	errAttachmentUnsupported  = errors.New("attachment: unsupported image")
-	errAttachmentChanged      = errors.New("attachment: source changed")
-	errAttachmentStorage      = errors.New("attachment: storage unavailable")
-	errAttachmentReadDeadline = errors.New("attachment: request deadline unsupported")
+	errAttachmentInvalid     = errors.New("attachment: invalid request")
+	errAttachmentConflict    = errors.New("attachment: id conflict")
+	errAttachmentReceiving   = errors.New("attachment: item is receiving")
+	errAttachmentNotFound    = errors.New("attachment: item not found")
+	errAttachmentForbidden   = errors.New("attachment: owner mismatch")
+	errAttachmentLimit       = errors.New("attachment: limit reached")
+	errAttachmentUnsupported = errors.New("attachment: unsupported image")
+	errAttachmentChanged     = errors.New("attachment: source changed")
+	errAttachmentStorage     = errors.New("attachment: storage unavailable")
 )
 
 // AttachmentItem is metadata for one immutable item. Path is a server-local

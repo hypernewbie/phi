@@ -10,7 +10,10 @@ import type {
 } from '@earendil-works/pi-coding-agent';
 import { isAbsolute } from 'node:path';
 import type { ChannelCreds } from './channel.js';
-import { type AttachmentLatchState, freshAttachmentLatch } from './attachments.js';
+import {
+    type AttachmentLatchState,
+    freshAttachmentLatch,
+} from './attachments.js';
 import {
     type ReloadLatchState,
     captureNativeReloadBaseline,
@@ -102,7 +105,9 @@ export function readCredsFromEnv(
 }
 
 /** Read the provisioned private root before clearing child environment. */
-export function readAttachmentRootFromEnv(env: NodeJS.ProcessEnv = process.env): string | null {
+export function readAttachmentRootFromEnv(
+    env: NodeJS.ProcessEnv = process.env,
+): string | null {
     const root = env[ENV_ATTACHMENT_ROOT];
     return typeof root === 'string' && isAbsolute(root) ? root : null;
 }

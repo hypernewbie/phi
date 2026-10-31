@@ -230,8 +230,12 @@ describe('attachment v2 request helpers', () => {
     it('uploads one file to the captured pane with the captured backend header', async () => {
         fetchResponse = {
             id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-            name: 'note.txt', path: '/private/note.bin', sizeBytes: 3,
-            mimeType: 'application/octet-stream', kind: 'file', sha256: 'a'.repeat(64),
+            name: 'note.txt',
+            path: '/private/note.bin',
+            sizeBytes: 3,
+            mimeType: 'application/octet-stream',
+            kind: 'file',
+            sha256: 'a'.repeat(64),
         };
         const file = new File(['abc'], 'note.txt', { type: 'text/plain' });
         const item = await uploadAttachmentItem(
@@ -239,7 +243,9 @@ describe('attachment v2 request helpers', () => {
             'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
             owner,
         );
-        expect(lastUrl).toBe('/api/attachments/v2/items/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+        expect(lastUrl).toBe(
+            '/api/attachments/v2/items/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        );
         expect(lastInit.method).toBe('PUT');
         expect(lastInit.credentials).toBe('same-origin');
         expect(lastInit.headers['X-Phi-Backend']).toBe('profile-a');
@@ -251,7 +257,12 @@ describe('attachment v2 request helpers', () => {
 
     it('uses read-only status and context requests', async () => {
         fetchResponse = { state: 'missing' };
-        await expect(getAttachmentItemStatus('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', owner)).resolves.toEqual({ state: 'missing' });
+        await expect(
+            getAttachmentItemStatus(
+                'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+                owner,
+            ),
+        ).resolves.toEqual({ state: 'missing' });
         expect(lastInit.method).toBe('GET');
         expect(lastUrl).toContain('pane=pane-a');
         fetchResponse = { available: false };
@@ -265,10 +276,14 @@ describe('attachment v2 request helpers', () => {
             id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
             pane: 'pane-a',
             context: {
-                process_id: 'proc', generation: '1', session_id: 'sess', leaf_id: '',
+                process_id: 'proc',
+                generation: '1',
+                session_id: 'sess',
+                leaf_id: '',
                 model: null,
             },
-            text: 'inspect', attachment_ids: ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
+            text: 'inspect',
+            attachment_ids: ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
         };
         fetchResponse = { id: body.id, state: 'unknown', reason: 'uncertain' };
         await sendAttachmentPrompt(owner, body);
@@ -289,14 +304,28 @@ describe('attachment v2 request helpers', () => {
             calls += 1;
             return new Promise(() => {});
         });
-        const pending = sendAttachmentPrompt(owner, {
-            id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', pane: owner.paneId,
-            context: { process_id: 'proc', generation: '1', session_id: 's', leaf_id: 'l', model: null },
-            text: '', attachment_ids: ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
-        }, abortController.signal);
+        const pending = sendAttachmentPrompt(
+            owner,
+            {
+                id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+                pane: owner.paneId,
+                context: {
+                    process_id: 'proc',
+                    generation: '1',
+                    session_id: 's',
+                    leaf_id: 'l',
+                    model: null,
+                },
+                text: '',
+                attachment_ids: ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
+            },
+            abortController.signal,
+        );
         abortController.abort();
         await expect(pending).rejects.toMatchObject({
-            status: 0, reason: 'uncertain', uncertain: true,
+            status: 0,
+            reason: 'uncertain',
+            uncertain: true,
         });
         expect(calls).toBe(1);
         expect(AttachmentRequestError).toBeDefined();
@@ -304,10 +333,24 @@ describe('attachment v2 request helpers', () => {
 
     it('classifies malformed mutation responses as uncertain', async () => {
         mockFetch(() => ({ ok: true, status: 200, text: '{bad json' }));
-        await expect(sendAttachmentPrompt(owner, {
-            id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', pane: owner.paneId,
-            context: { process_id: 'proc', generation: '1', session_id: 's', leaf_id: 'l', model: null },
-            text: '', attachment_ids: ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
-        })).rejects.toMatchObject({ status: 200, reason: 'uncertain', uncertain: true });
+        await expect(
+            sendAttachmentPrompt(owner, {
+                id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+                pane: owner.paneId,
+                context: {
+                    process_id: 'proc',
+                    generation: '1',
+                    session_id: 's',
+                    leaf_id: 'l',
+                    model: null,
+                },
+                text: '',
+                attachment_ids: ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
+            }),
+        ).rejects.toMatchObject({
+            status: 200,
+            reason: 'uncertain',
+            uncertain: true,
+        });
     });
 });

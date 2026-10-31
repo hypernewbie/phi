@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -160,11 +159,4 @@ func handleAttachmentsV2ServerItem(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(item)
-}
-
-func attachmentSourceErrorStatus(err error) int {
-	if errors.Is(err, errAttachmentChanged) {
-		return http.StatusConflict
-	}
-	return http.StatusBadRequest
 }

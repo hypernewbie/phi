@@ -40,7 +40,9 @@ async function attachmentFetch(owner, url, init, timeoutMs, externalSignal) {
     };
     const onScopeAbort = () => cancel('Attachment owner changed');
     const onExternalAbort = () => cancel('Attachment request cancelled');
-    owner.scope?.signal?.addEventListener('abort', onScopeAbort, { once: true });
+    owner.scope?.signal?.addEventListener('abort', onScopeAbort, {
+        once: true,
+    });
     externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
     const timer = setTimeout(() => cancel('Attachment request timed out'), timeoutMs);
     if (owner.scope?.signal?.aborted)
@@ -74,7 +76,9 @@ async function attachmentFetch(owner, url, init, timeoutMs, externalSignal) {
                 throw new AttachmentRequestError('Attachment result unknown', response.status, 'uncertain', true);
             }
             const uncertain = response.status === 503 || response.status >= 500;
-            throw new AttachmentRequestError(uncertain ? 'Attachment result unknown' : `Attachment refused: ${reason}`, response.status, reason, uncertain);
+            throw new AttachmentRequestError(uncertain
+                ? 'Attachment result unknown'
+                : `Attachment refused: ${reason}`, response.status, reason, uncertain);
         }
         try {
             return JSON.parse(text);
@@ -115,7 +119,11 @@ export function getAttachmentPiContext(owner, signal) {
     return attachmentFetch(owner, `/api/pi-bridge/attachments/context?${query}`, { method: 'GET' }, ATTACHMENT_READ_TIMEOUT_MS, signal);
 }
 export function sendAttachmentPrompt(owner, body, signal) {
-    return attachmentFetch(owner, '/api/pi-bridge/attachments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 45_000, signal);
+    return attachmentFetch(owner, '/api/pi-bridge/attachments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    }, 45_000, signal);
 }
 export function getAttachmentSendStatus(owner, id, signal) {
     const query = new URLSearchParams({ pane: owner.paneId, id });
