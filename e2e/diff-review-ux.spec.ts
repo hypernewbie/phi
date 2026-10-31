@@ -80,6 +80,9 @@ test('hovering unified old/new lines does not move diff rows; comments and modal
     await page.locator('.diff-tab-btn[data-tab="diff"]').click();
     await expectPrettyDiffRow(page);
     await page.locator('#rich-diff-btn').click();
+    await expect(
+        page.locator('.d2h-code-line-ctn', { hasText: 'new content' }),
+    ).toBeVisible();
 
     const modal = page.locator('#diff-modal');
     const content = modal.locator('.md-modal-content');
@@ -127,18 +130,27 @@ test('hovering unified old/new lines does not move diff rows; comments and modal
         'aria-label',
         'Restore diff viewer size',
     );
+    await expect(size).toHaveAccessibleName('Restore diff viewer size');
     await expect(content).toHaveClass(/diff-modal-maximized/);
+    await expect(content).toHaveCSS('transform', 'none');
     await expect(size.locator('svg:visible')).toHaveCount(1);
     const expanded = await content.boundingBox();
+    expect(expanded!.x).toBeCloseTo(0, 0);
+    expect(expanded!.y).toBeCloseTo(0, 0);
     expect(expanded!.width).toBeGreaterThan(original!.width + 20);
     expect(expanded!.width).toBeCloseTo(1400, 0);
     expect(expanded!.height).toBeGreaterThan(original!.height);
+    expect(expanded!.height).toBeCloseTo(850, 0);
+    await expect(modal.locator('#diff-modal-close')).toBeVisible();
     expect(await page.evaluate(() => document.fullscreenElement)).toBeNull();
     await size.click();
     await expect(size).toHaveAttribute('aria-pressed', 'false');
     await expect(size).toHaveAttribute('aria-label', 'Maximize diff viewer');
+    await expect(size).toHaveAccessibleName('Maximize diff viewer');
     await expect(content).not.toHaveClass(/diff-modal-maximized/);
-    expect((await content.boundingBox())!.width).toBe(original!.width);
+    const restored = await content.boundingBox();
+    expect(restored!.width).toBe(original!.width);
+    expect(restored!.height).toBeCloseTo(original!.height, 0);
     await expect(modal.locator('.diff-comment-card-body')).toHaveText(
         'Review this line',
     );
@@ -225,6 +237,9 @@ test('hovering unified old/new lines does not move diff rows; comments and modal
             .locator('.diff-comment-card', { hasText: 'Offset note' })
             .locator('.diff-comment-target-badge'),
     ).toHaveText('sample.txt:103');
+
+    await page.keyboard.press('Escape');
+    await expect(modal).toBeHidden();
 });
 
 test('modal size toggle remains an in-page dialog on a narrow viewport', async ({
@@ -255,13 +270,117 @@ test('modal size toggle remains an in-page dialog on a narrow viewport', async (
     const modal = page.locator('#diff-modal');
     const content = modal.locator('.md-modal-content');
     const size = modal.locator('#diff-modal-size-btn');
+    await expect(
+        modal.locator('.d2h-code-line-ctn', { hasText: 'new content' }),
+    ).toBeVisible();
     await expect(size).toBeVisible();
-    await size.click();
-    const box = (await content.boundingBox())!;
-    expect(box.x).toBeCloseTo(0, 0);
-    expect(box.x + box.width).toBeCloseTo(420, 0);
-    expect(box.height).toBeCloseTo(800, 0);
-    expect(await page.evaluate(() => document.fullscreenElement)).toBeNull();
-    await size.click();
-    await expect(content).not.toHaveClass(/diff-modal-maximized/);
+    await expect(size).toHaveAttribute('aria-pressed', 'false');
+    await expect(size).toHaveAccessibleName('Maximize diff viewer');
+
+    for (const height of [800, 850]) {
+        await page.setViewportSize({ width: 420, height });
+        const before = await content.boundingBox();
+        await size.click();
+        await expect(size).toHaveAttribute('aria-pressed', 'true');
+        await expect(size).toHaveAccessibleName('Restore diff viewer size');
+        await expect(content).toHaveClass(/diff-modal-maximized/);
+        await expect(content).toHaveCSS('transform', 'none');
+        const box = await content.boundingBox();
+        expect(box!.x).toBeCloseTo(0, 0);
+        expect(box!.y).toBeCloseTo(0, 0);
+        expect(box!.width).toBeCloseTo(420, 0);
+        expect(box!.x + box!.width).toBeCloseTo(420, 0);
+        expect(box!.height).toBeCloseTo(height, 0);
+        await expect(modal.locator('#diff-modal-close')).toBeVisible();
+        expect(
+            await page.evaluate(() => document.fullscreenElement),
+        ).toBeNull();
+
+        await size.click();
+        await expect(size).toHaveAttribute('aria-pressed', 'false');
+        await expect(size).toHaveAccessibleName('Maximize diff viewer');
+        await expect(content).not.toHaveClass(/diff-modal-maximized/);
+        const restored = await content.boundingBox();
+        expect(restored!.width).toBeCloseTo(before!.width, 0);
+        expect(restored!.height).toBeCloseTo(before!.height, 0);
+    }
+
+    await page.keyboard.press('Escape');
+    await expect(modal).toBeHidden();
+});
+
+test.describe('touch diff maximize', () => {
+    test.use({
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+    });
+
+    test('touch maximizes and restores the loaded diff offline', async ({
+        page,
+    }) => {
+        let rawDiffRequests = 0;
+        let blockRawDiffRequests = false;
+        page.on('request', (request) => {
+            if (request.url().includes('/api/git/raw-diff?')) rawDiffRequests++;
+        });
+        await page.route('**/api/git/raw-diff?*', (route) => {
+            if (blockRawDiffRequests) return route.abort();
+            return route.fulfill({
+                status: 200,
+                contentType: 'text/plain',
+                body: RAW_DIFF,
+            });
+        });
+        await page.goto(phi.url);
+        await page
+            .locator('#diff-term-container .xterm')
+            .first()
+            .waitFor({ state: 'attached' });
+        const panel = page.locator('#diff-panel');
+        if (
+            !(await panel.evaluate((el) =>
+                el.classList.contains('mobile-open'),
+            ))
+        ) {
+            await page.locator('#header-diff-toggle-btn').tap();
+        }
+        await page.locator('.diff-tab-btn[data-tab="diff"]').tap();
+        await expectPrettyDiffRow(page);
+        await page.locator('#rich-diff-btn').tap();
+
+        const modal = page.locator('#diff-modal');
+        const content = modal.locator('.md-modal-content');
+        const size = modal.locator('#diff-modal-size-btn');
+        const diffRow = modal.locator('.d2h-code-line-ctn', {
+            hasText: 'new content',
+        });
+        await expect(diffRow).toBeVisible();
+        const loadedRequestCount = rawDiffRequests;
+        expect(loadedRequestCount).toBeGreaterThan(0);
+        blockRawDiffRequests = true;
+        await page.context().setOffline(true);
+
+        try {
+            await size.tap();
+            await expect(size).toHaveAttribute('aria-pressed', 'true');
+            await expect(size).toHaveAccessibleName('Restore diff viewer size');
+            await expect(content).toBeVisible();
+            await expect(diffRow).toBeVisible();
+            expect(rawDiffRequests).toBe(loadedRequestCount);
+
+            await size.tap();
+            await expect(size).toHaveAttribute('aria-pressed', 'false');
+            await expect(size).toHaveAccessibleName('Maximize diff viewer');
+            await expect(content).toBeVisible();
+            await expect(diffRow).toBeVisible();
+            expect(rawDiffRequests).toBe(loadedRequestCount);
+
+            await modal.locator('#diff-modal-close').tap();
+            await expect(modal).toBeHidden();
+            expect(rawDiffRequests).toBe(loadedRequestCount);
+        } finally {
+            await page.context().setOffline(false);
+        }
+    });
 });
