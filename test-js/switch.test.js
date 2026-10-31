@@ -92,10 +92,21 @@ function setupVendorStubs() {
 }
 
 describe('Single-Tab Embedded Backend Switching', () => {
+    const realSetInterval = globalThis.setInterval.bind(globalThis);
+    const realClearInterval = globalThis.clearInterval.bind(globalThis);
     let app;
+    let appIntervals = [];
     let fetchCalls = [];
 
     beforeEach(() => {
+        app = undefined;
+        appIntervals = [];
+        // Keep real polling during tests, but own its lifetime before jsdom teardown.
+        vi.spyOn(globalThis, 'setInterval').mockImplementation((...args) => {
+            const interval = realSetInterval(...args);
+            appIntervals.push(interval);
+            return interval;
+        });
         setupVendorStubs();
         stubWebSocket();
         setupHtml();
@@ -138,6 +149,9 @@ describe('Single-Tab Embedded Backend Switching', () => {
     });
 
     afterEach(() => {
+        app?.scope?.abort();
+        for (const interval of appIntervals) realClearInterval(interval);
+        appIntervals = [];
         setEmbeddedBackend('', '');
         backendStores.clear();
     });
