@@ -182,7 +182,7 @@ async function yieldIfNeeded(lastYieldAt: number): Promise<number> {
 async function findTextMatch(
     text: string,
     pattern: RegExp,
-    queryByteLength: number,
+    queryCodePoints: number,
     input: TranscriptSearchInput,
     lastYieldAt: number,
 ): Promise<{
@@ -192,8 +192,9 @@ async function findTextMatch(
 }> {
     let offset = 0;
     let yieldedAt = lastYieldAt;
+    // Unicode simple folds can use more UTF-8 bytes than the query (k → K).
     const overlapBytes = Math.min(
-        queryByteLength,
+        queryCodePoints * 4,
         MAX_TRANSCRIPT_TEXT_CHUNK_BYTES - 1,
     );
     const mainChunkBytes = MAX_TRANSCRIPT_TEXT_CHUNK_BYTES - overlapBytes;
@@ -357,7 +358,7 @@ export async function searchTranscriptPage(
             return unavailablePage(sessionId, anchorLeafId, input.startIndex);
 
         const pattern = new RegExp(escapeRegExp(input.query), 'giu');
-        const queryByteLength = queryBytes(input.query);
+        const queryCodePoints = Array.from(input.query).length;
         const matches: TranscriptSearchMatch[] = [];
         const endIndex = Math.min(
             branch.length,
@@ -385,7 +386,7 @@ export async function searchTranscriptPage(
                         const found = await findTextMatch(
                             text,
                             pattern,
-                            queryByteLength,
+                            queryCodePoints,
                             input,
                             lastYieldAt,
                         );

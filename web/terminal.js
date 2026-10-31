@@ -12401,7 +12401,7 @@ export class TabManager {
             searchBar.setStatus(archiveStatus(), Boolean(archiveFailure));
         };
 
-        const archiveDelay = (delay, signal) => new Promise((resolve, reject) => {
+        const searchDelay = (delay, signal) => new Promise((resolve, reject) => {
             if (signal.aborted) {
                 reject(signal.reason || new Error('archive search canceled'));
                 return;
@@ -12443,7 +12443,7 @@ export class TabManager {
                     clearTimeout(timeout);
                     signal.removeEventListener('abort', onAbort);
                 }
-                if (attempt < delays.length) await archiveDelay(delays[attempt], signal);
+                if (attempt < delays.length) await searchDelay(delays[attempt], signal);
             }
             throw lastError;
         };
@@ -13103,6 +13103,32 @@ export class TabManager {
             const isReady = () =>
                 this._piBridgeTranscriptSearchEligible(tabInfo) &&
                 String(tabInfo.piBridge?.generation || '') === bridgeGeneration;
+            const readTranscriptPage = async (body) => {
+                const delays = [500, 1500];
+                for (let attempt = 0; ; attempt++) {
+                    if (controller.signal.aborted || !isCurrent() || !isReady())
+                        throw new Error('transcript search canceled');
+                    try {
+                        const response = await fetch('/api/pi-bridge/transcript-search', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(body),
+                            signal: controller.signal,
+                        });
+                        if (
+                            response.ok ||
+                            (response.status < 500 && response.status !== 429) ||
+                            attempt >= delays.length
+                        )
+                            return response;
+                        await response.body?.cancel();
+                    } catch (error) {
+                        if (controller.signal.aborted || attempt >= delays.length)
+                            throw error;
+                    }
+                    await searchDelay(delays[attempt], controller.signal);
+                }
+            };
             searchBar?.setStatus(
                 cacheUsable
                     ? 'Refreshing Pi transcript; cached matches remain available.'
@@ -13117,10 +13143,15 @@ export class TabManager {
                 let sessionId = '';
                 let anchorLeafId = '';
                 const seenEntries = new Set();
+                const queryPattern = new RegExp(
+                    query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+                    'iu',
+                );
                 const freshResults = [];
                 let complete = false;
                 let capped = false;
                 try {
+                    await searchDelay(250, controller.signal);
                     while (true) {
                         if (!isCurrent()) return;
                         if (!isReady()) throw new Error('bridge unavailable');
@@ -13138,15 +13169,7 @@ export class TabManager {
                                 anchor_leaf_id: anchorLeafId,
                             });
                         }
-                        const response = await fetch(
-                            '/api/pi-bridge/transcript-search',
-                            {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify(body),
-                                signal: controller.signal,
-                            },
-                        );
+                        const response = await readTranscriptPage(body);
                         if (!response.ok) throw new Error('search unavailable');
                         const page = await response.json();
                         if (
@@ -13192,7 +13215,7 @@ export class TabManager {
                                 !['user', 'assistant', 'toolResult'].includes(match.role) ||
                                 typeof match.snippet !== 'string' ||
                                 new TextEncoder().encode(match.snippet).byteLength > 2048 ||
-                                !match.snippet.toLocaleLowerCase().includes(query.toLocaleLowerCase()) ||
+                                !queryPattern.test(match.snippet) ||
                                 seenEntries.has(match.entry_id)
                             )
                                 throw new Error('invalid transcript match');

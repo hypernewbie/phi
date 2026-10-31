@@ -69,10 +69,14 @@ function monitorPage(page: Page, baseUrl: string) {
                 message.text().includes('500'))
         )
             return;
-        // Offline search can overlap this unrelated local background poll.
+        // Offline search can overlap these unrelated background refreshes.
         if (
             offlinePhase &&
-            url.pathname === '/api/system/cpu' &&
+            [
+                '/api/system/cpu',
+                '/api/config',
+                '/api/config/mobile-appearance',
+            ].includes(url.pathname) &&
             message.text() ===
                 'Failed to load resource: net::ERR_INTERNET_DISCONNECTED'
         )
@@ -92,7 +96,12 @@ function monitorPage(page: Page, baseUrl: string) {
             return;
         if (
             offlinePhase &&
-            url.pathname === '/api/system/cpu' &&
+            request.method() === 'GET' &&
+            [
+                '/api/system/cpu',
+                '/api/config',
+                '/api/config/mobile-appearance',
+            ].includes(url.pathname) &&
             error === 'net::ERR_INTERNET_DISCONNECTED'
         )
             return;

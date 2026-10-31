@@ -200,6 +200,17 @@ describe('bounded active-branch transcript search', () => {
         ).toBeLessThanOrEqual(MAX_TRANSCRIPT_SNIPPET_BYTES);
     });
 
+    it('finds wider Unicode case folds across a chunk boundary', async () => {
+        const content = `${'x'.repeat(32 * 1024 - 5)}Kx tail`;
+        const result = await searchTranscriptPage(
+            manager([messageEntry('u1', null, 'user', content)]),
+            initial('kx'),
+        );
+        expect(result.unavailable).toBe(false);
+        expect(result.matches).toHaveLength(1);
+        expect(result.matches[0]?.snippet).toContain('Kx');
+    });
+
     it('treats an empty branch as a complete search and failures as unavailable', async () => {
         const empty = await searchTranscriptPage(
             manager([]),

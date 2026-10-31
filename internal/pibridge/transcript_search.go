@@ -3,9 +3,9 @@ package pibridge
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
-	"strings"
 	"unicode/utf8"
 
 	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
@@ -106,13 +106,13 @@ func validateTranscriptSearchResponse(req TranscriptSearchRequest, sessionID, re
 	}
 	matches := make([]TranscriptSearchMatch, 0, len(res.GetMatches()))
 	seen := make(map[string]struct{}, len(res.GetMatches()))
-	needle := strings.ToLower(req.Query)
+	pattern := regexp.MustCompile("(?i)" + regexp.QuoteMeta(req.Query))
 	for _, match := range res.GetMatches() {
 		entryID, role, snippet := match.GetEntryId(), match.GetRole(), match.GetSnippet()
 		if !validTranscriptSearchIdentity(entryID, false) ||
 			!utf8.ValidString(snippet) || snippet == "" || len(snippet) > maxTranscriptSnippetBytes ||
 			(role != "user" && role != "assistant" && role != "toolResult") ||
-			!strings.Contains(strings.ToLower(snippet), needle) {
+			!pattern.MatchString(snippet) {
 			return nil, false
 		}
 		if _, duplicate := seen[entryID]; duplicate {

@@ -235,6 +235,26 @@ func TestRequestTranscriptSearchWorksAfterPeerReconnect(t *testing.T) {
 	}
 }
 
+func TestValidateTranscriptSearchResponseUnicodeLiteralMatching(t *testing.T) {
+	for _, tc := range []struct{ query, snippet string }{
+		{"s", "before ſ after"},
+		{"σ", "before ς after"},
+		{"kx", "before Kx after"},
+		{"[literal]", "before [LITERAL] after"},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			request := TranscriptSearchRequest{Query: tc.query, Initial: true}
+			response := &pibridgepb.TranscriptSearchResponse{
+				RequestId: "t1", SessionId: "sess", AnchorLeafId: "leaf", NextIndex: 1,
+				Matches: []*pibridgepb.TranscriptSearchMatch{{EntryId: "entry", Role: "assistant", Snippet: tc.snippet}}, Complete: true,
+			}
+			if _, ok := validateTranscriptSearchResponse(request, "sess", "t1", response); !ok {
+				t.Fatal("valid Unicode literal match rejected")
+			}
+		})
+	}
+}
+
 func TestValidateTranscriptSearchResponseRejectsBadPages(t *testing.T) {
 	request := TranscriptSearchRequest{Query: "needle", Initial: true}
 	valid := &pibridgepb.TranscriptSearchResponse{

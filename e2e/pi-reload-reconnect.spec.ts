@@ -23,7 +23,8 @@ async function watchDiagnostics(page: Page, serverOrigin: string) {
         if (message.type() !== 'error') return;
         const text = message.text();
         if (
-            text === 'Failed to load resource: net::ERR_INTERNET_DISCONNECTED' ||
+            text ===
+                'Failed to load resource: net::ERR_INTERNET_DISCONNECTED' ||
             text.startsWith(
                 '[term] Failed to sync pin on backend: TypeError: Failed to fetch',
             )

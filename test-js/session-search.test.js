@@ -254,7 +254,8 @@ describe('active terminal find bar', () => {
         ).toContain('256 code points');
     });
 
-    it('searches the loaded terminal immediately while Pi transcript search runs', () => {
+    it('searches the loaded terminal immediately while Pi transcript search runs', async () => {
+        vi.useFakeTimers();
         const { tab } = makeBridgePiTab();
         const { manager, composer } = makeManager(tab);
         const fetchMock = mockFetch(
@@ -284,6 +285,8 @@ describe('active terminal find bar', () => {
             'bridge needle',
             expect.any(Object),
         );
+        expect(fetchMock).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(250);
         expect(fetchMock).toHaveBeenCalledWith(
             '/api/pi-bridge/transcript-search',
             expect.objectContaining({
@@ -357,6 +360,145 @@ describe('active terminal find bar', () => {
         bar.querySelector('.find-close').click();
     });
 
+    it('debounces remote queries and retries a transient read without blocking local search', async () => {
+        vi.useFakeTimers();
+        const { tab } = makeBridgePiTab();
+        const { manager, composer } = makeManager(tab);
+        const fetchMock = mockFetch((_url, options) => {
+            if (fetchMock.mock.calls.length === 1)
+                return { ok: false, status: 503 };
+            const { query } = JSON.parse(options.body);
+            return {
+                session_id: 'session-1',
+                anchor_leaf_id: 'leaf-1',
+                next_index: 1,
+                matches: [
+                    { entry_id: 'entry-1', role: 'assistant', snippet: query },
+                ],
+                complete: true,
+                unavailable: false,
+                process_id: 'process-1',
+                generation: '7',
+            };
+        });
+        dispatchKey(composer, manager, { ctrlKey: true });
+        const bar = tab.termContainer.querySelector('.find-bar');
+        const input = bar.querySelector('.find-input');
+        for (const query of ['n', 'ne', 'needle']) {
+            input.value = query;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            await vi.advanceTimersByTimeAsync(100);
+        }
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(tab.searchAddon.findNext).toHaveBeenCalledWith(
+            'needle',
+            expect.any(Object),
+        );
+        await vi.advanceTimersByTimeAsync(150);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(500);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(bar.querySelector('.find-status').textContent).toContain(
+            '1 matches in Pi transcript',
+        );
+        bar.querySelector('.find-next').click();
+        expect(bar.querySelector('.find-preview').textContent).toBe('needle');
+        bar.querySelector('.find-close').click();
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+        [503, 3],
+        [400, 1],
+    ])(
+        'bounds retries for HTTP %s and preserves the query',
+        async (status, attempts) => {
+            vi.useFakeTimers();
+            const { tab } = makeBridgePiTab();
+            const { manager, composer } = makeManager(tab);
+            const fetchMock = mockFetch(() => ({ ok: false, status }));
+            dispatchKey(composer, manager, { ctrlKey: true });
+            const bar = tab.termContainer.querySelector('.find-bar');
+            const input = bar.querySelector('.find-input');
+            input.value = 'preserved query';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            await vi.advanceTimersByTimeAsync(15_000);
+            expect(fetchMock).toHaveBeenCalledTimes(attempts);
+            expect(input.value).toBe('preserved query');
+            expect(document.activeElement).toBe(input);
+            expect(bar.querySelector('.find-source-select').value).toBe(
+                'terminal',
+            );
+            expect(bar.querySelector('.find-status').textContent).toContain(
+                'showing loaded terminal output',
+            );
+            bar.querySelector('.find-close').click();
+        },
+    );
+
+    it('cancels a transcript retry when the query changes or search closes', async () => {
+        vi.useFakeTimers();
+        const { tab } = makeBridgePiTab();
+        const { manager, composer } = makeManager(tab);
+        const fetchMock = mockFetch(() => {
+            throw new TypeError('network unavailable');
+        });
+        dispatchKey(composer, manager, { ctrlKey: true });
+        const bar = tab.termContainer.querySelector('.find-bar');
+        const input = bar.querySelector('.find-input');
+        input.value = 'old query';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        await vi.advanceTimersByTimeAsync(250);
+        input.value = 'new query';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        await vi.advanceTimersByTimeAsync(250);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(JSON.parse(fetchMock.mock.calls[1][1].body).query).toBe(
+            'new query',
+        );
+        bar.querySelector('.find-close').click();
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('accepts Unicode case-folded transcript snippets without falling back', async () => {
+        const { tab } = makeBridgePiTab();
+        const { manager, composer } = makeManager(tab);
+        mockFetch(() => ({
+            session_id: 'session-1',
+            anchor_leaf_id: 'leaf-1',
+            next_index: 1,
+            matches: [
+                { entry_id: 'entry-1', role: 'assistant', snippet: 'ſ ς Kx' },
+            ],
+            complete: true,
+            unavailable: false,
+            process_id: 'process-1',
+            generation: '7',
+        }));
+        dispatchKey(composer, manager, { ctrlKey: true });
+        const bar = tab.termContainer.querySelector('.find-bar');
+        const input = bar.querySelector('.find-input');
+        for (const query of ['s', 'σ', 'kx']) {
+            input.value = query;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            await vi.waitFor(() => {
+                expect(bar.querySelector('.find-status').textContent).toContain(
+                    '1 matches in Pi transcript',
+                );
+            });
+            bar.querySelector('.find-next').click();
+            expect(bar.querySelector('.find-preview').textContent).toBe(
+                'ſ ς Kx',
+            );
+            expect(bar.querySelector('.find-source-select').value).toBe(
+                'transcript',
+            );
+        }
+        bar.querySelector('.find-close').click();
+    });
+
     it('keeps terminal search when the transcript capability is missing at startup', () => {
         const { tab } = makeBridgePiTab();
         tab.piBridge.capabilities = [];
@@ -382,7 +524,8 @@ describe('active terminal find bar', () => {
         bar.querySelector('.find-close').click();
     });
 
-    it('falls back to loaded terminal search when the bridge capability disappears', () => {
+    it('falls back to loaded terminal search when the bridge capability disappears', async () => {
+        vi.useFakeTimers();
         const { tab } = makeBridgePiTab();
         const { manager, composer } = makeManager(tab);
         const fetchMock = mockFetch(
@@ -398,6 +541,7 @@ describe('active terminal find bar', () => {
         const input = bar.querySelector('.find-input');
         input.value = 'fallback needle';
         input.dispatchEvent(new Event('input', { bubbles: true }));
+        await vi.advanceTimersByTimeAsync(250);
         expect(fetchMock).toHaveBeenCalled();
 
         tab.piBridge.connected = false;
@@ -422,6 +566,7 @@ describe('active terminal find bar', () => {
         expect(reconnectedBar.querySelector('.find-source-select').value).toBe(
             'transcript',
         );
+        await vi.advanceTimersByTimeAsync(250);
         expect(fetchMock.mock.calls.at(-1)[1].body).toContain(
             '"generation":"8"',
         );
