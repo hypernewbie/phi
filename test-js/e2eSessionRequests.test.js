@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+    isCancelledGitInfoRead,
     isCancelledSessionListRead,
     isCancelledWorktreeRead,
 } from '../e2e/_session-requests.ts';
@@ -61,6 +62,31 @@ describe('expected background session-list cancellation diagnostics', () => {
     ])('does not exempt %s %s %s', (url, method, errorText) => {
         expect(
             isCancelledSessionListRead(request(url, method, errorText), origin),
+        ).toBe(false);
+    });
+});
+
+describe('expected Git-info cancellation diagnostics', () => {
+    it('recognizes a canceled same-origin GET with a cwd query', () => {
+        expect(
+            isCancelledGitInfoRead(
+                request(`${origin}/api/git/info?cwd=%2Fwork`),
+                origin,
+            ),
+        ).toBe(true);
+    });
+
+    it.each([
+        [`${origin}/api/git/action`, 'POST', 'net::ERR_ABORTED'],
+        [`${origin}/api/git/info`, 'POST', 'net::ERR_ABORTED'],
+        [`${origin}/api/git/info`, 'GET', 'net::ERR_FAILED'],
+        [`${origin}/api/git/info`, 'GET', null],
+        [`${origin}/api/git/info/extra`, 'GET', 'net::ERR_ABORTED'],
+        ['http://127.0.0.1:17778/api/git/info', 'GET', 'net::ERR_ABORTED'],
+        ['http://localhost:17777/api/git/info', 'GET', 'net::ERR_ABORTED'],
+    ])('does not exempt %s %s %s', (url, method, errorText) => {
+        expect(
+            isCancelledGitInfoRead(request(url, method, errorText), origin),
         ).toBe(false);
     });
 });

@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { configToToml, startPhi, type PhiServer } from './_server.js';
+import { isCancelledWorktreeRead } from './_session-requests.js';
 
 let phi: PhiServer | null = null;
 let ownership: {
@@ -19,7 +20,12 @@ let remote = '';
 let baseHead = '';
 let fixtureDir = '';
 
-type FailedRequest = { method: string; url: string; error: string };
+type FailedRequest = {
+    method: string;
+    url: string;
+    error: string;
+    cancelledWorktreeRead?: boolean;
+};
 
 // Context changes can abort obsolete Git metadata and worktree-dirty reads.
 // Each flow waits for a successful metadata read for its current workspace.
@@ -617,6 +623,7 @@ async function exerciseNetworkSafety(
     options: { mode: 'keyboard' | 'touch'; cancel: boolean },
 ): Promise<void> {
     if (!phi) throw new Error('Phi fixture is not running');
+    const origin = phi.url;
     const consoleErrors: string[] = [];
     const failedRequests: FailedRequest[] = [];
     let actionPosts = 0;
@@ -629,6 +636,7 @@ async function exerciseNetworkSafety(
             method: request.method(),
             url: request.url(),
             error: request.failure()?.errorText || '',
+            cancelledWorktreeRead: isCancelledWorktreeRead(request, origin),
         });
     });
     page.on('request', (request) => {
@@ -687,6 +695,10 @@ async function exerciseNetworkSafety(
     expect(actionPosts).toBe(0);
 
     if (options.cancel) {
+        await navigateToProject(page);
+        await expect(page.locator('#git-action-resume-btn')).toBeVisible();
+        await expect(page.locator('#git-action-cancel-btn')).toBeVisible();
+        expect(actionPosts).toBe(0);
         await activate(page, '#git-action-cancel-btn', options.mode);
         await expect(page.locator('#git-action-status')).toHaveText(
             'Unsent Git action cancelled.',
@@ -717,6 +729,7 @@ async function exerciseNetworkSafety(
     expect(failedPaths).toContain('/api/git/raw-diff');
     expect(failedPaths).toContain('/api/git/info');
     const unexpectedFailures = failedRequests.filter((request) => {
+        if (request.cancelledWorktreeRead) return false;
         const url = new URL(request.url);
         if (request.method !== 'GET') return true;
         if (url.pathname === '/api/git/raw-diff')
@@ -938,6 +951,8 @@ test('Git drawer actions stay safe in desktop and mobile contexts', async ({
             pull: 'touch',
             push: 'keyboard',
         });
+        resetFixture();
+        await exerciseNetworkSafety(page, { mode: 'touch', cancel: true });
         resetFixture();
         await exerciseNetworkSafety(page, { mode: 'touch', cancel: false });
         resetFixture();

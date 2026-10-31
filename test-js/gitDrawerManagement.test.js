@@ -294,6 +294,18 @@ describe('Git drawer action safety', () => {
         const secondAction = second.resumeGitAction();
         await vi.waitFor(() => expect(infoCalls).toBe(2));
 
+        first.cancelGitAction();
+        expect(first.gitManageRecord).not.toBeNull();
+        expect(first.gitManageStatus).toContain('ownership changed');
+        expect(storedRecords()).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    phase: 'queued',
+                    owner: second.gitManagePageId,
+                }),
+            ]),
+        );
+
         firstInfo.resolve({ ok: true, status: 200, json: INFO });
         await firstAction;
         expect(actionCalls).toBe(0);
@@ -374,44 +386,84 @@ describe('Git drawer action safety', () => {
         expect(actionCalls).toBe(1);
     });
 
-    it('does not dispatch when Cancel is clicked during the fresh-target read', async () => {
-        const freshInfo = deferred();
-        let infoCalls = 0;
-        let actionCalls = 0;
-        mockFetch((url) => {
-            const path = new URL(url, window.location.href).pathname;
-            if (path === '/api/git/info') {
-                infoCalls++;
-                return infoCalls === 2
-                    ? freshInfo.promise
-                    : { ok: true, status: 200, json: INFO };
-            }
-            if (path === '/api/git/action') {
-                actionCalls++;
-                return { ok: true, status: 200, json: {} };
-            }
-            throw new Error(`Unexpected fetch ${url}`);
-        });
+    it.each([false, true])(
+        'cancels an unsent action during its target read (reload: %s)',
+        async (reload) => {
+            const freshInfo = deferred();
+            let infoCalls = 0;
+            let actionCalls = 0;
+            mockFetch((url) => {
+                const path = new URL(url, window.location.href).pathname;
+                if (path === '/api/git/info') {
+                    infoCalls++;
+                    return infoCalls === 2
+                        ? freshInfo.promise
+                        : { ok: true, status: 200, json: INFO };
+                }
+                if (path === '/api/git/action') {
+                    actionCalls++;
+                    return { ok: true, status: 200, json: {} };
+                }
+                throw new Error(`Unexpected fetch ${url}`);
+            });
 
-        const app = buildApp();
-        const controller = new DiffController(app);
-        await controller.refreshDiff();
-        await vi.waitFor(() => {
-            expect(document.getElementById('git-pull-btn').disabled).toBe(
-                false,
+            const app = buildApp();
+            const controller = new DiffController(app);
+            await controller.refreshDiff();
+            await vi.waitFor(() => {
+                expect(document.getElementById('git-pull-btn').disabled).toBe(
+                    false,
+                );
+            });
+            const action = controller.startGitAction('pull');
+            await vi.waitFor(() => expect(infoCalls).toBe(2));
+            if (reload) {
+                bootstrapDom();
+                const reloaded = new DiffController(app);
+                reloaded.captureGitManageContext();
+                expect(reloaded.gitManageRecord.phase).toBe('paused');
+            }
+            document.getElementById('git-action-cancel-btn').click();
+            expect(storedRecords().filter((record) => record?.action)).toEqual(
+                [],
             );
-        });
-        document.getElementById('git-pull-btn').click();
-        await vi.waitFor(() => expect(infoCalls).toBe(2));
-        document.getElementById('git-action-cancel-btn').click();
-        freshInfo.resolve({ ok: true, status: 200, json: INFO });
-        await Promise.resolve();
-        await Promise.resolve();
+            freshInfo.resolve({ ok: true, status: 200, json: INFO });
+            await action;
 
-        expect(actionCalls).toBe(0);
-        expect(document.getElementById('git-action-status').textContent).toBe(
-            'Unsent Git action cancelled.',
-        );
+            expect(actionCalls).toBe(0);
+            expect(
+                document.getElementById('git-action-status').textContent,
+            ).toBe('Unsent Git action cancelled.');
+        },
+    );
+
+    it('cannot cancel a restored action that another page has already sent', () => {
+        const controller = new DiffController(buildApp());
+        const context = controller.captureGitManageContext();
+        const storageKey = `${context.actionPrefix}pending`;
+        const record = {
+            version: 1,
+            id: 'pending',
+            owner: 'previous-page',
+            action: 'pull',
+            target: TARGET,
+            phase: 'queued',
+            createdAt: Date.now(),
+            status: 'Preparing Pull…',
+        };
+        localStorage.setItem(storageKey, JSON.stringify(record));
+        bootstrapDom();
+        const reloaded = new DiffController(buildApp());
+        reloaded.captureGitManageContext();
+        expect(reloaded.gitManageRecord.phase).toBe('paused');
+        record.phase = 'sent';
+        localStorage.setItem(storageKey, JSON.stringify(record));
+
+        reloaded.cancelGitAction();
+
+        expect(JSON.parse(localStorage.getItem(storageKey))).toEqual(record);
+        expect(reloaded.gitManageRecord).not.toBeNull();
+        expect(reloaded.gitManageStatus).toContain('ownership changed');
     });
 
     it('paints immediately, persists sent before POST, and never replays an uncertain action', async () => {
