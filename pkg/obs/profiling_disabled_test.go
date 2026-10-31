@@ -5,26 +5,14 @@ package obs
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
-	"reflect"
 	"runtime/pprof"
 	"testing"
 )
 
 func TestWrapTimingHTTPIsIdentityWithoutProfiling(t *testing.T) {
-	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Echo", r.URL.Path)
-		w.WriteHeader(http.StatusTeapot)
-	})
-	wrapped := WrapTimingHTTP(inner)
-	if reflect.ValueOf(wrapped).Pointer() != reflect.ValueOf(inner).Pointer() {
+	inner := http.NewServeMux()
+	if WrapTimingHTTP(inner) != inner {
 		t.Fatal("expected WrapTimingHTTP to return the handler unchanged")
-	}
-	req := httptest.NewRequest(http.MethodGet, "/api/version", nil)
-	rec := httptest.NewRecorder()
-	wrapped.ServeHTTP(rec, req)
-	if rec.Code != http.StatusTeapot || rec.Header().Get("X-Echo") != "/api/version" {
-		t.Fatalf("pass-through broken: code=%d echo=%q", rec.Code, rec.Header().Get("X-Echo"))
 	}
 }
 

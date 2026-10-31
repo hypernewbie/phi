@@ -10,13 +10,17 @@ Diagnostics exist only in binaries built with `-tags=profiling`. Normal builds a
 go build -tags=profiling -o phi-profiling .
 ```
 
+Use `-tags=profiling,otel` to include OpenTelemetry as well. The tags are independent: `otel` alone does not include diagnostics. Normal release builds (`embedassets`) also exclude diagnostics; use `-tags=embedassets,profiling` after generating release assets to include both.
+
+The build tag includes the instrumentation. The flag starts the private service. An authenticated capture request starts recording. A profiling build without the flag has no private listener or active capture, but still includes worker labels and inactive timing checks.
+
 ## Start
 
 The selected parent directory must exist and must be an absolute path. Phi creates one private `phi-diag-*` directory for the process. It writes the listener URL and a curl configuration with a random bearer token into that directory. The session directory is mode `0700`; its files are mode `0600`.
 
 ```bash
 mkdir -p /tmp/phi-diagnostics
-phi --diagnostics-dir=/tmp/phi-diagnostics
+./phi-profiling --diagnostics-dir=/tmp/phi-diagnostics
 ```
 
 If setup fails, Phi logs a warning and continues without diagnostics. Relative paths are rejected before application startup. Windows is not supported. Do not share the session directory or the `client.curl` file: it contains the bearer token. Do not print the curl file into shared logs or shell history.

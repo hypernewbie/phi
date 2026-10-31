@@ -16,6 +16,7 @@ if test -e "$OUT"; then
   exit 2
 fi
 mkdir -p -m 700 "$OUT"
+OUT="$(cd "$OUT" && pwd -P)"
 ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$ROOT"
 
@@ -25,7 +26,13 @@ have() { grep -Fxq "$2" "$1" || fail "$1 lacks $2"; }
 # need FILE PATTERN: FILE must match PATTERN.
 need() { grep -Eq "$2" "$1" || fail "$1 lacks $2"; }
 # lack FILE PATTERN: FILE must not match PATTERN.
-lack() { grep -Eq "$2" "$1" && fail "$1 contains $2" || true; }
+lack() {
+  if grep -E "$2" "$1" > /dev/null; then
+    fail "$1 contains $2"
+  else
+    test "$?" -eq 1 || fail "cannot check $1 for $2"
+  fi
+}
 
 PROFILING_GO='timing.go feature.go memory_stats.go memory_stats_profiling.go diagnostics_profiling.go'
 DISABLED_GO='profiling_disabled.go diagnostics_disabled.go'
@@ -36,6 +43,7 @@ check_variant() {
   label="$1"; want="$2"; shift 2
   go list "$@" -f '{{.ImportPath}}{{"\n"}}{{join .GoFiles "\n"}}' . ./pkg/obs ./pkg/ws ./internal/termstate > "$OUT/$label-files.txt"
   go list "$@" -f '{{.ImportPath}}{{"\n"}}{{join .TestGoFiles "\n"}}{{"\n"}}{{join .XTestGoFiles "\n"}}' . ./pkg/obs ./pkg/ws ./internal/termstate > "$OUT/$label-tests.txt"
+  go list "$@" -f '{{join .IgnoredGoFiles "\n"}}' . ./pkg/obs ./pkg/ws ./internal/termstate > "$OUT/$label-ignored.txt"
   # go list exits 1 when constraints exclude every file; that is the
   # expected empty selection for non-profiling variants.
   set +e
@@ -49,16 +57,25 @@ check_variant() {
   go list "$@" -deps . > "$OUT/$label-deps.txt"
   if test "$want" = yes; then
     for f in $PROFILING_GO; do have "$OUT/$label-files.txt" "$f"; done
-    for f in $DISABLED_GO; do lack "$OUT/$label-files.txt" "^$f\$"; done
+    for f in $DISABLED_GO; do
+      lack "$OUT/$label-files.txt" "^$f\$"
+      have "$OUT/$label-ignored.txt" "$f"
+    done
     for f in $PROFILING_TEST; do have "$OUT/$label-tests.txt" "$f"; done
     lack "$OUT/$label-tests.txt" '^profiling_disabled_test\.go$'
     test -s "$OUT/$label-diag-files.txt" || fail "$label diagnostics has no files"
     have "$OUT/$label-deps.txt" 'github.com/hypernewbie/phi/internal/diagnostics'
     have "$OUT/$label-deps.txt" 'github.com/google/pprof/profile'
   else
-    for f in $PROFILING_GO; do lack "$OUT/$label-files.txt" "^$f\$"; done
+    for f in $PROFILING_GO; do
+      lack "$OUT/$label-files.txt" "^$f\$"
+      have "$OUT/$label-ignored.txt" "$f"
+    done
     for f in $DISABLED_GO; do have "$OUT/$label-files.txt" "$f"; done
-    for f in $PROFILING_TEST; do lack "$OUT/$label-tests.txt" "^$f\$"; done
+    for f in $PROFILING_TEST; do
+      lack "$OUT/$label-tests.txt" "^$f\$"
+      have "$OUT/$label-ignored.txt" "$f"
+    done
     have "$OUT/$label-tests.txt" 'profiling_disabled_test.go'
     test -s "$OUT/$label-diag-files.txt" && fail "$label diagnostics unexpectedly selected" || true
     lack "$OUT/$label-deps.txt" '^github\.com/hypernewbie/phi/internal/diagnostics$'
@@ -94,9 +111,8 @@ check_binary() {
       lack "$OUT/$label.nm" 'phi/internal/diagnostics\.'
       # Only the two constant no-op hooks may carry timing names here; the
       # recorder file itself is already proven excluded by source selection.
-      if grep -E 'phi/pkg/obs\.timing' "$OUT/$label.nm" | grep -Ev 'phi/pkg/obs\.timingSpan(Start|End)$' | grep -q .; then
-        fail "$label links recorder timing symbols"
-      fi
+      grep -Ev 'phi/pkg/obs\.timingSpan(Start|End)$' "$OUT/$label.nm" > "$OUT/$label-recorder.nm"
+      lack "$OUT/$label-recorder.nm" 'phi/pkg/obs\.timing'
       lack "$OUT/$label.nm" 'phi/pkg/obs\.BeginTimingCapture'
       lack "$OUT/$label.nm" 'pprof/profile\.'
       go tool objdump -s 'github.com/hypernewbie/phi/pkg/obs.Span' "$OUT/phi-$label" > "$OUT/$label-span.asm"
