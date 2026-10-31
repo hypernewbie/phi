@@ -608,6 +608,9 @@ export class TabManager {
         this.sendInputBtn = document.getElementById('send-input-btn');
         this.cancelInputBtn = document.getElementById('cancel-input-btn');
         this.copyInputBtn = document.getElementById('copy-input-btn');
+        this.thinkingVisibilityBtn = document.getElementById(
+            'thinking-visibility-btn',
+        );
 
         // On pagehide, leave a fresh screen checkpoint behind so the next
         // client restores instantly instead of falling back to the bounded
@@ -1842,6 +1845,9 @@ export class TabManager {
                     // its Enter/Tab must activate and move focus, never
                     // reach the PTY as raw keys.
                     t.closest('#sidebar-panel') ||
+                    // Bottom-bar controls keep native keyboard activation,
+                    // including Expand and Interrupt in direct-input mode.
+                    t.closest('.presets-actions') ||
                     // Thinking is UI-only: its Enter/Tab must not reach the
                     // PTY as raw keys on coarse pointers.
                     t.closest('.pi-rpc-thinking-trigger') ||
@@ -1873,7 +1879,11 @@ export class TabManager {
                             : '\x03';
                     this.sendRawInput(cancelKey);
                 }
-                this.inputTextArea.focus({ preventScroll: true });
+                if (activeTab?.directMode) {
+                    this.focusActiveTerminal();
+                } else {
+                    this.inputTextArea.focus({ preventScroll: true });
+                }
             });
         }
 
@@ -1881,6 +1891,13 @@ export class TabManager {
             this.copyInputBtn.addEventListener('click', () => {
                 this.sendRawInput('/copy\r', { submit: true });
                 this.inputTextArea.focus({ preventScroll: true });
+            });
+        }
+
+        if (this.thinkingVisibilityBtn) {
+            this.thinkingVisibilityBtn.addEventListener('click', (event) => {
+                event.stopPropagation();
+                this._togglePiRpcThinkingVisibility(this.getActiveTab());
             });
         }
 
@@ -3814,6 +3831,12 @@ export class TabManager {
 
     updateDirectModeUI(tab, skipFit = false) {
         this._setPiRpcActionVisibility(tab);
+        const modeLabel = tab.directMode
+            ? 'Switch to staged text input and expand the text bar'
+            : 'Switch to direct terminal input and collapse the text bar';
+        this.directModeToggle.textContent = tab.directMode ? '⌃' : '⌄';
+        this.directModeToggle.title = modeLabel;
+        this.directModeToggle.setAttribute('aria-label', modeLabel);
 
         // Save scroll state before DOM changes alter the terminal height
         if (tab && !tab.isDead && tab.isAtBottom === undefined) {
@@ -3844,6 +3867,21 @@ export class TabManager {
             this.renderPresets(tab.coder);
         }
 
+        // Keep the same interrupt button and handler in the collapsed row;
+        // restore it beside Send when staged input returns.
+        if (this.cancelInputBtn) {
+            if (tab.directMode) {
+                this.directModeToggle.before(this.cancelInputBtn);
+            } else {
+                this.sendInputBtn?.parentElement?.append(this.cancelInputBtn);
+            }
+        }
+        this.directModeToggle.setAttribute(
+            'aria-expanded',
+            String(!tab.directMode),
+        );
+        this.directModeToggle.setAttribute('aria-controls', 'input-bar-container');
+
         // Toggle Ctrl+T button visibility based on backend
         if (this.ctrlTBtn) {
             if (['opencode', 'pi'].includes(tab.coder)) {
@@ -3853,6 +3891,7 @@ export class TabManager {
                     tab.coder === 'pi'
                         ? 'Show or hide thinking blocks (Ctrl+T)'
                         : 'Send Ctrl+T (Explain/Analyze)';
+                this.ctrlTBtn.setAttribute('aria-label', this.ctrlTBtn.title);
                 this.ctrlTBtn.classList.remove('hidden');
             } else {
                 this.ctrlTBtn.classList.add('hidden');
@@ -5115,6 +5154,7 @@ export class TabManager {
         for (const element of [this.copyInputBtn, this.directModeToggle]) {
             element?.classList.toggle('hidden', hidden);
         }
+        this.thinkingVisibilityBtn?.classList.toggle('hidden', !hidden);
         if (hidden) this.directModeToggle?.classList.remove('active');
     }
 
@@ -5122,6 +5162,23 @@ export class TabManager {
         const tab = this.getActiveTab();
         if (tab?.coder !== 'pi-rpc') return false;
         return closePiSubagentViewer(tab.paneId);
+    }
+
+    _togglePiRpcThinkingVisibility(tab) {
+        if (tab?.coder !== 'pi-rpc') return;
+        const paneId = tab.paneId;
+        if (!this._thinkingAllVisible) this._thinkingAllVisible = new Map();
+        const next = !(this._thinkingAllVisible.get(paneId) === true);
+        this._thinkingAllVisible.set(paneId, next);
+        const container = this.tabs.get(paneId)?.termContainer;
+        if (container) {
+            container.querySelectorAll('.thinking-block').forEach((el) => {
+                el.classList.toggle('collapsed', !next);
+                const toggle = el.querySelector('.thinking-toggle');
+                if (toggle) toggle.textContent = next ? '▼' : '▶';
+            });
+        }
+        this.renderPresets('pi-rpc');
     }
 
     _closePiRpcDropups(clear = false) {
@@ -7097,6 +7154,7 @@ export class TabManager {
         this.presetsContainer.replaceChildren();
         if (activeTab?.coder !== 'pi-rpc') {
             this.presetsContainer.classList.add('hidden');
+            this.thinkingVisibilityBtn?.classList.add('hidden');
             return;
         }
         this._setPiRpcActionVisibility(activeTab);
@@ -7175,31 +7233,23 @@ export class TabManager {
                         this.renderPresets('pi-rpc');
                 });
         });
-        const thinkingVisibilityBtn = document.createElement('button');
-        thinkingVisibilityBtn.type = 'button';
-        thinkingVisibilityBtn.className = 'preset-btn';
-        if (!this._thinkingAllVisible) this._thinkingAllVisible = new Map();
-        const allVisible = this._thinkingAllVisible.get(paneId) === true;
-        thinkingVisibilityBtn.textContent = allVisible
-            ? 'Hide thinking'
-            : 'Show thinking';
-        thinkingVisibilityBtn.title = 'Toggle all thinking blocks';
-        thinkingVisibilityBtn.disabled = menuDisabled;
-        thinkingVisibilityBtn.addEventListener('click', (event) => {
-            event.stopPropagation();
-            if (!this._thinkingAllVisible) this._thinkingAllVisible = new Map();
-            const next = !(this._thinkingAllVisible.get(paneId) === true);
-            this._thinkingAllVisible.set(paneId, next);
-            const container = this.tabs.get(paneId)?.termContainer;
-            if (container) {
-                container.querySelectorAll('.thinking-block').forEach((el) => {
-                    el.classList.toggle('collapsed', !next);
-                    const t = el.querySelector('.thinking-toggle');
-                    if (t) t.textContent = next ? '▼' : '▶';
-                });
-            }
-            this.renderPresets('pi-rpc');
-        });
+        const thinkingVisibilityBtn = this.thinkingVisibilityBtn;
+        if (thinkingVisibilityBtn) {
+            if (!this._thinkingAllVisible)
+                this._thinkingAllVisible = new Map();
+            const allVisible =
+                this._thinkingAllVisible.get(paneId) === true;
+            thinkingVisibilityBtn.textContent = allVisible
+                ? 'Hide thinking'
+                : 'Show thinking';
+            thinkingVisibilityBtn.title = 'Toggle all thinking blocks';
+            thinkingVisibilityBtn.setAttribute(
+                'aria-label',
+                thinkingVisibilityBtn.textContent,
+            );
+            // Visibility is local: keep it usable while Pi is disconnected.
+            thinkingVisibilityBtn.disabled = false;
+        }
 
         const divider = document.createElement('div');
         divider.className = 'presets-divider';
@@ -7254,7 +7304,6 @@ export class TabManager {
         this.presetsContainer.append(
             compactButton,
             resetButton,
-            thinkingVisibilityBtn,
             divider,
             quickCmdsButton,
             modelButton,

@@ -3106,6 +3106,17 @@ body.has-terminal-bg
     gap: 8px;
 }
 
+.input-mode-toggle {
+    flex: 0 0 24px;
+    font-family: var(--font-ui);
+    font-size: 18px;
+    line-height: 1;
+}
+
+.input-mode-toggle.active {
+    color: var(--accent-bright);
+}
+
 .input-actions .btn {
     width: auto;
     padding: 0 16px;
@@ -3158,14 +3169,22 @@ body.has-terminal-bg
     box-shadow: 0 0 10px rgba(239, 68, 68, 0.4);
 }
 
-.input-bar-container.direct-mode-active textarea,
-.input-bar-container.direct-mode-active #send-input-btn {
+.input-bar-container.direct-mode-active {
     display: none !important;
 }
 
-.input-bar-container.direct-mode-active {
-    justify-content: flex-end;
-    padding: 4px 12px;
+.input-bar-container.direct-mode-active
+    + .presets-toolbar
+    .presets-actions
+    > :not(#cancel-input-btn, #direct-mode-toggle) {
+    display: none !important;
+}
+
+.presets-actions > #cancel-input-btn {
+    width: 24px;
+    height: 24px;
+    margin-left: 0;
+    order: 0;
 }
 
 /* PI RPC STATUS BAR */
@@ -3265,18 +3284,52 @@ body.has-terminal-bg
 }
 
 /* PRESETS PANEL */
+.presets-toolbar {
+    display: flex;
+    align-items: stretch;
+    justify-content: flex-end;
+    min-width: 0;
+    flex-shrink: 0;
+    border-top: 1px solid var(--bg-border);
+    background-color: var(--bg-panel);
+}
+
+#input-bar-container.hidden + .presets-toolbar {
+    display: none;
+}
+
 .presets-container {
     display: flex;
+    flex: 1 1 auto;
     flex-wrap: nowrap;
+    min-width: 0;
     overflow-x: auto;
     align-items: center;
     gap: 6px;
     padding: 8px 12px;
-    background-color: var(--bg-panel);
-    border-top: 1px solid var(--bg-border);
-    flex-shrink: 0;
+    background-color: transparent;
+    border-top: 0;
     scrollbar-width: none; /* Hide scrollbar Firefox */
     -ms-overflow-style: none; /* Hide scrollbar IE/Edge */
+}
+
+.presets-toolbar .presets-container.hidden {
+    display: none !important;
+}
+
+.presets-actions {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 12px 4px 8px;
+}
+
+@media (pointer: coarse) {
+    .presets-actions > button {
+        min-width: 48px !important;
+        min-height: 48px;
+    }
 }
 
 .presets-container::-webkit-scrollbar {
@@ -5613,8 +5666,6 @@ html[data-phi-config-page] .settings-modal {
         flex-wrap: nowrap;
         gap: 6px;
         padding: 6px 12px;
-        background-color: var(--bg-panel);
-        border-top: 1px solid var(--bg-border);
         scrollbar-width: none; /* Hide Firefox scrollbar */
     }
 
