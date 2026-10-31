@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/hypernewbie/phi/internal/termstate"
+	"github.com/hypernewbie/phi/pkg/obs"
 	"github.com/hypernewbie/phi/pkg/pty"
 )
 
@@ -61,7 +62,7 @@ func (h *Hub) StartRetentionSweeps() {
 	h.mu.Unlock()
 	h.sweepRetention(h.wallClock())
 	h.sweepWg.Add(1)
-	go func() {
+	go obs.DoFeature("terminal", func(_ context.Context) {
 		defer h.sweepWg.Done()
 		ticker := time.NewTicker(retentionSweepInterval)
 		defer ticker.Stop()
@@ -73,7 +74,7 @@ func (h *Hub) StartRetentionSweeps() {
 				h.sweepRetention(now)
 			}
 		}
-	}()
+	})
 }
 
 // sweepRetention expires closed groups older than the retention period.

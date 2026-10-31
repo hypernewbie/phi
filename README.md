@@ -154,11 +154,12 @@ The hook (`.githooks/pre-commit`) only acts on commits that touch frontend files
 | `-port`           | `7070`  | Port for the web server                                                                                                            |
 | `-web`            | `""`    | Serve assets from this directory instead of embedded assets. Relative paths use the startup directory. |
 | `-data-dir`       | `~/.phi` | Absolute directory for Phi-owned state. Does not change `HOME` or assistant settings. |
+| `-diagnostics-dir` | (disabled) | Enable private, loopback-only server diagnostics. Requires a binary built with `-tags=profiling`; normal builds log one warning and start no listener. Writes short-lived connection files under this absolute directory. See [server profiling](docs/server-profiling.md). |
 | `-ip`             | `lan`   | Bind target. `lan` binds loopback plus every RFC 1918 LAN and Tailscale interface; use `127.0.0.1` for local-only access, `0.0.0.0` for every interface, or an explicit address. |
 | `-log-level`      | `info`  | Log level: `debug`\|`info`\|`warn`\|`error` (or `PHI_LOG` env var). `debug` also enables WS/PTY frame traces and span timing lines. |
-| `-otel-endpoint`  | (none)  | OTLP/gRPC collector endpoint (`host:port`) for OpenTelemetry export (or `PHI_OTEL_ENDPOINT` env var). Only takes effect in a binary built with `-tags otel` — the default build parses and ignores it, adding zero OTel dependencies. |
+| `-otel-endpoint`  | (none)  | OTLP/gRPC collector endpoint (`host:port`) for OpenTelemetry export (or `PHI_OTEL_ENDPOINT` env var). Only takes effect in a binary built with `-tags=otel` — the default build parses and ignores it, adding zero OTel dependencies. |
 
-Flags also accept double-dash forms, such as `--web=./web`.
+Flags also accept double-dash forms, such as `--web=./web`. Diagnostics are disabled by default and unavailable on Windows.
 
 > **Network access:** By default Phi is available on localhost, private LAN, and Tailscale addresses—not public interfaces. Phi does not add authentication, so use `-ip 127.0.0.1` for local-only access and do not use `-ip 0.0.0.0` unless you deliberately want to expose it on every interface.
 

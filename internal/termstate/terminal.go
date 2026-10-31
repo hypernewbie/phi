@@ -383,6 +383,7 @@ func (t *Terminal) Restore(data []byte) error {
 	}
 	return nil
 }
+
 func (t *Terminal) Close() error {
 	if t.module == nil {
 		return nil

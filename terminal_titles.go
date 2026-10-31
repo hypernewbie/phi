@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"path/filepath"
 	"runtime"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hypernewbie/phi/pkg/fswatch"
+	"github.com/hypernewbie/phi/pkg/obs"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/session"
 	"github.com/hypernewbie/phi/pkg/ws"
@@ -329,6 +331,10 @@ func (s *piTerminalTitleService) reconcile() {
 }
 
 func (s *piTerminalTitleService) run() {
+	obs.DoFeature("sessions", func(_ context.Context) { s.runLoop() })
+}
+
+func (s *piTerminalTitleService) runLoop() {
 	defer close(s.workerDone)
 	interval := s.recoveryInterval
 	if interval <= 0 {

@@ -7,6 +7,7 @@
 package fswatch
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/hypernewbie/phi/pkg/obs"
 )
 
 // Watcher tracks a caller-supplied set of desired directories with an
@@ -74,7 +76,7 @@ func New(getDirs func() []string, onChange func(absDir string)) (*Watcher, error
 func (w *Watcher) Start() {
 	w.Recompute()
 
-	go func() {
+	go obs.DoFeature("filesystem", func(_ context.Context) {
 		ticker := time.NewTicker(w.RearmInterval)
 		defer ticker.Stop()
 
@@ -96,7 +98,7 @@ func (w *Watcher) Start() {
 				return
 			}
 		}
-	}()
+	})
 }
 
 // Recompute diffs the desired directory set (from getDirs) against what
@@ -173,12 +175,14 @@ func (w *Watcher) debounce(dir string) {
 		return
 	}
 	w.timers[dir] = time.AfterFunc(w.Debounce, func() {
-		w.mu.Lock()
-		delete(w.timers, dir)
-		w.mu.Unlock()
-		// Not called while holding w.mu: the caller-supplied onChange
-		// (e.g. a WS broadcast) may take other locks of its own.
-		w.onChange(dir)
+		obs.DoFeature("filesystem", func(_ context.Context) {
+			w.mu.Lock()
+			delete(w.timers, dir)
+			w.mu.Unlock()
+			// Not called while holding w.mu: the caller-supplied onChange
+			// (e.g. a WS broadcast) may take other locks of its own.
+			w.onChange(dir)
+		})
 	})
 }
 
