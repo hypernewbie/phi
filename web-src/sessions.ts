@@ -2515,8 +2515,7 @@ export class SessionsManager {
 
         const mkItem = (label: string, onClick: () => void) => {
             const el = document.createElement('div');
-            el.className =
-                'btn btn-primary btn-compact btn-menu session-ctx-item';
+            el.className = 'session-ctx-item';
             el.textContent = label;
             el.addEventListener('click', () => {
                 this._dismissContextMenu();
@@ -2721,8 +2720,7 @@ export class SessionsManager {
         menu.className = 'session-ctx-menu';
         menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:9999`;
         const item = document.createElement('div');
-        item.className =
-            'btn btn-primary btn-compact btn-menu session-ctx-item';
+        item.className = 'session-ctx-item';
         item.textContent = 'Open Mini';
         item.setAttribute('role', 'menuitem');
         item.tabIndex = 0;

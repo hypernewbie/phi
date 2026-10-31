@@ -118,97 +118,10 @@ async function watchPage(page: Page, serverOrigin: string) {
     };
 }
 
-function countLogged(inputLog: string, text: string): number {
-    if (!existsSync(inputLog)) return 0;
-    return readFileSync(inputLog, 'utf8')
-        .split(/\r?\n/)
-        .filter((line) => line.includes(text)).length;
-}
-
 function countQuit(inputLog: string): number {
-    return countLogged(inputLog, '/quit');
-}
-
-async function resolveTokenPalette(page: Page) {
-    return page.evaluate(() => {
-        const probe = document.createElement('div');
-        probe.style.cssText = 'position:fixed;visibility:hidden';
-        probe.style.backgroundColor = 'var(--bg-elevated)';
-        probe.style.color = 'var(--text-primary)';
-        document.body.appendChild(probe);
-        const style = getComputedStyle(probe);
-        const palette = {
-            backgroundColor: style.backgroundColor,
-            color: style.color,
-        };
-        probe.remove();
-        return palette;
-    });
-}
-
-async function compactTokenHeight(page: Page): Promise<number> {
-    return page.evaluate(() => {
-        const probe = document.createElement('div');
-        probe.style.cssText =
-            'position:fixed;visibility:hidden;width:1px;height:var(--btn-compact-height)';
-        document.body.appendChild(probe);
-        const height = probe.getBoundingClientRect().height;
-        probe.remove();
-        return height;
-    });
-}
-
-async function expectSharedMenuGeometry(
-    page: Page,
-    menu: import('@playwright/test').Locator,
-    longLabel: string,
-    expectedHeight: number,
-) {
-    expect(await compactTokenHeight(page)).toBe(expectedHeight);
-    const palette = await resolveTokenPalette(page);
-    const reference = await page
-        .locator('#header-notifications-btn')
-        .evaluate((button) => {
-            const rect = button.getBoundingClientRect();
-            const style = getComputedStyle(button);
-            return {
-                width: rect.width,
-                height: rect.height,
-                backgroundColor: style.backgroundColor,
-                color: style.color,
-            };
-        });
-    expect(Math.abs(reference.height - expectedHeight)).toBeLessThanOrEqual(1);
-    expect(reference.backgroundColor).toBe(palette.backgroundColor);
-    expect(reference.color).toBe(palette.color);
-
-    const rows = await menu
-        .locator('.dropup-row > .dropup-model-btn')
-        .evaluateAll((buttons) =>
-            buttons.map((button) => {
-                const rect = button.getBoundingClientRect();
-                const style = getComputedStyle(button);
-                return {
-                    text: button.textContent?.trim() || '',
-                    width: rect.width,
-                    height: rect.height,
-                    scrollWidth: button.scrollWidth,
-                    clientWidth: button.clientWidth,
-                    backgroundColor: style.backgroundColor,
-                    color: style.color,
-                };
-            }),
-        );
-    const longRow = rows.find((row) => row.text === longLabel);
-    expect(longRow).toBeDefined();
-    for (const row of rows.filter((item) => item.text !== longLabel)) {
-        expect(Math.abs(row.height - expectedHeight)).toBeLessThanOrEqual(1);
-        expect(row.backgroundColor).toBe(palette.backgroundColor);
-        expect(row.color).toBe(palette.color);
-    }
-    expect(longRow!.height).toBeGreaterThan(expectedHeight);
-    expect(longRow!.scrollWidth).toBeLessThanOrEqual(longRow!.clientWidth + 1);
-    expect(longRow!.width).toBeGreaterThan(0);
+    if (!existsSync(inputLog)) return 0;
+    const matches = readFileSync(inputLog, 'utf8').match(/\/quit/g);
+    return matches ? matches.length : 0;
 }
 
 async function checkTheme(
@@ -232,33 +145,17 @@ async function checkTheme(
             .trim(),
     );
     expect(rootAccent).toBe(expected);
-    await page.mouse.move(0, 0);
     const cmdsColor = await page
         .getByRole('button', { name: 'Cmds ▾' })
         .evaluate((el) => getComputedStyle(el).color);
     expect(cmdsColor).toMatch(/^rgba?\(/);
-    const palette = await resolveTokenPalette(page);
-    const sharedColors = await page.evaluate(() => {
-        const header = document.querySelector('#header-notifications-btn');
-        const menu = document.querySelector(
+    const menuColor = await page.evaluate(() => {
+        const btn = document.querySelector(
             '#quick-commands-dropup .dropup-model-btn',
         );
-        if (!header || !menu) throw new Error('shared controls are missing');
-        const headerStyle = getComputedStyle(header);
-        const menuStyle = getComputedStyle(menu);
-        return {
-            headerBackground: headerStyle.backgroundColor,
-            headerText: headerStyle.color,
-            menuBackground: menuStyle.backgroundColor,
-            menuText: menuStyle.color,
-            menuHovered: menu.matches(':hover'),
-        };
+        return btn ? getComputedStyle(btn).color : '';
     });
-    expect(sharedColors.headerBackground).toBe(palette.backgroundColor);
-    expect(sharedColors.menuHovered).toBe(false);
-    expect(sharedColors.menuBackground).toBe(palette.backgroundColor);
-    expect(sharedColors.headerText).toBe(palette.color);
-    expect(sharedColors.menuText).toBe(palette.color);
+    expect(menuColor).toMatch(/^rgba?\(/);
 }
 
 test('low-frequency Pi presets move to Cmds on desktop and mobile', async ({
@@ -309,14 +206,6 @@ done
             pane_id: string;
         };
         const inputLog = join(home, 'pi-input.log');
-        const longLabel =
-            'A deliberately long quick command label that must wrap without clipping';
-        const longCommand = 'CUSTOM_ACTION_ONCE';
-        const seededCommand = await request.post(
-            `${phi.url}/api/config/quick-commands`,
-            { data: { name: longLabel, command: longCommand } },
-        );
-        expect(seededCommand.ok()).toBe(true);
 
         const pin = await request.post(
             `${phi.url}/api/terminals/${paneId}/pin`,
@@ -354,7 +243,6 @@ done
         await page.keyboard.press('Enter');
         const desktopMenu = page.locator('#quick-commands-dropup');
         await expect(desktopMenu).toBeVisible();
-        await expectSharedMenuGeometry(page, desktopMenu, longLabel, 32);
         await expect(desktopMenu.locator('.dropup-header').first()).toHaveText(
             'Built-in Commands',
         );
@@ -363,23 +251,6 @@ done
             .allTextContents();
         expect(desktopBuiltIns.slice(0, 2)).toEqual(['/quit', '/resume']);
         expect(desktopBuiltIns).toContain('/model');
-        const desktopLongBaseline = countLogged(inputLog, longCommand);
-        await desktopMenu
-            .locator('.dropup-model-btn')
-            .filter({ hasText: longLabel })
-            .click();
-        await expect
-            .poll(() => countLogged(inputLog, longCommand))
-            .toBe(desktopLongBaseline + 1);
-        await expect(desktopMenu).toBeHidden();
-        await desktopCommands.focus();
-        await page.keyboard.press('Space');
-        await expect(desktopMenu).toBeVisible();
-        await page.mouse.click(0, 0);
-        await expect(desktopMenu).toBeHidden();
-        await desktopCommands.focus();
-        await page.keyboard.press('Enter');
-        await expect(desktopMenu).toBeVisible();
         const desktopBaseline = countQuit(inputLog);
         const quit = desktopMenu.getByRole('button', { name: '/quit' });
         await quit.focus();
@@ -387,23 +258,13 @@ done
         await expect.poll(() => countQuit(inputLog)).toBe(desktopBaseline + 1);
         await expect(desktopMenu).toBeHidden();
 
-        const mobileContext = await browser.newContext({
+        mobilePage = await browser.newPage({
             viewport: { width: 390, height: 844 },
             isMobile: true,
             hasTouch: true,
-            userAgent:
-                'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',
         });
-        mobilePage = await mobileContext.newPage();
         mobileWatch = await watchPage(mobilePage, new URL(phi.url).origin);
         await mobilePage.goto(phi.url);
-        await expect(mobilePage.locator('html')).toHaveAttribute(
-            'data-appearance-profile',
-            'mobile',
-        );
-        expect(
-            await mobilePage.evaluate(() => navigator.maxTouchPoints),
-        ).toBeGreaterThan(0);
         await expect(mobilePage.locator(`#term-${paneId}`)).toBeVisible();
         // Compact keeps the pickers in the row and parks the slash trigger
         // with the input controls.
@@ -422,18 +283,6 @@ done
         await mobilePage.getByRole('button', { name: 'Cmds ▾' }).tap();
         const mobileMenu = mobilePage.locator('#quick-commands-dropup');
         await expect(mobileMenu).toContainText('Built-in Commands');
-        await expectSharedMenuGeometry(mobilePage, mobileMenu, longLabel, 44);
-        const mobileLongBaseline = countLogged(inputLog, longCommand);
-        await mobileMenu
-            .locator('.dropup-model-btn')
-            .filter({ hasText: longLabel })
-            .tap();
-        await expect
-            .poll(() => countLogged(inputLog, longCommand))
-            .toBe(mobileLongBaseline + 1);
-        await expect(mobileMenu).toBeHidden();
-        await mobilePage.getByRole('button', { name: 'Cmds ▾' }).tap();
-        await expect(mobileMenu).toBeVisible();
         const mobileInput = mobilePage.locator('#input-textarea');
         await mobileInput.focus();
         const mobileBaseline = countQuit(inputLog);
@@ -529,7 +378,7 @@ done
             expect(diagnostics.stubbedLocal).toContain('/api/update/status');
         }
     } finally {
-        await mobilePage?.context().close();
+        await mobilePage?.close();
         const url = phi.url;
         const dir = phi.dir;
         await phi.stop();

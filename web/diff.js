@@ -816,8 +816,7 @@ export class DiffController {
         const addItem = (label, scope) => {
             const item = document.createElement('button');
             item.type = 'button';
-            item.className =
-                'btn btn-primary btn-compact btn-menu cmd-context-menu-item';
+            item.className = 'cmd-context-menu-item';
             item.dataset.scope = scope;
             item.setAttribute('role', 'menuitem');
             item.textContent = label;

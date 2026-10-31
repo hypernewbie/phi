@@ -523,7 +523,7 @@ export class FileTreeManager {
         }
         actions.forEach((action) => {
             const btn = document.createElement('button');
-            btn.className = `btn btn-primary btn-compact btn-menu md-context-action ${action.className}`;
+            btn.className = `md-context-action ${action.className}`;
             btn.innerHTML = `<span class="md-context-icon">${action.icon}</span><span class="md-context-label">${action.label}</span>`;
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
