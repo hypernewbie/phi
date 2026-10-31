@@ -539,6 +539,9 @@ func main() {
 		boundAddrs = []bindaddr.Addr{{IP: parsed, Kind: kind}}
 	}
 
+	if piBridge != nil {
+		piBridge.SetListenerAddr(listeners[0].Addr())
+	}
 	serverPort = listeners[0].Addr().(*net.TCPAddr).Port
 	printWelcomeBanner(cfg, boundAddrs, serverPort)
 	var serveErr error

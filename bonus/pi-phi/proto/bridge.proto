@@ -45,6 +45,7 @@ message PiToPhi {
     SkillsResponse skills_response = 23;
     InvokeSkillAck invoke_skill_ack = 24;
     ReloadAck reload_ack = 25;
+    SyncboardRequest syncboard_request = 26;
   }
 }
 
@@ -67,6 +68,7 @@ message PhiToPi {
     SkillsRequest skills_request = 20;
     InvokeSkillRequest invoke_skill_request = 21;
     ReloadRequest reload_request = 22;
+    SyncboardResponse syncboard_response = 23;
   }
 }
 
@@ -479,6 +481,48 @@ message InvokeSkillAck {
   string request_id = 1;
   bool ok = 2;
   string reason = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Native Syncboard tool
+// ---------------------------------------------------------------------------
+
+// SyncboardOperation selects one fixed Syncboard API operation. The
+// request never carries a URL or an arbitrary HTTP path.
+enum SyncboardOperation {
+  SYNCBOARD_OPERATION_UNSPECIFIED = 0;
+  SYNCBOARD_OPERATION_LIST = 1;
+  SYNCBOARD_OPERATION_GET = 2;
+  SYNCBOARD_OPERATION_UPSERT = 3;
+  SYNCBOARD_OPERATION_DELETE = 4;
+}
+
+// SyncboardOutcome distinguishes a complete API response from a request
+// that did not start or one whose outcome cannot be established.
+enum SyncboardOutcome {
+  SYNCBOARD_OUTCOME_UNSPECIFIED = 0;
+  SYNCBOARD_OUTCOME_HTTP_RESPONSE = 1;
+  SYNCBOARD_OUTCOME_NOT_SENT = 2;
+  SYNCBOARD_OUTCOME_UNKNOWN = 3;
+}
+
+// SyncboardRequest asks the owning Phi process to perform one bounded
+// Syncboard operation against its configured coordinator.
+message SyncboardRequest {
+  string request_id = 1;
+  SyncboardOperation operation = 2;
+  string key = 3;
+  bytes value_json = 4;
+}
+
+// SyncboardResponse carries one bounded result for request_id. Error
+// reasons use a fixed safe vocabulary and never contain HTTP bodies.
+message SyncboardResponse {
+  string request_id = 1;
+  SyncboardOutcome outcome = 2;
+  uint32 http_status = 3;
+  bytes body_json = 4;
+  string reason = 5;
 }
 
 // ---------------------------------------------------------------------------

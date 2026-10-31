@@ -35,6 +35,10 @@ import {
     StateSnapshot,
     ThinkingLevelsResponse,
     SetThinkingAck,
+    SyncboardOperation,
+    SyncboardRequest,
+    SyncboardResponse,
+    SyncboardOutcome,
 } from './gen/bridge.js';
 import { BridgeChannel, type ChannelCreds } from './channel.js';
 import { InvalidTargetError } from './endpoint.js';
@@ -46,6 +50,7 @@ import { CAPABILITY_LIFECYCLE } from './protocol.js';
 import { CAPABILITY_MODELS } from './protocol.js';
 import { CAPABILITY_RELOAD } from './protocol.js';
 import { CAPABILITY_SKILLS } from './protocol.js';
+import { CAPABILITY_SYNCBOARD } from './protocol.js';
 import { CAPABILITY_THINKING } from './protocol.js';
 import { MAX_COMPACT_IDENTITY_CHARS } from './protocol.js';
 import { MAX_JOURNAL_RECORDS } from './protocol.js';
@@ -54,6 +59,9 @@ import { MAX_MODELS_ENTRIES } from './protocol.js';
 import { MAX_SKILL_DESCRIPTION_BYTES } from './protocol.js';
 import { MAX_SKILL_ENTRIES } from './protocol.js';
 import { MAX_SKILL_NAME_BYTES } from './protocol.js';
+import { MAX_SYNCBOARD_PENDING } from './protocol.js';
+import { MAX_SYNCBOARD_RESPONSE_BYTES } from './protocol.js';
+import { SYNCBOARD_CALL_TIMEOUT_MS } from './protocol.js';
 import { isAddressableSkillName } from './protocol.js';
 import { MAX_THINKING_LEVELS } from './protocol.js';
 import { MAX_THINKING_LEVEL_BYTES } from './protocol.js';
@@ -222,6 +230,10 @@ export interface RuntimeOptions {
      * through the bridge.
      */
     readonly invokeSkill?: ((name: string) => void) | undefined;
+    /** True only when the bound host can register the native tool. */
+    readonly syncboardEnabled?: boolean;
+    /** Called when this runtime's accepted stream exposes Syncboard. */
+    readonly onSyncboardAvailability?: (available: boolean) => void;
     /** Base reconnect delay; doubles per attempt up to maxBackoffMs. */
     readonly backoffBaseMs?: number;
     readonly backoffMaxMs?: number;
@@ -277,6 +289,27 @@ function isTerminalConnectError(err: unknown): boolean {
 
 const COMPACT_ID_PATTERN = /^[1-9][0-9]{0,19}$/;
 const MAX_UINT64 = (1n << 64n) - 1n;
+
+export class SyncboardCallError extends Error {
+    constructor(
+        readonly outcome: 'not-sent' | 'unknown',
+        readonly reason: string,
+    ) {
+        super(`Syncboard ${outcome}: ${reason}`);
+        this.name = 'SyncboardCallError';
+    }
+}
+
+interface SyncboardWaiter {
+    readonly channel: RuntimeChannel;
+    readonly operation: SyncboardOperation;
+    readonly resolve: (response: SyncboardResponse) => void;
+    readonly reject: (error: SyncboardCallError) => void;
+    readonly signal?: AbortSignal | undefined;
+    readonly abort?: (() => void) | undefined;
+    timer: ReturnType<typeof setTimeout>;
+    admitted: boolean;
+}
 
 /**
  * Parse a native-mutation request ID (Compact or Reload): positive
@@ -364,9 +397,9 @@ function usageField(
 function normalizeContextUsage(value: unknown): ContextSample | null {
     if (typeof value !== 'object' || value === null) return null;
     const record = value as Record<string, unknown>;
-    const tokens = usageField(record['tokens'], false);
-    const contextWindow = usageField(record['contextWindow'], true);
-    const percent = usageField(record['percent'], false);
+    const tokens = usageField(record.tokens, false);
+    const contextWindow = usageField(record.contextWindow, true);
+    const percent = usageField(record.percent, false);
     if (
         tokens === INVALID_SAMPLE ||
         contextWindow === INVALID_SAMPLE ||
@@ -465,6 +498,9 @@ export class Runtime {
     private compactAccepted = false;
     private reloadAccepted = false;
     private skillsAccepted = false;
+    private syncboardAccepted = false;
+    private syncboardSeq = 0n;
+    private syncboardPending = new Map<string, SyncboardWaiter>();
     /** getContextUsage present on the latest event context. */
     private contextApi = false;
     /** compact/isIdle/hasPendingMessages present on the latest context. */
@@ -826,10 +862,101 @@ export class Runtime {
         );
     }
 
+    /** One native Syncboard bridge call. Requests are never replayed. */
+    requestSyncboard(
+        operation: SyncboardOperation,
+        key: string,
+        valueJson?: Uint8Array,
+        signal?: AbortSignal,
+    ): Promise<SyncboardResponse> {
+        const channel = this.channel;
+        if (!this.syncboardAccepted || channel === null) {
+            return Promise.reject(
+                new SyncboardCallError('not-sent', 'unavailable'),
+            );
+        }
+        if (signal?.aborted) {
+            return Promise.reject(
+                new SyncboardCallError('not-sent', 'cancelled'),
+            );
+        }
+        if (this.syncboardPending.size >= MAX_SYNCBOARD_PENDING) {
+            return Promise.reject(new SyncboardCallError('not-sent', 'busy'));
+        }
+        if (this.syncboardSeq >= MAX_UINT64) {
+            return Promise.reject(
+                new SyncboardCallError('not-sent', 'unavailable'),
+            );
+        }
+        const requestId = (++this.syncboardSeq).toString();
+        const request = SyncboardRequest.create({
+            requestId,
+            operation,
+            key,
+            valueJson: Buffer.from(valueJson ?? new Uint8Array()),
+        });
+        return new Promise((resolve, reject) => {
+            let waiter!: SyncboardWaiter;
+            waiter = {
+                channel,
+                operation,
+                resolve,
+                reject,
+                signal,
+                timer: setTimeout(() => {
+                    this.finishSyncboardError(
+                        requestId,
+                        new SyncboardCallError(
+                            waiter.admitted ? 'unknown' : 'not-sent',
+                            'timeout',
+                        ),
+                    );
+                }, SYNCBOARD_CALL_TIMEOUT_MS),
+                admitted: false,
+            };
+            this.syncboardPending.set(requestId, waiter);
+            if (signal) {
+                const abort = (): void => {
+                    this.finishSyncboardError(
+                        requestId,
+                        new SyncboardCallError(
+                            waiter.admitted ? 'unknown' : 'not-sent',
+                            'cancelled',
+                        ),
+                    );
+                };
+                Object.assign(waiter, { abort });
+                signal.addEventListener('abort', abort, { once: true });
+            }
+            if (signal?.aborted) {
+                this.finishSyncboardError(
+                    requestId,
+                    new SyncboardCallError('not-sent', 'cancelled'),
+                );
+                return;
+            }
+            const sent = channel.sendNonfatal({
+                paneId: this.opts.creds.pane,
+                processId: this.opts.creds.process,
+                runtimeGeneration: this.opts.generation,
+                payload: { $case: 'syncboardRequest', value: request },
+            });
+            if (!sent) {
+                this.finishSyncboardError(
+                    requestId,
+                    new SyncboardCallError('not-sent', 'unavailable'),
+                );
+                return;
+            }
+            waiter.admitted = true;
+        });
+    }
+
     /** Idempotent shutdown: stop retrying and drain the stream. */
     shutdown(): void {
         if (this.shutdownRequested) return;
         this.shutdownRequested = true;
+        this.setSyncboardAccepted(false);
         // Shutdown releases active status, never unresolved native
         // work or duplicate protection: those stay process-owned.
         if (this.compact.active?.runtimeId === this.runtimeId) {
@@ -1152,6 +1279,7 @@ export class Runtime {
         // Skills need both host calls: the list and the invocation.
         if (this.opts.getSkills && this.opts.invokeSkill)
             caps.push(CAPABILITY_SKILLS);
+        if (this.opts.syncboardEnabled) caps.push(CAPABILITY_SYNCBOARD);
         return caps;
     }
 
@@ -1216,6 +1344,7 @@ export class Runtime {
         this.compactAccepted = false;
         this.reloadAccepted = false;
         this.skillsAccepted = false;
+        this.setSyncboardAccepted(false);
         // Reconnect carries a fresh baseline: resample through the
         // latest context so the Hello never replays a stale reading.
         if (this.lastCtx) this.sampleTelemetry(this.lastCtx);
@@ -1245,6 +1374,10 @@ export class Runtime {
                     accepted.capabilities.includes(CAPABILITY_RELOAD);
                 this.skillsAccepted =
                     accepted.capabilities.includes(CAPABILITY_SKILLS);
+                this.setSyncboardAccepted(
+                    this.opts.syncboardEnabled === true &&
+                        accepted.capabilities.includes(CAPABILITY_SYNCBOARD),
+                );
             }
         } catch (err) {
             channel.close();
@@ -1330,6 +1463,142 @@ export class Runtime {
                 msg.payload.value.requestId,
                 msg.payload.value.name,
             );
+        } else if (
+            msg.payload?.$case === 'syncboardResponse' &&
+            this.syncboardAccepted
+        ) {
+            this.onSyncboardResponse(msg.payload.value);
+        }
+    }
+
+    private onSyncboardResponse(response: SyncboardResponse): void {
+        const waiter = this.syncboardPending.get(response.requestId);
+        if (
+            !waiter ||
+            waiter.channel !== this.channel ||
+            !this.syncboardAccepted
+        )
+            return;
+        if (!this.validSyncboardWireResponse(response, waiter.operation)) {
+            this.finishSyncboardError(
+                response.requestId,
+                new SyncboardCallError('unknown', 'invalid-response'),
+            );
+            return;
+        }
+        this.finishSyncboardResponse(response.requestId, response);
+    }
+
+    private validSyncboardWireResponse(
+        response: SyncboardResponse,
+        operation: SyncboardOperation,
+    ): boolean {
+        switch (response.outcome) {
+            case SyncboardOutcome.SYNCBOARD_OUTCOME_NOT_SENT:
+            case SyncboardOutcome.SYNCBOARD_OUTCOME_UNKNOWN:
+                return (
+                    response.httpStatus === 0 &&
+                    response.bodyJson.length === 0 &&
+                    this.validSyncboardReason(response.reason)
+                );
+            case SyncboardOutcome.SYNCBOARD_OUTCOME_HTTP_RESPONSE:
+                if (response.httpStatus < 100 || response.httpStatus > 599)
+                    return false;
+                if (
+                    response.httpStatus === 404 &&
+                    (operation === SyncboardOperation.SYNCBOARD_OPERATION_GET ||
+                        operation ===
+                            SyncboardOperation.SYNCBOARD_OPERATION_DELETE)
+                )
+                    return (
+                        response.reason === '' && response.bodyJson.length === 0
+                    );
+                if (response.httpStatus !== 200)
+                    return (
+                        response.reason === 'http-error' &&
+                        response.bodyJson.length === 0
+                    );
+                if (operation === SyncboardOperation.SYNCBOARD_OPERATION_DELETE)
+                    return (
+                        response.reason === '' && response.bodyJson.length === 0
+                    );
+                return (
+                    response.reason === '' &&
+                    response.bodyJson.length > 0 &&
+                    response.bodyJson.length <= MAX_SYNCBOARD_RESPONSE_BYTES
+                );
+            default:
+                return false;
+        }
+    }
+
+    private validSyncboardReason(reason: string): boolean {
+        switch (reason) {
+            case 'unavailable':
+            case 'invalid-request':
+            case 'invalid-config':
+            case 'not-ready':
+            case 'busy':
+            case 'timeout':
+            case 'cancelled':
+            case 'too-large':
+            case 'invalid-response':
+            case 'http-error':
+            case 'transport-error':
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private finishSyncboardResponse(
+        requestId: string,
+        response: SyncboardResponse,
+    ): void {
+        const waiter = this.takeSyncboardWaiter(requestId);
+        waiter?.resolve(response);
+    }
+
+    private finishSyncboardError(
+        requestId: string,
+        error: SyncboardCallError,
+    ): void {
+        const waiter = this.takeSyncboardWaiter(requestId);
+        waiter?.reject(error);
+    }
+
+    private takeSyncboardWaiter(
+        requestId: string,
+    ): SyncboardWaiter | undefined {
+        const waiter = this.syncboardPending.get(requestId);
+        if (!waiter) return undefined;
+        this.syncboardPending.delete(requestId);
+        clearTimeout(waiter.timer);
+        if (waiter.signal && waiter.abort)
+            waiter.signal.removeEventListener('abort', waiter.abort);
+        return waiter;
+    }
+
+    private failSyncboardPending(reason: string): void {
+        for (const [requestId, waiter] of this.syncboardPending) {
+            this.finishSyncboardError(
+                requestId,
+                new SyncboardCallError(
+                    waiter.admitted ? 'unknown' : 'not-sent',
+                    reason,
+                ),
+            );
+        }
+    }
+
+    private setSyncboardAccepted(available: boolean): void {
+        if (this.syncboardAccepted === available) return;
+        this.syncboardAccepted = available;
+        if (!available) this.failSyncboardPending('transport-error');
+        try {
+            this.opts.onSyncboardAvailability?.(available);
+        } catch {
+            // Syncboard registration errors must not disturb the bridge.
         }
     }
 
@@ -2429,6 +2698,7 @@ export class Runtime {
     }
 
     private onStreamEnd(status: ServiceError | null): void {
+        this.setSyncboardAccepted(false);
         this.channel?.close();
         this.channel = null;
         if (this.connectedAt !== null) {

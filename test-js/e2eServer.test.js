@@ -104,7 +104,9 @@ beforeEach(() => {
     accessSync.mockReturnValue(undefined);
     statSync.mockReturnValue({ isDirectory: () => true, mode: 0o40700 });
     execFileSync.mockImplementation((cmd, args) => {
-        if (cmd === 'git') return 'fixture-revision';
+        if (cmd === 'git')
+            return args[0] === 'status' ? '' : 'fixture-revision';
+        if (cmd === 'go') return 'fixture-go-build';
         if (cmd === 'ps') return `start-${args[1]}`;
         if (args.includes('-d')) return `n${join(DIR, 'phi')}\n`;
         return 'n127.0.0.1:45678\n';
@@ -302,11 +304,18 @@ describe('startPhi fixture isolation', () => {
         const phi = await startPhi();
         const first = spawn.mock.results[1].value;
         expect(phi.pid()).toBe(first.pid);
+        expect(phi.identity.pid).toBe(first.pid);
+        const before = phi.identity;
         await phi.restart();
         expect(first.killCalls).toEqual(['SIGTERM']);
         expect(spawn).toHaveBeenCalledTimes(3);
         const second = spawn.mock.results[2].value;
         expect(phi.pid()).toBe(second.pid);
+        expect(phi.identity).toEqual({
+            ...before,
+            pid: second.pid,
+            startTime: `start-${second.pid}`,
+        });
         expect(second.exitCode).toBeNull();
         await phi.stop();
         expect(second.killCalls).toEqual(['SIGTERM']);
@@ -336,7 +345,9 @@ describe('startPhi fixture isolation', () => {
         async () => {
             vi.useFakeTimers();
             execFileSync.mockImplementation((cmd, args) => {
-                if (cmd === 'git') return 'revision';
+                if (cmd === 'git')
+                    return args[0] === 'status' ? '' : 'revision';
+                if (cmd === 'go') return 'fixture-go-build';
                 if (cmd === 'ps') return `start-${args[1]}`;
                 if (args.includes('-d')) return `n${join(DIR, 'phi')}\n`;
                 const err = new Error('owned child has no listener');

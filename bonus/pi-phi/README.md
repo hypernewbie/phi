@@ -3,8 +3,11 @@
 Phi's integration endpoint inside Pi. The extension reports explicit
 Pi completion to Phi's existing bell and provides read-only editor history.
 It also lists and switches models through Phi's shared model picker.
-It shows context usage as display-only telemetry. It runs a native
-compaction only on an explicit user action through the existing
+It shows context usage as display-only telemetry. It exposes a native
+`syncboard` tool for list, get, upsert, and delete while the owning Phi
+bridge capability is active. Phi resolves its own coordinator for each call.
+An unknown outcome is never retried. It runs a native compaction only on an
+explicit user action through the existing
 Compact control: one operation per Pi process, no server-side queue,
 no automatic retry. A press during a turn waits in the browser for that
 turn; a second press cancels it. An expired or interrupted wait reports
@@ -79,6 +82,23 @@ confirm reload completion. A timeout, lost connection, or runtime replacement
 keeps the operation uncertain and never triggers an automatic retry. If the
 request was admitted but never reached Pi, the server cannot prove release;
 the record stays pending until the Pi process exits.
+
+## Syncboard tool
+
+A Pi session with the negotiated `pi.syncboard.v1` capability exposes the
+native `syncboard` tool for `list`, `get`, `upsert`, and `delete`. Phi routes
+every call to the coordinator configured by the Phi process that owns the
+pane. Pi cannot supply or change that URL. An unset coordinator uses the
+owning Phi store. Without the bridge or capability, the tool stays hidden and
+existing Pi behavior remains unchanged.
+
+List returns messages. Get returns the message or `{found:false,key}` when the
+key is absent. Upsert stores a JSON value and returns the message. Delete
+returns `{deleted:true,key,already_absent}`. Phi validates keys and JSON
+values before dispatch. It bounds values to 64 KiB, responses to 192 KiB, and
+outstanding calls to four per peer. A request that fails before dispatch is
+safe to call again. A dispatched call with an unknown outcome is not. Read the
+key after reconnection before choosing another action.
 
 ## Skills
 

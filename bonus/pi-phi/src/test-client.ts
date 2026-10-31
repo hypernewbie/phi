@@ -22,6 +22,9 @@ import {
     IntegrationClient,
     type PhiToPi,
     PiToPhi,
+    SyncboardOperation,
+    SyncboardRequest,
+    type SyncboardResponse,
     type StateSnapshot,
 } from './gen/bridge.js';
 import { parseTarget } from './endpoint.js';
@@ -30,6 +33,7 @@ import {
     CAPABILITY_LIFECYCLE,
     HELLO_DEADLINE_MS,
     MAX_MESSAGE_BYTES,
+    SYNCBOARD_CALL_TIMEOUT_MS,
     METADATA_PANE_KEY,
     METADATA_PROCESS_KEY,
     METADATA_TOKEN_KEY,
@@ -72,6 +76,15 @@ export class BridgeTestClient {
     private token: string;
     private capabilities: string[];
     private state: StateSnapshot | undefined;
+    private syncboardSequence = 0n;
+    private syncboardWaiters = new Map<
+        string,
+        {
+            resolve: (value: SyncboardResponse) => void;
+            reject: (error: Error) => void;
+            timer: ReturnType<typeof setTimeout>;
+        }
+    >();
 
     constructor(opts: TestClientOptions) {
         const parsed = parseTarget(opts.target);
@@ -130,6 +143,9 @@ export class BridgeTestClient {
         });
         stream.on('status', (status: ServiceError) => {
             this.statusResolve?.(status.code === 0 ? null : status);
+            this.failSyncboardWaiters(
+                new Error(status.details || 'bridge stream ended'),
+            );
         });
         stream.on('error', () => {
             // Status carries the terminal code; error avoids unhandled throws.
@@ -207,6 +223,15 @@ export class BridgeTestClient {
             else this.acceptedQueue.push(payload.value);
             return;
         }
+        if (payload?.$case === 'syncboardResponse') {
+            const waiter = this.syncboardWaiters.get(payload.value.requestId);
+            if (waiter) {
+                clearTimeout(waiter.timer);
+                this.syncboardWaiters.delete(payload.value.requestId);
+                waiter.resolve(payload.value);
+            }
+            return;
+        }
         if (payload?.$case === 'compactRequest') {
             const waiter = this.compactRequestWaiters.shift();
             if (waiter) waiter(payload.value);
@@ -228,6 +253,54 @@ export class BridgeTestClient {
     private compactRequestQueue: CompactRequest[] = [];
     private compactRequestWaiters: Array<(r: CompactRequest) => void> = [];
     private compactRequestTotal = 0;
+
+    /** Send one request and await its matching Go bridge response. */
+    requestSyncboard(
+        operation: SyncboardOperation,
+        key: string,
+        valueJson?: Uint8Array,
+    ): Promise<SyncboardResponse> {
+        const requestId = (++this.syncboardSequence).toString();
+        const message: PiToPhi = {
+            paneId: this.pane,
+            processId: this.process,
+            runtimeGeneration: this.generation,
+            payload: {
+                $case: 'syncboardRequest',
+                value: SyncboardRequest.create({
+                    requestId,
+                    operation,
+                    key,
+                    valueJson: Buffer.from(valueJson ?? new Uint8Array()),
+                }),
+            },
+        };
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                this.syncboardWaiters.delete(requestId);
+                reject(new Error('Syncboard response deadline'));
+            }, SYNCBOARD_CALL_TIMEOUT_MS);
+            this.syncboardWaiters.set(requestId, { resolve, reject, timer });
+            try {
+                this.enqueueFrame(message);
+                void this.pumpWriter();
+            } catch (cause) {
+                clearTimeout(timer);
+                this.syncboardWaiters.delete(requestId);
+                reject(
+                    cause instanceof Error ? cause : new Error(String(cause)),
+                );
+            }
+        });
+    }
+
+    private failSyncboardWaiters(error: Error): void {
+        for (const [requestId, waiter] of this.syncboardWaiters) {
+            clearTimeout(waiter.timer);
+            this.syncboardWaiters.delete(requestId);
+            waiter.reject(error);
+        }
+    }
 
     /** Await the next CompactRequest dispatched by the server. */
     async awaitCompactRequest(timeoutMs = 5_000): Promise<CompactRequest> {
@@ -451,6 +524,7 @@ export class BridgeTestClient {
     }
 
     async close(): Promise<void> {
+        this.failSyncboardWaiters(new Error('bridge client closed'));
         this.stream?.end();
         this.client.close();
     }

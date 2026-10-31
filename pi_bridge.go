@@ -52,12 +52,13 @@ const (
 // materialized runtime path, revokes on every exit path, and publishes
 // nonsecret bridge state plus settlement notifications to browsers.
 type Bridge struct {
-	server   *pibridge.Server
-	endpoint *pibridge.Endpoint
-	listener net.Listener
-	hub      *ws.Hub
-	artifact string
-	reason   string
+	server       *pibridge.Server
+	endpoint     *pibridge.Endpoint
+	listener     net.Listener
+	listenerAddr *net.TCPAddr
+	hub          *ws.Hub
+	artifact     string
+	reason       string
 
 	mu     sync.Mutex
 	panes  map[string]*bridgePane
@@ -129,6 +130,7 @@ func startPiBridge(hub *ws.Hub) *Bridge {
 	b.server.SetOnSettled(b.onSettled)
 	b.server.SetOnState(b.onState)
 	b.server.SetOnPeerDown(b.onPeerDown)
+	b.server.SetSyncboardHandler(b.handleSyncboard)
 	hub.SetBridgeAttach(b.encodeAttach)
 	hub.SetOnPaneExit(func(inst *pty.PTYInstance, _ int) { b.handlePaneExit(inst) })
 	go func() {
@@ -320,6 +322,26 @@ func (b *Bridge) Provision(paneID string, inject bool) (env map[string]string, a
 		args = []string{"--extension", b.artifact}
 	}
 	return env, args, true
+}
+
+// SetListenerAddr publishes a defensive copy of the primary HTTP listener
+// address for the per-call Syncboard default. Before publication, an unset
+// coordinator is unavailable rather than guessed.
+func (b *Bridge) SetListenerAddr(addr net.Addr) {
+	if b == nil {
+		return
+	}
+	tcp, ok := addr.(*net.TCPAddr)
+	if !ok {
+		return
+	}
+	copy := *tcp
+	copy.IP = append(net.IP(nil), tcp.IP...)
+	b.mu.Lock()
+	if !b.closed {
+		b.listenerAddr = &copy
+	}
+	b.mu.Unlock()
 }
 
 // Complete binds the spawned instance and marks a provisioned lease live

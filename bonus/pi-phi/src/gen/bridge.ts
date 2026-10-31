@@ -81,6 +81,31 @@ export enum ReloadDispatchOutcome {
   UNRECOGNIZED = -1,
 }
 
+/**
+ * SyncboardOperation selects one fixed Syncboard API operation. The
+ * request never carries a URL or an arbitrary HTTP path.
+ */
+export enum SyncboardOperation {
+  SYNCBOARD_OPERATION_UNSPECIFIED = 0,
+  SYNCBOARD_OPERATION_LIST = 1,
+  SYNCBOARD_OPERATION_GET = 2,
+  SYNCBOARD_OPERATION_UPSERT = 3,
+  SYNCBOARD_OPERATION_DELETE = 4,
+  UNRECOGNIZED = -1,
+}
+
+/**
+ * SyncboardOutcome distinguishes a complete API response from a request
+ * that did not start or one whose outcome cannot be established.
+ */
+export enum SyncboardOutcome {
+  SYNCBOARD_OUTCOME_UNSPECIFIED = 0,
+  SYNCBOARD_OUTCOME_HTTP_RESPONSE = 1,
+  SYNCBOARD_OUTCOME_NOT_SENT = 2,
+  SYNCBOARD_OUTCOME_UNKNOWN = 3,
+  UNRECOGNIZED = -1,
+}
+
 export enum ProtocolErrorCode {
   PROTOCOL_ERROR_UNSPECIFIED = 0,
   PROTOCOL_ERROR_UNSUPPORTED_VERSION = 1,
@@ -113,6 +138,7 @@ export interface PiToPhi {
     | { $case: "skillsResponse"; value: SkillsResponse }
     | { $case: "invokeSkillAck"; value: InvokeSkillAck }
     | { $case: "reloadAck"; value: ReloadAck }
+    | { $case: "syncboardRequest"; value: SyncboardRequest }
     | undefined;
 }
 
@@ -133,6 +159,7 @@ export interface PhiToPi {
     | { $case: "skillsRequest"; value: SkillsRequest }
     | { $case: "invokeSkillRequest"; value: InvokeSkillRequest }
     | { $case: "reloadRequest"; value: ReloadRequest }
+    | { $case: "syncboardResponse"; value: SyncboardResponse }
     | undefined;
 }
 
@@ -557,6 +584,29 @@ export interface InvokeSkillAck {
   reason: string;
 }
 
+/**
+ * SyncboardRequest asks the owning Phi process to perform one bounded
+ * Syncboard operation against its configured coordinator.
+ */
+export interface SyncboardRequest {
+  requestId: string;
+  operation: SyncboardOperation;
+  key: string;
+  valueJson: Buffer;
+}
+
+/**
+ * SyncboardResponse carries one bounded result for request_id. Error
+ * reasons use a fixed safe vocabulary and never contain HTTP bodies.
+ */
+export interface SyncboardResponse {
+  requestId: string;
+  outcome: SyncboardOutcome;
+  httpStatus: number;
+  bodyJson: Buffer;
+  reason: string;
+}
+
 /** Terminal protocol-level rejection. Ends the stream attempt. */
 export interface ProtocolError {
   code: ProtocolErrorCode;
@@ -620,6 +670,9 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         break;
       case "reloadAck":
         ReloadAck.encode(message.payload.value, writer.uint32(202).fork()).join();
+        break;
+      case "syncboardRequest":
+        SyncboardRequest.encode(message.payload.value, writer.uint32(210).fork()).join();
         break;
     }
     return writer;
@@ -769,6 +822,14 @@ export const PiToPhi: MessageFns<PiToPhi> = {
             message.payload = { $case: "reloadAck", value: ReloadAck.decode(reader, reader.uint32()) };
             continue;
           }
+          case 26: {
+            if (tag !== 210) {
+              break;
+            }
+
+            message.payload = { $case: "syncboardRequest", value: SyncboardRequest.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -873,6 +934,12 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         }
         break;
       }
+      case "syncboardRequest": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "syncboardRequest", value: SyncboardRequest.fromPartial(object.payload.value) };
+        }
+        break;
+      }
     }
     return message;
   },
@@ -929,6 +996,9 @@ export const PhiToPi: MessageFns<PhiToPi> = {
         break;
       case "reloadRequest":
         ReloadRequest.encode(message.payload.value, writer.uint32(178).fork()).join();
+        break;
+      case "syncboardResponse":
+        SyncboardResponse.encode(message.payload.value, writer.uint32(186).fork()).join();
         break;
     }
     return writer;
@@ -1068,6 +1138,14 @@ export const PhiToPi: MessageFns<PhiToPi> = {
             message.payload = { $case: "reloadRequest", value: ReloadRequest.decode(reader, reader.uint32()) };
             continue;
           }
+          case 23: {
+            if (tag !== 186) {
+              break;
+            }
+
+            message.payload = { $case: "syncboardResponse", value: SyncboardResponse.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1163,6 +1241,12 @@ export const PhiToPi: MessageFns<PhiToPi> = {
       case "reloadRequest": {
         if (object.payload?.value !== undefined && object.payload?.value !== null) {
           message.payload = { $case: "reloadRequest", value: ReloadRequest.fromPartial(object.payload.value) };
+        }
+        break;
+      }
+      case "syncboardResponse": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "syncboardResponse", value: SyncboardResponse.fromPartial(object.payload.value) };
         }
         break;
       }
@@ -3846,6 +3930,200 @@ export const InvokeSkillAck: MessageFns<InvokeSkillAck> = {
     const message = createBaseInvokeSkillAck();
     message.requestId = object.requestId ?? "";
     message.ok = object.ok ?? false;
+    message.reason = object.reason ?? "";
+    return message;
+  },
+};
+
+function createBaseSyncboardRequest(): SyncboardRequest {
+  return { requestId: "", operation: 0, key: "", valueJson: Buffer.alloc(0) };
+}
+
+export const SyncboardRequest: MessageFns<SyncboardRequest> = {
+  encode(message: SyncboardRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.operation !== 0) {
+      writer.uint32(16).int32(message.operation);
+    }
+    if (message.key !== "") {
+      writer.uint32(26).string(message.key);
+    }
+    if (message.valueJson.length !== 0) {
+      writer.uint32(34).bytes(message.valueJson);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SyncboardRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSyncboardRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.operation = reader.int32() as any;
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.key = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.valueJson = Buffer.from(reader.bytes());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<SyncboardRequest>, I>>(base?: I): SyncboardRequest {
+    return SyncboardRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SyncboardRequest>, I>>(object: I): SyncboardRequest {
+    const message = createBaseSyncboardRequest();
+    message.requestId = object.requestId ?? "";
+    message.operation = object.operation ?? 0;
+    message.key = object.key ?? "";
+    message.valueJson = object.valueJson ?? Buffer.alloc(0);
+    return message;
+  },
+};
+
+function createBaseSyncboardResponse(): SyncboardResponse {
+  return { requestId: "", outcome: 0, httpStatus: 0, bodyJson: Buffer.alloc(0), reason: "" };
+}
+
+export const SyncboardResponse: MessageFns<SyncboardResponse> = {
+  encode(message: SyncboardResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.outcome !== 0) {
+      writer.uint32(16).int32(message.outcome);
+    }
+    if (message.httpStatus !== 0) {
+      writer.uint32(24).uint32(message.httpStatus);
+    }
+    if (message.bodyJson.length !== 0) {
+      writer.uint32(34).bytes(message.bodyJson);
+    }
+    if (message.reason !== "") {
+      writer.uint32(42).string(message.reason);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SyncboardResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSyncboardResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.outcome = reader.int32() as any;
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.httpStatus = reader.uint32();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.bodyJson = Buffer.from(reader.bytes());
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<SyncboardResponse>, I>>(base?: I): SyncboardResponse {
+    return SyncboardResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SyncboardResponse>, I>>(object: I): SyncboardResponse {
+    const message = createBaseSyncboardResponse();
+    message.requestId = object.requestId ?? "";
+    message.outcome = object.outcome ?? 0;
+    message.httpStatus = object.httpStatus ?? 0;
+    message.bodyJson = object.bodyJson ?? Buffer.alloc(0);
     message.reason = object.reason ?? "";
     return message;
   },

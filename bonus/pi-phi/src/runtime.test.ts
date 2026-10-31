@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ServiceError } from '@grpc/grpc-js';
 import {
     type AgentSettled,
@@ -8,6 +8,9 @@ import {
     PiToPhi,
     ReloadDispatchOutcome,
     RunOutcome,
+    SyncboardOperation,
+    SyncboardOutcome,
+    type SyncboardResponse,
     type StateSnapshot,
 } from './gen/bridge.js';
 import { LIFECYCLE_HEADROOM_BYTES } from './protocol.js';
@@ -17,10 +20,12 @@ import { CAPABILITY_RELOAD } from './protocol.js';
 import { CAPABILITY_HISTORY, CAPABILITY_LIFECYCLE } from './protocol.js';
 import { CAPABILITY_MODELS } from './protocol.js';
 import { CAPABILITY_SKILLS } from './protocol.js';
+import { CAPABILITY_SYNCBOARD } from './protocol.js';
 import { CAPABILITY_THINKING } from './protocol.js';
 import { MAX_MODELS_ENTRIES } from './protocol.js';
 import { MAX_SKILL_ENTRIES } from './protocol.js';
 import { MAX_SKILL_NAME_BYTES } from './protocol.js';
+import { SYNCBOARD_CALL_TIMEOUT_MS } from './protocol.js';
 import { MAX_THINKING_LEVELS } from './protocol.js';
 import { MAX_THINKING_LEVEL_BYTES } from './protocol.js';
 import { MAX_THINKING_MODEL_ID_BYTES } from './protocol.js';
@@ -76,6 +81,7 @@ interface MockChannel extends RuntimeChannel {
     sendResult: boolean;
     nonfatalResult: boolean;
     connectError: Error | null;
+    acceptedCaps: string[] | null;
 }
 
 function mockChannel(): MockChannel {
@@ -90,15 +96,17 @@ function mockChannel(): MockChannel {
         sendResult: true,
         nonfatalResult: true,
         connectError: null,
+        acceptedCaps: null,
         connect: async (hello: PiToPhi) => {
             m.hellos.push(hello);
             if (m.connectError) throw m.connectError;
             return {
                 protocolVersion: 1,
                 capabilities:
-                    hello.payload?.$case === 'hello'
+                    m.acceptedCaps ??
+                    (hello.payload?.$case === 'hello'
                         ? hello.payload.value.capabilities
-                        : [],
+                        : []),
                 runtimeGeneration: 1n,
                 runtimeId: 'rt',
             };
@@ -4135,5 +4143,351 @@ describe('Runtime reload dispatch', () => {
         await sleep(10);
         expect(first.latch.pending).toBeNull();
         second.shutdown();
+    });
+});
+
+describe('Runtime Syncboard', () => {
+    it('advertises the capability and correlates one response', async () => {
+        const ch = mockChannel();
+        const availability: boolean[] = [];
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            syncboardEnabled: true,
+            onSyncboardAvailability: (value) => availability.push(value),
+            makeChannel: wired(ch),
+        });
+        rt.start(ctx());
+        await sleep(10);
+        expect(helloCaps(ch)).toContain(CAPABILITY_SYNCBOARD);
+        expect(availability).toEqual([true]);
+
+        const result = rt.requestSyncboard(
+            SyncboardOperation.SYNCBOARD_OPERATION_LIST,
+            '',
+        );
+        expect(ch.nonfatalSends).toHaveLength(1);
+        const payload = payloadOf(ch.nonfatalSends[0]!);
+        if (payload.$case !== 'syncboardRequest')
+            throw new Error('not a Syncboard request');
+        const requestId = payload.value.requestId;
+        const response = (id: string): PhiToPi => ({
+            paneId: 'pane',
+            processId: 'proc',
+            runtimeGeneration: 1n,
+            payload: {
+                $case: 'syncboardResponse',
+                value: {
+                    requestId: id,
+                    outcome: SyncboardOutcome.SYNCBOARD_OUTCOME_HTTP_RESPONSE,
+                    httpStatus: 200,
+                    bodyJson: Buffer.from('[]'),
+                    reason: '',
+                } satisfies SyncboardResponse,
+            },
+        });
+        ch.hooks!.onMessage(response('999'));
+        ch.hooks!.onMessage(response(requestId));
+        await expect(result).resolves.toMatchObject({ requestId });
+        expect(ch.nonfatalSends).toHaveLength(1);
+        rt.shutdown();
+        expect(availability).toEqual([true, false]);
+    });
+
+    it('bounds admission and releases waiters on refusal, abort, and shutdown', async () => {
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            syncboardEnabled: true,
+            makeChannel: wired(ch),
+        });
+        rt.start(ctx());
+        await sleep(10);
+        vi.useFakeTimers();
+        try {
+            const controller = new AbortController();
+            controller.abort();
+            await expect(
+                rt.requestSyncboard(
+                    SyncboardOperation.SYNCBOARD_OPERATION_LIST,
+                    '',
+                    undefined,
+                    controller.signal,
+                ),
+            ).rejects.toMatchObject({
+                outcome: 'not-sent',
+                reason: 'cancelled',
+            });
+            expect(ch.nonfatalSends).toHaveLength(0);
+
+            ch.nonfatalResult = false;
+            await expect(
+                rt.requestSyncboard(
+                    SyncboardOperation.SYNCBOARD_OPERATION_LIST,
+                    '',
+                ),
+            ).rejects.toMatchObject({
+                outcome: 'not-sent',
+                reason: 'unavailable',
+            });
+            expect(vi.getTimerCount()).toBe(0);
+            ch.nonfatalResult = true;
+
+            const controllers = Array.from(
+                { length: 4 },
+                () => new AbortController(),
+            );
+            const removals = controllers.map((item) =>
+                vi.spyOn(item.signal, 'removeEventListener'),
+            );
+            const pending = controllers.map((item) =>
+                rt.requestSyncboard(
+                    SyncboardOperation.SYNCBOARD_OPERATION_UPSERT,
+                    'card-a',
+                    Buffer.from('false'),
+                    item.signal,
+                ),
+            );
+            const settled = Promise.allSettled(pending);
+            await expect(
+                rt.requestSyncboard(
+                    SyncboardOperation.SYNCBOARD_OPERATION_LIST,
+                    '',
+                ),
+            ).rejects.toMatchObject({ outcome: 'not-sent', reason: 'busy' });
+            expect(ch.nonfatalSends).toHaveLength(5);
+            expect(vi.getTimerCount()).toBe(4);
+
+            controllers[0]!.abort();
+            expect(vi.getTimerCount()).toBe(3);
+            const next = rt.requestSyncboard(
+                SyncboardOperation.SYNCBOARD_OPERATION_LIST,
+                '',
+            );
+            const stopped = expect(next).rejects.toMatchObject({
+                outcome: 'unknown',
+                reason: 'transport-error',
+            });
+            expect(ch.nonfatalSends).toHaveLength(6);
+            rt.shutdown();
+            await stopped;
+            expect(await settled).toEqual([
+                expect.objectContaining({
+                    status: 'rejected',
+                    reason: expect.objectContaining({
+                        outcome: 'unknown',
+                        reason: 'cancelled',
+                    }),
+                }),
+                ...Array.from({ length: 3 }, () =>
+                    expect.objectContaining({
+                        status: 'rejected',
+                        reason: expect.objectContaining({
+                            outcome: 'unknown',
+                            reason: 'transport-error',
+                        }),
+                    }),
+                ),
+            ]);
+            expect(
+                removals.every((remove) => remove.mock.calls.length === 1),
+            ).toBe(true);
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {
+            rt.shutdown();
+            vi.useRealTimers();
+        }
+    });
+
+    it('keeps the tool unavailable when the host did not accept the capability', async () => {
+        const ch = mockChannel();
+        ch.acceptedCaps = [CAPABILITY_LIFECYCLE, CAPABILITY_MODELS];
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            syncboardEnabled: true,
+            makeChannel: wired(ch),
+        });
+        rt.start(ctx());
+        await sleep(10);
+        expect(helloCaps(ch)).toContain(CAPABILITY_SYNCBOARD);
+        await expect(
+            rt.requestSyncboard(
+                SyncboardOperation.SYNCBOARD_OPERATION_LIST,
+                '',
+            ),
+        ).rejects.toMatchObject({ outcome: 'not-sent', reason: 'unavailable' });
+        expect(ch.nonfatalSends).toHaveLength(0);
+        rt.shutdown();
+    });
+
+    it('times out admitted work without replay and fences its late response', async () => {
+        const ch = mockChannel();
+        const availability: boolean[] = [];
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            syncboardEnabled: true,
+            backoffBaseMs: 1,
+            backoffMaxMs: 1,
+            onSyncboardAvailability: (value) => availability.push(value),
+            makeChannel: wired(ch),
+        });
+        rt.start(ctx());
+        await sleep(10);
+        vi.useFakeTimers();
+        try {
+            const mutation = rt.requestSyncboard(
+                SyncboardOperation.SYNCBOARD_OPERATION_UPSERT,
+                'card-a',
+                Buffer.from('{"ok":true}'),
+            );
+            const sent = payloadOf(ch.nonfatalSends[0]!);
+            if (sent.$case !== 'syncboardRequest')
+                throw new Error('not a Syncboard request');
+            const mutationID = sent.value.requestId;
+            expect(ch.nonfatalSends).toHaveLength(1);
+
+            const timedOut = expect(mutation).rejects.toMatchObject({
+                outcome: 'unknown',
+                reason: 'timeout',
+            });
+            await vi.advanceTimersByTimeAsync(SYNCBOARD_CALL_TIMEOUT_MS);
+            await timedOut;
+
+            ch.hooks!.onStatus(status(14));
+            await vi.advanceTimersByTimeAsync(2);
+            expect(ch.hellos).toHaveLength(2);
+            expect(availability).toEqual([true, false, true]);
+            expect(ch.nonfatalSends).toHaveLength(1);
+
+            const read = rt.requestSyncboard(
+                SyncboardOperation.SYNCBOARD_OPERATION_GET,
+                'card-a',
+            );
+            const readFrame = payloadOf(ch.nonfatalSends[1]!);
+            if (readFrame.$case !== 'syncboardRequest')
+                throw new Error('not a Syncboard request');
+            expect(readFrame.value.operation).toBe(
+                SyncboardOperation.SYNCBOARD_OPERATION_GET,
+            );
+            let readSettled = false;
+            void read.finally(() => {
+                readSettled = true;
+            });
+            const response = (requestId: string): PhiToPi => ({
+                paneId: 'pane',
+                processId: 'proc',
+                runtimeGeneration: 1n,
+                payload: {
+                    $case: 'syncboardResponse',
+                    value: {
+                        requestId,
+                        outcome:
+                            SyncboardOutcome.SYNCBOARD_OUTCOME_HTTP_RESPONSE,
+                        httpStatus: 200,
+                        bodyJson: Buffer.from(
+                            JSON.stringify({
+                                key: 'card-a',
+                                value: '{"ok":true}',
+                                created_at: '2026-01-01T00:00:00Z',
+                                updated_at: '2026-01-01T00:00:00Z',
+                            }),
+                        ),
+                        reason: '',
+                    } satisfies SyncboardResponse,
+                },
+            });
+            ch.hooks!.onMessage(response(mutationID));
+            await Promise.resolve();
+            expect(readSettled).toBe(false);
+            ch.hooks!.onMessage(response(readFrame.value.requestId));
+            await expect(read).resolves.toMatchObject({
+                requestId: readFrame.value.requestId,
+            });
+            expect(ch.nonfatalSends).toHaveLength(2);
+        } finally {
+            rt.shutdown();
+            vi.useRealTimers();
+        }
+    });
+
+    it('reports cancellation after admission as unknown without replay', async () => {
+        const ch = mockChannel();
+        const availability: boolean[] = [];
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            syncboardEnabled: true,
+            backoffBaseMs: 1,
+            backoffMaxMs: 1,
+            onSyncboardAvailability: (value) => availability.push(value),
+            makeChannel: wired(ch),
+        });
+        rt.start(ctx());
+        await sleep(10);
+        const controller = new AbortController();
+        const result = rt.requestSyncboard(
+            SyncboardOperation.SYNCBOARD_OPERATION_UPSERT,
+            'card-a',
+            Buffer.from('null'),
+            controller.signal,
+        );
+        expect(ch.nonfatalSends).toHaveLength(1);
+        controller.abort();
+        await expect(result).rejects.toMatchObject({
+            outcome: 'unknown',
+            reason: 'cancelled',
+        });
+        // A reconnect can restore availability, but it cannot replay the
+        // mutation whose admitted result was lost.
+        vi.useFakeTimers();
+        try {
+            ch.hooks!.onStatus(status(14));
+            await vi.advanceTimersByTimeAsync(2);
+            expect(ch.hellos).toHaveLength(2);
+            expect(availability).toEqual([true, false, true]);
+            expect(ch.nonfatalSends).toHaveLength(1);
+            const read = rt.requestSyncboard(
+                SyncboardOperation.SYNCBOARD_OPERATION_LIST,
+                '',
+            );
+            expect(ch.nonfatalSends).toHaveLength(2);
+            const payload = payloadOf(ch.nonfatalSends[1]!);
+            if (payload.$case !== 'syncboardRequest')
+                throw new Error('not a Syncboard request');
+            expect(payload.value.operation).toBe(
+                SyncboardOperation.SYNCBOARD_OPERATION_LIST,
+            );
+            ch.hooks!.onMessage({
+                paneId: 'pane',
+                processId: 'proc',
+                runtimeGeneration: 1n,
+                payload: {
+                    $case: 'syncboardResponse',
+                    value: {
+                        requestId: payload.value.requestId,
+                        outcome:
+                            SyncboardOutcome.SYNCBOARD_OUTCOME_HTTP_RESPONSE,
+                        httpStatus: 200,
+                        bodyJson: Buffer.from('[]'),
+                        reason: '',
+                    } satisfies SyncboardResponse,
+                },
+            });
+            await expect(read).resolves.toMatchObject({
+                requestId: payload.value.requestId,
+            });
+        } finally {
+            rt.shutdown();
+            vi.useRealTimers();
+        }
+        expect(ch.nonfatalSends).toHaveLength(2);
     });
 });

@@ -28,12 +28,26 @@ export function configToToml(config: Record<string, unknown>): string {
     );
 }
 
+export interface PhiServerIdentity {
+    pid: number;
+    startTime: string;
+    binaryPath: string;
+    binaryHash: string;
+    goVersion: string;
+    buildRevision: string;
+    dirtyBuild: boolean;
+    bindAddress: string;
+    port: number;
+    dir: string;
+}
+
 export interface PhiServer {
     url: string;
     dir: string;
     stop: () => Promise<void>;
     restart: (beforeStart?: () => void | Promise<void>) => Promise<void>;
     logPath: string;
+    readonly identity: PhiServerIdentity;
     /** Live owned-child PID for spec-side listener checks. */
     pid: () => number | undefined;
     verify: () => void;
@@ -353,6 +367,15 @@ export async function startPhi(
             revision: execFileSync('git', ['rev-parse', 'HEAD'], {
                 encoding: 'utf8',
             }).trim(),
+            goVersion: execFileSync('go', ['version', '-m', binary], {
+                encoding: 'utf8',
+                timeout: 5_000,
+            }).trim(),
+            dirty:
+                execFileSync('git', ['status', '--porcelain'], {
+                    encoding: 'utf8',
+                    timeout: 5_000,
+                }).trim() !== '',
             sha256: createHash('sha256')
                 .update(readFileSync(bin))
                 .digest('hex'),
@@ -379,6 +402,24 @@ export async function startPhi(
             url: `http://127.0.0.1:${port}`,
             logPath,
             dir,
+            get identity() {
+                if (!server || childExited(server))
+                    throw new Error('phi fixture is not running');
+                const owned = identities.get(server);
+                if (!owned) throw new Error('phi fixture identity unavailable');
+                return {
+                    pid: owned.pid,
+                    startTime: owned.start,
+                    binaryPath: owned.binary,
+                    binaryHash: build.sha256,
+                    goVersion: build.goVersion,
+                    buildRevision: build.revision,
+                    dirtyBuild: build.dirty,
+                    bindAddress: '127.0.0.1',
+                    port,
+                    dir,
+                };
+            },
             pid: () => server?.pid,
             verify: () => {
                 if (!server || childExited(server))
