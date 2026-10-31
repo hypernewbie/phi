@@ -54,6 +54,10 @@ function monitorPage(page: Page, baseUrl: string) {
     const pageErrors: string[] = [];
     const consoleErrors: string[] = [];
     const failedRequests: string[] = [];
+    const offlineConsoleErrors: string[] = [];
+    const offlineRequests: string[] = [];
+    const cancelledRequests: string[] = [];
+    const origin = new URL(baseUrl).origin;
     let offlinePhase = false;
     page.on('pageerror', (error) => pageErrors.push(error.message));
     page.on('console', (message) => {
@@ -79,8 +83,10 @@ function monitorPage(page: Page, baseUrl: string) {
             ].includes(url.pathname) &&
             message.text() ===
                 'Failed to load resource: net::ERR_INTERNET_DISCONNECTED'
-        )
+        ) {
+            offlineConsoleErrors.push(message.text());
             return;
+        }
         consoleErrors.push(message.text());
     });
     page.on('requestfailed', (request) => {
@@ -89,11 +95,18 @@ function monitorPage(page: Page, baseUrl: string) {
         const error = request.failure()?.errorText ?? 'failed';
         // A newer worktree refresh may cancel this unrelated background GET.
         if (
+            url.origin === origin &&
             request.method() === 'GET' &&
-            url.pathname === '/api/git/worktrees' &&
+            ['/api/git/worktrees', '/api/git/worktree-dirty'].includes(
+                url.pathname,
+            ) &&
             error === 'net::ERR_ABORTED'
-        )
+        ) {
+            cancelledRequests.push(
+                `${request.method()} ${request.url()}: ${error}`,
+            );
             return;
+        }
         if (
             offlinePhase &&
             request.method() === 'GET' &&
@@ -103,14 +116,21 @@ function monitorPage(page: Page, baseUrl: string) {
                 '/api/config/mobile-appearance',
             ].includes(url.pathname) &&
             error === 'net::ERR_INTERNET_DISCONNECTED'
-        )
+        ) {
+            offlineRequests.push(
+                `${request.method()} ${request.url()}: ${error}`,
+            );
             return;
+        }
         failedRequests.push(`${request.method()} ${request.url()}: ${error}`);
     });
     return {
         pageErrors,
         consoleErrors,
         failedRequests,
+        offlineConsoleErrors,
+        offlineRequests,
+        cancelledRequests,
         setOfflinePhase(offline: boolean) {
             offlinePhase = offline;
         },
@@ -177,6 +197,7 @@ async function searchOffline(
         'Pi RPC transcript',
     );
     const input = bar.locator('.find-input');
+    await expect(input).toBeFocused();
     await input.fill(query);
     await expect(bar.locator('.find-status')).toContainText(
         '1 matches in Pi RPC transcript',
@@ -197,7 +218,7 @@ async function searchOffline(
 test('Pi RPC active-session search reveals local transcript rows while offline on desktop and touch', async ({
     browser,
     page,
-}) => {
+}, testInfo) => {
     test.setTimeout(240_000);
     page.setDefaultTimeout(30_000);
     const sessionPaths = new Map<string, string>();
@@ -294,12 +315,17 @@ test('Pi RPC active-session search reveals local transcript rows while offline o
         ).toHaveCount(0);
         mobileMonitor.setOfflinePhase(true);
         await mobileContext.setOffline(true);
-        await mobilePage.locator('#input-textarea').tap();
-        await mobilePage.keyboard.press('Control+f');
+        // Search stays available without the network, without Cmds, and
+        // without remote readiness: the transcript is already local.
+        const mobileDraft = 'offline mobile draft';
+        await mobilePage.locator('#input-textarea').fill(mobileDraft);
+        const mobileSearch = mobilePage.locator('#session-search-btn');
+        await expect(mobileSearch).toBeEnabled();
+        await mobileSearch.tap();
         const mobileBar = mobilePage.locator('.find-bar').last();
         await expect(mobileBar).toBeVisible();
         const mobileInput = mobileBar.locator('.find-input');
-        await mobileInput.tap();
+        await expect(mobileInput).toBeFocused();
         await mobilePage.keyboard.type('mobile-search-session-needle-007');
         await expect(mobileBar.locator('.find-status')).toContainText(
             '1 matches in Pi RPC transcript',
@@ -328,7 +354,19 @@ test('Pi RPC active-session search reveals local transcript rows while offline o
         ).toBe(true);
         await mobileBar.locator('.find-close').tap();
         await expect(mobileBar).toHaveCount(0);
+        await expect(mobilePage.locator('#input-textarea')).toHaveValue(
+            mobileDraft,
+        );
 
+        await expect(mobilePage.locator('#input-textarea')).toBeFocused();
+        await testInfo.attach('search-network-diagnostics.json', {
+            body: JSON.stringify(
+                { desktop: desktopMonitor, mobile: mobileMonitor },
+                null,
+                2,
+            ),
+            contentType: 'application/json',
+        });
         expect(mobileMonitor.pageErrors).toEqual([]);
         expect(desktopMonitor.pageErrors).toEqual([]);
         expect(desktopMonitor.consoleErrors).toEqual([]);

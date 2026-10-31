@@ -73,57 +73,6 @@ function makeBridgePiTab() {
     return fixture;
 }
 
-function installArchiveWorker({ failRange = false, silentInit = false } = {}) {
-    const workers = [];
-    class ArchiveWorker {
-        onmessage = null;
-        onerror = null;
-        terminated = false;
-
-        constructor() {
-            this.failRange = failRange;
-            this.silentInit = silentInit;
-            workers.push(this);
-        }
-
-        postMessage(command) {
-            this.jobId = command.jobId;
-            const reply = (message) => {
-                queueMicrotask(() => {
-                    if (!this.terminated)
-                        this.onmessage?.({
-                            data: { jobId: command.jobId, ...message },
-                        });
-                });
-            };
-            if (command.type === 'init') {
-                if (!this.silentInit)
-                    reply({ type: 'ready', through: command.through });
-            } else if (command.type === 'range') {
-                if (this.failRange) {
-                    reply({ type: 'error', message: 'archive parser failed' });
-                    return;
-                }
-                reply({
-                    type: 'matches',
-                    through: command.end,
-                    matches: [{ id: 1, snippet: 'ARCHIVE needle retained' }],
-                    capped: false,
-                });
-                reply({ type: 'ack', through: command.end });
-            } else if (command.type === 'finish') {
-                reply({ type: 'complete', through: 2 });
-            }
-        }
-
-        terminate() {
-            this.terminated = true;
-        }
-    }
-    vi.stubGlobal('Worker', ArchiveWorker);
-    return workers;
-}
-
 function makeManager(tab) {
     const composer = document.createElement('textarea');
     composer.id = 'input-textarea';
@@ -168,7 +117,15 @@ describe('active terminal find bar', () => {
                 bar.querySelector('.find-input'),
             );
 
-            dispatchKey(document.activeElement, manager, modifiers);
+            const repeated = dispatchKey(
+                document.activeElement,
+                manager,
+                modifiers,
+            );
+            expect(repeated.defaultPrevented).toBe(true);
+            expect(document.activeElement).toBe(
+                bar.querySelector('.find-input'),
+            );
             expect(
                 tab.termContainer.querySelectorAll('.find-bar'),
             ).toHaveLength(1);
@@ -227,11 +184,15 @@ describe('active terminal find bar', () => {
         expect(document.activeElement).toBe(composer);
     });
 
-    it('does not search during IME composition and rejects queries beyond 256 code points', () => {
-        const { tab } = makeTab();
+    it('keeps composing and oversized queries out of typing, navigation, and source changes', () => {
+        vi.useFakeTimers();
+        const fetchMock = mockFetch();
+        const { tab } = makeBridgePiTab();
         const { manager, composer } = makeManager(tab);
         dispatchKey(composer, manager, { ctrlKey: true });
-        const input = tab.termContainer.querySelector('.find-input');
+        const bar = tab.termContainer.querySelector('.find-bar');
+        const input = bar.querySelector('.find-input');
+        const source = bar.querySelector('.find-source-select');
         tab.searchAddon.findNext.mockClear();
         tab.searchAddon.findPrevious.mockClear();
         tab.searchAddon.clearDecorations.mockClear();
@@ -242,16 +203,54 @@ describe('active terminal find bar', () => {
         Object.defineProperty(composingInput, 'isComposing', { value: true });
         input.dispatchEvent(composingInput);
         expect(tab.searchAddon.findNext).not.toHaveBeenCalled();
+        for (const key of ['Enter', 'Escape']) {
+            const event = new KeyboardEvent('keydown', {
+                key,
+                bubbles: true,
+                cancelable: true,
+                isComposing: true,
+            });
+            input.dispatchEvent(event);
+            expect(event.defaultPrevented).toBe(false);
+        }
+        expect(bar.isConnected).toBe(true);
+        expect(source.disabled).toBe(true);
+        expect(bar.querySelector('.find-next').disabled).toBe(true);
+        expect(tab.searchAddon.findNext).not.toHaveBeenCalled();
         input.dispatchEvent(new Event('compositionend'));
         expect(tab.searchAddon.findNext).toHaveBeenCalledTimes(1);
+        expect(source.disabled).toBe(false);
 
         input.value = '🙂'.repeat(257);
         input.dispatchEvent(new Event('input', { bubbles: true }));
         expect(tab.searchAddon.findNext).toHaveBeenCalledTimes(1);
         expect(tab.searchAddon.clearDecorations).toHaveBeenCalled();
-        expect(
-            tab.termContainer.querySelector('.find-status').textContent,
-        ).toContain('256 code points');
+        expect(bar.querySelector('.find-status').textContent).toContain(
+            '256 code points',
+        );
+        expect(source.disabled).toBe(true);
+        for (const button of bar.querySelectorAll('.find-prev, .find-next')) {
+            expect(button.disabled).toBe(true);
+            button.click();
+        }
+        input.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+        );
+        source.dispatchEvent(new Event('change'));
+        expect(tab.searchAddon.findNext).toHaveBeenCalledTimes(1);
+        expect(tab.searchAddon.findPrevious).not.toHaveBeenCalled();
+        expect(fetchMock).not.toHaveBeenCalled();
+
+        // The exact code-point/UTF-8 boundary is still searchable.
+        input.value = '🙂'.repeat(256);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        expect(source.disabled).toBe(false);
+        expect(bar.querySelector('.find-next').disabled).toBe(false);
+        expect(tab.searchAddon.findNext).toHaveBeenLastCalledWith(
+            input.value,
+            expect.any(Object),
+        );
+        bar.querySelector('.find-close').click();
     });
 
     it('searches the loaded terminal immediately while Pi transcript search runs', async () => {
@@ -272,11 +271,7 @@ describe('active terminal find bar', () => {
         expect(source.value).toBe('transcript');
         expect(
             Array.from(source.options).map((option) => option.textContent),
-        ).toEqual([
-            'Loaded terminal output',
-            'Retained terminal output',
-            'Pi transcript',
-        ]);
+        ).toEqual(['Loaded output', 'Pi transcript']);
 
         const input = bar.querySelector('.find-input');
         input.value = 'bridge needle';
@@ -506,13 +501,8 @@ describe('active terminal find bar', () => {
         const fetchMock = mockFetch();
         dispatchKey(composer, manager, { ctrlKey: true });
         const bar = tab.termContainer.querySelector('.find-bar');
-        expect(bar.querySelector('.find-source-select').value).toBe('terminal');
-        expect(
-            Array.from(
-                bar.querySelector('.find-source-select').options,
-                (option) => option.textContent,
-            ),
-        ).toEqual(['Loaded terminal output', 'Retained terminal output']);
+        // One search source needs no selector.
+        expect(bar.querySelector('.find-source-select')).toBeNull();
         const input = bar.querySelector('.find-input');
         input.value = 'local only';
         input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -554,6 +544,7 @@ describe('active terminal find bar', () => {
         expect(bar.querySelector('.find-status').textContent).toContain(
             'showing loaded terminal output',
         );
+        expect(bar.querySelector('.find-status').dataset.error).toBeUndefined();
         bar.querySelector('.find-close').click();
 
         // A new host generation advertises the capability again. Reopening
@@ -573,407 +564,117 @@ describe('active terminal find bar', () => {
         reconnectedBar.querySelector('.find-close').click();
     });
 
-    it('keeps cached retained matches visible when a refresh expires', async () => {
-        localStorage.clear();
-        const { tab } = makeTab();
-        Object.assign(tab, {
-            coder: 'bash',
-            paneEpoch: 1,
-            paneOldest: 0,
-            drainedSeq: 0,
-            sessionId: 'archive-session',
-            ws: { mode: 'hot', lastFrameEnd: 2 },
-        });
-        const { manager, composer } = makeManager(tab);
-        const workers = installArchiveWorker();
-        manager._fetchTerminalState = vi.fn(async () => ({
-            through: 0,
-            oldest: 0,
-            cols: 80,
-            rows: 24,
-            bytes: new Uint8Array(),
-        }));
-        manager._fetchRecordingRangeOnce = vi.fn(async (_pane, start, end) => ({
-            start,
-            end,
-            bytes: new Uint8Array(end - start),
-            resizes: [],
-        }));
+    it.each(['socket', 'generation'])(
+        'does not navigate matches from a replaced bridge %s',
+        async (replacement) => {
+            vi.useFakeTimers();
+            const { tab } = makeBridgePiTab();
+            const { manager, composer } = makeManager(tab);
+            let host = 'old';
+            const fetchMock = mockFetch((_url, options) => {
+                const { query, generation } = JSON.parse(options.body);
+                return {
+                    session_id: 'session-1',
+                    anchor_leaf_id: 'leaf-1',
+                    next_index: 1,
+                    matches: [
+                        {
+                            entry_id: `${host}-entry`,
+                            role: 'assistant',
+                            snippet: `${host} host: ${query}`,
+                        },
+                    ],
+                    complete: true,
+                    unavailable: false,
+                    process_id: 'process-1',
+                    generation,
+                };
+            });
+            dispatchKey(composer, manager, { ctrlKey: true });
+            const bar = tab.termContainer.querySelector('.find-bar');
+            const input = bar.querySelector('.find-input');
+            input.value = 'needle';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            await vi.advanceTimersByTimeAsync(250);
+            bar.querySelector('.find-next').click();
+            expect(bar.querySelector('.find-preview').textContent).toBe(
+                'old host: needle',
+            );
 
+            host = 'new';
+            if (replacement === 'socket') {
+                tab.ws = {};
+                tab._piBridgeFresh = tab.ws;
+            } else {
+                tab.piBridge.generation = '8';
+            }
+            bar.querySelector('.find-next').click();
+            expect(bar.querySelector('.find-preview').hidden).toBe(true);
+            await vi.advanceTimersByTimeAsync(250);
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+            expect(bar.querySelector('.find-preview').textContent).toBe(
+                'new host: needle',
+            );
+            expect(input.value).toBe('needle');
+            bar.querySelector('.find-close').click();
+        },
+    );
+
+    it('keeps cached transcript matches and local controls usable through a timed-out refresh', async () => {
+        vi.useFakeTimers();
+        const { tab } = makeBridgePiTab();
+        const { manager, composer } = makeManager(tab);
+        const fetchMock = mockFetch((_url, options) => ({
+            session_id: 'session-1',
+            anchor_leaf_id: 'leaf-1',
+            next_index: 1,
+            matches: [
+                { entry_id: 'entry-1', role: 'assistant', snippet: 'needle' },
+            ],
+            complete: true,
+            unavailable: false,
+            process_id: 'process-1',
+            generation: JSON.parse(options.body).generation,
+        }));
         dispatchKey(composer, manager, { ctrlKey: true });
         let bar = tab.termContainer.querySelector('.find-bar');
         const input = bar.querySelector('.find-input');
-        input.value = 'ARCHIVE needle';
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        await vi.waitFor(() => {
-            expect(bar.querySelector('.find-source-select').value).toBe(
-                'retained',
-            );
-            expect(bar.querySelector('.find-status').textContent).toContain(
-                'Complete through captured byte 2',
-            );
-        });
-        input.dispatchEvent(
-            new KeyboardEvent('keydown', {
-                key: 'Enter',
-                bubbles: true,
-                cancelable: true,
-            }),
-        );
-        expect(bar.querySelector('.find-preview').textContent).toBe(
-            'ARCHIVE needle retained',
-        );
-        expect(workers).toHaveLength(1);
-        bar.querySelector('.find-close').click();
-
-        const expired = new Error('expired checkpoint');
-        expired.historyPermanent = true;
-        manager._fetchTerminalState.mockRejectedValue(expired);
-        dispatchKey(composer, manager, { ctrlKey: true });
-        bar = tab.termContainer.querySelector('.find-bar');
-        await vi.waitFor(() => {
-            expect(bar.querySelector('.find-status').textContent).toContain(
-                'Retained output search is incomplete',
-            );
-        });
-        expect(bar.querySelector('.find-status').textContent).toContain(
-            'Cached results cover output through byte 2',
-        );
-        expect(bar.querySelector('.find-status').textContent).not.toContain(
-            'Complete through',
-        );
-        bar.querySelector('.find-input').dispatchEvent(
-            new KeyboardEvent('keydown', {
-                key: 'Enter',
-                bubbles: true,
-                cancelable: true,
-            }),
-        );
-        expect(bar.querySelector('.find-preview').textContent).toBe(
-            'ARCHIVE needle retained',
-        );
-        bar.querySelector('.find-close').click();
-
-        manager._fetchTerminalState.mockResolvedValue({
-            through: 0,
-            oldest: 1,
-            cols: 80,
-            rows: 24,
-            bytes: new Uint8Array(),
-        });
-        dispatchKey(composer, manager, { ctrlKey: true });
-        bar = tab.termContainer.querySelector('.find-bar');
-        await vi.waitFor(() => {
-            expect(bar.querySelector('.find-status').textContent).toContain(
-                'Retained output search is incomplete',
-            );
-        });
-        expect(bar.querySelector('.find-status').textContent).toContain(
-            'Cached results cover output through byte 2',
-        );
-        expect(bar.querySelector('.find-status').textContent).not.toContain(
-            'Complete through',
-        );
-        expect(workers).toHaveLength(1);
-        bar.querySelector('.find-close').click();
-        localStorage.clear();
-    });
-
-    it('finishes an empty retained snapshot without requesting a range', async () => {
-        localStorage.clear();
-        const { tab } = makeTab();
-        Object.assign(tab, {
-            coder: 'bash',
-            paneEpoch: 3,
-            paneOldest: 2,
-            drainedSeq: 2,
-            sessionId: 'empty-archive-session',
-            ws: { mode: 'hot', lastFrameEnd: 2 },
-        });
-        const { manager, composer } = makeManager(tab);
-        const workers = installArchiveWorker();
-        manager._fetchTerminalState = vi.fn(async () => ({
-            through: 2,
-            oldest: 2,
-            cols: 80,
-            rows: 24,
-            bytes: new Uint8Array(),
-        }));
-        const rangeRead = vi.fn();
-        manager._fetchRecordingRangeOnce = rangeRead;
-
-        dispatchKey(composer, manager, { ctrlKey: true });
-        const bar = tab.termContainer.querySelector('.find-bar');
-        const input = bar.querySelector('.find-input');
-        input.value = 'empty archive';
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-
-        await vi.waitFor(() => {
-            expect(bar.querySelector('.find-status').textContent).toContain(
-                'No matches in retained output.',
-            );
-        });
-        expect(bar.querySelector('.find-status').textContent).toContain(
-            'Complete through captured byte 2.',
-        );
-        expect(rangeRead).not.toHaveBeenCalled();
-        expect(workers[0].terminated).toBe(true);
-        bar.querySelector('.find-close').click();
-        localStorage.clear();
-    });
-
-    it('terminates a retained worker that misses its acknowledgement deadline', async () => {
-        localStorage.clear();
-        vi.useFakeTimers();
-        const { tab } = makeTab();
-        Object.assign(tab, {
-            coder: 'bash',
-            paneEpoch: 4,
-            paneOldest: 0,
-            drainedSeq: 0,
-            sessionId: 'watchdog-session',
-            ws: { mode: 'hot', lastFrameEnd: 2 },
-        });
-        const { manager, composer } = makeManager(tab);
-        const workers = installArchiveWorker({ silentInit: true });
-        manager._fetchTerminalState = vi.fn(async () => ({
-            through: 0,
-            oldest: 0,
-            cols: 80,
-            rows: 24,
-            bytes: new Uint8Array(),
-        }));
-        manager._fetchRecordingRangeOnce = vi.fn();
-
-        dispatchKey(composer, manager, { ctrlKey: true });
-        const bar = tab.termContainer.querySelector('.find-bar');
-        const input = bar.querySelector('.find-input');
-        input.value = 'watchdog';
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        await vi.advanceTimersByTimeAsync(0);
-        expect(workers).toHaveLength(1);
-        expect(workers[0].terminated).toBe(false);
-
-        await vi.advanceTimersByTimeAsync(30_000);
-        expect(workers[0].terminated).toBe(true);
-        expect(bar.querySelector('.find-status').textContent).toContain(
-            'Retained output unavailable; loaded terminal search remains active.',
-        );
-        expect(manager._fetchRecordingRangeOnce).not.toHaveBeenCalled();
-        bar.querySelector('.find-close').click();
-    });
-
-    it('ignores a late archive reply after query and epoch replacement', async () => {
-        localStorage.clear();
-        const { tab } = makeTab();
-        Object.assign(tab, {
-            coder: 'bash',
-            paneEpoch: 1,
-            paneOldest: 0,
-            drainedSeq: 0,
-            sessionId: 'stale-archive-session',
-            ws: { mode: 'hot', lastFrameEnd: 2 },
-        });
-        const { manager, composer } = makeManager(tab);
-        const workers = installArchiveWorker({ silentInit: true });
-        manager._fetchTerminalState = vi.fn(async (_pane, _epoch, through) => ({
-            through,
-            oldest: 0,
-            cols: 80,
-            rows: 24,
-            bytes: new Uint8Array(),
-        }));
-        const rangeRead = vi.fn(async (_pane, start, end) => ({
-            start,
-            end,
-            bytes: new Uint8Array(end - start),
-            resizes: [],
-        }));
-        manager._fetchRecordingRangeOnce = rangeRead;
-
-        dispatchKey(composer, manager, { ctrlKey: true });
-        const bar = tab.termContainer.querySelector('.find-bar');
-        const input = bar.querySelector('.find-input');
-        input.value = 'old query';
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        await vi.waitFor(() => expect(workers).toHaveLength(1));
-        expect(rangeRead).not.toHaveBeenCalled();
-
-        tab.paneEpoch = 2;
         input.value = 'needle';
         input.dispatchEvent(new Event('input', { bubbles: true }));
-        await vi.waitFor(() => expect(workers).toHaveLength(2));
-        workers[0].onmessage({
-            data: { jobId: workers[0].jobId, type: 'ready', through: 0 },
-        });
-        await Promise.resolve();
-        expect(rangeRead).not.toHaveBeenCalled();
-
-        workers[1].onmessage({
-            data: { jobId: workers[1].jobId, type: 'ready', through: 0 },
-        });
-        await vi.waitFor(() => {
-            expect(bar.querySelector('.find-source-select').value).toBe(
-                'retained',
-            );
-            expect(bar.querySelector('.find-status').textContent).toContain(
-                'matches in retained output',
-            );
-        });
-        expect(rangeRead).toHaveBeenCalledTimes(1);
-        expect(workers[0].terminated).toBe(true);
+        await vi.advanceTimersByTimeAsync(250);
         bar.querySelector('.find-next').click();
-        expect(bar.querySelector('.find-preview').textContent).toBe(
-            'ARCHIVE needle retained',
-        );
         bar.querySelector('.find-close').click();
-    });
 
-    it('keeps loaded search available when the retained parser fails', async () => {
-        localStorage.clear();
-        const { tab } = makeTab();
-        Object.assign(tab, {
-            coder: 'bash',
-            paneEpoch: 1,
-            paneOldest: 0,
-            drainedSeq: 0,
-            sessionId: 'parser-failure-session',
-            ws: { mode: 'hot', lastFrameEnd: 2 },
+        let heldSignal;
+        fetchMock.mockImplementation((_url, { signal }) => {
+            heldSignal = signal;
+            return new Promise((_resolve, reject) => {
+                signal.addEventListener('abort', () => reject(signal.reason));
+            });
         });
-        const { manager, composer } = makeManager(tab);
-        const workers = installArchiveWorker({ failRange: true });
-        manager._fetchTerminalState = vi.fn(async () => ({
-            through: 0,
-            oldest: 0,
-            cols: 80,
-            rows: 24,
-            bytes: new Uint8Array(),
-        }));
-        manager._fetchRecordingRangeOnce = vi.fn(async (_pane, start, end) => ({
-            start,
-            end,
-            bytes: new Uint8Array(end - start),
-            resizes: [],
-        }));
-
+        composer.focus();
         dispatchKey(composer, manager, { ctrlKey: true });
-        const bar = tab.termContainer.querySelector('.find-bar');
-        const input = bar.querySelector('.find-input');
-        input.value = 'parser failure';
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-
-        await vi.waitFor(() => {
-            expect(bar.querySelector('.find-status').textContent).toContain(
-                'Retained output unavailable; loaded terminal search remains active.',
-            );
-        });
-        expect(bar.querySelector('.find-source-select').value).toBe('terminal');
-        expect(tab.searchAddon.findNext).toHaveBeenCalledWith(
-            'parser failure',
-            expect.any(Object),
-        );
-        expect(workers).toHaveLength(1);
-        expect(workers[0].terminated).toBe(true);
-        bar.querySelector('.find-close').click();
-    });
-
-    it('does not retry a permanent retained-range failure', async () => {
-        localStorage.clear();
-        const { tab } = makeTab();
-        Object.assign(tab, {
-            coder: 'bash',
-            paneEpoch: 1,
-            paneOldest: 0,
-            drainedSeq: 0,
-            sessionId: 'permanent-range-session',
-            ws: { mode: 'hot', lastFrameEnd: 2 },
-        });
-        const { manager, composer } = makeManager(tab);
-        const workers = installArchiveWorker();
-        manager._fetchTerminalState = vi.fn(async () => ({
-            through: 0,
-            oldest: 0,
-            cols: 80,
-            rows: 24,
-            bytes: new Uint8Array(),
-        }));
-        const expired = new Error('recording range expired');
-        expired.historyPermanent = true;
-        const rangeRead = vi.fn(async () => {
-            throw expired;
-        });
-        manager._fetchRecordingRangeOnce = rangeRead;
-
-        dispatchKey(composer, manager, { ctrlKey: true });
-        const bar = tab.termContainer.querySelector('.find-bar');
-        const input = bar.querySelector('.find-input');
-        input.value = 'expired archive';
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-
-        await vi.waitFor(() => {
-            expect(bar.querySelector('.find-status').textContent).toContain(
-                'Retained output unavailable; loaded terminal search remains active.',
-            );
-        });
-        expect(rangeRead).toHaveBeenCalledTimes(1);
-        expect(workers[0].terminated).toBe(true);
-        expect(tab.searchAddon.findNext).toHaveBeenCalledWith(
-            'expired archive',
-            expect.any(Object),
-        );
-        bar.querySelector('.find-close').click();
-        localStorage.clear();
-    });
-
-    it('retries the same retained range twice and stops with local fallback', async () => {
-        localStorage.clear();
-        vi.useFakeTimers();
-        const { tab } = makeTab();
-        Object.assign(tab, {
-            coder: 'bash',
-            paneEpoch: 1,
-            paneOldest: 0,
-            drainedSeq: 0,
-            sessionId: 'retry-session',
-            ws: { mode: 'hot', lastFrameEnd: 2 },
-        });
-        const { manager, composer } = makeManager(tab);
-        const workers = installArchiveWorker();
-        manager._fetchTerminalState = vi.fn(async () => ({
-            through: 0,
-            oldest: 0,
-            cols: 80,
-            rows: 24,
-            bytes: new Uint8Array(),
-        }));
-        const rangeRead = vi.fn(async () => null);
-        manager._fetchRecordingRangeOnce = rangeRead;
-
-        dispatchKey(composer, manager, { ctrlKey: true });
-        const bar = tab.termContainer.querySelector('.find-bar');
-        const input = bar.querySelector('.find-input');
-        input.value = 'retry range';
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-
-        await vi.advanceTimersByTimeAsync(0);
-        expect(rangeRead).toHaveBeenCalledTimes(1);
-        await vi.advanceTimersByTimeAsync(500);
-        expect(rangeRead).toHaveBeenCalledTimes(2);
-        await vi.advanceTimersByTimeAsync(1500);
-        expect(rangeRead).toHaveBeenCalledTimes(3);
-        expect(
-            rangeRead.mock.calls.map(([paneId, start, end, epoch]) => [
-                paneId,
-                start,
-                end,
-                epoch,
-            ]),
-        ).toEqual(Array.from({ length: 3 }, () => ['pane-search', 0, 2, 1]));
+        bar = tab.termContainer.querySelector('.find-bar');
+        expect(bar.querySelector('.find-preview').textContent).toBe('needle');
+        await vi.advanceTimersByTimeAsync(250);
+        expect(heldSignal.aborted).toBe(false);
+        bar.querySelector('.find-next').click();
+        expect(bar.querySelector('.find-preview').textContent).toBe('needle');
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(heldSignal.aborted).toBe(true);
+        expect(bar.querySelector('.find-preview').textContent).toBe('needle');
         expect(bar.querySelector('.find-status').textContent).toContain(
-            'Retained output unavailable; loaded terminal search remains active.',
+            'showing cached matches',
         );
-        expect(workers[0].terminated).toBe(true);
+        const source = bar.querySelector('.find-source-select');
+        source.value = 'terminal';
+        source.dispatchEvent(new Event('change'));
+        expect(tab.searchAddon.findNext).toHaveBeenLastCalledWith(
+            'needle',
+            expect.any(Object),
+        );
         bar.querySelector('.find-close').click();
+        expect(document.activeElement).toBe(composer);
     });
 
     it('routes Pi RPC search to the pane transcript and rejects stale query callbacks', () => {

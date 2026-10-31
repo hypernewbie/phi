@@ -3,7 +3,7 @@
 import { PTYWebSocket } from './ws.js';
 import { modelRequestJson } from './model-request.js';
 import { terminalSnapshot, resetTerminalState } from './terminal-state.js';
-import { terminalHistoryMethods, HISTORY_BOOK_BYTES } from './terminal-history.js';
+import { terminalHistoryMethods } from './terminal-history.js';
 import { normalizePath } from './sessions.js';
 import {
     projectWorktreeLabel,
@@ -95,125 +95,6 @@ import {
 } from './chat-pi/controller.js';
 import { formatPiRpcStatus } from './chat-pi/render.js';
 import { ACCENT_COLORS } from './theme.js';
-
-const TERMINAL_ARCHIVE_CACHE_KEY = 'phi_session_archive_search_v1';
-const TERMINAL_ARCHIVE_CACHE_SCHEMA = 1;
-const TERMINAL_ARCHIVE_CACHE_LIMIT = 1 << 20;
-const TERMINAL_ARCHIVE_RESULT_LIMIT = 200;
-const TERMINAL_ARCHIVE_SNIPPET_LIMIT = 2048;
-const TERMINAL_ARCHIVE_CACHE_ENCODER = new TextEncoder();
-let terminalArchiveCacheStorageKey = '';
-let terminalArchiveCacheEntries = [];
-
-function validTerminalArchiveCacheEntry(entry) {
-    return Boolean(
-        entry &&
-            entry.source === 'retained' &&
-            typeof entry.paneId === 'string' &&
-            entry.paneId.length > 0 &&
-            entry.paneId.length <= 128 &&
-            typeof entry.sessionId === 'string' &&
-            entry.sessionId.length <= 256 &&
-            Number.isSafeInteger(entry.epoch) &&
-            entry.epoch >= 0 &&
-            typeof entry.query === 'string' &&
-            Array.from(entry.query).length <= 256 &&
-            TERMINAL_ARCHIVE_CACHE_ENCODER.encode(entry.query).byteLength <= 1024 &&
-            Number.isSafeInteger(entry.floor) &&
-            entry.floor >= 0 &&
-            Number.isSafeInteger(entry.head) &&
-            entry.head >= entry.floor &&
-            entry.through === entry.head &&
-            entry.complete === true &&
-            typeof entry.capped === 'boolean' &&
-            (entry.updatedAt === undefined ||
-                (Number.isSafeInteger(entry.updatedAt) && entry.updatedAt >= 0)) &&
-            Array.isArray(entry.matches) &&
-            entry.matches.length <= TERMINAL_ARCHIVE_RESULT_LIMIT &&
-            entry.matches.every(
-                (match) =>
-                    match &&
-                    Number.isSafeInteger(match.id) &&
-                    match.id > 0 &&
-                    typeof match.snippet === 'string' &&
-                    TERMINAL_ARCHIVE_CACHE_ENCODER.encode(match.snippet).byteLength <=
-                        TERMINAL_ARCHIVE_SNIPPET_LIMIT,
-            ),
-    );
-}
-
-function readTerminalArchiveCache() {
-    const key = serverKey(TERMINAL_ARCHIVE_CACHE_KEY);
-    if (key === terminalArchiveCacheStorageKey) return terminalArchiveCacheEntries;
-    terminalArchiveCacheStorageKey = key;
-    terminalArchiveCacheEntries = [];
-    try {
-        const raw = localStorage.getItem(key);
-        if (
-            !raw ||
-            TERMINAL_ARCHIVE_CACHE_ENCODER.encode(raw).byteLength >
-                TERMINAL_ARCHIVE_CACHE_LIMIT
-        )
-            return terminalArchiveCacheEntries;
-        const parsed = JSON.parse(raw);
-        if (
-            parsed?.schema === TERMINAL_ARCHIVE_CACHE_SCHEMA &&
-            Array.isArray(parsed.entries)
-        )
-            terminalArchiveCacheEntries = parsed.entries
-                .filter(validTerminalArchiveCacheEntry)
-                .slice(-64);
-    } catch {
-        // Storage denial or corrupt cache falls back to memory.
-    }
-    return terminalArchiveCacheEntries;
-}
-
-function findTerminalArchiveCache(paneId, sessionId, epoch, query) {
-    const entries = readTerminalArchiveCache();
-    return (
-        entries.find(
-            (entry) =>
-                entry.paneId === paneId &&
-                entry.sessionId === sessionId &&
-                entry.epoch === epoch &&
-                entry.query === query,
-        ) || null
-    );
-}
-
-function persistTerminalArchiveCache(entry) {
-    if (!validTerminalArchiveCacheEntry(entry)) return;
-    const entries = readTerminalArchiveCache().filter(
-        (candidate) =>
-            candidate.paneId !== entry.paneId ||
-            candidate.sessionId !== entry.sessionId ||
-            candidate.epoch !== entry.epoch ||
-            candidate.query !== entry.query,
-    );
-    entries.push({ ...entry, updatedAt: Date.now() });
-    let raw = JSON.stringify({
-        schema: TERMINAL_ARCHIVE_CACHE_SCHEMA,
-        entries,
-    });
-    while (
-        entries.length > 0 &&
-        TERMINAL_ARCHIVE_CACHE_ENCODER.encode(raw).byteLength >
-            TERMINAL_ARCHIVE_CACHE_LIMIT
-    ) {
-        entries.shift();
-        raw = JSON.stringify({
-            schema: TERMINAL_ARCHIVE_CACHE_SCHEMA,
-            entries,
-        });
-    }
-    terminalArchiveCacheEntries = entries;
-    try {
-        localStorage.setItem(serverKey(TERMINAL_ARCHIVE_CACHE_KEY), raw);
-    } catch {
-        // Keep the bounded in-memory result when storage is unavailable.
-    }
-}
 
 export const DEFAULT_ANSI_THEME = {
     background: '#08080a',
@@ -890,6 +771,9 @@ export class TabManager {
         this.selfHudCloseTimer = null;
         this.sendInputBtn = document.getElementById('send-input-btn');
         this.cancelInputBtn = document.getElementById('cancel-input-btn');
+        this.sessionSearchBtn = document.getElementById(
+            'session-search-btn',
+        );
         this.copyInputBtn = document.getElementById('copy-input-btn');
         this.thinkingVisibilityBtn = document.getElementById(
             'thinking-visibility-btn',
@@ -2224,6 +2108,10 @@ export class TabManager {
                     // Bottom-bar controls keep native keyboard activation,
                     // including Expand and Interrupt in direct-input mode.
                     t.closest('.presets-actions') ||
+                    // The search launcher parks in the bottom bar when input
+                    // is collapsed but sits in the composer row when it is
+                    // staged. Its Enter/Tab must open search, never type.
+                    t.closest('#session-search-btn') ||
                     // Thinking is UI-only: its Enter/Tab must not reach the
                     // PTY as raw keys on coarse pointers.
                     t.closest('.pi-rpc-thinking-trigger') ||
@@ -2267,6 +2155,19 @@ export class TabManager {
             this.copyInputBtn.addEventListener('click', () => {
                 this.sendRawInput('/copy\r', { submit: true });
                 this.inputTextArea.focus({ preventScroll: true });
+            });
+        }
+
+        if (this.sessionSearchBtn) {
+            this.sessionSearchBtn.addEventListener('click', () => {
+                const activeTab = this.getActiveTab();
+                if (!this._sessionSearchEligible(activeTab)) return;
+                // Direct-mode search returns to the terminal, staged search
+                // to the composer that owned the focus before the tap.
+                this.toggleFindBar(
+                    activeTab,
+                    activeTab.directMode ? null : this.inputTextArea,
+                );
             });
         }
 
@@ -2843,7 +2744,6 @@ export class TabManager {
         const samePane = prevEpoch !== undefined && prevEpoch === info.epoch;
         if (!samePane || info.ckpt?.bytes) tabInfo._serverStateAvailable = Boolean(info.ckpt?.bytes);
         if (!samePane) {
-            tabInfo._cancelSessionArchiveSearch?.();
             this._cancelHistoryRequest(tabInfo);
             // A different pane lifetime owns a different byte stream.
             pty.hold?.();
@@ -4278,13 +4178,17 @@ export class TabManager {
             this.renderPresets(tab.coder);
         }
 
-        // Keep the same interrupt button and handler in the collapsed row;
-        // restore it beside Send when staged input returns.
+        // Keep the same interrupt and search buttons, with their handlers, in
+        // the collapsed row; restore them beside Send when staged input returns.
         if (this.cancelInputBtn) {
             if (tab.directMode) {
                 this.directModeToggle.before(this.cancelInputBtn);
+                if (this.sessionSearchBtn)
+                    this.cancelInputBtn.before(this.sessionSearchBtn);
             } else {
                 this.sendInputBtn?.parentElement?.append(this.cancelInputBtn);
+                if (this.sessionSearchBtn)
+                    this.sendInputBtn?.before(this.sessionSearchBtn);
             }
         }
         this.directModeToggle.setAttribute(
@@ -5566,6 +5470,14 @@ export class TabManager {
         bar.replaceChildren(cwdEl, mainRow);
     }
 
+    // A pane can be searched whenever it renders output in this browser:
+    // live or disconnected, bridged or not. Never gate on a request.
+    _sessionSearchEligible(tab) {
+        return Boolean(
+            tab?.termContainer && (tab.term || tab.coder === 'pi-rpc'),
+        );
+    }
+
     _setPiRpcActionVisibility(tab) {
         const hidden = tab?.coder === 'pi-rpc';
         for (const element of [this.copyInputBtn, this.directModeToggle]) {
@@ -5573,6 +5485,10 @@ export class TabManager {
         }
         this.thinkingVisibilityBtn?.classList.toggle('hidden', !hidden);
         if (hidden) this.directModeToggle?.classList.remove('active');
+        if (this.sessionSearchBtn) {
+            this.sessionSearchBtn.disabled =
+                !this._sessionSearchEligible(tab);
+        }
     }
 
     _closePiSubagentViewerIfOpen() {
@@ -7946,7 +7862,6 @@ export class TabManager {
             for (const item of prevTab.draftAttachments || []) {
                 if (item.uploadState === 'uploading') this._attachmentRequestScopes.get(item.id)?.controller?.abort();
             }
-            prevTab._cancelSessionArchiveSearch?.();
             if (prevTab.term) {
                 prevTab.isAtBottom =
                     prevTab.term.buffer.active.viewportY >=
@@ -7986,7 +7901,6 @@ export class TabManager {
 
         newTab.tabEl.classList.add('active');
         newTab.termContainer.classList.add('active');
-        newTab._resumeSessionArchiveSearch?.();
         if (newTab.isAttention) {
             this._setTabAttention(newTab, false);
             this.updateDocumentTitle();
@@ -8383,7 +8297,6 @@ export class TabManager {
         this.app?.removeReadyPane?.(paneId);
 
         const wasActive = this.activePaneId === paneId;
-        tab._cancelSessionArchiveSearch?.();
         tab.softClosing = true;
         tab.softCloseStartedAt = Date.now();
         tab.tabEl.classList.add('soft-closed');
@@ -8561,7 +8474,6 @@ export class TabManager {
         if (!tab) return;
         if (!preserveStorage) this.app?.removeReadyPane?.(paneId);
         tab.finalizing = true;
-        tab._cancelSessionArchiveSearch?.();
         this._clearReaderAnchor(tab);
 
         this._cancelHistoryRequest?.(tab);
@@ -12841,7 +12753,6 @@ export class TabManager {
 
     _setCurrentTabSocket(tabInfo, socket) {
         tabInfo._piTitleRevision = -1;
-        if (tabInfo.ws !== socket) tabInfo._cancelSessionArchiveSearch?.();
         tabInfo.ws = socket;
         // A new browser socket restarts bridge ordering: never carry
         // the old server's counter across, and drop freshness until
@@ -13953,42 +13864,18 @@ export class TabManager {
         return true;
     }
 
-    toggleFindBar(tabInfo) {
+    toggleFindBar(tabInfo, focusOrigin = document.activeElement) {
         const existing = tabInfo.termContainer.querySelector('.find-bar');
         if (existing) {
             existing.querySelector('.find-input')?.focus({ preventScroll: true });
             return;
         }
 
-        const previousFocus = document.activeElement;
+        const previousFocus = focusOrigin;
         const isRpc = tabInfo.coder === 'pi-rpc';
         const transcriptAvailableAtOpen =
             !isRpc && this._piBridgeTranscriptSearchEligible(tabInfo);
-        const searchInstance = {};
-        tabInfo._sessionSearchInstance = searchInstance;
         let activeSource = transcriptAvailableAtOpen ? 'transcript' : 'terminal';
-        let archiveAutoPreferred = !transcriptAvailableAtOpen;
-        let archiveGeneration = 0;
-        let archiveQuery = '';
-        let archiveResults = [];
-        let archiveFreshResults = [];
-        let archiveFreshIds = new Set();
-        let archiveIndex = -1;
-        let archiveThrough = 0;
-        let archiveFloor = 0;
-        let archiveHead = 0;
-        let archiveComplete = false;
-        let archiveCapped = false;
-        let archiveFreshCapped = false;
-        let archiveCached = false;
-        let archiveCacheHead = null;
-        let archiveFailure = null;
-        let archiveController = null;
-        let archiveWorker = null;
-        let archiveWorkerWatchdog = null;
-        let pendingArchiveDirection = null;
-        let pendingArchiveReply = null;
-        let archiveWorkerError = null;
         let searchBar = null;
         let cancelRpcSearch = () => {};
         let transcriptGeneration = 0;
@@ -13997,7 +13884,8 @@ export class TabManager {
         let transcriptIndex = -1;
         let transcriptComplete = false;
         let transcriptCapped = false;
-        let transcriptOrigin = null;
+        let transcriptSocket = null;
+        let transcriptBridgeGeneration = '';
         let transcriptController = null;
         let transcriptDeadline = null;
         let pendingTranscriptDirection = null;
@@ -14030,6 +13918,24 @@ export class TabManager {
             }
         };
 
+        // A bounded delay that aborts with the search it belongs to.
+        const searchDelay = (delay, signal) =>
+            new Promise((resolve, reject) => {
+                if (signal.aborted) {
+                    reject(signal.reason || new Error('search canceled'));
+                    return;
+                }
+                const timer = setTimeout(() => {
+                    signal.removeEventListener('abort', abort);
+                    resolve();
+                }, delay);
+                const abort = () => {
+                    clearTimeout(timer);
+                    reject(signal.reason || new Error('search canceled'));
+                };
+                signal.addEventListener('abort', abort, { once: true });
+            });
+
         const searchTerminal = (direction, query) => {
             if (!query) {
                 searchBar?.setStatus('');
@@ -14060,591 +13966,6 @@ export class TabManager {
                 found ? '' : 'No match in loaded terminal output.',
                 !found,
             );
-        };
-
-        const archiveStatus = () => {
-            if (!archiveQuery) return '';
-            const total = archiveResults.length;
-            const boundary = archiveCached && !archiveComplete
-                ? archiveCacheHead
-                : archiveThrough;
-            if (archiveFailure) {
-                const cached = archiveCached
-                    ? ` Cached results cover output through byte ${archiveCacheHead}.`
-                    : '';
-                return `Retained output search is incomplete.${cached} Loaded output remains available.`;
-            }
-            if (archiveComplete) {
-                const coverage = ` Complete through captured byte ${archiveHead}.`;
-                if (archiveCapped)
-                    return `200 results shown; refine the search.${coverage}`;
-                return total === 0
-                    ? `No matches in retained output.${coverage}`
-                    : `${total} matches in retained output.${coverage}`;
-            }
-            if (archiveCached) {
-                return total === 0
-                    ? `Checking cached retained-output search through byte ${boundary}…`
-                    : `${total} cached matches through byte ${boundary}; checking retained output…`;
-            }
-            return total === 0
-                ? `Searching retained output through captured byte ${archiveHead}…`
-                : `${total} matches so far; scanning retained output through captured byte ${archiveHead}…`;
-        };
-
-        const showArchiveState = () => {
-            if (activeSource === 'retained') {
-                searchBar?.setStatus(archiveStatus(), Boolean(archiveFailure));
-            } else if (archiveFailure && archiveAutoPreferred) {
-                searchBar?.setStatus(
-                    'Retained output unavailable; loaded terminal search remains active.',
-                    true,
-                );
-            }
-        };
-
-        const stopArchiveWorker = (reason = null) => {
-            if (archiveWorkerWatchdog) clearTimeout(archiveWorkerWatchdog);
-            archiveWorkerWatchdog = null;
-            const pending = pendingArchiveReply;
-            pendingArchiveReply = null;
-            archiveWorker?.terminate();
-            archiveWorker = null;
-            if (pending) pending.reject(reason || new Error('archive search canceled'));
-        };
-
-        const saveArchiveMemory = () => {
-            if (!archiveQuery) return;
-            tabInfo._terminalArchiveSearchMemory = {
-                paneId: tabInfo.paneId,
-                sessionId: typeof tabInfo.sessionId === 'string' ? tabInfo.sessionId : '',
-                epoch: tabInfo.paneEpoch,
-                query: archiveQuery,
-                floor: archiveFloor,
-                head: archiveHead,
-                through: archiveThrough,
-                complete: archiveComplete,
-                capped: archiveCapped,
-                results: archiveResults.slice(0, TERMINAL_ARCHIVE_RESULT_LIMIT),
-            };
-        };
-
-        const cancelArchiveSearch = () => {
-            saveArchiveMemory();
-            archiveGeneration++;
-            archiveController?.abort();
-            archiveController = null;
-            stopArchiveWorker();
-        };
-
-        const archiveIsCurrent = (generation, query, paneId, epoch, socket) =>
-            generation === archiveGeneration &&
-            query === archiveQuery &&
-            searchBar?.root.isConnected &&
-            tabInfo._sessionSearchInstance === searchInstance &&
-            this.tabs?.get(paneId) === tabInfo &&
-            !tabInfo.finalizing &&
-            !tabInfo.softClosing &&
-            tabInfo.paneId === paneId &&
-            tabInfo.paneEpoch === epoch &&
-            tabInfo.ws === socket &&
-            this.getActiveTab?.() === tabInfo;
-
-        const activateArchiveSource = () => {
-            if (activeSource === 'retained') return;
-            activeSource = 'retained';
-            searchBar?.setSource('retained');
-            tabInfo.searchAddon?.clearDecorations();
-        };
-
-        const navigateArchive = (direction) => {
-            if (!searchBar || !archiveQuery) return;
-            if (archiveResults.length === 0) {
-                if (!archiveComplete && !archiveFailure) {
-                    pendingArchiveDirection = direction;
-                    searchBar.setStatus('Searching retained output…', false);
-                } else {
-                    searchBar.setPreview(null);
-                    searchBar.setStatus(archiveStatus(), Boolean(archiveFailure));
-                }
-                return;
-            }
-            archiveIndex = archiveIndex < 0
-                ? direction === 'next' ? 0 : archiveResults.length - 1
-                : (archiveIndex + (direction === 'next' ? 1 : -1) + archiveResults.length) % archiveResults.length;
-            searchBar.setPreview(archiveResults[archiveIndex].snippet);
-            searchBar.setStatus(archiveStatus(), Boolean(archiveFailure));
-        };
-
-        const searchDelay = (delay, signal) => new Promise((resolve, reject) => {
-            if (signal.aborted) {
-                reject(signal.reason || new Error('archive search canceled'));
-                return;
-            }
-            const timer = setTimeout(() => {
-                signal.removeEventListener('abort', abort);
-                resolve();
-            }, delay);
-            const abort = () => {
-                clearTimeout(timer);
-                reject(signal.reason || new Error('archive search canceled'));
-            };
-            signal.addEventListener('abort', abort, { once: true });
-        });
-
-        const archiveReadWithRetries = async (read, signal) => {
-            let lastError = new Error('retained output read failed');
-            const delays = [500, 1500];
-            for (let attempt = 0; attempt < 3; attempt++) {
-                if (signal.aborted)
-                    throw signal.reason || new Error('archive search canceled');
-                const request = new AbortController();
-                const onAbort = () => request.abort(signal.reason);
-                signal.addEventListener('abort', onAbort, { once: true });
-                const timeout = setTimeout(
-                    () => request.abort(new Error('retained output read timed out')),
-                    10_000,
-                );
-                try {
-                    const value = await read(request.signal);
-                    if (signal.aborted)
-                        throw signal.reason || new Error('archive search canceled');
-                    if (value !== null && value !== undefined) return value;
-                    lastError = new Error('retained output read returned no data');
-                } catch (error) {
-                    if (signal.aborted || error?.historyPermanent) throw error;
-                    lastError = error;
-                } finally {
-                    clearTimeout(timeout);
-                    signal.removeEventListener('abort', onAbort);
-                }
-                if (attempt < delays.length) await searchDelay(delays[attempt], signal);
-            }
-            throw lastError;
-        };
-
-        const waitForArchiveWorker = (expectedType, send) => new Promise((resolve, reject) => {
-            if (!archiveWorker || archiveWorkerError) {
-                reject(archiveWorkerError || new Error('archive worker is unavailable'));
-                return;
-            }
-            if (pendingArchiveReply) {
-                reject(new Error('archive worker command already pending'));
-                return;
-            }
-            const pending = { expectedType, resolve, reject };
-            pendingArchiveReply = pending;
-            archiveWorkerWatchdog = setTimeout(() => {
-                if (pendingArchiveReply !== pending) return;
-                archiveWorkerError = new Error('archive worker timed out');
-                stopArchiveWorker(archiveWorkerError);
-            }, 30_000);
-            try {
-                send();
-            } catch (error) {
-                if (pendingArchiveReply === pending) {
-                    pendingArchiveReply = null;
-                    clearTimeout(archiveWorkerWatchdog);
-                    archiveWorkerWatchdog = null;
-                }
-                reject(error);
-            }
-        });
-
-        const handleArchiveWorkerMessage = (generation, query, paneId, epoch, socket, jobId, message) => {
-            if (
-                !archiveIsCurrent(generation, query, paneId, epoch, socket) ||
-                message?.jobId !== jobId
-            )
-                return;
-            if (message.type === 'matches') {
-                const queryPattern = new RegExp(
-                    query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
-                    'iu',
-                );
-                if (
-                    !Number.isSafeInteger(message.through) ||
-                    message.through < archiveFloor ||
-                    message.through > archiveHead ||
-                    !Array.isArray(message.matches) ||
-                    message.matches.length > TERMINAL_ARCHIVE_RESULT_LIMIT ||
-                    typeof message.capped !== 'boolean'
-                ) {
-                    archiveWorkerError = new Error('invalid archive worker result');
-                    stopArchiveWorker(archiveWorkerError);
-                    return;
-                }
-                for (const match of message.matches) {
-                    if (
-                        !match ||
-                        !Number.isSafeInteger(match.id) ||
-                        match.id <= 0 ||
-                        archiveFreshIds.has(match.id) ||
-                        typeof match.snippet !== 'string' ||
-                        TERMINAL_ARCHIVE_CACHE_ENCODER.encode(match.snippet).byteLength >
-                            TERMINAL_ARCHIVE_SNIPPET_LIMIT ||
-                        !queryPattern.test(match.snippet)
-                    ) {
-                        archiveWorkerError = new Error('invalid archive worker match');
-                        stopArchiveWorker(archiveWorkerError);
-                        return;
-                    }
-                    archiveFreshIds.add(match.id);
-                    archiveFreshResults.push(match);
-                }
-                if (archiveFreshResults.length > TERMINAL_ARCHIVE_RESULT_LIMIT) {
-                    archiveWorkerError = new Error('archive worker exceeded result limit');
-                    stopArchiveWorker(archiveWorkerError);
-                    return;
-                }
-                archiveFreshResults.sort((a, b) => a.id - b.id);
-                archiveThrough = Math.max(archiveThrough, message.through);
-                archiveFreshCapped = archiveFreshCapped || message.capped;
-                if (!archiveCached) {
-                    archiveCapped = archiveFreshCapped;
-                    const selectedId = archiveIndex >= 0
-                        ? archiveResults[archiveIndex]?.id
-                        : null;
-                    archiveResults = archiveFreshResults.slice();
-                    archiveIndex = selectedId === null
-                        ? -1
-                        : archiveResults.findIndex((result) => result.id === selectedId);
-                    if (archiveIndex < 0) archiveIndex = -1;
-                }
-                if (activeSource === 'retained') {
-                    searchBar?.setPreview(
-                        archiveIndex >= 0
-                            ? archiveResults[archiveIndex]?.snippet || null
-                            : null,
-                    );
-                    showArchiveState();
-                }
-                saveArchiveMemory();
-                if (pendingArchiveDirection && archiveResults.length) {
-                    const direction = pendingArchiveDirection;
-                    pendingArchiveDirection = null;
-                    navigateArchive(direction);
-                }
-                return;
-            }
-            if (message.type === 'error') {
-                archiveWorkerError = new Error('archive worker failed');
-                stopArchiveWorker(archiveWorkerError);
-                return;
-            }
-            if (!['ready', 'ack', 'complete'].includes(message.type)) {
-                archiveWorkerError = new Error('unexpected archive worker reply');
-                stopArchiveWorker(archiveWorkerError);
-                return;
-            }
-            const pending = pendingArchiveReply;
-            if (!pending || pending.expectedType !== message.type) {
-                archiveWorkerError = new Error('out-of-order archive worker reply');
-                stopArchiveWorker(archiveWorkerError);
-                return;
-            }
-            if (archiveWorkerWatchdog) clearTimeout(archiveWorkerWatchdog);
-            archiveWorkerWatchdog = null;
-            pendingArchiveReply = null;
-            pending.resolve(message);
-        };
-
-        const startArchiveSearch = (query) => {
-            if (!query) {
-                cancelArchiveSearch();
-                archiveQuery = '';
-                archiveResults = [];
-                archiveFreshResults = [];
-                archiveFreshIds.clear();
-                archiveIndex = -1;
-                archiveComplete = false;
-                archiveCapped = false;
-                archiveFreshCapped = false;
-                archiveCached = false;
-                archiveFailure = null;
-                pendingArchiveDirection = null;
-                if (activeSource === 'retained') {
-                    searchBar?.setPreview(null);
-                    searchBar?.setStatus('');
-                }
-                return;
-            }
-            if (
-                archiveQuery === query &&
-                (archiveComplete ||
-                    (archiveController && !archiveController.signal.aborted))
-            ) {
-                if (activeSource === 'retained') showArchiveState();
-                return;
-            }
-            cancelArchiveSearch();
-            const generation = archiveGeneration;
-            archiveQuery = query;
-            searchBar?.setPreview(null);
-            archiveResults = [];
-            archiveFreshResults = [];
-            archiveFreshIds = new Set();
-            archiveIndex = -1;
-            archiveThrough = 0;
-            archiveFloor = 0;
-            archiveHead = 0;
-            archiveComplete = false;
-            archiveCapped = false;
-            archiveFreshCapped = false;
-            archiveCached = false;
-            archiveCacheHead = null;
-            archiveFailure = null;
-            pendingArchiveDirection = null;
-            archiveWorkerError = null;
-
-            const paneId = tabInfo.paneId;
-            const epoch = tabInfo.paneEpoch;
-            const socket = tabInfo.ws;
-            const sessionId = typeof tabInfo.sessionId === 'string'
-                ? tabInfo.sessionId
-                : '';
-            const memory = tabInfo._terminalArchiveSearchMemory;
-            const remembered =
-                memory?.paneId === paneId &&
-                memory.sessionId === sessionId &&
-                memory.epoch === epoch &&
-                memory.query === query
-                    ? memory
-                    : null;
-            const cache =
-                typeof paneId === 'string' && Number.isSafeInteger(epoch)
-                    ? remembered || findTerminalArchiveCache(paneId, sessionId, epoch, query)
-                    : null;
-            if (cache) {
-                archiveResults = (cache.results || cache.matches).map((match) => ({ ...match }));
-                archiveCached = true;
-                archiveCacheHead = cache.through ?? cache.head;
-                archiveFloor = cache.floor ?? 0;
-                archiveHead = cache.head ?? archiveCacheHead ?? 0;
-                archiveThrough = cache.through ?? cache.head ?? 0;
-                archiveCapped = cache.capped === true;
-                if (archiveAutoPreferred && archiveResults.length) {
-                    activateArchiveSource();
-                    searchBar?.setStatus(archiveStatus(), false);
-                }
-            }
-
-            const floor = tabInfo.paneOldest;
-            const head = socket?.lastFrameEnd ?? tabInfo.drainedSeq;
-            if (
-                typeof paneId !== 'string' ||
-                !Number.isSafeInteger(epoch) ||
-                epoch < 0 ||
-                !Number.isSafeInteger(floor) ||
-                floor < 0 ||
-                !Number.isSafeInteger(head) ||
-                head < floor ||
-                !tabInfo.term ||
-                typeof Worker !== 'function'
-            ) {
-                archiveFailure = new Error('archive metadata unavailable');
-                archiveHead = Number.isSafeInteger(head) ? head : 0;
-                archiveFloor = Number.isSafeInteger(floor) ? floor : 0;
-                if (activeSource === 'retained') showArchiveState();
-                else if (archiveAutoPreferred)
-                    searchBar?.setStatus(
-                        'Retained output metadata unavailable; loaded terminal search remains active.',
-                        true,
-                    );
-                return;
-            }
-            archiveFloor = floor;
-            archiveHead = head;
-            archiveThrough = archiveCached ? archiveCacheHead ?? floor : floor;
-            archiveController = new AbortController();
-            const signal = archiveController.signal;
-            const isCurrent = () =>
-                archiveIsCurrent(generation, query, paneId, epoch, socket);
-
-            void (async () => {
-                try {
-                    if (activeSource === 'retained') showArchiveState();
-                    const state = await archiveReadWithRetries(
-                        (requestSignal) =>
-                            this._fetchTerminalState(
-                                paneId,
-                                epoch,
-                                floor,
-                                requestSignal,
-                            ),
-                        signal,
-                    );
-                    if (!isCurrent()) return;
-                    if (
-                        state.through !== floor ||
-                        state.oldest !== floor ||
-                        !Number.isSafeInteger(state.cols) ||
-                        !Number.isSafeInteger(state.rows) ||
-                        !(state.bytes instanceof Uint8Array) ||
-                        state.bytes.byteLength > (2 << 20)
-                    )
-                        throw new Error('archive checkpoint changed');
-
-                    const jobId = `${paneId}:${epoch}:${generation}`;
-                    const worker = new Worker(
-                        new URL('./terminal-search-worker.js', import.meta.url),
-                        { type: 'module' },
-                    );
-                    archiveWorker = worker;
-                    worker.onmessage = (event) =>
-                        handleArchiveWorkerMessage(
-                            generation,
-                            query,
-                            paneId,
-                            epoch,
-                            socket,
-                            jobId,
-                            event.data,
-                        );
-                    worker.onerror = () => {
-                        if (!isCurrent()) return;
-                        archiveWorkerError = new Error('archive worker failed');
-                        stopArchiveWorker(archiveWorkerError);
-                    };
-                    const checkpointBytes = state.bytes;
-                    const ready = await waitForArchiveWorker('ready', () =>
-                        worker.postMessage(
-                            {
-                                type: 'init',
-                                jobId,
-                                query,
-                                through: floor,
-                                cols: state.cols,
-                                rows: state.rows,
-                                bytes: checkpointBytes,
-                            },
-                            [checkpointBytes.buffer],
-                        ),
-                    );
-                    if (!isCurrent()) return;
-                    if (ready.through !== floor)
-                        throw new Error('archive worker checkpoint mismatch');
-
-                    let cursor = floor;
-                    let eventCursor = state.eventCursor;
-                    while (cursor < head) {
-                        if (!isCurrent()) return;
-                        const end = Math.min(head, cursor + HISTORY_BOOK_BYTES);
-                        const range = await archiveReadWithRetries(
-                            (requestSignal) =>
-                                this._fetchRecordingRangeOnce(
-                                    paneId,
-                                    cursor,
-                                    end,
-                                    epoch,
-                                    requestSignal,
-                                    eventCursor,
-                                ),
-                            signal,
-                        );
-                        if (!isCurrent()) return;
-                        if (
-                            range.start !== cursor ||
-                            range.end !== end ||
-                            !(range.bytes instanceof Uint8Array) ||
-                            range.bytes.byteLength !== end - cursor ||
-                            range.bytes.byteLength > HISTORY_BOOK_BYTES ||
-                            !Array.isArray(range.resizes)
-                        )
-                            throw new Error('invalid retained range');
-                        const rangeBytes = range.bytes;
-                        const response = await waitForArchiveWorker('ack', () =>
-                            worker.postMessage(
-                                {
-                                    type: 'range',
-                                    jobId,
-                                    start: cursor,
-                                    end,
-                                    bytes: rangeBytes,
-                                    resizes: range.resizes,
-                                },
-                                [rangeBytes.buffer],
-                            ),
-                        );
-                        if (!isCurrent()) return;
-                        if (response.through !== end)
-                            throw new Error('archive worker frontier mismatch');
-                        cursor = end;
-                        archiveThrough = cursor;
-                        eventCursor = range.endCursor ?? eventCursor;
-                        saveArchiveMemory();
-                        if (activeSource === 'retained') showArchiveState();
-                    }
-
-                    const complete = await waitForArchiveWorker('complete', () =>
-                        worker.postMessage({ type: 'finish', jobId }),
-                    );
-                    if (!isCurrent()) return;
-                    if (complete.through !== head)
-                        throw new Error('archive worker did not reach captured head');
-                    stopArchiveWorker();
-                    archiveThrough = head;
-                    archiveComplete = true;
-                    archiveCapped = archiveFreshCapped;
-                    archiveFailure = null;
-                    archiveCached = false;
-                    archiveCacheHead = null;
-                    const selectedSnippet = archiveIndex >= 0
-                        ? archiveResults[archiveIndex]?.snippet
-                        : null;
-                    archiveResults = archiveFreshResults.slice(0, TERMINAL_ARCHIVE_RESULT_LIMIT);
-                    archiveIndex = selectedSnippet
-                        ? archiveResults.findIndex((match) => match.snippet === selectedSnippet)
-                        : -1;
-                    if (archiveIndex < 0) archiveIndex = -1;
-                    if (pendingArchiveDirection && archiveResults.length) {
-                        const direction = pendingArchiveDirection;
-                        pendingArchiveDirection = null;
-                        navigateArchive(direction);
-                    }
-                    persistTerminalArchiveCache({
-                        source: 'retained',
-                        paneId,
-                        sessionId,
-                        epoch,
-                        query,
-                        floor,
-                        head,
-                        through: head,
-                        complete: true,
-                        capped: archiveCapped,
-                        matches: archiveResults,
-                    });
-                    if (archiveAutoPreferred && activeSource === 'terminal')
-                        activateArchiveSource();
-                    saveArchiveMemory();
-                    if (activeSource === 'retained') {
-                        searchBar?.setPreview(
-                            archiveIndex >= 0
-                                ? archiveResults[archiveIndex]?.snippet || null
-                                : null,
-                        );
-                        showArchiveState();
-                    }
-                } catch (error) {
-                    if (!isCurrent()) return;
-                    archiveFailure = error;
-                    archiveComplete = false;
-                    saveArchiveMemory();
-                    archiveController?.abort();
-                    archiveController = null;
-                    stopArchiveWorker(error);
-                    showArchiveState();
-                } finally {
-                    if (generation === archiveGeneration) {
-                        if (!archiveIsCurrent(generation, query, paneId, epoch, socket)) {
-                            archiveController?.abort();
-                            stopArchiveWorker();
-                        }
-                        archiveController = null;
-                    }
-                }
-            })();
         };
 
         const rpcStatus = () => {
@@ -14786,7 +14107,16 @@ export class TabManager {
                 searchBar.setPreview(null);
                 searchBar.setStatus(
                     'Pi transcript unavailable; showing loaded terminal output.',
+                    false,
                 );
+                return;
+            }
+            if (
+                tabInfo.ws !== transcriptSocket ||
+                String(tabInfo.piBridge?.generation || '') !== transcriptBridgeGeneration
+            ) {
+                startPiTranscriptSearch(searchBar.input.value);
+                pendingTranscriptDirection = direction;
                 return;
             }
             if (transcriptResults.length === 0) {
@@ -14821,6 +14151,8 @@ export class TabManager {
             pendingTranscriptDirection = null;
             const socket = tabInfo.ws;
             const bridgeGeneration = String(tabInfo.piBridge?.generation || '');
+            transcriptSocket = socket;
+            transcriptBridgeGeneration = bridgeGeneration;
             const cached = tabInfo._piTranscriptSearchCache;
             const cacheUsable =
                 !!query &&
@@ -14833,7 +14165,6 @@ export class TabManager {
                 transcriptIndex = cached.index;
                 transcriptComplete = cached.complete === true;
                 transcriptCapped = cached.capped === true;
-                transcriptOrigin = cached.origin;
                 searchBar?.setPreview(
                     transcriptIndex >= 0
                         ? transcriptResults[transcriptIndex]?.snippet || null
@@ -14844,7 +14175,6 @@ export class TabManager {
                 transcriptIndex = -1;
                 transcriptComplete = !query;
                 transcriptCapped = false;
-                transcriptOrigin = null;
                 searchBar?.setPreview(null);
             }
             if (!query) {
@@ -14861,6 +14191,7 @@ export class TabManager {
                 searchBar?.setPreview(null);
                 searchBar?.setStatus(
                     'Pi transcript unavailable; showing loaded terminal output.',
+                    false,
                 );
                 return;
             }
@@ -15018,7 +14349,6 @@ export class TabManager {
                             : -1;
                     transcriptComplete = complete;
                     transcriptCapped = capped;
-                    transcriptOrigin = { processId, sessionId, anchorLeafId };
                     searchBar?.setPreview(
                         transcriptIndex >= 0
                             ? transcriptResults[transcriptIndex]?.snippet || null
@@ -15032,7 +14362,6 @@ export class TabManager {
                         complete,
                         capped,
                         index: transcriptIndex,
-                        origin: transcriptOrigin,
                     };
                     tabInfo._piTranscriptSearchCache = resultCache;
                     if (pendingTranscriptDirection && transcriptResults.length) {
@@ -15044,7 +14373,6 @@ export class TabManager {
                     }
                 } catch {
                     if (!isCurrent()) return;
-                    transcriptOrigin = null;
                     if (cacheUsable) {
                         transcriptResults = cached.results.slice(0, 200);
                         transcriptIndex = cached.index;
@@ -15057,6 +14385,7 @@ export class TabManager {
                         );
                         searchBar?.setStatus(
                             'Pi transcript refresh unavailable; showing cached matches.',
+                            false,
                         );
                     } else {
                         activeSource = 'terminal';
@@ -15069,6 +14398,7 @@ export class TabManager {
                         searchTerminal('next', query);
                         searchBar?.setStatus(
                             'Pi transcript unavailable; showing loaded terminal output.',
+                            false,
                         );
                     }
                 } finally {
@@ -15086,20 +14416,17 @@ export class TabManager {
             sourceLabel: isRpc ? 'Pi RPC transcript' : 'Loaded terminal output',
             sources: isRpc
                 ? undefined
-                : [
-                      { value: 'terminal', label: 'Loaded terminal output' },
-                      { value: 'retained', label: 'Retained terminal output' },
-                      ...(transcriptAvailableAtOpen
-                          ? [{ value: 'transcript', label: 'Pi transcript' }]
-                          : []),
-                  ],
+                : transcriptAvailableAtOpen
+                  ? [
+                        { value: 'terminal', label: 'Loaded output' },
+                        { value: 'transcript', label: 'Pi transcript' },
+                    ]
+                  : undefined,
             selectedSource: activeSource,
             onSourceChange: (source) => {
-                archiveAutoPreferred = false;
                 activeSource = source;
                 const query = searchBar.input.value;
                 if (source === 'transcript') {
-                    cancelArchiveSearch();
                     searchTerminal('next', query);
                     startPiTranscriptSearch(query);
                     return;
@@ -15112,15 +14439,7 @@ export class TabManager {
                 transcriptComplete = false;
                 transcriptCapped = false;
                 searchBar.setPreview(null);
-                if (source === 'retained') {
-                    tabInfo.searchAddon?.clearDecorations();
-                    if (query) startArchiveSearch(query);
-                    else startArchiveSearch('');
-                    showArchiveState();
-                } else {
-                    cancelArchiveSearch();
-                    searchTerminal('next', query);
-                }
+                searchTerminal('next', query);
             },
             ariaLabel: isRpc
                 ? 'Search Pi RPC transcript'
@@ -15132,28 +14451,20 @@ export class TabManager {
                     return;
                 }
                 searchTerminal('next', query);
-                if (activeSource === 'transcript') {
-                    startArchiveSearch('');
-                    startPiTranscriptSearch(query);
-                    return;
+                if (activeSource !== 'transcript') {
+                    transcriptGeneration++;
+                    cancelTranscriptRequest();
+                    transcriptQuery = '';
+                    searchBar.setPreview(null);
                 }
-                transcriptGeneration++;
-                cancelTranscriptRequest();
-                transcriptQuery = '';
-                searchBar.setPreview(null);
-                if (activeSource === 'retained' || archiveAutoPreferred)
-                    startArchiveSearch(query);
-                else if (!query)
-                    startArchiveSearch('');
+                if (activeSource === 'transcript') startPiTranscriptSearch(query);
             },
             onNavigate: (direction) => {
                 if (isRpc) {
                     navigateRpc(direction);
                     return;
                 }
-                archiveAutoPreferred = false;
                 if (activeSource === 'transcript') navigateTranscript(direction);
-                else if (activeSource === 'retained') navigateArchive(direction);
                 else searchTerminal(direction, searchBar.input.value);
             },
             onClose: () => {
@@ -15161,27 +14472,10 @@ export class TabManager {
                 cancelRpcSearch();
                 transcriptGeneration++;
                 cancelTranscriptRequest();
-                cancelArchiveSearch();
-                if (tabInfo._sessionSearchInstance === searchInstance) {
-                    delete tabInfo._sessionSearchInstance;
-                    delete tabInfo._cancelSessionArchiveSearch;
-                    delete tabInfo._resumeSessionArchiveSearch;
-                }
                 if (!isRpc) tabInfo.searchAddon?.clearDecorations();
                 restoreFocus();
             },
         });
-        tabInfo._cancelSessionArchiveSearch = cancelArchiveSearch;
-        tabInfo._resumeSessionArchiveSearch = () => {
-            if (
-                searchBar?.root.isConnected &&
-                archiveQuery &&
-                !archiveComplete &&
-                !archiveFailure &&
-                (activeSource === 'retained' || archiveAutoPreferred)
-            )
-                startArchiveSearch(archiveQuery);
-        };
         searchBar.input.focus({ preventScroll: true });
         searchBar.search();
     }

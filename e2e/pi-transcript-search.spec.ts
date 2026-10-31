@@ -310,7 +310,10 @@ test('managed Pi transcript search works through the find bar on desktop and tou
             )
             .tap();
         await mobilePage.locator(`#term-${pane} .xterm-screen`).tap();
-        await mobilePage.keyboard.press('Control+f');
+        // A phone has no Ctrl+F: the launcher is the only touch entry point.
+        const mobileSearch = mobilePage.locator('#session-search-btn');
+        await expect(mobileSearch).toBeEnabled();
+        await mobileSearch.tap();
         const mobileBar = mobilePage.locator(`#term-${pane} .find-bar`);
         await expect(mobileBar).toBeVisible();
         const mobileInput = mobileBar.locator('.find-input');

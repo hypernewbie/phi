@@ -45,6 +45,7 @@ function setupManager() {
         inputTextArea: document.getElementById('input-textarea'),
         sendInputBtn: document.getElementById('send-input-btn'),
         cancelInputBtn: document.getElementById('cancel-input-btn'),
+        sessionSearchBtn: document.getElementById('session-search-btn'),
         inputBarContainer: document.getElementById('input-bar-container'),
         presetsContainer: document.getElementById('presets-container'),
         copyInputBtn: document.getElementById('copy-input-btn'),
@@ -88,7 +89,7 @@ describe('terminal toolbar markup and bindings', () => {
         }
     });
 
-    it('folds on click, moves the existing interrupt button, and restores the draft on expand', () => {
+    it('folds on click, moves the existing interrupt and search buttons, and restores the draft on expand', () => {
         const { manager, first } = setupManager();
         Object.assign(manager, {
             renderPresets: vi.fn(),
@@ -98,6 +99,7 @@ describe('terminal toolbar markup and bindings', () => {
         });
         Object.assign(first, { directMode: false, isAtBottom: true });
         const cancel = manager.cancelInputBtn;
+        const search = manager.sessionSearchBtn;
         const expandedActions = manager.sendInputBtn.parentElement;
         manager.inputTextArea.value = 'keep this draft';
 
@@ -111,6 +113,8 @@ describe('terminal toolbar markup and bindings', () => {
             true,
         );
         expect(cancel.parentElement.className).toBe('presets-actions');
+        expect(search.parentElement).toBe(cancel.parentElement);
+        expect(search.nextElementSibling).toBe(cancel);
         expect(cancel.nextElementSibling).toBe(manager.directModeToggle);
         expect(manager.directModeToggle.getAttribute('aria-expanded')).toBe(
             'false',
@@ -124,7 +128,12 @@ describe('terminal toolbar markup and bindings', () => {
             manager.inputBarContainer.classList.contains('direct-mode-active'),
         ).toBe(false);
         expect(cancel.parentElement).toBe(expandedActions);
+        expect(search.parentElement).toBe(expandedActions);
+        expect(search.nextElementSibling).toBe(manager.sendInputBtn);
         expect(document.querySelectorAll('#cancel-input-btn')).toHaveLength(1);
+        expect(document.querySelectorAll('#session-search-btn')).toHaveLength(
+            1,
+        );
         expect(manager.inputTextArea.value).toBe('keep this draft');
         expect(manager.directModeToggle.getAttribute('aria-expanded')).toBe(
             'true',
@@ -164,6 +173,9 @@ describe('terminal toolbar markup and bindings', () => {
             expect(manager.cancelInputBtn.parentElement.className).toBe(
                 'presets-actions',
             );
+            expect(manager.sessionSearchBtn.parentElement).toBe(
+                manager.cancelInputBtn.parentElement,
+            );
             expect(manager.inputTextArea.value).toBe('unsent draft');
         },
     );
@@ -194,6 +206,9 @@ describe('terminal toolbar markup and bindings', () => {
             expect(manager.cancelInputBtn.parentElement).toBe(
                 manager.sendInputBtn.parentElement,
             );
+            expect(manager.sessionSearchBtn.parentElement).toBe(
+                manager.sendInputBtn.parentElement,
+            );
             expect(
                 manager.inputBarContainer.classList.contains(
                     'direct-mode-active',
@@ -205,6 +220,49 @@ describe('terminal toolbar markup and bindings', () => {
         },
     );
 
+    it('opens search for the pane active at tap time', () => {
+        const { manager, first, second } = setupManager();
+        manager.toggleFindBar = vi.fn();
+        first.termContainer = document.createElement('div');
+        second.termContainer = document.createElement('div');
+        // No live socket on either pane: search reads the local buffer.
+        delete first.ws;
+
+        manager._setPiRpcActionVisibility(first);
+        expect(manager.sessionSearchBtn.disabled).toBe(false);
+        manager.sessionSearchBtn.click();
+        expect(manager.toggleFindBar).toHaveBeenCalledExactlyOnceWith(
+            first,
+            manager.inputTextArea,
+        );
+
+        // The launcher resolves the active pane when tapped, not at mount.
+        manager.activePaneId = second.paneId;
+        manager._setPiRpcActionVisibility(second);
+        manager.sessionSearchBtn.click();
+        expect(manager.toggleFindBar).toHaveBeenLastCalledWith(
+            second,
+            manager.inputTextArea,
+        );
+
+        // Collapsed input gives focus back to the terminal, not the composer.
+        second.directMode = true;
+        manager.sessionSearchBtn.click();
+        expect(manager.toggleFindBar).toHaveBeenLastCalledWith(second, null);
+        second.directMode = false;
+
+        // No rendered output and no active pane stay inert.
+        delete first.term;
+        manager.activePaneId = first.paneId;
+        manager._setPiRpcActionVisibility(first);
+        expect(manager.sessionSearchBtn.disabled).toBe(true);
+        manager.sessionSearchBtn.click();
+        manager.tabs.clear();
+        manager._setPiRpcActionVisibility(undefined);
+        manager.sessionSearchBtn.click();
+        expect(manager.toggleFindBar).toHaveBeenCalledTimes(3);
+    });
+
     it('keeps Enter and Tab on collapsed controls out of the mobile PTY fallback', () => {
         const { manager } = setupManager();
         vi.stubGlobal(
@@ -214,13 +272,20 @@ describe('terminal toolbar markup and bindings', () => {
         manager.inputBarContainer.classList.remove('hidden');
         manager._forwardKeyToPty = vi.fn();
         manager.directModeToggle.before(manager.cancelInputBtn);
+        // A supported pane enables the staged search launcher; the fallback
+        // must still ignore its Enter/Tab with an empty composer.
+        manager.sessionSearchBtn.disabled = false;
         const fallback = document.addEventListener.mock.calls.find(
             ([type, handler]) =>
                 type === 'keydown' &&
                 handler.toString().includes('_forwardKeyToPty'),
         )[1];
 
-        for (const id of ['direct-mode-toggle', 'cancel-input-btn']) {
+        for (const id of [
+            'direct-mode-toggle',
+            'cancel-input-btn',
+            'session-search-btn',
+        ]) {
             for (const key of ['Enter', 'Tab']) {
                 const event = new KeyboardEvent('keydown', {
                     key,

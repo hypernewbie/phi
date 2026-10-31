@@ -146,12 +146,23 @@ export function createSessionSearchBar(
     if (preview) root.appendChild(preview);
     options.container.appendChild(root);
 
-    sourceSelect?.addEventListener('change', () =>
-        options.onSourceChange?.(sourceSelect.value),
-    );
-
     let composing = false;
     let closed = false;
+
+    const canSearch = (): boolean =>
+        !closed && !composing && !queryTooLong(input.value);
+    const updateControls = (): void => {
+        const disabled = !canSearch();
+        previous.disabled = disabled;
+        next.disabled = disabled;
+        if (sourceSelect) sourceSelect.disabled = disabled;
+    };
+    const navigate = (direction: SessionSearchDirection): void => {
+        if (canSearch()) options.onNavigate(direction);
+    };
+    sourceSelect?.addEventListener('change', () => {
+        if (canSearch()) options.onSourceChange?.(sourceSelect.value);
+    });
 
     const setStatus = (text: string, error = true): void => {
         status.textContent = text;
@@ -164,6 +175,7 @@ export function createSessionSearchBar(
         preview.hidden = !text;
     };
     const search = (): void => {
+        updateControls();
         if (closed || composing) return;
         const query = input.value;
         if (queryTooLong(query)) {
@@ -185,6 +197,7 @@ export function createSessionSearchBar(
 
     input.addEventListener('compositionstart', () => {
         composing = true;
+        updateControls();
         options.onQuery('');
         setPreview(null);
         setStatus('Composing search query…', false);
@@ -198,17 +211,29 @@ export function createSessionSearchBar(
         search();
     });
     root.addEventListener('keydown', (event) => {
+        // Let the document shortcut handler keep repeated Ctrl/Cmd+F in
+        // this bar instead of falling through to the browser's own Find.
+        if (
+            !composing &&
+            !event.isComposing &&
+            !event.altKey &&
+            (event.ctrlKey || event.metaKey) &&
+            event.key.toLowerCase() === 'f'
+        )
+            return;
+        // Enter/Escape belong to the IME until composition ends.
+        event.stopPropagation();
+        if (composing || event.isComposing) return;
         if (event.key === 'Escape') {
             event.preventDefault();
             close();
         } else if (event.target === input && event.key === 'Enter') {
             event.preventDefault();
-            options.onNavigate(event.shiftKey ? 'previous' : 'next');
+            navigate(event.shiftKey ? 'previous' : 'next');
         }
-        event.stopPropagation();
     });
-    previous.addEventListener('click', () => options.onNavigate('previous'));
-    next.addEventListener('click', () => options.onNavigate('next'));
+    previous.addEventListener('click', () => navigate('previous'));
+    next.addEventListener('click', () => navigate('next'));
     closeButton.addEventListener('click', close);
 
     return {
