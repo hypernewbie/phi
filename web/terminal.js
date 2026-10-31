@@ -10534,6 +10534,9 @@ export class TabManager {
         // The idle sample can lag the lifecycle edge by one frame;
         // keep the queue until readiness is authoritative.
         if (!piBridgeReloadReady(view).ready) return;
+        if (!this._piBridgeReloadEligible(tabInfo)) return;
+        if (typeof navigator !== 'undefined' && navigator.onLine === false)
+            return;
         this._dispatchPiBridgeReload(tabInfo, view, { focus: false });
     }
 
@@ -10570,6 +10573,8 @@ export class TabManager {
             intent.phase = 'requested';
             intent.requestId = result.requestId;
             this._piReloadPersist(op.tab);
+            // A slow HTTP receipt may follow the release snapshot.
+            this._piReloadRetire(op.tab);
             this._refreshPiReloadRow(op.tab);
             this._piReloadToast('Reload requested — check Pi');
         } else if (result?.kind === 'refused') {
@@ -10593,6 +10598,7 @@ export class TabManager {
             intent.phase = 'unconfirmed';
             if (result?.requestId) intent.requestId = result.requestId;
             this._piReloadPersist(op.tab);
+            this._piReloadRetire(op.tab);
             this._refreshPiReloadRow(op.tab);
             this._piReloadToast(
                 'Reload unconfirmed — check Pi. Not retried.',
@@ -13104,7 +13110,7 @@ export class TabManager {
         }
     }
 
-    renderPresets(coderId) {
+    renderPresets(coderId, { refreshQuickCommands = true } = {}) {
         const activeTab = this.getActiveTab();
         if (activeTab?.coder === 'pi')
             this._bindThinkingPresetStore(this.app?.scope);
@@ -13436,7 +13442,11 @@ export class TabManager {
             }
         }
         const qcDropup = document.getElementById('quick-commands-dropup');
-        if (qcDropup && !qcDropup.classList.contains('hidden')) {
+        if (
+            refreshQuickCommands &&
+            qcDropup &&
+            !qcDropup.classList.contains('hidden')
+        ) {
             this.renderQuickCmdsDropup();
         }
         const keysDropup = document.getElementById('keys-presets-dropup');
@@ -15344,6 +15354,9 @@ export class TabManager {
     // changes; status rides the title plus the dismiss control.
     _piReloadControlState(tab) {
         const none = { title: '', queued: false, dismiss: false };
+        if (tab && !tab._piReloadIntent)
+            tab._piReloadIntent = this._piReloadRestore(tab);
+        this._piReloadRetire(tab);
         const intent = tab?._piReloadIntent;
         if (!intent) return none;
         if (
@@ -15546,7 +15559,12 @@ export class TabManager {
         // Thinking cleanup first so the single renderPresets below owns the
         // open-picker re-render with settled pending state (one levels fetch).
         this._refreshPiBridgeThinking(tab);
-        if (this.getActiveTab() === tab) this.renderPresets('pi');
+        if (this.getActiveTab() === tab) {
+            // Bridge telemetry changes Reload status, not the Cmds catalog.
+            // Patch that row without replacing a keyboard user's focus.
+            this.renderPresets('pi', { refreshQuickCommands: false });
+            this._refreshPiReloadRow(tab);
+        }
         if (
             this.getActiveTab() === tab &&
             typeof this.renderPiRpcStatusBar === 'function'

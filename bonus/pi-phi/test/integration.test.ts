@@ -20,6 +20,12 @@ import {
     CAPABILITY_RELOAD,
 } from '../src/protocol.js';
 import { BridgeTestClient } from '../src/test-client.js';
+import { BridgeChannel } from '../src/channel.js';
+import {
+    captureNativeReloadBaseline,
+    freshReloadLatch,
+} from '../src/native-reload.js';
+import { Runtime, freshCompactLatch } from '../src/runtime.js';
 
 interface ControlResponse {
     ok: boolean;
@@ -646,6 +652,70 @@ describe('reload', () => {
         expect(res.error).toContain('capability not negotiated');
         expect(client.receivedReloadRequests()).toBe(0);
         await client.close();
+    }, 20_000);
+
+    it('delivers a focus refusal before release retires its server waiter', async () => {
+        const pane = 'pane-reload-focus';
+        const { process, token } = await registerPane(pane);
+        await control({ op: 'complete', process });
+        let nativeCalls = 0;
+        class CustomEditor {
+            history: string[] = [];
+            async onSubmit() {
+                nativeCalls++;
+            }
+        }
+        let focused: object = new CustomEditor();
+        const ctx = {
+            sessionManager: {
+                getSessionId: () => 'sess-focus',
+                getLeafId: () => null,
+            },
+            isIdle: () => true,
+            hasPendingMessages: () => false,
+            ui: {
+                getEditorComponent: () => undefined,
+                setWidget: (
+                    _key: string,
+                    factory: ((tui: unknown) => unknown) | undefined,
+                ) => factory?.({ getFocusedComponent: () => focused }),
+            },
+        };
+        const latch = freshReloadLatch();
+        expect(captureNativeReloadBaseline(ctx, latch)).toBe(true);
+        let accepted = false;
+        const runtime = new Runtime({
+            creds: { target, pane, process, token },
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            reloadState: latch,
+            makeChannel(creds, hooks) {
+                const channel = new BridgeChannel(creds, hooks);
+                const connect = channel.connect.bind(channel);
+                channel.connect = async (hello) => {
+                    const result = await connect(hello);
+                    accepted = true;
+                    return result;
+                };
+                return channel;
+            },
+        });
+        try {
+            runtime.start(ctx);
+            await expect.poll(() => accepted).toBe(true);
+            focused = {}; // A selector took focus after capability negotiation.
+            const { generation, pubRev } = await reloadStamps(process);
+            const call = await dispatchReload(process, generation, pubRev);
+            const result = await waitReload(call);
+            expect(result.ok).toBe(true);
+            expect(result.outcome).toBe('RELOAD_DISPATCH_OUTCOME_REFUSED');
+            expect(result.reason).toBe('unavailable');
+            expect(nativeCalls).toBe(0);
+            expect(latch.pending).toBeNull();
+        } finally {
+            runtime.shutdown();
+            await control({ op: 'revoke', process });
+        }
     }, 20_000);
 
     it('negotiates, correlates, and releases native Reload requests', async () => {

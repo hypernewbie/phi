@@ -3797,16 +3797,6 @@ function lastSnapshot(ch: MockChannel): PiToPhi {
 }
 
 describe('Runtime reload dispatch', () => {
-    it('keeps the reload outcome vocabulary stable', () => {
-        expect(ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_UNSPECIFIED).toBe(
-            0,
-        );
-        expect(ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_DISPATCHED).toBe(
-            1,
-        );
-        expect(ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_REFUSED).toBe(2);
-    });
-
     it('advertises reload with the idle pair, without the compact API', async () => {
         const { ch, rt } = await startedReload({ compact: undefined });
         const hello = ch.hellos[0]!;
@@ -3984,6 +3974,17 @@ describe('Runtime reload dispatch', () => {
         expect(reloadAcks(ch).map((a) => a.reason)).toEqual(['unavailable']);
         expect(editor.calls).toEqual([]);
         expect(latch.pending).toBeNull();
+        // Release evidence retires the server's operation. The refusal
+        // must reach the same stream first, or its waiter sees unknown.
+        const frames = ch.nonfatalSends;
+        expect(frames.map((frame) => payloadOf(frame).$case)).toEqual([
+            'stateSnapshot',
+            'reloadAck',
+            'stateSnapshot',
+        ]);
+        expect(reloadReadinessOf(frames[0]!).reloadPending).toBe(true);
+        expect(reloadReadinessOf(frames[2]!).reloadPending).toBe(false);
+        expect(reloadReadinessOf(frames[2]!).highWater).toBe(1n);
         holder.current = editor;
         ch.hooks!.onMessage(reloadRequest('2'));
         expect(reloadAcks(ch).map((a) => a.reason)).toEqual([

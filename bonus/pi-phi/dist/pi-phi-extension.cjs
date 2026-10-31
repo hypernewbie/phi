@@ -30651,13 +30651,13 @@ var Runtime = class {
       const attempt = invokeNativeReload(ctx, reload);
       if (!attempt.entered) {
         reload.pending = null;
-        this.publishContextOnly();
         this.sendReloadAck(
           req.requestId,
           2 /* RELOAD_DISPATCH_OUTCOME_REFUSED */,
           "unavailable",
           dispatchChannel
         );
+        this.publishContextOnly();
         return;
       }
       if (this.sendReloadAck(

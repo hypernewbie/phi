@@ -2325,13 +2325,15 @@ export class Runtime {
                 // the request. Release the latch and refuse; a later
                 // explicit request may proceed after restoration.
                 reload.pending = null;
-                this.publishContextOnly();
+                // Release readiness retires the server operation, so its
+                // refusal receipt must enter the stream first.
                 this.sendReloadAck(
                     req.requestId,
                     ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_REFUSED,
                     'unavailable',
                     dispatchChannel,
                 );
+                this.publishContextOnly();
                 return;
             }
             if (

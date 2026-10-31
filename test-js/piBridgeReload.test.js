@@ -608,6 +608,37 @@ describe('reload persistence and retirement', () => {
         expect(fetchSpy).toHaveBeenCalledTimes(2);
     });
 
+    it('uses release evidence that arrived before a delayed receipt', async () => {
+        const gate = deferred();
+        const fetchSpy = mockFetch(() => gate.promise);
+        const tm = makeTm();
+        const tab = makePiTab();
+        tm.tabs.set(tab.paneId, tab);
+        tm.activePaneId = tab.paneId;
+        baseline(tm, tab);
+        tm.sendSlashCommand(tab, '/reload');
+
+        tm._acceptPiBridgeState(
+            tab,
+            wsFrame(tab, {
+                telemetry_revision: '8',
+                reload_high_water: '1',
+            }),
+            tab.ws,
+        );
+        expect(tab._piReloadIntent?.phase).toBe('sending');
+        gate.resolve({
+            status: 202,
+            json: { outcome: 'dispatched', request_id: '1' },
+        });
+        await tick();
+        await tick();
+        expect(tab._piReloadIntent).toBeNull();
+        expect(localStorage.getItem('phi.piBridge.reload.v1.pi-1')).toBeNull();
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        expect(tab.ws.sendInput).not.toHaveBeenCalled();
+    });
+
     it('a marker for a replaced runtime clears for a new decision', async () => {
         const fetchSpy = mockFetch(() => ({
             status: 409,
@@ -881,6 +912,46 @@ describe('reload turn-scoped queue', () => {
         expect(tab._piReloadIntent?.phase).toBe('review');
     });
 
+    it.each([
+        ['peer disconnect', { connected: 'false' }],
+        ['capability loss', { capabilities: '' }],
+    ])(
+        'keeps never-sent work queued through %s',
+        async (_name, unavailable) => {
+            const fetchSpy = mockFetch(() => ({
+                status: 202,
+                json: { outcome: 'dispatched', request_id: '1' },
+            }));
+            const tm = makeTm();
+            const tab = makePiTab();
+            tm.tabs.set(tab.paneId, tab);
+            tm.activePaneId = tab.paneId;
+            runningBaseline(tm, tab);
+            tm.sendSlashCommand(tab, '/reload');
+
+            tm._acceptPiBridgeState(
+                tab,
+                wsFrame(tab, {
+                    telemetry_revision: '8',
+                    running: 'false',
+                    ...unavailable,
+                }),
+                tab.ws,
+            );
+            expect(fetchSpy).not.toHaveBeenCalled();
+            expect(tab._piReloadIntent?.phase).toBe('queued');
+            expect(tab.ws.sendInput).not.toHaveBeenCalled();
+
+            tm._acceptPiBridgeState(
+                tab,
+                wsFrame(tab, { telemetry_revision: '9', running: 'false' }),
+                tab.ws,
+            );
+            await tick();
+            expect(fetchSpy).toHaveBeenCalledTimes(1);
+        },
+    );
+
     it('an HTTP seed alone never flushes the queue', async () => {
         const fetchSpy = mockFetch(() => ({
             status: 202,
@@ -1067,6 +1138,38 @@ describe('reload Cmds row states', () => {
         };
     }
 
+    it('shows restored uncertainty as soon as Cmds opens, without a send', () => {
+        const fetchSpy = mockFetch(() => ({}));
+        localStorage.setItem(
+            'phi.piBridge.reload.v1.pi-1',
+            JSON.stringify({
+                v: 1,
+                id: 'r-restored',
+                phase: 'sending',
+                paneId: 'pi-1',
+                processId: 'proc-1',
+                generation: '2',
+                pubRev: '7',
+                runId: '0',
+                contextRevision: '0',
+                requestId: null,
+            }),
+        );
+        const tm = makeTm();
+        const tab = makePiTab();
+        tm.tabs.set(tab.paneId, tab);
+        tm.activePaneId = tab.paneId;
+        baseline(tm, tab);
+        openMenu(tm);
+
+        expect(reloadRow().status?.textContent).toBe(
+            'Reload unconfirmed — check Pi. Not retried.',
+        );
+        expect(reloadRow().dismiss).not.toBeNull();
+        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(tab.ws.sendInput).not.toHaveBeenCalled();
+    });
+
     it('renders queued state with no dismiss control', () => {
         mockFetch(() => ({}));
         const tm = makeTm();
@@ -1159,6 +1262,19 @@ describe('reload Cmds row states', () => {
         expect(after.btn?.title).toBe('Reload requested — check Pi');
         expect(after.dismiss?.textContent).toBe('Dismiss');
         expect(document.activeElement).toBe(after.btn);
+
+        tm._acceptPiBridgeState(
+            tab,
+            wsFrame(tab, {
+                telemetry_revision: '8',
+                reload_high_water: '1',
+            }),
+            tab.ws,
+        );
+        expect(reloadRow().btn).toBe(before.btn);
+        expect(reloadRow().btn?.title).toBe('');
+        expect(reloadRow().dismiss).toBeNull();
+        expect(document.activeElement).toBe(before.btn);
     });
 });
 
@@ -1184,6 +1300,15 @@ describe('reload explicit offline signal', () => {
             expect(toasts(tm)).toEqual([
                 'Reload queued — waiting for connection',
             ]);
+            expect(tab._piReloadIntent?.phase).toBe('queued');
+            // Established sockets can still deliver state while the
+            // browser reports offline. Such a frame is not a send gate.
+            tm._acceptPiBridgeState(
+                tab,
+                wsFrame(tab, { telemetry_revision: '8' }),
+                tab.ws,
+            );
+            expect(fetchSpy).not.toHaveBeenCalled();
             expect(tab._piReloadIntent?.phase).toBe('queued');
         } finally {
             Object.defineProperty(window.navigator, 'onLine', {
