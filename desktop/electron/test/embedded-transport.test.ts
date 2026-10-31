@@ -66,6 +66,7 @@ function fakeAuthHost(
 } {
   return {
     getToken: vi.fn(() => AUTH_BUNDLE.token),
+    getSelectedProtocol: vi.fn(() => 'v2'),
     getBundle: vi.fn(() => AUTH_BUNDLE),
     installBundle: vi.fn(() => true),
     // The fence is a counter: any other attempt (a second login, an install,
@@ -580,6 +581,43 @@ describe('embedded-transport', () => {
         fetchImpl: mockFetch as unknown as typeof fetch,
         auth,
       });
+    });
+
+    it.each(['v1', 'v2', null] as const)(
+      'reports host protocol %s without trusting page or upstream metadata',
+      async (protocol) => {
+        Object.assign(auth, { getSelectedProtocol: vi.fn(() => protocol) });
+        auth.getToken.mockReturnValue(null);
+        const body =
+          '{"enabled":true,"authenticated":true,"protocols":["v1","v2"]}';
+        mockFetch.mockResolvedValueOnce(
+          new Response(body, {
+            headers: { 'X-Phi-Host-Auth-Protocol': 'v1' },
+          }),
+        );
+        const res = await send('/api/auth/status', {
+          headers: { 'X-Phi-Host-Auth-Protocol': 'v1' },
+        });
+        expect(res.headers.get('X-Phi-Host-Auth-Protocol')).toBe(protocol);
+        expect(await res.text()).toBe(body);
+        const { init } = upstreamCall();
+        expect(init.headers.get('X-Phi-Host-Auth-Protocol')).toBeNull();
+      },
+    );
+
+    it('reads the selected protocol separately for each backend', async () => {
+      Object.assign(auth, {
+        getSelectedProtocol: vi.fn((origin: string) =>
+          origin === profiles.get('prof1')?.origin ? 'v1' : 'v2',
+        ),
+      });
+      mockFetch.mockImplementation(async () => new Response('{}'));
+      const first = await send('/api/auth/status');
+      const second = await send('/api/auth/status', {
+        headers: { 'X-Phi-Backend': 'prof2' },
+      });
+      expect(first.headers.get('X-Phi-Host-Auth-Protocol')).toBe('v1');
+      expect(second.headers.get('X-Phi-Host-Auth-Protocol')).toBe('v2');
     });
 
     it('authorizes the status row with the host bearer and reports the host session', async () => {

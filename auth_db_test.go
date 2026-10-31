@@ -16,6 +16,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/BurntSushi/toml"
 )
 
 func failAccessDBCommitForTest(t *testing.T, auth *accessAuthManager) func() {
@@ -99,7 +101,7 @@ func TestAccessRollbackGuard(t *testing.T) {
 				State: markerState,
 				ID:    base64.RawURLEncoding.EncodeToString(make([]byte, 16)),
 			}}
-			raw, err := json.Marshal(cfg)
+			raw, err := toml.Marshal(cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -115,7 +117,7 @@ func TestAccessRollbackGuard(t *testing.T) {
 
 	t.Run("refuses malformed migration metadata", func(t *testing.T) {
 		withTempConfig(t)
-		if err := os.WriteFile(configFilePath(), []byte(`{"access_auth_migration":{"state":"complete","id":"bad"}}`), 0o600); err != nil {
+		if err := os.WriteFile(configFilePath(), []byte("[access_auth_migration]\nstate = \"complete\"\nid = \"bad\"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if release, err := acquireAccessRollbackGuard(); err == nil {
@@ -126,7 +128,7 @@ func TestAccessRollbackGuard(t *testing.T) {
 
 	t.Run("refuses malformed Config", func(t *testing.T) {
 		withTempConfig(t)
-		if err := os.WriteFile(configFilePath(), []byte(`{"broken":`), 0o600); err != nil {
+		if err := os.WriteFile(configFilePath(), []byte("broken = [\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if release, err := acquireAccessRollbackGuard(); err == nil {
@@ -194,6 +196,107 @@ func TestAccessMigrationFreshInstallAndVerifierImport(t *testing.T) {
 			t.Fatalf("imported Config migration state = %#v", cfg.AccessAuthMigration)
 		}
 	})
+}
+
+func seedCompletedJSONAccessHome(t *testing.T, configID, databaseID [16]byte) (string, string, []byte, accessDBState) {
+	t.Helper()
+	primary := withTempConfig(t)
+	if err := os.Remove(primary); err != nil {
+		t.Fatal(err)
+	}
+	legacyPath := withTempLegacyConfig(t)
+	active, _, err := accessDBTestState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := testAccessHash()
+	active.RecordBinding = accessRecordBinding(encoded)
+	state := accessDBState{PasswordRecord: encoded, MigrationID: databaseID, V2Available: true, Active: active}
+	store, err := openAccessDB(accessDBPath(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.migrationID = databaseID
+	if err := store.initialize(state); err != nil {
+		store.close()
+		t.Fatal(err)
+	}
+	if err := store.close(); err != nil {
+		t.Fatal(err)
+	}
+	config := Config{
+		ThemeColor:    "violet",
+		QuickCommands: []QuickCommand{{Name: "fixture", Command: "printf fixture"}},
+		AccessAuthMigration: &accessAuthMigrationMarker{
+			State: "complete",
+			ID:    base64.RawURLEncoding.EncodeToString(configID[:]),
+		},
+	}
+	legacyBytes, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, legacyBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return primary, legacyPath, legacyBytes, state
+}
+
+func TestAccessMigrationCompletedLegacyJSONConvertsAfterDatabaseVerification(t *testing.T) {
+	_, databaseID, err := accessDBTestState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary, legacyPath, legacyBytes, want := seedCompletedJSONAccessHome(t, databaseID, databaseID)
+	manager := newAccessAuthManager()
+	t.Cleanup(func() { manager.close() })
+	if err := manager.configure(""); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustRead(t, legacyPath); !reflect.DeepEqual(got, legacyBytes) {
+		t.Fatalf("legacy JSON changed: got %q want %q", got, legacyBytes)
+	}
+	cfg, present, err := readPrimaryConfig()
+	if err != nil || !present {
+		t.Fatalf("completed migration did not create TOML: present=%v err=%v", present, err)
+	}
+	if cfg.AccessPasswordHash != "" || cfg.AccessAuthMigration == nil || cfg.AccessAuthMigration.State != "complete" || cfg.AccessAuthMigration.ID != base64.RawURLEncoding.EncodeToString(databaseID[:]) {
+		t.Fatalf("converted TOML migration state = %+v", cfg.AccessAuthMigration)
+	}
+	if cfg.ThemeColor != "violet" || len(cfg.QuickCommands) != 1 || cfg.QuickCommands[0].Name != "fixture" {
+		t.Fatalf("converted TOML lost operator settings: %+v", cfg)
+	}
+	if strings.Contains(string(mustRead(t, primary)), "access_password_hash") {
+		t.Fatal("converted TOML retained the verifier key")
+	}
+	got, err := manager.db.verify(databaseID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PasswordRecord != want.PasswordRecord || !reflect.DeepEqual(got.Active, want.Active) {
+		t.Fatal("completed JSON conversion changed the verified database state")
+	}
+}
+
+func TestAccessMigrationCompletedLegacyJSONDoesNotConvertOnDatabaseMismatch(t *testing.T) {
+	_, databaseID, err := accessDBTestState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mismatchedID [16]byte
+	primary, legacyPath, legacyBytes, _ := seedCompletedJSONAccessHome(t, mismatchedID, databaseID)
+	manager := newAccessAuthManager()
+	if err := manager.configure(""); err == nil {
+		manager.close()
+		t.Fatal("completed JSON with a mismatched database was accepted")
+	}
+	manager.close()
+	if _, err := os.Lstat(primary); !os.IsNotExist(err) {
+		t.Fatalf("mismatched database created TOML: %v", err)
+	}
+	if got := mustRead(t, legacyPath); !reflect.DeepEqual(got, legacyBytes) {
+		t.Fatalf("mismatched migration changed legacy JSON: got %q want %q", got, legacyBytes)
+	}
 }
 
 func TestAccessMigrationImportsLegacySessionsAndConsumedHandles(t *testing.T) {
@@ -540,7 +643,7 @@ func TestAccessMigrationConfigWriteFailuresRecoverIdempotently(t *testing.T) {
 			completeWriteAttempted := false
 			writeConfigFile = func(path string, contents []byte, mode os.FileMode) error {
 				var cfg Config
-				if err := json.Unmarshal(contents, &cfg); err != nil {
+				if err := toml.Unmarshal(contents, &cfg); err != nil {
 					return err
 				}
 				if cfg.AccessAuthMigration != nil && cfg.AccessAuthMigration.State == "complete" {
@@ -651,7 +754,7 @@ func TestAccessMigrationCompletedMarkerRejectsUntrustedDatabaseState(t *testing.
 				store.close()
 			case "unexpected Config verifier":
 				cfg.AccessPasswordHash = encoded
-				raw, err := json.Marshal(cfg)
+				raw, err := toml.Marshal(cfg)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -812,6 +915,62 @@ func TestAccessMigrationPendingRejectsMismatchedOrUnsupportedDatabase(t *testing
 	}
 }
 
+func TestAccessMigrationRejectsMalformedTOMLMarkerMetadata(t *testing.T) {
+	id := base64.RawURLEncoding.EncodeToString(make([]byte, 16))
+	for _, tc := range []struct {
+		name, marker string
+	}{
+		{name: "extra marker field", marker: "[access_auth_migration]\nstate = \"complete\"\nid = \"" + id + "\"\nextra = true\n"},
+		{name: "missing id", marker: "[access_auth_migration]\nstate = \"complete\"\n"},
+		{name: "unknown state", marker: "[access_auth_migration]\nstate = \"finished\"\nid = \"" + id + "\"\n"},
+		{name: "noncanonical id", marker: "[access_auth_migration]\nstate = \"complete\"\nid = \"" + id + "==\"\n"},
+		{name: "wrong marker type", marker: "access_auth_migration = \"complete\"\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withTempConfig(t)
+			if err := os.WriteFile(configFilePath(), []byte(tc.marker), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := readAccessMigrationConfig(); err == nil {
+				t.Fatal("malformed TOML marker was accepted")
+			}
+		})
+	}
+}
+
+func TestAccessMigrationJSONFallbackRejectsMalformedMetadata(t *testing.T) {
+	id := base64.RawURLEncoding.EncodeToString(make([]byte, 16))
+	for _, tc := range []struct {
+		name, raw string
+	}{
+		{name: "duplicate key", raw: `{"theme_color":"a","theme_color":"b"}`},
+		{name: "trailing value", raw: `{} {}`},
+		{name: "extra marker field", raw: `{"access_auth_migration":{"state":"complete","id":"` + id + `","extra":true}}`},
+		{name: "wrong marker type", raw: `{"access_auth_migration":"complete"}`},
+		{name: "unknown marker state", raw: `{"access_auth_migration":{"state":"finished","id":"` + id + `"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			primary := withTempConfig(t)
+			legacy := withTempLegacyConfig(t)
+			if err := os.Remove(primary); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(legacy, []byte(tc.raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := readAccessMigrationConfig(); err == nil {
+				t.Fatal("malformed legacy JSON metadata was accepted")
+			}
+			if got := mustRead(t, legacy); string(got) != tc.raw {
+				t.Fatal("strict JSON read modified the fallback file")
+			}
+			if _, err := os.Lstat(primary); !os.IsNotExist(err) {
+				t.Fatalf("strict JSON read created primary TOML: %v", err)
+			}
+		})
+	}
+}
+
 func TestAccessMigrationRejectsUnmarkedDatabaseAndMalformedMarker(t *testing.T) {
 	t.Run("unmarked existing database", func(t *testing.T) {
 		withTempConfig(t)
@@ -826,7 +985,7 @@ func TestAccessMigrationRejectsUnmarkedDatabaseAndMalformedMarker(t *testing.T) 
 			t.Fatal(err)
 		}
 		cfg.AccessAuthMigration = nil
-		raw, err := json.Marshal(cfg)
+		raw, err := toml.Marshal(cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -843,7 +1002,7 @@ func TestAccessMigrationRejectsUnmarkedDatabaseAndMalformedMarker(t *testing.T) 
 
 	t.Run("malformed marker", func(t *testing.T) {
 		withTempConfig(t)
-		if err := os.WriteFile(configFilePath(), []byte(`{"access_auth_migration":{"state":"complete","id":"bad"}}`), 0o600); err != nil {
+		if err := os.WriteFile(configFilePath(), []byte("[access_auth_migration]\nstate = \"complete\"\nid = \"bad\"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		manager := newAccessAuthManager()

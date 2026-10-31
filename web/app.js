@@ -3490,7 +3490,11 @@ export class App {
 // Start Application on DOM Load. Access bootstrap happens before App.init so
 // protected API calls and PTY WebSockets never start before authentication.
 window.addEventListener('DOMContentLoaded', async () => {
-    if (document.documentElement.hasAttribute('data-phi-config-page')) return;
+    if (
+        document.documentElement.hasAttribute('data-phi-config-page') ||
+        document.documentElement.hasAttribute('data-phi-desktop-root')
+    )
+        return;
     try {
         const auth = await bootstrapAccessAuth();
         const app = new App();

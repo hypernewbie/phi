@@ -78,6 +78,7 @@ export interface EmbeddedTransportOptions {
  *  structural avoids a second credential owner and lets tests supply a fake. */
 export interface EmbeddedAuthHost {
   getToken(origin: string): string | null;
+  getSelectedProtocol?(origin: string): 'v1' | 'v2' | null;
   getBundle(origin: string): V2Bundle | null;
   installBundle(origin: string, bundle: V2Bundle): boolean;
   /** Captures the handshake fence, see `AccessAuth.captureAttempt`. */
@@ -1322,6 +1323,16 @@ export class EmbeddedTransport {
       }
     });
 
+    // Only this host can describe its selected session. Upstream capabilities
+    // and a page-supplied hint cannot replace it, even after a v2 rejection.
+    clientHeaders.delete('X-Phi-Host-Auth-Protocol');
+    if (req.method === 'GET' && targetUrl.pathname === '/api/auth/status') {
+      const protocol = this.auth?.getSelectedProtocol?.(profile.origin);
+      if (protocol === 'v1' || protocol === 'v2') {
+        clientHeaders.set('X-Phi-Host-Auth-Protocol', protocol);
+      }
+    }
+
     const isNoBodyStatus =
       upstreamRes.status === 204 ||
       upstreamRes.status === 304 ||
@@ -1348,6 +1359,7 @@ export class EmbeddedTransport {
     const headers = new Headers();
     const stripped = new Set([
       'x-phi-backend',
+      'x-phi-host-auth-protocol',
       'host',
       'origin',
       'sec-fetch-site',

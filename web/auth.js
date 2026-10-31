@@ -1216,7 +1216,13 @@ async function discoverAccessStatus() {
         } catch {
             throw invalidStatusError();
         }
-        return parseAccessStatus(payload);
+        const status = parseAccessStatus(payload);
+        if (hostAuthenticatedMode()) {
+            const protocol = res.headers.get('X-Phi-Host-Auth-Protocol');
+            if (protocol === 'v1' || protocol === 'v2')
+                status.hostProtocol = protocol;
+        }
+        return status;
     });
 }
 
@@ -1391,14 +1397,17 @@ function showUnlockPrompt(protocol) {
 // holds no credential and can never read one: it reads the proxied status, which
 // the host authenticates, and prompts only when that answer says the session is
 // gone. Renewal, rotation and logout all belong to the host owner.
-async function bootstrapHostAuthenticated() {
-    const status = await discoverAccessStatus();
+async function bootstrapHostAuthenticated(wait, installed) {
+    const status = await wait(discoverAccessStatus());
+    if (status === HOST_INSTALL || installed())
+        return { enabled: accessEnabled };
     accessEnabled = status.enabled;
-    // The shell follows the server's capability, exactly like a browser page: a
-    // v1-only server has no v2 routes, and asking it for a v2 session would
-    // prompt for a password that can never be accepted. The proxied jar carries
-    // the v1 cookie, so the v1 path works from the shell unchanged.
-    const protocol = preferredProtocol(status.protocols);
+    // The host's selected credential wins over capability preference. A saved
+    // v1 session must not become a v2 prompt; a rejected v2 must not use v1.
+    // Older hosts without this metadata retain capability-based negotiation.
+    const protocol = status.protocols.includes(status.hostProtocol)
+        ? status.hostProtocol
+        : preferredProtocol(status.protocols);
     selectedProtocol = protocol;
     if (!status.enabled) {
         hostSession = false;
@@ -1413,7 +1422,9 @@ async function bootstrapHostAuthenticated() {
         hostSession = false;
         return showUnlockPrompt('v1');
     }
-    const verdict = await checkV2Token(null);
+    const verdict = await wait(checkV2Token(null));
+    if (verdict === HOST_INSTALL || installed())
+        return { enabled: accessEnabled };
     if (verdict === 'valid') {
         hostSession = true;
         return { enabled: true };
@@ -1455,7 +1466,6 @@ async function recoverV1(status, wait, installed) {
 export async function bootstrapAccessAuth() {
     installAccessFetch();
     discardLegacyBearer();
-    if (hostAuthenticatedMode()) return bootstrapHostAuthenticated();
     const epoch = stateEpoch;
     const installed = () => epoch !== stateEpoch;
     // A host token can land while discovery or a status check is in flight.
@@ -1466,6 +1476,14 @@ export async function bootstrapAccessAuth() {
     });
     pendingBootstrapRelease = releaseHost;
     const wait = (promise) => Promise.race([promise, hostInstall]);
+    if (hostAuthenticatedMode()) {
+        try {
+            return await bootstrapHostAuthenticated(wait, installed);
+        } catch (err) {
+            if (installed()) return { enabled: accessEnabled };
+            throw err;
+        }
+    }
 
     let status;
     try {
@@ -1683,6 +1701,26 @@ export function installToken(token) {
     return true;
 }
 
+// A native v2 login owns the credential, but the body may still be waiting
+// at its own prompt. Verify through the host proxy before releasing bootstrap;
+// no token enters the page and existing input survives without a reload.
+export async function completeHostSession() {
+    if (!hostAuthenticatedMode()) return false;
+    const epoch = stateEpoch;
+    const verdict = await checkV2Token(null);
+    if (epoch !== stateEpoch || verdict !== 'valid') return false;
+    hostSession = true;
+    accessEnabled = true;
+    selectedProtocol = 'v2';
+    loggedOut = false;
+    stateEpoch++;
+    const releaseBootstrap = pendingBootstrapRelease;
+    pendingBootstrapRelease = null;
+    if (releaseBootstrap) releaseBootstrap();
+    if (pendingOverlay) pendingOverlay.finish({ enabled: true });
+    return true;
+}
+
 // logoutAccess revokes the current family (all=false) or every v2 family
 // (all=true) on the server, then drops the in-memory credential. It claims
 // nothing the server has not confirmed.
@@ -1769,6 +1807,7 @@ export function webSocketURL(url) {
 if (typeof window !== 'undefined') {
     const bridge = window.phiAccessAuth || {};
     bridge.installToken = installToken;
+    bridge.completeHostSession = completeHostSession;
     bridge.getAccessToken = getAccessToken;
     bridge.webSocketURL = webSocketURL;
     bridge.refreshAccessIfDue = refreshAccessIfDue;

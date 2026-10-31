@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { setupDomHarness, mockFetch } from './_dom.js';
-import { bootstrapAccessAuth, logoutAccess, __test__ } from '../web/auth.js';
+import {
+    bootstrapAccessAuth,
+    completeHostSession,
+    logoutAccess,
+    __test__,
+} from '../web/auth.js';
 
 setupDomHarness();
 
@@ -591,6 +596,155 @@ describe('host-authenticated shell', () => {
                 String(url).includes('/refresh'),
             ),
         ).toEqual([]);
+    });
+
+    const hostStatusResponse = (protocol, authenticated = true) =>
+        new Response(
+            JSON.stringify({
+                ...STATUS,
+                authenticated,
+                protocols: ['v1', 'v2'],
+            }),
+            {
+                headers: { 'X-Phi-Host-Auth-Protocol': protocol },
+            },
+        );
+
+    it('follows the host-selected v1 session on a mixed-capability server', async () => {
+        const fetchSpy = mockFetch();
+        fetchSpy.mockImplementation(async (url) => {
+            expect(url).toBe('/api/auth/status');
+            return hostStatusResponse('v1');
+        });
+        await expect(bootstrapAccessAuth()).resolves.toEqual({ enabled: true });
+        expect(document.querySelector('.access-auth-overlay')).toBeNull();
+        expect(__test__.getAccessState()).toMatchObject({
+            selectedProtocol: 'v1',
+            hostSession: true,
+            accessToken: null,
+        });
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        expect(localStorage.length).toBe(0);
+    });
+
+    it('keeps host-selected v2 after rejection despite an authenticated v1 cookie', async () => {
+        const fetchSpy = mockFetch();
+        fetchSpy.mockImplementation(async (url) => {
+            if (url === '/api/auth/status') return hostStatusResponse('v2');
+            expect(url).toBe('/api/auth/v2/status');
+            return new Response(
+                JSON.stringify({ ...HOST_STATUS, authenticated: false }),
+            );
+        });
+        void bootstrapAccessAuth();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(document.querySelector('.access-auth-overlay')).not.toBeNull();
+        expect(__test__.getAccessState()).toMatchObject({
+            selectedProtocol: 'v2',
+            hostSession: false,
+            accessToken: null,
+        });
+        expect(fetchSpy.mock.calls.map(([url]) => url)).not.toContain(
+            '/api/auth/login',
+        );
+    });
+
+    it('ignores host protocol metadata outside the embedded shell', async () => {
+        restoreLocation();
+        const fetchSpy = mockFetch();
+        fetchSpy.mockImplementation(async (url) => {
+            if (url === '/api/auth/status')
+                return hostStatusResponse('v1', false);
+            return new Response('{}', { status: 401 });
+        });
+        void bootstrapAccessAuth();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(__test__.getAccessState().selectedProtocol).toBe('v2');
+        expect(document.querySelector('.access-auth-overlay')).not.toBeNull();
+    });
+
+    it.each([true, false])(
+        'completes native v2 login only when the proxy accepts it: %s',
+        async (accepted) => {
+            let authenticated = false;
+            const fetchSpy = mockFetch((url) => {
+                if (url === '/api/auth/status')
+                    return { ...STATUS, protocols: ['v1', 'v2'] };
+                expect(url).toBe('/api/auth/v2/status');
+                return { ...HOST_STATUS, authenticated };
+            });
+            const boot = bootstrapAccessAuth();
+            await vi.waitFor(() =>
+                expect(
+                    document.querySelector('.access-auth-overlay'),
+                ).not.toBeNull(),
+            );
+            const draft = document.createElement('input');
+            draft.value = 'unsent draft';
+            document.body.appendChild(draft);
+            authenticated = accepted;
+            expect(await completeHostSession()).toBe(accepted);
+            expect(draft.value).toBe('unsent draft');
+            if (accepted)
+                await expect(boot).resolves.toEqual({ enabled: true });
+            expect(
+                document.querySelector('.access-auth-overlay') === null,
+            ).toBe(accepted);
+            expect(__test__.getAccessState()).toMatchObject({
+                selectedProtocol: 'v2',
+                hostSession: accepted,
+                accessToken: null,
+            });
+            expect(localStorage.length).toBe(0);
+            expect(
+                fetchSpy.mock.calls.some(
+                    ([, options]) => options.headers?.Authorization,
+                ),
+            ).toBe(false);
+        },
+    );
+
+    it.each(['discovery', 'status'])(
+        'native completion supersedes a pending %s without a late prompt',
+        async (stage) => {
+            let release;
+            const pending = new Promise((resolve) => {
+                release = resolve;
+            });
+            let checks = 0;
+            mockFetch((url) => {
+                if (url === '/api/auth/status')
+                    return stage === 'discovery'
+                        ? pending
+                        : { ...STATUS, protocols: ['v1', 'v2'] };
+                expect(url).toBe('/api/auth/v2/status');
+                if (stage === 'status' && ++checks === 1) return pending;
+                return HOST_STATUS;
+            });
+            const boot = bootstrapAccessAuth();
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            expect(await completeHostSession()).toBe(true);
+            await expect(boot).resolves.toEqual({ enabled: true });
+            release(
+                stage === 'discovery'
+                    ? { ...STATUS, protocols: ['v1', 'v2'] }
+                    : { ...HOST_STATUS, authenticated: false },
+            );
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            expect(document.querySelector('.access-auth-overlay')).toBeNull();
+            expect(__test__.getAccessState()).toMatchObject({
+                hostSession: true,
+                accessToken: null,
+                selectedProtocol: 'v2',
+            });
+        },
+    );
+
+    it('refuses native completion outside the embedded shell', async () => {
+        restoreLocation();
+        const fetchSpy = mockFetch();
+        expect(await completeHostSession()).toBe(false);
+        expect(fetchSpy).not.toHaveBeenCalled();
     });
 
     it('accepts the token-free login answer without adopting a credential', async () => {

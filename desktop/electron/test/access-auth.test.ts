@@ -6,17 +6,8 @@
  * `crypto.pbkdf2`/`crypto.createHmac` produce identical verifier and
  * proof bytes for the same password + salt + iterations + challenge.
  */
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
-import os from 'node:os';
-import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({
   app: { getPath: () => '', isPackaged: false },
@@ -38,7 +29,6 @@ vi.mock('electron', () => ({
   WebContentsView: class {},
 }));
 
-import { DesktopHost } from '../src/desktop.js';
 import {
   AccessAuth,
   type CookieJarEntry,
@@ -56,156 +46,16 @@ import {
 const desktopSource = readFileSync('src/desktop.ts', 'utf8');
 const preloadSource = readFileSync('src/preload.ts', 'utf8');
 
-describe('DesktopHost local verifier recovery boundary', () => {
-  it('keeps SQLite read-only, outside the preload, and excluded for selected v2', () => {
-    expect(desktopSource).toMatch(
-      /new DatabaseSync\(authDBPath, \{\s*readOnly: true\s*\}\)/,
-    );
+describe('DesktopHost credential discovery boundary', () => {
+  it('does not read local server config or auth.db for credentials', () => {
+    expect(desktopSource).not.toContain("from 'node:sqlite'");
+    expect(desktopSource).not.toContain('auth.db');
+    expect(desktopSource).not.toContain('tryRecoverLocalCredential');
     expect(preloadSource).not.toContain('node:sqlite');
     expect(preloadSource).not.toContain('auth.db');
     expect(desktopSource).toContain(
       "if (accessAuth.getSelectedProtocol(canonical) === 'v2') return false;",
     );
-  });
-});
-
-describe('DesktopHost local verifier recovery behavior', () => {
-  const origin = 'http://127.0.0.1:7070';
-  const migrationID = Buffer.alloc(16, 0x33);
-  let tempDir = '';
-  let homeDir = '';
-  let phiDir = '';
-
-  type RecoveryCredential = {
-    version: 'v1';
-    algorithm: 'pbkdf2-sha256';
-    iterations: number;
-    salt: Buffer;
-    verifier: Buffer;
-  };
-  type RecoveryHost = {
-    storedCredentials: Map<string, unknown>;
-    saveStoredCredentials: () => boolean;
-    tryRecoverLocalCredential: (origin: string) => RecoveryCredential | null;
-  };
-
-  beforeEach(() => {
-    tempDir = mkdtempSync(path.join(os.tmpdir(), 'phi-auth-recovery-'));
-    homeDir = path.join(tempDir, 'home');
-    phiDir = path.join(homeDir, '.phi');
-    mkdirSync(phiDir, { recursive: true });
-    vi.spyOn(os, 'homedir').mockReturnValue(homeDir);
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    rmSync(tempDir, { recursive: true, force: true });
-  });
-
-  function hashRecord(saltByte: number, verifierByte: number): string {
-    return `v1.pbkdf2-sha256.600000.${Buffer.alloc(16, saltByte).toString('base64url')}.${Buffer.alloc(32, verifierByte).toString('base64url')}`;
-  }
-
-  function writeConfig(
-    marker: { state: 'complete' | 'pending'; id: string } | undefined,
-    accessPasswordHash = hashRecord(0xaa, 0xbb),
-  ): void {
-    writeFileSync(
-      path.join(phiDir, 'config.json'),
-      JSON.stringify({
-        access_password_hash: accessPasswordHash,
-        ...(marker ? { access_auth_migration: marker } : {}),
-      }),
-    );
-  }
-
-  function writeAuthDB(record: string, rowMigrationID = migrationID): string {
-    const filename = path.join(phiDir, 'auth.db');
-    const database = new DatabaseSync(filename);
-    database.exec(`
-      CREATE TABLE auth_consumed_handles (id INTEGER);
-      CREATE TABLE auth_families (id INTEGER);
-      CREATE TABLE auth_state (
-        singleton_id INTEGER,
-        password_record TEXT,
-        migration_id BLOB
-      );
-      PRAGMA user_version = 1;
-    `);
-    database
-      .prepare('INSERT INTO auth_state VALUES (1, ?, ?)')
-      .run(record, rowMigrationID);
-    database.close();
-    return filename;
-  }
-
-  function writeQueryErrorDB(): string {
-    const filename = path.join(phiDir, 'auth.db');
-    const database = new DatabaseSync(filename);
-    database.exec(`
-      CREATE TABLE auth_consumed_handles (id INTEGER);
-      CREATE TABLE auth_families (id INTEGER);
-      CREATE TABLE auth_state (singleton_id INTEGER, password_record TEXT);
-      PRAGMA user_version = 1;
-    `);
-    database.close();
-    return filename;
-  }
-
-  function recoveryHost(): RecoveryHost {
-    const host = Object.create(DesktopHost.prototype) as RecoveryHost;
-    host.storedCredentials = new Map();
-    host.saveStoredCredentials = () => true;
-    return host;
-  }
-
-  it('recovers the database verifier and ignores a stale Config hash', () => {
-    const databaseHash = hashRecord(0x11, 0x22);
-    writeConfig({ state: 'complete', id: migrationID.toString('base64url') });
-    writeAuthDB(databaseHash);
-    const host = recoveryHost();
-    expect(os.homedir()).toBe(homeDir);
-
-    const recovered = host.tryRecoverLocalCredential(origin);
-
-    expect(recovered).toEqual({
-      version: 'v1',
-      algorithm: 'pbkdf2-sha256',
-      iterations: 600_000,
-      salt: Buffer.alloc(16, 0x11),
-      verifier: Buffer.alloc(32, 0x22),
-    });
-    expect(host.storedCredentials.get(origin)).toEqual(recovered);
-  });
-
-  it('rejects a mismatched migration ID and closes the opened database', () => {
-    writeConfig({ state: 'complete', id: migrationID.toString('base64url') });
-    writeAuthDB(hashRecord(0x11, 0x22), Buffer.alloc(16, 0x44));
-    const close = vi.spyOn(DatabaseSync.prototype, 'close');
-    const host = recoveryHost();
-
-    expect(host.tryRecoverLocalCredential(origin)).toBeNull();
-    expect(host.storedCredentials.size).toBe(0);
-    expect(close).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not recover stale Config when a complete migration marker has no database', () => {
-    writeConfig({ state: 'complete', id: migrationID.toString('base64url') });
-    const host = recoveryHost();
-
-    expect(host.tryRecoverLocalCredential(origin)).toBeNull();
-    expect(host.storedCredentials.size).toBe(0);
-  });
-
-  it('rejects a query-error database without Config fallback and closes it', () => {
-    writeConfig({ state: 'complete', id: migrationID.toString('base64url') });
-    writeQueryErrorDB();
-    const close = vi.spyOn(DatabaseSync.prototype, 'close');
-    const host = recoveryHost();
-
-    expect(host.tryRecoverLocalCredential(origin)).toBeNull();
-    expect(host.storedCredentials.size).toBe(0);
-    expect(close).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -842,7 +692,44 @@ describe('AccessAuth.tryUnlockWithVerifier + verifier cache', () => {
     );
     expect(result.kind).toBe('ok');
     expect(auth.hasCookie(origin)).toBe(true);
+    expect(auth.getSelectedProtocol(origin)).toBe('v1');
   });
+
+  it.each([1, 2])(
+    'does not replace v2 when saved-verifier status read %i is pending',
+    async (delayedRead) => {
+      let release!: (response: Response) => void;
+      const pending = new Promise<Response>((resolve) => {
+        release = resolve;
+      });
+      let statusReads = 0;
+      const doFetch = vi.fn(async (url: URL) => {
+        if (url.pathname === '/api/auth/status') {
+          if (++statusReads === delayedRead) return pending;
+          return new Response(JSON.stringify(goodStatus));
+        }
+        if (url.pathname === '/api/auth/login')
+          return new Response('', { status: 401 });
+        throw new Error('unexpected saved-verifier request');
+      });
+      const auth = new AccessAuth(doFetch as unknown as typeof fetch);
+      const verifier = Buffer.alloc(32, 0xab);
+      const result = auth.tryUnlockWithVerifier(origin, verifier);
+      await vi.waitFor(() => expect(statusReads).toBe(delayedRead));
+      auth.installToken(origin, 'newer-v2');
+      release(new Response(JSON.stringify(goodStatus)));
+      expect((await result).kind).toBe('stale');
+      expect(auth.getSelectedProtocol(origin)).toBe('v2');
+      expect(auth.getToken(origin)).toBe('newer-v2');
+      expect(auth.hasCookie(origin)).toBe(false);
+      expect(verifier.equals(Buffer.alloc(32))).toBe(true);
+      expect(
+        doFetch.mock.calls.filter(
+          ([url]) => url.pathname === '/api/auth/login',
+        ),
+      ).toHaveLength(delayedRead - 1);
+    },
+  );
 
   it('tryUnlockWithVerifier clears the cookie and returns invalid-password on a server-issued 401', async () => {
     const crypto = await import('node:crypto');
