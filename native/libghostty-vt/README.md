@@ -6,7 +6,7 @@ License: MIT. The upstream license is in `LICENSE`.
 The module includes the static archives, headers, and `manifest.json`.
 A normal CGO build links the archive for its target. No special build tag is necessary.
 Source installation requires Go and a supported C compiler. It does not require Zig or an external Ghostty installation.
-The root `phi` server retains its pure-Go build path.
+Both `phi` and `phic` link this archive; CGO is mandatory for either binary.
 
 ```sh
 go build .
@@ -14,10 +14,9 @@ go build -o phic ./cmd/phic
 go install ./cmd/phic
 ```
 
-A client built with `CGO_ENABLED=0` cannot run the console.
-That client reports the missing build requirement before it enters fullscreen.
-Help and version commands remain available.
-The client never downloads a native library at runtime or substitutes another emulator.
+Unsupported targets fail at compile time; there is no emulator-disabled fallback.
+Neither binary downloads a native library at runtime or substitutes another emulator.
+Windows source builds use `zig cc -target x86_64-windows-gnu` as the C compiler.
 
 ## Maintainer reproduction
 
@@ -31,7 +30,8 @@ zig build -Demit-lib-vt -Demit-xcframework=false -Doptimize=ReleaseSafe
 ```
 
 Cross-target builds add `-Dtarget=TARGET -Dcpu=baseline`.
-The targets are `x86_64-macos`, `x86_64-linux-gnu`, `aarch64-linux-gnu`, and `x86_64-windows`.
+The targets are `aarch64-macos`, `x86_64-macos`, `x86_64-linux-gnu`, `aarch64-linux-gnu`, and `x86_64-windows-gnu`.
+`build.sh` in this directory is the reproducible archive builder: it asserts the pin and Zig version, applies the Phi patch, and verifies exports before installing.
 The Windows archive keeps its COFF contents under the `.a` suffix that CGO accepts.
 Headers and archives must come from the same pin.
 The manifest records each checksum, compiler, target, and build flags.

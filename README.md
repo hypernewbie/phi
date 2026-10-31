@@ -79,6 +79,7 @@ After launching, open <http://localhost:7070> in your browser. The web UI is ful
 ### Prerequisites
 
 - Go 1.26+
+- A supported C compiler: both `phi` and `phic` link a native VT engine (Windows source builds use `zig cc`)
 - Whichever agent CLIs you want to drive, on your `PATH`: `opencode`, `claude`, `agy`, `pi`
 - `git` (for the diff/log panels)
 

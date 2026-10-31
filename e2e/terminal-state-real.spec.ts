@@ -35,7 +35,7 @@ interface StateWindow {
 }
 
 // Unlike the mocked transport performance test, this exercises the actual
-// server WASM formatter -> ANSI checkpoint -> browser stream decoder -> xterm.
+// server formatter -> ANSI checkpoint -> browser stream decoder -> xterm.
 test('real bounded attach preserves alternate screen, split UTF-8 and return to primary', async ({
     page,
     request,

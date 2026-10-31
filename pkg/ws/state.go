@@ -263,8 +263,8 @@ func (h *Hub) HistoricalState(paneID string, epoch, through uint64) (PanePositio
 
 // Historical reconstruction has its own parser. Hold the pane lock only for
 // bounded journal reads, never for VT replay or snapshot formatting, so a
-// history request cannot stall live ingestion. Request cancellation also
-// cancels its WASM work; disposing the parser stays on this owner.
+// history request cannot stall live ingestion. Request cancellation stops
+// replay at chunk boundaries; disposing the parser stays on this owner.
 func (h *Hub) HistoricalStateContext(ctx context.Context, paneID string, epoch, through uint64) (PanePosition, []byte, int, int, error) {
 	return h.historicalStateContext(ctx, paneID, epoch, through, false)
 }
@@ -278,6 +278,11 @@ func (h *Hub) HistoricalANSIStateContext(ctx context.Context, paneID string, epo
 // ErrStateNotFound ends state lookups for groups that do not exist or
 // cannot be opened. Callers map it to 404, never a transient retry.
 var ErrStateNotFound = errors.New("pane recording unavailable")
+
+// testHistoryBarrier pauses a history request at the post-capture context
+// check. Tests use it to prove live ingestion proceeds without the pane
+// lock. It is nil outside tests.
+var testHistoryBarrier func()
 
 func (h *Hub) historicalStateContext(ctx context.Context, paneID string, epoch, through uint64, ansi bool) (PanePosition, []byte, int, int, error) {
 	ph := h.recordingForRead(paneID)
@@ -383,6 +388,9 @@ func (h *Hub) historicalStateContext(ctx context.Context, paneID string, epoch, 
 	}
 	if err := ctx.Err(); err != nil {
 		return pos, nil, 0, 0, err
+	}
+	if testHistoryBarrier != nil {
+		testHistoryBarrier()
 	}
 	at := from
 	for _, r := range resizes {

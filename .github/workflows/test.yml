@@ -79,22 +79,123 @@ jobs:
             GOOS=$goos CGO_ENABLED=0 go build -tags=profiling -o /tmp/phi-server-${goos}-profiling .
           done
 
-      # The phic client is a separate binary. Build it for every
-      # supported platform so a syntax error in cmd/phic or a
-      # platform-specific stub does not rot unnoticed.
-      - name: Build phic (linux/darwin/windows)
+      # Both binaries link the native VT engine, so cross-builds need a C
+      # toolchain per target; the sha256 gate keeps the compiler supply
+      # chain fixed. Host linux/amd64 is covered by the full test run above.
+      - name: Set up Zig cross compiler
         run: |
-          for goos in linux darwin windows; do
-            GOOS=$goos CGO_ENABLED=0 go build -o /tmp/phic-${goos} ./cmd/phic
-          done
+          set -euo pipefail
+          curl -fsSL --connect-timeout 15 --max-time 600 --retry 2 --retry-all-errors \
+            https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz -o /tmp/zig.tar.xz
+          echo '70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  /tmp/zig.tar.xz' | sha256sum --check
+          mkdir -p "$HOME/.local/zig-0.16.0"
+          tar -xJf /tmp/zig.tar.xz -C "$HOME/.local/zig-0.16.0" --strip-components=1
+          echo "$HOME/.local/zig-0.16.0" >> "$GITHUB_PATH"
+
+      # Compile-only evidence for the foreign targets Ubuntu can link.
+      # Darwin cannot zig-cross-link (no macOS system libraries); the
+      # macOS job below covers it.
+      - name: Native cross-builds (linux arm64, windows amd64)
+        run: |
+          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC="zig cc -target aarch64-linux-gnu" \
+            go build -o /tmp/phi-linux-arm64 .
+          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC="zig cc -target aarch64-linux-gnu" \
+            go build -o /tmp/phic-linux-arm64 ./cmd/phic
+          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC="zig cc -target x86_64-windows-gnu" \
+            go build -o /tmp/phi-windows-amd64.exe .
+          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC="zig cc -target x86_64-windows-gnu" \
+            go build -o /tmp/phic-windows-amd64.exe ./cmd/phic
 
       # Native tests already run above with -race. Cross-compile the
-      # Windows tests; Linux cannot execute Windows PE binaries.
-      - name: Compile phic tests (Windows)
+      # Windows tests with CGO on; Linux cannot execute Windows PE binaries.
+      - name: Compile engine tests (Windows, CGO on)
         run: |
-          mkdir -p /tmp/phic-windows-tests
-          GOOS=windows CGO_ENABLED=0 go test -c -o /tmp/phic-windows-tests/ \
-            ./internal/phic/... ./internal/termproof/... ./pkg/ws/wireproto/...
+          mkdir -p /tmp/phi-windows-tests
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC="zig cc -target x86_64-windows-gnu" \
+            go test -c -o /tmp/phi-windows-tests/ \
+            ./internal/termstate/... ./internal/termemu/ ./internal/phic/... ./internal/termproof/... ./pkg/ws/wireproto/...
+
+  test-darwin:
+    name: Darwin native builds + engine tests
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Both darwin architectures link here; the non-host one is
+      # compile-only evidence.
+      - name: Build both binaries (arm64 + amd64)
+        run: |
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 CC="clang -arch arm64" go build -o /tmp/phi-darwin-arm64 .
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 CC="clang -arch arm64" go build -o /tmp/phic-darwin-arm64 ./cmd/phic
+          CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 CC="clang -arch x86_64" go build -o /tmp/phi-darwin-amd64 .
+          CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 CC="clang -arch x86_64" go build -o /tmp/phic-darwin-amd64 ./cmd/phic
+
+      - name: Engine tests (host arch)
+        run: go test ./internal/termstate/... ./internal/termemu/
+
+  test-windows:
+    name: Windows native builds + engine tests
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Zig compiler
+        shell: pwsh
+        run: |
+          $url = 'https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip'
+          $zip = Join-Path $env:RUNNER_TEMP 'zig-0.16.0.zip'
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $hash = (Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne '68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e') {
+            throw "zig checksum mismatch: $hash"
+          }
+          $dest = Join-Path $env:RUNNER_TEMP 'zig-0.16.0'
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+          $zigDir = Get-ChildItem $dest -Directory | Select-Object -First 1
+          Add-Content $env:GITHUB_PATH $zigDir.FullName
+
+      - name: Build both binaries
+        shell: pwsh
+        run: |
+          $env:CGO_ENABLED = '1'
+          $env:CC = 'zig cc -target x86_64-windows-gnu'
+          go build -o (Join-Path $env:RUNNER_TEMP 'phi.exe') .
+          go build -o (Join-Path $env:RUNNER_TEMP 'phic.exe') ./cmd/phic
+
+      - name: Engine tests
+        shell: pwsh
+        run: |
+          $env:CGO_ENABLED = '1'
+          $env:CC = 'zig cc -target x86_64-windows-gnu'
+          go test ./internal/termstate/... ./internal/termemu/
+
+  goreleaser-check:
+    name: GoReleaser config check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v5
+
+      - name: Check release config
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
+        with:
+          distribution: goreleaser
+          version: latest
+          args: check
 
   test-ts:
     name: TS Build + Type Check + Drift Guard

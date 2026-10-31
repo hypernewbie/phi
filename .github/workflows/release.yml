@@ -17,12 +17,13 @@ permissions:
   id-token: write
 
 jobs:
-  # Darwin phic needs Apple toolchains (zig cannot cross-link macOS system
-  # libraries), so both darwin architectures are compiled here, archived in
-  # the exact goreleaser naming (binary at tar root), and uploaded to the
-  # draft release by the goreleaser job after its own assets succeed.
-  phic-darwin-build:
-    name: Build darwin phic archives
+  # Darwin binaries need Apple toolchains (zig cannot cross-link macOS system
+  # libraries), so both binaries for both darwin architectures are compiled
+  # here, archived in the exact goreleaser naming (binary at tar root), and
+  # uploaded to the draft release by the goreleaser job after its own assets
+  # succeed.
+  darwin-build:
+    name: Build darwin phi/phic archives
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -34,36 +35,67 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Build and archive both darwin architectures
+      - name: Set up pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "24"
+          cache: "pnpm"
+
+      # The server embeds web/ (//go:embed all:web), so build the frontend
+      # first; same commands as the goreleaser job's web step.
+      - name: Build web assets
+        run: |
+          pnpm install --frozen-lockfile --filter phi-dev --filter @phi/pi-phi
+          pnpm run build:web
+          pnpm run check:pi-phi-generated
+          go run ./tools/webdist
+
+      - name: Build and archive both binaries for both darwin architectures
         run: |
           set -euo pipefail
           version=${GITHUB_REF_NAME#v}
           commit=${GITHUB_SHA}
           date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           ldflags="-s -w -X main.Version=$version -X main.Commit=$commit -X main.Date=$date"
+          server_ldflags="$ldflags -X main.BuildSource=release"
           mkdir -p prebuilt staging
-          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -trimpath \
+          # Host architecture first: these binaries get version-smoked below.
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 CC="clang -arch arm64" go build -trimpath \
+            -tags=embedassets -ldflags "$server_ldflags" -o staging/phi .
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 CC="clang -arch arm64" go build -trimpath \
             -ldflags "$ldflags" -o staging/phic ./cmd/phic
+          staging/phi --version
+          staging/phic --version
           cp README.md staging/README.md
+          tar -czf "prebuilt/phi_${version}_darwin_arm64.tar.gz" -C staging phi README.md
           tar -czf "prebuilt/phi_${version}_darwin_arm64_phic.tar.gz" -C staging phic README.md
-          rm staging/phic
+          rm staging/phi staging/phic
+          # Cross-built architecture: archive without executing.
+          CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 CC="clang -arch x86_64" go build -trimpath \
+            -tags=embedassets -ldflags "$server_ldflags" -o staging/phi .
           CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 CC="clang -arch x86_64" go build -trimpath \
             -ldflags "$ldflags" -o staging/phic ./cmd/phic
+          tar -czf "prebuilt/phi_${version}_darwin_amd64.tar.gz" -C staging phi README.md
           tar -czf "prebuilt/phi_${version}_darwin_amd64_phic.tar.gz" -C staging phic README.md
           file prebuilt/*.tar.gz
-          tar -tzf prebuilt/phi_${version}_darwin_arm64_phic.tar.gz
-          staging/phic --version
+          tar -tzf "prebuilt/phi_${version}_darwin_arm64.tar.gz"
+          tar -tzf "prebuilt/phi_${version}_darwin_arm64_phic.tar.gz"
+          tar -tzf "prebuilt/phi_${version}_darwin_amd64.tar.gz"
+          tar -tzf "prebuilt/phi_${version}_darwin_amd64_phic.tar.gz"
 
-      - name: Upload darwin phic archives
+      - name: Upload darwin archives
         uses: >- # v4
           actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: phic-darwin-prebuilt
+          name: darwin-prebuilt
           path: prebuilt/*.tar.gz
           if-no-files-found: error
 
   goreleaser:
-    needs: phic-darwin-build
+    needs: darwin-build
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -98,19 +130,19 @@ jobs:
           pnpm run check:pi-phi-generated
           go run ./tools/webdist
 
-      - name: Download prebuilt darwin phic
+      - name: Download prebuilt darwin archives
         uses: >- # v4
           actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: phic-darwin-prebuilt
+          name: darwin-prebuilt
           path: prebuilt
 
-      # phic CGO linux targets cross-compile through pinned zig; the sha256
-      # gate keeps the compiler supply chain fixed.
+      # CGO targets cross-compile through pinned zig; the sha256 gate keeps
+      # the compiler supply chain fixed.
       - name: Set up Zig cross compiler
         run: |
           set -euo pipefail
-          curl -fsSL https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz -o /tmp/zig.tar.xz
+          curl -fsSL --connect-timeout 15 --max-time 600 --retry 2 --retry-all-errors https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz -o /tmp/zig.tar.xz
           echo '70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  /tmp/zig.tar.xz' | sha256sum --check
           mkdir -p "$HOME/.local/zig-0.16.0"
           tar -xJf /tmp/zig.tar.xz -C "$HOME/.local/zig-0.16.0" --strip-components=1
@@ -129,7 +161,7 @@ jobs:
       # Uploaded only after goreleaser published its own assets, so a failed
       # goreleaser never leaves a half release; checksums.txt already covers
       # these via checksum.extra_files.
-      - name: Upload darwin phic archives
+      - name: Upload darwin archives
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >-
