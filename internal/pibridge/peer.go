@@ -45,6 +45,9 @@ type peer struct {
 	histMu      sync.Mutex
 	histPending map[string]chan HistoryResult
 
+	transcriptMu      sync.Mutex
+	transcriptPending map[string]transcriptSearchWaiter
+
 	modelsMu           sync.Mutex
 	modelsPending      map[string]chan ModelsResult
 	setPending         map[string]chan SetModelResult
@@ -78,6 +81,7 @@ func newPeer(generation uint64, sessionID string, stream connectStream) *peer {
 		histPending: make(
 			map[string]chan HistoryResult,
 		),
+		transcriptPending: make(map[string]transcriptSearchWaiter),
 		modelsPending: make(
 			map[string]chan ModelsResult,
 		),

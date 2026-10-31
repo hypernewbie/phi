@@ -139,6 +139,7 @@ export interface PiToPhi {
     | { $case: "invokeSkillAck"; value: InvokeSkillAck }
     | { $case: "reloadAck"; value: ReloadAck }
     | { $case: "syncboardRequest"; value: SyncboardRequest }
+    | { $case: "transcriptSearchResponse"; value: TranscriptSearchResponse }
     | undefined;
 }
 
@@ -160,6 +161,7 @@ export interface PhiToPi {
     | { $case: "invokeSkillRequest"; value: InvokeSkillRequest }
     | { $case: "reloadRequest"; value: ReloadRequest }
     | { $case: "syncboardResponse"; value: SyncboardResponse }
+    | { $case: "transcriptSearchRequest"; value: TranscriptSearchRequest }
     | undefined;
 }
 
@@ -607,6 +609,50 @@ export interface SyncboardResponse {
   reason: string;
 }
 
+/**
+ * TranscriptSearchRequest searches one frozen active-branch snapshot.
+ * Initial requests use start_index 0 and an empty anchor; the extension
+ * captures the live leaf. Continuations echo the returned session and
+ * anchor and resume at next_index. The host refuses an anchor that is no
+ * longer on the active branch.
+ */
+export interface TranscriptSearchRequest {
+  requestId: string;
+  query: string;
+  sessionId: string;
+  anchorLeafId: string;
+  startIndex: number;
+  initial: boolean;
+}
+
+/**
+ * One safe transcript match. role is exactly user, assistant, or
+ * toolResult. snippet is bounded plain text; no hidden state, tool-call
+ * arguments, or images are included.
+ */
+export interface TranscriptSearchMatch {
+  entryId: string;
+  role: string;
+  snippet: string;
+}
+
+/**
+ * TranscriptSearchResponse echoes request_id. One response examines no
+ * more than 256 branch entries and returns no more than 50 matches.
+ * next_index counts branch entries inspected, so an empty page with
+ * complete=false still makes bounded forward progress. unavailable
+ * invalidates the whole read; partial matches must then be empty.
+ */
+export interface TranscriptSearchResponse {
+  requestId: string;
+  sessionId: string;
+  anchorLeafId: string;
+  nextIndex: number;
+  matches: TranscriptSearchMatch[];
+  complete: boolean;
+  unavailable: boolean;
+}
+
 /** Terminal protocol-level rejection. Ends the stream attempt. */
 export interface ProtocolError {
   code: ProtocolErrorCode;
@@ -673,6 +719,9 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         break;
       case "syncboardRequest":
         SyncboardRequest.encode(message.payload.value, writer.uint32(210).fork()).join();
+        break;
+      case "transcriptSearchResponse":
+        TranscriptSearchResponse.encode(message.payload.value, writer.uint32(218).fork()).join();
         break;
     }
     return writer;
@@ -830,6 +879,17 @@ export const PiToPhi: MessageFns<PiToPhi> = {
             message.payload = { $case: "syncboardRequest", value: SyncboardRequest.decode(reader, reader.uint32()) };
             continue;
           }
+          case 27: {
+            if (tag !== 218) {
+              break;
+            }
+
+            message.payload = {
+              $case: "transcriptSearchResponse",
+              value: TranscriptSearchResponse.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -940,6 +1000,15 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         }
         break;
       }
+      case "transcriptSearchResponse": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = {
+            $case: "transcriptSearchResponse",
+            value: TranscriptSearchResponse.fromPartial(object.payload.value),
+          };
+        }
+        break;
+      }
     }
     return message;
   },
@@ -999,6 +1068,9 @@ export const PhiToPi: MessageFns<PhiToPi> = {
         break;
       case "syncboardResponse":
         SyncboardResponse.encode(message.payload.value, writer.uint32(186).fork()).join();
+        break;
+      case "transcriptSearchRequest":
+        TranscriptSearchRequest.encode(message.payload.value, writer.uint32(194).fork()).join();
         break;
     }
     return writer;
@@ -1146,6 +1218,17 @@ export const PhiToPi: MessageFns<PhiToPi> = {
             message.payload = { $case: "syncboardResponse", value: SyncboardResponse.decode(reader, reader.uint32()) };
             continue;
           }
+          case 24: {
+            if (tag !== 194) {
+              break;
+            }
+
+            message.payload = {
+              $case: "transcriptSearchRequest",
+              value: TranscriptSearchRequest.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1247,6 +1330,15 @@ export const PhiToPi: MessageFns<PhiToPi> = {
       case "syncboardResponse": {
         if (object.payload?.value !== undefined && object.payload?.value !== null) {
           message.payload = { $case: "syncboardResponse", value: SyncboardResponse.fromPartial(object.payload.value) };
+        }
+        break;
+      }
+      case "transcriptSearchRequest": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = {
+            $case: "transcriptSearchRequest",
+            value: TranscriptSearchRequest.fromPartial(object.payload.value),
+          };
         }
         break;
       }
@@ -4125,6 +4217,335 @@ export const SyncboardResponse: MessageFns<SyncboardResponse> = {
     message.httpStatus = object.httpStatus ?? 0;
     message.bodyJson = object.bodyJson ?? Buffer.alloc(0);
     message.reason = object.reason ?? "";
+    return message;
+  },
+};
+
+function createBaseTranscriptSearchRequest(): TranscriptSearchRequest {
+  return { requestId: "", query: "", sessionId: "", anchorLeafId: "", startIndex: 0, initial: false };
+}
+
+export const TranscriptSearchRequest: MessageFns<TranscriptSearchRequest> = {
+  encode(message: TranscriptSearchRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.query !== "") {
+      writer.uint32(18).string(message.query);
+    }
+    if (message.sessionId !== "") {
+      writer.uint32(26).string(message.sessionId);
+    }
+    if (message.anchorLeafId !== "") {
+      writer.uint32(34).string(message.anchorLeafId);
+    }
+    if (message.startIndex !== 0) {
+      writer.uint32(40).uint32(message.startIndex);
+    }
+    if (message.initial !== false) {
+      writer.uint32(48).bool(message.initial);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): TranscriptSearchRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseTranscriptSearchRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.query = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.sessionId = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.anchorLeafId = reader.string();
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.startIndex = reader.uint32();
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+
+            message.initial = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<TranscriptSearchRequest>, I>>(base?: I): TranscriptSearchRequest {
+    return TranscriptSearchRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TranscriptSearchRequest>, I>>(object: I): TranscriptSearchRequest {
+    const message = createBaseTranscriptSearchRequest();
+    message.requestId = object.requestId ?? "";
+    message.query = object.query ?? "";
+    message.sessionId = object.sessionId ?? "";
+    message.anchorLeafId = object.anchorLeafId ?? "";
+    message.startIndex = object.startIndex ?? 0;
+    message.initial = object.initial ?? false;
+    return message;
+  },
+};
+
+function createBaseTranscriptSearchMatch(): TranscriptSearchMatch {
+  return { entryId: "", role: "", snippet: "" };
+}
+
+export const TranscriptSearchMatch: MessageFns<TranscriptSearchMatch> = {
+  encode(message: TranscriptSearchMatch, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.entryId !== "") {
+      writer.uint32(10).string(message.entryId);
+    }
+    if (message.role !== "") {
+      writer.uint32(18).string(message.role);
+    }
+    if (message.snippet !== "") {
+      writer.uint32(26).string(message.snippet);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): TranscriptSearchMatch {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseTranscriptSearchMatch();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.entryId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.role = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.snippet = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<TranscriptSearchMatch>, I>>(base?: I): TranscriptSearchMatch {
+    return TranscriptSearchMatch.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TranscriptSearchMatch>, I>>(object: I): TranscriptSearchMatch {
+    const message = createBaseTranscriptSearchMatch();
+    message.entryId = object.entryId ?? "";
+    message.role = object.role ?? "";
+    message.snippet = object.snippet ?? "";
+    return message;
+  },
+};
+
+function createBaseTranscriptSearchResponse(): TranscriptSearchResponse {
+  return {
+    requestId: "",
+    sessionId: "",
+    anchorLeafId: "",
+    nextIndex: 0,
+    matches: [],
+    complete: false,
+    unavailable: false,
+  };
+}
+
+export const TranscriptSearchResponse: MessageFns<TranscriptSearchResponse> = {
+  encode(message: TranscriptSearchResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.sessionId !== "") {
+      writer.uint32(18).string(message.sessionId);
+    }
+    if (message.anchorLeafId !== "") {
+      writer.uint32(26).string(message.anchorLeafId);
+    }
+    if (message.nextIndex !== 0) {
+      writer.uint32(32).uint32(message.nextIndex);
+    }
+    for (const v of message.matches) {
+      TranscriptSearchMatch.encode(v!, writer.uint32(42).fork()).join();
+    }
+    if (message.complete !== false) {
+      writer.uint32(48).bool(message.complete);
+    }
+    if (message.unavailable !== false) {
+      writer.uint32(56).bool(message.unavailable);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): TranscriptSearchResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseTranscriptSearchResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.sessionId = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.anchorLeafId = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.nextIndex = reader.uint32();
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.matches.push(TranscriptSearchMatch.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+
+            message.complete = reader.bool();
+            continue;
+          }
+          case 7: {
+            if (tag !== 56) {
+              break;
+            }
+
+            message.unavailable = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<TranscriptSearchResponse>, I>>(base?: I): TranscriptSearchResponse {
+    return TranscriptSearchResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TranscriptSearchResponse>, I>>(object: I): TranscriptSearchResponse {
+    const message = createBaseTranscriptSearchResponse();
+    message.requestId = object.requestId ?? "";
+    message.sessionId = object.sessionId ?? "";
+    message.anchorLeafId = object.anchorLeafId ?? "";
+    message.nextIndex = object.nextIndex ?? 0;
+    message.matches = object.matches?.map((e) => TranscriptSearchMatch.fromPartial(e)) || [];
+    message.complete = object.complete ?? false;
+    message.unavailable = object.unavailable ?? false;
     return message;
   },
 };

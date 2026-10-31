@@ -53,6 +53,8 @@ const (
 	CapabilitySkills = "pi.skills.v1"
 	// CapabilitySyncboard is the fixed Syncboard REST capability.
 	CapabilitySyncboard = "pi.syncboard.v1"
+	// CapabilityTranscriptSearch is the bounded active-branch search capability.
+	CapabilityTranscriptSearch = "pi.transcript-search.v1"
 
 	// maxHistoryPending bounds history requests awaiting replies per
 	// peer. Excess callers fail fast into fallback; the map never
@@ -90,4 +92,13 @@ const (
 	// them.
 	maxSkillNameBytes        = 64
 	maxSkillDescriptionBytes = 1024
+
+	// Transcript search bounds mirror bonus/pi-phi/src/transcript-search.ts.
+	maxTranscriptSearchPending = 2
+	maxTranscriptSearchMatches = 50
+	maxTranscriptSearchEntries = 256
+	maxTranscriptQueryBytes    = 1024
+	maxTranscriptQueryRunes    = 256
+	maxTranscriptSnippetBytes  = 2048
+	maxTranscriptIdentityBytes = 256
 )

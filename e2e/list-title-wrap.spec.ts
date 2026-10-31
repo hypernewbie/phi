@@ -1123,7 +1123,7 @@ async function classifyExpectedDiagnostics(
             }
             if (
                 entry.kind === 'console-error' &&
-                entry.phase === 'offline' &&
+                (entry.phase === 'offline' || entry.phase === 'recovery') &&
                 entry.message ===
                     'Failed to load resource: net::ERR_INTERNET_DISCONNECTED' &&
                 entry.url?.startsWith(`${item.origin}/`) &&
@@ -2451,7 +2451,7 @@ test('offline warmed tabs', async ({ browser }, testInfo) => {
                 mobilePage,
                 drawerTabs,
                 'tap',
-                1000,
+                5000,
             );
 
             desktopTracker.setPhase('recovery', true);

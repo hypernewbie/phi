@@ -22,6 +22,7 @@ import { CAPABILITY_MODELS } from './protocol.js';
 import { CAPABILITY_SKILLS } from './protocol.js';
 import { CAPABILITY_SYNCBOARD } from './protocol.js';
 import { CAPABILITY_THINKING } from './protocol.js';
+import { CAPABILITY_TRANSCRIPT_SEARCH } from './protocol.js';
 import { MAX_MODELS_ENTRIES } from './protocol.js';
 import { MAX_SKILL_ENTRIES } from './protocol.js';
 import { MAX_SKILL_NAME_BYTES } from './protocol.js';
@@ -183,6 +184,34 @@ function historyRequest(id: string): PhiToPi {
     };
 }
 
+function transcriptSearchRequest(
+    id: string,
+    overrides: Partial<{
+        query: string;
+        sessionId: string;
+        anchorLeafId: string;
+        startIndex: number;
+        initial: boolean;
+    }> = {},
+): PhiToPi {
+    return {
+        paneId: 'pane',
+        processId: 'proc',
+        runtimeGeneration: 1n,
+        payload: {
+            $case: 'transcriptSearchRequest',
+            value: {
+                requestId: id,
+                query: overrides.query ?? 'needle',
+                sessionId: overrides.sessionId ?? 'sess',
+                anchorLeafId: overrides.anchorLeafId ?? '',
+                startIndex: overrides.startIndex ?? 0,
+                initial: overrides.initial ?? true,
+            },
+        },
+    };
+}
+
 function responseOf(msg: PiToPhi): {
     requestId: string;
     entries: string[];
@@ -287,6 +316,161 @@ describe('Runtime hello', () => {
             CAPABILITY_LIFECYCLE,
             CAPABILITY_MODELS,
         ]);
+        rt.shutdown();
+    });
+});
+
+describe('Runtime transcript search', () => {
+    it('does not advertise transcript search when the host lacks getBranch', async () => {
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            makeChannel: wired(ch),
+        });
+        rt.start(ctx());
+        await sleep(10);
+        const hello = payloadOf(ch.hellos[0]!);
+        expect(hello.$case).toBe('hello');
+        if (hello.$case !== 'hello') return;
+        expect(hello.value.capabilities).not.toContain(
+            CAPABILITY_TRANSCRIPT_SEARCH,
+        );
+        rt.shutdown();
+    });
+
+    function transcriptContext(entries: readonly Record<string, unknown>[]) {
+        return ctx({
+            sessionManager: {
+                getSessionId: () => 'sess',
+                getLeafId: () => entries.at(-1)?.id as string | null,
+                getBranch: (fromId?: string) => {
+                    const end = fromId
+                        ? entries.findIndex((entry) => entry.id === fromId)
+                        : entries.length - 1;
+                    return end < 0 ? [] : entries.slice(0, end + 1);
+                },
+            },
+        });
+    }
+
+    it('advertises the capability and returns safe active-branch matches', async () => {
+        const entries = [
+            {
+                id: 'u1',
+                parentId: null,
+                type: 'message',
+                message: {
+                    role: 'user',
+                    content: [{ type: 'text', text: 'Needle in visible text' }],
+                },
+            },
+            {
+                id: 'a1',
+                parentId: 'u1',
+                type: 'message',
+                message: {
+                    role: 'assistant',
+                    content: [
+                        { type: 'thinking', thinking: 'needle hidden' },
+                        { type: 'text', text: 'No match here' },
+                    ],
+                },
+            },
+        ];
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            makeChannel: wired(ch),
+        });
+        rt.start(transcriptContext(entries));
+        await sleep(10);
+        const hello = payloadOf(ch.hellos[0]!);
+        expect(hello.$case).toBe('hello');
+        if (hello.$case !== 'hello') return;
+        expect(hello.value.capabilities).toContain(
+            CAPABILITY_TRANSCRIPT_SEARCH,
+        );
+
+        ch.hooks!.onMessage(transcriptSearchRequest('ts1'));
+        await sleep(10);
+        const payload = payloadOf(ch.nonfatalSends[0]!);
+        expect(payload.$case).toBe('transcriptSearchResponse');
+        if (payload.$case !== 'transcriptSearchResponse') return;
+        expect(payload.value).toMatchObject({
+            requestId: 'ts1',
+            sessionId: 'sess',
+            anchorLeafId: 'a1',
+            nextIndex: 2,
+            complete: true,
+            unavailable: false,
+        });
+        expect(payload.value.matches).toEqual([
+            { entryId: 'u1', role: 'user', snippet: 'Needle in visible text' },
+        ]);
+        rt.shutdown();
+    });
+
+    it('does not handle requests when the server did not negotiate the capability', async () => {
+        const ch = mockChannel();
+        const connect = ch.connect;
+        ch.connect = async (hello) => {
+            const accepted = await connect(hello);
+            return {
+                ...accepted,
+                capabilities: accepted.capabilities.filter(
+                    (capability) => capability !== CAPABILITY_TRANSCRIPT_SEARCH,
+                ),
+            };
+        };
+        const entries = [
+            {
+                id: 'u1',
+                parentId: null,
+                type: 'message',
+                message: { role: 'user', content: 'needle' },
+            },
+        ];
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            makeChannel: wired(ch),
+        });
+        rt.start(transcriptContext(entries));
+        await sleep(10);
+        ch.hooks!.onMessage(transcriptSearchRequest('ts2'));
+        await sleep(10);
+        expect(ch.nonfatalSends).toHaveLength(0);
+        rt.shutdown();
+    });
+
+    it('cancels a chunked read when its bridge stream disconnects', async () => {
+        const entries = [
+            {
+                id: 'u1',
+                parentId: null,
+                type: 'message',
+                message: { role: 'user', content: 'x'.repeat(64 * 1024) },
+            },
+        ];
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            backoffBaseMs: 10_000,
+            makeChannel: wired(ch),
+        });
+        rt.start(transcriptContext(entries));
+        await sleep(10);
+        setTimeout(() => ch.hooks?.onStatus(status(14)), 0);
+        ch.hooks!.onMessage(transcriptSearchRequest('ts3'));
+        await sleep(30);
+        expect(ch.nonfatalSends).toHaveLength(0);
         rt.shutdown();
     });
 });

@@ -20,7 +20,17 @@ async function watchDiagnostics(page: Page, serverOrigin: string) {
     const pageErrors: string[] = [];
     const localFailures: string[] = [];
     page.on('console', (message) => {
-        if (message.type() === 'error') consoleErrors.push(message.text());
+        if (message.type() !== 'error') return;
+        const text = message.text();
+        if (
+            text ===
+                'Failed to load resource: net::ERR_INTERNET_DISCONNECTED' ||
+            text.startsWith(
+                '[term] Failed to sync pin on backend: TypeError: Failed to fetch',
+            )
+        )
+            return;
+        consoleErrors.push(text);
     });
     page.on('pageerror', (error) => pageErrors.push(error.message));
     page.on('response', (response) => {

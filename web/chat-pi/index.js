@@ -1210,6 +1210,7 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
             destroyed = true;
             off();
             offState();
+            view.cancelSearch();
             client.close();
             subagentViewer.destroy();
             strip.destroy();
@@ -1236,6 +1237,8 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
         compact,
         interrupt,
         setName,
+        searchTranscript: (query, onUpdate) => destroyed ? () => { } : view.searchStructured(query, onUpdate),
+        revealTranscriptSearchResult: (result) => !destroyed && view.revealSearchResult(result),
         refreshFleet: () => {
             // Tab re-activation: repaint this pane's last fleet snapshot
             // (or hide the shared strip when this pane has none).

@@ -80,6 +80,7 @@ Runtime identity binds `(generation, runtime_id, session_id)`:
 | `pi.reload.v1`    | Native `/reload` dispatch from an interactive editor |
 | `pi.skills.v1`    | On-demand skill list and skill invocation        |
 | `pi.syncboard.v1` | Direct Pi tool for the owning Phi Syncboard      |
+| `pi.transcript-search.v1` | Read-only visible-text search on the active Pi branch |
 
 Context, Compact, and Reload negotiate independently on every Hello
 from checked host availability: `pi.context.v1` needs `getContextUsage`;
@@ -104,6 +105,35 @@ message slots). A history frame admits only while the queue retains that headroo
 after admission. Admission failure fails only the request — it
 never closes the stream — and Phi falls back to pre-bridge
 behavior on any failure or a 1 s timeout.
+
+## Transcript search
+
+`pi.transcript-search.v1` requires the public `getSessionId`, `getLeafId`,
+and `getBranch` methods. The extension checks availability for each request.
+Phi sends `TranscriptSearchRequest` (field 24). Pi answers
+`TranscriptSearchResponse` (field 27) with the same request ID.
+
+The initial request captures the active leaf. Continuations name the same
+session and leaf, then resume at `next_index`. An anchor outside the active
+branch returns `unavailable`. New messages do not extend the captured branch.
+An empty branch returns a complete page with no matches.
+
+Search uses literal Unicode case-insensitive matching. It reads user,
+assistant, and tool-result text only. It excludes thinking, tool arguments,
+images, hidden state, and sibling branches. Each query has at most 256 Unicode
+code points and 1024 UTF-8 bytes. Each page inspects at most 256 entries and
+returns at most 50 matches. Each snippet has at most 2048 UTF-8 bytes.
+
+Phi and Pi each allow two concurrent reads per peer. Pi allows 1500 ms per
+read and yields between text chunks. Phi allows two seconds for local IPC.
+Invalid pages, timeouts, and queue pressure fail only the read, not the stream.
+The response carries the answering process and generation through HTTP.
+The browser rejects replies from a replaced pane, process, or generation.
+
+The browser delays remote queries by 250 ms and keeps loaded-terminal search
+immediate. Network errors, HTTP 429, and HTTP 5xx allow two retries, after
+500 ms and 1500 ms, within a 15-second deadline. A superseded query cancels
+these waits. Invalid pages do not retry. Bridge loss preserves terminal search.
 
 ## Model list and switching
 

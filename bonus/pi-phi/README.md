@@ -45,6 +45,18 @@ Without the bridge or history capability, the existing key behavior remains.
 An unavailable editor, failed request, or timeout also keeps that behavior.
 The reader checks a private Pi editor field, so compatibility requires a host check.
 
+## Transcript search
+
+Ctrl+F or Cmd+F opens search for the active pane. A connected Pi pane with
+`pi.transcript-search.v1` can search user, assistant, and tool-result text on
+its active branch, including messages before compaction. Thinking, tool
+arguments, images, hidden state, and sibling branches are excluded.
+
+Matches appear as read-only context in the existing find bar. Search does not
+change Pi's active leaf, editor, or prompt queue. Loaded-terminal search stays
+immediate during remote reads. Without the bridge or capability, terminal
+search remains available. See `PROTOCOL.md` for page bounds and failure handling.
+
 ## Model selection
 
 A connected Pi pane with `pi.models.v1` uses the shared Pi RPC model picker,

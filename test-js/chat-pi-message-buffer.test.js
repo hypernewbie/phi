@@ -368,6 +368,7 @@ describe('MessageBuffer accessors and render disposition', () => {
         const b = new MessageBuffer();
         b.applySnapshot(snap(2, [{ role: 'user', content: 'go' }]));
         const source = b.getStructuredTranscript();
+        expect(source.identity).toBeDefined();
         expect(source.length).toBe(1);
         const slice = source.slice(0, 1);
         expect(slice).toHaveLength(1);
@@ -381,8 +382,13 @@ describe('MessageBuffer accessors and render disposition', () => {
             },
         });
         expect(source.length).toBe(1);
-        // A fresh source reads the new length.
-        expect(b.getStructuredTranscript().length).toBe(2);
+        // A fresh source reads the new length without changing the backing identity.
+        const grown = b.getStructuredTranscript();
+        expect(grown.length).toBe(2);
+        expect(grown.identity).toBe(source.identity);
+
+        b.applySnapshot(snap(4, [{ role: 'user', content: 'replacement' }]));
+        expect(b.getStructuredTranscript().identity).not.toBe(grown.identity);
     });
 });
 

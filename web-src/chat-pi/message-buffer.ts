@@ -25,6 +25,8 @@ export interface Snapshot {
 
 export interface StructuredMessageSource {
     readonly length: number;
+    /** Stable backing identity; equal identities promise an unchanged prefix. */
+    readonly identity?: object;
     slice(start: number, end?: number): readonly StructuredMessage[];
 }
 

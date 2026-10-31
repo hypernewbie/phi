@@ -24601,6 +24601,7 @@ var MAX_SYNCBOARD_VALUE_BYTES = 64 * 1024;
 var MAX_SYNCBOARD_RESPONSE_BYTES = 192 * 1024;
 var MAX_SYNCBOARD_PENDING = 4;
 var SYNCBOARD_CALL_TIMEOUT_MS = 15e3;
+var CAPABILITY_TRANSCRIPT_SEARCH = "pi.transcript-search.v1";
 var MAX_SKILL_ENTRIES = 200;
 var MAX_SKILL_NAME_BYTES = 64;
 var MAX_SKILL_DESCRIPTION_BYTES = 1024;
@@ -25782,6 +25783,9 @@ var PiToPhi = {
       case "syncboardRequest":
         SyncboardRequest.encode(message.payload.value, writer.uint32(210).fork()).join();
         break;
+      case "transcriptSearchResponse":
+        TranscriptSearchResponse.encode(message.payload.value, writer.uint32(218).fork()).join();
+        break;
     }
     return writer;
   },
@@ -25920,6 +25924,16 @@ var PiToPhi = {
             message.payload = { $case: "syncboardRequest", value: SyncboardRequest.decode(reader, reader.uint32()) };
             continue;
           }
+          case 27: {
+            if (tag !== 218) {
+              break;
+            }
+            message.payload = {
+              $case: "transcriptSearchResponse",
+              value: TranscriptSearchResponse.decode(reader, reader.uint32())
+            };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -26027,6 +26041,15 @@ var PiToPhi = {
         }
         break;
       }
+      case "transcriptSearchResponse": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = {
+            $case: "transcriptSearchResponse",
+            value: TranscriptSearchResponse.fromPartial(object.payload.value)
+          };
+        }
+        break;
+      }
     }
     return message;
   }
@@ -26084,6 +26107,9 @@ var PhiToPi = {
         break;
       case "syncboardResponse":
         SyncboardResponse.encode(message.payload.value, writer.uint32(186).fork()).join();
+        break;
+      case "transcriptSearchRequest":
+        TranscriptSearchRequest.encode(message.payload.value, writer.uint32(194).fork()).join();
         break;
     }
     return writer;
@@ -26215,6 +26241,16 @@ var PhiToPi = {
             message.payload = { $case: "syncboardResponse", value: SyncboardResponse.decode(reader, reader.uint32()) };
             continue;
           }
+          case 24: {
+            if (tag !== 194) {
+              break;
+            }
+            message.payload = {
+              $case: "transcriptSearchRequest",
+              value: TranscriptSearchRequest.decode(reader, reader.uint32())
+            };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -26313,6 +26349,15 @@ var PhiToPi = {
       case "syncboardResponse": {
         if (object.payload?.value !== void 0 && object.payload?.value !== null) {
           message.payload = { $case: "syncboardResponse", value: SyncboardResponse.fromPartial(object.payload.value) };
+        }
+        break;
+      }
+      case "transcriptSearchRequest": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = {
+            $case: "transcriptSearchRequest",
+            value: TranscriptSearchRequest.fromPartial(object.payload.value)
+          };
         }
         break;
       }
@@ -28914,6 +28959,307 @@ var SyncboardResponse = {
     return message;
   }
 };
+function createBaseTranscriptSearchRequest() {
+  return { requestId: "", query: "", sessionId: "", anchorLeafId: "", startIndex: 0, initial: false };
+}
+var TranscriptSearchRequest = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.query !== "") {
+      writer.uint32(18).string(message.query);
+    }
+    if (message.sessionId !== "") {
+      writer.uint32(26).string(message.sessionId);
+    }
+    if (message.anchorLeafId !== "") {
+      writer.uint32(34).string(message.anchorLeafId);
+    }
+    if (message.startIndex !== 0) {
+      writer.uint32(40).uint32(message.startIndex);
+    }
+    if (message.initial !== false) {
+      writer.uint32(48).bool(message.initial);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseTranscriptSearchRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+            message.query = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+            message.sessionId = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+            message.anchorLeafId = reader.string();
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+            message.startIndex = reader.uint32();
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+            message.initial = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return TranscriptSearchRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseTranscriptSearchRequest();
+    message.requestId = object.requestId ?? "";
+    message.query = object.query ?? "";
+    message.sessionId = object.sessionId ?? "";
+    message.anchorLeafId = object.anchorLeafId ?? "";
+    message.startIndex = object.startIndex ?? 0;
+    message.initial = object.initial ?? false;
+    return message;
+  }
+};
+function createBaseTranscriptSearchMatch() {
+  return { entryId: "", role: "", snippet: "" };
+}
+var TranscriptSearchMatch = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.entryId !== "") {
+      writer.uint32(10).string(message.entryId);
+    }
+    if (message.role !== "") {
+      writer.uint32(18).string(message.role);
+    }
+    if (message.snippet !== "") {
+      writer.uint32(26).string(message.snippet);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseTranscriptSearchMatch();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.entryId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+            message.role = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+            message.snippet = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return TranscriptSearchMatch.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseTranscriptSearchMatch();
+    message.entryId = object.entryId ?? "";
+    message.role = object.role ?? "";
+    message.snippet = object.snippet ?? "";
+    return message;
+  }
+};
+function createBaseTranscriptSearchResponse() {
+  return {
+    requestId: "",
+    sessionId: "",
+    anchorLeafId: "",
+    nextIndex: 0,
+    matches: [],
+    complete: false,
+    unavailable: false
+  };
+}
+var TranscriptSearchResponse = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.sessionId !== "") {
+      writer.uint32(18).string(message.sessionId);
+    }
+    if (message.anchorLeafId !== "") {
+      writer.uint32(26).string(message.anchorLeafId);
+    }
+    if (message.nextIndex !== 0) {
+      writer.uint32(32).uint32(message.nextIndex);
+    }
+    for (const v of message.matches) {
+      TranscriptSearchMatch.encode(v, writer.uint32(42).fork()).join();
+    }
+    if (message.complete !== false) {
+      writer.uint32(48).bool(message.complete);
+    }
+    if (message.unavailable !== false) {
+      writer.uint32(56).bool(message.unavailable);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseTranscriptSearchResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+            message.sessionId = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+            message.anchorLeafId = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+            message.nextIndex = reader.uint32();
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+            message.matches.push(TranscriptSearchMatch.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+            message.complete = reader.bool();
+            continue;
+          }
+          case 7: {
+            if (tag !== 56) {
+              break;
+            }
+            message.unavailable = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return TranscriptSearchResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseTranscriptSearchResponse();
+    message.requestId = object.requestId ?? "";
+    message.sessionId = object.sessionId ?? "";
+    message.anchorLeafId = object.anchorLeafId ?? "";
+    message.nextIndex = object.nextIndex ?? 0;
+    message.matches = object.matches?.map((e) => TranscriptSearchMatch.fromPartial(e)) || [];
+    message.complete = object.complete ?? false;
+    message.unavailable = object.unavailable ?? false;
+    return message;
+  }
+};
 function createBaseProtocolError() {
   return { code: 0, safeMessage: "" };
 }
@@ -29287,6 +29633,303 @@ function isHistoryReaderAvailable(ui) {
   return readEditorHistory(ui) !== null;
 }
 
+// src/transcript-search.ts
+var MAX_TRANSCRIPT_QUERY_CODE_POINTS = 256;
+var MAX_TRANSCRIPT_QUERY_BYTES = 1024;
+var MAX_TRANSCRIPT_ENTRIES_PER_PAGE = 256;
+var MAX_TRANSCRIPT_MATCHES_PER_PAGE = 50;
+var MAX_TRANSCRIPT_TEXT_CHUNK_BYTES = 32 * 1024;
+var MAX_TRANSCRIPT_SNIPPET_BYTES = 2048;
+var TRANSCRIPT_SEARCH_DEADLINE_MS = 1500;
+var MAX_TRANSCRIPT_CONCURRENT_READS = 2;
+var COOPERATIVE_YIELD_MS = 25;
+var MAX_IDENTITY_BYTES = 256;
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function utf8Width(codePoint) {
+  if (codePoint <= 127) return 1;
+  if (codePoint <= 2047) return 2;
+  if (codePoint <= 65535) return 3;
+  return 4;
+}
+function queryBytes(query) {
+  return new TextEncoder().encode(query).byteLength;
+}
+function isTranscriptSearchQuery(query) {
+  return query !== "" && Array.from(query).length <= MAX_TRANSCRIPT_QUERY_CODE_POINTS && queryBytes(query) <= MAX_TRANSCRIPT_QUERY_BYTES;
+}
+function isTranscriptSearchAvailable(value) {
+  if (!isRecord(value)) return false;
+  try {
+    return typeof value.getSessionId === "function" && typeof value.getLeafId === "function" && typeof value.getBranch === "function";
+  } catch {
+    return false;
+  }
+}
+function validIdentity(value) {
+  return value !== "" && queryBytes(value) <= MAX_IDENTITY_BYTES;
+}
+function previousCodePointStart(text, end) {
+  const last = text.charCodeAt(end - 1);
+  if (last >= 56320 && last <= 57343 && end > 1) {
+    const before = text.charCodeAt(end - 2);
+    if (before >= 55296 && before <= 56319) return end - 2;
+  }
+  return end - 1;
+}
+function nextCodePointEnd(text, start) {
+  const codePoint = text.codePointAt(start);
+  return start + (codePoint !== void 0 && codePoint > 65535 ? 2 : 1);
+}
+function prefixEndByBytes(text, start, maxBytes) {
+  let end = start;
+  let bytes = 0;
+  while (end < text.length) {
+    const point = text.codePointAt(end);
+    if (point === void 0) break;
+    const width = utf8Width(point);
+    if (bytes + width > maxBytes) break;
+    bytes += width;
+    end = nextCodePointEnd(text, end);
+  }
+  return end;
+}
+function suffixStartByBytes(text, end, maxBytes) {
+  let start = end;
+  let bytes = 0;
+  while (start > 0) {
+    const previous = previousCodePointStart(text, start);
+    const point = text.codePointAt(previous);
+    if (point === void 0) break;
+    const width = utf8Width(point);
+    if (bytes + width > maxBytes) break;
+    bytes += width;
+    start = previous;
+  }
+  return start;
+}
+function chunkEndByBytes(text, start, maxBytes) {
+  return prefixEndByBytes(text, start, maxBytes);
+}
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function makeSnippet(text, start, end) {
+  const matched = text.slice(start, end);
+  const matchedBytes = queryBytes(matched);
+  if (matchedBytes > MAX_TRANSCRIPT_SNIPPET_BYTES) return null;
+  const hasPrefix = start > 0;
+  const hasSuffix = end < text.length;
+  const ellipsisBytes = (hasPrefix ? 3 : 0) + (hasSuffix ? 3 : 0);
+  const contextBytes = Math.max(
+    0,
+    MAX_TRANSCRIPT_SNIPPET_BYTES - matchedBytes - ellipsisBytes
+  );
+  const prefixBudget = Math.floor(contextBytes / 2);
+  const suffixBudget = contextBytes - prefixBudget;
+  const prefixStart = suffixStartByBytes(text, start, prefixBudget);
+  const suffixEnd = prefixEndByBytes(text, end, suffixBudget);
+  const snippet = (prefixStart > 0 ? "\u2026" : "") + text.slice(prefixStart, start) + matched + text.slice(end, suffixEnd) + (suffixEnd < text.length ? "\u2026" : "");
+  return queryBytes(snippet) <= MAX_TRANSCRIPT_SNIPPET_BYTES ? snippet : null;
+}
+async function yieldIfNeeded(lastYieldAt) {
+  if (Date.now() - lastYieldAt < COOPERATIVE_YIELD_MS) return lastYieldAt;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  return Date.now();
+}
+async function findTextMatch(text, pattern, queryCodePoints, input, lastYieldAt) {
+  let offset = 0;
+  let yieldedAt = lastYieldAt;
+  const overlapBytes = Math.min(
+    queryCodePoints * 4,
+    MAX_TRANSCRIPT_TEXT_CHUNK_BYTES - 1
+  );
+  const mainChunkBytes = MAX_TRANSCRIPT_TEXT_CHUNK_BYTES - overlapBytes;
+  while (offset < text.length) {
+    if (input.signal.aborted || Date.now() >= input.deadlineAt) {
+      return { snippet: null, lastYieldAt: yieldedAt, unavailable: true };
+    }
+    const chunkStart = suffixStartByBytes(text, offset, overlapBytes);
+    const chunkEnd = chunkEndByBytes(text, offset, mainChunkBytes);
+    if (chunkEnd <= offset) {
+      return { snippet: null, lastYieldAt: yieldedAt, unavailable: true };
+    }
+    const chunk = text.slice(chunkStart, chunkEnd);
+    pattern.lastIndex = 0;
+    while (true) {
+      const match = pattern.exec(chunk);
+      if (match === null) break;
+      const matchStart = chunkStart + match.index;
+      const matchEnd = matchStart + match[0].length;
+      if (offset === 0 || matchEnd > offset) {
+        const snippet = makeSnippet(text, matchStart, matchEnd);
+        return {
+          snippet,
+          lastYieldAt: yieldedAt,
+          unavailable: snippet === null
+        };
+      }
+    }
+    offset = chunkEnd;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    yieldedAt = Date.now();
+  }
+  return { snippet: null, lastYieldAt: yieldedAt, unavailable: false };
+}
+function readBranch(manager, fromId) {
+  let entries;
+  try {
+    entries = manager.getBranch(fromId ?? void 0);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(entries)) return null;
+  const out = [];
+  const ids = /* @__PURE__ */ new Set();
+  let parentId = null;
+  for (const item of entries) {
+    if (!isRecord(item)) return null;
+    const id = item.id;
+    if (typeof id !== "string" || !validIdentity(id) || ids.has(id))
+      return null;
+    if (item.parentId !== parentId) return null;
+    ids.add(id);
+    parentId = id;
+    out.push(item);
+  }
+  if (fromId === null) return out.length === 0 ? out : null;
+  return out.length > 0 && out[out.length - 1]?.id === fromId ? out : null;
+}
+function visibleTextSegments(message) {
+  if (!isRecord(message)) return null;
+  const role = message.role;
+  if (role !== "user" && role !== "assistant" && role !== "toolResult")
+    return null;
+  const content = message.content;
+  if (typeof content === "string") return { role, texts: [content] };
+  if (!Array.isArray(content)) return null;
+  const texts = [];
+  for (const part of content) {
+    if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string")
+      continue;
+    texts.push(part.text);
+  }
+  return { role, texts };
+}
+function unavailablePage(sessionId, anchorLeafId, startIndex) {
+  return {
+    sessionId,
+    anchorLeafId,
+    nextIndex: startIndex,
+    matches: [],
+    complete: false,
+    unavailable: true
+  };
+}
+async function searchTranscriptPage(manager, input) {
+  let sessionId = input.expectedSessionId;
+  let anchorLeafId = input.anchorLeafId;
+  try {
+    if (!isTranscriptSearchQuery(input.query) || !validIdentity(input.expectedSessionId) || !Number.isSafeInteger(input.startIndex) || input.startIndex < 0 || input.startIndex > 4294967295 || input.signal.aborted || Date.now() >= input.deadlineAt || manager.getSessionId() !== input.expectedSessionId)
+      return unavailablePage(sessionId, anchorLeafId, input.startIndex);
+    let branch;
+    if (input.initial) {
+      if (input.startIndex !== 0 || input.anchorLeafId !== "")
+        return unavailablePage(sessionId, "", input.startIndex);
+      const leafId = manager.getLeafId();
+      if (leafId !== null && !validIdentity(leafId))
+        return unavailablePage(sessionId, "", input.startIndex);
+      anchorLeafId = leafId ?? "";
+      branch = readBranch(manager, leafId);
+    } else {
+      if (!validIdentity(input.anchorLeafId) || input.startIndex === 0 || input.startIndex > 4294967295)
+        return unavailablePage(
+          sessionId,
+          anchorLeafId,
+          input.startIndex
+        );
+      const currentLeaf2 = manager.getLeafId();
+      const activeBranch2 = readBranch(manager, currentLeaf2);
+      if (!activeBranch2 || !activeBranch2.some((entry) => entry.id === input.anchorLeafId))
+        return unavailablePage(
+          sessionId,
+          anchorLeafId,
+          input.startIndex
+        );
+      branch = currentLeaf2 === input.anchorLeafId ? activeBranch2 : readBranch(manager, input.anchorLeafId);
+    }
+    if (!branch || input.startIndex > branch.length)
+      return unavailablePage(sessionId, anchorLeafId, input.startIndex);
+    const pattern = new RegExp(escapeRegExp(input.query), "giu");
+    const queryCodePoints = Array.from(input.query).length;
+    const matches = [];
+    const endIndex = Math.min(
+      branch.length,
+      input.startIndex + MAX_TRANSCRIPT_ENTRIES_PER_PAGE
+    );
+    let lastYieldAt = Date.now();
+    let nextIndex = input.startIndex;
+    for (let index = input.startIndex; index < endIndex; index++) {
+      if (input.signal.aborted || Date.now() >= input.deadlineAt || manager.getSessionId() !== input.expectedSessionId)
+        return unavailablePage(
+          sessionId,
+          anchorLeafId,
+          input.startIndex
+        );
+      const entry = branch[index];
+      nextIndex = index + 1;
+      if (entry?.type === "message") {
+        const message = visibleTextSegments(entry.message);
+        if (message) {
+          for (const text of message.texts) {
+            const found = await findTextMatch(
+              text,
+              pattern,
+              queryCodePoints,
+              input,
+              lastYieldAt
+            );
+            lastYieldAt = found.lastYieldAt;
+            if (found.unavailable)
+              return unavailablePage(
+                sessionId,
+                anchorLeafId,
+                input.startIndex
+              );
+            if (found.snippet !== null) {
+              matches.push({
+                entryId: entry.id,
+                role: message.role,
+                snippet: found.snippet
+              });
+              break;
+            }
+          }
+        }
+      }
+      if (matches.length >= MAX_TRANSCRIPT_MATCHES_PER_PAGE) break;
+      lastYieldAt = await yieldIfNeeded(lastYieldAt);
+    }
+    if (input.signal.aborted || Date.now() >= input.deadlineAt || manager.getSessionId() !== input.expectedSessionId)
+      return unavailablePage(sessionId, anchorLeafId, input.startIndex);
+    const currentLeaf = manager.getLeafId();
+    const activeBranch = readBranch(manager, currentLeaf);
+    if (!activeBranch || (anchorLeafId === "" ? currentLeaf !== null || activeBranch.length !== 0 : !activeBranch.some((entry) => entry.id === anchorLeafId)) || input.signal.aborted || Date.now() >= input.deadlineAt || manager.getSessionId() !== input.expectedSessionId)
+      return unavailablePage(sessionId, anchorLeafId, input.startIndex);
+    return {
+      sessionId,
+      anchorLeafId,
+      nextIndex,
+      matches,
+      complete: nextIndex >= branch.length,
+      unavailable: false
+    };
+  } catch {
+    return unavailablePage(sessionId, anchorLeafId, input.startIndex);
+  }
+}
+
 // src/runtime.ts
 function representableSkill(skill) {
   if (!skill || typeof skill.name !== "string") return null;
@@ -29448,6 +30091,8 @@ var Runtime = class {
   syncboardAccepted = false;
   syncboardSeq = 0n;
   syncboardPending = /* @__PURE__ */ new Map();
+  transcriptSearchAccepted = false;
+  transcriptSearchReads = /* @__PURE__ */ new Set();
   /** getContextUsage present on the latest event context. */
   contextApi = false;
   /** compact/isIdle/hasPendingMessages present on the latest context. */
@@ -29860,6 +30505,7 @@ var Runtime = class {
       clearTimeout(this.compactSettleTimer);
       this.compactSettleTimer = null;
     }
+    this.cancelTranscriptSearches();
     const channel = this.channel;
     this.channel = null;
     this.starting = false;
@@ -30098,6 +30744,8 @@ var Runtime = class {
     if (isHistoryReaderAvailable(this.ui)) caps.push(CAPABILITY_HISTORY);
     if (this.opts.getThinkingLevel && this.opts.setThinkingLevel)
       caps.push(CAPABILITY_THINKING);
+    if (isTranscriptSearchAvailable(this.lastCtx?.sessionManager))
+      caps.push(CAPABILITY_TRANSCRIPT_SEARCH);
     if (this.opts.getSkills && this.opts.invokeSkill)
       caps.push(CAPABILITY_SKILLS);
     if (this.opts.syncboardEnabled) caps.push(CAPABILITY_SYNCBOARD);
@@ -30153,6 +30801,7 @@ var Runtime = class {
     this.reloadAccepted = false;
     this.skillsAccepted = false;
     this.setSyncboardAccepted(false);
+    this.transcriptSearchAccepted = false;
     if (this.lastCtx) this.sampleTelemetry(this.lastCtx);
     const channel = make(this.opts.creds, {
       onMessage: (msg) => {
@@ -30176,6 +30825,9 @@ var Runtime = class {
         this.skillsAccepted = accepted.capabilities.includes(CAPABILITY_SKILLS);
         this.setSyncboardAccepted(
           this.opts.syncboardEnabled === true && accepted.capabilities.includes(CAPABILITY_SYNCBOARD)
+        );
+        this.transcriptSearchAccepted = accepted.capabilities.includes(
+          CAPABILITY_TRANSCRIPT_SEARCH
         );
       }
     } catch (err) {
@@ -30222,6 +30874,8 @@ var Runtime = class {
       );
     } else if (msg.payload?.$case === "syncboardResponse" && this.syncboardAccepted) {
       this.onSyncboardResponse(msg.payload.value);
+    } else if (msg.payload?.$case === "transcriptSearchRequest" && this.transcriptSearchAccepted) {
+      this.onTranscriptSearchRequest(msg.payload.value);
     }
   }
   onSyncboardResponse(response) {
@@ -30309,6 +30963,178 @@ var Runtime = class {
     try {
       this.opts.onSyncboardAvailability?.(available);
     } catch {
+    }
+  }
+  onTranscriptSearchRequest(request) {
+    const channel = this.channel;
+    const manager = this.lastCtx?.sessionManager;
+    if (!channel || this.shutdownRequested || typeof request.requestId !== "string" || request.requestId === "" || Buffer.byteLength(request.requestId, "utf8") > 64)
+      return;
+    const unavailable = () => ({
+      sessionId: request.sessionId,
+      anchorLeafId: request.initial ? "" : request.anchorLeafId,
+      nextIndex: request.startIndex,
+      matches: [],
+      complete: false,
+      unavailable: true
+    });
+    if (!isTranscriptSearchAvailable(manager) || !isTranscriptSearchQuery(request.query) || request.sessionId !== this.sessionId || (request.initial ? request.startIndex !== 0 || request.anchorLeafId !== "" : request.startIndex === 0 || request.anchorLeafId === "")) {
+      this.sendTranscriptSearchResponse(
+        channel,
+        request.requestId,
+        unavailable()
+      );
+      return;
+    }
+    try {
+      if (manager.getSessionId() !== request.sessionId) {
+        this.sendTranscriptSearchResponse(
+          channel,
+          request.requestId,
+          unavailable()
+        );
+        return;
+      }
+    } catch {
+      this.sendTranscriptSearchResponse(
+        channel,
+        request.requestId,
+        unavailable()
+      );
+      return;
+    }
+    if (this.transcriptSearchReads.size >= MAX_TRANSCRIPT_CONCURRENT_READS) {
+      this.sendTranscriptSearchResponse(
+        channel,
+        request.requestId,
+        unavailable()
+      );
+      return;
+    }
+    const controller = new AbortController();
+    const deadlineAt = Date.now() + TRANSCRIPT_SEARCH_DEADLINE_MS;
+    const timer = setTimeout(
+      () => controller.abort(),
+      TRANSCRIPT_SEARCH_DEADLINE_MS
+    );
+    const operation = {
+      requestId: request.requestId,
+      channel,
+      sessionId: request.sessionId,
+      controller,
+      deadlineAt,
+      timer,
+      cancelled: false
+    };
+    this.transcriptSearchReads.add(operation);
+    void this.runTranscriptSearch(manager, request, operation);
+  }
+  async runTranscriptSearch(manager, request, operation) {
+    try {
+      const page = await searchTranscriptPage(manager, {
+        query: request.query,
+        expectedSessionId: request.sessionId,
+        initial: request.initial,
+        anchorLeafId: request.anchorLeafId,
+        startIndex: request.startIndex,
+        signal: operation.controller.signal,
+        deadlineAt: operation.deadlineAt
+      });
+      if (!this.ownsTranscriptSearch(operation)) return;
+      this.sendTranscriptSearchResponse(
+        operation.channel,
+        operation.requestId,
+        page.unavailable ? {
+          sessionId: request.sessionId,
+          anchorLeafId: request.initial ? "" : request.anchorLeafId,
+          nextIndex: request.startIndex,
+          matches: [],
+          complete: false,
+          unavailable: true
+        } : page
+      );
+    } catch {
+      if (this.ownsTranscriptSearch(operation)) {
+        this.sendTranscriptSearchResponse(
+          operation.channel,
+          operation.requestId,
+          {
+            sessionId: request.sessionId,
+            anchorLeafId: request.initial ? "" : request.anchorLeafId,
+            nextIndex: request.startIndex,
+            matches: [],
+            complete: false,
+            unavailable: true
+          }
+        );
+      }
+    } finally {
+      clearTimeout(operation.timer);
+      this.transcriptSearchReads.delete(operation);
+    }
+  }
+  ownsTranscriptSearch(operation) {
+    if (operation.cancelled || this.shutdownRequested || this.channel !== operation.channel || this.sessionId !== operation.sessionId)
+      return false;
+    try {
+      return this.lastCtx?.sessionManager.getSessionId() === operation.sessionId;
+    } catch {
+      return false;
+    }
+  }
+  sendTranscriptSearchResponse(channel, requestId, page) {
+    let response = this.transcriptSearchResponse(requestId, page);
+    if (PiToPhi.encode(response).finish().length > MAX_MESSAGE_BYTES) {
+      response = this.transcriptSearchResponse(requestId, {
+        sessionId: page.sessionId,
+        anchorLeafId: page.anchorLeafId,
+        nextIndex: page.nextIndex,
+        matches: [],
+        complete: false,
+        unavailable: true
+      });
+    }
+    if (!channel.sendNonfatal(response) && !page.unavailable) {
+      channel.sendNonfatal(
+        this.transcriptSearchResponse(requestId, {
+          sessionId: page.sessionId,
+          anchorLeafId: page.anchorLeafId,
+          nextIndex: page.nextIndex,
+          matches: [],
+          complete: false,
+          unavailable: true
+        })
+      );
+    }
+  }
+  transcriptSearchResponse(requestId, page) {
+    return {
+      paneId: this.opts.creds.pane,
+      processId: this.opts.creds.process,
+      runtimeGeneration: this.opts.generation,
+      payload: {
+        $case: "transcriptSearchResponse",
+        value: TranscriptSearchResponse.create({
+          requestId,
+          sessionId: page.sessionId,
+          anchorLeafId: page.anchorLeafId,
+          nextIndex: page.nextIndex,
+          matches: page.matches.map(
+            (match) => TranscriptSearchMatch.create(match)
+          ),
+          complete: page.complete,
+          unavailable: page.unavailable
+        })
+      }
+    };
+  }
+  cancelTranscriptSearches(channel) {
+    for (const operation of this.transcriptSearchReads) {
+      if (channel && operation.channel !== channel) continue;
+      operation.cancelled = true;
+      clearTimeout(operation.timer);
+      operation.controller.abort();
+      this.transcriptSearchReads.delete(operation);
     }
   }
   /**
@@ -31143,7 +31969,9 @@ var Runtime = class {
   }
   onStreamEnd(status) {
     this.setSyncboardAccepted(false);
-    this.channel?.close();
+    const channel = this.channel;
+    this.cancelTranscriptSearches(channel ?? void 0);
+    channel?.close();
     this.channel = null;
     if (this.connectedAt !== null) {
       if (Date.now() - this.connectedAt >= RECONNECT_STABLE_MS) {
@@ -35673,7 +36501,7 @@ function createSyncboardToolManager(pi, options) {
   return manager;
 }
 function validateSyncboardInput(value) {
-  if (!isRecord(value)) throw new Error("Invalid Syncboard request.");
+  if (!isRecord2(value)) throw new Error("Invalid Syncboard request.");
   const operation = value.operation;
   const hasKey = Object.hasOwn(value, "key");
   const hasValue = Object.hasOwn(value, "value");
@@ -35815,7 +36643,7 @@ function parseSyncboardResponse(response, request) {
   return body;
 }
 function isSyncboardMessage(value) {
-  if (!isRecord(value)) return false;
+  if (!isRecord2(value)) return false;
   return typeof value.key === "string" && typeof value.value === "string" && isTimestamp(value.created_at) && isTimestamp(value.updated_at);
 }
 function isTimestamp(value) {
@@ -35845,7 +36673,7 @@ function safeReason(reason) {
       return "invalid-response";
   }
 }
-function isRecord(value) {
+function isRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -35888,10 +36716,18 @@ function clearCredsFromEnv(env = process.env) {
   delete env[ENV_TOKEN];
 }
 function contextView(ctx) {
+  const sessionManager = ctx.sessionManager;
+  const getBranch = sessionManager.getBranch;
   return {
     sessionManager: {
-      getSessionId: () => ctx.sessionManager.getSessionId(),
-      getLeafId: () => ctx.sessionManager.getLeafId()
+      getSessionId: () => sessionManager.getSessionId(),
+      getLeafId: () => sessionManager.getLeafId(),
+      ...typeof getBranch === "function" ? {
+        getBranch: (fromId) => getBranch.call(
+          sessionManager,
+          fromId
+        )
+      } : {}
     },
     get model() {
       return ctx.model ?? void 0;
@@ -35912,25 +36748,25 @@ function settledAborted(event) {
   return event.aborted === true;
 }
 function agentEndStopReason(event) {
-  if (!isRecord2(event) || !Array.isArray(event.messages)) return null;
+  if (!isRecord3(event) || !Array.isArray(event.messages)) return null;
   const messages = event.messages;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
-    if (!isRecord2(message) || message.role !== "assistant") continue;
+    if (!isRecord3(message) || message.role !== "assistant") continue;
     return typeof message.stopReason === "string" ? message.stopReason : null;
   }
   return null;
 }
-function isRecord2(value) {
+function isRecord3(value) {
   return typeof value === "object" && value !== null;
 }
 function bridgeDisabled(pi) {
   try {
     const api = pi;
     const settings2 = api.getSettings?.();
-    if (!isRecord2(settings2)) return false;
+    if (!isRecord3(settings2)) return false;
     const section = settings2.phiBridge;
-    if (!isRecord2(section)) return false;
+    if (!isRecord3(section)) return false;
     return section.enabled === false;
   } catch {
     return false;
