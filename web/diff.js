@@ -1729,11 +1729,10 @@ export class DiffController {
         this.gitManageRetryDelay = 1000;
         try {
             const stored = JSON.parse(localStorage.getItem(this.gitManageRecordKey) || 'null');
-            if (record.owner !== this.gitManagePageId ||
-                (stored !== null &&
-                    (stored?.id !== record.id ||
-                        stored?.owner !== this.gitManagePageId ||
-                        !['queued', 'paused'].includes(stored?.phase)))) {
+            if (stored !== null &&
+                (stored?.id !== record.id ||
+                    stored?.owner !== record.owner ||
+                    !['queued', 'paused'].includes(stored?.phase))) {
                 this.gitManageStatus =
                     'Git action ownership changed; it was not cancelled.';
                 this.renderGitManagement();

@@ -2182,11 +2182,10 @@ export class DiffController {
                 localStorage.getItem(this.gitManageRecordKey) || 'null',
             );
             if (
-                record.owner !== this.gitManagePageId ||
-                (stored !== null &&
-                    (stored?.id !== record.id ||
-                        stored?.owner !== this.gitManagePageId ||
-                        !['queued', 'paused'].includes(stored?.phase)))
+                stored !== null &&
+                (stored?.id !== record.id ||
+                    stored?.owner !== record.owner ||
+                    !['queued', 'paused'].includes(stored?.phase))
             ) {
                 this.gitManageStatus =
                     'Git action ownership changed; it was not cancelled.';

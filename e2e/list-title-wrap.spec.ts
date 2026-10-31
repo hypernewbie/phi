@@ -19,6 +19,7 @@ import {
 } from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
 import {
+    isCancelledGitInfoRead,
     isCancelledSessionListRead,
     isCancelledWorktreeRead,
 } from './_session-requests.js';
@@ -866,6 +867,8 @@ async function installDiagnostics(
             classification = 'cancelled-session-list-read';
         else if (isCancelledWorktreeRead(request, origin))
             classification = 'cancelled-worktree-read';
+        else if (isCancelledGitInfoRead(request, origin))
+            classification = 'cancelled-git-info-read';
         entries.push({
             phase: metadata?.phase ?? phase,
             kind: 'request-failed',
@@ -1228,6 +1231,60 @@ function unexpectedDiagnostics(diagnostics: Diagnostics[]): Diagnostic[] {
                 ),
         ),
     );
+}
+
+async function assertCompletedCurrentGitInfoRead(
+    page: Page,
+    diagnostics: Diagnostics,
+): Promise<BrowserRequestRecord> {
+    const activeWorktree = page.locator(
+        '.worktree-section.active[data-worktree-path]',
+    );
+    await expect(activeWorktree).toHaveCount(1);
+    const selectedCwd = await activeWorktree.getAttribute('data-worktree-path');
+    expect(selectedCwd).toBeTruthy();
+    if (!selectedCwd) throw new Error('selected worktree path is missing');
+
+    const completedRead = () =>
+        diagnostics.requestRecords.find((record) => {
+            let url: URL;
+            try {
+                url = new URL(record.url);
+            } catch {
+                return false;
+            }
+            return (
+                record.origin === diagnostics.origin &&
+                url.origin === diagnostics.origin &&
+                record.method === 'GET' &&
+                url.pathname === '/api/git/info' &&
+                url.searchParams.get('cwd') === selectedCwd &&
+                record.phase === 'online' &&
+                record.onlineAtStart &&
+                record.response?.status === 200 &&
+                record.terminal?.kind === 'finished' &&
+                record.terminal.phase === 'online' &&
+                record.terminal.online
+            );
+        });
+    await expect
+        .poll(() => completedRead()?.requestId ?? null, {
+            timeout: 5000,
+            intervals: [50, 100, 250],
+        })
+        .not.toBeNull();
+    const request = completedRead();
+    if (!request)
+        throw new Error('completed current-target Git info read vanished');
+    diagnostics.entries.push({
+        phase: request.phase,
+        kind: 'completed-current-git-info-read',
+        message: 'Completed current-target Git info read',
+        url: request.url,
+        requestId: request.requestId,
+        classification: 'completed-current-git-info-read',
+    });
+    return request;
 }
 
 async function assertClean(
@@ -2423,6 +2480,9 @@ test('offline warmed tabs', async ({ browser }, testInfo) => {
         )
             throw new Error('offline tab contexts are missing');
 
+        await assertCompletedCurrentGitInfoRead(desktopPage, desktopTracker);
+        await assertCompletedCurrentGitInfoRead(mobilePage, mobileTracker);
+
         let runError: unknown;
         try {
             desktopTracker.setPhase('offline', false);
@@ -2447,6 +2507,28 @@ test('offline warmed tabs', async ({ browser }, testInfo) => {
             });
             const drawerTabs = mobilePage.locator('#drawer-tabs-body');
             await expect(drawerTabs).toBeVisible({ timeout: 1000 });
+            // Let the drawer slide finish before the 1s tap budget starts.
+            await drawerTabs.evaluate(async (element) => {
+                await document.fonts.ready;
+                const root =
+                    element.closest('#sidebar-panel') ??
+                    element.closest(
+                        '.tab-overflow-dropdown, .drawer-tabs-body, .hostname-tabs-dropdown, .session-list-container',
+                    ) ??
+                    element.parentElement;
+                const animations = root
+                    ? root.getAnimations({ subtree: true })
+                    : [];
+                await Promise.all(
+                    animations
+                        .filter(
+                            (animation) =>
+                                animation.effect?.getComputedTiming()
+                                    .iterations !== Number.POSITIVE_INFINITY,
+                        )
+                        .map((animation) => animation.finished.catch(() => {})),
+                );
+            });
             const mobileTarget = await selectOtherTab(
                 mobilePage,
                 drawerTabs,
