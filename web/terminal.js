@@ -805,25 +805,43 @@ export class TabManager {
             const raw = localStorage.getItem(serverKey(`phi_tab_draft_${paneId}`));
             if (!raw || raw.length > 1024 * 1024) return {};
             const draft = JSON.parse(raw);
-            return {
+            const out = {
                 draft: typeof draft.text === 'string' ? draft.text : '',
                 draftAttachments: Array.isArray(draft.attachments)
                     ? draft.attachments.filter(a => a && typeof a.id === 'string' && typeof a.name === 'string' && typeof a.path === 'string' && typeof a.type === 'string' && Number.isFinite(a.sizeBytes) && (a.source === 'drop' || a.source === 'paste')).slice(0, 100)
                     : [],
             };
+            if (draft.pasteRecovery === 'not_sent' || draft.pasteRecovery === 'unconfirmed') out.pasteRecovery = draft.pasteRecovery;
+            return out;
         } catch { return {}; }
     }
 
     saveTabDraft(tab) {
-        if (!tab || tab.coder === 'review' || tab.coder === 'kanban') return;
+        if (!tab || tab.coder === 'review' || tab.coder === 'kanban') return true;
+        const hadRecovery = !!tab.pasteRecovery;
+        if (!tab.draft) tab.pasteRecovery = undefined;
+        let saved = false;
         try {
             const key = serverKey(`phi_tab_draft_${tab.paneId}`);
             if (!tab.draft && !tab.draftAttachments?.length) {
                 localStorage.removeItem(key);
+                saved = true;
             } else {
-                localStorage.setItem(key, JSON.stringify({text: tab.draft || '', attachments: tab.draftAttachments || []}));
+                const record = {text: tab.draft || '', attachments: tab.draftAttachments || []};
+                if (tab.pasteRecovery) record.pasteRecovery = tab.pasteRecovery;
+                const serialized = JSON.stringify(record);
+                if (serialized.length <= 1024 * 1024) {
+                    localStorage.setItem(key, serialized);
+                    saved = true;
+                }
             }
-        } catch { /* Browser storage must not block typing or switching tabs. */ }
+        } catch { /* Keep the full draft in memory if storage is unavailable. */ }
+        if (hadRecovery) {
+            tab._pasteRecoveryUnsaved = !!tab.pasteRecovery && !saved;
+            tab._inputRestriction = this._pasteRecoveryStatusText(tab);
+            this._renderInputRestriction();
+        }
+        return saved;
     }
 
     saveActiveDraft() {
@@ -4513,6 +4531,7 @@ export class TabManager {
             // tab is inactive (written on switch-away, read on switch-in).
             draft: savedDraft.draft || '',
             draftAttachments: savedDraft.draftAttachments || [],
+            ...(savedDraft.pasteRecovery ? { pasteRecovery: savedDraft.pasteRecovery } : {}),
             lastOutputAt: undefined,
             isBusy: false,
             isAttention: false,
@@ -4571,6 +4590,10 @@ export class TabManager {
             this._connectTabSocket(tabInfo, initialCmd);
         }
 
+        if (tabInfo.pasteRecovery) {
+            tabInfo.directMode = false;
+            tabInfo._inputRestriction = this._pasteRecoveryStatusText(tabInfo);
+        }
         this.tabs.set(paneId, tabInfo);
         this._placeNewTabByWorkspace(paneId);
         // Seed the spawn/resume/restore HTTP bridge baseline before
@@ -4839,11 +4862,32 @@ export class TabManager {
         // Full-screen Pi scrolls its own transcript via SGR mouse reports;
         // dropping these leaves a perfectly drawn but unscrollable screen.
         // Route through tabInfo.ws so a reconnect swaps the destination.
+        // Terminal paste also bypasses the typing gate: a captured DOM paste
+        // carries its own context through term.paste's synchronous onData.
         let terminalUserInput = false;
         term._core?.coreService?.onUserInput?.(() => { terminalUserInput = true; });
+        termContainer.addEventListener('paste', (e) => {
+            const dt = e.clipboardData;
+            if (!dt) return;
+            let hasText = false;
+            try {
+                const types = dt.types ? Array.from(dt.types) : [];
+                hasText = types.includes('text/plain') || types.includes('text');
+            } catch { hasText = true; }
+            if (!hasText) return;
+            let text = '';
+            try { text = dt.getData('text/plain') ?? ''; } catch { return; }
+            e.preventDefault();
+            e.stopPropagation();
+            if (!text) return;
+            this._routeTerminalPaste(tabInfo, term, text);
+        }, { capture: true });
         term.onData((data) => {
             const fromUser = terminalUserInput;
             terminalUserInput = false;
+            const pasteCtx = tabInfo._terminalPaste;
+            if (pasteCtx && (tabInfo._resyncNeeded || tabInfo.finalizing || this.tabs?.get(tabInfo.paneId) !== tabInfo ||
+                !tabInfo.ws || tabInfo.isDead || tabInfo.ws.ws?.readyState !== 1)) return;
             // A retained view holds live delivery. Nothing mode-dependent may
             // reach the PTY from it: the mouse reports, application-mode keys,
             // and paste wrappers all describe a screen that is no longer live.
@@ -4854,12 +4898,14 @@ export class TabManager {
             const protocolReply =
                 /^(?:\x1b\[<\d+;\d+;\d+[Mm])+$/.test(data) ||
                 /^\x1b\[\??[\d;:]*[cnRu]$/.test(data);
-            if (tabInfo.directMode || protocolReply) {
+            if (tabInfo.directMode || protocolReply || pasteCtx) {
+                if (pasteCtx) pasteCtx.outcome = 'unconfirmed';
                 const accepted = this.sendInput(tabInfo, data);
+                if (pasteCtx && accepted) pasteCtx.outcome = 'accepted';
                 // Enter-only follow: a bare physical Enter that the pane
                 // accepted is a submit; a printable key, a protocol reply, a
                 // paste carrying newlines, or a refused send is not.
-                if (tabInfo.directMode && accepted && fromUser && data === '\r') {
+                if (tabInfo.directMode && !pasteCtx && accepted && fromUser && data === '\r') {
                     this._resumeFollowOnSubmit(tabInfo);
                 }
             }
@@ -9475,10 +9521,16 @@ export class TabManager {
                 payload.length > 16 ||
                 payload.includes('\n')
             ) {
-                payload = `\x1b[200~${payload}\x1b[201~`;
+                payload = `\x1b[200~${payload.replace(/\x1b/g, '\u241b')}\x1b[201~`;
             }
 
-            // No isDead pre-check: sendInput() toasts + shows the reconnect overlay on failure.
+            // Record uncertainty BEFORE invoking the writer: it can accept a
+            // prefix and close the socket (or throw) before returning. A known
+            // offline refusal stays not-sent. sendInput still owns its toast.
+            if (activeTab.pasteRecovery && activeTab.ws && !activeTab.isDead && activeTab.ws.ws?.readyState === 1) {
+                activeTab.pasteRecovery = 'unconfirmed';
+                this.saveActiveDraft();
+            }
             const sent = this.sendInput(activeTab, `${payload}\r`);
             if (!sent) return;
         }
@@ -11574,7 +11626,7 @@ export class TabManager {
         if (!tabInfo._resyncNeeded) return;
         tabInfo._resyncNeeded = false;
         this._updateResyncAffordance(tabInfo);
-        tabInfo._inputRestriction = '';
+        tabInfo._inputRestriction = tabInfo.pasteRecovery ? this._pasteRecoveryStatusText(tabInfo) : '';
         this._renderInputRestriction();
     }
 
@@ -11637,6 +11689,58 @@ export class TabManager {
         const text = tab?._inputRestriction ?? '';
         if (line.textContent !== text) line.textContent = text;
         line.classList.toggle('hidden', !text);
+    }
+
+    _pasteRecoveryStatusText(tabInfo) {
+        let base = '';
+        if (tabInfo._resyncNeeded) base = 'Paste held until live output is resynced.';
+        else if (tabInfo.pasteRecovery === 'unconfirmed') base = 'Paste preserved; delivery unconfirmed. Check the terminal before sending.';
+        else if (tabInfo.pasteRecovery === 'not_sent') base = 'Paste saved locally, not sent.';
+        if (!base) return '';
+        if (tabInfo._pasteRecoveryUnsaved) base += ' Kept for this session only; copy it before reloading.';
+        return base;
+    }
+
+    _routeTerminalPaste(tabInfo, term, text) {
+        if (tabInfo._resyncNeeded || tabInfo.finalizing || this.tabs?.get(tabInfo.paneId) !== tabInfo ||
+            !tabInfo.ws || tabInfo.isDead || tabInfo.ws.ws?.readyState !== 1) {
+            this._preserveTerminalPaste(tabInfo, text, 'not_sent');
+            return;
+        }
+        tabInfo._terminalPaste = { text, outcome: 'not_attempted' };
+        try {
+            term.paste(text);
+        } finally {
+            const outcome = tabInfo._terminalPaste?.outcome;
+            tabInfo._terminalPaste = null;
+            if (outcome && outcome !== 'accepted') {
+                this._preserveTerminalPaste(tabInfo, text, outcome === 'unconfirmed' ? 'unconfirmed' : 'not_sent');
+            }
+        }
+    }
+
+    _preserveTerminalPaste(tabInfo, text, status) {
+        if (!tabInfo || tabInfo.finalizing) return false;
+        if (this.tabs?.get(tabInfo.paneId) !== tabInfo) return false;
+        if (!text) return false;
+        const normalized = String(text).replace(/\r\n?/g, '\n');
+        if (this.tabs.get(tabInfo.paneId) !== tabInfo) return false;
+        const isActive = this.getActiveTab?.() === tabInfo;
+        if (isActive && this.inputTextArea) {
+            this.inputTextArea.value += normalized;
+            tabInfo.draft = this.inputTextArea.value;
+            tabInfo.draftAttachments = this.stagedAttachments || [];
+            try { this.adjustInputHeight?.(); } catch {}
+        } else {
+            tabInfo.draft = (tabInfo.draft || '') + normalized;
+        }
+        if (tabInfo.pasteRecovery !== 'unconfirmed') tabInfo.pasteRecovery = status;
+        tabInfo.directMode = false;
+        this.saveTabDraft(tabInfo);
+        if (isActive) {
+            this.updateDirectModeUI(tabInfo, true);
+        }
+        return true;
     }
 
     // The one explicit recovery action for a retained view. The existing close

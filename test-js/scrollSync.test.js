@@ -119,8 +119,11 @@ function stubXtermGlobals() {
         // .xterm-viewport child, which is what both listeners query.
         const viewportEl = document.createElement('div');
         viewportEl.className = 'xterm-viewport';
+        const helperEl = document.createElement('textarea');
+        helperEl.className = 'xterm-helper-textarea';
         const rootEl = document.createElement('div');
         rootEl.appendChild(viewportEl);
+        rootEl.appendChild(helperEl);
         const dataListeners = [];
         const binaryListeners = [];
         const scrollListeners = [];
@@ -129,6 +132,7 @@ function stubXtermGlobals() {
         // xterm flags user-originated data through coreService.onUserInput
         // before onData; the fake keeps that hook so tests can emit as a user.
         let userInputHook = null;
+        let customKeyHandler = null;
         const write = vi.fn((_data, cb) => cb?.());
         return {
             rows: 24,
@@ -177,7 +181,16 @@ function stubXtermGlobals() {
                 if (container) container.appendChild(rootEl);
             },
             loadAddon: () => {},
-            attachCustomKeyEventHandler: () => {},
+            attachCustomKeyEventHandler: (fn) => {
+                customKeyHandler = fn;
+            },
+            emitCustomKey: (e) => customKeyHandler?.(e),
+            paste: vi.fn((text) => {
+                userInputHook?.();
+                dataListeners.forEach((fn) => {
+                    fn(text);
+                });
+            }),
             onSelectionChange: () => {},
             onBell: () => {},
             onScroll: (fn) => scrollListeners.push(fn),
@@ -283,6 +296,580 @@ describe('Pi full-screen input is independent of staged prompt mode', () => {
             expect(tab.draft).toBe('do not send my unsent prompt');
         },
     );
+});
+
+function pasteEvent(text) {
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', {
+        value: {
+            types: ['text/plain'],
+            getData: (type) => (type === 'text/plain' ? text : ''),
+        },
+    });
+    return event;
+}
+function mountPasteTab(coder = 'pi') {
+    const tab = mountRealTab({ coder });
+    const tm = tab.__tm;
+    tm.activePaneId = 'p1';
+    tm.inputTextArea = document.createElement('textarea');
+    tm.inputTextArea.value = 'seeded draft';
+    tm.stagedAttachments = [];
+    document.body.appendChild(tm.inputTextArea);
+    tm.app = { showToast: vi.fn() };
+    tm._showReconnectOverlay = vi.fn();
+    tm.updateDirectModeUI = vi.fn();
+    window.WebSocket.OPEN = 1;
+    tab.ws.ws.readyState = 1;
+    return tab;
+}
+
+describe('staged terminal paste reaches the PTY once', () => {
+    it('routes a DOM paste through the common writer in staged mode', () => {
+        const tab = mountPasteTab();
+        expect(tab.directMode).toBe(false);
+        const send = vi.spyOn(tab.ws, 'sendInput').mockReturnValue(true);
+        const helper = tab.termContainer.querySelector(
+            '.xterm-helper-textarea',
+        );
+        const event = pasteEvent('PI_PASTE_123');
+        helper.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(true);
+        expect(tab.term.paste).toHaveBeenCalledWith('PI_PASTE_123');
+        expect(send).toHaveBeenCalledTimes(1);
+        expect(send).toHaveBeenCalledWith('PI_PASTE_123');
+        expect(tab.__tm.inputTextArea.value).toBe('seeded draft');
+        expect(tab._terminalPaste).toBeNull();
+        // Ordinary staged typing still stays in the composer.
+        const keyResult = tab.term.emitCustomKey({
+            type: 'keydown',
+            key: 'x',
+            ctrlKey: false,
+            altKey: false,
+            metaKey: false,
+            preventDefault: () => {},
+        });
+        expect(keyResult).toBe(false);
+        expect(tab.__tm.inputTextArea.value).toBe('seeded draftx');
+        expect(send).toHaveBeenCalledTimes(1);
+    });
+    it('keeps direct-mode paste on the same path without touching the draft', () => {
+        const tab = mountPasteTab('bash');
+        expect(tab.directMode).toBe(true);
+        const send = vi.spyOn(tab.ws, 'sendInput').mockReturnValue(true);
+        const helper = tab.termContainer.querySelector(
+            '.xterm-helper-textarea',
+        );
+        helper.dispatchEvent(pasteEvent('direct-paste-1'));
+        expect(send).toHaveBeenCalledTimes(1);
+        expect(tab.__tm.inputTextArea.value).toBe('seeded draft');
+    });
+    it('consumes an empty plain-text paste without a PTY write', () => {
+        const tab = mountPasteTab();
+        const send = vi.spyOn(tab.ws, 'sendInput').mockReturnValue(true);
+        const helper = tab.termContainer.querySelector(
+            '.xterm-helper-textarea',
+        );
+        const event = pasteEvent('');
+        helper.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(true);
+        expect(tab.term.paste).not.toHaveBeenCalled();
+        expect(send).not.toHaveBeenCalled();
+    });
+});
+
+describe('terminal paste throw paths keep one recovery copy', () => {
+    function helperOf(tab) {
+        return tab.termContainer.querySelector('.xterm-helper-textarea');
+    }
+    it('preserves once as unconfirmed when the writer throws mid-send', () => {
+        const tab = mountPasteTab();
+        const send = vi.spyOn(tab.ws, 'sendInput').mockImplementation(() => {
+            throw new Error('socket gone');
+        });
+        expect(() =>
+            tab.__tm._routeTerminalPaste(tab, tab.term, 'THROW_MID_SEND'),
+        ).toThrow('socket gone');
+        expect(send).toHaveBeenCalledTimes(1);
+        expect(tab._terminalPaste).toBeNull();
+        expect(tab.pasteRecovery).toBe('unconfirmed');
+        expect(tab.__tm.inputTextArea.value).toBe('seeded draftTHROW_MID_SEND');
+        expect(tab._inputRestriction).toBe(
+            'Paste preserved; delivery unconfirmed. Check the terminal before sending.',
+        );
+    });
+    it('does not create a false refusal when the throw lands after acceptance', () => {
+        const tab = mountPasteTab();
+        const send = vi.spyOn(tab.ws, 'sendInput').mockReturnValue(true);
+        tab.term.paste.mockImplementationOnce((text) => {
+            tab.term.emitData(text);
+            throw new Error('late ui fault');
+        });
+        expect(() =>
+            tab.__tm._routeTerminalPaste(tab, tab.term, 'ACCEPTED_ONCE'),
+        ).toThrow('late ui fault');
+        expect(send).toHaveBeenCalledTimes(1);
+        expect(tab._terminalPaste).toBeNull();
+        expect(tab.pasteRecovery).toBeUndefined();
+        expect(tab.__tm.inputTextArea.value).toBe('seeded draft');
+    });
+    it('never downgrades unconfirmed recovery to not-sent', () => {
+        const tab = mountPasteTab();
+        vi.spyOn(tab.ws, 'sendInput').mockReturnValue(false);
+        helperOf(tab).dispatchEvent(pasteEvent('FIRST_FAIL'));
+        expect(tab.pasteRecovery).toBe('unconfirmed');
+        tab._resyncNeeded = true;
+        helperOf(tab).dispatchEvent(pasteEvent('SECOND_HELD'));
+        expect(tab.pasteRecovery).toBe('unconfirmed');
+        expect(tab.__tm.inputTextArea.value).toBe(
+            'seeded draftFIRST_FAILSECOND_HELD',
+        );
+        expect(tab._inputRestriction).toBe(
+            'Paste held until live output is resynced.',
+        );
+    });
+});
+
+describe('terminal paste refusal sends zero bytes and holds one copy', () => {
+    function helperOf(tab) {
+        return tab.termContainer.querySelector('.xterm-helper-textarea');
+    }
+    it('holds a frozen single-line paste in the draft', () => {
+        const tab = mountPasteTab();
+        tab._resyncNeeded = true;
+        const tm = tab.__tm;
+        const resync = vi.spyOn(tm, '_resyncRetainedView');
+        const send = vi.spyOn(tab.ws, 'sendInput');
+        helperOf(tab).dispatchEvent(pasteEvent('FROZEN_LINE'));
+        expect(send).not.toHaveBeenCalled();
+        expect(tab.term.paste).not.toHaveBeenCalled();
+        expect(resync).not.toHaveBeenCalled();
+        expect(tm.inputTextArea.value).toBe('seeded draftFROZEN_LINE');
+        expect(tab.draft).toBe('seeded draftFROZEN_LINE');
+        expect(tab.pasteRecovery).toBe('not_sent');
+        expect(tab._inputRestriction).toBe(
+            'Paste held until live output is resynced.',
+        );
+        expect(tab._terminalPaste).toBeFalsy();
+    });
+    it('normalizes CRLF/CR to newlines in the held copy', () => {
+        const tab = mountPasteTab();
+        tab._resyncNeeded = true;
+        const send = vi.spyOn(tab.ws, 'sendInput');
+        helperOf(tab).dispatchEvent(pasteEvent('aa\r\nbb\rcc'));
+        expect(send).not.toHaveBeenCalled();
+        expect(tab.__tm.inputTextArea.value).toBe('seeded draftaa\nbb\ncc');
+        expect(tab.pasteRecovery).toBe('not_sent');
+    });
+    it('holds a frozen newline-only paste without requesting resync', () => {
+        const tab = mountPasteTab();
+        tab._resyncNeeded = true;
+        const resync = vi.spyOn(tab.__tm, '_resyncRetainedView');
+        const send = vi.spyOn(tab.ws, 'sendInput');
+        helperOf(tab).dispatchEvent(pasteEvent('\n'));
+        expect(send).not.toHaveBeenCalled();
+        expect(tab.term.paste).not.toHaveBeenCalled();
+        expect(resync).not.toHaveBeenCalled();
+        expect(tab.__tm.inputTextArea.value).toBe('seeded draft\n');
+        expect(tab.pasteRecovery).toBe('not_sent');
+    });
+    it('holds the paste for a dead tab and flips it to staged mode', () => {
+        const tab = mountPasteTab('bash');
+        expect(tab.directMode).toBe(true);
+        tab.isDead = true;
+        const send = vi.spyOn(tab.ws, 'sendInput');
+        helperOf(tab).dispatchEvent(pasteEvent('DEAD_HELD'));
+        expect(send).not.toHaveBeenCalled();
+        expect(tab.term.paste).not.toHaveBeenCalled();
+        expect(tab.__tm.inputTextArea.value).toBe('seeded draftDEAD_HELD');
+        expect(tab.pasteRecovery).toBe('not_sent');
+        expect(tab.directMode).toBe(false);
+        expect(tab._inputRestriction).toBe('Paste saved locally, not sent.');
+    });
+    it.each([[0], [2], [3]])(
+        'holds the paste when the socket is not open (readyState %s)',
+        (readyState) => {
+            const tab = mountPasteTab();
+            tab.ws.ws.readyState = readyState;
+            const send = vi.spyOn(tab.ws, 'sendInput');
+            helperOf(tab).dispatchEvent(pasteEvent('SOCKET_HELD'));
+            expect(send).not.toHaveBeenCalled();
+            expect(tab.term.paste).not.toHaveBeenCalled();
+            expect(tab.__tm.inputTextArea.value).toBe(
+                'seeded draftSOCKET_HELD',
+            );
+            expect(tab.pasteRecovery).toBe('not_sent');
+            expect(tab._inputRestriction).toBe(
+                'Paste saved locally, not sent.',
+            );
+        },
+    );
+    it('keeps the existing draft text and attachment chips with the held copy', () => {
+        const tab = mountPasteTab();
+        const att = {
+            id: 'att-1',
+            name: 's.png',
+            path: '/u/s.png',
+            type: 'image/png',
+            sizeBytes: 8,
+            source: 'paste',
+        };
+        tab.__tm.stagedAttachments = [att];
+        tab._resyncNeeded = true;
+        helperOf(tab).dispatchEvent(pasteEvent('HELD'));
+        expect(tab.draft).toBe('seeded draftHELD');
+        expect(tab.draftAttachments).toEqual([att]);
+        expect(JSON.parse(localStorage.getItem('phi_tab_draft_p1'))).toEqual({
+            text: 'seeded draftHELD',
+            attachments: [att],
+            pasteRecovery: 'not_sent',
+        });
+    });
+});
+
+describe('terminal paste recovery stays pane-owned', () => {
+    function helperOf(tab) {
+        return tab.termContainer.querySelector('.xterm-helper-textarea');
+    }
+    function addSibling(tm) {
+        tm.createTab(
+            'p2',
+            'sess-p2',
+            'Title',
+            'pi',
+            '',
+            '',
+            false,
+            false,
+            '',
+            null,
+            null,
+        );
+        return tm.tabs.get('p2');
+    }
+    it('does not alter a sibling pane', () => {
+        const tab = mountPasteTab();
+        const sib = addSibling(tab.__tm);
+        sib.draft = 'sibling draft';
+        tab._resyncNeeded = true;
+        helperOf(tab).dispatchEvent(pasteEvent('ONLY_P1'));
+        expect(tab.draft).toBe('seeded draftONLY_P1');
+        expect(sib.draft).toBe('sibling draft');
+        expect(sib.pasteRecovery).toBeUndefined();
+        expect(sib._inputRestriction).toBeUndefined();
+    });
+    it('holds for an inactive owner without touching the shared textarea', () => {
+        const tab = mountPasteTab();
+        const tm = tab.__tm;
+        addSibling(tm);
+        tm.activePaneId = 'p2';
+        tab.draft = 'parked draft';
+        tab._resyncNeeded = true;
+        helperOf(tab).dispatchEvent(pasteEvent('INACTIVE_HELD'));
+        expect(tm.inputTextArea.value).toBe('seeded draft');
+        expect(tab.draft).toBe('parked draftINACTIVE_HELD');
+        expect(tab.pasteRecovery).toBe('not_sent');
+        expect(JSON.parse(localStorage.getItem('phi_tab_draft_p1')).text).toBe(
+            'parked draftINACTIVE_HELD',
+        );
+        const line = document.createElement('div');
+        line.id = 'input-restriction';
+        document.body.appendChild(line);
+        tm.activePaneId = 'p1';
+        tm._renderInputRestriction();
+        expect(line.textContent).toBe(
+            'Paste held until live output is resynced.',
+        );
+        expect(line.classList.contains('hidden')).toBe(false);
+    });
+    it('does not save under a pane ID now owned by a replacement', () => {
+        const tab = mountPasteTab();
+        tab._resyncNeeded = true;
+        tab.__tm.tabs.set('p1', {
+            paneId: 'p1',
+            draft: 'replacement',
+            coder: 'pi',
+        });
+        helperOf(tab).dispatchEvent(pasteEvent('STALE_PASTE'));
+        expect(tab.draft).toBe('');
+        expect(localStorage.getItem('phi_tab_draft_p1')).toBeNull();
+    });
+    it('does not recreate a closed pane draft record', () => {
+        const tab = mountPasteTab();
+        tab.__tm.tabs.delete('p1');
+        helperOf(tab).dispatchEvent(pasteEvent('CLOSED_PASTE'));
+        expect(localStorage.getItem('phi_tab_draft_p1')).toBeNull();
+    });
+    it('restores text, status, and staged mode on reload, even for direct-mode coders', () => {
+        const tab = mountPasteTab('bash');
+        expect(tab.directMode).toBe(true);
+        tab._resyncNeeded = true;
+        helperOf(tab).dispatchEvent(pasteEvent('RELOAD_ME'));
+        expect(tab.directMode).toBe(false);
+        const re = mountRealTab({ coder: 'bash' });
+        expect(re.draft).toBe('seeded draftRELOAD_ME');
+        expect(re.pasteRecovery).toBe('not_sent');
+        expect(re.directMode).toBe(false);
+        expect(re._inputRestriction).toBe('Paste saved locally, not sent.');
+    });
+    it('keeps the recovery warning after resync until the text is sent or cleared', () => {
+        const tab = mountPasteTab();
+        tab._resyncNeeded = true;
+        helperOf(tab).dispatchEvent(pasteEvent('HELD_THROUGH_RESYNC'));
+        tab.__tm._updateResyncAffordance = vi.fn();
+        tab.__tm._clearResyncNeeded(tab);
+        expect(tab._resyncNeeded).toBe(false);
+        expect(tab.pasteRecovery).toBe('not_sent');
+        expect(tab._inputRestriction).toBe('Paste saved locally, not sent.');
+    });
+    it('clears the recovery state when the held text is explicitly cleared', () => {
+        const tab = mountPasteTab();
+        const tm = tab.__tm;
+        tab._resyncNeeded = true;
+        helperOf(tab).dispatchEvent(pasteEvent('TEMP_HELD'));
+        expect(tab.pasteRecovery).toBe('not_sent');
+        tab._resyncNeeded = false;
+        tm.inputTextArea.value = '';
+        tm.saveActiveDraft();
+        expect(tab.pasteRecovery).toBeUndefined();
+        expect(tab._inputRestriction).toBe('');
+        expect(localStorage.getItem('phi_tab_draft_p1')).toBeNull();
+    });
+    it('keeps the frozen restriction when the draft is cleared while still frozen', () => {
+        const tab = mountPasteTab();
+        const tm = tab.__tm;
+        tab._resyncNeeded = true;
+        helperOf(tab).dispatchEvent(pasteEvent('STILL_FROZEN'));
+        tm.inputTextArea.value = '';
+        tm.saveActiveDraft();
+        expect(tab.pasteRecovery).toBeUndefined();
+        expect(tab._inputRestriction).toBe(
+            'Paste held until live output is resynced.',
+        );
+        tm._updateResyncAffordance = vi.fn();
+        tm._clearResyncNeeded(tab);
+        expect(tab._inputRestriction).toBe('');
+    });
+    it('warns session-only on oversized recovery and clears after a later successful save', () => {
+        const tab = mountPasteTab();
+        const tm = tab.__tm;
+        tab._resyncNeeded = true;
+        helperOf(tab).dispatchEvent(pasteEvent('y'.repeat(1024 * 1024)));
+        expect(tab.pasteRecovery).toBe('not_sent');
+        expect(tm.inputTextArea.value).toHaveLength(
+            'seeded draft'.length + 1024 * 1024,
+        );
+        expect(tab._pasteRecoveryUnsaved).toBe(true);
+        expect(tab._inputRestriction).toBe(
+            'Paste held until live output is resynced. Kept for this session only; copy it before reloading.',
+        );
+        tm._updateResyncAffordance = vi.fn();
+        tm._clearResyncNeeded(tab);
+        expect(tab._inputRestriction).toBe(
+            'Paste saved locally, not sent. Kept for this session only; copy it before reloading.',
+        );
+        tm.inputTextArea.value = 'trimmed';
+        tm.saveActiveDraft();
+        expect(tab._pasteRecoveryUnsaved).toBe(false);
+        expect(tab._inputRestriction).toBe('Paste saved locally, not sent.');
+        expect(JSON.parse(localStorage.getItem('phi_tab_draft_p1')).text).toBe(
+            'trimmed',
+        );
+    });
+});
+
+const PARTIAL_PASTE_TEXT = 'é'.repeat(512 * 1024 - 1) + '🙂tail';
+
+describe('terminal paste uncertain delivery is never silently replayed', () => {
+    function helperOf(tab) {
+        return tab.termContainer.querySelector('.xterm-helper-textarea');
+    }
+    it('keeps the full text unconfirmed when a later chunk fails', async () => {
+        const tab = mountPasteTab();
+        const tm = tab.__tm;
+        const wire = vi
+            .spyOn(tab.ws.ws, 'send')
+            .mockImplementationOnce(() => {})
+            .mockImplementationOnce(() => {
+                throw new Error('socket broke');
+            });
+        helperOf(tab).dispatchEvent(pasteEvent(PARTIAL_PASTE_TEXT));
+        expect(tm.app.showToast).toHaveBeenCalled();
+        expect(wire).toHaveBeenCalledTimes(2);
+        expect(tab.pasteRecovery).toBe('unconfirmed');
+        expect(tm.inputTextArea.value).toBe(
+            'seeded draft' + PARTIAL_PASTE_TEXT,
+        );
+        expect(tab._inputRestriction).toBe(
+            'Paste preserved; delivery unconfirmed. Check the terminal before sending.',
+        );
+        const frame = TerminalClientFrame.decode(
+            new Uint8Array(wire.mock.calls[0][0]),
+        );
+        const sentBytes = frame.payload.value;
+        const fullBytes = new TextEncoder().encode(PARTIAL_PASTE_TEXT);
+        expect(fullBytes.length).toBeGreaterThan(1024 * 1024);
+        expect(sentBytes.length).toBe(1024 * 1024);
+        expect(
+            Buffer.from(sentBytes).equals(
+                Buffer.from(fullBytes.slice(0, 1024 * 1024)),
+            ),
+        ).toBe(true);
+        await Promise.resolve();
+        tab.ws.ws.readyState = 0;
+        tab.ws.ws.readyState = 1;
+        expect(wire).toHaveBeenCalledTimes(2);
+        expect(tm.inputTextArea.value).toBe(
+            'seeded draft' + PARTIAL_PASTE_TEXT,
+        );
+        expect(tab.pasteRecovery).toBe('unconfirmed');
+    });
+    it('runs offline paste to reconnect to explicit Send to partial failure to reload', () => {
+        const tab = mountPasteTab('bash');
+        const tm = tab.__tm;
+        tab.ws.ws.readyState = 0;
+        helperOf(tab).dispatchEvent(pasteEvent(PARTIAL_PASTE_TEXT));
+        expect(tab.pasteRecovery).toBe('not_sent');
+        expect(tab.directMode).toBe(false);
+        tab.ws.ws.readyState = 1;
+        const wire = vi
+            .spyOn(tab.ws.ws, 'send')
+            .mockImplementationOnce(() => {})
+            .mockImplementationOnce(() => {
+                tab.ws.ws.readyState = 3;
+                throw new Error('connection closed after first chunk');
+            });
+        tm.sendStagedInput();
+        expect(wire).toHaveBeenCalledTimes(2);
+        expect(tab.pasteRecovery).toBe('unconfirmed');
+        expect(
+            JSON.parse(localStorage.getItem('phi_tab_draft_p1')).pasteRecovery,
+        ).toBe('unconfirmed');
+        expect(tm.inputTextArea.value).toBe(
+            'seeded draft' + PARTIAL_PASTE_TEXT,
+        );
+        expect(tab._inputRestriction).toBe(
+            'Paste preserved; delivery unconfirmed. Check the terminal before sending.',
+        );
+        const re = mountRealTab({ coder: 'bash' });
+        expect(re.draft).toBe('seeded draft' + PARTIAL_PASTE_TEXT);
+        expect(re.pasteRecovery).toBe('unconfirmed');
+        expect(re.directMode).toBe(false);
+    });
+    it('keeps not_sent when the explicit Send meets a known offline refusal', () => {
+        const tab = mountPasteTab();
+        const tm = tab.__tm;
+        tab.ws.ws.readyState = 0;
+        const wire = vi.spyOn(tab.ws.ws, 'send');
+        helperOf(tab).dispatchEvent(pasteEvent('OFFLINE_KEPT'));
+        expect(tab.pasteRecovery).toBe('not_sent');
+        tm.sendStagedInput();
+        expect(wire).not.toHaveBeenCalled();
+        expect(tab.pasteRecovery).toBe('not_sent');
+        expect(tm.inputTextArea.value).toBe('seeded draftOFFLINE_KEPT');
+        expect(
+            JSON.parse(localStorage.getItem('phi_tab_draft_p1')).pasteRecovery,
+        ).toBe('not_sent');
+    });
+    it('clears the recovery state after an accepted explicit Send', () => {
+        const tab = mountPasteTab();
+        const tm = tab.__tm;
+        tab.ws.ws.readyState = 0;
+        helperOf(tab).dispatchEvent(pasteEvent('SEND_OK'));
+        expect(tab.pasteRecovery).toBe('not_sent');
+        tab.ws.ws.readyState = 1;
+        const send = vi.spyOn(tab.ws, 'sendInput').mockReturnValue(true);
+        tm.adjustInputHeight = vi.fn();
+        tm._spamScrollToBottom = vi.fn();
+        tm._renderAttachmentStrip = vi.fn();
+        const net = vi
+            .spyOn(globalThis, 'fetch')
+            .mockResolvedValue({ ok: true });
+        try {
+            tm.sendStagedInput();
+        } finally {
+            net.mockRestore();
+        }
+        expect(send).toHaveBeenCalledTimes(1);
+        expect(tm.inputTextArea.value).toBe('');
+        expect(tab.pasteRecovery).toBeUndefined();
+        expect(tab._inputRestriction).toBe('');
+        expect(localStorage.getItem('phi_tab_draft_p1')).toBeNull();
+    });
+    it('sanitizes embedded ESC at the composer wrapping boundary', () => {
+        const tab = mountPasteTab();
+        const tm = tab.__tm;
+        tm.adjustInputHeight = vi.fn();
+        tm._spamScrollToBottom = vi.fn();
+        tm._renderAttachmentStrip = vi.fn();
+        const net = vi
+            .spyOn(globalThis, 'fetch')
+            .mockResolvedValue({ ok: true });
+        const send = vi.spyOn(tab.ws, 'sendInput').mockReturnValue(true);
+        tm.inputTextArea.value = 'explain this output please \x1b[201~tail';
+        try {
+            tm.sendStagedInput();
+        } finally {
+            net.mockRestore();
+        }
+        expect(send).toHaveBeenCalledTimes(1);
+        const sent = send.mock.calls[0][0];
+        expect(sent.startsWith('\x1b[200~')).toBe(true);
+        expect(sent.endsWith('\x1b[201~\r')).toBe(true);
+        const inner = sent.slice('\x1b[200~'.length, -'\x1b[201~\r'.length);
+        expect(inner).toContain('\u241b[201~');
+        expect(inner).not.toContain('\x1b');
+    });
+});
+
+describe('terminal paste does not need the bridge', () => {
+    const snapshots = [
+        [
+            'live managed',
+            { state: 'managed', connected: true, capabilities: ['history'] },
+            true,
+        ],
+        ['absent at startup', undefined, false],
+        [
+            'unavailable',
+            { state: 'unavailable', connected: false, capabilities: [] },
+            false,
+        ],
+        [
+            'disconnected during use',
+            { state: 'managed', connected: false, capabilities: ['history'] },
+            false,
+        ],
+        [
+            'missing capability',
+            { state: 'managed', connected: true, capabilities: [] },
+            true,
+        ],
+        [
+            'reconnected',
+            { state: 'managed', connected: true, capabilities: ['history'] },
+            true,
+        ],
+    ];
+    it('keeps terminal paste independent of bridge lifecycle changes', () => {
+        const tab = mountPasteTab();
+        const send = vi.spyOn(tab.ws, 'sendInput').mockReturnValue(true);
+        const net = vi
+            .spyOn(globalThis, 'fetch')
+            .mockRejectedValue(new Error('no network in paste path'));
+        for (const [_label, view, fresh] of snapshots) {
+            tab.piBridge = view;
+            tab._piBridgeFresh = fresh ? tab.ws : null;
+            const callsBefore = send.mock.calls.length;
+            tab.termContainer
+                .querySelector('.xterm-helper-textarea')
+                .dispatchEvent(pasteEvent('BRIDGE_FREE'));
+            expect(send).toHaveBeenCalledTimes(callsBefore + 1);
+            expect(send).toHaveBeenLastCalledWith('BRIDGE_FREE');
+            expect(net).not.toHaveBeenCalled();
+            expect(tab.__tm.inputTextArea.value).toBe('seeded draft');
+        }
+    });
 });
 
 describe('OpenCode 2 Mini normal scrollback', () => {
