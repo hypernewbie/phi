@@ -1,6 +1,7 @@
 import { mountDirectoryTree, } from './path-picker.js';
 import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname, isCompactViewport, serverKey, getEmbeddedBackendOrigin, getEmbeddedProfileId, } from './util.js';
 import { openPiRpcChatTab } from './chat-pi/tab.js';
+import { openDshPreviewTab, refreshDshLauncher } from './dsh-tab.js';
 import { createReviewTranscriptView } from './review-transcript.js';
 import { loadCoderRegistry, openCodePaneMode, visibleCoders, getCoder, hasTranscript, hasPiRpc, hasRename, hasSessions, isShell, renderLogo, RESERVED_CODER_IDS, } from './coders.js';
 export function normalizePath(p) {
@@ -273,6 +274,7 @@ export class SessionsManager {
     newSessionBtn;
     openCodeServiceRow;
     openCodeServiceBtn;
+    dshPreviewBtn;
     _openCodeServicePollTimer = null;
     workspaceSelect;
     addWorkspaceBtn;
@@ -324,6 +326,7 @@ export class SessionsManager {
         this.newSessionBtn = document.getElementById('new-session-btn');
         this.openCodeServiceRow = document.getElementById('opencode-service-row');
         this.openCodeServiceBtn = document.getElementById('opencode-service-btn');
+        this.dshPreviewBtn = document.getElementById('dsh-preview-btn');
         // Workspace Controls
         this.workspaceSelect = document.getElementById('workspace-select');
         this.addWorkspaceBtn = document.getElementById('add-workspace-btn');
@@ -457,6 +460,17 @@ export class SessionsManager {
         this.newSessionBtn.addEventListener('click', () => {
             this.spawnNewSession();
         });
+        // DSH preview launcher: visibility follows the cached server
+        // status; the tab itself revalidates the mount on every open.
+        this.dshPreviewBtn?.addEventListener('click', () => {
+            if (isCompactViewport()) {
+                document
+                    .getElementById('sidebar-panel')
+                    ?.classList.remove('drawer-open');
+            }
+            void openDshPreviewTab(this.app.tabManager);
+        });
+        void refreshDshLauncher(this.app?.scope);
         this.newSessionBtn.addEventListener('contextmenu', (e) => {
             if (this.activeCoder !== 'opencode' ||
                 !this.quickLaunchReady ||
@@ -2735,6 +2749,10 @@ export class SessionsManager {
             btn.appendChild(label);
             container.appendChild(btn);
         }
+        // Keep the application launcher and its listener across registry refreshes.
+        // It shares the icon row, not the PTY/session-list selection flow.
+        if (this.dshPreviewBtn)
+            container.appendChild(this.dshPreviewBtn);
         // Sync the SessionsManager's active coder with the resolved
         // selection only when it actually changed; preserving the
         // user's pick across re-renders is what avoids the

@@ -38,6 +38,14 @@ jobs:
       - name: Run Go Tests
         run: go test -race -v ./...
 
+      # The DSH carrier is opt-in behind -tags dsh (api_dsh.go, auth_dsh.go).
+      # Default builds must stay carrier-free, and the tagged path must keep
+      # compiling and passing its own tests.
+      - name: DSH Build Tag
+        run: |
+          go vet -tags dsh ./...
+          go test -tags dsh -race .
+
       # A real native terminal, not the headless screen oracle. No provider
       # credentials, model access, desktop profile, or tmux state is inherited.
       - name: Native phic Shell views and reattachment

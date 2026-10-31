@@ -38,6 +38,8 @@ func handleRestart(w http.ResponseWriter, r *http.Request) {
 
 	time.Sleep(150 * time.Millisecond)
 
+	stopDshPreview()
+
 	args := os.Args
 
 	switch runtime.GOOS {

@@ -172,6 +172,14 @@ type Config struct {
 	KanbanPasswordEnc string `json:"kanban_password_enc" toml:"kanban_password_enc"`
 	KanbanUsername    string `json:"kanban_username,omitempty" toml:"kanban_username,omitempty"`
 	KanbanURL         string `json:"kanban_url,omitempty" toml:"kanban_url,omitempty"`
+	// DSH preview fields are startup-only operator values, read once at boot.
+	// They never appear in /api/config and take effect after a restart, not
+	// through a write API. Enabled without a valid command/origin leaves only
+	// the preview unavailable. Off by default: missing keys change nothing.
+	DshPreviewEnabled bool   `json:"dsh_preview_enabled" toml:"dsh_preview_enabled"`
+	DshPreviewCommand string `json:"dsh_preview_command,omitempty" toml:"dsh_preview_command,omitempty"`
+	DshPreviewOrigin  string `json:"dsh_preview_origin,omitempty" toml:"dsh_preview_origin,omitempty"`
+
 	// AccessPasswordHash is an optional browser-derived password verifier.
 	// An empty string deliberately disables Phi's access-password gate.
 	AccessPasswordHash string       `json:"access_password_hash" toml:"access_password_hash"`

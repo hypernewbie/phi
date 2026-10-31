@@ -15,6 +15,7 @@ import {
     getEmbeddedProfileId,
 } from './util.js';
 import { openPiRpcChatTab } from './chat-pi/tab.js';
+import { openDshPreviewTab, refreshDshLauncher } from './dsh-tab.js';
 import { createReviewTranscriptView } from './review-transcript.js';
 import {
     loadCoderRegistry,
@@ -364,6 +365,7 @@ export class SessionsManager {
     newSessionBtn: HTMLElement;
     openCodeServiceRow: HTMLElement | null;
     openCodeServiceBtn: HTMLButtonElement | null;
+    dshPreviewBtn: HTMLButtonElement | null;
     _openCodeServicePollTimer: number | null = null;
     workspaceSelect: HTMLSelectElement;
     addWorkspaceBtn: HTMLElement;
@@ -443,6 +445,9 @@ export class SessionsManager {
         );
         this.openCodeServiceBtn = document.getElementById(
             'opencode-service-btn',
+        ) as HTMLButtonElement | null;
+        this.dshPreviewBtn = document.getElementById(
+            'dsh-preview-btn',
         ) as HTMLButtonElement | null;
 
         // Workspace Controls
@@ -612,6 +617,17 @@ export class SessionsManager {
         this.newSessionBtn.addEventListener('click', () => {
             this.spawnNewSession();
         });
+        // DSH preview launcher: visibility follows the cached server
+        // status; the tab itself revalidates the mount on every open.
+        this.dshPreviewBtn?.addEventListener('click', () => {
+            if (isCompactViewport()) {
+                document
+                    .getElementById('sidebar-panel')
+                    ?.classList.remove('drawer-open');
+            }
+            void openDshPreviewTab(this.app.tabManager);
+        });
+        void refreshDshLauncher(this.app?.scope);
         this.newSessionBtn.addEventListener('contextmenu', (e) => {
             if (
                 this.activeCoder !== 'opencode' ||
@@ -3397,6 +3413,10 @@ export class SessionsManager {
             btn.appendChild(label);
             container.appendChild(btn);
         }
+
+        // Keep the application launcher and its listener across registry refreshes.
+        // It shares the icon row, not the PTY/session-list selection flow.
+        if (this.dshPreviewBtn) container.appendChild(this.dshPreviewBtn);
 
         // Sync the SessionsManager's active coder with the resolved
         // selection only when it actually changed; preserving the

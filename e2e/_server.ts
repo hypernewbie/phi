@@ -256,6 +256,13 @@ async function waitForHealth(
 export async function startPhi(
     options: {
         config?: Record<string, unknown>;
+        // configAfterPort merges extra startup config once the loopback
+        // port is known (e.g. a DSH preview origin). It still lands in
+        // config.toml before the build and spawn, like config.
+        configAfterPort?: (
+            dir: string,
+            port: number,
+        ) => Record<string, unknown>;
         setup?: (dir: string) => void | Promise<void>;
         env?: Record<string, string>;
         web?: string;
@@ -325,18 +332,30 @@ export async function startPhi(
         mkdirSync(home, { recursive: true });
         mkdirSync(runTmp, { mode: 0o700 });
         checkRuntimeTmp(runTmp, dir);
-        if (options.config) {
+        const port = await freePort();
+        // Startup config lands after the port is known but before the
+        // build and spawn. Callers without configAfterPort see the same
+        // bytes as before.
+        if (options.config || options.configAfterPort) {
+            const merged = {
+                ...options.config,
+                ...options.configAfterPort?.(dir, port),
+            };
             mkdirSync(join(home, '.phi'), { recursive: true });
             writeFileSync(
                 join(home, '.phi', 'config.toml'),
-                configToToml(options.config),
+                configToToml(merged),
             );
         }
-
         await options.setup?.(dir);
-        const port = await freePort();
         const bin = join(dir, process.platform === 'win32' ? 'phi.exe' : 'phi');
-        await run('go', ['build', '-o', bin, '.'], process.cwd());
+        // The carrier is opt-in behind -tags dsh; the fixture enables the
+        // preview, so its server must be built with the tag.
+        await run(
+            'go',
+            ['build', '-tags', 'dsh', '-o', bin, '.'],
+            process.cwd(),
+        );
         const args = ['--port', String(port), '--ip', '127.0.0.1'];
         if (options.web !== undefined) args.push('--web', options.web);
         const launch = (): ChildProcess =>

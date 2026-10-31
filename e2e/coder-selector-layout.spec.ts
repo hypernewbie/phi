@@ -15,7 +15,7 @@ test('left coder selector drops labels before wrapping and restores them when wi
     await page.setViewportSize({ width: 1920, height: 900 });
     await page.goto(phi.url);
     const sidebar = page.locator('#sidebar-panel');
-    const buttons = page.locator('#coder-selector .coder-tab');
+    const buttons = page.locator('#coder-selector .coder-tab[data-coder]');
     await expect(buttons).toHaveCount(6);
     await page.evaluate(() => document.fonts.ready);
     for (const width of [320, 260, 180, 450, 260]) {
