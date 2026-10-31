@@ -614,12 +614,8 @@ func testAccessShortLivedToken(t *testing.T, auth *accessAuthManager, familyID s
 	}
 	now := time.Now()
 	issuedAt := now.Unix()
-	expiresAt := now.Add(lifetime).Unix()
-	// exp is a whole second: truncating a sub-second lifetime can land on the
-	// current second, which is already expired. Round up instead.
-	if !time.Unix(expiresAt, 0).After(now) {
-		expiresAt = issuedAt + 1
-	}
+	// Round up so Unix truncation cannot shorten the admission window.
+	expiresAt := now.Add(lifetime).Truncate(time.Second).Add(time.Second).Unix()
 	token, err := formatAccessJWT(auth.jwtKey, issuedAt, expiresAt, family.CurrentAccess.Nonce, accessJWTRevocation{
 		RecordID: auth.v2.recordID,
 		Epoch:    auth.v2.epoch,
@@ -775,7 +771,8 @@ func TestAccessWSSocketClosesAtFamilyDeadline(t *testing.T) {
 	familyID := testAccessFamilyOf(t, auth, token)
 
 	auth.mu.Lock()
-	auth.v2.families[familyID].IdleExpiresAt = time.Now().Add(700 * time.Millisecond).Unix()
+	// Keep the same minimum admission window as the short-lived token fixture.
+	auth.v2.families[familyID].IdleExpiresAt = time.Now().Add(700 * time.Millisecond).Truncate(time.Second).Add(time.Second).Unix()
 	auth.mu.Unlock()
 
 	socket := dial("/ws/md-events", wireproto.EventsSubprotocol, token, "")
