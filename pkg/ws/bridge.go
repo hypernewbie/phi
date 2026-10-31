@@ -36,6 +36,10 @@ var Upgrader = websocket.Upgrader{
 }
 
 func (c *Client) WritePump() {
+	obs.DoFeature("terminal", func(_ context.Context) { c.writePump() })
+}
+
+func (c *Client) writePump() {
 	logger := c.logger()
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
@@ -91,6 +95,12 @@ func (c *Client) WritePump() {
 // path (client-initiated close, PTY write error, read error) ends it
 // exactly once.
 func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub, endSpan func(error)) {
+	obs.DoFeature("terminal", func(_ context.Context) {
+		c.readPump(inst, manager, hub, endSpan)
+	})
+}
+
+func (c *Client) readPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub, endSpan func(error)) {
 	logger := c.logger()
 	defer func() {
 		hub.Unregister(inst.ID, c)
@@ -208,7 +218,7 @@ func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
 	// must win over a delayed old exit that is still draining.
 	hub.notePaneOwner(inst)
 	logger := componentLogger().With("pane", inst.ID)
-	go func() {
+	go obs.DoFeature("terminal", func(_ context.Context) {
 		defer close(done)
 		buf := make([]byte, 32*1024)
 		for {
@@ -239,7 +249,7 @@ func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
 		<-inst.Pty.Closed
 		code := inst.Pty.ExitCode()
 		hub.exitPaneForOwner(inst, code)
-	}()
+	})
 }
 
 // enqueueBridgeSnapshot appends the Pi-bridge attach snapshot after the

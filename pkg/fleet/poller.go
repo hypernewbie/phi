@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/hypernewbie/phi/pkg/obs"
 )
 
 const (
@@ -97,20 +99,22 @@ func (p *Poller) Start(peers []PeerCfg) {
 }
 
 func (p *Poller) pollLoop(ctx context.Context, peer PeerCfg) {
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
+	obs.DoFeature("fleet", func(_ context.Context) {
+		ticker := time.NewTicker(pollInterval)
+		defer ticker.Stop()
 
-	// Poll immediately on start so the first response isn't 15s away.
-	p.poll(peer)
+		// Poll immediately on start so the first response isn't 15s away.
+		p.poll(peer)
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			p.poll(peer)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				p.poll(peer)
+			}
 		}
-	}
+	})
 }
 
 func (p *Poller) poll(peer PeerCfg) {

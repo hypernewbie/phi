@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/hypernewbie/phi/pkg/coders"
+	"github.com/hypernewbie/phi/pkg/obs"
 )
 
 // shouldStop calculates whether an idle stop should be triggered.
@@ -189,7 +190,7 @@ func (w *openCodeIdleWatcher) start(interval time.Duration) {
 	w.running = true
 	w.mu.Unlock()
 
-	go func() {
+	go obs.DoFeature("sessions", func(_ context.Context) {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
@@ -201,7 +202,7 @@ func (w *openCodeIdleWatcher) start(interval time.Duration) {
 				w.checkOnce(context.Background())
 			}
 		}
-	}()
+	})
 }
 
 func (w *openCodeIdleWatcher) stop() {
