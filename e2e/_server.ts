@@ -6,11 +6,14 @@ import {
     writeFileSync,
     accessSync,
     statSync,
+    readFileSync,
+    realpathSync,
     constants as fsConstants,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, isAbsolute } from 'node:path';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import net from 'node:net';
 
 // Shared live-server fixture for e2e specs: builds phi once, runs it
@@ -31,6 +34,9 @@ export interface PhiServer {
     stop: () => Promise<void>;
     restart: (beforeStart?: () => void | Promise<void>) => Promise<void>;
     logPath: string;
+    /** Live owned-child PID for spec-side listener checks. */
+    pid: () => number | undefined;
+    verify: () => void;
 }
 
 // Outer env vars inherited by the fixture Phi child: PATH (+Windows
@@ -130,14 +136,103 @@ function freePort(): Promise<number> {
     });
 }
 
-async function waitForHealth(port: number): Promise<void> {
+// A signal kill records signalCode with exitCode null; either one
+// means the exit event already fired and must not be awaited.
+function childExited(child: ChildProcess): boolean {
+    return child.exitCode !== null || child.signalCode !== null;
+}
+
+interface ProcessIdentity {
+    pid: number;
+    start: string;
+    binary: string;
+}
+
+function inspectProcess(child: ChildProcess, binary: string): ProcessIdentity {
+    if (!child.pid || childExited(child))
+        throw new Error('phi fixture child exited during startup');
+    const opts = { encoding: 'utf8' as const, timeout: 5_000 };
+    const start = execFileSync(
+        'ps',
+        ['-p', String(child.pid), '-o', 'lstart='],
+        opts,
+    ).trim();
+    const images = execFileSync(
+        'lsof',
+        ['-nP', '-a', '-p', String(child.pid), '-d', 'txt', '-Fn'],
+        opts,
+    );
+    if (!start || !images.split('\n').includes(`n${binary}`)) {
+        throw new Error(
+            `phi fixture identity mismatch for PID ${child.pid}; leaving resources intact`,
+        );
+    }
+    return { pid: child.pid, start, binary };
+}
+
+function ownsListener(child: ChildProcess, port: number): boolean {
+    try {
+        const sockets = execFileSync(
+            'lsof',
+            [
+                '-nP',
+                '-a',
+                '-p',
+                String(child.pid),
+                '-iTCP',
+                '-sTCP:LISTEN',
+                '-Fn',
+            ],
+            {
+                encoding: 'utf8',
+                timeout: 5_000,
+                stdio: ['ignore', 'pipe', 'pipe'],
+            },
+        );
+        return sockets.split('\n').includes(`n127.0.0.1:${port}`);
+    } catch (err) {
+        // lsof returns 1 while a live child has no listening socket yet.
+        if ((err as { status?: number }).status === 1) return false;
+        throw err;
+    }
+}
+
+async function waitForHealth(
+    port: number,
+    child: ChildProcess,
+    verify: () => void,
+): Promise<void> {
     const deadline = Date.now() + 90_000;
     for (;;) {
-        try {
-            const res = await fetch(`http://127.0.0.1:${port}/healthz`);
-            if (res.ok) return;
-        } catch {
-            // Server still compiling/starting.
+        // The owned child must stay alive while polling: a foreign listener
+        // answering /healthz after our bind failed or child exited must not
+        // pass readiness for this fixture.
+        if (childExited(child)) {
+            throw new Error(
+                `phi fixture child (pid ${child.pid}) exited during startup`,
+            );
+        }
+        verify();
+        // Never probe a foreign listener, including the bind-race window
+        // before Node has observed the owned child's exit event.
+        if (process.platform === 'win32' || ownsListener(child, port)) {
+            let healthy = false;
+            try {
+                const res = await fetch(`http://127.0.0.1:${port}/healthz`, {
+                    signal: AbortSignal.timeout(2_000),
+                });
+                healthy = res.ok;
+                await res.body?.cancel();
+            } catch {
+                /* Server still starting. */
+            }
+            if (healthy) {
+                if (childExited(child))
+                    throw new Error('phi fixture child exited during startup');
+                verify();
+                if (process.platform === 'win32' || ownsListener(child, port))
+                    return;
+            }
         }
         if (Date.now() > deadline) throw new Error('phi server never came up');
         await new Promise((r) => setTimeout(r, 500));
@@ -159,6 +254,20 @@ export async function startPhi(
     // below reaps the owned child (if any) and removes the owned dir.
     let server: ChildProcess | null = null;
     let disposed = false;
+    const identities = new WeakMap<ChildProcess, ProcessIdentity>();
+    const verifyIdentity = (child: ChildProcess) => {
+        if (process.platform === 'win32') return;
+        const expected = identities.get(child);
+        if (!expected)
+            throw new Error(
+                'phi fixture identity unavailable; leaving resources intact',
+            );
+        const current = inspectProcess(child, expected.binary);
+        if (current.start !== expected.start)
+            throw new Error(
+                'phi fixture PID was reused; leaving resources intact',
+            );
+    };
     const removeDir = () => {
         // Best-effort: the binary can stay briefly locked on Windows.
         try {
@@ -167,12 +276,10 @@ export async function startPhi(
             // Tmp dirs are reaped by the OS; never fail on cleanup.
         }
     };
-    // A signal kill records signalCode with exitCode null; either one
-    // means the exit event already fired and must not be awaited.
-    const alreadyExited = (child: ChildProcess): boolean =>
-        child.exitCode !== null || child.signalCode !== null;
+    const alreadyExited = childExited;
     const terminate = async (child: ChildProcess | null) => {
-        if (!child || alreadyExited(child)) return;
+        if (!child || !child.pid || alreadyExited(child)) return;
+        verifyIdentity(child);
         const exited = new Promise<void>((resolve) =>
             child.once('exit', () => resolve()),
         );
@@ -182,6 +289,7 @@ export async function startPhi(
             new Promise((resolve) => setTimeout(resolve, 10_000)),
         ]);
         if (!alreadyExited(child)) {
+            verifyIdentity(child);
             child.kill('SIGKILL');
             await exited;
         }
@@ -240,13 +348,45 @@ export async function startPhi(
             child.stderr?.on('data', append);
             return child;
         };
-        server = capture(launch());
-        await waitForHealth(port);
+        const binary = realpathSync(bin);
+        const build = {
+            revision: execFileSync('git', ['rev-parse', 'HEAD'], {
+                encoding: 'utf8',
+            }).trim(),
+            sha256: createHash('sha256')
+                .update(readFileSync(bin))
+                .digest('hex'),
+        };
+        const boot = async () => {
+            const child = capture(launch());
+            server = child;
+            await new Promise<void>((resolve, reject) => {
+                child.once('spawn', resolve);
+                child.once('error', reject);
+            });
+            if (process.platform !== 'win32')
+                identities.set(child, inspectProcess(child, binary));
+            append(
+                Buffer.from(
+                    `${JSON.stringify({ ...build, ...identities.get(child), bind: `127.0.0.1:${port}`, dir })}\n`,
+                ),
+            );
+            await waitForHealth(port, child, () => verifyIdentity(child));
+        };
+        await boot();
 
         return {
             url: `http://127.0.0.1:${port}`,
             logPath,
             dir,
+            pid: () => server?.pid,
+            verify: () => {
+                if (!server || childExited(server))
+                    throw new Error('phi fixture is not running');
+                verifyIdentity(server);
+                if (process.platform !== 'win32' && !ownsListener(server, port))
+                    throw new Error('phi fixture does not own its listener');
+            },
             restart: async (beforeStart) => {
                 if (disposed) throw new Error('phi fixture already disposed');
                 const old = server;
@@ -254,8 +394,7 @@ export async function startPhi(
                 await terminate(old);
                 try {
                     await beforeStart?.();
-                    server = capture(launch());
-                    await waitForHealth(port);
+                    await boot();
                 } catch (err) {
                     await fail(err);
                 }
