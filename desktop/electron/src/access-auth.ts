@@ -209,6 +209,27 @@ function withTimeout(signal?: AbortSignal, ms = FETCH_TIMEOUT_MS): AbortSignal {
   return signal ? AbortSignal.any([signal, timeoutSig]) : timeoutSig;
 }
 
+// Bound both headers and body reads, even if a transport ignores AbortSignal.
+// Racing only the work that reads the response prevents late completion from
+// reaching the caller's credential installation code.
+async function withAbort<T>(
+  signal: AbortSignal | null | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  if (!signal) return run();
+  signal.throwIfAborted();
+  let onAbort!: () => void;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([run(), aborted]);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
+}
+
 /** Validated `/api/auth/status` shape — only returned when fully trusted. */
 interface TrustedAuthStatus {
   readonly version: 'v1';
@@ -289,13 +310,32 @@ export class AccessAuth {
 
   private async safeFetch(url: URL, init: RequestInit): Promise<Response> {
     try {
-      return await this._doFetch(url, init);
+      return await withAbort(init.signal, () => this._doFetch(url, init));
     } catch (err) {
-      if (url.hostname === 'localhost') {
+      const method = init.method?.toUpperCase() ?? 'GET';
+      // A lost mutation reply is unconfirmed, not permission to resend it.
+      // Reads and protocol refresh are retry-safe. A refused connection proves
+      // the request never reached the server and keeps IPv4 fallback usable.
+      const refusedBeforeSend =
+        err instanceof Error &&
+        typeof err.cause === 'object' &&
+        err.cause !== null &&
+        'code' in err.cause &&
+        err.cause.code === 'ECONNREFUSED';
+      if (
+        url.hostname === 'localhost' &&
+        !init.signal?.aborted &&
+        (method === 'GET' ||
+          method === 'HEAD' ||
+          (method === 'POST' && url.pathname === AUTH_PATH_V2_REFRESH) ||
+          refusedBeforeSend)
+      ) {
         const fallback = new URL(url.toString());
         fallback.hostname = '127.0.0.1';
         try {
-          return await this._doFetch(fallback, init);
+          return await withAbort(init.signal, () =>
+            this._doFetch(fallback, init),
+          );
         } catch {
           throw err;
         }
@@ -690,9 +730,10 @@ export class AccessAuth {
       headers.Cookie = `${cookie.cookieName}=${cookie.cookieValue}`;
     const sentCookie = cookie;
     try {
+      signal = withTimeout(signal);
       const res = await this.safeFetch(new URL(CONFIG_PATH, canonical), {
         headers,
-        signal: withTimeout(signal, FETCH_TIMEOUT_MS),
+        signal,
         redirect: 'error',
       });
       if (res.status === 401) {
@@ -724,7 +765,7 @@ export class AccessAuth {
       }
       if (!res.ok) return { kind: 'unavailable', reason: `http ${res.status}` };
       // Parse defensively: a non-JSON body should not crash the main view.
-      const text = await res.text();
+      const text = await withAbort(signal, () => res.text());
       try {
         return { kind: 'ok', config: JSON.parse(text) as unknown };
       } catch {
@@ -920,6 +961,7 @@ export class AccessAuth {
     | { kind: 'unavailable'; message: string }
   > {
     try {
+      signal = withTimeout(signal);
       const res = await this.safeFetch(new URL(AUTH_PATH_V2_LOGIN, canonical), {
         method: 'POST',
         // No browser metadata is forged: the host sends the route-local CSRF
@@ -929,7 +971,7 @@ export class AccessAuth {
           [CSRF_HEADER]: CSRF_VALUE,
         },
         body: JSON.stringify({ password }),
-        signal: withTimeout(signal, FETCH_TIMEOUT_MS),
+        signal,
         redirect: 'error',
       });
       if (res.status === 429) {
@@ -957,7 +999,7 @@ export class AccessAuth {
           message: 'v2 login returned no refresh handle',
         };
       }
-      const bundle = await this.readBundle(res, handle);
+      const bundle = await this.readBundle(res, handle, signal);
       if (bundle === null) {
         return { kind: 'unavailable', message: 'v2 login returned bad bundle' };
       }
@@ -979,14 +1021,15 @@ export class AccessAuth {
     const canonical = toCanonicalAuthOrigin(origin);
     if (!canonical) return { kind: 'unavailable', message: 'invalid origin' };
     try {
+      signal = withTimeout(signal);
       const res = await this.safeFetch(new URL(AUTH_PATH_STATUS, canonical), {
-        signal: withTimeout(signal, FETCH_TIMEOUT_MS),
+        signal,
         redirect: 'error',
       });
       if (res.status !== 200) {
         return { kind: 'unavailable', message: `status http ${res.status}` };
       }
-      const raw = (await res.json()) as unknown;
+      const raw = (await withAbort(signal, () => res.json())) as unknown;
       if (!raw || typeof raw !== 'object') {
         return { kind: 'unavailable', message: 'bad status json' };
       }
@@ -1030,17 +1073,18 @@ export class AccessAuth {
       return 'invalid';
     }
     try {
+      signal = withTimeout(signal);
       const res = await this.safeFetch(
         new URL(AUTH_PATH_V2_STATUS, canonical),
         {
           headers: { Authorization: `Bearer ${token}` },
-          signal: withTimeout(signal, FETCH_TIMEOUT_MS),
+          signal,
           redirect: 'error',
         },
       );
       if (res.status === 401 || res.status === 403) return 'invalid';
       if (res.status !== 200) return 'unavailable';
-      const payload = (await res.json()) as unknown;
+      const payload = (await withAbort(signal, () => res.json())) as unknown;
       if (!payload || typeof payload !== 'object') return 'unavailable';
       const record = payload as Record<string, unknown>;
       if (typeof record.enabled !== 'boolean') return 'unavailable';
@@ -1124,6 +1168,7 @@ export class AccessAuth {
     }
     let res: Response;
     try {
+      signal = withTimeout(signal);
       res = await this.safeFetch(new URL(AUTH_PATH_V2_LOGOUT, canonical), {
         method: 'POST',
         // The bearer is the only authorization; the refresh cookie is not.
@@ -1133,7 +1178,7 @@ export class AccessAuth {
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ all }),
-        signal: withTimeout(signal, FETCH_TIMEOUT_MS),
+        signal,
         redirect: 'error',
       });
     } catch (err) {
@@ -1165,6 +1210,7 @@ export class AccessAuth {
   ): Promise<RefreshResult> {
     let res: Response;
     try {
+      signal = withTimeout(signal);
       res = await this.safeFetch(new URL(AUTH_PATH_V2_REFRESH, canonical), {
         method: 'POST',
         headers: {
@@ -1173,7 +1219,7 @@ export class AccessAuth {
           Cookie: `${REFRESH_COOKIE_NAME}=${bundle.refreshHandle}`,
         },
         body: '{}',
-        signal: withTimeout(signal, FETCH_TIMEOUT_MS),
+        signal,
         redirect: 'error',
       });
     } catch (err) {
@@ -1210,7 +1256,7 @@ export class AccessAuth {
     }
     let installed: V2Bundle | null;
     try {
-      installed = await this.readBundle(res, handle);
+      installed = await this.readBundle(res, handle, signal);
     } catch (err) {
       return this.failRefresh(
         canonical,
@@ -1241,8 +1287,9 @@ export class AccessAuth {
   private async readBundle(
     res: Response,
     handle: string,
+    signal?: AbortSignal,
   ): Promise<V2Bundle | null> {
-    const text = await res.text();
+    const text = await withAbort(signal, () => res.text());
     if (text.length > MAX_BUNDLE_BYTES) throw new Error('bundle too large');
     let payload: unknown;
     try {
@@ -1421,13 +1468,14 @@ export class AccessAuth {
     const canonical = toCanonicalAuthOrigin(origin);
     if (!canonical) return { kind: 'unavailable', message: 'invalid origin' };
     try {
+      signal = withTimeout(signal);
       const res = await this.safeFetch(new URL(AUTH_PATH_STATUS, canonical), {
-        signal: withTimeout(signal, FETCH_TIMEOUT_MS),
+        signal,
         redirect: 'error',
       });
       if (!res.ok)
         return { kind: 'unavailable', message: `status http ${res.status}` };
-      const status = (await res.json()) as unknown;
+      const status = (await withAbort(signal, () => res.json())) as unknown;
       const v = validateStatus(status);
       if (v === null)
         return {
@@ -1462,23 +1510,28 @@ export class AccessAuth {
     | { kind: 'unavailable'; message: string }
   > {
     try {
+      signal = withTimeout(signal);
       const res = await this.safeFetch(new URL(AUTH_PATH_LOGIN, canonical), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ challenge, proof }),
-        signal: withTimeout(signal, FETCH_TIMEOUT_MS),
+        signal,
         redirect: 'error',
       });
       if (res.status === 429) {
         return {
           kind: 'rate-limited',
-          message: await extractError(res, 'rate-limited'),
+          message: await withAbort(signal, () =>
+            extractError(res, 'rate-limited'),
+          ),
         };
       }
       if (res.status === 401) {
         return {
           kind: 'invalid-password',
-          message: await extractError(res, 'Password not accepted'),
+          message: await withAbort(signal, () =>
+            extractError(res, 'Password not accepted'),
+          ),
         };
       }
       if (!res.ok) {

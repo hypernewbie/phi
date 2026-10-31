@@ -237,6 +237,7 @@ it('waits for a due refresh before redialing an expired pane', async () => {
         vi.useFakeTimers();
         h.manager.app = { config: { auto_reconnect: 'visible' } };
         h.manager.activePaneId = h.tab.paneId;
+        h.manager.tabs.set(h.tab.paneId, h.tab);
         h.tab.isDead = true;
         h.tab.termContainer = { querySelector: () => null };
         const redial = vi.fn();

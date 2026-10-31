@@ -878,6 +878,16 @@ export async function startPhi(
                 );
                 await waitForOwnedServer(child, serverIdentity, process.cwd());
                 if (startupError) throw startupError;
+            } catch (error) {
+                // Drop an unidentified child only after exit and listener checks.
+                if (!serverIdentity && alreadyExited(child)) {
+                    const listeners = await listenerRecords(
+                        port,
+                        process.cwd(),
+                    );
+                    if (listeners.length === 0) server = null;
+                }
+                throw error;
             } finally {
                 child.off('error', onError);
             }

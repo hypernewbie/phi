@@ -12020,19 +12020,12 @@ export class TabManager {
             tabInfo.autoReconnectTimer = null;
             tabInfo.autoReconnectPending = false;
             const redial = () => {
-                const isDesktop =
-                    document.documentElement.hasAttribute('data-phi-desktop') ||
-                    new URLSearchParams(location.search).get('desktop') === '1' ||
-                    Boolean(window.__phiDesktop) ||
-                    location.protocol === 'phi-app:';
                 if (
                     this._canReconnectTab(tabInfo) &&
                     tabInfo.isDead &&
                     !tabInfo.reconnectInFlight &&
                     this.app?.config?.auto_reconnect === 'visible' &&
-                    document.visibilityState === 'visible' &&
-                    (isDesktop || tabInfo.paneId === this.activePaneId) &&
-                    tabInfo.exitCode == null
+                    document.visibilityState === 'visible'
                 ) {
                     this.reconnectTab(tabInfo, { auto: true });
                 } else {

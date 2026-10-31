@@ -1321,6 +1321,46 @@ describe('AccessAuth v2 selection', () => {
     expect(seen.some((c) => c.path === '/api/auth/login')).toBe(false);
   });
 
+  it.each(['v1', 'v2'])(
+    'does not resend an unconfirmed %s login through loopback fallback',
+    async (protocol) => {
+      const hosts: string[] = [];
+      const auth = new AccessAuth((async (url: URL) => {
+        if (url.pathname === '/api/auth/status')
+          return json(protocol === 'v2' ? v1Status : v1OnlyStatus);
+        hosts.push(url.host);
+        throw new TypeError('fetch failed', {
+          cause: { code: 'ECONNRESET' },
+        });
+      }) as unknown as typeof fetch);
+      const local = 'http://localhost:8080';
+      expect((await auth.tryUnlock(local, 'test-pass-1234')).kind).toBe(
+        'unavailable',
+      );
+      expect(hosts).toEqual(['localhost:8080']);
+      expect(auth.getToken(local)).toBeNull();
+    },
+  );
+
+  it('keeps login fallback for a proven pre-send connection refusal', async () => {
+    const hosts: string[] = [];
+    const auth = new AccessAuth((async (url: URL) => {
+      if (url.pathname === '/api/auth/status') return json(v1Status);
+      if (url.pathname === '/api/config') return json({ hostname: 'LOCAL' });
+      hosts.push(url.host);
+      if (url.hostname === 'localhost')
+        throw new TypeError('fetch failed', {
+          cause: { code: 'ECONNREFUSED' },
+        });
+      return bundleResponse('local-access');
+    }) as unknown as typeof fetch);
+    const local = 'http://localhost:8080';
+    expect((await auth.tryUnlock(local, 'test-pass-1234')).kind).toBe('ok');
+    expect(hosts).toEqual(['localhost:8080', '127.0.0.1:8080']);
+    expect(auth.getToken(local) !== null).toBe(true);
+    expect(auth.getToken('http://127.0.0.1:8080')).toBeNull();
+  });
+
   it('keeps v2 selected after a rejected token and never falls back to a cookie', async () => {
     const seen: Array<{
       path: string;
@@ -1895,6 +1935,119 @@ describe('AccessAuth v2 refresh bundle', () => {
     expect(await auth.renewIfDue(origin)).toBeNull();
   });
 
+  it.each(['headers', 'body'])(
+    'releases a refresh with stalled %s on deadline and ignores its late completion',
+    async (stage) => {
+      vi.useFakeTimers();
+      vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+        const controller = new AbortController();
+        setTimeout(
+          () => controller.abort(new DOMException('Timed out', 'TimeoutError')),
+          ms,
+        );
+        return controller.signal;
+      });
+      let releaseHeaders!: (response: Response) => void;
+      let releaseBody!: (text: string) => void;
+      const headers = new Promise<Response>((resolve) => {
+        releaseHeaders = resolve;
+      });
+      const body = new Promise<string>((resolve) => {
+        releaseBody = resolve;
+      });
+      const response = bundleResponse('late-token', handleB);
+      if (stage === 'body')
+        vi.spyOn(response, 'text').mockImplementation(() => body);
+      const doFetch = vi
+        .fn()
+        .mockImplementationOnce(() =>
+          stage === 'headers' ? headers : response,
+        )
+        .mockImplementation(() => bundleResponse('recovered-token', handleB));
+      const auth = new AccessAuth(doFetch, now);
+      install(auth);
+      const original = auth.getBundle(origin);
+      let settled: Awaited<ReturnType<AccessAuth['refreshAccess']>> | undefined;
+      const pending = auth.refreshAccess(origin).then((result) => {
+        settled = result;
+        return result;
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(settled).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled?.kind).toBe('unavailable');
+        expect(auth.getBundle(origin) === original).toBe(true);
+        expect(auth.getSelectedProtocol(origin)).toBe('v2');
+        expect(await auth.renewIfDue(origin)).toBeNull();
+        expect(doFetch).toHaveBeenCalledOnce();
+        clockMs += 1_000;
+        expect((await auth.refreshAccess(origin)).kind).toBe('ok');
+        releaseHeaders(response);
+        releaseBody(JSON.stringify(bundle('late-token')));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(auth.getToken(origin) === 'recovered-token').toBe(true);
+        expect(doFetch).toHaveBeenCalledTimes(2);
+      } finally {
+        auth.cancel(origin);
+        releaseHeaders(response);
+        releaseBody(JSON.stringify(bundle('late-token')));
+        await pending;
+        vi.restoreAllMocks();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(['headers', 'body'])(
+    'honors caller abort during stalled refresh %s without clearing the session',
+    async (stage) => {
+      let releaseHeaders!: (response: Response) => void;
+      let releaseBody!: (text: string) => void;
+      const headers = new Promise<Response>((resolve) => {
+        releaseHeaders = resolve;
+      });
+      const body = new Promise<string>((resolve) => {
+        releaseBody = resolve;
+      });
+      const response = bundleResponse('late-token', handleB);
+      if (stage === 'body')
+        vi.spyOn(response, 'text').mockImplementation(() => body);
+      const doFetch = vi
+        .fn()
+        .mockImplementation(() => (stage === 'headers' ? headers : response));
+      const auth = new AccessAuth(doFetch, now);
+      install(auth);
+      const original = auth.getBundle(origin);
+      const controller = new AbortController();
+      let settled: Awaited<ReturnType<AccessAuth['refreshAccess']>> | undefined;
+      const pending = auth
+        .refreshAccess(origin, controller.signal)
+        .then((result) => {
+          settled = result;
+          return result;
+        });
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        controller.abort();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(settled?.kind).toBe('unavailable');
+        expect(auth.getBundle(origin) === original).toBe(true);
+        releaseHeaders(response);
+        releaseBody(JSON.stringify(bundle('late-token')));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(auth.getBundle(origin) === original).toBe(true);
+        expect(doFetch).toHaveBeenCalledOnce();
+      } finally {
+        auth.cancel(origin);
+        releaseHeaders(response);
+        releaseBody(JSON.stringify(bundle('late-token')));
+        await pending;
+        vi.restoreAllMocks();
+      }
+    },
+  );
+
   it('never installs a late refresh response over a newer bundle', async () => {
     let release!: (res: Response) => void;
     const pending = new Promise<Response>((resolve) => {
@@ -2061,6 +2214,22 @@ describe('AccessAuth v2 refresh bundle', () => {
     expect(auth.getToken(origin)).toBeNull();
     expect(auth.getBundle(origin)).toBeNull();
     expect(auth.getSelectedProtocol(origin)).toBe('v2');
+  });
+
+  it('does not resend an unconfirmed localhost logout through fallback', async () => {
+    const hosts: string[] = [];
+    const auth = new AccessAuth((async (url: URL) => {
+      hosts.push(url.host);
+      throw new TypeError('fetch failed', {
+        cause: { code: 'ECONNRESET' },
+      });
+    }) as unknown as typeof fetch);
+    const local = 'http://localhost:8080';
+    expect(auth.installToken(local, 'local-access')).toBe(true);
+    expect((await auth.logout(local, false)).kind).toBe('unavailable');
+    expect(hosts).toEqual(['localhost:8080']);
+    expect(auth.getToken(local) !== null).toBe(true);
+    expect(auth.getSelectedProtocol(local)).toBe('v2');
   });
 
   it('keeps the bundle when logout is not confirmed', async () => {

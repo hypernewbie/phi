@@ -705,9 +705,9 @@ describe('embedded-transport', () => {
       expect(auth.installBundleForAttempt).toHaveBeenCalledTimes(1);
     });
 
-    it('reports a cleared password as the token-free cleared shape', async () => {
+    it('reports the server password-clear response as the token-free cleared shape', async () => {
       mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ ok: true, enabled: false }), {
+        new Response(JSON.stringify({ enabled: false }), {
           status: 200,
           headers: { 'content-type': 'application/json' },
         }),
@@ -854,14 +854,15 @@ describe('embedded-transport', () => {
       expect(auth.installBundle).not.toHaveBeenCalled();
     });
 
-    it('requires the exact clear answer before dropping the host credential', async () => {
-      // `enabled: false` alone is also an unrelated config row, so it is not a
-      // clear: the host keeps its credential and the page sees a host error.
+    it('rejects an invalid clear answer without dropping the host credential', async () => {
       mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ enabled: false }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        }),
+        new Response(
+          JSON.stringify({ enabled: false, token: 'unexpected-token' }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        ),
       );
       const res = await send('/api/auth/v2/password', {
         method: 'POST',
@@ -872,10 +873,48 @@ describe('embedded-transport', () => {
       expect(auth.clearBundleForAttempt).not.toHaveBeenCalled();
     });
 
+    it('does not interpret a login answer as a password clear', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ enabled: false }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+      const res = await send('/api/auth/v2/login', {
+        method: 'POST',
+        body: JSON.stringify({ password: 'correct-horse-battery' }),
+      });
+      expect(res.status).toBe(502);
+      expect(auth.clearBundleForAttempt).not.toHaveBeenCalled();
+      expect(auth.installBundleForAttempt).not.toHaveBeenCalled();
+    });
+
+    it.each(['login', 'password'])(
+      'does not send a superseded %s whose request body arrived late',
+      async (route) => {
+        const req = new Request(`phi-app://app/api/auth/v2/${route}`, {
+          method: 'POST',
+          headers: { 'X-Phi-Backend': 'prof1' },
+          body: JSON.stringify({ password: 'correct-horse-battery' }),
+        });
+        const readBody = req.arrayBuffer.bind(req);
+        vi.spyOn(req, 'arrayBuffer').mockImplementationOnce(async () => {
+          bumpFence('http://127.0.0.1:8080');
+          return readBody();
+        });
+        mockFetch.mockResolvedValueOnce(credentialResponse());
+        const res = await authed.handleRequest(req);
+        expect(res.status).toBe(409);
+        expect(mockFetch).not.toHaveBeenCalled();
+        expect(auth.installBundleForAttempt).not.toHaveBeenCalled();
+        expect(auth.clearBundleForAttempt).not.toHaveBeenCalled();
+      },
+    );
+
     it('refuses to clear a credential a newer attempt installed', async () => {
       mockFetch.mockImplementationOnce(async () => {
         bumpFence('http://127.0.0.1:8080');
-        return new Response(JSON.stringify({ ok: true, enabled: false }), {
+        return new Response(JSON.stringify({ enabled: false }), {
           status: 200,
           headers: { 'content-type': 'application/json' },
         });
@@ -942,6 +981,27 @@ describe('embedded-transport', () => {
       expect(auth.logout).toHaveBeenCalledTimes(1);
       expect(auth.logout).toHaveBeenCalledWith('http://127.0.0.1:8080', true);
     });
+
+    it.each([false, true])(
+      'keeps a newer sign-in when the old logout body arrives late (all=%s)',
+      async (all) => {
+        const req = new Request('phi-app://app/api/auth/v2/logout', {
+          method: 'POST',
+          headers: { 'X-Phi-Backend': 'prof1' },
+          body: JSON.stringify({ all }),
+        });
+        const readBody = req.arrayBuffer.bind(req);
+        vi.spyOn(req, 'arrayBuffer').mockImplementationOnce(async () => {
+          bumpFence('http://127.0.0.1:8080');
+          return readBody();
+        });
+        const res = await authed.handleRequest(req);
+        expect(res.status).toBe(409);
+        expect(await res.text()).toBe('{"error":"superseded"}');
+        expect(auth.logout).not.toHaveBeenCalled();
+        expect(mockFetch).not.toHaveBeenCalled();
+      },
+    );
 
     it('reports a failed logout instead of claiming the session ended', async () => {
       auth.logout.mockResolvedValueOnce({

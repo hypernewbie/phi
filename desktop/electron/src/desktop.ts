@@ -404,6 +404,12 @@ const REMOTE_ACTIVITY_SCRIPT = `(() => {
   return indicator ? indicator.classList.contains('is-active') : false;
 })()`;
 
+const REMOTE_PROFILE_POLL_SCRIPT = `(() => ({
+  cpu: ${REMOTE_CPU_SCRIPT},
+  activity: ${REMOTE_ACTIVITY_SCRIPT},
+  workspace: ${READ_WORKSPACE_SCRIPT},
+}))()`;
+
 /** Fixed page-observation expression: a guarded click on
  * #hostname-display — the in-page handler toggles the dropdown and
  * renders the active tabs. */
@@ -755,6 +761,8 @@ export class DesktopHost {
    *  (any tab producing output drives the brand-glow `▍` glyph and the
    *  `phi:header-state` push). Never persisted. */
   observedActivity = new Map<string, boolean>();
+  /** At most one pending page read per remote renderer. */
+  private readonly pendingRendererReads = new WeakSet<WebContents>();
   /** Path of the encrypted credential file. Holds the per-origin
    *  PBKDF2 verifiers (rotated server-side) so a subsequent launch can
    *  auto-reauthenticate without prompting for the password. The file
@@ -1790,6 +1798,23 @@ export class DesktopHost {
     }
   }
 
+  private executeRendererRead<T>(
+    contents: WebContents,
+    script: string,
+  ): Promise<T | null> {
+    if (
+      contents.isDestroyed() ||
+      (typeof contents.isLoading === 'function' && contents.isLoading()) ||
+      this.pendingRendererReads.has(contents)
+    )
+      return Promise.resolve(null);
+    this.pendingRendererReads.add(contents);
+    return contents
+      .executeJavaScript(script)
+      .then((result) => result as T)
+      .finally(() => this.pendingRendererReads.delete(contents));
+  }
+
   /**
    * Caches the observed hostname/accent for the profile at origin; null
    * while the remote page has reported neither or on failure.
@@ -1813,7 +1838,7 @@ export class DesktopHost {
         setTimeout(() => resolve(null), 1000),
       );
       const observed = (await Promise.race([
-        view.webContents.executeJavaScript(REMOTE_IDENTITY_SCRIPT),
+        this.executeRendererRead(view.webContents, REMOTE_IDENTITY_SCRIPT),
         timeoutPromise,
       ])) as {
         hostname?: unknown;
@@ -1886,51 +1911,52 @@ export class DesktopHost {
         continue;
       }
       const profileId = profile.id;
-      void Promise.all([
-        view.webContents.executeJavaScript(REMOTE_CPU_SCRIPT).catch(() => null),
-        view.webContents
-          .executeJavaScript(REMOTE_ACTIVITY_SCRIPT)
-          .catch(() => false),
-        view.webContents
-          .executeJavaScript(READ_WORKSPACE_SCRIPT)
-          .catch(() => null),
-      ]).then(([rawCpu, rawActivity, rawWorkspace]) => {
-        if (
-          !this.isCurrentWindowSession(win, generation) ||
-          !view.webContents ||
-          view.webContents.isDestroyed()
-        )
-          return;
-        const cpu =
-          typeof rawCpu === 'number' && Number.isFinite(rawCpu)
-            ? Math.min(100, Math.max(0, rawCpu))
-            : NaN;
-        const next = Number.isFinite(cpu) ? cpu : null;
-        const prev = this.observedCpu.get(profileId) ?? null;
-        if (next === null) this.observedCpu.delete(profileId);
-        else this.observedCpu.set(profileId, next);
-        const activity = Boolean(rawActivity);
-        const prevActivity = this.observedActivity.get(profileId) ?? false;
-        if (activity !== prevActivity) {
-          if (activity) this.observedActivity.set(profileId, true);
-          else this.observedActivity.delete(profileId);
-          this.pushRailState();
-        }
-        if (next !== prev) this.pushRailState();
-        // The taskbar progress and the main view TBAR follow the
-        // selected server only.
-        if (profileId !== st.activeId || win.isDestroyed()) return;
-        if (ctrl.state().activeId !== st.activeId) {
-          win.setProgressBar(-1);
-          return;
-        }
-        win.setProgressBar(next !== null && next > 50 ? next / 100 : -1);
-        const workspace =
-          typeof rawWorkspace === 'string' && rawWorkspace !== ''
-            ? rawWorkspace
-            : null;
-        this.pushHeaderState(next, activity, workspace);
-      });
+      void this.executeRendererRead<{
+        cpu?: unknown;
+        activity?: unknown;
+        workspace?: unknown;
+      }>(view.webContents, REMOTE_PROFILE_POLL_SCRIPT)
+        .then((result) => {
+          if (
+            !result ||
+            !this.isCurrentWindowSession(win, generation) ||
+            view.webContents.isDestroyed()
+          )
+            return;
+          const rawCpu = result.cpu;
+          const rawActivity = result.activity;
+          const rawWorkspace = result.workspace;
+          const cpu =
+            typeof rawCpu === 'number' && Number.isFinite(rawCpu)
+              ? Math.min(100, Math.max(0, rawCpu))
+              : NaN;
+          const next = Number.isFinite(cpu) ? cpu : null;
+          const prev = this.observedCpu.get(profileId) ?? null;
+          if (next === null) this.observedCpu.delete(profileId);
+          else this.observedCpu.set(profileId, next);
+          const activity = Boolean(rawActivity);
+          const prevActivity = this.observedActivity.get(profileId) ?? false;
+          if (activity !== prevActivity) {
+            if (activity) this.observedActivity.set(profileId, true);
+            else this.observedActivity.delete(profileId);
+            this.pushRailState();
+          }
+          if (next !== prev) this.pushRailState();
+          // The taskbar progress and the main view TBAR follow the
+          // selected server only.
+          if (profileId !== st.activeId || win.isDestroyed()) return;
+          if (ctrl.state().activeId !== st.activeId) {
+            win.setProgressBar(-1);
+            return;
+          }
+          win.setProgressBar(next !== null && next > 50 ? next / 100 : -1);
+          const workspace =
+            typeof rawWorkspace === 'string' && rawWorkspace !== ''
+              ? rawWorkspace
+              : null;
+          this.pushHeaderState(next, activity, workspace);
+        })
+        .catch(() => {});
     }
   }
 
@@ -2860,9 +2886,13 @@ export class DesktopHost {
     if (!profile) return;
     const view = this.viewByOrigin.get(profile.origin);
     if (!view?.webContents || view.webContents.isDestroyed()) return;
-    void view.webContents.executeJavaScript(READ_FILE_ACTION_SCRIPT).then(
+    void this.executeRendererRead<unknown>(
+      view.webContents,
+      READ_FILE_ACTION_SCRIPT,
+    ).then(
       (raw) => {
         if (
+          raw === null ||
           !this.isCurrentWindowSession(win, generation) ||
           !view.webContents ||
           view.webContents.isDestroyed()

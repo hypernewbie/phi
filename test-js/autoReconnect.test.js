@@ -65,7 +65,7 @@ describe('all-tab wake and shared scheduler', () => {
         ]);
         expect(healthy.autoReconnectTimer).toBeUndefined();
     });
-    it('limits background redials to the active pane outside desktop shells', () => {
+    it('redials active and background panes outside desktop shells', () => {
         document.documentElement.removeAttribute('data-phi-desktop');
         const { manager, tab } = harness();
         manager.activePaneId = tab.paneId;
@@ -75,35 +75,46 @@ describe('all-tab wake and shared scheduler', () => {
         manager._reviveActiveTabIfDead();
         vi.advanceTimersByTime(1000);
 
-        expect(manager.reconnectTab).toHaveBeenCalledOnce();
-        expect(manager.reconnectTab).toHaveBeenCalledWith(tab, { auto: true });
-        expect(manager._showReconnectOverlay).toHaveBeenCalledWith(background);
+        expect(manager.reconnectTab.mock.calls).toEqual([
+            [tab, { auto: true }],
+            [background, { auto: true }],
+        ]);
+        expect(manager._showReconnectOverlay).not.toHaveBeenCalled();
     });
-    it('waits for a due auth refresh before redialing a desktop pane', async () => {
-        const { manager, tab } = harness();
-        const previousBridge = window.phiAccessAuth;
-        let releaseRefresh;
-        const refresh = new Promise((resolve) => {
-            releaseRefresh = resolve;
-        });
-        window.phiAccessAuth = {
-            refreshAccessIfDue: vi.fn(() => refresh),
-        };
-
-        try {
-            manager.maybeAutoReconnect(tab);
-            await vi.advanceTimersByTimeAsync(1000);
-            expect(manager.reconnectTab).not.toHaveBeenCalled();
-            releaseRefresh();
-            await vi.advanceTimersByTimeAsync(0);
-            expect(manager.reconnectTab).toHaveBeenCalledWith(tab, {
-                auto: true,
+    it.each([false, true])(
+        'waits for auth refresh before redialing all panes (desktop shell=%s)',
+        async (desktopShell) => {
+            if (!desktopShell)
+                document.documentElement.removeAttribute('data-phi-desktop');
+            const { manager, tab } = harness();
+            manager.activePaneId = tab.paneId;
+            const background = { ...tab, paneId: 'p2' };
+            manager.tabs.set(background.paneId, background);
+            const previousBridge = window.phiAccessAuth;
+            let releaseRefresh;
+            const refresh = new Promise((resolve) => {
+                releaseRefresh = resolve;
             });
-        } finally {
-            if (previousBridge === undefined) delete window.phiAccessAuth;
-            else window.phiAccessAuth = previousBridge;
-        }
-    });
+            window.phiAccessAuth = {
+                refreshAccessIfDue: vi.fn(() => refresh),
+            };
+
+            try {
+                manager._reviveActiveTabIfDead();
+                await vi.advanceTimersByTimeAsync(1000);
+                expect(manager.reconnectTab).not.toHaveBeenCalled();
+                releaseRefresh();
+                await vi.advanceTimersByTimeAsync(0);
+                expect(manager.reconnectTab.mock.calls).toEqual([
+                    [tab, { auto: true }],
+                    [background, { auto: true }],
+                ]);
+            } finally {
+                if (previousBridge === undefined) delete window.phiAccessAuth;
+                else window.phiAccessAuth = previousBridge;
+            }
+        },
+    );
     it.each([
         { isDead: false },
         { reconnectInFlight: true },
