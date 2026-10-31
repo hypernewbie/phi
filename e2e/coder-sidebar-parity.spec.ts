@@ -26,7 +26,8 @@ test('built-in coder controls keep their pre-registry layout before and after bo
     try {
         await page.goto(phi.url, { waitUntil: 'domcontentloaded' });
 
-        const tabs = page.locator('#coder-selector .coder-tab');
+        // App launchers share this row but do not select a registered coder.
+        const tabs = page.locator('#coder-selector .coder-tab[data-coder]');
         const quick = page.locator('#empty-quick-launch .empty-launch-btn');
         const tabIds = ['opencode', 'claude', 'agy', 'pi', 'codex', 'bash'];
         const quickIds = ['opencode', 'claude', 'pi', 'agy', 'codex', 'bash'];
@@ -69,7 +70,9 @@ test('built-in coder controls keep their pre-registry layout before and after bo
         const geometry = () =>
             page.evaluate(() =>
                 [
-                    ...document.querySelectorAll('#coder-selector .coder-tab'),
+                    ...document.querySelectorAll(
+                        '#coder-selector .coder-tab[data-coder]',
+                    ),
                 ].map((tab) => {
                     const box = tab.getBoundingClientRect();
                     const logo = tab
@@ -92,7 +95,9 @@ test('built-in coder controls keep their pre-registry layout before and after bo
         releaseRegistry();
         await page.waitForFunction(
             (node) =>
-                document.querySelector('#coder-selector .coder-tab') !== node,
+                document.querySelector(
+                    '#coder-selector .coder-tab[data-coder]',
+                ) !== node,
             initialTab,
         );
         await assertControls();
@@ -130,7 +135,9 @@ test('initial coder controls remain when config cannot load', async ({
         route.fulfill({ status: 503, body: 'unavailable' }),
     );
     await page.goto(phi.url);
-    await expect(page.locator('#coder-selector .coder-tab')).toHaveCount(6);
+    await expect(
+        page.locator('#coder-selector .coder-tab[data-coder]'),
+    ).toHaveCount(6);
     await expect(
         page.locator('#empty-quick-launch .empty-launch-btn'),
     ).toHaveCount(6);
