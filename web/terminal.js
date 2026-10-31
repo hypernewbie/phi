@@ -879,9 +879,10 @@ export class TabManager {
     }
 
     saveTabDraft(tab) {
-        if (!tab || tab.coder === 'review' || tab.coder === 'kanban') return;
+        if (!tab || tab.coder === 'review' || tab.coder === 'kanban') return true;
         tab._attachmentEditVersion = (tab._attachmentEditVersion || 0) + 1;
-        this._writeLegacyTabDraft(tab);
+        const saved = this._writeLegacyTabDraft(tab);
+        if (tab.coder !== 'pi' || (!tab._attachmentDraftOwner && !tab.draftAttachments?.some((item) => item.phiAttachment))) return saved;
         return this._persistAttachmentDraft(tab);
     }
 
@@ -9630,8 +9631,6 @@ export class TabManager {
                 tab.draft = this.inputTextArea.value;
             }
             this._renderAttachmentStrip();
-        } else if (this.inputTextArea) {
-            tab.draft = this.inputTextArea.value;
         }
         tab._attachmentNotice = this._attachmentStorageWarning || 'Saving attachment to this device…';
         this._renderAttachmentStatus(tab);
@@ -9853,7 +9852,7 @@ export class TabManager {
         const label = document.createElement('span');
         label.textContent = [message, message.includes(warning) ? '' : warning].filter(Boolean).join(' ');
         el.appendChild(label);
-        if (snapshot?.outboxState === 'waiting' && snapshot.id) {
+        if (snapshot?.outboxState === 'waiting') {
             const cancel = document.createElement('button');
             cancel.type = 'button';
             cancel.className = 'btn btn-primary attachment-status-action';
@@ -9972,8 +9971,6 @@ export class TabManager {
                 tab.draft = this.inputTextArea.value;
             }
             this._renderAttachmentStrip();
-        } else if (this.inputTextArea) {
-            tab.draft = this.inputTextArea.value;
         }
         tab._attachmentNotice = this._attachmentStorageWarning || 'Saving attachment to this device…';
         this._renderAttachmentStatus(tab);

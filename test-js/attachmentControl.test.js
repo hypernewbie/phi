@@ -281,6 +281,39 @@ describe('attachment control', () => {
         expect(tm.stagedAttachments).toHaveLength(0);
     });
 
+    it.each(['device', 'server'])(
+        'keeps both pane drafts when a %s picker finishes after switching panes',
+        async (source) => {
+            const { tm, tabA, tabB } = makeManager();
+            const owner = tm._captureAttachmentOwner(tabA);
+            tabA.draft = 'original pane draft';
+            tabB.draft = 'other pane draft';
+            tm.activePaneId = tabB.paneId;
+            tm.inputTextArea.value = tabB.draft;
+            vi.spyOn(tm, '_refreshAttachmentContext').mockResolvedValue();
+            vi.spyOn(tm, '_startAttachmentUpload').mockResolvedValue();
+            vi.spyOn(tm, '_snapshotServerAttachment').mockResolvedValue();
+            if (source === 'device') {
+                tm._stageDeviceAttachments(tabA, owner, tm.app.scope, [png()]);
+            } else {
+                tm._stageServerAttachment(tabA, owner, tm.app.scope, {
+                    name: 'note.txt',
+                    path: '/project-a/note.txt',
+                    sizeBytes: 3,
+                    fingerprint: 'a'.repeat(64),
+                });
+            }
+            await tabA._attachmentPersistChain;
+            expect(tabA.draft).toBe('original pane draft');
+            expect((await tm.attachmentStore.loadDraft(owner)).draft.text).toBe(
+                'original pane draft',
+            );
+            expect(tabA.draftAttachments).toHaveLength(1);
+            expect(tabB.draftAttachments).toHaveLength(0);
+            expect(tm.inputTextArea.value).toBe('other pane draft');
+        },
+    );
+
     it('does not restore a stale snapshot while the owner draft save is pending', async () => {
         const { tm, tabA } = makeManager();
         const owner = tm._captureAttachmentOwner(tabA);
@@ -595,7 +628,11 @@ describe('attachment control', () => {
         const freeze = vi.spyOn(tm.attachmentStore, 'freezeDraft');
         const sending = tm._freezeAndDispatchAttachmentSnapshot(tabA, snapshot);
         await vi.waitFor(() => expect(finishRead).toBeTypeOf('function'));
-        await tm._cancelWaitingAttachmentSnapshot(tabA, snapshot);
+        const cancel = [...tm.attachmentStatus.querySelectorAll('button')].find(
+            (button) => button.textContent === 'Cancel waiting send',
+        );
+        expect(cancel).toBeDefined();
+        cancel.click();
         expect(snapshot.state).toBe('cancelled');
         finishRead(context);
         await sending;

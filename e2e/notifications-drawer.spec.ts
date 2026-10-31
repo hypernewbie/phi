@@ -12,7 +12,10 @@ import {
 import { configToToml, startPhi, type PhiServer } from './_server.js';
 import { syntheticPiSource } from './_pi-bridge.js';
 import { toastErrorScript } from '../desktop/electron/src/injected.js';
-import { isCancelledWorktreeRead } from './_session-requests.js';
+import {
+    isCancelledSessionListRead,
+    isCancelledWorktreeRead,
+} from './_session-requests.js';
 
 interface BridgeView {
     state: string;
@@ -179,7 +182,11 @@ test('M1 notifications drawer caps compact popups and dismisses locally', async 
                     consoleErrors.push(message.text());
             });
             page.on('requestfailed', (requestInfo) => {
-                if (isCancelledWorktreeRead(requestInfo, allowedOrigin)) return;
+                if (
+                    isCancelledWorktreeRead(requestInfo, allowedOrigin) ||
+                    isCancelledSessionListRead(requestInfo, allowedOrigin)
+                )
+                    return;
                 failedRequests.push(
                     `${requestInfo.method()} ${requestInfo.url()}: ${requestInfo.failure()?.errorText || 'failed'}`,
                 );
@@ -660,7 +667,11 @@ test('M1 notifications drawer caps compact popups and dismisses locally', async 
                 coldConsoleErrors.push(message.text());
         });
         coldPage.on('requestfailed', (requestInfo) => {
-            if (isCancelledWorktreeRead(requestInfo, allowedOrigin)) return;
+            if (
+                isCancelledWorktreeRead(requestInfo, allowedOrigin) ||
+                isCancelledSessionListRead(requestInfo, allowedOrigin)
+            )
+                return;
             coldFailedRequests.push(
                 `${requestInfo.method()} ${requestInfo.url()}: ${requestInfo.failure()?.errorText || 'failed'}`,
             );
@@ -899,7 +910,11 @@ test('M2 real bridge settlements group distinct ready panes and open the existin
                     consoleErrors.push(message.text());
             });
             page.on('requestfailed', (requestInfo) => {
-                if (isCancelledWorktreeRead(requestInfo, phi.url)) return;
+                if (
+                    isCancelledWorktreeRead(requestInfo, phi.url) ||
+                    isCancelledSessionListRead(requestInfo, phi.url)
+                )
+                    return;
                 failedRequests.push(
                     `${requestInfo.method()} ${requestInfo.url()}: ${requestInfo.failure()?.errorText || 'failed'}`,
                 );
