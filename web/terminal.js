@@ -5947,7 +5947,7 @@ export class TabManager {
             const isFavorite = favorites.has(favoriteKey(model));
             const star = document.createElement('button');
             star.type = 'button';
-            star.className = `pi-rpc-model-star${
+            star.className = `btn btn-primary btn-compact btn-icon pi-rpc-model-star${
                 isFavorite ? ' is-favorite' : ''
             }`;
             star.textContent = isFavorite ? '★' : '☆';
@@ -5965,7 +5965,7 @@ export class TabManager {
             });
             const button = document.createElement('button');
             button.type = 'button';
-            button.className = 'dropup-model-btn';
+            button.className = 'btn btn-primary btn-compact btn-menu dropup-model-btn';
             const name = document.createElement('span');
             name.className = 'pi-model-name-full';
             name.textContent = model.name || model.id;
@@ -6021,7 +6021,7 @@ export class TabManager {
                     this._piRpcModelExpandedGroup === group.id);
             const toggle = document.createElement('button');
             toggle.type = 'button';
-            toggle.className = 'pi-rpc-model-group-toggle';
+            toggle.className = 'btn btn-primary btn-compact btn-menu pi-rpc-model-group-toggle';
             toggle.setAttribute('aria-controls', listId);
             toggle.setAttribute('aria-expanded', String(expanded));
             if (group.alwaysExpanded) {
@@ -6613,7 +6613,7 @@ export class TabManager {
             row.className = 'dropup-row pi-rpc-model-row';
             const button = document.createElement('button');
             button.type = 'button';
-            button.className = 'dropup-model-btn';
+            button.className = 'btn btn-primary btn-compact btn-menu dropup-model-btn';
             button.textContent = skill.name;
             button.title = skill.description || skill.name;
             button.disabled = pending;
@@ -6771,7 +6771,7 @@ export class TabManager {
             loading.textContent = 'Pi thinking levels unavailable';
             const native = document.createElement('button');
             native.type = 'button';
-            native.className = 'dropup-model-btn';
+            native.className = 'btn btn-primary btn-compact btn-menu dropup-model-btn';
             native.textContent = 'Open native Thinking picker';
             native.addEventListener('click', (event) => {
                 event.stopPropagation();
@@ -6831,7 +6831,7 @@ export class TabManager {
                     row.className = 'dropup-row';
                     const button = document.createElement('button');
                     button.type = 'button';
-                    button.className = 'dropup-model-btn';
+                    button.className = 'btn btn-primary btn-compact btn-menu dropup-model-btn';
                     button.textContent = level;
                     button.disabled = pending;
                     button.addEventListener('click', (event) => {
@@ -6978,7 +6978,7 @@ export class TabManager {
 
             const button = document.createElement('button');
             button.type = 'button';
-            button.className = 'dropup-model-btn pi-thinking-saved-level';
+            button.className = 'btn btn-primary btn-compact btn-menu dropup-model-btn pi-thinking-saved-level';
             button.textContent = level;
             button.disabled = !this._piThinkingPtyLive(tab);
             button.addEventListener('click', (event) => {
@@ -6999,6 +6999,7 @@ export class TabManager {
             editBtn.type = 'button';
             editBtn.className = 'dropup-action-btn dropup-edit-btn';
             editBtn.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>`;
+            editBtn.classList.add('btn', 'btn-primary', 'btn-compact', 'btn-icon');
             editBtn.title = `Edit Thinking option ${level}`;
             editBtn.setAttribute('aria-label', `Edit Thinking option ${level}`);
             editBtn.addEventListener('click', (event) => {
@@ -7011,6 +7012,7 @@ export class TabManager {
             delBtn.type = 'button';
             delBtn.className = 'dropup-action-btn dropup-del-btn';
             delBtn.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>`;
+            delBtn.classList.add('btn', 'btn-primary', 'btn-compact', 'btn-icon');
             delBtn.title = `Delete Thinking option ${level}`;
             delBtn.setAttribute('aria-label', `Delete Thinking option ${level}`);
             delBtn.addEventListener('click', (event) => {
@@ -7036,7 +7038,7 @@ export class TabManager {
         nativeRow.className = 'dropup-row';
         const native = document.createElement('button');
         native.type = 'button';
-        native.className = 'dropup-model-btn pi-thinking-native-picker';
+        native.className = 'btn btn-primary btn-compact btn-menu dropup-model-btn pi-thinking-native-picker';
         native.textContent = 'Open native Thinking picker';
         native.disabled = !this._piThinkingPtyLive(tab);
         native.addEventListener('click', (event) => {
@@ -7050,7 +7052,7 @@ export class TabManager {
         refreshRow.className = 'dropup-row pi-thinking-refresh-row';
         const refresh = document.createElement('button');
         refresh.type = 'button';
-        refresh.className = 'dropup-model-btn pi-thinking-refresh';
+        refresh.className = 'btn btn-primary btn-compact btn-menu dropup-model-btn pi-thinking-refresh';
         refresh.textContent = 'Refresh';
         refresh.addEventListener('click', (event) => {
             event.stopPropagation();
@@ -7075,7 +7077,7 @@ export class TabManager {
             recovery.className = 'dropup-row pi-thinking-recovery';
             const retry = document.createElement('button');
             retry.type = 'button';
-            retry.className = 'dropup-model-btn pi-thinking-save-again';
+            retry.className = 'btn btn-primary btn-compact btn-menu dropup-model-btn pi-thinking-save-again';
             retry.textContent = 'Save again';
             retry.disabled = state.writing;
             retry.addEventListener('click', (event) => {
@@ -7088,7 +7090,7 @@ export class TabManager {
                 const useServer = document.createElement('button');
                 useServer.type = 'button';
                 useServer.className =
-                    'dropup-model-btn pi-thinking-use-server';
+                    'btn btn-primary btn-compact btn-menu dropup-model-btn pi-thinking-use-server';
                 useServer.textContent = 'Use server list';
                 useServer.disabled = state.writing;
                 useServer.addEventListener('click', (event) => {
@@ -7115,7 +7117,7 @@ export class TabManager {
         addRow.className = 'dropup-add-row';
         const addBtn = document.createElement('button');
         addBtn.type = 'button';
-        addBtn.className = 'dropup-add-btn';
+        addBtn.className = 'btn btn-primary btn-compact btn-menu dropup-add-btn';
         addBtn.textContent = '+ Add Thinking Option';
         addBtn.disabled = thinkingPresetTokens(state.desired).length === 0;
         addBtn.addEventListener('click', (event) => {
@@ -8736,7 +8738,7 @@ export class TabManager {
 
             const selectBtn = document.createElement('button');
             selectBtn.type = 'button';
-            selectBtn.className = 'hostname-dropdown-select-btn';
+            selectBtn.className = 'btn btn-primary btn-compact btn-menu hostname-dropdown-select-btn';
             selectBtn.dataset.overflowFocusKey = JSON.stringify([
                 'select',
                 paneId,
@@ -8779,7 +8781,7 @@ export class TabManager {
 
             const actionBtn = document.createElement('button');
             actionBtn.type = 'button';
-            actionBtn.className = 'hostname-dropdown-close-btn';
+            actionBtn.className = 'btn btn-primary btn-compact btn-icon hostname-dropdown-close-btn';
             actionBtn.dataset.overflowFocusKey = JSON.stringify([
                 'action',
                 paneId,
@@ -13686,7 +13688,7 @@ export class TabManager {
             row.className = 'dropup-row';
 
             const btn = document.createElement('button');
-            btn.className = 'dropup-model-btn';
+            btn.className = 'btn btn-primary btn-compact btn-menu dropup-model-btn';
             btn.innerText = p.name;
             if (
                 p.value === '/compact\r' &&
@@ -13789,7 +13791,7 @@ export class TabManager {
 
             // Click target to switch tab
             const selectBtn = document.createElement('button');
-            selectBtn.className = 'hostname-dropdown-select-btn';
+            selectBtn.className = 'btn btn-primary btn-compact btn-menu hostname-dropdown-select-btn';
 
             // Coder favicon (icon-only — the coder prefix text was redundant
             // since the favicon already identifies the coder)
@@ -13842,7 +13844,7 @@ export class TabManager {
 
             // Marker button (toggles glow on session name)
             const markerBtn = document.createElement('button');
-            markerBtn.className = 'hostname-dropdown-marker-btn';
+            markerBtn.className = 'btn btn-primary btn-compact btn-icon hostname-dropdown-marker-btn';
             if (tabInfo.marked) {
                 markerBtn.classList.add('marked');
             }
@@ -13858,7 +13860,7 @@ export class TabManager {
 
             // Pin button
             const pinBtn = document.createElement('button');
-            pinBtn.className = 'hostname-dropdown-pin-btn';
+            pinBtn.className = 'btn btn-primary btn-compact btn-icon hostname-dropdown-pin-btn';
             if (tabInfo.pinned) {
                 pinBtn.classList.add('pinned');
             }
@@ -13873,7 +13875,7 @@ export class TabManager {
 
             // Close button
             const closeBtn = document.createElement('button');
-            closeBtn.className = 'hostname-dropdown-close-btn';
+            closeBtn.className = 'btn btn-primary btn-compact btn-icon hostname-dropdown-close-btn';
             closeBtn.innerHTML = '×';
             closeBtn.title = 'Close session';
             closeBtn.addEventListener('click', (e) => {
@@ -14105,7 +14107,7 @@ export class TabManager {
             row.className = 'dropup-row';
 
             const btn = document.createElement('button');
-            btn.className = 'dropup-model-btn';
+            btn.className = 'btn btn-primary btn-compact btn-menu dropup-model-btn';
             btn.innerText = model;
             btn.addEventListener('click', () => {
                 // Model-switch sequences are pinned to the click-time
@@ -14222,6 +14224,7 @@ export class TabManager {
             const editBtn = document.createElement('button');
             editBtn.className = 'dropup-action-btn dropup-edit-btn';
             editBtn.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>`;
+            editBtn.classList.add('btn', 'btn-primary', 'btn-compact', 'btn-icon');
             editBtn.title = `Edit model preset ${model}`;
             editBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
@@ -14232,6 +14235,7 @@ export class TabManager {
             const delBtn = document.createElement('button');
             delBtn.className = 'dropup-action-btn dropup-del-btn';
             delBtn.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>`;
+            delBtn.classList.add('btn', 'btn-primary', 'btn-compact', 'btn-icon');
             delBtn.title = `Delete model preset ${model}`;
             delBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
@@ -14258,7 +14262,7 @@ export class TabManager {
         addRow.className = 'dropup-add-row';
 
         const addBtn = document.createElement('button');
-        addBtn.className = 'dropup-add-btn';
+        addBtn.className = 'btn btn-primary btn-compact btn-menu dropup-add-btn';
         addBtn.innerText = '+ Add Model Preset...';
         addBtn.addEventListener('click', async () => {
             await this.addModelPreset(backend);
@@ -14293,7 +14297,8 @@ export class TabManager {
                 const row = document.createElement('div');
                 row.className = 'dropup-row';
                 const btn = document.createElement('button');
-                btn.className = 'dropup-model-btn';
+                btn.className =
+                    'btn btn-primary btn-compact btn-menu dropup-model-btn';
                 btn.innerText = preset.name;
                 let reloadState = null;
                 if (
@@ -14342,7 +14347,7 @@ export class TabManager {
             row.className = 'dropup-row';
 
             const btn = document.createElement('button');
-            btn.className = 'dropup-model-btn';
+            btn.className = 'btn btn-primary btn-compact btn-menu dropup-model-btn';
             btn.innerText = cmd.name;
             btn.title = cmd.command;
             btn.addEventListener('click', () => {
@@ -14384,6 +14389,7 @@ export class TabManager {
             const editBtn = document.createElement('button');
             editBtn.className = 'dropup-action-btn dropup-edit-btn';
             editBtn.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>`;
+            editBtn.classList.add('btn', 'btn-primary', 'btn-compact', 'btn-icon');
             editBtn.title = `Edit quick command "${cmd.name}"`;
             editBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
@@ -14394,6 +14400,7 @@ export class TabManager {
             const delBtn = document.createElement('button');
             delBtn.className = 'dropup-action-btn dropup-del-btn';
             delBtn.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>`;
+            delBtn.classList.add('btn', 'btn-primary', 'btn-compact', 'btn-icon');
             delBtn.title = `Delete quick command "${cmd.name}"`;
             delBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
@@ -14419,7 +14426,7 @@ export class TabManager {
         addRow.className = 'dropup-add-row';
 
         const addBtn = document.createElement('button');
-        addBtn.className = 'dropup-add-btn';
+        addBtn.className = 'btn btn-primary btn-compact btn-menu dropup-add-btn';
         addBtn.innerText = '+ Add Command...';
         addBtn.addEventListener('click', async () => {
             await this.addQuickCommand();
@@ -14445,7 +14452,7 @@ export class TabManager {
 
         const closeBtn = document.createElement('button');
         closeBtn.type = 'button';
-        closeBtn.className = 'kb-dropup-close-btn';
+        closeBtn.className = 'btn btn-primary btn-compact btn-icon kb-dropup-close-btn';
         closeBtn.innerText = '✕';
         closeBtn.title = 'Close';
         closeBtn.addEventListener('click', (e) => {
@@ -14580,7 +14587,7 @@ export class TabManager {
         footer.className = 'dropup-config-footer';
 
         const copyBtn = document.createElement('button');
-        copyBtn.className = 'dropup-config-btn';
+        copyBtn.className = 'btn btn-primary btn-compact dropup-config-btn';
         copyBtn.title =
             mode === 'cmds'
                 ? 'Copy commands config to clipboard'
@@ -14597,7 +14604,7 @@ export class TabManager {
         });
 
         const pasteBtn = document.createElement('button');
-        pasteBtn.className = 'dropup-config-btn';
+        pasteBtn.className = 'btn btn-primary btn-compact dropup-config-btn';
         pasteBtn.title =
             mode === 'cmds'
                 ? 'Paste commands config from clipboard'

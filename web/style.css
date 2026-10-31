@@ -22,6 +22,7 @@
     --green: #38bdf8; /* Teal/blue-green active status */
     --green-glow: rgba(56, 189, 248, 0.2);
     --red: #ef4444; /* Exit/termination operations */
+    --btn-compact-height: 32px;
 
     --font-ui:
         "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
@@ -814,7 +815,7 @@ html[data-sync="stale"] .brand .logo {
     font-size: 13px;
 }
 
-.workspace-area button {
+.workspace-area button:not(.btn-compact) {
     background: transparent;
     border: none;
     color: var(--text-muted);
@@ -895,8 +896,17 @@ html[data-sync="stale"] .brand .logo {
     font-family: var(--font-ui);
     font-size: 11px;
     font-weight: 600;
-    color: var(--text-muted);
     letter-spacing: 1px;
+}
+.panel-header h2,
+.panel-header .tab-action-btn.desktop-sidebar-toggle {
+    color: var(--text-muted);
+}
+/* In the sessions heading, keep the toggle styled as part of the title.
+   In the tab bar restore slot it uses the shared compact button palette. */
+.panel-header .tab-action-btn.desktop-sidebar-toggle {
+    background: transparent;
+    border: 0;
 }
 
 #sidebar-panel .panel-header-actions {
@@ -1454,6 +1464,54 @@ html[data-sync="stale"] .brand .logo {
     box-shadow: 0 0 16px rgba(239, 68, 68, 0.25);
 }
 
+.btn.btn-compact {
+    box-sizing: border-box;
+    width: auto;
+    min-height: var(--btn-compact-height);
+    height: var(--btn-compact-height);
+    flex-shrink: 0;
+}
+
+.btn.btn-compact.btn-icon {
+    flex: 0 0 var(--btn-compact-height);
+    width: var(--btn-compact-height);
+    height: var(--btn-compact-height);
+    gap: 0;
+    padding: 0;
+}
+
+.btn.btn-compact.btn-menu {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    min-height: var(--btn-compact-height);
+    height: auto;
+    justify-content: flex-start;
+    padding: 6px 12px;
+    line-height: 18px;
+    text-align: left;
+    white-space: normal;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+}
+
+.btn.btn-compact.btn-menu:hover,
+.btn.btn-compact.btn-menu:active {
+    transform: none;
+}
+
+@media (any-pointer: coarse) {
+    :root {
+        --btn-compact-height: 44px;
+    }
+
+    #header-kanban-btn,
+    #header-diff-toggle-btn {
+        min-width: var(--btn-compact-height);
+    }
+}
+
 /* Overlap the border and existing padding, not adjacent scrollbars or text. */
 .resize-handle {
     position: relative;
@@ -1615,7 +1673,7 @@ html[data-sync="stale"] .brand .logo {
 }
 
 /* Tab action buttons stay pinned beside #tabs-container, outside the scroller. */
-.tab-action-btn {
+.tab-action-btn:not(.btn-compact) {
     background-color: transparent;
     border: none;
     color: var(--text-muted);
@@ -1631,9 +1689,13 @@ html[data-sync="stale"] .brand .logo {
     transition: all 0.15s;
     flex-shrink: 0;
 }
-.tab-action-btn:hover {
+.tab-action-btn:not(.btn-compact):hover {
     background-color: var(--bg-border);
     color: var(--text-primary);
+}
+.tab-action-btn.btn-compact:hover,
+.tab-action-btn.btn-compact:active {
+    transform: none;
 }
 .tab-action-btn:focus-visible {
     outline: 2px solid var(--text-primary);
@@ -3573,9 +3635,6 @@ body.has-terminal-bg
 .dropup-model-btn {
     flex: 1;
     text-align: left;
-    background: transparent;
-    border: none;
-    color: var(--text-primary);
     font-family: var(--font-mono);
     font-size: 11px;
     padding: 8px 12px;
@@ -3584,6 +3643,15 @@ body.has-terminal-bg
     text-overflow: ellipsis;
     white-space: nowrap;
     transition: color 0.1s;
+}
+
+.dropup-model-btn:not(.btn-menu) {
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+}
+.dropup-model-btn.btn-menu {
+    font-weight: 400;
 }
 
 .dropup-model-btn:hover {
@@ -3616,9 +3684,9 @@ body.has-terminal-bg
     font-size: 10px;
     font-weight: 600;
 }
-#pi-rpc-model-dropup .dropup-model-btn,
-#pi-rpc-thinking-dropup .dropup-model-btn,
-#pi-rpc-skills-dropup .dropup-model-btn {
+#pi-rpc-model-dropup .dropup-model-btn:not(.btn-menu),
+#pi-rpc-thinking-dropup .dropup-model-btn:not(.btn-menu),
+#pi-rpc-skills-dropup .dropup-model-btn:not(.btn-menu) {
     font-size: 11px;
     font-weight: 400;
     line-height: 1.4;
@@ -3629,6 +3697,12 @@ body.has-terminal-bg
     align-items: center;
     min-width: 0;
     padding-right: 0;
+    font-size: 11px;
+    font-weight: 400;
+}
+#pi-rpc-thinking-dropup .dropup-model-btn {
+    font-size: 11px;
+    font-weight: 400;
 }
 
 #pi-rpc-model-dropup .pi-model-name-full {
@@ -3644,6 +3718,9 @@ body.has-terminal-bg
 #pi-rpc-model-dropup .pi-rpc-dropup-meta {
     font-size: 10px;
     font-weight: 400;
+    /* Keep long identities from consuming the model name's entire width. */
+    flex-shrink: 1;
+    max-width: 55%;
 }
 #pi-rpc-skills-dropup .pi-rpc-dropup-meta {
     font-size: 10px;
@@ -3720,9 +3797,6 @@ body.has-terminal-bg
     align-items: center;
     justify-content: space-between;
     width: 100%;
-    background: transparent;
-    border: none;
-    color: var(--text-muted);
     font-family: var(--font-mono);
     font-size: 10px;
     font-weight: 700;
@@ -3732,6 +3806,11 @@ body.has-terminal-bg
     cursor: pointer;
 }
 
+.pi-rpc-model-group-toggle:not(.btn-menu) {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+}
 .pi-rpc-model-group-toggle:hover {
     color: var(--accent-bright);
 }
@@ -3766,14 +3845,16 @@ body.has-terminal-bg
 #pi-rpc-model-dropup .pi-rpc-model-star {
     appearance: none;
     -webkit-appearance: none;
-    background: transparent;
-    border: none;
     color: var(--text-muted);
     cursor: pointer;
     font-family: var(--font-mono);
     font-size: 14px;
-    padding: 0 8px 0 10px;
     line-height: 1;
+}
+#pi-rpc-model-dropup .pi-rpc-model-star:not(.btn-compact) {
+    background: transparent;
+    border: none;
+    padding: 0 8px 0 10px;
 }
 
 #pi-rpc-model-dropup .pi-rpc-model-star:hover {
@@ -3794,23 +3875,26 @@ body.has-terminal-bg
 
 .dropup-action-btn {
     min-width: 30px;
-    height: 26px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    background: rgba(255, 255, 255, 0.025);
-    border: 1px solid transparent;
     border-radius: 5px;
-    color: var(--text-muted);
     cursor: pointer;
     font-family: var(--font-mono);
     font-size: 9px;
     font-weight: 700;
     letter-spacing: 0.08em;
     line-height: 1;
-    padding: 0 7px;
     text-transform: uppercase;
     transition: all 0.15s ease;
+}
+
+.dropup-action-btn:not(.btn-compact) {
+    height: 26px;
+    padding: 0 7px;
+    background: rgba(255, 255, 255, 0.025);
+    border: 1px solid transparent;
+    color: var(--text-muted);
 }
 
 .dropup-action-btn:hover {
@@ -3833,12 +3917,9 @@ body.has-terminal-bg
 .dropup-add-btn {
     width: 100%;
     text-align: left;
-    background: transparent;
-    border: none;
     color: var(--accent-bright);
     font-size: 11px;
     font-weight: 600;
-    padding: 8px 12px;
     cursor: pointer;
     transition: all 0.15s;
 }
@@ -3878,14 +3959,17 @@ body.has-terminal-bg
 }
 
 .kb-dropup-close-btn {
-    background: transparent;
-    border: none;
     color: var(--text-muted);
     cursor: pointer;
     font-size: 11px;
     padding: 2px 6px;
     border-radius: 4px;
     line-height: 1;
+}
+
+.kb-dropup-close-btn:not(.btn-compact) {
+    background: transparent;
+    border: none;
 }
 
 .kb-dropup-close-btn:hover {
@@ -4848,6 +4932,12 @@ body.has-terminal-bg
    Terminal, diff and Pi chat content retain their terminal preference path. */
 html[data-appearance-profile="mobile"] {
     --mobile-header-height: max(44px, calc(var(--mobile-ui-size, 17px) * 1.5));
+    --btn-compact-height: max(44px, var(--mobile-header-height, 44px));
+}
+
+html[data-appearance-profile="mobile"] #header-kanban-btn,
+html[data-appearance-profile="mobile"] #header-diff-toggle-btn {
+    min-width: var(--btn-compact-height);
 }
 
 html[data-appearance-profile="mobile"] :is(
@@ -5417,6 +5507,12 @@ html[data-phi-config-page] .settings-modal {
         display: none !important;
     }
 
+    .brand,
+    .hostname-wrapper {
+        min-width: 0;
+        overflow: hidden;
+    }
+
     /* Sidebar as a Slide-out Drawer. Apple HIG: a slide-over panel presents at
        nearly the full screen width with a narrow peek of the content behind it. */
     .sidebar-panel {
@@ -5518,11 +5614,15 @@ html[data-phi-config-page] .settings-modal {
 
     /* Workspace Area responsiveness - compact display showing only last folder name */
     .workspace-area {
+        box-sizing: border-box;
         flex: 0 1 auto;
-        max-width: 140px;
-        min-width: 60px;
+        /* Two square buttons plus the workspace selector and its spacing. */
+        max-width: calc(2 * var(--btn-compact-height) + 52px);
+        min-width: calc(2 * var(--btn-compact-height) + 52px);
+        height: var(--btn-compact-height);
         margin: 0 4px;
-        padding: 4px 6px;
+        gap: 2px;
+        padding: 0 4px;
     }
     .workspace-area select {
         width: 100%;
@@ -5543,6 +5643,11 @@ html[data-phi-config-page] .settings-modal {
     /* Show hostname on mobile next to brand logo */
     .brand .hostname-display {
         display: inline-block !important;
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
         font-size: 11px;
         margin-left: 2px;
     }
@@ -5566,6 +5671,7 @@ html[data-phi-config-page] .settings-modal {
         scrollbar-width: none; /* Firefox */
         -webkit-overflow-scrolling: touch;
         flex: 1;
+        min-width: var(--btn-compact-height);
         justify-content: safe flex-end;
     }
     .header-actions::-webkit-scrollbar {
@@ -5937,6 +6043,23 @@ html[data-phi-config-page] .settings-modal {
 
     .sidebar-panel.drawer-open {
         transform: translateX(0);
+    }
+}
+
+@media (min-width: 769px) and (max-width: 1023px) {
+    .app-header {
+        padding-inline: 10px;
+    }
+
+    .header-actions {
+        flex: 1 1 auto;
+        gap: 6px;
+        min-width: 0;
+        overflow-x: auto;
+    }
+
+    .header-actions > * {
+        flex-shrink: 0;
     }
 }
 
@@ -6863,8 +6986,6 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 }
 
 .md-context-action {
-    background: transparent;
-    border: none;
     color: var(--text-primary);
     font-family: var(--font-ui);
     font-size: 12px;
@@ -6877,6 +6998,11 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     display: flex;
     align-items: center;
     gap: 10px;
+}
+
+.md-context-action:not(.btn-menu) {
+    background: transparent;
+    border: none;
 }
 
 .md-context-icon {
@@ -7356,14 +7482,14 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 }
 
 .md-modal-action-btn {
-    background: transparent !important;
-    border: none !important;
-    border-radius: 0 !important;
-    padding: 4px 10px !important;
-    font-size: 11px !important;
-    font-weight: 500 !important;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 500;
     cursor: pointer;
-    color: var(--text-primary) !important;
+    color: var(--text-primary);
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -7379,14 +7505,14 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 }
 
 .md-modal-dropdown-trigger {
-    background: transparent !important;
-    border: none !important;
-    border-left: 1px solid var(--bg-border) !important;
-    border-radius: 0 !important;
-    padding: 4px 8px !important;
-    font-size: 10px !important;
+    background: transparent;
+    border: none;
+    border-left: 1px solid var(--bg-border);
+    border-radius: 0;
+    padding: 4px 8px;
+    font-size: 10px;
     cursor: pointer;
-    color: var(--text-muted) !important;
+    color: var(--text-muted);
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -8398,9 +8524,11 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     background-color: var(--bg-elevated);
     border: 1px solid var(--bg-border);
     border-radius: 6px;
-    padding: 2px 6px;
+    box-sizing: border-box;
+    padding: 0 6px;
     gap: 4px;
-    height: 28px;
+    min-height: calc(var(--btn-compact-height) + 2px);
+    height: auto;
     user-select: none;
     transition:
         background-color 0.18s ease,
@@ -8429,15 +8557,18 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 }
 
 .header-config-pill .pill-label {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
     font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
-    color: var(--text-muted);
     margin-right: 4px;
     letter-spacing: 0.5px;
 }
 
-.header-config-pill .pill-btn {
+.header-config-pill .pill-btn:not(.btn-compact) {
     background: transparent;
     border: none;
     color: var(--text-muted);
@@ -8929,16 +9060,23 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 }
 
 .cmd-context-menu-item {
-    display: block;
     width: 100%;
-    padding: 7px 10px;
-    border: 0;
     border-radius: 4px;
-    background: transparent;
     color: var(--text-primary);
     font: 11px var(--font-ui);
     text-align: left;
     cursor: pointer;
+}
+
+#cmd-context-menu .cmd-context-menu-item {
+    width: 100%;
+}
+
+.cmd-context-menu-item:not(.btn-menu) {
+    display: block;
+    padding: 7px 10px;
+    border: 0;
+    background: transparent;
 }
 
 .cmd-context-menu-item:hover,
@@ -9173,14 +9311,17 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 }
 
 .hostname-dropdown-marker-btn {
-    background: transparent;
-    border: none;
     color: var(--text-dim);
     cursor: pointer;
     font-size: 10px;
     padding: 2px 4px;
     border-radius: 3px;
     transition: all 0.15s ease;
+}
+
+.hostname-dropdown-marker-btn:not(.btn-compact) {
+    background: transparent;
+    border: none;
 }
 
 .hostname-dropdown-marker-btn:hover {
@@ -9308,16 +9449,19 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 
 .hostname-dropdown-select-btn {
     flex: 1;
-    background: none;
-    border: none;
-    padding: 8px 10px;
     text-align: left;
     cursor: pointer;
     font-size: 13px;
-    color: var(--text-primary);
     display: flex;
     flex-direction: column;
+    align-items: flex-start;
     overflow: hidden;
+}
+.hostname-dropdown-select-btn:not(.btn-menu) {
+    background: none;
+    border: none;
+    padding: 8px 10px;
+    color: var(--text-primary);
 }
 
 .hostname-dropdown-row.active .hostname-dropdown-select-btn {
@@ -9340,8 +9484,6 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 
 .hostname-dropdown-pin-btn,
 .hostname-dropdown-close-btn {
-    background: none;
-    border: none;
     cursor: pointer;
     padding: 6px;
     border-radius: 4px;
@@ -9352,6 +9494,12 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
         background-color 0.15s,
         opacity 0.15s;
     flex-shrink: 0;
+}
+
+.hostname-dropdown-pin-btn:not(.btn-compact),
+.hostname-dropdown-close-btn:not(.btn-compact) {
+    background: none;
+    border: none;
 }
 
 .hostname-dropdown-pin-btn {
@@ -10314,11 +10462,14 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     font-size: 11px;
     padding: 5px 8px;
     border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.dropup-config-btn:not(.btn-compact) {
     border: 1px solid var(--bg-border);
     background: var(--bg-panel);
     color: var(--text-muted);
-    cursor: pointer;
-    transition: all 0.15s;
 }
 
 .dropup-config-btn:hover {
