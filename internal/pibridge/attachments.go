@@ -174,7 +174,7 @@ func (s *Server) RequestAttachmentPrompt(ctx context.Context, processID string, 
 		l.mu.Unlock()
 		return AttachmentPromptResult{}, &AttachmentPromptRefusal{Reason: "compaction-active"}
 	}
-	if ready.GetBridgePending() || l.compact != nil || l.attachment != nil {
+	if ready.GetBridgePending() || l.compact != nil || l.reload != nil || l.attachment != nil {
 		l.mu.Unlock()
 		return AttachmentPromptResult{}, &AttachmentPromptRefusal{Reason: "pending"}
 	}

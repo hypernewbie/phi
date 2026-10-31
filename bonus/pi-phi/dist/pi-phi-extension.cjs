@@ -24601,7 +24601,7 @@ var MAX_SYNCBOARD_VALUE_BYTES = 64 * 1024;
 var MAX_SYNCBOARD_RESPONSE_BYTES = 192 * 1024;
 var MAX_SYNCBOARD_PENDING = 4;
 var SYNCBOARD_CALL_TIMEOUT_MS = 15e3;
-var CAPABILITY_ATTACHMENTS = "pi.attachments.v1";
+var CAPABILITY_ATTACHMENTS = "pi.attachments.v2";
 var CAPABILITY_STATE = "pi.state.v1";
 var MAX_SKILL_ENTRIES = 200;
 var MAX_SKILL_NAME_BYTES = 64;
@@ -30313,7 +30313,8 @@ var Runtime = class {
    */
   publishContextOnly() {
     if (this.lastCtx) this.sampleTelemetry(this.lastCtx);
-    if (!this.contextApi && !this.compactApi && !this.reloadApi && !this.attachmentApi) return;
+    if (!this.contextApi && !this.compactApi && !this.reloadApi && !this.attachmentApi)
+      return;
     if (!this.channel) return;
     try {
       this.channel.sendNonfatal({
@@ -30675,7 +30676,7 @@ var Runtime = class {
           idle: ctx.isIdle() === true,
           hasPendingMessages: ctx.hasPendingMessages() !== false,
           compactionActive: this.compactionActive,
-          bridgePending: this.compact.pending !== null || this.attachments.active !== null,
+          bridgePending: this.compact.pending !== null || (this.reload?.pending ?? null) !== null || this.attachments.active !== null,
           ...imageAvailable === void 0 ? {} : { imageAvailable }
         };
       } catch {
@@ -31557,7 +31558,7 @@ var Runtime = class {
     if (!idle) return "busy";
     if (queued) return "queued";
     if (this.compactionActive) return "compaction-active";
-    if (this.compact.pending !== null || this.attachments.active !== operation)
+    if (this.compact.pending !== null || (this.reload?.pending ?? null) !== null || this.attachments.active !== operation)
       return "pending";
     if (hasImage) {
       try {
@@ -31609,7 +31610,7 @@ var Runtime = class {
     }
     this.compact.highWater = id;
     const reloadPending = this.reload?.pending ?? null;
-    if (this.compact.pending !== null || reloadPending !== null) {
+    if (this.compact.pending !== null || reloadPending !== null || this.attachments.active !== null) {
       this.sendCompactResult(
         req.requestId,
         2 /* COMPACT_OUTCOME_REFUSED */,
@@ -31849,7 +31850,7 @@ var Runtime = class {
       return;
     }
     reload.highWater = id;
-    if (reload.pending !== null || this.compact.pending !== null) {
+    if (reload.pending !== null || this.compact.pending !== null || this.attachments.active !== null) {
       this.sendReloadAck(
         req.requestId,
         2 /* RELOAD_DISPATCH_OUTCOME_REFUSED */,

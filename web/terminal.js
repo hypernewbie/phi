@@ -4124,12 +4124,7 @@ export class TabManager {
             this.inputBarContainer.classList.add('direct-mode-active');
             this.inputBarContainer.classList.remove('hidden');
             this.presetsContainer.classList.add('hidden');
-            // Keep only the paperclip available for Pi in direct mode.
             this._placeCompactQuickChips([]);
-            if (tab.coder === 'pi' && this.attachInputBtn) {
-                this.presetsContainer.replaceChildren(this.attachInputBtn);
-                this.presetsContainer.classList.remove('hidden');
-            }
         } else {
             this.directModeToggle.classList.remove('active');
             this.inputBarContainer.classList.remove('direct-mode-active');
@@ -9997,7 +9992,7 @@ export class TabManager {
         if (
             tab?.coder === 'pi' &&
             tab.piBridge?.connected === true &&
-            (tab.piBridge.capabilities || []).includes('pi.attachments.v1')
+            (tab.piBridge.capabilities || []).includes('pi.attachments.v2')
         ) {
             void this._refreshAttachmentContext(
                 tab,
@@ -11221,7 +11216,7 @@ export class TabManager {
             this._renderAttachmentStatus(tab);
             return;
         }
-        if (!tab.piBridge || tab.piBridge.connected !== true || !(tab.piBridge.capabilities || []).includes('pi.attachments.v1')) {
+        if (!tab.piBridge || tab.piBridge.connected !== true || !(tab.piBridge.capabilities || []).includes('pi.attachments.v2')) {
             tab._attachmentNotice = 'Pi attachment sending is unavailable for this pane. Existing text and paste/drop behavior is unchanged.';
             this._renderAttachmentStatus(tab);
             return;
@@ -13096,7 +13091,7 @@ export class TabManager {
             this._refreshPiBridgeModels(tabInfo);
             if (
                 tabInfo.piBridge?.connected === true &&
-                (tabInfo.piBridge?.capabilities || []).includes('pi.attachments.v1')
+                (tabInfo.piBridge?.capabilities || []).includes('pi.attachments.v2')
             ) {
                 void this._refreshAttachmentContext(
                     tabInfo,
@@ -14991,9 +14986,9 @@ export class TabManager {
         const attachmentButton = coderId === 'pi' ? this.attachInputBtn : null;
         if (attachmentButton) this.presetsContainer.appendChild(attachmentButton);
 
-        // Direct mode has no presets, but Pi still needs its attachment entry.
+        // Collapsed input keeps only Interrupt and Expand visible.
         if (activeTab?.directMode) {
-            this.presetsContainer.classList.toggle('hidden', !attachmentButton);
+            this.presetsContainer.classList.add('hidden');
             return;
         }
 

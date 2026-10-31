@@ -403,7 +403,7 @@ func (s *Server) paneStateLocked(l *lease) StateView {
 		view.Readiness = copyReadiness(l.lastState)
 		view.Reload = copyReloadReadiness(l.lastState)
 		view.AttachmentReadiness = copyAttachmentReadiness(l.lastState)
-		if l.attachment != nil && view.AttachmentReadiness != nil {
+		if view.AttachmentReadiness != nil && (l.compact != nil || l.reload != nil || l.attachment != nil) {
 			view.AttachmentReadiness.BridgePending = true
 		}
 	}

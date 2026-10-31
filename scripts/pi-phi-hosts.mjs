@@ -1471,7 +1471,7 @@ for (const version of versions) {
                 });
                 if (
                     !view.ok ||
-                    !(view.caps || []).includes('pi.attachments.v1')
+                    !(view.caps || []).includes('pi.attachments.v2')
                 ) {
                     fail(
                         version.name,
@@ -1682,7 +1682,7 @@ for (const version of versions) {
                 }
                 if (
                     (tuiView.caps || []).join(',') !==
-                    'pi.attachments.v1,pi.compact.v1,pi.context.v1,pi.history.v1,pi.lifecycle.v1,pi.models.v1,pi.reload.v1,pi.skills.v1,pi.state.v1,pi.syncboard.v1,pi.thinking.v1'
+                    'pi.attachments.v2,pi.compact.v1,pi.context.v1,pi.history.v1,pi.lifecycle.v1,pi.models.v1,pi.reload.v1,pi.skills.v1,pi.state.v1,pi.syncboard.v1,pi.thinking.v1'
                 ) {
                     fail(
                         version.name,

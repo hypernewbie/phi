@@ -109,20 +109,35 @@ describe('presets row', () => {
         },
     );
 
-    it('keeps the paperclip reachable when Pi enters direct mode', () => {
+    it('hides the paperclip while folded and restores its existing handler on expand', () => {
         const tm = makeTm();
         tm.attachInputBtn = new DOMParser()
             .parseFromString(indexHtml, 'text/html')
             .getElementById('attach-input-btn');
         tm.directModeToggle = document.createElement('button');
         tm.inputBarContainer = document.createElement('div');
+        const clicked = vi.fn();
+        tm.attachInputBtn.addEventListener('click', clicked);
+        const button = tm.attachInputBtn;
         tm.renderPresets('pi');
         tm.updateDirectModeUI(
             { coder: 'pi', directMode: true, isAtBottom: true },
             true,
         );
+        expect(tm.presetsContainer.classList.contains('hidden')).toBe(true);
+        expect(tm.directModeToggle.getAttribute('aria-expanded')).toBe('false');
+        tm.updateDirectModeUI(
+            { coder: 'pi', directMode: false, isAtBottom: true },
+            true,
+        );
         expect(tm.presetsContainer.classList.contains('hidden')).toBe(false);
-        expect([...tm.presetsContainer.children]).toEqual([tm.attachInputBtn]);
+        expect(tm.directModeToggle.getAttribute('aria-expanded')).toBe('true');
+        expect(
+            tm.presetsContainer.querySelectorAll('#attach-input-btn'),
+        ).toHaveLength(1);
+        expect(tm.presetsContainer.firstElementChild).toBe(button);
+        button.click();
+        expect(clicked).toHaveBeenCalledTimes(1);
     });
 
     it('renders no ctrl+shift+x chip for any coder', () => {

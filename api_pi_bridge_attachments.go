@@ -360,7 +360,7 @@ func validateAttachmentSendRequest(body attachmentSendRequest) error {
 	if c.ProcessID == nil || c.Generation == nil || c.SessionID == nil || c.LeafID == nil || *c.ProcessID == "" || len(*c.ProcessID) > 256 || len(*c.SessionID) > 256 || len(*c.LeafID) > 256 {
 		return errAttachmentInvalid
 	}
-	if _, ok := parseCompactStamp(*c.Generation); !ok {
+	if _, ok := parsePositiveStamp(*c.Generation); !ok {
 		return errAttachmentInvalid
 	}
 	if c.Model != nil && (c.Model.Provider == "" || c.Model.ID == "" || len(c.Model.Provider) > 256 || len(c.Model.ID) > 256) {

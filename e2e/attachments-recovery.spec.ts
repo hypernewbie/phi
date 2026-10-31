@@ -24,6 +24,7 @@ import {
 import { startPhi } from './_server.js';
 import { tabList } from './_tabs.js';
 import { startBridgeProxy, type BridgeProxy } from './_pi-bridge-proxy.js';
+import { paneBridgeReload } from './_pi-reload.js';
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
@@ -149,7 +150,7 @@ async function spawnPane(
         .toMatchObject({
             state: 'managed',
             connected: true,
-            capabilities: expect.arrayContaining(['pi.attachments.v1']),
+            capabilities: expect.arrayContaining(['pi.attachments.v2']),
         });
     return pane;
 }
@@ -919,6 +920,170 @@ test('pane switching keeps attachment drafts and sends with their captured pane'
         );
     } finally {
         await context.close();
+        await proxy?.close();
+        await fixture.phi.stop();
+        await fixture.provider.close();
+    }
+});
+
+test('native Pi reload preserves attachment drafts without sending until explicit Send on desktop and touch', async ({
+    browser,
+    request,
+}) => {
+    test.setTimeout(240_000);
+    const fixture = await startRecoveryFixture();
+    let proxy: BridgeProxy | null = null;
+    try {
+        proxy = await startAttachmentProxy(
+            fixture.phi.dir,
+            fixture.proxySocket,
+        );
+        for (const mobile of [false, true]) {
+            const pane = await spawnPane(
+                request,
+                fixture.phi.url,
+                fixture.work,
+            );
+            const { context, page } = await startPage(
+                browser,
+                fixture.phi.url,
+                pane,
+                mobile,
+            );
+            try {
+                const errors: string[] = [];
+                const calls: string[] = [];
+                page.on('pageerror', (error) => errors.push(error.message));
+                page.on('request', (item) => {
+                    const path = new URL(item.url()).pathname;
+                    if (
+                        item.method() === 'POST' &&
+                        [
+                            '/api/pi-bridge/reload',
+                            '/api/pi-bridge/attachments',
+                        ].includes(path)
+                    )
+                        calls.push(path);
+                });
+                const before = await paneBridgeReload(
+                    request,
+                    fixture.phi.url,
+                    pane,
+                );
+                expect(before?.capabilities).toEqual(
+                    expect.arrayContaining([
+                        'pi.reload.v1',
+                        'pi.attachments.v2',
+                    ]),
+                );
+                const baseline = fixture.provider.requests.length;
+                const draft = `preserve ${mobile ? 'touch' : 'desktop'} attachment through native reload`;
+                await chooseFile(page, fixture.pngPath, mobile);
+                const chip = page.locator('#attachment-strip .attachment-chip');
+                await expect(chip.locator('.attachment-state')).toHaveText(
+                    'Ready',
+                    { timeout: 30_000 },
+                );
+                const itemID = await chip.getAttribute('data-id');
+                await page.locator('#input-textarea').fill(draft);
+                const toggle = page.locator('#direct-mode-toggle');
+                if (mobile) await toggle.tap();
+                else await toggle.click();
+                await expect(page.locator('#input-bar-container')).toBeHidden();
+                await expect(
+                    page.locator('.presets-toolbar button:visible'),
+                ).toHaveCount(2);
+                if (mobile) await toggle.tap();
+                else {
+                    await toggle.focus();
+                    await page.keyboard.press('Enter');
+                }
+                await expect(page.locator('#input-textarea')).toHaveValue(
+                    draft,
+                );
+                await expect(chip).toHaveAttribute('data-id', itemID!);
+                const cmds = page.getByRole('button', { name: 'Cmds ▾' });
+                if (mobile) await cmds.tap();
+                else await cmds.click();
+                const reload = page
+                    .locator('#quick-commands-dropup')
+                    .getByRole('button', { name: '/reload', exact: true });
+                const receipt = page.waitForResponse(
+                    (response) =>
+                        new URL(response.url()).pathname ===
+                            '/api/pi-bridge/reload' &&
+                        response.request().method() === 'POST',
+                );
+                if (mobile) await reload.tap();
+                else {
+                    await reload.focus();
+                    await page.keyboard.press('Enter');
+                }
+                const response = await receipt;
+                expect(response.status()).toBe(202);
+                expect(await response.json()).toMatchObject({
+                    outcome: 'dispatched',
+                });
+                await expect
+                    .poll(
+                        async () => {
+                            const current = await paneBridgeReload(
+                                request,
+                                fixture.phi.url,
+                                pane,
+                            );
+                            return {
+                                connected: current?.connected,
+                                changed:
+                                    current?.generation !== before?.generation,
+                                pending: current?.reload_pending,
+                            };
+                        },
+                        { timeout: 30_000 },
+                    )
+                    .toEqual({
+                        connected: true,
+                        changed: true,
+                        pending: false,
+                    });
+                const refreshed = waitForContext(page, pane);
+                await page.reload();
+                await selectPane(page, pane, mobile);
+                await refreshed;
+                await expect(chip).toHaveAttribute('data-id', itemID!);
+                await expect(chip.locator('.attachment-state')).toHaveText(
+                    'Ready',
+                    { timeout: 30_000 },
+                );
+                await expect(page.locator('#input-textarea')).toHaveValue(
+                    draft,
+                );
+                expect(calls).toEqual(['/api/pi-bridge/reload']);
+                expect(fixture.provider.requests).toHaveLength(baseline);
+                if (mobile) await page.locator('#send-input-btn').tap();
+                else await page.locator('#send-input-btn').click();
+                await waitForProvider(fixture.provider, baseline + 1);
+                await expect(page.locator('#attachment-status')).toContainText(
+                    'Submitted to Pi',
+                    { timeout: 30_000 },
+                );
+                expect(calls).toEqual([
+                    '/api/pi-bridge/reload',
+                    '/api/pi-bridge/attachments',
+                ]);
+                expect(fixture.provider.requests).toHaveLength(baseline + 1);
+                expect(
+                    anthropicImages(fixture.provider.requests[baseline]!),
+                ).toHaveLength(1);
+                expect(
+                    providerText(fixture.provider.requests[baseline]!),
+                ).toContain(draft);
+                expect(errors).toEqual([]);
+            } finally {
+                await context.close();
+            }
+        }
+    } finally {
         await proxy?.close();
         await fixture.phi.stop();
         await fixture.provider.close();

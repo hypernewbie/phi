@@ -53,10 +53,14 @@ describe('negotiateCapabilities', () => {
         expect(isKnownCapability(CAPABILITY_CONTEXT)).toBe(true);
         expect(isKnownCapability(CAPABILITY_COMPACT)).toBe(true);
     });
-    it('negotiates attachment capability independently', () => {
-        expect(negotiateCapabilities([CAPABILITY_ATTACHMENTS])).toEqual([
-            CAPABILITY_ATTACHMENTS,
-        ]);
+    it('negotiates attachment v2 independently without aliasing the old review protocol', () => {
+        expect(CAPABILITY_ATTACHMENTS).toBe('pi.attachments.v2');
+        expect(
+            negotiateCapabilities([
+                'pi.attachments.v1',
+                CAPABILITY_ATTACHMENTS,
+            ]),
+        ).toEqual([CAPABILITY_ATTACHMENTS]);
         expect(isKnownCapability(CAPABILITY_ATTACHMENTS)).toBe(true);
     });
     it('yields empty for empty', () => {

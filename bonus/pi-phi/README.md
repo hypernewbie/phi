@@ -116,7 +116,7 @@ refresh keeps it and says it may be out of date.
 
 ## Attachments
 
-A connected regular Pi pane with `pi.attachments.v1` can receive one explicit
+A connected regular Pi pane with `pi.attachments.v2` can receive one explicit
 attachment prompt from Phi. PNG/JPEG files become native Pi image content.
 Other files become a JSON-quoted private snapshot path that Pi's normal file
 tools can read. Unsupported image formats fail clearly; they are not sent as

@@ -81,7 +81,7 @@ Runtime identity binds `(generation, runtime_id, session_id)`:
 | `pi.reload.v1`    | Native `/reload` dispatch from an interactive editor |
 | `pi.skills.v1`    | On-demand skill list and skill invocation        |
 | `pi.syncboard.v1` | Direct Pi tool for the owning Phi Syncboard      |
-| `pi.attachments.v1` | Explicit user-triggered attachment prompt dispatch |
+| `pi.attachments.v2` | Explicit user-triggered attachment prompt dispatch |
 | `pi.state.v1` | Read-only live identity and readiness refresh |
 
 Context, Compact, and Reload negotiate independently on every Hello
@@ -246,13 +246,19 @@ replayed. The composer responds locally before the background read completes.
 
 ## Attachment prompt dispatch
 
-`pi.attachments.v1` is advertised only when the provisioned absolute
+`pi.attachments.v2` is advertised only when the provisioned absolute
 `PHI_PI_ATTACHMENT_ROOT` is a checked directory and the public host exposes
 `sendUserMessage`, session identity, `isIdle`, and `hasPendingMessages`.
 Attachment readiness is independent of `pi.compact.v1`; it samples compact
 activity and unresolved bridge work without requiring the Compact API.
 If any required facility is absent, the extension does not advertise this
 capability. Other capabilities and the ordinary Pi input path remain usable.
+
+Version 2 uses request field 24, acknowledgment field 26, and snapshot
+readiness field 14. Released Reload fields 22, 25, and 12 keep their meanings.
+The incompatible `pi.attachments.v1` review protocol is not negotiated or
+aliased to version 2. Mixed-version peers retain their other capabilities;
+new attachment sends stay unavailable until both peers support version 2.
 
 Phi sends `AttachmentPromptRequest` (field 24) only after an explicit user
 Send action. It contains one complete user message: bounded text plus checked
@@ -268,8 +274,8 @@ PNG and JPEG are the only native image formats. The host sends their bytes as
 Pi image content. A file is represented by labelled text containing its
 JSON-quoted absolute private snapshot path; Pi's ordinary file tools can read
 that snapshot. Unknown or unsupported image types are refused and are never
-silently converted to a path. The current Phi MVP allows one file per send;
-the bridge/runtime bounds are at most eight references and 50 MiB total, with
+silently converted to a path. Phi and the bridge allow at most eight
+references and 50 MiB total, with
 64 KiB of UTF-8 prompt text. No image bytes travel in the bridge message.
 
 Before the host call, the extension rechecks runtime, session, leaf, model,
@@ -376,8 +382,10 @@ reload completion. A refusal reports one safe reason: `duplicate`, `stale`,
 `busy`, `queued`, `compaction-active`, `pending`, or `unavailable`. Pi keeps a
 process-owned latch until the callback settles and publishes fresh readiness.
 Phi keeps the operation unresolved until a same-process readiness snapshot
-covers its ID and explicitly clears `reload_pending`. Reload and Compact are
-mutually exclusive while either operation is unresolved. A timeout, lost
+covers its ID and explicitly clears `reload_pending`. Reload, Compact, and
+attachment preparation are mutually exclusive while an operation is unresolved.
+Attachment dispatch also rechecks the process-owned Reload latch immediately
+before the host call. A timeout, lost
 receipt, disconnect, or runtime replacement does not permit replay. When
 shutdown follows dispatch, the extension drains and half-closes the receipt
 stream, then waits for server status before a replacement runtime sends Hello.
@@ -483,7 +491,7 @@ Other failures retry with bounded backoff on the same generation.
   and interactive modes: print runs advertise `pi.compact.v1`,
   `pi.context.v1`, `pi.lifecycle.v1`, `pi.models.v1`; interactive runs
   add `pi.history.v1` and advertise `pi.reload.v1` when the checked stock
-  editor baseline is available. They add `pi.attachments.v1` when the
+  editor baseline is available. They add `pi.attachments.v2` when the
   private handoff root and attachment host APIs are available.
 - The Reload desktop/mobile browser flow also passed on Pi 1.4.0 in
   isolated state. Other Pi versions and installed-release behavior with

@@ -586,7 +586,7 @@ describe('attachment control', () => {
         const owner = tabA.draftAttachments[0].owner;
         tabA.piBridge = {
             connected: true,
-            capabilities: ['pi.attachments.v1'],
+            capabilities: ['pi.attachments.v2'],
         };
         tabA._attachmentContextOwnerKey = tm._attachmentOwnerKey(owner);
         tabA._attachmentContext = {
@@ -680,7 +680,7 @@ describe('attachment control', () => {
         const owner = tabA.draftAttachments[0].owner;
         tabA.piBridge = {
             connected: true,
-            capabilities: ['pi.attachments.v1'],
+            capabilities: ['pi.attachments.v2'],
         };
         tabA._attachmentContextOwnerKey = tm._attachmentOwnerKey(owner);
         tabA._attachmentContext = {
@@ -931,7 +931,7 @@ describe('attachment control', () => {
         const { tm, tabA } = makeManager();
         tabA.piBridge = {
             connected: true,
-            capabilities: ['pi.attachments.v1'],
+            capabilities: ['pi.attachments.v2'],
         };
         tm.stagedAttachments = [
             {

@@ -49,6 +49,7 @@ import {
     type PiThinkingLevel,
     Runtime,
     type RuntimeChannel,
+    type RuntimeOptions,
     freshCompactLatch,
 } from './runtime.js';
 import {
@@ -3969,6 +3970,7 @@ async function startedReload(
     over: Partial<PiContextView> = {},
     latch?: ReloadLatchState,
     setup?: (editor: StockEditor) => void,
+    options: Partial<RuntimeOptions> = {},
 ): Promise<ReloadFixture> {
     const editor = new StockEditor();
     setup?.(editor);
@@ -3986,6 +3988,7 @@ async function startedReload(
         compactState: compact,
         reloadState: l,
         makeChannel: wired(ch),
+        ...options,
     });
     rt.start(startCtx);
     await sleep(10);
@@ -4068,6 +4071,109 @@ function lastSnapshot(ch: MockChannel): PiToPhi {
 }
 
 describe('Runtime reload dispatch', () => {
+    it('excludes attachments and reload in both directions without replay after release', async () => {
+        const root = mkdtempSync(join(tmpdir(), 'phi-attachment-reload-'));
+        const basename = 'att-data.bin';
+        const bytes = Buffer.from('attachment reload fixture');
+        writeFileSync(join(root, basename), bytes);
+        const attachments = freshAttachmentLatch();
+        const sendUserMessage = vi.fn();
+        let release!: () => void;
+        const completion = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        const { ch, rt, editor } = await startedReload(
+            {
+                model: {
+                    provider: 'p',
+                    id: 'm',
+                    api: 'openai-completions',
+                    input: ['text', 'image'],
+                } as unknown as PiContextView['model'],
+            },
+            undefined,
+            (editor) => {
+                editor.onSubmit = async (text) => {
+                    editor.calls.push(text);
+                    await completion;
+                };
+            },
+            {
+                attachmentRoot: root,
+                attachmentState: attachments,
+                sendUserMessage,
+            },
+        );
+        try {
+            attachments.active = { requestId: 'a0', runtimeId: 'old-runtime' };
+            ch.hooks!.onMessage(reloadRequest('1'));
+            ch.hooks!.onMessage(compactRequest('1'));
+            expect(reloadAcks(ch).map((a) => a.reason)).toEqual(['pending']);
+            expect(results(ch).map((r) => r.reason)).toEqual(['pending']);
+            expect(editor.calls).toEqual([]);
+            attachments.active = null;
+            ch.hooks!.onMessage(reloadRequest('2'));
+            expect(editor.calls).toEqual(['/reload']);
+            const frames = ch.nonfatalSends.filter(
+                (m) => payloadOf(m).$case === 'stateSnapshot',
+            );
+            expect(
+                snapshotOf(frames.at(-1)!).attachmentReadiness?.bridgePending,
+            ).toBe(true);
+            const request = AttachmentPromptRequest.create({
+                requestId: '1',
+                expectedSessionId: 'sess',
+                expectedLeafId: 'leaf',
+                expectedModel: { provider: 'p', model: 'm' },
+                text: 'inspect',
+                attachments: [
+                    {
+                        basename,
+                        sizeBytes: BigInt(bytes.length),
+                        kind: 'file',
+                        mimeType: 'application/octet-stream',
+                        sha256: createHash('sha256')
+                            .update(bytes)
+                            .digest('hex'),
+                    },
+                ],
+            });
+            const send = (requestId: string) =>
+                ch.hooks!.onMessage({
+                    paneId: CREDS.pane,
+                    processId: CREDS.process,
+                    runtimeGeneration: 1n,
+                    payload: {
+                        $case: 'attachmentPromptRequest',
+                        value: { ...request, requestId },
+                    },
+                });
+            send('1');
+            const acknowledgments = () =>
+                ch.nonfatalSends.flatMap((m) =>
+                    m.payload?.$case === 'attachmentPromptAck'
+                        ? [m.payload.value]
+                        : [],
+                );
+            expect(acknowledgments().at(-1)?.reason).toBe('pending');
+            expect(sendUserMessage).not.toHaveBeenCalled();
+            release();
+            await sleep(10);
+            send('1');
+            expect(acknowledgments().at(-1)?.reason).toBe('duplicate');
+            expect(sendUserMessage).not.toHaveBeenCalled();
+            send('2');
+            expect(acknowledgments().at(-1)?.outcome).toBe(
+                AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_DISPATCHED,
+            );
+            expect(sendUserMessage).toHaveBeenCalledTimes(1);
+        } finally {
+            release();
+            rt.shutdown();
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
+
     it('advertises reload with the idle pair, without the compact API', async () => {
         const { ch, rt } = await startedReload({ compact: undefined });
         const hello = ch.hellos[0]!;

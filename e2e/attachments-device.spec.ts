@@ -244,7 +244,7 @@ async function spawnPane(
         .toMatchObject({
             state: 'managed',
             connected: true,
-            capabilities: expect.arrayContaining(['pi.attachments.v1']),
+            capabilities: expect.arrayContaining(['pi.attachments.v2']),
         });
     return pane;
 }
@@ -1183,7 +1183,7 @@ test('extension transformations are not mistaken for model receipt; lost ack is 
             .toMatchObject({
                 state: 'managed',
                 connected: true,
-                capabilities: expect.arrayContaining(['pi.attachments.v1']),
+                capabilities: expect.arrayContaining(['pi.attachments.v2']),
             });
         await page.waitForTimeout(1_500);
         expect(provider.requests).toHaveLength(beforeLostAck + 1);

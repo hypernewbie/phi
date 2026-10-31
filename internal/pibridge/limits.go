@@ -54,7 +54,7 @@ const (
 	// CapabilitySyncboard is the fixed Syncboard REST capability.
 	CapabilitySyncboard = "pi.syncboard.v1"
 	// CapabilityAttachments is the user-triggered native attachment capability.
-	CapabilityAttachments = "pi.attachments.v1"
+	CapabilityAttachments = "pi.attachments.v2"
 	// CapabilityState is the read-only live snapshot refresh capability.
 	CapabilityState = "pi.state.v1"
 	maxStatePending = 4
