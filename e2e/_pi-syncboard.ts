@@ -25,6 +25,7 @@ export interface SyncboardProviderOptions {
     key?: string;
     value?: unknown;
     expectUnknownUpsert?: boolean;
+    expectImage?: boolean;
 }
 
 export interface SyncboardFollowupStep {
@@ -265,6 +266,25 @@ export async function startSyncboardProvider(
                     throw new Error(
                         'provider request did not declare native syncboard',
                     );
+                if (requests === 1 && options.expectImage) {
+                    const messages = request['messages'];
+                    const images = Array.isArray(messages)
+                        ? messages.flatMap((message) =>
+                              isRecord(message) &&
+                              Array.isArray(message['content'])
+                                  ? message['content'].filter(
+                                        (block) =>
+                                            isRecord(block) &&
+                                            block['type'] === 'image',
+                                    )
+                                  : [],
+                          )
+                        : [];
+                    if (images.length !== 1)
+                        throw new Error(
+                            'attachment prompt must contain exactly one native image',
+                        );
+                }
                 const results = readToolResults(request['messages']);
                 if (followup) {
                     const received = results.length - followup.offset;
@@ -684,7 +704,7 @@ export function seedSyncboardPi(
                     baseUrl: `http://127.0.0.1:${providerPort}`,
                     api: 'anthropic-messages',
                     apiKey: 'syncboard-fixture-key-localhost-only',
-                    models: [{ id: SYNCBOARD_MODEL }],
+                    models: [{ id: SYNCBOARD_MODEL, input: ['text', 'image'] }],
                 },
             },
         }),

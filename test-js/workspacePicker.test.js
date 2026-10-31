@@ -105,11 +105,14 @@ describe('Add Workspace directory tree', () => {
         const end = html.indexOf('<!-- Markdown Viewer Modal -->', start);
         const template = document.createElement('template');
         template.innerHTML = html.slice(start, end);
-        const dialog = template.content.querySelector('[role="dialog"]');
+        const workspaceModal = template.content.querySelector('#ws-modal');
+        expect(workspaceModal).not.toBeNull();
+        const dialog = workspaceModal.querySelector('[role="dialog"]');
 
-        expect(
-            template.content.querySelectorAll('[role="dialog"]'),
-        ).toHaveLength(1);
+        expect(workspaceModal.querySelectorAll('[role="dialog"]')).toHaveLength(
+            1,
+        );
+        expect(dialog).not.toBeNull();
         expect(dialog.getAttribute('aria-labelledby')).toBe('ws-modal-title');
         expect(dialog.querySelector('#ws-modal-input').disabled).toBe(false);
         expect(dialog.querySelector('#ws-modal-tree')).toBeTruthy();
@@ -121,9 +124,7 @@ describe('Add Workspace directory tree', () => {
             'button',
         );
         expect(dialog.querySelector('#ws-modal-add-btn').type).toBe('button');
-        expect(
-            template.content.querySelector('.path-picker-overlay'),
-        ).toBeNull();
+        expect(workspaceModal.querySelector('.path-picker-overlay')).toBeNull();
         expect(dialog.querySelector('.path-picker-overlay')).toBeNull();
     });
 

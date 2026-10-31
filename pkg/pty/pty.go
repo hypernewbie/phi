@@ -263,9 +263,16 @@ func startWithSize(ctx context.Context, dir string, command string, args []strin
 		} else if exitErr, ok := waitErr.(*exec.ExitError); ok {
 			p.exitCode = exitErr.ExitCode()
 		}
-		p.closePTY()
+		if unixPTY, ok := pt.(gopty.UnixPty); ok {
+			// Closing the master here discards unread output from fast children.
+			// Release our slave so the reader gets EOF after draining the master.
+			_ = unixPTY.Slave().Close()
+		} else {
+			// Preserve ConPTY's existing shutdown path.
+			p.closePTY()
+		}
 		_ = os.RemoveAll(tempDir) // remove shim dir BEFORE signaling done
-		close(p.Closed)           // Closed now means "process exited AND cleaned up"
+		close(p.Closed)           // process reaped and shims removed; Unix output may still be draining
 	}()
 
 	return p, nil
@@ -343,7 +350,13 @@ func findKey(index map[string]int, key string, windowsCI bool) (int, bool) {
 }
 
 func (p *Pty) Read(b []byte) (int, error) {
-	return p.pt.Read(b)
+	n, err := p.pt.Read(b)
+	if err != nil && runtime.GOOS != "windows" {
+		// Natural Unix exit leaves the master open until output is drained.
+		// Kill still closes it immediately to unblock a pending read.
+		p.closePTY()
+	}
+	return n, err
 }
 
 func (p *Pty) Write(b []byte) (int, error) {

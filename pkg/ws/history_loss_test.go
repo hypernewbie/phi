@@ -39,6 +39,18 @@ func TestRecordingSurvivesReplayMemoryLimits(t *testing.T) {
 }
 
 func TestProcessExitDoesNotEraseColdRecording(t *testing.T) {
+	testProcessExitRecording(t, false)
+}
+
+func TestProcessExitBeforeReaderRetainsColdRecording(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux allows the child to exit before its PTY output is read")
+	}
+	testProcessExitRecording(t, true)
+}
+
+func testProcessExitRecording(t *testing.T, exitBeforeReader bool) {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX PTY child")
 	}
@@ -51,6 +63,13 @@ func TestProcessExitDoesNotEraseColdRecording(t *testing.T) {
 	hub := NewHub(4096)
 	client := &Client{Send: make(chan []byte, 32)}
 	hub.Register(inst.ID, client)
+	if exitBeforeReader {
+		select {
+		case <-inst.Pty.Closed:
+		case <-time.After(5 * time.Second):
+			t.Fatal("process did not exit before reader startup")
+		}
+	}
 	StartPTYReadLoop(inst, hub)
 	deadline := time.After(5 * time.Second)
 	for {

@@ -58,7 +58,8 @@ type lease struct {
 	// retained until a host refusal, release evidence in fresh
 	// same-process readiness, or lease revoke. Runtime replacement
 	// never clears it: the native callback outlives its runtime.
-	reload *reloadOp
+	reload     *reloadOp
+	attachment *attachmentPromptOp
 }
 
 type leaseState int
@@ -152,6 +153,7 @@ func (r *registry) revoke(processID string) {
 	// Process exit releases unresolved Compact and Reload work with it.
 	l.compact = nil
 	l.reload = nil
+	l.attachment = nil
 	l.mu.Unlock()
 
 	if peer != nil {

@@ -47,8 +47,10 @@ describe('source guards', () => {
             "['online', 'pageshow', 'focus', 'phi:desktop-wake']",
         );
         expect(src).toContain('window.addEventListener(event, resumeViewport)');
-        expect(src).toMatch(
-            /const resumeViewport = \(\) => \{ this\._reviveActiveTabIfDead\(\); this\._queueActiveRefresh\(\); \}/,
-        );
+        const resumeViewport = src.match(
+            /const resumeViewport = \(\) => \{([^}]*)\}/,
+        )?.[1];
+        expect(resumeViewport).toContain('this._reviveActiveTabIfDead();');
+        expect(resumeViewport).toContain('this._queueActiveRefresh();');
     });
 });

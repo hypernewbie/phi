@@ -14,7 +14,9 @@ turn; a second press cancels it. An expired or interrupted wait reports
 unknown; native work may still complete, and a late result releases only
 its own operation. On explicit user action, an interactive Pi session can
 also dispatch its native `/reload` command; a lost receipt is never replayed.
-It never sends prompts on its own and never edits messages or files.
+The extension never initiates prompts on its own. It forwards one complete user
+message only after an explicit attachment Send in Phi. It never edits messages
+or files.
 
 ## Layout
 
@@ -26,6 +28,7 @@ It never sends prompts on its own and never edits messages or files.
 - `src/extension.ts` — the factory: credential handling, process-global
   ownership, and event subscriptions.
 - `src/runtime.ts` — lifecycle mapping, context and compact support, history and model requests, journal, and reconnect.
+- `src/attachments.ts` — checked process-root reads, image content, and attachment dispatch fencing.
 - `src/history-reader.ts` — checked access to the live TUI editor history.
 - `src/channel.ts` — bounded-queue gRPC transport.
 - `src/test-client.ts` — the synthetic peer for interop tests.
@@ -111,6 +114,35 @@ reopen Pi to check. The skill is sent to Pi, not run by Phi.
 The last known list stays on screen while the picker refreshes; a failed
 refresh keeps it and says it may be out of date.
 
+## Attachments
+
+A connected regular Pi pane with `pi.attachments.v3` can receive one explicit
+attachment prompt from Phi. PNG/JPEG files become native Pi image content.
+Other files become a JSON-quoted private snapshot path that Pi's normal file
+tools can read. Unsupported image formats fail clearly; they are not sent as
+paths. The browser and server limit each file to 25 MiB and prompt text to
+64 KiB. Each send allows at most eight files and 50 MiB in total.
+
+The bridge receives generated references, never file bytes or browser paths.
+Phi provisions `PHI_PI_ATTACHMENT_ROOT` for each Pi process. The extension
+checks the root, basename, file type, size, and SHA-256 before reading. Missing
+host APIs, an unsafe root, unknown image support, a busy/queued turn, active
+compaction, or changed session/model identity prevents dispatch.
+
+With `pi.state.v2`, Phi reads the live Pi context before freezing a new online
+send. Idle extension metadata can change Pi's leaf without a session or model
+switch. An old lifecycle snapshot must not make a fresh send fail as `stale`.
+Already saved and offline sends keep their original target; they are never
+rebound or automatically replayed.
+
+A `DISPATCHED` acknowledgment means Pi's public `sendUserMessage` call returned
+normally and Phi received its matching acknowledgment. It does not prove that
+Pi hooks preserved the image, that the model received it, or that a provider
+completed. Phi shows “Submitted to Pi.” It never retries an uncertain send.
+
+See `PROTOCOL.md` for operation bounds, refusal reasons, and the full safety
+contract.
+
 ## Toggles and manual install
 
 Two switches, one per side. Defaults bridge every phi-spawned Pi.
@@ -150,9 +182,10 @@ From the Phi checkout:
 - `pnpm --filter @phi/pi-phi typecheck` — strict typecheck.
 - `pnpm --filter @phi/pi-phi test` — unit suite.
 - `pnpm test:pi-phi:integration` — interop over native IPC.
-- `pnpm test:pi-phi:hosts` — load the bundle and check real editor history on both pinned Pi versions.
+- `pnpm test:pi-phi:hosts` — load the bundle, check real editor history, and verify native image dispatch on both pinned Pi versions.
 
 The host check covers Pi 1.0.1 and 1.3.0 in isolated profiles. Interactive
-history checks require `script(1)` on macOS or Linux. The command fails if
-that proof is unavailable. These checks do not establish installed-release
-behavior with an existing user profile or support for other Pi versions.
+history and attachment checks require `script(1)` on macOS or Linux. The
+command fails if that proof is unavailable. These checks do not establish
+installed-release behavior with an existing user profile or support for
+other Pi versions.

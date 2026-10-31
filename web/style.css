@@ -2875,6 +2875,24 @@ body.has-terminal-bg
     display: none;
 }
 
+.attachment-status {
+    align-self: stretch;
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1.35;
+}
+.attachment-status.hidden {
+    display: none;
+}
+.attachment-status-action {
+    display: inline-flex;
+    width: auto;
+    height: 26px;
+    margin-left: 6px;
+    padding: 0 8px;
+    font-size: 11px;
+}
+
 .attachment-chip {
     display: inline-flex;
     align-items: center;
@@ -2895,6 +2913,17 @@ body.has-terminal-bg
 .attachment-chip:hover {
     border-color: var(--accent-soft);
     box-shadow: 0 0 10px var(--accent-glow);
+}
+.attachment-chip.is-error {
+    border-color: var(--red, #ef4444);
+}
+.attachment-chip.is-pending {
+    opacity: 0.82;
+}
+.attachment-chip .attachment-state {
+    color: var(--text-dim);
+    font-family: var(--font-ui);
+    font-size: 10px;
 }
 
 .attachment-chip .attachment-icon {
@@ -3161,6 +3190,23 @@ body.has-terminal-bg
     width: auto;
     padding: 0 16px;
     white-space: nowrap;
+}
+
+#attachment-source-dropup {
+    max-width: calc(100vw - 24px);
+}
+
+#attach-input-btn.input-quick-chip:not(:hover, :focus-visible, [aria-expanded="true"]) {
+    background: transparent;
+    border-color: transparent;
+}
+
+@media (pointer: coarse) {
+    #attach-input-btn,
+    #attachment-source-dropup .dropup-model-btn {
+        min-width: 44px;
+        min-height: 44px;
+    }
 }
 
 /* Pi-coding-agent keyboard shortcut chip. Only visible when the
@@ -7836,7 +7882,8 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     padding: 6px;
 }
 
-.sidebar-narrow .panel-header h2 {
+.sidebar-narrow .panel-header h2,
+.sidebar-narrow #refresh-sessions-btn {
     display: none;
 }
 

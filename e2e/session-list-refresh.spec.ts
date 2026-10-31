@@ -388,6 +388,26 @@ test('refreshes Pi and Claude sessions across desktop and touch without reloadin
                     : ['Pi initial session'];
                 await expect(piTitles).toHaveText(priorPiTitles);
                 await expect(refresh).toBeVisible();
+                const placement = await refresh.evaluate((button) => {
+                    const title = document.getElementById('drawer-panel-title');
+                    if (!title) throw new Error('Missing sessions heading');
+                    const bounds = button.getBoundingClientRect();
+                    return {
+                        followsTitle: button.previousElementSibling === title,
+                        gap: bounds.left - title.getBoundingClientRect().right,
+                        border: getComputedStyle(button).borderWidth,
+                        width: bounds.width,
+                        height: bounds.height,
+                    };
+                });
+                expect(placement).toMatchObject({
+                    followsTitle: true,
+                    border: '0px',
+                    width: 24,
+                    height: 24,
+                });
+                expect(placement.gap).toBeGreaterThanOrEqual(0);
+                expect(placement.gap).toBeLessThanOrEqual(8);
 
                 fixture.pi('pi-new', `Pi ${mode} refresh`);
                 await expect(piTitles).toHaveText(priorPiTitles);

@@ -134,7 +134,7 @@ func (s *Server) RequestReload(ctx context.Context, processID string, generation
 		l.mu.Unlock()
 		return ReloadResult{}, &ReloadRefusal{Reason: "stale"}
 	}
-	if l.reload != nil || l.compact != nil {
+	if l.reload != nil || l.compact != nil || l.attachment != nil {
 		l.mu.Unlock()
 		return ReloadResult{}, &ReloadRefusal{Reason: "pending"}
 	}
