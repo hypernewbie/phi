@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/hypernewbie/phi/internal/dshweb"
 )
 
 const (
@@ -87,6 +89,10 @@ type accessAuthManager struct {
 	challenges map[string]time.Time
 	sessions   map[string]time.Time
 	attempts   map[string]accessLoginAttempt
+	// generation invalidates DSH live work. It bumps under the same
+	// lock that clears sessions, so a lease snapshot is atomic with
+	// the credential it was verified against.
+	generation uint64
 }
 
 func newAccessAuthManager() *accessAuthManager {
@@ -110,6 +116,7 @@ func (m *accessAuthManager) configure(encoded string) error {
 	m.challenges = make(map[string]time.Time)
 	m.sessions = make(map[string]time.Time)
 	m.attempts = make(map[string]accessLoginAttempt)
+	m.generation++
 	return nil
 }
 
@@ -141,6 +148,34 @@ func (m *accessAuthManager) statusAndChallenge() (enabled bool, salt, challenge 
 	return true, base64.RawURLEncoding.EncodeToString(m.record.Salt), challenge, nil
 }
 
+// currentGeneration reads the live auth generation for DSH staleness checks.
+func (m *accessAuthManager) currentGeneration() uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.generation
+}
+
+// admitDSH verifies Phi auth for one DSH request using the existing
+// token-validation logic. It returns a generation/expiry lease snapshot
+// taken under the same lock, never the raw cookie.
+func (m *accessAuthManager) admitDSH(r *http.Request) (dshweb.Lease, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	if m.record == nil {
+		return dshweb.Lease{Generation: m.generation, ExpiresAt: now.Add(accessSessionTTL)}, true
+	}
+	cookie, err := r.Cookie(accessSessionCookie)
+	if err != nil || cookie.Value == "" {
+		return dshweb.Lease{}, false
+	}
+	expiresAt, ok := m.verifiedSessionLocked(cookie.Value, now)
+	if !ok {
+		return dshweb.Lease{}, false
+	}
+	return dshweb.Lease{Generation: m.generation, ExpiresAt: expiresAt}, true
+}
+
 func (m *accessAuthManager) authenticated(r *http.Request) bool {
 	cookie, err := r.Cookie(accessSessionCookie)
 	if err != nil || cookie.Value == "" {
@@ -151,42 +186,48 @@ func (m *accessAuthManager) authenticated(r *http.Request) bool {
 	if m.record == nil {
 		return false
 	}
-	now := time.Now()
-	expiresAt, ok := m.sessions[cookie.Value]
+	_, ok := m.verifiedSessionLocked(cookie.Value, time.Now())
+	return ok
+}
+
+// verifiedSessionLocked checks the session map, then the stateless
+// restart-surviving token form. Callers hold m.mu.
+func (m *accessAuthManager) verifiedSessionLocked(token string, now time.Time) (time.Time, bool) {
+	expiresAt, ok := m.sessions[token]
 	if ok {
 		if expiresAt.After(now) {
-			return true
+			return expiresAt, true
 		}
-		delete(m.sessions, cookie.Value)
-		return false
+		delete(m.sessions, token)
+		return time.Time{}, false
 	}
 	// Stateless token verification across server restarts. The token is
 	// signed with the current verifier, so it remains valid across restarts
 	// until expiry whilst any password change automatically invalidates it.
-	parts := strings.Split(cookie.Value, ".")
+	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return false
+		return time.Time{}, false
 	}
 	expiresUnix, err := strconv.ParseInt(parts[1], 10, 64)
 	if err != nil {
-		return false
+		return time.Time{}, false
 	}
 	tokenExpiry := time.Unix(expiresUnix, 0)
 	if !tokenExpiry.After(now) {
-		return false
+		return time.Time{}, false
 	}
 	gotSig, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil || len(gotSig) != sha256.Size {
-		return false
+		return time.Time{}, false
 	}
 	mac := hmac.New(sha256.New, m.record.Verifier)
 	_, _ = mac.Write([]byte(parts[0] + "." + parts[1]))
 	wantSig := mac.Sum(nil)
 	if subtle.ConstantTimeCompare(gotSig, wantSig) != 1 {
-		return false
+		return time.Time{}, false
 	}
-	m.sessions[cookie.Value] = tokenExpiry
-	return true
+	m.sessions[token] = tokenExpiry
+	return tokenExpiry, true
 }
 
 func (m *accessAuthManager) login(challenge, proof, remoteAddr string) (string, error) {
@@ -244,6 +285,7 @@ func (m *accessAuthManager) updatePassword(encoded string, authorized bool) (tok
 	m.challenges = make(map[string]time.Time)
 	m.sessions = make(map[string]time.Time)
 	m.attempts = make(map[string]accessLoginAttempt)
+	m.generation++
 	if record == nil {
 		return "", revokeLiveConnections, nil
 	}
@@ -445,10 +487,13 @@ func handleAccessPassword(w http.ResponseWriter, r *http.Request) {
 	cfg := loadConfig()
 	cfg.AccessPasswordHash = req.PasswordHash
 	saveConfig(cfg)
-	if revokeLiveConnections && wsHub != nil {
+	if revokeLiveConnections {
 		// Sessions are invalidated above; close already-upgraded sockets too so
 		// an old browser cannot keep driving a terminal until it reconnects.
-		wsHub.CloseAllClients()
+		if wsHub != nil {
+			wsHub.CloseAllClients()
+		}
+		dshRevokeLiveWork()
 	}
 	if token == "" {
 		clearAccessSessionCookie(w, r)

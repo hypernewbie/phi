@@ -389,6 +389,8 @@ func main() {
 	http.HandleFunc("/api/update/apply", handleUpdateApply)
 	http.HandleFunc("/api/update/progress", handleUpdateProgress)
 	http.HandleFunc("/api/restart", handleRestart)
+	http.HandleFunc("/api/dsh/status", handleDshStatus)
+	http.HandleFunc("/api/dsh/", handleDshMount)
 	http.HandleFunc("/api/diag", handleDiag)
 
 	// Start fleet poller with current peer config
@@ -541,10 +543,12 @@ func main() {
 
 	serverPort = listeners[0].Addr().(*net.TCPAddr).Port
 	printWelcomeBanner(cfg, boundAddrs, serverPort)
+	startDshPreview(cfg)
 	var serveErr error
 	shutdownServers, serveErr = serveAndCapture(listeners)
 	if serveErr != nil {
 		slog.Error("serve failed", "err", serveErr)
+		stopDshPreview()
 		os.Exit(1)
 	}
 }
@@ -692,7 +696,7 @@ func printWelcomeBanner(cfg Config, addrs []bindaddr.Addr, port int) {
 // returns the servers so the shutdown path can drain them. Blocks until all
 // listeners exit; ErrServerClosed (from Shutdown) is a clean stop, not fatal.
 func serveAll(listeners []net.Listener) ([]*http.Server, <-chan error) {
-	handler := obs.WrapHTTP(accessAuthMiddleware(http.DefaultServeMux))
+	handler := obs.WrapHTTP(accessAuthMiddleware(dshPathGuard(http.DefaultServeMux)))
 	servers := make([]*http.Server, len(listeners))
 	errCh := make(chan error, len(listeners))
 	for i, ln := range listeners {
@@ -785,6 +789,7 @@ func gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace, grace time.D
 			slog.Error("shutdown tab snapshot", "err", err)
 		}
 	}
+	stopDshPreview()
 	ctx, cancel := context.WithTimeout(context.Background(), grace)
 	defer cancel()
 	var wg sync.WaitGroup

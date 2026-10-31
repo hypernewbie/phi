@@ -78,6 +78,10 @@ import {
     syncPiSubagentStrip,
 } from './chat-pi/controller.js';
 import { formatPiRpcStatus } from './chat-pi/render.js';
+import {
+    destroyDshPreview,
+    restoreDshPreviewContainer,
+} from './dsh-tab.js';
 import { ACCENT_COLORS } from './theme.js';
 
 export const DEFAULT_ANSI_THEME = {
@@ -472,6 +476,8 @@ const CODER_FAVICONS = {
     'pi-rpc': 'vendor/logos/pi.png',
     review: 'vendor/logos/review.png',
     kanban: 'vendor/logos/kanban.png',
+    'dsh-preview':
+        'data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20viewBox=%270%200%2024%2024%27%3E%3Crect%20width=%2724%27%20height=%2724%27%20rx=%275%27%20fill=%27%234D6BFE%27/%3E%3Ctext%20x=%2712%27%20y=%2716%27%20font-size=%279%27%20font-family=%27sans-serif%27%20text-anchor=%27middle%27%20fill=%27white%27%3EDS%3C/text%3E%3C/svg%3E',
 };
 
 // Automatic-reconnect retry policy: full-jitter exponential backoff.
@@ -1087,6 +1093,57 @@ export class TabManager {
         } catch {}
     }
 
+    saveDshTabs() {
+        try {
+            const dshTabs = Array.from(this.tabs.values())
+                .filter((t) => t.coder === 'dsh-preview')
+                .map((t) => ({
+                    paneId: t.paneId,
+                    title: t.title || '',
+                    workspace: t.workspace || '',
+                    cwd: t.cwd || '',
+                }));
+            localStorage.setItem(serverKey('phi_dsh_tabs'), JSON.stringify(dshTabs));
+        } catch {}
+    }
+
+    restoreDshTabs() {
+        let raw;
+        try {
+            raw = localStorage.getItem(serverKey('phi_dsh_tabs'));
+            if (!raw) return;
+            const tabs = JSON.parse(raw);
+            if (!Array.isArray(tabs) || tabs.length === 0) return;
+            for (const t of tabs) {
+                if (t.paneId !== 'dsh-preview' || this.tabs.has(t.paneId)) continue;
+                // Recreate the shell only; the mount re-resolves live so
+                // a restarted server never strands the frame on a dead
+                // instance. A live tab is never touched (see the guard
+                // above): no recreate, no re-navigate.
+                this.createTab(
+                    t.paneId,
+                    '',
+                    t.title || 'DSH preview',
+                    'dsh-preview',
+                    t.workspace || '',
+                    t.cwd || '',
+                    true,
+                );
+                const tab = this.tabs.get(t.paneId);
+                if (!tab) continue;
+                try {
+                    restoreDshPreviewContainer(this, tab.termContainer);
+                } catch (e) {
+                    console.warn(
+                        'phi: failed to restore dsh tab',
+                        t.paneId,
+                        e,
+                    );
+                }
+            }
+        } catch {}
+    }
+
     // ---- Drag-to-reorder (localStorage-only, v0.8.x polish) ----
 
     _workspaceTabGroups(entries) {
@@ -1541,7 +1598,7 @@ export class TabManager {
         try {
             const serverIds = new Set(instances.map((t) => t.id ?? t.paneId));
             for (const [paneId, tab] of Array.from(this.tabs.entries())) {
-                if (!tab.isKanban && !tab.isReview && tab.coder !== 'pi-rpc' && !tab.softClosing) {
+                if (!tab.isKanban && !tab.isReview && tab.coder !== 'pi-rpc' && tab.coder !== 'dsh-preview' && !tab.softClosing) {
                     if (!serverIds.has(paneId)) {
                         this.disposeTabClient(paneId, { preserveStorage: false });
                     }
@@ -1562,7 +1619,7 @@ export class TabManager {
                     if (t.pi_bridge != null) {
                         this._seedHttpPiBridge(tab, t.pi_bridge);
                     }
-                    if (live && (tab._detachedCache || !tab.ws) && tab.coder !== 'review' && tab.coder !== 'kanban' && tab.coder !== 'pi-rpc') {
+                    if (live && (tab._detachedCache || !tab.ws) && tab.coder !== 'review' && tab.coder !== 'kanban' && tab.coder !== 'pi-rpc' && tab.coder !== 'dsh-preview') {
                         tab._detachedCache = false;
                         this._connectTabSocket(tab);
                     }
@@ -1591,6 +1648,7 @@ export class TabManager {
                 await this.app.kanbanManager.openBoard();
             }
             this.restorePiRpcTabs();
+            this.restoreDshTabs();
             this.applySavedTabOrder();
             if (savedActive && this.tabs.has(savedActive)) {
                 this.switchTab(savedActive);
@@ -1645,7 +1703,8 @@ export class TabManager {
                 tab.isReview ||
                 tab.coder === 'kanban' ||
                 tab.coder === 'review' ||
-                tab.coder === 'pi-rpc'
+                tab.coder === 'pi-rpc' ||
+                tab.coder === 'dsh-preview'
             ) {
                 continue;
             }
@@ -4052,7 +4111,7 @@ export class TabManager {
     }
 
     _connectTabSocket(tabInfo, initialCmd = '') {
-        if (!tabInfo || tabInfo.isReview || tabInfo.isKanban || tabInfo.coder === 'pi-rpc') return;
+        if (!tabInfo || tabInfo.isReview || tabInfo.isKanban || tabInfo.coder === 'pi-rpc' || tabInfo.coder === 'dsh-preview') return;
         tabInfo._cachedScreen = null;
         if (tabInfo.pinned) {
             const fetchFn = (this.app?.scope && typeof this.app.scope.fetch === 'function')
@@ -4212,7 +4271,7 @@ export class TabManager {
         termContainer.id = `term-${paneId}`;
 
         let loaderEl = null;
-        if (coder !== 'review' && coder !== 'kanban' && coder !== 'pi-rpc') {
+        if (coder !== 'review' && coder !== 'kanban' && coder !== 'pi-rpc' && coder !== 'dsh-preview') {
             loaderEl = document.createElement('div');
             loaderEl.className = 'tab-loader';
             loaderEl.innerHTML = `
@@ -4237,6 +4296,7 @@ export class TabManager {
         // event happened to trigger a refresh. Both are called below
         // immediately after the tabs.set instead.
 
+        if (coder === 'dsh-preview') tabEl.querySelector('.tab-pin')?.classList.add('hidden');
         tabEl.addEventListener('click', (e) => {
             const currentPaneId = tabEl.getAttribute('data-pane-id');
             if (e.target.closest('.tab-close')) {
@@ -4259,11 +4319,13 @@ export class TabManager {
             this.openTabRenamer(currentPaneId, titleEl);
         });
 
-        if (coder === 'review' || coder === 'kanban' || coder === 'pi-rpc') {
+        if (coder === 'review' || coder === 'kanban' || coder === 'pi-rpc' || coder === 'dsh-preview') {
             if (coder === 'review' || coder === 'pi-rpc') {
                 termContainer.classList.add('review-panel');
             } else if (coder === 'kanban') {
                 termContainer.classList.add('kanban-panel');
+            } else if (coder === 'dsh-preview') {
+                termContainer.classList.add('dsh-panel');
             }
             const tabInfo = {
                 paneId,
@@ -4278,6 +4340,7 @@ export class TabManager {
                 isReview: coder === 'review',
                 isKanban: coder === 'kanban',
                 isChatRpc: coder === 'pi-rpc',
+                isDsh: coder === 'dsh-preview',
                 pinned: !!pinned,
                 marked: !!marked,
             };
@@ -4290,6 +4353,7 @@ export class TabManager {
             this._placeNewTabByWorkspace(paneId);
             this.switchTab(paneId);
             if (coder === 'pi-rpc') this.savePiRpcTabs();
+            if (coder === 'dsh-preview') this.saveDshTabs();
             return;
         }
 
@@ -5282,6 +5346,10 @@ export class TabManager {
         }
         this.thinkingVisibilityBtn?.classList.toggle('hidden', !hidden);
         if (hidden) this.directModeToggle?.classList.remove('active');
+        // DSH has no PTY to reload. Do not change Pi chat's controls.
+        for (const id of ['refresh-console-btn', 'mobile-refresh-console-btn']) {
+            document.getElementById(id)?.classList.toggle('hidden', tab?.coder === 'dsh-preview');
+        }
     }
 
     _closePiSubagentViewerIfOpen() {
@@ -7488,7 +7556,8 @@ export class TabManager {
             if (
                 this.inputTextArea &&
                 prevTab.coder !== 'review' &&
-                prevTab.coder !== 'kanban'
+                prevTab.coder !== 'kanban' &&
+                !prevTab.isDsh
             ) {
                 prevTab.draft = this.inputTextArea.value;
                 prevTab.draftAttachments = this.stagedAttachments;
@@ -7520,7 +7589,7 @@ export class TabManager {
         syncPiSubagentStrip(newTab.paneId);
 
         // Show/hide staged input & direct mode based on tab settings
-        if (newTab.coder === 'review' || newTab.coder === 'kanban') {
+        if (newTab.coder === 'review' || newTab.coder === 'kanban' || newTab.isDsh) {
             this.inputBarContainer.classList.add('hidden');
         } else {
             this.inputBarContainer.classList.remove('hidden');
@@ -7595,7 +7664,7 @@ export class TabManager {
         // pi-rpc is a chat tab opened via the eye icon — it must NOT hijack
         // the left Pi tab's activeCoder or trigger a worktree reload.
         const prevCoder = this.app.sessionsManager.activeCoder;
-        if (newTab.coder !== 'pi-rpc') {
+        if (newTab.coder !== 'pi-rpc' && newTab.coder !== 'dsh-preview') {
             this.app.sessionsManager.switchCoder(newTab.coder, true);
         }
 
@@ -7604,7 +7673,8 @@ export class TabManager {
         if (
             newTab.coder === 'kanban' ||
             newTab.coder === 'review' ||
-            newTab.coder === 'pi-rpc'
+            newTab.coder === 'pi-rpc' ||
+            newTab.coder === 'dsh-preview'
         ) {
             this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
             return true;
@@ -7729,6 +7799,7 @@ export class TabManager {
     }
 
     syncBackendPin(paneId, pinned) {
+        if (this.tabs.get(paneId)?.coder === 'dsh-preview') return;
         fetch(`/api/terminals/${paneId}/pin`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -7739,6 +7810,7 @@ export class TabManager {
     }
 
     syncBackendMark(paneId, marked) {
+        if (this.tabs.get(paneId)?.coder === 'dsh-preview') return;
         fetch(`/api/terminals/${paneId}/mark`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -7843,6 +7915,7 @@ export class TabManager {
     }
 
     syncBackendTitle(paneId, title) {
+        if (this.tabs.get(paneId)?.coder === 'dsh-preview') return Promise.resolve();
         return fetch(`/api/terminals/${paneId}/title`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -8139,6 +8212,9 @@ export class TabManager {
         if (tab.coder === 'pi-rpc' && typeof destroyRpcChat === 'function') {
             destroyRpcChat(tab.paneId);
         }
+        if (tab.isDsh && typeof destroyDshPreview === 'function') {
+            destroyDshPreview(tab.paneId);
+        }
 
         if (tab.autoReconnectTimer) {
             clearTimeout(tab.autoReconnectTimer);
@@ -8185,6 +8261,7 @@ export class TabManager {
         }
 
         const wasPiRpc = tab.coder === 'pi-rpc';
+        const wasDsh = tab.coder === 'dsh-preview';
         // The pane is leaving the map, so bridge Thinking ownership goes with
         // it; a stuck pending would block the Thinking controls elsewhere.
         this._invalidatePiBridgeThinking(tab, false);
@@ -8202,6 +8279,7 @@ export class TabManager {
             this.updateDisconnectBanner?.();
             this.saveTabsState?.();
             if (wasPiRpc) this.savePiRpcTabs?.();
+            if (wasDsh) this.saveDshTabs?.();
 
             this.updateTabOverflow?.();
             this._refreshOverflowDropdown?.();
@@ -8256,7 +8334,7 @@ export class TabManager {
         // be alive on the server (e.g. a race with another tab close,
         // network blip, or 5xx). The 30-min detach grace timer is the
         // server-side backstop either way.
-        if (tab.coder !== 'pi-rpc' && !tab.isKanban && !tab.isReview) {
+        if (tab.coder !== 'pi-rpc' && !tab.isKanban && !tab.isReview && !tab.isDsh) {
             const capturedToast =
                 typeof this.app?.captureToastContext === 'function'
                     ? this.app.captureToastContext()
@@ -11950,7 +12028,7 @@ export class TabManager {
         return Boolean(tabInfo && this.tabs.get(tabInfo.paneId) === tabInfo &&
             !tabInfo.finalizing && !tabInfo.softClosing && tabInfo.exitCode == null &&
             !tabInfo.isReview && !tabInfo.isKanban &&
-            !['review', 'kanban', 'pi-rpc'].includes(tabInfo.coder));
+            !['review', 'kanban', 'pi-rpc', 'dsh-preview'].includes(tabInfo.coder));
     }
 
     // Wake hints start a fresh series only when the pane has no recovery work.
@@ -13869,7 +13947,7 @@ export class TabManager {
                 this.togglePinTab(paneId);
                 this.renderHostnameTabsDropdown(); // refresh dropdown layout
             });
-            row.appendChild(pinBtn);
+            if (tabInfo.coder !== 'dsh-preview') row.appendChild(pinBtn);
 
             // Close button
             const closeBtn = document.createElement('button');

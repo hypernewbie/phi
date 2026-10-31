@@ -2343,13 +2343,13 @@ body.has-terminal-bg .terminal-bg-overlay {
     display: block;
 }
 
-body.has-terminal-bg .term-container:not(.review-panel, .kanban-panel),
-body.has-terminal-bg .term-container:not(.review-panel, .kanban-panel) .xterm,
+body.has-terminal-bg .term-container:not(.review-panel, .kanban-panel, .dsh-panel),
+body.has-terminal-bg .term-container:not(.review-panel, .kanban-panel, .dsh-panel) .xterm,
 body.has-terminal-bg
-    .term-container:not(.review-panel, .kanban-panel)
+    .term-container:not(.review-panel, .kanban-panel, .dsh-panel)
     .xterm-viewport,
 body.has-terminal-bg
-    .term-container:not(.review-panel, .kanban-panel)
+    .term-container:not(.review-panel, .kanban-panel, .dsh-panel)
     .xterm-screen {
     background-color: transparent !important;
 }
@@ -8482,6 +8482,81 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
 .header-config-pill .pill-btn .icon {
     width: 12px;
     height: 12px;
+}
+
+/* DSH preview: same-origin frame of the official harness UI. The
+ * panel mirrors .review-panel: full-bleed, no terminal chrome. */
+.dsh-panel {
+    background-color: var(--bg-base);
+    display: none;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+}
+.dsh-panel.active {
+    display: flex;
+}
+.dsh-frame {
+    flex: 1;
+    width: 100%;
+    min-height: 0;
+    border: 0;
+    background-color: var(--bg-base);
+}
+.dsh-shell {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 24px;
+    text-align: center;
+}
+.dsh-notice {
+    flex: 0 0 auto;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--bg-border);
+    color: var(--text-muted);
+    font-size: 11px;
+}
+.dsh-notice .btn {
+    margin-left: 6px;
+}
+/* The mobile toolbar forces display over .hidden. Scope this override
+   to the active DSH surface; other tab controls stay unchanged. */
+body:has(.dsh-panel.active) #mobile-refresh-console-btn {
+    display: none !important;
+}
+.dsh-shell-text {
+    color: var(--text-muted);
+    max-width: 44ch;
+    font-size: 13px;
+}
+.dsh-preview-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    margin-top: 6px;
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--bg-border);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+.dsh-preview-btn:hover {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+}
+.dsh-online-badge {
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    opacity: 0.75;
 }
 
 /* Session Reviewer Premium CSS */
