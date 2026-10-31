@@ -1596,16 +1596,21 @@ test('mobile source menu supports keyboard, distinct inputs, and cancel drafts',
             await expect(attachButton).toHaveAttribute('aria-expanded', 'true');
             await expect(menuItems).toHaveCount(3);
             for (const target of [attachButton, ...(await menuItems.all())]) {
-                expect(
-                    await target.evaluate(
-                        (element) => element.getBoundingClientRect().height,
-                    ),
-                ).toBeGreaterThanOrEqual(44);
-                expect(
-                    await target.evaluate(
-                        (element) => element.getBoundingClientRect().width,
-                    ),
-                ).toBeGreaterThanOrEqual(44);
+                // Translated entrance frames can round a 44px rect below 44.
+                await expect
+                    .poll(() =>
+                        target.evaluate(
+                            (element) => element.getBoundingClientRect().height,
+                        ),
+                    )
+                    .toBeGreaterThanOrEqual(44);
+                await expect
+                    .poll(() =>
+                        target.evaluate(
+                            (element) => element.getBoundingClientRect().width,
+                        ),
+                    )
+                    .toBeGreaterThanOrEqual(44);
             }
             await page.keyboard.press('Escape');
             await expect(sourceMenu).toBeHidden();

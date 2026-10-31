@@ -326,15 +326,18 @@ test('a tablet drawer keeps sessions content and closes on a terminal tap', asyn
         );
         await expect(page.locator('.session-list-container')).toBeVisible();
         await expect(page.locator('#drawer-tabs-body')).toBeHidden();
-        expect(
-            await page.evaluate(() =>
-                Boolean(
-                    document
-                        .elementFromPoint(700, 400)
-                        ?.closest('.terminal-content .xterm'),
+        // A fading tab loader can still intercept taps after xterm appears.
+        await expect
+            .poll(() =>
+                page.evaluate(() =>
+                    Boolean(
+                        document
+                            .elementFromPoint(700, 400)
+                            ?.closest('.terminal-content .xterm'),
+                    ),
                 ),
-            ),
-        ).toBe(true);
+            )
+            .toBe(true);
         await page.touchscreen.tap(700, 400);
         await expect(sidebar).not.toHaveClass(/drawer-open/);
         expect(
