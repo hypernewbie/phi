@@ -42,7 +42,11 @@ func Span(ctx context.Context, name string, attrs ...any) (context.Context, func
 	tracer := otel.Tracer("github.com/hypernewbie/phi")
 	ctx, span := tracer.Start(ctx, name, trace.WithAttributes(toKV(attrs...)...))
 	start := time.Now()
+	ctx, gen, id, recorded := timingSpanStart(ctx, name)
 	return ctx, func(err error) {
+		if recorded {
+			timingSpanEnd(gen, id)
+		}
 		if err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())

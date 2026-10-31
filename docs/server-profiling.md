@@ -48,9 +48,42 @@ Require `elapsed_seconds > 0` and a nondecreasing CPU counter. Do not divide by 
 
 The optional `ownership` object reports known live/archive pane owners and three separate measures: `ring_capacity_bytes` (allocated backing capacity), `checkpoint_capacity_bytes` (retained ANSI checkpoint capacity), and `wasm_linear_bytes` (addressable WASM memory). These values are not additive and are not RSS estimates. `complete=false` means the view skipped one or more busy owners; check `skipped_owner_count`. A busy hub returns null counters and `reason="hub_busy"`. A missing hub returns `ownership: null`.
 
+## Capture operation timings (primary flame-graph path)
+
+Timing capture records explicit start/end intervals for API-handler requests plus fixed nested operation spans. It retains short requests that a ~100 Hz CPU sampler misses. Units are nanoseconds of handler elapsed time, which includes waits. This is not CPU usage, client latency, or an individual request timeline.
+
+Check status first and rendezvous on it. Never start a second capture while one is active.
+
+```bash
+curl --fail-with-body --max-time 5 --config "$DIAG_SESSION/client.curl" "$DIAG_URL/debug/phi/timing/status"
+# {"active":false,"capture_id":0,"schema_version":1}
+```
+
+```bash
+curl --fail-with-body --max-time 45 --config "$DIAG_SESSION/client.curl" \
+  --dump-header timing.headers --output timing.pprof \
+  "$DIAG_URL/debug/phi/timing?seconds=30"
+# Run the workload while the capture window is open.
+```
+
+Duration accepts `1` through `120` seconds and defaults to 30. Only one profile or timing capture runs at a time; a competitor gets HTTP 409. Do not retry a 409: wait for the active capture to finish, then start a new one. The success headers `X-Phi-Timing-Capture-ID`, `X-Phi-Timing-Complete`, and `X-Phi-Timing-Roots-Exported` describe the delivered file. A truncated download is failed evidence even with saved headers.
+
+Open the flame graph in the installed Go viewer:
+
+```bash
+go tool pprof -http=127.0.0.1:0 -no_browser timing.pprof
+# Open the printed URL, then the flamegraph view.
+```
+
+The profile carries one `phi_timing=` JSON comment with machine-readable counts: `roots_seen/admitted/exported/dropped`, `discarded_open/invalid/capacity`, `nodes_recorded/dropped`, `root_duration_ns`, `exported_span_counts`, and `complete`. `complete=true` means no loss. An empty capture is valid: zero roots, zero duration. Partial loss never reports as zero cost; check the counters.
+
+Graph meaning: each HTTP root name is the fixed method plus the registered mux pattern, for example `http GET /api/version`. Raw paths, queries, headers, and IDs never become names. Rectangles show exclusive self time: a root's width minus its children, so nested frames never double count. Adjacent siblings are valid; overlapping siblings, a child outside its parent, or a missing end rejects the whole root as invalid, never clamped. Independent roots may overlap in time, so their sum can exceed the capture window. The viewer aggregates identical paths and can filter frames, but it cannot reconstruct missing spans. Nested coverage is the ten existing fixed operation names only (`git.*`, `pty.spawn`, `clipboard.read`, `ws.connection`); uninstrumented functions and background workers do not appear.
+
+Budgets are fixed: 256 admitted roots, 4,096 nodes, depth 32 per capture. Overload discards with visible counts; capacity-limited captures favor earlier requests and are not a representative cost ranking.
+
 ## Capture profiles
 
-Profiles are captured to a mode-`0600` temporary file in the private session directory, then sent to the authenticated local client and removed. Only one profile capture can run at a time. Each profile is limited to 64 MiB. A slow or disconnected client cannot keep the server writing indefinitely. Server shutdown cancels an active CPU capture.
+CPU, heap, and goroutine profiles are drill-down tools alongside timing. They are captured to a mode-`0600` temporary file in the private session directory, then sent to the authenticated local client and removed. Only one profile capture can run at a time. Each profile is limited to 64 MiB. A slow or disconnected client cannot keep the server writing indefinitely. Server shutdown cancels an active CPU capture.
 
 ```bash
 curl --fail-with-body --max-time 140 --config "$DIAG_SESSION/client.curl" \
