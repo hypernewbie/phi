@@ -1506,15 +1506,22 @@ test('closed phone drawer allows the left-edge touch swipe', async ({
             document.documentElement.dataset.touchTrace = '';
         });
         await page.waitForTimeout(60);
+        // The terminal canvas keeps its own touch stream; use the input-bar edge
+        // to exercise the document-level drawer gesture.
         await dispatchTouchPath(page, [
-            { x: 10, y: 422 },
-            { x: 70, y: 422 },
-            { x: 140, y: 422 },
+            { x: 10, y: 820 },
+            { x: 70, y: 820 },
+            { x: 140, y: 820 },
         ]);
-        const touchTrace = await page.evaluate(
-            () => document.documentElement.dataset.touchTrace,
-        );
-        expect(touchTrace, 'real touch sequence').toContain('touchend:140');
+        await expect
+            .poll(
+                () =>
+                    page.evaluate(
+                        () => document.documentElement.dataset.touchTrace,
+                    ),
+                { message: 'real touch sequence' },
+            )
+            .toContain('touchend:140');
         await expect(page.locator('#sidebar-panel')).toHaveClass(/drawer-open/);
     } finally {
         await context.close();

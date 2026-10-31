@@ -70,9 +70,27 @@ test('a show-commit card selects an older hash and opens that hash in the pretty
     await expect(prettyButton).toHaveAccessibleName(
         `Open Pretty Diff · ${HASH.slice(0, 12)}`,
     );
-    const prettyBox = (await prettyButton.boundingBox())!;
-    const rowBox = (await card.locator('.sync-pretty-diff-row').boundingBox())!;
-    expect(prettyBox.width).toBeCloseTo(rowBox.width, 0);
+    // Opening Sync schedules a 60ms refresh that replaces the card DOM. Take
+    // both measurements in one browser task after the refreshed row is visible.
+    await expect
+        .poll(() =>
+            prettyButton.evaluateAll(([button]) => {
+                const row = button?.closest('.sync-pretty-diff-row');
+                if (!button || !row) return Number.POSITIVE_INFINITY;
+                const buttonBox = button.getBoundingClientRect();
+                const rowBox = row.getBoundingClientRect();
+                if (
+                    getComputedStyle(button).visibility !== 'visible' ||
+                    getComputedStyle(row).visibility !== 'visible' ||
+                    buttonBox.width === 0 ||
+                    rowBox.width === 0
+                ) {
+                    return Number.POSITIVE_INFINITY;
+                }
+                return buttonBox.width - rowBox.width;
+            }),
+        )
+        .toBeCloseTo(0, 0);
     expect(
         await prettyButton.evaluate(
             (element) => getComputedStyle(element).boxShadow,
