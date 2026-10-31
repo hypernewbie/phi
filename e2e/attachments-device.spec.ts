@@ -895,6 +895,7 @@ test('device attachments reach interactive Pi as images and readable files on de
                 );
                 const handoffPath = attachedHandoffPath(toolRequest);
                 expect(handoffPath).toContain('/attachments-v2/handoff/');
+                expect(handoffPath).toMatch(/\/att-[0-9a-f]{32}-note\.txt$/);
                 expect(handoffPath).not.toBe(storedFile.path);
                 const readResultRequest = provider.requests[beforeFile + 1]!;
                 expect(anthropicUserText(readResultRequest)).toContain(
