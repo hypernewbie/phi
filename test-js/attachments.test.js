@@ -271,6 +271,24 @@ describe('attachment v2 request helpers', () => {
         expect(lastInit.method).toBe('GET');
     });
 
+    it.each([undefined, { signal: new AbortController().signal }])(
+        'keeps JSON headers when the captured owner has no header helper (%s)',
+        async (scope) => {
+            fetchResponse = {
+                id: 'send',
+                state: 'unknown',
+                reason: 'uncertain',
+            };
+            await sendAttachmentPrompt({ ...owner, scope }, { id: 'send' });
+            expect(new Headers(lastInit.headers).get('Content-Type')).toBe(
+                'application/json',
+            );
+            expect(new Headers(lastInit.headers).get('X-Phi-Backend')).toBe(
+                'profile-a',
+            );
+        },
+    );
+
     it('posts the frozen snapshot and reads its status without replay', async () => {
         const body = {
             id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',

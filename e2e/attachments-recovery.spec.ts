@@ -853,7 +853,23 @@ test('pane switching keeps attachment drafts and sends with their captured pane'
         await contextReady;
 
         await page.locator('#input-textarea').fill('draft belongs to pane A');
-        await chooseFile(page, fixture.pngPath, false);
+        await page.locator('#attach-input-btn').click();
+        const choosing = page.waitForEvent('filechooser');
+        await page.getByRole('menuitem', { name: 'Device Files' }).click();
+        const chooser = await choosing;
+        await selectPane(page, paneB, false);
+        await page.locator('#input-textarea').fill('draft belongs to pane B');
+        await chooser.setFiles(fixture.pngPath);
+        await expect(page.locator('#input-textarea')).toHaveValue(
+            'draft belongs to pane B',
+        );
+        await expect(
+            page.locator('#attachment-strip .attachment-chip'),
+        ).toHaveCount(0);
+        await selectPane(page, paneA, false);
+        await expect(page.locator('#input-textarea')).toHaveValue(
+            'draft belongs to pane A',
+        );
         const chipA = page.locator('#attachment-strip .attachment-chip');
         await expect(chipA.locator('.attachment-state')).toHaveText('Ready', {
             timeout: 30_000,
@@ -864,8 +880,9 @@ test('pane switching keeps attachment drafts and sends with their captured pane'
         await expect(
             page.locator('#attachment-strip .attachment-chip'),
         ).toHaveCount(0);
-        await expect(page.locator('#input-textarea')).toHaveValue('');
-        await page.locator('#input-textarea').fill('draft belongs to pane B');
+        await expect(page.locator('#input-textarea')).toHaveValue(
+            'draft belongs to pane B',
+        );
         await chooseFile(page, fixture.pngPath, false);
         const chipB = page.locator('#attachment-strip .attachment-chip');
         await expect(chipB.locator('.attachment-state')).toHaveText('Ready', {

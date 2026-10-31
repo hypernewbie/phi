@@ -111,7 +111,9 @@ async function attachmentFetch<T>(
     );
     if (owner.scope?.signal?.aborted) onScopeAbort();
     if (externalSignal?.aborted) onExternalAbort();
-    const headers = owner.scope?.headers?.(init.headers) ?? {};
+    const headers =
+        owner.scope?.headers?.(init.headers) ??
+        Object.fromEntries(new Headers(init.headers).entries());
     if (owner.profileId) headers['X-Phi-Backend'] = owner.profileId;
     const operation = (async () => {
         if (controller.signal.aborted)

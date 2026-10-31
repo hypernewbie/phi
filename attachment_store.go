@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -520,22 +519,20 @@ func (s *AttachmentStore) SnapshotFile(ctx context.Context, id, paneID, sourcePa
 	if before.Size() > s.limits.maxFileBytes {
 		return AttachmentItem{}, errAttachmentLimit
 	}
-	data, err := io.ReadAll(io.LimitReader(file, s.limits.maxFileBytes+1))
-	if err != nil || int64(len(data)) > s.limits.maxFileBytes {
-		return AttachmentItem{}, errAttachmentChanged
+	// Put reserves the ingestion slot and quota before reading the source.
+	// Validate the descriptor and selected path again before publication.
+	finish := func() error {
+		after, err := file.Stat()
+		if err != nil || !after.Mode().IsRegular() || attachmentSourceFingerprint(after) != expectedFingerprint {
+			return errAttachmentChanged
+		}
+		pathInfo, err := os.Lstat(sourcePath)
+		if err != nil || !pathInfo.Mode().IsRegular() || attachmentSourceFingerprint(pathInfo) != expectedFingerprint {
+			return errAttachmentChanged
+		}
+		return nil
 	}
-	if err := ctx.Err(); err != nil {
-		return AttachmentItem{}, errAttachmentStorage
-	}
-	after, err := file.Stat()
-	if err != nil || !after.Mode().IsRegular() || attachmentSourceFingerprint(after) != expectedFingerprint || int64(len(data)) != after.Size() {
-		return AttachmentItem{}, errAttachmentChanged
-	}
-	pathInfo, err := os.Lstat(sourcePath)
-	if err != nil || !pathInfo.Mode().IsRegular() || attachmentSourceFingerprint(pathInfo) != expectedFingerprint {
-		return AttachmentItem{}, errAttachmentChanged
-	}
-	return s.Put(ctx, id, paneID, name, "", bytes.NewReader(data), nil)
+	return s.Put(ctx, id, paneID, name, "", file, finish)
 }
 
 func attachmentSourceFingerprint(info os.FileInfo) string {

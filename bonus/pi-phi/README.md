@@ -121,7 +121,7 @@ attachment prompt from Phi. PNG/JPEG files become native Pi image content.
 Other files become a JSON-quoted private snapshot path that Pi's normal file
 tools can read. Unsupported image formats fail clearly; they are not sent as
 paths. The browser and server limit each file to 25 MiB and prompt text to
-64 KiB. The current Phi MVP allows one file per send.
+64 KiB. Each send allows at most eight files and 50 MiB in total.
 
 The bridge receives generated references, never file bytes or browser paths.
 Phi provisions `PHI_PI_ATTACHMENT_ROOT` for each Pi process. The extension
