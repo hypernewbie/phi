@@ -14988,7 +14988,10 @@ export class TabManager {
 
         // Reuse the original button so rerenders keep its picker handlers.
         const attachmentButton = coderId === 'pi' ? this.attachInputBtn : null;
-        if (attachmentButton) this.presetsContainer.appendChild(attachmentButton);
+        if (attachmentButton) {
+            attachmentButton.classList.remove('input-quick-chip');
+            this.presetsContainer.appendChild(attachmentButton);
+        }
 
         // Collapsed input keeps only Interrupt and Expand visible.
         if (activeTab?.directMode) {
@@ -14999,9 +15002,9 @@ export class TabManager {
         this.presetsContainer.classList.remove('hidden');
 
         const isMobile = isCompactViewport();
-        // Compact moves the slash trigger and the control-key chips out of
-        // this row, so they ride with the input controls instead.
-        const compactChips = [];
+        // Compact keeps attachment, slash and control-key actions with the
+        // composer, outside the scrolling picker row.
+        const compactChips = attachmentButton ? [attachmentButton] : [];
 
         // 1. Render Static Coder Presets / Slash Menu
         if (hasCoderPresets) {
@@ -15356,7 +15359,7 @@ export class TabManager {
         }
     }
 
-    // Compact only: park the slash trigger and the control-key chips at the
+    // Compact only: park attachment, slash and control-key actions at the
     // start of the input controls, so the bottom row keeps just the pickers.
     // Idempotent: chips from an earlier render are removed before the move.
     _placeCompactQuickChips(chips = []) {

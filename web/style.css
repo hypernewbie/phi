@@ -3196,6 +3196,11 @@ body.has-terminal-bg
     max-width: calc(100vw - 24px);
 }
 
+#attach-input-btn.input-quick-chip:not(:hover, :focus-visible, [aria-expanded="true"]) {
+    background: transparent;
+    border-color: transparent;
+}
+
 @media (pointer: coarse) {
     #attach-input-btn,
     #attachment-source-dropup .dropup-model-btn {

@@ -60,7 +60,7 @@ beforeEach(() => {
 
 describe('presets row', () => {
     it.each([390, 1440])(
-        'keeps one icon-only paperclip in the bottom bar at %ipx',
+        'keeps one icon-only paperclip in its responsive location at %ipx',
         (width) => {
             Object.defineProperty(window, 'innerWidth', {
                 value: width,
@@ -88,57 +88,107 @@ describe('presets row', () => {
             tm.attachInputBtn.addEventListener('click', clicked);
             tm.renderPresets('pi');
             tm.renderPresets('pi');
-            expect(tm.presetsContainer.firstElementChild).toBe(
-                tm.attachInputBtn,
+            const actions = document.querySelector('.input-actions');
+            const host = width === 390 ? actions : tm.presetsContainer;
+            expect(host.firstElementChild).toBe(tm.attachInputBtn);
+            if (width === 390) {
+                expect(tm.attachInputBtn.nextElementSibling).toBe(
+                    actions.querySelector('.slash-trigger-btn'),
+                );
+                expect(
+                    tm.presetsContainer.querySelector('#attach-input-btn'),
+                ).toBeNull();
+            }
+            expect(document.querySelectorAll('#attach-input-btn')).toHaveLength(
+                1,
             );
-            expect(
-                tm.presetsContainer.querySelectorAll('#attach-input-btn'),
-            ).toHaveLength(1);
             tm.attachInputBtn.click();
             expect(clicked).toHaveBeenCalledTimes(1);
             tm.renderPresets('bash');
-            expect(
-                tm.presetsContainer.querySelector('#attach-input-btn'),
-            ).toBeNull();
+            expect(document.querySelector('#attach-input-btn')).toBeNull();
             tm.renderPresets('pi');
-            expect(tm.presetsContainer.firstElementChild).toBe(
-                tm.attachInputBtn,
-            );
+            expect(host.firstElementChild).toBe(tm.attachInputBtn);
             tm.attachInputBtn.click();
             expect(clicked).toHaveBeenCalledTimes(2);
+            for (const nextWidth of [width === 390 ? 1440 : 390, width]) {
+                Object.defineProperty(window, 'innerWidth', {
+                    value: nextWidth,
+                    configurable: true,
+                });
+                tm.renderPresets('pi');
+                expect(
+                    (nextWidth === 390 ? actions : tm.presetsContainer)
+                        .firstElementChild,
+                ).toBe(tm.attachInputBtn);
+                expect(
+                    document.querySelectorAll('#attach-input-btn'),
+                ).toHaveLength(1);
+                expect(
+                    tm.attachInputBtn.classList.contains('input-quick-chip'),
+                ).toBe(nextWidth === 390);
+            }
+            tm.attachInputBtn.click();
+            expect(clicked).toHaveBeenCalledTimes(3);
         },
     );
 
-    it('hides the paperclip while folded and restores its existing handler on expand', () => {
-        const tm = makeTm();
-        tm.attachInputBtn = new DOMParser()
-            .parseFromString(indexHtml, 'text/html')
-            .getElementById('attach-input-btn');
-        tm.directModeToggle = document.createElement('button');
-        tm.inputBarContainer = document.createElement('div');
-        const clicked = vi.fn();
-        tm.attachInputBtn.addEventListener('click', clicked);
-        const button = tm.attachInputBtn;
-        tm.renderPresets('pi');
-        tm.updateDirectModeUI(
-            { coder: 'pi', directMode: true, isAtBottom: true },
-            true,
-        );
-        expect(tm.presetsContainer.classList.contains('hidden')).toBe(true);
-        expect(tm.directModeToggle.getAttribute('aria-expanded')).toBe('false');
-        tm.updateDirectModeUI(
-            { coder: 'pi', directMode: false, isAtBottom: true },
-            true,
-        );
-        expect(tm.presetsContainer.classList.contains('hidden')).toBe(false);
-        expect(tm.directModeToggle.getAttribute('aria-expanded')).toBe('true');
-        expect(
-            tm.presetsContainer.querySelectorAll('#attach-input-btn'),
-        ).toHaveLength(1);
-        expect(tm.presetsContainer.firstElementChild).toBe(button);
-        button.click();
-        expect(clicked).toHaveBeenCalledTimes(1);
-    });
+    it.each([390, 1440])(
+        'hides the paperclip while folded and restores its existing handler on expand at %ipx',
+        (width) => {
+            Object.defineProperty(window, 'innerWidth', {
+                value: width,
+                configurable: true,
+            });
+            document.body.insertAdjacentHTML(
+                'afterbegin',
+                '<div id="input-bar-container"><div class="input-actions"></div></div>',
+            );
+            const tm = makeTm();
+            tm.attachInputBtn = new DOMParser()
+                .parseFromString(indexHtml, 'text/html')
+                .getElementById('attach-input-btn');
+            tm.directModeToggle = document.createElement('button');
+            tm.inputBarContainer = document.getElementById(
+                'input-bar-container',
+            );
+            const clicked = vi.fn();
+            tm.attachInputBtn.addEventListener('click', clicked);
+            const button = tm.attachInputBtn;
+            tm.renderPresets('pi');
+            tm.updateDirectModeUI(
+                { coder: 'pi', directMode: true, isAtBottom: true },
+                true,
+            );
+            expect(tm.presetsContainer.classList.contains('hidden')).toBe(true);
+            expect(tm.directModeToggle.getAttribute('aria-expanded')).toBe(
+                'false',
+            );
+            expect(
+                document.querySelector('.input-actions #attach-input-btn'),
+            ).toBeNull();
+            tm.updateDirectModeUI(
+                { coder: 'pi', directMode: false, isAtBottom: true },
+                true,
+            );
+            expect(tm.presetsContainer.classList.contains('hidden')).toBe(
+                false,
+            );
+            expect(tm.directModeToggle.getAttribute('aria-expanded')).toBe(
+                'true',
+            );
+            expect(document.querySelectorAll('#attach-input-btn')).toHaveLength(
+                1,
+            );
+            expect(
+                (width === 390
+                    ? document.querySelector('.input-actions')
+                    : tm.presetsContainer
+                ).firstElementChild,
+            ).toBe(button);
+            button.click();
+            expect(clicked).toHaveBeenCalledTimes(1);
+        },
+    );
 
     it('renders no ctrl+shift+x chip for any coder', () => {
         const tm = makeTm();

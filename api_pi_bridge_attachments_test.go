@@ -2,14 +2,19 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/hypernewbie/phi/internal/pibridge"
+	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
+	"github.com/hypernewbie/phi/pkg/pty"
 )
 
 func TestPiAttachmentStatusSurvivesPaneClosure(t *testing.T) {
@@ -89,6 +94,97 @@ func TestPiAttachmentPostPersistsRefusalAndIdempotentResult(t *testing.T) {
 	defer third.Body.Close()
 	if third.StatusCode != http.StatusConflict {
 		t.Fatalf("changed body status=%d", third.StatusCode)
+	}
+}
+
+func TestPiAttachmentDispatchRetainsValidatedTarget(t *testing.T) {
+	for _, change := range []string{"unchanged", "generation", "process"} {
+		t.Run(change, func(t *testing.T) {
+			withAttachmentTestGlobals(t)
+			b := startPiBridge(testBridgeHub())
+			if b == nil {
+				t.Fatal("bridge did not start")
+			}
+			defer b.Stop()
+			piBridge = b
+			const pane = "pane-attachment-target"
+			env, _, managed := b.Provision(pane, true)
+			if !managed {
+				t.Fatal("provision not managed")
+			}
+			b.Complete(&pty.PTYInstance{ID: pane})
+			open := func(generation uint64) pibridgepb.Integration_ConnectClient {
+				t.Helper()
+				stream, cancel := dialBridge(t, b, pane, env[piBridgeEnvProcess], env[piBridgeEnvToken])
+				t.Cleanup(cancel)
+				if err := stream.Send(&pibridgepb.PiToPhi{
+					PaneId: pane, ProcessId: env[piBridgeEnvProcess], RuntimeGeneration: generation,
+					Payload: &pibridgepb.PiToPhi_Hello{Hello: &pibridgepb.Hello{
+						ProtocolVersion: 1, SessionId: "session", RuntimeId: "runtime",
+						Capabilities: []string{pibridge.CapabilityLifecycle, pibridge.CapabilityAttachments},
+						CurrentState: &pibridgepb.StateSnapshot{
+							State: pibridgepb.LogicalState_LOGICAL_STATE_IDLE, SessionId: "session", LeafId: "leaf",
+							Model:               &pibridgepb.ModelSnapshot{Provider: "provider", Model: "model"},
+							AttachmentReadiness: &pibridgepb.AttachmentReadiness{Idle: true},
+						},
+					}},
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if msg, err := stream.Recv(); err != nil || msg.GetAccepted() == nil {
+					t.Fatalf("hello response=%v error=%v", msg, err)
+				}
+				return stream
+			}
+			stream := open(1)
+			processID, view, ok := b.AttachmentPaneView(pane)
+			if !ok {
+				t.Fatal("missing initial attachment context")
+			}
+			body := attachmentSendRequest{Pane: pane, Context: attachmentContextFromView(processID, view), Text: "inspect"}
+			// Admission has checked this snapshot. Replace the runtime before
+			// dispatch, keeping session, leaf, and model identical.
+			switch change {
+			case "generation":
+				stream = open(2)
+			case "process":
+				b.RevokePane(pane)
+				env, _, managed = b.Provision(pane, true)
+				if !managed {
+					t.Fatal("replacement provision not managed")
+				}
+				b.Complete(&pty.PTYInstance{ID: pane})
+				stream = open(1)
+			}
+			go func() {
+				msg, err := stream.Recv()
+				if err != nil || msg.GetAttachmentPromptRequest() == nil {
+					return
+				}
+				_ = stream.Send(&pibridgepb.PiToPhi{
+					PaneId: pane, ProcessId: msg.GetProcessId(), RuntimeGeneration: msg.GetRuntimeGeneration(),
+					Payload: &pibridgepb.PiToPhi_AttachmentPromptAck{AttachmentPromptAck: &pibridgepb.AttachmentPromptAck{
+						RequestId: msg.GetAttachmentPromptRequest().GetRequestId(),
+						Outcome:   pibridgepb.AttachmentPromptOutcome_ATTACHMENT_PROMPT_OUTCOME_DISPATCHED,
+					}},
+				})
+			}()
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			result, err := body.requestPrompt(ctx, []pibridge.AttachmentRef{{
+				Basename: "att-file.bin", MIMEType: "application/octet-stream", Kind: "file", SHA256: strings.Repeat("a", 64),
+			}}, false)
+			if change == "unchanged" {
+				if err != nil || result.Outcome != pibridgepb.AttachmentPromptOutcome_ATTACHMENT_PROMPT_OUTCOME_DISPATCHED {
+					t.Fatalf("unchanged target result=%+v error=%v", result, err)
+				}
+				return
+			}
+			var refusal *pibridge.AttachmentPromptRefusal
+			if !errors.As(err, &refusal) || refusal.Reason != "stale" {
+				t.Fatalf("changed %s must refuse as stale, result=%+v error=%v", change, result, err)
+			}
+		})
 	}
 }
 

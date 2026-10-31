@@ -265,15 +265,7 @@ func handlePiBridgeAttachmentSend(w http.ResponseWriter, r *http.Request) {
 		refuse("unsupported-model")
 		return
 	}
-	processID, view, viewOK := piBridge.AttachmentPaneView(body.Pane)
-	if !viewOK {
-		refuse("unavailable")
-		return
-	}
-	model := (*pibridgepb.ModelSnapshot)(nil)
-	if current.Model != nil {
-		model = &pibridgepb.ModelSnapshot{Provider: current.Model.Provider, Model: current.Model.ID}
-	}
+	processID := *body.Context.ProcessID
 	_, refs, err := attachmentStore.CreateHandoff(processID, body.Pane, body.AttachmentIDs)
 	if err != nil {
 		writeAttachmentStoreError(w, err)
@@ -293,7 +285,7 @@ func handlePiBridgeAttachmentSend(w http.ResponseWriter, r *http.Request) {
 			Kind: ref.Kind, SHA256: ref.SHA256,
 		})
 	}
-	outcome, err := piBridge.RequestPaneAttachmentPrompt(ctx, body.Pane, processID, view.Generation, body.Context.SessionIDValue(), body.Context.LeafIDValue(), model, body.Text, bridgeRefs, imageRequired)
+	outcome, err := body.requestPrompt(ctx, bridgeRefs, imageRequired)
 	if err != nil {
 		var refusal *pibridge.AttachmentPromptRefusal
 		var unknown *pibridge.AttachmentPromptUnknown
@@ -324,6 +316,17 @@ func handlePiBridgeAttachmentSend(w http.ResponseWriter, r *http.Request) {
 	}
 	record, _ = attachmentStore.Send(body.ID, body.Pane)
 	writeAttachmentSend(w, record)
+}
+
+// requestPrompt retains the validated snapshot's identity across preparation.
+// Sampling the latest process/generation here would retarget a stale send.
+func (body attachmentSendRequest) requestPrompt(ctx context.Context, refs []pibridge.AttachmentRef, imageRequired bool) (pibridge.AttachmentPromptResult, error) {
+	generation, _ := parsePositiveStamp(*body.Context.Generation)
+	var model *pibridgepb.ModelSnapshot
+	if body.Context.Model != nil {
+		model = &pibridgepb.ModelSnapshot{Provider: body.Context.Model.Provider, Model: body.Context.Model.ID}
+	}
+	return piBridge.RequestPaneAttachmentPrompt(ctx, body.Pane, *body.Context.ProcessID, generation, body.Context.SessionIDValue(), body.Context.LeafIDValue(), model, body.Text, refs, imageRequired)
 }
 
 func currentAttachmentContext(pane string) attachmentTargetContext {
