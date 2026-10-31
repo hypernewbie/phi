@@ -81,48 +81,64 @@ func TestConfigCacheReuseAndReload(t *testing.T) {
 }
 
 func TestConfigCacheAtomicReplaceSameMetadata(t *testing.T) {
-	path := withTempConfig(t)
-	resetConfigCache(t)
-	writePrimary(t, path, "theme_color = \"aaaa\"\n")
-	var n int
-	if cfg, err := cachedLoad(&n); err != nil || cfg.ThemeColor != "aaaa" {
-		t.Fatalf("seed: cfg=%+v err=%v", cfg, err)
-	}
-	orig, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Same-length replacement through a rename, with the original mtime and
-	// mode restored: only the inode differs, so only identity detects it.
-	tmp := path + ".new"
-	if err := os.WriteFile(tmp, []byte("theme_color = \"bbbb\"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(tmp, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(path, orig.ModTime(), orig.ModTime()); err != nil {
-		t.Fatal(err)
-	}
-	replaced, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if replaced.Size() != orig.Size() || !replaced.ModTime().Equal(orig.ModTime()) || replaced.Mode() != orig.Mode() {
-		t.Fatalf("fixture must preserve size/mtime/mode: before=%v after=%v", orig, replaced)
-	}
-	if os.SameFile(orig, replaced) {
-		t.Fatal("fixture must replace the inode")
-	}
-	cfg, err := cachedLoad(&n)
-	if err != nil || cfg.ThemeColor != "bbbb" {
-		t.Fatalf("replaced file served stale data: cfg=%+v err=%v", cfg, err)
-	}
-	if n != 2 {
-		t.Fatalf("same-metadata replacement read total %d, want 2", n)
+	for _, kind := range []string{"regular file", "symlink target"} {
+		t.Run(kind, func(t *testing.T) {
+			if kind == "symlink target" && runtime.GOOS == "windows" {
+				t.Skip("symlink creation may require elevated privileges on Windows")
+			}
+			path := withTempConfig(t)
+			resetConfigCache(t)
+			target := path
+			if kind == "symlink target" {
+				target = path + ".target"
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			writePrimary(t, target, "theme_color = \"aaaa\"\n")
+			var n int
+			for range 2 {
+				if cfg, err := cachedLoad(&n); err != nil || cfg.ThemeColor != "aaaa" {
+					t.Fatalf("seed: cfg=%+v err=%v", cfg, err)
+				}
+			}
+			if n != 1 {
+				t.Fatalf("unchanged %s was not cached: reads=%d", kind, n)
+			}
+			orig, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Restore size/mtime/mode after replacement: only the target's
+			// inode changes. For a symlink the link itself stays untouched.
+			tmp := target + ".new"
+			if err := os.WriteFile(tmp, []byte("theme_color = \"bbbb\"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(tmp, target); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chtimes(target, orig.ModTime(), orig.ModTime()); err != nil {
+				t.Fatal(err)
+			}
+			replaced, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if replaced.Size() != orig.Size() || !replaced.ModTime().Equal(orig.ModTime()) || replaced.Mode() != orig.Mode() {
+				t.Fatalf("fixture must preserve size/mtime/mode: before=%v after=%v", orig, replaced)
+			}
+			if os.SameFile(orig, replaced) {
+				t.Fatal("fixture must replace the inode")
+			}
+			cfg, err := cachedLoad(&n)
+			if err != nil || cfg.ThemeColor != "bbbb" || n != 2 {
+				t.Fatalf("replacement not reloaded: cfg=%+v err=%v reads=%d", cfg, err, n)
+			}
+		})
 	}
 }
 
@@ -160,44 +176,49 @@ pi = ["m1", "m2"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Mutate every mutable field class of the returned value.
-	first.ThemeColor = "MUT"
-	first.Workspaces[0] = "MUT"
-	first.Workspaces = append(first.Workspaces, "MUT")
-	first.ThinkingPresets[0] = "MUT"
-	first.MarkdownDirs[0] = "MUT"
-	first.QuickCommands[0].Name = "MUT"
-	first.TerminalCommands[0].Command = "MUT"
-	first.Peers[0].URL = "MUT"
-	first.ExpandedWorktrees["MUT"] = true
-	delete(first.ExpandedWorktrees, "/repo/a")
-	first.ActiveWorktrees["/repo/a"] = "MUT"
-	first.ModelPresets["pi"][0] = "MUT"
-	first.ModelPresets["MUT"] = []string{"x"}
-	*first.MobileUIFontFamily = "MUT"
-	*first.MobileUIFontSize = 99
-	*first.MobileTerminalFontFamily = "MUT"
-	*first.MobileTerminalFontSize = 99
-	*first.ReplayBufferBytes = 999
+	// Check both the initial miss and a subsequent hit: neither may expose
+	// mutable cache storage to its caller.
+	for range 2 {
+		// Mutate every mutable field class of the returned value.
+		first.ThemeColor = "MUT"
+		first.Workspaces[0] = "MUT"
+		first.Workspaces = append(first.Workspaces, "MUT")
+		first.ThinkingPresets[0] = "MUT"
+		first.MarkdownDirs[0] = "MUT"
+		first.QuickCommands[0].Name = "MUT"
+		first.TerminalCommands[0].Command = "MUT"
+		first.Peers[0].URL = "MUT"
+		first.ExpandedWorktrees["MUT"] = true
+		delete(first.ExpandedWorktrees, "/repo/a")
+		first.ActiveWorktrees["/repo/a"] = "MUT"
+		first.ModelPresets["pi"][0] = "MUT"
+		first.ModelPresets["MUT"] = []string{"x"}
+		*first.MobileUIFontFamily = "MUT"
+		*first.MobileUIFontSize = 99
+		*first.MobileTerminalFontFamily = "MUT"
+		*first.MobileTerminalFontSize = 99
+		*first.ReplayBufferBytes = 999
 
-	second, err := cachedLoad(&n)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 1 {
-		t.Fatalf("pristine reread cost a real read: total %d", n)
-	}
-	if second.ThemeColor != "amber" || second.Workspaces[0] != "/repo/a" || len(second.Workspaces) != 2 ||
-		second.ThinkingPresets[0] != "low" || second.MarkdownDirs[0] != "docs" ||
-		second.QuickCommands[0].Name != "q" || second.TerminalCommands[0].Command != "echo t" ||
-		second.Peers[0].URL != "http://p.test" || !second.ExpandedWorktrees["/repo/a"] ||
-		len(second.ExpandedWorktrees) != 1 || second.ActiveWorktrees["/repo/a"] != "w1" ||
-		second.ModelPresets["pi"][0] != "m1" || len(second.ModelPresets["pi"]) != 2 ||
-		len(second.ModelPresets) != 4 || // pi plus opencode/claude/agy defaults
-		*second.MobileUIFontFamily != "MUI" || *second.MobileUIFontSize != 21 ||
-		*second.MobileTerminalFontFamily != "MTF" || *second.MobileTerminalFontSize != 22 ||
-		second.MobileAppearanceRevision != 7 || *second.ReplayBufferBytes != 123 {
-		t.Fatalf("caller mutation leaked into cache: %+v", second)
+		second, err := cachedLoad(&n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Fatalf("pristine reread cost a real read: total %d", n)
+		}
+		if second.ThemeColor != "amber" || second.Workspaces[0] != "/repo/a" || len(second.Workspaces) != 2 ||
+			second.ThinkingPresets[0] != "low" || second.MarkdownDirs[0] != "docs" ||
+			second.QuickCommands[0].Name != "q" || second.TerminalCommands[0].Command != "echo t" ||
+			second.Peers[0].URL != "http://p.test" || !second.ExpandedWorktrees["/repo/a"] ||
+			len(second.ExpandedWorktrees) != 1 || second.ActiveWorktrees["/repo/a"] != "w1" ||
+			second.ModelPresets["pi"][0] != "m1" || len(second.ModelPresets["pi"]) != 2 ||
+			len(second.ModelPresets) != 4 || // pi plus opencode/claude/agy defaults
+			*second.MobileUIFontFamily != "MUI" || *second.MobileUIFontSize != 21 ||
+			*second.MobileTerminalFontFamily != "MTF" || *second.MobileTerminalFontSize != 22 ||
+			second.MobileAppearanceRevision != 7 || *second.ReplayBufferBytes != 123 {
+			t.Fatalf("caller mutation leaked into cache: %+v", second)
+		}
+		first = second
 	}
 
 	// A minimal file proves defaults land on the returned copy, not the raw entry.

@@ -588,9 +588,7 @@ export class MobileAppearanceStore {
         if (this.conflict)
             return 'Server settings changed. Choose which values to save.';
         if (this.pending) return 'Pending changes';
-        return this.confirmed
-            ? 'Saved'
-            : 'Using mobile defaults';
+        return this.confirmed ? 'Saved' : 'Using mobile defaults';
     }
     subscribe(listener: () => void): () => void {
         this.listeners.add(listener);

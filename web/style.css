@@ -5122,6 +5122,11 @@ html[data-appearance-profile="mobile"] .settings-modal :is(input, select, textar
     transition: border-color 0.15s;
 }
 
+/* Keep both digits visible beside the mobile size reset buttons. */
+#settings-mobile-appearance input[type="number"] {
+    min-width: 5em;
+}
+
 .settings-row input:focus,
 .settings-row select:focus {
     border-color: var(--accent);

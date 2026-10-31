@@ -352,9 +352,10 @@ async function mobileSettings(page: Page) {
     await expect(status).toHaveText(
         /^(Saved|Settings request cancelled or timed out)$/,
     );
-    // Reopen the standalone page after a cancelled initial background read:
-    // online and focus hints never fetch, so only an explicit load retries.
-    if ((await status.textContent()) !== 'Saved') await page.reload();
+    // Online and focus hints never fetch. Use the visible recovery action
+    // after a cancelled initial read, preserving the current document.
+    if ((await status.textContent()) !== 'Saved')
+        await page.locator('#settings-mobile-refresh').click();
     await expect(status).toHaveText('Saved');
 }
 async function persistedDrafts(page: Page) {
@@ -494,20 +495,23 @@ test('an edit queued behind a held save sends after acknowledgment without refet
         );
         let posts = 0,
             reads = 0;
-        await page.route(
-            '**/api/config/mobile-appearance',
-            async (route) => {
-                if (route.request().method() !== 'POST') {
-                    reads++;
-                    return route.continue();
-                }
-                posts++;
-                if (posts > 1) return route.continue();
-                const response = await route.fetch();
-                await firstHeld;
-                await route.fulfill({ response });
-            },
-        );
+        page.on('request', (request) => {
+            if (
+                request.method() === 'GET' &&
+                ['/api/config', '/api/config/mobile-appearance'].includes(
+                    new URL(request.url()).pathname,
+                )
+            )
+                reads++;
+        });
+        await page.route('**/api/config/mobile-appearance', async (route) => {
+            if (route.request().method() !== 'POST') return route.continue();
+            posts++;
+            if (posts > 1) return route.continue();
+            const response = await route.fetch();
+            await firstHeld;
+            await route.fulfill({ response });
+        });
         await page.locator('#settings-mobile-ui-font-size').fill('21');
         await expect.poll(() => posts).toBe(1);
         await page.locator('#settings-mobile-ui-font-size').fill('22');

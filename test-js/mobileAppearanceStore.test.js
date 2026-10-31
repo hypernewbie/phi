@@ -661,8 +661,7 @@ it('performs no recurring reads after success, error, or late completion', async
     await f.store.refresh();
     await vi.advanceTimersByTimeAsync(0);
     const gets = () =>
-        f.fetch.mock.calls.filter(([, init]) => init?.method !== 'POST')
-            .length;
+        f.fetch.mock.calls.filter(([, init]) => init?.method !== 'POST').length;
     expect(gets()).toBe(1);
     expect(f.inheritanceFetch).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(120_000);
@@ -698,8 +697,7 @@ it('sends never-dispatched drafts after an online event without fetching appeara
     await f.store.start();
     await vi.advanceTimersByTimeAsync(0);
     const gets = () =>
-        f.fetch.mock.calls.filter(([, init]) => init?.method !== 'POST')
-            .length;
+        f.fetch.mock.calls.filter(([, init]) => init?.method !== 'POST').length;
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
     f.store.edit({ ui_font_size: 21 });
     await settleEdit();
