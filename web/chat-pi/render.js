@@ -53,6 +53,7 @@ export function createStructuredTranscript(messages) {
     const capturedLength = messages.length;
     const raw = messages;
     return {
+        identity: raw,
         get length() {
             return capturedLength;
         },

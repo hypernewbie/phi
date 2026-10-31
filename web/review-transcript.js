@@ -1,5 +1,5 @@
 import { renderMarkdownSafe, highlightCodeIn } from './md-render.js';
-import { assistantErrorText, } from './chat-pi/render.js';
+import { assistantErrorText, renderTranscriptStructured, } from './chat-pi/render.js';
 import { renderBashExecution } from './chat-pi/bash-render.js';
 import { renderToolExecution, validatedToolDiff, } from './chat-pi/tool-render.js';
 /** Wrap a structured array as a source-compatible view without conversion. */
@@ -31,6 +31,107 @@ const SCROLL_NEAR_BOTTOM_PX = 40;
 // Bumped from 24→80 to tolerate 1ch border/padding on wrapper and
 // keep new pi messages pinned when user is near bottom.
 const SNAP_ZONE_PX = 80;
+const SEARCH_BATCH_SIZE = 50;
+const SEARCH_CHUNK_SIZE = 32 * 1024;
+const SEARCH_RESULT_LIMIT = 200;
+function searchTaskBoundary() {
+    return new Promise((resolve) => setTimeout(resolve, 0));
+}
+function escapeSearchQuery(query) {
+    return query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+function previousCodePoint(text, index, count) {
+    let at = index;
+    while (count-- > 0 && at > 0) {
+        const last = text.charCodeAt(at - 1);
+        const first = at > 1 ? text.charCodeAt(at - 2) : 0;
+        at -=
+            last >= 0xdc00 &&
+                last <= 0xdfff &&
+                first >= 0xd800 &&
+                first <= 0xdbff
+                ? 2
+                : 1;
+    }
+    return at;
+}
+function nextCodePoint(text, index, count) {
+    let at = index;
+    while (count-- > 0 && at < text.length) {
+        const first = text.charCodeAt(at);
+        const second = at + 1 < text.length ? text.charCodeAt(at + 1) : 0;
+        at +=
+            first >= 0xd800 &&
+                first <= 0xdbff &&
+                second >= 0xdc00 &&
+                second <= 0xdfff
+                ? 2
+                : 1;
+    }
+    return at;
+}
+function searchSnippet(text, index, matchLength) {
+    const start = previousCodePoint(text, index, 80);
+    const end = nextCodePoint(text, index + matchLength, 80);
+    return `${start > 0 ? '…' : ''}${text.slice(start, end)}${end < text.length ? '…' : ''}`;
+}
+async function findTextSnippet(text, pattern, query, isCurrent) {
+    const overlap = Math.max(2, query.length * 2);
+    let start = 0;
+    while (start < text.length && isCurrent()) {
+        let end = Math.min(text.length, start + SEARCH_CHUNK_SIZE);
+        if (end < text.length &&
+            end > start &&
+            text.charCodeAt(end - 1) >= 0xd800 &&
+            text.charCodeAt(end - 1) <= 0xdbff &&
+            text.charCodeAt(end) >= 0xdc00 &&
+            text.charCodeAt(end) <= 0xdfff)
+            end--;
+        const chunk = text.slice(start, end);
+        const match = pattern.exec(chunk);
+        if (match)
+            return searchSnippet(text, start + match.index, match[0].length);
+        if (end >= text.length)
+            break;
+        start = Math.max(start + 1, end - overlap);
+        if (start < text.length &&
+            text.charCodeAt(start) >= 0xdc00 &&
+            text.charCodeAt(start) <= 0xdfff &&
+            text.charCodeAt(start - 1) >= 0xd800 &&
+            text.charCodeAt(start - 1) <= 0xdbff)
+            start++;
+        await searchTaskBoundary();
+    }
+    return null;
+}
+async function findJsonSnippet(value, pattern, query, isCurrent, seen = new WeakSet(), depth = 0) {
+    if (!isCurrent() || depth > 64)
+        return null;
+    if (typeof value === 'string')
+        return findTextSnippet(value, pattern, query, isCurrent);
+    if (typeof value === 'number' || typeof value === 'boolean')
+        return findTextSnippet(String(value), pattern, query, isCurrent);
+    if (!value || typeof value !== 'object' || seen.has(value))
+        return null;
+    seen.add(value);
+    if (Array.isArray(value)) {
+        for (const item of value) {
+            const result = await findJsonSnippet(item, pattern, query, isCurrent, seen, depth + 1);
+            if (result !== null)
+                return result;
+        }
+        return null;
+    }
+    for (const [key, item] of Object.entries(value)) {
+        const keyMatch = await findTextSnippet(key, pattern, query, isCurrent);
+        if (keyMatch !== null)
+            return keyMatch;
+        const result = await findJsonSnippet(item, pattern, query, isCurrent, seen, depth + 1);
+        if (result !== null)
+            return result;
+    }
+    return null;
+}
 function roleLabel(role) {
     if (role === 'user')
         return 'User';
@@ -491,6 +592,10 @@ export function createReviewTranscriptView(root, options) {
         length: 0,
         slice: () => [],
     };
+    let sourceIdentity;
+    let sourceLength = 0;
+    let searchRevision = 0;
+    let activeSearch = null;
     let toolResults = new Map();
     let compactSnapshot = null;
     let liveMessages = null;
@@ -547,6 +652,7 @@ export function createReviewTranscriptView(root, options) {
                 retainedKeys.add(key);
                 const cached = cache.get(key);
                 const block = cached ?? buildCompactionBlock(info);
+                block.dataset.piMessageIndex = String(currentStart + index);
                 if (!cached)
                     cache.set(key, block);
                 fragment.appendChild(block);
@@ -865,6 +971,196 @@ export function createReviewTranscriptView(root, options) {
             return structuredMessages.length;
         return compactSnapshot.messages.length + 1 + liveMessages.length;
     }
+    function isCurrentSearch(run) {
+        return activeSearch === run && run.revision === searchRevision;
+    }
+    function publishSearch(run) {
+        if (!isCurrentSearch(run))
+            return;
+        try {
+            run.listener({
+                revision: run.revision,
+                results: [...run.results],
+                scanned: run.scanned,
+                complete: run.complete,
+                capped: run.capped,
+                failed: run.failed,
+            });
+        }
+        catch {
+            // A closed search surface cannot interrupt transcript updates.
+        }
+    }
+    function newSearchRun(owner, query, listener) {
+        return {
+            owner,
+            query,
+            revision: searchRevision,
+            pattern: new RegExp(escapeSearchQuery(query), 'iu'),
+            listener,
+            results: [],
+            scanned: 0,
+            complete: false,
+            capped: false,
+            failed: false,
+            scanning: false,
+            toolCalls: new Map(),
+        };
+    }
+    async function findMessageSnippet(message, run) {
+        const isCurrent = () => isCurrentSearch(run);
+        const segments = Array.isArray(message.segments)
+            ? message.segments
+            : [];
+        for (const segment of segments) {
+            if (!isCurrent())
+                return null;
+            if (segment.kind === 'text' || segment.kind === 'thinking') {
+                const match = await findTextSnippet(segment.text, run.pattern, run.query, isCurrent);
+                if (match !== null)
+                    return match;
+            }
+            else if (segment.kind === 'toolCall') {
+                const nameMatch = await findTextSnippet(segment.name, run.pattern, run.query, isCurrent);
+                if (nameMatch !== null)
+                    return nameMatch;
+                const argsMatch = await findJsonSnippet(segment.args, run.pattern, run.query, isCurrent);
+                if (argsMatch !== null)
+                    return argsMatch;
+            }
+            else if (segment.kind === 'toolResult') {
+                const resultMatch = await findTextSnippet(segment.content, run.pattern, run.query, isCurrent);
+                if (resultMatch !== null)
+                    return resultMatch;
+            }
+        }
+        const errorText = assistantErrorText(message);
+        return errorText
+            ? findTextSnippet(errorText, run.pattern, run.query, isCurrent)
+            : null;
+    }
+    async function scanSearch(run) {
+        if (run.scanning || !isCurrentSearch(run) || run.failed || run.capped)
+            return;
+        run.scanning = true;
+        try {
+            await searchTaskBoundary();
+            while (isCurrentSearch(run)) {
+                const total = combinedLength();
+                if (run.scanned >= total) {
+                    run.complete = true;
+                    publishSearch(run);
+                    return;
+                }
+                const start = run.scanned;
+                const end = Math.min(total, start + SEARCH_BATCH_SIZE);
+                const batch = combinedSlice(start, end);
+                if (batch.length === 0) {
+                    run.failed = true;
+                    publishSearch(run);
+                    return;
+                }
+                for (let offset = 0; offset < batch.length; offset++) {
+                    if (!isCurrentSearch(run))
+                        return;
+                    const combinedIndex = start + offset;
+                    const message = batch[offset];
+                    const compaction = message;
+                    let snippet = null;
+                    let kind = 'message';
+                    if (compaction.__compaction) {
+                        if (typeof compaction.info?.summary === 'string') {
+                            snippet = await findTextSnippet(compaction.info.summary, run.pattern, run.query, () => isCurrentSearch(run));
+                            kind = 'summary';
+                        }
+                    }
+                    else {
+                        for (const segment of message.segments ?? []) {
+                            if (segment.kind === 'toolCall' && segment.id)
+                                run.toolCalls.set(segment.id, combinedIndex);
+                        }
+                        snippet = await findMessageSnippet(message, run);
+                    }
+                    run.scanned = combinedIndex + 1;
+                    if (snippet !== null) {
+                        const pairedCallIndex = !compaction.__compaction &&
+                            message.role === 'toolResult' &&
+                            message.toolCallId
+                            ? run.toolCalls.get(message.toolCallId)
+                            : undefined;
+                        run.results.push({
+                            revision: run.revision,
+                            combinedIndex: pairedCallIndex ?? combinedIndex,
+                            kind,
+                            snippet,
+                        });
+                        if (run.results.length >= SEARCH_RESULT_LIMIT) {
+                            run.capped = true;
+                            publishSearch(run);
+                            return;
+                        }
+                    }
+                }
+                publishSearch(run);
+                await searchTaskBoundary();
+            }
+        }
+        catch {
+            if (isCurrentSearch(run)) {
+                run.failed = true;
+                publishSearch(run);
+            }
+        }
+        finally {
+            run.scanning = false;
+        }
+    }
+    function invalidateSearchIndexes() {
+        searchRevision++;
+        const previous = activeSearch;
+        if (!previous)
+            return;
+        const restarted = newSearchRun(previous.owner, previous.query, previous.listener);
+        activeSearch = restarted;
+        publishSearch(restarted);
+        void scanSearch(restarted);
+    }
+    function resumeSearchAfterGrowth() {
+        const run = activeSearch;
+        if (!run || run.capped || run.failed)
+            return;
+        if (run.scanned >= combinedLength())
+            return;
+        run.complete = false;
+        publishSearch(run);
+        void scanSearch(run);
+    }
+    function startStructuredSearch(query, listener) {
+        activeSearch = null;
+        if (!query) {
+            listener({
+                revision: searchRevision,
+                results: [],
+                scanned: 0,
+                complete: true,
+                capped: false,
+                failed: false,
+            });
+            return () => { };
+        }
+        const owner = {};
+        const run = newSearchRun(owner, query, listener);
+        activeSearch = run;
+        publishSearch(run);
+        void scanSearch(run);
+        return () => {
+            if (activeSearch?.owner === owner)
+                activeSearch = null;
+        };
+    }
+    function cancelStructuredSearch() {
+        activeSearch = null;
+    }
     function getNewestStart() {
         const total = compactSnapshot
             ? combinedLength()
@@ -942,6 +1238,12 @@ export function createReviewTranscriptView(root, options) {
         },
         setStructuredMessages(messages, partial, results) {
             const sourceRaw = asSource(messages);
+            const stablePrefix = sourceRaw.identity !== undefined &&
+                sourceRaw.identity === sourceIdentity &&
+                sourceRaw.length >= sourceLength;
+            const sourceGrew = stablePrefix && sourceRaw.length > sourceLength;
+            sourceIdentity = sourceRaw.identity;
+            sourceLength = sourceRaw.length;
             let source = sourceRaw;
             let sourceArr = null;
             if (compactSnapshot) {
@@ -970,6 +1272,13 @@ export function createReviewTranscriptView(root, options) {
             }
             toolResults = results;
             latestPartial = partial;
+            if (stablePrefix) {
+                if (sourceGrew)
+                    resumeSearchAfterGrowth();
+            }
+            else {
+                invalidateSearchIndexes();
+            }
             const newestTotal = compactSnapshot
                 ? combinedLength()
                 : source.length;
@@ -1048,6 +1357,36 @@ export function createReviewTranscriptView(root, options) {
             }
             return structuredMessages.slice(0, structuredMessages.length);
         },
+        searchStructured(query, onUpdate) {
+            return startStructuredSearch(query, onUpdate);
+        },
+        revealSearchResult(result) {
+            if (options.mode !== 'structured' ||
+                result.revision !== searchRevision ||
+                result.combinedIndex < 0 ||
+                result.combinedIndex >= combinedLength())
+                return false;
+            currentStart = Math.max(0, Math.min(result.combinedIndex - Math.floor(windowSize / 2), Math.max(0, combinedLength() - windowSize)));
+            rebuildStructuredWindow({
+                appendPartial: latestPartial,
+                partialStreaming: latestPartial !== '',
+            });
+            const target = transcript.querySelector(`[data-pi-message-index="${result.combinedIndex}"]`);
+            if (!target)
+                return false;
+            const targetRect = target.getBoundingClientRect();
+            const transcriptRect = transcript.getBoundingClientRect();
+            transcript.scrollTop = Math.max(0, transcript.scrollTop +
+                targetRect.top -
+                transcriptRect.top -
+                transcript.clientHeight / 2 +
+                target.clientHeight / 2);
+            syncJumpButton();
+            return true;
+        },
+        cancelSearch() {
+            cancelStructuredSearch();
+        },
         hasCompactSnapshot() {
             return !!compactSnapshot;
         },
@@ -1056,6 +1395,7 @@ export function createReviewTranscriptView(root, options) {
                 compactSnapshot = null;
                 liveMessages = null;
                 cache.clear();
+                invalidateSearchIndexes();
                 return;
             }
             const msgs = snapshot.messages;
@@ -1075,11 +1415,13 @@ export function createReviewTranscriptView(root, options) {
             liveMessages = [];
             currentStart = Math.max(0, compactSnapshot.messages.length + 1 - windowSize);
             cache.clear();
+            invalidateSearchIndexes();
         },
         clearCompactSnapshot() {
             compactSnapshot = null;
             liveMessages = null;
             cache.clear();
+            invalidateSearchIndexes();
             rebuildStructuredWindow({
                 appendPartial: latestPartial,
                 partialStreaming: latestPartial !== '',
@@ -1143,7 +1485,16 @@ export function createReviewTranscriptView(root, options) {
                             continue;
                         if (liveIds.has(msg.id) || snapIds.has(msg.id))
                             continue;
-                        old.push(msg);
+                        const structured = Array.isArray(msg.segments)
+                            ? msg
+                            : renderTranscriptStructured([
+                                msg,
+                            ])[0];
+                        if (structured)
+                            old.push({
+                                ...structured,
+                                id: msg.id,
+                            });
                     }
                     catch { }
                 }
@@ -1177,6 +1528,7 @@ export function createReviewTranscriptView(root, options) {
                     else
                         return false;
                 }
+                invalidateSearchIndexes();
                 const preHeight = transcript.scrollHeight;
                 currentStart = 0;
                 rebuildStructuredWindow({

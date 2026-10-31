@@ -3,6 +3,10 @@ import { mountChatPi } from './index.js';
 import { hideSubagentStrip } from './subagents.js';
 import type { ChatPiHandle, PiModel, PiRpcControls } from './index.js';
 import type { PiRpcStatus } from './render.js';
+import type {
+    TranscriptSearchResult,
+    TranscriptSearchUpdate,
+} from '../review-transcript.js';
 
 const chats = new Map<string, ChatPiHandle>();
 const lastFleetSnapshots = new Map<string, unknown>();
@@ -84,6 +88,21 @@ export function syncPiSubagentStrip(paneId: string): void {
 
 export function rpcChatSend(paneId: string, payload: string): boolean {
     return chats.get(paneId)?.send(payload) ?? false;
+}
+
+export function rpcChatSearch(
+    paneId: string,
+    query: string,
+    onUpdate: (update: TranscriptSearchUpdate) => void,
+): (() => void) | null {
+    return chats.get(paneId)?.searchTranscript(query, onUpdate) ?? null;
+}
+
+export function rpcChatReveal(
+    paneId: string,
+    result: TranscriptSearchResult,
+): boolean {
+    return chats.get(paneId)?.revealTranscriptSearchResult(result) ?? false;
 }
 
 export function rpcChatModels(paneId: string): Promise<PiModel[]> {

@@ -389,6 +389,7 @@ func main() {
 	http.HandleFunc("/api/attachments/v2/browse", handleAttachmentsV2Browse)
 	http.HandleFunc("/api/attachments/v2/server-items", handleAttachmentsV2ServerItem)
 	http.HandleFunc("/api/attachments/v2/items/", handleAttachmentsV2Item)
+	http.HandleFunc("/api/pi-bridge/transcript-search", handlePiBridgeTranscriptSearch)
 	http.HandleFunc("/api/attachments", handleAttachments)
 	http.HandleFunc("/api/clipboard", handleGetClipboard)
 	http.HandleFunc("/api/system/cpu", handleSystemCPU)

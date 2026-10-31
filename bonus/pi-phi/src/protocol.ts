@@ -23,6 +23,7 @@ export const MAX_SYNCBOARD_PENDING = 4;
 export const SYNCBOARD_CALL_TIMEOUT_MS = 15_000;
 export const CAPABILITY_ATTACHMENTS = 'pi.attachments.v3';
 export const CAPABILITY_STATE = 'pi.state.v2';
+export const CAPABILITY_TRANSCRIPT_SEARCH = 'pi.transcript-search.v1';
 /** Cap on skill entries per SkillsResponse; excess sets truncated. */
 export const MAX_SKILL_ENTRIES = 200;
 /**
@@ -86,6 +87,7 @@ const SUPPORTED = new Set([
     CAPABILITY_SYNCBOARD,
     CAPABILITY_ATTACHMENTS,
     CAPABILITY_STATE,
+    CAPABILITY_TRANSCRIPT_SEARCH,
 ]);
 
 /** Intersect advertised names with the supported set. Unknown names are ignored. */

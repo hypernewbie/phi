@@ -62,6 +62,12 @@ export function syncPiSubagentStrip(paneId) {
 export function rpcChatSend(paneId, payload) {
     return chats.get(paneId)?.send(payload) ?? false;
 }
+export function rpcChatSearch(paneId, query, onUpdate) {
+    return chats.get(paneId)?.searchTranscript(query, onUpdate) ?? null;
+}
+export function rpcChatReveal(paneId, result) {
+    return chats.get(paneId)?.revealTranscriptSearchResult(result) ?? false;
+}
 export function rpcChatModels(paneId) {
     return chats.get(paneId)?.getModels() ?? missingPane(paneId);
 }
