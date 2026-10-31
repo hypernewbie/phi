@@ -79,6 +79,7 @@ Runtime identity binds `(generation, runtime_id, session_id)`:
 | `pi.compact.v1`   | Native compaction on explicit user action        |
 | `pi.reload.v1`    | Native `/reload` dispatch from an interactive editor |
 | `pi.skills.v1`    | On-demand skill list and skill invocation        |
+| `pi.syncboard.v1` | Direct Pi tool for the owning Phi Syncboard      |
 
 Context, Compact, and Reload negotiate independently on every Hello
 from checked host availability: `pi.context.v1` needs `getContextUsage`;
@@ -178,6 +179,48 @@ lands in a runtime that replaced the one the list came from. Queue,
 admission, drop, and timeout semantics match history
 reads; Phi shows the picker only while the capability is live and
 shows nothing at all without it.
+
+## Native Syncboard tool
+
+`pi.syncboard.v1` is advertised only when the Phi extension owns the
+native `syncboard` tool registration. Phi negotiates the capability only
+when it has a Syncboard handler. Pi keeps the tool hidden until Phi accepts
+the capability, withdraws it when the stream loses availability, and checks
+availability again before each call. Without the bridge or capability, Pi
+keeps its existing tools and behavior.
+
+Pi sends `SyncboardRequest` (field 26) with a canonical positive decimal
+request ID. Phi answers `SyncboardResponse` (field 23) with the same ID.
+The request contains only an operation and operation data. It never names
+a coordinator URL. Phi reads its own current `sync_coordinator` setting for
+each call. A changed setting takes effect on the next call. An unset setting
+uses the owning Phi store directly. Phi also dispatches directly when a
+configured root `http` URL uses a literal IP address and port equal to the
+published listener address. It does not resolve hostnames. HTTPS, hostnames,
+path prefixes, wildcard listeners, other ports, and other addresses keep the
+HTTP path.
+
+The tool supports `list`, `get`, `upsert`, and `delete`. List returns board
+messages. Get returns the message or `{found:false,key}` for HTTP 404. Upsert
+stores the JSON value as the message value and returns the message. Delete
+returns `{deleted:true,key,already_absent:false}` for HTTP 200 and
+`{deleted:true,key,already_absent:true}` for HTTP 404. Phi rejects invalid
+input before dispatch. The caller must not retry a mutation when the outcome
+is unknown. Read the key after reconnection before deciding what to do.
+
+A refusal before dispatch returns `NOT_SENT`. A complete HTTP response
+returns `HTTP_RESPONSE`, including an HTTP error status. An internal handler
+response uses the same API status and body checks. The internal handler does
+not observe request cancellation. A local mutation can finish after its
+caller disconnects, so a lost reply remains `UNKNOWN`. A transport failure,
+invalid or oversized response, timeout, or lost reply also returns `UNKNOWN`.
+Phi never replays a request after dispatch. Duplicate or older request IDs
+are dropped. Requests run outside the stream reader and do not block
+lifecycle messages. The worker limit is four per peer.
+
+The value limit is 64 KiB and the response limit is 192 KiB. The Pi caller
+waits up to 15 seconds. Phi's remote HTTP request deadline is 10 seconds. The
+shared stream retains 16 KiB and two message slots for lifecycle traffic.
 
 ## Context telemetry
 
@@ -314,6 +357,11 @@ model text.
 | Send queue per peer          | 16 messages and 256 KiB    |
 | Pending history reads per peer | 4 (including awaiting replies) |
 | Pending compact per process    | 1, no waiting queue            |
+| Pending Syncboard requests per peer | 4                         |
+| Syncboard value JSON            | 64 KiB                          |
+| Syncboard response body         | 192 KiB                         |
+| Syncboard caller wait           | 15 s                            |
+| Syncboard coordinator request   | 10 s                            |
 | Compact caller wait            | 120 s server, 125 s browser; expiry reports unknown |
 | Blocked send                 | 5 s, then the stream ends  |
 | Journal rows retained        | 64, then gap latches       |

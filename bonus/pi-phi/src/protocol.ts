@@ -15,6 +15,12 @@ export const CAPABILITY_CONTEXT = 'pi.context.v1';
 export const CAPABILITY_COMPACT = 'pi.compact.v1';
 export const CAPABILITY_RELOAD = 'pi.reload.v1';
 export const CAPABILITY_SKILLS = 'pi.skills.v1';
+export const CAPABILITY_SYNCBOARD = 'pi.syncboard.v1';
+/** Bounds and deadlines for native Syncboard calls. */
+export const MAX_SYNCBOARD_VALUE_BYTES = 64 * 1024;
+export const MAX_SYNCBOARD_RESPONSE_BYTES = 192 * 1024;
+export const MAX_SYNCBOARD_PENDING = 4;
+export const SYNCBOARD_CALL_TIMEOUT_MS = 15_000;
 /** Cap on skill entries per SkillsResponse; excess sets truncated. */
 export const MAX_SKILL_ENTRIES = 200;
 /**
@@ -75,6 +81,7 @@ const SUPPORTED = new Set([
     CAPABILITY_COMPACT,
     CAPABILITY_RELOAD,
     CAPABILITY_SKILLS,
+    CAPABILITY_SYNCBOARD,
 ]);
 
 /** Intersect advertised names with the supported set. Unknown names are ignored. */

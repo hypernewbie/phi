@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type {
     ExtensionAPI,
     ExtensionContext,
+    ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
 import {
     ENV_PANE,
@@ -47,6 +48,19 @@ function mockPi(): {
         },
     } as unknown as ExtensionAPI;
     return { pi, handlers };
+}
+
+function mockPiWithTools(): {
+    pi: ExtensionAPI;
+    handlers: Map<string, (event: unknown, ctx: never) => unknown>;
+    tools: ToolDefinition[];
+} {
+    const { pi, handlers } = mockPi();
+    const tools: ToolDefinition[] = [];
+    const surface = pi as unknown as Record<string, unknown>;
+    surface.registerTool = (tool: ToolDefinition) => tools.push(tool);
+    surface.getAllTools = () => tools.map((tool) => ({ name: tool.name }));
+    return { pi, handlers, tools };
 }
 
 function mockCtx(): ExtensionContext {
@@ -216,8 +230,8 @@ describe('settings disable', () => {
         ) => () => void;
         let factoryTime = true;
         if (opts.throwInFactory) {
-            const innerOn = surface['on'] as AnyOn;
-            surface['on'] = (
+            const innerOn = surface.on as AnyOn;
+            surface.on = (
                 event: string,
                 handler: (event: unknown, ctx: never) => unknown,
             ) => {
@@ -228,7 +242,7 @@ describe('settings disable', () => {
         } else {
             factoryTime = false;
         }
-        surface['getSettings'] = () => {
+        surface.getSettings = () => {
             if (factoryTime) {
                 throw new Error(
                     'Extension runtime not initialized. Action methods cannot be called during extension loading.',
@@ -253,8 +267,8 @@ describe('settings disable', () => {
         expect(rec.calls).toEqual([]);
         expect(readCredsFromEnv()).toBeNull();
         // Later events stay inert.
-        handlers.get('agent_start')!({}, mockCtx() as never);
-        handlers.get('agent_settled')!(
+        handlers.get('agent_start')?.({}, mockCtx() as never);
+        handlers.get('agent_settled')?.(
             { type: 'agent_settled' },
             mockCtx() as never,
         );
@@ -280,16 +294,15 @@ describe('settings disable', () => {
         setEnv();
         let settings: unknown = {};
         const { pi, handlers } = mockPi();
-        (pi as unknown as Record<string, unknown>)['getSettings'] = () =>
-            settings;
+        (pi as unknown as Record<string, unknown>).getSettings = () => settings;
         const rec = recordingRuntime();
         createExtension(pi, { makeRuntime: () => rec.runtime });
-        handlers.get('session_start')!({}, mockCtxWithSession('s1') as never);
+        handlers.get('session_start')?.({}, mockCtxWithSession('s1') as never);
         expect(rec.calls).toEqual(['start']);
         // Replacement session with the disable now visible: the
         // claimed runtime is shut down and credentials are scrubbed.
         settings = { phiBridge: { enabled: false } };
-        handlers.get('session_start')!({}, mockCtxWithSession('s2') as never);
+        handlers.get('session_start')?.({}, mockCtxWithSession('s2') as never);
         expect(rec.calls).toEqual(['start', 'shutdown']);
         expect(readCredsFromEnv()).toBeNull();
     });
@@ -307,18 +320,18 @@ describe('settings disable', () => {
             const { pi, handlers } = mockPiWithSettings(settings);
             const rec = recordingRuntime();
             createExtension(pi, { makeRuntime: () => rec.runtime });
-            handlers.get('session_start')!({}, mockCtx() as never);
+            handlers.get('session_start')?.({}, mockCtx() as never);
             expect(rec.calls).toEqual(['start']);
         }
         resetOwnerSlotForTest();
         setEnv();
         const { pi, handlers } = mockPi();
-        (pi as unknown as Record<string, unknown>)['getSettings'] = () => {
+        (pi as unknown as Record<string, unknown>).getSettings = () => {
             throw new Error('boom');
         };
         const rec = recordingRuntime();
         createExtension(pi, { makeRuntime: () => rec.runtime });
-        handlers.get('session_start')!({}, mockCtx() as never);
+        handlers.get('session_start')?.({}, mockCtx() as never);
         expect(rec.calls).toEqual(['start']);
     });
 });
@@ -333,15 +346,15 @@ describe('owner guard', () => {
         createExtension(first.pi, { makeRuntime: () => rec1.runtime });
         createExtension(second.pi, { makeRuntime: () => rec2.runtime });
         const ctx = mockCtx();
-        first.handlers.get('session_start')!({}, ctx as never);
-        second.handlers.get('session_start')!({}, ctx as never);
+        first.handlers.get('session_start')?.({}, ctx as never);
+        second.handlers.get('session_start')?.({}, ctx as never);
         expect(rec1.calls).toEqual(['start']);
         expect(rec2.calls).toEqual([]);
         // Only the owner forwards events.
-        first.handlers.get('agent_start')!({}, ctx as never);
-        second.handlers.get('agent_start')!({}, ctx as never);
-        first.handlers.get('thinking_level_select')!({}, ctx as never);
-        second.handlers.get('thinking_level_select')!({}, ctx as never);
+        first.handlers.get('agent_start')?.({}, ctx as never);
+        second.handlers.get('agent_start')?.({}, ctx as never);
+        first.handlers.get('thinking_level_select')?.({}, ctx as never);
+        second.handlers.get('thinking_level_select')?.({}, ctx as never);
         expect(rec1.calls).toEqual([
             'start',
             'agent_start',
@@ -349,8 +362,8 @@ describe('owner guard', () => {
         ]);
         expect(rec2.calls).toEqual([]);
         // Only the owner releases on shutdown.
-        second.handlers.get('session_shutdown')!({}, ctx as never);
-        first.handlers.get('agent_settled')!(
+        second.handlers.get('session_shutdown')?.({}, ctx as never);
+        first.handlers.get('agent_settled')?.(
             { type: 'agent_settled' },
             ctx as never,
         );
@@ -363,10 +376,10 @@ describe('owner guard', () => {
         const rec1 = recordingRuntime();
         createExtension(first.pi, { makeRuntime: () => rec1.runtime });
         const ctx = mockCtx();
-        first.handlers.get('session_start')!({}, ctx as never);
+        first.handlers.get('session_start')?.({}, ctx as never);
         expect(process.env[ENV_TOKEN]).toBeUndefined();
         expect(readCredsFromEnv()).toBeNull();
-        first.handlers.get('session_shutdown')!({}, ctx as never);
+        first.handlers.get('session_shutdown')?.({}, ctx as never);
         expect(rec1.calls).toEqual(['start', 'shutdown']);
         // Reload: no env remains, but the stash provisions a fresh runtime.
         const reloaded = mockPi();
@@ -383,12 +396,15 @@ describe('owner guard', () => {
         const rec = recordingRuntime();
         createExtension(pi, { makeRuntime: () => rec.runtime });
         const ctx = mockCtx();
-        handlers.get('session_start')!({}, ctx as never);
-        handlers.get('agent_settled')!(
+        handlers.get('session_start')?.({}, ctx as never);
+        handlers.get('agent_settled')?.(
             { type: 'agent_settled', aborted: true },
             ctx as never,
         );
-        handlers.get('agent_settled')!({ type: 'agent_settled' }, ctx as never);
+        handlers.get('agent_settled')?.(
+            { type: 'agent_settled' },
+            ctx as never,
+        );
         expect(rec.calls).toEqual(['start', 'settled:true', 'settled:false']);
     });
 
@@ -398,8 +414,8 @@ describe('owner guard', () => {
         const rec = recordingRuntime();
         createExtension(pi, { makeRuntime: () => rec.runtime });
         const ctx = mockCtx();
-        handlers.get('session_start')!({}, ctx as never);
-        handlers.get('agent_end')!(
+        handlers.get('session_start')?.({}, ctx as never);
+        handlers.get('agent_end')?.(
             {
                 type: 'agent_end',
                 messages: [
@@ -410,11 +426,11 @@ describe('owner guard', () => {
             },
             ctx as never,
         );
-        handlers.get('agent_end')!(
+        handlers.get('agent_end')?.(
             { type: 'agent_end', messages: [{ role: 'user' }] },
             ctx as never,
         );
-        handlers.get('agent_end')!({ type: 'agent_end' }, ctx as never);
+        handlers.get('agent_end')?.({ type: 'agent_end' }, ctx as never);
         expect(rec.calls).toEqual([
             'start',
             'agent_end:error',
@@ -429,8 +445,8 @@ describe('owner guard', () => {
         const rec = recordingRuntime();
         createExtension(pi, { makeRuntime: () => rec.runtime });
         const ctx = mockCtxWithTelemetry();
-        handlers.get('session_start')!({}, ctx as never);
-        handlers.get('turn_end')!({ type: 'turn_end' }, ctx as never);
+        handlers.get('session_start')?.({}, ctx as never);
+        handlers.get('turn_end')?.({ type: 'turn_end' }, ctx as never);
         expect(rec.calls).toEqual(['start', 'turn_end']);
     });
 
@@ -493,11 +509,11 @@ describe('owner guard', () => {
             },
         });
         void rec;
-        handlers.get('session_start')!(
+        handlers.get('session_start')?.(
             {},
             mockCtxWithSession('sess-a') as never,
         );
-        handlers.get('session_start')!(
+        handlers.get('session_start')?.(
             {},
             mockCtxWithSession('sess-b') as never,
         );
@@ -516,8 +532,8 @@ describe('owner guard', () => {
             },
         });
         const ctx = mockCtxWithSession('sess-a');
-        handlers.get('session_start')!({}, ctx as never);
-        handlers.get('session_start')!({}, ctx as never);
+        handlers.get('session_start')?.({}, ctx as never);
+        handlers.get('session_start')?.({}, ctx as never);
         expect(generations).toEqual([1n]);
     });
 });
@@ -550,19 +566,19 @@ describe('telemetry view and compaction latch', () => {
         const { pi, handlers } = mockPi();
         const cap = capturing();
         createExtension(pi, { makeRuntime: cap.makeRuntime });
-        handlers.get('session_start')!({}, mockCtxWithTelemetry() as never);
+        handlers.get('session_start')?.({}, mockCtxWithTelemetry() as never);
         expect(cap.views).toHaveLength(1);
         const view = cap.views[0]!;
         expect(typeof view.getContextUsage).toBe('function');
-        expect(view.getContextUsage!()).toEqual({
+        expect(view.getContextUsage?.()).toEqual({
             tokens: 1010,
             contextWindow: 8192,
             percent: 12.3,
         });
         expect(typeof view.isIdle).toBe('function');
-        expect(view.isIdle!()).toBe(true);
+        expect(view.isIdle?.()).toBe(true);
         expect(typeof view.hasPendingMessages).toBe('function');
-        expect(view.hasPendingMessages!()).toBe(false);
+        expect(view.hasPendingMessages?.()).toBe(false);
         expect(typeof view.compact).toBe('function');
     });
 
@@ -571,7 +587,7 @@ describe('telemetry view and compaction latch', () => {
         const { pi, handlers } = mockPi();
         const cap = capturing();
         createExtension(pi, { makeRuntime: cap.makeRuntime });
-        handlers.get('session_start')!({}, mockCtx() as never);
+        handlers.get('session_start')?.({}, mockCtx() as never);
         expect(cap.views).toHaveLength(1);
         const view = cap.views[0]!;
         expect(view.getContextUsage).toBeUndefined();
@@ -590,11 +606,11 @@ describe('telemetry view and compaction latch', () => {
                 return recordingRuntime().runtime;
             },
         });
-        handlers.get('session_start')!(
+        handlers.get('session_start')?.(
             {},
             mockCtxWithSession('sess-a') as never,
         );
-        handlers.get('session_start')!(
+        handlers.get('session_start')?.(
             {},
             mockCtxWithSession('sess-b') as never,
         );
@@ -713,5 +729,60 @@ describe('message start', () => {
         );
         expect(rec.calls).toContain('message_start:user');
         expect(rec.calls).toContain('message_start:assistant');
+    });
+});
+
+describe('native Syncboard tool', () => {
+    it('registers hidden, exposes only after negotiation, and withdraws on loss', () => {
+        setEnv();
+        const { pi, handlers, tools } = mockPiWithTools();
+        const rec = recordingRuntime();
+        let enabled = false;
+        let availability: ((available: boolean) => void) | undefined;
+        createExtension(pi, {
+            makeRuntime: (
+                _creds,
+                _generation,
+                _compact,
+                _reload,
+                canRegister,
+                onAvailable,
+            ) => {
+                enabled = canRegister === true;
+                availability = onAvailable;
+                return rec.runtime;
+            },
+        });
+        handlers.get('session_start')?.({}, mockCtx() as never);
+        expect(enabled).toBe(true);
+        expect(tools).toHaveLength(1);
+        expect(tools[0]?.name).toBe('syncboard');
+        expect(tools[0]?.exposure).toBe('hidden');
+
+        availability?.(true);
+        expect(tools.at(-1)?.exposure).toBe('direct');
+        availability?.(false);
+        expect(tools.at(-1)?.exposure).toBe('hidden');
+    });
+
+    it('does not advertise when the host lacks native tool APIs', () => {
+        setEnv();
+        const { pi, handlers } = mockPi();
+        const rec = recordingRuntime();
+        let enabled: boolean | undefined;
+        createExtension(pi, {
+            makeRuntime: (
+                _creds,
+                _generation,
+                _compact,
+                _reload,
+                canRegister,
+            ) => {
+                enabled = canRegister;
+                return rec.runtime;
+            },
+        });
+        handlers.get('session_start')?.({}, mockCtx() as never);
+        expect(enabled).toBe(false);
     });
 });

@@ -25,17 +25,18 @@ type Server struct {
 
 	reg *registry
 
-	grpcServer     *grpc.Server
-	onSettled      func(paneID, processID string, generation, runID uint64, outcome pibridgepb.RunOutcome)
-	onState        func(paneID, processID string, generation, pubRev uint64, running, hasState bool, model, thinkingLevel string, caps []string, usage *ContextUsage, readiness *Readiness, reload *ReloadReadiness)
-	onPeerDown     func(paneID, processID string, generation uint64)
-	histSeq        atomic.Uint64
-	modelsSeq      atomic.Uint64
-	setSeq         atomic.Uint64
-	thinkingSeq    atomic.Uint64
-	setThinkingSeq atomic.Uint64
-	skillsSeq      atomic.Uint64
-	invokeSkillSeq atomic.Uint64
+	grpcServer       *grpc.Server
+	onSettled        func(paneID, processID string, generation, runID uint64, outcome pibridgepb.RunOutcome)
+	onState          func(paneID, processID string, generation, pubRev uint64, running, hasState bool, model, thinkingLevel string, caps []string, usage *ContextUsage, readiness *Readiness, reload *ReloadReadiness)
+	onPeerDown       func(paneID, processID string, generation uint64)
+	histSeq          atomic.Uint64
+	modelsSeq        atomic.Uint64
+	setSeq           atomic.Uint64
+	thinkingSeq      atomic.Uint64
+	setThinkingSeq   atomic.Uint64
+	skillsSeq        atomic.Uint64
+	invokeSkillSeq   atomic.Uint64
+	syncboardHandler SyncboardHandler
 	// compactSeq allocates monotonic server-side Compact request
 	// IDs. IDs are positive canonical decimal uint64 strings,
 	// never wrap, and are never reused or browser-supplied.
@@ -129,6 +130,12 @@ func (s *Server) fireState(l *lease, p *peer, pubRev uint64, snap *pibridgepb.St
 // fire: detaching a peer that is no longer active is a no-op.
 func (s *Server) SetOnPeerDown(fn func(paneID, processID string, generation uint64)) {
 	s.onPeerDown = fn
+}
+
+// SetSyncboardHandler enables the Syncboard capability. Call before serving.
+// Without a handler, the server does not negotiate pi.syncboard.v1.
+func (s *Server) SetSyncboardHandler(fn SyncboardHandler) {
+	s.syncboardHandler = fn
 }
 
 // Stop drains gracefully for shutdownDrainTimeout, then force-stops.
@@ -487,7 +494,7 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 	if hello.GetRuntimeId() == "" || hello.GetSessionId() == "" {
 		return status.Error(codes.InvalidArgument, "runtime and session required")
 	}
-	caps := negotiateCapabilities(hello.GetCapabilities())
+	caps := negotiateCapabilities(hello.GetCapabilities(), s.syncboardHandler != nil)
 
 	l.mu.Lock()
 	gen := first.GetRuntimeGeneration()
@@ -787,6 +794,9 @@ func (s *Server) handleMessage(l *lease, p *peer, msg *pibridgepb.PiToPhi) error
 		return nil
 	case msg.GetInvokeSkillAck() != nil:
 		s.deliverInvokeSkill(l, p, msg.GetInvokeSkillAck())
+		return nil
+	case msg.GetSyncboardRequest() != nil:
+		s.receiveSyncboard(l, p, msg.GetSyncboardRequest())
 		return nil
 	default:
 		return status.Error(codes.InvalidArgument, "unsupported payload")

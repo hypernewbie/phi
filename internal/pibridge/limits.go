@@ -51,6 +51,8 @@ const (
 	CapabilityReload = "pi.reload.v1"
 	// CapabilitySkills is the on-demand skill list/invocation capability name.
 	CapabilitySkills = "pi.skills.v1"
+	// CapabilitySyncboard is the fixed Syncboard REST capability.
+	CapabilitySyncboard = "pi.syncboard.v1"
 
 	// maxHistoryPending bounds history requests awaiting replies per
 	// peer. Excess callers fail fast into fallback; the map never
@@ -71,6 +73,14 @@ const (
 	// peer, each, independently. Excess callers fail fast; the maps
 	// never grow under a wedged or silent extension.
 	maxSkillsPending = 4
+	// maxSyncboardPending bounds coordinator calls awaiting dispatch or response.
+	maxSyncboardPending = 4
+	// Syncboard values and responses stay below the bridge frame limit.
+	MaxSyncboardValueBytes    = 64 * 1024
+	MaxSyncboardResponseBytes = 192 * 1024
+	// Syncboard responses preserve room for lifecycle traffic in the peer queue.
+	syncboardLifecycleHeadroomBytes    = 16 * 1024
+	syncboardLifecycleHeadroomMessages = 2
 	// maxSkillEntries caps one skill list; a longer list is truncated
 	// and flagged, never silently partial.
 	maxSkillEntries = 200

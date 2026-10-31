@@ -13,11 +13,14 @@ import {
     ReloadDispatchOutcome,
     RunOutcome,
     StateSnapshot,
+    SyncboardOperation,
+    SyncboardOutcome,
 } from '../src/gen/bridge.js';
 import {
     CAPABILITY_COMPACT,
     CAPABILITY_LIFECYCLE,
     CAPABILITY_RELOAD,
+    CAPABILITY_SYNCBOARD,
 } from '../src/protocol.js';
 import { BridgeTestClient } from '../src/test-client.js';
 import { BridgeChannel } from '../src/channel.js';
@@ -49,6 +52,10 @@ interface ControlResponse {
     outcome?: string;
     reason?: string;
     requestId?: string;
+    syncboardCalls?: number;
+    syncboardMutations?: number;
+    syncboardPending?: number;
+    syncboardMessage?: { key: string; value: string };
 }
 
 let server: ReturnType<typeof spawn>;
@@ -804,6 +811,171 @@ describe('reload', () => {
         expect(client.receivedReloadRequests()).toBe(2);
         await client.close();
     }, 30_000);
+});
+
+describe('Syncboard Go ↔ TypeScript interop', () => {
+    it('routes CRUD through the negotiated capability and preserves API results', async () => {
+        const capabilities = [CAPABILITY_LIFECYCLE, CAPABILITY_SYNCBOARD];
+        const { client } = await makeClient('pane-syncboard-crud', {
+            capabilities,
+        });
+        const accepted = await client.connect();
+        expect(accepted.capabilities).toContain(CAPABILITY_SYNCBOARD);
+        try {
+            const before = await control({ op: 'syncboard-stats' });
+            const key = 'interop-key';
+            const valueJson = '{"nested":{"ok":true}}';
+            const upsert = await client.requestSyncboard(
+                SyncboardOperation.SYNCBOARD_OPERATION_UPSERT,
+                key,
+                Buffer.from(valueJson),
+            );
+            expect(upsert).toMatchObject({
+                outcome: SyncboardOutcome.SYNCBOARD_OUTCOME_HTTP_RESPONSE,
+                httpStatus: 200,
+            });
+            expect(
+                JSON.parse(Buffer.from(upsert.bodyJson).toString('utf8')),
+            ).toMatchObject({
+                key,
+                value: valueJson,
+            });
+
+            const get = await client.requestSyncboard(
+                SyncboardOperation.SYNCBOARD_OPERATION_GET,
+                key,
+            );
+            expect(
+                JSON.parse(Buffer.from(get.bodyJson).toString('utf8')),
+            ).toMatchObject({
+                key,
+                value: valueJson,
+            });
+            const list = await client.requestSyncboard(
+                SyncboardOperation.SYNCBOARD_OPERATION_LIST,
+                '',
+            );
+            expect(
+                JSON.parse(Buffer.from(list.bodyJson).toString('utf8')),
+            ).toContainEqual(
+                expect.objectContaining({ key, value: valueJson }),
+            );
+            const missing = await client.requestSyncboard(
+                SyncboardOperation.SYNCBOARD_OPERATION_GET,
+                'missing-key',
+            );
+            expect(missing).toMatchObject({
+                outcome: SyncboardOutcome.SYNCBOARD_OUTCOME_HTTP_RESPONSE,
+                httpStatus: 404,
+            });
+            expect(missing.bodyJson.byteLength).toBe(0);
+            const deleted = await client.requestSyncboard(
+                SyncboardOperation.SYNCBOARD_OPERATION_DELETE,
+                key,
+            );
+            expect(deleted.httpStatus).toBe(200);
+            expect(deleted.bodyJson.byteLength).toBe(0);
+            const absent = await client.requestSyncboard(
+                SyncboardOperation.SYNCBOARD_OPERATION_DELETE,
+                key,
+            );
+            expect(absent.httpStatus).toBe(404);
+            expect(absent.bodyJson.byteLength).toBe(0);
+            const stats = await control({ op: 'syncboard-stats' });
+            expect(stats.syncboardCalls).toBe((before.syncboardCalls ?? 0) + 6);
+            expect(stats.syncboardMutations).toBe(
+                (before.syncboardMutations ?? 0) + 3,
+            );
+        } finally {
+            await client.close();
+        }
+    }, 30_000);
+
+    it('keeps lifecycle edges and snapshots live while a response is held', async () => {
+        const pane = 'pane-syncboard-held';
+        const sessionId = `sess-${pane}`;
+        const { client, process } = await makeClient(pane, {
+            capabilities: [CAPABILITY_LIFECYCLE, CAPABILITY_SYNCBOARD],
+        });
+        await client.connect();
+        let pending: ReturnType<typeof client.requestSyncboard> | null = null;
+        try {
+            const before = await control({ op: 'syncboard-stats' });
+            expect((await control({ op: 'syncboard-hold' })).ok).toBe(true);
+            pending = client.requestSyncboard(
+                SyncboardOperation.SYNCBOARD_OPERATION_LIST,
+                '',
+            );
+            expect(
+                (await control({ op: 'syncboard-wait', timeoutMs: 5000 })).ok,
+            ).toBe(true);
+            expect(await control({ op: 'syncboard-stats' })).toMatchObject({
+                syncboardCalls: (before.syncboardCalls ?? 0) + 1,
+                syncboardPending: 1,
+            });
+
+            client.sendStarted(1n, 1n);
+            client.sendSettled(2n, 1n, RunOutcome.RUN_OUTCOME_COMPLETED);
+            client.sendSnapshot(
+                StateSnapshot.create({
+                    state: LogicalState.LOGICAL_STATE_IDLE,
+                    sessionId,
+                    leafId: `leaf-${pane}`,
+                    stateRevision: 1n,
+                }),
+            );
+            await client.drain();
+            await expect
+                .poll(() => control({ op: 'inspect', process }), {
+                    timeout: 5000,
+                })
+                .toMatchObject({
+                    journalLast: '2',
+                    hasState: true,
+                    hasPeer: true,
+                });
+            expect(await control({ op: 'syncboard-stats' })).toMatchObject({
+                syncboardPending: 1,
+                syncboardCalls: (before.syncboardCalls ?? 0) + 1,
+            });
+
+            expect((await control({ op: 'syncboard-release' })).ok).toBe(true);
+            await expect(pending!).resolves.toMatchObject({
+                outcome: SyncboardOutcome.SYNCBOARD_OUTCOME_HTTP_RESPONSE,
+                httpStatus: 200,
+            });
+            const after = await control({ op: 'syncboard-stats' });
+            expect(after.syncboardPending ?? 0).toBe(0);
+            expect(after.syncboardCalls).toBe((before.syncboardCalls ?? 0) + 1);
+        } finally {
+            await control({ op: 'syncboard-release' });
+            await pending?.catch(() => {});
+            await client.close();
+        }
+    }, 30_000);
+
+    it('refuses requests when the capability was not negotiated', async () => {
+        const { client } = await makeClient('pane-syncboard-nocap');
+        await client.connect();
+        try {
+            const before = await control({ op: 'syncboard-stats' });
+            const result = await client.requestSyncboard(
+                SyncboardOperation.SYNCBOARD_OPERATION_LIST,
+                '',
+            );
+            expect(result).toMatchObject({
+                outcome: SyncboardOutcome.SYNCBOARD_OUTCOME_NOT_SENT,
+                reason: 'unavailable',
+            });
+            const after = await control({ op: 'syncboard-stats' });
+            expect(after.syncboardCalls ?? 0).toBe(before.syncboardCalls ?? 0);
+            expect(after.syncboardMutations ?? 0).toBe(
+                before.syncboardMutations ?? 0,
+            );
+        } finally {
+            await client.close();
+        }
+    }, 20_000);
 });
 
 describe('slow peer', () => {
