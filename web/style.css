@@ -5400,7 +5400,7 @@ html[data-phi-config-page] .settings-modal {
     [data-panel-mode="tabs"] .drawer-tabs-toolbar {
         display: block;
         flex: 0 0 auto;
-        padding: 8px 12px;
+        padding: 8px 32px 8px 12px;
         border-bottom: 1px solid var(--bg-border);
     }
 
