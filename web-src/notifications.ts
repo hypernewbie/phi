@@ -261,7 +261,7 @@ function ensureShell(doc: Document): NotificationShell {
         trigger = makeButton(
             doc,
             'header-notifications-btn',
-            'header-btn icon-only',
+            'btn btn-primary btn-compact btn-icon header-btn icon-only',
             '',
         );
         ownedDom.push(trigger);

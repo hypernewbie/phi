@@ -157,7 +157,7 @@ function ensureShell(doc) {
     const ownedDom = [];
     let trigger = doc.getElementById('header-notifications-btn');
     if (!trigger) {
-        trigger = makeButton(doc, 'header-notifications-btn', 'header-btn icon-only', '');
+        trigger = makeButton(doc, 'header-notifications-btn', 'btn btn-primary btn-compact btn-icon header-btn icon-only', '');
         ownedDom.push(trigger);
         trigger.title = 'Notifications';
         trigger.setAttribute('aria-label', 'Notifications');
