@@ -4655,7 +4655,14 @@ export class TabManager {
             return true;
         });
 
+        // Search selects matches, including during delayed live-output
+        // refreshes. Those are not copy gestures: the HTTP clipboard fallback
+        // focuses a hidden textarea and would take focus from the find bar.
+        let selectingSearchMatch = false;
+        searchAddon.onBeforeSearch?.(() => { selectingSearchMatch = true; });
+        searchAddon.onAfterSearch?.(() => { selectingSearchMatch = false; });
         term.onSelectionChange(() => {
+            if (selectingSearchMatch) return;
             const sel = term.getSelection();
             if (sel) {
                 this.copyTextRobustly(sel, true);
