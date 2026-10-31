@@ -7799,7 +7799,7 @@ export class TabManager {
     }
 
     syncBackendPin(paneId, pinned) {
-        if (this.tabs.get(paneId)?.coder === 'dsh-preview') return;
+        if (this.tabs?.get(paneId)?.coder === 'dsh-preview') return;
         fetch(`/api/terminals/${paneId}/pin`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -7810,7 +7810,7 @@ export class TabManager {
     }
 
     syncBackendMark(paneId, marked) {
-        if (this.tabs.get(paneId)?.coder === 'dsh-preview') return;
+        if (this.tabs?.get(paneId)?.coder === 'dsh-preview') return;
         fetch(`/api/terminals/${paneId}/mark`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -7915,7 +7915,7 @@ export class TabManager {
     }
 
     syncBackendTitle(paneId, title) {
-        if (this.tabs.get(paneId)?.coder === 'dsh-preview') return Promise.resolve();
+        if (this.tabs?.get(paneId)?.coder === 'dsh-preview') return Promise.resolve();
         return fetch(`/api/terminals/${paneId}/title`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
