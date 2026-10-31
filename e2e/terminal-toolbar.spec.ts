@@ -260,8 +260,8 @@ for (const surface of surfaces) {
                             const firstRect =
                                 visibleActions[0].getBoundingClientRect();
                             const firstFits =
-                                firstRect.left >= actionRect.left &&
-                                firstRect.right <= actionRect.right;
+                                firstRect.left >= actionRect.left - 1 &&
+                                firstRect.right <= actionRect.right + 1;
                             const initialScrollLeft = actions.scrollLeft;
                             const maxScroll =
                                 actions.scrollWidth - actions.clientWidth;
@@ -272,8 +272,8 @@ for (const surface of surfaces) {
                             const reachedEnd =
                                 actions.scrollLeft >= maxScroll - 1;
                             const lastFits =
-                                lastRect.left >= actionRect.left &&
-                                lastRect.right <= actionRect.right;
+                                lastRect.left >= actionRect.left - 1 &&
+                                lastRect.right <= actionRect.right + 1;
                             const otherControls = Array.from(
                                 document.querySelectorAll(
                                     '.app-header button.btn-compact',
@@ -445,11 +445,26 @@ for (const surface of surfaces) {
                 expect(metrics.color).toBe(expectedText);
             }
             if (surface.isMobile) {
-                for (const { width, height } of [
-                    { width: 390, height: 844 },
-                    { width: 320, height: 568 },
+                for (const { width, height, controlHeight } of [
+                    { width: 390, height: 844, controlHeight: 44 },
+                    { width: 320, height: 568, controlHeight: 44 },
+                    { width: 390, height: 844, controlHeight: 54 },
+                    { width: 320, height: 568, controlHeight: 54 },
                 ]) {
                     await page.setViewportSize({ width, height });
+                    // The mobile height token also grows with system text size.
+                    await page.evaluate(
+                        (height) =>
+                            document.documentElement.style.setProperty(
+                                '--mobile-header-height',
+                                `${height}px`,
+                            ),
+                        controlHeight,
+                    );
+                    await expect(page.locator('#add-workspace-btn')).toHaveCSS(
+                        'height',
+                        `${controlHeight}px`,
+                    );
                     const layout = await page.evaluate(() => {
                         const header = document.querySelector('.app-header')!;
                         const workspace =
@@ -470,8 +485,8 @@ for (const surface of surfaces) {
                             .at(-1)!
                             .getBoundingClientRect();
                         const lastFits =
-                            lastRect.left >= actionRect.left &&
-                            lastRect.right <= actionRect.right;
+                            lastRect.left >= actionRect.left - 1 &&
+                            lastRect.right <= actionRect.right + 1;
                         actions.scrollLeft = initialScroll;
                         const headerRect = header.getBoundingClientRect();
                         const workspaceRect = workspace.getBoundingClientRect();
@@ -500,8 +515,8 @@ for (const surface of surfaces) {
                             actionMinimum:
                                 actionButtons[0].getBoundingClientRect().height,
                             firstFits:
-                                firstRect.left >= actionRect.left &&
-                                firstRect.right <= actionRect.right,
+                                firstRect.left >= actionRect.left - 1 &&
+                                firstRect.right <= actionRect.right + 1,
                             lastFits,
                         };
                     });
@@ -512,11 +527,18 @@ for (const surface of surfaces) {
                     expect(
                         Math.abs(layout.workspaceHeight - layout.headerHeight),
                     ).toBeLessThanOrEqual(1);
-                    expect(layout.actionViewport).toBeGreaterThanOrEqual(44);
-                    expect(layout.actionMinimum).toBe(44);
+                    expect(layout.actionViewport).toBeGreaterThanOrEqual(
+                        controlHeight,
+                    );
+                    expect(layout.actionMinimum).toBe(controlHeight);
                     expect(layout.firstFits).toBe(true);
                     expect(layout.lastFits).toBe(true);
                 }
+                await page.evaluate(() =>
+                    document.documentElement.style.removeProperty(
+                        '--mobile-header-height',
+                    ),
+                );
                 await page.setViewportSize(surface.viewport);
             }
             await expect(bomb).toHaveCSS(

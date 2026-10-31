@@ -86,7 +86,6 @@ function fixtureEnv(
         if (value !== undefined) env[key] = value;
     }
     if (overrides) Object.assign(env, overrides);
-    delete env.PHI_E2E_VERIFY_OWNERSHIP;
     env.HOME = home;
     env.USERPROFILE = home;
     env.APPDATA = home;

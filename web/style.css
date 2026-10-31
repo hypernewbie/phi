@@ -899,8 +899,14 @@ html[data-sync="stale"] .brand .logo {
     letter-spacing: 1px;
 }
 .panel-header h2,
-.tab-action-btn.desktop-sidebar-toggle:not(.btn-compact) {
+.panel-header .tab-action-btn.desktop-sidebar-toggle {
     color: var(--text-muted);
+}
+/* In the sessions heading, keep the toggle styled as part of the title.
+   In the tab bar restore slot it uses the shared compact button palette. */
+.panel-header .tab-action-btn.desktop-sidebar-toggle {
+    background: transparent;
+    border: 0;
 }
 
 #sidebar-panel .panel-header-actions {
@@ -3712,6 +3718,9 @@ body.has-terminal-bg
 #pi-rpc-model-dropup .pi-rpc-dropup-meta {
     font-size: 10px;
     font-weight: 400;
+    /* Keep long identities from consuming the model name's entire width. */
+    flex-shrink: 1;
+    max-width: 55%;
 }
 #pi-rpc-skills-dropup .pi-rpc-dropup-meta {
     font-size: 10px;
@@ -5607,8 +5616,9 @@ html[data-phi-config-page] .settings-modal {
     .workspace-area {
         box-sizing: border-box;
         flex: 0 1 auto;
-        max-width: 140px;
-        min-width: 140px;
+        /* Two square buttons plus the workspace selector and its spacing. */
+        max-width: calc(2 * var(--btn-compact-height) + 52px);
+        min-width: calc(2 * var(--btn-compact-height) + 52px);
         height: var(--btn-compact-height);
         margin: 0 4px;
         gap: 2px;

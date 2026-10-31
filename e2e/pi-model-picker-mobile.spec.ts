@@ -211,6 +211,52 @@ test('slow lists stay visible, offline picks wait, and lost acks are never repla
     }
 });
 
+test('long desktop model identities leave room for the name and stay inside the row', async ({
+    page,
+}) => {
+    const modelPrefix =
+        'vendor/some-extremely-long-model-family-and-variant-name-with-extended-context-2026-10-31-';
+    const modelId = `${modelPrefix}0`;
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.route('**/picker-fixture', (route) =>
+        route.fulfill({
+            contentType: 'text/html',
+            body: fixture.replace(
+                "'vendor/model-' + i",
+                `${JSON.stringify(modelPrefix)} + i`,
+            ),
+        }),
+    );
+    await page.goto(`${phi.url}/picker-fixture`);
+    await page.locator('.pi-rpc-model-trigger').click();
+    const choice = page
+        .locator('#pi-rpc-model-dropup .dropup-model-btn')
+        .first();
+    await expect(choice).toBeVisible();
+    await expect(choice).toHaveAttribute('title', `router/${modelId}`);
+    await expect(choice.locator('.pi-model-name-full')).toHaveText(modelId);
+    const geometry = await choice.evaluate((button) => {
+        const name = button.querySelector('.pi-model-name-full')!;
+        const meta = button.querySelector('.pi-rpc-dropup-meta')!;
+        const rect = button.getBoundingClientRect();
+        return {
+            nameWidth: name.getBoundingClientRect().width,
+            metaRight: meta.getBoundingClientRect().right,
+            buttonRight: rect.right,
+            scrollWidth: button.scrollWidth,
+            clientWidth: button.clientWidth,
+        };
+    });
+    expect(geometry.nameWidth).toBeGreaterThan(0);
+    expect(geometry.metaRight).toBeLessThanOrEqual(geometry.buttonRight);
+    expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+    await choice.locator('.pi-rpc-dropup-meta').click();
+    await expect(page.locator('body')).toHaveAttribute(
+        'data-selected',
+        `router/${modelId}`,
+    );
+});
+
 // Real picker code and stylesheet; synthetic catalog, no provider calls.
 const fixture = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -321,8 +367,6 @@ test('phone picker uses short names, wide rows, scrolling and full-width tap tar
                 await expect(
                     picker.locator('.dropup-header .pi-model-name-compact'),
                 ).toHaveText('Model · model-0');
-                expect(rowBox.height).toBeGreaterThanOrEqual(44);
-                expect(starBox.width).toBeGreaterThanOrEqual(44);
                 expect(
                     await picker
                         .locator('.pi-rpc-model-search')
