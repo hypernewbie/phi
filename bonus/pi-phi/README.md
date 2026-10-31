@@ -51,7 +51,7 @@ The reader checks a private Pi editor field, so compatibility requires a host ch
 ## Transcript search
 
 Ctrl+F or Cmd+F opens search for the active pane. A connected Pi pane with
-`pi.transcript-search.v1` can search user, assistant, and tool-result text on
+`pi.transcript-search.v2` can search user, assistant, and tool-result text on
 its active branch, including messages before compaction. Thinking, tool
 arguments, images, hidden state, and sibling branches are excluded.
 

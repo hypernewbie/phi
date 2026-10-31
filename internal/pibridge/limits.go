@@ -59,7 +59,7 @@ const (
 	CapabilityState = "pi.state.v2"
 	maxStatePending = 4
 	// CapabilityTranscriptSearch is the bounded active-branch search capability.
-	CapabilityTranscriptSearch = "pi.transcript-search.v1"
+	CapabilityTranscriptSearch = "pi.transcript-search.v2"
 
 	// maxHistoryPending bounds history requests awaiting replies per
 	// peer. Excess callers fail fast into fallback; the map never

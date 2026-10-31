@@ -204,7 +204,7 @@ test('managed Pi transcript search works through the find bar on desktop and tou
                 state: 'managed',
                 connected: true,
                 capabilities: expect.arrayContaining([
-                    'pi.transcript-search.v1',
+                    'pi.transcript-search.v2',
                 ]),
             });
         const bridge = await paneBridge(request, phi.url, pane);

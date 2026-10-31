@@ -1050,7 +1050,7 @@ for (const version of versions) {
         if (!view.runtimeId) fail(version.name, 'runtime id missing');
         if (
             (view.caps || []).join(',') !==
-            'pi.compact.v1,pi.context.v1,pi.lifecycle.v1,pi.models.v1,pi.skills.v1,pi.syncboard.v1,pi.thinking.v1,pi.transcript-search.v1'
+            'pi.compact.v1,pi.context.v1,pi.lifecycle.v1,pi.models.v1,pi.skills.v1,pi.syncboard.v1,pi.thinking.v1,pi.transcript-search.v2'
         ) {
             fail(version.name, 'accepted caps', (view.caps || []).join(','));
         }
@@ -1703,7 +1703,7 @@ for (const version of versions) {
                 }
                 if (
                     (tuiView.caps || []).join(',') !==
-                    'pi.attachments.v3,pi.compact.v1,pi.context.v1,pi.history.v1,pi.lifecycle.v1,pi.models.v1,pi.reload.v1,pi.skills.v1,pi.state.v2,pi.syncboard.v1,pi.thinking.v1,pi.transcript-search.v1'
+                    'pi.attachments.v3,pi.compact.v1,pi.context.v1,pi.history.v1,pi.lifecycle.v1,pi.models.v1,pi.reload.v1,pi.skills.v1,pi.state.v2,pi.syncboard.v1,pi.thinking.v1,pi.transcript-search.v2'
                 ) {
                     fail(
                         version.name,

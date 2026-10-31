@@ -139,7 +139,9 @@ export interface PiToPhi {
     | { $case: "invokeSkillAck"; value: InvokeSkillAck }
     | { $case: "reloadAck"; value: ReloadAck }
     | { $case: "syncboardRequest"; value: SyncboardRequest }
-    | { $case: "transcriptSearchResponse"; value: TranscriptSearchResponse }
+    | //
+    /** Field 27 belongs to AttachmentPromptAck on main. */
+    { $case: "transcriptSearchResponse"; value: TranscriptSearchResponse }
     | undefined;
 }
 
@@ -161,7 +163,9 @@ export interface PhiToPi {
     | { $case: "invokeSkillRequest"; value: InvokeSkillRequest }
     | { $case: "reloadRequest"; value: ReloadRequest }
     | { $case: "syncboardResponse"; value: SyncboardResponse }
-    | { $case: "transcriptSearchRequest"; value: TranscriptSearchRequest }
+    | //
+    /** Fields 24/25 belong to AttachmentPromptRequest/StateRequest on main. */
+    { $case: "transcriptSearchRequest"; value: TranscriptSearchRequest }
     | undefined;
 }
 
@@ -721,7 +725,7 @@ export const PiToPhi: MessageFns<PiToPhi> = {
         SyncboardRequest.encode(message.payload.value, writer.uint32(210).fork()).join();
         break;
       case "transcriptSearchResponse":
-        TranscriptSearchResponse.encode(message.payload.value, writer.uint32(218).fork()).join();
+        TranscriptSearchResponse.encode(message.payload.value, writer.uint32(226).fork()).join();
         break;
     }
     return writer;
@@ -879,8 +883,8 @@ export const PiToPhi: MessageFns<PiToPhi> = {
             message.payload = { $case: "syncboardRequest", value: SyncboardRequest.decode(reader, reader.uint32()) };
             continue;
           }
-          case 27: {
-            if (tag !== 218) {
+          case 28: {
+            if (tag !== 226) {
               break;
             }
 
@@ -1070,7 +1074,7 @@ export const PhiToPi: MessageFns<PhiToPi> = {
         SyncboardResponse.encode(message.payload.value, writer.uint32(186).fork()).join();
         break;
       case "transcriptSearchRequest":
-        TranscriptSearchRequest.encode(message.payload.value, writer.uint32(194).fork()).join();
+        TranscriptSearchRequest.encode(message.payload.value, writer.uint32(210).fork()).join();
         break;
     }
     return writer;
@@ -1218,8 +1222,8 @@ export const PhiToPi: MessageFns<PhiToPi> = {
             message.payload = { $case: "syncboardResponse", value: SyncboardResponse.decode(reader, reader.uint32()) };
             continue;
           }
-          case 24: {
-            if (tag !== 194) {
+          case 26: {
+            if (tag !== 210) {
               break;
             }
 

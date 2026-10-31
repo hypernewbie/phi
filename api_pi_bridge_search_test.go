@@ -39,7 +39,7 @@ func dialTranscriptPane(t *testing.T, b *Bridge, pane string) (pibridgepb.Integr
 		PaneId: pane, ProcessId: proc, RuntimeGeneration: 1,
 		Payload: &pibridgepb.PiToPhi_Hello{Hello: &pibridgepb.Hello{
 			ProtocolVersion: 1, SessionId: "sess", RuntimeId: "rt",
-			Capabilities: []string{"pi.lifecycle.v1", "pi.transcript-search.v1"},
+			Capabilities: []string{"pi.lifecycle.v1", "pi.transcript-search.v2"},
 			CurrentState: &pibridgepb.StateSnapshot{
 				State: pibridgepb.LogicalState_LOGICAL_STATE_IDLE, SessionId: "sess", LeafId: "leaf",
 				Model: &pibridgepb.ModelSnapshot{Provider: "p", Model: "m"},

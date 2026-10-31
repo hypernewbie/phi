@@ -160,7 +160,7 @@ func TestRequestTranscriptSearchEmptyBranchAndInvalidResponseStayNonfatal(t *tes
 func TestRequestTranscriptSearchCapabilityGenerationAndTimeout(t *testing.T) {
 	s, sock, cleanup := testServer(t)
 	defer cleanup()
-	stream, process, _, cancel := openLeaseStream(t, s, sock, "pane-ts3", CapabilityLifecycle)
+	stream, process, _, cancel := openLeaseStream(t, s, sock, "pane-ts3", CapabilityLifecycle, "pi.transcript-search.v1")
 	defer cancel()
 	request := TranscriptSearchRequest{Query: "needle", Initial: true}
 	if _, err := s.RequestTranscriptSearch(context.Background(), process, 1, request); err == nil || !strings.Contains(err.Error(), "not negotiated") {

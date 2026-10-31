@@ -698,7 +698,8 @@ type PiToPhi_SyncboardRequest struct {
 }
 
 type PiToPhi_TranscriptSearchResponse struct {
-	TranscriptSearchResponse *TranscriptSearchResponse `protobuf:"bytes,27,opt,name=transcript_search_response,json=transcriptSearchResponse,proto3,oneof"`
+	// Field 27 belongs to AttachmentPromptAck on main.
+	TranscriptSearchResponse *TranscriptSearchResponse `protobuf:"bytes,28,opt,name=transcript_search_response,json=transcriptSearchResponse,proto3,oneof"`
 }
 
 func (*PiToPhi_Hello) isPiToPhi_Payload() {}
@@ -985,7 +986,8 @@ type PhiToPi_SyncboardResponse struct {
 }
 
 type PhiToPi_TranscriptSearchRequest struct {
-	TranscriptSearchRequest *TranscriptSearchRequest `protobuf:"bytes,24,opt,name=transcript_search_request,json=transcriptSearchRequest,proto3,oneof"`
+	// Fields 24/25 belong to AttachmentPromptRequest/StateRequest on main.
+	TranscriptSearchRequest *TranscriptSearchRequest `protobuf:"bytes,26,opt,name=transcript_search_request,json=transcriptSearchRequest,proto3,oneof"`
 }
 
 func (*PhiToPi_Accepted) isPhiToPi_Payload() {}
@@ -3565,7 +3567,7 @@ const file_bridge_proto_rawDesc = "" +
 	"\n" +
 	"reload_ack\x18\x19 \x01(\v2\x14.phi.pi.v1.ReloadAckH\x00R\treloadAck\x12J\n" +
 	"\x11syncboard_request\x18\x1a \x01(\v2\x1b.phi.pi.v1.SyncboardRequestH\x00R\x10syncboardRequest\x12c\n" +
-	"\x1atranscript_search_response\x18\x1b \x01(\v2#.phi.pi.v1.TranscriptSearchResponseH\x00R\x18transcriptSearchResponseB\t\n" +
+	"\x1atranscript_search_response\x18\x1c \x01(\v2#.phi.pi.v1.TranscriptSearchResponseH\x00R\x18transcriptSearchResponseB\t\n" +
 	"\apayloadJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10J\x04\b\x10\x10\x11R\x0esummary_resultR\rcommand_errorR\x13cancel_acknowledged\"\xe2\b\n" +
 	"\aPhiToPi\x12\x17\n" +
 	"\apane_id\x18\x01 \x01(\tR\x06paneId\x12\x1d\n" +
@@ -3585,7 +3587,7 @@ const file_bridge_proto_rawDesc = "" +
 	"\x14invoke_skill_request\x18\x15 \x01(\v2\x1d.phi.pi.v1.InvokeSkillRequestH\x00R\x12invokeSkillRequest\x12A\n" +
 	"\x0ereload_request\x18\x16 \x01(\v2\x18.phi.pi.v1.ReloadRequestH\x00R\rreloadRequest\x12M\n" +
 	"\x12syncboard_response\x18\x17 \x01(\v2\x1c.phi.pi.v1.SyncboardResponseH\x00R\x11syncboardResponse\x12`\n" +
-	"\x19transcript_search_request\x18\x18 \x01(\v2\".phi.pi.v1.TranscriptSearchRequestH\x00R\x17transcriptSearchRequestB\t\n" +
+	"\x19transcript_search_request\x18\x1a \x01(\v2\".phi.pi.v1.TranscriptSearchRequestH\x00R\x17transcriptSearchRequestB\t\n" +
 	"\apayloadJ\x04\b\v\x10\fJ\x04\b\f\x10\rR\tsummarizeR\x06cancel\"\xe8\x02\n" +
 	"\x05Hello\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\x1d\n" +

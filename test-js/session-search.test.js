@@ -67,7 +67,7 @@ function makeBridgePiTab() {
             state: 'managed',
             connected: true,
             generation: '7',
-            capabilities: ['pi.transcript-search.v1'],
+            capabilities: ['pi.transcript-search.v2'],
         },
     });
     return fixture;
@@ -494,25 +494,31 @@ describe('active terminal find bar', () => {
         bar.querySelector('.find-close').click();
     });
 
-    it('keeps terminal search when the transcript capability is missing at startup', () => {
-        const { tab } = makeBridgePiTab();
-        tab.piBridge.capabilities = [];
-        const { manager, composer } = makeManager(tab);
-        const fetchMock = mockFetch();
-        dispatchKey(composer, manager, { ctrlKey: true });
-        const bar = tab.termContainer.querySelector('.find-bar');
-        // One search source needs no selector.
-        expect(bar.querySelector('.find-source-select')).toBeNull();
-        const input = bar.querySelector('.find-input');
-        input.value = 'local only';
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        expect(tab.searchAddon.findNext).toHaveBeenCalledWith(
-            'local only',
-            expect.any(Object),
-        );
-        expect(fetchMock).not.toHaveBeenCalled();
-        bar.querySelector('.find-close').click();
-    });
+    it.each([
+        { state: 'missing', capabilities: [] },
+        { state: 'legacy v1', capabilities: ['pi.transcript-search.v1'] },
+    ])(
+        'keeps terminal search when the transcript capability is $state at startup',
+        ({ capabilities }) => {
+            const { tab } = makeBridgePiTab();
+            tab.piBridge.capabilities = capabilities;
+            const { manager, composer } = makeManager(tab);
+            const fetchMock = mockFetch();
+            dispatchKey(composer, manager, { ctrlKey: true });
+            const bar = tab.termContainer.querySelector('.find-bar');
+            // One search source needs no selector.
+            expect(bar.querySelector('.find-source-select')).toBeNull();
+            const input = bar.querySelector('.find-input');
+            input.value = 'local only';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            expect(tab.searchAddon.findNext).toHaveBeenCalledWith(
+                'local only',
+                expect.any(Object),
+            );
+            expect(fetchMock).not.toHaveBeenCalled();
+            bar.querySelector('.find-close').click();
+        },
+    );
 
     it('falls back to loaded terminal search when the bridge capability disappears', async () => {
         vi.useFakeTimers();

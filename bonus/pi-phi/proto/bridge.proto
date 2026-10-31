@@ -47,7 +47,7 @@ message PiToPhi {
     ReloadAck reload_ack = 25;
     SyncboardRequest syncboard_request = 26;
     AttachmentPromptAck attachment_prompt_ack = 27;
-    TranscriptSearchResponse transcript_search_response = 27;
+    TranscriptSearchResponse transcript_search_response = 28;
   }
 }
 
@@ -73,7 +73,7 @@ message PhiToPi {
     SyncboardResponse syncboard_response = 23;
     AttachmentPromptRequest attachment_prompt_request = 24;
     StateRequest state_request = 25;
-    TranscriptSearchRequest transcript_search_request = 24;
+    TranscriptSearchRequest transcript_search_request = 26;
   }
 }
 

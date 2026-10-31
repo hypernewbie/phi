@@ -19,11 +19,11 @@ func TestMetadataSizeBound(t *testing.T) {
 }
 
 func TestNegotiateCapabilities(t *testing.T) {
-	got := negotiateCapabilities([]string{CapabilityLifecycle, CapabilityThinking, "unknown.future.v9", CapabilitySyncboard}, false)
-	if !got[CapabilityLifecycle] || !got[CapabilityThinking] {
+	got := negotiateCapabilities([]string{CapabilityLifecycle, CapabilityThinking, "unknown.future.v9", CapabilitySyncboard, "pi.transcript-search.v1", CapabilityTranscriptSearch}, false)
+	if !got[CapabilityLifecycle] || !got[CapabilityThinking] || !got[CapabilityTranscriptSearch] {
 		t.Fatalf("known caps dropped: %v", got)
 	}
-	if got["unknown.future.v9"] || got[CapabilitySyncboard] {
+	if got["unknown.future.v9"] || got[CapabilitySyncboard] || got["pi.transcript-search.v1"] {
 		t.Fatalf("unknown or unconfigured cap accepted: %v", got)
 	}
 	enabled := negotiateCapabilities([]string{CapabilitySyncboard}, true)

@@ -23,7 +23,7 @@ export const MAX_SYNCBOARD_PENDING = 4;
 export const SYNCBOARD_CALL_TIMEOUT_MS = 15_000;
 export const CAPABILITY_ATTACHMENTS = 'pi.attachments.v3';
 export const CAPABILITY_STATE = 'pi.state.v2';
-export const CAPABILITY_TRANSCRIPT_SEARCH = 'pi.transcript-search.v1';
+export const CAPABILITY_TRANSCRIPT_SEARCH = 'pi.transcript-search.v2';
 /** Cap on skill entries per SkillsResponse; excess sets truncated. */
 export const MAX_SKILL_ENTRIES = 200;
 /**

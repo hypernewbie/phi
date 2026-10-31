@@ -83,7 +83,7 @@ Runtime identity binds `(generation, runtime_id, session_id)`:
 | `pi.syncboard.v1` | Direct Pi tool for the owning Phi Syncboard      |
 | `pi.attachments.v3` | Explicit user-triggered attachment prompt dispatch |
 | `pi.state.v2` | Read-only live identity and readiness refresh |
-| `pi.transcript-search.v1` | Read-only visible-text search on the active Pi branch |
+| `pi.transcript-search.v2` | Read-only visible-text search on the active Pi branch |
 
 Context, Compact, and Reload negotiate independently on every Hello
 from checked host availability: `pi.context.v1` needs `getContextUsage`;
@@ -111,10 +111,16 @@ behavior on any failure or a 1 s timeout.
 
 ## Transcript search
 
-`pi.transcript-search.v1` requires the public `getSessionId`, `getLeafId`,
+`pi.transcript-search.v2` requires the public `getSessionId`, `getLeafId`,
 and `getBranch` methods. The extension checks availability for each request.
-Phi sends `TranscriptSearchRequest` (field 24). Pi answers
-`TranscriptSearchResponse` (field 27) with the same request ID.
+Phi sends `TranscriptSearchRequest` (field 26). Pi answers
+`TranscriptSearchResponse` (field 28) with the same request ID.
+
+Version 2 avoids the legacy search-v1 collision with attachment fields 24/27.
+Request field 25 is also allocated to state refresh; search never uses it.
+Neither peer negotiates `pi.transcript-search.v1`. Mixed-version peers keep
+other capabilities, and the browser keeps loaded-terminal search. Search
+requests require version 2 on both peers; no legacy-field translation occurs.
 
 The initial request captures the active leaf. Continuations name the same
 session and leaf, then resume at `next_index`. An anchor outside the active

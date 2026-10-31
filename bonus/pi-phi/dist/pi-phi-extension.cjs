@@ -24601,7 +24601,7 @@ var MAX_SYNCBOARD_VALUE_BYTES = 64 * 1024;
 var MAX_SYNCBOARD_RESPONSE_BYTES = 192 * 1024;
 var MAX_SYNCBOARD_PENDING = 4;
 var SYNCBOARD_CALL_TIMEOUT_MS = 15e3;
-var CAPABILITY_TRANSCRIPT_SEARCH = "pi.transcript-search.v1";
+var CAPABILITY_TRANSCRIPT_SEARCH = "pi.transcript-search.v2";
 var MAX_SKILL_ENTRIES = 200;
 var MAX_SKILL_NAME_BYTES = 64;
 var MAX_SKILL_DESCRIPTION_BYTES = 1024;
@@ -25784,7 +25784,7 @@ var PiToPhi = {
         SyncboardRequest.encode(message.payload.value, writer.uint32(210).fork()).join();
         break;
       case "transcriptSearchResponse":
-        TranscriptSearchResponse.encode(message.payload.value, writer.uint32(218).fork()).join();
+        TranscriptSearchResponse.encode(message.payload.value, writer.uint32(226).fork()).join();
         break;
     }
     return writer;
@@ -25924,8 +25924,8 @@ var PiToPhi = {
             message.payload = { $case: "syncboardRequest", value: SyncboardRequest.decode(reader, reader.uint32()) };
             continue;
           }
-          case 27: {
-            if (tag !== 218) {
+          case 28: {
+            if (tag !== 226) {
               break;
             }
             message.payload = {
@@ -26109,7 +26109,7 @@ var PhiToPi = {
         SyncboardResponse.encode(message.payload.value, writer.uint32(186).fork()).join();
         break;
       case "transcriptSearchRequest":
-        TranscriptSearchRequest.encode(message.payload.value, writer.uint32(194).fork()).join();
+        TranscriptSearchRequest.encode(message.payload.value, writer.uint32(210).fork()).join();
         break;
     }
     return writer;
@@ -26241,8 +26241,8 @@ var PhiToPi = {
             message.payload = { $case: "syncboardResponse", value: SyncboardResponse.decode(reader, reader.uint32()) };
             continue;
           }
-          case 24: {
-            if (tag !== 194) {
+          case 26: {
+            if (tag !== 210) {
               break;
             }
             message.payload = {

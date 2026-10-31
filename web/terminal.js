@@ -17550,7 +17550,7 @@ export class TabManager {
     // available when the pane is unmanaged, disconnected, or missing the cap.
     _piBridgeTranscriptSearchEligible(tab) {
         return tab?.coder === 'pi' && !tab.isDead &&
-            piBridgeCapable(tab, 'pi.transcript-search.v1') &&
+            piBridgeCapable(tab, 'pi.transcript-search.v2') &&
             /^[1-9]\d*$/.test(String(tab.piBridge?.generation || ''));
     }
 
