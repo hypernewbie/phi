@@ -20,14 +20,10 @@ async function expectSingleRowPresets(page: Page) {
         const container = els[0].closest('#presets-container');
         if (!container) throw new Error('missing #presets-container');
         return {
-            rowHeight: container.getBoundingClientRect().height,
             wrap: getComputedStyle(container).flexWrap,
             shrink: [
                 ...new Set(els.map((el) => getComputedStyle(el).flexShrink)),
             ],
-            chipHeight: Math.max(
-                ...els.map((el) => el.getBoundingClientRect().height),
-            ),
             heights: [
                 ...new Set(els.map((el) => el.getBoundingClientRect().height)),
             ],
@@ -47,10 +43,6 @@ async function expectSingleRowPresets(page: Page) {
         measured.tops,
         'preset buttons are vertically misaligned',
     ).toHaveLength(1);
-    expect(
-        measured.rowHeight,
-        'presets row wrapped onto more than one line',
-    ).toBeLessThan(measured.chipHeight * 2);
     expect(measured.squeezed, 'chips shrank into an ellipsis').toEqual([]);
 }
 

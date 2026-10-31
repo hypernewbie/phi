@@ -247,7 +247,7 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(bar.querySelector('[tabindex="0"]')).toBeNull();
     });
 
-    it('renders only Model, Thinking, and Reset Chat for Pi RPC', () => {
+    it('renders Pi RPC thinking visibility beside presets in the shared bottom bar', () => {
         const row = document.createElement('div');
         const tab = { paneId: 'pi-rpc:controls', coder: 'pi-rpc' };
         getPiRpcControls.mockReturnValue({
@@ -265,6 +265,8 @@ describe('Pi RPC TabManager boundaries', () => {
         tm.cancelInputBtn = document.createElement('button');
         tm.copyInputBtn = document.createElement('button');
         tm.directModeToggle = document.createElement('button');
+        tm.thinkingVisibilityBtn = document.createElement('button');
+        tm.thinkingVisibilityBtn.classList.add('hidden');
         tm._piRpcResetPending = new Set();
 
         tm.renderPresets('pi-rpc');
@@ -276,11 +278,14 @@ describe('Pi RPC TabManager boundaries', () => {
         ).toEqual([
             'Compact',
             'Clear',
-            'Show thinking',
             'Cmds ▾',
             'Model: pi-4 ▾',
             'Thinking: high ▾',
         ]);
+        expect(tm.thinkingVisibilityBtn.textContent).toBe('Show thinking');
+        expect(tm.thinkingVisibilityBtn.classList.contains('hidden')).toBe(
+            false,
+        );
         expect(row.querySelector('.presets-divider')).not.toBeNull();
         expect(row.querySelector('.mobile-nav-btn')).toBeNull();
         expect(row.querySelector('.pi-rpc-reset-btn').disabled).toBe(false);
@@ -290,6 +295,11 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(tm.cancelInputBtn.classList.contains('hidden')).toBe(false);
         expect(tm.copyInputBtn.classList.contains('hidden')).toBe(true);
         expect(tm.directModeToggle.classList.contains('hidden')).toBe(true);
+
+        getPiRpcControls.mockReturnValue({ ready: false, exited: true });
+        tm.renderPresets('pi-rpc');
+        expect(tm.thinkingVisibilityBtn.disabled).toBe(false);
+        expect(row.querySelector('.pi-rpc-reset-btn').disabled).toBe(true);
     });
 
     it('falls back to an em dash for empty Pi model and thinking values', () => {
@@ -310,6 +320,8 @@ describe('Pi RPC TabManager boundaries', () => {
         tm.cancelInputBtn = document.createElement('button');
         tm.copyInputBtn = document.createElement('button');
         tm.directModeToggle = document.createElement('button');
+        tm.thinkingVisibilityBtn = document.createElement('button');
+        tm.thinkingVisibilityBtn.classList.add('hidden');
         tm._piRpcResetPending = new Set();
 
         tm.renderPresets('pi-rpc');
@@ -321,11 +333,11 @@ describe('Pi RPC TabManager boundaries', () => {
         ).toEqual([
             'Compact',
             'Clear',
-            'Show thinking',
             'Cmds ▾',
             'Model: — ▾',
             'Thinking: — ▾',
         ]);
+        expect(tm.thinkingVisibilityBtn.textContent).toBe('Show thinking');
         expect(row.querySelector('.pi-rpc-model-trigger').title).toBe(
             'Change the model for this session',
         );
