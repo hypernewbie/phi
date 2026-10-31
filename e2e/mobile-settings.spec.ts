@@ -352,7 +352,7 @@ async function mobileSettings(page: Page) {
     await expect(status).toHaveText(
         /^(Saved|Settings request cancelled or timed out)$/,
     );
-    // Online and focus hints never fetch. Use the visible recovery action
+    // Idle online and focus hints never fetch. Use the visible recovery action
     // after a cancelled initial read, preserving the current document.
     if ((await status.textContent()) !== 'Saved')
         await page.locator('#settings-mobile-refresh').click();
@@ -477,6 +477,78 @@ test('a still-open document flushes only never-dispatched work after reconnect',
         await context.close();
     }
 });
+
+for (const touch of [false, true]) {
+    test(`a cold-start offline draft saves once after reconnect (${touch ? 'touch' : 'desktop'})`, async ({
+        browser,
+    }) => {
+        const context = await browser.newContext(
+            touch
+                ? {
+                      viewport: { width: 390, height: 844 },
+                      isMobile: true,
+                      hasTouch: true,
+                      userAgent: IPHONE,
+                  }
+                : { viewport: { width: 1440, height: 900 } },
+        );
+        try {
+            const page = await context.newPage();
+            let allowReads = false,
+                reads = 0,
+                posts = 0;
+            await page.route(
+                '**/api/config/mobile-appearance',
+                async (route) => {
+                    if (route.request().method() === 'POST') {
+                        posts++;
+                        return route.continue();
+                    }
+                    reads++;
+                    if (allowReads) return route.continue();
+                    return route.fulfill({
+                        status: 503,
+                        body: 'fixture offline',
+                    });
+                },
+            );
+            await page.goto(`${phi.url}/config.html?page=mobile`);
+            const status = page.locator('#settings-mobile-status');
+            await expect(status).toHaveText(
+                'Unable to refresh mobile settings.',
+            );
+            await context.setOffline(true);
+            await page.locator('#settings-mobile-ui-font-size').fill('21');
+            await expect
+                .poll(async () =>
+                    (await persistedDrafts(page)).some(
+                        (draft) =>
+                            draft.base === null &&
+                            draft.fields.ui_font_size === 21,
+                    ),
+                )
+                .toBe(true);
+            expect(posts).toBe(0);
+            const initialReads = reads;
+            allowReads = true;
+            await context.setOffline(false);
+            await expect(status).toHaveText('Saved');
+            expect(reads).toBe(initialReads + 1);
+            expect(posts).toBe(1);
+            expect(
+                (
+                    await (
+                        await page.request.get(
+                            `${phi.url}/api/config/mobile-appearance`,
+                        )
+                    ).json()
+                ).ui_font_size,
+            ).toBe(21);
+        } finally {
+            await context.close();
+        }
+    });
+}
 
 test('an edit queued behind a held save sends after acknowledgment without refetching', async ({
     browser,

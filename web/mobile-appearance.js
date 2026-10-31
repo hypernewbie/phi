@@ -504,8 +504,8 @@ export class MobileAppearanceStore {
             event.returnValue = '';
         }
     };
-    // Local-only wake: reload persisted records and offer never-dispatched
-    // drafts. Online, focus, and broadcast hints never fetch appearance.
+    // Reload local records and offer never-dispatched drafts. Idle hints
+    // never fetch; a draft with no revision can read once to enable its save.
     wake = () => {
         void this.sync().then(() => {
             if (!this.disposed)
@@ -834,9 +834,19 @@ export class MobileAppearanceStore {
             this.storageWarning ||
             navigator.onLine === false ||
             !hasFields(selected) ||
-            selected.base === null ||
             (!explicit && selected.explicit))
             return;
+        if (selected.base === null) {
+            if (this.attempt)
+                return;
+            if (!this.confirmed) {
+                await this.refresh();
+                return;
+            }
+            // Only a never-dispatched draft has no base. Claim against the
+            // first known revision; the durable transaction rechecks safety.
+            selected.base = this.confirmed.revision;
+        }
         const active = this.draft;
         const choice = this.choiceGeneration;
         await this.lane;

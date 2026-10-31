@@ -717,6 +717,54 @@ it('sends never-dispatched drafts after an online event without fetching appeara
     expect(f.store.pending).toBe(false);
 });
 
+it('saves a cold-start offline draft after a revision read, retaining it when that read fails', async () => {
+    const f = fixture();
+    // The usual fixture has a known revision. Model a first visit with no
+    // cached or durable server state before the initial request fails.
+    localStorage.removeItem(appearanceCacheKey(f.scope));
+    f.store.confirmed = null;
+    f.store.draft.base = null;
+    f.db.owners.set(f.store.owner, {
+        owner: f.store.owner,
+        confirmed: null,
+        counter: 0,
+        attempt: null,
+    });
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    f.fetch.mockRejectedValueOnce(new TypeError('offline'));
+    await f.store.start();
+    await vi.advanceTimersByTimeAsync(0);
+    f.store.edit({ ui_font_size: 21 });
+    await settleEdit();
+    expect(f.store.pending).toBe(true);
+    expect(posts(f.fetch)).toHaveLength(0);
+    const gets = () =>
+        f.fetch.mock.calls.filter(([, init]) => init?.method !== 'POST').length;
+    expect(gets()).toBe(1);
+
+    f.fetch.mockRejectedValueOnce(new TypeError('still offline'));
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    window.dispatchEvent(new Event('online'));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(gets()).toBe(2);
+    expect(posts(f.fetch)).toHaveLength(0);
+    expect(f.store.values.ui_font_size).toBe(21);
+    expect([...f.db.drafts.values()][0].fields.ui_font_size).toBe(21);
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(gets()).toBe(2);
+
+    window.dispatchEvent(new Event('online'));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(gets()).toBe(3);
+    expect(posts(f.fetch)).toHaveLength(1);
+    expect(JSON.parse(posts(f.fetch)[0][1].body)).toEqual({
+        revision: 0,
+        fields: { ui_font_size: 21 },
+    });
+    expect(f.server.ui_font_size).toBe(21);
+    expect(f.store.pending).toBe(false);
+});
+
 it('treats broadcast hints as local-only sync without fetching appearance', async () => {
     const f = fixture();
     await f.store.start();
