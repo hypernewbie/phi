@@ -694,9 +694,12 @@ async function dragDrawerAndCheck(
         await page.mouse.move(start.x, start.y);
         await expect
             .poll(() =>
-                handle.evaluate((el) => getComputedStyle(el, '::after').width),
+                handle.evaluate((el) => {
+                    const grip = getComputedStyle(el, '::after');
+                    return { width: grip.width, opacity: grip.opacity };
+                }),
             )
-            .toBe('4px');
+            .toEqual({ width: '1px', opacity: '1' });
         await page.mouse.down();
         try {
             await page.mouse.move(end.x, end.y, { steps: 5 });
@@ -1316,7 +1319,7 @@ async function assertDrawerEdgeTouch(
     }
 }
 
-test('desktop docked handles stay inside 24px gutters and resize from both edges', async ({
+test('desktop 8px resize targets work from both edges without blocking scrollbars', async ({
     browser,
 }) => {
     const { context, page } = await openDesktopPage(browser);
@@ -1326,7 +1329,7 @@ test('desktop docked handles stay inside 24px gutters and resize from both edges
             ['right-resize-handle', 'diff-panel', 'phi_panel_right_width'],
         ]) {
             const geometry = await handleGeometry(page, handleId);
-            expect(geometry.width).toBeCloseTo(24, 5);
+            expect(geometry.width).toBeCloseTo(8, 5);
             expect(geometry.samples).toHaveLength(9);
             for (const sample of geometry.samples) {
                 expect(sample.id).toBe(handleId);
@@ -1346,6 +1349,38 @@ test('desktop docked handles stay inside 24px gutters and resize from both edges
                 }
             }
         }
+
+        await selectTerminal(page);
+        await openPiSessions(page);
+        for (const selector of [
+            '.session-list-container',
+            '#term-t1 .xterm-scrollable-element',
+        ]) {
+            await expect(page.locator(selector)).toBeVisible();
+            // Resize targets must not intercept clicks on either scrollbar.
+            expect(
+                await page.locator(selector).evaluate((element) => {
+                    const box = element.getBoundingClientRect();
+                    return element.contains(
+                        document.elementFromPoint(
+                            box.right - 3,
+                            box.top + box.height / 2,
+                        ),
+                    );
+                }),
+            ).toBe(true);
+        }
+        const sessions = page.locator('.session-list-container');
+        const scroll = await sessions.boundingBox();
+        if (!scroll) throw new Error('session scrollbar has no bounds');
+        await page.mouse.move(
+            scroll.x + scroll.width - 3,
+            scroll.y + scroll.height * 0.75,
+        );
+        await page.mouse.wheel(0, 400);
+        await expect
+            .poll(() => sessions.evaluate((element) => element.scrollTop))
+            .toBeGreaterThan(0);
 
         const savedWidths = await page.evaluate(() => ({
             left: Number(localStorage.getItem('phi_panel_left_width')),
@@ -1853,9 +1888,9 @@ test('drawer handles resize with touch and mouse without stealing closed-edge in
                         };
                     });
                 expect(grip).toEqual({
-                    width: '3px',
+                    width: '1px',
                     height: '40px',
-                    opacity: '0.35',
+                    opacity: '0',
                 });
 
                 for (const xFraction of [0.05, 0.95]) {
