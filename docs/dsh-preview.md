@@ -33,7 +33,7 @@ Phi supplies `--profile web --host 127.0.0.1 --port 0 --no-open --trusted-host <
 
 The child receives a fixed executable search path, synthetic home and temporary paths, locale settings, and a telemetry opt-out. It does not inherit Phi's provider keys, proxies, or other environment variables. Durable DSH state is under `<phi-data-dir>/dsh-preview/`. Disabling or stopping the preview does not delete that state.
 
-Restart Phi after changing these settings. Open the sessions launcher and select **DSH preview — Online preview**. The preview is unavailable in the desktop shell.
+Restart Phi after changing these settings. Open the sessions launcher and select the **DeepSeek** orca icon beside the other agents. Its accessible name and tooltip identify it as an online preview. The opened tab also shows the preview notice. The preview is unavailable in the desktop shell.
 
 ## Networking and tab lifecycle
 
@@ -53,3 +53,7 @@ The following remain unaccepted:
 - An Electron low-memory carrier.
 
 The unchanged upstream UI does not supply the required offline catalog and durable outbox contracts. Do not describe this online preview as satisfying those requirements. The separate, user-present Tailnet review also remains pending.
+
+## Icon license
+
+The orca icon is the unmodified `dist/favicon-dark.svg` from `@deepseek-ai/dsh-web-frontend@0.2.1-rc.5`. It is distributed under the [MIT license](../web/vendor/logos/deepseek.LICENSE).

@@ -44,7 +44,10 @@ test('launcher opens the carrier without creating a terminal', async ({
     page,
 }) => {
     await page.goto(phi.url);
-    const launcher = page.locator('#dsh-preview-btn');
+    const launcher = page.locator('#coder-selector').getByRole('button', {
+        name: 'DeepSeek — Online preview',
+        exact: true,
+    });
     await expect(launcher).toBeVisible({ timeout: 60_000 });
     const terminalWrites: string[] = [];
     page.on('request', (request) => {
@@ -55,7 +58,8 @@ test('launcher opens the carrier without creating a terminal', async ({
             terminalWrites.push(request.method());
         }
     });
-    await launcher.click();
+    await launcher.focus();
+    await launcher.press('Enter');
     await expect(page.locator('.dsh-notice')).toContainText('Not isolated');
     await expect(page.locator('.tab.active .tab-pin')).toBeHidden();
     await expect(page.locator('#refresh-console-btn')).toBeHidden();
@@ -90,12 +94,23 @@ test('mobile DSH tab hides PTY controls without horizontal overflow', async ({
             })
             .click();
         await page.locator('#drawer-open-sessions').click();
-        await page.locator('#dsh-preview-btn').click();
+        await page
+            .locator('#coder-selector')
+            .getByRole('button', {
+                name: 'DeepSeek — Online preview',
+                exact: true,
+            })
+            .tap();
         await expect(
             page
                 .frameLocator('iframe.dsh-frame')
                 .locator('[data-stub="dsh-carrier-ok"]'),
         ).toBeVisible({ timeout: 30_000 });
+        // A loaded frame is not enough: the drawer must not cover the app.
+        await page
+            .frameLocator('iframe.dsh-frame')
+            .locator('[data-stub="dsh-carrier-ok"]')
+            .click({ trial: true, timeout: 5_000 });
         await expect(page.locator('#mobile-refresh-console-btn')).toBeHidden();
         expect(
             await page.evaluate(

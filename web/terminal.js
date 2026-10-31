@@ -476,8 +476,7 @@ const CODER_FAVICONS = {
     'pi-rpc': 'vendor/logos/pi.png',
     review: 'vendor/logos/review.png',
     kanban: 'vendor/logos/kanban.png',
-    'dsh-preview':
-        'data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20viewBox=%270%200%2024%2024%27%3E%3Crect%20width=%2724%27%20height=%2724%27%20rx=%275%27%20fill=%27%234D6BFE%27/%3E%3Ctext%20x=%2712%27%20y=%2716%27%20font-size=%279%27%20font-family=%27sans-serif%27%20text-anchor=%27middle%27%20fill=%27white%27%3EDS%3C/text%3E%3C/svg%3E',
+    'dsh-preview': 'vendor/logos/deepseek.svg',
 };
 
 // Automatic-reconnect retry policy: full-jitter exponential backoff.

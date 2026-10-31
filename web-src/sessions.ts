@@ -620,6 +620,11 @@ export class SessionsManager {
         // DSH preview launcher: visibility follows the cached server
         // status; the tab itself revalidates the mount on every open.
         this.dshPreviewBtn?.addEventListener('click', () => {
+            if (isCompactViewport()) {
+                document
+                    .getElementById('sidebar-panel')
+                    ?.classList.remove('drawer-open');
+            }
             void openDshPreviewTab(this.app.tabManager);
         });
         void refreshDshLauncher(this.app?.scope);
@@ -3406,6 +3411,10 @@ export class SessionsManager {
             btn.appendChild(label);
             container.appendChild(btn);
         }
+
+        // Keep the application launcher and its listener across registry refreshes.
+        // It shares the icon row, not the PTY/session-list selection flow.
+        if (this.dshPreviewBtn) container.appendChild(this.dshPreviewBtn);
 
         // Sync the SessionsManager's active coder with the resolved
         // selection only when it actually changed; preserving the

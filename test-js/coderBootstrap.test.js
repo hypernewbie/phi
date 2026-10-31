@@ -56,6 +56,12 @@ describe('default coder UI parity', () => {
         document.body.innerHTML = `${staticSidebar}${staticQuickLaunch}`;
         // Before any fetch or script render, the built-in controls exist.
         expectBuiltInSidebar();
+        const preview = document.querySelector(
+            '#coder-selector #dsh-preview-btn',
+        );
+        expect(preview).not.toBeNull();
+        const openPreview = vi.fn();
+        preview.addEventListener('click', openPreview);
         expect(ids('.empty-launch-btn')).toEqual([
             'opencode',
             'claude',
@@ -167,6 +173,7 @@ describe('default coder UI parity', () => {
             Object.create(SessionsManager.prototype),
             {
                 activeCoder: 'opencode',
+                dshPreviewBtn: preview,
                 loadSessions: vi.fn(),
                 sessionRequests: new Map(),
                 worktreeReads: new Map(),
@@ -202,6 +209,12 @@ describe('default coder UI parity', () => {
         expect(document.querySelector('.coder-tab.active').dataset.coder).toBe(
             'agy',
         );
+        expect(document.querySelector('#coder-selector #dsh-preview-btn')).toBe(
+            preview,
+        );
+        preview.click();
+        expect(openPreview).toHaveBeenCalledTimes(1);
+        expect(sidebar.activeCoder).toBe('agy');
     });
 
     it('delegates exactly one click to static and rebuilt quick-launch buttons', () => {
