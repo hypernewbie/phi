@@ -529,8 +529,6 @@ export class MobileAppearanceStore {
     unavailable = false;
     private disposed = false;
     private timer: ReturnType<typeof setTimeout> | null = null;
-    private refreshTimer: ReturnType<typeof setTimeout> | null = null;
-    private backoff = 5000;
     private read: Promise<boolean> | null = null;
     private lane: Promise<unknown> = Promise.resolve();
     private choiceGeneration = 0;
@@ -592,7 +590,7 @@ export class MobileAppearanceStore {
         if (this.pending) return 'Pending changes';
         return this.confirmed
             ? 'Saved'
-            : 'Using mobile defaults; refreshing in background';
+            : 'Using mobile defaults';
     }
     subscribe(listener: () => void): () => void {
         this.listeners.add(listener);
@@ -608,18 +606,17 @@ export class MobileAppearanceStore {
         try {
             this.channel?.postMessage({ owner: this.owner });
         } catch {
-            // Notifications are hints; persisted drafts and polling remain usable.
+            // Notifications are hints; persisted drafts remain usable.
         }
     }
     async start(): Promise<void> {
         try {
             this.channel = new BroadcastChannel('phi_mobile_appearance');
             this.channel.onmessage = (event) => {
-                if (event.data?.owner === this.owner)
-                    void this.sync().then(() => this.refresh());
+                if (event.data?.owner === this.owner) void this.wake();
             };
         } catch {
-            /* polling also covers browsers without BroadcastChannel */
+            /* each tab persists and flushes its own drafts without hints */
         }
         window.addEventListener('online', this.wake);
         window.addEventListener('focus', this.wake);
@@ -636,15 +633,18 @@ export class MobileAppearanceStore {
             event.returnValue = '';
         }
     };
+    // Local-only wake: reload persisted records and offer never-dispatched
+    // drafts. Online, focus, and broadcast hints never fetch appearance.
     private wake = () => {
-        void this.refresh();
+        void this.sync().then(() => {
+            if (!this.disposed) void this.flush();
+        });
     };
     dispose() {
         this.disposed = true;
         this.stop.abort();
         this.channel?.close();
         if (this.timer) clearTimeout(this.timer);
-        if (this.refreshTimer) clearTimeout(this.refreshTimer);
         window.removeEventListener('online', this.wake);
         window.removeEventListener('focus', this.wake);
         window.removeEventListener('beforeunload', this.beforeUnload);
@@ -812,7 +812,6 @@ export class MobileAppearanceStore {
             return Promise.resolve(false);
         void this.refreshInheritance();
         const startRevision = this.confirmed?.revision ?? null;
-        let nextDelay = 5000;
         this.read = (async () => {
             try {
                 const response = await ownerFetch(this.scope, MOBILE_ROUTE, {
@@ -853,7 +852,6 @@ export class MobileAppearanceStore {
                     this.draft.base = this.confirmed?.revision ?? null;
                 this.error = '';
                 this.unavailable = false;
-                this.backoff = 5000;
                 await this.sync();
                 void this.flush();
                 return true;
@@ -863,18 +861,10 @@ export class MobileAppearanceStore {
                         error instanceof Error
                             ? error.message
                             : 'Unable to refresh mobile settings.';
-                nextDelay = this.backoff;
-                this.backoff = Math.min(30000, this.backoff * 2);
                 return false;
             } finally {
                 this.read = null;
                 this.notify();
-                if (!this.disposed && !this.unavailable) {
-                    if (this.refreshTimer) clearTimeout(this.refreshTimer);
-                    this.refreshTimer = setTimeout(() => {
-                        void this.refresh();
-                    }, nextDelay);
-                }
             }
         })();
         return this.read;
@@ -1218,6 +1208,9 @@ export class MobileAppearanceStore {
         } finally {
             await this.sync();
             this.broadcast();
+            // An acknowledged save can unblock edits queued behind it; the
+            // flush guards recheck intent, so a settled attempt retries nothing.
+            if (!this.disposed) void this.flush();
             this.notify();
         }
     }

@@ -352,9 +352,9 @@ async function mobileSettings(page: Page) {
     await expect(status).toHaveText(
         /^(Saved|Settings request cancelled or timed out)$/,
     );
-    // Reuse the UI's online wake after a cancelled initial background read.
-    if ((await status.textContent()) !== 'Saved')
-        await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    // Reopen the standalone page after a cancelled initial background read:
+    // online and focus hints never fetch, so only an explicit load retries.
+    if ((await status.textContent()) !== 'Saved') await page.reload();
     await expect(status).toHaveText('Saved');
 }
 async function persistedDrafts(page: Page) {
@@ -472,6 +472,72 @@ test('a still-open document flushes only never-dispatched work after reconnect',
             'Saved',
         );
         expect(posts).toBe(1);
+    } finally {
+        await context.close();
+    }
+});
+
+test('an edit queued behind a held save sends after acknowledgment without refetching', async ({
+    browser,
+}) => {
+    const context = await browser.newContext({
+        isMobile: true,
+        hasTouch: true,
+        userAgent: IPHONE,
+    });
+    try {
+        const page = await context.newPage();
+        await mobileSettings(page);
+        let releaseFirst!: () => void;
+        const firstHeld = new Promise<void>(
+            (resolve) => (releaseFirst = resolve),
+        );
+        let posts = 0,
+            reads = 0;
+        await page.route(
+            '**/api/config/mobile-appearance',
+            async (route) => {
+                if (route.request().method() !== 'POST') {
+                    reads++;
+                    return route.continue();
+                }
+                posts++;
+                if (posts > 1) return route.continue();
+                const response = await route.fetch();
+                await firstHeld;
+                await route.fulfill({ response });
+            },
+        );
+        await page.locator('#settings-mobile-ui-font-size').fill('21');
+        await expect.poll(() => posts).toBe(1);
+        await page.locator('#settings-mobile-ui-font-size').fill('22');
+        await expect
+            .poll(async () =>
+                (await persistedDrafts(page)).some(
+                    (draft) => draft.fields.ui_font_size === 22,
+                ),
+            )
+            .toBe(true);
+        releaseFirst();
+        await expect(page.locator('#settings-mobile-status')).toHaveText(
+            'Saved',
+        );
+        await expect
+            .poll(
+                async () =>
+                    (
+                        await (
+                            await page.request.get(
+                                `${phi.url}/api/config/mobile-appearance`,
+                            )
+                        ).json()
+                    ).ui_font_size,
+            )
+            .toBe(22);
+        expect(posts).toBe(2);
+        // Bounded absence check: one old retry cycle was 5 seconds.
+        await page.waitForTimeout(7000);
+        expect(reads).toBe(0);
     } finally {
         await context.close();
     }
@@ -1091,7 +1157,20 @@ test('four font overrides update real terminals, inherit remote desktop families
         await pc
             .locator('#settings-ui-font')
             .selectOption('"Segoe UI", system-ui, sans-serif');
-        // No reload or shared browser storage: the mobile poll must learn the server family.
+        // No shared browser storage: the phone learns the server family
+        // only through an explicit refresh. Wait for the desktop save to
+        // land before reloading, or the phone re-reads the older value.
+        await expect
+            .poll(
+                async () =>
+                    (
+                        await (
+                            await pc.request.get(`${phi.url}/api/config`)
+                        ).json()
+                    ).ui_font_family,
+            )
+            .toContain('Segoe UI');
+        await phone.reload();
         await expect(phone.locator('body')).toHaveCSS(
             'font-family',
             /Segoe UI/,
@@ -1125,16 +1204,12 @@ test('four font overrides update real terminals, inherit remote desktop families
                     ).ui_font_family,
             )
             .toContain('Helvetica Neue');
-        await expect
-            .poll(
-                async () =>
-                    phone
-                        .locator('#settings-mobile-ui-font option')
-                        .first()
-                        .textContent(),
-                { timeout: 15000 },
-            )
-            .toContain('Helvetica Neue');
+        // Inheritance labels refresh only on explicit Settings open.
+        await phone.keyboard.press('Escape');
+        await openDrawerSettings(phone);
+        await expect(
+            phone.locator('#settings-mobile-ui-font option').first(),
+        ).toContainText('Helvetica Neue', { timeout: 15000 });
         await expect(phone.locator('body')).toHaveCSS(
             'font-family',
             /system-ui, -apple-system/,
@@ -1172,6 +1247,8 @@ test('four font overrides update real terminals, inherit remote desktop families
                     .every((term) => term.family === 'monospace'),
             )
             .toBe(true);
+        // Cross-device values apply only after an explicit refresh.
+        await phone.reload();
         await expect(phone.locator('body')).toHaveCSS('font-family', /Inter/, {
             timeout: 15000,
         });

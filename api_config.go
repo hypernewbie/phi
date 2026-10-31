@@ -222,9 +222,9 @@ func validateThinkingPresetList(levels []string) ([]string, bool) {
 func handleThinkingPresets(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		configMu.RLock()
-		cfg, err := readConfigLocked()
-		configMu.RUnlock()
+		configMu.Lock()
+		cfg, err := readConfigCachedLocked(readPrimaryConfig)
+		configMu.Unlock()
 		if err != nil {
 			http.Error(w, "Failed to read config", http.StatusInternalServerError)
 			return
@@ -521,10 +521,10 @@ func handleMobileAppearanceFence(w http.ResponseWriter, r *http.Request) {
 func serveMobileAppearance(w http.ResponseWriter, r *http.Request, fence bool, write func(Config) error) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method == http.MethodGet && !fence {
-		configMu.RLock()
-		cfg, err := readConfigLocked()
+		configMu.Lock()
+		cfg, err := readConfigCachedLocked(readPrimaryConfig)
 		state := mobileAppearanceFromConfig(cfg)
-		configMu.RUnlock()
+		configMu.Unlock()
 		if err != nil || state.Revision > maxMobileAppearanceRevision {
 			http.Error(w, "Failed to read config", http.StatusInternalServerError)
 			return
