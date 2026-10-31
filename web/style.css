@@ -7701,7 +7701,8 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     padding: 6px;
 }
 
-.sidebar-narrow .panel-header h2 {
+.sidebar-narrow .panel-header h2,
+.sidebar-narrow #refresh-sessions-btn {
     display: none;
 }
 

@@ -398,20 +398,11 @@ eager to avoid a first-open unstyled flash. -->
                     data-panel-mode="tabs"
                 >
                     <div class="panel-header">
-                        <h2 id="drawer-panel-title">SESSIONS</h2>
-                        <div class="panel-header-actions" id="desktop-sidebar-toggle-home">
-                            <button
-                                id="desktop-sidebar-toggle"
-                                type="button"
-                                class="tab-action-btn desktop-sidebar-toggle hidden"
-                                aria-controls="sidebar-panel"
-                                aria-expanded="true"
-                                title="Hide sessions"
-                                aria-label="Hide sessions"
-                            >&lt;&lt;</button>
+                        <div class="panel-header-actions">
+                            <h2 id="drawer-panel-title">SESSIONS</h2>
                             <button
                                 id="refresh-sessions-btn"
-                                class="header-btn icon-only"
+                                class="tab-action-btn"
                                 type="button"
                                 title="Refresh Sessions"
                                 aria-label="Refresh Sessions"
@@ -422,6 +413,17 @@ eager to avoid a first-open unstyled flash. -->
                                     <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
                                 </svg>
                             </button>
+                        </div>
+                        <div class="panel-header-actions" id="desktop-sidebar-toggle-home">
+                            <button
+                                id="desktop-sidebar-toggle"
+                                type="button"
+                                class="tab-action-btn desktop-sidebar-toggle hidden"
+                                aria-controls="sidebar-panel"
+                                aria-expanded="true"
+                                title="Hide sessions"
+                                aria-label="Hide sessions"
+                            >&lt;&lt;</button>
                             <button
                                 id="drawer-back-to-tabs"
                                 class="header-btn mobile-only"
