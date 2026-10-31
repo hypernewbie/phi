@@ -152,6 +152,22 @@ function makeRealStatusController(sessionsManager, initialStatus) {
         activeTab: 'status',
         currentWs: null,
         isPanelOpen: true,
+        gitManageInfo: null,
+        gitManageInfoKey: '',
+        gitManageContextKey: '',
+        gitManageRequestKey: '',
+        gitManageGeneration: 0,
+        gitManageBusy: false,
+        gitManageStatus: '',
+        gitManageRecord: null,
+        gitManageRecordKey: '',
+        gitManageMemory: new Map(),
+        gitViewMemory: new Map(),
+        gitManageCancels: new Set(),
+        gitManageRetryTimer: null,
+        gitManageRetryDelay: 1000,
+        gitCommitDraftKey: '',
+        gitCommitDraftMemory: new Map(),
         term,
         commitSelect: null,
         fitTerminal: vi.fn(),
@@ -288,6 +304,8 @@ function makePendingProjectRefresh(tm, initialStatus) {
             if (requestUrl === '/api/git/raw-status?cwd=%2FwsB%2Fmain') {
                 return Promise.resolve({
                     ok: true,
+                    status: 200,
+                    headers: { get: vi.fn(() => null) },
                     text: vi.fn(async () => 'status for /wsB/main'),
                 });
             }
@@ -745,6 +763,8 @@ describe('softCloseTab - stale real worktree responses', () => {
                     ) {
                         return Promise.resolve({
                             ok: true,
+                            status: 200,
+                            headers: { get: vi.fn(() => null) },
                             text: vi.fn(async () => 'status for /wsB/main'),
                         });
                     }

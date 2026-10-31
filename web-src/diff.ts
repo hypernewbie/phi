@@ -12,6 +12,9 @@ import {
     DIFF_TERMINAL_TARGET_COLUMNS,
     openExternalLink,
     installTerminalLinkProvider,
+    getEmbeddedBackendOrigin,
+    getEmbeddedProfileId,
+    serverKey,
 } from './util.js';
 import {
     buildVSCodeURI,
@@ -19,6 +22,210 @@ import {
     normalizeHostname,
     isVSCodeLaunchUnsupported,
 } from './vscode.js';
+
+interface GitManageTarget {
+    root: string;
+    head: string;
+    branch: string;
+    remote: string;
+    remote_ref: string;
+    remote_token: string;
+}
+
+interface GitManageInfo {
+    notGitRepo?: boolean;
+    target?: GitManageTarget;
+    can_pull_push: boolean;
+    reason?: string;
+    has_staged?: boolean;
+    index_token?: string;
+    can_commit?: boolean;
+    commit_reason?: string;
+}
+
+type GitManageActionName = 'pull' | 'push' | 'commit';
+type GitManageActionPhase =
+    | 'queued'
+    | 'sent'
+    | 'confirmed'
+    | 'failed'
+    | 'blocked'
+    | 'unconfirmed'
+    | 'paused'
+    | 'dismissed';
+
+interface GitManageActionRecord {
+    version: 1;
+    id: string;
+    owner: string;
+    action: GitManageActionName;
+    target: GitManageTarget;
+    message?: string;
+    indexToken?: string;
+    phase: GitManageActionPhase;
+    createdAt: number;
+    status: string;
+}
+
+interface GitManageRequestContext {
+    cwd: string;
+    scopeRef: any;
+    key: string;
+    infoKey: string;
+    actionPrefix: string;
+    generation: number;
+    headers: Record<string, string>;
+    scopeSignal: AbortSignal | null;
+    requestAvailable: boolean;
+}
+
+interface GitViewCacheEntry {
+    version: 1;
+    root: string;
+    view: string;
+    selection: string;
+    text: string;
+    head: string;
+    branch: string;
+    updatedAt: number;
+}
+
+class GitManageHTTPError extends Error {
+    constructor(
+        readonly status: number,
+        readonly body: string,
+    ) {
+        super(`Git request failed (${status})`);
+    }
+}
+
+const GIT_MANAGE_STORAGE_PREFIX = 'phi_git_manage_v1';
+const GIT_VIEW_STORAGE_PREFIX = 'phi_git_view_v1';
+const GIT_VIEW_CACHE_MAX_ENTRIES = 12;
+const GIT_VIEW_CACHE_MAX_BYTES = 256 * 1024;
+const GIT_INFO_TIMEOUT_MS = 30_000;
+const GIT_ACTION_TIMEOUT_MS = 150_000;
+
+function isGitManageTarget(value: unknown): value is GitManageTarget {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return false;
+    const target = value as Record<string, unknown>;
+    return [
+        'root',
+        'head',
+        'branch',
+        'remote',
+        'remote_ref',
+        'remote_token',
+    ].every((key) => typeof target[key] === 'string');
+}
+
+function sameGitManageTarget(
+    a: GitManageTarget,
+    b: GitManageTarget,
+    action: GitManageActionName,
+): boolean {
+    return (
+        a.root === b.root &&
+        a.head === b.head &&
+        a.branch === b.branch &&
+        (action === 'commit' ||
+            (a.remote === b.remote &&
+                a.remote_ref === b.remote_ref &&
+                a.remote_token === b.remote_token))
+    );
+}
+
+function isGitManageInfo(value: unknown): value is GitManageInfo {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return false;
+    const info = value as Record<string, unknown>;
+    if (info.notGitRepo === true) return true;
+    return (
+        typeof info.can_pull_push === 'boolean' &&
+        isGitManageTarget(info.target) &&
+        (info.reason === undefined || typeof info.reason === 'string') &&
+        (info.has_staged === undefined ||
+            typeof info.has_staged === 'boolean') &&
+        (info.index_token === undefined ||
+            typeof info.index_token === 'string') &&
+        (info.can_commit === undefined ||
+            typeof info.can_commit === 'boolean') &&
+        (info.commit_reason === undefined ||
+            typeof info.commit_reason === 'string')
+    );
+}
+
+function normalizeGitManageInfo(info: GitManageInfo): GitManageInfo {
+    if (info.notGitRepo) {
+        return {
+            notGitRepo: true,
+            can_pull_push: false,
+            has_staged: false,
+            index_token: '',
+            can_commit: false,
+            commit_reason: '',
+        };
+    }
+    return {
+        ...info,
+        has_staged: info.has_staged === true,
+        index_token: info.index_token || '',
+        can_commit: info.can_commit === true,
+        commit_reason:
+            info.commit_reason ||
+            (info.can_commit === undefined
+                ? 'Commit information is unavailable on this server.'
+                : ''),
+    };
+}
+
+function gitManageActionLabel(action: GitManageActionName): string {
+    return action === 'pull' ? 'Pull' : action === 'push' ? 'Push' : 'Commit';
+}
+
+function gitManagePausedStatus(action: GitManageActionName): string {
+    const label = gitManageActionLabel(action);
+    return `Queued ${label} paused. Resume ${label} to verify before sending.`;
+}
+
+function isGitManageActionRecord(
+    value: unknown,
+): value is GitManageActionRecord {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return false;
+    const record = value as Record<string, unknown>;
+    return (
+        record.version === 1 &&
+        typeof record.id === 'string' &&
+        typeof record.owner === 'string' &&
+        (record.action === 'pull' ||
+            record.action === 'push' ||
+            record.action === 'commit') &&
+        (record.action !== 'commit' ||
+            (typeof record.message === 'string' &&
+                typeof record.indexToken === 'string' &&
+                /^[0-9a-f]{64}$/i.test(record.indexToken))) &&
+        isGitManageTarget(record.target) &&
+        typeof record.phase === 'string' &&
+        [
+            'queued',
+            'sent',
+            'confirmed',
+            'failed',
+            'blocked',
+            'unconfirmed',
+            'paused',
+            'dismissed',
+        ].includes(record.phase) &&
+        typeof record.createdAt === 'number' &&
+        typeof record.status === 'string'
+    );
+}
+
+function gitManageActionId(): string {
+    return `g_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
 
 // One inline review note attached to a specific (file, line) in the diff
 // viewer. `codeSnippet` carries enough surrounding context for the staged
@@ -165,6 +372,36 @@ export class DiffController {
     reviewStorageKey: string;
     activeGitHead: string;
     activeGitBranch: string;
+    gitPullBtn: HTMLButtonElement | null;
+    gitPushBtn: HTMLButtonElement | null;
+    gitCommitBtn: HTMLButtonElement | null;
+    gitCommitMessageInput: HTMLTextAreaElement | null;
+    gitCommitDraftStatusElement: HTMLElement | null;
+    gitCommitHint: HTMLElement | null;
+    gitCommitDraftKey = '';
+    gitCommitDraftMemory = new Map<string, string>();
+    gitCommitDraftStatus = '';
+    gitTargetLabel: HTMLElement | null;
+    gitActionStatus: HTMLElement | null;
+    gitActionRecovery: HTMLElement | null;
+    gitActionResumeBtn: HTMLButtonElement | null;
+    gitActionCancelBtn: HTMLButtonElement | null;
+    gitActionDismissBtn: HTMLButtonElement | null;
+    gitManageInfo: GitManageInfo | null = null;
+    gitManageInfoKey = '';
+    gitManageContextKey = '';
+    gitManageRequestKey = '';
+    gitManageGeneration = 0;
+    gitManageBusy = false;
+    gitManageStatus = '';
+    gitManageRecord: GitManageActionRecord | null = null;
+    gitManageRecordKey = '';
+    gitManagePageId = gitManageActionId();
+    gitManageMemory = new Map<string, GitManageInfo>();
+    gitViewMemory = new Map<string, GitViewCacheEntry>();
+    gitManageCancels = new Set<(message: string) => void>();
+    gitManageRetryTimer: ReturnType<typeof setTimeout> | null = null;
+    gitManageRetryDelay = 1000;
     // Commits selected from Sync Board can be older than the recent list.
     // Keep the explicit option only while this project and selection match.
     syncCommitTarget: { hash: string; cwd: string } | null = null;
@@ -251,6 +488,36 @@ export class DiffController {
         this.reviewStorageKey = 'phi_diff_review_draft';
         this.activeGitHead = '';
         this.activeGitBranch = '';
+        this.gitPullBtn = document.getElementById(
+            'git-pull-btn',
+        ) as HTMLButtonElement | null;
+        this.gitPushBtn = document.getElementById(
+            'git-push-btn',
+        ) as HTMLButtonElement | null;
+        this.gitCommitBtn = document.getElementById(
+            'git-commit-btn',
+        ) as HTMLButtonElement | null;
+        this.gitCommitMessageInput = document.getElementById(
+            'git-commit-message',
+        ) as HTMLTextAreaElement | null;
+        this.gitCommitDraftStatusElement = document.getElementById(
+            'git-commit-draft-status',
+        );
+        this.gitCommitHint = document.getElementById('git-commit-hint');
+        this.gitTargetLabel = document.getElementById('git-target-label');
+        this.gitActionStatus = document.getElementById('git-action-status');
+        this.gitActionRecovery = document.getElementById(
+            'git-management-recovery',
+        );
+        this.gitActionResumeBtn = document.getElementById(
+            'git-action-resume-btn',
+        ) as HTMLButtonElement | null;
+        this.gitActionCancelBtn = document.getElementById(
+            'git-action-cancel-btn',
+        ) as HTMLButtonElement | null;
+        this.gitActionDismissBtn = document.getElementById(
+            'git-action-dismiss-btn',
+        ) as HTMLButtonElement | null;
 
         this._loadReviewDraft();
         this.setupEventListeners();
@@ -351,6 +618,40 @@ export class DiffController {
 
         // Manual Refresh trigger
         this.refreshDiffBtn.addEventListener('click', () => this.refreshDiff());
+        this.gitPullBtn?.addEventListener('click', () =>
+            this.startGitAction('pull'),
+        );
+        this.gitPushBtn?.addEventListener('click', () =>
+            this.startGitAction('push'),
+        );
+        this.gitCommitBtn?.addEventListener('click', () =>
+            this.startGitAction('commit'),
+        );
+        this.gitCommitMessageInput?.addEventListener('input', () => {
+            if (!this.gitCommitDraftKey) {
+                const value = this.gitCommitMessageInput?.value || '';
+                const context = this.captureGitManageContext();
+                if (this.gitCommitMessageInput)
+                    this.gitCommitMessageInput.value = value;
+                this.gitCommitDraftKey = `${context.key}:commit-draft`;
+            }
+            this.gitCommitDraftMemory.set(
+                this.gitCommitDraftKey,
+                this.gitCommitMessageInput?.value || '',
+            );
+            this.persistGitCommitDraft();
+            this.renderGitManagement();
+        });
+        this.gitActionResumeBtn?.addEventListener('click', () =>
+            this.resumeGitAction(),
+        );
+        this.gitActionCancelBtn?.addEventListener('click', () =>
+            this.cancelGitAction(),
+        );
+        this.gitActionDismissBtn?.addEventListener('click', () =>
+            this.dismissGitAction(),
+        );
+        window.addEventListener('online', () => this.wakeGitManageQueue());
 
         // Diff sub-tabs
         document.querySelectorAll('.diff-tab-btn').forEach((btn) => {
@@ -700,13 +1001,19 @@ export class DiffController {
             syncEl?.classList.add('hidden');
             ftEl?.classList.add('hidden');
             ftToolbar?.classList.add('hidden');
-            if (this.activeTab === 'diff') {
-                this.actionBar?.classList.remove('hidden');
-                this.commitSelect?.classList.remove('hidden');
-                this.richDiffBtn?.classList.remove('hidden');
+            const diffTab = this.activeTab === 'diff';
+            const gitTab =
+                diffTab ||
+                this.activeTab === 'log' ||
+                this.activeTab === 'status';
+            this.actionBar?.classList.toggle('hidden', !gitTab);
+            this.commitSelect?.classList.toggle('hidden', !diffTab);
+            this.richDiffBtn?.classList.toggle('hidden', !diffTab);
+            if (diffTab) {
                 this._refreshDiffProjectActions();
             } else {
-                this.actionBar?.classList.add('hidden');
+                this.vscodeLocalBtn?.classList.add('hidden');
+                this.vscodeRemoteBtn?.classList.add('hidden');
             }
         }
     }
@@ -774,6 +1081,1222 @@ export class DiffController {
         }
     }
 
+    private captureGitManageContext(): GitManageRequestContext {
+        const scope = this.app.scope;
+        const cwd = String(this.app.sessionsManager?.activeCWD || '');
+        const profileId = String(
+            scope?.profileId || getEmbeddedProfileId() || '',
+        );
+        const origin = String(
+            scope?.origin ||
+                getEmbeddedBackendOrigin() ||
+                window.location.origin ||
+                '',
+        );
+        const normalizedCwd = normalizeCwd(cwd);
+        const key = `${serverKey(GIT_MANAGE_STORAGE_PREFIX)}:${encodeURIComponent(profileId)}:${encodeURIComponent(origin)}:${encodeURIComponent(normalizedCwd)}`;
+        let headers: Record<string, string> = {};
+        let requestAvailable = true;
+        try {
+            if (typeof scope?.headers === 'function') {
+                headers = { ...scope.headers() };
+            } else if (profileId) {
+                headers['X-Phi-Backend'] = profileId;
+            }
+        } catch {
+            requestAvailable = false;
+        }
+        if (this.gitManageContextKey !== key) {
+            this.persistGitCommitDraft();
+            if (this.gitManageRecord?.phase === 'queued') {
+                this.gitManageRecord.phase = 'paused';
+                this.gitManageRecord.status = gitManagePausedStatus(
+                    this.gitManageRecord.action,
+                );
+                this.writeGitManageAction(
+                    this.gitManageRecordKey,
+                    this.gitManageRecord,
+                );
+            }
+            this.clearGitManageRetry();
+            for (const cancel of this.gitManageCancels) {
+                cancel('Git context changed');
+            }
+            this.gitManageCancels.clear();
+            this.gitManageGeneration++;
+            this.gitManageContextKey = key;
+            this.restoreGitCommitDraft(`${key}:commit-draft`);
+            this.gitManageInfoKey = `${key}:info`;
+            this.gitManageInfo = this.readGitManageInfo(this.gitManageInfoKey);
+            const restored = this.readGitManageAction(`${key}:action:`);
+            this.gitManageRecord = restored?.record || null;
+            this.gitManageRecordKey = restored?.storageKey || '';
+            this.gitManageBusy = false;
+            this.gitManageStatus =
+                this.gitManageRecord?.status ||
+                (this.gitManageInfo ? '' : 'No cached Git information');
+            this.gitManageRequestKey = '';
+            this.renderGitManagement();
+        }
+        return {
+            cwd,
+            scopeRef: scope,
+            key,
+            infoKey: `${key}:info`,
+            actionPrefix: `${key}:action:`,
+            generation: this.gitManageGeneration,
+            headers,
+            scopeSignal: scope?.signal || null,
+            requestAvailable,
+        };
+    }
+
+    private persistGitCommitDraft(): void {
+        if (!this.gitCommitMessageInput || !this.gitCommitDraftKey) return;
+        this.gitCommitDraftMemory.set(
+            this.gitCommitDraftKey,
+            this.gitCommitMessageInput.value,
+        );
+        try {
+            localStorage.setItem(
+                this.gitCommitDraftKey,
+                this.gitCommitMessageInput.value,
+            );
+            this.gitCommitDraftStatus = '';
+        } catch {
+            this.gitCommitDraftStatus =
+                'Draft not saved on this device. Keep this page open.';
+        }
+    }
+
+    private clearGitCommitDraftAfterSuccess(): void {
+        if (!this.gitCommitMessageInput || !this.gitCommitDraftKey) return;
+        try {
+            localStorage.setItem(this.gitCommitDraftKey, '');
+            this.gitCommitDraftMemory.set(this.gitCommitDraftKey, '');
+            this.gitCommitMessageInput.value = '';
+            this.gitCommitDraftStatus = '';
+        } catch {
+            this.gitCommitDraftMemory.set(
+                this.gitCommitDraftKey,
+                this.gitCommitMessageInput.value,
+            );
+            this.gitCommitDraftStatus =
+                'Draft not saved on this device. Keep this page open.';
+        }
+    }
+
+    private restoreGitCommitDraft(key: string): void {
+        this.gitCommitDraftKey = key;
+        if (!this.gitCommitMessageInput) return;
+        const memoryDraft = this.gitCommitDraftMemory.get(key);
+        if (memoryDraft !== undefined) {
+            this.gitCommitMessageInput.value = memoryDraft;
+            this.gitCommitDraftStatus = '';
+            return;
+        }
+        this.gitCommitMessageInput.value = '';
+        try {
+            const draft = localStorage.getItem(key) || '';
+            this.gitCommitMessageInput.value = draft;
+            this.gitCommitDraftMemory.set(key, draft);
+            this.gitCommitDraftStatus = '';
+        } catch {
+            this.gitCommitDraftStatus =
+                'Draft not saved on this device. Keep this page open.';
+        }
+    }
+
+    private readGitManageInfo(key: string): GitManageInfo | null {
+        const memory = this.gitManageMemory.get(key);
+        if (memory) return memory;
+        try {
+            const raw = localStorage.getItem(key);
+            if (!raw) return null;
+            const parsed: unknown = JSON.parse(raw);
+            if (!isGitManageInfo(parsed)) return null;
+            const info = normalizeGitManageInfo(parsed);
+            this.gitManageMemory.set(key, info);
+            return info;
+        } catch {
+            return null;
+        }
+    }
+
+    private readGitManageAction(
+        prefix: string,
+    ): { record: GitManageActionRecord; storageKey: string } | null {
+        try {
+            const candidates: {
+                record: GitManageActionRecord;
+                storageKey: string;
+                unresolved: boolean;
+            }[] = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const storageKey = localStorage.key(i);
+                if (!storageKey?.startsWith(prefix)) continue;
+                let parsed: unknown;
+                try {
+                    parsed = JSON.parse(
+                        localStorage.getItem(storageKey) || 'null',
+                    );
+                } catch {
+                    // One corrupt record must not hide other sent actions.
+                    continue;
+                }
+                if (
+                    !isGitManageActionRecord(parsed) ||
+                    parsed.phase === 'dismissed' ||
+                    localStorage.getItem(
+                        `${this.gitManageContextKey}:dismissed:${encodeURIComponent(parsed.id)}`,
+                    ) === '1'
+                ) {
+                    continue;
+                }
+                let record = parsed;
+                if (record.phase === 'sent') {
+                    record = {
+                        ...record,
+                        phase: 'unconfirmed',
+                        status: 'Result unconfirmed. Inspect Git state before running again.',
+                    };
+                } else if (record.phase === 'queued') {
+                    record = {
+                        ...record,
+                        phase: 'paused',
+                        status: gitManagePausedStatus(record.action),
+                    };
+                } else if (
+                    record.phase === 'paused' &&
+                    record.status ===
+                        'Queued Git action paused. Resume to verify before sending.'
+                ) {
+                    // Records stored by an older build carry one generic
+                    // sentence; name the queued command without resending.
+                    record = {
+                        ...record,
+                        status: gitManagePausedStatus(record.action),
+                    };
+                }
+                candidates.push({
+                    record,
+                    storageKey,
+                    unresolved: [
+                        'queued',
+                        'sent',
+                        'unconfirmed',
+                        'paused',
+                    ].includes(parsed.phase),
+                });
+            }
+            candidates.sort(
+                (a, b) =>
+                    Number(b.unresolved) - Number(a.unresolved) ||
+                    b.record.createdAt - a.record.createdAt,
+            );
+            return candidates[0] || null;
+        } catch {
+            return null;
+        }
+    }
+
+    private renderGitManagement(): void {
+        const info = this.gitManageInfo;
+        const target = info?.target;
+        if (this.gitTargetLabel) {
+            if (info?.notGitRepo) {
+                this.gitTargetLabel.textContent = 'Not a Git repository';
+            } else if (target) {
+                const branch = target.branch || 'Detached HEAD';
+                const upstream = target.remote
+                    ? `${target.remote}:${target.remote_ref || 'no upstream'}`
+                    : 'No remote upstream';
+                this.gitTargetLabel.textContent = `${target.root}\nBranch ${branch} · ${upstream}`;
+            } else {
+                this.gitTargetLabel.textContent = 'No cached Git information';
+            }
+        }
+        const actionWaiting =
+            this.gitManageBusy ||
+            ['queued', 'sent', 'paused', 'unconfirmed'].includes(
+                this.gitManageRecord?.phase || '',
+            );
+        const disabled = !info?.can_pull_push || !target || actionWaiting;
+        if (this.gitPullBtn) {
+            this.gitPullBtn.disabled = disabled;
+            this.gitPullBtn.title =
+                info?.reason || 'Fast-forward from the configured upstream';
+        }
+        if (this.gitPushBtn) {
+            this.gitPushBtn.disabled = disabled;
+            this.gitPushBtn.title =
+                info?.reason ||
+                'Push the current branch to its configured upstream';
+        }
+        if (this.gitCommitBtn) {
+            this.gitCommitBtn.disabled =
+                !info?.can_commit ||
+                !target ||
+                !/^[0-9a-f]{64}$/i.test(info.index_token || '') ||
+                !this.gitCommitMessageInput?.value.trim() ||
+                actionWaiting;
+            this.gitCommitBtn.title =
+                info?.commit_reason ||
+                'Commit only the currently staged changes';
+        }
+        if (this.gitCommitDraftStatusElement) {
+            this.gitCommitDraftStatusElement.textContent =
+                this.gitCommitDraftStatus;
+            this.gitCommitDraftStatusElement.classList.toggle(
+                'hidden',
+                !this.gitCommitDraftStatus,
+            );
+        }
+        if (this.gitCommitHint) {
+            const prerequisite = this.gitCommitPrerequisite(
+                info,
+                target,
+                actionWaiting,
+            );
+            this.gitCommitHint.textContent = prerequisite;
+            this.gitCommitHint.classList.toggle('hidden', !prerequisite);
+        }
+        const paused = this.gitManageRecord?.phase === 'paused';
+        const unconfirmed = this.gitManageRecord?.phase === 'unconfirmed';
+        if (this.gitActionResumeBtn) {
+            this.gitActionResumeBtn.textContent = this.gitManageRecord
+                ? `Resume ${gitManageActionLabel(this.gitManageRecord.action)}`
+                : 'Resume';
+            this.gitActionResumeBtn.classList.toggle('hidden', !paused);
+        }
+        this.gitActionCancelBtn?.classList.toggle(
+            'hidden',
+            !(paused || this.gitManageRecord?.phase === 'queued'),
+        );
+        this.gitActionDismissBtn?.classList.toggle('hidden', !unconfirmed);
+        this.gitActionRecovery?.classList.toggle(
+            'hidden',
+            !(
+                paused ||
+                unconfirmed ||
+                this.gitManageRecord?.phase === 'queued'
+            ),
+        );
+        if (this.gitActionStatus) {
+            this.gitActionStatus.textContent =
+                this.gitManageStatus || info?.reason || '';
+        }
+        document
+            .getElementById('git-management')
+            ?.setAttribute('aria-busy', String(this.gitManageBusy));
+    }
+
+    private gitCommitPrerequisite(
+        info: GitManageInfo | null,
+        target: GitManageTarget | undefined,
+        actionWaiting: boolean,
+    ): string {
+        if (!info) {
+            return this.app.sessionsManager?.activeCWD
+                ? 'No cached Git information.'
+                : 'Select a workspace to view Git actions.';
+        }
+        if (info.notGitRepo) return 'Not a Git repository.';
+        if (actionWaiting)
+            return 'Resolve the pending Git action before committing.';
+        if (
+            !info.can_commit ||
+            !target ||
+            !/^[0-9a-f]{64}$/i.test(info.index_token || '')
+        ) {
+            return (
+                info.commit_reason ||
+                'Commit information is unavailable. Refresh to try again.'
+            );
+        }
+        if (!this.gitCommitMessageInput?.value.trim())
+            return 'Enter a commit message.';
+        return '';
+    }
+
+    private isCurrentGitManageContext(
+        context: GitManageRequestContext,
+    ): boolean {
+        return (
+            this.gitManageContextKey === context.key &&
+            this.gitManageGeneration === context.generation &&
+            this.app.scope === context.scopeRef &&
+            normalizeCwd(this.app.sessionsManager?.activeCWD || '') ===
+                normalizeCwd(context.cwd)
+        );
+    }
+
+    private async requestGitManage<T>(
+        context: GitManageRequestContext,
+        path: string,
+        init: RequestInit,
+        timeoutMs: number,
+        consume: (response: Response) => Promise<T>,
+    ): Promise<T> {
+        if (!context.requestAvailable) {
+            throw new Error('Git backend request context is unavailable');
+        }
+        const controller = new AbortController();
+        let rejectAbort: (reason?: unknown) => void = () => {};
+        const aborted = new Promise<never>((_resolve, reject) => {
+            rejectAbort = reject;
+        });
+        let cancelled = false;
+        const cancel = (message: string) => {
+            if (cancelled) return;
+            cancelled = true;
+            controller.abort();
+            rejectAbort(new DOMException(message, 'AbortError'));
+        };
+        const scopeSignal = context.scopeSignal;
+        const onScopeAbort = () => cancel('Backend scope changed');
+        if (scopeSignal?.aborted) {
+            onScopeAbort();
+        } else {
+            scopeSignal?.addEventListener('abort', onScopeAbort, {
+                once: true,
+            });
+        }
+        const timer = setTimeout(
+            () => cancel('Git request timed out'),
+            timeoutMs,
+        );
+        this.gitManageCancels.add(cancel);
+        const extraHeaders = (init.headers || {}) as Record<string, string>;
+        const headers = { ...context.headers, ...extraHeaders };
+        const operation = (async () => {
+            const response = await fetch(path, {
+                ...init,
+                headers,
+                signal: controller.signal,
+                credentials: 'same-origin',
+            });
+            return consume(response);
+        })();
+        try {
+            if (controller.signal.aborted) return await aborted;
+            return await Promise.race([operation, aborted]);
+        } finally {
+            clearTimeout(timer);
+            scopeSignal?.removeEventListener('abort', onScopeAbort);
+            this.gitManageCancels.delete(cancel);
+        }
+    }
+
+    private async fetchGitManageInfo(
+        context: GitManageRequestContext,
+    ): Promise<GitManageInfo> {
+        const query = new URLSearchParams({ cwd: context.cwd });
+        return this.requestGitManage(
+            context,
+            `/api/git/info?${query}`,
+            { method: 'GET', cache: 'no-store' },
+            GIT_INFO_TIMEOUT_MS,
+            async (response) => {
+                const body = await response.text();
+                if (!response.ok)
+                    throw new GitManageHTTPError(response.status, body);
+                let parsed: unknown;
+                try {
+                    parsed = JSON.parse(body);
+                } catch {
+                    throw new Error('Invalid Git information response');
+                }
+                if (!isGitManageInfo(parsed))
+                    throw new Error('Invalid Git information response');
+                return normalizeGitManageInfo(parsed);
+            },
+        );
+    }
+
+    private cacheGitManageInfo(
+        context: GitManageRequestContext,
+        info: GitManageInfo,
+    ): void {
+        info = normalizeGitManageInfo(info);
+        this.gitManageMemory.set(context.infoKey, info);
+        try {
+            localStorage.setItem(context.infoKey, JSON.stringify(info));
+        } catch {
+            /* In-memory state remains usable when browser storage is unavailable. */
+        }
+    }
+
+    private gitViewRoot(context: GitManageRequestContext): string {
+        return normalizeCwd(this.gitManageInfo?.target?.root || context.cwd);
+    }
+
+    private gitViewCacheKey(
+        context: GitManageRequestContext,
+        root: string,
+        view: string,
+        selection: string,
+    ): string {
+        return `${GIT_VIEW_STORAGE_PREFIX}:${encodeURIComponent(context.key)}:${encodeURIComponent(root)}:${encodeURIComponent(view)}:${encodeURIComponent(selection)}`;
+    }
+
+    private readGitViewCache(
+        context: GitManageRequestContext,
+        root: string,
+        view: string,
+        selection: string,
+    ): GitViewCacheEntry | null {
+        const key = this.gitViewCacheKey(context, root, view, selection);
+        const memory = this.gitViewMemory.get(key);
+        if (memory) return memory;
+        try {
+            const parsed: unknown = JSON.parse(
+                localStorage.getItem(key) || 'null',
+            );
+            if (
+                !parsed ||
+                typeof parsed !== 'object' ||
+                Array.isArray(parsed)
+            ) {
+                return null;
+            }
+            const entry = parsed as GitViewCacheEntry;
+            if (
+                entry.version !== 1 ||
+                entry.root !== root ||
+                entry.view !== view ||
+                entry.selection !== selection ||
+                typeof entry.text !== 'string' ||
+                typeof entry.head !== 'string' ||
+                typeof entry.branch !== 'string' ||
+                typeof entry.updatedAt !== 'number'
+            ) {
+                return null;
+            }
+            this.gitViewMemory.set(key, entry);
+            return entry;
+        } catch {
+            return null;
+        }
+    }
+
+    private cacheGitView(
+        context: GitManageRequestContext,
+        root: string,
+        view: string,
+        selection: string,
+        text: string,
+        head = '',
+        branch = '',
+    ): void {
+        const key = this.gitViewCacheKey(context, root, view, selection);
+        const entry: GitViewCacheEntry = {
+            version: 1,
+            root,
+            view,
+            selection,
+            text,
+            head,
+            branch,
+            updatedAt: Date.now(),
+        };
+        this.gitViewMemory.set(key, entry);
+        const serialized =
+            text.length <= GIT_VIEW_CACHE_MAX_BYTES
+                ? JSON.stringify(entry)
+                : '';
+        if (
+            serialized &&
+            new TextEncoder().encode(serialized).byteLength <=
+                GIT_VIEW_CACHE_MAX_BYTES
+        ) {
+            const prefix = `${GIT_VIEW_STORAGE_PREFIX}:${encodeURIComponent(context.key)}:${encodeURIComponent(root)}:`;
+            try {
+                localStorage.setItem(key, serialized);
+                const saved: { key: string; updatedAt: number }[] = [];
+                for (let index = 0; index < localStorage.length; index++) {
+                    const savedKey = localStorage.key(index);
+                    if (!savedKey?.startsWith(prefix)) continue;
+                    try {
+                        const value = JSON.parse(
+                            localStorage.getItem(savedKey) || 'null',
+                        );
+                        if (typeof value?.updatedAt === 'number') {
+                            saved.push({
+                                key: savedKey,
+                                updatedAt: value.updatedAt,
+                            });
+                        }
+                    } catch {
+                        /* Ignore unrelated or corrupt entries. */
+                    }
+                }
+                saved.sort((a, b) => b.updatedAt - a.updatedAt);
+                for (const stale of saved.slice(GIT_VIEW_CACHE_MAX_ENTRIES)) {
+                    localStorage.removeItem(stale.key);
+                    this.gitViewMemory.delete(stale.key);
+                }
+            } catch {
+                /* Keep the successful view in memory if browser storage is full. */
+            }
+        }
+        const memoryPrefix = `${GIT_VIEW_STORAGE_PREFIX}:${encodeURIComponent(context.key)}:${encodeURIComponent(root)}:`;
+        const memoryKeys = [...this.gitViewMemory.keys()].filter((item) =>
+            item.startsWith(memoryPrefix),
+        );
+        memoryKeys.sort(
+            (a, b) =>
+                (this.gitViewMemory.get(b)?.updatedAt || 0) -
+                (this.gitViewMemory.get(a)?.updatedAt || 0),
+        );
+        for (const stale of memoryKeys.slice(GIT_VIEW_CACHE_MAX_ENTRIES)) {
+            this.gitViewMemory.delete(stale);
+        }
+    }
+
+    private paintGitViewCache(
+        entry: GitViewCacheEntry | null,
+        view: string,
+        emptyText: string,
+    ): boolean {
+        if (!entry || !this.term) return false;
+        if (entry.text === 'NOT_GIT_REPO') {
+            this._writeStaticTerminalOutput(
+                '',
+                `\x1b[90mNot a git repository — the ${view} is empty for this workspace.\x1b[0m\r\n`,
+            );
+        } else {
+            this._writeStaticTerminalOutput(entry.text, emptyText);
+        }
+        this.activeGitHead = entry.head;
+        this.activeGitBranch = entry.branch;
+        return true;
+    }
+
+    private refreshGitManagement(context: GitManageRequestContext): void {
+        this.renderGitManagement();
+        if (!context.cwd) {
+            this.gitManageStatus = 'Select a workspace to view Git actions.';
+            this.renderGitManagement();
+            return;
+        }
+        const requestKey = `${context.key}:${context.generation}`;
+        if (this.gitManageRequestKey === requestKey) return;
+        if (!context.requestAvailable) {
+            this.gitManageStatus =
+                'Git information unavailable for the selected backend.';
+            this.renderGitManagement();
+            return;
+        }
+        this.gitManageRequestKey = requestKey;
+        void this.fetchGitManageInfo(context)
+            .then((info) => {
+                if (!this.isCurrentGitManageContext(context)) return;
+                this.cacheGitManageInfo(context, info);
+                this.gitManageInfo = info;
+                this.gitManageInfoKey = context.infoKey;
+                if (!this.gitManageRecord) this.gitManageStatus = '';
+                this.renderGitManagement();
+            })
+            .catch(() => {
+                if (!this.isCurrentGitManageContext(context)) return;
+                this.gitManageStatus =
+                    this.gitManageRecord?.status ||
+                    (this.gitManageInfo
+                        ? 'Git information refresh failed; showing the last saved target.'
+                        : 'Git information is unavailable. Refresh to try again.');
+                this.renderGitManagement();
+            })
+            .finally(() => {
+                if (this.gitManageRequestKey === requestKey)
+                    this.gitManageRequestKey = '';
+            });
+    }
+
+    private wakeGitManageQueue(): void {
+        const context = this.captureGitManageContext();
+        const record = this.gitManageRecord;
+        if (
+            !context.requestAvailable ||
+            !record ||
+            record.phase !== 'queued' ||
+            this.gitManageBusy
+        ) {
+            return;
+        }
+        this.clearGitManageRetry();
+        this.gitManageRetryDelay = 1000;
+        this.gitManageBusy = true;
+        record.status = `Preparing ${gitManageActionLabel(record.action)}…`;
+        this.gitManageStatus = record.status;
+        this.renderGitManagement();
+        void this.dispatchGitAction(context, record, this.gitManageRecordKey);
+    }
+
+    private clearGitManageRetry(): void {
+        if (this.gitManageRetryTimer !== null) {
+            clearTimeout(this.gitManageRetryTimer);
+            this.gitManageRetryTimer = null;
+        }
+    }
+
+    private scheduleGitManageRetry(
+        context: GitManageRequestContext,
+        record: GitManageActionRecord,
+        storageKey: string,
+    ): void {
+        if (
+            !this.isCurrentGitManageContext(context) ||
+            this.gitManageRecord !== record ||
+            record.phase !== 'queued'
+        ) {
+            return;
+        }
+        if (!this.ownsGitManageAction(storageKey, record)) {
+            record.phase = 'paused';
+            record.status =
+                'Git action ownership changed. Resume here to revalidate.';
+            this.gitManageStatus = record.status;
+            this.gitManageBusy = false;
+            this.renderGitManagement();
+            return;
+        }
+        this.clearGitManageRetry();
+        const delay = this.gitManageRetryDelay;
+        this.gitManageRetryDelay = Math.min(delay * 2, 30_000);
+        const seconds = Math.max(1, Math.ceil(delay / 1000));
+        record.status = `Phi unavailable; retrying ${gitManageActionLabel(record.action)} in ${seconds}s. Cancel to stop.`;
+        this.gitManageStatus = record.status;
+        this.gitManageBusy = false;
+        this.writeGitManageAction(storageKey, record);
+        this.renderGitManagement();
+        this.gitManageRetryTimer = setTimeout(() => {
+            this.gitManageRetryTimer = null;
+            if (
+                !this.isCurrentGitManageContext(context) ||
+                this.gitManageRecord !== record ||
+                record.phase !== 'queued'
+            ) {
+                return;
+            }
+            this.gitManageBusy = true;
+            record.status = `Preparing ${gitManageActionLabel(record.action)}…`;
+            this.gitManageStatus = record.status;
+            this.renderGitManagement();
+            void this.dispatchGitAction(context, record, storageKey);
+        }, delay);
+    }
+
+    private writeGitManageAction(
+        storageKey: string,
+        record: GitManageActionRecord,
+        requireNew = false,
+    ): boolean {
+        try {
+            const raw = localStorage.getItem(storageKey);
+            if (requireNew && raw !== null) return false;
+            if (raw !== null) {
+                const existing: unknown = JSON.parse(raw);
+                if (
+                    !isGitManageActionRecord(existing) ||
+                    existing.id !== record.id ||
+                    existing.owner !== record.owner ||
+                    (existing.phase === 'sent' &&
+                        ['queued', 'paused'].includes(record.phase))
+                ) {
+                    return false;
+                }
+            }
+            try {
+                localStorage.setItem(storageKey, JSON.stringify(record));
+                return true;
+            } catch (error) {
+                const name = (error as { name?: unknown })?.name;
+                if (
+                    record.phase !== 'sent' ||
+                    (name !== 'QuotaExceededError' &&
+                        name !== 'NS_ERROR_DOM_QUOTA_REACHED')
+                ) {
+                    return false;
+                }
+                try {
+                    this.evictGitViewCacheForTarget(record.target.root);
+                    localStorage.setItem(storageKey, JSON.stringify(record));
+                    return true;
+                } catch {
+                    return false;
+                }
+            }
+        } catch {
+            return false;
+        }
+    }
+
+    private evictGitViewCacheForTarget(root: string): void {
+        const prefix = `${GIT_VIEW_STORAGE_PREFIX}:${encodeURIComponent(this.gitManageContextKey)}:${encodeURIComponent(root)}:`;
+        const keys: string[] = [];
+        for (let index = 0; index < localStorage.length; index++) {
+            const key = localStorage.key(index);
+            if (key?.startsWith(prefix)) keys.push(key);
+        }
+        for (const key of keys) localStorage.removeItem(key);
+    }
+
+    private ownsGitManageAction(
+        storageKey: string,
+        record: GitManageActionRecord,
+    ): boolean {
+        try {
+            const stored: unknown = JSON.parse(
+                localStorage.getItem(storageKey) || 'null',
+            );
+            return (
+                isGitManageActionRecord(stored) &&
+                stored.id === record.id &&
+                stored.owner === this.gitManagePageId &&
+                stored.phase === 'queued'
+            );
+        } catch {
+            return false;
+        }
+    }
+
+    private claimGitManageAction(
+        storageKey: string,
+        current: GitManageActionRecord,
+        claimed: GitManageActionRecord,
+    ): boolean {
+        try {
+            const stored: unknown = JSON.parse(
+                localStorage.getItem(storageKey) || 'null',
+            );
+            if (
+                !isGitManageActionRecord(stored) ||
+                stored.id !== current.id ||
+                !['queued', 'paused'].includes(stored.phase)
+            ) {
+                return false;
+            }
+            localStorage.setItem(storageKey, JSON.stringify(claimed));
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    async startGitAction(action: GitManageActionName): Promise<void> {
+        const context = this.captureGitManageContext();
+        const info = this.gitManageInfo;
+        const message = this.gitCommitMessageInput?.value || '';
+        const target = info?.target;
+        if (!context.requestAvailable) {
+            this.gitManageStatus =
+                'Git backend request context is unavailable. Refresh before trying again.';
+            this.renderGitManagement();
+            return;
+        }
+        if (action === 'commit' && !message.trim()) {
+            this.gitManageStatus = 'Enter a commit message.';
+            this.renderGitManagement();
+            return;
+        }
+        const targetAvailable =
+            action === 'commit'
+                ? info?.can_commit === true &&
+                  info.has_staged === true &&
+                  /^[0-9a-f]{64}$/i.test(info.index_token || '')
+                : info?.can_pull_push === true &&
+                  isGitManageTarget(target) &&
+                  /^[0-9a-f]{64}$/i.test(target.remote_token);
+        if (!targetAvailable || !isGitManageTarget(target)) {
+            this.gitManageStatus =
+                (action === 'commit' ? info?.commit_reason : info?.reason) ||
+                'Git target is unavailable. Refresh before trying again.';
+            this.renderGitManagement();
+            return;
+        }
+        if (
+            this.gitManageBusy ||
+            ['queued', 'sent', 'paused', 'unconfirmed'].includes(
+                this.gitManageRecord?.phase || '',
+            )
+        ) {
+            this.gitManageStatus =
+                this.gitManageRecord?.status ||
+                'Resolve the previous Git action before starting another.';
+            this.renderGitManagement();
+            return;
+        }
+        const actionTarget = { ...target };
+        if (action === 'commit') {
+            actionTarget.remote = '';
+            actionTarget.remote_ref = '';
+            actionTarget.remote_token = '';
+        }
+        const record: GitManageActionRecord = {
+            version: 1,
+            id: gitManageActionId(),
+            owner: this.gitManagePageId,
+            action,
+            target: actionTarget,
+            ...(action === 'commit'
+                ? { message, indexToken: info?.index_token || '' }
+                : {}),
+            phase: 'queued',
+            createdAt: Date.now(),
+            status: `Preparing ${gitManageActionLabel(action)}…`,
+        };
+        const storageKey = `${context.actionPrefix}${record.id}`;
+        this.clearGitManageRetry();
+        this.gitManageRetryDelay = 1000;
+        this.gitManageRecord = record;
+        this.gitManageRecordKey = storageKey;
+        this.gitManageStatus = record.status;
+        this.gitManageBusy = true;
+        if (!this.writeGitManageAction(storageKey, record, true)) {
+            record.phase = 'paused';
+            record.status =
+                'Git action not sent: browser storage is unavailable. Retry explicitly.';
+            this.gitManageStatus = record.status;
+            this.gitManageBusy = false;
+            this.renderGitManagement();
+            return;
+        }
+        this.renderGitManagement();
+        await this.dispatchGitAction(context, record, storageKey);
+    }
+
+    private async dispatchGitAction(
+        context: GitManageRequestContext,
+        record: GitManageActionRecord,
+        storageKey: string,
+    ): Promise<void> {
+        try {
+            const fresh = await this.fetchGitManageInfo(context);
+            if (
+                !this.isCurrentGitManageContext(context) ||
+                this.gitManageRecord !== record ||
+                this.gitManageRecordKey !== storageKey ||
+                record.phase !== 'queued'
+            ) {
+                return;
+            }
+            if (!this.ownsGitManageAction(storageKey, record)) {
+                record.phase = 'paused';
+                record.status =
+                    'Git action ownership changed. Resume here to revalidate.';
+                this.gitManageStatus = record.status;
+                this.gitManageBusy = false;
+                this.renderGitManagement();
+                return;
+            }
+            this.cacheGitManageInfo(context, fresh);
+            this.gitManageInfo = fresh;
+            this.gitManageInfoKey = context.infoKey;
+            const freshTarget = isGitManageTarget(fresh.target)
+                ? { ...fresh.target }
+                : null;
+            if (freshTarget && record.action === 'commit') {
+                freshTarget.remote = '';
+                freshTarget.remote_ref = '';
+                freshTarget.remote_token = '';
+            }
+            const actionAvailable =
+                record.action === 'commit'
+                    ? fresh.can_commit === true &&
+                      fresh.has_staged === true &&
+                      fresh.index_token === record.indexToken
+                    : fresh.can_pull_push;
+            if (
+                !actionAvailable ||
+                !freshTarget ||
+                !sameGitManageTarget(record.target, freshTarget, record.action)
+            ) {
+                record.phase = 'blocked';
+                record.status = `Git target changed or ${gitManageActionLabel(record.action)} is unavailable. Refresh and click again.`;
+                this.writeGitManageAction(storageKey, record);
+                this.gitManageRecord = record;
+                this.gitManageStatus = record.status;
+                this.gitManageBusy = false;
+                this.renderGitManagement();
+                return;
+            }
+            record.phase = 'sent';
+            record.status = `${gitManageActionLabel(record.action)} sent; waiting for confirmation.`;
+            if (!this.writeGitManageAction(storageKey, record)) {
+                record.phase = 'paused';
+                record.status =
+                    'Git action not sent: the sent marker could not be saved.';
+                this.gitManageRecord = record;
+                this.gitManageStatus = record.status;
+                this.gitManageBusy = false;
+                this.renderGitManagement();
+                return;
+            }
+            this.gitManageRecord = record;
+            this.gitManageStatus = record.status;
+            this.renderGitManagement();
+            const result = await this.requestGitManage(
+                context,
+                '/api/git/action',
+                {
+                    method: 'POST',
+                    redirect: 'error',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        cwd: context.cwd,
+                        action: record.action,
+                        target: record.target,
+                        ...(record.action === 'commit'
+                            ? {
+                                  message: record.message,
+                                  index_token: record.indexToken,
+                              }
+                            : {}),
+                    }),
+                },
+                GIT_ACTION_TIMEOUT_MS,
+                async (response) => ({
+                    status: response.status,
+                    ok: response.ok,
+                    body: await response.text(),
+                }),
+            );
+            if (result.ok && result.status === 200) {
+                let payload: any;
+                try {
+                    payload = JSON.parse(result.body);
+                } catch {
+                    payload = null;
+                }
+                if (
+                    payload?.action === record.action &&
+                    payload?.root === record.target.root &&
+                    typeof payload?.output === 'string' &&
+                    payload.output.length > 0
+                ) {
+                    const messageInput = this.gitCommitMessageInput;
+                    if (
+                        this.isCurrentGitManageContext(context) &&
+                        record.action === 'commit' &&
+                        messageInput &&
+                        messageInput.value === record.message
+                    ) {
+                        this.clearGitCommitDraftAfterSuccess();
+                    }
+                    this.finishGitAction(
+                        context,
+                        record,
+                        storageKey,
+                        'confirmed',
+                        `${gitManageActionLabel(record.action)} completed.`,
+                    );
+                    this.refreshAfterGitAction(context);
+                    return;
+                }
+                this.finishGitAction(
+                    context,
+                    record,
+                    storageKey,
+                    'unconfirmed',
+                    'Result unconfirmed. Inspect Git state before running again.',
+                );
+                return;
+            }
+            const errorBody = result.body.trim();
+            if (
+                result.status === 500 &&
+                errorBody ===
+                    `Git ${record.action} failed. Partial effects are possible. Inspect Git before running again.`
+            ) {
+                this.finishGitAction(
+                    context,
+                    record,
+                    storageKey,
+                    'failed',
+                    `Git ${record.action} failed. Partial effects are possible. Inspect Git before running again.`,
+                );
+                this.refreshAfterGitAction(context);
+                return;
+            }
+            if (
+                result.status === 504 ||
+                errorBody ===
+                    'Git result unconfirmed. Inspect Git state before running again.' ||
+                result.status >= 500
+            ) {
+                this.finishGitAction(
+                    context,
+                    record,
+                    storageKey,
+                    'unconfirmed',
+                    'Result unconfirmed. Inspect Git state before running again.',
+                );
+                return;
+            }
+            this.finishGitAction(
+                context,
+                record,
+                storageKey,
+                'blocked',
+                `Git action rejected (HTTP ${result.status}). Refresh the target before trying again.`,
+            );
+            this.refreshAfterGitAction(context);
+        } catch (error) {
+            if (record.phase === 'sent') {
+                this.finishGitAction(
+                    context,
+                    record,
+                    storageKey,
+                    'unconfirmed',
+                    'Result unconfirmed. Inspect Git state before running again.',
+                );
+            } else if (
+                this.isCurrentGitManageContext(context) &&
+                this.gitManageRecord === record &&
+                this.gitManageRecordKey === storageKey &&
+                record.phase === 'queued'
+            ) {
+                if (
+                    error instanceof GitManageHTTPError &&
+                    [401, 403, 404].includes(error.status)
+                ) {
+                    record.phase = 'blocked';
+                    record.status =
+                        error.status === 401
+                            ? 'Phi authorization required. Unlock or reload, then refresh the Git target.'
+                            : `Git target check rejected (HTTP ${error.status}). Refresh before trying again.`;
+                    this.writeGitManageAction(storageKey, record);
+                    this.gitManageStatus = record.status;
+                    this.gitManageBusy = false;
+                    this.renderGitManagement();
+                } else {
+                    this.scheduleGitManageRetry(context, record, storageKey);
+                }
+            }
+        } finally {
+            if (this.isCurrentGitManageContext(context)) {
+                this.gitManageBusy = false;
+                this.renderGitManagement();
+            }
+        }
+    }
+
+    private refreshAfterGitAction(context: GitManageRequestContext): void {
+        if (!this.isCurrentGitManageContext(context)) return;
+        void this.refreshDiff();
+        if (this.diffModal && !this.diffModal.classList.contains('hidden')) {
+            void this.loadRichDiff();
+        }
+    }
+
+    private finishGitAction(
+        context: GitManageRequestContext,
+        record: GitManageActionRecord,
+        storageKey: string,
+        phase: GitManageActionPhase,
+        status: string,
+    ): void {
+        record.phase = phase;
+        record.status = status;
+        this.writeGitManageAction(storageKey, record);
+        if (!this.isCurrentGitManageContext(context)) return;
+        this.clearGitManageRetry();
+        this.gitManageRetryDelay = 1000;
+        this.gitManageRecord = record;
+        this.gitManageStatus = status;
+        this.gitManageBusy = false;
+        this.renderGitManagement();
+    }
+
+    async resumeGitAction(): Promise<void> {
+        const context = this.captureGitManageContext();
+        const record = this.gitManageRecord;
+        if (
+            !context.requestAvailable ||
+            !record ||
+            !['queued', 'paused'].includes(record.phase)
+        ) {
+            return;
+        }
+        this.clearGitManageRetry();
+        this.gitManageRetryDelay = 1000;
+        const claimed: GitManageActionRecord = {
+            ...record,
+            owner: this.gitManagePageId,
+            phase: 'queued',
+            status: `Preparing ${gitManageActionLabel(record.action)}…`,
+        };
+        if (
+            !this.claimGitManageAction(this.gitManageRecordKey, record, claimed)
+        ) {
+            record.phase = 'paused';
+            record.status = 'Git action is no longer available to resume here.';
+            this.gitManageStatus = record.status;
+            this.renderGitManagement();
+            return;
+        }
+        Object.assign(record, claimed);
+        this.gitManageBusy = true;
+        this.gitManageStatus = record.status;
+        this.renderGitManagement();
+        await this.dispatchGitAction(context, record, this.gitManageRecordKey);
+    }
+
+    cancelGitAction(): void {
+        const context = this.captureGitManageContext();
+        const record = this.gitManageRecord;
+        if (!record || !['queued', 'paused'].includes(record.phase)) return;
+        this.clearGitManageRetry();
+        this.gitManageRetryDelay = 1000;
+        try {
+            const stored = JSON.parse(
+                localStorage.getItem(this.gitManageRecordKey) || 'null',
+            );
+            if (
+                stored !== null &&
+                (stored?.id !== record.id ||
+                    stored?.owner !== record.owner ||
+                    !['queued', 'paused'].includes(stored?.phase))
+            ) {
+                this.gitManageStatus =
+                    'Git action ownership changed; it was not cancelled.';
+                this.renderGitManagement();
+                return;
+            }
+            localStorage.removeItem(this.gitManageRecordKey);
+        } catch {
+            this.gitManageStatus =
+                'Git action could not be cancelled because browser storage is unavailable.';
+            this.renderGitManagement();
+            return;
+        }
+        this.gitManageRecord = null;
+        this.gitManageRecordKey = '';
+        this.gitManageBusy = false;
+        this.gitManageStatus = 'Unsent Git action cancelled.';
+        if (this.isCurrentGitManageContext(context)) this.renderGitManagement();
+    }
+
+    dismissGitAction(): void {
+        const context = this.captureGitManageContext();
+        const record = this.gitManageRecord;
+        if (!record || record.phase !== 'unconfirmed') return;
+        try {
+            localStorage.setItem(
+                `${context.key}:dismissed:${encodeURIComponent(record.id)}`,
+                '1',
+            );
+        } catch {
+            /* Acknowledgement remains local to this page. */
+        }
+        this.gitManageRecord = null;
+        this.gitManageRecordKey = '';
+        this.gitManageStatus =
+            'Unconfirmed result acknowledged. Inspect Git before another action.';
+        this.renderGitManagement();
+    }
+
     async openCommitDiff(hash: string, modal = false): Promise<void> {
         if (!/^[0-9a-f]{4,64}$/i.test(hash)) {
             throw new Error('Invalid Git commit hash');
@@ -811,6 +2334,31 @@ export class DiffController {
      * refreshDiff after that POST.
      */
     onBackendSwitch(): void {
+        if (this.gitManageRecord?.phase === 'queued') {
+            this.gitManageRecord.phase = 'paused';
+            this.gitManageRecord.status = gitManagePausedStatus(
+                this.gitManageRecord.action,
+            );
+            this.writeGitManageAction(
+                this.gitManageRecordKey,
+                this.gitManageRecord,
+            );
+        }
+        this.clearGitManageRetry();
+        this.gitManageGeneration++;
+        for (const cancel of this.gitManageCancels) {
+            cancel('Backend scope changed');
+        }
+        this.gitManageCancels.clear();
+        this.gitManageContextKey = '';
+        this.gitManageInfoKey = '';
+        this.gitManageInfo = null;
+        this.gitManageRecord = null;
+        this.gitManageRecordKey = '';
+        this.gitManageRequestKey = '';
+        this.gitManageBusy = false;
+        this.gitManageStatus = 'No cached Git information';
+        this.renderGitManagement();
         // Invalidate any old diff fetch before it can paint into this
         // shared panel after the backend changes.
         this._diffStreamToken = (this._diffStreamToken || 0) + 1;
@@ -879,19 +2427,22 @@ export class DiffController {
         this._commitLoadToken = (this._commitLoadToken || 0) + 1;
         const requestToken = this._commitLoadToken;
         const cwd = this.app.sessionsManager.activeCWD || '';
-        try {
-            const res = await fetch(
-                `/api/git/commits?cwd=${encodeURIComponent(cwd)}`,
-            );
-            if (!res.ok) throw new Error('Failed to load commits');
-            const commits = await res.json();
+        const context = this.captureGitManageContext();
+        const cached = this.readGitViewCache(
+            context,
+            this.gitViewRoot(context),
+            'commits',
+            'recent',
+        );
+        const applyCommits = (commits: any[], refreshOnFallback: boolean) => {
             if (
                 requestToken !== this._commitLoadToken ||
+                !this.isCurrentGitManageContext(context) ||
                 (this.app.sessionsManager.activeCWD || '') !== cwd
-            )
+            ) {
                 return;
-
-            let currentSelected = this.commitSelect.value || 'unstaged';
+            }
+            let currentSelected = this.commitSelect?.value || 'unstaged';
             const target = this.syncCommitTarget;
             if (target && target.cwd !== cwd) {
                 if (currentSelected === target.hash)
@@ -905,34 +2456,84 @@ export class DiffController {
             const stagedOpt = document.createElement('option');
             stagedOpt.value = 'staged';
             stagedOpt.textContent = 'Staged Changes';
-            this.commitSelect.replaceChildren(unstagedOpt, stagedOpt);
+            this.commitSelect?.replaceChildren(unstagedOpt, stagedOpt);
+            commits.forEach((commit: any) => {
+                const opt = document.createElement('option');
+                opt.value = commit.hash;
+                opt.textContent = `${commit.hash} - ${commit.subject}`;
+                this.commitSelect?.appendChild(opt);
+            });
 
-            if (Array.isArray(commits)) {
-                commits.forEach((commit: any) => {
-                    const opt = document.createElement('option');
-                    opt.value = commit.hash;
-                    opt.innerText = `${commit.hash} - ${commit.subject}`;
-                    this.commitSelect?.appendChild(opt);
-                });
-            }
-
+            const previousSelection = currentSelected;
             if (
                 this.syncCommitTarget?.cwd === cwd &&
                 this.syncCommitTarget?.hash === currentSelected
             ) {
                 this._ensureCommitOption(currentSelected);
             } else if (
-                Array.from(this.commitSelect.options).some(
-                    (o) => o.value === currentSelected,
+                Array.from(this.commitSelect?.options || []).some(
+                    (option) => option.value === currentSelected,
                 )
             ) {
-                this.commitSelect.value = currentSelected;
-            } else {
+                if (this.commitSelect)
+                    this.commitSelect.value = currentSelected;
+            } else if (this.commitSelect) {
                 this.commitSelect.value = 'unstaged';
             }
             this._syncModalCommitSelect();
-        } catch (e) {
-            console.error('[diff] Failed to load commits list:', e);
+            if (
+                refreshOnFallback &&
+                previousSelection !== 'unstaged' &&
+                this.commitSelect?.value === 'unstaged' &&
+                this.activeTab === 'diff' &&
+                this.isPanelOpen
+            ) {
+                void this.refreshDiff(true, { silent: true });
+            }
+        };
+
+        if (cached) {
+            try {
+                const commits = JSON.parse(cached.text);
+                if (Array.isArray(commits)) applyCommits(commits, false);
+            } catch {
+                /* A corrupt view cache does not replace the live list. */
+            }
+        }
+
+        try {
+            const commits = await this.requestGitManage(
+                context,
+                `/api/git/commits?cwd=${encodeURIComponent(cwd)}`,
+                { method: 'GET', cache: 'no-store' },
+                GIT_INFO_TIMEOUT_MS,
+                async (response) => {
+                    if (!response.ok)
+                        throw new GitManageHTTPError(
+                            response.status,
+                            await response.text(),
+                        );
+                    return response.json();
+                },
+            );
+            if (!Array.isArray(commits))
+                throw new Error('Invalid Git commit list');
+            if (
+                requestToken !== this._commitLoadToken ||
+                !this.isCurrentGitManageContext(context)
+            ) {
+                return;
+            }
+            this.cacheGitView(
+                context,
+                this.gitViewRoot(context),
+                'commits',
+                'recent',
+                JSON.stringify(commits),
+            );
+            applyCommits(commits, true);
+        } catch {
+            // Keep the last saved list and the current selection on read failure.
         }
     }
 
@@ -1738,6 +3339,8 @@ export class DiffController {
         skipLoadCommits: boolean = false,
         opts: { silent?: boolean } = {},
     ): Promise<void> {
+        const gitContext = this.captureGitManageContext();
+        this.refreshGitManagement(gitContext);
         if (!this.isPanelOpen || !this.term) return;
 
         this._diffStreamToken = (this._diffStreamToken || 0) + 1;
@@ -1782,90 +3385,171 @@ export class DiffController {
             this.currentWs = null;
         }
 
-        this.term.clear();
-        this.term.write('\x1b[35mStreaming git information...\x1b[0m\r\n\r\n');
-
+        const cwd = String(this.app.sessionsManager.activeCWD || '');
         if (this.activeTab === 'diff' && !skipLoadCommits) {
-            await this.loadCommits();
+            void this.loadCommits();
         }
-        if (streamToken !== this._diffStreamToken || !this.isPanelOpen) return;
-
-        const cwd = this.app.sessionsManager.activeCWD;
         const commitVal = this.commitSelect
             ? this.commitSelect.value
             : 'unstaged';
+        const view = this.activeTab;
+        const selection = view === 'diff' ? commitVal : 'recent';
+        const viewRoot = this.gitViewRoot(gitContext);
+        const cachedView = this.readGitViewCache(
+            gitContext,
+            viewRoot,
+            view,
+            selection,
+        );
+        const emptyText =
+            view === 'status'
+                ? '\x1b[90mClean working tree.\x1b[0m\r\n'
+                : view === 'log'
+                  ? '\x1b[90mNo commits yet.\x1b[0m\r\n'
+                  : '\x1b[90mNo changes detected.\x1b[0m\r\n';
+        const paintedCache = this.paintGitViewCache(
+            cachedView,
+            view,
+            emptyText,
+        );
+        if (!paintedCache) {
+            this.term.clear();
+            this.term.write('\x1b[35mLoading Git information…\x1b[0m\r\n\r\n');
+        }
+        if (streamToken !== this._diffStreamToken || !this.isPanelOpen) return;
 
-        // Helper: render the muted "not a git repo" line into the term.
-        // Used by both raw endpoints (sentinel text body) and the
-        // streaming endpoint (notGitRepo:true JSON flag) so the user
-        // gets a calm single muted line instead of git's raw
-        // "fatal: not a git repository ..." stderr in red.
-        const notAGitRepo = (label: string) => {
+        // Use a quiet line for the literal non-repository sentinel. Cache the
+        // successful answer so a later offline refresh does not revive stale data.
+        const notAGitRepo = (label: string, cacheView = false) => {
+            if (cacheView) {
+                this.cacheGitView(
+                    gitContext,
+                    viewRoot,
+                    view,
+                    selection,
+                    'NOT_GIT_REPO',
+                );
+            }
             this._writeStaticTerminalOutput(
                 '',
                 `\x1b[90mNot a git repository \u2014 ${label} is empty for this workspace.\x1b[0m\r\n`,
             );
-            return;
         };
+
+        const fetchRaw = (path: string) =>
+            this.requestGitManage(
+                gitContext,
+                path,
+                { method: 'GET', cache: 'no-store' },
+                GIT_INFO_TIMEOUT_MS,
+                async (response) => ({
+                    status: response.status,
+                    text: await response.text(),
+                    head: response.headers.get('X-Phi-Git-Head') || '',
+                    branch: response.headers.get('X-Phi-Git-Branch') || '',
+                }),
+            );
 
         try {
             if (this.activeTab === 'diff') {
-                const res = await fetch(
+                const result = await fetchRaw(
                     `/api/git/raw-diff?cwd=${encodeURIComponent(cwd)}&commit=${encodeURIComponent(commitVal)}&context=3&ansi=1`,
                 );
                 if (streamToken !== this._diffStreamToken || !this.isPanelOpen)
                     return;
-                if (!res.ok) {
-                    const errText = await res
-                        .text()
-                        .catch(() => 'unknown error');
-                    throw new Error(errText.trim() || 'Diff fetch error');
-                }
-                const text = await res.text();
-                if (streamToken !== this._diffStreamToken || !this.isPanelOpen)
-                    return;
-                if (text === 'NOT_GIT_REPO') return notAGitRepo('the diff');
-                this._writeStaticTerminalOutput(
-                    text,
-                    '\x1b[90mNo changes detected.\x1b[0m\r\n',
+                if (result.status !== 200)
+                    throw new Error(
+                        `Git diff refresh failed (HTTP ${result.status}).`,
+                    );
+                if (result.text === 'NOT_GIT_REPO')
+                    return notAGitRepo('the diff', true);
+                const head =
+                    result.head || this.gitManageInfo?.target?.head || '';
+                const branch =
+                    result.branch || this.gitManageInfo?.target?.branch || '';
+                this.cacheGitView(
+                    gitContext,
+                    this.gitViewRoot(gitContext),
+                    view,
+                    selection,
+                    result.text,
+                    head,
+                    branch,
                 );
+                this._writeStaticTerminalOutput(result.text, emptyText);
                 return;
             }
 
             if (this.activeTab === 'status') {
-                const res = await fetch(
+                const result = await fetchRaw(
                     `/api/git/raw-status?cwd=${encodeURIComponent(cwd)}`,
                 );
                 if (streamToken !== this._diffStreamToken || !this.isPanelOpen)
                     return;
-                if (!res.ok) {
-                    const errText = await res
-                        .text()
-                        .catch(() => 'unknown error');
-                    throw new Error(errText.trim() || 'Status fetch error');
-                }
-                const text = await res.text();
+                if (result.status !== 200)
+                    throw new Error(
+                        `Git status refresh failed (HTTP ${result.status}).`,
+                    );
+                if (result.text === 'NOT_GIT_REPO')
+                    return notAGitRepo('the status', true);
+                this.cacheGitView(
+                    gitContext,
+                    this.gitViewRoot(gitContext),
+                    view,
+                    selection,
+                    result.text,
+                    this.gitManageInfo?.target?.head || '',
+                    this.gitManageInfo?.target?.branch || '',
+                );
+                this._writeStaticTerminalOutput(result.text, emptyText);
+                return;
+            }
+
+            if (this.activeTab === 'log') {
+                const result = await fetchRaw(
+                    `/api/git/raw-log?cwd=${encodeURIComponent(cwd)}`,
+                );
                 if (streamToken !== this._diffStreamToken || !this.isPanelOpen)
                     return;
-                if (text === 'NOT_GIT_REPO') return notAGitRepo('the status');
-                this._writeStaticTerminalOutput(
-                    text,
-                    '\x1b[90mClean working tree.\x1b[0m\r\n',
-                );
-                return;
+                if (result.status === 404) {
+                    // Older supported servers use the PTY log stream below.
+                } else {
+                    if (result.status !== 200)
+                        throw new Error(
+                            `Git log refresh failed (HTTP ${result.status}).`,
+                        );
+                    if (result.text === 'NOT_GIT_REPO')
+                        return notAGitRepo('the log', true);
+                    this.cacheGitView(
+                        gitContext,
+                        this.gitViewRoot(gitContext),
+                        view,
+                        selection,
+                        result.text,
+                        result.head || this.gitManageInfo?.target?.head || '',
+                        result.branch ||
+                            this.gitManageInfo?.target?.branch ||
+                            '',
+                    );
+                    this._writeStaticTerminalOutput(result.text, emptyText);
+                    return;
+                }
             }
 
-            const res = await fetch(
+            const data = await this.requestGitManage(
+                gitContext,
                 `/api/diff?cwd=${encodeURIComponent(cwd)}&type=${this.activeTab}&commit=${commitVal}`,
+                { method: 'GET', cache: 'no-store' },
+                GIT_INFO_TIMEOUT_MS,
+                async (response) => {
+                    if (!response.ok)
+                        throw new GitManageHTTPError(
+                            response.status,
+                            await response.text(),
+                        );
+                    return response.json();
+                },
             );
-            if (streamToken !== this._diffStreamToken || !this.isPanelOpen)
-                return;
-            if (!res.ok) {
-                const errText = await res.text().catch(() => 'unknown error');
-                throw new Error(errText.trim() || 'Spawn error');
-            }
-
-            const data = await res.json();
 
             // A newer refresh (tab switch, worktree switch, second
             // click) owns the panel now. Adopting this socket would
@@ -1876,13 +3560,32 @@ export class DiffController {
             // Streaming endpoint signals non-repo via JSON flag rather
             // than by spawning a PTY that immediately exits with the
             // fatal stderr.
-            if (data?.notGitRepo) return notAGitRepo('this view');
+            if (data?.notGitRepo) return notAGitRepo('this view', true);
 
             // Connect and stream diff/log output. The PTY holds output
             // until the checkpoint is rendered and release() runs.
+            let streamOutput = '';
             const ws = new PTYWebSocket(
                 data.pane_id,
-                (text) => this.term.write(text),
+                (text) => {
+                    this.term.write(text);
+                    if (
+                        this.activeTab === 'log' &&
+                        streamToken === this._diffStreamToken &&
+                        this.isCurrentGitManageContext(gitContext)
+                    ) {
+                        streamOutput += text;
+                        this.cacheGitView(
+                            gitContext,
+                            this.gitViewRoot(gitContext),
+                            'log',
+                            'recent',
+                            streamOutput,
+                            this.gitManageInfo?.target?.head || '',
+                            this.gitManageInfo?.target?.branch || '',
+                        );
+                    }
+                },
                 null,
                 () =>
                     console.log(`[diff] Stream finished for ${this.activeTab}`),
@@ -1891,6 +3594,10 @@ export class DiffController {
                     onAttachHead: (info) => {
                         if (this.currentWs !== ws) return;
                         if (!info.ckpt) {
+                            if (paintedCache) {
+                                this.term.reset();
+                                this.term.clear();
+                            }
                             this.fitTerminal();
                             ws.release();
                             return;
@@ -1898,14 +3605,34 @@ export class DiffController {
                         try {
                             this.term.resize(info.ckpt.cols, info.ckpt.rows);
                         } catch {}
+                        const checkpointText = info.ckpt.bytes
+                            ? ws.decodeOutput(info.ckpt.bytes)
+                            : info.ckpt.ansi;
+                        if (paintedCache) {
+                            this.term.reset();
+                            this.term.clear();
+                        }
+                        streamOutput = checkpointText;
+                        if (
+                            this.activeTab === 'log' &&
+                            this.isCurrentGitManageContext(gitContext)
+                        ) {
+                            this.cacheGitView(
+                                gitContext,
+                                this.gitViewRoot(gitContext),
+                                'log',
+                                'recent',
+                                streamOutput,
+                                this.gitManageInfo?.target?.head || '',
+                                this.gitManageInfo?.target?.branch || '',
+                            );
+                        }
                         this.term.write(
                             // Decode through the socket's own decoder: a
                             // checkpoint can end mid-codepoint, and only
                             // the stream decoder carries the split bytes
                             // into the next live frame.
-                            info.ckpt.bytes
-                                ? ws.decodeOutput(info.ckpt.bytes)
-                                : info.ckpt.ansi,
+                            checkpointText,
                             () => {
                                 if (this.currentWs === ws) this.fitTerminal();
                             },
@@ -1930,7 +3657,7 @@ export class DiffController {
     async openRichDiffModal(): Promise<void> {
         if (this.diffModal) {
             this.diffModal.classList.remove('hidden');
-            await this.loadCommits();
+            void this.loadCommits();
             this._syncModalCommitSelect();
             if (this.contextToggleBtn) {
                 this.contextToggleBtn.textContent =
@@ -2421,55 +4148,96 @@ export class DiffController {
 
     async loadRichDiff(): Promise<void> {
         if (!this.diffModalBody) return;
-        this.diffModalBody.innerHTML =
-            '<div style="padding: 20px; color: var(--text-muted); font-family: var(--font-mono); font-size: 13px;">Loading rich diff viewer...</div>';
 
-        // Snapshot the active context BEFORE the fetch starts so a
-        // server switch that lands mid-request cannot confuse the
-        // per-file editor actions with stale project state. Late
-        // responses that no longer match the snapshot must not
-        // install links.
-        const cwd = this.app.sessionsManager.activeCWD || '';
+        // Snapshot the active context before the request. Paint the matching
+        // local view first, then replace it when the live answer arrives.
+        const context = this.captureGitManageContext();
+        const cwd = String(this.app.sessionsManager.activeCWD || '');
         const commitVal = this.commitSelect
             ? this.commitSelect.value
             : 'unstaged';
+        const selection = `${commitVal}:${this.currentContextLines}`;
+        const root = this.gitViewRoot(context);
+        const cached = this.readGitViewCache(
+            context,
+            root,
+            'pretty',
+            selection,
+        );
         const requestRoot = cwd;
         const requestHostname = normalizeHostname(this.app.hostname);
         const requestToken = (this._richDiffRequestToken || 0) + 1;
         this._richDiffRequestToken = requestToken;
-
-        try {
-            const res = await fetch(
-                `/api/git/raw-diff?cwd=${encodeURIComponent(cwd)}&commit=${encodeURIComponent(commitVal)}&context=${this.currentContextLines}`,
-            );
-            if (requestToken !== this._richDiffRequestToken) return;
-            if (!res.ok) {
-                const errText = await res.text();
-                throw new Error(errText || 'Failed to fetch raw diff');
-            }
-
-            // X-Phi-Git-Head / X-Phi-Git-Branch anchor the staged
-            // review prompt to a concrete commit. Absent on non-git
-            // repos / detached HEADs — treat empty as unknown.
-            this.activeGitHead = res.headers.get('X-Phi-Git-Head') || '';
-            this.activeGitBranch = res.headers.get('X-Phi-Git-Branch') || '';
-
-            const rawDiffText = await res.text();
-            if (requestToken !== this._richDiffRequestToken) return;
-            // Accepted: pin the active context for per-file actions and
-            // any future re-render of the same data.
+        const paint = (rawDiffText: string, head: string, branch: string) => {
+            this.activeGitHead = head;
+            this.activeGitBranch = branch;
             this.activeDiffRoot = requestRoot;
             this.activeDiffHostname = requestHostname;
             this.lastRawDiffText = rawDiffText;
             this.renderRichDiff(rawDiffText);
-        } catch (e) {
-            if (requestToken !== this._richDiffRequestToken) return;
+        };
+        const showCacheNotice = () => {
+            const notice = document.createElement('div');
+            notice.className = 'git-view-cache-note';
+            notice.textContent = 'Refresh failed; showing the last saved diff.';
+            this.diffModalBody?.prepend(notice);
+        };
+
+        if (cached) paint(cached.text, cached.head, cached.branch);
+        else {
+            this.diffModalBody.innerHTML =
+                '<div style="padding: 20px; color: var(--text-muted); font-family: var(--font-mono); font-size: 13px;">Loading rich diff viewer...</div>';
+        }
+
+        try {
+            const result = await this.requestGitManage(
+                context,
+                `/api/git/raw-diff?cwd=${encodeURIComponent(cwd)}&commit=${encodeURIComponent(commitVal)}&context=${this.currentContextLines}`,
+                { method: 'GET', cache: 'no-store' },
+                GIT_INFO_TIMEOUT_MS,
+                async (response) => ({
+                    status: response.status,
+                    text: await response.text(),
+                    head: response.headers.get('X-Phi-Git-Head') || '',
+                    branch: response.headers.get('X-Phi-Git-Branch') || '',
+                }),
+            );
+            if (
+                requestToken !== this._richDiffRequestToken ||
+                !this.isCurrentGitManageContext(context)
+            )
+                return;
+            if (result.status !== 200)
+                throw new Error(
+                    result.text.trim() ||
+                        `Diff refresh failed (HTTP ${result.status}).`,
+                );
+            this.cacheGitView(
+                context,
+                this.gitViewRoot(context),
+                'pretty',
+                selection,
+                result.text,
+                result.head,
+                result.branch,
+            );
+            paint(result.text, result.head, result.branch);
+        } catch (error) {
+            if (
+                requestToken !== this._richDiffRequestToken ||
+                !this.isCurrentGitManageContext(context)
+            )
+                return;
+            if (cached) {
+                showCacheNotice();
+                return;
+            }
             const errDiv = document.createElement('div');
             errDiv.style.padding = '20px';
             errDiv.style.color = 'var(--red)';
             errDiv.style.fontFamily = 'var(--font-mono)';
             errDiv.style.fontSize = '13px';
-            errDiv.textContent = `Error: ${(e as Error).message}`;
+            errDiv.textContent = `Error: ${(error as Error).message}`;
             this.diffModalBody.replaceChildren(errDiv);
         }
     }

@@ -20,7 +20,7 @@ type GitWorktree struct {
 
 func hasUnstagedChanges(ctx context.Context, dir string) bool {
 	ctx, end := obs.Span(ctx, "git.status", "cwd", dir)
-	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
+	cmd := exec.CommandContext(ctx, "git", "--no-optional-locks", "status", "--porcelain")
 	cmd.Dir = dir
 	var out bytes.Buffer
 	cmd.Stdout = &out

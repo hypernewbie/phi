@@ -12,6 +12,8 @@ import {
     test,
     type Locator,
     type Page,
+    type Request,
+    type Route,
     type TestInfo,
 } from '@playwright/test';
 import {
@@ -26,7 +28,10 @@ import type {
     StateChangedEvent,
 } from '../web-src/proto/control.js';
 import { configToToml, startPhi, type PhiServer } from './_server.js';
-import { isCancelledWorktreeRead } from './_session-requests.js';
+import {
+    isCancelledSessionListRead,
+    isCancelledWorktreeRead,
+} from './_session-requests.js';
 
 // The served codec carries no types; bind its runtime decoders to the
 // generated declarations so spec-side decoding is fully checked.
@@ -527,8 +532,13 @@ async function startFixture(sessionID: string): Promise<Fixture> {
     };
 }
 
-async function openPiSession(page: Page, fixture: Fixture): Promise<Locator> {
+async function openPiSession(
+    page: Page,
+    fixture: Fixture,
+    afterCoderSelect?: () => Promise<void>,
+): Promise<Locator> {
     await page.locator('#coder-selector .coder-tab[data-coder="pi"]').click();
+    await afterCoderSelect?.();
     const sessionRow = page.locator(
         `.session-item[data-session-id="${fixture.sessionID}"]`,
     );
@@ -702,7 +712,11 @@ test('M1 real offline Pi rename keeps metadata and the later hydrate coherent', 
             browserErrors.pageErrors.push(error.message),
         );
         page.on('requestfailed', (failed) => {
-            if (isCancelledWorktreeRead(failed, fixture.phi.url)) return;
+            if (
+                isCancelledSessionListRead(failed, fixture.phi.url) ||
+                isCancelledWorktreeRead(failed, fixture.phi.url)
+            )
+                return;
             browserErrors.failedRequests.push(
                 `${failed.method()} ${failed.url()} ${failed.failure()?.errorText ?? ''}`,
             );
@@ -942,7 +956,11 @@ test('M2 real offline Pi reset invalidates the old boundary exactly once', async
             browserErrors.pageErrors.push(error.message),
         );
         page.on('requestfailed', (failed) => {
-            if (isCancelledWorktreeRead(failed, fixture.phi.url)) return;
+            if (
+                isCancelledSessionListRead(failed, fixture.phi.url) ||
+                isCancelledWorktreeRead(failed, fixture.phi.url)
+            )
+                return;
             browserErrors.failedRequests.push(
                 `${failed.method()} ${failed.url()} ${failed.failure()?.errorText ?? ''}`,
             );
@@ -1049,6 +1067,15 @@ test('M3 real offline Pi UI reset clears the transcript, keeps narrow and keyboa
     const summary: JsonObject = { assertions: [] };
     let cleanupFixture: Fixture | undefined;
     let piPid: number | undefined;
+    let heldSessionRequest: Request | undefined;
+    let heldSessionFailure:
+        | { method: string; url: string; errorText: string }
+        | undefined;
+    let releaseHeldSessionRead = () => {};
+    const heldSessionReadRelease = new Promise<void>((resolve) => {
+        releaseHeldSessionRead = resolve;
+    });
+    let holdOldCoderSessionRead: ((route: Route) => Promise<void>) | undefined;
     try {
         const fixture = await startFixture('m3-state-session');
         cleanupFixture = fixture;
@@ -1085,8 +1112,34 @@ test('M3 real offline Pi UI reset clears the transcript, keeps narrow and keyboa
         page.on('pageerror', (error) =>
             browserErrors.pageErrors.push(error.message),
         );
+        holdOldCoderSessionRead = async (route) => {
+            const request = route.request();
+            const url = new URL(request.url());
+            if (
+                heldSessionRequest === undefined &&
+                request.method() === 'GET' &&
+                url.origin === new URL(fixture.phi.url).origin &&
+                url.pathname === '/api/sessions' &&
+                url.searchParams.get('coder') === 'opencode'
+            ) {
+                heldSessionRequest = request;
+                await heldSessionReadRelease;
+            }
+            await route.fallback();
+        };
         page.on('requestfailed', (failed) => {
-            if (isCancelledWorktreeRead(failed, fixture.phi.url)) return;
+            if (failed === heldSessionRequest) {
+                heldSessionFailure = {
+                    method: failed.method(),
+                    url: failed.url(),
+                    errorText: failed.failure()?.errorText ?? '',
+                };
+            }
+            if (
+                isCancelledSessionListRead(failed, fixture.phi.url) ||
+                isCancelledWorktreeRead(failed, fixture.phi.url)
+            )
+                return;
             browserErrors.failedRequests.push(
                 `${failed.method()} ${failed.url()} ${failed.failure()?.errorText ?? ''}`,
             );
@@ -1099,10 +1152,33 @@ test('M3 real offline Pi UI reset clears the transcript, keeps narrow and keyboa
             }
             await route.continue();
         });
+        if (!holdOldCoderSessionRead)
+            throw new Error('M3 session-read hold route was not initialized');
+        await page.route('**/*', holdOldCoderSessionRead);
 
         await page.setViewportSize({ width: 1440, height: 900 });
         await page.goto(fixture.phi.url);
-        await openPiSession(page, fixture);
+        await expect
+            .poll(() => heldSessionRequest?.url() ?? '', { timeout: 10_000 })
+            .not.toBe('');
+        const oldCoderRequest = heldSessionRequest;
+        if (!oldCoderRequest)
+            throw new Error('M3 old-coder session request was not held');
+        expect(oldCoderRequest.method()).toBe('GET');
+        const oldCoderUrl = new URL(oldCoderRequest.url());
+        expect(oldCoderUrl.origin).toBe(new URL(fixture.phi.url).origin);
+        expect(oldCoderUrl.pathname).toBe('/api/sessions');
+        expect(oldCoderUrl.searchParams.get('coder')).toBe('opencode');
+        await openPiSession(page, fixture, async () => {
+            releaseHeldSessionRead();
+            await expect
+                .poll(() => heldSessionFailure?.errorText ?? '', {
+                    timeout: 10_000,
+                })
+                .toBe('net::ERR_ABORTED');
+        });
+        expect(heldSessionFailure?.method).toBe('GET');
+
         await expect
             .poll(() => existsSync(fixture.piPidFile), { timeout: 20_000 })
             .toBe(true);
@@ -1178,21 +1254,33 @@ test('M3 real offline Pi UI reset clears the transcript, keeps narrow and keyboa
         });
 
         summary.assertions = [
+            'the held old-coder GET ended with net::ERR_ABORTED after coder selection',
             'Escape cancelled the rename without a control call',
             'the reset control stayed visible at a 390-pixel viewport',
             'UI Clear drove a real newSession and cleared the transcript',
             'the later hydrate has no old transcript and no stale resume path',
         ];
+        summary.heldSessionListRead = heldSessionFailure;
         summary.sessionId = fixture.sessionID;
         summary.sid = sid;
         summary.beforeSeq = beforeSeq;
     } finally {
-        await finishFixture(
-            testInfo,
-            cleanupFixture,
-            piPid,
-            summary,
-            browserErrors,
-        );
+        try {
+            releaseHeldSessionRead();
+        } finally {
+            try {
+                if (holdOldCoderSessionRead)
+                    await page.unroute('**/*', holdOldCoderSessionRead);
+            } finally {
+                summary.heldSessionListRead = heldSessionFailure ?? null;
+                await finishFixture(
+                    testInfo,
+                    cleanupFixture,
+                    piPid,
+                    summary,
+                    browserErrors,
+                );
+            }
+        }
     }
 });

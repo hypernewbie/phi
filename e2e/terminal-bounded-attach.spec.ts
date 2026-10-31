@@ -139,8 +139,9 @@ test('long archive attaches from bounded state and fetches older books only on a
     await page.route(`**/api/terminals/${id}/recording?*`, (route) => {
         const query = new URL(route.request().url()).searchParams,
             from = Number(query.get('from')),
-            through = Math.min(Number(query.get('through')), archive.length);
-        recordingRequests.push({ from, through });
+            requestedThrough = Number(query.get('through'));
+        recordingRequests.push({ from, through: requestedThrough });
+        const through = Math.min(requestedThrough, archive.length);
         const body = archive.subarray(from, through),
             header = Buffer.from(
                 JSON.stringify({
@@ -318,11 +319,13 @@ test('long archive attaches from bounded state and fetches older books only on a
     const pageRequest = recordingRequests.at(-1);
     expect(pageRequest).toBeDefined();
     if (!pageRequest) throw new Error('history request disappeared');
-    expect(pageRequest.from).toBeGreaterThanOrEqual(0);
+    expect(pageRequest.from).toBe(archive.length - HISTORY_BOOK_BYTES);
     expect(pageRequest.through).toBe(archive.length);
     expect(pageRequest.through - pageRequest.from).toBeLessThanOrEqual(
         HISTORY_BOOK_BYTES,
     );
+    await expect(historyButton).toBeEnabled();
+    await expect(historyButton).toHaveAttribute('aria-busy', 'false');
     await expect
         .poll(() =>
             page.evaluate(() => {
@@ -345,7 +348,6 @@ test('long archive attaches from bounded state and fetches older books only on a
             }),
         )
         .toBe(true);
-    await expect(historyButton).toBeEnabled();
     await page.mouse.wheel(0, -120);
     await expect(historyButton).toBeEnabled();
     expect(recordingRequests).toHaveLength(1);

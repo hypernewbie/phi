@@ -257,7 +257,7 @@ describe('Switch latency: the cache is the switch', () => {
 
     it('resolves the switch without waiting for the remote server', async () => {
         const log = [];
-        const remoteDelayMs = 600;
+        const remoteDelayMs = 5000;
         const fetchStub = slowFetch(remoteDelayMs, log);
         globalThis.fetch = fetchStub;
         global.fetch = fetchStub;
@@ -289,6 +289,8 @@ describe('Switch latency: the cache is the switch', () => {
             const elapsed = performance.now() - t0;
 
             // The limit follows the remote delay, not a 150ms CPU budget.
+            // The delay stays far above local switch work so a loaded
+            // worker cannot fail a switch that never waited.
             expect(
                 elapsed,
                 'switch must resolve before a remote response',

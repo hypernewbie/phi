@@ -124,6 +124,12 @@ describe('DiffController.loadRichDiff — fetch-error path (diff.ts:~949)', () =
             app: { sessionsManager: { activeCWD: '/ws' } },
             commitSelect: { value: 'unstaged' },
             currentContextLines: 3,
+            captureGitManageContext: () => ({}),
+            isCurrentGitManageContext: () => true,
+            gitViewRoot: () => '/ws',
+            readGitViewCache: () => null,
+            requestGitManage: async (_context, url, options, _timeout, read) =>
+                read(await fetch(url, options)),
         };
         mockFetch(() => ({ ok: false, status: 500, text: PAYLOAD }));
         await mod.DiffController.prototype.loadRichDiff.call(ctx);

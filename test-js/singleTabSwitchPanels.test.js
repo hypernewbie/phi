@@ -213,9 +213,13 @@ describe('single-tab switch: right panel surfaces', () => {
         expect(list.textContent).not.toContain('Scanning');
 
         // The background refresh replaces the cache once it answers.
-        await new Promise((r) => setTimeout(r, 450));
-        expect(list.textContent).toContain('fresh-a.md');
-        expect(list.textContent).not.toContain('cached-a.md');
+        await vi.waitFor(
+            () => {
+                expect(list.textContent).toContain('fresh-a.md');
+                expect(list.textContent).not.toContain('cached-a.md');
+            },
+            { timeout: 5000, interval: 50 },
+        );
         const urls = fetchStub.mock.calls.map(([url]) => String(url));
         expect(urls.indexOf('/__phi/active')).toBeLessThan(
             urls.indexOf('/api/markdown/files?cwd=%2Fw-a'),
