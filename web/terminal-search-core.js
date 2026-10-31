@@ -115,7 +115,9 @@ export function createTerminalArchiveScanner(terminal, query) {
         const buffer = terminal.buffer.active;
         const index = buffer.baseY + buffer.cursorY - 1;
         const line = buffer.getLine(index);
-        const marker = buffer.type === 'normal' ? terminal.registerMarker(-1) : undefined;
+        const marker = buffer.type === 'normal'
+            ? (terminal.markers.find((item) => !item.isDisposed && item.line === index) ?? terminal.registerMarker(-1))
+            : undefined;
         const id = identity(marker, index);
         acceptLine(id, lineText(line), line?.isWrapped === true);
     };

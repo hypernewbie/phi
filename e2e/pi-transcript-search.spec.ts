@@ -10,7 +10,8 @@ import { startPhi } from './_server.js';
 import { startSkillProvider } from './_pi-skill-provider.js';
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-const NEEDLE = 'M3-TRANSCRIPT-NEEDLE-9c2b';
+const NEEDLE = 'M3-TRANSCRIPT-NEEDLE-9c2b-ſ-ς-Kx';
+const QUERY = 'M3-TRANSCRIPT-NEEDLE-9c2b-S-Σ-KX';
 
 interface BridgeView {
     state: string;
@@ -47,8 +48,8 @@ function isSupersededTranscriptQuery(
         const query = (JSON.parse(body ?? '') as { query?: unknown }).query;
         return (
             typeof query === 'string' &&
-            query !== NEEDLE &&
-            NEEDLE.startsWith(query)
+            query !== QUERY &&
+            QUERY.startsWith(query)
         );
     } catch {
         return false;
@@ -235,7 +236,7 @@ test('managed Pi transcript search works through the find bar on desktop and tou
             {
                 data: {
                     pane,
-                    query: NEEDLE,
+                    query: QUERY,
                     generation,
                     initial: true,
                 },
@@ -265,7 +266,7 @@ test('managed Pi transcript search works through the find bar on desktop and tou
         const desktopSource = desktopBar.locator('.find-source-select');
         await expect(desktopSource).toHaveValue('transcript');
         const desktopInput = desktopBar.locator('.find-input');
-        await desktopInput.fill(NEEDLE);
+        await desktopInput.fill(QUERY);
         await expect(desktopBar.locator('.find-status')).toContainText(
             '1 matches in Pi transcript',
             { timeout: 15_000 },
@@ -314,7 +315,7 @@ test('managed Pi transcript search works through the find bar on desktop and tou
         await expect(mobileBar).toBeVisible();
         const mobileInput = mobileBar.locator('.find-input');
         await mobileInput.tap();
-        await mobilePage.keyboard.type(NEEDLE);
+        await mobilePage.keyboard.type(QUERY);
         await expect(mobileBar.locator('.find-status')).toContainText(
             '1 matches in Pi transcript',
             { timeout: 15_000 },

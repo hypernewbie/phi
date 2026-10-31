@@ -29738,11 +29738,11 @@ async function yieldIfNeeded(lastYieldAt) {
   await new Promise((resolve) => setTimeout(resolve, 0));
   return Date.now();
 }
-async function findTextMatch(text, pattern, queryByteLength, input, lastYieldAt) {
+async function findTextMatch(text, pattern, queryCodePoints, input, lastYieldAt) {
   let offset = 0;
   let yieldedAt = lastYieldAt;
   const overlapBytes = Math.min(
-    queryByteLength,
+    queryCodePoints * 4,
     MAX_TRANSCRIPT_TEXT_CHUNK_BYTES - 1
   );
   const mainChunkBytes = MAX_TRANSCRIPT_TEXT_CHUNK_BYTES - overlapBytes;
@@ -29862,7 +29862,7 @@ async function searchTranscriptPage(manager, input) {
     if (!branch || input.startIndex > branch.length)
       return unavailablePage(sessionId, anchorLeafId, input.startIndex);
     const pattern = new RegExp(escapeRegExp(input.query), "giu");
-    const queryByteLength = queryBytes(input.query);
+    const queryCodePoints = Array.from(input.query).length;
     const matches = [];
     const endIndex = Math.min(
       branch.length,
@@ -29886,7 +29886,7 @@ async function searchTranscriptPage(manager, input) {
             const found = await findTextMatch(
               text,
               pattern,
-              queryByteLength,
+              queryCodePoints,
               input,
               lastYieldAt
             );

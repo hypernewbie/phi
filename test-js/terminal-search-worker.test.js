@@ -134,6 +134,24 @@ describe('terminal archive scanner', () => {
         }
     });
 
+    it('counts a row once when its newline arrives in a later write', async () => {
+        const { terminal, scanner } = createScanner({
+            cols: 32,
+            query: 'SPLIT-ROW-MATCH',
+        });
+        try {
+            await scanner.write(encoder.encode('SPLIT-ROW-MATCH'));
+            const first = scanner.takeMatches();
+            expect(first).toHaveLength(1);
+            await scanner.write(encoder.encode('\r\nnext row\r\n'));
+            scanner.finish();
+            expect(scanner.takeMatches()).toEqual([]);
+        } finally {
+            scanner.dispose();
+            terminal.dispose();
+        }
+    });
+
     it('finds the final unterminated row and excludes OSC metadata', async () => {
         const { terminal, scanner } = createScanner({
             cols: 32,
