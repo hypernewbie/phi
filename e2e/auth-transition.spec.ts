@@ -813,6 +813,25 @@ test.describe('MVP legacy home', () => {
         await phi.stop();
     });
 
+    /**
+     * The restart below stops the owned listener while both surviving pages
+     * stay open. The decorative CPU poll then records a connection refusal,
+     * and its console line names no URL, so the quiet gate cannot tell it
+     * from a real failure. Hold that one endpoint steady for the restart
+     * window, as `pi-reload-reconnect.spec.ts` already does. Auth, config,
+     * sockets, and every other request stay real.
+     */
+    async function stubDecorativeCpu(...pages: Page[]): Promise<void> {
+        for (const page of pages) {
+            await page.route('**/api/system/cpu', (route) =>
+                route.fulfill({
+                    contentType: 'application/json',
+                    body: JSON.stringify({ cpu: 0 }),
+                }),
+            );
+        }
+    }
+
     async function exerciseMvpProfile(browser: Browser, mobile: boolean) {
         const profileOptions = mobile
             ? {
@@ -1057,6 +1076,7 @@ test.describe('MVP legacy home', () => {
         expect(await openSocket(v2Page, '/ws/md-events', EVENTS)).toBe('open');
         expect(await openSocket(v2Page, '/ws/control', CONTROL)).toBe('open');
 
+        await stubDecorativeCpu(legacyPage, v2Page);
         const beforeRestart = phi.identity;
         legacyQuiet.setRestarting(true);
         v2Quiet.setRestarting(true);
