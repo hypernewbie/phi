@@ -32,11 +32,22 @@ jobs:
       - name: Go Vet
         run: go vet ./...
 
+      - name: Go Vet (profiling)
+        run: go vet -tags=profiling ./...
+
       - name: Install native terminal test dependency
         run: sudo apt-get update && sudo apt-get install -y tmux
 
       - name: Run Go Tests
         run: go test -race -v ./...
+
+      - name: Run Go Tests (profiling)
+        run: go test -race -tags=profiling ./...
+
+      - name: Run Go Tests (otel tags)
+        run: |
+          go test -race -tags=otel ./pkg/obs .
+          go test -race -tags=profiling,otel ./pkg/obs ./internal/diagnostics .
 
       # A real native terminal, not the headless screen oracle. No provider
       # credentials, model access, desktop profile, or tmux state is inherited.
@@ -51,6 +62,22 @@ jobs:
           go run ./tools/webdist
           go vet -tags=embedassets ./...
           go test -tags=embedassets -race .
+          go test -tags=embedassets,profiling -race .
+
+      # The added profiling implementation must compile out of normal
+      # builds. This guard checks source, test, dependency, and symbol
+      # selection across all build-tag combinations.
+      - name: Profiling Partition Guard
+        run: bash scripts/check-profiling-build.sh "$(mktemp -d)/partition"
+
+      # The main server must build with and without the profiling tag
+      # on every supported platform. Linux is covered natively above.
+      - name: Build server (darwin/windows, both tags)
+        run: |
+          for goos in darwin windows; do
+            GOOS=$goos CGO_ENABLED=0 go build -o /tmp/phi-server-${goos} .
+            GOOS=$goos CGO_ENABLED=0 go build -tags=profiling -o /tmp/phi-server-${goos}-profiling .
+          done
 
       # The phic client is a separate binary. Build it for every
       # supported platform so a syntax error in cmd/phic or a

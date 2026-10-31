@@ -4,10 +4,10 @@ import { expect, test, type Page } from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
 
 // One wheel notch must keep the reader on the line they saw, even when a burst
-// of output lands right after the gesture. The fixture blocks on stdin after
-// filling the scrollback, so the notch always happens before the late burst —
-// the write backlog that used to clamp the viewport to the oldest row
-// (viewportY = 0) is deterministic instead of a race.
+// of output lands right after the gesture. The fixture waits for attachment
+// before filling scrollback, then waits for the wheel before its late burst.
+// The write backlog that used to clamp the viewport to the oldest row
+// (viewportY = 0) is deterministic instead of a startup race.
 const fixture = `#!/usr/bin/env python3
 import os, tty, time
 tty.setraw(0)
@@ -23,16 +23,17 @@ def burst(start, count):
             buf = bytearray()
     if buf:
         write(bytes(buf))
+write(b'ANCHOR ATTACHED\\r\\n')
+# A cold attach restores a compact screen, not the full scrollback. Emit the
+# initial burst only after the test sees this marker and sends its start byte.
+while b'S' not in os.read(0, 4096):
+    pass
 burst(0, 11000)
 write(b'ANCHOR READY\\r\\n')
-# The test wheels inside this window, so the late burst always lands while the
-# reader is scrolled up.
-# Wait for the test's trigger file (written only after the wheel has landed and
-# the anchor is asserted), so a slow attach cannot consume the window.
+# Release the late burst only after the wheel has landed and its anchor has
+# been asserted. A slow test must not release it on a wall-clock deadline.
 trigger = '__TRIGGER__'
-for _ in range(600):
-    if os.path.exists(trigger):
-        break
+while not os.path.exists(trigger):
     time.sleep(0.1)
 try:
     size = int(open('__BURST__').read().strip())
@@ -117,6 +118,32 @@ async function observeTerminals(page: Page): Promise<void> {
     });
 }
 
+async function waitForMarker(page: Page, pane: string, marker: string) {
+    await page.waitForFunction(
+        ({ id, marker }) => {
+            const term = (
+                window as unknown as { anchorTerms: Observed[] }
+            ).anchorTerms
+                .filter(
+                    (t) =>
+                        t.element?.isConnected &&
+                        t.element.closest('.term-container')?.id ===
+                            `term-${id}`,
+                )
+                .at(-1);
+            if (!term) return false;
+            const buffer = term.buffer.active;
+            for (let i = buffer.baseY; i < buffer.baseY + term.rows; i++) {
+                if (buffer.getLine(i)?.translateToString(true).includes(marker))
+                    return true;
+            }
+            return false;
+        },
+        { id: pane, marker },
+        { timeout: 60_000 },
+    );
+}
+
 function topLine(page: Page, pane: string) {
     return page.evaluate((id) => {
         const term = (
@@ -188,51 +215,42 @@ test('one wheel notch keeps the reading row when a burst follows', async ({
     });
     const pane = ((await created.json()) as { pane_id: string }).pane_id;
     openPanes.push(pane);
+    // Force a cold attach: the fixture is already waiting before the browser
+    // opens. Startup speed must not decide whether this case gets scrollback.
+    await expect
+        .poll(
+            async () => {
+                const recording = await request.get(
+                    `${phi.url}/api/terminals/${pane}/recording?from=0&through=18446744073709551615`,
+                );
+                return (await recording.body()).includes(
+                    Buffer.from('ANCHOR ATTACHED'),
+                );
+            },
+            { timeout: 30_000 },
+        )
+        .toBe(true);
     await page.goto(`${phi.url}/?pane=${pane}`);
     // Panes accumulate across tests on one server; make sure this pane is
     // the active tab before driving its screen.
     await page.locator(`.tab[data-pane-id="${pane}"]`).click();
-    // The fixture only releases its second burst after this marker paints.
-    await page.waitForFunction(
-        (id) =>
-            (window as unknown as { anchorTerms: Observed[] }).anchorTerms.some(
-                (t) => {
-                    if (
-                        t.element?.closest('.term-container')?.id !==
-                        `term-${id}`
-                    )
-                        return false;
-                    const buffer = t.buffer.active;
-                    for (
-                        let i = buffer.baseY;
-                        i < Math.min(buffer.baseY + t.rows, buffer.baseY + 40);
-                        i++
-                    ) {
-                        const text =
-                            buffer.getLine(i)?.translateToString(true) ?? '';
-                        if (text.includes('ANCHOR READY')) return true;
-                    }
-                    return false;
-                },
-            ),
-        pane,
-        { timeout: 180_000 },
+    await waitForMarker(page, pane, 'ANCHOR ATTACHED');
+    const started = await request.post(
+        `${phi.url}/api/terminals/${pane}/input`,
+        {
+            data: { text: 'S' },
+        },
     );
+    expect(started.ok()).toBe(true);
+    await waitForMarker(page, pane, 'ANCHOR READY');
 
-    // Activation replays a state checkpoint, which briefly resets the
-    // buffer; wait for the retained scrollback to be back before acting.
-    await page.waitForFunction(
-        (id) =>
-            (window as unknown as { anchorTerms: Observed[] }).anchorTerms
-                .filter(
-                    (t) =>
-                        t.element?.closest('.term-container')?.id ===
-                        `term-${id}`,
-                )
-                .some((t) => t.buffer.active.baseY >= 10000),
-        pane,
-        { timeout: 120_000 },
-    );
+    // The full initial burst was rendered live, not restored from a compact
+    // checkpoint. Keep the full-buffer precondition before driving the wheel.
+    await expect
+        .poll(async () => (await topLine(page, pane))?.baseY, {
+            timeout: 120_000,
+        })
+        .toBeGreaterThanOrEqual(10000);
     await page.waitForTimeout(200);
     const before = await topLine(page, pane);
     expect(before?.line).not.toBeNull();
@@ -288,27 +306,7 @@ test('one wheel notch keeps the reading row when a burst follows', async ({
     // Release the late burst only now: the anchor is captured and asserted.
     writeFileSync(join(phi.dir, 'late-burst.trigger'), 'go');
 
-    await page.waitForFunction(
-        (id) =>
-            (window as unknown as { anchorTerms: Observed[] }).anchorTerms.some(
-                (t) => {
-                    if (
-                        t.element?.closest('.term-container')?.id !==
-                        `term-${id}`
-                    )
-                        return false;
-                    const buffer = t.buffer.active;
-                    for (let i = 0; i < buffer.baseY + t.rows; i++) {
-                        const text =
-                            buffer.getLine(i)?.translateToString(true) ?? '';
-                        if (text.includes('ANCHOR LATE DONE')) return true;
-                    }
-                    return false;
-                },
-            ),
-        pane,
-        { timeout: 60_000 },
-    );
+    await waitForMarker(page, pane, 'ANCHOR LATE DONE');
     await page.waitForTimeout(500);
     const after = await topLine(page, pane);
 

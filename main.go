@@ -74,6 +74,7 @@ var (
 func main() {
 	enableVirtualTerminalProcessing()
 	portFlag := flag.Int("port", 7070, "Port to run Go web server on")
+	diagnosticsDirFlag := flag.String("diagnostics-dir", "", "Enable private loopback diagnostics and write connection files under this absolute directory. Only takes effect in a binary built with -tags=profiling.")
 	ipFlag := flag.String("ip", "lan", `IP to bind. "lan" (default) binds loopback + every LAN (RFC 1918) + Tailscale (100.64/10) interface on the host. Use 0.0.0.0 to expose on every interface (public internet reachable), or an explicit IP to bind just one address.`)
 	webFlag := flag.String("web", "", "Directory to serve web assets from instead of embedded assets")
 	dataDirFlag := flag.String("data-dir", "", "Absolute directory for Phi state (default ~/.phi); does not change HOME or assistant settings")
@@ -83,8 +84,13 @@ func main() {
 	// Registered unconditionally (not behind //go:build otel) so a default
 	// build parses identical args — it just never has anywhere to send the
 	// endpoint. obs.Init's body is the only tag-split part (plan §B).
-	otelEndpointFlag := flag.String("otel-endpoint", "", "OTLP/gRPC collector endpoint for OpenTelemetry export (host:port). Only takes effect in a binary built with -tags otel. Falls back to PHI_OTEL_ENDPOINT.")
+	otelEndpointFlag := flag.String("otel-endpoint", "", "OTLP/gRPC collector endpoint for OpenTelemetry export (host:port). Only takes effect in a binary built with -tags=otel. Falls back to PHI_OTEL_ENDPOINT.")
 	flag.Parse()
+
+	if *diagnosticsDirFlag != "" && !filepath.IsAbs(*diagnosticsDirFlag) {
+		fmt.Fprintln(os.Stderr, "--diagnostics-dir must be an absolute path")
+		os.Exit(2)
+	}
 
 	if *dataDirFlag != "" {
 		if !filepath.IsAbs(*dataDirFlag) {
@@ -410,7 +416,7 @@ func main() {
 	if BuildSource == "release" {
 		updateChecker = update.NewChecker(Version, update.DetectInstallMethod(BuildSource))
 		updateChecker.LoadCache()
-		go func() {
+		go obs.DoFeature("updates", func(_ context.Context) {
 			// Stagger startup so we don't hammer GitHub on cold boot.
 			time.Sleep(30 * time.Second)
 			runGatedUpdateCheck(updateChecker, "Initial check")
@@ -420,7 +426,7 @@ func main() {
 			for range ticker.C {
 				runGatedUpdateCheck(updateChecker, "Periodic check")
 			}
-		}()
+		})
 
 		// Construct the applier so /api/update/apply + /api/update/progress
 		// work, even though only npm/standalone installs can use them.
@@ -443,6 +449,8 @@ func main() {
 	http.HandleFunc("/", handleFallback)
 	http.HandleFunc("/ws/control", ws.HandleControl(rpcMgr, func() string { return activeCWD }))
 
+	closeDiagnostics := startPrivateDiagnostics(*diagnosticsDirFlag)
+
 	// Graceful shutdown listener. The signal handler drains via
 	// gracefulShutdown (PHI_SHUTDOWN_* env tunables) instead of the old
 	// sleep+Exit — k8s-friendly without changing Ctrl-C on a tty because
@@ -456,6 +464,7 @@ func main() {
 		sig := <-sigChan
 		slog.Info("graceful shutdown initiated", "signal", sig.String())
 		shutdownOnce.Do(func() {
+			closeDiagnostics()
 			// A human pressing Ctrl-C wants out now. The long graces exist
 			// for orchestrated draining (k8s, systemd), which is precisely
 			// when there is no tty. Interactive shutdown used to wait up to
@@ -490,7 +499,11 @@ func main() {
 	// advertises URLs we actually serve.
 	var listeners []net.Listener
 	var boundAddrs []bindaddr.Addr
-	bindFailedFatal := func(err error) { slog.Error("bind failed", "err", err); os.Exit(1) }
+	bindFailedFatal := func(err error) {
+		closeDiagnostics()
+		slog.Error("bind failed", "err", err)
+		os.Exit(1)
+	}
 
 	if *ipFlag == "lan" {
 		detected := bindaddr.Detect()
@@ -558,6 +571,7 @@ func main() {
 	printWelcomeBanner(cfg, boundAddrs, serverPort)
 	var serveErr error
 	shutdownServers, serveErr = serveAndCapture(listeners)
+	closeDiagnostics()
 	if serveErr != nil {
 		slog.Error("serve failed", "err", serveErr)
 		os.Exit(1)
@@ -707,7 +721,7 @@ func printWelcomeBanner(cfg Config, addrs []bindaddr.Addr, port int) {
 // returns the servers so the shutdown path can drain them. Blocks until all
 // listeners exit; ErrServerClosed (from Shutdown) is a clean stop, not fatal.
 func serveAll(listeners []net.Listener) ([]*http.Server, <-chan error) {
-	handler := obs.WrapHTTP(accessAuthMiddleware(http.DefaultServeMux))
+	handler := obs.WrapHTTP(accessAuthMiddleware(obs.WrapTimingHTTP(http.DefaultServeMux)))
 	servers := make([]*http.Server, len(listeners))
 	errCh := make(chan error, len(listeners))
 	for i, ln := range listeners {
