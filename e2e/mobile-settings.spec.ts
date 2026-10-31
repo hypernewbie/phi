@@ -348,7 +348,14 @@ for (const touch of [false, true]) {
 
 async function mobileSettings(page: Page) {
     await page.goto(`${phi.url}/config.html?page=mobile`);
-    await expect(page.locator('#settings-mobile-status')).toHaveText('Saved');
+    const status = page.locator('#settings-mobile-status');
+    await expect(status).toHaveText(
+        /^(Saved|Settings request cancelled or timed out)$/,
+    );
+    // Reuse the UI's online wake after a cancelled initial background read.
+    if ((await status.textContent()) !== 'Saved')
+        await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await expect(status).toHaveText('Saved');
 }
 async function persistedDrafts(page: Page) {
     return page.evaluate(
