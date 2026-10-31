@@ -27,6 +27,7 @@ function harness() {
     };
     const manager = Object.assign(Object.create(TabManager.prototype), {
         tabs: new Map([['p1', tab]]),
+        activePaneId: tab.paneId,
         app: { config: { auto_reconnect: 'visible' }, showToast: vi.fn() },
         getActiveTab: () => tab,
         updateDocumentTitle: vi.fn(),

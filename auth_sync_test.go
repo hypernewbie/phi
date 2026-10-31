@@ -25,7 +25,7 @@ func authedHandler() http.Handler {
 func TestSyncBoardBypassesAccessAuth(t *testing.T) {
 	withTempConfig(t)
 	auth := useTestAccessAuth(t)
-	if err := auth.configure(testAccessHash()); err != nil {
+	if err := setTestAccessRecord(auth, testAccessHash()); err != nil {
 		t.Fatal(err)
 	}
 	if !auth.enabled() {

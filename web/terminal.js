@@ -13787,12 +13787,36 @@ export class TabManager {
             if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.autoReconnectTimer !== timer) return;
             tabInfo.autoReconnectTimer = null;
             tabInfo.autoReconnectPending = false;
-            if (this._canReconnectTab(tabInfo) && tabInfo.isDead && !tabInfo.reconnectInFlight &&
-                this.app?.config?.auto_reconnect === 'visible' && document.visibilityState === 'visible') {
-                this.reconnectTab(tabInfo, { auto: true });
+            const redial = () => {
+                if (
+                    this._canReconnectTab(tabInfo) &&
+                    tabInfo.isDead &&
+                    !tabInfo.reconnectInFlight &&
+                    this.app?.config?.auto_reconnect === 'visible' &&
+                    document.visibilityState === 'visible'
+                ) {
+                    this.reconnectTab(tabInfo, { auto: true });
+                } else {
+                    if (tabInfo.isDead && !tabInfo.finalizing) this._showReconnectOverlay(tabInfo);
+                    this.updateDisconnectBanner();
+                }
+            };
+            // The server closes a pane socket at the admitted token exp, so an
+            // expiry close leaves the in-memory bearer stale and redialing
+            // with it would be refused again. The timer above still owns the
+            // backoff; this only makes the redial wait for the due refresh.
+            // Keep status visible while refresh runs in the background.
+            this.updateDisconnectBanner();
+            let refresh;
+            try {
+                refresh = window.phiAccessAuth?.refreshAccessIfDue?.();
+            } catch (_e) {}
+            // No auth module (or a v1 session) keeps the redial synchronous:
+            // bridge-free behavior must stay byte-identical.
+            if (refresh && typeof refresh.then === 'function') {
+                void refresh.catch(() => {}).then(redial);
             } else {
-                if (tabInfo.isDead && !tabInfo.finalizing) this._showReconnectOverlay(tabInfo);
-                this.updateDisconnectBanner();
+                redial();
             }
         }, delay);
         tabInfo.autoReconnectTimer = timer;

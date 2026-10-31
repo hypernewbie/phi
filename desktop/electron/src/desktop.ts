@@ -42,19 +42,31 @@ import {
   type Session,
   type WebContents,
 } from 'electron';
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ProfileViewManager } from './views.js';
 import {
+  EMBEDDED_HOST,
   EMBEDDED_ORIGIN,
   EMBEDDED_PARTITION,
   EMBEDDED_SCHEME,
   EmbeddedTransport,
 } from './embedded-transport.js';
 import { AccessAuth } from './access-auth.js';
-import { toCanonicalAuthOrigin } from './access-auth.js';
+import { parseStoredV2Bundle, toCanonicalAuthOrigin } from './access-auth.js';
+import type { V2Bundle } from './access-auth.js';
 import type {
   ActiveServer,
   HeaderAction,
@@ -86,6 +98,7 @@ import {
 import {
   registerHotkey,
   resolveAccelerator,
+  type GlobalShortcutLike,
   type HotkeyRegistration,
 } from './hotkeys.js';
 import {
@@ -109,6 +122,7 @@ import {
   setWorkspaceScript,
   READ_WORKSPACE_SCRIPT,
   bodyAuthLoginScript,
+  bodyAuthTokenScript,
   WAKE_PAGE_SCRIPT,
   lowPowerApplyScript,
   switchToScript,
@@ -212,6 +226,17 @@ const APP_ICON_PATH = resolveAppIconPath();
 /** Smoke mode is driven by the e2e harness (test/smoke.test.ts, `pnpm run smoke`). */
 const SMOKE = process.env.PHI_DESKTOP_SMOKE === '1';
 
+let testHotkeyShortcut: GlobalShortcutLike | null = null;
+let hotkeyRegistrationStarted = false;
+
+/** Installs a fake shortcut API for isolated real-Electron tests before startup. */
+export function setTestHotkeyShortcut(shortcut: GlobalShortcutLike): void {
+  if (hotkeyRegistrationStarted || testHotkeyShortcut) {
+    throw new Error('test hotkey shortcut must be set once before startup');
+  }
+  testHotkeyShortcut = shortcut;
+}
+
 /** Linux deliberately has no supported click-through pet implementation. */
 export function isPetAvailable(root: string | null): boolean {
   return process.platform !== 'linux' && root !== null;
@@ -251,6 +276,37 @@ const SYNC_ALARM_MARKER = 'PHI_ALARM ';
 
 /** Random unguessable id bound to one in-flight access-auth prompt. */
 const randomRequestId = (): string => randomBytes(16).toString('hex');
+
+/** The single cookie a trusted remote body is allowed to hold: the scoped asset
+ *  handle the server itself sets for `/api` asset requests. Its value is the
+ *  current access token, so a renderer can stream images and PDFs natively
+ *  without the host babysitting every asset fetch. The refresh handle never
+ *  enters a renderer's jar. */
+const BODY_ASSET_COOKIE = 'phi_access_asset';
+const BODY_ASSET_PATH = '/api';
+
+/** The slice of Electron's cookie API the body asset handle needs. */
+interface BodyCookieJar {
+  set(details: {
+    url: string;
+    name: string;
+    value: string;
+    path: string;
+    httpOnly: boolean;
+    sameSite: 'strict';
+    secure: boolean;
+    expirationDate?: number;
+  }): Promise<void>;
+  remove(url: string, name: string): Promise<void>;
+}
+
+/** The cookie jar of the renderer that would receive the handle, or null when
+ *  the environment has no jar (tests, a teardown-in-progress view). */
+function bodyCookieJar(contents: WebContents): BodyCookieJar | null {
+  const jar = (contents as unknown as { session?: { cookies?: BodyCookieJar } })
+    .session?.cookies;
+  return jar && typeof jar.set === 'function' ? jar : null;
+}
 
 /** Startup argv has one explicit --server winner; all other URL payloads keep order. */
 function classifyInitialLaunch(argv: string[]): ForwardPayload[] {
@@ -348,6 +404,12 @@ const REMOTE_ACTIVITY_SCRIPT = `(() => {
   return indicator ? indicator.classList.contains('is-active') : false;
 })()`;
 
+const REMOTE_PROFILE_POLL_SCRIPT = `(() => ({
+  cpu: ${REMOTE_CPU_SCRIPT},
+  activity: ${REMOTE_ACTIVITY_SCRIPT},
+  workspace: ${READ_WORKSPACE_SCRIPT},
+}))()`;
+
 /** Fixed page-observation expression: a guarded click on
  * #hostname-display — the in-page handler toggles the dropdown and
  * renders the active tabs. */
@@ -388,6 +450,226 @@ const realHealthChecker: HealthChecker = {
     }
   },
 };
+
+/** One persisted access credential. The outer file keeps `{origins}` so an
+ *  older build still reads v1 entries; v2 entries are ignored by it.
+ *
+ *  A v2 entry carries the whole rotating bundle, not just the access token: a
+ *  bare JWT has no refresh handle, so a restart could only replay it until it
+ *  expired and would have to prompt for a password the user already gave. */
+type StoredV2Credential = {
+  version: 'v2';
+  jwt: string;
+  expiresAt: number;
+  expiresIn: number;
+  refreshHandle: string;
+  refreshIdleExpiresAt: number;
+  refreshAbsoluteExpiresAt: number;
+};
+
+type StoredCredential =
+  | {
+      version: 'v1';
+      algorithm: 'pbkdf2-sha256';
+      iterations: number;
+      salt: Buffer;
+      verifier: Buffer;
+    }
+  | StoredV2Credential;
+
+/** The bundle a stored v2 entry describes. */
+function storedBundle(entry: StoredV2Credential): V2Bundle {
+  return {
+    token: entry.jwt,
+    expiresAt: entry.expiresAt,
+    expiresIn: entry.expiresIn,
+    refreshHandle: entry.refreshHandle,
+    refreshIdleExpiresAt: entry.refreshIdleExpiresAt,
+    refreshAbsoluteExpiresAt: entry.refreshAbsoluteExpiresAt,
+  };
+}
+
+/** Filesystem operations the encrypted credential store uses. Split out so a
+ *  test can prove the pre-rename, rename and durability failures without a
+ *  broken disk; production passes the real ones. */
+export interface CredentialStoreFs {
+  writeNew(path: string, data: Buffer): void;
+  syncFile(path: string): void;
+  rename(from: string, to: string): void;
+  syncDir(path: string): void;
+  remove(path: string): void;
+}
+
+/** Directory-`fsync` failures that mean "this platform has no such claim to
+ *  make", not "the write did not reach the disk". Anything else is a real I/O
+ *  failure and must travel to the caller. */
+const UNSUPPORTED_DIR_SYNC_CODES = new Set([
+  'EISDIR',
+  'EPERM',
+  'EBADF',
+  'EINVAL',
+  'ENOSYS',
+  'ENOTSUP',
+]);
+
+function isUnsupportedDirSync(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && UNSUPPORTED_DIR_SYNC_CODES.has(code);
+}
+
+/** Real credential-store filesystem. Directory fsync is POSIX-only: Windows
+ *  refuses a directory handle, so no durability claim is made there. Every
+ *  other failure propagates, so a caller never reports a durable commit that
+ *  did not happen. */
+export const realCredentialStoreFs: CredentialStoreFs = {
+  writeNew: (file, data) => writeFileSync(file, data, { mode: 0o600 }),
+  syncFile: (file) => {
+    const fd = openSync(file, 'r');
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  },
+  rename: (from, to) => renameSync(from, to),
+  syncDir: (dir) => {
+    let fd: number;
+    try {
+      fd = openSync(dir, 'r');
+    } catch (err) {
+      if (isUnsupportedDirSync(err)) return;
+      throw err;
+    }
+    try {
+      fsyncSync(fd);
+    } catch (err) {
+      if (isUnsupportedDirSync(err)) return;
+      throw err;
+    } finally {
+      closeSync(fd);
+    }
+  },
+  remove: (file) => rmSync(file, { force: true }),
+};
+
+/** The in-app routes a retained view may navigate to. */
+function isAppRoute(pathname: string): boolean {
+  return (
+    pathname === '/' ||
+    pathname === '/index.html' ||
+    pathname === '/md.html' ||
+    pathname === '/config.html' ||
+    pathname === '/input.html'
+  );
+}
+
+/**
+ * The one navigation rule for a retained profile view: window opens,
+ * will-navigate, will-redirect, and main-process loadURL all consult it. The
+ * embedded shell reports origin "null" (a non-special scheme has no tuple
+ * origin), so scheme and host are its only usable identity: an origin equality
+ * test can never match phi-app://app and would wrongly match file://, which
+ * reports "null" too. `isSameServer` is the caller's same-server comparison, so
+ * the profile's own origin and its loopback fallback keep working.
+ */
+export function isAllowedNavigationTarget(
+  target: URL,
+  allowedOrigin: string,
+  isSameServer: (target: URL) => boolean,
+): boolean {
+  // The embedded shell is identified by its scheme and host, never by origin:
+  // a non-special scheme reports "null", which `file:` and every other
+  // non-special URL also report. Returning here, without falling through to the
+  // remote-origin predicate, is what keeps `file:///index.html` and
+  // `phi-app://evil/index.html` out of the shell.
+  if (allowedOrigin === EMBEDDED_ORIGIN) {
+    return (
+      target.protocol === `${EMBEDDED_SCHEME}:` &&
+      target.host === EMBEDDED_HOST &&
+      isAppRoute(target.pathname)
+    );
+  }
+  // A remote profile view never navigates to a non-special URL either.
+  if (target.origin === 'null') return false;
+  return isSameServer(target) && isAppRoute(target.pathname);
+}
+
+/**
+ * How the host authorizes one body view for a v2 credential. The embedded
+ * single-tab shell is a different transport: its page holds no credential at
+ * all (the main-process proxy attaches the host bearer per request), so a
+ * host-authorized sign-in is already complete there and nothing is injected.
+ * `new URL(EMBEDDED_ORIGIN).origin` is the string "null", which `file:` and
+ * every other non-special URL also report, so the shell is identified by scheme
+ * and host; a remote body must be exactly the canonical origin.
+ */
+export function resolveV2BodyAuthTarget(
+  viewUrl: string,
+  canonical: string,
+): 'embedded' | 'exact' | 'refuse' {
+  let url: URL;
+  try {
+    url = new URL(viewUrl);
+  } catch {
+    return 'refuse';
+  }
+  if (url.protocol === `${EMBEDDED_SCHEME}:` && url.host === EMBEDDED_HOST) {
+    return 'embedded';
+  }
+  if (url.origin === 'null' || url.origin !== canonical) return 'refuse';
+  return 'exact';
+}
+
+/** The slice of a WebContents the navigation guard touches. */
+export interface NavGuardTarget {
+  on(
+    event: 'will-navigate' | 'will-redirect',
+    listener: (event: { preventDefault(): void }, url: string) => void,
+  ): unknown;
+  loadURL(url: string, options?: unknown): Promise<unknown>;
+}
+
+/**
+ * Navigation guard (security): one predicate for will-navigate, will-redirect,
+ * window opens, and main-process loadURL targets. A redirect is checked exactly
+ * like a fresh navigation: a permitted URL that redirects to a foreign page must
+ * not become a credential-bearing renderer (the proxy would inject host
+ * credentials into it). A denied target is handed to the OS only when it is a
+ * web or mail URL, and is never loaded in-app.
+ */
+export function attachNavGuard(
+  contents: NavGuardTarget,
+  isAllowedNavigation: (target: URL) => boolean,
+  handOffExternal: (url: string) => void,
+): void {
+  const deny = (event: { preventDefault(): void }, url: string): void => {
+    handOffExternal(url);
+    event.preventDefault();
+  };
+  for (const event of ['will-navigate', 'will-redirect'] as const) {
+    contents.on(event, (navigationEvent, url) => {
+      try {
+        if (isAllowedNavigation(new URL(url))) return;
+      } catch {
+        /* malformed URL: deny below */
+      }
+      deny(navigationEvent, url);
+    });
+  }
+  // A main-process loadURL emits neither event, so its target is validated
+  // explicitly instead of relying on that exemption.
+  const loadURL = contents.loadURL.bind(contents);
+  contents.loadURL = ((url: string, options?: unknown) => {
+    let allowed = false;
+    try {
+      allowed = isAllowedNavigation(new URL(url));
+    } catch {
+      allowed = false;
+    }
+    if (!allowed) return Promise.resolve();
+    return loadURL(url, options);
+  }) as typeof contents.loadURL;
+}
 
 export class DesktopHost {
   // --- Host-loop state ---
@@ -479,6 +761,8 @@ export class DesktopHost {
    *  (any tab producing output drives the brand-glow `▍` glyph and the
    *  `phi:header-state` push). Never persisted. */
   observedActivity = new Map<string, boolean>();
+  /** At most one pending page read per remote renderer. */
+  private readonly pendingRendererReads = new WeakSet<WebContents>();
   /** Path of the encrypted credential file. Holds the per-origin
    *  PBKDF2 verifiers (rotated server-side) so a subsequent launch can
    *  auto-reauthenticate without prompting for the password. The file
@@ -489,19 +773,18 @@ export class DesktopHost {
     app.getPath('userData'),
     'access-credentials.bin',
   );
+  /** Credential-store filesystem seam; tests replace it to prove the failure
+   *  and durability paths. */
+  credentialFs: CredentialStoreFs = realCredentialStoreFs;
   /** Per-origin verifier persistence (in-memory mirror of the
    *  decrypted file). Cleared when the corresponding origin is removed
    *  or the stored credential fails a server-side rotation check. */
-  private readonly storedCredentials = new Map<
-    string,
-    {
-      verifier: Buffer;
-      salt: Buffer;
-      iterations: number;
-      version: 'v1';
-      algorithm: 'pbkdf2-sha256';
-    }
-  >();
+  private readonly storedCredentials = new Map<string, StoredCredential>();
+  /** Tokens that already authorized a native request, so they may be
+   *  installed into a renderer. A restored token waits for validation:
+   *  a transient status failure keeps it for native retries but must not
+   *  authorize body bootstrap. */
+  private readonly bodyTokens = new Map<string, string>();
   /** Last CPU+activity+workspace push sent to the main view, for change-only
    *  emission. Null until the first push. */
   lastHeaderState: HeaderState | null = null;
@@ -1515,6 +1798,23 @@ export class DesktopHost {
     }
   }
 
+  private executeRendererRead<T>(
+    contents: WebContents,
+    script: string,
+  ): Promise<T | null> {
+    if (
+      contents.isDestroyed() ||
+      (typeof contents.isLoading === 'function' && contents.isLoading()) ||
+      this.pendingRendererReads.has(contents)
+    )
+      return Promise.resolve(null);
+    this.pendingRendererReads.add(contents);
+    return contents
+      .executeJavaScript(script)
+      .then((result) => result as T)
+      .finally(() => this.pendingRendererReads.delete(contents));
+  }
+
   /**
    * Caches the observed hostname/accent for the profile at origin; null
    * while the remote page has reported neither or on failure.
@@ -1538,7 +1838,7 @@ export class DesktopHost {
         setTimeout(() => resolve(null), 1000),
       );
       const observed = (await Promise.race([
-        view.webContents.executeJavaScript(REMOTE_IDENTITY_SCRIPT),
+        this.executeRendererRead(view.webContents, REMOTE_IDENTITY_SCRIPT),
         timeoutPromise,
       ])) as {
         hostname?: unknown;
@@ -1611,51 +1911,52 @@ export class DesktopHost {
         continue;
       }
       const profileId = profile.id;
-      void Promise.all([
-        view.webContents.executeJavaScript(REMOTE_CPU_SCRIPT).catch(() => null),
-        view.webContents
-          .executeJavaScript(REMOTE_ACTIVITY_SCRIPT)
-          .catch(() => false),
-        view.webContents
-          .executeJavaScript(READ_WORKSPACE_SCRIPT)
-          .catch(() => null),
-      ]).then(([rawCpu, rawActivity, rawWorkspace]) => {
-        if (
-          !this.isCurrentWindowSession(win, generation) ||
-          !view.webContents ||
-          view.webContents.isDestroyed()
-        )
-          return;
-        const cpu =
-          typeof rawCpu === 'number' && Number.isFinite(rawCpu)
-            ? Math.min(100, Math.max(0, rawCpu))
-            : NaN;
-        const next = Number.isFinite(cpu) ? cpu : null;
-        const prev = this.observedCpu.get(profileId) ?? null;
-        if (next === null) this.observedCpu.delete(profileId);
-        else this.observedCpu.set(profileId, next);
-        const activity = Boolean(rawActivity);
-        const prevActivity = this.observedActivity.get(profileId) ?? false;
-        if (activity !== prevActivity) {
-          if (activity) this.observedActivity.set(profileId, true);
-          else this.observedActivity.delete(profileId);
-          this.pushRailState();
-        }
-        if (next !== prev) this.pushRailState();
-        // The taskbar progress and the main view TBAR follow the
-        // selected server only.
-        if (profileId !== st.activeId || win.isDestroyed()) return;
-        if (ctrl.state().activeId !== st.activeId) {
-          win.setProgressBar(-1);
-          return;
-        }
-        win.setProgressBar(next !== null && next > 50 ? next / 100 : -1);
-        const workspace =
-          typeof rawWorkspace === 'string' && rawWorkspace !== ''
-            ? rawWorkspace
-            : null;
-        this.pushHeaderState(next, activity, workspace);
-      });
+      void this.executeRendererRead<{
+        cpu?: unknown;
+        activity?: unknown;
+        workspace?: unknown;
+      }>(view.webContents, REMOTE_PROFILE_POLL_SCRIPT)
+        .then((result) => {
+          if (
+            !result ||
+            !this.isCurrentWindowSession(win, generation) ||
+            view.webContents.isDestroyed()
+          )
+            return;
+          const rawCpu = result.cpu;
+          const rawActivity = result.activity;
+          const rawWorkspace = result.workspace;
+          const cpu =
+            typeof rawCpu === 'number' && Number.isFinite(rawCpu)
+              ? Math.min(100, Math.max(0, rawCpu))
+              : NaN;
+          const next = Number.isFinite(cpu) ? cpu : null;
+          const prev = this.observedCpu.get(profileId) ?? null;
+          if (next === null) this.observedCpu.delete(profileId);
+          else this.observedCpu.set(profileId, next);
+          const activity = Boolean(rawActivity);
+          const prevActivity = this.observedActivity.get(profileId) ?? false;
+          if (activity !== prevActivity) {
+            if (activity) this.observedActivity.set(profileId, true);
+            else this.observedActivity.delete(profileId);
+            this.pushRailState();
+          }
+          if (next !== prev) this.pushRailState();
+          // The taskbar progress and the main view TBAR follow the
+          // selected server only.
+          if (profileId !== st.activeId || win.isDestroyed()) return;
+          if (ctrl.state().activeId !== st.activeId) {
+            win.setProgressBar(-1);
+            return;
+          }
+          win.setProgressBar(next !== null && next > 50 ? next / 100 : -1);
+          const workspace =
+            typeof rawWorkspace === 'string' && rawWorkspace !== ''
+              ? rawWorkspace
+              : null;
+          this.pushHeaderState(next, activity, workspace);
+        })
+        .catch(() => {});
     }
   }
 
@@ -1746,26 +2047,60 @@ export class DesktopHost {
     if (!parsed || typeof parsed !== 'object') return;
     const entries = (parsed as { origins?: Record<string, unknown> }).origins;
     if (!entries || typeof entries !== 'object') return;
-    for (const [origin, raw] of Object.entries(entries)) {
+    const v2Allowed = this.secureV2StorageAvailable();
+    /** A v2 entry this build cannot honour is dropped from the store, so the
+     *  next launch asks for a password instead of retrying a dead credential. */
+    let dropped = false;
+    for (const [origin, rawEntry] of Object.entries(entries)) {
       const canonical = toCanonicalAuthOrigin(origin);
       if (!canonical) continue;
-      const c = this.parseStoredCredential(raw);
-      if (c) this.storedCredentials.set(canonical, c);
+      const c = this.parseStoredCredential(rawEntry);
+      if (!c) {
+        // An older build wrote `{version:'v2', jwt}`; that cannot be renewed
+        // and must not be restored. Drop only that entry, keep v1 entries.
+        if ((rawEntry as { version?: unknown })?.version === 'v2') {
+          dropped = true;
+        }
+        continue;
+      }
+      // Never load a bearer through an insecure backend: keep the entry on
+      // disk (an encrypted backend may return later) but leave it unusable.
+      if (c.version === 'v2' && !v2Allowed) continue;
+      this.storedCredentials.set(canonical, c);
     }
+    if (dropped) this.saveStoredCredentials();
+  }
+
+  /** True when the host can encrypt a v2 token at rest. Linux's
+   *  `basic_text` backend is obfuscation, not encryption. */
+  private secureV2StorageAvailable(): boolean {
+    if (!safeStorage.isEncryptionAvailable()) return false;
+    if (process.platform !== 'linux') return true;
+    const backend = (
+      safeStorage as unknown as { getSelectedStorageBackend?: () => string }
+    ).getSelectedStorageBackend?.();
+    return backend !== 'basic_text';
   }
 
   /** Validates and clones one entry of the credential blob. Defensive
    *  against partial / tampered files: a malformed entry is dropped
    *  silently rather than crashing the host. */
-  private parseStoredCredential(raw: unknown): {
-    verifier: Buffer;
-    salt: Buffer;
-    iterations: number;
-    version: 'v1';
-    algorithm: 'pbkdf2-sha256';
-  } | null {
+  private parseStoredCredential(raw: unknown): StoredCredential | null {
     if (!raw || typeof raw !== 'object') return null;
     const r = raw as Record<string, unknown>;
+    if (r.version === 'v2') {
+      const bundle = parseStoredV2Bundle(r);
+      if (!bundle) return null;
+      return {
+        version: 'v2',
+        jwt: bundle.token,
+        expiresAt: bundle.expiresAt,
+        expiresIn: bundle.expiresIn,
+        refreshHandle: bundle.refreshHandle,
+        refreshIdleExpiresAt: bundle.refreshIdleExpiresAt,
+        refreshAbsoluteExpiresAt: bundle.refreshAbsoluteExpiresAt,
+      };
+    }
     if (r.version !== 'v1' || r.algorithm !== 'pbkdf2-sha256') return null;
     if (typeof r.iterations !== 'number' || !Number.isFinite(r.iterations))
       return null;
@@ -1848,38 +2183,76 @@ export class DesktopHost {
     );
   }
 
-  /** Writes the encrypted credential file. Captures a single atomic
-   *  snapshot of `this.storedCredentials` so a torn write (kill -9 in
-   *  the middle) leaves either the old or the new file, not a half
-   *  file. Failures are silent: a missing credentials file is the
-   *  normal first-launch state, so a write that fails just means
-   *  the next launch re-prompts. */
-  private saveStoredCredentials(): void {
-    if (!safeStorage.isEncryptionAvailable()) return;
+  /** Replaces the encrypted credential file with a snapshot of
+   *  `this.storedCredentials`. The write is atomic and durable: a fresh
+   *  temporary file is written and synced, then renamed over the old file and
+   *  the parent directory synced. A failure before the rename leaves the old
+   *  file untouched; a failure after it is an ambiguous commit, so the caller
+   *  is told the file could not be confirmed. Returns false when nothing was
+   *  durably written.
+   *
+   *  Silence is not success: a failed save keeps the credential in native
+   *  memory and the next launch simply asks for the password again. */
+  private saveStoredCredentials(): boolean {
+    if (!safeStorage.isEncryptionAvailable()) return false;
+    // A v2 token must never be written through Linux's basic_text backend,
+    // including a mixed store that also holds legacy v1 entries.
+    const hasV2 = Array.from(this.storedCredentials.values()).some(
+      (c) => c.version === 'v2',
+    );
+    if (hasV2 && !this.secureV2StorageAvailable()) return false;
     const origins: Record<string, unknown> = {};
     for (const [origin, c] of this.storedCredentials) {
       const canonical = toCanonicalAuthOrigin(origin) ?? origin;
-      origins[canonical] = {
-        version: c.version,
-        algorithm: c.algorithm,
-        iterations: c.iterations,
-        saltBase64: c.salt.toString('base64url'),
-        verifierBase64: c.verifier.toString('base64url'),
-      };
+      origins[canonical] =
+        c.version === 'v2'
+          ? {
+              version: 'v2',
+              jwt: c.jwt,
+              expiresAt: c.expiresAt,
+              expiresIn: c.expiresIn,
+              refreshHandle: c.refreshHandle,
+              refreshIdleExpiresAt: c.refreshIdleExpiresAt,
+              refreshAbsoluteExpiresAt: c.refreshAbsoluteExpiresAt,
+            }
+          : {
+              version: c.version,
+              algorithm: c.algorithm,
+              iterations: c.iterations,
+              saltBase64: c.salt.toString('base64url'),
+              verifierBase64: c.verifier.toString('base64url'),
+            };
     }
     const plaintext = JSON.stringify({ origins });
     let encrypted: Buffer;
     try {
       encrypted = safeStorage.encryptString(plaintext);
     } catch {
-      return;
+      return false;
+    }
+    const fs = this.credentialFs;
+    const temp = `${this.credentialsPath}.tmp`;
+    try {
+      fs.writeNew(temp, encrypted);
+      fs.syncFile(temp);
+      fs.rename(temp, this.credentialsPath);
+    } catch {
+      // Pre-rename failure: the previous file is still the whole truth.
+      try {
+        fs.remove(temp);
+      } catch {
+        /* nothing left to clean up */
+      }
+      return false;
     }
     try {
-      writeFileSync(this.credentialsPath, encrypted);
+      fs.syncDir(path.dirname(this.credentialsPath));
     } catch {
-      // Disk full or permission denied; ignore (next launch will
-      // re-prompt, no security loss).
+      // Post-rename failure is an ambiguous committed write: the new file is
+      // in place but its durability is unconfirmed.
+      return false;
     }
+    return true;
   }
 
   /**
@@ -1992,6 +2365,8 @@ export class DesktopHost {
         this.storedCredentials.get(canonical) ??
         this.storedCredentials.get(origin);
     }
+    // A v2 bearer is not a verifier: never hand it to the PBKDF2 path.
+    if (cred?.version === 'v2') return null;
     return cred ?? null;
   }
 
@@ -2005,6 +2380,9 @@ export class DesktopHost {
   ): void {
     if (generation !== this.sessionGeneration) return;
     const canonical = toCanonicalAuthOrigin(origin) ?? origin;
+    // A v2 session persists only its bearer; a stale v1 verifier must not
+    // overwrite the selected v2 entry.
+    if (accessAuth.getSelectedProtocol(canonical) === 'v2') return;
     const cred =
       accessAuth.getLastCredential(canonical) ??
       accessAuth.getLastCredential(origin);
@@ -2088,6 +2466,7 @@ export class DesktopHost {
   ): Promise<boolean> {
     if (generation !== this.sessionGeneration) return false;
     const canonical = toCanonicalAuthOrigin(origin) ?? origin;
+    if (accessAuth.getSelectedProtocol(canonical) === 'v2') return false;
     const cred = this.getOrRecoverCredential(canonical);
     if (!cred) return false;
     const status = await this.fetchAuthStatusForPersistence(canonical);
@@ -2121,8 +2500,193 @@ export class DesktopHost {
     }
   }
 
-  /** Re-authenticates origins with cached credentials at startup.
-   *  Called once during
+  /** Marks the token a successful native v2 unlock installed as authorized
+   *  for body install. The bundle itself was already persisted by the store
+   *  listener before this point, so a body failure cannot lose it. */
+  private persistTokenAfterUnlock(
+    origin: string,
+    accessAuth: AccessAuth,
+    generation: number,
+  ): void {
+    if (generation !== this.sessionGeneration) return;
+    const canonical = toCanonicalAuthOrigin(origin) ?? origin;
+    const token = accessAuth.getToken(canonical);
+    if (!token) return;
+    // A successful native unlock authorized this token: body install may
+    // use it now.
+    this.bodyTokens.set(canonical, token);
+    this.persistBundle(canonical, accessAuth.getBundle(canonical));
+  }
+
+  /** Writes one origin's rotating bundle to the encrypted store, or drops the
+   *  entry when the origin no longer holds one. Called for every install,
+   *  rotation and terminal rejection, so what is on disk is always the
+   *  newest bundle the host holds. A failed save keeps the bundle in memory
+   *  and is never reported as persisted. */
+  private persistBundle(origin: string, bundle: V2Bundle | null): void {
+    const canonical = toCanonicalAuthOrigin(origin) ?? origin;
+    const existing = this.storedCredentials.get(canonical);
+    if (!bundle) {
+      if (existing?.version !== 'v2') return;
+      this.storedCredentials.delete(canonical);
+      this.saveStoredCredentials();
+      return;
+    }
+    if (
+      existing?.version === 'v2' &&
+      existing.jwt === bundle.token &&
+      existing.refreshHandle === bundle.refreshHandle
+    ) {
+      return;
+    }
+    this.storedCredentials.set(canonical, {
+      version: 'v2',
+      jwt: bundle.token,
+      expiresAt: bundle.expiresAt,
+      expiresIn: bundle.expiresIn,
+      refreshHandle: bundle.refreshHandle,
+      refreshIdleExpiresAt: bundle.refreshIdleExpiresAt,
+      refreshAbsoluteExpiresAt: bundle.refreshAbsoluteExpiresAt,
+    });
+    this.saveStoredCredentials();
+  }
+
+  /** Hands the session's credential owner a store listener. Every bundle the
+   *  host installs or rotates is persisted here, before any renderer sees
+   *  the token. A cleared bundle is terminal: the body asset handle goes with
+   *  it so no renderer keeps a dead credential. */
+  private watchBundles(auth: AccessAuth): AccessAuth {
+    auth.setBundleListener((origin, bundle) => {
+      this.persistBundle(origin, bundle);
+      if (!bundle) this.clearBodyAssetCookies(origin);
+    });
+    return auth;
+  }
+
+  /** Gives one trusted remote body the scoped asset cookie its asset requests
+   *  need, with the server's own attributes. Only the current access token is
+   *  used, so a rotation followed by a reinstall refreshes the deadline too.
+   *  The caller has already proven the frame is the credential origin. */
+  private installBodyAssetCookie(
+    contents: WebContents,
+    canonical: string,
+    accessAuth: AccessAuth,
+  ): void {
+    const jar = bodyCookieJar(contents);
+    if (!jar) return;
+    const token = accessAuth.getToken(canonical);
+    if (!token) return;
+    // The deadline comes from the response that delivered the bundle, never
+    // from the server's absolute timestamp compared with this machine's clock.
+    const deadline = accessAuth.getAccessDeadline(canonical);
+    const cookie = {
+      url: `${canonical}${BODY_ASSET_PATH}`,
+      name: BODY_ASSET_COOKIE,
+      value: token,
+      path: BODY_ASSET_PATH,
+      httpOnly: true,
+      sameSite: 'strict' as const,
+      secure: canonical.startsWith('https://'),
+      // A bare host token carries no server deadline: the cookie then dies
+      // with the view's session, exactly like the memory token it mirrors.
+      ...(deadline !== null ? { expirationDate: deadline } : {}),
+    };
+    void jar.set(cookie).catch(() => {});
+  }
+
+  /** Drops the asset handle from every loaded body of `origin`. Bound to the
+   *  same origins as token installation, so a credential clear cannot leave a
+   *  renderer holding an asset cookie for a dead session. */
+  private clearBodyAssetCookies(origin: string): void {
+    const canonical = toCanonicalAuthOrigin(origin) ?? origin;
+    for (const [key, view] of this.viewByOrigin) {
+      if ((toCanonicalAuthOrigin(key) ?? key) !== canonical) continue;
+      const contents = view?.webContents;
+      if (!contents || contents.isDestroyed()) continue;
+      const jar = bodyCookieJar(contents);
+      if (!jar) continue;
+      void jar
+        .remove(`${canonical}${BODY_ASSET_PATH}`, BODY_ASSET_COOKIE)
+        .catch(() => {});
+    }
+  }
+
+  /** Installs the host bearer into one loaded frame whose main frame is the
+   *  exact credential origin. Body memory is discarded by every load, so
+   *  startup restoration and retained-profile recovery both use this. The
+   *  token must have authorized a native request first; the embedded shell
+   *  (phi-app://app) and any other origin are refused. */
+  private installBodyToken(
+    contents: WebContents,
+    origin: string,
+    accessAuth: AccessAuth,
+    generation: number,
+  ): void {
+    if (generation !== this.sessionGeneration) return;
+    const canonical = toCanonicalAuthOrigin(origin) ?? origin;
+    const token = accessAuth.getToken(canonical);
+    if (!token || this.bodyTokens.get(canonical) !== token) return;
+    if (!contents || contents.isDestroyed()) return;
+    let viewOrigin = '';
+    try {
+      viewOrigin = new URL(contents.getURL()).origin;
+    } catch {
+      return;
+    }
+    if (viewOrigin !== canonical) return;
+    // The token goes in as a memory install; the asset cookie is the one
+    // credential a remote body may hold, and it mirrors the same token.
+    this.installBodyAssetCookie(contents, canonical, accessAuth);
+    void contents
+      .executeJavaScript(bodyAuthTokenScript(token, canonical))
+      .catch(() => {});
+  }
+
+  /** Installs the host bearer into a popout window once it has loaded.
+   *  A popout has no cookie to inherit, so without this a v2 popout would
+   *  render signed out. The exact-origin check inside `installBodyToken`
+   *  refuses the embedded shell and any other frame. */
+  private installPopoutToken(
+    contents: WebContents,
+    origin: string,
+    accessAuth: AccessAuth,
+    generation: number,
+    isCurrent: () => boolean,
+  ): void {
+    contents.on('did-finish-load', () => {
+      if (!isCurrent() || contents.isDestroyed()) return;
+      this.installBodyToken(
+        contents,
+        origin === EMBEDDED_ORIGIN ? this.activeServerOrigin() : origin,
+        accessAuth,
+        generation,
+      );
+    });
+  }
+
+  /** Reinstalls the host bearer into every loaded view for `origin` (two
+   *  profiles can share one canonical auth origin). */
+  private reinstallBodyToken(
+    origin: string,
+    accessAuth: AccessAuth,
+    generation: number,
+  ): void {
+    if (generation !== this.sessionGeneration) return;
+    const canonical = toCanonicalAuthOrigin(origin) ?? origin;
+    for (const [key, view] of this.viewByOrigin) {
+      if ((toCanonicalAuthOrigin(key) ?? key) !== canonical) continue;
+      if (!this.loadedViews.has(view)) continue;
+      this.installBodyToken(
+        view.webContents,
+        canonical,
+        accessAuth,
+        generation,
+      );
+    }
+  }
+
+  /** Iterates every saved profile at startup and re-authenticates
+   *  any that have a persisted credential. Called once during
    *  `start()` after the view manager is ready and before the first
    *  `/api/config` poll. */
   async bootstrapStoredCredentials(
@@ -2133,6 +2697,20 @@ export class DesktopHost {
     this.loadStoredCredentials();
     if (this.storedCredentials.size === 0) return;
     const origins = Array.from(this.storedCredentials.keys());
+    // Restore every bearer into native memory before any network work.
+    // Validation is a background confirmation; a slow or offline server
+    // must not leave a later profile without its credential when the user
+    // activates it. Body installation stays gated on validation.
+    for (const [origin, entry] of this.storedCredentials) {
+      if (entry.version === 'v2') {
+        // A restored bundle has no receipt-relative clock: renew as soon as the
+        // host can, instead of trusting an absolute timestamp that a skewed
+        // local clock may read as fresh for hours.
+        accessAuth.installBundle(origin, storedBundle(entry), {
+          restored: true,
+        });
+      }
+    }
     // Re-authenticate the origins CONCURRENTLY, with a small concurrency
     // cap. Sequentially, every server cost a status round trip plus a
     // login round trip before the next one started, so a server late in
@@ -2153,11 +2731,21 @@ export class DesktopHost {
         // page ask for a password the user had already given.
         this.embeddedTransport?.beginAuth(origin);
         try {
-          await this.tryReauthWithStoredCredential(
-            origin,
-            accessAuth,
-            generation,
-          );
+          const entry = this.storedCredentials.get(origin);
+          if (entry?.version === 'v2') {
+            await this.bootstrapV2Token(
+              origin,
+              entry.jwt,
+              accessAuth,
+              generation,
+            );
+          } else {
+            await this.tryReauthWithStoredCredential(
+              origin,
+              accessAuth,
+              generation,
+            );
+          }
         } finally {
           this.embeddedTransport?.endAuth(origin);
         }
@@ -2168,6 +2756,81 @@ export class DesktopHost {
         worker(),
       ),
     );
+  }
+
+  /** Restores one persisted bearer into native memory and lets the server
+   *  decide whether it is still valid. Expiry is not rejection: a live refresh
+   *  family renews the access token, and only the server's refresh `401` ends
+   *  the session. A transient failure keeps the bundle for the next poll. */
+  private async bootstrapV2Token(
+    origin: string,
+    jwt: string,
+    accessAuth: AccessAuth,
+    generation: number,
+  ): Promise<void> {
+    if (generation !== this.sessionGeneration) return;
+    const canonical = toCanonicalAuthOrigin(origin) ?? origin;
+    const installed = accessAuth.getToken(origin);
+    // A newer in-memory token already won; a stale disk entry must not
+    // overwrite it.
+    if (installed && installed !== jwt) return;
+    const stored = this.storedCredentials.get(canonical);
+    const entry =
+      stored?.version === 'v2' && stored.jwt === jwt ? stored : null;
+    if (!installed) {
+      if (entry) accessAuth.installBundle(canonical, storedBundle(entry));
+      else accessAuth.installToken(origin, jwt);
+    }
+    if (entry && accessAuth.renewalDue(canonical)) {
+      const renewed = await accessAuth.renewIfDue(canonical);
+      if (generation !== this.sessionGeneration) return;
+      if (renewed?.kind === 'unauthorized') {
+        // The family is gone server-side: this is the one terminal signal.
+        this.forgetStoredV2(canonical, jwt);
+        return;
+      }
+      // unavailable/superseded: keep the bundle and let the poll retry.
+      if (renewed?.kind !== 'ok') return;
+    }
+    const current = accessAuth.getToken(canonical);
+    if (!current) return;
+    const verdict = await accessAuth.checkToken(canonical, current);
+    if (generation !== this.sessionGeneration) return;
+    // A native unlock can install a newer token while this check is in
+    // flight. Its readiness must survive the late verdict for the old one.
+    if (accessAuth.getToken(canonical) !== current) return;
+    if (verdict !== 'invalid') {
+      if (verdict === 'valid') {
+        // The server accepted this token: it may now reach a renderer.
+        this.bodyTokens.set(canonical, current);
+        this.reinstallBodyToken(canonical, accessAuth, generation);
+      }
+      return;
+    }
+    if (this.bodyTokens.get(canonical) === current) {
+      this.bodyTokens.delete(canonical);
+    }
+    // A rejected token is not yet a dead family: one refresh decides, and
+    // only its 401 clears the stored credential.
+    const bundle = accessAuth.getBundle(canonical);
+    if (bundle) {
+      const renewed = await accessAuth.refreshAccess(canonical);
+      if (generation !== this.sessionGeneration) return;
+      if (renewed.kind !== 'unauthorized') return;
+    }
+    accessAuth.rejectToken(canonical, current);
+    this.forgetStoredV2(canonical, current);
+  }
+
+  /** Drops one origin's stored v2 entry after a terminal rejection. The v2
+   *  selection survives in `accessAuth`, so no v1 fallback follows. */
+  private forgetStoredV2(canonical: string, jwt: string): void {
+    const current = this.storedCredentials.get(canonical);
+    if (current?.version !== 'v2') return;
+    // A newer bundle won while this request was in flight: its entry stays.
+    if (current.jwt !== jwt) return;
+    this.storedCredentials.delete(canonical);
+    this.saveStoredCredentials();
   }
 
   /** Injects Phi's error toast into the view for a failed local file action. */
@@ -2223,9 +2886,13 @@ export class DesktopHost {
     if (!profile) return;
     const view = this.viewByOrigin.get(profile.origin);
     if (!view?.webContents || view.webContents.isDestroyed()) return;
-    void view.webContents.executeJavaScript(READ_FILE_ACTION_SCRIPT).then(
+    void this.executeRendererRead<unknown>(
+      view.webContents,
+      READ_FILE_ACTION_SCRIPT,
+    ).then(
       (raw) => {
         if (
+          raw === null ||
           !this.isCurrentWindowSession(win, generation) ||
           !view.webContents ||
           view.webContents.isDestroyed()
@@ -3134,7 +3801,7 @@ export class DesktopHost {
     } | null = null;
     let unlockInFlight = false;
     let promptSuppressedFor: string | null = null;
-    let accessAuth = new AccessAuth();
+    let accessAuth = this.watchBundles(new AccessAuth());
     /** Reinstalled for each fresh native shell; cancels its prior auth work. */
     const armAuthCancellation = (): void => {
       this.abortCurrentAuth = () => {
@@ -3248,7 +3915,7 @@ export class DesktopHost {
       // Auth and coalescing state belong to this native shell. A late old
       // promise retains its old map/auth object and cannot clear or mutate
       // replacement-session state.
-      accessAuth = new AccessAuth();
+      accessAuth = this.watchBundles(new AccessAuth());
       this.configOpInFlight = new Map<string, Promise<unknown>>();
       this.bodyReauthInFlight = new Map<string, Promise<void>>();
       activeEpoch++;
@@ -3271,6 +3938,10 @@ export class DesktopHost {
         resolveProfile: (id) =>
           this.controller?.state().profiles.find((p) => p.id === id) ?? null,
         listProfiles: () => this.controller?.state().profiles ?? [],
+        // The page holds no credential at all: every protected row of the
+        // embedded request table is authorized here, through the same host
+        // owner the main process uses, so one refresh handle has one owner.
+        auth: accessAuth,
         // The server capability answer is a stable fact about a server:
         // persisting it keeps the FIRST flip to a server after a restart
         // as fast as every flip after it.
@@ -3356,8 +4027,11 @@ export class DesktopHost {
         this.viewByOrigin.set(origin, view);
         // The normalized comparison origin: computed once per view so both
         // guard paths (window-open and will-navigate) compare the same
-        // canonical origin string.
-        const allowedOrigin = new URL(origin).origin;
+        // canonical origin string. The embedded shell keeps its own constant:
+        // `new URL('phi-app://app').origin` is the string "null", which every
+        // non-special URL shares, so it can never identify the shell.
+        const allowedOrigin =
+          origin === EMBEDDED_ORIGIN ? EMBEDDED_ORIGIN : new URL(origin).origin;
         const isSameServerOrigin = (
           target: URL,
           allowedOrigin: string,
@@ -3387,6 +4061,27 @@ export class DesktopHost {
             isLoopback(allowed.hostname)
           );
         };
+        // ONE navigation policy for this view: remote navigation stays limited
+        // to this profile's own Phi origin, including its loopback fallback, and
+        // the embedded shell to its own scheme and host.
+        const isAllowedNavigation = (target: URL): boolean =>
+          isAllowedNavigationTarget(target, allowedOrigin, (candidate) =>
+            isSameServerOrigin(candidate, allowedOrigin),
+          );
+        const handOffExternal = (url: string): void => {
+          try {
+            const target = new URL(url);
+            if (
+              target.protocol === 'http:' ||
+              target.protocol === 'https:' ||
+              target.protocol === 'mailto:'
+            ) {
+              void shell.openExternal(url);
+            }
+          } catch {
+            /* malformed URL: deny */
+          }
+        };
         const popupSize = (
           features: string,
         ): { width: number; height: number } => {
@@ -3405,11 +4100,8 @@ export class DesktopHost {
           if (!isCurrent()) return { action: 'deny' };
           try {
             const target = new URL(url);
-            const isSameOrigin =
-              target.origin === allowedOrigin ||
-              isSameServerOrigin(target, allowedOrigin);
             const isInternalPopout =
-              isSameOrigin &&
+              isAllowedNavigation(target) &&
               (target.pathname === '/md.html' ||
                 target.pathname === '/config.html') &&
               Boolean(
@@ -3444,7 +4136,21 @@ export class DesktopHost {
                   child.once('ready-to-show', () => {
                     if (isCurrent() && !child.isDestroyed()) child.show();
                   });
-                  attachNavGuard(child.webContents);
+                  // A v2 popout has no cookie to inherit: install the same
+                  // host bearer the body view uses. The embedded shell is
+                  // refused by the exact-origin check.
+                  this.installPopoutToken(
+                    child.webContents,
+                    origin,
+                    accessAuth,
+                    generation,
+                    isCurrent,
+                  );
+                  attachNavGuard(
+                    child.webContents,
+                    isAllowedNavigation,
+                    handOffExternal,
+                  );
                   child.webContents.setWindowOpenHandler(
                     ({ url: childUrl }) => {
                       try {
@@ -3492,41 +4198,7 @@ export class DesktopHost {
           }
           return { action: 'deny' };
         });
-        // Navigation guard (security): a retained profile view may only
-        // navigate within its own origin — the same same-origin rule as the
-        // window-open guard above. Same-origin navigations are allowed;
-        // http(s) targets are handed to the OS browser via
-        // shell.openExternal; everything else is denied. The main process's
-        // own loadURL calls do not emit will-navigate, so the view manager's
-        // initial page loads are unaffected.
-        const attachNavGuard = (contents: typeof view.webContents): void => {
-          contents.on('will-navigate', (event, url) => {
-            try {
-              const target = new URL(url);
-              const isSameOrigin =
-                target.origin === allowedOrigin ||
-                isSameServerOrigin(target, allowedOrigin);
-              const isInternalRoute =
-                target.pathname === '/' ||
-                target.pathname === '/index.html' ||
-                target.pathname === '/md.html' ||
-                target.pathname === '/config.html' ||
-                target.pathname === '/input.html';
-              if (isSameOrigin && isInternalRoute) return; // same-origin internal app route: allow
-              if (
-                target.protocol === 'http:' ||
-                target.protocol === 'https:' ||
-                target.protocol === 'mailto:'
-              ) {
-                void shell.openExternal(url);
-              }
-            } catch {
-              /* malformed URL: deny below */
-            }
-            event.preventDefault();
-          });
-        };
-        attachNavGuard(view.webContents);
+        attachNavGuard(view.webContents, isAllowedNavigation, handOffExternal);
         // Rail-selection shortcuts: before-input-event runs in the browser
         // process, so a chord is caught before the renderer. The always-safe
         // digits (Ctrl+1/2/9) produce no PTY byte and switch synchronously.
@@ -3619,6 +4291,15 @@ export class DesktopHost {
               origin === EMBEDDED_ORIGIN ? this.activeServerOrigin() : origin;
             return toCanonicalAuthOrigin(serverOrigin) ?? serverOrigin;
           })();
+          // A v2 bearer lives only in body memory, so every load needs it
+          // again. The helper refuses the embedded shell and any frame that
+          // is not the exact credential origin.
+          this.installBodyToken(
+            view.webContents,
+            canonicalOrigin,
+            accessAuth,
+            generation,
+          );
           const activeProfileId = this.controller?.state().activeId ?? null;
           void this.recoverFromViewLocalStorage(
             view,
@@ -4318,6 +4999,119 @@ export class DesktopHost {
       }
       if (pending.generation !== this.sessionGeneration)
         return { ok: false, code: 'stale', message: 'Prompt expired.' };
+      // A selected v2 session has no cookie and no verifier: install the
+      // host bearer into the trusted body view instead of a v1 proof. The
+      // body keeps it in memory, so this runs again after every load.
+      if (pending.auth.getSelectedProtocol(pending.origin) === 'v2') {
+        const canonical =
+          toCanonicalAuthOrigin(pending.origin) ?? pending.origin;
+        const target = resolveV2BodyAuthTarget(
+          view.webContents.getURL(),
+          canonical,
+        );
+        // The embedded shell holds no page credential. Complete its pending
+        // bootstrap through the token-free bridge instead of installing one.
+        if (target === 'embedded') {
+          if (
+            pending.abort.signal.aborted ||
+            (pendingUnlock !== null && pendingUnlock !== pending) ||
+            pending.epoch !== activeEpoch ||
+            pending.generation !== this.sessionGeneration ||
+            ctrl.state().activeId !== pending.profileId ||
+            !pending.auth.hasToken(pending.origin)
+          ) {
+            return { ok: false, code: 'stale', message: 'Prompt expired.' };
+          }
+          let accepted = false;
+          try {
+            accepted =
+              (await view.webContents.executeJavaScript(
+                'window.phiAccessAuth?.completeHostSession?.()',
+              )) === true;
+          } catch {
+            // The existing coalesced retry handles a slow or replaced body.
+          }
+          if (
+            pending.abort.signal.aborted ||
+            (pendingUnlock !== null && pendingUnlock !== pending) ||
+            pending.epoch !== activeEpoch ||
+            pending.generation !== this.sessionGeneration ||
+            ctrl.state().activeId !== pending.profileId ||
+            !pending.auth.hasToken(pending.origin) ||
+            view.webContents.isDestroyed() ||
+            resolveV2BodyAuthTarget(view.webContents.getURL(), canonical) !==
+              'embedded'
+          ) {
+            return { ok: false, code: 'stale', message: 'Prompt expired.' };
+          }
+          if (!accepted) {
+            return {
+              ok: false,
+              code: 'unavailable',
+              message: 'The server view did not accept the session.',
+            };
+          }
+          return { ok: true };
+        }
+        const token = pending.auth.getToken(pending.origin);
+        // The load wait above can span a rail switch, a cancellation, or a
+        // session teardown. Reapply every foreground guard before the
+        // renderer mutation, not only after it.
+        if (
+          !token ||
+          this.bodyTokens.get(canonical) !== token ||
+          pending.abort.signal.aborted ||
+          (pendingUnlock !== null && pendingUnlock !== pending) ||
+          pending.epoch !== activeEpoch ||
+          pending.generation !== this.sessionGeneration ||
+          ctrl.state().activeId !== pending.profileId
+        ) {
+          return { ok: false, code: 'stale', message: 'Prompt expired.' };
+        }
+        // The injected script repeats this check; refusing first keeps the
+        // bearer out of a redirected or unrelated frame entirely.
+        if (target !== 'exact') {
+          return {
+            ok: false,
+            code: 'unavailable',
+            message: 'The server view is not the authenticated origin.',
+          };
+        }
+        // Only the asset cookie accompanies the memory install: the refresh
+        // handle stays host-side, so the body can stream assets and can never
+        // rotate its own session.
+        this.installBodyAssetCookie(view.webContents, canonical, pending.auth);
+        let status: unknown;
+        try {
+          status = await view.webContents.executeJavaScript(
+            bodyAuthTokenScript(token, canonical),
+          );
+        } catch {
+          return {
+            ok: false,
+            code: 'unavailable',
+            message: 'Unable to authenticate the server view.',
+          };
+        }
+        if (
+          pending.abort.signal.aborted ||
+          pending.auth.getToken(canonical) !== token ||
+          (pendingUnlock !== null && pendingUnlock !== pending) ||
+          pending.epoch !== activeEpoch ||
+          pending.generation !== this.sessionGeneration ||
+          ctrl.state().activeId !== pending.profileId
+        ) {
+          return { ok: false, code: 'stale', message: 'Prompt expired.' };
+        }
+        if (status !== 200) {
+          return {
+            ok: false,
+            code: 'unavailable',
+            message: 'The server view did not accept the session.',
+          };
+        }
+        return { ok: true };
+      }
       const login = await pending.auth.createLoginProof(
         pending.origin,
         pending.abort.signal,
@@ -4520,12 +5314,30 @@ export class DesktopHost {
           capture.generation === this.sessionGeneration &&
           capture.epoch === activeEpoch &&
           ctrl.state().activeId === capture.profileId;
+        // Renew a bundled v2 credential before this poll when its access
+        // expiry is near. The owner coalesces callers onto one request, so a
+        // reload racing a poll never consumes the same handle twice, and a v1
+        // session is untouched. The due check is synchronous: an origin with
+        // no bundle keeps this poll's existing timing exactly.
+        if (auth.renewalDue(origin)) {
+          await auth.renewIfDue(origin);
+          if (!isCurrentCapture()) return null;
+        }
         const result = await auth.fetchConfig(origin);
         if (!isCurrentCapture()) return null;
         // A config response for the outgoing server must never repaint the
         // header after the rail has switched to another profile.
         if (ctrl.state().activeId !== capture.profileId) return null;
         if (result.kind === 'ok') {
+          // A successful config request proves the bearer; a restored
+          // token that was still unvalidated may now reach the body once.
+          if (auth.getSelectedProtocol(origin) === 'v2') {
+            const token = auth.getToken(origin);
+            if (token && this.bodyTokens.get(origin) !== token) {
+              this.bodyTokens.set(origin, token);
+              this.reinstallBodyToken(origin, auth, capture.generation);
+            }
+          }
           if (
             pendingUnlock &&
             (pendingUnlock.origin === origin ||
@@ -4545,13 +5357,26 @@ export class DesktopHost {
         }
         if (result.kind === 'unavailable') return null;
         // result.kind === 'unauthorized': the server requires access.
+        // A selected v2 client never falls back to the legacy cookie or
+        // verifier recovery paths: only a fresh v2 password may replace a
+        // rejected bearer.
+        const v2Selected = auth.getSelectedProtocol(origin) === 'v2';
+        // Keep a newer token installable if this 401 belonged to an older
+        // request; only a currently absent token loses body readiness.
+        if (v2Selected && auth.getToken(origin) === null) {
+          this.bodyTokens.delete(origin);
+        }
         // If the active body view is already loaded and authenticated (e.g. via browser session/localStorage),
         // read the rendered config directly from its DOM/fetch so the desktop TBAR syncs without a redundant prompt.
         const bodyView =
           this.profileViews?.getView(active.id) ??
           this.viewByOrigin.get(active.origin) ??
           this.viewByOrigin.get(origin);
-        if (bodyView?.webContents && !bodyView.webContents.isDestroyed()) {
+        if (
+          !v2Selected &&
+          bodyView?.webContents &&
+          !bodyView.webContents.isDestroyed()
+        ) {
           try {
             const recovered = await this.recoverFromViewLocalStorage(
               bodyView,
@@ -4640,14 +5465,25 @@ export class DesktopHost {
         }
         // Re-check the visit as well as the profile, including A→B→A.
         if (!isCurrentCapture()) return null;
-        const status = await auth
-          .fetchStatus(
-            origin,
-            pendingUnlock === null ? undefined : pendingUnlock.abort.signal,
-          )
-          .catch(() => null);
+        // A selected v2 origin asks only whether the server is protected:
+        // its legacy v1 KDF metadata is irrelevant and may even be outside
+        // the v1 client's accepted bounds. The v1 path keeps the trusted
+        // status check it always had.
+        const status = v2Selected
+          ? await auth
+              .discoverStatus(
+                origin,
+                pendingUnlock === null ? undefined : pendingUnlock.abort.signal,
+              )
+              .catch(() => null)
+          : await auth
+              .fetchStatus(
+                origin,
+                pendingUnlock === null ? undefined : pendingUnlock.abort.signal,
+              )
+              .catch(() => null);
         if (!isCurrentCapture() || status === null) return null;
-        if (status.kind === 'no-auth') {
+        if (status.kind === 'no-auth' || status.kind === 'disabled') {
           // Server reports no auth protection — the unlock is moot.
           const cfg = await auth.fetchConfig(origin).catch(() => null);
           if (!isCurrentCapture()) return null;
@@ -4679,11 +5515,12 @@ export class DesktopHost {
         // re-authenticate), and the verifier on disk is exactly the secret
         // that lets us do that without a prompt. Only when no valid
         // credential exists (or the server rotated the salt) do we fall
-        // through to the modal below.
-        const cred = this.storedCredentials.has(origin)
-          ? this.getOrRecoverCredential(origin)
-          : this.getOrRecoverCredential(origin);
+        // through to the modal below. A selected v2 origin never recovers
+        // a v1 credential here.
+        const cred = v2Selected ? null : this.getOrRecoverCredential(origin);
         if (
+          status.kind === 'trusted' &&
+          !v2Selected &&
           cred !== null &&
           !unlockInFlight &&
           promptSuppressedFor !== origin
@@ -4928,8 +5765,28 @@ export class DesktopHost {
           return { ok: false, code: 'stale', message: 'replaced' };
         }
         if (result.kind === 'ok') {
+          // A v2 bearer must be durable before body-install retries: a
+          // transient body failure must not lose the credential the user
+          // just proved.
+          this.persistTokenAfterUnlock(
+            pending.origin,
+            pending.auth,
+            pending.generation,
+          );
           const bodyResult = await authenticateBodyView(pending);
-          if (!bodyResult.ok) return bodyResult;
+          if (!bodyResult.ok) {
+            // Native auth succeeded but the body did not accept the
+            // credential (transient navigation, a slow load, or a
+            // rejected install). Reuse the existing coalesced retry chain
+            // so a body failure does not force a second password entry.
+            scheduleBodyReauthRetry(
+              pending.auth,
+              pending.origin,
+              pending.profileId,
+              pending.generation,
+            );
+            return bodyResult;
+          }
           const resolvedInfo = {
             requestId: pending.requestId,
             origin: pending.origin,
@@ -5071,13 +5928,17 @@ export class DesktopHost {
     // The smoke harness never reaches this line (the PHI_DESKTOP_SMOKE
     // gate), so no real globalShortcut registration ever happens in smoke
     // mode.
+    hotkeyRegistrationStarted = true;
     this.hotkeyRegistrations.push(
       registerHotkey(
         resolveAccelerator(),
         () => {
           this.foreground();
         },
-        { log: (msg) => console.log(msg) },
+        {
+          ...(testHotkeyShortcut ? { shortcut: testHotkeyShortcut } : {}),
+          log: (msg) => console.log(msg),
+        },
       ),
     );
     app.on('activate', () => {

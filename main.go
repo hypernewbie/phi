@@ -71,6 +71,15 @@ var (
 	StartedAt = time.Now().Unix()
 )
 
+func rollbackPreviousBinary() (string, error) {
+	release, err := acquireAccessRollbackGuard()
+	if err != nil {
+		return "", err
+	}
+	defer release()
+	return update.Rollback()
+}
+
 func main() {
 	enableVirtualTerminalProcessing()
 	portFlag := flag.Int("port", 7070, "Port to run Go web server on")
@@ -111,7 +120,7 @@ func main() {
 	}
 
 	if *rollbackFlag {
-		restored, err := update.Rollback()
+		restored, err := rollbackPreviousBinary()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Rollback failed: %v\n", err)
 			os.Exit(1)
@@ -142,9 +151,6 @@ func main() {
 
 	log.Printf("[main] Starting Phi in CWD: %s", activeCWD)
 
-	// Migrate the read-only legacy JSON config before loading startup settings.
-	migrateLegacyConfig()
-
 	// Ensure config directory exists and contains CWD as a workspace
 	cfg, err := loadConfigWithError()
 	if err != nil {
@@ -155,6 +161,14 @@ func main() {
 		slog.Error("invalid access password configuration", "err", err)
 		os.Exit(1)
 	}
+	if err := accessAuth.validateOrigins(); err != nil {
+		slog.Error("invalid auth_origins configuration", "err", err)
+		os.Exit(1)
+	}
+	if !accessAuth.stateOwned() {
+		slog.Warn("another phi instance owns the access state for this directory; " +
+			"this instance serves the UI but refuses all authentication until it exits")
+	}
 	found := false
 	for _, wsPath := range cfg.Workspaces {
 		if wsPath == activeCWD {
@@ -164,7 +178,9 @@ func main() {
 	}
 	if !found {
 		cfg.Workspaces = append(cfg.Workspaces, activeCWD)
-		saveConfig(cfg)
+		if accessAuth.stateOwned() {
+			saveConfig(cfg)
+		}
 	}
 
 	// Initialize PTY and WebSocket subsystems
@@ -219,6 +235,13 @@ func main() {
 	})
 	startOpenCodeIdleWatcher()
 	wsHub = ws.NewHub(*cfg.ReplayBufferBytes)
+	// Adopt the generation loaded from config so the first upgrade is admitted
+	// and later password changes fence older sockets.
+	wsHub.RotateAuth(accessAuth.accessGeneration())
+	// Re-check every socket admission against live auth state: a family
+	// revocation or an expiring token between the middleware decision and the
+	// upgrade must refuse the connection rather than serve it.
+	wsHub.SetAuthValidator(accessAuth.admitsFence)
 	if err := wsHub.SetRecordingDirectory(filepath.Join(system.PhiDataDir(), "recordings")); err != nil {
 		slog.Error("terminal recording directory unavailable", "err", err)
 	}
@@ -275,6 +298,11 @@ func main() {
 	http.HandleFunc("/api/auth/status", handleAccessAuthStatus)
 	http.HandleFunc("/api/auth/login", handleAccessAuthLogin)
 	http.HandleFunc("/api/auth/password", handleAccessPassword)
+	http.HandleFunc("/api/auth/v2/status", handleAccessV2Status)
+	http.HandleFunc("/api/auth/v2/login", handleAccessV2Login)
+	http.HandleFunc("/api/auth/v2/password", handleAccessV2Password)
+	http.HandleFunc("/api/auth/v2/refresh", handleAccessV2Refresh)
+	http.HandleFunc("/api/auth/v2/logout", handleAccessV2Logout)
 	http.HandleFunc("/api/coders", handleGetCoders)
 	http.HandleFunc("/api/sessions", handleGetSessions)
 	http.HandleFunc("/api/terminals", handleSpawnTerminal)
@@ -441,7 +469,7 @@ func main() {
 	http.HandleFunc("/healthz", handleLivez) // alias
 	http.HandleFunc("/readyz", handleReadyz)
 	http.HandleFunc("/", handleFallback)
-	http.HandleFunc("/ws/control", ws.HandleControl(rpcMgr, func() string { return activeCWD }))
+	http.HandleFunc("/ws/control", ws.HandleControl(wsHub, rpcMgr, func() string { return activeCWD }))
 
 	// Graceful shutdown listener. The signal handler drains via
 	// gracefulShutdown (PHI_SHUTDOWN_* env tunables) instead of the old
@@ -478,6 +506,7 @@ func main() {
 				envDuration("PHI_SHUTDOWN_PTY_GRACE", ptyGrace),
 				envDuration("PHI_SHUTDOWN_GRACE", httpGrace),
 			)
+			accessAuth.beginRestart()
 			piBridge.Stop()
 			if err := obsShutdown(context.Background()); err != nil {
 				slog.Error("obs shutdown", "err", err)

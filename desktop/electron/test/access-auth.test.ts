@@ -1,22 +1,63 @@
+// @vitest-environment node
 /**
- * Tests for the AccessAuth module — pure-Node (no Electron import),
- * runs in vitest. Crypto parity is asserted by a fixed Unicode
+ * Tests for AccessAuth and DesktopHost credential recovery in vitest.
+ * Crypto parity is asserted by a fixed Unicode
  * vector: the browser's `web/auth.js` (Noble) and Node's
  * `crypto.pbkdf2`/`crypto.createHmac` produce identical verifier and
  * proof bytes for the same password + salt + iterations + challenge.
  */
-import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('electron', () => ({
+  app: { getPath: () => '', isPackaged: false },
+  BrowserWindow: class {},
+  clipboard: { readText: () => '', writeText: () => {} },
+  dialog: {},
+  globalShortcut: {},
+  ipcMain: {},
+  Menu: {},
+  nativeImage: {},
+  net: {},
+  Notification: class {},
+  powerMonitor: {},
+  safeStorage: {},
+  screen: {},
+  session: {},
+  shell: {},
+  Tray: class {},
+  WebContentsView: class {},
+}));
+
 import {
   AccessAuth,
+  type CookieJarEntry,
   deriveVerifier,
   makeProof,
   MAX_ITERATIONS,
   MIN_ITERATIONS,
   parseSessionCookie,
+  parseProtocols,
   readSetCookieHeaders,
   toCanonicalAuthOrigin,
   validateStatus,
 } from '../src/access-auth.js';
+
+const desktopSource = readFileSync('src/desktop.ts', 'utf8');
+const preloadSource = readFileSync('src/preload.ts', 'utf8');
+
+describe('DesktopHost credential discovery boundary', () => {
+  it('does not read local server config or auth.db for credentials', () => {
+    expect(desktopSource).not.toContain("from 'node:sqlite'");
+    expect(desktopSource).not.toContain('auth.db');
+    expect(desktopSource).not.toContain('tryRecoverLocalCredential');
+    expect(preloadSource).not.toContain('node:sqlite');
+    expect(preloadSource).not.toContain('auth.db');
+    expect(desktopSource).toContain(
+      "if (accessAuth.getSelectedProtocol(canonical) === 'v2') return false;",
+    );
+  });
+});
 
 // -- crypto parity vector (must stay byte-for-byte equal across platforms) --
 
@@ -64,6 +105,7 @@ describe('validateStatus', () => {
   it('returns null when iterations is below MIN_ITERATIONS', () => {
     const r = validateStatus({
       enabled: true,
+      authenticated: false,
       version: 'v1',
       algorithm: 'pbkdf2-sha256',
       iterations: 100,
@@ -76,6 +118,7 @@ describe('validateStatus', () => {
   it('returns null on malformed salt or challenge', () => {
     const r = validateStatus({
       enabled: true,
+      authenticated: false,
       version: 'v1',
       algorithm: 'pbkdf2-sha256',
       iterations: 600_000,
@@ -85,6 +128,7 @@ describe('validateStatus', () => {
     expect(r).toBe(null);
     const r2 = validateStatus({
       enabled: true,
+      authenticated: false,
       version: 'v1',
       algorithm: 'pbkdf2-sha256',
       iterations: 600_000,
@@ -102,6 +146,7 @@ describe('validateStatus', () => {
   it('accepts a well-formed enabled status', () => {
     const r = validateStatus({
       enabled: true,
+      authenticated: false,
       version: 'v1',
       algorithm: 'pbkdf2-sha256',
       iterations: 600_000,
@@ -276,6 +321,7 @@ describe('AccessAuth.tryUnlock', () => {
   const origin = 'https://phi.example/';
   const goodStatus = {
     enabled: true,
+    authenticated: false,
     version: 'v1' as const,
     algorithm: 'pbkdf2-sha256' as const,
     iterations: 600_000,
@@ -487,6 +533,7 @@ describe('AccessAuth.fetchStatus', () => {
   const origin = 'https://phi.example/';
   const goodStatus = {
     enabled: true,
+    authenticated: false,
     version: 'v1' as const,
     algorithm: 'pbkdf2-sha256' as const,
     iterations: 600_000,
@@ -587,6 +634,7 @@ describe('AccessAuth.tryUnlockWithVerifier + verifier cache', () => {
   const origin = 'https://phi.example/';
   const goodStatus = {
     enabled: true,
+    authenticated: false,
     version: 'v1' as const,
     algorithm: 'pbkdf2-sha256' as const,
     iterations: 600_000,
@@ -644,7 +692,44 @@ describe('AccessAuth.tryUnlockWithVerifier + verifier cache', () => {
     );
     expect(result.kind).toBe('ok');
     expect(auth.hasCookie(origin)).toBe(true);
+    expect(auth.getSelectedProtocol(origin)).toBe('v1');
   });
+
+  it.each([1, 2])(
+    'does not replace v2 when saved-verifier status read %i is pending',
+    async (delayedRead) => {
+      let release!: (response: Response) => void;
+      const pending = new Promise<Response>((resolve) => {
+        release = resolve;
+      });
+      let statusReads = 0;
+      const doFetch = vi.fn(async (url: URL) => {
+        if (url.pathname === '/api/auth/status') {
+          if (++statusReads === delayedRead) return pending;
+          return new Response(JSON.stringify(goodStatus));
+        }
+        if (url.pathname === '/api/auth/login')
+          return new Response('', { status: 401 });
+        throw new Error('unexpected saved-verifier request');
+      });
+      const auth = new AccessAuth(doFetch as unknown as typeof fetch);
+      const verifier = Buffer.alloc(32, 0xab);
+      const result = auth.tryUnlockWithVerifier(origin, verifier);
+      await vi.waitFor(() => expect(statusReads).toBe(delayedRead));
+      auth.installToken(origin, 'newer-v2');
+      release(new Response(JSON.stringify(goodStatus)));
+      expect((await result).kind).toBe('stale');
+      expect(auth.getSelectedProtocol(origin)).toBe('v2');
+      expect(auth.getToken(origin)).toBe('newer-v2');
+      expect(auth.hasCookie(origin)).toBe(false);
+      expect(verifier.equals(Buffer.alloc(32))).toBe(true);
+      expect(
+        doFetch.mock.calls.filter(
+          ([url]) => url.pathname === '/api/auth/login',
+        ),
+      ).toHaveLength(delayedRead - 1);
+    },
+  );
 
   it('tryUnlockWithVerifier clears the cookie and returns invalid-password on a server-issued 401', async () => {
     const crypto = await import('node:crypto');
@@ -804,6 +889,7 @@ describe('AccessAuth: invariants the DesktopHost silent re-auth fix relies on', 
     );
     const goodStatus = {
       enabled: true,
+      authenticated: false,
       version: 'v1' as const,
       algorithm: 'pbkdf2-sha256' as const,
       iterations: 600_000,
@@ -887,6 +973,7 @@ describe('AccessAuth: invariants the DesktopHost silent re-auth fix relies on', 
   it('notifies onCookieCaptured when a new session cookie is acquired', async () => {
     const goodStatus = {
       enabled: true,
+      authenticated: false,
       version: 'v1' as const,
       algorithm: 'pbkdf2-sha256' as const,
       iterations: 600_000,
@@ -965,6 +1052,7 @@ describe('AccessAuth: invariants the DesktopHost silent re-auth fix relies on', 
           return new Response(
             JSON.stringify({
               enabled: true,
+              authenticated: false,
               version: 'v1',
               algorithm: 'pbkdf2-sha256',
               iterations: 600_000,
@@ -1073,6 +1161,7 @@ describe('AccessAuth: invariants the DesktopHost silent re-auth fix relies on', 
 
       const goodStatus = {
         enabled: true,
+        authenticated: false,
         version: 'v1' as const,
         algorithm: 'pbkdf2-sha256' as const,
         iterations: 600_000,
@@ -1143,5 +1232,1166 @@ describe('AccessAuth: invariants the DesktopHost silent re-auth fix relies on', 
         expect(postCheck.config).toEqual({ hostname: 'from-S2' });
       }
     });
+  });
+});
+
+// -- v2 selection, token ownership, and no-downgrade invariants --
+
+describe('AccessAuth v2 selection', () => {
+  const origin = 'https://phi.example/';
+  const v1Status = {
+    enabled: true,
+    authenticated: false,
+    version: 'v1',
+    algorithm: 'pbkdf2-sha256',
+    iterations: 600_000,
+    salt: Buffer.from('AQID', 'base64url').toString('base64url'),
+    challenge: 'sample-challenge',
+    protocols: ['v1', 'v2'],
+  };
+  const v1OnlyStatus = { ...v1Status, protocols: ['v1'] };
+
+  function json(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+
+  // A v2 success is a credential bundle plus the rotating refresh cookie. The
+  // host holds the handle; no test may rely on a bare-token success.
+  const handleFor = (seed: number): string =>
+    Buffer.alloc(32, seed).toString('base64url');
+  const bundleBody = (
+    token: string,
+    overrides: Record<string, unknown> = {},
+  ): Record<string, unknown> => ({
+    token,
+    expires_at: 1_700_003_600,
+    expires_in: 3_600,
+    refresh_idle_expires_at: 1_702_592_000,
+    refresh_absolute_expires_at: 1_707_776_000,
+    ...overrides,
+  });
+  const bundleResponse = (
+    token: string,
+    handle = handleFor(1),
+    overrides: Record<string, unknown> = {},
+  ): Response =>
+    new Response(JSON.stringify(bundleBody(token, overrides)), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+        'set-cookie': `phi_access_refresh=${handle}; Path=/api/auth/v2/refresh; HttpOnly; SameSite=Strict`,
+      },
+    });
+
+  it('posts the raw password to v2 login and sends the token to config', async () => {
+    const seen: Array<{ path: string; auth: string | null; body: string }> = [];
+    const auth = new AccessAuth((async (url: URL, init?: RequestInit) => {
+      const path = url.pathname;
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      seen.push({
+        path,
+        auth: headers.Authorization ?? null,
+        body: typeof init?.body === 'string' ? init.body : '',
+      });
+      if (path === '/api/auth/status') return json(v1Status);
+      if (path === '/api/auth/v2/login') {
+        expect(init?.method).toBe('POST');
+        expect(headers['X-Phi-Auth']).toBe('v2');
+        return bundleResponse('jwt-token');
+      }
+      if (path === '/api/config') {
+        return json({ hostname: 'V2' });
+      }
+      throw new Error(`unexpected ${path}`);
+    }) as unknown as typeof fetch);
+
+    const result = await auth.tryUnlock(origin, 'test-pass-1234');
+    expect(result.kind).toBe('ok');
+    if (result.kind === 'ok') expect(result.config).toEqual({ hostname: 'V2' });
+    expect(auth.getSelectedProtocol(origin)).toBe('v2');
+    expect(auth.getToken(origin)).toBe('jwt-token');
+    expect(auth.getBundle(origin)?.refreshHandle).toBe(handleFor(1));
+    const login = seen.find((c) => c.path === '/api/auth/v2/login');
+    expect(login?.body).toBe(JSON.stringify({ password: 'test-pass-1234' }));
+    const config = seen.find((c) => c.path === '/api/config');
+    expect(config?.auth).toBe('Bearer jwt-token');
+    expect(seen.some((c) => c.path === '/api/auth/login')).toBe(false);
+  });
+
+  it.each(['v1', 'v2'])(
+    'does not resend an unconfirmed %s login through loopback fallback',
+    async (protocol) => {
+      const hosts: string[] = [];
+      const auth = new AccessAuth((async (url: URL) => {
+        if (url.pathname === '/api/auth/status')
+          return json(protocol === 'v2' ? v1Status : v1OnlyStatus);
+        hosts.push(url.host);
+        throw new TypeError('fetch failed', {
+          cause: { code: 'ECONNRESET' },
+        });
+      }) as unknown as typeof fetch);
+      const local = 'http://localhost:8080';
+      expect((await auth.tryUnlock(local, 'test-pass-1234')).kind).toBe(
+        'unavailable',
+      );
+      expect(hosts).toEqual(['localhost:8080']);
+      expect(auth.getToken(local)).toBeNull();
+    },
+  );
+
+  it('keeps login fallback for a proven pre-send connection refusal', async () => {
+    const hosts: string[] = [];
+    const auth = new AccessAuth((async (url: URL) => {
+      if (url.pathname === '/api/auth/status') return json(v1Status);
+      if (url.pathname === '/api/config') return json({ hostname: 'LOCAL' });
+      hosts.push(url.host);
+      if (url.hostname === 'localhost')
+        throw new TypeError('fetch failed', {
+          cause: { code: 'ECONNREFUSED' },
+        });
+      return bundleResponse('local-access');
+    }) as unknown as typeof fetch);
+    const local = 'http://localhost:8080';
+    expect((await auth.tryUnlock(local, 'test-pass-1234')).kind).toBe('ok');
+    expect(hosts).toEqual(['localhost:8080', '127.0.0.1:8080']);
+    expect(auth.getToken(local) !== null).toBe(true);
+    expect(auth.getToken('http://127.0.0.1:8080')).toBeNull();
+  });
+
+  it('keeps v2 selected after a rejected token and never falls back to a cookie', async () => {
+    const seen: Array<{
+      path: string;
+      cookie: string | null;
+      auth: string | null;
+    }> = [];
+    const auth = new AccessAuth((async (url: URL, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      seen.push({
+        path: url.pathname,
+        cookie: headers.Cookie ?? null,
+        auth: headers.Authorization ?? null,
+      });
+      return new Response('', { status: 401 });
+    }) as unknown as typeof fetch);
+    // A working legacy cookie exists, but an explicit token decides alone.
+    (
+      auth as unknown as {
+        cookies: Map<string, unknown>;
+      }
+    ).cookies.set(origin, {
+      cookieName: 'phi_access_session',
+      cookieValue: 'legacy-cookie',
+      path: '/',
+      httpOnly: true,
+    });
+    expect(auth.installToken(origin, 'rejected-token')).toBe(true);
+    expect((await auth.fetchConfig(origin)).kind).toBe('unauthorized');
+    expect(auth.getToken(origin)).toBeNull();
+    expect(auth.getSelectedProtocol(origin)).toBe('v2');
+    expect((await auth.fetchConfig(origin)).kind).toBe('unauthorized');
+    expect(
+      seen.every((c) => c.auth === 'Bearer rejected-token' || c.auth === null),
+    ).toBe(true);
+    expect(seen.every((c) => c.cookie === null)).toBe(true);
+  });
+
+  it('keeps a newer token when an older request is rejected', async () => {
+    let releaseA!: (res: Response) => void;
+    const configA = new Promise<Response>((resolve) => {
+      releaseA = resolve;
+    });
+    let configCalls = 0;
+    const auth = new AccessAuth((async (url: URL, init?: RequestInit) => {
+      if (url.pathname !== '/api/config')
+        throw new Error(`unexpected ${url.pathname}`);
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      configCalls += 1;
+      if (headers.Authorization === 'Bearer token-A') return configA;
+      if (headers.Authorization === 'Bearer token-B')
+        return json({ hostname: 'B' });
+      return new Response('', { status: 401 });
+    }) as unknown as typeof fetch);
+
+    expect(auth.installToken(origin, 'token-A')).toBe(true);
+    const requestA = auth.fetchConfig(origin);
+    // Wait until A is actually in flight before replacing it.
+    while (configCalls === 0) await new Promise((r) => setTimeout(r, 0));
+    expect(auth.installToken(origin, 'token-B')).toBe(true);
+    releaseA(new Response('', { status: 401 }));
+    expect((await requestA).kind).toBe('unauthorized');
+    expect(auth.getToken(origin)).toBe('token-B');
+    const next = await auth.fetchConfig(origin);
+    expect(next.kind).toBe('ok');
+  });
+
+  it('lets a host token installed mid-handshake win over the login response', async () => {
+    let releaseLogin!: (res: Response) => void;
+    const loginPending = new Promise<Response>((resolve) => {
+      releaseLogin = resolve;
+    });
+    let loginStarted = false;
+    const auth = new AccessAuth((async (url: URL) => {
+      if (url.pathname === '/api/auth/status') return json(v1Status);
+      if (url.pathname === '/api/auth/v2/login') {
+        loginStarted = true;
+        return loginPending;
+      }
+      throw new Error(`unexpected ${url.pathname}`);
+    }) as unknown as typeof fetch);
+
+    const unlock = auth.tryUnlock(origin, 'test-pass-1234');
+    while (!loginStarted) await new Promise((r) => setTimeout(r, 0));
+    // The host installs its own bearer while the password login is still
+    // in flight (restored credential, or a second window's unlock).
+    expect(auth.installToken(origin, 'host-token')).toBe(true);
+    releaseLogin(bundleResponse('login-token'));
+
+    expect(await unlock).toMatchObject({ kind: 'stale' });
+    expect(auth.getToken(origin)).toBe('host-token');
+    expect(auth.getSelectedProtocol(origin)).toBe('v2');
+  });
+
+  it('keeps v2 selected when the login fails so no later poll sends the v1 cookie', async () => {
+    const seen: Array<{ path: string; cookie: string | null }> = [];
+    const auth = new AccessAuth((async (url: URL, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      seen.push({ path: url.pathname, cookie: headers.Cookie ?? null });
+      if (url.pathname === '/api/auth/status') return json(v1Status);
+      return new Response('', { status: 401 });
+    }) as unknown as typeof fetch);
+    (auth as unknown as { cookies: Map<string, unknown> }).cookies.set(origin, {
+      cookieName: 'phi_access_session',
+      cookieValue: 'legacy-cookie',
+      path: '/',
+      httpOnly: true,
+    });
+
+    expect((await auth.tryUnlock(origin, 'test-pass-1234')).kind).toBe(
+      'invalid-password',
+    );
+    expect(auth.getSelectedProtocol(origin)).toBe('v2');
+    expect((await auth.fetchConfig(origin)).kind).toBe('unauthorized');
+    expect(
+      seen
+        .filter((c) => c.path === '/api/config')
+        .every((c) => c.cookie === null),
+    ).toBe(true);
+  });
+
+  it('ignores a cookie provider that resolves after a v2 token is installed', async () => {
+    const sent: Array<{ cookie: string | null; auth: string | null }> = [];
+    const auth = new AccessAuth((async (_url: URL, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      sent.push({
+        cookie: headers.Cookie ?? null,
+        auth: headers.Authorization ?? null,
+      });
+      return json({ hostname: 'V2' });
+    }) as unknown as typeof fetch);
+    let releaseProvider!: (value: CookieJarEntry | null) => void;
+    auth.setCookieProvider(
+      () =>
+        new Promise((resolve) => {
+          releaseProvider = resolve;
+        }),
+    );
+
+    // The poll starts as a legacy (cookie) request and parks in the provider.
+    const config = auth.fetchConfig(origin);
+    while (!releaseProvider) await new Promise((r) => setTimeout(r, 0));
+    expect(auth.installToken(origin, 'host-token')).toBe(true);
+    releaseProvider({
+      origin,
+      cookieName: 'phi_access_session',
+      cookieValue: 'legacy-cookie',
+      path: '/',
+      httpOnly: true,
+    });
+
+    expect((await config).kind).toBe('ok');
+    expect(sent).toEqual([{ cookie: null, auth: 'Bearer host-token' }]);
+  });
+
+  it('validates a token through v2 status without a cookie', async () => {
+    const seen: Array<{ auth: string | null; cookie: string | null }> = [];
+    const auth = new AccessAuth((async (url: URL, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      seen.push({
+        auth: headers.Authorization ?? null,
+        cookie: headers.Cookie ?? null,
+      });
+      if (url.pathname !== '/api/auth/v2/status')
+        throw new Error('wrong route');
+      return json({ enabled: true, authenticated: true });
+    }) as unknown as typeof fetch);
+    expect(await auth.checkToken(origin, 'tok')).toBe('valid');
+    expect(seen[0]).toEqual({ auth: 'Bearer tok', cookie: null });
+  });
+
+  it('reports invalid, disabled, transient, and malformed v2 statuses', async () => {
+    const make = (res: Response) =>
+      new AccessAuth((async () => res) as unknown as typeof fetch);
+    expect(
+      await make(json({ enabled: true, authenticated: false })).checkToken(
+        origin,
+        't',
+      ),
+    ).toBe('invalid');
+    expect(
+      await make(json({ enabled: false, authenticated: false })).checkToken(
+        origin,
+        't',
+      ),
+    ).toBe('valid');
+    expect(
+      await make(new Response('', { status: 401 })).checkToken(origin, 't'),
+    ).toBe('invalid');
+    expect(
+      await make(new Response('', { status: 500 })).checkToken(origin, 't'),
+    ).toBe('unavailable');
+    expect(
+      await make(new Response('not json', { status: 200 })).checkToken(
+        origin,
+        't',
+      ),
+    ).toBe('unavailable');
+    expect(await make(json({ enabled: true })).checkToken(origin, 't')).toBe(
+      'unavailable',
+    );
+  });
+
+  it('maps v2 login failures to fixed messages', async () => {
+    const make = (res: Response) =>
+      new AccessAuth((async (url: URL) => {
+        if (url.pathname === '/api/auth/status') return json(v1Status);
+        if (url.pathname === '/api/auth/v2/login') return res;
+        throw new Error(`unexpected ${url.pathname}`);
+      }) as unknown as typeof fetch);
+    const invalid = await make(
+      new Response('secret server text', { status: 401 }),
+    ).tryUnlock(origin, 'test-pass-1234');
+    expect(invalid).toEqual({
+      kind: 'invalid-password',
+      message: 'Password not accepted.',
+    });
+    const limited = await make(new Response('', { status: 429 })).tryUnlock(
+      origin,
+      'test-pass-1234',
+    );
+    expect(limited.kind).toBe('rate-limited');
+    const down = await make(new Response('', { status: 503 })).tryUnlock(
+      origin,
+      'test-pass-1234',
+    );
+    expect(down.kind).toBe('unavailable');
+    const badToken = await make(json({ token: 42 })).tryUnlock(
+      origin,
+      'test-pass-1234',
+    );
+    expect(badToken.kind).toBe('unavailable');
+  });
+
+  it('uses UTF-8 byte length for the v2 password bound', async () => {
+    const calls: string[] = [];
+    const auth = new AccessAuth((async (url: URL) => {
+      calls.push(url.pathname);
+      if (url.pathname === '/api/auth/status') return json(v1Status);
+      if (url.pathname === '/api/auth/v2/login') return bundleResponse('tok');
+      return json({});
+    }) as unknown as typeof fetch);
+    // Four 4-byte characters plus four ASCII characters = 20 bytes, 8 chars.
+    expect((await auth.tryUnlock(origin, '😀😀😀😀abcd')).kind).toBe('ok');
+    // 1025 ASCII bytes exceeds the 1024-byte bound; no login request.
+    const before = calls.filter((p) => p === '/api/auth/v2/login').length;
+    const tooLong = await auth.tryUnlock(origin, 'a'.repeat(1025));
+    expect(tooLong.kind).toBe('invalid-password');
+    expect(calls.filter((p) => p === '/api/auth/v2/login').length).toBe(before);
+  });
+
+  it('refuses the v1 verifier and proof paths after v2 selection', async () => {
+    const auth = new AccessAuth();
+    auth.installToken(origin, 'tok');
+    const verifier = Buffer.alloc(32, 0x11);
+    expect((await auth.tryUnlockWithVerifier(origin, verifier)).kind).toBe(
+      'unavailable',
+    );
+    expect((await auth.createLoginProof(origin)).kind).toBe('unavailable');
+  });
+
+  it('moves a selected v2 client to v1 only after v1-only discovery', async () => {
+    const seen: string[] = [];
+    const auth = new AccessAuth((async (url: URL) => {
+      seen.push(url.pathname);
+      if (url.pathname === '/api/auth/status') return json(v1OnlyStatus);
+      if (url.pathname === '/api/auth/login') {
+        return new Response('', {
+          status: 200,
+          headers: { 'set-cookie': 'phi_access_session=v1; Path=/; HttpOnly' },
+        });
+      }
+      return json({ hostname: 'V1' });
+    }) as unknown as typeof fetch);
+    auth.installToken(origin, 'stale-v2');
+    const result = await auth.tryUnlock(origin, 'test-pass-1234');
+    expect(result.kind).toBe('ok');
+    expect(auth.getSelectedProtocol(origin)).toBe('v1');
+    expect(auth.getToken(origin)).toBeNull();
+    expect(seen).toContain('/api/auth/login');
+    expect(seen).not.toContain('/api/auth/v2/login');
+  });
+
+  it('keeps a selected v1 client on v1 when the server advertises v2', async () => {
+    const seen: string[] = [];
+    let status = v1OnlyStatus;
+    const auth = new AccessAuth((async (url: URL) => {
+      seen.push(url.pathname);
+      if (url.pathname === '/api/auth/status') return json(status);
+      if (url.pathname === '/api/auth/login') {
+        return new Response('', {
+          status: 200,
+          headers: { 'set-cookie': 'phi_access_session=v1; Path=/; HttpOnly' },
+        });
+      }
+      return json({});
+    }) as unknown as typeof fetch);
+    // Seed a v1 selection from a v1-only server.
+    expect((await auth.tryUnlock(origin, 'test-pass-1234')).kind).toBe('ok');
+    expect(auth.getSelectedProtocol(origin)).toBe('v1');
+    // The same server now advertises v2; the selected v1 client stays on v1.
+    status = v1Status;
+    seen.length = 0;
+    expect((await auth.tryUnlock(origin, 'test-pass-1234')).kind).toBe('ok');
+    expect(seen).toContain('/api/auth/login');
+    expect(seen).not.toContain('/api/auth/v2/login');
+    expect(auth.getSelectedProtocol(origin)).toBe('v1');
+  });
+
+  it('clears token and selection on cancel', () => {
+    const auth = new AccessAuth();
+    auth.installToken(origin, 'tok');
+    expect(auth.hasToken(origin)).toBe(true);
+    auth.cancel(origin);
+    expect(auth.hasToken(origin)).toBe(false);
+    expect(auth.getSelectedProtocol(origin)).toBeNull();
+  });
+});
+
+describe('parseProtocols', () => {
+  it('treats an absent field as legacy v1-only', () => {
+    expect(parseProtocols(undefined)).toEqual([]);
+  });
+  it('accepts unique supported names and ignores unknown neighbours', () => {
+    expect(parseProtocols(['v1', 'v2'])).toEqual(['v1', 'v2']);
+    expect(parseProtocols(['v2', 'future'])).toEqual(['v2']);
+  });
+  it('rejects malformed, empty, duplicate, and unsupported-only arrays', () => {
+    expect(parseProtocols(null)).toBeNull();
+    expect(parseProtocols([])).toBeNull();
+    expect(parseProtocols(['v1', 'v1'])).toBeNull();
+    expect(parseProtocols(['v1', ''])).toBeNull();
+    expect(parseProtocols(['future'])).toBeNull();
+    expect(parseProtocols('v2')).toBeNull();
+  });
+});
+
+describe('AccessAuth v2 refresh bundle', () => {
+  const origin = 'https://phi.example';
+  const handleA = Buffer.alloc(32, 0xa1).toString('base64url');
+  const handleB = Buffer.alloc(32, 0xb2).toString('base64url');
+  // A fixed clock keeps renewal deterministic: the bundle's deadlines are
+  // absolute server seconds, so the host never compares its own wall clock.
+  let clockMs = 1_700_000_000_000;
+  const now = (): number => clockMs;
+
+  function bundle(
+    token: string,
+    overrides: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return {
+      token,
+      expires_at: Math.floor(clockMs / 1000) + 3_600,
+      expires_in: 3_600,
+      refresh_idle_expires_at: Math.floor(clockMs / 1000) + 2_592_000,
+      refresh_absolute_expires_at: Math.floor(clockMs / 1000) + 7_776_000,
+      ...overrides,
+    };
+  }
+
+  function refreshCookie(handle: string): string {
+    return `phi_access_refresh=${handle}; Path=/api/auth/v2/refresh; HttpOnly; SameSite=Strict`;
+  }
+
+  function bundleResponse(
+    token: string,
+    handle: string,
+    overrides: Record<string, unknown> = {},
+  ): Response {
+    return new Response(JSON.stringify(bundle(token, overrides)), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+        'set-cookie': refreshCookie(handle),
+      },
+    });
+  }
+
+  function install(
+    auth: AccessAuth,
+    token = 'token-a',
+    handle = handleA,
+  ): void {
+    expect(
+      auth.installBundle(origin, {
+        token,
+        expiresAt: Math.floor(clockMs / 1000) + 3_600,
+        expiresIn: 3_600,
+        refreshHandle: handle,
+        refreshIdleExpiresAt: Math.floor(clockMs / 1000) + 2_592_000,
+        refreshAbsoluteExpiresAt: Math.floor(clockMs / 1000) + 7_776_000,
+      }),
+    ).toBe(true);
+  }
+
+  type RefreshCall = {
+    path: string;
+    method: string | undefined;
+    cookie: string | null;
+    auth: string | null;
+    csrf: string | null;
+    body: string;
+    url: string;
+  };
+
+  it('captures the bundle and keeps the refresh handle out of the request path', async () => {
+    const calls: RefreshCall[] = [];
+    const auth = new AccessAuth(
+      (async (url: URL, init?: RequestInit) => {
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        calls.push({
+          path: url.pathname,
+          method: init?.method,
+          cookie: headers.Cookie ?? null,
+          auth: headers.Authorization ?? null,
+          csrf: headers['X-Phi-Auth'] ?? null,
+          body: typeof init?.body === 'string' ? init.body : '',
+          url: url.toString(),
+        });
+        if (url.pathname === '/api/auth/status')
+          return new Response(
+            JSON.stringify({
+              enabled: true,
+              authenticated: false,
+              version: 'v1',
+              algorithm: 'pbkdf2-sha256',
+              iterations: 600_000,
+              salt: Buffer.from('AQID', 'base64url').toString('base64url'),
+              challenge: 'chal',
+              protocols: ['v1', 'v2'],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        if (url.pathname === '/api/auth/v2/login')
+          return bundleResponse('access-1', handleB);
+        if (url.pathname === '/api/config') return new Response('{"ok":1}');
+        throw new Error(`unexpected ${url.pathname}`);
+      }) as unknown as typeof fetch,
+      now,
+    );
+
+    expect((await auth.tryUnlock(origin, 'correct-horse')).kind).toBe('ok');
+    const login = calls.find((c) => c.path === '/api/auth/v2/login');
+    expect(login?.csrf).toBe('v2');
+    expect(login?.url).not.toContain(handleB);
+    expect(auth.getToken(origin)).toBe('access-1');
+    expect(auth.getBundle(origin)?.refreshHandle).toBe(handleB);
+    expect(auth.getBundle(origin)?.expiresIn).toBe(3_600);
+  });
+
+  it('refreshes with only the host cookie, JSON body, and CSRF header', async () => {
+    const calls: RefreshCall[] = [];
+    const auth = new AccessAuth(
+      (async (url: URL, init?: RequestInit) => {
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        calls.push({
+          path: url.pathname,
+          method: init?.method,
+          cookie: headers.Cookie ?? null,
+          auth: headers.Authorization ?? null,
+          csrf: headers['X-Phi-Auth'] ?? null,
+          body: typeof init?.body === 'string' ? init.body : '',
+          url: url.toString(),
+        });
+        return bundleResponse('access-2', handleB);
+      }) as unknown as typeof fetch,
+      now,
+    );
+    install(auth, 'access-1', handleA);
+
+    const result = await auth.refreshAccess(origin);
+    expect(result.kind).toBe('ok');
+    const call = calls[0];
+    expect(call.path).toBe('/api/auth/v2/refresh');
+    expect(call.method).toBe('POST');
+    expect(call.cookie).toBe(`phi_access_refresh=${handleA}`);
+    expect(call.auth).toBeNull();
+    expect(call.csrf).toBe('v2');
+    expect(call.body).toBe('{}');
+    expect(call.url).not.toContain(handleA);
+    expect(auth.getToken(origin)).toBe('access-2');
+    expect(auth.getBundle(origin)?.refreshHandle).toBe(handleB);
+  });
+
+  it('renews only when the access expiry is near, and coalesces callers', async () => {
+    let refreshCalls = 0;
+    let release!: (res: Response) => void;
+    const pending = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    const auth = new AccessAuth(
+      (async (url: URL) => {
+        if (url.pathname !== '/api/auth/v2/refresh')
+          throw new Error(`unexpected ${url.pathname}`);
+        refreshCalls += 1;
+        return pending;
+      }) as unknown as typeof fetch,
+      now,
+    );
+    install(auth, 'access-1', handleA);
+
+    // Well inside the lifetime: nothing is due, and no request is made.
+    expect(await auth.renewIfDue(origin)).toBeNull();
+    expect(refreshCalls).toBe(0);
+
+    // Move to one second inside the renewal lead.
+    clockMs += (3_600 - 60) * 1_000;
+    const first = auth.renewIfDue(origin);
+    const second = auth.renewIfDue(origin);
+    const forced = auth.refreshAccess(origin);
+    await Promise.resolve();
+    expect(refreshCalls).toBe(1);
+    release(bundleResponse('access-2', handleB));
+    expect((await first)?.kind).toBe('ok');
+    expect((await second)?.kind).toBe('ok');
+    expect((await forced).kind).toBe('ok');
+    expect(refreshCalls).toBe(1);
+    expect(auth.getToken(origin)).toBe('access-2');
+  });
+
+  it('treats a matching refresh 401 as terminal and keeps v2 selected', async () => {
+    const auth = new AccessAuth(
+      (async () =>
+        new Response('access authentication required\n', {
+          status: 401,
+        })) as unknown as typeof fetch,
+      now,
+    );
+    install(auth, 'access-1', handleA);
+    expect((await auth.refreshAccess(origin)).kind).toBe('unauthorized');
+    expect(auth.getToken(origin)).toBeNull();
+    expect(auth.getBundle(origin)).toBeNull();
+    // A rejected credential must never reopen the legacy v1 cookie path.
+    expect(auth.getSelectedProtocol(origin)).toBe('v2');
+  });
+
+  it('keeps the bundle and backs off on every non-401 refresh failure', async () => {
+    let refreshCalls = 0;
+    let status = 500;
+    let retryAfter: string | null = null;
+    const auth = new AccessAuth(
+      (async () => {
+        refreshCalls += 1;
+        const headers = new Headers();
+        if (retryAfter !== null) headers.set('retry-after', retryAfter);
+        return new Response('', { status, headers });
+      }) as unknown as typeof fetch,
+      now,
+    );
+    install(auth, 'access-1', handleA);
+    clockMs += (3_600 - 60) * 1_000;
+    const first = await auth.refreshAccess(origin);
+    expect(first.kind).toBe('unavailable');
+    expect(refreshCalls).toBe(1);
+    // The credential survives a server-side or transport failure.
+    expect(auth.getToken(origin)).toBe('access-1');
+    expect(auth.getBundle(origin)?.refreshHandle).toBe(handleA);
+
+    // Backoff holds the next attempt even though the token is now due.
+    expect(await auth.renewIfDue(origin)).toBeNull();
+    expect(refreshCalls).toBe(1);
+
+    // A 429 with Retry-After is honored, bounded by the 300-second cap.
+    clockMs += 120_000;
+    status = 429;
+    retryAfter = '900';
+    const limited = await auth.refreshAccess(origin);
+    expect(limited).toMatchObject({
+      kind: 'unavailable',
+      retryAfterMs: 300_000,
+    });
+    expect(auth.getToken(origin)).toBe('access-1');
+    expect(await auth.renewIfDue(origin)).toBeNull();
+  });
+
+  it.each(['headers', 'body'])(
+    'releases a refresh with stalled %s on deadline and ignores its late completion',
+    async (stage) => {
+      vi.useFakeTimers();
+      vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+        const controller = new AbortController();
+        setTimeout(
+          () => controller.abort(new DOMException('Timed out', 'TimeoutError')),
+          ms,
+        );
+        return controller.signal;
+      });
+      let releaseHeaders!: (response: Response) => void;
+      let releaseBody!: (text: string) => void;
+      const headers = new Promise<Response>((resolve) => {
+        releaseHeaders = resolve;
+      });
+      const body = new Promise<string>((resolve) => {
+        releaseBody = resolve;
+      });
+      const response = bundleResponse('late-token', handleB);
+      if (stage === 'body')
+        vi.spyOn(response, 'text').mockImplementation(() => body);
+      const doFetch = vi
+        .fn()
+        .mockImplementationOnce(() =>
+          stage === 'headers' ? headers : response,
+        )
+        .mockImplementation(() => bundleResponse('recovered-token', handleB));
+      const auth = new AccessAuth(doFetch, now);
+      install(auth);
+      const original = auth.getBundle(origin);
+      let settled: Awaited<ReturnType<AccessAuth['refreshAccess']>> | undefined;
+      const pending = auth.refreshAccess(origin).then((result) => {
+        settled = result;
+        return result;
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(settled).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled?.kind).toBe('unavailable');
+        expect(auth.getBundle(origin) === original).toBe(true);
+        expect(auth.getSelectedProtocol(origin)).toBe('v2');
+        expect(await auth.renewIfDue(origin)).toBeNull();
+        expect(doFetch).toHaveBeenCalledOnce();
+        clockMs += 1_000;
+        expect((await auth.refreshAccess(origin)).kind).toBe('ok');
+        releaseHeaders(response);
+        releaseBody(JSON.stringify(bundle('late-token')));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(auth.getToken(origin) === 'recovered-token').toBe(true);
+        expect(doFetch).toHaveBeenCalledTimes(2);
+      } finally {
+        auth.cancel(origin);
+        releaseHeaders(response);
+        releaseBody(JSON.stringify(bundle('late-token')));
+        await pending;
+        vi.restoreAllMocks();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(['headers', 'body'])(
+    'honors caller abort during stalled refresh %s without clearing the session',
+    async (stage) => {
+      let releaseHeaders!: (response: Response) => void;
+      let releaseBody!: (text: string) => void;
+      const headers = new Promise<Response>((resolve) => {
+        releaseHeaders = resolve;
+      });
+      const body = new Promise<string>((resolve) => {
+        releaseBody = resolve;
+      });
+      const response = bundleResponse('late-token', handleB);
+      if (stage === 'body')
+        vi.spyOn(response, 'text').mockImplementation(() => body);
+      const doFetch = vi
+        .fn()
+        .mockImplementation(() => (stage === 'headers' ? headers : response));
+      const auth = new AccessAuth(doFetch, now);
+      install(auth);
+      const original = auth.getBundle(origin);
+      const controller = new AbortController();
+      let settled: Awaited<ReturnType<AccessAuth['refreshAccess']>> | undefined;
+      const pending = auth
+        .refreshAccess(origin, controller.signal)
+        .then((result) => {
+          settled = result;
+          return result;
+        });
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        controller.abort();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(settled?.kind).toBe('unavailable');
+        expect(auth.getBundle(origin) === original).toBe(true);
+        releaseHeaders(response);
+        releaseBody(JSON.stringify(bundle('late-token')));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(auth.getBundle(origin) === original).toBe(true);
+        expect(doFetch).toHaveBeenCalledOnce();
+      } finally {
+        auth.cancel(origin);
+        releaseHeaders(response);
+        releaseBody(JSON.stringify(bundle('late-token')));
+        await pending;
+        vi.restoreAllMocks();
+      }
+    },
+  );
+
+  it('never installs a late refresh response over a newer bundle', async () => {
+    let release!: (res: Response) => void;
+    const pending = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    const auth = new AccessAuth(
+      (async () => pending) as unknown as typeof fetch,
+      now,
+    );
+    install(auth, 'access-a', handleA);
+    const inFlight = auth.refreshAccess(origin);
+    await Promise.resolve();
+    // A second login (another window) installs a newer credential meanwhile.
+    install(auth, 'access-b', handleB);
+    release(
+      bundleResponse(
+        'access-late',
+        Buffer.alloc(32, 0xc3).toString('base64url'),
+      ),
+    );
+    expect((await inFlight).kind).toBe('superseded');
+    expect(auth.getToken(origin)).toBe('access-b');
+    expect(auth.getBundle(origin)?.refreshHandle).toBe(handleB);
+  });
+
+  it('rejects a malformed or oversized bundle without losing the credential', async () => {
+    const badBundles: Response[] = [
+      bundleResponse('access-2', handleB, { expires_at: 0 }),
+      bundleResponse('access-2', handleB, { expires_in: 'soon' }),
+      bundleResponse('access-2', handleB, {
+        refresh_idle_expires_at: 9_999_999_999,
+        refresh_absolute_expires_at: 1,
+      }),
+      new Response(JSON.stringify({ token: '' }), { status: 200 }),
+      new Response('x'.repeat(70_000), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    ];
+    for (const response of badBundles) {
+      const auth = new AccessAuth(
+        (async () => response.clone()) as unknown as typeof fetch,
+        now,
+      );
+      install(auth, 'access-1', handleA);
+      const result = await auth.refreshAccess(origin);
+      expect(result.kind).toBe('unavailable');
+      expect(auth.getToken(origin)).toBe('access-1');
+      expect(auth.getBundle(origin)?.refreshHandle).toBe(handleA);
+    }
+  });
+
+  it('refuses a refresh cookie without the exact server attributes', async () => {
+    const weak = [
+      `phi_access_refresh=${handleB}; Path=/api/auth/v2/refresh; SameSite=Strict`,
+      `phi_access_refresh=${handleB}; Path=/api/auth/v2/refresh; HttpOnly`,
+      `phi_access_refresh=${handleB}; Path=/; HttpOnly; SameSite=Strict`,
+      `phi_access_refresh=${handleB}; Path=/api/auth/v2/refresh; HttpOnly; SameSite=Strict; Domain=example`,
+      `phi_access_refresh=${handleB}=; Path=/api/auth/v2/refresh; HttpOnly; SameSite=Strict`,
+      `phi_access_refresh=short-handle; Path=/api/auth/v2/refresh; HttpOnly; SameSite=Strict`,
+    ];
+    for (const cookie of weak) {
+      const auth = new AccessAuth(
+        (async () =>
+          new Response(JSON.stringify(bundle('access-2')), {
+            status: 200,
+            headers: {
+              'content-type': 'application/json',
+              'set-cookie': cookie,
+            },
+          })) as unknown as typeof fetch,
+        now,
+      );
+      install(auth, 'access-1', handleA);
+      expect((await auth.refreshAccess(origin)).kind).toBe('unavailable');
+      expect(auth.getBundle(origin)?.refreshHandle).toBe(handleA);
+    }
+  });
+
+  it('starts exactly one refresh from an access 401 and never replays the request', async () => {
+    let configCalls = 0;
+    let refreshCalls = 0;
+    const auth = new AccessAuth(
+      (async (url: URL) => {
+        if (url.pathname === '/api/config') {
+          configCalls += 1;
+          return new Response('', { status: 401 });
+        }
+        if (url.pathname === '/api/auth/v2/refresh') {
+          refreshCalls += 1;
+          return bundleResponse('access-2', handleB);
+        }
+        throw new Error(`unexpected ${url.pathname}`);
+      }) as unknown as typeof fetch,
+      now,
+    );
+    install(auth, 'access-1', handleA);
+    expect((await auth.fetchConfig(origin)).kind).toBe('unauthorized');
+    // The request is not replayed, but the credential is not deleted either.
+    expect(configCalls).toBe(1);
+    expect(auth.getToken(origin)).toBe('access-1');
+    // The 401 itself started the refresh, and exactly one.
+    expect(refreshCalls).toBe(1);
+    const refreshed = await auth.refreshAccess(origin);
+    // A caller asking while that refresh is in flight joins it instead of
+    // starting a second rotation of the same handle.
+    expect(refreshed.kind).toBe('ok');
+    expect(refreshCalls).toBe(1);
+    expect(auth.getToken(origin)).toBe('access-2');
+  });
+
+  it('clears a host-installed token on 401 without a refresh attempt', async () => {
+    let refreshCalls = 0;
+    const auth = new AccessAuth(
+      (async (url: URL) => {
+        if (url.pathname === '/api/config')
+          return new Response('', { status: 401 });
+        if (url.pathname === '/api/auth/v2/refresh') {
+          refreshCalls += 1;
+          return bundleResponse('access-2', handleB);
+        }
+        throw new Error(`unexpected ${url.pathname}`);
+      }) as unknown as typeof fetch,
+      now,
+    );
+    expect(auth.installToken(origin, 'host-token')).toBe(true);
+    expect((await auth.fetchConfig(origin)).kind).toBe('unauthorized');
+    expect(refreshCalls).toBe(0);
+    expect(auth.getToken(origin)).toBeNull();
+    expect(auth.getSelectedProtocol(origin)).toBe('v2');
+  });
+
+  it('logs out with the bearer, then drops the bundle and stays on v2', async () => {
+    const calls: RefreshCall[] = [];
+    const auth = new AccessAuth(
+      (async (url: URL, init?: RequestInit) => {
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        calls.push({
+          path: url.pathname,
+          method: init?.method,
+          cookie: headers.Cookie ?? null,
+          auth: headers.Authorization ?? null,
+          csrf: headers['X-Phi-Auth'] ?? null,
+          body: typeof init?.body === 'string' ? init.body : '',
+          url: url.toString(),
+        });
+        return new Response('{"ok":true}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }) as unknown as typeof fetch,
+      now,
+    );
+    install(auth, 'access-1', handleA);
+    expect(await auth.logout(origin, true)).toEqual({ kind: 'ok' });
+    expect(calls[0]).toMatchObject({
+      path: '/api/auth/v2/logout',
+      method: 'POST',
+      auth: 'Bearer access-1',
+      csrf: 'v2',
+      body: '{"all":true}',
+      cookie: null,
+    });
+    expect(auth.getToken(origin)).toBeNull();
+    expect(auth.getBundle(origin)).toBeNull();
+    expect(auth.getSelectedProtocol(origin)).toBe('v2');
+  });
+
+  it('does not resend an unconfirmed localhost logout through fallback', async () => {
+    const hosts: string[] = [];
+    const auth = new AccessAuth((async (url: URL) => {
+      hosts.push(url.host);
+      throw new TypeError('fetch failed', {
+        cause: { code: 'ECONNRESET' },
+      });
+    }) as unknown as typeof fetch);
+    const local = 'http://localhost:8080';
+    expect(auth.installToken(local, 'local-access')).toBe(true);
+    expect((await auth.logout(local, false)).kind).toBe('unavailable');
+    expect(hosts).toEqual(['localhost:8080']);
+    expect(auth.getToken(local) !== null).toBe(true);
+    expect(auth.getSelectedProtocol(local)).toBe('v2');
+  });
+
+  it('keeps the bundle when logout is not confirmed', async () => {
+    const auth = new AccessAuth(
+      (async () =>
+        new Response('', { status: 503 })) as unknown as typeof fetch,
+      now,
+    );
+    install(auth, 'access-1', handleA);
+    expect((await auth.logout(origin, false)).kind).toBe('unavailable');
+    expect(auth.getToken(origin)).toBe('access-1');
+    expect(auth.getBundle(origin)?.refreshHandle).toBe(handleA);
+  });
+
+  it('isolates origins, cancellation, and the loopback fallback identity', async () => {
+    const other = 'https://other.example';
+    const refreshHosts: string[] = [];
+    const auth = new AccessAuth(
+      (async (url: URL) => {
+        refreshHosts.push(url.host);
+        return bundleResponse('access-2', handleB);
+      }) as unknown as typeof fetch,
+      now,
+    );
+    install(auth, 'access-1', handleA);
+    expect(
+      auth.installBundle(other, {
+        token: 'other-token',
+        expiresAt: Math.floor(clockMs / 1000) + 3_600,
+        expiresIn: 3_600,
+        refreshHandle: Buffer.alloc(32, 0xd4).toString('base64url'),
+        refreshIdleExpiresAt: Math.floor(clockMs / 1000) + 2_592_000,
+        refreshAbsoluteExpiresAt: Math.floor(clockMs / 1000) + 7_776_000,
+      }),
+    ).toBe(true);
+
+    auth.cancel(other);
+    expect(auth.getBundle(other)).toBeNull();
+    expect(auth.getBundle(origin)?.refreshHandle).toBe(handleA);
+    expect(auth.getSelectedProtocol(origin)).toBe('v2');
+
+    // The canonical identity of 127.0.0.1 is its own origin: a bundle held
+    // for another origin never travels to it.
+    expect(auth.getBundle('http://127.0.0.1:8080')).toBeNull();
+    expect(refreshHosts).toEqual([]);
+  });
+
+  it('accepts a grace replay that re-issues the same handle', async () => {
+    // A lost response leaves the host holding a consumed handle. Inside the
+    // server's 60-second grace the replay succeeds and re-issues that same
+    // handle, which must not be mistaken for a missing rotation.
+    const auth = new AccessAuth(
+      (async () =>
+        bundleResponse('access-2', handleA)) as unknown as typeof fetch,
+      now,
+    );
+    install(auth, 'access-1', handleA);
+    const result = await auth.refreshAccess(origin);
+    expect(result.kind).toBe('ok');
+    expect(auth.getToken(origin)).toBe('access-2');
+    expect(auth.getBundle(origin)?.refreshHandle).toBe(handleA);
+  });
+
+  it('keeps the canonical identity across the localhost transport fallback', async () => {
+    const hosts: string[] = [];
+    const auth = new AccessAuth(
+      (async (url: URL) => {
+        hosts.push(url.host);
+        if (url.host === 'localhost:8080')
+          throw new Error('connection refused');
+        return bundleResponse('access-2', handleB);
+      }) as unknown as typeof fetch,
+      now,
+    );
+    const local = 'http://localhost:8080';
+    expect(
+      auth.installBundle(local, {
+        token: 'access-1',
+        expiresAt: Math.floor(clockMs / 1000) + 3_600,
+        expiresIn: 3_600,
+        refreshHandle: handleA,
+        refreshIdleExpiresAt: Math.floor(clockMs / 1000) + 2_592_000,
+        refreshAbsoluteExpiresAt: Math.floor(clockMs / 1000) + 7_776_000,
+      }),
+    ).toBe(true);
+    expect((await auth.refreshAccess(local)).kind).toBe('ok');
+    // The transport may move to the loopback literal; the credential stays
+    // bound to the origin the user chose.
+    expect(hosts).toEqual(['localhost:8080', '127.0.0.1:8080']);
+    expect(auth.getToken(local)).toBe('access-2');
+    expect(auth.getBundle('http://127.0.0.1:8080')).toBeNull();
+  });
+
+  it('renews from the receipt, not from a skewed server timestamp', () => {
+    // The server says the token lives an hour. Its absolute timestamp is a
+    // different clock entirely: this machine's clock is far ahead of it, so an
+    // absolute comparison would call a fresh token overdue forever.
+    let clock = 1_900_000_000_000;
+    const auth = new AccessAuth(undefined, () => clock);
+    auth.installBundle(origin, {
+      token: 'access-1',
+      expiresAt: 1_000_000,
+      expiresIn: 3600,
+      refreshHandle: handleA,
+      refreshIdleExpiresAt: 1_900_500_000,
+      refreshAbsoluteExpiresAt: 1_900_900_000,
+    });
+    expect(auth.renewalDue(origin)).toBe(false);
+    // The scoped consumer sees the same receipt-relative deadline.
+    expect(auth.getAccessDeadline(origin)).toBe(1_900_000_000 + 3600);
+    // Renewal starts one lead before that deadline, not before the server's.
+    clock += (3600 - 61) * 1000;
+    expect(auth.renewalDue(origin)).toBe(false);
+    clock += 1000;
+    expect(auth.renewalDue(origin)).toBe(true);
+  });
+
+  it('treats a restored bundle as due at once', () => {
+    const auth = new AccessAuth(undefined, now);
+    // A bundle read back from disk carries no receipt time, so its absolute
+    // timestamp proves nothing: the host must renew before protected work.
+    auth.installBundle(
+      origin,
+      {
+        token: 'access-1',
+        expiresAt: 4_000_000_000,
+        expiresIn: 3600,
+        refreshHandle: handleA,
+        refreshIdleExpiresAt: 4_000_500_000,
+        refreshAbsoluteExpiresAt: 4_000_900_000,
+      },
+      { restored: true },
+    );
+    expect(auth.renewalDue(origin)).toBe(true);
+  });
+
+  it('installs and clears only while the captured attempt owns the origin', async () => {
+    const auth = new AccessAuth(undefined, now);
+    install(auth, 'access-1', handleA);
+    const attempt = auth.captureAttempt(origin);
+    expect(attempt).not.toBeNull();
+    const bundle = {
+      token: 'access-2',
+      expiresAt: 4_000_000_000,
+      expiresIn: 3600,
+      refreshHandle: handleB,
+      refreshIdleExpiresAt: 4_000_500_000,
+      refreshAbsoluteExpiresAt: 4_000_900_000,
+    };
+    // A newer credential landed after the capture.
+    auth.installBundle(origin, { ...bundle, token: 'access-3' });
+    expect(auth.installBundleForAttempt(origin, bundle, attempt!)).toBe(false);
+    expect(auth.getToken(origin)).toBe('access-3');
+    expect(auth.clearBundleForAttempt(attempt!)).toBe(false);
+    expect(auth.getToken(origin)).toBe('access-3');
+    // A fresh capture owns the origin again. Installing supersedes the fence it
+    // used, so the next mutation needs its own capture.
+    const fresh = auth.captureAttempt(origin);
+    expect(auth.installBundleForAttempt(origin, bundle, fresh!)).toBe(true);
+    expect(auth.getToken(origin)).toBe('access-2');
+    expect(auth.clearBundleForAttempt(fresh!)).toBe(false);
+    expect(auth.clearBundleForAttempt(auth.captureAttempt(origin)!)).toBe(true);
+    expect(auth.getToken(origin)).toBeNull();
   });
 });

@@ -172,12 +172,18 @@ type Config struct {
 	KanbanPasswordEnc string `json:"kanban_password_enc" toml:"kanban_password_enc"`
 	KanbanUsername    string `json:"kanban_username,omitempty" toml:"kanban_username,omitempty"`
 	KanbanURL         string `json:"kanban_url,omitempty" toml:"kanban_url,omitempty"`
-	// AccessPasswordHash is an optional browser-derived password verifier.
-	// An empty string deliberately disables Phi's access-password gate.
-	AccessPasswordHash string       `json:"access_password_hash" toml:"access_password_hash"`
-	SyncCoordinator    string       `json:"sync_coordinator" toml:"sync_coordinator"`
-	AutoReconnect      string       `json:"auto_reconnect" toml:"auto_reconnect"`
-	Peers              []PeerConfig `json:"peers" toml:"peers"`
+	// AccessPasswordHash is the legacy browser-derived verifier. After auth.db
+	// migration it is omitted from TOML; auth.db is authoritative.
+	AccessPasswordHash  string                     `json:"access_password_hash,omitempty" toml:"access_password_hash,omitempty"`
+	AccessAuthMigration *accessAuthMigrationMarker `json:"access_auth_migration,omitempty" toml:"access_auth_migration,omitempty"`
+	SyncCoordinator     string                     `json:"sync_coordinator" toml:"sync_coordinator"`
+
+	// AuthOrigins lists extra origins a browser may present to the v2 auth
+	// routes when a reverse proxy terminates TLS. Same-origin requests never
+	// need an entry. Malformed entries are a startup error, not a skip.
+	AuthOrigins   []string     `json:"auth_origins,omitempty" toml:"auth_origins,omitempty"`
+	AutoReconnect string       `json:"auto_reconnect" toml:"auto_reconnect"`
+	Peers         []PeerConfig `json:"peers" toml:"peers"`
 }
 
 type PeerConfig struct {
@@ -429,10 +435,10 @@ func saveConfig(cfg Config) {
 	defer configMu.Unlock()
 
 	// Legacy callers hold a full snapshot from loadConfig, which may be
-	// older than disk. Thinking presets are owned by their own endpoint,
-	// so always keep the latest persisted list instead of overwriting it
-	// with this snapshot. An unreadable or malformed file is not a safe
-	// base: skip the write rather than destroy it.
+	// older than disk. Thinking presets, the auth verifier, and the internal
+	// migration marker are owned by their own flows, so keep the latest values.
+	// An unreadable or malformed file is not a safe base: skip the write rather
+	// than destroy it.
 	latest, err := readConfigLocked()
 	if err != nil {
 		return
@@ -443,6 +449,8 @@ func saveConfig(cfg Config) {
 	cfg.MobileTerminalFontFamily = latest.MobileTerminalFontFamily
 	cfg.MobileTerminalFontSize = latest.MobileTerminalFontSize
 	cfg.MobileAppearanceRevision = latest.MobileAppearanceRevision
+	cfg.AccessPasswordHash = latest.AccessPasswordHash
+	cfg.AccessAuthMigration = latest.AccessAuthMigration
 
 	// Defense in depth: never persist a workspace whose path looks
 	// like a test scratch dir (e.g. /tmp/phi-test-alpha). This guards
@@ -469,7 +477,11 @@ func readPrimaryConfig() (Config, bool, error) {
 	if strings.TrimSpace(string(b)) == "" {
 		return cfg, true, nil
 	}
-	if err := toml.Unmarshal(b, &cfg); err != nil {
+	metadata, err := toml.Decode(string(b), &cfg)
+	if err != nil {
+		return cfg, true, err
+	}
+	if err := validateAccessMigrationTOML(metadata, cfg); err != nil {
 		return cfg, true, err
 	}
 	return cfg, true, nil
@@ -495,7 +507,7 @@ func readLegacyConfig() (Config, bool, error) {
 	if len(b) == 0 || strings.TrimSpace(string(b)) == "" {
 		return cfg, true, nil
 	}
-	if err := json.Unmarshal(b, &cfg); err != nil {
+	if err := decodeAccessMigrationJSON(b, &cfg); err != nil {
 		return cfg, true, err
 	}
 	return cfg, true, nil
@@ -510,7 +522,26 @@ func readConfigLocked() (Config, error) {
 	return cfg, err
 }
 
+// writeConfigFile is the atomic writer used for config writes. Tests replace
+// it to exercise persistence failures; production uses the strict variant that
+// never deletes the existing config.
+var writeConfigFile = system.WriteFileAtomicPreserveExisting
+
+// writeConfigLocked persists cfg without taking configMu. Callers must
+// hold it. Auth-owned fields are preserved from the latest file.
 func writeConfigLocked(cfg Config) error {
+	latest, err := readConfigLocked()
+	if err != nil {
+		return err
+	}
+	cfg.AccessPasswordHash = latest.AccessPasswordHash
+	cfg.AccessAuthMigration = latest.AccessAuthMigration
+	return writeConfigContentsLocked(cfg)
+}
+
+// writeConfigContentsLocked writes a config whose auth-owned fields are already
+// current. Callers must hold configMu.
+func writeConfigContentsLocked(cfg Config) error {
 	cfg.Workspaces = filterOutTestPaths(cfg.Workspaces)
 	before, present, err := readPrimaryConfig()
 	if err != nil {
@@ -529,33 +560,36 @@ func writeConfigLocked(cfg Config) error {
 	if err != nil {
 		return err
 	}
-	return system.WriteFileAtomic(path, b, 0600)
+	// PreserveExisting keeps the old config on a failed replacement.
+	return writeConfigFile(path, b, 0600)
 }
 
-func migrateLegacyConfig() {
+// saveAccessPasswordHash persists only the access verifier, so a password
+// change never rewrites the rest of the config from a stale snapshot. A
+// malformed file is an error because replacing it could discard operator data.
+func saveAccessPasswordHash(encoded string) error {
 	configMu.Lock()
 	defer configMu.Unlock()
-	_, present, err := readPrimaryConfig()
+	cfg, err := readConfigLocked()
 	if err != nil {
-		logConfigReadError(configFilePath(), err)
-		return
+		return err
 	}
-	if present {
-		return
-	}
-	legacy, legacyPresent, err := readLegacyConfig()
+	cfg.AccessPasswordHash = encoded
+	return writeConfigContentsLocked(cfg)
+}
+
+// accessPasswordHashAuthoritative reads the durable record for auth activation.
+// Unlike loadConfig it reports errors, because an unreadable Config must make
+// authentication unavailable instead of looking like "no password set". A
+// missing or empty file keeps first-run semantics.
+func accessPasswordHashAuthoritative() (string, error) {
+	configMu.Lock()
+	defer configMu.Unlock()
+	cfg, err := readConfigLocked()
 	if err != nil {
-		logConfigReadError(legacyConfigFilePath(), err)
-		return
+		return "", err
 	}
-	if !legacyPresent {
-		return
-	}
-	if err := writeConfigLocked(legacy); err != nil {
-		logConfigReadError(configFilePath(), err)
-		return
-	}
-	slog.Info("migrated legacy config", "from", legacyConfigFilePath(), "to", configFilePath())
+	return cfg.AccessPasswordHash, nil
 }
 
 // looksLikeTestArtifact returns true if `path` looks like a scratch

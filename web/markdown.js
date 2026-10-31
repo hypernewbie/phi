@@ -45,6 +45,9 @@ export class MarkdownManager {
      *  previews don't allocate a handle because renderMarkdownSafe +
      *  innerHTML='' is sufficient cleanup. */
     _currentFileView;
+    /** Bumped by every modal render and by close. A render that resolves after
+     *  the body moved on is dropped instead of painted. */
+    _modalRenderId;
     markdownClipboard;
     contextMenuEl;
     refreshRequestId;
@@ -78,6 +81,7 @@ export class MarkdownManager {
         this._pastePending = false;
         this._pasteConflict = false;
         this._currentFileView = null;
+        this._modalRenderId = 0;
         this.currentRawContent = '';
         this.markdownClipboard = null;
         this.contextMenuEl = this._createContextMenu();
@@ -512,6 +516,7 @@ export class MarkdownManager {
         this.modalTitle.innerHTML = `${scrollSvg}<span class="md-modal-title-text">${escapeHtml(name)}</span>`;
     }
     async openFile(f) {
+        const render = ++this._modalRenderId;
         const cwd = this.app.sessionsManager.activeCWD || '';
         this._setModalTitle(f.name);
         this.modalBody.innerHTML =
@@ -528,9 +533,13 @@ export class MarkdownManager {
         this._updateModalActions();
         try {
             const res = await fetch(`/api/markdown/file?path=${encodeURIComponent(f.path)}&cwd=${encodeURIComponent(cwd)}`);
+            if (render !== this._modalRenderId)
+                return;
             if (!res.ok)
                 throw new Error(await res.text());
             const raw = await res.text();
+            if (render !== this._modalRenderId)
+                return;
             this.currentRawContent = raw;
             this._updateModalActions();
             const html = renderMarkdownSafe(raw);
@@ -539,6 +548,8 @@ export class MarkdownManager {
             highlightCodeIn(this.modalBody);
         }
         catch (e) {
+            if (render !== this._modalRenderId)
+                return;
             this.modalBody.innerHTML = `<div class="md-list-error">Failed to load: ${escapeHtml(e.message)}</div>`;
         }
     }
@@ -561,6 +572,7 @@ export class MarkdownManager {
             this._currentFileView = null;
         }
         this._setModalTitle(f.name);
+        this._modalRenderId++;
         this.modalBody.innerHTML = '<div class="md-rendering">Loading…</div>';
         this.modal.classList.remove('hidden');
         this.currentRawContent = '';
@@ -610,6 +622,7 @@ export class MarkdownManager {
         this.modalSizeToggleBtn.setAttribute('aria-label', label);
     }
     closeModal() {
+        this._modalRenderId++;
         this.modal.classList.add('hidden');
         this.modalBody.innerHTML = '';
         this.currentRawContent = '';
@@ -677,12 +690,14 @@ export class MarkdownManager {
         };
         this._updateModalActions();
         const html = renderMarkdownSafe(rawMarkdown);
+        this._modalRenderId++;
         this.modalBody.innerHTML = `<div class="md-rendered">${html}</div>`;
         highlightCodeIn(this.modalBody);
         this.modal.classList.remove('hidden');
     }
     async openHelpModal() {
         this.modalTitle.innerText = 'Phi Documentation';
+        this._modalRenderId++;
         this.modalBody.innerHTML =
             '<div class="md-rendering">Loading help...</div>';
         this.currentRawContent = '';
@@ -715,6 +730,7 @@ export class MarkdownManager {
     // every 2s while open.
     async openDiagModal() {
         this.modalTitle.innerText = 'Phi Diagnostics';
+        this._modalRenderId++;
         this.modalBody.innerHTML =
             '<div class="md-rendering">Loading diagnostics…</div>';
         this.currentRawContent = '';
@@ -799,6 +815,7 @@ export class MarkdownManager {
         const version = (versionEl?.textContent || '').trim();
         const title = version ? `Changelog — ${version}` : 'Changelog';
         this.modalTitle.innerText = title;
+        this._modalRenderId++;
         this.modalBody.innerHTML =
             '<div class="md-rendering">Loading changelog...</div>';
         this.currentRawContent = '';
@@ -1487,7 +1504,7 @@ export class MarkdownManager {
             img.src = url;
         });
     }
-    _downloadFile(url, filename) {
+    async _downloadFile(url, filename) {
         if (!url) {
             this.app.showToast('No file to download', { type: 'error' });
             return;

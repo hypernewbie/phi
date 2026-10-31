@@ -13,12 +13,14 @@ import (
 )
 
 func TestControlAuthRejectsNoCookie(t *testing.T) {
+	// Auth state lives beside config, so this test isolates both.
+	withTempConfig(t)
 	auth := useTestAccessAuth(t)
-	if err := auth.configure(testAccessHash()); err != nil {
+	if err := setTestAccessRecord(auth, testAccessHash()); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/ws/control", ws.HandleControl(rpc.NewManager(), nil))
+	mux.HandleFunc("/ws/control", ws.HandleControl(nil, rpc.NewManager(), nil))
 	srv := httptest.NewServer(accessAuthMiddleware(mux))
 	defer srv.Close()
 	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/control"

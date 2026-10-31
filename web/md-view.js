@@ -23,6 +23,24 @@ export function decodeNotificationDir(bytes) {
         return null;
     return notif.kind.value.dir ?? '';
 }
+// Markdown events retry: full-jitter exponential backoff with a floor, capped.
+// The fixed 10 s retry this replaced hammered a down server at a constant rate
+// and gave a recovered link no fast path back.
+const MD_EVENT_RETRY_BASE_MS = 1000;
+const MD_EVENT_RETRY_MAX_MS = 20000;
+const MD_EVENT_RETRY_FLOOR_MS = 500;
+// A connection must stay up this long before its attempt counter resets. A
+// proxy that opens and drops immediately would otherwise pin the retry at the
+// first window forever instead of backing off.
+const MD_EVENT_STABLE_MS = 10000;
+// mdEventRetryDelay returns the wait before retry `attempt` (1-based). Full
+// jitter: random(0, min(cap, base * 2^(attempt-1))) plus a floor, because full
+// jitter alone can return ~0 ms and turn a flapping server into a hot loop.
+// `random` is injected so tests are deterministic.
+export function mdEventRetryDelay(attempt, random = Math.random) {
+    const cap = Math.min(MD_EVENT_RETRY_MAX_MS, MD_EVENT_RETRY_BASE_MS * 2 ** Math.max(0, attempt - 1));
+    return Math.round(MD_EVENT_RETRY_FLOOR_MS + random() * cap);
+}
 // mdEventMatchesPath reports whether a 0x07 md-changed event for `dir`
 // concerns the file at `path`.
 export function mdEventMatchesPath(dir, path) {
@@ -82,20 +100,22 @@ export function initMdView() {
         // Overlapping fetches (onopen + 0x07 event) can resolve out of
         // order; only the latest request may touch the DOM.
         const requestId = ++loadRequestId;
+        const showError = (html) => {
+            container.innerHTML = html;
+        };
         try {
             const res = await fetch(`/api/markdown/file?path=${encodeURIComponent(path)}&cwd=${encodeURIComponent(cwd)}`);
             if (requestId !== loadRequestId)
                 return;
             if (res.status === 401) {
-                container.innerHTML =
-                    '<div class="md-list-error">Session expired — log in in the main phi window, then reload this one.</div>';
+                showError('<div class="md-list-error">Session expired — log in in the main phi window, then reload this one.</div>');
                 return;
             }
             if (!res.ok) {
                 const text = await res.text();
                 if (requestId !== loadRequestId)
                     return;
-                container.innerHTML = `<div class="md-list-error">Failed to load: ${escapeHtml(text)}</div>`;
+                showError(`<div class="md-list-error">Failed to load: ${escapeHtml(text)}</div>`);
                 return;
             }
             const raw = await res.text();
@@ -114,14 +134,48 @@ export function initMdView() {
         catch (e) {
             if (requestId !== loadRequestId)
                 return;
-            container.innerHTML = `<div class="md-list-error">Failed to load: ${escapeHtml(e.message)}</div>`;
+            showError(`<div class="md-list-error">Failed to load: ${escapeHtml(e.message)}</div>`);
         }
     }
+    // Event-socket retry state lives here, not at module scope: this function
+    // owns one events socket per md.html window.
+    let eventAttempt = 0;
+    let eventTimer = null;
+    let eventStableTimer = null;
+    // connect refreshes a stale bearer before dialing: the server closes an
+    // events socket at the admitted token exp, so a redial with that same
+    // token would only be refused again. The wait is bounded by the module's
+    // own auth deadline and a refresh failure still redials — the retry owner
+    // below decides what happens next, not the refresh.
     function connect() {
-        const ws = new WebSocket(wsUrl('/ws/md-events'), eventsSubprotocol);
+        let refresh;
+        try {
+            refresh = window.phiAccessAuth?.refreshAccessIfDue?.();
+        }
+        catch (_e) { }
+        // No auth module (or a v1 session) dials synchronously: bridge-free
+        // behavior must stay byte-identical.
+        if (refresh && typeof refresh.then === 'function') {
+            void refresh.catch(() => { }).then(dial);
+        }
+        else {
+            dial();
+        }
+    }
+    function dial() {
+        const socketURL = new URL(wsUrl('/ws/md-events'));
+        const ws = new WebSocket((window.phiAccessAuth?.webSocketURL?.(socketURL) ?? socketURL).href, eventsSubprotocol);
         ws.binaryType = 'arraybuffer';
         // Refresh on open too: content may have changed while disconnected.
         ws.onopen = () => {
+            // Reset only once the connection has proven stable, matching the
+            // control owner: a short-lived upgrade must keep backing off.
+            if (eventStableTimer !== null)
+                clearTimeout(eventStableTimer);
+            eventStableTimer = setTimeout(() => {
+                eventStableTimer = null;
+                eventAttempt = 0;
+            }, MD_EVENT_STABLE_MS);
             const negotiated = ws.protocol;
             // Test fakes omit the attribute; real servers must select it.
             if (negotiated !== undefined && negotiated !== eventsSubprotocol) {
@@ -144,7 +198,17 @@ export function initMdView() {
                 void loadAndRender();
         };
         ws.onclose = () => {
-            setTimeout(connect, 10000);
+            if (eventStableTimer !== null) {
+                clearTimeout(eventStableTimer);
+                eventStableTimer = null;
+            }
+            eventAttempt += 1;
+            if (eventTimer !== null)
+                clearTimeout(eventTimer);
+            eventTimer = setTimeout(() => {
+                eventTimer = null;
+                connect();
+            }, mdEventRetryDelay(eventAttempt));
         };
     }
     void loadAndRender();

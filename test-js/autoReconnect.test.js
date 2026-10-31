@@ -32,12 +32,14 @@ function visibility(value) {
 beforeEach(() => {
     vi.useFakeTimers();
     vi.spyOn(Math, 'random').mockReturnValue(0);
+    document.documentElement.setAttribute('data-phi-desktop', '');
     visibility('visible');
 });
 afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
     vi.restoreAllMocks();
+    document.documentElement.removeAttribute('data-phi-desktop');
     visibility('visible');
 });
 
@@ -63,6 +65,56 @@ describe('all-tab wake and shared scheduler', () => {
         ]);
         expect(healthy.autoReconnectTimer).toBeUndefined();
     });
+    it('redials active and background panes outside desktop shells', () => {
+        document.documentElement.removeAttribute('data-phi-desktop');
+        const { manager, tab } = harness();
+        manager.activePaneId = tab.paneId;
+        const background = { ...tab, paneId: 'p2' };
+        manager.tabs.set(background.paneId, background);
+
+        manager._reviveActiveTabIfDead();
+        vi.advanceTimersByTime(1000);
+
+        expect(manager.reconnectTab.mock.calls).toEqual([
+            [tab, { auto: true }],
+            [background, { auto: true }],
+        ]);
+        expect(manager._showReconnectOverlay).not.toHaveBeenCalled();
+    });
+    it.each([false, true])(
+        'waits for auth refresh before redialing all panes (desktop shell=%s)',
+        async (desktopShell) => {
+            if (!desktopShell)
+                document.documentElement.removeAttribute('data-phi-desktop');
+            const { manager, tab } = harness();
+            manager.activePaneId = tab.paneId;
+            const background = { ...tab, paneId: 'p2' };
+            manager.tabs.set(background.paneId, background);
+            const previousBridge = window.phiAccessAuth;
+            let releaseRefresh;
+            const refresh = new Promise((resolve) => {
+                releaseRefresh = resolve;
+            });
+            window.phiAccessAuth = {
+                refreshAccessIfDue: vi.fn(() => refresh),
+            };
+
+            try {
+                manager._reviveActiveTabIfDead();
+                await vi.advanceTimersByTimeAsync(1000);
+                expect(manager.reconnectTab).not.toHaveBeenCalled();
+                releaseRefresh();
+                await vi.advanceTimersByTimeAsync(0);
+                expect(manager.reconnectTab.mock.calls).toEqual([
+                    [tab, { auto: true }],
+                    [background, { auto: true }],
+                ]);
+            } finally {
+                if (previousBridge === undefined) delete window.phiAccessAuth;
+                else window.phiAccessAuth = previousBridge;
+            }
+        },
+    );
     it.each([
         { isDead: false },
         { reconnectInFlight: true },

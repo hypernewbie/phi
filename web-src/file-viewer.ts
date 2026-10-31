@@ -155,7 +155,7 @@ export async function mountFileView(opts: {
             handle = await mountMedia(url, container, false);
             break;
         case 'pdf':
-            handle = mountPdf(url, container);
+            handle = await mountPdf(url, container);
             break;
         case 'markdown':
             handle = await mountMarkdown(url, container, signal);
@@ -257,7 +257,10 @@ async function mountMedia(
     };
 }
 
-function mountPdf(url: string, container: HTMLElement): FileViewHandle {
+async function mountPdf(
+    url: string,
+    container: HTMLElement,
+): Promise<FileViewHandle> {
     // Use the vendored PDF.js wrapper instead of Chromium's built-in
     // viewer: cross-browser consistent toolbar (page nav, zoom, scale
     // picker, find), support for non-embedded CJK fonts via the
@@ -400,14 +403,14 @@ function mountDownload(
     message.append("Can't preview ", code, '.');
     const download = document.createElement('a');
     download.className = 'file-viewer-download-btn';
+    // The plain address keeps the control a real link: focusable, activated
+    // by Enter, and usable before any bearer is installed.
     download.href = url;
     download.download = name;
     download.textContent = 'Download';
     wrapper.append(message, download);
     container.replaceChildren(wrapper);
     return {
-        dispose: () => {
-            container.innerHTML = '';
-        },
+        dispose: () => container.replaceChildren(),
     };
 }
