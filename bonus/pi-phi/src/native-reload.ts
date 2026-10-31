@@ -30,11 +30,19 @@ export interface ReloadLatchState {
         reported: boolean;
     } | null;
     highWater: bigint | null;
+    /** Drain barrier before a replacement runtime opens its stream. */
+    drain: Promise<void> | null;
     active: { runtimeId: string; notify: () => void } | null;
 }
 
 export function freshReloadLatch(): ReloadLatchState {
-    return { baseline: null, pending: null, highWater: null, active: null };
+    return {
+        baseline: null,
+        pending: null,
+        highWater: null,
+        drain: null,
+        active: null,
+    };
 }
 
 function readStockEditor(ctx: NativeReloadHost): NativeReloadBaseline | null {

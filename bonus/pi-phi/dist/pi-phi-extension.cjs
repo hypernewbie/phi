@@ -24754,7 +24754,13 @@ function captureFocusedComponent(ui, key) {
 // src/native-reload.ts
 var PROBE_KEY2 = "phi.pi-phi.reload-probe";
 function freshReloadLatch() {
-  return { baseline: null, pending: null, highWater: null, active: null };
+  return {
+    baseline: null,
+    pending: null,
+    highWater: null,
+    drain: null,
+    active: null
+  };
 }
 function readStockEditor(ctx) {
   try {
@@ -28790,6 +28796,7 @@ var BridgeChannel = class {
   writerActive = false;
   writerError = null;
   closed = false;
+  ended = false;
   blockedTimeout = false;
   acceptedWaiters = [];
   /** Open the stream, send Hello, and await Accepted or a status. */
@@ -28895,9 +28902,8 @@ var BridgeChannel = class {
     return true;
   }
   /**
-   * Best-effort bounded drain: wait until the outbound queue
-   * (queued plus in-flight) is empty or the deadline expires,
-   * then close. A dead stream or writer error closes
+   * Drain queued frames, half-close, then wait for the server's
+   * terminal status. Both waits are bounded; a dead stream closes
    * immediately. Never rejects.
    */
   drainAndClose(timeoutMs) {
@@ -28905,15 +28911,47 @@ var BridgeChannel = class {
       this.close();
       return Promise.resolve();
     }
+    const stream = this.stream;
     const deadline = Date.now() + Math.max(0, timeoutMs);
     return new Promise((resolve) => {
-      const tick = () => {
-        if (this.closed || this.stream === null || this.writerError || this.queue.outstanding === 0 || Date.now() >= deadline) {
-          this.close();
-          resolve();
+      let finished = false;
+      let pollTimer = null;
+      let statusTimer = null;
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        if (pollTimer !== null) clearTimeout(pollTimer);
+        if (statusTimer !== null) clearTimeout(statusTimer);
+        stream.removeListener("status", finish);
+        this.close();
+        resolve();
+      };
+      const halfClose = () => {
+        if (finished) return;
+        if (this.closed || this.stream !== stream) {
+          finish();
           return;
         }
-        setTimeout(tick, DRAIN_POLL_MS);
+        stream.once("status", finish);
+        statusTimer = setTimeout(finish, Math.max(0, timeoutMs));
+        this.ended = true;
+        try {
+          stream.end();
+        } catch {
+          finish();
+        }
+      };
+      const tick = () => {
+        if (finished) return;
+        if (this.closed || this.stream !== stream || this.writerError) {
+          finish();
+          return;
+        }
+        if (this.queue.outstanding === 0 || Date.now() >= deadline) {
+          halfClose();
+          return;
+        }
+        pollTimer = setTimeout(tick, DRAIN_POLL_MS);
       };
       tick();
     });
@@ -28924,7 +28962,7 @@ var BridgeChannel = class {
     this.closed = true;
     this.failWaiters(new Error("channel closed"));
     try {
-      this.stream?.end();
+      if (!this.ended) this.stream?.end();
     } catch {
     }
     try {
@@ -29200,7 +29238,9 @@ var Runtime = class {
   shutdownRequested = false;
   /** Channel whose drain must wait for a synchronous Reload receipt enqueue. */
   reloadDispatchChannel = null;
+  reloadReceiptChannel = null;
   reloadDrainDeferred = false;
+  reloadDrainResolve = null;
   backoffMs;
   retryTimer = null;
   compactSettleTimer = null;
@@ -29245,7 +29285,14 @@ var Runtime = class {
       };
     }
     this.noteView(ctx);
-    void this.attempt();
+    const drain = this.opts.reloadState?.drain;
+    if (drain) {
+      void drain.then(() => {
+        if (!this.shutdownRequested) void this.attempt();
+      });
+    } else {
+      void this.attempt();
+    }
   }
   /** A replacement session refreshes identities and the snapshot. */
   onSessionStart(ctx) {
@@ -29503,6 +29550,10 @@ var Runtime = class {
     if (channel) {
       if (channel === this.reloadDispatchChannel) {
         this.reloadDrainDeferred = true;
+        this.installReloadDrainBarrier();
+      } else if (channel === this.reloadReceiptChannel) {
+        this.installReloadDrainBarrier();
+        this.drainReloadChannel(channel);
       } else {
         void channel.drainAndClose(SHUTDOWN_DRAIN_MS);
       }
@@ -29514,7 +29565,27 @@ var Runtime = class {
     this.reloadDispatchChannel = null;
     if (!this.reloadDrainDeferred) return;
     this.reloadDrainDeferred = false;
-    void channel.drainAndClose(SHUTDOWN_DRAIN_MS);
+    this.drainReloadChannel(channel);
+  }
+  /** Hold a replacement runtime until this stream reaches terminal status. */
+  installReloadDrainBarrier() {
+    const reload = this.opts.reloadState;
+    if (!reload) return;
+    let barrier;
+    barrier = new Promise((resolve) => {
+      this.reloadDrainResolve = () => {
+        if (reload.drain === barrier) reload.drain = null;
+        resolve();
+      };
+    });
+    reload.drain = barrier;
+  }
+  drainReloadChannel(channel) {
+    const resolve = this.reloadDrainResolve;
+    this.reloadDrainResolve = null;
+    const drain = channel.drainAndClose(SHUTDOWN_DRAIN_MS);
+    if (resolve) void drain.then(resolve, resolve);
+    else void drain;
   }
   get isRunning() {
     return this.running;
@@ -30589,12 +30660,14 @@ var Runtime = class {
         );
         return;
       }
-      this.sendReloadAck(
+      if (this.sendReloadAck(
         req.requestId,
         1 /* RELOAD_DISPATCH_OUTCOME_DISPATCHED */,
         "",
         dispatchChannel
-      );
+      )) {
+        this.reloadReceiptChannel = dispatchChannel;
+      }
       attempt.completion.then(
         () => this.releaseReloadLatch(op),
         () => this.releaseReloadLatch(op)
@@ -30648,7 +30721,7 @@ var Runtime = class {
    * traffic. A lost receipt is unknown, never permission to retry.
    */
   sendReloadAck(requestId, outcome, reason, channel = this.channel) {
-    channel?.sendNonfatal({
+    return channel?.sendNonfatal({
       paneId: this.opts.creds.pane,
       processId: this.opts.creds.process,
       runtimeGeneration: this.opts.generation,
@@ -30656,7 +30729,7 @@ var Runtime = class {
         $case: "reloadAck",
         value: ReloadAck.create({ requestId, outcome, reason })
       }
-    });
+    }) ?? false;
   }
   onStreamEnd(status) {
     this.channel?.close();

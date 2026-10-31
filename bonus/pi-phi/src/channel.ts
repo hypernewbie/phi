@@ -78,6 +78,7 @@ export class BridgeChannel {
     private writerActive = false;
     private writerError: Error | null = null;
     private closed = false;
+    private ended = false;
     private blockedTimeout = false;
     private acceptedWaiters: Array<{
         resolve: (a: Accepted) => void;
@@ -206,9 +207,8 @@ export class BridgeChannel {
     }
 
     /**
-     * Best-effort bounded drain: wait until the outbound queue
-     * (queued plus in-flight) is empty or the deadline expires,
-     * then close. A dead stream or writer error closes
+     * Drain queued frames, half-close, then wait for the server's
+     * terminal status. Both waits are bounded; a dead stream closes
      * immediately. Never rejects.
      */
     drainAndClose(timeoutMs: number): Promise<void> {
@@ -216,21 +216,47 @@ export class BridgeChannel {
             this.close();
             return Promise.resolve();
         }
+        const stream = this.stream;
         const deadline = Date.now() + Math.max(0, timeoutMs);
         return new Promise((resolve) => {
-            const tick = (): void => {
-                if (
-                    this.closed ||
-                    this.stream === null ||
-                    this.writerError ||
-                    this.queue.outstanding === 0 ||
-                    Date.now() >= deadline
-                ) {
-                    this.close();
-                    resolve();
+            let finished = false;
+            let pollTimer: ReturnType<typeof setTimeout> | null = null;
+            let statusTimer: ReturnType<typeof setTimeout> | null = null;
+            const finish = (): void => {
+                if (finished) return;
+                finished = true;
+                if (pollTimer !== null) clearTimeout(pollTimer);
+                if (statusTimer !== null) clearTimeout(statusTimer);
+                stream.removeListener('status', finish);
+                this.close();
+                resolve();
+            };
+            const halfClose = (): void => {
+                if (finished) return;
+                if (this.closed || this.stream !== stream) {
+                    finish();
                     return;
                 }
-                setTimeout(tick, DRAIN_POLL_MS);
+                stream.once('status', finish);
+                statusTimer = setTimeout(finish, Math.max(0, timeoutMs));
+                this.ended = true;
+                try {
+                    stream.end();
+                } catch {
+                    finish();
+                }
+            };
+            const tick = (): void => {
+                if (finished) return;
+                if (this.closed || this.stream !== stream || this.writerError) {
+                    finish();
+                    return;
+                }
+                if (this.queue.outstanding === 0 || Date.now() >= deadline) {
+                    halfClose();
+                    return;
+                }
+                pollTimer = setTimeout(tick, DRAIN_POLL_MS);
             };
             tick();
         });
@@ -242,7 +268,7 @@ export class BridgeChannel {
         this.closed = true;
         this.failWaiters(new Error('channel closed'));
         try {
-            this.stream?.end();
+            if (!this.ended) this.stream?.end();
         } catch {
             // Already torn down; close stays idempotent.
         }

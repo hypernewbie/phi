@@ -4086,4 +4086,53 @@ describe('Runtime reload dispatch', () => {
         expect(latch.pending).toBeNull();
         rt.shutdown();
     });
+
+    it('gates a replacement runtime until the reload receipt stream closes', async () => {
+        const nativeGate: { finish?: () => void } = {};
+        const first = await startedReload({}, undefined, (editor) => {
+            editor.onSubmit = async (text: string) => {
+                editor.calls.push(text);
+                await new Promise<void>((resolve) => {
+                    nativeGate.finish = resolve;
+                });
+            };
+        });
+
+        const drainGate: { finish?: () => void } = {};
+        first.ch.drainAndClose = (timeoutMs: number) => {
+            first.ch.drainCalls.push(timeoutMs);
+            first.ch.events.push('drain');
+            return new Promise<void>((resolve) => {
+                drainGate.finish = resolve;
+            });
+        };
+        first.ch.hooks!.onMessage(reloadRequest('1'));
+        expect(reloadAcks(first.ch)).toHaveLength(1);
+        // Models session_shutdown after the synchronous callback
+        // entry window returned and the receipt was queued.
+        first.rt.shutdown();
+        expect(first.latch.drain).not.toBeNull();
+
+        const secondCh = mockChannel();
+        const second = new Runtime({
+            creds: CREDS,
+            generation: 2n,
+            compactState: first.compact,
+            reloadState: first.latch,
+            makeChannel: wired(secondCh),
+        });
+        second.start(telemetryCtx({ ui: reloadUi(first.holder) }));
+        await sleep(10);
+        expect(secondCh.hellos).toHaveLength(0);
+
+        drainGate.finish?.();
+        await sleep(10);
+        expect(secondCh.hellos).toHaveLength(1);
+        expect(first.latch.drain).toBeNull();
+
+        nativeGate.finish?.();
+        await sleep(10);
+        expect(first.latch.pending).toBeNull();
+        second.shutdown();
+    });
 });

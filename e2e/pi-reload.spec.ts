@@ -102,6 +102,24 @@ async function openCmdsReload(page: Page) {
     return menu;
 }
 
+async function selectMobilePane(page: Page, paneId: string) {
+    await expect(
+        page.locator(`#tabs-container .tab[data-pane-id="${paneId}"]`),
+    ).toHaveCount(1, { timeout: 30_000 });
+    await page.locator('#mobile-sidebar-toggle').tap({ timeout: 10_000 });
+    await expect(page.locator('#sidebar-panel')).toHaveClass(/drawer-open/, {
+        timeout: 10_000,
+    });
+    const select = page.locator(
+        `#drawer-tabs-body .hostname-dropdown-row[data-pane-id="${paneId}"] .hostname-dropdown-select-btn`,
+    );
+    await expect(select).toBeVisible({ timeout: 10_000 });
+    await select.tap({ timeout: 10_000 });
+    await expect(page.locator(`#term-${paneId}`)).toBeVisible({
+        timeout: 30_000,
+    });
+}
+
 test('native reload from Cmds on desktop and mobile touch', async ({
     browser,
     page,
@@ -366,17 +384,7 @@ test('native reload from Cmds on desktop and mobile touch', async ({
         const mobileReloads = recordReloadCalls(mobilePage);
         await mobilePage.goto(phi.url);
         // Compact view parks tabs in the drawer, not the tab bar.
-        await mobilePage.locator('#mobile-sidebar-toggle').tap();
-        const drawerBody = mobilePage.locator('#drawer-tabs-body');
-        await expect(drawerBody).toBeVisible();
-        await drawerBody
-            .locator(
-                `.hostname-dropdown-row[data-pane-id="${mobilePane}"] .hostname-dropdown-select-btn`,
-            )
-            .tap();
-        await expect(mobilePage.locator(`#term-${mobilePane}`)).toBeVisible({
-            timeout: 30_000,
-        });
+        await selectMobilePane(mobilePage, mobilePane);
         await mobilePage.locator('#input-textarea').fill('MOBILE RELOAD DRAFT');
         await stageReloadAttachment(mobilePage);
         await mobilePage.emulateMedia({ colorScheme: 'dark' });
@@ -439,17 +447,7 @@ test('native reload from Cmds on desktop and mobile touch', async ({
 
         // The same command remains a PTY fallback when injection is
         // disabled for this pane, including on touch.
-        await mobilePage.locator('#mobile-sidebar-toggle').tap();
-        const mobileDrawer = mobilePage.locator('#drawer-tabs-body');
-        await expect(mobileDrawer).toBeVisible();
-        await mobileDrawer
-            .locator(
-                `.hostname-dropdown-row[data-pane-id="${absentPane}"] .hostname-dropdown-select-btn`,
-            )
-            .tap();
-        await expect(mobilePage.locator(`#term-${absentPane}`)).toBeVisible({
-            timeout: 30_000,
-        });
+        await selectMobilePane(mobilePage, absentPane);
         await mobilePage.getByRole('button', { name: 'Cmds ▾' }).tap();
         const fallbackMenu = mobilePage.locator('#quick-commands-dropup');
         await fallbackMenu.getByRole('button', { name: '/reload' }).tap();

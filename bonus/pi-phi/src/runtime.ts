@@ -492,7 +492,9 @@ export class Runtime {
     private shutdownRequested = false;
     /** Channel whose drain must wait for a synchronous Reload receipt enqueue. */
     private reloadDispatchChannel: RuntimeChannel | null = null;
+    private reloadReceiptChannel: RuntimeChannel | null = null;
     private reloadDrainDeferred = false;
+    private reloadDrainResolve: (() => void) | null = null;
     private backoffMs: number;
     private retryTimer: ReturnType<typeof setTimeout> | null = null;
     private compactSettleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -550,7 +552,14 @@ export class Runtime {
             };
         }
         this.noteView(ctx);
-        void this.attempt();
+        const drain = this.opts.reloadState?.drain;
+        if (drain) {
+            void drain.then(() => {
+                if (!this.shutdownRequested) void this.attempt();
+            });
+        } else {
+            void this.attempt();
+        }
     }
 
     /** A replacement session refreshes identities and the snapshot. */
@@ -841,14 +850,19 @@ export class Runtime {
         // Drain, don't drop: session_shutdown lands milliseconds
         // after agent_settled, and the settlement edge queued behind
         // context-only snapshots must flush before the stream dies.
-        // Detach first so no later event can send; the bounded drain
-        // closes the old channel even across session replacement.
+        // Detach first so no later event can send. A replacement
+        // runtime waits for terminal status when this stream carried
+        // the Reload receipt, so its Hello cannot overtake the receipt.
         const channel = this.channel;
         this.channel = null;
         this.starting = false;
         if (channel) {
             if (channel === this.reloadDispatchChannel) {
                 this.reloadDrainDeferred = true;
+                this.installReloadDrainBarrier();
+            } else if (channel === this.reloadReceiptChannel) {
+                this.installReloadDrainBarrier();
+                this.drainReloadChannel(channel);
             } else {
                 void channel.drainAndClose(SHUTDOWN_DRAIN_MS);
             }
@@ -861,7 +875,29 @@ export class Runtime {
         this.reloadDispatchChannel = null;
         if (!this.reloadDrainDeferred) return;
         this.reloadDrainDeferred = false;
-        void channel.drainAndClose(SHUTDOWN_DRAIN_MS);
+        this.drainReloadChannel(channel);
+    }
+
+    /** Hold a replacement runtime until this stream reaches terminal status. */
+    private installReloadDrainBarrier(): void {
+        const reload = this.opts.reloadState;
+        if (!reload) return;
+        let barrier!: Promise<void>;
+        barrier = new Promise<void>((resolve) => {
+            this.reloadDrainResolve = () => {
+                if (reload.drain === barrier) reload.drain = null;
+                resolve();
+            };
+        });
+        reload.drain = barrier;
+    }
+
+    private drainReloadChannel(channel: RuntimeChannel): void {
+        const resolve = this.reloadDrainResolve;
+        this.reloadDrainResolve = null;
+        const drain = channel.drainAndClose(SHUTDOWN_DRAIN_MS);
+        if (resolve) void drain.then(resolve, resolve);
+        else void drain;
     }
 
     get isRunning(): boolean {
@@ -2298,12 +2334,16 @@ export class Runtime {
                 );
                 return;
             }
-            this.sendReloadAck(
-                req.requestId,
-                ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_DISPATCHED,
-                '',
-                dispatchChannel,
-            );
+            if (
+                this.sendReloadAck(
+                    req.requestId,
+                    ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_DISPATCHED,
+                    '',
+                    dispatchChannel,
+                )
+            ) {
+                this.reloadReceiptChannel = dispatchChannel;
+            }
             // Release the latch when the native callback settles. The
             // settlement carries no completion evidence: release only.
             // A lost receipt stays unknown on the server, which retires
@@ -2372,16 +2412,18 @@ export class Runtime {
         outcome: ReloadDispatchOutcome,
         reason: string,
         channel: RuntimeChannel | null = this.channel,
-    ): void {
-        channel?.sendNonfatal({
-            paneId: this.opts.creds.pane,
-            processId: this.opts.creds.process,
-            runtimeGeneration: this.opts.generation,
-            payload: {
-                $case: 'reloadAck',
-                value: ReloadAck.create({ requestId, outcome, reason }),
-            },
-        });
+    ): boolean {
+        return (
+            channel?.sendNonfatal({
+                paneId: this.opts.creds.pane,
+                processId: this.opts.creds.process,
+                runtimeGeneration: this.opts.generation,
+                payload: {
+                    $case: 'reloadAck',
+                    value: ReloadAck.create({ requestId, outcome, reason }),
+                },
+            }) ?? false
+        );
     }
 
     private onStreamEnd(status: ServiceError | null): void {

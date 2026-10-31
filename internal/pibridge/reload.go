@@ -236,22 +236,26 @@ func (s *Server) RequestReload(ctx context.Context, processID string, generation
 		if err := ctx.Err(); err != nil {
 			return ReloadResult{}, &ReloadUnknown{RequestID: op.id}
 		}
-		// Fence delayed receipts, like RequestCompact: a
-		// replacement between delivery and consumption must not
-		// fulfill this caller. The receipt already resolved the
-		// caller-visible outcome; only this caller is fenced,
-		// and no unrelated work is cleared.
-		l.mu.Lock()
-		current := l.peer == p && p.generation == l.maxGen && l.state != leaseRevoked
-		l.mu.Unlock()
-		if !current {
-			return ReloadResult{}, &ReloadUnknown{RequestID: op.id}
-		}
+		// deliverReload accepted this receipt under the lease lock
+		// from the current peer. A later replacement cannot revoke
+		// that evidence for the original operation.
 		return res, nil
 	case <-ctx.Done():
 		releaseReloadWaiter(l, op)
 		return ReloadResult{}, &ReloadUnknown{RequestID: op.id}
 	case <-p.done:
+		return reloadResultAfterPeerLoss(l, op)
+	}
+}
+
+// reloadResultAfterPeerLoss prefers a receipt already accepted under
+// the lease lock before the peer closed. A missing receipt remains
+// unknown and leaves the operation unresolved.
+func reloadResultAfterPeerLoss(l *lease, op *reloadOp) (ReloadResult, error) {
+	select {
+	case res := <-op.ch:
+		return res, nil
+	default:
 		releaseReloadWaiter(l, op)
 		return ReloadResult{}, &ReloadUnknown{RequestID: op.id}
 	}

@@ -262,9 +262,11 @@ process-owned latch until the callback settles and publishes fresh readiness.
 Phi keeps the operation unresolved until a same-process readiness snapshot
 covers its ID and explicitly clears `reload_pending`. Reload and Compact are
 mutually exclusive while either operation is unresolved. A timeout, lost
-receipt, disconnect, or runtime replacement does not permit replay. If an
-admitted request never reaches Pi, the server cannot prove release; it stays
-pending until the Pi process exits.
+receipt, disconnect, or runtime replacement does not permit replay. When
+shutdown follows dispatch, the extension drains and half-closes the receipt
+stream, then waits for server status before a replacement runtime sends Hello.
+If an admitted request never reaches Pi, the server cannot prove release; it
+stays pending until the Pi process exits.
 
 ## Lifecycle events
 

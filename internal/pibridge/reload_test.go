@@ -710,6 +710,22 @@ func TestRequestReloadPeerLossKeepsOperation(t *testing.T) {
 	_ = stream
 }
 
+func TestReloadPeerLossPrefersAcceptedReceipt(t *testing.T) {
+	want := ReloadResult{
+		RequestID: "7",
+		Outcome:   pibridgepb.ReloadDispatchOutcome_RELOAD_DISPATCH_OUTCOME_DISPATCHED,
+	}
+	op := &reloadOp{id: want.RequestID, ch: make(chan ReloadResult, 1)}
+	op.ch <- want
+	got, err := reloadResultAfterPeerLoss(&lease{reload: op}, op)
+	if err != nil {
+		t.Fatalf("peer loss: %v", err)
+	}
+	if got != want {
+		t.Fatalf("result %+v, want %+v", got, want)
+	}
+}
+
 func TestRequestReloadReplacementKeepsWithoutEvidence(t *testing.T) {
 	s, sock, cleanup := testServer(t)
 	defer cleanup()
@@ -880,18 +896,20 @@ func TestRequestReloadReplacementBetweenDeliveryAndConsumption(t *testing.T) {
 
 	// Each iteration delivers the dispatch receipt, then replaces
 	// the dispatch peer while the waiter is gated inside
-	// consumption: replacement strictly precedes the currency
-	// check, so the waiter reports unknown every time while the
-	// dispatched operation itself stays unresolved. A missing
-	// waiter fence returns DISPATCHED instead.
+	// consumption. The accepted receipt remains valid for its
+	// original operation; replacement cannot revoke it.
 	for i := 0; i < 5; i++ {
 		rev, _ := s.PublicationRevision(proc)
 		parent, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		gated := newGateContext(parent)
-		errCh := make(chan error, 1)
+		type outcome struct {
+			res ReloadResult
+			err error
+		}
+		resultCh := make(chan outcome, 1)
 		go func() {
-			_, err := s.RequestReload(gated, proc, 1, rev, 0, 0)
-			errCh <- err
+			res, err := s.RequestReload(gated, proc, 1, rev, 0, 0)
+			resultCh <- outcome{res: res, err: err}
 		}()
 		wire := recvReloadRequest(t, stream)
 		l.mu.Lock()
@@ -914,9 +932,12 @@ func TestRequestReloadReplacementBetweenDeliveryAndConsumption(t *testing.T) {
 		l.mu.Unlock()
 		close(gated.release)
 		select {
-		case err := <-errCh:
-			if reloadUnknownID(t, err) != wire.id {
-				t.Fatalf("iter %d err %v, want unknown for %s", i, err, wire.id)
+		case got := <-resultCh:
+			if got.err != nil {
+				t.Fatalf("iter %d err %v, want accepted receipt", i, got.err)
+			}
+			if got.res.RequestID != wire.id || got.res.Outcome != pibridgepb.ReloadDispatchOutcome_RELOAD_DISPATCH_OUTCOME_DISPATCHED {
+				t.Fatalf("iter %d result %+v, want dispatched receipt for %s", i, got.res, wire.id)
 			}
 		case <-time.After(5 * time.Second):
 			t.Fatalf("iter %d waiter hung", i)

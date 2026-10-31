@@ -617,6 +617,7 @@ describe('telemetry view and compaction latch', () => {
             baseline: null,
             pending: null,
             highWater: null,
+            drain: null,
             active: null,
         });
         resetOwnerSlotForTest();
