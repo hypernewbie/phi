@@ -728,7 +728,7 @@ async function assertEmbeddedCredentialBoundary(
             .fromPartition('persist:phi-embedded')
             .cookies.get({});
         return cookies.filter(
-            (cookie) =>
+            (cookie: { name: string }) =>
                 cookie.name === 'phi_access_refresh' ||
                 cookie.name === 'phi_access_asset',
         ).length;
