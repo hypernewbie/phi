@@ -44,7 +44,15 @@ function setupManager() {
         app: { sessionsManager: { loadSessions } },
         inputTextArea: document.getElementById('input-textarea'),
         sendInputBtn: document.getElementById('send-input-btn'),
+        cancelInputBtn: document.getElementById('cancel-input-btn'),
+        inputBarContainer: document.getElementById('input-bar-container'),
+        presetsContainer: document.getElementById('presets-container'),
+        copyInputBtn: document.getElementById('copy-input-btn'),
+        ctrlTBtn: document.getElementById('ctrl-t-btn'),
         directModeToggle: document.getElementById('direct-mode-toggle'),
+        thinkingVisibilityBtn: document.getElementById(
+            'thinking-visibility-btn',
+        ),
         reconnectTab: vi.fn(),
         _cancelHistoryRequest: vi.fn(),
         closeTab: vi.fn(),
@@ -78,6 +86,191 @@ describe('terminal toolbar markup and bindings', () => {
             expect(button.classList.contains('tab-action-btn')).toBe(true);
             expect(button.getAttribute('type')).toBe('button');
         }
+    });
+
+    it('folds on click, moves the existing interrupt button, and restores the draft on expand', () => {
+        const { manager, first } = setupManager();
+        Object.assign(manager, {
+            renderPresets: vi.fn(),
+            _placeCompactQuickChips: vi.fn(),
+            fitActiveTerminal: vi.fn(),
+            focusActiveTerminal: vi.fn(),
+        });
+        Object.assign(first, { directMode: false, isAtBottom: true });
+        const cancel = manager.cancelInputBtn;
+        const expandedActions = manager.sendInputBtn.parentElement;
+        manager.inputTextArea.value = 'keep this draft';
+
+        manager.directModeToggle.click();
+
+        expect(first.directMode).toBe(true);
+        expect(
+            manager.inputBarContainer.classList.contains('direct-mode-active'),
+        ).toBe(true);
+        expect(manager.presetsContainer.classList.contains('hidden')).toBe(
+            true,
+        );
+        expect(cancel.parentElement.className).toBe('presets-actions');
+        expect(cancel.nextElementSibling).toBe(manager.directModeToggle);
+        expect(manager.directModeToggle.getAttribute('aria-expanded')).toBe(
+            'false',
+        );
+        expect(manager.focusActiveTerminal).toHaveBeenCalledOnce();
+
+        manager.directModeToggle.click();
+
+        expect(first.directMode).toBe(false);
+        expect(
+            manager.inputBarContainer.classList.contains('direct-mode-active'),
+        ).toBe(false);
+        expect(cancel.parentElement).toBe(expandedActions);
+        expect(document.querySelectorAll('#cancel-input-btn')).toHaveLength(1);
+        expect(manager.inputTextArea.value).toBe('keep this draft');
+        expect(manager.directModeToggle.getAttribute('aria-expanded')).toBe(
+            'true',
+        );
+    });
+
+    it.each([
+        ['bash', '\x03'],
+        ['pi', '\x1b'],
+        ['claude', '\x1b'],
+        ['opencode', '\x1b'],
+    ])(
+        'interrupts %s while keeping the composer collapsed',
+        (coder, expectedKey) => {
+            const { manager, first } = setupManager();
+            Object.assign(manager, {
+                renderPresets: vi.fn(),
+                _placeCompactQuickChips: vi.fn(),
+                fitActiveTerminal: vi.fn(),
+                focusActiveTerminal: vi.fn(),
+                sendRawInput: vi.fn(),
+            });
+            Object.assign(first, {
+                coder,
+                directMode: false,
+                isAtBottom: true,
+            });
+            manager.inputTextArea.value = 'unsent draft';
+            manager.directModeToggle.click();
+
+            manager.cancelInputBtn.click();
+
+            expect(manager.sendRawInput).toHaveBeenCalledExactlyOnceWith(
+                expectedKey,
+            );
+            expect(first.directMode).toBe(true);
+            expect(manager.cancelInputBtn.parentElement.className).toBe(
+                'presets-actions',
+            );
+            expect(manager.inputTextArea.value).toBe('unsent draft');
+        },
+    );
+
+    it.each(['bash', 'pi-rpc'])(
+        'restores interrupt beside Send when switching to an expanded %s pane',
+        (coder) => {
+            const { manager, first, second } = setupManager();
+            Object.assign(manager, {
+                renderPresets: vi.fn(),
+                _placeCompactQuickChips: vi.fn(),
+                fitActiveTerminal: vi.fn(),
+                focusActiveTerminal: vi.fn(),
+            });
+            Object.assign(first, { directMode: false, isAtBottom: true });
+            manager.directModeToggle.click();
+            Object.assign(second, {
+                coder,
+                directMode: false,
+                isAtBottom: true,
+            });
+            manager.activePaneId = second.paneId;
+
+            manager.updateDirectModeUI(second, true);
+
+            expect(first.directMode).toBe(true);
+            expect(second.directMode).toBe(false);
+            expect(manager.cancelInputBtn.parentElement).toBe(
+                manager.sendInputBtn.parentElement,
+            );
+            expect(
+                manager.inputBarContainer.classList.contains(
+                    'direct-mode-active',
+                ),
+            ).toBe(false);
+            expect(manager.directModeToggle.classList.contains('hidden')).toBe(
+                coder === 'pi-rpc',
+            );
+        },
+    );
+
+    it('keeps Enter and Tab on collapsed controls out of the mobile PTY fallback', () => {
+        const { manager } = setupManager();
+        vi.stubGlobal(
+            'matchMedia',
+            vi.fn(() => ({ matches: true })),
+        );
+        manager.inputBarContainer.classList.remove('hidden');
+        manager._forwardKeyToPty = vi.fn();
+        manager.directModeToggle.before(manager.cancelInputBtn);
+        const fallback = document.addEventListener.mock.calls.find(
+            ([type, handler]) =>
+                type === 'keydown' &&
+                handler.toString().includes('_forwardKeyToPty'),
+        )[1];
+
+        for (const id of ['direct-mode-toggle', 'cancel-input-btn']) {
+            for (const key of ['Enter', 'Tab']) {
+                const event = new KeyboardEvent('keydown', {
+                    key,
+                    cancelable: true,
+                });
+                Object.defineProperty(event, 'target', {
+                    value: document.getElementById(id),
+                });
+                fallback(event);
+                expect(event.defaultPrevented).toBe(false);
+            }
+        }
+        expect(manager._forwardKeyToPty).not.toHaveBeenCalled();
+
+        const terminalKey = new KeyboardEvent('keydown', { key: 'Enter' });
+        Object.defineProperty(terminalKey, 'target', { value: document.body });
+        fallback(terminalKey);
+        expect(manager._forwardKeyToPty).toHaveBeenCalledOnce();
+    });
+
+    it('toggles thinking only in the active Pi RPC pane', () => {
+        const { manager, first, second } = setupManager();
+        const container = document.createElement('div');
+        const block = document.createElement('div');
+        block.className = 'thinking-block collapsed';
+        const toggle = document.createElement('span');
+        toggle.className = 'thinking-toggle';
+        toggle.textContent = '▶';
+        block.append(toggle);
+        container.append(block);
+        first.coder = 'pi-rpc';
+        first.termContainer = container;
+        manager.renderPresets = vi.fn();
+        manager._setPiRpcActionVisibility(first);
+
+        manager.thinkingVisibilityBtn.click();
+
+        expect(manager._thinkingAllVisible.get(first.paneId)).toBe(true);
+        expect(block.classList.contains('collapsed')).toBe(false);
+        expect(toggle.textContent).toBe('▼');
+        expect(manager.renderPresets).toHaveBeenCalledWith('pi-rpc');
+
+        manager.thinkingVisibilityBtn.click();
+        expect(manager._thinkingAllVisible.get(first.paneId)).toBe(false);
+        expect(block.classList.contains('collapsed')).toBe(true);
+        expect(toggle.textContent).toBe('▶');
+
+        manager.activePaneId = second.paneId;
+        manager.thinkingVisibilityBtn.click();
+        expect(manager._thinkingAllVisible.has(second.paneId)).toBe(false);
     });
 
     it('removes the toolbar reconnect buttons and labels the retained controls', () => {
