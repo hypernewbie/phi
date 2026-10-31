@@ -278,6 +278,74 @@ func TestAttachmentStoreLockFileIsPrivate(t *testing.T) {
 	}
 }
 
+func TestAttachmentHandoffBasenamePreservesSafeNames(t *testing.T) {
+	id := "01234567-89ab-cdef-0123-456789abcdef"
+	prefix := "att-0123456789abcdef0123456789abcdef-"
+	for _, tc := range []struct {
+		name, kind, mime, want string
+	}{
+		{name: "local-benchmark.json", want: "local-benchmark.json"},
+		{name: "archive.tar.gz", want: "archive.tar.gz"},
+		{name: "README", want: "README"},
+		{name: ".env", want: "file.env"},
+		{name: "my report.txt", want: "my_report.txt"},
+		{name: "café-✓.txt", want: "caf_-_.txt"},
+		{name: `quote"angle<>.txt`, want: "quote_angle__.txt"},
+		{name: "../report.json", want: "__report.json"},
+		{name: `C:\temp\report.json`, want: "C__temp_report.json"},
+		{name: "foo....bar.json", want: "foo__bar.json"},
+		{name: "report..json", want: "report.json"},
+		{name: "report.txt.", want: "report.txt"},
+		{name: "...", want: "file"},
+		{name: "CON", want: "CON"},
+		{name: "wrong.jpg", kind: "image", mime: "image/png", want: "wrong.png"},
+		{name: "photo.jpeg", kind: "image", mime: "image/jpeg", want: "photo.jpg"},
+		{name: strings.Repeat("a", 1000) + ".json", want: strings.Repeat("a", 86) + ".json"},
+		{name: strings.Repeat("a", 85) + ".tail.json", want: strings.Repeat("a", 85) + ".json"},
+		{name: "report." + strings.Repeat("x", 150), want: "report." + strings.Repeat("x", 84)},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			got := attachmentHandoffBasename(id, AttachmentItem{Name: tc.name, Kind: tc.kind, MIMEType: tc.mime})
+			if got != prefix+tc.want {
+				t.Fatalf("basename = %q, want %q", got, prefix+tc.want)
+			}
+			if len(got) > 128 || strings.Contains(got, "..") || strings.ContainsAny(got, `/\\`) {
+				t.Fatalf("basename violates bridge boundary: %q", got)
+			}
+			for _, r := range got {
+				if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-') {
+					t.Fatalf("basename contains unsafe character: %q", got)
+				}
+			}
+		})
+	}
+}
+
+func TestAttachmentStoreHandoffPreservesFilenameBytesAndUniqueness(t *testing.T) {
+	store := openTestAttachmentStore(t)
+	data := []byte(`{"benchmark":42}`)
+	item, err := putTestItem(t, store, "pane", "local-benchmark.json", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := make(map[string]bool)
+	for range 2 {
+		root, refs, err := store.CreateHandoff("process-1", "pane", []string{item.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ref := refs[0]
+		if !strings.HasSuffix(ref.Basename, "-local-benchmark.json") || seen[ref.Basename] {
+			t.Fatalf("unexpected or reused handoff name: %q", ref.Basename)
+		}
+		seen[ref.Basename] = true
+		got, err := os.ReadFile(filepath.Join(root, ref.Basename))
+		if err != nil || !bytes.Equal(got, data) || ref.SHA256 != item.SHA256 {
+			t.Fatalf("handoff content changed: ref=%+v bytes=%q err=%v", ref, got, err)
+		}
+	}
+}
+
 func TestAttachmentStoreHandoffEnforcesEightItemAndTotalLimits(t *testing.T) {
 	store := openTestAttachmentStore(t)
 	ids := make([]string, 0, 8)

@@ -712,6 +712,7 @@ test('desktop server file inside cwd snapshots without browser upload and reache
             const handoffPaths = attachedHandoffPaths(toolRequest);
             expect(handoffPaths).toHaveLength(1);
             expect(handoffPaths[0]).toContain('/attachments-v2/handoff/');
+            expect(handoffPaths[0]).toMatch(/\/att-[0-9a-f]{32}-report\.txt$/);
             const readResult = fixture.provider.requests[before + 1]!;
             expect(anthropicUserText(readResult)).toContain(SERVER_TEXT);
             await expect(page.locator('#attachment-status')).toContainText(

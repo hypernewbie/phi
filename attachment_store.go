@@ -38,6 +38,7 @@ const (
 	attachmentImageProbeBytes = 1 << 20
 	attachmentHandoffMaxRefs  = 8
 	attachmentHandoffMaxTotal = int64(50 << 20)
+	attachmentHandoffMaxName  = 128
 )
 
 var (
@@ -749,6 +750,39 @@ func (s *AttachmentStore) CreateHandoff(processID, paneID string, ids []string) 
 	return root, refs, nil
 }
 
+// attachmentHandoffBasename keeps a readable name within the existing ASCII
+// bridge boundary. The UUID prefix prevents collisions and reserved filenames.
+func attachmentHandoffBasename(id string, item AttachmentItem) string {
+	prefix := "att-" + strings.ReplaceAll(id, "-", "") + "-"
+	name := strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-' {
+			return r
+		}
+		return '_'
+	}, item.Name)
+	name = strings.TrimRight(name, ".")
+	ext := filepath.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	if item.Kind == "image" {
+		if item.MIMEType == "image/png" {
+			ext = ".png"
+		} else if item.MIMEType == "image/jpeg" {
+			ext = ".jpg"
+		}
+	}
+	budget := attachmentHandoffMaxName - len(prefix) - len(ext)
+	if budget < 1 {
+		stem, ext = name, ""
+		budget = attachmentHandoffMaxName - len(prefix)
+	}
+	stem = strings.Trim(strings.ReplaceAll(stem, "..", "_"), ".")
+	if stem == "" {
+		stem = "file"
+	}
+	stem = strings.TrimRight(stem[:min(len(stem), budget)], ".")
+	return prefix + stem + ext
+}
+
 func (s *AttachmentStore) copyHandoff(root string, item AttachmentItem) (AttachmentHandoffRef, int64, error) {
 	src, err := openAttachmentRegularNoFollow(item.Path)
 	if err != nil {
@@ -763,15 +797,7 @@ func (s *AttachmentStore) copyHandoff(root string, item AttachmentItem) (Attachm
 	if err != nil {
 		return AttachmentHandoffRef{}, 0, errAttachmentStorage
 	}
-	ext := ".bin"
-	if item.Kind == "image" {
-		if item.MIMEType == "image/png" {
-			ext = ".png"
-		} else if item.MIMEType == "image/jpeg" {
-			ext = ".jpg"
-		}
-	}
-	basename := "att-" + strings.ReplaceAll(id, "-", "") + ext
+	basename := attachmentHandoffBasename(id, item)
 	target := filepath.Join(root, basename)
 	out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
