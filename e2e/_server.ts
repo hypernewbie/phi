@@ -257,7 +257,9 @@ export async function startPhi(
     options: {
         config?: Record<string, unknown>;
         setup?: (dir: string) => void | Promise<void>;
-        env?: Record<string, string>;
+        env?:
+            | Record<string, string>
+            | ((dir: string) => Record<string, string>);
         web?: string;
     } = {},
 ): Promise<PhiServer> {
@@ -336,13 +338,23 @@ export async function startPhi(
         await options.setup?.(dir);
         const port = await freePort();
         const bin = join(dir, process.platform === 'win32' ? 'phi.exe' : 'phi');
-        await run('go', ['build', '-o', bin, '.'], process.cwd());
+        await run(
+            'go',
+            ['build', '-buildvcs=true', '-o', bin, '.'],
+            process.cwd(),
+        );
         const args = ['--port', String(port), '--ip', '127.0.0.1'];
         if (options.web !== undefined) args.push('--web', options.web);
         const launch = (): ChildProcess =>
             spawn(bin, args, {
                 cwd: dir,
-                env: fixtureEnv(home, runTmp, options.env),
+                env: fixtureEnv(
+                    home,
+                    runTmp,
+                    typeof options.env === 'function'
+                        ? options.env(dir)
+                        : options.env,
+                ),
                 stdio: ['ignore', 'pipe', 'pipe'],
             });
         const logPath = join(dir, 'server.log');

@@ -1133,6 +1133,21 @@ eager to avoid a first-open unstyled flash. -->
                     </div>
 
                     <div class="diff-action-bar hidden" id="diff-action-bar">
+                        <section class="git-management" id="git-management" aria-label="Git actions">
+                            <div class="git-target-label" id="git-target-label">No cached Git information</div>
+                            <label class="git-commit-label" for="git-commit-message">Commit message</label>
+                            <textarea id="git-commit-message" class="diff-comment-textarea git-commit-message" rows="2" aria-describedby="git-commit-draft-status"></textarea>
+                            <div class="git-action-status hidden" id="git-commit-draft-status" role="status" aria-live="polite"></div>
+                            <div class="git-management-actions">
+                                <button id="git-pull-btn" type="button" class="btn btn-primary git-management-btn" disabled>Pull</button>
+                                <button id="git-push-btn" type="button" class="btn btn-primary git-management-btn" disabled>Push</button>
+                                <button id="git-commit-btn" type="button" class="btn btn-primary git-management-btn" disabled>Commit staged</button>
+                                <button id="git-action-resume-btn" type="button" class="btn btn-primary git-management-btn hidden">Resume</button>
+                                <button id="git-action-cancel-btn" type="button" class="btn btn-primary git-management-btn hidden">Cancel</button>
+                                <button id="git-action-dismiss-btn" type="button" class="btn btn-primary git-management-btn hidden">Dismiss</button>
+                            </div>
+                            <div class="git-action-status" id="git-action-status" role="status" aria-live="polite"></div>
+                        </section>
                         <select
                             id="diff-commit-select"
                             class="diff-commit-select hidden"

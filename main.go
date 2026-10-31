@@ -275,7 +275,10 @@ func main() {
 	http.HandleFunc("/api/diff", handleGetDiff)
 	http.HandleFunc("/api/git/raw-diff", handleRawDiff)
 	http.HandleFunc("/api/git/raw-status", handleRawStatus)
+	http.HandleFunc("/api/git/raw-log", handleRawLog)
 	http.HandleFunc("/api/git/commits", handleGetCommits)
+	http.HandleFunc("/api/git/info", handleGitInfo)
+	http.HandleFunc("/api/git/action", handleGitAction)
 	http.HandleFunc("/api/config", handleConfig)
 	http.HandleFunc("/api/config/pushover", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
