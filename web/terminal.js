@@ -9544,14 +9544,15 @@ export class TabManager {
     }
 
     async _browseAttachmentServer(selection, path) {
+        const current = () => this._attachmentServerSelection === selection;
         const record = (listing) => {
+            if (!current()) return;
             for (const entry of listing.entries || []) {
                 if (entry && entry.kind === 'file' && typeof entry.path === 'string') {
                     this._attachmentServerEntries.set(entry.path, entry);
                 }
             }
         };
-        const current = () => this._attachmentServerSelection === selection;
         const serveCached = (why) => {
             const cached = this._readAttachmentServerCache(selection.owner, path);
             if (!cached) return null;
@@ -9559,28 +9560,35 @@ export class TabManager {
             if (current()) this._setAttachmentServerStatus(`${why} Showing a cached listing.`);
             return cached.listing;
         };
-        if (this._attachmentNetworkOffline()) {
-            const cached = serveCached('Offline.');
+        const offline = this._attachmentNetworkOffline();
+        const cached = serveCached(offline ? 'Offline.' : 'Refreshing.');
+        if (offline) {
             if (cached) return cached;
             throw new Error('offline');
         }
-        try {
-            const listing = await browseServerFiles({ ...selection.owner, scope: selection.scope }, path);
-            record(listing);
-            const cached = { at: Date.now(), listing };
-            if (!this._attachmentServerMemory) this._attachmentServerMemory = new Map();
-            this._attachmentServerMemory.set(`${this._attachmentOwnerKey(selection.owner)} ${path}`, cached);
+        const refresh = (async () => {
             try {
-                const raw = JSON.stringify(cached);
-                if (raw.length < 200000) localStorage.setItem(this._attachmentServerCacheKey(selection.owner, path), raw);
-            } catch {}
-            if (current()) this._setAttachmentServerStatus(listing.truncated ? 'Showing the first entries; the listing was truncated.' : '');
-            return listing;
-        } catch (error) {
-            const cached = serveCached('Refresh failed.');
-            if (cached) return cached;
-            throw error;
-        }
+                const listing = await browseServerFiles({ ...selection.owner, scope: selection.scope }, path);
+                record(listing);
+                const saved = { at: Date.now(), listing };
+                if (!this._attachmentServerMemory) this._attachmentServerMemory = new Map();
+                this._attachmentServerMemory.set(`${this._attachmentOwnerKey(selection.owner)} ${path}`, saved);
+                try {
+                    const raw = JSON.stringify(saved);
+                    if (raw.length < 200000) localStorage.setItem(this._attachmentServerCacheKey(selection.owner, path), raw);
+                } catch {}
+                if (current()) {
+                    if (cached) this._attachmentServerTree?.updateListing(listing);
+                    this._setAttachmentServerStatus(listing.truncated ? 'Showing the first entries; the listing was truncated.' : '');
+                }
+                return listing;
+            } catch (error) {
+                const fallback = serveCached('Refresh failed.');
+                if (fallback) return fallback;
+                throw error;
+            }
+        })();
+        return cached || refresh;
     }
 
     _selectAttachmentServerFile(selection, path) {

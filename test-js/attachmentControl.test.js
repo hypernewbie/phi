@@ -314,6 +314,123 @@ describe('attachment control', () => {
         },
     );
 
+    it('shows cached server files before refresh and updates rows without losing keyboard focus', async () => {
+        const { tm, tabA } = makeManager();
+        const owner = tm._captureAttachmentOwner(tabA);
+        const report = {
+            name: 'report.txt',
+            path: '/project-a/report.txt',
+            kind: 'file',
+            fingerprint: 'a'.repeat(64),
+        };
+        const listing = {
+            path: owner.cwd,
+            parent: '/',
+            truncated: false,
+            entries: [report],
+        };
+        localStorage.setItem(
+            tm._attachmentServerCacheKey(owner, owner.cwd),
+            JSON.stringify({ at: Date.now(), listing }),
+        );
+        let finishRead;
+        mockFetch(
+            () =>
+                new Promise((resolve) => {
+                    finishRead = resolve;
+                }),
+        );
+        tm._openAttachmentServerModal(tabA, owner, tm.app.scope);
+        const reportRow = () =>
+            tm.attachmentServerTree.querySelector(
+                '[data-path="/project-a/report.txt"]',
+            );
+        await vi.waitFor(() => expect(reportRow()).not.toBeNull(), {
+            timeout: 500,
+        });
+        expect(tm.attachmentServerStatus.textContent).toBe(
+            'Refreshing. Showing a cached listing.',
+        );
+        reportRow().focus();
+        const focused = document.activeElement;
+        finishRead({
+            ...listing,
+            entries: [
+                report,
+                {
+                    name: 'new.txt',
+                    path: '/project-a/new.txt',
+                    kind: 'file',
+                    fingerprint: 'b'.repeat(64),
+                },
+            ],
+        });
+        await vi.waitFor(() =>
+            expect(
+                tm.attachmentServerTree.querySelector(
+                    '[data-path="/project-a/new.txt"]',
+                ),
+            ).not.toBeNull(),
+        );
+        expect(document.activeElement).toBe(focused);
+        expect(tm.attachmentServerStatus.textContent).toBe('');
+        tm._closeAttachmentServerModal();
+    });
+
+    it('ignores a late server listing after the picker switches to another pane', async () => {
+        const { tm, tabA, tabB } = makeManager();
+        const ownerA = tm._captureAttachmentOwner(tabA);
+        const ownerB = tm._captureAttachmentOwner(tabB);
+        let finishRead;
+        mockFetch((url) => {
+            const path = new URL(
+                String(url),
+                'http://localhost',
+            ).searchParams.get('path');
+            const listing = {
+                path,
+                parent: '/',
+                truncated: false,
+                entries: [
+                    {
+                        name: 'report.txt',
+                        path: `${path}/report.txt`,
+                        kind: 'file',
+                        fingerprint: 'a'.repeat(64),
+                    },
+                ],
+            };
+            return path === ownerA.cwd
+                ? new Promise((resolve) => {
+                      finishRead = () => resolve(listing);
+                  })
+                : listing;
+        });
+        tm._openAttachmentServerModal(tabA, ownerA, tm.app.scope);
+        await vi.waitFor(() => expect(finishRead).toBeTypeOf('function'));
+        tm._closeAttachmentServerModal();
+        tm.activePaneId = tabB.paneId;
+        tm._openAttachmentServerModal(tabB, ownerB, tm.app.scope);
+        await vi.waitFor(() =>
+            expect(
+                tm.attachmentServerTree.querySelector(
+                    '[data-path="/project-b/report.txt"]',
+                ),
+            ).not.toBeNull(),
+        );
+        finishRead();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(tm._attachmentServerEntries.has('/project-a/report.txt')).toBe(
+            false,
+        );
+        expect(
+            tm.attachmentServerTree.querySelector(
+                '[data-path="/project-a/report.txt"]',
+            ),
+        ).toBeNull();
+        tm._closeAttachmentServerModal();
+    });
+
     it('does not restore a stale snapshot while the owner draft save is pending', async () => {
         const { tm, tabA } = makeManager();
         const owner = tm._captureAttachmentOwner(tabA);
