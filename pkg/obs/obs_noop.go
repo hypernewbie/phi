@@ -22,11 +22,11 @@ import (
 )
 
 // Span starts a logical span named name with the given key,value,... attrs.
-// In the default build there is no real span: ctx flows through unchanged,
-// and the returned end func times the operation and emits one
-// slog.Debug("span", ...) line (attrs plus dur_ms, and err on failure) —
-// gated behind the Debug level like every other hot-path trace in phi, so
-// it costs nothing at the default Info level.
+// In the default build there is no OTel span. During a private timing
+// capture, allowlisted spans below an API root carry a local timing scope.
+// Otherwise ctx flows through unchanged. The returned end func also emits
+// slog.Debug("span", ...) (attrs plus dur_ms, and err on failure) when Debug
+// logging is enabled.
 func Span(ctx context.Context, name string, attrs ...any) (context.Context, func(error)) {
 	start := time.Now()
 	ctx, gen, id, recorded := timingSpanStart(ctx, name)

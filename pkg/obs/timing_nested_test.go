@@ -390,20 +390,37 @@ func TestTimingPreviousGenerationSpanCallbacksIgnored(t *testing.T) {
 	if first.DiscardedOpen != 1 {
 		t.Fatalf("counts = %+v", first)
 	}
-	// Late callbacks from the finished generation.
-	endSpan(nil)
-	late := httptest.NewRequest(http.MethodGet, "/api/thing", nil)
-	late.Pattern = "/api/thing"
-	endTimingRoot(gen1, id1, late)
-	timingSpanEnd(gen1, id1+1)
-
 	next, ok := BeginTimingCapture()
 	if !ok {
 		t.Fatal("begin next capture")
 	}
+	defer next.Cancel()
+	// Reuse the same node IDs in a live generation. Calling stale hooks
+	// before this point would not test the generation guard at all.
+	gen2, id2, ok := admitTimingRoot(http.MethodGet)
+	if !ok {
+		t.Fatal("admit next root")
+	}
+	ctx2 := context.WithValue(context.Background(), timingCtxKey{}, timingScope{generation: gen2, node: id2})
+	_, endCurrent := Span(ctx2, "git.status")
+	endSpan(nil)
+	_, endStale := Span(ctx1, "git.diff")
+	endStale(nil)
+	late := httptest.NewRequest(http.MethodGet, "/api/thing", nil)
+	late.Pattern = "/api/thing"
+	endTimingRoot(gen1, id1, late)
+	timingSpanEnd(gen1, id1+1)
+	timingMu.Lock()
+	rootEnded, childEnded := timingCur.nodes[0].ended, timingCur.nodes[1].ended
+	timingMu.Unlock()
+	if rootEnded || childEnded {
+		t.Fatal("stale callback closed a current node")
+	}
+	endCurrent(nil)
+	endTimingRoot(gen2, id2, late)
 	second := next.Finish()
-	if second.RootsSeen != 0 || second.NodesRecorded != 0 || second.NodesDropped != 0 {
-		t.Fatalf("late callbacks leaked: %+v", second)
+	if second.RootsSeen != 1 || second.RootsExported != 1 || second.NodesRecorded != 2 || second.NodesDropped != 0 {
+		t.Fatalf("stale callbacks changed the next capture: %+v", second)
 	}
 }
 

@@ -259,6 +259,7 @@ func removeProfileFile(file *os.File) {
 
 func (s *Server) deliverProfile(w http.ResponseWriter, file *os.File) error {
 	if err := setWriteDeadline(w, time.Now().Add(s.profileDeliveryWindow)); err != nil {
+		http.Error(w, "profile transport unavailable", http.StatusServiceUnavailable)
 		return err
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
@@ -313,7 +314,7 @@ func (w *limitingWriter) Write(data []byte) (int, error) {
 	} else if n != len(data) {
 		w.failLocked(io.ErrShortWrite)
 	}
-	return n, err
+	return n, w.err
 }
 
 func (w *limitingWriter) Err() error {

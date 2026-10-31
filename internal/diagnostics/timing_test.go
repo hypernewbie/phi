@@ -86,6 +86,7 @@ func parseTimingProfile(t *testing.T, data []byte) (*profile.Profile, timingSumm
 func startTimingCapture(t *testing.T, client *http.Client, s *Server, path string) (context.CancelFunc, <-chan *http.Response) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	done := make(chan *http.Response, 1)
 	go func() {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.URL()+path, nil)
@@ -105,34 +106,12 @@ func startTimingCapture(t *testing.T, client *http.Client, s *Server, path strin
 	return cancel, done
 }
 
-func TestTimingStatusRetainsLastID(t *testing.T) {
-	s := startTestServer(t, currentProcessReaders())
-	client := profileClient(t)
-	active, firstID := timingStatus(t, client, s)
-	if active {
-		t.Fatal("capture unexpectedly active")
-	}
-	cancel, done := startTimingCapture(t, client, s, "/debug/phi/timing?seconds=30")
-	defer cancel()
-	active, secondID := waitTimingStatus(t, client, s, true)
-	if !active || secondID <= firstID {
-		t.Fatalf("active=%t id=%d after %d", active, secondID, firstID)
-	}
-	cancel()
-	<-done
-	active, thirdID := waitTimingStatus(t, client, s, false)
-	if active || thirdID != secondID {
-		t.Fatalf("active=%t id=%d, want inactive id=%d", active, thirdID, secondID)
-	}
-	assertNoTemporaryProfiles(t, s.Dir())
-}
-
 func TestTimingCaptureRoundTripWithWorkload(t *testing.T) {
 	s := startTestServer(t, currentProcessReaders())
 	client := profileClient(t)
 	_, beforeID := timingStatus(t, client, s)
 
-	cancel, done := startTimingCapture(t, client, s, "/debug/phi/timing?seconds=5")
+	cancel, done := startTimingCapture(t, client, s, "/debug/phi/timing?seconds=1")
 	defer cancel()
 	_, captureID := waitTimingStatus(t, client, s, true)
 	if captureID <= beforeID {
@@ -147,30 +126,7 @@ func TestTimingCaptureRoundTripWithWorkload(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		wrapped.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/version", nil))
 	}
-	// End the capture window promptly without waiting out the timer.
-	active, _ := timingStatus(t, client, s)
-	if !active {
-		t.Fatal("capture ended before workload finished")
-	}
-	cancel()
-	// Cancellation discards the capture: the client sees its own cancel.
-	if resp := <-done; resp != nil {
-		defer resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			t.Fatal("canceled capture returned success")
-		}
-	}
-	waitTimingStatus(t, client, s, false)
-	assertNoTemporaryProfiles(t, s.Dir())
-
-	// A complete short capture with direct workload proves the full path.
-	complete, completeDone := startTimingCapture(t, client, s, "/debug/phi/timing?seconds=1")
-	defer complete()
-	waitTimingStatus(t, client, s, true)
-	for i := 0; i < 3; i++ {
-		wrapped.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/version", nil))
-	}
-	resp2 := <-completeDone
+	resp2 := <-done
 	if resp2 == nil {
 		t.Fatal("complete capture request failed")
 	}
@@ -258,9 +214,13 @@ func TestTimingEndpointsRejectInvalidRequests(t *testing.T) {
 func TestTimingConflictAndCancellationAllowRetry(t *testing.T) {
 	s := startTestServer(t, currentProcessReaders())
 	client := profileClient(t)
+	_, beforeID := timingStatus(t, client, s)
 	cancel, done := startTimingCapture(t, client, s, "/debug/phi/timing?seconds=30")
 	defer cancel()
-	waitTimingStatus(t, client, s, true)
+	_, captureID := waitTimingStatus(t, client, s, true)
+	if captureID <= beforeID {
+		t.Fatalf("capture id did not advance: %d after %d", captureID, beforeID)
+	}
 
 	busy := authorizedProfileRequest(t, client, s, "/debug/pprof/heap")
 	busy.Body.Close()
@@ -278,8 +238,15 @@ func TestTimingConflictAndCancellationAllowRetry(t *testing.T) {
 	cancel()
 	if resp := <-done; resp != nil {
 		resp.Body.Close()
+		t.Fatal("canceled capture returned an HTTP response")
 	}
-	waitTimingStatus(t, client, s, false)
+	// Inactive status only means detached. Wait for the handler's file
+	// cleanup and final slot release before asserting cleanup or retrying.
+	waitTimingIdle(t, s)
+	active, lastID := timingStatus(t, client, s)
+	if active || lastID != captureID {
+		t.Fatalf("status after cancel: active=%t id=%d, want inactive id=%d", active, lastID, captureID)
+	}
 	assertNoTemporaryProfiles(t, s.Dir())
 
 	retry := authorizedProfileRequest(t, client, s, "/debug/phi/timing?seconds=1")
@@ -315,7 +282,9 @@ func TestServerCloseCancelsTimingCapture(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("timing request did not finish after server close")
 	}
-	waitTimingInactive(t)
+	if active, _ := obs.TimingStatus(); active {
+		t.Fatal("recorder still active after server close")
+	}
 	if _, err := os.Stat(dir); err == nil {
 		t.Fatalf("owned directory still exists: %s", dir)
 	}
@@ -329,17 +298,16 @@ func TestServerCloseCancelsTimingCapture(t *testing.T) {
 	assertNoTemporaryProfiles(t, fresh.Dir())
 }
 
-// waitTimingInactive polls the process-local recorder until the closed
-// server's handler detaches its capture.
-func waitTimingInactive(t *testing.T) {
+// waitTimingIdle waits for detachment AND transport cleanup on this server.
+func waitTimingIdle(t *testing.T, s *Server) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if active, _ := obs.TimingStatus(); !active {
+		if active, _ := obs.TimingStatus(); !active && len(s.profileSlot) == 0 {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("recorder still active after server close")
+			t.Fatal("timing handler did not release its recorder and profile slot")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -354,46 +322,6 @@ func TestTimingSizeLimitPreventsSuccess(t *testing.T) {
 		t.Fatalf("status = %d, want 503", resp.StatusCode)
 	}
 	assertNoTemporaryProfiles(t, s.Dir())
-}
-
-func TestEncodeTimingProfileExactWeights(t *testing.T) {
-	epoch := time.Now()
-	snapshot := obs.TimingSnapshot{
-		CaptureID:     7,
-		RootsSeen:     1,
-		RootsAdmitted: 1,
-		RootsExported: 1,
-		NodesRecorded: 3,
-		Roots: []*obs.TimingNode{{
-			Name:  "http GET /api/version",
-			Start: epoch,
-			End:   epoch.Add(900 * time.Nanosecond),
-			Children: []*obs.TimingNode{{
-				Name:  "child",
-				Start: epoch.Add(100 * time.Nanosecond),
-				End:   epoch.Add(300 * time.Nanosecond),
-			}},
-		}},
-	}
-	summary, prof, err := encodeTimingProfile(snapshot, "abc123")
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	if summary.RootDurationNS != 900 || summary.CaptureID != 7 || !summary.Complete {
-		t.Fatalf("summary = %+v", summary)
-	}
-	if summary.BuildCommit != "abc123" || summary.PID != os.Getpid() {
-		t.Fatalf("summary = %+v", summary)
-	}
-	weights := map[string]int64{}
-	var total int64
-	for _, sample := range prof.Sample {
-		total += sample.Value[0]
-		weights[sample.Location[0].Line[0].Function.Name] = sample.Value[0]
-	}
-	if total != 900 || weights["http GET /api/version"] != 700 || weights["child"] != 200 {
-		t.Fatalf("weights = %v total = %d", weights, total)
-	}
 }
 
 func TestEncodeTimingProfileNestedWeights(t *testing.T) {
@@ -424,9 +352,12 @@ func TestEncodeTimingProfileNestedWeights(t *testing.T) {
 			},
 		}},
 	}
-	summary, prof, err := encodeTimingProfile(snapshot, "")
+	summary, prof, err := encodeTimingProfile(snapshot, "abc123")
 	if err != nil {
 		t.Fatalf("encode: %v", err)
+	}
+	if summary.BuildCommit != "abc123" || summary.PID != os.Getpid() || summary.CaptureID != 3 {
+		t.Fatalf("identity = %+v", summary)
 	}
 	if summary.RootDurationNS != 900 || !summary.Complete {
 		t.Fatalf("summary = %+v", summary)
@@ -438,16 +369,19 @@ func TestEncodeTimingProfileNestedWeights(t *testing.T) {
 	var total int64
 	for _, sample := range prof.Sample {
 		total += sample.Value[0]
-		weights[sample.Location[0].Line[0].Function.Name] = sample.Value[0]
+		var stack []string
+		for _, location := range sample.Location {
+			stack = append(stack, location.Line[0].Function.Name)
+		}
+		weights[strings.Join(stack, " -> ")] = sample.Value[0]
 	}
 	if total != 900 {
 		t.Fatalf("total = %d, want 900", total)
 	}
-	if weights["http GET /api/git/raw-status"] != 700 || weights["git.status"] != 150 || weights["git.diff"] != 50 {
+	if len(weights) != 3 || weights["http GET /api/git/raw-status"] != 700 ||
+		weights["git.status -> http GET /api/git/raw-status"] != 150 ||
+		weights["git.diff -> git.status -> http GET /api/git/raw-status"] != 50 {
 		t.Fatalf("weights = %v", weights)
-	}
-	if _, ok := weights["git.log"]; ok {
-		t.Fatalf("zero child added weight: %v", weights)
 	}
 }
 

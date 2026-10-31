@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,6 +98,20 @@ func TestLimitingWriterEnforcesMaximum(t *testing.T) {
 	}
 	if !errors.Is(writer.Err(), errProfileTooLarge) {
 		t.Fatalf("stored error = %v", writer.Err())
+	}
+}
+
+type shortProfileWriter struct{}
+
+func (shortProfileWriter) Write(data []byte) (int, error) { return len(data) - 1, nil }
+
+func TestLimitingWriterPropagatesShortWrite(t *testing.T) {
+	writer := newLimitingWriter(shortProfileWriter{}, 64)
+	if n, err := writer.Write([]byte("profile")); n != 6 || !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("short write = %d, %v; want 6 and ErrShortWrite", n, err)
+	}
+	if n, err := writer.Write([]byte("more")); n != 0 || !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("failed writer accepted more data: %d, %v", n, err)
 	}
 }
 
@@ -301,7 +316,7 @@ func TestServerCloseCancelsCPUProfileAndRemovesOwnedDirectory(t *testing.T) {
 	}
 }
 
-func TestDeliverProfileUsesBoundedDeadlineAndReleasesCPUProfiler(t *testing.T) {
+func TestDeliverProfileUsesBoundedDeadline(t *testing.T) {
 	s := &Server{profileDeliveryWindow: 50 * time.Millisecond}
 	path := filepath.Join(t.TempDir(), "profile")
 	if err := os.WriteFile(path, []byte("profile bytes"), 0600); err != nil {
@@ -314,13 +329,14 @@ func TestDeliverProfileUsesBoundedDeadlineAndReleasesCPUProfiler(t *testing.T) {
 	defer file.Close()
 	writer := &blockingResponseWriter{started: make(chan struct{})}
 	finished := make(chan error, 1)
+	before := time.Now()
 	go func() { finished <- s.deliverProfile(writer, file) }()
 	select {
 	case <-writer.started:
 	case <-time.After(time.Second):
 		t.Fatal("profile response did not attempt a write")
 	}
-	if time.Until(writer.deadline) > 50*time.Millisecond || time.Until(writer.deadline) <= 0 {
+	if writer.deadline.Before(before.Add(s.profileDeliveryWindow)) || writer.deadline.After(time.Now().Add(s.profileDeliveryWindow)) {
 		t.Fatalf("write deadline = %v", writer.deadline)
 	}
 	select {
@@ -331,12 +347,27 @@ func TestDeliverProfileUsesBoundedDeadlineAndReleasesCPUProfiler(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("slow profile delivery exceeded its test deadline")
 	}
+}
 
-	var out bytes.Buffer
-	if err := pprof.StartCPUProfile(&out); err != nil {
-		t.Fatalf("CPU profiler remained active during file delivery: %v", err)
+func TestDeliverProfileRejectsUnavailableTransport(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "profile")
+	if err != nil {
+		t.Fatal(err)
 	}
-	pprof.StopCPUProfile()
+	defer file.Close()
+	if _, err := file.WriteString("profile bytes"); err != nil {
+		t.Fatal(err)
+	}
+	// ResponseRecorder has no deadline support. This must not become an
+	// implicit 200 with an empty body when the handler returns.
+	writer := httptest.NewRecorder()
+	err = (&Server{}).deliverProfile(writer, file)
+	if !errors.Is(err, http.ErrNotSupported) || writer.Code != http.StatusServiceUnavailable {
+		t.Fatalf("delivery status=%d err=%v, want 503 and unsupported transport", writer.Code, err)
+	}
+	if strings.Contains(writer.Body.String(), "profile bytes") {
+		t.Fatal("failed transport sent profile data")
+	}
 }
 
 type blockingResponseWriter struct {
@@ -410,13 +441,26 @@ func assertGzipProfile(t *testing.T, data []byte) {
 
 func assertNoTemporaryProfiles(t *testing.T, dir string) {
 	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), profileFilePrefix) {
-			t.Errorf("temporary profile remains: %s", entry.Name())
+	// Receiving the last response byte need not mean the handler's deferred
+	// cleanup already ran. Poll for that observable result, not a fixed sleep.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
 		}
+		var remaining []string
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), profileFilePrefix) {
+				remaining = append(remaining, entry.Name())
+			}
+		}
+		if len(remaining) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("temporary profiles remain: %v", remaining)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

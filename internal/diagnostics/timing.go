@@ -91,17 +91,17 @@ func (s *Server) handleTiming(w http.ResponseWriter, r *http.Request) {
 		default:
 		}
 	}
-	// Detach before encoding or delivery: slow download clients must not
-	// extend collection, and cancellation discards before cleanup.
-	snapshot := capture.Finish()
-	if !captureComplete {
+	// Detach before encoding or delivery. Canceled captures must discard,
+	// not validate and export trees while requests wait on the recorder.
+	if !captureComplete || r.Context().Err() != nil || s.ctx.Err() != nil {
+		capture.Cancel()
 		if s.ctx.Err() != nil && r.Context().Err() == nil {
 			http.Error(w, "profile capture canceled", http.StatusServiceUnavailable)
 		}
 		return
 	}
 
-	summary, prof, err := encodeTimingProfile(snapshot, s.commit)
+	summary, prof, err := encodeTimingProfile(capture.Finish(), s.commit)
 	if err != nil {
 		slogProfileError(err)
 		http.Error(w, "profile capture failed", http.StatusServiceUnavailable)

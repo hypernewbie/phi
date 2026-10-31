@@ -52,19 +52,22 @@ The optional `ownership` object reports known live/archive pane owners and three
 
 Timing capture records explicit start/end intervals for API-handler requests plus fixed nested operation spans. It retains short requests that a ~100 Hz CPU sampler misses. Units are nanoseconds of handler elapsed time, which includes waits. This is not CPU usage, client latency, or an individual request timeline.
 
-Check status first and rendezvous on it. Never start a second capture while one is active.
+Check status first. Never start a second capture while one is active.
 
 ```bash
 curl --fail-with-body --max-time 5 --config "$DIAG_SESSION/client.curl" "$DIAG_URL/debug/phi/timing/status"
 # {"active":false,"capture_id":0,"schema_version":1}
 ```
 
+In the first terminal, start the capture:
+
 ```bash
 curl --fail-with-body --max-time 45 --config "$DIAG_SESSION/client.curl" \
   --dump-header timing.headers --output timing.pprof \
   "$DIAG_URL/debug/phi/timing?seconds=30"
-# Run the workload while the capture window is open.
 ```
+
+In a second terminal, repeat the status request with the same connection variables. Wait for `active:true` and a newer `capture_id`. Run the workload before that capture becomes inactive. After the first command exits successfully, open its profile.
 
 Duration accepts `1` through `120` seconds and defaults to 30. Only one profile or timing capture runs at a time; a competitor gets HTTP 409. Do not retry a 409: wait for the active capture to finish, then start a new one. The success headers `X-Phi-Timing-Capture-ID`, `X-Phi-Timing-Complete`, and `X-Phi-Timing-Roots-Exported` describe the delivered file. A truncated download is failed evidence even with saved headers.
 
@@ -77,7 +80,13 @@ go tool pprof -http=127.0.0.1:0 -no_browser timing.pprof
 
 The profile carries one `phi_timing=` JSON comment with machine-readable counts: `roots_seen/admitted/exported/dropped`, `discarded_open/invalid/capacity`, `nodes_recorded/dropped`, `root_duration_ns`, `exported_span_counts`, and `complete`. `complete=true` means no loss. An empty capture is valid: zero roots, zero duration. Partial loss never reports as zero cost; check the counters.
 
-Graph meaning: each HTTP root name is the fixed method plus the registered mux pattern, for example `http GET /api/version`. Raw paths, queries, headers, and IDs never become names. Rectangles show exclusive self time: a root's width minus its children, so nested frames never double count. Adjacent siblings are valid; overlapping siblings, a child outside its parent, or a missing end rejects the whole root as invalid, never clamped. Independent roots may overlap in time, so their sum can exceed the capture window. The viewer aggregates identical paths and can filter frames, but it cannot reconstruct missing spans. Nested coverage is the ten existing fixed operation names only (`git.*`, `pty.spawn`, `clipboard.read`, `ws.connection`); uninstrumented functions and background workers do not appear.
+Each HTTP root name contains the fixed method and registered mux pattern, for example `http GET /api/version`. Raw paths, queries, headers, and IDs never become names.
+
+The profile stores exclusive self time: each interval minus its direct children. The flame graph shows inclusive widths, which include descendant time. Do not add parent and child widths. Independent roots can overlap in time, so their sum can exceed the capture window.
+
+Adjacent siblings are valid. Overlapping siblings or a child outside its parent makes the whole root invalid. A missing end makes the whole root open. Both types are discarded. Phi never clamps these intervals. The viewer aggregates identical paths but cannot reconstruct missing spans.
+
+Nested coverage includes only the ten existing fixed operation names (`git.*`, `pty.spawn`, `clipboard.read`, `ws.connection`). Uninstrumented functions and unscoped background workers do not appear.
 
 Budgets are fixed: 256 admitted roots, 4,096 nodes, depth 32 per capture. Overload discards with visible counts; capacity-limited captures favor earlier requests and are not a representative cost ranking.
 

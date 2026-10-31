@@ -69,6 +69,29 @@ func TestTimingExactRootExports900ns(t *testing.T) {
 	}
 }
 
+func TestTimingPanicClosesRootWithoutRecovery(t *testing.T) {
+	capture, ok := BeginTimingCapture()
+	if !ok {
+		t.Fatal("begin capture")
+	}
+	defer capture.Cancel()
+	panicValue := "handler panic"
+	func() {
+		defer func() {
+			if got := recover(); got != panicValue {
+				t.Fatalf("panic = %v, want %q", got, panicValue)
+			}
+		}()
+		mux := http.NewServeMux()
+		mux.HandleFunc("/api/panic", func(http.ResponseWriter, *http.Request) { panic(panicValue) })
+		WrapTimingHTTP(mux).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/panic", nil))
+	}()
+	snapshot := capture.Finish()
+	if snapshot.RootsExported != 1 || snapshot.DiscardedOpen != 0 || snapshot.Roots[0].Name != "http GET /api/panic" {
+		t.Fatalf("panic left an open or unnamed root: %+v", snapshot)
+	}
+}
+
 func TestTimingZeroIntervalStaysZero(t *testing.T) {
 	epoch := time.Now()
 	setTimingClock(t, epoch, epoch)
@@ -152,10 +175,7 @@ func TestTimingSkipsNonAPITraffic(t *testing.T) {
 	seen := 0
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { seen++ })
 	wrapped := WrapTimingHTTP(next)
-	for _, path := range []string{"/healthz", "/ws/pane/x", "/app.js", "/api/"} {
-		if path == "/api/" {
-			continue // prefix match belongs to a later assertion
-		}
+	for _, path := range []string{"/healthz", "/ws/pane/x", "/app.js"} {
 		wrapped.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path, nil))
 	}
 	if seen != 3 {
