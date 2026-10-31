@@ -1,3 +1,5 @@
+//go:build dsh
+
 package main
 
 import (

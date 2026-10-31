@@ -1,6 +1,19 @@
 # DeepSeek Harness online preview
 
-Phi can carry the official DeepSeek Harness (DSH) Web UI in an application tab. Phi does not replace the DSH chat UI or create a terminal for this tab. The preview is off by default.
+Phi can carry the official DeepSeek Harness (DSH) Web UI in an application tab. Phi does not replace the DSH chat UI or create a terminal for this tab. The preview is off by default and is built only on request.
+
+## Build requirement
+
+The carrier is a compile-time opt-in. Ordinary builds exclude it:
+
+```sh
+go build .            # no DSH carrier, no dshweb package linked
+go build -tags dsh .  # carrier included, still off until configured
+```
+
+In a build without the tag, `/api/dsh/status` reports `{"enabled":false,"state":"disabled","reason":"unsupported-build"}`, `/api/dsh/` returns 404, and the launcher stays hidden. `dsh_preview_enabled = true` in such a build logs one startup warning and nothing else. The `internal/dshweb` package still compiles so its tests keep running, but no default binary links it.
+
+Release builds use `-tags embedassets`; add `dsh` only for a build that should carry the preview.
 
 ## Security limitation
 
