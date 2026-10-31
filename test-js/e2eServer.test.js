@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, accessSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import net from 'node:net';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { startPhi } from '../e2e/_server.ts';
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -17,6 +17,8 @@ vi.mock('node:fs', async (importOriginal) => {
         rmSync: vi.fn(),
         accessSync: vi.fn(),
         statSync: vi.fn(),
+        readFileSync: vi.fn(() => Buffer.from('fixture binary')),
+        realpathSync: vi.fn((path) => path),
     };
 });
 
@@ -30,10 +32,16 @@ vi.mock('node:net', () => ({
     createServer: vi.fn(),
 }));
 
-vi.mock('node:child_process', () => ({ spawn: vi.fn() }));
+vi.mock('node:child_process', () => ({
+    spawn: vi.fn(),
+    execFileSync: vi.fn(),
+}));
+let nextPid = 100;
 
 class FakeChild {
     constructor() {
+        this.pid = nextPid++;
+        queueMicrotask(() => this.emit('spawn'));
         this.exitCode = null;
         this.signalCode = null;
         this.killCalls = [];
@@ -95,6 +103,12 @@ beforeEach(() => {
     mkdirSync.mockReturnValue(undefined);
     accessSync.mockReturnValue(undefined);
     statSync.mockReturnValue({ isDirectory: () => true, mode: 0o40700 });
+    execFileSync.mockImplementation((cmd, args) => {
+        if (cmd === 'git') return 'fixture-revision';
+        if (cmd === 'ps') return `start-${args[1]}`;
+        if (args.includes('-d')) return `n${join(DIR, 'phi')}\n`;
+        return 'n127.0.0.1:45678\n';
+    });
     net.createServer.mockImplementation(() => ({
         listen: (_port, _host, cb) => cb(),
         address: () => ({ port: 45678 }),
@@ -242,7 +256,7 @@ describe('startPhi fixture isolation', () => {
         });
         const pending = startPhi();
         const assertion = expect(pending).rejects.toThrow(
-            'phi server never came up',
+            /exited during startup/,
         );
         await vi.advanceTimersByTimeAsync(91_000);
         await assertion;
@@ -287,10 +301,12 @@ describe('startPhi fixture isolation', () => {
     test('restart replaces the child and stop still cleans once', async () => {
         const phi = await startPhi();
         const first = spawn.mock.results[1].value;
+        expect(phi.pid()).toBe(first.pid);
         await phi.restart();
         expect(first.killCalls).toEqual(['SIGTERM']);
         expect(spawn).toHaveBeenCalledTimes(3);
         const second = spawn.mock.results[2].value;
+        expect(phi.pid()).toBe(second.pid);
         expect(second.exitCode).toBeNull();
         await phi.stop();
         expect(second.killCalls).toEqual(['SIGTERM']);
@@ -313,6 +329,58 @@ describe('startPhi fixture isolation', () => {
         await phi.stop();
         expect(rmSync).toHaveBeenCalledTimes(1);
         await expect(phi.restart()).rejects.toThrow('already disposed');
+    });
+
+    test.skipIf(process.platform === 'win32')(
+        'foreign listener cannot pass readiness',
+        async () => {
+            vi.useFakeTimers();
+            execFileSync.mockImplementation((cmd, args) => {
+                if (cmd === 'git') return 'revision';
+                if (cmd === 'ps') return `start-${args[1]}`;
+                if (args.includes('-d')) return `n${join(DIR, 'phi')}\n`;
+                const err = new Error('owned child has no listener');
+                err.status = 1;
+                throw err;
+            });
+            const pending = startPhi();
+            const assertion = expect(pending).rejects.toThrow(
+                /exited during startup/,
+            );
+            await vi.advanceTimersByTimeAsync(500);
+            const child = spawn.mock.results[1].value;
+            child.signalCode = 'SIGTERM';
+            child.emit('exit', null, 'SIGTERM');
+            await vi.advanceTimersByTimeAsync(500);
+            await assertion;
+            expect(global.fetch).not.toHaveBeenCalled();
+            expect(child.killCalls).toEqual([]);
+            expect(rmSync).toHaveBeenCalledOnce();
+        },
+    );
+
+    test.skipIf(process.platform === 'win32')(
+        'identity change prevents cleanup from signaling or deleting',
+        async () => {
+            const phi = await startPhi();
+            execFileSync.mockImplementation((cmd, args) =>
+                cmd === 'ps' ? 'reused-pid-start' : `n${join(DIR, 'phi')}\n`,
+            );
+            await expect(phi.stop()).rejects.toThrow(/PID was reused/);
+            expect(spawn.mock.results[1].value.killCalls).toEqual([]);
+            expect(rmSync).not.toHaveBeenCalled();
+        },
+    );
+
+    test('child exit while health is in flight cannot pass readiness', async () => {
+        global.fetch = vi.fn().mockImplementation(async () => {
+            const child = spawn.mock.results[1].value;
+            child.signalCode = 'SIGTERM';
+            child.emit('exit', null, 'SIGTERM');
+            return { ok: true };
+        });
+        await expect(startPhi()).rejects.toThrow(/exited during startup/);
+        expect(rmSync).toHaveBeenCalledOnce();
     });
 
     test('restart after stop fails fast without spawning', async () => {
