@@ -82,6 +82,7 @@ Runtime identity binds `(generation, runtime_id, session_id)`:
 | `pi.skills.v1`    | On-demand skill list and skill invocation        |
 | `pi.syncboard.v1` | Direct Pi tool for the owning Phi Syncboard      |
 | `pi.attachments.v1` | Explicit user-triggered attachment prompt dispatch |
+| `pi.state.v1` | Read-only live identity and readiness refresh |
 
 Context, Compact, and Reload negotiate independently on every Hello
 from checked host availability: `pi.context.v1` needs `getContextUsage`;
@@ -223,6 +224,25 @@ lifecycle messages. The worker limit is four per peer.
 The value limit is 64 KiB and the response limit is 192 KiB. The Pi caller
 waits up to 15 seconds. Phi's remote HTTP request deadline is 10 seconds. The
 shared stream retains 16 KiB and two message slots for lifecycle traffic.
+
+## Live state reads
+
+`pi.state.v1` lets Phi request a fresh snapshot instead of trusting the last
+lifecycle event. It is advertised with attachment support. Phi sends
+`StateRequest` (field 23) with a correlating request ID. The extension reads
+live session, leaf, model, and readiness, then sends a normal `StateSnapshot`
+with that ID in field 13. A failed identity read sends no confirmation.
+The server applies the validated snapshot before releasing the waiter.
+Requests use bounded nonfatal queues and at most four waiters per peer;
+timeout, disconnect, and peer replacement fail only the read. No input is sent.
+
+The attachment context HTTP read requests this refresh when the capability is
+present. Older runtimes keep their cached-context behavior. A new online send
+also reads context before freezing its outbox entry: it can bind a fresh leaf
+in the same process, runtime, session, and model. This covers idle extension
+metadata writes, which move Pi's leaf without a lifecycle event. Saved and
+offline outbox entries keep their original leaf and are never rebound or
+replayed. The composer responds locally before the background read completes.
 
 ## Attachment prompt dispatch
 

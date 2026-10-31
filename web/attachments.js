@@ -118,6 +118,14 @@ export function getAttachmentPiContext(owner, signal) {
     const query = new URLSearchParams({ pane: owner.paneId });
     return attachmentFetch(owner, `/api/pi-bridge/attachments/context?${query}`, { method: 'GET' }, ATTACHMENT_READ_TIMEOUT_MS, signal);
 }
+export function attachmentRefusalNotice(reason) {
+    const detail = reason === 'stale'
+        ? 'Pi state changed before submission.'
+        : reason === 'unavailable'
+            ? 'Pi state could not be confirmed.'
+            : `Submission was blocked (${reason || 'unavailable'}).`;
+    return `Attachment not sent. ${detail} Restore it to edit and send again.`;
+}
 export function sendAttachmentPrompt(owner, body, signal) {
     return attachmentFetch(owner, '/api/pi-bridge/attachments', {
         method: 'POST',

@@ -1046,7 +1046,13 @@ test('an attempted send remains unknown across reload and Phi restart without re
         ).toHaveText('Ready', { timeout: 30_000 });
         await page.locator('#input-textarea').fill('uncertain across restart');
         const providerBaseline = fixture.provider.requests.length;
-        proxy.pausePiToPhi();
+        // Keep the live context read available; lose only the dispatch
+        // acknowledgment, not the prerequisite state refresh.
+        const activeProxy = proxy;
+        await page.route('**/api/pi-bridge/attachments', (route) => {
+            if (route.request().method() === 'POST') activeProxy.pausePiToPhi();
+            return route.continue();
+        });
         await page.locator('#send-input-btn').click();
         await waitForProvider(fixture.provider, providerBaseline + 1);
         await expect.poll(() => sends.length, { timeout: 30_000 }).toBe(1);

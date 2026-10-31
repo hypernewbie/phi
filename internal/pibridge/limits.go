@@ -55,6 +55,9 @@ const (
 	CapabilitySyncboard = "pi.syncboard.v1"
 	// CapabilityAttachments is the user-triggered native attachment capability.
 	CapabilityAttachments = "pi.attachments.v1"
+	// CapabilityState is the read-only live snapshot refresh capability.
+	CapabilityState = "pi.state.v1"
+	maxStatePending = 4
 
 	// maxHistoryPending bounds history requests awaiting replies per
 	// peer. Excess callers fail fast into fallback; the map never

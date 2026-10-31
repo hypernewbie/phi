@@ -78,6 +78,23 @@ func handlePiBridgeAttachmentContext(w http.ResponseWriter, r *http.Request) {
 	if piBridge != nil {
 		processID, view, ok := piBridge.AttachmentPaneView(pane)
 		if ok {
+			// Older runtimes keep their existing cached-context behavior.
+			// New runtimes sample Pi live: idle extension metadata can move
+			// the leaf without a lifecycle event reaching the bridge.
+			if view.HasPeer && attachmentContainsString(view.Caps, pibridge.CapabilityState) {
+				ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+				defer cancel()
+				if err := piBridge.server.RefreshState(ctx, processID); err != nil {
+					writeAttachmentJSONError(w, http.StatusServiceUnavailable, "unavailable")
+					return
+				}
+				currentProcess, currentView, current := piBridge.AttachmentPaneView(pane)
+				if !current || currentProcess != processID || currentView.Generation != view.Generation {
+					writeAttachmentJSONError(w, http.StatusServiceUnavailable, "unavailable")
+					return
+				}
+				view = currentView
+			}
 			result = attachmentContextFromView(processID, view)
 			result.Available = view.HasPeer && attachmentContainsString(view.Caps, pibridge.CapabilityAttachments) && view.AttachmentReadiness != nil && attachmentStore != nil
 		}

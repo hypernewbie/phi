@@ -163,6 +163,7 @@ async function startAttachmentPhi() {
             writeFileSync(
                 join(extensions, 'attachment-boundary-fixture.js'),
                 `module.exports = (pi) => {\n` +
+                    `  pi.registerCommand('attachment-metadata-fixture', { description: 'Append harmless fixture metadata', handler: async (_args, ctx) => { pi.appendEntry('attachment-fixture-state', { enabled: true }); require('node:fs').writeFileSync(${JSON.stringify(join(fixtures, 'metadata-leaf'))}, ctx.sessionManager.getLeafId()); } });\n` +
                     `  pi.on('input', (event) => event.text.includes('${CONSUME_MARKER}') ? { action: 'handled' } : undefined);\n` +
                     `  pi.on('context', (event) => {\n` +
                     `    if (!event.messages.some((message) => message.role === 'user' && JSON.stringify(message.content).includes('${STRIP_MARKER}'))) return;\n` +
@@ -516,6 +517,124 @@ async function itemFromServer(
     expect(status.item).toBeTruthy();
     return status.item!;
 }
+
+test('idle extension metadata does not falsely stale a fresh attachment send', async ({
+    browser,
+    request,
+}) => {
+    test.setTimeout(180_000);
+    const { provider, phi, pngPath, work, proxySocket } =
+        await startAttachmentPhi();
+    let proxy: BridgeProxy | null = null;
+    try {
+        proxy = await startAttachmentProxy(phi.dir, proxySocket);
+        const marker = join(phi.dir, 'attachment-fixtures', 'metadata-leaf');
+        let previousLeaf = '';
+        for (const mobile of [false, true]) {
+            const pane = await spawnPane(
+                request,
+                phi.url,
+                work,
+                `Metadata ${mobile ? 'touch' : 'desktop'}`,
+            );
+            const context = await browser.newContext(
+                mobile
+                    ? devices['Pixel 7']
+                    : { viewport: { width: 1440, height: 900 } },
+            );
+            try {
+                const page = await context.newPage();
+                const errors: string[] = [];
+                page.on('pageerror', (error) => errors.push(error.message));
+                await blockExternalRequests(page, (url) =>
+                    errors.push(`external: ${url}`),
+                );
+                await page.goto(phi.url);
+                await selectPane(page, pane, mobile);
+                const appendMetadata = async () => {
+                    const response = await request.post(
+                        `${phi.url}/api/terminals/${pane}/input`,
+                        { data: { text: '/attachment-metadata-fixture' } },
+                    );
+                    expect(response.ok()).toBe(true);
+                    await expect
+                        .poll(() => {
+                            try {
+                                return readFileSync(marker, 'utf8');
+                            } catch {
+                                return '';
+                            }
+                        })
+                        .not.toBe(previousLeaf);
+                    previousLeaf = readFileSync(marker, 'utf8');
+                    return previousLeaf;
+                };
+                // Neither append changes the session, model, or conversation.
+                // One precedes staging; the other follows its background read.
+                await appendMetadata();
+                await chooseFile(page, pngPath, mobile);
+                await expect(page.locator('.attachment-chip')).toContainText(
+                    'Ready',
+                );
+                const liveLeaf = await appendMetadata();
+                await page.route(
+                    '**/api/pi-bridge/attachments/context?**',
+                    async (route) => {
+                        await new Promise((resolve) =>
+                            setTimeout(resolve, 300),
+                        );
+                        await route.continue();
+                    },
+                );
+                const before = provider.requests.length;
+                const sent = page.waitForRequest(
+                    (req) =>
+                        req.method() === 'POST' &&
+                        new URL(req.url()).pathname ===
+                            '/api/pi-bridge/attachments',
+                );
+                await page
+                    .locator('#input-textarea')
+                    .fill('metadata regression image');
+                if (mobile) await page.locator('#send-input-btn').tap();
+                else await page.locator('#send-input-btn').click();
+                await expect(page.locator('#input-textarea')).toHaveValue('');
+                await page
+                    .locator('#input-textarea')
+                    .fill('newer typing stays visible');
+                expect((await sent).postDataJSON().context.leaf_id).toBe(
+                    liveLeaf,
+                );
+                await expect(page.locator('#attachment-status')).toContainText(
+                    'Submitted to Pi',
+                );
+                await expect(page.locator('#input-textarea')).toHaveValue(
+                    'newer typing stays visible',
+                );
+                await waitForProvider(provider, before + 1);
+                expect(
+                    anthropicImages(provider.requests[before]!, true),
+                ).toHaveLength(1);
+                await waitForIdle(request, phi.url, pane);
+                expect(provider.requests).toHaveLength(before + 1);
+                expect(
+                    await page.evaluate(
+                        () =>
+                            document.documentElement.scrollWidth <=
+                            window.innerWidth,
+                    ),
+                ).toBe(true);
+                expect(errors).toEqual([]);
+            } finally {
+                await context.close();
+            }
+        }
+    } finally {
+        await proxy?.close();
+        await phi.stop();
+        await provider.close();
+    }
+});
 
 test('device attachments reach interactive Pi as images and readable files on desktop and touch', async ({
     browser,
@@ -1007,7 +1126,15 @@ test('extension transformations are not mistaken for model receipt; lost ack is 
         await page
             .locator('#input-textarea')
             .fill('PHI_ATTACHMENT_LOST_ACK_FIXTURE');
-        const resumePiToPhi = proxy.pausePiToPhi();
+        // Let the read-only live context refresh finish. Pause only
+        // when the actual dispatch POST is about to leave the browser.
+        let resumePiToPhi = () => {};
+        const activeProxy = proxy;
+        await page.route('**/api/pi-bridge/attachments', (route) => {
+            if (route.request().method() === 'POST')
+                resumePiToPhi = activeProxy.pausePiToPhi();
+            return route.continue();
+        });
         await page.locator('#send-input-btn').click();
         await waitForProvider(provider, beforeLostAck + 1);
         await proxy.drop();

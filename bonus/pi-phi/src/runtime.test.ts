@@ -26,6 +26,7 @@ import {
     CAPABILITY_COMPACT,
     CAPABILITY_CONTEXT,
     CAPABILITY_RELOAD,
+    CAPABILITY_STATE,
 } from './protocol.js';
 import { freshAttachmentLatch } from './attachments.js';
 import { CAPABILITY_HISTORY, CAPABILITY_LIFECYCLE } from './protocol.js';
@@ -303,7 +304,7 @@ describe('Runtime hello', () => {
 });
 
 describe('Runtime attachment prompts', () => {
-    it('advertises only with a safe root and APIs, then acknowledges the synchronous call', async () => {
+    it('refreshes an idle leaf before attachment dispatch and acknowledges the synchronous call', async () => {
         const root = mkdtempSync(join(tmpdir(), 'phi-attachment-runtime-'));
         const basename = 'att-0123456789abcdef.png';
         const bytes = Buffer.from([
@@ -318,6 +319,7 @@ describe('Runtime attachment prompts', () => {
         } as unknown as PiContextView['model'];
         const ch = mockChannel();
         let sendCalls = 0;
+        let liveLeaf = 'leaf';
         const rt = new Runtime({
             creds: CREDS,
             generation: 1n,
@@ -333,6 +335,10 @@ describe('Runtime attachment prompts', () => {
         try {
             rt.start(
                 ctx({
+                    sessionManager: {
+                        getSessionId: () => 'sess',
+                        getLeafId: () => liveLeaf,
+                    },
                     model,
                     isIdle: () => true,
                     hasPendingMessages: () => false,
@@ -342,10 +348,26 @@ describe('Runtime attachment prompts', () => {
             const hello = payloadOf(ch.hellos[0]!);
             if (hello.$case !== 'hello') throw new Error('missing hello');
             expect(hello.value.capabilities).toContain(CAPABILITY_ATTACHMENTS);
+            expect(hello.value.capabilities).toContain(CAPABILITY_STATE);
+            // A custom entry is appended without any lifecycle event.
+            liveLeaf = 'metadata-leaf';
+            ch.hooks!.onMessage({
+                paneId: CREDS.pane,
+                processId: CREDS.process,
+                runtimeGeneration: 1n,
+                payload: { $case: 'stateRequest', value: { requestId: 's1' } },
+            });
+            const refreshed = ch.nonfatalSends.at(-1)?.payload;
+            expect(refreshed?.$case).toBe('stateSnapshot');
+            if (refreshed?.$case !== 'stateSnapshot')
+                throw new Error('missing snapshot');
+            expect(refreshed.value.requestId).toBe('s1');
+            expect(refreshed.value.leafId).toBe('metadata-leaf');
+            expect(sendCalls).toBe(0);
             const request = AttachmentPromptRequest.create({
                 requestId: '1',
                 expectedSessionId: 'sess',
-                expectedLeafId: 'leaf',
+                expectedLeafId: refreshed.value.leafId,
                 expectedModel: { provider: 'p', model: 'm' },
                 text: 'look',
                 attachments: [
@@ -375,6 +397,129 @@ describe('Runtime attachment prompts', () => {
                 expect(ack.value.outcome).toBe(
                     AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_DISPATCHED,
                 );
+            }
+            // Refreshing a draft must not weaken checks on an already
+            // frozen request with the old leaf.
+            ch.hooks!.onMessage({
+                paneId: CREDS.pane,
+                processId: CREDS.process,
+                runtimeGeneration: 1n,
+                payload: {
+                    $case: 'attachmentPromptRequest',
+                    value: {
+                        ...request,
+                        requestId: '2',
+                        expectedLeafId: 'leaf',
+                    },
+                },
+            });
+            expect(sendCalls).toBe(1);
+            const refused = ch.nonfatalSends
+                .map((message) => message.payload)
+                .filter((payload) => payload?.$case === 'attachmentPromptAck')
+                .at(-1);
+            if (refused?.$case !== 'attachmentPromptAck')
+                throw new Error('missing refusal');
+            expect(refused.value.outcome).toBe(
+                AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_REFUSED,
+            );
+            expect(refused.value.reason).toBe('stale');
+        } finally {
+            rt.shutdown();
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it('reports unavailable when live attachment state cannot be read', async () => {
+        const root = mkdtempSync(join(tmpdir(), 'phi-attachment-runtime-'));
+        const basename = 'att-0123456789abcdef.png';
+        const bytes = Buffer.from([
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3,
+        ]);
+        writeFileSync(join(root, basename), bytes, { mode: 0o600 });
+        let unreadable = false;
+        let sendCalls = 0;
+        const model = {
+            provider: 'p',
+            id: 'm',
+            api: 'openai-completions',
+            input: ['text', 'image'],
+        } as unknown as PiContextView['model'];
+        const piCtx = ctx({
+            sessionManager: {
+                getSessionId: () => {
+                    if (unreadable) throw new Error('boom');
+                    return 'sess';
+                },
+                getLeafId: () => 'leaf',
+            },
+            model,
+            isIdle: () => true,
+            hasPendingMessages: () => false,
+        });
+        const ch = mockChannel();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            attachmentRoot: root,
+            attachmentState: freshAttachmentLatch(),
+            sendUserMessage: (() => {
+                sendCalls += 1;
+            }) as never,
+            makeChannel: wired(ch),
+        });
+        try {
+            rt.start(piCtx);
+            await sleep(10);
+            unreadable = true;
+            ch.hooks!.onMessage({
+                paneId: CREDS.pane,
+                processId: CREDS.process,
+                runtimeGeneration: 1n,
+                payload: { $case: 'stateRequest', value: { requestId: 's1' } },
+            });
+            expect(
+                ch.nonfatalSends.some(
+                    (message) =>
+                        message.payload?.$case === 'stateSnapshot' &&
+                        message.payload.value.requestId === 's1',
+                ),
+            ).toBe(false);
+            const request = AttachmentPromptRequest.create({
+                requestId: '1',
+                expectedSessionId: 'sess',
+                expectedLeafId: 'leaf',
+                expectedModel: { provider: 'p', model: 'm' },
+                text: 'look',
+                attachments: [
+                    {
+                        basename,
+                        sizeBytes: BigInt(bytes.length),
+                        mimeType: 'image/png',
+                        kind: 'image',
+                        sha256: createHash('sha256')
+                            .update(bytes)
+                            .digest('hex'),
+                    },
+                ],
+            });
+            ch.hooks!.onMessage({
+                paneId: CREDS.pane,
+                processId: CREDS.process,
+                runtimeGeneration: 1n,
+                payload: { $case: 'attachmentPromptRequest', value: request },
+            });
+            expect(sendCalls).toBe(0);
+            const ack = ch.nonfatalSends
+                .map((msg) => msg.payload)
+                .find((payload) => payload?.$case === 'attachmentPromptAck');
+            expect(ack?.$case).toBe('attachmentPromptAck');
+            if (ack?.$case === 'attachmentPromptAck') {
+                expect(ack.value.outcome).toBe(
+                    AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_REFUSED,
+                );
+                expect(ack.value.reason).toBe('unavailable');
             }
         } finally {
             rt.shutdown();

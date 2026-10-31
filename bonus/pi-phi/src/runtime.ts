@@ -19,7 +19,7 @@ import {
     CompactOutcome,
     AttachmentPromptAck,
     AttachmentPromptOutcome,
-    AttachmentPromptRequest,
+    type AttachmentPromptRequest,
     AttachmentReadiness,
     CompactReadiness,
     CompactResult,
@@ -48,7 +48,7 @@ import {
 import { BridgeChannel, type ChannelCreds } from './channel.js';
 import { InvalidTargetError } from './endpoint.js';
 import { PROTOCOL_VERSION } from './protocol.js';
-import { CAPABILITY_ATTACHMENTS } from './protocol.js';
+import { CAPABILITY_ATTACHMENTS, CAPABILITY_STATE } from './protocol.js';
 import { CAPABILITY_COMPACT } from './protocol.js';
 import { CAPABILITY_CONTEXT } from './protocol.js';
 import { CAPABILITY_HISTORY } from './protocol.js';
@@ -528,6 +528,7 @@ export class Runtime {
     private syncboardSeq = 0n;
     private syncboardPending = new Map<string, SyncboardWaiter>();
     private attachmentsAccepted = false;
+    private stateAccepted = false;
     /** getContextUsage present on the latest event context. */
     private contextApi = false;
     /** compact/isIdle/hasPendingMessages present on the latest context. */
@@ -1346,7 +1347,8 @@ export class Runtime {
         if (this.opts.getSkills && this.opts.invokeSkill)
             caps.push(CAPABILITY_SKILLS);
         if (this.opts.syncboardEnabled) caps.push(CAPABILITY_SYNCBOARD);
-        if (this.attachmentApi) caps.push(CAPABILITY_ATTACHMENTS);
+        if (this.attachmentApi)
+            caps.push(CAPABILITY_ATTACHMENTS, CAPABILITY_STATE);
         return caps;
     }
 
@@ -1413,6 +1415,7 @@ export class Runtime {
         this.skillsAccepted = false;
         this.setSyncboardAccepted(false);
         this.attachmentsAccepted = false;
+        this.stateAccepted = false;
         // Reconnect carries a fresh baseline: resample through the
         // latest context so the Hello never replays a stale reading.
         if (this.lastCtx) this.sampleTelemetry(this.lastCtx);
@@ -1449,6 +1452,8 @@ export class Runtime {
                 this.attachmentsAccepted = accepted.capabilities.includes(
                     CAPABILITY_ATTACHMENTS,
                 );
+                this.stateAccepted =
+                    accepted.capabilities.includes(CAPABILITY_STATE);
             }
         } catch (err) {
             channel.close();
@@ -1539,6 +1544,37 @@ export class Runtime {
             this.attachmentsAccepted
         ) {
             void this.onAttachmentPromptRequest(msg.payload.value);
+        } else if (
+            msg.payload?.$case === 'stateRequest' &&
+            this.stateAccepted
+        ) {
+            const requestId = msg.payload.value.requestId;
+            if (!requestId || requestId.length > 64 || !this.channel) return;
+            // Extensions can append metadata while idle without emitting a
+            // lifecycle event. Re-read the live leaf, not the event-time cache.
+            const ctx = this.lastCtx;
+            if (!ctx) return;
+            try {
+                this.sessionId = ctx.sessionManager.getSessionId();
+                this.leafId = ctx.sessionManager.getLeafId() ?? '';
+                this.model = ctx.model;
+                this.sampleTelemetry(ctx);
+            } catch {
+                // A failed read must not confirm a cached identity as live.
+                return;
+            }
+            const snapshot = this.snapshot(
+                this.running
+                    ? LogicalState.LOGICAL_STATE_RUNNING
+                    : LogicalState.LOGICAL_STATE_IDLE,
+            );
+            snapshot.requestId = requestId;
+            this.channel.sendNonfatal({
+                paneId: this.opts.creds.pane,
+                processId: this.opts.creds.process,
+                runtimeGeneration: this.opts.generation,
+                payload: { $case: 'stateSnapshot', value: snapshot },
+            });
         } else if (
             msg.payload?.$case === 'syncboardResponse' &&
             this.syncboardAccepted
@@ -2276,7 +2312,7 @@ export class Runtime {
             idle = ctx.isIdle() === true;
             queued = ctx.hasPendingMessages() !== false;
         } catch {
-            return 'stale';
+            return 'unavailable';
         }
         if (session !== req.expectedSessionId || leaf !== req.expectedLeafId)
             return 'stale';

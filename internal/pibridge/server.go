@@ -38,6 +38,7 @@ type Server struct {
 	invokeSkillSeq   atomic.Uint64
 	syncboardHandler SyncboardHandler
 	attachmentSeq  atomic.Uint64
+	stateSeq       atomic.Uint64
 	// compactSeq allocates monotonic server-side Compact request
 	// IDs. IDs are positive canonical decimal uint64 strings,
 	// never wrap, and are never reused or browser-supplied.
@@ -805,6 +806,12 @@ func (s *Server) handleMessage(l *lease, p *peer, msg *pibridgepb.PiToPhi) error
 		caps := append([]string{}, l.caps...)
 		l.mu.Unlock()
 		s.fireState(l, p, pubRev, snap, caps)
+		p.stateMu.Lock()
+		if ch, ok := p.statePending[snap.GetRequestId()]; ok {
+			delete(p.statePending, snap.GetRequestId())
+			ch <- struct{}{}
+		}
+		p.stateMu.Unlock()
 		return nil
 	case msg.GetHistoryResponse() != nil:
 		s.deliverHistory(l, p, msg.GetHistoryResponse())
@@ -862,6 +869,9 @@ func validateSnapshot(snap *pibridgepb.StateSnapshot, sessionID string) error {
 	}
 	if len(snap.GetJournal()) > maxJournalRecords {
 		return fmt.Errorf("journal too large")
+	}
+	if len(snap.GetRequestId()) > 64 {
+		return fmt.Errorf("snapshot request id too large")
 	}
 	if len(snap.GetThinkingLevel()) > maxThinkingLevel {
 		return fmt.Errorf("thinking level too large")

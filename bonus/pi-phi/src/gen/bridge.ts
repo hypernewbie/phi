@@ -170,6 +170,7 @@ export interface PhiToPi {
     | { $case: "reloadRequest"; value: ReloadRequest }
     | { $case: "syncboardResponse"; value: SyncboardResponse }
     | { $case: "attachmentPromptRequest"; value: AttachmentPromptRequest }
+    | { $case: "stateRequest"; value: StateRequest }
     | undefined;
 }
 
@@ -273,7 +274,22 @@ export interface StateSnapshot {
    * Optional Pi attachment readiness. It is independent of Compact APIs.
    * Absence means unavailable, never idle.
    */
-  attachmentReadiness: AttachmentReadiness | undefined;
+  attachmentReadiness:
+    | AttachmentReadiness
+    | undefined;
+  /**
+   * Correlates a live refresh requested with pi.state.v1. Empty on
+   * unsolicited lifecycle/telemetry snapshots and Hello baselines.
+   */
+  requestId: string;
+}
+
+/**
+ * Read-only live refresh. The runtime samples identities and readiness,
+ * then answers with a StateSnapshot echoing request_id. Never dispatches input.
+ */
+export interface StateRequest {
+  requestId: string;
 }
 
 /**
@@ -1090,6 +1106,9 @@ export const PhiToPi: MessageFns<PhiToPi> = {
       case "attachmentPromptRequest":
         AttachmentPromptRequest.encode(message.payload.value, writer.uint32(194).fork()).join();
         break;
+      case "stateRequest":
+        StateRequest.encode(message.payload.value, writer.uint32(202).fork()).join();
+        break;
     }
     return writer;
   },
@@ -1247,6 +1266,14 @@ export const PhiToPi: MessageFns<PhiToPi> = {
             };
             continue;
           }
+          case 25: {
+            if (tag !== 202) {
+              break;
+            }
+
+            message.payload = { $case: "stateRequest", value: StateRequest.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1357,6 +1384,12 @@ export const PhiToPi: MessageFns<PhiToPi> = {
             $case: "attachmentPromptRequest",
             value: AttachmentPromptRequest.fromPartial(object.payload.value),
           };
+        }
+        break;
+      }
+      case "stateRequest": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "stateRequest", value: StateRequest.fromPartial(object.payload.value) };
         }
         break;
       }
@@ -1950,6 +1983,7 @@ function createBaseStateSnapshot(): StateSnapshot {
     compactReadiness: undefined,
     reloadReadiness: undefined,
     attachmentReadiness: undefined,
+    requestId: "",
   };
 }
 
@@ -1993,6 +2027,9 @@ export const StateSnapshot: MessageFns<StateSnapshot> = {
     }
     if (message.attachmentReadiness !== undefined) {
       AttachmentReadiness.encode(message.attachmentReadiness, writer.uint32(114).fork()).join();
+    }
+    if (message.requestId !== "") {
+      writer.uint32(106).string(message.requestId);
     }
     return writer;
   },
@@ -2106,6 +2143,14 @@ export const StateSnapshot: MessageFns<StateSnapshot> = {
             message.attachmentReadiness = AttachmentReadiness.decode(reader, reader.uint32());
             continue;
           }
+          case 13: {
+            if (tag !== 106) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -2147,6 +2192,62 @@ export const StateSnapshot: MessageFns<StateSnapshot> = {
     message.attachmentReadiness = (object.attachmentReadiness !== undefined && object.attachmentReadiness !== null)
       ? AttachmentReadiness.fromPartial(object.attachmentReadiness)
       : undefined;
+    message.requestId = object.requestId ?? "";
+    return message;
+  },
+};
+
+function createBaseStateRequest(): StateRequest {
+  return { requestId: "" };
+}
+
+export const StateRequest: MessageFns<StateRequest> = {
+  encode(message: StateRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): StateRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseStateRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<StateRequest>, I>>(base?: I): StateRequest {
+    return StateRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<StateRequest>, I>>(object: I): StateRequest {
+    const message = createBaseStateRequest();
+    message.requestId = object.requestId ?? "";
     return message;
   },
 };

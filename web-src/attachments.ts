@@ -244,6 +244,16 @@ export interface AttachmentSendBody {
     readonly attachment_ids: readonly string[];
 }
 
+export function attachmentRefusalNotice(reason: string): string {
+    const detail =
+        reason === 'stale'
+            ? 'Pi state changed before submission.'
+            : reason === 'unavailable'
+              ? 'Pi state could not be confirmed.'
+              : `Submission was blocked (${reason || 'unavailable'}).`;
+    return `Attachment not sent. ${detail} Restore it to edit and send again.`;
+}
+
 export interface AttachmentSendResult {
     readonly id: string;
     readonly state: 'refused' | 'dispatched' | 'unknown' | 'missing';
