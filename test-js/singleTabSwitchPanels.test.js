@@ -122,7 +122,10 @@ const CONFIG = {
 };
 
 describe('single-tab switch: right panel surfaces', () => {
+    const realSetInterval = globalThis.setInterval.bind(globalThis);
+    const realClearInterval = globalThis.clearInterval.bind(globalThis);
     let app;
+    let appIntervals = [];
 
     beforeEach(async () => {
         setupVendorStubs();
@@ -139,11 +142,22 @@ describe('single-tab switch: right panel surfaces', () => {
         // refresh timer, then tests opt into an open panel explicitly.
         localStorage.setItem('phi_diff_panel_open', 'false');
         setEmbeddedBackend('p-old', 'http://old:7070');
+        appIntervals = [];
+        const intervalSpy = vi
+            .spyOn(globalThis, 'setInterval')
+            .mockImplementation((...args) => {
+                const interval = realSetInterval(...args);
+                appIntervals.push(interval);
+                return interval;
+            });
         app = new App();
+        intervalSpy.mockRestore();
         app.initOnce();
     });
 
     afterEach(() => {
+        for (const interval of appIntervals) realClearInterval(interval);
+        appIntervals = [];
         setEmbeddedBackend('', '');
     });
 
