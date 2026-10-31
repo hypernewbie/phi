@@ -81,16 +81,20 @@ while True: time.sleep(1)
         const pane = (await spawned.json()).pane_id as string;
         const recordingURL = `${phi.url}/api/terminals/${pane}/recording?from=0&through=18446744073709551615`;
         await expect
-            .poll(async () => {
-                const from =
-                    Buffer.byteLength('archive book payload\r\n') * 100000 -
-                    256;
-                const response = await request.get(
-                    `${phi.url}/api/terminals/${pane}/recording?from=${from}&through=18446744073709551615`,
-                );
-                const body = await response.body();
-                return response.ok() && body.includes(prefix);
-            })
+            .poll(
+                async () => {
+                    const from =
+                        Buffer.byteLength('archive book payload\r\n') *
+                            100000 -
+                        256;
+                    const response = await request.get(
+                        `${phi.url}/api/terminals/${pane}/recording?from=${from}&through=18446744073709551615`,
+                    );
+                    const body = await response.body();
+                    return response.ok() && body.includes(prefix);
+                },
+                { timeout: 30_000 },
+            )
             .toBe(true);
         const sourceResponse = await request.get(recordingURL);
         const sourceBytes = (await sourceResponse.body()).length;

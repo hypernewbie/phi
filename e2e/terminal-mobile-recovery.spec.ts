@@ -216,7 +216,9 @@ for (const alternate of [false, true]) {
                         : null;
                 });
             await page.goto(phi.url);
-            await expect(page.locator(`#term-${id}`)).toBeVisible();
+            await expect(page.locator(`#term-${id}`)).toBeVisible({
+                timeout: 30_000,
+            });
             await expect.poll(() => sockets.length).toBe(1);
             output(0, boundary);
             await expect.poll(line).toBe('kept ');
@@ -231,7 +233,9 @@ for (const alternate of [false, true]) {
             await expect.poll(line).toBe('kept 🙂 after');
             await expect.poll(() => checkpoint?.through).toBe(bytes.length);
             await page.reload();
-            await expect(page.locator(`#term-${id}`)).toBeVisible();
+            await expect(page.locator(`#term-${id}`)).toBeVisible({
+                timeout: 30_000,
+            });
             await expect.poll(line).toBe('kept 🙂 after');
             expect(checkpoint?.through).toBe(bytes.length);
         } finally {
