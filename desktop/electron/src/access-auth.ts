@@ -544,7 +544,12 @@ export class AccessAuth {
         message: 'Stored credential is corrupted.',
       };
     }
+    const attempt = this.captureAttempt(canonical);
     const status = await this.fetchStatus(canonical, signal);
+    if (!attempt?.isCurrent()) {
+      verifier.fill(0);
+      return { kind: 'stale', message: 'Superseded' };
+    }
     if (status.kind === 'unavailable') {
       verifier.fill(0);
       return { kind: 'unavailable', message: status.message };
@@ -573,7 +578,11 @@ export class AccessAuth {
       // If login returned invalid-password, the challenge may have expired or been consumed
       // (e.g. server restart). Allow at most one retry with a fresh status and challenge.
       if (res.kind === 'invalid-password' && !signal?.aborted) {
+        const retryAttempt = this.captureAttempt(canonical);
         const freshStatus = await this.fetchStatus(canonical, signal);
+        if (!retryAttempt?.isCurrent()) {
+          return { kind: 'stale', message: 'Superseded' };
+        }
         if (freshStatus.kind === 'trusted') {
           const retryCopy = Buffer.from(verifier);
           res = await this.completeUnlock(
@@ -1305,6 +1314,9 @@ export class AccessAuth {
     signal: AbortSignal | undefined,
     callerOrigin?: string,
   ): Promise<UnlockResult> {
+    if (this.selectedProtocols.get(canonical) === 'v2') {
+      return { kind: 'stale', message: 'Superseded' };
+    }
     const attempt = (this.attemptTokens.get(canonical) ?? 0) + 1;
     this.attemptTokens.set(canonical, attempt);
     const isCurrent = (): boolean =>
@@ -1333,6 +1345,8 @@ export class AccessAuth {
       return login;
     }
 
+    // The successful v1 credential decides the protocol, including restoration.
+    this.selectedProtocols.set(canonical, 'v1');
     // Install cookie and cache verifier only if this attempt is still current
     this.cookies.set(canonical, login.cookie);
     if (callerOrigin && callerOrigin !== canonical) {

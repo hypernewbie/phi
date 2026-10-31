@@ -98,6 +98,7 @@ import {
 import {
   registerHotkey,
   resolveAccelerator,
+  type GlobalShortcutLike,
   type HotkeyRegistration,
 } from './hotkeys.js';
 import {
@@ -224,6 +225,17 @@ const APP_ICON_PATH = resolveAppIconPath();
 
 /** Smoke mode is driven by the e2e harness (test/smoke.test.ts, `pnpm run smoke`). */
 const SMOKE = process.env.PHI_DESKTOP_SMOKE === '1';
+
+let testHotkeyShortcut: GlobalShortcutLike | null = null;
+let hotkeyRegistrationStarted = false;
+
+/** Installs a fake shortcut API for isolated real-Electron tests before startup. */
+export function setTestHotkeyShortcut(shortcut: GlobalShortcutLike): void {
+  if (hotkeyRegistrationStarted || testHotkeyShortcut) {
+    throw new Error('test hotkey shortcut must be set once before startup');
+  }
+  testHotkeyShortcut = shortcut;
+}
 
 /** Linux deliberately has no supported click-through pet implementation. */
 export function isPetAvailable(root: string | null): boolean {
@@ -4967,8 +4979,8 @@ export class DesktopHost {
           view.webContents.getURL(),
           canonical,
         );
-        // The embedded shell holds no page credential, so a host-authorized
-        // sign-in is already complete for it and nothing is injected.
+        // The embedded shell holds no page credential. Complete its pending
+        // bootstrap through the token-free bridge instead of installing one.
         if (target === 'embedded') {
           if (
             pending.abort.signal.aborted ||
@@ -4979,6 +4991,35 @@ export class DesktopHost {
             !pending.auth.hasToken(pending.origin)
           ) {
             return { ok: false, code: 'stale', message: 'Prompt expired.' };
+          }
+          let accepted = false;
+          try {
+            accepted =
+              (await view.webContents.executeJavaScript(
+                'window.phiAccessAuth?.completeHostSession?.()',
+              )) === true;
+          } catch {
+            // The existing coalesced retry handles a slow or replaced body.
+          }
+          if (
+            pending.abort.signal.aborted ||
+            (pendingUnlock !== null && pendingUnlock !== pending) ||
+            pending.epoch !== activeEpoch ||
+            pending.generation !== this.sessionGeneration ||
+            ctrl.state().activeId !== pending.profileId ||
+            !pending.auth.hasToken(pending.origin) ||
+            view.webContents.isDestroyed() ||
+            resolveV2BodyAuthTarget(view.webContents.getURL(), canonical) !==
+              'embedded'
+          ) {
+            return { ok: false, code: 'stale', message: 'Prompt expired.' };
+          }
+          if (!accepted) {
+            return {
+              ok: false,
+              code: 'unavailable',
+              message: 'The server view did not accept the session.',
+            };
           }
           return { ok: true };
         }
@@ -5857,13 +5898,17 @@ export class DesktopHost {
     // The smoke harness never reaches this line (the PHI_DESKTOP_SMOKE
     // gate), so no real globalShortcut registration ever happens in smoke
     // mode.
+    hotkeyRegistrationStarted = true;
     this.hotkeyRegistrations.push(
       registerHotkey(
         resolveAccelerator(),
         () => {
           this.foreground();
         },
-        { log: (msg) => console.log(msg) },
+        {
+          ...(testHotkeyShortcut ? { shortcut: testHotkeyShortcut } : {}),
+          log: (msg) => console.log(msg),
+        },
       ),
     );
     app.on('activate', () => {

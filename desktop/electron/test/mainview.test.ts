@@ -15,7 +15,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { JSDOM } from 'jsdom';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const webDir = path.join(here, '..', 'web');
@@ -383,17 +383,47 @@ describe('vendored browser JS (web/vendor/*)', () => {
     }
   });
 
-  it('imports the vendored app.js module graph and exposes the full palette', async (ctx) => {
+  it('keeps browser auth bootstrap out of the desktop shell and config page', async (ctx) => {
     const vendored = path.join(webDir, 'vendor', 'app.js');
     if (!existsSync(vendored)) {
       ctx.skip('web/vendor missing — run `pnpm run build` first');
       return;
     }
-    // The module graph (terminal/ws/sessions/util/...) must load without
-    // booting the app: importing app.js only defines classes and the
-    // palette (no App instantiation at module scope).
-    const mod = await import(pathToFileURL(vendored).href);
-    expect(Object.keys(mod.ACCENT_COLORS).length).toBe(29);
+    const originalFetch = globalThis.fetch;
+    const originalBody = document.body.innerHTML;
+    const fetcher = vi
+      .fn()
+      .mockRejectedValue(new Error('fixture bootstrap stop'));
+    const listeners = vi.spyOn(window, 'addEventListener');
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    globalThis.fetch = fetcher;
+    try {
+      const mod = await import(pathToFileURL(vendored).href);
+      expect(Object.keys(mod.ACCENT_COLORS).length).toBe(29);
+      const boot = listeners.mock.calls
+        .filter(([name]) => name === 'DOMContentLoaded')
+        .pop()?.[1] as (() => Promise<void>) | undefined;
+      expect(typeof boot).toBe('function');
+      for (const marker of ['data-phi-desktop-root', 'data-phi-config-page']) {
+        document.documentElement.setAttribute(marker, '');
+        await boot?.();
+        expect(fetcher).not.toHaveBeenCalled();
+        expect(document.querySelector('.access-auth-overlay')).toBeNull();
+        document.documentElement.removeAttribute(marker);
+      }
+      // The normal browser/body still enters auth before App initialization.
+      await boot?.();
+      expect(fetcher).toHaveBeenCalled();
+      expect(String(fetcher.mock.calls[0]?.[0])).toContain('/api/auth/status');
+      expect(document.querySelector('.access-auth-overlay')).not.toBeNull();
+    } finally {
+      document.documentElement.removeAttribute('data-phi-desktop-root');
+      document.documentElement.removeAttribute('data-phi-config-page');
+      document.body.innerHTML = originalBody;
+      globalThis.fetch = originalFetch;
+      listeners.mockRestore();
+      errors.mockRestore();
+    }
   });
 
   it('loads the vendored module entry in the main view page (no sidecar script)', () => {
