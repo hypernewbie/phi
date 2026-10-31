@@ -1,7 +1,9 @@
+//go:build profiling
+
 // Local operation-timing capture for the private diagnostics listener.
 //
 // timing.go records explicit API-handler start/end intervals while a capture
-// is active. It is untagged and standard-library-only: both obs backends
+// is active. It is profiling-only and standard-library-only: both obs backends
 // share it, and the default binary gains no new dependency. The diagnostics
 // package owns capture lifetime over HTTP; this file owns bounded in-memory
 // records and immutable snapshots. See the fixed contract in the canonical

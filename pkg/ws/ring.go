@@ -110,18 +110,6 @@ func (r *RingBuffer) Snapshot() []byte {
 	return res
 }
 
-// tryCapacity reads allocated capacity without waiting on an active writer.
-func (r *RingBuffer) tryCapacity() (int, bool) {
-	if r == nil {
-		return 0, true
-	}
-	if !r.mu.TryLock() {
-		return 0, false
-	}
-	defer r.mu.Unlock()
-	return cap(r.buf), true
-}
-
 // Stats returns (used bytes, capacity) for the ring. When wrapped,
 // used == cap. Used by /api/diag.
 func (r *RingBuffer) Stats() (int, int) {

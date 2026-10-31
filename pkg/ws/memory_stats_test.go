@@ -1,3 +1,5 @@
+//go:build profiling
+
 package ws
 
 import (

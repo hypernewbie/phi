@@ -23,7 +23,8 @@ import (
 
 // Span starts a logical span named name with the given key,value,... attrs.
 // In the default build there is no OTel span. During a private timing
-// capture, allowlisted spans below an API root carry a local timing scope.
+// capture (profiling builds only), allowlisted spans below an API root
+// carry a local timing scope.
 // Otherwise ctx flows through unchanged. The returned end func also emits
 // slog.Debug("span", ...) (attrs plus dur_ms, and err on failure) when Debug
 // logging is enabled.

@@ -2,6 +2,14 @@
 
 Phi's Go process can publish a private, opt-in diagnostics listener. It is separate from the application listener and binds only to IPv4 loopback. Diagnostics are disabled unless `--diagnostics-dir` is set.
 
+## Build requirement
+
+Diagnostics exist only in binaries built with `-tags=profiling`. Normal builds accept `--diagnostics-dir` but log one rebuild warning and start no listener, create no files, and record no captures:
+
+```bash
+go build -tags=profiling -o phi-profiling .
+```
+
 ## Start
 
 The selected parent directory must exist and must be an absolute path. Phi creates one private `phi-diag-*` directory for the process. It writes the listener URL and a curl configuration with a random bearer token into that directory. The session directory is mode `0700`; its files are mode `0600`.

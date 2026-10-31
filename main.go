@@ -22,7 +22,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hypernewbie/phi/internal/diagnostics"
 	"github.com/hypernewbie/phi/internal/pibridge"
 	"github.com/hypernewbie/phi/pkg/bindaddr"
 	"github.com/hypernewbie/phi/pkg/coders"
@@ -73,10 +72,9 @@ var (
 )
 
 func main() {
-	processStartedAt := time.Now()
 	enableVirtualTerminalProcessing()
 	portFlag := flag.Int("port", 7070, "Port to run Go web server on")
-	diagnosticsDirFlag := flag.String("diagnostics-dir", "", "Enable private loopback diagnostics and write connection files under this absolute directory")
+	diagnosticsDirFlag := flag.String("diagnostics-dir", "", "Enable private loopback diagnostics and write connection files under this absolute directory. Only takes effect in a binary built with -tags=profiling.")
 	ipFlag := flag.String("ip", "lan", `IP to bind. "lan" (default) binds loopback + every LAN (RFC 1918) + Tailscale (100.64/10) interface on the host. Use 0.0.0.0 to expose on every interface (public internet reachable), or an explicit IP to bind just one address.`)
 	webFlag := flag.String("web", "", "Directory to serve web assets from instead of embedded assets")
 	dataDirFlag := flag.String("data-dir", "", "Absolute directory for Phi state (default ~/.phi); does not change HOME or assistant settings")
@@ -451,28 +449,7 @@ func main() {
 	http.HandleFunc("/", handleFallback)
 	http.HandleFunc("/ws/control", ws.HandleControl(rpcMgr, func() string { return activeCWD }))
 
-	var diagnosticsServer *diagnostics.Server
-	if *diagnosticsDirFlag != "" {
-		diagnosticsServer, err = diagnostics.Start(*diagnosticsDirFlag, processStartedAt, Commit)
-		if err != nil {
-			slog.Warn("private diagnostics unavailable; Phi will continue", "err", err)
-		} else {
-			diagnosticsServer.SetOwnershipStats(func() any {
-				if wsHub == nil {
-					return nil
-				}
-				return wsHub.MemoryStats()
-			})
-			slog.Info("private diagnostics ready", "dir", diagnosticsServer.Dir())
-		}
-	}
-	closeDiagnostics := func() {
-		if diagnosticsServer != nil {
-			if err := diagnosticsServer.Close(); err != nil {
-				slog.Warn("private diagnostics cleanup incomplete", "err", err)
-			}
-		}
-	}
+	closeDiagnostics := startPrivateDiagnostics(*diagnosticsDirFlag)
 
 	// Graceful shutdown listener. The signal handler drains via
 	// gracefulShutdown (PHI_SHUTDOWN_* env tunables) instead of the old

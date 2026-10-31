@@ -1,3 +1,5 @@
+//go:build profiling
+
 package ws
 
 // memoryStats is a best-effort view of memory with a known Phi owner. The
@@ -103,4 +105,16 @@ func (h *Hub) MemoryStats() memoryStats {
 		WasmLinearBytes:         &wasmBytes,
 		Complete:                complete,
 	}
+}
+
+// tryCapacity reads allocated capacity without waiting on an active writer.
+func (r *RingBuffer) tryCapacity() (int, bool) {
+	if r == nil {
+		return 0, true
+	}
+	if !r.mu.TryLock() {
+		return 0, false
+	}
+	defer r.mu.Unlock()
+	return cap(r.buf), true
 }
