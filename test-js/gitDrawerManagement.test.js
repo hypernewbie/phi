@@ -45,14 +45,17 @@ function bootstrapDom() {
             <section id="git-management">
                 <div id="git-target-label"></div>
                 <label for="git-commit-message">Commit message</label>
-                <textarea id="git-commit-message"></textarea>
+                <textarea id="git-commit-message" aria-describedby="git-commit-hint git-commit-draft-status"></textarea>
                 <div id="git-commit-draft-status" class="hidden" role="status"></div>
+                <div id="git-commit-hint" class="git-commit-hint hidden"></div>
                 <button id="git-pull-btn" disabled>Pull</button>
                 <button id="git-push-btn" disabled>Push</button>
                 <button id="git-commit-btn" disabled>Commit staged</button>
-                <button id="git-action-resume-btn" class="hidden">Resume</button>
-                <button id="git-action-cancel-btn" class="hidden">Cancel</button>
-                <button id="git-action-dismiss-btn" class="hidden">Dismiss</button>
+                <div id="git-management-recovery" class="hidden">
+                    <button id="git-action-resume-btn" class="hidden">Resume</button>
+                    <button id="git-action-cancel-btn" class="hidden">Cancel</button>
+                    <button id="git-action-dismiss-btn" class="hidden">Dismiss</button>
+                </div>
                 <div id="git-action-status" role="status" aria-live="polite"></div>
             </section>
         </div>
@@ -139,7 +142,68 @@ describe('Git drawer action safety', () => {
         expect(document.getElementById('git-action-status').textContent).toBe(
             'Select a workspace to view Git actions.',
         );
+        expect(
+            document
+                .getElementById('git-management-recovery')
+                .classList.contains('hidden'),
+        ).toBe(true);
     });
+
+    it.each([
+        ['paused', 'Git action not sent: the sent marker could not be saved.'],
+        [
+            'unconfirmed',
+            'Result unconfirmed. Inspect Git state before running again.',
+        ],
+        ['confirmed', 'Commit completed.'],
+        [
+            'failed',
+            'Git commit failed. Partial effects are possible. Inspect Git before running again.',
+        ],
+    ])(
+        'keeps the %s action status when metadata refresh fails',
+        async (phase, status) => {
+            const prepared = new DiffController(buildApp());
+            const context = prepared.captureGitManageContext();
+            localStorage.setItem(context.infoKey, JSON.stringify(COMMIT_INFO));
+            localStorage.setItem(
+                `${context.actionPrefix}restored`,
+                JSON.stringify({
+                    version: 1,
+                    id: 'restored',
+                    owner: 'previous-page',
+                    action: 'commit',
+                    target: TARGET,
+                    phase,
+                    createdAt: Date.now(),
+                    status,
+                    message: 'queued message',
+                    indexToken: COMMIT_INFO.index_token,
+                }),
+            );
+            const failedInfo = deferred();
+            const fetch = mockFetch(() => failedInfo.promise);
+            bootstrapDom();
+            const controller = new DiffController(buildApp());
+            const refresh = controller.refreshDiff();
+            expect(
+                document.getElementById('git-action-status').textContent,
+            ).toBe(status);
+            failedInfo.reject(new TypeError('offline'));
+            await refresh;
+            await vi.waitFor(() =>
+                expect(controller.gitManageRequestKey).toBe(''),
+            );
+            expect(
+                document.getElementById('git-action-status').textContent,
+            ).toBe(status);
+            expect(
+                fetch.mock.calls.every(
+                    ([, options]) => options.method === 'GET',
+                ),
+            ).toBe(true);
+        },
+    );
 
     it('paints a saved Git view before refresh and keeps it on network failure', async () => {
         const firstStatus = deferred();
@@ -680,6 +744,160 @@ describe('Git drawer action safety', () => {
             fetch.mock.calls.filter(([, options]) => options.method === 'POST'),
         ).toHaveLength(1);
     });
+
+    it.each([
+        {
+            name: 'no staged changes',
+            info: {
+                ...COMMIT_INFO,
+                has_staged: false,
+                can_commit: false,
+                commit_reason: 'Stage changes in Git before committing.',
+            },
+            message: 'ready to commit',
+            expected: 'Stage changes in Git before committing.',
+            commitEnabled: false,
+        },
+        {
+            name: 'a whitespace message',
+            info: COMMIT_INFO,
+            message: '   ',
+            expected: 'Enter a commit message.',
+            commitEnabled: false,
+        },
+        {
+            name: 'missing index information',
+            info: { ...COMMIT_INFO, index_token: '' },
+            message: 'ready to commit',
+            expected:
+                'Commit information is unavailable. Refresh to try again.',
+            commitEnabled: false,
+        },
+        {
+            name: 'a pending uncertain action',
+            info: COMMIT_INFO,
+            message: 'ready to commit',
+            record: {
+                id: 'pending',
+                phase: 'unconfirmed',
+                status: 'Result unconfirmed. Inspect Git state before running again.',
+            },
+            expected: 'Resolve the pending Git action before committing.',
+            commitEnabled: false,
+        },
+        {
+            name: 'a ready Commit without an upstream',
+            info: {
+                ...COMMIT_INFO,
+                can_pull_push: false,
+                reason: 'No upstream branch configured',
+            },
+            message: 'ready to commit',
+            expected: '',
+            commitEnabled: true,
+        },
+    ])(
+        'shows the Commit prerequisite for $name without sending an action',
+        async ({ info, message, record, expected, commitEnabled }) => {
+            if (record) {
+                const prepared = new DiffController(buildApp());
+                const context = prepared.captureGitManageContext();
+                localStorage.setItem(
+                    `${context.actionPrefix}${record.id}`,
+                    JSON.stringify({
+                        version: 1,
+                        owner: 'previous-page',
+                        action: 'pull',
+                        target: TARGET,
+                        createdAt: Date.now(),
+                        ...record,
+                    }),
+                );
+            }
+            bootstrapDom();
+            const fetch = mockFetch((url) => {
+                const path = new URL(url, window.location.href).pathname;
+                if (path === '/api/git/info') return info;
+                throw new Error(`Unexpected fetch ${url}`);
+            });
+            const controller = new DiffController(buildApp());
+            await controller.refreshDiff();
+            await vi.waitFor(() =>
+                expect(controller.gitManageInfo).toBeTruthy(),
+            );
+            const input = document.getElementById('git-commit-message');
+            input.value = message;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            if (record) {
+                await vi.waitFor(() =>
+                    expect(controller.gitManageRecord?.phase).toBe(
+                        record.phase,
+                    ),
+                );
+            }
+
+            const hint = document.getElementById('git-commit-hint');
+            expect(hint.textContent).toBe(expected);
+            expect(hint.classList.contains('hidden')).toBe(!expected);
+            expect(document.getElementById('git-commit-btn').disabled).toBe(
+                !commitEnabled,
+            );
+            expect(
+                fetch.mock.calls.filter(
+                    ([, options]) => options.method === 'POST',
+                ),
+            ).toHaveLength(0);
+        },
+    );
+
+    it.each([
+        ['pull', 'Resume Pull'],
+        ['push', 'Resume Push'],
+        ['commit', 'Resume Commit'],
+    ])(
+        'names a restored paused %s without replaying it',
+        async (action, resumeLabel) => {
+            const prepared = new DiffController(buildApp());
+            const context = prepared.captureGitManageContext();
+            localStorage.setItem(
+                `${context.actionPrefix}restored`,
+                JSON.stringify({
+                    version: 1,
+                    id: 'restored',
+                    owner: 'previous-page',
+                    action,
+                    target: TARGET,
+                    phase: 'paused',
+                    createdAt: Date.now(),
+                    status: 'Queued Git action paused. Resume to verify before sending.',
+                    message: 'queued message',
+                    indexToken: COMMIT_INFO.index_token,
+                }),
+            );
+            const fetch = mockFetch(() => {
+                throw new Error('No request is allowed');
+            });
+            bootstrapDom();
+            const controller = new DiffController(buildApp());
+            controller.captureGitManageContext();
+
+            expect(controller.gitManageRecord?.phase).toBe('paused');
+            expect(
+                document
+                    .getElementById('git-management-recovery')
+                    .classList.contains('hidden'),
+            ).toBe(false);
+            expect(
+                document.getElementById('git-action-resume-btn').textContent,
+            ).toBe(resumeLabel);
+            expect(
+                document.getElementById('git-action-status').textContent,
+            ).toBe(
+                `Queued ${action === 'pull' ? 'Pull' : action === 'push' ? 'Push' : 'Commit'} paused. ${resumeLabel} to verify before sending.`,
+            );
+            expect(fetch).not.toHaveBeenCalled();
+        },
+    );
 
     it('keeps workspace drafts separate in memory when storage is unavailable', async () => {
         mockFetch((url) => {

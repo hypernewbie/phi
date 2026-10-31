@@ -4185,13 +4185,13 @@ body.has-terminal-bg
 }
 
 .git-target-label {
-    color: var(--text-muted);
+    color: var(--text-primary);
     font-size: 11px;
     line-height: 1.4;
 }
 
 .git-commit-label {
-    color: var(--text-muted);
+    color: var(--text-primary);
     font-size: 11px;
     line-height: 1.3;
 }
@@ -4201,8 +4201,18 @@ body.has-terminal-bg
     max-height: 120px;
 }
 
-.git-management-actions {
+.git-commit-hint {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    color: var(--text-primary);
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.git-management-actions,
+.git-management-recovery {
     display: flex;
+    flex-wrap: wrap;
     gap: 6px;
     min-width: 0;
 }
@@ -4210,14 +4220,17 @@ body.has-terminal-bg
 .diff-action-bar .git-management-btn {
     width: auto;
     min-width: 0;
-    height: 30px;
-    flex: 1 1 0;
-    padding: 0 10px;
+    height: auto;
+    min-height: var(--btn-compact-height, 32px);
+    flex: 0 1 auto;
+    padding: 6px 12px;
     border: 1px solid var(--bg-border);
     border-radius: 6px;
     background: var(--bg-elevated);
     color: var(--text-primary);
     font-size: 11px;
+    line-height: 1.3;
+    white-space: nowrap;
 }
 
 .diff-action-bar .git-management-btn:hover:not(:disabled) {
@@ -4226,9 +4239,28 @@ body.has-terminal-bg
     color: var(--text-primary);
 }
 
+/* Commit is the one primary action in this row; Pull, Push, and the
+   recovery controls stay neutral so the hierarchy matches the drawer. */
+.diff-action-bar #git-commit-btn:not(:disabled) {
+    border-color: var(--accent);
+    background: var(--accent-trace);
+    font-weight: 700;
+}
+
+.diff-action-bar #git-commit-btn:hover:not(:disabled) {
+    border-color: var(--accent-bright);
+}
+
 .diff-action-bar .git-management-btn:disabled {
     cursor: not-allowed;
     opacity: 0.55;
+}
+
+@media (any-pointer: coarse) {
+    .diff-action-bar .git-management-btn {
+        min-width: 44px;
+        min-height: max(44px, var(--btn-compact-height, 44px));
+    }
 }
 
 .git-management-btn:focus-visible {
@@ -4238,7 +4270,7 @@ body.has-terminal-bg
 
 .git-action-status {
     min-height: 14px;
-    color: var(--text-muted);
+    color: var(--text-primary);
     font-size: 11px;
     line-height: 1.4;
 }
