@@ -271,6 +271,7 @@ describe('startPhi fixture isolation', () => {
         const phi = await startPhi({
             env: {
                 PHI_SHUTDOWN_GRACE: '1s',
+                PHI_E2E_VERIFY_OWNERSHIP: '1',
                 HOME: '/evil',
                 TMPDIR: '/evil',
             },
@@ -279,6 +280,7 @@ describe('startPhi fixture isolation', () => {
         expect(opts.env.PATH).toBe(process.env.PATH);
         expect(opts.env.F1_PROBE_OUTER).toBeUndefined();
         expect(opts.env.PHI_SHUTDOWN_GRACE).toBe('1s');
+        expect(opts.env.PHI_E2E_VERIFY_OWNERSHIP).toBeUndefined();
         expect(opts.env.HOME).toBe(HOME);
         expect(opts.env.USERPROFILE).toBe(HOME);
         expect(opts.env.APPDATA).toBe(HOME);
