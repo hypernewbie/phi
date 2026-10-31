@@ -29,6 +29,8 @@ type peer struct {
 	sessionID  string
 
 	stream connectStream
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	sendCh chan *pibridgepb.PhiToPi
 	done   chan struct{}
@@ -52,14 +54,25 @@ type peer struct {
 	skillsPending      map[string]chan SkillsResult
 	invokeSkillPending map[string]chan InvokeSkillResult
 
+	syncboardMu        sync.Mutex
+	syncboardHighWater uint64
+	syncboardPending   map[uint64]struct{}
+
 	writerDone chan struct{}
 }
 
 func newPeer(generation uint64, sessionID string, stream connectStream) *peer {
+	parent := context.Background()
+	if stream != nil {
+		parent = stream.Context()
+	}
+	ctx, cancel := context.WithCancel(parent)
 	return &peer{
 		generation: generation,
 		sessionID:  sessionID,
 		stream:     stream,
+		ctx:        ctx,
+		cancel:     cancel,
 		sendCh:     make(chan *pibridgepb.PhiToPi, maxQueuedMessages),
 		done:       make(chan struct{}),
 		histPending: make(
@@ -75,6 +88,7 @@ func newPeer(generation uint64, sessionID string, stream connectStream) *peer {
 		setThinkingPending: make(map[string]chan SetThinkingResult),
 		skillsPending:      make(map[string]chan SkillsResult),
 		invokeSkillPending: make(map[string]chan InvokeSkillResult),
+		syncboardPending:   make(map[uint64]struct{}),
 		writerDone:         make(chan struct{}),
 	}
 }
@@ -85,7 +99,7 @@ func newPeer(generation uint64, sessionID string, stream connectStream) *peer {
 // The bound covers queued plus in-flight messages, so a blocked writer
 // cannot hide an extra message outside the queue.
 func (p *peer) send(msg *pibridgepb.PhiToPi) bool {
-	return p.enqueue(msg, true)
+	return p.enqueue(msg, true, false)
 }
 
 // sendNonfatal enqueues one outbound message without closing the peer
@@ -93,17 +107,27 @@ func (p *peer) send(msg *pibridgepb.PhiToPi) bool {
 // a recall attempt must never end the lifecycle stream. Callers fail
 // only their own request.
 func (p *peer) sendNonfatal(msg *pibridgepb.PhiToPi) bool {
-	return p.enqueue(msg, false)
+	return p.enqueue(msg, false, false)
 }
 
-func (p *peer) enqueue(msg *pibridgepb.PhiToPi, fatalOverflow bool) bool {
+// sendSyncboardNonfatal leaves reserved queue room for lifecycle messages.
+func (p *peer) sendSyncboardNonfatal(msg *pibridgepb.PhiToPi) bool {
+	return p.enqueue(msg, false, true)
+}
+
+func (p *peer) enqueue(msg *pibridgepb.PhiToPi, fatalOverflow, reserveLifecycle bool) bool {
 	size := proto.Size(msg)
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
 		return false
 	}
-	if p.outstanding >= maxQueuedMessages || p.queuedBytes+size > maxQueuedBytes {
+	maxMessages, maxBytes := maxQueuedMessages, maxQueuedBytes
+	if reserveLifecycle {
+		maxMessages -= syncboardLifecycleHeadroomMessages
+		maxBytes -= syncboardLifecycleHeadroomBytes
+	}
+	if p.outstanding >= maxMessages || p.queuedBytes+size > maxBytes {
 		p.mu.Unlock()
 		if fatalOverflow {
 			p.closeWith(codes.ResourceExhausted, "bounded send queue full")
@@ -143,6 +167,7 @@ func (p *peer) closeWith(code codes.Code, msg string) {
 	p.closeCode = code
 	p.closeMsg = msg
 	p.mu.Unlock()
+	p.cancel()
 	close(p.done)
 }
 

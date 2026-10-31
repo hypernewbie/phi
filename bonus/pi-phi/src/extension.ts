@@ -18,10 +18,13 @@ import {
     type CompactLatchState,
     type PiContextView,
     type PiSkillView,
-    type PiThinkingLevel,
     Runtime,
     freshCompactLatch,
 } from './runtime.js';
+import {
+    createSyncboardToolManager,
+    type SyncboardRuntime,
+} from './syncboard.js';
 
 export const ENV_TARGET = 'PHI_PI_BRIDGE_ENDPOINT';
 export const ENV_PANE = 'PHI_PI_BRIDGE_PANE_ID';
@@ -39,6 +42,7 @@ interface OwnerSlot {
     creds?: ChannelCreds | undefined;
     compact?: CompactLatchState | undefined;
     reload?: ReloadLatchState | undefined;
+    syncboardOwned?: boolean | undefined;
 }
 
 function ownerSlot(): OwnerSlot {
@@ -74,6 +78,7 @@ export function resetOwnerSlotForTest(): void {
     (globalThis as Record<symbol, unknown>)[OWNER_KEY] = {
         active: false,
         generation: 0n,
+        syncboardOwned: false,
     } as OwnerSlot;
 }
 
@@ -140,13 +145,13 @@ export function settledAborted(event: unknown): boolean {
  * flag, so this evidence classifies them.
  */
 export function agentEndStopReason(event: unknown): string | null {
-    if (!isRecord(event) || !Array.isArray(event['messages'])) return null;
-    const messages = event['messages'] as unknown[];
+    if (!isRecord(event) || !Array.isArray(event.messages)) return null;
+    const messages = event.messages as unknown[];
     for (let i = messages.length - 1; i >= 0; i -= 1) {
         const message = messages[i];
-        if (!isRecord(message) || message['role'] !== 'assistant') continue;
-        return typeof message['stopReason'] === 'string'
-            ? (message['stopReason'] as string)
+        if (!isRecord(message) || message.role !== 'assistant') continue;
+        return typeof message.stopReason === 'string'
+            ? (message.stopReason as string)
             : null;
     }
     return null;
@@ -175,9 +180,9 @@ function bridgeDisabled(pi: ExtensionAPI): boolean {
         const api = pi as unknown as { getSettings?: () => unknown };
         const settings = api.getSettings?.();
         if (!isRecord(settings)) return false;
-        const section = settings['phiBridge'];
+        const section = settings.phiBridge;
         if (!isRecord(section)) return false;
-        return section['enabled'] === false;
+        return section.enabled === false;
     } catch {
         return false;
     }
@@ -198,6 +203,7 @@ export interface FactoryRuntime {
     onCompactStart(ctx: PiContextView): void;
     onCompactEnd(ctx: PiContextView): void;
     shutdown(): void;
+    requestSyncboard?: SyncboardRuntime['requestSyncboard'];
 }
 
 export interface FactoryDeps {
@@ -206,6 +212,8 @@ export interface FactoryDeps {
         generation: bigint,
         compact: CompactLatchState,
         reload: ReloadLatchState,
+        syncboardEnabled?: boolean,
+        onSyncboardAvailability?: (available: boolean) => void,
     ) => FactoryRuntime;
 }
 
@@ -224,18 +232,34 @@ export function createExtension(
     let runtime: FactoryRuntime | null = null;
     let claimed = false;
     let sessionId: string | null = null;
+    const syncboardTools = createSyncboardToolManager(pi, {
+        currentRuntime: () => {
+            const current = runtime as
+                | (FactoryRuntime & {
+                      requestSyncboard?: SyncboardRuntime['requestSyncboard'];
+                  })
+                | null;
+            return current && typeof current.requestSyncboard === 'function'
+                ? (current as FactoryRuntime & SyncboardRuntime)
+                : null;
+        },
+        disabled: () => bridgeDisabled(pi),
+        isOwned: () => ownerSlot().syncboardOwned === true,
+        setOwned: (owned) => {
+            ownerSlot().syncboardOwned = owned;
+        },
+    });
 
     const nativeThinking = pi as Partial<
         Pick<ExtensionAPI, 'getThinkingLevel' | 'setThinkingLevel'>
     >;
     const getThinkingLevel =
         typeof nativeThinking.getThinkingLevel === 'function'
-            ? () => nativeThinking.getThinkingLevel!()
+            ? nativeThinking.getThinkingLevel.bind(pi)
             : undefined;
     const setThinkingLevel =
         typeof nativeThinking.setThinkingLevel === 'function'
-            ? (level: PiThinkingLevel) =>
-                  nativeThinking.setThinkingLevel!(level)
+            ? nativeThinking.setThinkingLevel.bind(pi)
             : undefined;
     // Skills need both host calls: the command registry lists them and
     // sendUserMessage delivers one. Either one missing keeps the
@@ -245,14 +269,16 @@ export function createExtension(
     >;
     const hasSkillsApi = typeof nativeSkills.getCommands === 'function';
     const hasInvokeApi = typeof nativeSkills.sendUserMessage === 'function';
-    const make =
+    const make: NonNullable<FactoryDeps['makeRuntime']> =
         deps.makeRuntime ??
-        ((c, g, compact, reload) =>
+        ((c, g, compact, reload, syncboardEnabled, onSyncboardAvailability) =>
             new Runtime({
                 creds: c,
                 generation: g,
                 compactState: compact,
                 reloadState: reload,
+                syncboardEnabled: syncboardEnabled === true,
+                ...(onSyncboardAvailability ? { onSyncboardAvailability } : {}),
                 setModel: (model) => pi.setModel(model),
                 ...(getThinkingLevel ? { getThinkingLevel } : {}),
                 ...(setThinkingLevel ? { setThinkingLevel } : {}),
@@ -264,10 +290,29 @@ export function createExtension(
                       }
                     : {}),
             }));
+    const makeOwnedRuntime = (
+        creds: ChannelCreds,
+        generation: bigint,
+        syncboardEnabled: boolean,
+    ): FactoryRuntime => {
+        let created: FactoryRuntime | null = null;
+        created = make(
+            creds,
+            generation,
+            ownerCompactState(),
+            ownerReloadState(),
+            syncboardEnabled,
+            (available) => {
+                if (runtime === created) syncboardTools.setAvailable(available);
+            },
+        );
+        return created;
+    };
 
     pi.on('session_start', (_event, ctx) => {
         const slot = ownerSlot();
         if (bridgeDisabled(pi)) {
+            syncboardTools.setAvailable(false);
             // Disabled in Pi settings: scrub every credential copy and
             // stay inert. Checked here, not in the factory, because
             // getSettings is not callable until the runtime is bound.
@@ -303,11 +348,11 @@ export function createExtension(
             captureNativeReloadBaseline(ctx, reloadState);
             slot.generation += 1n;
             sessionId = next;
-            runtime = make(
+            const syncboardEnabled = syncboardTools.prepare();
+            runtime = makeOwnedRuntime(
                 slot.creds!,
                 slot.generation,
-                ownerCompactState(),
-                reloadState,
+                syncboardEnabled,
             );
             runtime.start(contextView(ctx));
             return;
@@ -326,12 +371,8 @@ export function createExtension(
         }
         const reloadState = ownerReloadState();
         captureNativeReloadBaseline(ctx, reloadState);
-        runtime = make(
-            creds,
-            slot.generation,
-            ownerCompactState(),
-            reloadState,
-        );
+        const syncboardEnabled = syncboardTools.prepare();
+        runtime = makeOwnedRuntime(creds, slot.generation, syncboardEnabled);
         runtime.start(contextView(ctx));
     });
 
@@ -380,6 +421,7 @@ export function createExtension(
     pi.on('session_compact_failed', compactEnd);
 
     pi.on('session_shutdown', () => {
+        syncboardTools.setAvailable(false);
         runtime?.shutdown();
         runtime = null;
         if (claimed) {
@@ -401,7 +443,7 @@ export function hostSkills(pi: ExtensionAPI): PiSkillView[] {
     if (!Array.isArray(commands)) return [];
     const out: PiSkillView[] = [];
     for (const command of commands) {
-        if (!command || command.source !== 'skill') continue;
+        if (command?.source !== 'skill') continue;
         const name =
             typeof command.name === 'string' &&
             command.name.startsWith(SKILL_COMMAND_PREFIX)

@@ -29,35 +29,40 @@ type request struct {
 	ContextRev uint64 `json:"contextRev"`
 	TimeoutMs  int    `json:"timeoutMs"`
 	Call       string `json:"call"`
+	Key        string `json:"key"`
 }
 
 type response struct {
-	OK           bool     `json:"ok"`
-	Error        string   `json:"error,omitempty"`
-	Code         int      `json:"code,omitempty"`
-	Process      string   `json:"process,omitempty"`
-	Token        string   `json:"token,omitempty"`
-	Sent         int      `json:"sent,omitempty"`
-	Active       int      `json:"active,omitempty"`
-	Leases       int      `json:"leases,omitempty"`
-	HasPeer      bool     `json:"hasPeer,omitempty"`
-	HasState     bool     `json:"hasState,omitempty"`
-	State        int32    `json:"state,omitempty"`
-	Revision     string   `json:"revision,omitempty"`
-	JournalFirst string   `json:"journalFirst,omitempty"`
-	JournalLast  string   `json:"journalLast,omitempty"`
-	JournalGap   bool     `json:"journalGap,omitempty"`
-	Generation   string   `json:"generation,omitempty"`
-	RuntimeID    string   `json:"runtimeId,omitempty"`
-	PubRev       string   `json:"pubRev,omitempty"`
-	Call         string   `json:"call,omitempty"`
-	Outcome      string   `json:"outcome,omitempty"`
-	Reason       string   `json:"reason,omitempty"`
-	RequestID    string   `json:"requestId,omitempty"`
-	Caps         []string `json:"caps,omitempty"`
-	Session      string   `json:"session,omitempty"`
-	Leaf         string   `json:"leaf,omitempty"`
-	Model        string   `json:"model,omitempty"`
+	OK                 bool                  `json:"ok"`
+	Error              string                `json:"error,omitempty"`
+	Code               int                   `json:"code,omitempty"`
+	Process            string                `json:"process,omitempty"`
+	Token              string                `json:"token,omitempty"`
+	Sent               int                   `json:"sent,omitempty"`
+	Active             int                   `json:"active,omitempty"`
+	Leases             int                   `json:"leases,omitempty"`
+	HasPeer            bool                  `json:"hasPeer,omitempty"`
+	HasState           bool                  `json:"hasState,omitempty"`
+	State              int32                 `json:"state,omitempty"`
+	Revision           string                `json:"revision,omitempty"`
+	JournalFirst       string                `json:"journalFirst,omitempty"`
+	JournalLast        string                `json:"journalLast,omitempty"`
+	JournalGap         bool                  `json:"journalGap,omitempty"`
+	Generation         string                `json:"generation,omitempty"`
+	RuntimeID          string                `json:"runtimeId,omitempty"`
+	PubRev             string                `json:"pubRev,omitempty"`
+	Call               string                `json:"call,omitempty"`
+	Outcome            string                `json:"outcome,omitempty"`
+	Reason             string                `json:"reason,omitempty"`
+	RequestID          string                `json:"requestId,omitempty"`
+	Caps               []string              `json:"caps,omitempty"`
+	Session            string                `json:"session,omitempty"`
+	Leaf               string                `json:"leaf,omitempty"`
+	Model              string                `json:"model,omitempty"`
+	SyncboardCalls     int                   `json:"syncboardCalls,omitempty"`
+	SyncboardMutations int                   `json:"syncboardMutations,omitempty"`
+	SyncboardPending   int                   `json:"syncboardPending,omitempty"`
+	SyncboardMessage   *testSyncboardMessage `json:"syncboardMessage,omitempty"`
 }
 
 func fail(format string, args ...any) response {
@@ -143,6 +148,8 @@ func run() error {
 		return err
 	}
 	srv := pibridge.NewServer()
+	syncboard := newTestSyncboard()
+	srv.SetSyncboardHandler(syncboard.handle)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.GRPCServer().Serve(lis) }()
 	var callsMu sync.Mutex
@@ -205,6 +212,34 @@ func run() error {
 				PubRev: strconv.FormatUint(view.PubRev, 10),
 				Caps:   view.Caps, Session: view.SessionID, Leaf: view.LeafID, Model: view.Model,
 			})
+		case "syncboard-hold":
+			if !syncboard.holdNext() {
+				_ = enc.Encode(fail("Syncboard handler is already held"))
+				continue
+			}
+			_ = enc.Encode(response{OK: true})
+		case "syncboard-wait":
+			ctx, cancel := context.WithTimeout(context.Background(), clampTimeout(req.TimeoutMs))
+			started := syncboard.waitUntilStarted(ctx)
+			cancel()
+			if !started {
+				_ = enc.Encode(fail("Syncboard handler did not start"))
+				continue
+			}
+			_ = enc.Encode(response{OK: true})
+		case "syncboard-release":
+			syncboard.release()
+			_ = enc.Encode(response{OK: true})
+		case "syncboard-stats":
+			calls, mutations, pending := syncboard.stats()
+			_ = enc.Encode(response{OK: true, SyncboardCalls: calls, SyncboardMutations: mutations, SyncboardPending: pending})
+		case "syncboard-inspect":
+			message, found := syncboard.inspect(req.Key)
+			if !found {
+				_ = enc.Encode(fail("unknown Syncboard key"))
+				continue
+			}
+			_ = enc.Encode(response{OK: true, SyncboardMessage: &message})
 		case "compact":
 			callsMu.Lock()
 			callSeq++

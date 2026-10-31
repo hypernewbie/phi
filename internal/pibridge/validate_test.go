@@ -19,14 +19,18 @@ func TestMetadataSizeBound(t *testing.T) {
 }
 
 func TestNegotiateCapabilities(t *testing.T) {
-	got := negotiateCapabilities([]string{CapabilityLifecycle, CapabilityThinking, "unknown.future.v9"})
+	got := negotiateCapabilities([]string{CapabilityLifecycle, CapabilityThinking, "unknown.future.v9", CapabilitySyncboard}, false)
 	if !got[CapabilityLifecycle] || !got[CapabilityThinking] {
 		t.Fatalf("known caps dropped: %v", got)
 	}
-	if got["unknown.future.v9"] {
-		t.Fatalf("unknown cap accepted: %v", got)
+	if got["unknown.future.v9"] || got[CapabilitySyncboard] {
+		t.Fatalf("unknown or unconfigured cap accepted: %v", got)
 	}
-	if len(negotiateCapabilities(nil)) != 0 {
+	enabled := negotiateCapabilities([]string{CapabilitySyncboard}, true)
+	if !enabled[CapabilitySyncboard] {
+		t.Fatal("configured Syncboard capability not accepted")
+	}
+	if len(negotiateCapabilities(nil, false)) != 0 {
 		t.Fatal("empty advise must yield empty accepted set")
 	}
 }

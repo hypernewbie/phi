@@ -65,8 +65,11 @@ func validateContextUsage(u *pibridgepb.ContextUsageSnapshot) error {
 
 // negotiateCapabilities intersects client-advertised names with the
 // server-supported set. Unknown names are ignored, never an error.
-func negotiateCapabilities(advised []string) map[string]bool {
+func negotiateCapabilities(advised []string, syncboardEnabled bool) map[string]bool {
 	supported := map[string]bool{CapabilityLifecycle: true, CapabilityHistory: true, CapabilityModels: true, CapabilityThinking: true, CapabilityContext: true, CapabilityCompact: true, CapabilityReload: true, CapabilitySkills: true}
+	if syncboardEnabled {
+		supported[CapabilitySyncboard] = true
+	}
 	out := map[string]bool{}
 	for _, c := range advised {
 		if supported[c] {
