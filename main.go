@@ -368,6 +368,7 @@ func main() {
 	http.HandleFunc("/api/pi-bridge/thinking-levels", handlePiBridgeThinkingLevels)
 	http.HandleFunc("/api/pi-bridge/thinking", handlePiBridgeSetThinking)
 	http.HandleFunc("/api/pi-bridge/compact", handlePiBridgeCompact)
+	http.HandleFunc("/api/pi-bridge/reload", handlePiBridgeReload)
 	http.HandleFunc("/api/pi-bridge/skills", handlePiBridgeSkills)
 	http.HandleFunc("/api/pi-bridge/skill", handlePiBridgeInvokeSkill)
 	http.HandleFunc("/api/attachments", handleAttachments)

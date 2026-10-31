@@ -9,7 +9,8 @@ Compact control: one operation per Pi process, no server-side queue,
 no automatic retry. A press during a turn waits in the browser for that
 turn; a second press cancels it. An expired or interrupted wait reports
 unknown; native work may still complete, and a late result releases only
-its own operation.
+its own operation. On explicit user action, an interactive Pi session can
+also dispatch its native `/reload` command; a lost receipt is never replayed.
 It never sends prompts on its own and never edits messages or files.
 
 ## Layout
@@ -63,6 +64,21 @@ reports idle; a second press cancels it. It is cancelled rather than deferred
 if a new turn starts, messages are queued, or another compaction starts, so a
 later compaction never includes context the user did not intend. A press that
 cannot act immediately reports why instead of leaving a grey control.
+
+## Native reload
+
+A connected interactive Pi pane with `pi.reload.v1` shows `/reload` under
+Cmds → Built-in Commands. Phi enters Pi's native editor callback, not the PTY.
+During a turn, Phi can hold one cancellable wait; it dispatches only after a
+fresh idle check with the same session, run, and context. A queued message or
+changed identity requires review. Without the bridge or capability, the
+existing PTY command behavior remains.
+
+The dispatch receipt means only that Pi entered the callback. It does not
+confirm reload completion. A timeout, lost connection, or runtime replacement
+keeps the operation uncertain and never triggers an automatic retry. If the
+request was admitted but never reached Pi, the server cannot prove release;
+the record stays pending until the Pi process exits.
 
 ## Skills
 

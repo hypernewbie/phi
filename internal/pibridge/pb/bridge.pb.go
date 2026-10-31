@@ -197,6 +197,55 @@ func (CompactOutcome) EnumDescriptor() ([]byte, []int) {
 	return file_bridge_proto_rawDescGZIP(), []int{2}
 }
 
+type ReloadDispatchOutcome int32
+
+const (
+	ReloadDispatchOutcome_RELOAD_DISPATCH_OUTCOME_UNSPECIFIED ReloadDispatchOutcome = 0
+	ReloadDispatchOutcome_RELOAD_DISPATCH_OUTCOME_DISPATCHED  ReloadDispatchOutcome = 1
+	ReloadDispatchOutcome_RELOAD_DISPATCH_OUTCOME_REFUSED     ReloadDispatchOutcome = 2
+)
+
+// Enum value maps for ReloadDispatchOutcome.
+var (
+	ReloadDispatchOutcome_name = map[int32]string{
+		0: "RELOAD_DISPATCH_OUTCOME_UNSPECIFIED",
+		1: "RELOAD_DISPATCH_OUTCOME_DISPATCHED",
+		2: "RELOAD_DISPATCH_OUTCOME_REFUSED",
+	}
+	ReloadDispatchOutcome_value = map[string]int32{
+		"RELOAD_DISPATCH_OUTCOME_UNSPECIFIED": 0,
+		"RELOAD_DISPATCH_OUTCOME_DISPATCHED":  1,
+		"RELOAD_DISPATCH_OUTCOME_REFUSED":     2,
+	}
+)
+
+func (x ReloadDispatchOutcome) Enum() *ReloadDispatchOutcome {
+	p := new(ReloadDispatchOutcome)
+	*p = x
+	return p
+}
+
+func (x ReloadDispatchOutcome) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ReloadDispatchOutcome) Descriptor() protoreflect.EnumDescriptor {
+	return file_bridge_proto_enumTypes[3].Descriptor()
+}
+
+func (ReloadDispatchOutcome) Type() protoreflect.EnumType {
+	return &file_bridge_proto_enumTypes[3]
+}
+
+func (x ReloadDispatchOutcome) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ReloadDispatchOutcome.Descriptor instead.
+func (ReloadDispatchOutcome) EnumDescriptor() ([]byte, []int) {
+	return file_bridge_proto_rawDescGZIP(), []int{3}
+}
+
 type ProtocolErrorCode int32
 
 const (
@@ -239,11 +288,11 @@ func (x ProtocolErrorCode) String() string {
 }
 
 func (ProtocolErrorCode) Descriptor() protoreflect.EnumDescriptor {
-	return file_bridge_proto_enumTypes[3].Descriptor()
+	return file_bridge_proto_enumTypes[4].Descriptor()
 }
 
 func (ProtocolErrorCode) Type() protoreflect.EnumType {
-	return &file_bridge_proto_enumTypes[3]
+	return &file_bridge_proto_enumTypes[4]
 }
 
 func (x ProtocolErrorCode) Number() protoreflect.EnumNumber {
@@ -252,7 +301,7 @@ func (x ProtocolErrorCode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ProtocolErrorCode.Descriptor instead.
 func (ProtocolErrorCode) EnumDescriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{3}
+	return file_bridge_proto_rawDescGZIP(), []int{4}
 }
 
 // Envelope for every Pi → Phi message. The identity fields are repeated on
@@ -276,6 +325,7 @@ type PiToPhi struct {
 	//	*PiToPhi_CompactResult
 	//	*PiToPhi_SkillsResponse
 	//	*PiToPhi_InvokeSkillAck
+	//	*PiToPhi_ReloadAck
 	Payload       isPiToPhi_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -447,6 +497,15 @@ func (x *PiToPhi) GetInvokeSkillAck() *InvokeSkillAck {
 	return nil
 }
 
+func (x *PiToPhi) GetReloadAck() *ReloadAck {
+	if x != nil {
+		if x, ok := x.Payload.(*PiToPhi_ReloadAck); ok {
+			return x.ReloadAck
+		}
+	}
+	return nil
+}
+
 type isPiToPhi_Payload interface {
 	isPiToPhi_Payload()
 }
@@ -499,6 +558,10 @@ type PiToPhi_InvokeSkillAck struct {
 	InvokeSkillAck *InvokeSkillAck `protobuf:"bytes,24,opt,name=invoke_skill_ack,json=invokeSkillAck,proto3,oneof"`
 }
 
+type PiToPhi_ReloadAck struct {
+	ReloadAck *ReloadAck `protobuf:"bytes,25,opt,name=reload_ack,json=reloadAck,proto3,oneof"`
+}
+
 func (*PiToPhi_Hello) isPiToPhi_Payload() {}
 
 func (*PiToPhi_AgentStarted) isPiToPhi_Payload() {}
@@ -523,6 +586,8 @@ func (*PiToPhi_SkillsResponse) isPiToPhi_Payload() {}
 
 func (*PiToPhi_InvokeSkillAck) isPiToPhi_Payload() {}
 
+func (*PiToPhi_ReloadAck) isPiToPhi_Payload() {}
+
 // Envelope for every Phi → Pi message.
 type PhiToPi struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
@@ -541,6 +606,7 @@ type PhiToPi struct {
 	//	*PhiToPi_CompactRequest
 	//	*PhiToPi_SkillsRequest
 	//	*PhiToPi_InvokeSkillRequest
+	//	*PhiToPi_ReloadRequest
 	Payload       isPhiToPi_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -694,6 +760,15 @@ func (x *PhiToPi) GetInvokeSkillRequest() *InvokeSkillRequest {
 	return nil
 }
 
+func (x *PhiToPi) GetReloadRequest() *ReloadRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*PhiToPi_ReloadRequest); ok {
+			return x.ReloadRequest
+		}
+	}
+	return nil
+}
+
 type isPhiToPi_Payload interface {
 	isPhiToPi_Payload()
 }
@@ -738,6 +813,10 @@ type PhiToPi_InvokeSkillRequest struct {
 	InvokeSkillRequest *InvokeSkillRequest `protobuf:"bytes,21,opt,name=invoke_skill_request,json=invokeSkillRequest,proto3,oneof"`
 }
 
+type PhiToPi_ReloadRequest struct {
+	ReloadRequest *ReloadRequest `protobuf:"bytes,22,opt,name=reload_request,json=reloadRequest,proto3,oneof"`
+}
+
 func (*PhiToPi_Accepted) isPhiToPi_Payload() {}
 
 func (*PhiToPi_ProtocolError) isPhiToPi_Payload() {}
@@ -757,6 +836,8 @@ func (*PhiToPi_CompactRequest) isPhiToPi_Payload() {}
 func (*PhiToPi_SkillsRequest) isPhiToPi_Payload() {}
 
 func (*PhiToPi_InvokeSkillRequest) isPhiToPi_Payload() {}
+
+func (*PhiToPi_ReloadRequest) isPhiToPi_Payload() {}
 
 // Hello is the first application message on every stream. Protocol version,
 // identities, capabilities, and the replay range of the retained journal.
@@ -1182,8 +1263,11 @@ type StateSnapshot struct {
 	// isIdle/hasPendingMessages plus local compaction tracking.
 	// Absent when the pi.compact.v1 APIs are unavailable.
 	CompactReadiness *CompactReadiness `protobuf:"bytes,11,opt,name=compact_readiness,json=compactReadiness,proto3" json:"compact_readiness,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Optional native Reload readiness. Missing counters mean unknown;
+	// they are never inferred to be zero.
+	ReloadReadiness *ReloadReadiness `protobuf:"bytes,12,opt,name=reload_readiness,json=reloadReadiness,proto3" json:"reload_readiness,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *StateSnapshot) Reset() {
@@ -1282,6 +1366,13 @@ func (x *StateSnapshot) GetContextUsage() *ContextUsageSnapshot {
 func (x *StateSnapshot) GetCompactReadiness() *CompactReadiness {
 	if x != nil {
 		return x.CompactReadiness
+	}
+	return nil
+}
+
+func (x *StateSnapshot) GetReloadReadiness() *ReloadReadiness {
+	if x != nil {
+		return x.ReloadReadiness
 	}
 	return nil
 }
@@ -2272,6 +2363,257 @@ func (x *CompactResult) GetReason() string {
 	return ""
 }
 
+// ReloadRequest asks Pi's native interactive editor to run its fixed
+// /reload command. Identity/readiness are rechecked immediately before
+// callback entry. A lost receipt means unknown, never permission to retry.
+type ReloadRequest struct {
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	RequestId               string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	ExpectedSessionId       string                 `protobuf:"bytes,2,opt,name=expected_session_id,json=expectedSessionId,proto3" json:"expected_session_id,omitempty"`
+	ExpectedLeafId          string                 `protobuf:"bytes,3,opt,name=expected_leaf_id,json=expectedLeafId,proto3" json:"expected_leaf_id,omitempty"`
+	ExpectedModel           *ModelSnapshot         `protobuf:"bytes,4,opt,name=expected_model,json=expectedModel,proto3" json:"expected_model,omitempty"`
+	ExpectedRunId           *uint64                `protobuf:"varint,5,opt,name=expected_run_id,json=expectedRunId,proto3,oneof" json:"expected_run_id,omitempty"`
+	ExpectedContextRevision *uint64                `protobuf:"varint,6,opt,name=expected_context_revision,json=expectedContextRevision,proto3,oneof" json:"expected_context_revision,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *ReloadRequest) Reset() {
+	*x = ReloadRequest{}
+	mi := &file_bridge_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReloadRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReloadRequest) ProtoMessage() {}
+
+func (x *ReloadRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReloadRequest.ProtoReflect.Descriptor instead.
+func (*ReloadRequest) Descriptor() ([]byte, []int) {
+	return file_bridge_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *ReloadRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ReloadRequest) GetExpectedSessionId() string {
+	if x != nil {
+		return x.ExpectedSessionId
+	}
+	return ""
+}
+
+func (x *ReloadRequest) GetExpectedLeafId() string {
+	if x != nil {
+		return x.ExpectedLeafId
+	}
+	return ""
+}
+
+func (x *ReloadRequest) GetExpectedModel() *ModelSnapshot {
+	if x != nil {
+		return x.ExpectedModel
+	}
+	return nil
+}
+
+func (x *ReloadRequest) GetExpectedRunId() uint64 {
+	if x != nil && x.ExpectedRunId != nil {
+		return *x.ExpectedRunId
+	}
+	return 0
+}
+
+func (x *ReloadRequest) GetExpectedContextRevision() uint64 {
+	if x != nil && x.ExpectedContextRevision != nil {
+		return *x.ExpectedContextRevision
+	}
+	return 0
+}
+
+// ReloadAck reports callback entry only. DISPATCHED does not mean that
+// Pi completed the reload. reason uses a bounded safe vocabulary.
+type ReloadAck struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Outcome       ReloadDispatchOutcome  `protobuf:"varint,2,opt,name=outcome,proto3,enum=phi.pi.v1.ReloadDispatchOutcome" json:"outcome,omitempty"`
+	Reason        string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReloadAck) Reset() {
+	*x = ReloadAck{}
+	mi := &file_bridge_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReloadAck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReloadAck) ProtoMessage() {}
+
+func (x *ReloadAck) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReloadAck.ProtoReflect.Descriptor instead.
+func (*ReloadAck) Descriptor() ([]byte, []int) {
+	return file_bridge_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *ReloadAck) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ReloadAck) GetOutcome() ReloadDispatchOutcome {
+	if x != nil {
+		return x.Outcome
+	}
+	return ReloadDispatchOutcome_RELOAD_DISPATCH_OUTCOME_UNSPECIFIED
+}
+
+func (x *ReloadAck) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+// ReloadReadiness carries exact current identity fences and process-owned
+// mutation state. Counter presence distinguishes known zero from unknown.
+type ReloadReadiness struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	RunId              *uint64                `protobuf:"varint,1,opt,name=run_id,json=runId,proto3,oneof" json:"run_id,omitempty"`
+	ContextRevision    *uint64                `protobuf:"varint,2,opt,name=context_revision,json=contextRevision,proto3,oneof" json:"context_revision,omitempty"`
+	Idle               bool                   `protobuf:"varint,3,opt,name=idle,proto3" json:"idle,omitempty"`
+	HasPendingMessages bool                   `protobuf:"varint,4,opt,name=has_pending_messages,json=hasPendingMessages,proto3" json:"has_pending_messages,omitempty"`
+	CompactionActive   bool                   `protobuf:"varint,5,opt,name=compaction_active,json=compactionActive,proto3" json:"compaction_active,omitempty"`
+	CompactPending     bool                   `protobuf:"varint,6,opt,name=compact_pending,json=compactPending,proto3" json:"compact_pending,omitempty"`
+	ReloadPending      bool                   `protobuf:"varint,7,opt,name=reload_pending,json=reloadPending,proto3" json:"reload_pending,omitempty"`
+	HighWater          *uint64                `protobuf:"varint,8,opt,name=high_water,json=highWater,proto3,oneof" json:"high_water,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *ReloadReadiness) Reset() {
+	*x = ReloadReadiness{}
+	mi := &file_bridge_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReloadReadiness) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReloadReadiness) ProtoMessage() {}
+
+func (x *ReloadReadiness) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReloadReadiness.ProtoReflect.Descriptor instead.
+func (*ReloadReadiness) Descriptor() ([]byte, []int) {
+	return file_bridge_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *ReloadReadiness) GetRunId() uint64 {
+	if x != nil && x.RunId != nil {
+		return *x.RunId
+	}
+	return 0
+}
+
+func (x *ReloadReadiness) GetContextRevision() uint64 {
+	if x != nil && x.ContextRevision != nil {
+		return *x.ContextRevision
+	}
+	return 0
+}
+
+func (x *ReloadReadiness) GetIdle() bool {
+	if x != nil {
+		return x.Idle
+	}
+	return false
+}
+
+func (x *ReloadReadiness) GetHasPendingMessages() bool {
+	if x != nil {
+		return x.HasPendingMessages
+	}
+	return false
+}
+
+func (x *ReloadReadiness) GetCompactionActive() bool {
+	if x != nil {
+		return x.CompactionActive
+	}
+	return false
+}
+
+func (x *ReloadReadiness) GetCompactPending() bool {
+	if x != nil {
+		return x.CompactPending
+	}
+	return false
+}
+
+func (x *ReloadReadiness) GetReloadPending() bool {
+	if x != nil {
+		return x.ReloadPending
+	}
+	return false
+}
+
+func (x *ReloadReadiness) GetHighWater() uint64 {
+	if x != nil && x.HighWater != nil {
+		return *x.HighWater
+	}
+	return 0
+}
+
 // One skill entry. name is the bare Pi skill name without the "skill:"
 // command prefix. Both fields are UTF-8 byte bounds enforced by the
 // bridge, not by Pi: name <= 64 bytes, description <= 1024 bytes. Pi
@@ -2287,7 +2629,7 @@ type SkillRef struct {
 
 func (x *SkillRef) Reset() {
 	*x = SkillRef{}
-	mi := &file_bridge_proto_msgTypes[24]
+	mi := &file_bridge_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2299,7 +2641,7 @@ func (x *SkillRef) String() string {
 func (*SkillRef) ProtoMessage() {}
 
 func (x *SkillRef) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[24]
+	mi := &file_bridge_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2312,7 +2654,7 @@ func (x *SkillRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SkillRef.ProtoReflect.Descriptor instead.
 func (*SkillRef) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{24}
+	return file_bridge_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *SkillRef) GetName() string {
@@ -2342,7 +2684,7 @@ type SkillsRequest struct {
 
 func (x *SkillsRequest) Reset() {
 	*x = SkillsRequest{}
-	mi := &file_bridge_proto_msgTypes[25]
+	mi := &file_bridge_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2354,7 +2696,7 @@ func (x *SkillsRequest) String() string {
 func (*SkillsRequest) ProtoMessage() {}
 
 func (x *SkillsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[25]
+	mi := &file_bridge_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2367,7 +2709,7 @@ func (x *SkillsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SkillsRequest.ProtoReflect.Descriptor instead.
 func (*SkillsRequest) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{25}
+	return file_bridge_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *SkillsRequest) GetRequestId() string {
@@ -2394,7 +2736,7 @@ type SkillsResponse struct {
 
 func (x *SkillsResponse) Reset() {
 	*x = SkillsResponse{}
-	mi := &file_bridge_proto_msgTypes[26]
+	mi := &file_bridge_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2406,7 +2748,7 @@ func (x *SkillsResponse) String() string {
 func (*SkillsResponse) ProtoMessage() {}
 
 func (x *SkillsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[26]
+	mi := &file_bridge_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2419,7 +2761,7 @@ func (x *SkillsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SkillsResponse.ProtoReflect.Descriptor instead.
 func (*SkillsResponse) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{26}
+	return file_bridge_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *SkillsResponse) GetRequestId() string {
@@ -2463,7 +2805,7 @@ type InvokeSkillRequest struct {
 
 func (x *InvokeSkillRequest) Reset() {
 	*x = InvokeSkillRequest{}
-	mi := &file_bridge_proto_msgTypes[27]
+	mi := &file_bridge_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2475,7 +2817,7 @@ func (x *InvokeSkillRequest) String() string {
 func (*InvokeSkillRequest) ProtoMessage() {}
 
 func (x *InvokeSkillRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[27]
+	mi := &file_bridge_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2488,7 +2830,7 @@ func (x *InvokeSkillRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeSkillRequest.ProtoReflect.Descriptor instead.
 func (*InvokeSkillRequest) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{27}
+	return file_bridge_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *InvokeSkillRequest) GetRequestId() string {
@@ -2523,7 +2865,7 @@ type InvokeSkillAck struct {
 
 func (x *InvokeSkillAck) Reset() {
 	*x = InvokeSkillAck{}
-	mi := &file_bridge_proto_msgTypes[28]
+	mi := &file_bridge_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2535,7 +2877,7 @@ func (x *InvokeSkillAck) String() string {
 func (*InvokeSkillAck) ProtoMessage() {}
 
 func (x *InvokeSkillAck) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[28]
+	mi := &file_bridge_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2548,7 +2890,7 @@ func (x *InvokeSkillAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeSkillAck.ProtoReflect.Descriptor instead.
 func (*InvokeSkillAck) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{28}
+	return file_bridge_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *InvokeSkillAck) GetRequestId() string {
@@ -2583,7 +2925,7 @@ type ProtocolError struct {
 
 func (x *ProtocolError) Reset() {
 	*x = ProtocolError{}
-	mi := &file_bridge_proto_msgTypes[29]
+	mi := &file_bridge_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2595,7 +2937,7 @@ func (x *ProtocolError) String() string {
 func (*ProtocolError) ProtoMessage() {}
 
 func (x *ProtocolError) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[29]
+	mi := &file_bridge_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2608,7 +2950,7 @@ func (x *ProtocolError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProtocolError.ProtoReflect.Descriptor instead.
 func (*ProtocolError) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{29}
+	return file_bridge_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ProtocolError) GetCode() ProtocolErrorCode {
@@ -2629,7 +2971,7 @@ var File_bridge_proto protoreflect.FileDescriptor
 
 const file_bridge_proto_rawDesc = "" +
 	"\n" +
-	"\fbridge.proto\x12\tphi.pi.v1\"\xf1\a\n" +
+	"\fbridge.proto\x12\tphi.pi.v1\"\xa8\b\n" +
 	"\aPiToPhi\x12\x17\n" +
 	"\apane_id\x18\x01 \x01(\tR\x06paneId\x12\x1d\n" +
 	"\n" +
@@ -2647,8 +2989,10 @@ const file_bridge_proto_rawDesc = "" +
 	"\x10set_thinking_ack\x18\x15 \x01(\v2\x19.phi.pi.v1.SetThinkingAckH\x00R\x0esetThinkingAck\x12A\n" +
 	"\x0ecompact_result\x18\x16 \x01(\v2\x18.phi.pi.v1.CompactResultH\x00R\rcompactResult\x12D\n" +
 	"\x0fskills_response\x18\x17 \x01(\v2\x19.phi.pi.v1.SkillsResponseH\x00R\x0eskillsResponse\x12E\n" +
-	"\x10invoke_skill_ack\x18\x18 \x01(\v2\x19.phi.pi.v1.InvokeSkillAckH\x00R\x0einvokeSkillAckB\t\n" +
-	"\apayloadJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10J\x04\b\x10\x10\x11R\x0esummary_resultR\rcommand_errorR\x13cancel_acknowledged\"\xee\x06\n" +
+	"\x10invoke_skill_ack\x18\x18 \x01(\v2\x19.phi.pi.v1.InvokeSkillAckH\x00R\x0einvokeSkillAck\x125\n" +
+	"\n" +
+	"reload_ack\x18\x19 \x01(\v2\x14.phi.pi.v1.ReloadAckH\x00R\treloadAckB\t\n" +
+	"\apayloadJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10J\x04\b\x10\x10\x11R\x0esummary_resultR\rcommand_errorR\x13cancel_acknowledged\"\xb1\a\n" +
 	"\aPhiToPi\x12\x17\n" +
 	"\apane_id\x18\x01 \x01(\tR\x06paneId\x12\x1d\n" +
 	"\n" +
@@ -2664,7 +3008,8 @@ const file_bridge_proto_rawDesc = "" +
 	"\x14set_thinking_request\x18\x12 \x01(\v2\x1d.phi.pi.v1.SetThinkingRequestH\x00R\x12setThinkingRequest\x12D\n" +
 	"\x0fcompact_request\x18\x13 \x01(\v2\x19.phi.pi.v1.CompactRequestH\x00R\x0ecompactRequest\x12A\n" +
 	"\x0eskills_request\x18\x14 \x01(\v2\x18.phi.pi.v1.SkillsRequestH\x00R\rskillsRequest\x12Q\n" +
-	"\x14invoke_skill_request\x18\x15 \x01(\v2\x1d.phi.pi.v1.InvokeSkillRequestH\x00R\x12invokeSkillRequestB\t\n" +
+	"\x14invoke_skill_request\x18\x15 \x01(\v2\x1d.phi.pi.v1.InvokeSkillRequestH\x00R\x12invokeSkillRequest\x12A\n" +
+	"\x0ereload_request\x18\x16 \x01(\v2\x18.phi.pi.v1.ReloadRequestH\x00R\rreloadRequestB\t\n" +
 	"\apayloadJ\x04\b\v\x10\fJ\x04\b\f\x10\rR\tsummarizeR\x06cancel\"\xe8\x02\n" +
 	"\x05Hello\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\x1d\n" +
@@ -2696,7 +3041,7 @@ const file_bridge_proto_rawDesc = "" +
 	"\aoutcome\x18\x04 \x01(\x0e2\x15.phi.pi.v1.RunOutcomeR\aoutcome\"A\n" +
 	"\rModelSnapshot\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x14\n" +
-	"\x05model\x18\x02 \x01(\tR\x05model\"\xf8\x03\n" +
+	"\x05model\x18\x02 \x01(\tR\x05model\"\xbf\x04\n" +
 	"\rStateSnapshot\x12-\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x17.phi.pi.v1.LogicalStateR\x05state\x12\x1d\n" +
 	"\n" +
@@ -2710,7 +3055,8 @@ const file_bridge_proto_rawDesc = "" +
 	"\x0ethinking_level\x18\t \x01(\tR\rthinkingLevel\x12D\n" +
 	"\rcontext_usage\x18\n" +
 	" \x01(\v2\x1f.phi.pi.v1.ContextUsageSnapshotR\fcontextUsage\x12H\n" +
-	"\x11compact_readiness\x18\v \x01(\v2\x1b.phi.pi.v1.CompactReadinessR\x10compactReadinessJ\x04\b\b\x10\tR\x15outstanding_summaries\"\xa8\x01\n" +
+	"\x11compact_readiness\x18\v \x01(\v2\x1b.phi.pi.v1.CompactReadinessR\x10compactReadiness\x12E\n" +
+	"\x10reload_readiness\x18\f \x01(\v2\x1a.phi.pi.v1.ReloadReadinessR\x0freloadReadinessJ\x04\b\b\x10\tR\x15outstanding_summaries\"\xa8\x01\n" +
 	"\x14ContextUsageSnapshot\x12\x1b\n" +
 	"\x06tokens\x18\x01 \x01(\x01H\x00R\x06tokens\x88\x01\x01\x12*\n" +
 	"\x0econtext_window\x18\x02 \x01(\x01H\x01R\rcontextWindow\x88\x01\x01\x12\x1d\n" +
@@ -2785,7 +3131,35 @@ const file_bridge_proto_rawDesc = "" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x123\n" +
 	"\aoutcome\x18\x02 \x01(\x0e2\x19.phi.pi.v1.CompactOutcomeR\aoutcome\x12\x16\n" +
-	"\x06reason\x18\x03 \x01(\tR\x06reason\"@\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\"\xe9\x02\n" +
+	"\rReloadRequest\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12.\n" +
+	"\x13expected_session_id\x18\x02 \x01(\tR\x11expectedSessionId\x12(\n" +
+	"\x10expected_leaf_id\x18\x03 \x01(\tR\x0eexpectedLeafId\x12?\n" +
+	"\x0eexpected_model\x18\x04 \x01(\v2\x18.phi.pi.v1.ModelSnapshotR\rexpectedModel\x12+\n" +
+	"\x0fexpected_run_id\x18\x05 \x01(\x04H\x00R\rexpectedRunId\x88\x01\x01\x12?\n" +
+	"\x19expected_context_revision\x18\x06 \x01(\x04H\x01R\x17expectedContextRevision\x88\x01\x01B\x12\n" +
+	"\x10_expected_run_idB\x1c\n" +
+	"\x1a_expected_context_revision\"~\n" +
+	"\tReloadAck\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12:\n" +
+	"\aoutcome\x18\x02 \x01(\x0e2 .phi.pi.v1.ReloadDispatchOutcomeR\aoutcome\x12\x16\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\"\xf3\x02\n" +
+	"\x0fReloadReadiness\x12\x1a\n" +
+	"\x06run_id\x18\x01 \x01(\x04H\x00R\x05runId\x88\x01\x01\x12.\n" +
+	"\x10context_revision\x18\x02 \x01(\x04H\x01R\x0fcontextRevision\x88\x01\x01\x12\x12\n" +
+	"\x04idle\x18\x03 \x01(\bR\x04idle\x120\n" +
+	"\x14has_pending_messages\x18\x04 \x01(\bR\x12hasPendingMessages\x12+\n" +
+	"\x11compaction_active\x18\x05 \x01(\bR\x10compactionActive\x12'\n" +
+	"\x0fcompact_pending\x18\x06 \x01(\bR\x0ecompactPending\x12%\n" +
+	"\x0ereload_pending\x18\a \x01(\bR\rreloadPending\x12\"\n" +
+	"\n" +
+	"high_water\x18\b \x01(\x04H\x02R\thighWater\x88\x01\x01B\t\n" +
+	"\a_run_idB\x13\n" +
+	"\x11_context_revisionB\r\n" +
+	"\v_high_water\"@\n" +
 	"\bSkillRef\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\".\n" +
@@ -2825,7 +3199,11 @@ const file_bridge_proto_rawDesc = "" +
 	"\x19COMPACT_OUTCOME_COMPLETED\x10\x01\x12\x1b\n" +
 	"\x17COMPACT_OUTCOME_REFUSED\x10\x02\x12\x1a\n" +
 	"\x16COMPACT_OUTCOME_FAILED\x10\x03\x12\x1d\n" +
-	"\x19COMPACT_OUTCOME_CANCELLED\x10\x04*\xe7\x01\n" +
+	"\x19COMPACT_OUTCOME_CANCELLED\x10\x04*\x8d\x01\n" +
+	"\x15ReloadDispatchOutcome\x12'\n" +
+	"#RELOAD_DISPATCH_OUTCOME_UNSPECIFIED\x10\x00\x12&\n" +
+	"\"RELOAD_DISPATCH_OUTCOME_DISPATCHED\x10\x01\x12#\n" +
+	"\x1fRELOAD_DISPATCH_OUTCOME_REFUSED\x10\x02*\xe7\x01\n" +
 	"\x11ProtocolErrorCode\x12\x1e\n" +
 	"\x1aPROTOCOL_ERROR_UNSPECIFIED\x10\x00\x12&\n" +
 	"\"PROTOCOL_ERROR_UNSUPPORTED_VERSION\x10\x01\x12\x1f\n" +
@@ -2848,87 +3226,96 @@ func file_bridge_proto_rawDescGZIP() []byte {
 	return file_bridge_proto_rawDescData
 }
 
-var file_bridge_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_bridge_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
+var file_bridge_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_bridge_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
 var file_bridge_proto_goTypes = []any{
 	(RunOutcome)(0),                // 0: phi.pi.v1.RunOutcome
 	(LogicalState)(0),              // 1: phi.pi.v1.LogicalState
 	(CompactOutcome)(0),            // 2: phi.pi.v1.CompactOutcome
-	(ProtocolErrorCode)(0),         // 3: phi.pi.v1.ProtocolErrorCode
-	(*PiToPhi)(nil),                // 4: phi.pi.v1.PiToPhi
-	(*PhiToPi)(nil),                // 5: phi.pi.v1.PhiToPi
-	(*Hello)(nil),                  // 6: phi.pi.v1.Hello
-	(*Accepted)(nil),               // 7: phi.pi.v1.Accepted
-	(*AgentStarted)(nil),           // 8: phi.pi.v1.AgentStarted
-	(*AgentSettled)(nil),           // 9: phi.pi.v1.AgentSettled
-	(*LifecycleRecord)(nil),        // 10: phi.pi.v1.LifecycleRecord
-	(*ModelSnapshot)(nil),          // 11: phi.pi.v1.ModelSnapshot
-	(*StateSnapshot)(nil),          // 12: phi.pi.v1.StateSnapshot
-	(*ContextUsageSnapshot)(nil),   // 13: phi.pi.v1.ContextUsageSnapshot
-	(*CompactReadiness)(nil),       // 14: phi.pi.v1.CompactReadiness
-	(*HistoryRequest)(nil),         // 15: phi.pi.v1.HistoryRequest
-	(*HistoryResponse)(nil),        // 16: phi.pi.v1.HistoryResponse
-	(*ModelRef)(nil),               // 17: phi.pi.v1.ModelRef
-	(*ModelsRequest)(nil),          // 18: phi.pi.v1.ModelsRequest
-	(*ModelsResponse)(nil),         // 19: phi.pi.v1.ModelsResponse
-	(*SetModelRequest)(nil),        // 20: phi.pi.v1.SetModelRequest
-	(*SetModelAck)(nil),            // 21: phi.pi.v1.SetModelAck
-	(*ThinkingLevelsRequest)(nil),  // 22: phi.pi.v1.ThinkingLevelsRequest
-	(*ThinkingLevelsResponse)(nil), // 23: phi.pi.v1.ThinkingLevelsResponse
-	(*SetThinkingRequest)(nil),     // 24: phi.pi.v1.SetThinkingRequest
-	(*SetThinkingAck)(nil),         // 25: phi.pi.v1.SetThinkingAck
-	(*CompactRequest)(nil),         // 26: phi.pi.v1.CompactRequest
-	(*CompactResult)(nil),          // 27: phi.pi.v1.CompactResult
-	(*SkillRef)(nil),               // 28: phi.pi.v1.SkillRef
-	(*SkillsRequest)(nil),          // 29: phi.pi.v1.SkillsRequest
-	(*SkillsResponse)(nil),         // 30: phi.pi.v1.SkillsResponse
-	(*InvokeSkillRequest)(nil),     // 31: phi.pi.v1.InvokeSkillRequest
-	(*InvokeSkillAck)(nil),         // 32: phi.pi.v1.InvokeSkillAck
-	(*ProtocolError)(nil),          // 33: phi.pi.v1.ProtocolError
+	(ReloadDispatchOutcome)(0),     // 3: phi.pi.v1.ReloadDispatchOutcome
+	(ProtocolErrorCode)(0),         // 4: phi.pi.v1.ProtocolErrorCode
+	(*PiToPhi)(nil),                // 5: phi.pi.v1.PiToPhi
+	(*PhiToPi)(nil),                // 6: phi.pi.v1.PhiToPi
+	(*Hello)(nil),                  // 7: phi.pi.v1.Hello
+	(*Accepted)(nil),               // 8: phi.pi.v1.Accepted
+	(*AgentStarted)(nil),           // 9: phi.pi.v1.AgentStarted
+	(*AgentSettled)(nil),           // 10: phi.pi.v1.AgentSettled
+	(*LifecycleRecord)(nil),        // 11: phi.pi.v1.LifecycleRecord
+	(*ModelSnapshot)(nil),          // 12: phi.pi.v1.ModelSnapshot
+	(*StateSnapshot)(nil),          // 13: phi.pi.v1.StateSnapshot
+	(*ContextUsageSnapshot)(nil),   // 14: phi.pi.v1.ContextUsageSnapshot
+	(*CompactReadiness)(nil),       // 15: phi.pi.v1.CompactReadiness
+	(*HistoryRequest)(nil),         // 16: phi.pi.v1.HistoryRequest
+	(*HistoryResponse)(nil),        // 17: phi.pi.v1.HistoryResponse
+	(*ModelRef)(nil),               // 18: phi.pi.v1.ModelRef
+	(*ModelsRequest)(nil),          // 19: phi.pi.v1.ModelsRequest
+	(*ModelsResponse)(nil),         // 20: phi.pi.v1.ModelsResponse
+	(*SetModelRequest)(nil),        // 21: phi.pi.v1.SetModelRequest
+	(*SetModelAck)(nil),            // 22: phi.pi.v1.SetModelAck
+	(*ThinkingLevelsRequest)(nil),  // 23: phi.pi.v1.ThinkingLevelsRequest
+	(*ThinkingLevelsResponse)(nil), // 24: phi.pi.v1.ThinkingLevelsResponse
+	(*SetThinkingRequest)(nil),     // 25: phi.pi.v1.SetThinkingRequest
+	(*SetThinkingAck)(nil),         // 26: phi.pi.v1.SetThinkingAck
+	(*CompactRequest)(nil),         // 27: phi.pi.v1.CompactRequest
+	(*CompactResult)(nil),          // 28: phi.pi.v1.CompactResult
+	(*ReloadRequest)(nil),          // 29: phi.pi.v1.ReloadRequest
+	(*ReloadAck)(nil),              // 30: phi.pi.v1.ReloadAck
+	(*ReloadReadiness)(nil),        // 31: phi.pi.v1.ReloadReadiness
+	(*SkillRef)(nil),               // 32: phi.pi.v1.SkillRef
+	(*SkillsRequest)(nil),          // 33: phi.pi.v1.SkillsRequest
+	(*SkillsResponse)(nil),         // 34: phi.pi.v1.SkillsResponse
+	(*InvokeSkillRequest)(nil),     // 35: phi.pi.v1.InvokeSkillRequest
+	(*InvokeSkillAck)(nil),         // 36: phi.pi.v1.InvokeSkillAck
+	(*ProtocolError)(nil),          // 37: phi.pi.v1.ProtocolError
 }
 var file_bridge_proto_depIdxs = []int32{
-	6,  // 0: phi.pi.v1.PiToPhi.hello:type_name -> phi.pi.v1.Hello
-	8,  // 1: phi.pi.v1.PiToPhi.agent_started:type_name -> phi.pi.v1.AgentStarted
-	9,  // 2: phi.pi.v1.PiToPhi.agent_settled:type_name -> phi.pi.v1.AgentSettled
-	12, // 3: phi.pi.v1.PiToPhi.state_snapshot:type_name -> phi.pi.v1.StateSnapshot
-	16, // 4: phi.pi.v1.PiToPhi.history_response:type_name -> phi.pi.v1.HistoryResponse
-	19, // 5: phi.pi.v1.PiToPhi.models_response:type_name -> phi.pi.v1.ModelsResponse
-	21, // 6: phi.pi.v1.PiToPhi.set_model_ack:type_name -> phi.pi.v1.SetModelAck
-	23, // 7: phi.pi.v1.PiToPhi.thinking_levels_response:type_name -> phi.pi.v1.ThinkingLevelsResponse
-	25, // 8: phi.pi.v1.PiToPhi.set_thinking_ack:type_name -> phi.pi.v1.SetThinkingAck
-	27, // 9: phi.pi.v1.PiToPhi.compact_result:type_name -> phi.pi.v1.CompactResult
-	30, // 10: phi.pi.v1.PiToPhi.skills_response:type_name -> phi.pi.v1.SkillsResponse
-	32, // 11: phi.pi.v1.PiToPhi.invoke_skill_ack:type_name -> phi.pi.v1.InvokeSkillAck
-	7,  // 12: phi.pi.v1.PhiToPi.accepted:type_name -> phi.pi.v1.Accepted
-	33, // 13: phi.pi.v1.PhiToPi.protocol_error:type_name -> phi.pi.v1.ProtocolError
-	15, // 14: phi.pi.v1.PhiToPi.history_request:type_name -> phi.pi.v1.HistoryRequest
-	18, // 15: phi.pi.v1.PhiToPi.models_request:type_name -> phi.pi.v1.ModelsRequest
-	20, // 16: phi.pi.v1.PhiToPi.set_model_request:type_name -> phi.pi.v1.SetModelRequest
-	22, // 17: phi.pi.v1.PhiToPi.thinking_levels_request:type_name -> phi.pi.v1.ThinkingLevelsRequest
-	24, // 18: phi.pi.v1.PhiToPi.set_thinking_request:type_name -> phi.pi.v1.SetThinkingRequest
-	26, // 19: phi.pi.v1.PhiToPi.compact_request:type_name -> phi.pi.v1.CompactRequest
-	29, // 20: phi.pi.v1.PhiToPi.skills_request:type_name -> phi.pi.v1.SkillsRequest
-	31, // 21: phi.pi.v1.PhiToPi.invoke_skill_request:type_name -> phi.pi.v1.InvokeSkillRequest
-	12, // 22: phi.pi.v1.Hello.current_state:type_name -> phi.pi.v1.StateSnapshot
-	0,  // 23: phi.pi.v1.AgentSettled.outcome:type_name -> phi.pi.v1.RunOutcome
-	0,  // 24: phi.pi.v1.LifecycleRecord.outcome:type_name -> phi.pi.v1.RunOutcome
-	1,  // 25: phi.pi.v1.StateSnapshot.state:type_name -> phi.pi.v1.LogicalState
-	11, // 26: phi.pi.v1.StateSnapshot.model:type_name -> phi.pi.v1.ModelSnapshot
-	10, // 27: phi.pi.v1.StateSnapshot.journal:type_name -> phi.pi.v1.LifecycleRecord
-	13, // 28: phi.pi.v1.StateSnapshot.context_usage:type_name -> phi.pi.v1.ContextUsageSnapshot
-	14, // 29: phi.pi.v1.StateSnapshot.compact_readiness:type_name -> phi.pi.v1.CompactReadiness
-	17, // 30: phi.pi.v1.ModelsResponse.models:type_name -> phi.pi.v1.ModelRef
-	11, // 31: phi.pi.v1.CompactRequest.expected_model:type_name -> phi.pi.v1.ModelSnapshot
-	2,  // 32: phi.pi.v1.CompactResult.outcome:type_name -> phi.pi.v1.CompactOutcome
-	28, // 33: phi.pi.v1.SkillsResponse.skills:type_name -> phi.pi.v1.SkillRef
-	3,  // 34: phi.pi.v1.ProtocolError.code:type_name -> phi.pi.v1.ProtocolErrorCode
-	4,  // 35: phi.pi.v1.Integration.Connect:input_type -> phi.pi.v1.PiToPhi
-	5,  // 36: phi.pi.v1.Integration.Connect:output_type -> phi.pi.v1.PhiToPi
-	36, // [36:37] is the sub-list for method output_type
-	35, // [35:36] is the sub-list for method input_type
-	35, // [35:35] is the sub-list for extension type_name
-	35, // [35:35] is the sub-list for extension extendee
-	0,  // [0:35] is the sub-list for field type_name
+	7,  // 0: phi.pi.v1.PiToPhi.hello:type_name -> phi.pi.v1.Hello
+	9,  // 1: phi.pi.v1.PiToPhi.agent_started:type_name -> phi.pi.v1.AgentStarted
+	10, // 2: phi.pi.v1.PiToPhi.agent_settled:type_name -> phi.pi.v1.AgentSettled
+	13, // 3: phi.pi.v1.PiToPhi.state_snapshot:type_name -> phi.pi.v1.StateSnapshot
+	17, // 4: phi.pi.v1.PiToPhi.history_response:type_name -> phi.pi.v1.HistoryResponse
+	20, // 5: phi.pi.v1.PiToPhi.models_response:type_name -> phi.pi.v1.ModelsResponse
+	22, // 6: phi.pi.v1.PiToPhi.set_model_ack:type_name -> phi.pi.v1.SetModelAck
+	24, // 7: phi.pi.v1.PiToPhi.thinking_levels_response:type_name -> phi.pi.v1.ThinkingLevelsResponse
+	26, // 8: phi.pi.v1.PiToPhi.set_thinking_ack:type_name -> phi.pi.v1.SetThinkingAck
+	28, // 9: phi.pi.v1.PiToPhi.compact_result:type_name -> phi.pi.v1.CompactResult
+	34, // 10: phi.pi.v1.PiToPhi.skills_response:type_name -> phi.pi.v1.SkillsResponse
+	36, // 11: phi.pi.v1.PiToPhi.invoke_skill_ack:type_name -> phi.pi.v1.InvokeSkillAck
+	30, // 12: phi.pi.v1.PiToPhi.reload_ack:type_name -> phi.pi.v1.ReloadAck
+	8,  // 13: phi.pi.v1.PhiToPi.accepted:type_name -> phi.pi.v1.Accepted
+	37, // 14: phi.pi.v1.PhiToPi.protocol_error:type_name -> phi.pi.v1.ProtocolError
+	16, // 15: phi.pi.v1.PhiToPi.history_request:type_name -> phi.pi.v1.HistoryRequest
+	19, // 16: phi.pi.v1.PhiToPi.models_request:type_name -> phi.pi.v1.ModelsRequest
+	21, // 17: phi.pi.v1.PhiToPi.set_model_request:type_name -> phi.pi.v1.SetModelRequest
+	23, // 18: phi.pi.v1.PhiToPi.thinking_levels_request:type_name -> phi.pi.v1.ThinkingLevelsRequest
+	25, // 19: phi.pi.v1.PhiToPi.set_thinking_request:type_name -> phi.pi.v1.SetThinkingRequest
+	27, // 20: phi.pi.v1.PhiToPi.compact_request:type_name -> phi.pi.v1.CompactRequest
+	33, // 21: phi.pi.v1.PhiToPi.skills_request:type_name -> phi.pi.v1.SkillsRequest
+	35, // 22: phi.pi.v1.PhiToPi.invoke_skill_request:type_name -> phi.pi.v1.InvokeSkillRequest
+	29, // 23: phi.pi.v1.PhiToPi.reload_request:type_name -> phi.pi.v1.ReloadRequest
+	13, // 24: phi.pi.v1.Hello.current_state:type_name -> phi.pi.v1.StateSnapshot
+	0,  // 25: phi.pi.v1.AgentSettled.outcome:type_name -> phi.pi.v1.RunOutcome
+	0,  // 26: phi.pi.v1.LifecycleRecord.outcome:type_name -> phi.pi.v1.RunOutcome
+	1,  // 27: phi.pi.v1.StateSnapshot.state:type_name -> phi.pi.v1.LogicalState
+	12, // 28: phi.pi.v1.StateSnapshot.model:type_name -> phi.pi.v1.ModelSnapshot
+	11, // 29: phi.pi.v1.StateSnapshot.journal:type_name -> phi.pi.v1.LifecycleRecord
+	14, // 30: phi.pi.v1.StateSnapshot.context_usage:type_name -> phi.pi.v1.ContextUsageSnapshot
+	15, // 31: phi.pi.v1.StateSnapshot.compact_readiness:type_name -> phi.pi.v1.CompactReadiness
+	31, // 32: phi.pi.v1.StateSnapshot.reload_readiness:type_name -> phi.pi.v1.ReloadReadiness
+	18, // 33: phi.pi.v1.ModelsResponse.models:type_name -> phi.pi.v1.ModelRef
+	12, // 34: phi.pi.v1.CompactRequest.expected_model:type_name -> phi.pi.v1.ModelSnapshot
+	2,  // 35: phi.pi.v1.CompactResult.outcome:type_name -> phi.pi.v1.CompactOutcome
+	12, // 36: phi.pi.v1.ReloadRequest.expected_model:type_name -> phi.pi.v1.ModelSnapshot
+	3,  // 37: phi.pi.v1.ReloadAck.outcome:type_name -> phi.pi.v1.ReloadDispatchOutcome
+	32, // 38: phi.pi.v1.SkillsResponse.skills:type_name -> phi.pi.v1.SkillRef
+	4,  // 39: phi.pi.v1.ProtocolError.code:type_name -> phi.pi.v1.ProtocolErrorCode
+	5,  // 40: phi.pi.v1.Integration.Connect:input_type -> phi.pi.v1.PiToPhi
+	6,  // 41: phi.pi.v1.Integration.Connect:output_type -> phi.pi.v1.PhiToPi
+	41, // [41:42] is the sub-list for method output_type
+	40, // [40:41] is the sub-list for method input_type
+	40, // [40:40] is the sub-list for extension type_name
+	40, // [40:40] is the sub-list for extension extendee
+	0,  // [0:40] is the sub-list for field type_name
 }
 
 func init() { file_bridge_proto_init() }
@@ -2949,6 +3336,7 @@ func file_bridge_proto_init() {
 		(*PiToPhi_CompactResult)(nil),
 		(*PiToPhi_SkillsResponse)(nil),
 		(*PiToPhi_InvokeSkillAck)(nil),
+		(*PiToPhi_ReloadAck)(nil),
 	}
 	file_bridge_proto_msgTypes[1].OneofWrappers = []any{
 		(*PhiToPi_Accepted)(nil),
@@ -2961,15 +3349,18 @@ func file_bridge_proto_init() {
 		(*PhiToPi_CompactRequest)(nil),
 		(*PhiToPi_SkillsRequest)(nil),
 		(*PhiToPi_InvokeSkillRequest)(nil),
+		(*PhiToPi_ReloadRequest)(nil),
 	}
 	file_bridge_proto_msgTypes[9].OneofWrappers = []any{}
+	file_bridge_proto_msgTypes[24].OneofWrappers = []any{}
+	file_bridge_proto_msgTypes[26].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bridge_proto_rawDesc), len(file_bridge_proto_rawDesc)),
-			NumEnums:      4,
-			NumMessages:   30,
+			NumEnums:      5,
+			NumMessages:   33,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

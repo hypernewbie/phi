@@ -291,7 +291,7 @@ func TestTelemetryPropagatesAsCopies(t *testing.T) {
 		readiness *Readiness
 	}
 	calls := make(chan call, 8)
-	s.SetOnState(func(_, _ string, _, _ uint64, _, _ bool, _, _ string, _ []string, usage *ContextUsage, readiness *Readiness) {
+	s.SetOnState(func(_, _ string, _, _ uint64, _, _ bool, _, _ string, _ []string, usage *ContextUsage, readiness *Readiness, _ *ReloadReadiness) {
 		calls <- call{usage: usage, readiness: readiness}
 	})
 	proc, token, err := s.RegisterPending("pane-tele")

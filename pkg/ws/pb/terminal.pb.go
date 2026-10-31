@@ -806,28 +806,37 @@ func (x *TerminalTitle) GetRevision() uint64 {
 // Identifiers stay exact uint64 on the wire; the UI keeps decimal
 // strings, so adapters convert at the boundary.
 type TerminalBridgeState struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	State             *string                `protobuf:"bytes,1,opt,name=state,proto3,oneof" json:"state,omitempty"`
-	Reason            *string                `protobuf:"bytes,2,opt,name=reason,proto3,oneof" json:"reason,omitempty"`
-	Generation        *uint64                `protobuf:"varint,3,opt,name=generation,proto3,oneof" json:"generation,omitempty"`
-	TelemetryRevision *uint64                `protobuf:"varint,4,opt,name=telemetry_revision,json=telemetryRevision,proto3,oneof" json:"telemetry_revision,omitempty"`
-	LastRun           *uint64                `protobuf:"varint,5,opt,name=last_run,json=lastRun,proto3,oneof" json:"last_run,omitempty"`
-	LastOutcome       *string                `protobuf:"bytes,6,opt,name=last_outcome,json=lastOutcome,proto3,oneof" json:"last_outcome,omitempty"`
-	Running           *bool                  `protobuf:"varint,7,opt,name=running,proto3,oneof" json:"running,omitempty"`
-	Connected         *bool                  `protobuf:"varint,8,opt,name=connected,proto3,oneof" json:"connected,omitempty"`
-	Model             *string                `protobuf:"bytes,9,opt,name=model,proto3,oneof" json:"model,omitempty"`
-	Capabilities      []string               `protobuf:"bytes,10,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
-	PaneId            *string                `protobuf:"bytes,11,opt,name=pane_id,json=paneId,proto3,oneof" json:"pane_id,omitempty"`
-	ThinkingLevel     *string                `protobuf:"bytes,12,opt,name=thinking_level,json=thinkingLevel,proto3,oneof" json:"thinking_level,omitempty"`
-	ContextTokens     *float64               `protobuf:"fixed64,13,opt,name=context_tokens,json=contextTokens,proto3,oneof" json:"context_tokens,omitempty"`
-	ContextWindow     *float64               `protobuf:"fixed64,14,opt,name=context_window,json=contextWindow,proto3,oneof" json:"context_window,omitempty"`
-	ContextPercent    *float64               `protobuf:"fixed64,15,opt,name=context_percent,json=contextPercent,proto3,oneof" json:"context_percent,omitempty"`
-	CompactIdle       *bool                  `protobuf:"varint,16,opt,name=compact_idle,json=compactIdle,proto3,oneof" json:"compact_idle,omitempty"`
-	CompactQueued     *bool                  `protobuf:"varint,17,opt,name=compact_queued,json=compactQueued,proto3,oneof" json:"compact_queued,omitempty"`
-	CompactActive     *bool                  `protobuf:"varint,18,opt,name=compact_active,json=compactActive,proto3,oneof" json:"compact_active,omitempty"`
-	CompactPending    *bool                  `protobuf:"varint,19,opt,name=compact_pending,json=compactPending,proto3,oneof" json:"compact_pending,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	State                *string                `protobuf:"bytes,1,opt,name=state,proto3,oneof" json:"state,omitempty"`
+	Reason               *string                `protobuf:"bytes,2,opt,name=reason,proto3,oneof" json:"reason,omitempty"`
+	Generation           *uint64                `protobuf:"varint,3,opt,name=generation,proto3,oneof" json:"generation,omitempty"`
+	TelemetryRevision    *uint64                `protobuf:"varint,4,opt,name=telemetry_revision,json=telemetryRevision,proto3,oneof" json:"telemetry_revision,omitempty"`
+	LastRun              *uint64                `protobuf:"varint,5,opt,name=last_run,json=lastRun,proto3,oneof" json:"last_run,omitempty"`
+	LastOutcome          *string                `protobuf:"bytes,6,opt,name=last_outcome,json=lastOutcome,proto3,oneof" json:"last_outcome,omitempty"`
+	Running              *bool                  `protobuf:"varint,7,opt,name=running,proto3,oneof" json:"running,omitempty"`
+	Connected            *bool                  `protobuf:"varint,8,opt,name=connected,proto3,oneof" json:"connected,omitempty"`
+	Model                *string                `protobuf:"bytes,9,opt,name=model,proto3,oneof" json:"model,omitempty"`
+	Capabilities         []string               `protobuf:"bytes,10,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	PaneId               *string                `protobuf:"bytes,11,opt,name=pane_id,json=paneId,proto3,oneof" json:"pane_id,omitempty"`
+	ThinkingLevel        *string                `protobuf:"bytes,12,opt,name=thinking_level,json=thinkingLevel,proto3,oneof" json:"thinking_level,omitempty"`
+	ContextTokens        *float64               `protobuf:"fixed64,13,opt,name=context_tokens,json=contextTokens,proto3,oneof" json:"context_tokens,omitempty"`
+	ContextWindow        *float64               `protobuf:"fixed64,14,opt,name=context_window,json=contextWindow,proto3,oneof" json:"context_window,omitempty"`
+	ContextPercent       *float64               `protobuf:"fixed64,15,opt,name=context_percent,json=contextPercent,proto3,oneof" json:"context_percent,omitempty"`
+	CompactIdle          *bool                  `protobuf:"varint,16,opt,name=compact_idle,json=compactIdle,proto3,oneof" json:"compact_idle,omitempty"`
+	CompactQueued        *bool                  `protobuf:"varint,17,opt,name=compact_queued,json=compactQueued,proto3,oneof" json:"compact_queued,omitempty"`
+	CompactActive        *bool                  `protobuf:"varint,18,opt,name=compact_active,json=compactActive,proto3,oneof" json:"compact_active,omitempty"`
+	CompactPending       *bool                  `protobuf:"varint,19,opt,name=compact_pending,json=compactPending,proto3,oneof" json:"compact_pending,omitempty"`
+	ProcessId            *string                `protobuf:"bytes,20,opt,name=process_id,json=processId,proto3,oneof" json:"process_id,omitempty"`
+	RunId                *uint64                `protobuf:"varint,21,opt,name=run_id,json=runId,proto3,oneof" json:"run_id,omitempty"`
+	ContextRevision      *uint64                `protobuf:"varint,22,opt,name=context_revision,json=contextRevision,proto3,oneof" json:"context_revision,omitempty"`
+	ReloadIdle           *bool                  `protobuf:"varint,23,opt,name=reload_idle,json=reloadIdle,proto3,oneof" json:"reload_idle,omitempty"`
+	ReloadQueued         *bool                  `protobuf:"varint,24,opt,name=reload_queued,json=reloadQueued,proto3,oneof" json:"reload_queued,omitempty"`
+	ReloadActive         *bool                  `protobuf:"varint,25,opt,name=reload_active,json=reloadActive,proto3,oneof" json:"reload_active,omitempty"`
+	ReloadCompactPending *bool                  `protobuf:"varint,26,opt,name=reload_compact_pending,json=reloadCompactPending,proto3,oneof" json:"reload_compact_pending,omitempty"`
+	ReloadPending        *bool                  `protobuf:"varint,27,opt,name=reload_pending,json=reloadPending,proto3,oneof" json:"reload_pending,omitempty"`
+	ReloadHighWater      *uint64                `protobuf:"varint,28,opt,name=reload_high_water,json=reloadHighWater,proto3,oneof" json:"reload_high_water,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *TerminalBridgeState) Reset() {
@@ -993,6 +1002,69 @@ func (x *TerminalBridgeState) GetCompactPending() bool {
 	return false
 }
 
+func (x *TerminalBridgeState) GetProcessId() string {
+	if x != nil && x.ProcessId != nil {
+		return *x.ProcessId
+	}
+	return ""
+}
+
+func (x *TerminalBridgeState) GetRunId() uint64 {
+	if x != nil && x.RunId != nil {
+		return *x.RunId
+	}
+	return 0
+}
+
+func (x *TerminalBridgeState) GetContextRevision() uint64 {
+	if x != nil && x.ContextRevision != nil {
+		return *x.ContextRevision
+	}
+	return 0
+}
+
+func (x *TerminalBridgeState) GetReloadIdle() bool {
+	if x != nil && x.ReloadIdle != nil {
+		return *x.ReloadIdle
+	}
+	return false
+}
+
+func (x *TerminalBridgeState) GetReloadQueued() bool {
+	if x != nil && x.ReloadQueued != nil {
+		return *x.ReloadQueued
+	}
+	return false
+}
+
+func (x *TerminalBridgeState) GetReloadActive() bool {
+	if x != nil && x.ReloadActive != nil {
+		return *x.ReloadActive
+	}
+	return false
+}
+
+func (x *TerminalBridgeState) GetReloadCompactPending() bool {
+	if x != nil && x.ReloadCompactPending != nil {
+		return *x.ReloadCompactPending
+	}
+	return false
+}
+
+func (x *TerminalBridgeState) GetReloadPending() bool {
+	if x != nil && x.ReloadPending != nil {
+		return *x.ReloadPending
+	}
+	return false
+}
+
+func (x *TerminalBridgeState) GetReloadHighWater() uint64 {
+	if x != nil && x.ReloadHighWater != nil {
+		return *x.ReloadHighWater
+	}
+	return 0
+}
+
 // TerminalSettlement reports one observed Pi run outcome.
 type TerminalSettlement struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1137,7 +1209,7 @@ const file_terminal_proto_rawDesc = "" +
 	"\b_pane_idB\r\n" +
 	"\v_session_idB\b\n" +
 	"\x06_titleB\v\n" +
-	"\t_revision\"\x8e\b\n" +
+	"\t_revision\"\xb7\f\n" +
 	"\x13TerminalBridgeState\x12\x19\n" +
 	"\x05state\x18\x01 \x01(\tH\x00R\x05state\x88\x01\x01\x12\x1b\n" +
 	"\x06reason\x18\x02 \x01(\tH\x01R\x06reason\x88\x01\x01\x12#\n" +
@@ -1161,7 +1233,18 @@ const file_terminal_proto_rawDesc = "" +
 	"\fcompact_idle\x18\x10 \x01(\bH\x0eR\vcompactIdle\x88\x01\x01\x12*\n" +
 	"\x0ecompact_queued\x18\x11 \x01(\bH\x0fR\rcompactQueued\x88\x01\x01\x12*\n" +
 	"\x0ecompact_active\x18\x12 \x01(\bH\x10R\rcompactActive\x88\x01\x01\x12,\n" +
-	"\x0fcompact_pending\x18\x13 \x01(\bH\x11R\x0ecompactPending\x88\x01\x01B\b\n" +
+	"\x0fcompact_pending\x18\x13 \x01(\bH\x11R\x0ecompactPending\x88\x01\x01\x12\"\n" +
+	"\n" +
+	"process_id\x18\x14 \x01(\tH\x12R\tprocessId\x88\x01\x01\x12\x1a\n" +
+	"\x06run_id\x18\x15 \x01(\x04H\x13R\x05runId\x88\x01\x01\x12.\n" +
+	"\x10context_revision\x18\x16 \x01(\x04H\x14R\x0fcontextRevision\x88\x01\x01\x12$\n" +
+	"\vreload_idle\x18\x17 \x01(\bH\x15R\n" +
+	"reloadIdle\x88\x01\x01\x12(\n" +
+	"\rreload_queued\x18\x18 \x01(\bH\x16R\freloadQueued\x88\x01\x01\x12(\n" +
+	"\rreload_active\x18\x19 \x01(\bH\x17R\freloadActive\x88\x01\x01\x129\n" +
+	"\x16reload_compact_pending\x18\x1a \x01(\bH\x18R\x14reloadCompactPending\x88\x01\x01\x12*\n" +
+	"\x0ereload_pending\x18\x1b \x01(\bH\x19R\rreloadPending\x88\x01\x01\x12/\n" +
+	"\x11reload_high_water\x18\x1c \x01(\x04H\x1aR\x0freloadHighWater\x88\x01\x01B\b\n" +
 	"\x06_stateB\t\n" +
 	"\a_reasonB\r\n" +
 	"\v_generationB\x15\n" +
@@ -1182,7 +1265,16 @@ const file_terminal_proto_rawDesc = "" +
 	"\r_compact_idleB\x11\n" +
 	"\x0f_compact_queuedB\x11\n" +
 	"\x0f_compact_activeB\x12\n" +
-	"\x10_compact_pending\"\xbc\x01\n" +
+	"\x10_compact_pendingB\r\n" +
+	"\v_process_idB\t\n" +
+	"\a_run_idB\x13\n" +
+	"\x11_context_revisionB\x0e\n" +
+	"\f_reload_idleB\x10\n" +
+	"\x0e_reload_queuedB\x10\n" +
+	"\x0e_reload_activeB\x19\n" +
+	"\x17_reload_compact_pendingB\x11\n" +
+	"\x0f_reload_pendingB\x14\n" +
+	"\x12_reload_high_water\"\xbc\x01\n" +
 	"\x12TerminalSettlement\x12#\n" +
 	"\n" +
 	"generation\x18\x01 \x01(\x04H\x00R\n" +

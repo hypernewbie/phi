@@ -16,6 +16,9 @@ import {
     type CompactOutcome,
     type CompactRequest,
     CompactResult,
+    ReloadAck,
+    type ReloadDispatchOutcome,
+    type ReloadRequest,
     IntegrationClient,
     type PhiToPi,
     PiToPhi,
@@ -165,7 +168,8 @@ export class BridgeTestClient {
     }> = [];
 
     private async awaitAccepted(): Promise<Accepted> {
-        if (this.acceptedQueue.length > 0) return this.acceptedQueue.shift()!;
+        const accepted = this.acceptedQueue.shift();
+        if (accepted !== undefined) return accepted;
         return new Promise<Accepted>((resolve, reject) => {
             const timer = setTimeout(
                 () => reject(new Error('accepted deadline')),
@@ -210,6 +214,13 @@ export class BridgeTestClient {
             this.compactRequestTotal += 1;
             return;
         }
+        if (payload?.$case === 'reloadRequest') {
+            const waiter = this.reloadRequestWaiters.shift();
+            if (waiter) waiter(payload.value);
+            else this.reloadRequestQueue.push(payload.value);
+            this.reloadRequestTotal += 1;
+            return;
+        }
         // ProtocolError and unknown oneofs are informational; stream status
         // carries terminal failures.
     }
@@ -242,6 +253,51 @@ export class BridgeTestClient {
     /** Total CompactRequests received on this stream. Proves (non-)dispatch. */
     receivedCompactRequests(): number {
         return this.compactRequestTotal;
+    }
+
+    private reloadRequestQueue: ReloadRequest[] = [];
+    private reloadRequestWaiters: Array<(r: ReloadRequest) => void> = [];
+    private reloadRequestTotal = 0;
+
+    /** Await the next ReloadRequest dispatched by the server. */
+    async awaitReloadRequest(timeoutMs = 5_000): Promise<ReloadRequest> {
+        const queued = this.reloadRequestQueue.shift();
+        if (queued !== undefined) return queued;
+        return new Promise<ReloadRequest>((resolve, reject) => {
+            const waiter = (req: ReloadRequest) => {
+                clearTimeout(timer);
+                resolve(req);
+            };
+            const timer = setTimeout(() => {
+                const at = this.reloadRequestWaiters.indexOf(waiter);
+                if (at >= 0) this.reloadRequestWaiters.splice(at, 1);
+                reject(new Error('reload request deadline'));
+            }, timeoutMs);
+            this.reloadRequestWaiters.push(waiter);
+        });
+    }
+
+    /** Total ReloadRequests received on this stream. Proves (non-)dispatch. */
+    receivedReloadRequests(): number {
+        return this.reloadRequestTotal;
+    }
+
+    /** Report the native callback-entry receipt for requestId. */
+    sendReloadAck(
+        requestId: string,
+        outcome: ReloadDispatchOutcome,
+        reason = '',
+    ): void {
+        this.enqueueFrame({
+            paneId: this.pane,
+            processId: this.process,
+            runtimeGeneration: this.generation,
+            payload: {
+                $case: 'reloadAck',
+                value: ReloadAck.create({ requestId, outcome, reason }),
+            },
+        });
+        void this.pumpWriter();
     }
 
     /** Report one terminal Compact outcome for requestId. */

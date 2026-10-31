@@ -186,6 +186,9 @@ const MOVED_PRESET_VALUES = new Set([
     '/sessions\r',
     // The Models picker replaces the chip; the command stays in Cmds.
     '/model\r',
+    // Native bridge execution with a turn-scoped queue; the PTY
+    // paste stays as the bridge-free fallback only.
+    '/reload\r',
 ]);
 
 // Pi thinking vocabulary, in display order. `max` is a distinct level
@@ -196,6 +199,28 @@ const PI_BRIDGE_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'x
 // server's 120s bound. Expiry reports unknown; it never cancels
 // native provider work and never permits a replay.
 const PI_BRIDGE_COMPACT_TIMEOUT_MS = 125_000;
+
+// Native Reload waits at most 45s in the browser against the
+// server's 30s bound. Expiry reports unconfirmed; it never cancels
+// native work and never permits a replay.
+const PI_BRIDGE_RELOAD_TIMEOUT_MS = 45_000;
+
+// Fixed Reload reason vocabulary shared with the Go/wire contract.
+// Only these words may reach the toast; anything else (including
+// word-shaped provider text) is dropped, never rendered.
+const PI_BRIDGE_RELOAD_REASONS = new Set([
+    'duplicate',
+    'stale',
+    'busy',
+    'queued',
+    'compaction-active',
+    'pending',
+    'unavailable',
+]);
+
+// Versioned localStorage key prefix for one pane's Reload intent.
+// Memory is authoritative; storage only restores uncertainty.
+const PI_BRIDGE_RELOAD_STORE_PREFIX = 'phi.piBridge.reload.v1.';
 
 // Fixed Compact reason vocabulary shared with the Go/wire contract.
 // Only these words may reach the toast; anything else (including
@@ -316,6 +341,76 @@ function piBridgeCompactReasonText(reason) {
     }
 }
 
+// piBridgeReloadReady is the one readiness predicate behind the
+// Reload dispatch guard. Only a complete sample with identity,
+// run/context fences, and idle/no-pending state dispatches; every
+// other shape reports its reason instead of guessing.
+function piBridgeReloadReady(view) {
+    const known =
+        typeof view?.generation === 'string' &&
+        view.generation !== '' &&
+        typeof view?.telemetry_revision === 'string' &&
+        view.telemetry_revision !== '' &&
+        typeof view?.process_id === 'string' &&
+        view.process_id !== '' &&
+        typeof view?.run_id === 'string' &&
+        view.run_id !== '' &&
+        typeof view?.context_revision === 'string' &&
+        view.context_revision !== '' &&
+        typeof view?.reload_idle === 'boolean' &&
+        typeof view?.reload_queued === 'boolean' &&
+        typeof view?.reload_active === 'boolean' &&
+        typeof view?.reload_compact_pending === 'boolean' &&
+        typeof view?.reload_pending === 'boolean';
+    if (!known)
+        return {
+            ready: false,
+            reason: 'Reload unavailable: unknown Pi state',
+        };
+    // A sampled idle flag does not override a logically running
+    // runtime; an unknown (absent) running flag stays ready.
+    if (view.reload_idle !== true || view.running === true)
+        return { ready: false, reason: 'Reload unavailable: Pi is busy' };
+    if (view.reload_queued === true)
+        return {
+            ready: false,
+            reason: 'Reload unavailable: messages queued',
+        };
+    if (view.reload_active === true)
+        return {
+            ready: false,
+            reason: 'Reload unavailable: compaction active',
+        };
+    if (
+        view.reload_compact_pending === true ||
+        view.reload_pending === true
+    )
+        return {
+            ready: false,
+            reason: 'Reload unavailable: operation pending',
+        };
+    return { ready: true, reason: 'Reload via bridge' };
+}
+
+// piBridgeReloadReasonText turns the readiness predicate's stable
+// diagnostic into a toast sentence; statuses keep the precise form.
+function piBridgeReloadReasonText(reason) {
+    switch (reason) {
+        case 'Reload unavailable: unknown Pi state':
+            return 'Pi state is unknown';
+        case 'Reload unavailable: Pi is busy':
+            return 'Pi is busy';
+        case 'Reload unavailable: messages queued':
+            return 'Pi has queued messages';
+        case 'Reload unavailable: compaction active':
+            return 'A compaction is already running';
+        case 'Reload unavailable: operation pending':
+            return 'Another operation is already pending';
+        default:
+            return reason.replace('Reload unavailable: ', '');
+    }
+}
+
 // piBridgeEqualRevAgrees compares the retained publication fields:
 // an equal revision must agree on identity and telemetry, while
 // connected alone may flip to propagate peer-down. Lifecycle fields
@@ -347,7 +442,20 @@ function piBridgeEqualRevAgrees(current, view) {
             flag(view, 'compact_queued') &&
         flag(current, 'compact_active') ===
             flag(view, 'compact_active') &&
-        flag(current, 'compact_pending') === flag(view, 'compact_pending')
+        flag(current, 'compact_pending') ===
+            flag(view, 'compact_pending') &&
+        text(current, 'process_id') === text(view, 'process_id') &&
+        text(current, 'run_id') === text(view, 'run_id') &&
+        text(current, 'context_revision') ===
+            text(view, 'context_revision') &&
+        text(current, 'reload_high_water') ===
+            text(view, 'reload_high_water') &&
+        flag(current, 'reload_idle') === flag(view, 'reload_idle') &&
+        flag(current, 'reload_queued') === flag(view, 'reload_queued') &&
+        flag(current, 'reload_active') === flag(view, 'reload_active') &&
+        flag(current, 'reload_compact_pending') ===
+            flag(view, 'reload_compact_pending') &&
+        flag(current, 'reload_pending') === flag(view, 'reload_pending')
     );
 }
 
@@ -1988,8 +2096,26 @@ export class TabManager {
         }
 
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') this._handlePiRpcEscape(e);
-            else this._handlePiRpcKeydown(e);
+            if (e.key === 'Escape') {
+                const quickCommands = document.getElementById(
+                    'quick-commands-dropup',
+                );
+                if (
+                    quickCommands &&
+                    !quickCommands.classList.contains('hidden')
+                ) {
+                    quickCommands.classList.add('hidden');
+                    document
+                        .querySelector(
+                            '#presets-container .preset-btn[title="Open quick commands"]',
+                        )
+                        ?.focus({ preventScroll: true });
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return;
+                }
+                this._handlePiRpcEscape(e);
+            } else this._handlePiRpcKeydown(e);
         });
 
         // Close dropups and dropdowns on clicking outside
@@ -7915,6 +8041,9 @@ export class TabManager {
         // pane must drop it here or a later tab on the same pane id
         // inherits "Compacting…" from this one.
         this._invalidatePiBridgeCompact?.(tab);
+        // A closed pane drops the Reload waiter too; a stored
+        // marker revalidates against the next press's target.
+        this._invalidatePiBridgeReload?.(tab);
         tab._panelObserver?.disconnect();
         if (tab._panelFitRAF != null && typeof cancelAnimationFrame === 'function') {
             cancelAnimationFrame(tab._panelFitRAF);
@@ -9724,6 +9853,40 @@ export class TabManager {
                 focusInputOnMobile,
             });
         }
+        // Exact /reload mirrors /compact: an obsolete target
+        // dispatches nowhere, a capable tab takes the native bridge
+        // path, and anything else keeps the legacy paste+Enter.
+        // Unlike Compact, a possibly-sent native marker still blocks
+        // the legacy path when capability is lost: an uncertain
+        // dispatch never silently becomes a second reload. A waiting
+        // press cancels and a review press dismisses on any path.
+        if (cmd === '/reload' && tabInfo?.coder === 'pi') {
+            if (
+                this.tabs &&
+                this.tabs.get(tabInfo.paneId) !== tabInfo
+            )
+                return true;
+            if (
+                this._piReloadCancelOrDismiss(tabInfo, focusInputOnMobile)
+            )
+                return true;
+            if (this._piBridgeReloadEligible(tabInfo)) {
+                return this._sendPiBridgeReload(tabInfo, {
+                    focusInputOnMobile,
+                });
+            }
+            if (this._piReloadBlocked(tabInfo)) {
+                this._piReloadToast(
+                    this._piReloadIntentText(
+                        tabInfo._piReloadIntent,
+                    ),
+                );
+                this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
+                return true;
+            }
+            if (this._piReloadQueueOffline(tabInfo, focusInputOnMobile))
+                return true;
+        }
         const paste = `\x1b[200~${cmd}\x1b[201~`;
         const legacyOpenCode = tabInfo.coder === 'opencode' && !isOpenCodeMini(tabInfo);
         const sent = this.sendToTab(
@@ -10057,6 +10220,621 @@ export class TabManager {
         });
     }
 
+    // _sendPiBridgeReload runs the native bridge path for an exact
+    // /reload on a capable Pi PTY tab. Always handled (true): a press
+    // with a possibly-sent marker reports it instead of dispatching
+    // or PTY-falling back, an unready press explains itself, and a
+    // dispatch never replays on refusal, error, timeout, or
+    // disconnect. Draft and attachments are never touched here;
+    // focus matches the legacy slash path.
+    _sendPiBridgeReload(tabInfo, { focusInputOnMobile = true } = {}) {
+        const paneId = tabInfo.paneId;
+        if (this._piReloadCancelOrDismiss(tabInfo, focusInputOnMobile))
+            return true;
+        // One native request per pane; a duplicate desktop/mobile
+        // click while one is pending exposes the status, never
+        // redispatches.
+        if (this._piReloadPending?.get(paneId)) {
+            this._piReloadToast(
+                this._piReloadIntentText(tabInfo._piReloadIntent),
+            );
+            this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
+            return true;
+        }
+        // A possibly-sent marker blocks a fresh dispatch, whatever
+        // the current capability says.
+        if (this._piReloadBlocked(tabInfo)) {
+            this._piReloadToast(
+                this._piReloadIntentText(tabInfo._piReloadIntent),
+            );
+            this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
+            return true;
+        }
+        const view = tabInfo.piBridge;
+        // An explicit offline signal holds the press even when the
+        // retained view still looks eligible; dispatch always
+        // revalidates on fresh reconnect state.
+        if (
+            typeof navigator !== 'undefined' &&
+            navigator.onLine === false
+        ) {
+            if (this._piReloadQueueOffline(tabInfo, focusInputOnMobile))
+                return true;
+        }
+        const readiness = piBridgeReloadReady(view);
+        if (!readiness.ready) {
+            // The current run is the only queueable blocker; any
+            // other shape explains itself instead of deferring.
+            if (this._piBridgeReloadQueueable(tabInfo)) {
+                tabInfo._piReloadIntent = {
+                    v: 1,
+                    id: this._piReloadAllocId(),
+                    phase: 'queued',
+                    paneId,
+                    processId: view.process_id,
+                    generation: view.generation,
+                    pubRev: view.telemetry_revision,
+                    runId: view.run_id,
+                    contextRevision: view.context_revision,
+                    requestId: null,
+                };
+                this._piReloadPersist(tabInfo);
+                this._piReloadToast(
+                    'Reload queued — runs when Pi is idle',
+                );
+                this._refreshPiReloadRow(tabInfo);
+                this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
+                return true;
+            }
+            this._piReloadToast(
+                `Reload not sent — ${piBridgeReloadReasonText(readiness.reason)}`,
+            );
+            this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
+            return true;
+        }
+        this._dispatchPiBridgeReload(tabInfo, view, {
+            focusInputOnMobile,
+        });
+        return true;
+    }
+
+    // _dispatchPiBridgeReload sends one admitted Reload request. The
+    // caller fences identity and readiness; the core marks the
+    // intent possibly-sent before fetch, bounds the wait, parses
+    // strictly, and never falls back. An automatic flush skips the
+    // focus tail so background work never steals the keyboard.
+    _dispatchPiBridgeReload(
+        tabInfo,
+        view,
+        { focusInputOnMobile = true, focus = true } = {},
+    ) {
+        const paneId = tabInfo.paneId;
+        const intent = {
+            v: 1,
+            id: this._piReloadAllocId(),
+            phase: 'sending',
+            paneId,
+            processId: view.process_id,
+            generation: view.generation,
+            pubRev: view.telemetry_revision,
+            runId: view.run_id,
+            contextRevision: view.context_revision,
+            requestId: null,
+        };
+        tabInfo._piReloadIntent = intent;
+        this._piReloadPersist(tabInfo);
+        const controller = new AbortController();
+        const op = {
+            tab: tabInfo,
+            ws: tabInfo.ws,
+            generation: view.generation,
+            paneId,
+            intentId: intent.id,
+            controller,
+            timer: null,
+        };
+        if (!this._piReloadPending) this._piReloadPending = new Map();
+        this._piReloadPending.set(paneId, op);
+        // The timer finalizes directly: a dropped response still
+        // reports unconfirmed even when fetch ignores the abort.
+        op.timer = setTimeout(() => {
+            controller.abort();
+            this._finalizePiBridgeReload(op, { kind: 'unknown' });
+        }, PI_BRIDGE_RELOAD_TIMEOUT_MS);
+        let request;
+        try {
+            request = fetch('/api/pi-bridge/reload', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    pane: paneId,
+                    process_id: view.process_id,
+                    generation: view.generation,
+                    telemetry_revision: view.telemetry_revision,
+                    run_id: view.run_id,
+                    context_revision: view.context_revision,
+                }),
+                signal: controller.signal,
+                cache: 'no-store',
+            });
+        } catch (error) {
+            request = Promise.reject(error);
+        }
+        Promise.resolve(request).then(
+            (res) => {
+                let parsed = null;
+                try {
+                    parsed =
+                        typeof res?.json === 'function' ? res.json() : null;
+                } catch {
+                    parsed = null;
+                }
+                return Promise.resolve(parsed)
+                    .catch(() => null)
+                    .then((json) => ({ res, json }));
+            },
+            () => ({ res: null, json: null }),
+        ).then(({ res, json }) =>
+            this._finalizePiBridgeReload(
+                op,
+                this._piBridgeReloadOutcome(res, json),
+            ),
+        );
+        this._refreshPiReloadRow(tabInfo);
+        if (focus) this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
+    }
+
+    // _piBridgeReloadOutcome maps one Reload HTTP round trip to a
+    // safe outcome. Only the exact server vocabulary passes: a
+    // receipt needs exactly HTTP 202 with dispatched plus the
+    // opaque request ID, refusal needs 409/503, unknown needs 504.
+    // Anything else — network failure, unparsable body, wrong
+    // status — is unconfirmed, never a silent success and never a
+    // PTY replay.
+    _piBridgeReloadOutcome(res, json) {
+        const outcome =
+            json && typeof json === 'object' ? json.outcome : null;
+        const requestId =
+            json &&
+            typeof json === 'object' &&
+            typeof json.request_id === 'string' &&
+            json.request_id
+                ? json.request_id
+                : null;
+        if (res?.status === 202 && outcome === 'dispatched' && requestId)
+            return { kind: 'dispatched', requestId };
+        if (
+            outcome === 'rejected-before-start' &&
+            (res?.status === 409 || res?.status === 503)
+        )
+            return {
+                kind: 'refused',
+                unavailable: res.status === 503,
+                reason: json.reason,
+                requestId,
+            };
+        if (outcome === 'unknown' && res?.status === 504)
+            return { kind: 'unknown', requestId };
+        return { kind: 'unknown' };
+    }
+
+    // _piReloadCancelOrDismiss folds a waiting or review press into
+    // its local terminal state. True means handled: a queued press
+    // cancels, a review press dismisses, and neither dispatches.
+    // Called on every path, eligible or not.
+    _piReloadCancelOrDismiss(tabInfo, focusInputOnMobile = true) {
+        if (!tabInfo) return false;
+        if (!tabInfo._piReloadIntent)
+            tabInfo._piReloadIntent = this._piReloadRestore(tabInfo);
+        const phase = tabInfo._piReloadIntent?.phase;
+        if (phase === 'queued') {
+            this._piReloadClear(tabInfo);
+            this._piReloadToast('Queued reload cancelled');
+            this._refreshPiReloadRow(tabInfo);
+            this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
+            return true;
+        }
+        if (phase === 'review') {
+            this._piReloadClear(tabInfo);
+            this._refreshPiReloadRow(tabInfo);
+            this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
+            return true;
+        }
+        return false;
+    }
+
+    // _piBridgeReloadQueueable is true only when the one blocker is
+    // the run currently in progress. Queued messages, active or
+    // pending operations, and an unknown sample are never turned
+    // into a deferred action.
+    _piBridgeReloadQueueable(tab) {
+        if (!this._piBridgeReloadEligible(tab)) return false;
+        const view = tab?.piBridge;
+        return (
+            view?.running === true &&
+            view.reload_queued === false &&
+            view.reload_active === false &&
+            view.reload_compact_pending === false &&
+            view.reload_pending === false &&
+            piBridgeReloadReady(view).reason ===
+                'Reload unavailable: Pi is busy'
+        );
+    }
+
+    // _piReloadQueueOffline holds one press while the bridge is
+    // away. Last-known support plus complete identity retains the
+    // never-sent intent; dispatch always revalidates on fresh
+    // reconnect state. True means held; anything else falls through
+    // to the legacy path or an explanation.
+    _piReloadQueueOffline(tabInfo, focusInputOnMobile = true) {
+        if (tabInfo?.coder !== 'pi') return false;
+        const view = tabInfo.piBridge;
+        if (!view || view.state !== 'managed') return false;
+        if (!(view.capabilities || []).includes('pi.reload.v1'))
+            return false;
+        const stamped = (value) =>
+            typeof value === 'string' && value !== '';
+        if (
+            !stamped(view.process_id) ||
+            !stamped(view.generation) ||
+            !stamped(view.telemetry_revision) ||
+            !stamped(view.run_id) ||
+            !stamped(view.context_revision)
+        )
+            return false;
+        tabInfo._piReloadIntent = {
+            v: 1,
+            id: this._piReloadAllocId(),
+            phase: 'queued',
+            paneId: tabInfo.paneId,
+            processId: view.process_id,
+            generation: view.generation,
+            pubRev: view.telemetry_revision,
+            runId: view.run_id,
+            contextRevision: view.context_revision,
+            requestId: null,
+        };
+        this._piReloadPersist(tabInfo);
+        this._piReloadToast('Reload queued — waiting for connection');
+        this._refreshPiReloadRow(tabInfo);
+        this._focusAfterSlashCommand(tabInfo, focusInputOnMobile);
+        return true;
+    }
+
+    // _flushPiBridgeReloadQueue dispatches one held press once its
+    // turn settles on the same process, runtime, run, and context.
+    // It never replays a dispatched op and moves to review — never
+    // to a later context — when identity or context moves, work
+    // appears, or competing operations show up. Runs only from
+    // accepted current-socket state; HTTP seeds never flush.
+    _flushPiBridgeReloadQueue(tabInfo) {
+        const intent = tabInfo?._piReloadIntent;
+        if (!intent || intent.phase !== 'queued') return;
+        if (!tabInfo.ws || tabInfo._piBridgeFresh !== tabInfo.ws) return;
+        const view = tabInfo.piBridge;
+        if (
+            view?.process_id !== intent.processId ||
+            view?.generation !== intent.generation ||
+            view?.run_id !== intent.runId ||
+            view?.context_revision !== intent.contextRevision
+        ) {
+            this._piReloadReview(tabInfo, intent);
+            return;
+        }
+        if (
+            view?.reload_queued === true ||
+            view?.reload_active === true ||
+            view?.reload_compact_pending === true ||
+            view?.reload_pending === true
+        ) {
+            this._piReloadReview(tabInfo, intent);
+            return;
+        }
+        if (view?.running === true) return;
+        // The idle sample can lag the lifecycle edge by one frame;
+        // keep the queue until readiness is authoritative.
+        if (!piBridgeReloadReady(view).ready) return;
+        if (!this._piBridgeReloadEligible(tabInfo)) return;
+        if (typeof navigator !== 'undefined' && navigator.onLine === false)
+            return;
+        this._dispatchPiBridgeReload(tabInfo, view, { focus: false });
+    }
+
+    // _piReloadReview moves a waiting intent to its visible
+    // not-sent state. The target moved or work appeared; a new user
+    // decision is required. Never retargets, never PTY-falls back.
+    _piReloadReview(tabInfo, intent) {
+        if (tabInfo?._piReloadIntent !== intent) return;
+        intent.phase = 'review';
+        this._piReloadPersist(tabInfo);
+        this._piReloadToast(
+            'Reload not sent — review the current Pi session',
+        );
+        this._refreshPiReloadRow(tabInfo);
+    }
+
+    // _finalizePiBridgeReload settles one native Reload op. A late
+    // response for a superseded op, a replaced tab, or a superseded
+    // intent changes nothing. The durable record is the intent, not
+    // the op: a receipt weakens it to requested, a refusal clears
+    // it for a new explicit decision, and anything uncertain keeps
+    // it unconfirmed. Never PTY-falls back.
+    _finalizePiBridgeReload(op, result) {
+        if (op.timer) clearTimeout(op.timer);
+        if (this._piReloadPending?.get(op.paneId) !== op) return;
+        this._piReloadPending.delete(op.paneId);
+        if (this.tabs?.get(op.paneId) !== op.tab) return;
+        // A dead tab keeps its marker but reports nothing: the next
+        // press on a live target revalidates it.
+        if (op.tab.isDead) return;
+        if (op.tab._piReloadIntent?.id !== op.intentId) return;
+        const intent = op.tab._piReloadIntent;
+        if (result?.kind === 'dispatched') {
+            intent.phase = 'requested';
+            intent.requestId = result.requestId;
+            this._piReloadPersist(op.tab);
+            // A slow HTTP receipt may follow the release snapshot.
+            this._piReloadRetire(op.tab);
+            this._refreshPiReloadRow(op.tab);
+            this._piReloadToast('Reload requested — check Pi');
+        } else if (result?.kind === 'refused') {
+            this._piReloadClear(op.tab);
+            this._refreshPiReloadRow(op.tab);
+            // The reason must be one fixed vocabulary word; an
+            // empty or foreign reason renders the bare message.
+            // Word-shaped provider text never reaches the toast.
+            const reason =
+                typeof result?.reason === 'string' &&
+                PI_BRIDGE_RELOAD_REASONS.has(result.reason)
+                    ? result.reason
+                    : '';
+            const suffix = reason ? `: ${reason}` : '';
+            this._piReloadToast(
+                result.unavailable
+                    ? 'Reload unavailable'
+                    : `Reload refused${suffix}`,
+            );
+        } else {
+            intent.phase = 'unconfirmed';
+            if (result?.requestId) intent.requestId = result.requestId;
+            this._piReloadPersist(op.tab);
+            this._piReloadRetire(op.tab);
+            this._refreshPiReloadRow(op.tab);
+            this._piReloadToast(
+                'Reload unconfirmed — check Pi. Not retried.',
+                'error',
+            );
+        }
+    }
+
+    _piReloadToast(message, type = 'info') {
+        this.app?.showToast?.(message, { type, title: 'Reload' });
+    }
+
+    // _piReloadIntentText renders one blocking intent for the toast.
+    // A receipt is entry evidence, never completion; anything else
+    // uncertain stays explicitly unconfirmed.
+    _piReloadIntentText(intent) {
+        if (intent?.phase === 'requested')
+            return 'Reload requested — check Pi';
+        if (intent?.phase === 'sending') return 'Reload sending…';
+        return 'Reload unconfirmed — check Pi. Not retried.';
+    }
+
+    // _piReloadBlocked is true while a possibly-sent marker covers
+    // the current target. A marker for a replaced process or runtime
+    // is spent and clears for a new decision; an unverifiable target
+    // keeps the marker rather than guessing.
+    _piReloadBlocked(tabInfo) {
+        if (!tabInfo) return false;
+        if (!tabInfo._piReloadIntent)
+            tabInfo._piReloadIntent = this._piReloadRestore(tabInfo);
+        const intent = tabInfo._piReloadIntent;
+        if (!intent) return false;
+        // Waiting and review states cancel and dismiss; only a
+        // possibly-sent marker blocks.
+        if (intent.phase === 'queued' || intent.phase === 'review')
+            return false;
+        const view = tabInfo.piBridge;
+        const proc = view?.process_id;
+        const gen = view?.generation;
+        if (
+            typeof proc === 'string' &&
+            proc &&
+            typeof gen === 'string' &&
+            gen
+        ) {
+            if (proc !== intent.processId || gen !== intent.generation) {
+                this._piReloadClear(tabInfo);
+                return false;
+            }
+            return true;
+        }
+        return true;
+    }
+
+    _piReloadAllocId() {
+        this._piReloadSeq = (this._piReloadSeq || 0) + 1;
+        return `r${Date.now().toString(36)}-${this._piReloadSeq.toString(36)}-${Math.floor(Math.random() * 0xffffff).toString(36)}`;
+    }
+
+    _piReloadStoreKey(paneId) {
+        return `${PI_BRIDGE_RELOAD_STORE_PREFIX}${paneId}`;
+    }
+
+    // _piReloadPersist stores the tab's small intent record when
+    // storage is available. Memory stays authoritative: a storage
+    // failure or an oversized record never blocks the session.
+    _piReloadPersist(tabInfo) {
+        const intent = tabInfo?._piReloadIntent;
+        let storage = null;
+        try {
+            storage =
+                typeof localStorage === 'undefined'
+                    ? null
+                    : localStorage;
+        } catch {
+            storage = null;
+        }
+        if (!storage || !tabInfo?.paneId) return;
+        const key = this._piReloadStoreKey(tabInfo.paneId);
+        try {
+            if (!intent) {
+                storage.removeItem(key);
+                return;
+            }
+            const text = JSON.stringify(intent);
+            if (text.length > 4096) return;
+            storage.setItem(key, text);
+        } catch {
+            // Memory stays authoritative.
+        }
+    }
+
+    // _piReloadRestore reads one persisted intent. Only the exact
+    // versioned shape passes; malformed records are ignored without
+    // executing anything. A restored sending marker weakens to
+    // unconfirmed: its flight ended with the page.
+    _piReloadRestore(tabInfo) {
+        let storage = null;
+        try {
+            storage =
+                typeof localStorage === 'undefined'
+                    ? null
+                    : localStorage;
+        } catch {
+            storage = null;
+        }
+        if (!storage || !tabInfo?.paneId) return null;
+        let raw = null;
+        try {
+            raw = storage.getItem(this._piReloadStoreKey(tabInfo.paneId));
+        } catch {
+            return null;
+        }
+        if (typeof raw !== 'string' || !raw || raw.length > 4096)
+            return null;
+        let intent = null;
+        try {
+            intent = JSON.parse(raw);
+        } catch {
+            return null;
+        }
+        if (!intent || typeof intent !== 'object') return null;
+        const positive = (s) =>
+            typeof s === 'string' &&
+            /^[1-9][0-9]*$/.test(s) &&
+            s.length <= 20;
+        const counter = (s) =>
+            typeof s === 'string' &&
+            /^(0|[1-9][0-9]*)$/.test(s) &&
+            s.length <= 20;
+        if (intent.v !== 1) return null;
+        if (
+            typeof intent.id !== 'string' ||
+            !intent.id ||
+            intent.id.length > 128
+        )
+            return null;
+        if (
+            !['sending', 'requested', 'unconfirmed', 'queued', 'review'].includes(
+                intent.phase,
+            )
+        )
+            return null;
+        if (intent.paneId !== tabInfo.paneId) return null;
+        if (
+            typeof intent.processId !== 'string' ||
+            !intent.processId ||
+            intent.processId.length > 256
+        )
+            return null;
+        if (!positive(intent.generation) || !positive(intent.pubRev))
+            return null;
+        if (!counter(intent.runId) || !counter(intent.contextRevision))
+            return null;
+        if (intent.requestId !== null && !positive(intent.requestId))
+            return null;
+        if (intent.phase === 'sending') {
+            intent.phase = 'unconfirmed';
+            tabInfo._piReloadIntent = intent;
+            this._piReloadPersist(tabInfo);
+        }
+        // A restored wait is review, never authorized work: the
+        // turn may have settled while the browser was away.
+        if (intent.phase === 'queued') {
+            intent.phase = 'review';
+            tabInfo._piReloadIntent = intent;
+            this._piReloadPersist(tabInfo);
+        }
+        return intent;
+    }
+
+    _piReloadClear(tabInfo) {
+        if (tabInfo) tabInfo._piReloadIntent = null;
+        this._piReloadPersist(tabInfo);
+    }
+
+    // _piReloadRetire clears a blocking intent on release evidence:
+    // the same process and runtime, no pending native Reload, and a
+    // high-water mark covering the receipt's request ID. The ID
+    // anchor is required: the extension advances its high-water mark
+    // only when it processes that ID, so coverage proves the
+    // operation released. A publication comparison cannot prove
+    // this — queue-delayed pre-dispatch snapshots carry newer
+    // revisions — and an ID-less marker can only clear through a
+    // spent target or an explicit new decision. Retirement never
+    // replays or resends.
+    _piReloadRetire(tabInfo) {
+        const intent = tabInfo?._piReloadIntent;
+        if (!intent || tabInfo?.coder !== 'pi') return;
+        if (!intent.requestId) return;
+        const view = tabInfo.piBridge;
+        if (
+            view?.process_id !== intent.processId ||
+            view?.generation !== intent.generation
+        )
+            return;
+        if (view.reload_pending !== false) return;
+        const water = view.reload_high_water;
+        if (typeof water !== 'string' || water === '') return;
+        try {
+            if (BigInt(water) < BigInt(intent.requestId)) return;
+        } catch {
+            return;
+        }
+        this._piReloadClear(tabInfo);
+    }
+
+    // _invalidatePiBridgeReload drops the pane's pending native
+    // Reload waiter when its tab is gone: closed, exited, or
+    // restarting. Only the matching waiter is cleared — its timer is
+    // cancelled and the HTTP wait aborted, which never cancels
+    // accepted server work and never replays; the aborted wait's
+    // late reply finalizes silently. Peer-down, generation moves,
+    // capability changes, and socket swaps never invalidate: the
+    // receipt survives transport churn by design, and a reload
+    // replaces its own runtime, so invalidating there would destroy
+    // the expected answer. Unlike Compact, the possibly-sent marker
+    // always survives: the next press reports it instead of
+    // dispatching or PTY-falling back.
+    _invalidatePiBridgeReload(tabInfo) {
+        const paneId = tabInfo?.paneId;
+        if (paneId == null) return;
+        const op = this._piReloadPending?.get(paneId);
+        if (!op || op.tab !== tabInfo) return;
+        if (op.timer) clearTimeout(op.timer);
+        op.timer = null;
+        this._piReloadPending.delete(paneId);
+        try {
+            op.controller?.abort();
+        } catch (_abortError) {}
+        if (tabInfo._piReloadIntent?.id === op.intentId) {
+            tabInfo._piReloadIntent.phase = 'unconfirmed';
+            this._piReloadPersist(tabInfo);
+        }
+    }
+
     _showReconnectOverlay(tabInfo) {
         const existing =
             tabInfo.termContainer.querySelector('.reconnect-overlay');
@@ -10117,6 +10895,8 @@ export class TabManager {
             pendingOp.ws !== tabInfo.ws
         )
             this._invalidatePiBridgeCompact?.(tabInfo, true);
+        // The pending Reload waiter survives a socket swap: its HTTP
+        // receipt is transport-independent by design.
         this._refreshPiBridgeModels(tabInfo);
     }
 
@@ -10208,6 +10988,9 @@ export class TabManager {
             contextPercent <= 9007199254740991
         )
             view.context_percent = contextPercent;
+        // The process nonce is nonsecret identity, fenced at dispatch.
+        if (typeof raw.process_id === 'string' && raw.process_id)
+            view.process_id = raw.process_id;
         // Compaction readiness arrives as a group: any missing or
         // invalid member leaves the whole sample unknown.
         const compactIdle = piBridgeReadinessBool(raw.compact_idle);
@@ -10224,6 +11007,49 @@ export class TabManager {
             view.compact_queued = compactQueued;
             view.compact_active = compactActive;
             view.compact_pending = compactPending;
+        }
+        // Reload readiness arrives as a group with its run/context
+        // fences: any missing or invalid member leaves the whole
+        // sample unknown, never idle. The high-water mark is
+        // optional inside a complete sample; absence means no
+        // recognized request yet, never zero.
+        const runId =
+            typeof raw.run_id === 'string' && raw.run_id
+                ? raw.run_id
+                : null;
+        const contextRevision =
+            typeof raw.context_revision === 'string' &&
+            raw.context_revision
+                ? raw.context_revision
+                : null;
+        const reloadIdle = piBridgeReadinessBool(raw.reload_idle);
+        const reloadQueued = piBridgeReadinessBool(raw.reload_queued);
+        const reloadActive = piBridgeReadinessBool(raw.reload_active);
+        const reloadCompactPending = piBridgeReadinessBool(
+            raw.reload_compact_pending,
+        );
+        const reloadPending = piBridgeReadinessBool(raw.reload_pending);
+        if (
+            runId !== null &&
+            contextRevision !== null &&
+            reloadIdle !== null &&
+            reloadQueued !== null &&
+            reloadActive !== null &&
+            reloadCompactPending !== null &&
+            reloadPending !== null
+        ) {
+            view.run_id = runId;
+            view.context_revision = contextRevision;
+            view.reload_idle = reloadIdle;
+            view.reload_queued = reloadQueued;
+            view.reload_active = reloadActive;
+            view.reload_compact_pending = reloadCompactPending;
+            view.reload_pending = reloadPending;
+            if (
+                typeof raw.reload_high_water === 'string' &&
+                raw.reload_high_water
+            )
+                view.reload_high_water = raw.reload_high_water;
         }
         return view;
     }
@@ -10306,6 +11132,9 @@ export class TabManager {
         // A baseline can move model or availability like a live frame, but it
         // never reaches _acceptPiBridgeState, so clean up Thinking here.
         if (accepted) this._refreshPiBridgeModels(tabInfo);
+        // A baseline can also carry release evidence for a
+        // restored Reload marker.
+        if (accepted) this._piReloadRetire?.(tabInfo);
         return accepted;
     }
 
@@ -10369,6 +11198,7 @@ export class TabManager {
             // (PROTOCOL.md), never a silent drop and never a retry.
             this._invalidatePiBridgeCompact?.(tabInfo, true);
             this.updateDisconnectBanner();
+            this._invalidatePiBridgeReload?.(tabInfo);
         } else if (control.type === 'replay-complete') {
             // An empty replay still ends here, so drop the pending reset or
             // the next live byte would clear the terminal underneath the user.
@@ -10413,7 +11243,11 @@ export class TabManager {
     _acceptPiBridgeState(tabInfo, control, socket = tabInfo?.ws) {
         if (!tabInfo || tabInfo.coder !== 'pi') return;
         const prevKeys = this._piBridgeKeys(tabInfo);
-        this._acceptOrderedBridgeView(tabInfo, control, socket);
+        const accepted = this._acceptOrderedBridgeView(
+            tabInfo,
+            control,
+            socket,
+        );
         // A retained view that no longer supports the pending native
         // Compact waiter — runtime generation moved, peer lost, or
         // capability revoked — orphans it silently; the late HTTP
@@ -10439,6 +11273,10 @@ export class TabManager {
                 tabInfo.ws === pendingOp.ws &&
                     tabInfo.piBridge?.generation === pendingOp.generation,
             );
+        // Release evidence retires a blocking Reload marker. The
+        // pending waiter itself is never orphaned here: the receipt
+        // survives the reload it caused.
+        this._piReloadRetire?.(tabInfo);
         const nextKeys = this._piBridgeKeys(tabInfo);
         // The models trigger, the slash presets, and the Compact
         // controls ride the row key; context occupancy rides the bar
@@ -10448,6 +11286,9 @@ export class TabManager {
         if (prevKeys.row !== nextKeys.row) this._refreshPiBridgeModels(tabInfo);
         else if (prevKeys.bar !== nextKeys.bar && this.getActiveTab() === tabInfo)
             this.renderPiRpcStatusBar?.();
+        // A held Reload press flushes only from accepted
+        // current-socket state; rejected frames move nothing.
+        if (accepted) this._flushPiBridgeReloadQueue?.(tabInfo);
         if (
             this._piRecall?.paneId === tabInfo.paneId &&
             (!this._piRecallEligible(tabInfo) ||
@@ -10813,6 +11654,7 @@ export class TabManager {
         // A restart orphans the pending native Compact waiter for the
         // old pane before the new lease is provisioned.
         this._invalidatePiBridgeCompact?.(tabInfo);
+        this._invalidatePiBridgeReload?.(tabInfo);
 
         fetch('/api/terminals', {
             method: 'POST',
@@ -12268,7 +13110,7 @@ export class TabManager {
         }
     }
 
-    renderPresets(coderId) {
+    renderPresets(coderId, { refreshQuickCommands = true } = {}) {
         const activeTab = this.getActiveTab();
         if (activeTab?.coder === 'pi')
             this._bindThinkingPresetStore(this.app?.scope);
@@ -12600,7 +13442,11 @@ export class TabManager {
             }
         }
         const qcDropup = document.getElementById('quick-commands-dropup');
-        if (qcDropup && !qcDropup.classList.contains('hidden')) {
+        if (
+            refreshQuickCommands &&
+            qcDropup &&
+            !qcDropup.classList.contains('hidden')
+        ) {
             this.renderQuickCmdsDropup();
         }
         const keysDropup = document.getElementById('keys-presets-dropup');
@@ -13400,6 +14246,24 @@ export class TabManager {
                 const btn = document.createElement('button');
                 btn.className = 'dropup-model-btn';
                 btn.innerText = preset.name;
+                let reloadState = null;
+                if (
+                    preset.value === '/reload\r' &&
+                    activeTab?.coder === 'pi'
+                ) {
+                    reloadState = this._piReloadControlState(activeTab);
+                    btn.classList.add('pi-reload-btn');
+                    if (reloadState.title) btn.title = reloadState.title;
+                    btn.classList.toggle(
+                        'pi-reload-queued',
+                        reloadState.queued === true,
+                    );
+                    if (reloadState.dismiss)
+                        btn.setAttribute(
+                            'aria-describedby',
+                            'pi-reload-status',
+                        );
+                }
                 btn.addEventListener('click', () => {
                     this._sendBuiltInPreset(preset.value, {
                         focusInputOnMobile: false,
@@ -13407,6 +14271,14 @@ export class TabManager {
                     dropup.classList.add('hidden');
                 });
                 row.appendChild(btn);
+                if (reloadState?.dismiss) {
+                    const status = document.createElement('span');
+                    status.id = 'pi-reload-status';
+                    status.className = 'pi-reload-status';
+                    status.textContent = reloadState.title;
+                    row.appendChild(status);
+                    row.appendChild(this._piReloadDismissActions());
+                }
                 dropup.appendChild(row);
             });
         }
@@ -14472,6 +15344,130 @@ export class TabManager {
         return piBridgeCapable(tab, 'pi.compact.v1');
     }
 
+    _piBridgeReloadEligible(tab) {
+        return piBridgeCapable(tab, 'pi.reload.v1');
+    }
+
+    // _piReloadControlState derives the Cmds Reload row from the
+    // live intent. A marker for a replaced target reads as no
+    // state; the next press spends it. The command name never
+    // changes; status rides the title plus the dismiss control.
+    _piReloadControlState(tab) {
+        const none = { title: '', queued: false, dismiss: false };
+        if (tab && !tab._piReloadIntent)
+            tab._piReloadIntent = this._piReloadRestore(tab);
+        this._piReloadRetire(tab);
+        const intent = tab?._piReloadIntent;
+        if (!intent) return none;
+        if (
+            tab.piBridge?.process_id !== intent.processId ||
+            tab.piBridge?.generation !== intent.generation
+        )
+            return none;
+        switch (intent.phase) {
+            case 'queued': {
+                const waitingTurn =
+                    this._piBridgeReloadEligible(tab) &&
+                    tab.piBridge?.running === true;
+                return {
+                    title: waitingTurn
+                        ? 'Reload queued — press to cancel'
+                        : 'Reload queued — waiting for connection',
+                    queued: true,
+                    dismiss: false,
+                };
+            }
+            case 'sending':
+                return {
+                    title: 'Reload sending…',
+                    queued: false,
+                    dismiss: false,
+                };
+            case 'requested':
+                return {
+                    title: 'Reload requested — check Pi',
+                    queued: false,
+                    dismiss: true,
+                };
+            case 'unconfirmed':
+                return {
+                    title: 'Reload unconfirmed — check Pi. Not retried.',
+                    queued: false,
+                    dismiss: true,
+                };
+            case 'review':
+                return {
+                    title: 'Reload not sent — review the current Pi session',
+                    queued: false,
+                    dismiss: true,
+                };
+            default:
+                return none;
+        }
+    }
+
+    // _piReloadDismissActions builds the sibling dismiss control
+    // for a settled Reload status. Never nested in the command.
+    _piReloadDismissActions() {
+        const actions = document.createElement('div');
+        actions.className = 'dropup-row-actions';
+        const dismiss = document.createElement('button');
+        dismiss.className = 'dropup-action-btn pi-reload-dismiss-btn';
+        dismiss.textContent = 'Dismiss';
+        dismiss.setAttribute('aria-label', 'Dismiss reload status');
+        dismiss.addEventListener('click', (event) => {
+            event.stopPropagation();
+            const tab = this.getActiveTab();
+            // Dismissal clears browser status only: native work,
+            // if any, is untouched, and nothing resends.
+            if (tab) this._piReloadClear(tab);
+            this.renderQuickCmdsDropup();
+            document
+                .querySelector('#quick-commands-dropup .pi-reload-btn')
+                ?.focus({ preventScroll: true });
+        });
+        actions.appendChild(dismiss);
+        return actions;
+    }
+
+    // _refreshPiReloadRow patches the open Cmds Reload row in place
+    // during background changes. Attributes and the dismiss sibling
+    // update; the focused command button is never replaced.
+    _refreshPiReloadRow(tabInfo) {
+        if (!tabInfo || this.getActiveTab?.() !== tabInfo) return;
+        const dropup = document.getElementById('quick-commands-dropup');
+        if (!dropup || dropup.classList.contains('hidden')) return;
+        const btn = dropup.querySelector('.pi-reload-btn');
+        if (!btn) return;
+        const state = this._piReloadControlState(tabInfo);
+        if (state.title) btn.title = state.title;
+        else btn.removeAttribute('title');
+        btn.classList.toggle('pi-reload-queued', state.queued === true);
+        const row = btn.closest('.dropup-row');
+        const actions = row?.querySelector('.dropup-row-actions');
+        const status = row?.querySelector('#pi-reload-status');
+        if (state.dismiss) {
+            btn.setAttribute('aria-describedby', 'pi-reload-status');
+            if (status) status.textContent = state.title;
+            else if (row) {
+                const described = document.createElement('span');
+                described.id = 'pi-reload-status';
+                described.className = 'pi-reload-status';
+                described.textContent = state.title;
+                row.appendChild(described);
+            }
+            if (!actions) row?.appendChild(this._piReloadDismissActions());
+        } else {
+            status?.remove();
+            btn.removeAttribute('aria-describedby');
+            if (actions) {
+                if (actions.contains(document.activeElement))
+                    btn.focus({ preventScroll: true });
+                actions.remove();
+            }
+        }
+    }
+
     // _piBridgeStatusFor adapts bridge context telemetry into the
     // shared status-bar input. Only real cwd/model/tokens/window are
     // carried; RPC totals, cache, cost, and thinking stay unknown.
@@ -14538,7 +15534,7 @@ export class TabManager {
     // occupancy only the status-bar meter renders.
     _piBridgeKeys(tab, view = tab.piBridge) {
         if (!view) return { row: '', bar: '' };
-        const row = `${this._piBridgeModelsEligible(tab)}|${this._piBridgeThinkingEligible(tab)}|${piBridgeCapable(tab, 'pi.skills.v1')}|${piBridgeCapable(tab, 'pi.context.v1')}|${piBridgeCapable(tab, 'pi.compact.v1')}|${view.state}|${view.generation || ''}|${view.model || ''}|${view.thinking_level || ''}|${view.connected}|${view.running}|${view.last_run || ''}|${(view.capabilities || []).join(',')}|${view.compact_idle}/${view.compact_queued}/${view.compact_active}/${view.compact_pending}`;
+        const row = `${this._piBridgeModelsEligible(tab)}|${this._piBridgeThinkingEligible(tab)}|${piBridgeCapable(tab, 'pi.skills.v1')}|${piBridgeCapable(tab, 'pi.context.v1')}|${piBridgeCapable(tab, 'pi.compact.v1')}|${piBridgeCapable(tab, 'pi.reload.v1')}|${view.state}|${view.generation || ''}|${view.model || ''}|${view.thinking_level || ''}|${view.connected}|${view.running}|${view.last_run || ''}|${(view.capabilities || []).join(',')}|${view.compact_idle}/${view.compact_queued}/${view.compact_active}/${view.compact_pending}|${view.process_id || ''}|${view.run_id || ''}|${view.context_revision || ''}|${view.reload_idle}/${view.reload_queued}/${view.reload_active}/${view.reload_compact_pending}/${view.reload_pending}|${view.reload_high_water || ''}`;
         return {
             row,
             bar: `${row}|${view.context_tokens ?? ''},${view.context_window ?? ''},${view.context_percent ?? ''}`,
@@ -14563,7 +15559,12 @@ export class TabManager {
         // Thinking cleanup first so the single renderPresets below owns the
         // open-picker re-render with settled pending state (one levels fetch).
         this._refreshPiBridgeThinking(tab);
-        if (this.getActiveTab() === tab) this.renderPresets('pi');
+        if (this.getActiveTab() === tab) {
+            // Bridge telemetry changes Reload status, not the Cmds catalog.
+            // Patch that row without replacing a keyboard user's focus.
+            this.renderPresets('pi', { refreshQuickCommands: false });
+            this._refreshPiReloadRow(tab);
+        }
         if (
             this.getActiveTab() === tab &&
             typeof this.renderPiRpcStatusBar === 'function'

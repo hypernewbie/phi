@@ -114,6 +114,15 @@ export interface TerminalBridgeState {
   compactQueued?: boolean | undefined;
   compactActive?: boolean | undefined;
   compactPending?: boolean | undefined;
+  processId?: string | undefined;
+  runId?: bigint | undefined;
+  contextRevision?: bigint | undefined;
+  reloadIdle?: boolean | undefined;
+  reloadQueued?: boolean | undefined;
+  reloadActive?: boolean | undefined;
+  reloadCompactPending?: boolean | undefined;
+  reloadPending?: boolean | undefined;
+  reloadHighWater?: bigint | undefined;
 }
 
 /** TerminalSettlement reports one observed Pi run outcome. */
@@ -1104,6 +1113,15 @@ function createBaseTerminalBridgeState(): TerminalBridgeState {
     compactQueued: undefined,
     compactActive: undefined,
     compactPending: undefined,
+    processId: undefined,
+    runId: undefined,
+    contextRevision: undefined,
+    reloadIdle: undefined,
+    reloadQueued: undefined,
+    reloadActive: undefined,
+    reloadCompactPending: undefined,
+    reloadPending: undefined,
+    reloadHighWater: undefined,
   };
 }
 
@@ -1174,6 +1192,42 @@ export const TerminalBridgeState: MessageFns<TerminalBridgeState> = {
     }
     if (message.compactPending !== undefined) {
       writer.uint32(152).bool(message.compactPending);
+    }
+    if (message.processId !== undefined) {
+      writer.uint32(162).string(message.processId);
+    }
+    if (message.runId !== undefined) {
+      if (BigInt.asUintN(64, message.runId) !== message.runId) {
+        throw new globalThis.Error("value provided for field message.runId of type uint64 too large");
+      }
+      writer.uint32(168).uint64(message.runId);
+    }
+    if (message.contextRevision !== undefined) {
+      if (BigInt.asUintN(64, message.contextRevision) !== message.contextRevision) {
+        throw new globalThis.Error("value provided for field message.contextRevision of type uint64 too large");
+      }
+      writer.uint32(176).uint64(message.contextRevision);
+    }
+    if (message.reloadIdle !== undefined) {
+      writer.uint32(184).bool(message.reloadIdle);
+    }
+    if (message.reloadQueued !== undefined) {
+      writer.uint32(192).bool(message.reloadQueued);
+    }
+    if (message.reloadActive !== undefined) {
+      writer.uint32(200).bool(message.reloadActive);
+    }
+    if (message.reloadCompactPending !== undefined) {
+      writer.uint32(208).bool(message.reloadCompactPending);
+    }
+    if (message.reloadPending !== undefined) {
+      writer.uint32(216).bool(message.reloadPending);
+    }
+    if (message.reloadHighWater !== undefined) {
+      if (BigInt.asUintN(64, message.reloadHighWater) !== message.reloadHighWater) {
+        throw new globalThis.Error("value provided for field message.reloadHighWater of type uint64 too large");
+      }
+      writer.uint32(224).uint64(message.reloadHighWater);
     }
     return writer;
   },
@@ -1343,6 +1397,78 @@ export const TerminalBridgeState: MessageFns<TerminalBridgeState> = {
             message.compactPending = reader.bool();
             continue;
           }
+          case 20: {
+            if (tag !== 162) {
+              break;
+            }
+
+            message.processId = reader.string();
+            continue;
+          }
+          case 21: {
+            if (tag !== 168) {
+              break;
+            }
+
+            message.runId = reader.uint64() as bigint;
+            continue;
+          }
+          case 22: {
+            if (tag !== 176) {
+              break;
+            }
+
+            message.contextRevision = reader.uint64() as bigint;
+            continue;
+          }
+          case 23: {
+            if (tag !== 184) {
+              break;
+            }
+
+            message.reloadIdle = reader.bool();
+            continue;
+          }
+          case 24: {
+            if (tag !== 192) {
+              break;
+            }
+
+            message.reloadQueued = reader.bool();
+            continue;
+          }
+          case 25: {
+            if (tag !== 200) {
+              break;
+            }
+
+            message.reloadActive = reader.bool();
+            continue;
+          }
+          case 26: {
+            if (tag !== 208) {
+              break;
+            }
+
+            message.reloadCompactPending = reader.bool();
+            continue;
+          }
+          case 27: {
+            if (tag !== 216) {
+              break;
+            }
+
+            message.reloadPending = reader.bool();
+            continue;
+          }
+          case 28: {
+            if (tag !== 224) {
+              break;
+            }
+
+            message.reloadHighWater = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1383,6 +1509,19 @@ export const TerminalBridgeState: MessageFns<TerminalBridgeState> = {
     message.compactQueued = object.compactQueued ?? undefined;
     message.compactActive = object.compactActive ?? undefined;
     message.compactPending = object.compactPending ?? undefined;
+    message.processId = object.processId ?? undefined;
+    message.runId = (object.runId !== undefined && object.runId !== null) ? BigInt(object.runId) : undefined;
+    message.contextRevision = (object.contextRevision !== undefined && object.contextRevision !== null)
+      ? BigInt(object.contextRevision)
+      : undefined;
+    message.reloadIdle = object.reloadIdle ?? undefined;
+    message.reloadQueued = object.reloadQueued ?? undefined;
+    message.reloadActive = object.reloadActive ?? undefined;
+    message.reloadCompactPending = object.reloadCompactPending ?? undefined;
+    message.reloadPending = object.reloadPending ?? undefined;
+    message.reloadHighWater = (object.reloadHighWater !== undefined && object.reloadHighWater !== null)
+      ? BigInt(object.reloadHighWater)
+      : undefined;
     return message;
   },
 };

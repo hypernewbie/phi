@@ -10,11 +10,22 @@ import { status as GrpcStatus } from '@grpc/grpc-js';
 import {
     CompactOutcome,
     LogicalState,
+    ReloadDispatchOutcome,
     RunOutcome,
     StateSnapshot,
 } from '../src/gen/bridge.js';
-import { CAPABILITY_COMPACT, CAPABILITY_LIFECYCLE } from '../src/protocol.js';
+import {
+    CAPABILITY_COMPACT,
+    CAPABILITY_LIFECYCLE,
+    CAPABILITY_RELOAD,
+} from '../src/protocol.js';
 import { BridgeTestClient } from '../src/test-client.js';
+import { BridgeChannel } from '../src/channel.js';
+import {
+    captureNativeReloadBaseline,
+    freshReloadLatch,
+} from '../src/native-reload.js';
+import { Runtime, freshCompactLatch } from '../src/runtime.js';
 
 interface ControlResponse {
     ok: boolean;
@@ -296,6 +307,98 @@ async function makeCompactClient(pane: string): Promise<{
     });
 }
 
+const RELOAD_CAPABILITIES = [CAPABILITY_LIFECYCLE, CAPABILITY_RELOAD];
+
+function idleReloadState(sessionId: string, leafId: string): StateSnapshot {
+    return StateSnapshot.create({
+        state: LogicalState.LOGICAL_STATE_IDLE,
+        sessionId,
+        leafId,
+        model: { provider: 'test-provider', model: 'test-model' },
+        reloadReadiness: {
+            runId: 0n,
+            contextRevision: 0n,
+            idle: true,
+            hasPendingMessages: false,
+            compactionActive: false,
+            compactPending: false,
+            reloadPending: false,
+            highWater: 0n,
+        },
+        stateRevision: 0n,
+    });
+}
+
+async function makeReloadClient(pane: string): Promise<{
+    client: BridgeTestClient;
+    process: string;
+    token: string;
+}> {
+    const sessionId = `sess-${pane}`;
+    return makeClient(pane, {
+        capabilities: RELOAD_CAPABILITIES,
+        state: idleReloadState(sessionId, `leaf-${pane}`),
+    });
+}
+
+async function reloadStamps(
+    process: string,
+): Promise<{ generation: number; pubRev: number }> {
+    const view = await control({ op: 'inspect', process });
+    expect(view.ok, `stamps: ${view.error}`).toBe(true);
+    return {
+        generation: Number(view.generation),
+        pubRev: Number(view.pubRev),
+    };
+}
+
+async function dispatchReload(
+    process: string,
+    generation: number,
+    pubRev: number,
+    timeoutMs = 5000,
+): Promise<string> {
+    const res = await control({
+        op: 'reload',
+        process,
+        generation,
+        revision: pubRev,
+        runId: 0,
+        contextRev: 0,
+        timeoutMs,
+    });
+    expect(res.ok, `dispatch: ${res.error}`).toBe(true);
+    if (!res.call) throw new Error('dispatch response did not include call ID');
+    return res.call;
+}
+
+async function waitReload(
+    call: string,
+    timeoutMs = 10000,
+): Promise<ControlResponse> {
+    return control({ op: 'reload-wait', call, timeoutMs });
+}
+
+async function waitForNewPublication(
+    process: string,
+    previous: number,
+): Promise<{ generation: number; pubRev: number }> {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+        const view = await control({ op: 'inspect', process });
+        if (view.ok && Number(view.pubRev) > previous) {
+            return {
+                generation: Number(view.generation),
+                pubRev: Number(view.pubRev),
+            };
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error(
+        'publication did not advance after Reload readiness update',
+    );
+}
+
 async function compactStamps(
     process: string,
 ): Promise<{ generation: number; pubRev: number }> {
@@ -534,6 +637,171 @@ describe('compact', () => {
             CompactOutcome.COMPACT_OUTCOME_COMPLETED,
         );
         expect((await waitCompact(first)).ok).toBe(true);
+        await client.close();
+    }, 30_000);
+});
+
+describe('reload', () => {
+    it('refuses dispatch without the reload capability', async () => {
+        const { client, process } = await makeClient('pane-reload-nocap');
+        await client.connect();
+        const { generation, pubRev } = await reloadStamps(process);
+        const call = await dispatchReload(process, generation, pubRev);
+        const res = await waitReload(call);
+        expect(res.ok).toBe(false);
+        expect(res.error).toContain('capability not negotiated');
+        expect(client.receivedReloadRequests()).toBe(0);
+        await client.close();
+    }, 20_000);
+
+    it('delivers a focus refusal before release retires its server waiter', async () => {
+        const pane = 'pane-reload-focus';
+        const { process, token } = await registerPane(pane);
+        await control({ op: 'complete', process });
+        let nativeCalls = 0;
+        class CustomEditor {
+            history: string[] = [];
+            async onSubmit() {
+                nativeCalls++;
+            }
+        }
+        let focused: object = new CustomEditor();
+        const ctx = {
+            sessionManager: {
+                getSessionId: () => 'sess-focus',
+                getLeafId: () => null,
+            },
+            isIdle: () => true,
+            hasPendingMessages: () => false,
+            ui: {
+                getEditorComponent: () => undefined,
+                setWidget: (
+                    _key: string,
+                    factory: ((tui: unknown) => unknown) | undefined,
+                ) => factory?.({ getFocusedComponent: () => focused }),
+            },
+        };
+        const latch = freshReloadLatch();
+        expect(captureNativeReloadBaseline(ctx, latch)).toBe(true);
+        let accepted = false;
+        const runtime = new Runtime({
+            creds: { target, pane, process, token },
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            reloadState: latch,
+            makeChannel(creds, hooks) {
+                const channel = new BridgeChannel(creds, hooks);
+                const connect = channel.connect.bind(channel);
+                channel.connect = async (hello) => {
+                    const result = await connect(hello);
+                    accepted = true;
+                    return result;
+                };
+                return channel;
+            },
+        });
+        try {
+            runtime.start(ctx);
+            await expect.poll(() => accepted).toBe(true);
+            focused = {}; // A selector took focus after capability negotiation.
+            const { generation, pubRev } = await reloadStamps(process);
+            const call = await dispatchReload(process, generation, pubRev);
+            const result = await waitReload(call);
+            expect(result.ok).toBe(true);
+            expect(result.outcome).toBe('RELOAD_DISPATCH_OUTCOME_REFUSED');
+            expect(result.reason).toBe('unavailable');
+            expect(nativeCalls).toBe(0);
+            expect(latch.pending).toBeNull();
+        } finally {
+            runtime.shutdown();
+            await control({ op: 'revoke', process });
+        }
+    }, 20_000);
+
+    it('negotiates, correlates, and releases native Reload requests', async () => {
+        const pane = 'pane-reload-echo';
+        const { client, process } = await makeReloadClient(pane);
+        const accepted = await client.connect();
+        expect(accepted.capabilities).toContain(CAPABILITY_RELOAD);
+
+        const { generation, pubRev } = await reloadStamps(process);
+        const call = await dispatchReload(process, generation, pubRev, 15000);
+        const req = await client.awaitReloadRequest();
+        expect(req.requestId).toMatch(/^[1-9][0-9]*$/);
+        expect(req.expectedSessionId).toBe(`sess-${pane}`);
+        expect(req.expectedLeafId).toBe(`leaf-${pane}`);
+        expect(req.expectedModel).toMatchObject({
+            provider: 'test-provider',
+            model: 'test-model',
+        });
+        expect(req.expectedRunId).toBe(0n);
+        expect(req.expectedContextRevision).toBe(0n);
+
+        // A stray ID is ignored. Callback entry returns a receipt, but
+        // the operation stays pending until fresh readiness releases it.
+        client.sendReloadAck(
+            '999999999999',
+            ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_DISPATCHED,
+        );
+        await client.drain();
+        const duplicate = await dispatchReload(
+            process,
+            generation,
+            pubRev,
+            2000,
+        );
+        expect((await waitReload(duplicate)).error).toBe('refusal:pending');
+        expect(client.receivedReloadRequests()).toBe(1);
+
+        client.sendReloadAck(
+            req.requestId,
+            ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_DISPATCHED,
+        );
+        const result = await waitReload(call);
+        expect(result.ok).toBe(true);
+        expect(result.outcome).toBe('RELOAD_DISPATCH_OUTCOME_DISPATCHED');
+        expect(result.requestId).toBe(req.requestId);
+
+        client.sendSnapshot(
+            StateSnapshot.create({
+                state: LogicalState.LOGICAL_STATE_IDLE,
+                sessionId: `sess-${pane}`,
+                leafId: `leaf-${pane}`,
+                model: { provider: 'test-provider', model: 'test-model' },
+                reloadReadiness: {
+                    runId: 0n,
+                    contextRevision: 0n,
+                    idle: true,
+                    hasPendingMessages: false,
+                    compactionActive: false,
+                    compactPending: false,
+                    reloadPending: false,
+                    highWater: BigInt(req.requestId),
+                },
+                stateRevision: 1n,
+            }),
+        );
+        await client.drain();
+        const fresh = await waitForNewPublication(process, pubRev);
+
+        const nextCall = await dispatchReload(
+            process,
+            fresh.generation,
+            fresh.pubRev,
+            15000,
+        );
+        const nextReq = await client.awaitReloadRequest();
+        expect(nextReq.requestId).not.toBe(req.requestId);
+        client.sendReloadAck(
+            nextReq.requestId,
+            ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_REFUSED,
+            'busy',
+        );
+        const refused = await waitReload(nextCall);
+        expect(refused.ok).toBe(true);
+        expect(refused.outcome).toBe('RELOAD_DISPATCH_OUTCOME_REFUSED');
+        expect(refused.reason).toBe('busy');
+        expect(client.receivedReloadRequests()).toBe(2);
         await client.close();
     }, 30_000);
 });
