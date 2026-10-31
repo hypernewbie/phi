@@ -120,10 +120,8 @@ NSStatusItem/StatusNotifierItem code paths):
   `test/tray.test.ts`).
 
 Deliberately **not** implemented yet: click-to-open (left-click shows the
-app), menu rebuild on profile-set changes (creation-time snapshot),
-unread badges in the menu, native balloon/toast notifications (use
-`Notification.isSupported()` when they land), animations — all deferred to
-later slices (see `docs/ELECTRON_MIGRATION.md` step 4).
+app), menu rebuild on profile-set changes (creation-time snapshot), unread
+badges in the menu, and animations. See Native OS notifications below.
 
 ## Phase 5 scope (this slice)
 
@@ -277,6 +275,34 @@ isolation.
 - **Deep links / single instance / tray / hotkeys / protocol** — steps
   2-5 behavior is unchanged; deep links and forwarded argv now reach
   the rail renderer's preload bridge (`window.electron`).
+
+## Native OS notifications
+
+The Electron shell makes best-effort native notification attempts for new,
+live Phi notification-manager entries when the main window is not focused.
+It drains entries every two seconds, including while focused. Entries drained
+while focused are not replayed later. Native clicks foreground Phi and select
+the saved profile when it still exists; they do not run in-app action
+callbacks. In-app toasts and history remain available if native delivery is
+unsupported or fails.
+
+Native delivery requires macOS or Windows, OS notification permission, and
+OS focus settings that allow Phi alerts. macOS requires a code-signed app.
+Windows uses the app's `dev.phi.desktop` AppUserModelID. Notification titles
+and messages are visible to the OS and can contain file names, paths, or
+backend error text.
+
+The page-local queue keeps at most 100 previews and bounds titles to 200
+characters and messages to 2,000. The host drops entries older than 60 seconds
+or more than five seconds in the future. Only pages that include the updated
+Phi notification producer forward manager entries; older remote servers keep
+their existing behavior but do not gain this forwarding from a desktop update.
+Manager alerts are separate from the existing terminal and Sync Board alerts;
+one event can produce both, with no cross-source deduplication. The host
+retains at most 100 native notification objects. On Windows, a banner
+timeout does not release the click handler while the app is running, but
+closing the app or evicting an older object ends that guarantee. On macOS,
+object eviction may also remove the corresponding OS alert.
 
 ## Install / build / run
 

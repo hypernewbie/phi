@@ -66,6 +66,102 @@ export const READ_FILE_ACTION_SCRIPT = `(() => {
   return action || null;
 })()`;
 
+/** Atomically reads bounded plain desktop-notification previews from a page. */
+export const READ_DESKTOP_NOTIFICATIONS_SCRIPT = `(() => {
+  try {
+    const slot = window.__phiDesktopNotificationsV1;
+    if (!Array.isArray(slot)) return [];
+    const length = slot.length;
+    const start = Math.max(0, length - 100);
+    const previews = [];
+    for (let index = start; index < length; index++) {
+      try {
+        const record = slot[index];
+        if (typeof record !== 'object' || record === null || Array.isArray(record)) continue;
+        const id = record.id;
+        const profileId = record.profileId;
+        const title = record.title;
+        const message = record.message;
+        const type = record.type;
+        const timestamp = record.timestamp;
+        if (typeof id !== 'string' || id.length === 0 || id.length > 64) continue;
+        if (profileId !== null && (typeof profileId !== 'string' || profileId.length === 0 || profileId.length > 512)) continue;
+        if (typeof title !== 'string' || typeof message !== 'string') continue;
+        if (type !== 'info' && type !== 'success' && type !== 'error') continue;
+        if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) continue;
+        previews.push({ id, profileId, title: title.slice(0, 200), message: message.slice(0, 2000), type, timestamp });
+      } catch {}
+    }
+    if (window.__phiDesktopNotificationsV1 !== slot) return [];
+    if (!delete window.__phiDesktopNotificationsV1) return [];
+    return previews;
+  } catch {
+    return [];
+  }
+})()`;
+
+export interface DesktopNotificationPreview {
+  id: string;
+  profileId: string | null;
+  title: string;
+  message: string;
+  type: 'info' | 'success' | 'error';
+  timestamp: number;
+}
+
+/** Revalidates page data and drops previews outside the short live window. */
+export function parseDesktopNotificationBatch(
+  raw: unknown,
+  now = Date.now(),
+): DesktopNotificationPreview[] {
+  if (!Array.isArray(raw)) return [];
+  try {
+    const length = raw.length;
+    const start = Math.max(0, length - 100);
+    const previews: DesktopNotificationPreview[] = [];
+    for (let index = start; index < length; index++) {
+      try {
+        const value = raw[index];
+        if (typeof value !== 'object' || value === null || Array.isArray(value))
+          continue;
+        const record = value as Record<string, unknown>;
+        const id = record.id;
+        const profileId = record.profileId;
+        const title = record.title;
+        const message = record.message;
+        const type = record.type;
+        const timestamp = record.timestamp;
+        if (
+          typeof id !== 'string' ||
+          id.length === 0 ||
+          id.length > 64 ||
+          (profileId !== null &&
+            (typeof profileId !== 'string' ||
+              profileId.length === 0 ||
+              profileId.length > 512)) ||
+          typeof title !== 'string' ||
+          title.length > 200 ||
+          typeof message !== 'string' ||
+          message.length > 2_000 ||
+          (type !== 'info' && type !== 'success' && type !== 'error') ||
+          typeof timestamp !== 'number' ||
+          !Number.isFinite(timestamp) ||
+          timestamp < now - 60_000 ||
+          timestamp > now + 5_000
+        ) {
+          continue;
+        }
+        previews.push({ id, profileId, title, message, type, timestamp });
+      } catch {
+        // A bad record cannot discard valid siblings.
+      }
+    }
+    return previews;
+  } catch {
+    return [];
+  }
+}
+
 /**
  * The browser preference key for low power mode. Mirrors
  * LOW_POWER_STORAGE_KEY in web-src/util.ts (duplicated, not imported:

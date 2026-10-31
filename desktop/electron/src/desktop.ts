@@ -43,7 +43,7 @@ import {
   type WebContents,
 } from 'electron';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ProfileViewManager } from './views.js';
@@ -112,6 +112,9 @@ import {
   WAKE_PAGE_SCRIPT,
   lowPowerApplyScript,
   switchToScript,
+  READ_DESKTOP_NOTIFICATIONS_SCRIPT,
+  parseDesktopNotificationBatch,
+  type DesktopNotificationPreview,
 } from './injected.js';
 import type { FileAction, Dividers } from './injected.js';
 import { installFullscreenToggle } from './fullscreen.js';
@@ -389,6 +392,31 @@ const realHealthChecker: HealthChecker = {
   },
 };
 
+interface DesktopNotificationProfileBinding {
+  id: string;
+  origin: string | null;
+}
+
+interface DesktopNotificationSource {
+  contents: WebContents;
+  profileBindings: DesktopNotificationProfileBinding[];
+}
+
+interface DesktopNotificationClassification extends DesktopNotificationSource {
+  kind: 'local' | 'embedded' | 'remote';
+  key: string;
+}
+
+interface DesktopNotificationReadState {
+  epoch: number;
+  inFlight: boolean;
+}
+
+interface DesktopNotificationTarget {
+  profile: ProfileMeta | null;
+  origin: string | null;
+}
+
 export class DesktopHost {
   // --- Host-loop state ---
   mainWindow: BrowserWindow | null = null;
@@ -507,6 +535,16 @@ export class DesktopHost {
   lastHeaderState: HeaderState | null = null;
   /** Last alarm-chime fire time (the burst rate-limit). */
   lastAlarmChimeAt = 0;
+  private readonly desktopNotificationReadStates = new WeakMap<
+    WebContents,
+    DesktopNotificationReadState
+  >();
+  private readonly nativeDesktopNotifications = new Map<
+    Notification,
+    () => void
+  >();
+  private readonly platform = process.platform;
+  private nativeNotificationsUnavailableLogged = false;
 
   /** The live main window, or null before/after it exists (the single-instance gate reads it lazily). */
   window(): BrowserWindow | null {
@@ -1656,6 +1694,449 @@ export class DesktopHost {
             : null;
         this.pushHeaderState(next, activity, workspace);
       });
+    }
+  }
+
+  /** Drains new page notifications from the owned main/profile documents. */
+  pollDesktopNotifications(): void {
+    const win = this.liveMainWindow();
+    const ctrl = this.controller;
+    if (!win || !ctrl) return;
+    const generation = this.sessionGeneration;
+    for (const source of this.desktopNotificationSources(win, ctrl)) {
+      const classified = this.classifyDesktopNotificationSource(
+        source,
+        win,
+        ctrl,
+      );
+      if (!classified) continue;
+      const readState = this.desktopNotificationReadState(source.contents);
+      if (!readState || readState.inFlight) continue;
+      readState.inFlight = true;
+      const epoch = readState.epoch;
+      let read: Promise<unknown>;
+      try {
+        read = source.contents.executeJavaScript(
+          READ_DESKTOP_NOTIFICATIONS_SCRIPT,
+        );
+      } catch {
+        readState.inFlight = false;
+        console.log('phi-desktop: desktop notification read failed');
+        continue;
+      }
+      void Promise.resolve(read)
+        .then((raw) => {
+          if (
+            !this.isCurrentDesktopNotificationSource(
+              classified,
+              readState,
+              epoch,
+              win,
+              ctrl,
+              generation,
+            )
+          ) {
+            return;
+          }
+          for (const preview of parseDesktopNotificationBatch(raw)) {
+            const current = this.classifyDesktopNotificationSource(
+              this.desktopNotificationMembership(
+                classified.contents,
+                win,
+                ctrl,
+              ),
+              win,
+              ctrl,
+            );
+            if (
+              !current ||
+              !this.sameDesktopNotificationSource(classified, current) ||
+              readState.epoch !== epoch ||
+              !this.isCurrentWindowSession(win, generation)
+            ) {
+              return;
+            }
+            const target = this.resolveDesktopNotificationTarget(
+              current,
+              preview,
+              ctrl,
+            );
+            if (!target) continue;
+            const isCurrentDelivery = () => {
+              if (
+                !this.isCurrentDesktopNotificationSource(
+                  classified,
+                  readState,
+                  epoch,
+                  win,
+                  ctrl,
+                  generation,
+                )
+              ) {
+                return false;
+              }
+              const currentTarget = this.resolveDesktopNotificationTarget(
+                classified,
+                preview,
+                ctrl,
+              );
+              return (
+                currentTarget !== null &&
+                currentTarget.profile?.id === target.profile?.id &&
+                currentTarget.origin === target.origin
+              );
+            };
+            this.showDesktopNotification(
+              preview,
+              target,
+              win,
+              isCurrentDelivery,
+            );
+          }
+        })
+        .catch(() => {
+          console.log('phi-desktop: desktop notification read failed');
+        })
+        .finally(() => {
+          readState.inFlight = false;
+        });
+    }
+  }
+
+  private desktopNotificationSources(
+    win: BrowserWindow,
+    ctrl: Controller,
+  ): DesktopNotificationSource[] {
+    const sources = new Map<WebContents, DesktopNotificationProfileBinding[]>();
+    for (const profile of ctrl.state().profiles) {
+      try {
+        const contents = this.profileViews?.getView(profile.id)?.webContents;
+        if (!contents || contents.isDestroyed()) continue;
+        const profileBindings = sources.get(contents) ?? [];
+        profileBindings.push({
+          id: profile.id,
+          origin: toCanonicalAuthOrigin(profile.origin),
+        });
+        sources.set(contents, profileBindings);
+      } catch {
+        // A removed or detached profile view is not an owned source.
+      }
+    }
+    const mainContents = win.webContents;
+    if (mainContents && !mainContents.isDestroyed())
+      sources.set(mainContents, []);
+    return [...sources].map(([contents, profileBindings]) => ({
+      contents,
+      profileBindings,
+    }));
+  }
+
+  private desktopNotificationMembership(
+    contents: WebContents,
+    win: BrowserWindow,
+    ctrl: Controller,
+  ): DesktopNotificationSource {
+    if (contents === win.webContents) return { contents, profileBindings: [] };
+    const profileBindings: DesktopNotificationProfileBinding[] = [];
+    for (const profile of ctrl.state().profiles) {
+      try {
+        if (this.profileViews?.getView(profile.id)?.webContents === contents) {
+          profileBindings.push({
+            id: profile.id,
+            origin: toCanonicalAuthOrigin(profile.origin),
+          });
+        }
+      } catch {
+        // Keep resolving other profiles independently.
+      }
+    }
+    return { contents, profileBindings };
+  }
+
+  private classifyDesktopNotificationSource(
+    source: DesktopNotificationSource,
+    win: BrowserWindow,
+    ctrl: Controller,
+  ): DesktopNotificationClassification | null {
+    try {
+      if (source.contents.isDestroyed()) return null;
+      const url = new URL(source.contents.getURL());
+      if (source.contents === win.webContents) {
+        if (url.protocol !== 'file:') return null;
+        const file = path.resolve(fileURLToPath(url));
+        const expected = path.resolve(here, '..', 'web', 'index.html');
+        return file === expected
+          ? {
+              ...source,
+              kind: 'local',
+              key: `local:${file}`,
+            }
+          : null;
+      }
+      if (source.profileBindings.length === 0) return null;
+      if (
+        url.protocol === `${EMBEDDED_SCHEME}:` &&
+        url.host === 'app' &&
+        !url.username &&
+        !url.password &&
+        url.pathname === '/index.html'
+      ) {
+        return {
+          ...source,
+          kind: 'embedded',
+          key: `embedded:${url.protocol}//${url.host}${url.pathname}`,
+        };
+      }
+      if (
+        (url.protocol !== 'http:' && url.protocol !== 'https:') ||
+        url.username ||
+        url.password ||
+        (url.pathname !== '/' && url.pathname !== '/index.html')
+      ) {
+        return null;
+      }
+      const origin = toCanonicalAuthOrigin(url.origin);
+      if (!origin) return null;
+      const matches = ctrl
+        .state()
+        .profiles.filter(
+          (profile) => toCanonicalAuthOrigin(profile.origin) === origin,
+        );
+      if (
+        matches.length !== 1 ||
+        !source.profileBindings.some(
+          (binding) =>
+            binding.id === matches[0].id &&
+            binding.origin === toCanonicalAuthOrigin(matches[0].origin),
+        )
+      )
+        return null;
+      return {
+        ...source,
+        kind: 'remote',
+        key: `remote:${origin}${url.pathname}:${matches[0].id}`,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private desktopNotificationReadState(
+    contents: WebContents,
+  ): DesktopNotificationReadState | null {
+    const existing = this.desktopNotificationReadStates.get(contents);
+    if (existing) return existing;
+    const state: DesktopNotificationReadState = { epoch: 0, inFlight: false };
+    try {
+      contents.on('did-start-navigation', (details) => {
+        if (details.isMainFrame && !details.isSameDocument) state.epoch++;
+      });
+      this.desktopNotificationReadStates.set(contents, state);
+      return state;
+    } catch {
+      return null;
+    }
+  }
+
+  private sameDesktopNotificationSource(
+    left: DesktopNotificationClassification,
+    right: DesktopNotificationClassification,
+  ): boolean {
+    return (
+      left.contents === right.contents &&
+      left.kind === right.kind &&
+      left.key === right.key &&
+      left.profileBindings.length === right.profileBindings.length &&
+      left.profileBindings.every(
+        (binding, index) =>
+          binding.id === right.profileBindings[index].id &&
+          binding.origin === right.profileBindings[index].origin,
+      )
+    );
+  }
+
+  private isCurrentDesktopNotificationSource(
+    source: DesktopNotificationClassification,
+    readState: DesktopNotificationReadState,
+    epoch: number,
+    win: BrowserWindow,
+    ctrl: Controller,
+    generation: number,
+  ): boolean {
+    if (
+      !this.isCurrentWindowSession(win, generation) ||
+      this.controller !== ctrl ||
+      readState.epoch !== epoch
+    ) {
+      return false;
+    }
+    const current = this.classifyDesktopNotificationSource(
+      this.desktopNotificationMembership(source.contents, win, ctrl),
+      win,
+      ctrl,
+    );
+    return (
+      current !== null && this.sameDesktopNotificationSource(source, current)
+    );
+  }
+
+  private resolveDesktopNotificationTarget(
+    source: DesktopNotificationClassification,
+    preview: DesktopNotificationPreview,
+    ctrl: Controller,
+  ): DesktopNotificationTarget | null {
+    const profiles = ctrl.state().profiles;
+    if (source.kind === 'local') {
+      if (preview.profileId === null) return { profile: null, origin: null };
+      const profile = profiles.find((item) => item.id === preview.profileId);
+      const origin = profile ? toCanonicalAuthOrigin(profile.origin) : null;
+      return profile && origin ? { profile, origin } : null;
+    }
+    if (source.kind === 'embedded') {
+      if (preview.profileId === null) return null;
+      const profile = profiles.find((item) => item.id === preview.profileId);
+      const origin = profile ? toCanonicalAuthOrigin(profile.origin) : null;
+      const binding = source.profileBindings.find(
+        (item) => item.id === preview.profileId,
+      );
+      return profile && origin && binding?.origin === origin
+        ? { profile, origin }
+        : null;
+    }
+    let sourceOrigin: string;
+    try {
+      sourceOrigin =
+        toCanonicalAuthOrigin(new URL(source.contents.getURL()).origin) ?? '';
+    } catch {
+      return null;
+    }
+    const matches = profiles.filter(
+      (item) => toCanonicalAuthOrigin(item.origin) === sourceOrigin,
+    );
+    const profile = matches.length === 1 ? matches[0] : null;
+    const origin = profile ? toCanonicalAuthOrigin(profile.origin) : null;
+    if (
+      !profile ||
+      !origin ||
+      !source.profileBindings.some(
+        (binding) => binding.id === profile.id && binding.origin === origin,
+      ) ||
+      (preview.profileId !== null && preview.profileId !== profile.id)
+    ) {
+      return null;
+    }
+    return { profile, origin };
+  }
+
+  private showDesktopNotification(
+    preview: DesktopNotificationPreview,
+    target: DesktopNotificationTarget,
+    win: BrowserWindow,
+    isCurrentDelivery: () => boolean,
+  ): void {
+    if (!isCurrentDelivery() || this.isFocusedVisibleWindow(win)) {
+      return;
+    }
+    if (this.platform !== 'darwin' && this.platform !== 'win32') return;
+    try {
+      if (!Notification.isSupported()) {
+        if (!this.nativeNotificationsUnavailableLogged) {
+          this.nativeNotificationsUnavailableLogged = true;
+          console.log('phi-desktop: native notifications unavailable');
+        }
+        return;
+      }
+    } catch {
+      console.log('phi-desktop: native notifications unavailable');
+      return;
+    }
+    const profile = target.profile;
+    // Windows toast group identifiers are limited to 64 characters.
+    const groupId = profile
+      ? createHash('sha256').update(profile.id).digest('hex')
+      : 'phi-global';
+    const title = (
+      profile
+        ? `Phi · ${profile.name} · ${preview.title}`
+        : `Phi · ${preview.title}`
+    ).slice(0, 200);
+    let notification: Notification;
+    try {
+      notification = new Notification({
+        groupId,
+        groupTitle: profile?.name ?? 'Phi',
+        title,
+        body: preview.message,
+      });
+    } catch {
+      console.log('phi-desktop: native notification creation failed');
+      return;
+    }
+    const capturedId = profile?.id ?? null;
+    const capturedOrigin = target.origin;
+    const release = () => {
+      this.nativeDesktopNotifications.delete(notification);
+      try {
+        notification.removeListener('click', onClick);
+        notification.removeListener('close', onClose);
+        notification.removeListener('failed', onFailed);
+      } catch {
+        // Release is best-effort; native teardown must not block the host.
+      }
+    };
+    const onClick = () => {
+      release();
+      let current: ProfileMeta | undefined;
+      try {
+        current =
+          capturedId === null
+            ? undefined
+            : this.controller
+                ?.state()
+                .profiles.find(
+                  (item) =>
+                    item.id === capturedId &&
+                    toCanonicalAuthOrigin(item.origin) === capturedOrigin,
+                );
+      } catch {
+        current = undefined;
+      }
+      if (current) this.focusProfile(current);
+      else this.foreground();
+    };
+    const onClose = (details: { reason?: string }) => {
+      if (this.platform !== 'win32' || details.reason === 'userCanceled') {
+        release();
+      }
+    };
+    const onFailed = () => {
+      release();
+      console.log('phi-desktop: native notification failed');
+    };
+    try {
+      notification.on('click', onClick);
+      notification.on('close', onClose);
+      notification.on('failed', onFailed);
+      this.nativeDesktopNotifications.set(notification, release);
+      while (this.nativeDesktopNotifications.size > 100) {
+        this.nativeDesktopNotifications.values().next().value?.();
+      }
+      if (!isCurrentDelivery() || this.isFocusedVisibleWindow(win)) {
+        release();
+        return;
+      }
+      notification.show();
+    } catch {
+      release();
+      console.log('phi-desktop: native notification show failed');
+    }
+  }
+
+  private isFocusedVisibleWindow(win: BrowserWindow): boolean {
+    try {
+      return win.isFocused() && win.isVisible() && !win.isMinimized();
+    } catch {
+      return true;
     }
   }
 
@@ -2966,6 +3447,8 @@ export class DesktopHost {
         clearInterval(this.fileActionInterval);
         this.fileActionInterval = null;
       }
+      for (const release of [...this.nativeDesktopNotifications.values()])
+        release();
       // Unregister every active global hotkey, then tear the tray down (icon
       // removed).
       for (const reg of this.hotkeyRegistrations) reg.unregister();
@@ -5055,7 +5538,10 @@ export class DesktopHost {
     // (never reached in smoke mode — the smoke gate returns before this
     // line).
     if (this.cpuInterval === null) {
-      this.cpuInterval = setInterval(() => this.pollCpu(), 2_000);
+      this.cpuInterval = setInterval(() => {
+        this.pollCpu();
+        this.pollDesktopNotifications();
+      }, 2_000);
     }
     // Poll the active view for a recorded file-tree gesture at a short
     // cadence (never reached in smoke mode — the smoke gate returns before

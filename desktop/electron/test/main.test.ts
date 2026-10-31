@@ -16,10 +16,11 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
-// Importing the channel constants also typechecks the src modules; the
-// 'electron' import inside single-instance.ts is inert outside Electron
-// (the npm package exports a path string), so this is safe under vitest.
+import { describe, expect, it, vi } from 'vitest';
+// Only channel constants are needed. Stub Electron so importing
+// single-instance.ts cannot load its npm package or trigger installation.
+vi.mock('electron', () => ({ app: {} }));
+
 import { FORWARD_CHANNEL } from '../src/single-instance.js';
 import { DEEPLINK_CHANNEL } from '../src/deeplink.js';
 import {
@@ -53,6 +54,16 @@ describe('src/main.ts + src/desktop.ts (phase-1 Electron entry)', () => {
     expect(desktopSource).toContain('BrowserWindow');
     expect(mainSource).toContain('app.whenReady');
     expect(desktopSource).toContain('new BrowserWindow(');
+  });
+
+  it('sets the Windows notification identity before host startup', () => {
+    const appIdIndex = mainSource.indexOf(
+      "app.setAppUserModelId('dev.phi.desktop')",
+    );
+    const hostIndex = mainSource.indexOf('const host = new DesktopHost()');
+    expect(mainSource).toContain("if (process.platform === 'win32')");
+    expect(appIdIndex).toBeGreaterThan(-1);
+    expect(appIdIndex).toBeLessThan(hostIndex);
   });
 
   it('registers the phi-app embedded privileged scheme before whenReady', () => {
@@ -931,7 +942,7 @@ describe('src/desktop.ts (close-to-tray lifecycle)', () => {
   });
 
   it('registers the close interception on the main window only (child windows close normally)', () => {
-    const closeHandlers = desktopSource.match(/\.on\('close'/g) ?? [];
+    const closeHandlers = desktopSource.match(/win\.on\('close'/g) ?? [];
     expect(closeHandlers).toHaveLength(1);
     // The picker child window creation block registers no close handler.
     const pickerIdx = desktopSource.indexOf(

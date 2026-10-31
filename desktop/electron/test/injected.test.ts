@@ -10,6 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   INSTALL_FILE_ACTION_SCRIPT,
   READ_FILE_ACTION_SCRIPT,
+  READ_DESKTOP_NOTIFICATIONS_SCRIPT,
+  parseDesktopNotificationBatch,
   parseFileAction,
   toastErrorScript,
   READ_DIVIDERS_SCRIPT,
@@ -94,6 +96,7 @@ describe('the injected script constants', () => {
   it('are fixed constants with no template interpolation (never page-data interpolated)', () => {
     expect(INSTALL_FILE_ACTION_SCRIPT).not.toContain('${');
     expect(READ_FILE_ACTION_SCRIPT).not.toContain('${');
+    expect(READ_DESKTOP_NOTIFICATIONS_SCRIPT).not.toContain('${');
   });
 
   it('install the listeners on the documented fixed selectors', () => {
@@ -117,6 +120,119 @@ describe('the injected script constants', () => {
 
   it('read-and-clear the recorded gesture field', () => {
     expect(READ_FILE_ACTION_SCRIPT).toContain('delete window.__phiFileAction');
+  });
+});
+
+describe('desktop notification reads', () => {
+  it('reads, copies, and clears bounded desktop notification records', () => {
+    const fields = windowField();
+    fields.__phiDesktopNotificationsV1 = [
+      null,
+      {
+        id: 'n1',
+        profileId: 'profile-a',
+        title: 't'.repeat(201),
+        message: 'm'.repeat(2_001),
+        type: 'success',
+        timestamp: Date.now(),
+      },
+    ];
+
+    expect(window.eval(READ_DESKTOP_NOTIFICATIONS_SCRIPT)).toEqual([
+      {
+        id: 'n1',
+        profileId: 'profile-a',
+        title: 't'.repeat(200),
+        message: 'm'.repeat(2_000),
+        type: 'success',
+        timestamp: expect.any(Number),
+      },
+    ]);
+    expect(fields.__phiDesktopNotificationsV1).toBeUndefined();
+    expect(window.eval(READ_DESKTOP_NOTIFICATIONS_SCRIPT)).toEqual([]);
+  });
+
+  it('skips a throwing record getter without losing valid siblings', () => {
+    const fields = windowField();
+    const broken = Object.defineProperty({}, 'id', {
+      get() {
+        throw new Error('broken page record');
+      },
+    });
+    fields.__phiDesktopNotificationsV1 = [
+      broken,
+      {
+        id: 'good',
+        profileId: null,
+        title: 'Notice',
+        message: 'Message',
+        type: 'info',
+        timestamp: Date.now(),
+      },
+    ];
+
+    expect(window.eval(READ_DESKTOP_NOTIFICATIONS_SCRIPT)).toHaveLength(1);
+    expect(fields.__phiDesktopNotificationsV1).toBeUndefined();
+  });
+
+  it('returns no records when the source slot changes during the read', () => {
+    const fields = windowField();
+    const slot = [
+      {
+        id: 'n1',
+        profileId: null,
+        title: 'Notice',
+        message: 'Message',
+        type: 'info',
+        timestamp: Date.now(),
+      },
+    ];
+    let reads = 0;
+    Object.defineProperty(fields, '__phiDesktopNotificationsV1', {
+      configurable: true,
+      get: () => (++reads === 1 ? slot : []),
+    });
+
+    expect(window.eval(READ_DESKTOP_NOTIFICATIONS_SCRIPT)).toEqual([]);
+    expect(slot).toHaveLength(1);
+    Reflect.deleteProperty(fields, '__phiDesktopNotificationsV1');
+  });
+});
+
+describe('parseDesktopNotificationBatch', () => {
+  const now = 100_000;
+  const valid = {
+    id: 'n1',
+    profileId: 'profile-a',
+    title: 'Notice',
+    message: 'Message',
+    type: 'error',
+    timestamp: now,
+  };
+
+  it('revalidates plain records and the 60-second/five-second live window', () => {
+    expect(
+      parseDesktopNotificationBatch(
+        [
+          { ...valid, timestamp: now - 60_001 },
+          { ...valid, timestamp: now + 5_001 },
+          { ...valid, id: 'x'.repeat(65) },
+          valid,
+        ],
+        now,
+      ),
+    ).toEqual([valid]);
+  });
+
+  it('ignores throwing getters and keeps valid siblings', () => {
+    const broken = Object.defineProperty({}, 'id', {
+      get() {
+        throw new Error('bad record');
+      },
+    });
+    expect(parseDesktopNotificationBatch([broken, valid], now)).toEqual([
+      valid,
+    ]);
   });
 });
 

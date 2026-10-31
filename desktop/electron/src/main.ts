@@ -155,6 +155,10 @@ try {
   // Non-fatal
 }
 
+if (process.platform === 'win32') {
+  app.setAppUserModelId('dev.phi.desktop');
+}
+
 const host = new DesktopHost();
 
 // --- Single-instance gate ---

@@ -1,4 +1,5 @@
 import { backendStores, MAX_BACKEND_STORES, } from './backend-store.js';
+import { queueDesktopNotification } from './desktop-notifications.js';
 const DEFAULT_DURATION = 6000;
 const MAX_DURATION = 2_147_483_647;
 const MAX_RECORDS = 100;
@@ -73,6 +74,17 @@ function normalizeMetadataList(value) {
         entries.push(entry);
     }
     return entries;
+}
+function forwardDesktopNotification(entry, store) {
+    const profileId = store?.profileId;
+    queueDesktopNotification({
+        id: entry.id,
+        profileId: profileId && profileId !== '__default__' ? profileId : null,
+        title: entry.title,
+        message: entry.message,
+        type: entry.type,
+        timestamp: entry.timestamp,
+    });
 }
 function parseStoredNotifications(raw) {
     if (!raw || raw.length > MAX_STORAGE_TEXT)
@@ -453,6 +465,7 @@ export class NotificationManager {
         context.snapshot.unshift(metadata);
         context.snapshot.splice(MAX_RECORDS);
         this.scheduleWrite(context);
+        forwardDesktopNotification(metadata, context.store);
     }
     endContext() {
         if (this.destroyed)
@@ -743,6 +756,7 @@ export class NotificationManager {
         this.announce(entry);
         this.renderHistory();
         this.updateControls();
+        forwardDesktopNotification(entry, entry.context?.store ?? null);
         return toast;
     }
     showReady(message, options, paneId) {
@@ -1279,7 +1293,7 @@ export class NotificationManager {
         this.renderHistory();
         this.updateControls();
     }
-    importLegacyToast(toast) {
+    importLegacyToast(toast, forward = false) {
         const type = toast.classList.contains('toast-error')
             ? 'error'
             : toast.classList.contains('toast-success')
@@ -1301,6 +1315,9 @@ export class NotificationManager {
         this.entriesById.set(entry.id, entry);
         this.trimHistory();
         this.announce(entry);
+        if (forward) {
+            forwardDesktopNotification(entry, entry.context?.store ?? null);
+        }
         return entry;
     }
     makeEntry(options) {
@@ -1364,7 +1381,7 @@ export class NotificationManager {
                     }
                     continue;
                 }
-                this.importLegacyToast(node);
+                this.importLegacyToast(node, true);
             }
         }
     }
