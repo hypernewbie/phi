@@ -142,6 +142,7 @@ export function createStructuredTranscript(
     const capturedLength = messages.length;
     const raw = messages;
     return {
+        identity: raw as object,
         get length(): number {
             return capturedLength;
         },

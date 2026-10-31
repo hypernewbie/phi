@@ -1912,6 +1912,7 @@ describe('Pi RPC transcript controller', () => {
             ),
         ).toHaveLength(1);
         expect(root.textContent).not.toContain('secondsecond');
+        chat.destroy();
     });
 
     it('does not resurrect a prompt its own idle hydrate retired', async () => {

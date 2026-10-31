@@ -39,7 +39,10 @@ import {
     SyncboardRequest,
     SyncboardResponse,
     SyncboardOutcome,
+    TranscriptSearchMatch,
+    TranscriptSearchResponse,
 } from './gen/bridge.js';
+import type { TranscriptSearchRequest } from './gen/bridge.js';
 import { BridgeChannel, type ChannelCreds } from './channel.js';
 import { InvalidTargetError } from './endpoint.js';
 import { PROTOCOL_VERSION } from './protocol.js';
@@ -52,6 +55,7 @@ import { CAPABILITY_RELOAD } from './protocol.js';
 import { CAPABILITY_SKILLS } from './protocol.js';
 import { CAPABILITY_SYNCBOARD } from './protocol.js';
 import { CAPABILITY_THINKING } from './protocol.js';
+import { CAPABILITY_TRANSCRIPT_SEARCH } from './protocol.js';
 import { MAX_COMPACT_IDENTITY_CHARS } from './protocol.js';
 import { MAX_JOURNAL_RECORDS } from './protocol.js';
 import { MAX_MESSAGE_BYTES } from './protocol.js';
@@ -74,11 +78,21 @@ import { isHistoryReaderAvailable } from './history-reader.js';
 import { readEditorHistory } from './history-reader.js';
 import { invokeNativeReload } from './native-reload.js';
 import type { ReloadLatchState } from './native-reload.js';
+import {
+    isTranscriptSearchAvailable,
+    isTranscriptSearchQuery,
+    MAX_TRANSCRIPT_CONCURRENT_READS,
+    searchTranscriptPage,
+    TRANSCRIPT_SEARCH_DEADLINE_MS,
+    type TranscriptSearchPage,
+    type TranscriptSessionManager,
+} from './transcript-search.js';
 
 /** Structural Pi session view; satisfied by both pinned host versions. */
 export interface PiSessionView {
     getSessionId(): string;
     getLeafId(): string | null;
+    getBranch?(fromId?: string): readonly unknown[];
 }
 
 /** The live host model object, for provider routing. Never copied. */
@@ -265,6 +279,16 @@ export interface RuntimeChannel {
      * edges flush instead of dropping; never rejects.
      */
     drainAndClose(timeoutMs: number): Promise<void>;
+}
+
+interface TranscriptSearchOperation {
+    readonly requestId: string;
+    readonly channel: RuntimeChannel;
+    readonly sessionId: string;
+    readonly controller: AbortController;
+    readonly deadlineAt: number;
+    readonly timer: ReturnType<typeof setTimeout>;
+    cancelled: boolean;
 }
 
 interface JournalRow {
@@ -501,6 +525,9 @@ export class Runtime {
     private syncboardAccepted = false;
     private syncboardSeq = 0n;
     private syncboardPending = new Map<string, SyncboardWaiter>();
+    private transcriptSearchAccepted = false;
+    private readonly transcriptSearchReads =
+        new Set<TranscriptSearchOperation>();
     /** getContextUsage present on the latest event context. */
     private contextApi = false;
     /** compact/isIdle/hasPendingMessages present on the latest context. */
@@ -974,6 +1001,7 @@ export class Runtime {
             clearTimeout(this.compactSettleTimer);
             this.compactSettleTimer = null;
         }
+        this.cancelTranscriptSearches();
         // Drain, don't drop: session_shutdown lands milliseconds
         // after agent_settled, and the settlement edge queued behind
         // context-only snapshots must flush before the stream dies.
@@ -1276,6 +1304,8 @@ export class Runtime {
         if (isHistoryReaderAvailable(this.ui)) caps.push(CAPABILITY_HISTORY);
         if (this.opts.getThinkingLevel && this.opts.setThinkingLevel)
             caps.push(CAPABILITY_THINKING);
+        if (isTranscriptSearchAvailable(this.lastCtx?.sessionManager))
+            caps.push(CAPABILITY_TRANSCRIPT_SEARCH);
         // Skills need both host calls: the list and the invocation.
         if (this.opts.getSkills && this.opts.invokeSkill)
             caps.push(CAPABILITY_SKILLS);
@@ -1345,6 +1375,7 @@ export class Runtime {
         this.reloadAccepted = false;
         this.skillsAccepted = false;
         this.setSyncboardAccepted(false);
+        this.transcriptSearchAccepted = false;
         // Reconnect carries a fresh baseline: resample through the
         // latest context so the Hello never replays a stale reading.
         if (this.lastCtx) this.sampleTelemetry(this.lastCtx);
@@ -1377,6 +1408,9 @@ export class Runtime {
                 this.setSyncboardAccepted(
                     this.opts.syncboardEnabled === true &&
                         accepted.capabilities.includes(CAPABILITY_SYNCBOARD),
+                );
+                this.transcriptSearchAccepted = accepted.capabilities.includes(
+                    CAPABILITY_TRANSCRIPT_SEARCH,
                 );
             }
         } catch (err) {
@@ -1468,6 +1502,11 @@ export class Runtime {
             this.syncboardAccepted
         ) {
             this.onSyncboardResponse(msg.payload.value);
+        } else if (
+            msg.payload?.$case === 'transcriptSearchRequest' &&
+            this.transcriptSearchAccepted
+        ) {
+            this.onTranscriptSearchRequest(msg.payload.value);
         }
     }
 
@@ -1599,6 +1638,226 @@ export class Runtime {
             this.opts.onSyncboardAvailability?.(available);
         } catch {
             // Syncboard registration errors must not disturb the bridge.
+        }
+    }
+
+    private onTranscriptSearchRequest(request: TranscriptSearchRequest): void {
+        const channel = this.channel;
+        const manager = this.lastCtx?.sessionManager;
+        if (
+            !channel ||
+            this.shutdownRequested ||
+            typeof request.requestId !== 'string' ||
+            request.requestId === '' ||
+            Buffer.byteLength(request.requestId, 'utf8') > 64
+        )
+            return;
+        const unavailable = (): TranscriptSearchPage => ({
+            sessionId: request.sessionId,
+            anchorLeafId: request.initial ? '' : request.anchorLeafId,
+            nextIndex: request.startIndex,
+            matches: [],
+            complete: false,
+            unavailable: true,
+        });
+        if (
+            !isTranscriptSearchAvailable(manager) ||
+            !isTranscriptSearchQuery(request.query) ||
+            request.sessionId !== this.sessionId ||
+            (request.initial
+                ? request.startIndex !== 0 || request.anchorLeafId !== ''
+                : request.startIndex === 0 || request.anchorLeafId === '')
+        ) {
+            this.sendTranscriptSearchResponse(
+                channel,
+                request.requestId,
+                unavailable(),
+            );
+            return;
+        }
+        try {
+            if (manager.getSessionId() !== request.sessionId) {
+                this.sendTranscriptSearchResponse(
+                    channel,
+                    request.requestId,
+                    unavailable(),
+                );
+                return;
+            }
+        } catch {
+            this.sendTranscriptSearchResponse(
+                channel,
+                request.requestId,
+                unavailable(),
+            );
+            return;
+        }
+        if (
+            this.transcriptSearchReads.size >= MAX_TRANSCRIPT_CONCURRENT_READS
+        ) {
+            this.sendTranscriptSearchResponse(
+                channel,
+                request.requestId,
+                unavailable(),
+            );
+            return;
+        }
+        const controller = new AbortController();
+        const deadlineAt = Date.now() + TRANSCRIPT_SEARCH_DEADLINE_MS;
+        const timer = setTimeout(
+            () => controller.abort(),
+            TRANSCRIPT_SEARCH_DEADLINE_MS,
+        );
+        const operation: TranscriptSearchOperation = {
+            requestId: request.requestId,
+            channel,
+            sessionId: request.sessionId,
+            controller,
+            deadlineAt,
+            timer,
+            cancelled: false,
+        };
+        this.transcriptSearchReads.add(operation);
+        void this.runTranscriptSearch(manager, request, operation);
+    }
+
+    private async runTranscriptSearch(
+        manager: TranscriptSessionManager,
+        request: TranscriptSearchRequest,
+        operation: TranscriptSearchOperation,
+    ): Promise<void> {
+        try {
+            const page = await searchTranscriptPage(manager, {
+                query: request.query,
+                expectedSessionId: request.sessionId,
+                initial: request.initial,
+                anchorLeafId: request.anchorLeafId,
+                startIndex: request.startIndex,
+                signal: operation.controller.signal,
+                deadlineAt: operation.deadlineAt,
+            });
+            if (!this.ownsTranscriptSearch(operation)) return;
+            this.sendTranscriptSearchResponse(
+                operation.channel,
+                operation.requestId,
+                page.unavailable
+                    ? {
+                          sessionId: request.sessionId,
+                          anchorLeafId: request.initial
+                              ? ''
+                              : request.anchorLeafId,
+                          nextIndex: request.startIndex,
+                          matches: [],
+                          complete: false,
+                          unavailable: true,
+                      }
+                    : page,
+            );
+        } catch {
+            if (this.ownsTranscriptSearch(operation)) {
+                this.sendTranscriptSearchResponse(
+                    operation.channel,
+                    operation.requestId,
+                    {
+                        sessionId: request.sessionId,
+                        anchorLeafId: request.initial
+                            ? ''
+                            : request.anchorLeafId,
+                        nextIndex: request.startIndex,
+                        matches: [],
+                        complete: false,
+                        unavailable: true,
+                    },
+                );
+            }
+        } finally {
+            clearTimeout(operation.timer);
+            this.transcriptSearchReads.delete(operation);
+        }
+    }
+
+    private ownsTranscriptSearch(
+        operation: TranscriptSearchOperation,
+    ): boolean {
+        if (
+            operation.cancelled ||
+            this.shutdownRequested ||
+            this.channel !== operation.channel ||
+            this.sessionId !== operation.sessionId
+        )
+            return false;
+        try {
+            return (
+                this.lastCtx?.sessionManager.getSessionId() ===
+                operation.sessionId
+            );
+        } catch {
+            return false;
+        }
+    }
+
+    private sendTranscriptSearchResponse(
+        channel: RuntimeChannel,
+        requestId: string,
+        page: TranscriptSearchPage,
+    ): void {
+        let response = this.transcriptSearchResponse(requestId, page);
+        if (PiToPhi.encode(response).finish().length > MAX_MESSAGE_BYTES) {
+            response = this.transcriptSearchResponse(requestId, {
+                sessionId: page.sessionId,
+                anchorLeafId: page.anchorLeafId,
+                nextIndex: page.nextIndex,
+                matches: [],
+                complete: false,
+                unavailable: true,
+            });
+        }
+        if (!channel.sendNonfatal(response) && !page.unavailable) {
+            channel.sendNonfatal(
+                this.transcriptSearchResponse(requestId, {
+                    sessionId: page.sessionId,
+                    anchorLeafId: page.anchorLeafId,
+                    nextIndex: page.nextIndex,
+                    matches: [],
+                    complete: false,
+                    unavailable: true,
+                }),
+            );
+        }
+    }
+
+    private transcriptSearchResponse(
+        requestId: string,
+        page: TranscriptSearchPage,
+    ): PiToPhi {
+        return {
+            paneId: this.opts.creds.pane,
+            processId: this.opts.creds.process,
+            runtimeGeneration: this.opts.generation,
+            payload: {
+                $case: 'transcriptSearchResponse',
+                value: TranscriptSearchResponse.create({
+                    requestId,
+                    sessionId: page.sessionId,
+                    anchorLeafId: page.anchorLeafId,
+                    nextIndex: page.nextIndex,
+                    matches: page.matches.map((match) =>
+                        TranscriptSearchMatch.create(match),
+                    ),
+                    complete: page.complete,
+                    unavailable: page.unavailable,
+                }),
+            },
+        };
+    }
+
+    private cancelTranscriptSearches(channel?: RuntimeChannel): void {
+        for (const operation of this.transcriptSearchReads) {
+            if (channel && operation.channel !== channel) continue;
+            operation.cancelled = true;
+            clearTimeout(operation.timer);
+            operation.controller.abort();
+            this.transcriptSearchReads.delete(operation);
         }
     }
 
@@ -2699,7 +2958,9 @@ export class Runtime {
 
     private onStreamEnd(status: ServiceError | null): void {
         this.setSyncboardAccepted(false);
-        this.channel?.close();
+        const channel = this.channel;
+        this.cancelTranscriptSearches(channel ?? undefined);
+        channel?.close();
         this.channel = null;
         if (this.connectedAt !== null) {
             if (Date.now() - this.connectedAt >= RECONNECT_STABLE_MS) {

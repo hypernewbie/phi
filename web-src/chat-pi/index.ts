@@ -7,7 +7,11 @@ import { savePersisted } from './persist.js';
 import { renderedUserText } from './render.js';
 import type { PiRpcStatus } from './render.js';
 import { createReviewTranscriptView } from '../review-transcript.js';
-import type { ActiveTurnState } from '../review-transcript.js';
+import type {
+    ActiveTurnState,
+    TranscriptSearchResult,
+    TranscriptSearchUpdate,
+} from '../review-transcript.js';
 import { createSubagentStrip, createSubagentViewer } from './subagents.js';
 
 export interface PiModel {
@@ -39,6 +43,11 @@ export interface ChatPiHandle {
     resetChat(): Promise<unknown>;
     interrupt(): Promise<unknown>;
     setName(name: string): Promise<unknown>;
+    searchTranscript(
+        query: string,
+        onUpdate: (update: TranscriptSearchUpdate) => void,
+    ): () => void;
+    revealTranscriptSearchResult(result: TranscriptSearchResult): boolean;
     refreshFleet(): void;
     closeSubagentViewer(): boolean;
 }
@@ -1410,6 +1419,7 @@ export function mountChatPi(
             destroyed = true;
             off();
             offState();
+            view.cancelSearch();
             client.close();
             subagentViewer.destroy();
             strip.destroy();
@@ -1435,6 +1445,10 @@ export function mountChatPi(
         compact,
         interrupt,
         setName,
+        searchTranscript: (query, onUpdate) =>
+            destroyed ? () => {} : view.searchStructured(query, onUpdate),
+        revealTranscriptSearchResult: (result) =>
+            !destroyed && view.revealSearchResult(result),
         refreshFleet: (): void => {
             // Tab re-activation: repaint this pane's last fleet snapshot
             // (or hide the shared strip when this pane has none).

@@ -3,7 +3,7 @@
 import { PTYWebSocket } from './ws.js';
 import { modelRequestJson } from './model-request.js';
 import { terminalSnapshot, resetTerminalState } from './terminal-state.js';
-import { terminalHistoryMethods } from './terminal-history.js';
+import { terminalHistoryMethods, HISTORY_BOOK_BYTES } from './terminal-history.js';
 import { normalizePath } from './sessions.js';
 import {
     projectWorktreeLabel,
@@ -59,9 +59,12 @@ import {
     getCoder,
     isShell,
 } from './coders.js';
+import { createSessionSearchBar } from './session-search.js';
 import {
     mountRpcChat,
     rpcChatSend,
+    rpcChatSearch,
+    rpcChatReveal,
     destroyRpcChat,
     getPiRpcStatus,
     getPiRpcControls,
@@ -79,6 +82,125 @@ import {
 } from './chat-pi/controller.js';
 import { formatPiRpcStatus } from './chat-pi/render.js';
 import { ACCENT_COLORS } from './theme.js';
+
+const TERMINAL_ARCHIVE_CACHE_KEY = 'phi_session_archive_search_v1';
+const TERMINAL_ARCHIVE_CACHE_SCHEMA = 1;
+const TERMINAL_ARCHIVE_CACHE_LIMIT = 1 << 20;
+const TERMINAL_ARCHIVE_RESULT_LIMIT = 200;
+const TERMINAL_ARCHIVE_SNIPPET_LIMIT = 2048;
+const TERMINAL_ARCHIVE_CACHE_ENCODER = new TextEncoder();
+let terminalArchiveCacheStorageKey = '';
+let terminalArchiveCacheEntries = [];
+
+function validTerminalArchiveCacheEntry(entry) {
+    return Boolean(
+        entry &&
+            entry.source === 'retained' &&
+            typeof entry.paneId === 'string' &&
+            entry.paneId.length > 0 &&
+            entry.paneId.length <= 128 &&
+            typeof entry.sessionId === 'string' &&
+            entry.sessionId.length <= 256 &&
+            Number.isSafeInteger(entry.epoch) &&
+            entry.epoch >= 0 &&
+            typeof entry.query === 'string' &&
+            Array.from(entry.query).length <= 256 &&
+            TERMINAL_ARCHIVE_CACHE_ENCODER.encode(entry.query).byteLength <= 1024 &&
+            Number.isSafeInteger(entry.floor) &&
+            entry.floor >= 0 &&
+            Number.isSafeInteger(entry.head) &&
+            entry.head >= entry.floor &&
+            entry.through === entry.head &&
+            entry.complete === true &&
+            typeof entry.capped === 'boolean' &&
+            (entry.updatedAt === undefined ||
+                (Number.isSafeInteger(entry.updatedAt) && entry.updatedAt >= 0)) &&
+            Array.isArray(entry.matches) &&
+            entry.matches.length <= TERMINAL_ARCHIVE_RESULT_LIMIT &&
+            entry.matches.every(
+                (match) =>
+                    match &&
+                    Number.isSafeInteger(match.id) &&
+                    match.id > 0 &&
+                    typeof match.snippet === 'string' &&
+                    TERMINAL_ARCHIVE_CACHE_ENCODER.encode(match.snippet).byteLength <=
+                        TERMINAL_ARCHIVE_SNIPPET_LIMIT,
+            ),
+    );
+}
+
+function readTerminalArchiveCache() {
+    const key = serverKey(TERMINAL_ARCHIVE_CACHE_KEY);
+    if (key === terminalArchiveCacheStorageKey) return terminalArchiveCacheEntries;
+    terminalArchiveCacheStorageKey = key;
+    terminalArchiveCacheEntries = [];
+    try {
+        const raw = localStorage.getItem(key);
+        if (
+            !raw ||
+            TERMINAL_ARCHIVE_CACHE_ENCODER.encode(raw).byteLength >
+                TERMINAL_ARCHIVE_CACHE_LIMIT
+        )
+            return terminalArchiveCacheEntries;
+        const parsed = JSON.parse(raw);
+        if (
+            parsed?.schema === TERMINAL_ARCHIVE_CACHE_SCHEMA &&
+            Array.isArray(parsed.entries)
+        )
+            terminalArchiveCacheEntries = parsed.entries
+                .filter(validTerminalArchiveCacheEntry)
+                .slice(-64);
+    } catch {
+        // Storage denial or corrupt cache falls back to memory.
+    }
+    return terminalArchiveCacheEntries;
+}
+
+function findTerminalArchiveCache(paneId, sessionId, epoch, query) {
+    const entries = readTerminalArchiveCache();
+    return (
+        entries.find(
+            (entry) =>
+                entry.paneId === paneId &&
+                entry.sessionId === sessionId &&
+                entry.epoch === epoch &&
+                entry.query === query,
+        ) || null
+    );
+}
+
+function persistTerminalArchiveCache(entry) {
+    if (!validTerminalArchiveCacheEntry(entry)) return;
+    const entries = readTerminalArchiveCache().filter(
+        (candidate) =>
+            candidate.paneId !== entry.paneId ||
+            candidate.sessionId !== entry.sessionId ||
+            candidate.epoch !== entry.epoch ||
+            candidate.query !== entry.query,
+    );
+    entries.push({ ...entry, updatedAt: Date.now() });
+    let raw = JSON.stringify({
+        schema: TERMINAL_ARCHIVE_CACHE_SCHEMA,
+        entries,
+    });
+    while (
+        entries.length > 0 &&
+        TERMINAL_ARCHIVE_CACHE_ENCODER.encode(raw).byteLength >
+            TERMINAL_ARCHIVE_CACHE_LIMIT
+    ) {
+        entries.shift();
+        raw = JSON.stringify({
+            schema: TERMINAL_ARCHIVE_CACHE_SCHEMA,
+            entries,
+        });
+    }
+    terminalArchiveCacheEntries = entries;
+    try {
+        localStorage.setItem(serverKey(TERMINAL_ARCHIVE_CACHE_KEY), raw);
+    } catch {
+        // Keep the bounded in-memory result when storage is unavailable.
+    }
+}
 
 export const DEFAULT_ANSI_THEME = {
     background: '#08080a',
@@ -522,6 +644,26 @@ const HISTORY_MIN_STEP_BYTES = 4 * 1024;
 // After output stays quiet this long, the client uploads a screen
 // checkpoint so the next attach restores instantly.
 const CHECKPOINT_QUIET_MS = 2000;
+
+function isTerminalFindShortcut(e) {
+    return (
+        e.type === 'keydown' &&
+        !e.altKey &&
+        !e.isComposing &&
+        e.key?.toLowerCase() === 'f' &&
+        ((e.ctrlKey && !e.metaKey && !e.shiftKey) ||
+            (e.metaKey && !e.ctrlKey && !e.shiftKey) ||
+            (e.ctrlKey && e.shiftKey && !e.metaKey))
+    );
+}
+
+function isFindBarTarget(target) {
+    return (
+        typeof Element !== 'undefined' &&
+        target instanceof Element &&
+        target.closest('.find-bar') !== null
+    );
+}
 
 // Each name written through these two helpers keeps at most one entry, so
 // repeated tab selections and overlapping switches cannot grow the User
@@ -1945,7 +2087,8 @@ export class TabManager {
             const t = e.target;
             if (
                 t instanceof Element &&
-                (t.closest('#tab-overflow-dropdown') ||
+                (isFindBarTarget(t) ||
+                    t.closest('#tab-overflow-dropdown') ||
                     t.closest('#tab-overflow-btn') ||
                     t.closest('#sort-tabs-btn') ||
                     t.closest('#desktop-sidebar-toggle') ||
@@ -2558,6 +2701,7 @@ export class TabManager {
         const samePane = prevEpoch !== undefined && prevEpoch === info.epoch;
         if (!samePane || info.ckpt?.bytes) tabInfo._serverStateAvailable = Boolean(info.ckpt?.bytes);
         if (!samePane) {
+            tabInfo._cancelSessionArchiveSearch?.();
             this._cancelHistoryRequest(tabInfo);
             // A different pane lifetime owns a different byte stream.
             pty.hold?.();
@@ -4391,6 +4535,9 @@ export class TabManager {
         );
 
         term.attachCustomKeyEventHandler((e) => {
+            // Let the document handler open the bar exactly once. Returning
+            // false keeps either find chord out of the PTY in both modes.
+            if (isTerminalFindShortcut(e)) return false;
             if (
                 e.type === 'keydown' &&
                 this.app?.handlePanelResizeShortcut?.(e)
@@ -4447,13 +4594,6 @@ export class TabManager {
                 (e.key === 'r' || e.key === 'R')
             ) {
                 this.handleGlobalTabShortcuts(e);
-                return false;
-            }
-            // Support Ctrl+Shift+F inside xterm
-            if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'f') {
-                if (e.type === 'keydown') {
-                    this.handleGlobalTabShortcuts(e);
-                }
                 return false;
             }
             // Support Alt+1..9 (and Cmd+1..9 / Option+1..9 on macOS) tab switching inside xterm
@@ -4528,6 +4668,7 @@ export class TabManager {
         termContainer.addEventListener(
             'wheel',
             (e) => {
+                if (isFindBarTarget(e.target)) return;
                 if (tabInfo._historyBrowsing || tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo)) return;
 
                 const isUp = e.deltaY < 0;
@@ -4556,6 +4697,7 @@ export class TabManager {
         termContainer.addEventListener(
             'touchstart',
             (e) => {
+                if (isFindBarTarget(e.target)) return;
                 if (tabInfo._historyBrowsing || tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo)) return;
                 if (e.touches.length === 1) {
                     termTouchStartY = e.touches[0].clientY;
@@ -4568,6 +4710,7 @@ export class TabManager {
         termContainer.addEventListener(
             'touchmove',
             (e) => {
+                if (isFindBarTarget(e.target)) return;
                 if (tabInfo._historyBrowsing || tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo)) return;
                 if (e.touches.length === 1 && termTouchStartY !== null) {
                     const currentY = e.touches[0].clientY;
@@ -7476,6 +7619,7 @@ export class TabManager {
         // Deactivate current active tab
         const prevTab = this.getActiveTab();
         if (prevTab) {
+            prevTab._cancelSessionArchiveSearch?.();
             if (prevTab.term) {
                 prevTab.isAtBottom =
                     prevTab.term.buffer.active.viewportY >=
@@ -7510,6 +7654,7 @@ export class TabManager {
 
         newTab.tabEl.classList.add('active');
         newTab.termContainer.classList.add('active');
+        newTab._resumeSessionArchiveSearch?.();
         if (newTab.isAttention) {
             this._setTabAttention(newTab, false);
             this.updateDocumentTitle();
@@ -7906,6 +8051,7 @@ export class TabManager {
         this.app?.removeReadyPane?.(paneId);
 
         const wasActive = this.activePaneId === paneId;
+        tab._cancelSessionArchiveSearch?.();
         tab.softClosing = true;
         tab.softCloseStartedAt = Date.now();
         tab.tabEl.classList.add('soft-closed');
@@ -8083,6 +8229,7 @@ export class TabManager {
         if (!tab) return;
         if (!preserveStorage) this.app?.removeReadyPane?.(paneId);
         tab.finalizing = true;
+        tab._cancelSessionArchiveSearch?.();
         this._clearReaderAnchor(tab);
 
         this._cancelHistoryRequest?.(tab);
@@ -10930,6 +11077,7 @@ export class TabManager {
 
     _setCurrentTabSocket(tabInfo, socket) {
         tabInfo._piTitleRevision = -1;
+        if (tabInfo.ws !== socket) tabInfo._cancelSessionArchiveSearch?.();
         tabInfo.ws = socket;
         // A new browser socket restarts bridge ordering: never carry
         // the old server's counter across, and drop freshness until
@@ -12033,79 +12181,1211 @@ export class TabManager {
     toggleFindBar(tabInfo) {
         const existing = tabInfo.termContainer.querySelector('.find-bar');
         if (existing) {
-            existing.remove();
-            if (tabInfo.searchAddon) {
-                tabInfo.searchAddon.clearDecorations();
-            }
-            tabInfo.term.focus();
+            existing.querySelector('.find-input')?.focus({ preventScroll: true });
             return;
         }
 
-        const bar = document.createElement('div');
-        bar.className = 'find-bar';
-        bar.innerHTML = `
-            <input type="text" class="find-input" placeholder="Find in terminal..." />
-            <button class="find-btn find-prev">▲</button>
-            <button class="find-btn find-next">▼</button>
-            <button class="find-btn find-close">✕</button>
-        `;
+        const previousFocus = document.activeElement;
+        const isRpc = tabInfo.coder === 'pi-rpc';
+        const transcriptAvailableAtOpen =
+            !isRpc && this._piBridgeTranscriptSearchEligible(tabInfo);
+        const searchInstance = {};
+        tabInfo._sessionSearchInstance = searchInstance;
+        let activeSource = transcriptAvailableAtOpen ? 'transcript' : 'terminal';
+        let archiveAutoPreferred = !transcriptAvailableAtOpen;
+        let archiveGeneration = 0;
+        let archiveQuery = '';
+        let archiveResults = [];
+        let archiveFreshResults = [];
+        let archiveFreshIds = new Set();
+        let archiveIndex = -1;
+        let archiveThrough = 0;
+        let archiveFloor = 0;
+        let archiveHead = 0;
+        let archiveComplete = false;
+        let archiveCapped = false;
+        let archiveFreshCapped = false;
+        let archiveCached = false;
+        let archiveCacheHead = null;
+        let archiveFailure = null;
+        let archiveController = null;
+        let archiveWorker = null;
+        let archiveWorkerWatchdog = null;
+        let pendingArchiveDirection = null;
+        let pendingArchiveReply = null;
+        let archiveWorkerError = null;
+        let searchBar = null;
+        let cancelRpcSearch = () => {};
+        let transcriptGeneration = 0;
+        let transcriptQuery = '';
+        let transcriptResults = [];
+        let transcriptIndex = -1;
+        let transcriptComplete = false;
+        let transcriptCapped = false;
+        let transcriptOrigin = null;
+        let transcriptController = null;
+        let transcriptDeadline = null;
+        let pendingTranscriptDirection = null;
+        let rpcGeneration = 0;
+        let rpcQuery = '';
+        let rpcResults = [];
+        let rpcIndex = -1;
+        let rpcRevision = null;
+        let rpcComplete = false;
+        let rpcCapped = false;
+        let pendingDirection = null;
 
-        const input = bar.querySelector('.find-input');
-        const prevBtn = bar.querySelector('.find-prev');
-        const nextBtn = bar.querySelector('.find-next');
-        const closeBtn = bar.querySelector('.find-close');
-
-        const doSearch = (direction) => {
-            const val = input.value;
-            if (!val) {
-                if (tabInfo.searchAddon) tabInfo.searchAddon.clearDecorations();
+        const restoreFocus = () => {
+            if (
+                this.tabs?.get(tabInfo.paneId) !== tabInfo ||
+                this.getActiveTab?.() !== tabInfo
+            )
                 return;
-            }
-            if (tabInfo.searchAddon) {
-                if (direction === 'prev') {
-                    tabInfo.searchAddon.findPrevious(val, {
-                        decorations: {
-                            matchBackground: 'rgba(255,255,0,0.3)',
-                            activeMatchBackground: 'rgba(255,165,0,0.5)',
-                        },
-                    });
-                } else {
-                    tabInfo.searchAddon.findNext(val, {
-                        decorations: {
-                            matchBackground: 'rgba(255,255,0,0.3)',
-                            activeMatchBackground: 'rgba(255,165,0,0.5)',
-                        },
-                    });
-                }
+            if (
+                previousFocus instanceof HTMLElement &&
+                previousFocus.isConnected &&
+                (previousFocus === this.inputTextArea ||
+                    tabInfo.termContainer.contains(previousFocus))
+            ) {
+                previousFocus.focus({ preventScroll: true });
+            } else if (tabInfo.term) {
+                tabInfo.term.focus();
+            } else {
+                this.inputTextArea?.focus({ preventScroll: true });
             }
         };
 
-        input.addEventListener('input', () => {
-            doSearch('next');
+        const searchTerminal = (direction, query) => {
+            if (!query) {
+                searchBar?.setStatus('');
+                tabInfo.searchAddon?.clearDecorations();
+                return;
+            }
+            if (!tabInfo.searchAddon) {
+                searchBar?.setStatus('Search is unavailable for this terminal.');
+                return;
+            }
+            const cursorColor = tabInfo.term?.options?.theme?.cursor;
+            const activeMatchBackground =
+                typeof cursorColor === 'string' &&
+                /^#[\da-f]{6}$/i.test(cursorColor)
+                    ? cursorColor
+                    : '#7c6af7';
+            const searchOptions = {
+                decorations: {
+                    matchBackground: `${activeMatchBackground}40`,
+                    activeMatchBackground,
+                },
+            };
+            const found =
+                direction === 'previous'
+                    ? tabInfo.searchAddon.findPrevious(query, searchOptions)
+                    : tabInfo.searchAddon.findNext(query, searchOptions);
+            searchBar?.setStatus(
+                found ? '' : 'No match in loaded terminal output.',
+                !found,
+            );
+        };
+
+        const archiveStatus = () => {
+            if (!archiveQuery) return '';
+            const total = archiveResults.length;
+            const boundary = archiveCached && !archiveComplete
+                ? archiveCacheHead
+                : archiveThrough;
+            if (archiveFailure) {
+                const cached = archiveCached
+                    ? ` Cached results cover output through byte ${archiveCacheHead}.`
+                    : '';
+                return `Retained output search is incomplete.${cached} Loaded output remains available.`;
+            }
+            if (archiveComplete) {
+                const coverage = ` Complete through captured byte ${archiveHead}.`;
+                if (archiveCapped)
+                    return `200 results shown; refine the search.${coverage}`;
+                return total === 0
+                    ? `No matches in retained output.${coverage}`
+                    : `${total} matches in retained output.${coverage}`;
+            }
+            if (archiveCached) {
+                return total === 0
+                    ? `Checking cached retained-output search through byte ${boundary}…`
+                    : `${total} cached matches through byte ${boundary}; checking retained output…`;
+            }
+            return total === 0
+                ? `Searching retained output through captured byte ${archiveHead}…`
+                : `${total} matches so far; scanning retained output through captured byte ${archiveHead}…`;
+        };
+
+        const showArchiveState = () => {
+            if (activeSource === 'retained') {
+                searchBar?.setStatus(archiveStatus(), Boolean(archiveFailure));
+            } else if (archiveFailure && archiveAutoPreferred) {
+                searchBar?.setStatus(
+                    'Retained output unavailable; loaded terminal search remains active.',
+                    true,
+                );
+            }
+        };
+
+        const stopArchiveWorker = (reason = null) => {
+            if (archiveWorkerWatchdog) clearTimeout(archiveWorkerWatchdog);
+            archiveWorkerWatchdog = null;
+            const pending = pendingArchiveReply;
+            pendingArchiveReply = null;
+            archiveWorker?.terminate();
+            archiveWorker = null;
+            if (pending) pending.reject(reason || new Error('archive search canceled'));
+        };
+
+        const saveArchiveMemory = () => {
+            if (!archiveQuery) return;
+            tabInfo._terminalArchiveSearchMemory = {
+                paneId: tabInfo.paneId,
+                sessionId: typeof tabInfo.sessionId === 'string' ? tabInfo.sessionId : '',
+                epoch: tabInfo.paneEpoch,
+                query: archiveQuery,
+                floor: archiveFloor,
+                head: archiveHead,
+                through: archiveThrough,
+                complete: archiveComplete,
+                capped: archiveCapped,
+                results: archiveResults.slice(0, TERMINAL_ARCHIVE_RESULT_LIMIT),
+            };
+        };
+
+        const cancelArchiveSearch = () => {
+            saveArchiveMemory();
+            archiveGeneration++;
+            archiveController?.abort();
+            archiveController = null;
+            stopArchiveWorker();
+        };
+
+        const archiveIsCurrent = (generation, query, paneId, epoch, socket) =>
+            generation === archiveGeneration &&
+            query === archiveQuery &&
+            searchBar?.root.isConnected &&
+            tabInfo._sessionSearchInstance === searchInstance &&
+            this.tabs?.get(paneId) === tabInfo &&
+            !tabInfo.finalizing &&
+            !tabInfo.softClosing &&
+            tabInfo.paneId === paneId &&
+            tabInfo.paneEpoch === epoch &&
+            tabInfo.ws === socket &&
+            this.getActiveTab?.() === tabInfo;
+
+        const activateArchiveSource = () => {
+            if (activeSource === 'retained') return;
+            activeSource = 'retained';
+            searchBar?.setSource('retained');
+            tabInfo.searchAddon?.clearDecorations();
+        };
+
+        const navigateArchive = (direction) => {
+            if (!searchBar || !archiveQuery) return;
+            if (archiveResults.length === 0) {
+                if (!archiveComplete && !archiveFailure) {
+                    pendingArchiveDirection = direction;
+                    searchBar.setStatus('Searching retained output…', false);
+                } else {
+                    searchBar.setPreview(null);
+                    searchBar.setStatus(archiveStatus(), Boolean(archiveFailure));
+                }
+                return;
+            }
+            archiveIndex = archiveIndex < 0
+                ? direction === 'next' ? 0 : archiveResults.length - 1
+                : (archiveIndex + (direction === 'next' ? 1 : -1) + archiveResults.length) % archiveResults.length;
+            searchBar.setPreview(archiveResults[archiveIndex].snippet);
+            searchBar.setStatus(archiveStatus(), Boolean(archiveFailure));
+        };
+
+        const archiveDelay = (delay, signal) => new Promise((resolve, reject) => {
+            if (signal.aborted) {
+                reject(signal.reason || new Error('archive search canceled'));
+                return;
+            }
+            const timer = setTimeout(() => {
+                signal.removeEventListener('abort', abort);
+                resolve();
+            }, delay);
+            const abort = () => {
+                clearTimeout(timer);
+                reject(signal.reason || new Error('archive search canceled'));
+            };
+            signal.addEventListener('abort', abort, { once: true });
         });
 
-        input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                doSearch(e.shiftKey ? 'prev' : 'next');
-            } else if (e.key === 'Escape') {
-                e.preventDefault();
-                bar.remove();
-                if (tabInfo.searchAddon) tabInfo.searchAddon.clearDecorations();
-                tabInfo.term.focus();
+        const archiveReadWithRetries = async (read, signal) => {
+            let lastError = new Error('retained output read failed');
+            const delays = [500, 1500];
+            for (let attempt = 0; attempt < 3; attempt++) {
+                if (signal.aborted)
+                    throw signal.reason || new Error('archive search canceled');
+                const request = new AbortController();
+                const onAbort = () => request.abort(signal.reason);
+                signal.addEventListener('abort', onAbort, { once: true });
+                const timeout = setTimeout(
+                    () => request.abort(new Error('retained output read timed out')),
+                    10_000,
+                );
+                try {
+                    const value = await read(request.signal);
+                    if (signal.aborted)
+                        throw signal.reason || new Error('archive search canceled');
+                    if (value !== null && value !== undefined) return value;
+                    lastError = new Error('retained output read returned no data');
+                } catch (error) {
+                    if (signal.aborted || error?.historyPermanent) throw error;
+                    lastError = error;
+                } finally {
+                    clearTimeout(timeout);
+                    signal.removeEventListener('abort', onAbort);
+                }
+                if (attempt < delays.length) await archiveDelay(delays[attempt], signal);
+            }
+            throw lastError;
+        };
+
+        const waitForArchiveWorker = (expectedType, send) => new Promise((resolve, reject) => {
+            if (!archiveWorker || archiveWorkerError) {
+                reject(archiveWorkerError || new Error('archive worker is unavailable'));
+                return;
+            }
+            if (pendingArchiveReply) {
+                reject(new Error('archive worker command already pending'));
+                return;
+            }
+            const pending = { expectedType, resolve, reject };
+            pendingArchiveReply = pending;
+            archiveWorkerWatchdog = setTimeout(() => {
+                if (pendingArchiveReply !== pending) return;
+                archiveWorkerError = new Error('archive worker timed out');
+                stopArchiveWorker(archiveWorkerError);
+            }, 30_000);
+            try {
+                send();
+            } catch (error) {
+                if (pendingArchiveReply === pending) {
+                    pendingArchiveReply = null;
+                    clearTimeout(archiveWorkerWatchdog);
+                    archiveWorkerWatchdog = null;
+                }
+                reject(error);
             }
         });
 
-        prevBtn.addEventListener('click', () => doSearch('prev'));
-        nextBtn.addEventListener('click', () => doSearch('next'));
-        closeBtn.addEventListener('click', () => {
-            bar.remove();
-            if (tabInfo.searchAddon) tabInfo.searchAddon.clearDecorations();
-            tabInfo.term.focus();
-        });
+        const handleArchiveWorkerMessage = (generation, query, paneId, epoch, socket, jobId, message) => {
+            if (
+                !archiveIsCurrent(generation, query, paneId, epoch, socket) ||
+                message?.jobId !== jobId
+            )
+                return;
+            if (message.type === 'matches') {
+                const queryPattern = new RegExp(
+                    query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+                    'iu',
+                );
+                if (
+                    !Number.isSafeInteger(message.through) ||
+                    message.through < archiveFloor ||
+                    message.through > archiveHead ||
+                    !Array.isArray(message.matches) ||
+                    message.matches.length > TERMINAL_ARCHIVE_RESULT_LIMIT ||
+                    typeof message.capped !== 'boolean'
+                ) {
+                    archiveWorkerError = new Error('invalid archive worker result');
+                    stopArchiveWorker(archiveWorkerError);
+                    return;
+                }
+                for (const match of message.matches) {
+                    if (
+                        !match ||
+                        !Number.isSafeInteger(match.id) ||
+                        match.id <= 0 ||
+                        archiveFreshIds.has(match.id) ||
+                        typeof match.snippet !== 'string' ||
+                        TERMINAL_ARCHIVE_CACHE_ENCODER.encode(match.snippet).byteLength >
+                            TERMINAL_ARCHIVE_SNIPPET_LIMIT ||
+                        !queryPattern.test(match.snippet)
+                    ) {
+                        archiveWorkerError = new Error('invalid archive worker match');
+                        stopArchiveWorker(archiveWorkerError);
+                        return;
+                    }
+                    archiveFreshIds.add(match.id);
+                    archiveFreshResults.push(match);
+                }
+                if (archiveFreshResults.length > TERMINAL_ARCHIVE_RESULT_LIMIT) {
+                    archiveWorkerError = new Error('archive worker exceeded result limit');
+                    stopArchiveWorker(archiveWorkerError);
+                    return;
+                }
+                archiveFreshResults.sort((a, b) => a.id - b.id);
+                archiveThrough = Math.max(archiveThrough, message.through);
+                archiveFreshCapped = archiveFreshCapped || message.capped;
+                if (!archiveCached) {
+                    archiveCapped = archiveFreshCapped;
+                    const selectedId = archiveIndex >= 0
+                        ? archiveResults[archiveIndex]?.id
+                        : null;
+                    archiveResults = archiveFreshResults.slice();
+                    archiveIndex = selectedId === null
+                        ? -1
+                        : archiveResults.findIndex((result) => result.id === selectedId);
+                    if (archiveIndex < 0) archiveIndex = -1;
+                }
+                if (activeSource === 'retained') {
+                    searchBar?.setPreview(
+                        archiveIndex >= 0
+                            ? archiveResults[archiveIndex]?.snippet || null
+                            : null,
+                    );
+                    showArchiveState();
+                }
+                saveArchiveMemory();
+                if (pendingArchiveDirection && archiveResults.length) {
+                    const direction = pendingArchiveDirection;
+                    pendingArchiveDirection = null;
+                    navigateArchive(direction);
+                }
+                return;
+            }
+            if (message.type === 'error') {
+                archiveWorkerError = new Error('archive worker failed');
+                stopArchiveWorker(archiveWorkerError);
+                return;
+            }
+            if (!['ready', 'ack', 'complete'].includes(message.type)) {
+                archiveWorkerError = new Error('unexpected archive worker reply');
+                stopArchiveWorker(archiveWorkerError);
+                return;
+            }
+            const pending = pendingArchiveReply;
+            if (!pending || pending.expectedType !== message.type) {
+                archiveWorkerError = new Error('out-of-order archive worker reply');
+                stopArchiveWorker(archiveWorkerError);
+                return;
+            }
+            if (archiveWorkerWatchdog) clearTimeout(archiveWorkerWatchdog);
+            archiveWorkerWatchdog = null;
+            pendingArchiveReply = null;
+            pending.resolve(message);
+        };
 
-        tabInfo.termContainer.appendChild(bar);
-        input.focus({ preventScroll: true });
+        const startArchiveSearch = (query) => {
+            if (!query) {
+                cancelArchiveSearch();
+                archiveQuery = '';
+                archiveResults = [];
+                archiveFreshResults = [];
+                archiveFreshIds.clear();
+                archiveIndex = -1;
+                archiveComplete = false;
+                archiveCapped = false;
+                archiveFreshCapped = false;
+                archiveCached = false;
+                archiveFailure = null;
+                pendingArchiveDirection = null;
+                if (activeSource === 'retained') {
+                    searchBar?.setPreview(null);
+                    searchBar?.setStatus('');
+                }
+                return;
+            }
+            if (
+                archiveQuery === query &&
+                (archiveComplete ||
+                    (archiveController && !archiveController.signal.aborted))
+            ) {
+                if (activeSource === 'retained') showArchiveState();
+                return;
+            }
+            cancelArchiveSearch();
+            const generation = archiveGeneration;
+            archiveQuery = query;
+            searchBar?.setPreview(null);
+            archiveResults = [];
+            archiveFreshResults = [];
+            archiveFreshIds = new Set();
+            archiveIndex = -1;
+            archiveThrough = 0;
+            archiveFloor = 0;
+            archiveHead = 0;
+            archiveComplete = false;
+            archiveCapped = false;
+            archiveFreshCapped = false;
+            archiveCached = false;
+            archiveCacheHead = null;
+            archiveFailure = null;
+            pendingArchiveDirection = null;
+            archiveWorkerError = null;
+
+            const paneId = tabInfo.paneId;
+            const epoch = tabInfo.paneEpoch;
+            const socket = tabInfo.ws;
+            const sessionId = typeof tabInfo.sessionId === 'string'
+                ? tabInfo.sessionId
+                : '';
+            const memory = tabInfo._terminalArchiveSearchMemory;
+            const remembered =
+                memory?.paneId === paneId &&
+                memory.sessionId === sessionId &&
+                memory.epoch === epoch &&
+                memory.query === query
+                    ? memory
+                    : null;
+            const cache =
+                typeof paneId === 'string' && Number.isSafeInteger(epoch)
+                    ? remembered || findTerminalArchiveCache(paneId, sessionId, epoch, query)
+                    : null;
+            if (cache) {
+                archiveResults = (cache.results || cache.matches).map((match) => ({ ...match }));
+                archiveCached = true;
+                archiveCacheHead = cache.through ?? cache.head;
+                archiveFloor = cache.floor ?? 0;
+                archiveHead = cache.head ?? archiveCacheHead ?? 0;
+                archiveThrough = cache.through ?? cache.head ?? 0;
+                archiveCapped = cache.capped === true;
+                if (archiveAutoPreferred && archiveResults.length) {
+                    activateArchiveSource();
+                    searchBar?.setStatus(archiveStatus(), false);
+                }
+            }
+
+            const floor = tabInfo.paneOldest;
+            const head = socket?.lastFrameEnd ?? tabInfo.drainedSeq;
+            if (
+                typeof paneId !== 'string' ||
+                !Number.isSafeInteger(epoch) ||
+                epoch < 0 ||
+                !Number.isSafeInteger(floor) ||
+                floor < 0 ||
+                !Number.isSafeInteger(head) ||
+                head < floor ||
+                !tabInfo.term ||
+                typeof Worker !== 'function'
+            ) {
+                archiveFailure = new Error('archive metadata unavailable');
+                archiveHead = Number.isSafeInteger(head) ? head : 0;
+                archiveFloor = Number.isSafeInteger(floor) ? floor : 0;
+                if (activeSource === 'retained') showArchiveState();
+                else if (archiveAutoPreferred)
+                    searchBar?.setStatus(
+                        'Retained output metadata unavailable; loaded terminal search remains active.',
+                        true,
+                    );
+                return;
+            }
+            archiveFloor = floor;
+            archiveHead = head;
+            archiveThrough = archiveCached ? archiveCacheHead ?? floor : floor;
+            archiveController = new AbortController();
+            const signal = archiveController.signal;
+            const isCurrent = () =>
+                archiveIsCurrent(generation, query, paneId, epoch, socket);
+
+            void (async () => {
+                try {
+                    if (activeSource === 'retained') showArchiveState();
+                    const state = await archiveReadWithRetries(
+                        (requestSignal) =>
+                            this._fetchTerminalState(
+                                paneId,
+                                epoch,
+                                floor,
+                                requestSignal,
+                            ),
+                        signal,
+                    );
+                    if (!isCurrent()) return;
+                    if (
+                        state.through !== floor ||
+                        state.oldest !== floor ||
+                        !Number.isSafeInteger(state.cols) ||
+                        !Number.isSafeInteger(state.rows) ||
+                        !(state.bytes instanceof Uint8Array) ||
+                        state.bytes.byteLength > (2 << 20)
+                    )
+                        throw new Error('archive checkpoint changed');
+
+                    const jobId = `${paneId}:${epoch}:${generation}`;
+                    const worker = new Worker(
+                        new URL('./terminal-search-worker.js', import.meta.url),
+                        { type: 'module' },
+                    );
+                    archiveWorker = worker;
+                    worker.onmessage = (event) =>
+                        handleArchiveWorkerMessage(
+                            generation,
+                            query,
+                            paneId,
+                            epoch,
+                            socket,
+                            jobId,
+                            event.data,
+                        );
+                    worker.onerror = () => {
+                        if (!isCurrent()) return;
+                        archiveWorkerError = new Error('archive worker failed');
+                        stopArchiveWorker(archiveWorkerError);
+                    };
+                    const checkpointBytes = state.bytes;
+                    const ready = await waitForArchiveWorker('ready', () =>
+                        worker.postMessage(
+                            {
+                                type: 'init',
+                                jobId,
+                                query,
+                                through: floor,
+                                cols: state.cols,
+                                rows: state.rows,
+                                bytes: checkpointBytes,
+                            },
+                            [checkpointBytes.buffer],
+                        ),
+                    );
+                    if (!isCurrent()) return;
+                    if (ready.through !== floor)
+                        throw new Error('archive worker checkpoint mismatch');
+
+                    let cursor = floor;
+                    let eventCursor = state.eventCursor;
+                    while (cursor < head) {
+                        if (!isCurrent()) return;
+                        const end = Math.min(head, cursor + HISTORY_BOOK_BYTES);
+                        const range = await archiveReadWithRetries(
+                            (requestSignal) =>
+                                this._fetchRecordingRangeOnce(
+                                    paneId,
+                                    cursor,
+                                    end,
+                                    epoch,
+                                    requestSignal,
+                                    eventCursor,
+                                ),
+                            signal,
+                        );
+                        if (!isCurrent()) return;
+                        if (
+                            range.start !== cursor ||
+                            range.end !== end ||
+                            !(range.bytes instanceof Uint8Array) ||
+                            range.bytes.byteLength !== end - cursor ||
+                            range.bytes.byteLength > HISTORY_BOOK_BYTES ||
+                            !Array.isArray(range.resizes)
+                        )
+                            throw new Error('invalid retained range');
+                        const rangeBytes = range.bytes;
+                        const response = await waitForArchiveWorker('ack', () =>
+                            worker.postMessage(
+                                {
+                                    type: 'range',
+                                    jobId,
+                                    start: cursor,
+                                    end,
+                                    bytes: rangeBytes,
+                                    resizes: range.resizes,
+                                },
+                                [rangeBytes.buffer],
+                            ),
+                        );
+                        if (!isCurrent()) return;
+                        if (response.through !== end)
+                            throw new Error('archive worker frontier mismatch');
+                        cursor = end;
+                        archiveThrough = cursor;
+                        eventCursor = range.endCursor ?? eventCursor;
+                        saveArchiveMemory();
+                        if (activeSource === 'retained') showArchiveState();
+                    }
+
+                    const complete = await waitForArchiveWorker('complete', () =>
+                        worker.postMessage({ type: 'finish', jobId }),
+                    );
+                    if (!isCurrent()) return;
+                    if (complete.through !== head)
+                        throw new Error('archive worker did not reach captured head');
+                    stopArchiveWorker();
+                    archiveThrough = head;
+                    archiveComplete = true;
+                    archiveCapped = archiveFreshCapped;
+                    archiveFailure = null;
+                    archiveCached = false;
+                    archiveCacheHead = null;
+                    const selectedSnippet = archiveIndex >= 0
+                        ? archiveResults[archiveIndex]?.snippet
+                        : null;
+                    archiveResults = archiveFreshResults.slice(0, TERMINAL_ARCHIVE_RESULT_LIMIT);
+                    archiveIndex = selectedSnippet
+                        ? archiveResults.findIndex((match) => match.snippet === selectedSnippet)
+                        : -1;
+                    if (archiveIndex < 0) archiveIndex = -1;
+                    if (pendingArchiveDirection && archiveResults.length) {
+                        const direction = pendingArchiveDirection;
+                        pendingArchiveDirection = null;
+                        navigateArchive(direction);
+                    }
+                    persistTerminalArchiveCache({
+                        source: 'retained',
+                        paneId,
+                        sessionId,
+                        epoch,
+                        query,
+                        floor,
+                        head,
+                        through: head,
+                        complete: true,
+                        capped: archiveCapped,
+                        matches: archiveResults,
+                    });
+                    if (archiveAutoPreferred && activeSource === 'terminal')
+                        activateArchiveSource();
+                    saveArchiveMemory();
+                    if (activeSource === 'retained') {
+                        searchBar?.setPreview(
+                            archiveIndex >= 0
+                                ? archiveResults[archiveIndex]?.snippet || null
+                                : null,
+                        );
+                        showArchiveState();
+                    }
+                } catch (error) {
+                    if (!isCurrent()) return;
+                    archiveFailure = error;
+                    archiveComplete = false;
+                    saveArchiveMemory();
+                    archiveController?.abort();
+                    archiveController = null;
+                    stopArchiveWorker(error);
+                    showArchiveState();
+                } finally {
+                    if (generation === archiveGeneration) {
+                        if (!archiveIsCurrent(generation, query, paneId, epoch, socket)) {
+                            archiveController?.abort();
+                            stopArchiveWorker();
+                        }
+                        archiveController = null;
+                    }
+                }
+            })();
+        };
+
+        const rpcStatus = () => {
+            if (!rpcQuery) return '';
+            if (rpcResults.length === 0)
+                return rpcComplete
+                    ? 'No matches in Pi RPC transcript.'
+                    : 'Searching Pi RPC transcript…';
+            let summary = rpcCapped
+                ? '200 results shown; refine the search.'
+                : rpcComplete
+                  ? `${rpcResults.length} matches in Pi RPC transcript.`
+                  : `${rpcResults.length} matches so far; searching transcript…`;
+            if (rpcIndex >= 0)
+                summary += ` ${rpcIndex + 1} of ${rpcResults.length}.`;
+            return summary;
+        };
+
+        const navigateRpc = (direction) => {
+            if (!searchBar || !rpcQuery) return;
+            if (rpcResults.length === 0) {
+                if (!rpcComplete) {
+                    pendingDirection = direction;
+                    searchBar.setStatus('Searching Pi RPC transcript…', false);
+                } else {
+                    searchBar.setStatus('No matches in Pi RPC transcript.', false);
+                }
+                return;
+            }
+            const nextIndex =
+                rpcIndex < 0
+                    ? direction === 'next'
+                        ? 0
+                        : rpcResults.length - 1
+                    : (rpcIndex +
+                          (direction === 'next' ? 1 : -1) +
+                          rpcResults.length) %
+                      rpcResults.length;
+            const result = rpcResults[nextIndex];
+            if (!rpcChatReveal(tabInfo.paneId, result)) {
+                rpcIndex = -1;
+                rpcRevision = null;
+                searchBar.setPreview(null);
+                startRpcSearch(rpcQuery);
+                return;
+            }
+            rpcIndex = nextIndex;
+            searchBar.setPreview(result.snippet);
+            searchBar.setStatus(rpcStatus(), false);
+        };
+
+        const receiveRpcUpdate = (generation, query, update) => {
+            if (
+                generation !== rpcGeneration ||
+                query !== rpcQuery ||
+                !searchBar?.root.isConnected
+            )
+                return;
+            if (rpcRevision !== null && rpcRevision !== update.revision) {
+                rpcIndex = -1;
+                searchBar.setPreview(null);
+            }
+            rpcRevision = update.revision;
+            rpcResults = update.results;
+            rpcComplete = update.complete;
+            rpcCapped = update.capped;
+            if (update.failed) {
+                searchBar.setStatus('Pi RPC transcript search failed.');
+                return;
+            }
+            searchBar.setStatus(rpcStatus(), false);
+            if (pendingDirection && rpcResults.length) {
+                const direction = pendingDirection;
+                pendingDirection = null;
+                navigateRpc(direction);
+            }
+        };
+
+        const startRpcSearch = (query) => {
+            cancelRpcSearch();
+            cancelRpcSearch = () => {};
+            const generation = ++rpcGeneration;
+            rpcQuery = query;
+            rpcResults = [];
+            rpcIndex = -1;
+            rpcRevision = null;
+            rpcComplete = !query;
+            rpcCapped = false;
+            pendingDirection = null;
+            searchBar?.setPreview(null);
+            if (!query) {
+                searchBar?.setStatus('');
+                return;
+            }
+            searchBar?.setStatus('Searching Pi RPC transcript…', false);
+            const cancel = rpcChatSearch(
+                tabInfo.paneId,
+                query,
+                (update) => receiveRpcUpdate(generation, query, update),
+            );
+            if (!cancel) {
+                searchBar?.setStatus('Pi RPC transcript search is unavailable.');
+                return;
+            }
+            cancelRpcSearch = cancel;
+        };
+
+        const cancelTranscriptRequest = () => {
+            transcriptController?.abort();
+            transcriptController = null;
+            if (transcriptDeadline) clearTimeout(transcriptDeadline);
+            transcriptDeadline = null;
+        };
+
+        const transcriptStatus = () => {
+            if (!transcriptQuery) return '';
+            if (transcriptResults.length === 0)
+                return transcriptComplete
+                    ? 'No matches in Pi transcript.'
+                    : 'Searching Pi transcript…';
+            let summary = transcriptCapped
+                ? '200 results shown; refine the search.'
+                : transcriptComplete
+                  ? `${transcriptResults.length} matches in Pi transcript.`
+                  : `${transcriptResults.length} matches so far; searching transcript…`;
+            if (transcriptIndex >= 0)
+                summary += ` ${transcriptIndex + 1} of ${transcriptResults.length}.`;
+            return summary;
+        };
+
+        const navigateTranscript = (direction) => {
+            if (!searchBar || !transcriptQuery) return;
+            if (!this._piBridgeTranscriptSearchEligible(tabInfo)) {
+                transcriptGeneration++;
+                cancelTranscriptRequest();
+                activeSource = 'terminal';
+                searchBar.setSource('terminal');
+                searchTerminal(direction, searchBar.input.value);
+                searchBar.setPreview(null);
+                searchBar.setStatus(
+                    'Pi transcript unavailable; showing loaded terminal output.',
+                );
+                return;
+            }
+            if (transcriptResults.length === 0) {
+                if (!transcriptComplete) {
+                    pendingTranscriptDirection = direction;
+                    searchBar.setStatus('Searching Pi transcript…', false);
+                } else {
+                    searchBar.setStatus('No matches in Pi transcript.', false);
+                }
+                return;
+            }
+            transcriptIndex =
+                transcriptIndex < 0
+                    ? direction === 'next'
+                        ? 0
+                        : transcriptResults.length - 1
+                    : (transcriptIndex +
+                          (direction === 'next' ? 1 : -1) +
+                          transcriptResults.length) %
+                      transcriptResults.length;
+            searchBar.setPreview(transcriptResults[transcriptIndex].snippet);
+            searchBar.setStatus(transcriptStatus(), false);
+            const cached = tabInfo._piTranscriptSearchCache;
+            if (cached?.query === transcriptQuery)
+                cached.index = transcriptIndex;
+        };
+
+        const startPiTranscriptSearch = (query) => {
+            cancelTranscriptRequest();
+            const generation = ++transcriptGeneration;
+            transcriptQuery = query;
+            pendingTranscriptDirection = null;
+            const socket = tabInfo.ws;
+            const bridgeGeneration = String(tabInfo.piBridge?.generation || '');
+            const cached = tabInfo._piTranscriptSearchCache;
+            const cacheUsable =
+                !!query &&
+                cached?.query === query &&
+                cached.generation === bridgeGeneration &&
+                cached.socket === socket &&
+                Array.isArray(cached.results);
+            if (cacheUsable) {
+                transcriptResults = cached.results.slice(0, 200);
+                transcriptIndex = cached.index;
+                transcriptComplete = cached.complete === true;
+                transcriptCapped = cached.capped === true;
+                transcriptOrigin = cached.origin;
+                searchBar?.setPreview(
+                    transcriptIndex >= 0
+                        ? transcriptResults[transcriptIndex]?.snippet || null
+                        : null,
+                );
+            } else {
+                transcriptResults = [];
+                transcriptIndex = -1;
+                transcriptComplete = !query;
+                transcriptCapped = false;
+                transcriptOrigin = null;
+                searchBar?.setPreview(null);
+            }
+            if (!query) {
+                searchBar?.setStatus('');
+                return;
+            }
+            if (!this._piBridgeTranscriptSearchEligible(tabInfo)) {
+                activeSource = 'terminal';
+                searchBar?.setSource('terminal');
+                transcriptResults = [];
+                transcriptIndex = -1;
+                transcriptComplete = true;
+                transcriptCapped = false;
+                searchBar?.setPreview(null);
+                searchBar?.setStatus(
+                    'Pi transcript unavailable; showing loaded terminal output.',
+                );
+                return;
+            }
+
+            const controller = new AbortController();
+            transcriptController = controller;
+            transcriptDeadline = setTimeout(() => controller.abort(), 15000);
+            const isCurrent = () =>
+                transcriptGeneration === generation &&
+                transcriptQuery === query &&
+                searchBar?.root.isConnected === true &&
+                this.tabs?.get(tabInfo.paneId) === tabInfo &&
+                tabInfo.ws === socket &&
+                String(tabInfo.piBridge?.generation || '') === bridgeGeneration;
+            const isReady = () =>
+                this._piBridgeTranscriptSearchEligible(tabInfo) &&
+                String(tabInfo.piBridge?.generation || '') === bridgeGeneration;
+            searchBar?.setStatus(
+                cacheUsable
+                    ? 'Refreshing Pi transcript; cached matches remain available.'
+                    : 'Searching Pi transcript; loaded output remains available…',
+                false,
+            );
+
+            void (async () => {
+                let initial = true;
+                let startIndex = 0;
+                let processId = '';
+                let sessionId = '';
+                let anchorLeafId = '';
+                const seenEntries = new Set();
+                const freshResults = [];
+                let complete = false;
+                let capped = false;
+                try {
+                    while (true) {
+                        if (!isCurrent()) return;
+                        if (!isReady()) throw new Error('bridge unavailable');
+                        const body = {
+                            pane: tabInfo.paneId,
+                            query,
+                            generation: bridgeGeneration,
+                            initial,
+                            start_index: startIndex,
+                        };
+                        if (!initial) {
+                            Object.assign(body, {
+                                process_id: processId,
+                                session_id: sessionId,
+                                anchor_leaf_id: anchorLeafId,
+                            });
+                        }
+                        const response = await fetch(
+                            '/api/pi-bridge/transcript-search',
+                            {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(body),
+                                signal: controller.signal,
+                            },
+                        );
+                        if (!response.ok) throw new Error('search unavailable');
+                        const page = await response.json();
+                        if (
+                            !isCurrent() ||
+                            page?.unavailable === true ||
+                            typeof page?.session_id !== 'string' ||
+                            !page.session_id ||
+                            typeof page?.anchor_leaf_id !== 'string' ||
+                            !Number.isSafeInteger(page?.next_index) ||
+                            page.next_index < startIndex ||
+                            page.next_index > startIndex + 256 ||
+                            !Array.isArray(page?.matches) ||
+                            page.matches.length > 50 ||
+                            typeof page?.complete !== 'boolean' ||
+                            page?.process_id === '' ||
+                            typeof page?.process_id !== 'string' ||
+                            page?.generation !== bridgeGeneration
+                        )
+                            throw new Error('invalid search page');
+                        if (initial) {
+                            processId = page.process_id;
+                            sessionId = page.session_id;
+                            anchorLeafId = page.anchor_leaf_id;
+                            if (
+                                anchorLeafId === '' &&
+                                !(page.complete && page.next_index === 0 && page.matches.length === 0)
+                            )
+                                throw new Error('invalid empty transcript');
+                        } else if (
+                            page.process_id !== processId ||
+                            page.session_id !== sessionId ||
+                            page.anchor_leaf_id !== anchorLeafId ||
+                            (!page.complete && page.next_index <= startIndex)
+                        ) {
+                            throw new Error('stale transcript page');
+                        }
+                        if (page.unavailable || (!page.complete && page.next_index <= startIndex))
+                            throw new Error('incomplete transcript page');
+                        for (const match of page.matches) {
+                            if (
+                                typeof match?.entry_id !== 'string' ||
+                                !match.entry_id ||
+                                !['user', 'assistant', 'toolResult'].includes(match.role) ||
+                                typeof match.snippet !== 'string' ||
+                                new TextEncoder().encode(match.snippet).byteLength > 2048 ||
+                                !match.snippet.toLocaleLowerCase().includes(query.toLocaleLowerCase()) ||
+                                seenEntries.has(match.entry_id)
+                            )
+                                throw new Error('invalid transcript match');
+                            seenEntries.add(match.entry_id);
+                            freshResults.push(match);
+                            if (freshResults.length >= 200) break;
+                        }
+                        if (freshResults.length >= 200) {
+                            freshResults.length = 200;
+                            capped = true;
+                            break;
+                        }
+                        if (page.complete) {
+                            complete = true;
+                            break;
+                        }
+                        startIndex = page.next_index;
+                        initial = false;
+                    }
+                    if (!isCurrent()) return;
+                    transcriptResults = freshResults;
+                    transcriptIndex =
+                        cacheUsable && transcriptResults.length
+                            ? Math.min(cached.index, transcriptResults.length - 1)
+                            : -1;
+                    transcriptComplete = complete;
+                    transcriptCapped = capped;
+                    transcriptOrigin = { processId, sessionId, anchorLeafId };
+                    searchBar?.setPreview(
+                        transcriptIndex >= 0
+                            ? transcriptResults[transcriptIndex]?.snippet || null
+                            : null,
+                    );
+                    const resultCache = {
+                        query,
+                        generation: bridgeGeneration,
+                        socket,
+                        results: transcriptResults.slice(),
+                        complete,
+                        capped,
+                        index: transcriptIndex,
+                        origin: transcriptOrigin,
+                    };
+                    tabInfo._piTranscriptSearchCache = resultCache;
+                    if (pendingTranscriptDirection && transcriptResults.length) {
+                        const direction = pendingTranscriptDirection;
+                        pendingTranscriptDirection = null;
+                        navigateTranscript(direction);
+                    } else {
+                        searchBar?.setStatus(transcriptStatus(), false);
+                    }
+                } catch {
+                    if (!isCurrent()) return;
+                    transcriptOrigin = null;
+                    if (cacheUsable) {
+                        transcriptResults = cached.results.slice(0, 200);
+                        transcriptIndex = cached.index;
+                        transcriptComplete = cached.complete === true;
+                        transcriptCapped = cached.capped === true;
+                        searchBar?.setPreview(
+                            transcriptIndex >= 0
+                                ? transcriptResults[transcriptIndex]?.snippet || null
+                                : null,
+                        );
+                        searchBar?.setStatus(
+                            'Pi transcript refresh unavailable; showing cached matches.',
+                        );
+                    } else {
+                        activeSource = 'terminal';
+                        searchBar?.setSource('terminal');
+                        transcriptResults = [];
+                        transcriptIndex = -1;
+                        transcriptComplete = true;
+                        transcriptCapped = false;
+                        searchBar?.setPreview(null);
+                        searchTerminal('next', query);
+                        searchBar?.setStatus(
+                            'Pi transcript unavailable; showing loaded terminal output.',
+                        );
+                    }
+                } finally {
+                    if (transcriptGeneration === generation) {
+                        if (transcriptDeadline) clearTimeout(transcriptDeadline);
+                        transcriptDeadline = null;
+                        transcriptController = null;
+                    }
+                }
+            })();
+        };
+
+        searchBar = createSessionSearchBar({
+            container: tabInfo.termContainer,
+            sourceLabel: isRpc ? 'Pi RPC transcript' : 'Loaded terminal output',
+            sources: isRpc
+                ? undefined
+                : [
+                      { value: 'terminal', label: 'Loaded terminal output' },
+                      { value: 'retained', label: 'Retained terminal output' },
+                      ...(transcriptAvailableAtOpen
+                          ? [{ value: 'transcript', label: 'Pi transcript' }]
+                          : []),
+                  ],
+            selectedSource: activeSource,
+            onSourceChange: (source) => {
+                archiveAutoPreferred = false;
+                activeSource = source;
+                const query = searchBar.input.value;
+                if (source === 'transcript') {
+                    cancelArchiveSearch();
+                    searchTerminal('next', query);
+                    startPiTranscriptSearch(query);
+                    return;
+                }
+                transcriptGeneration++;
+                cancelTranscriptRequest();
+                transcriptQuery = '';
+                transcriptResults = [];
+                transcriptIndex = -1;
+                transcriptComplete = false;
+                transcriptCapped = false;
+                searchBar.setPreview(null);
+                if (source === 'retained') {
+                    tabInfo.searchAddon?.clearDecorations();
+                    if (query) startArchiveSearch(query);
+                    else startArchiveSearch('');
+                    showArchiveState();
+                } else {
+                    cancelArchiveSearch();
+                    searchTerminal('next', query);
+                }
+            },
+            ariaLabel: isRpc
+                ? 'Search Pi RPC transcript'
+                : 'Search active terminal history',
+            showPreview: true,
+            onQuery: (query) => {
+                if (isRpc) {
+                    startRpcSearch(query);
+                    return;
+                }
+                searchTerminal('next', query);
+                if (activeSource === 'transcript') {
+                    startArchiveSearch('');
+                    startPiTranscriptSearch(query);
+                    return;
+                }
+                transcriptGeneration++;
+                cancelTranscriptRequest();
+                transcriptQuery = '';
+                searchBar.setPreview(null);
+                if (activeSource === 'retained' || archiveAutoPreferred)
+                    startArchiveSearch(query);
+                else if (!query)
+                    startArchiveSearch('');
+            },
+            onNavigate: (direction) => {
+                if (isRpc) {
+                    navigateRpc(direction);
+                    return;
+                }
+                archiveAutoPreferred = false;
+                if (activeSource === 'transcript') navigateTranscript(direction);
+                else if (activeSource === 'retained') navigateArchive(direction);
+                else searchTerminal(direction, searchBar.input.value);
+            },
+            onClose: () => {
+                rpcGeneration++;
+                cancelRpcSearch();
+                transcriptGeneration++;
+                cancelTranscriptRequest();
+                cancelArchiveSearch();
+                if (tabInfo._sessionSearchInstance === searchInstance) {
+                    delete tabInfo._sessionSearchInstance;
+                    delete tabInfo._cancelSessionArchiveSearch;
+                    delete tabInfo._resumeSessionArchiveSearch;
+                }
+                if (!isRpc) tabInfo.searchAddon?.clearDecorations();
+                restoreFocus();
+            },
+        });
+        tabInfo._cancelSessionArchiveSearch = cancelArchiveSearch;
+        tabInfo._resumeSessionArchiveSearch = () => {
+            if (
+                searchBar?.root.isConnected &&
+                archiveQuery &&
+                !archiveComplete &&
+                !archiveFailure &&
+                (activeSource === 'retained' || archiveAutoPreferred)
+            )
+                startArchiveSearch(archiveQuery);
+        };
+        searchBar.input.focus({ preventScroll: true });
+        searchBar.search();
     }
 
     /**
@@ -12151,6 +13431,31 @@ export class TabManager {
             return;
         }
 
+        if (isTerminalFindShortcut(e) && !e.defaultPrevented) {
+            const activeTab = this.getActiveTab();
+            const target = e.target instanceof Element ? e.target : null;
+            const isEditable =
+                target?.isContentEditable ||
+                target?.closest('input, textarea, select, [contenteditable="true"]');
+            const allowedEditable =
+                !isEditable ||
+                target === this.inputTextArea ||
+                isFindBarTarget(target) ||
+                activeTab?.termContainer?.contains(target);
+            const modalOpen = document.querySelector(
+                '.modal-overlay:not(.hidden), .md-modal-overlay:not(.hidden)',
+            );
+            if (
+                (activeTab?.term || activeTab?.coder === 'pi-rpc') &&
+                allowedEditable &&
+                !modalOpen
+            ) {
+                e.preventDefault();
+                this.toggleFindBar(activeTab);
+            }
+            return;
+        }
+
         // Shift+F5 or Ctrl/Cmd+Shift+R: Reconnect / refresh all tabs in current workspace (Idea A)
         if (
             (e.shiftKey &&
@@ -12176,7 +13481,7 @@ export class TabManager {
             e.key.toLowerCase() === 'f'
         ) {
             const activeTab = this.getActiveTab();
-            if (activeTab?.term) {
+            if (activeTab?.term || activeTab?.coder === 'pi-rpc') {
                 e.preventDefault();
                 this.toggleFindBar(activeTab);
             }
@@ -15134,6 +16439,14 @@ export class TabManager {
             Array.isArray(tab.piBridge.capabilities) &&
             tab.piBridge.capabilities.includes('pi.thinking.v1')
         );
+    }
+
+    // Transcript search is an optional source; the terminal search remains
+    // available when the pane is unmanaged, disconnected, or missing the cap.
+    _piBridgeTranscriptSearchEligible(tab) {
+        return tab?.coder === 'pi' && !tab.isDead &&
+            piBridgeCapable(tab, 'pi.transcript-search.v1') &&
+            /^[1-9]\d*$/.test(String(tab.piBridge?.generation || ''));
     }
 
     // The skills picker needs the skills capability; anything else

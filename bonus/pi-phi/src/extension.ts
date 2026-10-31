@@ -103,10 +103,22 @@ export function clearCredsFromEnv(env: NodeJS.ProcessEnv = process.env): void {
 }
 
 function contextView(ctx: ExtensionContext): PiContextView {
+    const sessionManager = ctx.sessionManager;
+    const getBranch = (sessionManager as unknown as { getBranch?: unknown })
+        .getBranch;
     return {
         sessionManager: {
-            getSessionId: () => ctx.sessionManager.getSessionId(),
-            getLeafId: () => ctx.sessionManager.getLeafId(),
+            getSessionId: () => sessionManager.getSessionId(),
+            getLeafId: () => sessionManager.getLeafId(),
+            ...(typeof getBranch === 'function'
+                ? {
+                      getBranch: (fromId?: string) =>
+                          getBranch.call(
+                              sessionManager,
+                              fromId,
+                          ) as readonly unknown[],
+                  }
+                : {}),
         },
         get model() {
             return ctx.model ?? undefined;

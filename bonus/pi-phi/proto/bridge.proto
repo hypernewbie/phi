@@ -46,6 +46,7 @@ message PiToPhi {
     InvokeSkillAck invoke_skill_ack = 24;
     ReloadAck reload_ack = 25;
     SyncboardRequest syncboard_request = 26;
+    TranscriptSearchResponse transcript_search_response = 27;
   }
 }
 
@@ -69,6 +70,7 @@ message PhiToPi {
     InvokeSkillRequest invoke_skill_request = 21;
     ReloadRequest reload_request = 22;
     SyncboardResponse syncboard_response = 23;
+    TranscriptSearchRequest transcript_search_request = 24;
   }
 }
 
@@ -523,6 +525,48 @@ message SyncboardResponse {
   uint32 http_status = 3;
   bytes body_json = 4;
   string reason = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Bounded active-branch transcript search
+// ---------------------------------------------------------------------------
+
+// TranscriptSearchRequest searches one frozen active-branch snapshot.
+// Initial requests use start_index 0 and an empty anchor; the extension
+// captures the live leaf. Continuations echo the returned session and
+// anchor and resume at next_index. The host refuses an anchor that is no
+// longer on the active branch.
+message TranscriptSearchRequest {
+  string request_id = 1;
+  string query = 2;
+  string session_id = 3;
+  string anchor_leaf_id = 4;
+  uint32 start_index = 5;
+  bool initial = 6;
+}
+
+// One safe transcript match. role is exactly user, assistant, or
+// toolResult. snippet is bounded plain text; no hidden state, tool-call
+// arguments, or images are included.
+message TranscriptSearchMatch {
+  string entry_id = 1;
+  string role = 2;
+  string snippet = 3;
+}
+
+// TranscriptSearchResponse echoes request_id. One response examines no
+// more than 256 branch entries and returns no more than 50 matches.
+// next_index counts branch entries inspected, so an empty page with
+// complete=false still makes bounded forward progress. unavailable
+// invalidates the whole read; partial matches must then be empty.
+message TranscriptSearchResponse {
+  string request_id = 1;
+  string session_id = 2;
+  string anchor_leaf_id = 3;
+  uint32 next_index = 4;
+  repeated TranscriptSearchMatch matches = 5;
+  bool complete = 6;
+  bool unavailable = 7;
 }
 
 // ---------------------------------------------------------------------------

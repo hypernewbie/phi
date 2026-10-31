@@ -390,6 +390,12 @@ writeFileSync(
         `        const rec = { phase };\n` +
         `        try { rec.session = ctx.sessionManager.getSessionId(); } catch (_e) {}\n` +
         `        try {\n` +
+        `            const getBranch = ctx.sessionManager.getBranch;\n` +
+        `            const branch = typeof getBranch === 'function' ? getBranch.call(ctx.sessionManager) : null;\n` +
+        `            rec.branchAvailable = Array.isArray(branch);\n` +
+        `            rec.branchCount = Array.isArray(branch) ? branch.length : -1;\n` +
+        `        } catch (err) { rec.branchError = String(err); }\n` +
+        `        try {\n` +
         `            if (typeof bundle.readEditorHistory !== 'function') throw new Error('no-reader-export');\n` +
         `            const entries = bundle.readEditorHistory(ctx.ui);\n` +
         `            rec.available = entries !== null;\n` +
@@ -970,7 +976,7 @@ for (const version of versions) {
         if (!view.runtimeId) fail(version.name, 'runtime id missing');
         if (
             (view.caps || []).join(',') !==
-            'pi.compact.v1,pi.context.v1,pi.lifecycle.v1,pi.models.v1,pi.skills.v1,pi.syncboard.v1,pi.thinking.v1'
+            'pi.compact.v1,pi.context.v1,pi.lifecycle.v1,pi.models.v1,pi.skills.v1,pi.syncboard.v1,pi.thinking.v1,pi.transcript-search.v1'
         ) {
             fail(version.name, 'accepted caps', (view.caps || []).join(','));
         }
@@ -1390,6 +1396,21 @@ for (const version of versions) {
                 fail(version.name, 'history log unreadable', String(err));
             }
             const start = records.find((r) => r.phase === 'start');
+            if (!records.some((r) => r.branchAvailable === true)) {
+                fail(
+                    version.name,
+                    'public getBranch API unavailable',
+                    JSON.stringify(records[0] || null),
+                );
+            }
+            const branchError = records.find((r) => r.branchError);
+            if (branchError) {
+                fail(
+                    version.name,
+                    'public getBranch call failed',
+                    String(branchError.branchError),
+                );
+            }
             if (start?.available !== true) {
                 fail(
                     version.name,
@@ -1456,7 +1477,7 @@ for (const version of versions) {
                 }
                 if (
                     (tuiView.caps || []).join(',') !==
-                    'pi.compact.v1,pi.context.v1,pi.history.v1,pi.lifecycle.v1,pi.models.v1,pi.reload.v1,pi.skills.v1,pi.syncboard.v1,pi.thinking.v1'
+                    'pi.compact.v1,pi.context.v1,pi.history.v1,pi.lifecycle.v1,pi.models.v1,pi.reload.v1,pi.skills.v1,pi.syncboard.v1,pi.thinking.v1,pi.transcript-search.v1'
                 ) {
                     fail(
                         version.name,
@@ -1494,5 +1515,5 @@ if (failures.length > 0) {
 }
 rmSync(tmp, { recursive: true, force: true });
 console.log(
-    'pi-phi-hosts: both pinned hosts load, identify, execute Syncboard, withdraw/re-expose its tool, and retain interactive history and Reload capability; fallback runs contained',
+    'pi-phi-hosts: both pinned hosts load, identify, execute Syncboard, withdraw/re-expose its tool, prove Reload/getBranch/history, and retain interactive capability; fallback runs contained',
 );

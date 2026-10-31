@@ -391,6 +391,39 @@ func (b *Bridge) RequestPaneHistory(ctx context.Context, paneID string) (pibridg
 	return b.server.RequestHistory(ctx, processID)
 }
 
+// RequestPaneTranscriptSearch resolves the current pane owner, then treats
+// any echoed process ID as an origin fence rather than a routing choice.
+func (b *Bridge) RequestPaneTranscriptSearch(ctx context.Context, paneID, expectedProcessID string, generation uint64, req pibridge.TranscriptSearchRequest) (pibridge.TranscriptSearchResult, error) {
+	if b == nil {
+		return pibridge.TranscriptSearchResult{}, fmt.Errorf("pi-bridge: disabled")
+	}
+	b.mu.Lock()
+	p, ok := b.panes[paneID]
+	processID, managed := "", false
+	if ok {
+		processID, managed = p.processID, p.managed
+	}
+	b.mu.Unlock()
+	if !ok || !managed {
+		return pibridge.TranscriptSearchResult{}, fmt.Errorf("pi-bridge: pane not managed")
+	}
+	if expectedProcessID != "" && processID != expectedProcessID {
+		return pibridge.TranscriptSearchResult{}, fmt.Errorf("pi-bridge: transcript search process stale")
+	}
+	res, err := b.server.RequestTranscriptSearch(ctx, processID, generation, req)
+	if err != nil {
+		return pibridge.TranscriptSearchResult{}, err
+	}
+	b.mu.Lock()
+	current, ok := b.panes[paneID]
+	sameProcess := ok && current.managed && current.processID == processID
+	b.mu.Unlock()
+	if !sameProcess || res.ProcessID != processID || res.Generation != generation {
+		return pibridge.TranscriptSearchResult{}, fmt.Errorf("pi-bridge: transcript search pane replaced")
+	}
+	return res, nil
+}
+
 // RequestPaneModels resolves a pane to its bridge process and reads
 // the live Pi selectable-model list. Unknown, unmanaged, and
 // peerless panes fail; the picker displays the error. The caller

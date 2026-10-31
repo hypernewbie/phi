@@ -371,6 +371,7 @@ func main() {
 	http.HandleFunc("/api/pi-bridge/reload", handlePiBridgeReload)
 	http.HandleFunc("/api/pi-bridge/skills", handlePiBridgeSkills)
 	http.HandleFunc("/api/pi-bridge/skill", handlePiBridgeInvokeSkill)
+	http.HandleFunc("/api/pi-bridge/transcript-search", handlePiBridgeTranscriptSearch)
 	http.HandleFunc("/api/attachments", handleAttachments)
 	http.HandleFunc("/api/clipboard", handleGetClipboard)
 	http.HandleFunc("/api/system/cpu", handleSystemCPU)

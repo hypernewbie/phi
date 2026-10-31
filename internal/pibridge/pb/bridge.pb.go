@@ -438,6 +438,7 @@ type PiToPhi struct {
 	//	*PiToPhi_InvokeSkillAck
 	//	*PiToPhi_ReloadAck
 	//	*PiToPhi_SyncboardRequest
+	//	*PiToPhi_TranscriptSearchResponse
 	Payload       isPiToPhi_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -627,6 +628,15 @@ func (x *PiToPhi) GetSyncboardRequest() *SyncboardRequest {
 	return nil
 }
 
+func (x *PiToPhi) GetTranscriptSearchResponse() *TranscriptSearchResponse {
+	if x != nil {
+		if x, ok := x.Payload.(*PiToPhi_TranscriptSearchResponse); ok {
+			return x.TranscriptSearchResponse
+		}
+	}
+	return nil
+}
+
 type isPiToPhi_Payload interface {
 	isPiToPhi_Payload()
 }
@@ -687,6 +697,10 @@ type PiToPhi_SyncboardRequest struct {
 	SyncboardRequest *SyncboardRequest `protobuf:"bytes,26,opt,name=syncboard_request,json=syncboardRequest,proto3,oneof"`
 }
 
+type PiToPhi_TranscriptSearchResponse struct {
+	TranscriptSearchResponse *TranscriptSearchResponse `protobuf:"bytes,27,opt,name=transcript_search_response,json=transcriptSearchResponse,proto3,oneof"`
+}
+
 func (*PiToPhi_Hello) isPiToPhi_Payload() {}
 
 func (*PiToPhi_AgentStarted) isPiToPhi_Payload() {}
@@ -715,6 +729,8 @@ func (*PiToPhi_ReloadAck) isPiToPhi_Payload() {}
 
 func (*PiToPhi_SyncboardRequest) isPiToPhi_Payload() {}
 
+func (*PiToPhi_TranscriptSearchResponse) isPiToPhi_Payload() {}
+
 // Envelope for every Phi → Pi message.
 type PhiToPi struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
@@ -735,6 +751,7 @@ type PhiToPi struct {
 	//	*PhiToPi_InvokeSkillRequest
 	//	*PhiToPi_ReloadRequest
 	//	*PhiToPi_SyncboardResponse
+	//	*PhiToPi_TranscriptSearchRequest
 	Payload       isPhiToPi_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -906,6 +923,15 @@ func (x *PhiToPi) GetSyncboardResponse() *SyncboardResponse {
 	return nil
 }
 
+func (x *PhiToPi) GetTranscriptSearchRequest() *TranscriptSearchRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*PhiToPi_TranscriptSearchRequest); ok {
+			return x.TranscriptSearchRequest
+		}
+	}
+	return nil
+}
+
 type isPhiToPi_Payload interface {
 	isPhiToPi_Payload()
 }
@@ -958,6 +984,10 @@ type PhiToPi_SyncboardResponse struct {
 	SyncboardResponse *SyncboardResponse `protobuf:"bytes,23,opt,name=syncboard_response,json=syncboardResponse,proto3,oneof"`
 }
 
+type PhiToPi_TranscriptSearchRequest struct {
+	TranscriptSearchRequest *TranscriptSearchRequest `protobuf:"bytes,24,opt,name=transcript_search_request,json=transcriptSearchRequest,proto3,oneof"`
+}
+
 func (*PhiToPi_Accepted) isPhiToPi_Payload() {}
 
 func (*PhiToPi_ProtocolError) isPhiToPi_Payload() {}
@@ -981,6 +1011,8 @@ func (*PhiToPi_InvokeSkillRequest) isPhiToPi_Payload() {}
 func (*PhiToPi_ReloadRequest) isPhiToPi_Payload() {}
 
 func (*PhiToPi_SyncboardResponse) isPhiToPi_Payload() {}
+
+func (*PhiToPi_TranscriptSearchRequest) isPhiToPi_Payload() {}
 
 // Hello is the first application message on every stream. Protocol version,
 // identities, capabilities, and the replay range of the retained journal.
@@ -3205,6 +3237,255 @@ func (x *SyncboardResponse) GetReason() string {
 	return ""
 }
 
+// TranscriptSearchRequest searches one frozen active-branch snapshot.
+// Initial requests use start_index 0 and an empty anchor; the extension
+// captures the live leaf. Continuations echo the returned session and
+// anchor and resume at next_index. The host refuses an anchor that is no
+// longer on the active branch.
+type TranscriptSearchRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Query         string                 `protobuf:"bytes,2,opt,name=query,proto3" json:"query,omitempty"`
+	SessionId     string                 `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	AnchorLeafId  string                 `protobuf:"bytes,4,opt,name=anchor_leaf_id,json=anchorLeafId,proto3" json:"anchor_leaf_id,omitempty"`
+	StartIndex    uint32                 `protobuf:"varint,5,opt,name=start_index,json=startIndex,proto3" json:"start_index,omitempty"`
+	Initial       bool                   `protobuf:"varint,6,opt,name=initial,proto3" json:"initial,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TranscriptSearchRequest) Reset() {
+	*x = TranscriptSearchRequest{}
+	mi := &file_bridge_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TranscriptSearchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TranscriptSearchRequest) ProtoMessage() {}
+
+func (x *TranscriptSearchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TranscriptSearchRequest.ProtoReflect.Descriptor instead.
+func (*TranscriptSearchRequest) Descriptor() ([]byte, []int) {
+	return file_bridge_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *TranscriptSearchRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *TranscriptSearchRequest) GetQuery() string {
+	if x != nil {
+		return x.Query
+	}
+	return ""
+}
+
+func (x *TranscriptSearchRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *TranscriptSearchRequest) GetAnchorLeafId() string {
+	if x != nil {
+		return x.AnchorLeafId
+	}
+	return ""
+}
+
+func (x *TranscriptSearchRequest) GetStartIndex() uint32 {
+	if x != nil {
+		return x.StartIndex
+	}
+	return 0
+}
+
+func (x *TranscriptSearchRequest) GetInitial() bool {
+	if x != nil {
+		return x.Initial
+	}
+	return false
+}
+
+// One safe transcript match. role is exactly user, assistant, or
+// toolResult. snippet is bounded plain text; no hidden state, tool-call
+// arguments, or images are included.
+type TranscriptSearchMatch struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	EntryId       string                 `protobuf:"bytes,1,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`
+	Role          string                 `protobuf:"bytes,2,opt,name=role,proto3" json:"role,omitempty"`
+	Snippet       string                 `protobuf:"bytes,3,opt,name=snippet,proto3" json:"snippet,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TranscriptSearchMatch) Reset() {
+	*x = TranscriptSearchMatch{}
+	mi := &file_bridge_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TranscriptSearchMatch) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TranscriptSearchMatch) ProtoMessage() {}
+
+func (x *TranscriptSearchMatch) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TranscriptSearchMatch.ProtoReflect.Descriptor instead.
+func (*TranscriptSearchMatch) Descriptor() ([]byte, []int) {
+	return file_bridge_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *TranscriptSearchMatch) GetEntryId() string {
+	if x != nil {
+		return x.EntryId
+	}
+	return ""
+}
+
+func (x *TranscriptSearchMatch) GetRole() string {
+	if x != nil {
+		return x.Role
+	}
+	return ""
+}
+
+func (x *TranscriptSearchMatch) GetSnippet() string {
+	if x != nil {
+		return x.Snippet
+	}
+	return ""
+}
+
+// TranscriptSearchResponse echoes request_id. One response examines no
+// more than 256 branch entries and returns no more than 50 matches.
+// next_index counts branch entries inspected, so an empty page with
+// complete=false still makes bounded forward progress. unavailable
+// invalidates the whole read; partial matches must then be empty.
+type TranscriptSearchResponse struct {
+	state         protoimpl.MessageState   `protogen:"open.v1"`
+	RequestId     string                   `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	SessionId     string                   `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	AnchorLeafId  string                   `protobuf:"bytes,3,opt,name=anchor_leaf_id,json=anchorLeafId,proto3" json:"anchor_leaf_id,omitempty"`
+	NextIndex     uint32                   `protobuf:"varint,4,opt,name=next_index,json=nextIndex,proto3" json:"next_index,omitempty"`
+	Matches       []*TranscriptSearchMatch `protobuf:"bytes,5,rep,name=matches,proto3" json:"matches,omitempty"`
+	Complete      bool                     `protobuf:"varint,6,opt,name=complete,proto3" json:"complete,omitempty"`
+	Unavailable   bool                     `protobuf:"varint,7,opt,name=unavailable,proto3" json:"unavailable,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TranscriptSearchResponse) Reset() {
+	*x = TranscriptSearchResponse{}
+	mi := &file_bridge_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TranscriptSearchResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TranscriptSearchResponse) ProtoMessage() {}
+
+func (x *TranscriptSearchResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_bridge_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TranscriptSearchResponse.ProtoReflect.Descriptor instead.
+func (*TranscriptSearchResponse) Descriptor() ([]byte, []int) {
+	return file_bridge_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *TranscriptSearchResponse) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *TranscriptSearchResponse) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *TranscriptSearchResponse) GetAnchorLeafId() string {
+	if x != nil {
+		return x.AnchorLeafId
+	}
+	return ""
+}
+
+func (x *TranscriptSearchResponse) GetNextIndex() uint32 {
+	if x != nil {
+		return x.NextIndex
+	}
+	return 0
+}
+
+func (x *TranscriptSearchResponse) GetMatches() []*TranscriptSearchMatch {
+	if x != nil {
+		return x.Matches
+	}
+	return nil
+}
+
+func (x *TranscriptSearchResponse) GetComplete() bool {
+	if x != nil {
+		return x.Complete
+	}
+	return false
+}
+
+func (x *TranscriptSearchResponse) GetUnavailable() bool {
+	if x != nil {
+		return x.Unavailable
+	}
+	return false
+}
+
 // Terminal protocol-level rejection. Ends the stream attempt.
 type ProtocolError struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -3216,7 +3497,7 @@ type ProtocolError struct {
 
 func (x *ProtocolError) Reset() {
 	*x = ProtocolError{}
-	mi := &file_bridge_proto_msgTypes[34]
+	mi := &file_bridge_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3228,7 +3509,7 @@ func (x *ProtocolError) String() string {
 func (*ProtocolError) ProtoMessage() {}
 
 func (x *ProtocolError) ProtoReflect() protoreflect.Message {
-	mi := &file_bridge_proto_msgTypes[34]
+	mi := &file_bridge_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3241,7 +3522,7 @@ func (x *ProtocolError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProtocolError.ProtoReflect.Descriptor instead.
 func (*ProtocolError) Descriptor() ([]byte, []int) {
-	return file_bridge_proto_rawDescGZIP(), []int{34}
+	return file_bridge_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ProtocolError) GetCode() ProtocolErrorCode {
@@ -3262,7 +3543,7 @@ var File_bridge_proto protoreflect.FileDescriptor
 
 const file_bridge_proto_rawDesc = "" +
 	"\n" +
-	"\fbridge.proto\x12\tphi.pi.v1\"\xf4\b\n" +
+	"\fbridge.proto\x12\tphi.pi.v1\"\xd9\t\n" +
 	"\aPiToPhi\x12\x17\n" +
 	"\apane_id\x18\x01 \x01(\tR\x06paneId\x12\x1d\n" +
 	"\n" +
@@ -3283,8 +3564,9 @@ const file_bridge_proto_rawDesc = "" +
 	"\x10invoke_skill_ack\x18\x18 \x01(\v2\x19.phi.pi.v1.InvokeSkillAckH\x00R\x0einvokeSkillAck\x125\n" +
 	"\n" +
 	"reload_ack\x18\x19 \x01(\v2\x14.phi.pi.v1.ReloadAckH\x00R\treloadAck\x12J\n" +
-	"\x11syncboard_request\x18\x1a \x01(\v2\x1b.phi.pi.v1.SyncboardRequestH\x00R\x10syncboardRequestB\t\n" +
-	"\apayloadJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10J\x04\b\x10\x10\x11R\x0esummary_resultR\rcommand_errorR\x13cancel_acknowledged\"\x80\b\n" +
+	"\x11syncboard_request\x18\x1a \x01(\v2\x1b.phi.pi.v1.SyncboardRequestH\x00R\x10syncboardRequest\x12c\n" +
+	"\x1atranscript_search_response\x18\x1b \x01(\v2#.phi.pi.v1.TranscriptSearchResponseH\x00R\x18transcriptSearchResponseB\t\n" +
+	"\apayloadJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10J\x04\b\x10\x10\x11R\x0esummary_resultR\rcommand_errorR\x13cancel_acknowledged\"\xe2\b\n" +
 	"\aPhiToPi\x12\x17\n" +
 	"\apane_id\x18\x01 \x01(\tR\x06paneId\x12\x1d\n" +
 	"\n" +
@@ -3302,7 +3584,8 @@ const file_bridge_proto_rawDesc = "" +
 	"\x0eskills_request\x18\x14 \x01(\v2\x18.phi.pi.v1.SkillsRequestH\x00R\rskillsRequest\x12Q\n" +
 	"\x14invoke_skill_request\x18\x15 \x01(\v2\x1d.phi.pi.v1.InvokeSkillRequestH\x00R\x12invokeSkillRequest\x12A\n" +
 	"\x0ereload_request\x18\x16 \x01(\v2\x18.phi.pi.v1.ReloadRequestH\x00R\rreloadRequest\x12M\n" +
-	"\x12syncboard_response\x18\x17 \x01(\v2\x1c.phi.pi.v1.SyncboardResponseH\x00R\x11syncboardResponseB\t\n" +
+	"\x12syncboard_response\x18\x17 \x01(\v2\x1c.phi.pi.v1.SyncboardResponseH\x00R\x11syncboardResponse\x12`\n" +
+	"\x19transcript_search_request\x18\x18 \x01(\v2\".phi.pi.v1.TranscriptSearchRequestH\x00R\x17transcriptSearchRequestB\t\n" +
 	"\apayloadJ\x04\b\v\x10\fJ\x04\b\f\x10\rR\tsummarizeR\x06cancel\"\xe8\x02\n" +
 	"\x05Hello\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\x1d\n" +
@@ -3488,7 +3771,32 @@ const file_bridge_proto_rawDesc = "" +
 	"\vhttp_status\x18\x03 \x01(\rR\n" +
 	"httpStatus\x12\x1b\n" +
 	"\tbody_json\x18\x04 \x01(\fR\bbodyJson\x12\x16\n" +
-	"\x06reason\x18\x05 \x01(\tR\x06reason\"d\n" +
+	"\x06reason\x18\x05 \x01(\tR\x06reason\"\xce\x01\n" +
+	"\x17TranscriptSearchRequest\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12\x14\n" +
+	"\x05query\x18\x02 \x01(\tR\x05query\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x03 \x01(\tR\tsessionId\x12$\n" +
+	"\x0eanchor_leaf_id\x18\x04 \x01(\tR\fanchorLeafId\x12\x1f\n" +
+	"\vstart_index\x18\x05 \x01(\rR\n" +
+	"startIndex\x12\x18\n" +
+	"\ainitial\x18\x06 \x01(\bR\ainitial\"`\n" +
+	"\x15TranscriptSearchMatch\x12\x19\n" +
+	"\bentry_id\x18\x01 \x01(\tR\aentryId\x12\x12\n" +
+	"\x04role\x18\x02 \x01(\tR\x04role\x12\x18\n" +
+	"\asnippet\x18\x03 \x01(\tR\asnippet\"\x97\x02\n" +
+	"\x18TranscriptSearchResponse\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12$\n" +
+	"\x0eanchor_leaf_id\x18\x03 \x01(\tR\fanchorLeafId\x12\x1d\n" +
+	"\n" +
+	"next_index\x18\x04 \x01(\rR\tnextIndex\x12:\n" +
+	"\amatches\x18\x05 \x03(\v2 .phi.pi.v1.TranscriptSearchMatchR\amatches\x12\x1a\n" +
+	"\bcomplete\x18\x06 \x01(\bR\bcomplete\x12 \n" +
+	"\vunavailable\x18\a \x01(\bR\vunavailable\"d\n" +
 	"\rProtocolError\x120\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x1c.phi.pi.v1.ProtocolErrorCodeR\x04code\x12!\n" +
 	"\fsafe_message\x18\x02 \x01(\tR\vsafeMessage*t\n" +
@@ -3546,50 +3854,53 @@ func file_bridge_proto_rawDescGZIP() []byte {
 }
 
 var file_bridge_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
-var file_bridge_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
+var file_bridge_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
 var file_bridge_proto_goTypes = []any{
-	(RunOutcome)(0),                // 0: phi.pi.v1.RunOutcome
-	(LogicalState)(0),              // 1: phi.pi.v1.LogicalState
-	(CompactOutcome)(0),            // 2: phi.pi.v1.CompactOutcome
-	(ReloadDispatchOutcome)(0),     // 3: phi.pi.v1.ReloadDispatchOutcome
-	(SyncboardOperation)(0),        // 4: phi.pi.v1.SyncboardOperation
-	(SyncboardOutcome)(0),          // 5: phi.pi.v1.SyncboardOutcome
-	(ProtocolErrorCode)(0),         // 6: phi.pi.v1.ProtocolErrorCode
-	(*PiToPhi)(nil),                // 7: phi.pi.v1.PiToPhi
-	(*PhiToPi)(nil),                // 8: phi.pi.v1.PhiToPi
-	(*Hello)(nil),                  // 9: phi.pi.v1.Hello
-	(*Accepted)(nil),               // 10: phi.pi.v1.Accepted
-	(*AgentStarted)(nil),           // 11: phi.pi.v1.AgentStarted
-	(*AgentSettled)(nil),           // 12: phi.pi.v1.AgentSettled
-	(*LifecycleRecord)(nil),        // 13: phi.pi.v1.LifecycleRecord
-	(*ModelSnapshot)(nil),          // 14: phi.pi.v1.ModelSnapshot
-	(*StateSnapshot)(nil),          // 15: phi.pi.v1.StateSnapshot
-	(*ContextUsageSnapshot)(nil),   // 16: phi.pi.v1.ContextUsageSnapshot
-	(*CompactReadiness)(nil),       // 17: phi.pi.v1.CompactReadiness
-	(*HistoryRequest)(nil),         // 18: phi.pi.v1.HistoryRequest
-	(*HistoryResponse)(nil),        // 19: phi.pi.v1.HistoryResponse
-	(*ModelRef)(nil),               // 20: phi.pi.v1.ModelRef
-	(*ModelsRequest)(nil),          // 21: phi.pi.v1.ModelsRequest
-	(*ModelsResponse)(nil),         // 22: phi.pi.v1.ModelsResponse
-	(*SetModelRequest)(nil),        // 23: phi.pi.v1.SetModelRequest
-	(*SetModelAck)(nil),            // 24: phi.pi.v1.SetModelAck
-	(*ThinkingLevelsRequest)(nil),  // 25: phi.pi.v1.ThinkingLevelsRequest
-	(*ThinkingLevelsResponse)(nil), // 26: phi.pi.v1.ThinkingLevelsResponse
-	(*SetThinkingRequest)(nil),     // 27: phi.pi.v1.SetThinkingRequest
-	(*SetThinkingAck)(nil),         // 28: phi.pi.v1.SetThinkingAck
-	(*CompactRequest)(nil),         // 29: phi.pi.v1.CompactRequest
-	(*CompactResult)(nil),          // 30: phi.pi.v1.CompactResult
-	(*ReloadRequest)(nil),          // 31: phi.pi.v1.ReloadRequest
-	(*ReloadAck)(nil),              // 32: phi.pi.v1.ReloadAck
-	(*ReloadReadiness)(nil),        // 33: phi.pi.v1.ReloadReadiness
-	(*SkillRef)(nil),               // 34: phi.pi.v1.SkillRef
-	(*SkillsRequest)(nil),          // 35: phi.pi.v1.SkillsRequest
-	(*SkillsResponse)(nil),         // 36: phi.pi.v1.SkillsResponse
-	(*InvokeSkillRequest)(nil),     // 37: phi.pi.v1.InvokeSkillRequest
-	(*InvokeSkillAck)(nil),         // 38: phi.pi.v1.InvokeSkillAck
-	(*SyncboardRequest)(nil),       // 39: phi.pi.v1.SyncboardRequest
-	(*SyncboardResponse)(nil),      // 40: phi.pi.v1.SyncboardResponse
-	(*ProtocolError)(nil),          // 41: phi.pi.v1.ProtocolError
+	(RunOutcome)(0),                  // 0: phi.pi.v1.RunOutcome
+	(LogicalState)(0),                // 1: phi.pi.v1.LogicalState
+	(CompactOutcome)(0),              // 2: phi.pi.v1.CompactOutcome
+	(ReloadDispatchOutcome)(0),       // 3: phi.pi.v1.ReloadDispatchOutcome
+	(SyncboardOperation)(0),          // 4: phi.pi.v1.SyncboardOperation
+	(SyncboardOutcome)(0),            // 5: phi.pi.v1.SyncboardOutcome
+	(ProtocolErrorCode)(0),           // 6: phi.pi.v1.ProtocolErrorCode
+	(*PiToPhi)(nil),                  // 7: phi.pi.v1.PiToPhi
+	(*PhiToPi)(nil),                  // 8: phi.pi.v1.PhiToPi
+	(*Hello)(nil),                    // 9: phi.pi.v1.Hello
+	(*Accepted)(nil),                 // 10: phi.pi.v1.Accepted
+	(*AgentStarted)(nil),             // 11: phi.pi.v1.AgentStarted
+	(*AgentSettled)(nil),             // 12: phi.pi.v1.AgentSettled
+	(*LifecycleRecord)(nil),          // 13: phi.pi.v1.LifecycleRecord
+	(*ModelSnapshot)(nil),            // 14: phi.pi.v1.ModelSnapshot
+	(*StateSnapshot)(nil),            // 15: phi.pi.v1.StateSnapshot
+	(*ContextUsageSnapshot)(nil),     // 16: phi.pi.v1.ContextUsageSnapshot
+	(*CompactReadiness)(nil),         // 17: phi.pi.v1.CompactReadiness
+	(*HistoryRequest)(nil),           // 18: phi.pi.v1.HistoryRequest
+	(*HistoryResponse)(nil),          // 19: phi.pi.v1.HistoryResponse
+	(*ModelRef)(nil),                 // 20: phi.pi.v1.ModelRef
+	(*ModelsRequest)(nil),            // 21: phi.pi.v1.ModelsRequest
+	(*ModelsResponse)(nil),           // 22: phi.pi.v1.ModelsResponse
+	(*SetModelRequest)(nil),          // 23: phi.pi.v1.SetModelRequest
+	(*SetModelAck)(nil),              // 24: phi.pi.v1.SetModelAck
+	(*ThinkingLevelsRequest)(nil),    // 25: phi.pi.v1.ThinkingLevelsRequest
+	(*ThinkingLevelsResponse)(nil),   // 26: phi.pi.v1.ThinkingLevelsResponse
+	(*SetThinkingRequest)(nil),       // 27: phi.pi.v1.SetThinkingRequest
+	(*SetThinkingAck)(nil),           // 28: phi.pi.v1.SetThinkingAck
+	(*CompactRequest)(nil),           // 29: phi.pi.v1.CompactRequest
+	(*CompactResult)(nil),            // 30: phi.pi.v1.CompactResult
+	(*ReloadRequest)(nil),            // 31: phi.pi.v1.ReloadRequest
+	(*ReloadAck)(nil),                // 32: phi.pi.v1.ReloadAck
+	(*ReloadReadiness)(nil),          // 33: phi.pi.v1.ReloadReadiness
+	(*SkillRef)(nil),                 // 34: phi.pi.v1.SkillRef
+	(*SkillsRequest)(nil),            // 35: phi.pi.v1.SkillsRequest
+	(*SkillsResponse)(nil),           // 36: phi.pi.v1.SkillsResponse
+	(*InvokeSkillRequest)(nil),       // 37: phi.pi.v1.InvokeSkillRequest
+	(*InvokeSkillAck)(nil),           // 38: phi.pi.v1.InvokeSkillAck
+	(*SyncboardRequest)(nil),         // 39: phi.pi.v1.SyncboardRequest
+	(*SyncboardResponse)(nil),        // 40: phi.pi.v1.SyncboardResponse
+	(*TranscriptSearchRequest)(nil),  // 41: phi.pi.v1.TranscriptSearchRequest
+	(*TranscriptSearchMatch)(nil),    // 42: phi.pi.v1.TranscriptSearchMatch
+	(*TranscriptSearchResponse)(nil), // 43: phi.pi.v1.TranscriptSearchResponse
+	(*ProtocolError)(nil),            // 44: phi.pi.v1.ProtocolError
 }
 var file_bridge_proto_depIdxs = []int32{
 	9,  // 0: phi.pi.v1.PiToPhi.hello:type_name -> phi.pi.v1.Hello
@@ -3606,43 +3917,46 @@ var file_bridge_proto_depIdxs = []int32{
 	38, // 11: phi.pi.v1.PiToPhi.invoke_skill_ack:type_name -> phi.pi.v1.InvokeSkillAck
 	32, // 12: phi.pi.v1.PiToPhi.reload_ack:type_name -> phi.pi.v1.ReloadAck
 	39, // 13: phi.pi.v1.PiToPhi.syncboard_request:type_name -> phi.pi.v1.SyncboardRequest
-	10, // 14: phi.pi.v1.PhiToPi.accepted:type_name -> phi.pi.v1.Accepted
-	41, // 15: phi.pi.v1.PhiToPi.protocol_error:type_name -> phi.pi.v1.ProtocolError
-	18, // 16: phi.pi.v1.PhiToPi.history_request:type_name -> phi.pi.v1.HistoryRequest
-	21, // 17: phi.pi.v1.PhiToPi.models_request:type_name -> phi.pi.v1.ModelsRequest
-	23, // 18: phi.pi.v1.PhiToPi.set_model_request:type_name -> phi.pi.v1.SetModelRequest
-	25, // 19: phi.pi.v1.PhiToPi.thinking_levels_request:type_name -> phi.pi.v1.ThinkingLevelsRequest
-	27, // 20: phi.pi.v1.PhiToPi.set_thinking_request:type_name -> phi.pi.v1.SetThinkingRequest
-	29, // 21: phi.pi.v1.PhiToPi.compact_request:type_name -> phi.pi.v1.CompactRequest
-	35, // 22: phi.pi.v1.PhiToPi.skills_request:type_name -> phi.pi.v1.SkillsRequest
-	37, // 23: phi.pi.v1.PhiToPi.invoke_skill_request:type_name -> phi.pi.v1.InvokeSkillRequest
-	31, // 24: phi.pi.v1.PhiToPi.reload_request:type_name -> phi.pi.v1.ReloadRequest
-	40, // 25: phi.pi.v1.PhiToPi.syncboard_response:type_name -> phi.pi.v1.SyncboardResponse
-	15, // 26: phi.pi.v1.Hello.current_state:type_name -> phi.pi.v1.StateSnapshot
-	0,  // 27: phi.pi.v1.AgentSettled.outcome:type_name -> phi.pi.v1.RunOutcome
-	0,  // 28: phi.pi.v1.LifecycleRecord.outcome:type_name -> phi.pi.v1.RunOutcome
-	1,  // 29: phi.pi.v1.StateSnapshot.state:type_name -> phi.pi.v1.LogicalState
-	14, // 30: phi.pi.v1.StateSnapshot.model:type_name -> phi.pi.v1.ModelSnapshot
-	13, // 31: phi.pi.v1.StateSnapshot.journal:type_name -> phi.pi.v1.LifecycleRecord
-	16, // 32: phi.pi.v1.StateSnapshot.context_usage:type_name -> phi.pi.v1.ContextUsageSnapshot
-	17, // 33: phi.pi.v1.StateSnapshot.compact_readiness:type_name -> phi.pi.v1.CompactReadiness
-	33, // 34: phi.pi.v1.StateSnapshot.reload_readiness:type_name -> phi.pi.v1.ReloadReadiness
-	20, // 35: phi.pi.v1.ModelsResponse.models:type_name -> phi.pi.v1.ModelRef
-	14, // 36: phi.pi.v1.CompactRequest.expected_model:type_name -> phi.pi.v1.ModelSnapshot
-	2,  // 37: phi.pi.v1.CompactResult.outcome:type_name -> phi.pi.v1.CompactOutcome
-	14, // 38: phi.pi.v1.ReloadRequest.expected_model:type_name -> phi.pi.v1.ModelSnapshot
-	3,  // 39: phi.pi.v1.ReloadAck.outcome:type_name -> phi.pi.v1.ReloadDispatchOutcome
-	34, // 40: phi.pi.v1.SkillsResponse.skills:type_name -> phi.pi.v1.SkillRef
-	4,  // 41: phi.pi.v1.SyncboardRequest.operation:type_name -> phi.pi.v1.SyncboardOperation
-	5,  // 42: phi.pi.v1.SyncboardResponse.outcome:type_name -> phi.pi.v1.SyncboardOutcome
-	6,  // 43: phi.pi.v1.ProtocolError.code:type_name -> phi.pi.v1.ProtocolErrorCode
-	7,  // 44: phi.pi.v1.Integration.Connect:input_type -> phi.pi.v1.PiToPhi
-	8,  // 45: phi.pi.v1.Integration.Connect:output_type -> phi.pi.v1.PhiToPi
-	45, // [45:46] is the sub-list for method output_type
-	44, // [44:45] is the sub-list for method input_type
-	44, // [44:44] is the sub-list for extension type_name
-	44, // [44:44] is the sub-list for extension extendee
-	0,  // [0:44] is the sub-list for field type_name
+	43, // 14: phi.pi.v1.PiToPhi.transcript_search_response:type_name -> phi.pi.v1.TranscriptSearchResponse
+	10, // 15: phi.pi.v1.PhiToPi.accepted:type_name -> phi.pi.v1.Accepted
+	44, // 16: phi.pi.v1.PhiToPi.protocol_error:type_name -> phi.pi.v1.ProtocolError
+	18, // 17: phi.pi.v1.PhiToPi.history_request:type_name -> phi.pi.v1.HistoryRequest
+	21, // 18: phi.pi.v1.PhiToPi.models_request:type_name -> phi.pi.v1.ModelsRequest
+	23, // 19: phi.pi.v1.PhiToPi.set_model_request:type_name -> phi.pi.v1.SetModelRequest
+	25, // 20: phi.pi.v1.PhiToPi.thinking_levels_request:type_name -> phi.pi.v1.ThinkingLevelsRequest
+	27, // 21: phi.pi.v1.PhiToPi.set_thinking_request:type_name -> phi.pi.v1.SetThinkingRequest
+	29, // 22: phi.pi.v1.PhiToPi.compact_request:type_name -> phi.pi.v1.CompactRequest
+	35, // 23: phi.pi.v1.PhiToPi.skills_request:type_name -> phi.pi.v1.SkillsRequest
+	37, // 24: phi.pi.v1.PhiToPi.invoke_skill_request:type_name -> phi.pi.v1.InvokeSkillRequest
+	31, // 25: phi.pi.v1.PhiToPi.reload_request:type_name -> phi.pi.v1.ReloadRequest
+	40, // 26: phi.pi.v1.PhiToPi.syncboard_response:type_name -> phi.pi.v1.SyncboardResponse
+	41, // 27: phi.pi.v1.PhiToPi.transcript_search_request:type_name -> phi.pi.v1.TranscriptSearchRequest
+	15, // 28: phi.pi.v1.Hello.current_state:type_name -> phi.pi.v1.StateSnapshot
+	0,  // 29: phi.pi.v1.AgentSettled.outcome:type_name -> phi.pi.v1.RunOutcome
+	0,  // 30: phi.pi.v1.LifecycleRecord.outcome:type_name -> phi.pi.v1.RunOutcome
+	1,  // 31: phi.pi.v1.StateSnapshot.state:type_name -> phi.pi.v1.LogicalState
+	14, // 32: phi.pi.v1.StateSnapshot.model:type_name -> phi.pi.v1.ModelSnapshot
+	13, // 33: phi.pi.v1.StateSnapshot.journal:type_name -> phi.pi.v1.LifecycleRecord
+	16, // 34: phi.pi.v1.StateSnapshot.context_usage:type_name -> phi.pi.v1.ContextUsageSnapshot
+	17, // 35: phi.pi.v1.StateSnapshot.compact_readiness:type_name -> phi.pi.v1.CompactReadiness
+	33, // 36: phi.pi.v1.StateSnapshot.reload_readiness:type_name -> phi.pi.v1.ReloadReadiness
+	20, // 37: phi.pi.v1.ModelsResponse.models:type_name -> phi.pi.v1.ModelRef
+	14, // 38: phi.pi.v1.CompactRequest.expected_model:type_name -> phi.pi.v1.ModelSnapshot
+	2,  // 39: phi.pi.v1.CompactResult.outcome:type_name -> phi.pi.v1.CompactOutcome
+	14, // 40: phi.pi.v1.ReloadRequest.expected_model:type_name -> phi.pi.v1.ModelSnapshot
+	3,  // 41: phi.pi.v1.ReloadAck.outcome:type_name -> phi.pi.v1.ReloadDispatchOutcome
+	34, // 42: phi.pi.v1.SkillsResponse.skills:type_name -> phi.pi.v1.SkillRef
+	4,  // 43: phi.pi.v1.SyncboardRequest.operation:type_name -> phi.pi.v1.SyncboardOperation
+	5,  // 44: phi.pi.v1.SyncboardResponse.outcome:type_name -> phi.pi.v1.SyncboardOutcome
+	42, // 45: phi.pi.v1.TranscriptSearchResponse.matches:type_name -> phi.pi.v1.TranscriptSearchMatch
+	6,  // 46: phi.pi.v1.ProtocolError.code:type_name -> phi.pi.v1.ProtocolErrorCode
+	7,  // 47: phi.pi.v1.Integration.Connect:input_type -> phi.pi.v1.PiToPhi
+	8,  // 48: phi.pi.v1.Integration.Connect:output_type -> phi.pi.v1.PhiToPi
+	48, // [48:49] is the sub-list for method output_type
+	47, // [47:48] is the sub-list for method input_type
+	47, // [47:47] is the sub-list for extension type_name
+	47, // [47:47] is the sub-list for extension extendee
+	0,  // [0:47] is the sub-list for field type_name
 }
 
 func init() { file_bridge_proto_init() }
@@ -3665,6 +3979,7 @@ func file_bridge_proto_init() {
 		(*PiToPhi_InvokeSkillAck)(nil),
 		(*PiToPhi_ReloadAck)(nil),
 		(*PiToPhi_SyncboardRequest)(nil),
+		(*PiToPhi_TranscriptSearchResponse)(nil),
 	}
 	file_bridge_proto_msgTypes[1].OneofWrappers = []any{
 		(*PhiToPi_Accepted)(nil),
@@ -3679,6 +3994,7 @@ func file_bridge_proto_init() {
 		(*PhiToPi_InvokeSkillRequest)(nil),
 		(*PhiToPi_ReloadRequest)(nil),
 		(*PhiToPi_SyncboardResponse)(nil),
+		(*PhiToPi_TranscriptSearchRequest)(nil),
 	}
 	file_bridge_proto_msgTypes[9].OneofWrappers = []any{}
 	file_bridge_proto_msgTypes[24].OneofWrappers = []any{}
@@ -3689,7 +4005,7 @@ func file_bridge_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bridge_proto_rawDesc), len(file_bridge_proto_rawDesc)),
 			NumEnums:      7,
-			NumMessages:   35,
+			NumMessages:   38,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

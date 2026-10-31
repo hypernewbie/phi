@@ -30,6 +30,7 @@ type Server struct {
 	onState          func(paneID, processID string, generation, pubRev uint64, running, hasState bool, model, thinkingLevel string, caps []string, usage *ContextUsage, readiness *Readiness, reload *ReloadReadiness)
 	onPeerDown       func(paneID, processID string, generation uint64)
 	histSeq          atomic.Uint64
+	transcriptSeq    atomic.Uint64
 	modelsSeq        atomic.Uint64
 	setSeq           atomic.Uint64
 	thinkingSeq      atomic.Uint64
@@ -770,6 +771,9 @@ func (s *Server) handleMessage(l *lease, p *peer, msg *pibridgepb.PiToPhi) error
 		return nil
 	case msg.GetHistoryResponse() != nil:
 		s.deliverHistory(l, p, msg.GetHistoryResponse())
+		return nil
+	case msg.GetTranscriptSearchResponse() != nil:
+		s.deliverTranscriptSearch(l, p, msg.GetTranscriptSearchResponse())
 		return nil
 	case msg.GetModelsResponse() != nil:
 		s.deliverModels(l, p, msg.GetModelsResponse())
