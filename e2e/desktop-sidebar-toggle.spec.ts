@@ -633,10 +633,9 @@ test('MVP desktop hides and restores a live terminal', async ({
                     const state = await terminalState(page, paneId);
                     return (
                         Math.abs(
+                            // The handle overlaps the border; it takes no layout space.
                             geometry.terminal -
-                                (before.terminal +
-                                    before.sidebar +
-                                    before.handle),
+                                (before.terminal + before.sidebar),
                         ) <= 2 &&
                         state !== null &&
                         state.cols > beforeTerm!.cols

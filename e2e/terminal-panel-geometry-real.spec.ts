@@ -321,7 +321,7 @@ async function desktopDrag(
     const beforeGrid = await waitForGrid(page, `before ${handleId}`);
     const handle = await page.locator(`#${handleId}`).boundingBox();
     if (!handle) throw new Error(`${handleId} has no bounds`);
-    expect(handle.width).toBe(24);
+    expect(handle.width).toBe(8);
     const beforeWidth = await page
         .locator(`#${panelId}`)
         .evaluate((element) => element.getBoundingClientRect().width);
@@ -373,6 +373,36 @@ async function touchDrag(page: Page, side: 'left' | 'right') {
     const box = await page.locator(handle).boundingBox();
     if (!box) throw new Error(`${handle} has no bounds`);
     expect(box.width).toBe(24);
+    const seam = await page.locator(handle).evaluate((element, left) => {
+        const panel = element.parentElement;
+        if (!panel) throw new Error('drawer resize target has no panel');
+        const panelBox = panel.getBoundingClientRect();
+        const handleBox = element.getBoundingClientRect();
+        const border = getComputedStyle(panel);
+        const grip = getComputedStyle(element, '::after');
+        const borderWidth = Number.parseFloat(
+            left ? border.borderRightWidth : border.borderLeftWidth,
+        );
+        const gripWidth = Number.parseFloat(grip.width);
+        const gripLeft = left
+            ? handleBox.left + Number.parseFloat(grip.left)
+            : handleBox.right - Number.parseFloat(grip.right) - gripWidth;
+        return {
+            borderWidth,
+            gripWidth,
+            opacity: Number(grip.opacity),
+            edgeError: Math.abs(
+                gripLeft -
+                    (left ? panelBox.right - borderWidth : panelBox.left),
+            ),
+        };
+    }, left);
+    expect(seam).toEqual({
+        borderWidth: 1,
+        gripWidth: 1,
+        opacity: 0,
+        edgeError: 0,
+    });
     const before = await page
         .locator(panel)
         .evaluate((element) => element.getBoundingClientRect().width);
@@ -476,9 +506,34 @@ async function contrast(page: Page, events: BrowserEvents) {
             const painted = foreground.rgb.map(
                 (channel, i) => channel * alpha + backdrop[i] * (1 - alpha),
             );
+            const left = handle.id === 'left-resize-handle';
+            const panel = document.getElementById(
+                left ? 'sidebar-panel' : 'diff-panel',
+            );
+            const terminal = document.querySelector('.terminal-panel');
+            if (!panel || !terminal) throw new Error('panel layout is missing');
+            const panelBox = panel.getBoundingClientRect();
+            const terminalBox = terminal.getBoundingClientRect();
+            const border = getComputedStyle(panel);
+            const borderWidth = Number.parseFloat(
+                left ? border.borderRightWidth : border.borderLeftWidth,
+            );
+            const lineLeft =
+                handle.getBoundingClientRect().left +
+                Number.parseFloat(bar.left);
             return {
                 foreground,
                 background,
+                gap: left
+                    ? terminalBox.left - panelBox.right
+                    : panelBox.left - terminalBox.right,
+                borderWidth,
+                edgeError: Math.abs(
+                    lineLeft -
+                        (left ? panelBox.right - borderWidth : panelBox.left),
+                ),
+                shadow: bar.boxShadow,
+                panelShadow: border.boxShadow,
                 barOpacity: Number(bar.opacity),
                 gutterOpacity: Number(gutter.opacity),
                 width: bar.width,
@@ -490,16 +545,21 @@ async function contrast(page: Page, events: BrowserEvents) {
         const hovered = state !== 'idle';
         await expect
             .poll(async () => (await measure(id)).barOpacity)
-            .toBe(hovered ? 1 : 0.35);
+            .toBe(hovered ? 1 : 0);
         const result = await measure(id);
         console.log(`contrast ${state} ${id}: ${JSON.stringify(result)}`);
         expect(result.selfCheck).toBeCloseTo(21, 5);
         expect(result.foreground.alpha).toBe(1);
         expect(result.background.alpha).toBe(0);
-        expect(result.barOpacity).toBe(hovered ? 1 : 0.35);
+        expect(result.barOpacity).toBe(hovered ? 1 : 0);
         expect(result.gutterOpacity).toBe(1);
-        expect(result.width).toBe(hovered ? '4px' : '3px');
-        // Idle grips are deliberately muted. Check the interactive state.
+        expect(result.width).toBe('1px');
+        expect(result.borderWidth).toBe(1);
+        expect(result.gap).toBe(0);
+        expect(result.edgeError).toBe(0);
+        expect(result.shadow).toBe('none');
+        expect(result.panelShadow).toBe('none');
+        // Idle uses only the panel border; hover highlights that same pixel.
         if (hovered) expect(result.contrast).toBeGreaterThanOrEqual(3);
     };
     await page.mouse.move(0, 0);
