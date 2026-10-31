@@ -84,8 +84,7 @@ while True: time.sleep(1)
             .poll(
                 async () => {
                     const from =
-                        Buffer.byteLength('archive book payload\r\n') *
-                            100000 -
+                        Buffer.byteLength('archive book payload\r\n') * 100000 -
                         256;
                     const response = await request.get(
                         `${phi.url}/api/terminals/${pane}/recording?from=${from}&through=18446744073709551615`,
