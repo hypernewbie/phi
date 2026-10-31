@@ -1869,7 +1869,12 @@ test('drawer handles resize with touch and mouse without stealing closed-edge in
                     side === 'left'
                         ? 'sidebar-drawer-resizer'
                         : 'diff-drawer-resizer';
-                await openDrawer(page, side);
+                const panel = await openDrawer(page, side);
+                expect(
+                    await panel.evaluate(
+                        (element) => getComputedStyle(element).boxShadow,
+                    ),
+                ).toBe('none');
                 const geometry = await handleGeometry(page, handleId);
                 expect(geometry.width).toBeCloseTo(24, 5);
                 expect(geometry.samples).toHaveLength(9);

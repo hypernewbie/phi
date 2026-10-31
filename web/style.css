@@ -5430,7 +5430,7 @@ html[data-phi-config-page] .settings-modal {
         z-index: 1000;
         transform: translateX(-100%);
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        box-shadow: 10px 0 30px rgba(0, 0, 0, 0.5);
+        box-shadow: none;
         border-right: 1px solid var(--bg-border);
     }
 
@@ -5497,7 +5497,7 @@ html[data-phi-config-page] .settings-modal {
         z-index: 1000;
         transform: translateX(100%);
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        box-shadow: -10px 0 30px rgba(0, 0, 0, 0.5);
+        box-shadow: none;
         border-left: 1px solid var(--bg-border);
     }
 
@@ -5932,7 +5932,7 @@ html[data-phi-config-page] .settings-modal {
         z-index: 1100;
         transform: translateX(-100%);
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        box-shadow: 10px 0 30px rgba(0, 0, 0, 0.5);
+        box-shadow: none;
     }
 
     .sidebar-panel.drawer-open {
@@ -5955,7 +5955,7 @@ html[data-phi-config-page] .settings-modal {
         z-index: 1200;
         transform: translateX(100%);
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        box-shadow: -10px 0 30px rgba(0, 0, 0, 0.5);
+        box-shadow: none;
         border-left: 1px solid var(--bg-border);
     }
 
