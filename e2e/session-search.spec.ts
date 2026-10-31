@@ -1,6 +1,6 @@
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { tabList } from './_tabs.js';
 import { startPhi, type PhiServer } from './_server.js';
 
@@ -22,7 +22,10 @@ type SearchTerm = {
     };
 };
 
-type SearchWindow = Window & { searchTerms?: SearchTerm[] };
+type SearchWindow = Window & {
+    searchTerms?: SearchTerm[];
+    searchCopies?: number;
+};
 
 let phi: PhiServer;
 
@@ -94,6 +97,16 @@ async function captureSearchTerms(page: Page) {
             },
         });
     });
+}
+
+async function typeFindQuery(input: Locator, query: string) {
+    await input.fill('');
+    await input.focus();
+    for (const character of query) {
+        await input.page().keyboard.type(character);
+        await expect(input).toBeFocused();
+    }
+    await expect(input).toHaveValue(query);
 }
 
 async function terminalBufferText(page: Page, paneId: string) {
@@ -200,6 +213,16 @@ test('Ctrl/Cmd+F searches resident terminal output without sending search keys t
     await page.setViewportSize({ width: 1440, height: 900 });
     await captureSearchTerms(page);
 
+    // Plain-HTTP tailnet clients have no Clipboard API. Search selections
+    // must not enter the legacy copy path and steal keyboard focus.
+    await page.addInitScript(() => {
+        Object.defineProperty(navigator, 'clipboard', { value: undefined });
+        const w = window as SearchWindow;
+        w.searchCopies = 0;
+        document.addEventListener('copy', () => {
+            w.searchCopies = (w.searchCopies ?? 0) + 1;
+        });
+    });
     await page.goto(phi.url);
     await page.locator(`.tab[data-pane-id="${piPane}"]`).click();
     await expect(page.locator(`#term-${piPane} .xterm`)).toBeVisible();
@@ -231,7 +254,7 @@ test('Ctrl/Cmd+F searches resident terminal output without sending search keys t
     );
     await piSource.selectOption('terminal');
     const piInput = piFind.locator('.find-input');
-    await piInput.fill('FIND-MATCH-');
+    await typeFindQuery(piInput, 'FIND-MATCH-');
     await expect
         .poll(() => terminalViewportText(page, piPane))
         .toContain('FIND-MATCH-037');
@@ -246,6 +269,25 @@ test('Ctrl/Cmd+F searches resident terminal output without sending search keys t
     await expect
         .poll(async () => (await terminalBufferText(page, piPane))?.text ?? '')
         .not.toContain('PTY INPUT:');
+    await typeFindQuery(piInput, 'ROW-150');
+    await expect
+        .poll(() => terminalViewportText(page, piPane))
+        .toContain('ROW-150');
+    await page.keyboard.press('Backspace');
+    await expect(piInput).toBeFocused();
+    await expect(piInput).toHaveValue('ROW-15');
+    const liveOutput = await request.post(
+        `${phi.url}/api/terminals/${piPane}/input`,
+        { data: { text: 'live-output-during-search' } },
+    );
+    expect(liveOutput.ok()).toBe(true);
+    await expect
+        .poll(async () => (await terminalBufferText(page, piPane))?.text ?? '')
+        .toContain('PTY INPUT: live-output-during-search');
+    // The addon refreshes highlights 200 ms after parsing live output.
+    await page.waitForTimeout(350);
+    await expect(piInput).toBeFocused();
+    await expect(piInput).toHaveValue('ROW-15');
     await piFind.locator('.find-input').press('Escape');
     await expect(piFind).toHaveCount(0);
 
@@ -303,11 +345,23 @@ test('Ctrl/Cmd+F searches resident terminal output without sending search keys t
     const shellSource = shellFind.locator('.find-source-select');
     await shellSource.selectOption('terminal');
     await expect(shellSource).toHaveValue('terminal');
-    await shellInput.fill('FIND-MATCH-');
+    await typeFindQuery(shellInput, 'FIND-MATCH-');
     await expect
         .poll(() => terminalViewportText(page, shellPane))
         .toContain('FIND-MATCH-037');
+    expect(
+        await page.evaluate(() => (window as SearchWindow).searchCopies),
+    ).toBe(0);
     await shellFind.locator('.find-input').press('Escape');
+    // A real mouse selection still uses the ordinary auto-copy path.
+    await page.locator(`#term-${shellPane} .xterm-screen`).dblclick({
+        position: { x: 20, y: 10 },
+    });
+    await expect
+        .poll(() =>
+            page.evaluate(() => (window as SearchWindow).searchCopies ?? 0),
+        )
+        .toBeGreaterThan(0);
 
     expect(
         await page.evaluate(
@@ -331,6 +385,9 @@ test('Ctrl/Cmd+F searches resident terminal output without sending search keys t
     });
     try {
         const mobilePage = await mobileContext.newPage();
+        await mobilePage.addInitScript(() => {
+            Object.defineProperty(navigator, 'clipboard', { value: undefined });
+        });
         await captureSearchTerms(mobilePage);
         await mobilePage.goto(phi.url);
         await mobilePage.locator('#hostname-display').tap();
@@ -371,7 +428,7 @@ test('Ctrl/Cmd+F searches resident terminal output without sending search keys t
         await expect(mobileFind).toBeVisible();
         const mobileFindInput = mobileFind.locator('.find-input');
         await mobileFindInput.tap();
-        await mobilePage.keyboard.type('FIND-MATCH-');
+        await typeFindQuery(mobileFindInput, 'FIND-MATCH-');
         await expect
             .poll(() => terminalViewportText(mobilePage, mobilePiPane))
             .toContain('FIND-MATCH-037');
