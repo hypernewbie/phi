@@ -4863,6 +4863,15 @@ body.has-terminal-bg
     width: 100%;
 }
 
+/* Desktop already has Settings in the header Config pill. The drawer footer
+   button is only the mobile entry point (the pill is hidden there). The
+   height guard keeps the button where the compact drawer layout applies. */
+@media (min-width: 769px) and (min-height: 501px) {
+    html[data-appearance-profile="desktop"] #drawer-settings-btn {
+        display: none;
+    }
+}
+
 .settings-modal [hidden] {
     display: none !important;
 }
