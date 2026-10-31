@@ -1165,7 +1165,7 @@ test.describe('migration failure', () => {
 
         if (startupFailure !== undefined) {
             expect(String(startupFailure)).toMatch(
-                /fixture server exited before health|fixture server exited during identity check|phi server never came up/,
+                /fixture server exited (?:before health|(?:before|during) identity check)|phi server never came up/,
             );
             expect(readFileSync(phi.logPath, 'utf8')).toContain(
                 'invalid access password configuration',
@@ -1817,6 +1817,13 @@ async function provePostCommitRefreshLoss(
                 `${response.status()} ${response.request().method()} ${path}`,
             );
         });
+        // The background session list must be healthy before dropping a reply.
+        expect(
+            await page.evaluate(
+                async () =>
+                    (await fetch('/api/sessions?coder=opencode')).status,
+            ),
+        ).toBe(200);
         const authWritesBefore = unrelatedAuthWrites;
         let resolveCommit!: (commit: {
             withheld: { token: string; jti: string; refreshHandle: string };
@@ -1931,13 +1938,18 @@ async function provePostCommitRefreshLoss(
         ).toBe(200);
         expect(await openSocket(page, '/ws/md-events', EVENTS)).toBe('open');
         expect(await openSocket(page, '/ws/control', CONTROL)).toBe('open');
-        expect(failedRequests).toEqual(['POST /api/auth/v2/refresh']);
         // The aborted refresh echoes once in the console; nothing else may.
-        expect(consoleErrors).toEqual([
-            'Failed to load resource: net::ERR_FAILED',
-        ]);
-        expect(pageErrors).toEqual([]);
-        expect(unexpectedResponses).toEqual([]);
+        expect({
+            failedRequests,
+            consoleErrors,
+            pageErrors,
+            unexpectedResponses,
+        }).toEqual({
+            failedRequests: ['POST /api/auth/v2/refresh'],
+            consoleErrors: ['Failed to load resource: net::ERR_FAILED'],
+            pageErrors: [],
+            unexpectedResponses: [],
+        });
     } finally {
         await context.close();
     }
@@ -1947,7 +1959,10 @@ test.describe('post-commit response loss', () => {
     let phi: PhiServer;
 
     test.beforeEach(async () => {
-        phi = await startPhi({ config: { sync_coordinator: '', peers: [] } });
+        // Auth recovery does not require an OpenCode 2 installation.
+        phi = await startPhi({
+            config: { sync_coordinator: '', peers: [], opencode_legacy: true },
+        });
         await lockServer(phi.url, PASSWORD);
     });
 
