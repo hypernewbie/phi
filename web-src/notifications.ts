@@ -5,6 +5,7 @@ import {
     type NotificationMetadata,
 } from './backend-store.js';
 import type { ToastOptions } from './types.js';
+import { queueDesktopNotification } from './desktop-notifications.js';
 
 type ToastType = NonNullable<ToastOptions['type']>;
 
@@ -147,6 +148,21 @@ function normalizeMetadataList(value: unknown): NotificationMetadata[] {
         entries.push(entry);
     }
     return entries;
+}
+
+function forwardDesktopNotification(
+    entry: Pick<NotificationMetadata, 'id' | 'type' | 'title' | 'message' | 'timestamp'>,
+    store: BackendStore | null,
+): void {
+    const profileId = store?.profileId;
+    queueDesktopNotification({
+        id: entry.id,
+        profileId: profileId && profileId !== '__default__' ? profileId : null,
+        title: entry.title,
+        message: entry.message,
+        type: entry.type,
+        timestamp: entry.timestamp,
+    });
 }
 
 function parseStoredNotifications(raw: string | null): NotificationMetadata[] {
@@ -624,6 +640,7 @@ export class NotificationManager {
         context.snapshot.unshift(metadata);
         context.snapshot.splice(MAX_RECORDS);
         this.scheduleWrite(context);
+        forwardDesktopNotification(metadata, context.store);
     }
 
     endContext(): void {
@@ -938,6 +955,7 @@ export class NotificationManager {
         this.announce(entry);
         this.renderHistory();
         this.updateControls();
+        forwardDesktopNotification(entry, entry.context?.store ?? null);
         return toast;
     }
 
@@ -1502,7 +1520,10 @@ export class NotificationManager {
         this.updateControls();
     }
 
-    private importLegacyToast(toast: HTMLDivElement): NotificationEntry {
+    private importLegacyToast(
+        toast: HTMLDivElement,
+        forward = false,
+    ): NotificationEntry {
         const type: ToastType = toast.classList.contains('toast-error')
             ? 'error'
             : toast.classList.contains('toast-success')
@@ -1524,6 +1545,9 @@ export class NotificationManager {
         this.entriesById.set(entry.id, entry);
         this.trimHistory();
         this.announce(entry);
+        if (forward) {
+            forwardDesktopNotification(entry, entry.context?.store ?? null);
+        }
         return entry;
     }
 
@@ -1598,7 +1622,7 @@ export class NotificationManager {
                     }
                     continue;
                 }
-                this.importLegacyToast(node);
+                this.importLegacyToast(node, true);
             }
         }
     }
