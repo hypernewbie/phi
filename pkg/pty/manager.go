@@ -829,7 +829,7 @@ type IdleNotification struct {
 }
 
 func (m *Manager) StartIdleWatcher(callback func(info IdleNotification)) {
-	go func() {
+	go obs.DoFeature("terminal", func(_ context.Context) {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 		notifiableCoders := map[string]bool{
@@ -892,5 +892,5 @@ func (m *Manager) StartIdleWatcher(callback func(info IdleNotification)) {
 				inst.mu.Unlock()
 			}
 		}
-	}()
+	})
 }
