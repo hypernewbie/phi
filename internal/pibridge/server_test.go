@@ -629,7 +629,7 @@ func TestServerHeldCallbackReportsCapturedState(t *testing.T) {
 	heldA := make(chan struct{})
 	releaseA := make(chan struct{})
 	var heldOnce sync.Once
-	s.SetOnState(func(_, _ string, gen, rev uint64, running, hasState bool, model, thinkingLevel string, caps []string, _ *ContextUsage, _ *Readiness) {
+	s.SetOnState(func(_, _ string, gen, rev uint64, running, hasState bool, model, thinkingLevel string, caps []string, _ *ContextUsage, _ *Readiness, _ *ReloadReadiness) {
 		if model == "provA/modelA" {
 			heldOnce.Do(func() { close(heldA) })
 			<-releaseA
@@ -710,7 +710,7 @@ func TestServerHelloWithoutStateRepublishRules(t *testing.T) {
 
 	var mu sync.Mutex
 	var calls []stateCall
-	s.SetOnState(func(_, _ string, gen, rev uint64, running, hasState bool, model, thinkingLevel string, caps []string, _ *ContextUsage, _ *Readiness) {
+	s.SetOnState(func(_, _ string, gen, rev uint64, running, hasState bool, model, thinkingLevel string, caps []string, _ *ContextUsage, _ *Readiness, _ *ReloadReadiness) {
 		mu.Lock()
 		calls = append(calls, stateCall{gen: gen, rev: rev, running: running, hasState: hasState, model: model, thinkingLevel: thinkingLevel, caps: append([]string(nil), caps...)})
 		mu.Unlock()
@@ -781,7 +781,7 @@ func TestServerHelloUnknownThinkingLevelAccepted(t *testing.T) {
 
 	var mu sync.Mutex
 	var calls []stateCall
-	s.SetOnState(func(_, _ string, gen, rev uint64, running, hasState bool, model, thinkingLevel string, caps []string, _ *ContextUsage, _ *Readiness) {
+	s.SetOnState(func(_, _ string, gen, rev uint64, running, hasState bool, model, thinkingLevel string, caps []string, _ *ContextUsage, _ *Readiness, _ *ReloadReadiness) {
 		mu.Lock()
 		calls = append(calls, stateCall{gen: gen, rev: rev, running: running, hasState: hasState, model: model, thinkingLevel: thinkingLevel, caps: append([]string(nil), caps...)})
 		mu.Unlock()

@@ -24590,6 +24590,7 @@ var MAX_THINKING_MODEL_ID_BYTES = 256;
 var MAX_THINKING_LEVEL_BYTES = 16;
 var CAPABILITY_CONTEXT = "pi.context.v1";
 var CAPABILITY_COMPACT = "pi.compact.v1";
+var CAPABILITY_RELOAD = "pi.reload.v1";
 var CAPABILITY_SKILLS = "pi.skills.v1";
 var MAX_SKILL_ENTRIES = 200;
 var MAX_SKILL_NAME_BYTES = 64;
@@ -24713,6 +24714,99 @@ var BoundedQueue = class {
     this.inFlightBytes = 0;
   }
 };
+
+// src/tui-probe.ts
+var PROBE_KEY = "phi.pi-phi.focus-probe";
+function captureFocusedComponent(ui, key) {
+  try {
+    if (typeof ui !== "object" || ui === null) return null;
+    const candidate = ui.setWidget;
+    if (typeof candidate !== "function") return null;
+    const setWidget = candidate;
+    let tui = null;
+    try {
+      setWidget(
+        key || PROBE_KEY,
+        (captured) => {
+          tui = captured;
+          return { render: () => [] };
+        },
+        { placement: "belowEditor" }
+      );
+    } catch {
+      return null;
+    } finally {
+      try {
+        setWidget(key || PROBE_KEY, void 0);
+      } catch {
+      }
+    }
+    if (typeof tui !== "object" || tui === null) return null;
+    const getFocused = tui.getFocusedComponent;
+    if (typeof getFocused !== "function") return null;
+    const focused = getFocused.call(tui);
+    return typeof focused === "object" && focused !== null ? focused : null;
+  } catch {
+    return null;
+  }
+}
+
+// src/native-reload.ts
+var PROBE_KEY2 = "phi.pi-phi.reload-probe";
+function freshReloadLatch() {
+  return {
+    baseline: null,
+    pending: null,
+    highWater: null,
+    drain: null,
+    active: null
+  };
+}
+function readStockEditor(ctx) {
+  try {
+    const ui = ctx.ui;
+    const getEditorComponent = ui.getEditorComponent;
+    if (typeof getEditorComponent !== "function") return null;
+    if (getEditorComponent.call(ui) !== void 0) return null;
+    const editor = captureFocusedComponent(ui, PROBE_KEY2);
+    if (!editor || editor.constructor?.name !== "CustomEditor") return null;
+    if (!Array.isArray(editor.history) || !editor.history.every((entry) => typeof entry === "string")) {
+      return null;
+    }
+    const submit = editor.onSubmit;
+    if (typeof submit !== "function" || submit.constructor?.name !== "AsyncFunction") {
+      return null;
+    }
+    return { editor, submit };
+  } catch {
+    return null;
+  }
+}
+function captureNativeReloadBaseline(ctx, state) {
+  if (state.baseline) return true;
+  const candidate = readStockEditor(ctx);
+  if (!candidate) return false;
+  state.baseline = candidate;
+  return true;
+}
+function invokeNativeReload(ctx, state) {
+  const baseline = state.baseline;
+  if (!baseline) return { entered: false };
+  const current = readStockEditor(ctx);
+  if (!current || current.editor !== baseline.editor || current.submit !== baseline.submit) {
+    return { entered: false };
+  }
+  try {
+    return {
+      entered: true,
+      completion: Promise.resolve(
+        baseline.submit.call(baseline.editor, "/reload")
+      )
+    };
+  } catch (error) {
+    return { entered: true, completion: Promise.reject(error) };
+  }
+}
 
 // src/runtime.ts
 var import_node_crypto = require("node:crypto");
@@ -25673,6 +25767,9 @@ var PiToPhi = {
       case "invokeSkillAck":
         InvokeSkillAck.encode(message.payload.value, writer.uint32(194).fork()).join();
         break;
+      case "reloadAck":
+        ReloadAck.encode(message.payload.value, writer.uint32(202).fork()).join();
+        break;
     }
     return writer;
   },
@@ -25797,6 +25894,13 @@ var PiToPhi = {
             message.payload = { $case: "invokeSkillAck", value: InvokeSkillAck.decode(reader, reader.uint32()) };
             continue;
           }
+          case 25: {
+            if (tag !== 202) {
+              break;
+            }
+            message.payload = { $case: "reloadAck", value: ReloadAck.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -25892,6 +25996,12 @@ var PiToPhi = {
         }
         break;
       }
+      case "reloadAck": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = { $case: "reloadAck", value: ReloadAck.fromPartial(object.payload.value) };
+        }
+        break;
+      }
     }
     return message;
   }
@@ -25943,6 +26053,9 @@ var PhiToPi = {
         break;
       case "invokeSkillRequest":
         InvokeSkillRequest.encode(message.payload.value, writer.uint32(170).fork()).join();
+        break;
+      case "reloadRequest":
+        ReloadRequest.encode(message.payload.value, writer.uint32(178).fork()).join();
         break;
     }
     return writer;
@@ -26060,6 +26173,13 @@ var PhiToPi = {
             };
             continue;
           }
+          case 22: {
+            if (tag !== 178) {
+              break;
+            }
+            message.payload = { $case: "reloadRequest", value: ReloadRequest.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -26146,6 +26266,12 @@ var PhiToPi = {
             $case: "invokeSkillRequest",
             value: InvokeSkillRequest.fromPartial(object.payload.value)
           };
+        }
+        break;
+      }
+      case "reloadRequest": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = { $case: "reloadRequest", value: ReloadRequest.fromPartial(object.payload.value) };
         }
         break;
       }
@@ -26675,7 +26801,8 @@ function createBaseStateSnapshot() {
     stateRevision: 0n,
     thinkingLevel: "",
     contextUsage: void 0,
-    compactReadiness: void 0
+    compactReadiness: void 0,
+    reloadReadiness: void 0
   };
 }
 var StateSnapshot = {
@@ -26712,6 +26839,9 @@ var StateSnapshot = {
     }
     if (message.compactReadiness !== void 0) {
       CompactReadiness.encode(message.compactReadiness, writer.uint32(90).fork()).join();
+    }
+    if (message.reloadReadiness !== void 0) {
+      ReloadReadiness.encode(message.reloadReadiness, writer.uint32(98).fork()).join();
     }
     return writer;
   },
@@ -26798,6 +26928,13 @@ var StateSnapshot = {
             message.compactReadiness = CompactReadiness.decode(reader, reader.uint32());
             continue;
           }
+          case 12: {
+            if (tag !== 98) {
+              break;
+            }
+            message.reloadReadiness = ReloadReadiness.decode(reader, reader.uint32());
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -26824,6 +26961,7 @@ var StateSnapshot = {
     message.thinkingLevel = object.thinkingLevel ?? "";
     message.contextUsage = object.contextUsage !== void 0 && object.contextUsage !== null ? ContextUsageSnapshot.fromPartial(object.contextUsage) : void 0;
     message.compactReadiness = object.compactReadiness !== void 0 && object.compactReadiness !== null ? CompactReadiness.fromPartial(object.compactReadiness) : void 0;
+    message.reloadReadiness = object.reloadReadiness !== void 0 && object.reloadReadiness !== null ? ReloadReadiness.fromPartial(object.reloadReadiness) : void 0;
     return message;
   }
 };
@@ -27896,6 +28034,341 @@ var CompactResult = {
     return message;
   }
 };
+function createBaseReloadRequest() {
+  return {
+    requestId: "",
+    expectedSessionId: "",
+    expectedLeafId: "",
+    expectedModel: void 0,
+    expectedRunId: void 0,
+    expectedContextRevision: void 0
+  };
+}
+var ReloadRequest = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.expectedSessionId !== "") {
+      writer.uint32(18).string(message.expectedSessionId);
+    }
+    if (message.expectedLeafId !== "") {
+      writer.uint32(26).string(message.expectedLeafId);
+    }
+    if (message.expectedModel !== void 0) {
+      ModelSnapshot.encode(message.expectedModel, writer.uint32(34).fork()).join();
+    }
+    if (message.expectedRunId !== void 0) {
+      if (BigInt.asUintN(64, message.expectedRunId) !== message.expectedRunId) {
+        throw new globalThis.Error("value provided for field message.expectedRunId of type uint64 too large");
+      }
+      writer.uint32(40).uint64(message.expectedRunId);
+    }
+    if (message.expectedContextRevision !== void 0) {
+      if (BigInt.asUintN(64, message.expectedContextRevision) !== message.expectedContextRevision) {
+        throw new globalThis.Error("value provided for field message.expectedContextRevision of type uint64 too large");
+      }
+      writer.uint32(48).uint64(message.expectedContextRevision);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseReloadRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+            message.expectedSessionId = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+            message.expectedLeafId = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+            message.expectedModel = ModelSnapshot.decode(reader, reader.uint32());
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+            message.expectedRunId = reader.uint64();
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+            message.expectedContextRevision = reader.uint64();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return ReloadRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseReloadRequest();
+    message.requestId = object.requestId ?? "";
+    message.expectedSessionId = object.expectedSessionId ?? "";
+    message.expectedLeafId = object.expectedLeafId ?? "";
+    message.expectedModel = object.expectedModel !== void 0 && object.expectedModel !== null ? ModelSnapshot.fromPartial(object.expectedModel) : void 0;
+    message.expectedRunId = object.expectedRunId !== void 0 && object.expectedRunId !== null ? BigInt(object.expectedRunId) : void 0;
+    message.expectedContextRevision = object.expectedContextRevision !== void 0 && object.expectedContextRevision !== null ? BigInt(object.expectedContextRevision) : void 0;
+    return message;
+  }
+};
+function createBaseReloadAck() {
+  return { requestId: "", outcome: 0, reason: "" };
+}
+var ReloadAck = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    if (message.outcome !== 0) {
+      writer.uint32(16).int32(message.outcome);
+    }
+    if (message.reason !== "") {
+      writer.uint32(26).string(message.reason);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseReloadAck();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+            message.outcome = reader.int32();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return ReloadAck.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseReloadAck();
+    message.requestId = object.requestId ?? "";
+    message.outcome = object.outcome ?? 0;
+    message.reason = object.reason ?? "";
+    return message;
+  }
+};
+function createBaseReloadReadiness() {
+  return {
+    runId: void 0,
+    contextRevision: void 0,
+    idle: false,
+    hasPendingMessages: false,
+    compactionActive: false,
+    compactPending: false,
+    reloadPending: false,
+    highWater: void 0
+  };
+}
+var ReloadReadiness = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.runId !== void 0) {
+      if (BigInt.asUintN(64, message.runId) !== message.runId) {
+        throw new globalThis.Error("value provided for field message.runId of type uint64 too large");
+      }
+      writer.uint32(8).uint64(message.runId);
+    }
+    if (message.contextRevision !== void 0) {
+      if (BigInt.asUintN(64, message.contextRevision) !== message.contextRevision) {
+        throw new globalThis.Error("value provided for field message.contextRevision of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.contextRevision);
+    }
+    if (message.idle !== false) {
+      writer.uint32(24).bool(message.idle);
+    }
+    if (message.hasPendingMessages !== false) {
+      writer.uint32(32).bool(message.hasPendingMessages);
+    }
+    if (message.compactionActive !== false) {
+      writer.uint32(40).bool(message.compactionActive);
+    }
+    if (message.compactPending !== false) {
+      writer.uint32(48).bool(message.compactPending);
+    }
+    if (message.reloadPending !== false) {
+      writer.uint32(56).bool(message.reloadPending);
+    }
+    if (message.highWater !== void 0) {
+      if (BigInt.asUintN(64, message.highWater) !== message.highWater) {
+        throw new globalThis.Error("value provided for field message.highWater of type uint64 too large");
+      }
+      writer.uint32(64).uint64(message.highWater);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseReloadReadiness();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+            message.runId = reader.uint64();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+            message.contextRevision = reader.uint64();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+            message.idle = reader.bool();
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+            message.hasPendingMessages = reader.bool();
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+            message.compactionActive = reader.bool();
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+            message.compactPending = reader.bool();
+            continue;
+          }
+          case 7: {
+            if (tag !== 56) {
+              break;
+            }
+            message.reloadPending = reader.bool();
+            continue;
+          }
+          case 8: {
+            if (tag !== 64) {
+              break;
+            }
+            message.highWater = reader.uint64();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return ReloadReadiness.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseReloadReadiness();
+    message.runId = object.runId !== void 0 && object.runId !== null ? BigInt(object.runId) : void 0;
+    message.contextRevision = object.contextRevision !== void 0 && object.contextRevision !== null ? BigInt(object.contextRevision) : void 0;
+    message.idle = object.idle ?? false;
+    message.hasPendingMessages = object.hasPendingMessages ?? false;
+    message.compactionActive = object.compactionActive ?? false;
+    message.compactPending = object.compactPending ?? false;
+    message.reloadPending = object.reloadPending ?? false;
+    message.highWater = object.highWater !== void 0 && object.highWater !== null ? BigInt(object.highWater) : void 0;
+    return message;
+  }
+};
 function createBaseSkillRef() {
   return { name: "", description: "" };
 }
@@ -28323,6 +28796,7 @@ var BridgeChannel = class {
   writerActive = false;
   writerError = null;
   closed = false;
+  ended = false;
   blockedTimeout = false;
   acceptedWaiters = [];
   /** Open the stream, send Hello, and await Accepted or a status. */
@@ -28428,9 +28902,8 @@ var BridgeChannel = class {
     return true;
   }
   /**
-   * Best-effort bounded drain: wait until the outbound queue
-   * (queued plus in-flight) is empty or the deadline expires,
-   * then close. A dead stream or writer error closes
+   * Drain queued frames, half-close, then wait for the server's
+   * terminal status. Both waits are bounded; a dead stream closes
    * immediately. Never rejects.
    */
   drainAndClose(timeoutMs) {
@@ -28438,15 +28911,47 @@ var BridgeChannel = class {
       this.close();
       return Promise.resolve();
     }
+    const stream = this.stream;
     const deadline = Date.now() + Math.max(0, timeoutMs);
     return new Promise((resolve) => {
-      const tick = () => {
-        if (this.closed || this.stream === null || this.writerError || this.queue.outstanding === 0 || Date.now() >= deadline) {
-          this.close();
-          resolve();
+      let finished = false;
+      let pollTimer = null;
+      let statusTimer = null;
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        if (pollTimer !== null) clearTimeout(pollTimer);
+        if (statusTimer !== null) clearTimeout(statusTimer);
+        stream.removeListener("status", finish);
+        this.close();
+        resolve();
+      };
+      const halfClose = () => {
+        if (finished) return;
+        if (this.closed || this.stream !== stream) {
+          finish();
           return;
         }
-        setTimeout(tick, DRAIN_POLL_MS);
+        stream.once("status", finish);
+        statusTimer = setTimeout(finish, Math.max(0, timeoutMs));
+        this.ended = true;
+        try {
+          stream.end();
+        } catch {
+          finish();
+        }
+      };
+      const tick = () => {
+        if (finished) return;
+        if (this.closed || this.stream !== stream || this.writerError) {
+          finish();
+          return;
+        }
+        if (this.queue.outstanding === 0 || Date.now() >= deadline) {
+          halfClose();
+          return;
+        }
+        pollTimer = setTimeout(tick, DRAIN_POLL_MS);
       };
       tick();
     });
@@ -28457,7 +28962,7 @@ var BridgeChannel = class {
     this.closed = true;
     this.failWaiters(new Error("channel closed"));
     try {
-      this.stream?.end();
+      if (!this.ended) this.stream?.end();
     } catch {
     }
     try {
@@ -28542,12 +29047,7 @@ var BridgeChannel = class {
 };
 
 // src/history-reader.ts
-var PROBE_KEY = "phi.pi-phi.history-probe";
-function asSetWidget(ui) {
-  if (typeof ui !== "object" || ui === null) return null;
-  const fn = ui.setWidget;
-  return typeof fn === "function" ? fn : null;
-}
+var PROBE_KEY3 = "phi.pi-phi.history-probe";
 function readEditorHistory(ui) {
   try {
     return readEditorHistoryInner(ui);
@@ -28556,37 +29056,8 @@ function readEditorHistory(ui) {
   }
 }
 function readEditorHistoryInner(ui) {
-  const setWidget = asSetWidget(ui);
-  if (!setWidget) return null;
-  let tui = null;
-  try {
-    setWidget(
-      PROBE_KEY,
-      (captured) => {
-        tui = captured;
-        return { render: () => [] };
-      },
-      { placement: "belowEditor" }
-    );
-  } catch {
-    return null;
-  } finally {
-    try {
-      setWidget(PROBE_KEY, void 0);
-    } catch {
-    }
-  }
-  if (tui === null) return null;
-  if (typeof tui !== "object" || tui === null) return null;
-  const getFocused = tui.getFocusedComponent;
-  if (typeof getFocused !== "function") return null;
-  let focused;
-  try {
-    focused = getFocused.call(tui);
-  } catch {
-    return null;
-  }
-  if (typeof focused !== "object" || focused === null) return null;
+  const focused = captureFocusedComponent(ui, PROBE_KEY3);
+  if (!focused) return null;
   const history = focused.history;
   if (!Array.isArray(history)) return null;
   for (const entry of history) {
@@ -28629,13 +29100,31 @@ function isTerminalConnectError(err) {
 }
 var COMPACT_ID_PATTERN = /^[1-9][0-9]{0,19}$/;
 var MAX_UINT64 = (1n << 64n) - 1n;
-function parseCompactId(id) {
+function parseMutationId(id) {
   if (typeof id !== "string" || !COMPACT_ID_PATTERN.test(id)) return null;
   const value = BigInt(id);
   return value <= MAX_UINT64 ? value : null;
 }
 function isValidCompactIdentity(value) {
   return typeof value === "string" && value.length >= 1 && value.length <= MAX_COMPACT_IDENTITY_CHARS;
+}
+function isValidReloadLeaf(value) {
+  return typeof value === "string" && value.length <= MAX_COMPACT_IDENTITY_CHARS;
+}
+function sampleIdlePair(ctx) {
+  let idle = false;
+  let hasPendingMessages = true;
+  try {
+    idle = ctx.isIdle() === true;
+  } catch {
+    idle = false;
+  }
+  try {
+    hasPendingMessages = ctx.hasPendingMessages() !== false;
+  } catch {
+    hasPendingMessages = true;
+  }
+  return { idle, hasPendingMessages };
 }
 var INVALID_SAMPLE = /* @__PURE__ */ Symbol("invalid");
 function usageField(value, positive) {
@@ -28703,6 +29192,12 @@ var Runtime = class {
   running = false;
   seq = 0n;
   runId = 0n;
+  /**
+   * Reload context fence. Advances on user-message start,
+   * compaction start, and tree navigation; never on settlement
+   * or assistant output.
+   */
+  contextRevision = 0n;
   revision = 0n;
   journal = [];
   journalGap = false;
@@ -28720,15 +29215,20 @@ var Runtime = class {
   modelsAccepted = false;
   thinkingAccepted = false;
   compactAccepted = false;
+  reloadAccepted = false;
   skillsAccepted = false;
   /** getContextUsage present on the latest event context. */
   contextApi = false;
   /** compact/isIdle/hasPendingMessages present on the latest context. */
   compactApi = false;
+  /** isIdle/hasPendingMessages present on the latest context. */
+  reloadApi = false;
   /** Latest validated context measurement; null means none. */
   contextSample = null;
   /** Latest idle/queued sample; null when the trio is unavailable. */
   readinessSample = null;
+  /** Latest idle/queued sample for Reload; null without the pair. */
+  reloadSample = null;
   /** Native compaction start observed without its end. */
   compactionActive = false;
   /** Final assistant stop reason of the current run, if observed. */
@@ -28736,6 +29236,11 @@ var Runtime = class {
   /** When the current stream was accepted; null while connecting. */
   connectedAt = null;
   shutdownRequested = false;
+  /** Channel whose drain must wait for a synchronous Reload receipt enqueue. */
+  reloadDispatchChannel = null;
+  reloadReceiptChannel = null;
+  reloadDrainDeferred = false;
+  reloadDrainResolve = null;
   backoffMs;
   retryTimer = null;
   compactSettleTimer = null;
@@ -28743,6 +29248,10 @@ var Runtime = class {
   /** Process-owned compaction latch, shared across runtimes. */
   get compact() {
     return this.opts.compactState;
+  }
+  /** Process-owned Reload latch; null in runtimes without one. */
+  get reload() {
+    return this.opts.reloadState ?? null;
   }
   /** Begin connecting; never throws, never blocks Pi startup. */
   start(ctx) {
@@ -28760,8 +29269,30 @@ var Runtime = class {
         }
       }
     };
+    const reload = this.reload;
+    if (reload) {
+      reload.active = {
+        runtimeId: this.runtimeId,
+        notify: () => {
+          try {
+            this.refreshFromLive();
+            this.sendSnapshot(
+              this.running ? 2 /* LOGICAL_STATE_RUNNING */ : 1 /* LOGICAL_STATE_IDLE */
+            );
+          } catch {
+          }
+        }
+      };
+    }
     this.noteView(ctx);
-    void this.attempt();
+    const drain = this.opts.reloadState?.drain;
+    if (drain) {
+      void drain.then(() => {
+        if (!this.shutdownRequested) void this.attempt();
+      });
+    } else {
+      void this.attempt();
+    }
   }
   /** A replacement session refreshes identities and the snapshot. */
   onSessionStart(ctx) {
@@ -28829,13 +29360,13 @@ var Runtime = class {
    * Publish the newest sample outside a lifecycle transition.
    * Bounded nonfatal admission: a miss keeps the newest sample
    * for the next authoritative baseline or transition. Sends
-   * nothing when neither telemetry API is available. Never
+   * nothing when no telemetry API is available. Never
    * throws: a publish failure is an admission miss, so the
    * stream receiver and event handlers stay nonthrowing.
    */
   publishContextOnly() {
     if (this.lastCtx) this.sampleTelemetry(this.lastCtx);
-    if (!this.contextApi && !this.compactApi) return;
+    if (!this.contextApi && !this.compactApi && !this.reloadApi) return;
     if (!this.channel) return;
     try {
       this.channel.sendNonfatal({
@@ -28851,6 +29382,20 @@ var Runtime = class {
       });
     } catch {
     }
+  }
+  /**
+   * Map one message_start edge. Only the role is inspected, never
+   * message contents. A user message changes the reload context
+   * fence and publishes the new counter at once, including while
+   * a run continues, so a queued follow-up consumed inside one
+   * logical run still invalidates waiting Reload work.
+   */
+  onMessageStart(ctx, role) {
+    if (this.shutdownRequested) return;
+    this.noteView(ctx);
+    if (role !== "user") return;
+    this.contextRevision += 1n;
+    this.publishContextOnly();
   }
   /**
    * Map one agent_settled edge. A settlement with no observed run is
@@ -28921,6 +29466,7 @@ var Runtime = class {
   /** Tree navigation refreshes identities and the snapshot. */
   onSessionTree(ctx) {
     if (this.shutdownRequested) return;
+    this.contextRevision += 1n;
     this.noteView(ctx);
     this.sendSnapshot(
       this.running ? 2 /* LOGICAL_STATE_RUNNING */ : 1 /* LOGICAL_STATE_IDLE */
@@ -28935,6 +29481,7 @@ var Runtime = class {
   onCompactStart(ctx) {
     if (this.shutdownRequested) return;
     this.compactionActive = true;
+    this.contextRevision += 1n;
     this.noteView(ctx);
     this.publishContextOnly();
   }
@@ -28985,6 +29532,10 @@ var Runtime = class {
     if (this.compact.active?.runtimeId === this.runtimeId) {
       this.compact.active = null;
     }
+    const reload = this.reload;
+    if (reload?.active?.runtimeId === this.runtimeId) {
+      reload.active = null;
+    }
     if (this.retryTimer) {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
@@ -28996,7 +29547,45 @@ var Runtime = class {
     const channel = this.channel;
     this.channel = null;
     this.starting = false;
-    if (channel) void channel.drainAndClose(SHUTDOWN_DRAIN_MS);
+    if (channel) {
+      if (channel === this.reloadDispatchChannel) {
+        this.reloadDrainDeferred = true;
+        this.installReloadDrainBarrier();
+      } else if (channel === this.reloadReceiptChannel) {
+        this.installReloadDrainBarrier();
+        this.drainReloadChannel(channel);
+      } else {
+        void channel.drainAndClose(SHUTDOWN_DRAIN_MS);
+      }
+    }
+  }
+  /** Finish the synchronous entry window; drain only after its receipt is queued. */
+  finishReloadDispatch(channel) {
+    if (this.reloadDispatchChannel !== channel) return;
+    this.reloadDispatchChannel = null;
+    if (!this.reloadDrainDeferred) return;
+    this.reloadDrainDeferred = false;
+    this.drainReloadChannel(channel);
+  }
+  /** Hold a replacement runtime until this stream reaches terminal status. */
+  installReloadDrainBarrier() {
+    const reload = this.opts.reloadState;
+    if (!reload) return;
+    let barrier;
+    barrier = new Promise((resolve) => {
+      this.reloadDrainResolve = () => {
+        if (reload.drain === barrier) reload.drain = null;
+        resolve();
+      };
+    });
+    reload.drain = barrier;
+  }
+  drainReloadChannel(channel) {
+    const resolve = this.reloadDrainResolve;
+    this.reloadDrainResolve = null;
+    const drain = channel.drainAndClose(SHUTDOWN_DRAIN_MS);
+    if (resolve) void drain.then(resolve, resolve);
+    else void drain;
   }
   get isRunning() {
     return this.running;
@@ -29022,6 +29611,7 @@ var Runtime = class {
   sampleTelemetry(ctx) {
     this.contextApi = typeof ctx.getContextUsage === "function";
     this.compactApi = typeof ctx.compact === "function" && typeof ctx.isIdle === "function" && typeof ctx.hasPendingMessages === "function";
+    this.reloadApi = typeof ctx.isIdle === "function" && typeof ctx.hasPendingMessages === "function";
     if (this.contextApi) {
       try {
         this.contextSample = normalizeContextUsage(
@@ -29034,21 +29624,14 @@ var Runtime = class {
       this.contextSample = null;
     }
     if (this.compactApi) {
-      let idle = false;
-      let hasPendingMessages = true;
-      try {
-        idle = ctx.isIdle() === true;
-      } catch {
-        idle = false;
-      }
-      try {
-        hasPendingMessages = ctx.hasPendingMessages() !== false;
-      } catch {
-        hasPendingMessages = true;
-      }
-      this.readinessSample = { idle, hasPendingMessages };
+      this.readinessSample = sampleIdlePair(ctx);
     } else {
       this.readinessSample = null;
+    }
+    if (this.reloadApi) {
+      this.reloadSample = sampleIdlePair(ctx);
+    } else {
+      this.reloadSample = null;
     }
   }
   refreshIdentities(ctx) {
@@ -29152,7 +29735,30 @@ var Runtime = class {
         hasPendingMessages: this.readinessSample.hasPendingMessages,
         compactionActive: this.compactionActive,
         bridgePending: this.compact.pending !== null
-      }) : void 0
+      }) : void 0,
+      reloadReadiness: this.reloadReadiness()
+    });
+  }
+  /**
+   * Reload readiness sample, or undefined when the idle/pending
+   * pair is unavailable. Run and context counters are always
+   * explicit, including zero; only the request high-water mark
+   * stays absent until the first recognized ID.
+   */
+  reloadReadiness() {
+    const reload = this.reload;
+    if (!reload || !this.reloadApi || !this.reloadSample) {
+      return void 0;
+    }
+    return ReloadReadiness.create({
+      runId: this.runId,
+      contextRevision: this.contextRevision,
+      idle: this.reloadSample.idle,
+      hasPendingMessages: this.reloadSample.hasPendingMessages,
+      compactionActive: this.compactionActive,
+      compactPending: this.compact.pending !== null,
+      reloadPending: reload.pending !== null,
+      highWater: reload.highWater ?? void 0
     });
   }
   /**
@@ -29162,13 +29768,17 @@ var Runtime = class {
    * lifecycle-only. Models needs only the registry and the host
    * switch call, so it is always advertised. Context needs
    * getContextUsage; compact needs the compact/isIdle/
-   * hasPendingMessages trio; each is independent of the other.
+   * hasPendingMessages trio; reload needs isIdle/
+   * hasPendingMessages plus the stock-editor baseline captured at
+   * session_start. Each is independent of the others.
    * Re-evaluated on every Hello, so reconnects follow API changes.
    */
   capabilities() {
     const caps = [CAPABILITY_LIFECYCLE, CAPABILITY_MODELS];
     if (this.contextApi) caps.push(CAPABILITY_CONTEXT);
     if (this.compactApi) caps.push(CAPABILITY_COMPACT);
+    if (this.reload?.baseline && this.reloadApi)
+      caps.push(CAPABILITY_RELOAD);
     if (isHistoryReaderAvailable(this.ui)) caps.push(CAPABILITY_HISTORY);
     if (this.opts.getThinkingLevel && this.opts.setThinkingLevel)
       caps.push(CAPABILITY_THINKING);
@@ -29223,6 +29833,7 @@ var Runtime = class {
     this.modelsAccepted = false;
     this.thinkingAccepted = false;
     this.compactAccepted = false;
+    this.reloadAccepted = false;
     this.skillsAccepted = false;
     if (this.lastCtx) this.sampleTelemetry(this.lastCtx);
     const channel = make(this.opts.creds, {
@@ -29243,6 +29854,7 @@ var Runtime = class {
         this.modelsAccepted = accepted.capabilities.includes(CAPABILITY_MODELS);
         this.thinkingAccepted = accepted.capabilities.includes(CAPABILITY_THINKING);
         this.compactAccepted = accepted.capabilities.includes(CAPABILITY_COMPACT);
+        this.reloadAccepted = accepted.capabilities.includes(CAPABILITY_RELOAD);
         this.skillsAccepted = accepted.capabilities.includes(CAPABILITY_SKILLS);
       }
     } catch (err) {
@@ -29278,6 +29890,8 @@ var Runtime = class {
       this.onSetThinkingRequest(msg.payload.value);
     } else if (msg.payload?.$case === "compactRequest" && this.compactAccepted) {
       this.onCompactRequest(msg.payload.value);
+    } else if (msg.payload?.$case === "reloadRequest" && this.reloadAccepted) {
+      this.onReloadRequest(msg.payload.value);
     } else if (msg.payload?.$case === "skillsRequest" && this.skillsAccepted) {
       this.onSkillsRequest(msg.payload.value.requestId);
     } else if (msg.payload?.$case === "invokeSkillRequest" && this.skillsAccepted) {
@@ -29672,7 +30286,7 @@ var Runtime = class {
    * the callbacks below settle the operation.
    */
   onCompactRequest(req) {
-    const id = parseCompactId(req.requestId);
+    const id = parseMutationId(req.requestId);
     if (id === null || !this.channel) return;
     const highWater = this.compact.highWater;
     if (highWater !== null && id <= highWater) {
@@ -29684,7 +30298,8 @@ var Runtime = class {
       return;
     }
     this.compact.highWater = id;
-    if (this.compact.pending !== null) {
+    const reloadPending = this.reload?.pending ?? null;
+    if (this.compact.pending !== null || reloadPending !== null) {
       this.sendCompactResult(
         req.requestId,
         2 /* COMPACT_OUTCOME_REFUSED */,
@@ -29893,6 +30508,229 @@ var Runtime = class {
       }
     });
   }
+  /**
+   * Answer one Reload request. Every guard runs before callback
+   * entry; any failure refuses without touching the host. Only a
+   * well-formed ID newer than the process high-water mark can
+   * reach the host, and every recognized ID is consumed so a
+   * refused ID cannot later replay into a mutation. The fixed
+   * native command enters synchronously; the receipt reports
+   * callback entry only, never reload completion.
+   */
+  onReloadRequest(req) {
+    const id = parseMutationId(req.requestId);
+    if (id === null || !this.channel) return;
+    const reload = this.reload;
+    if (!reload) {
+      this.sendReloadAck(
+        req.requestId,
+        2 /* RELOAD_DISPATCH_OUTCOME_REFUSED */,
+        "unavailable"
+      );
+      return;
+    }
+    const highWater = reload.highWater;
+    if (highWater !== null && id <= highWater) {
+      this.sendReloadAck(
+        req.requestId,
+        2 /* RELOAD_DISPATCH_OUTCOME_REFUSED */,
+        "duplicate"
+      );
+      return;
+    }
+    reload.highWater = id;
+    if (reload.pending !== null || this.compact.pending !== null) {
+      this.sendReloadAck(
+        req.requestId,
+        2 /* RELOAD_DISPATCH_OUTCOME_REFUSED */,
+        "pending"
+      );
+      return;
+    }
+    if (!isValidCompactIdentity(req.expectedSessionId) || !isValidReloadLeaf(req.expectedLeafId) || req.expectedModel !== void 0 && (!isValidCompactIdentity(req.expectedModel.provider) || !isValidCompactIdentity(req.expectedModel.model))) {
+      this.sendReloadAck(
+        req.requestId,
+        2 /* RELOAD_DISPATCH_OUTCOME_REFUSED */,
+        "stale"
+      );
+      return;
+    }
+    const ctx = this.lastCtx;
+    if (!ctx || typeof ctx.isIdle !== "function" || typeof ctx.hasPendingMessages !== "function") {
+      this.sendReloadAck(
+        req.requestId,
+        2 /* RELOAD_DISPATCH_OUTCOME_REFUSED */,
+        "unavailable"
+      );
+      return;
+    }
+    let liveSession;
+    let liveLeaf;
+    let liveHasModel;
+    let liveProvider;
+    let liveModelId;
+    try {
+      liveSession = ctx.sessionManager.getSessionId();
+      liveLeaf = ctx.sessionManager.getLeafId() ?? "";
+      const liveModel = ctx.model;
+      liveHasModel = liveModel !== void 0 && liveModel !== null;
+      liveProvider = liveModel?.provider;
+      liveModelId = liveModel?.id;
+    } catch {
+      this.sendReloadAck(
+        req.requestId,
+        2 /* RELOAD_DISPATCH_OUTCOME_REFUSED */,
+        "stale"
+      );
+      return;
+    }
+    const modelFence = req.expectedModel !== void 0 ? liveHasModel && liveProvider === req.expectedModel.provider && liveModelId === req.expectedModel.model : !liveHasModel;
+    if (liveSession !== req.expectedSessionId || liveLeaf !== req.expectedLeafId || !modelFence) {
+      this.sendReloadAck(
+        req.requestId,
+        2 /* RELOAD_DISPATCH_OUTCOME_REFUSED */,
+        "stale"
+      );
+      return;
+    }
+    if (req.expectedRunId === void 0 || req.expectedContextRevision === void 0 || req.expectedRunId !== this.runId || req.expectedContextRevision !== this.contextRevision) {
+      this.sendReloadAck(
+        req.requestId,
+        2 /* RELOAD_DISPATCH_OUTCOME_REFUSED */,
+        "stale"
+      );
+      return;
+    }
+    let idle;
+    try {
+      idle = ctx.isIdle() === true;
+    } catch {
+      idle = false;
+    }
+    if (!idle) {
+      this.sendReloadAck(
+        req.requestId,
+        2 /* RELOAD_DISPATCH_OUTCOME_REFUSED */,
+        "busy"
+      );
+      return;
+    }
+    let queued;
+    try {
+      queued = ctx.hasPendingMessages() !== false;
+    } catch {
+      queued = true;
+    }
+    if (queued) {
+      this.sendReloadAck(
+        req.requestId,
+        2 /* RELOAD_DISPATCH_OUTCOME_REFUSED */,
+        "queued"
+      );
+      return;
+    }
+    if (this.compactionActive) {
+      this.sendReloadAck(
+        req.requestId,
+        2 /* RELOAD_DISPATCH_OUTCOME_REFUSED */,
+        "compaction-active"
+      );
+      return;
+    }
+    const op = {
+      requestId: req.requestId,
+      runtimeId: this.runtimeId,
+      sessionId: liveSession
+    };
+    const dispatchChannel = this.channel;
+    if (!dispatchChannel) return;
+    reload.pending = { ...op, reported: false };
+    this.publishContextOnly();
+    this.reloadDispatchChannel = dispatchChannel;
+    try {
+      const attempt = invokeNativeReload(ctx, reload);
+      if (!attempt.entered) {
+        reload.pending = null;
+        this.sendReloadAck(
+          req.requestId,
+          2 /* RELOAD_DISPATCH_OUTCOME_REFUSED */,
+          "unavailable",
+          dispatchChannel
+        );
+        this.publishContextOnly();
+        return;
+      }
+      if (this.sendReloadAck(
+        req.requestId,
+        1 /* RELOAD_DISPATCH_OUTCOME_DISPATCHED */,
+        "",
+        dispatchChannel
+      )) {
+        this.reloadReceiptChannel = dispatchChannel;
+      }
+      attempt.completion.then(
+        () => this.releaseReloadLatch(op),
+        () => this.releaseReloadLatch(op)
+      );
+    } finally {
+      this.finishReloadDispatch(dispatchChannel);
+    }
+  }
+  /**
+   * Release one native Reload latch when its callback settles.
+   * Releases only the matching operation, reports nothing, and
+   * refreshes the active runtime's readiness through its current
+   * context. Never throws.
+   */
+  releaseReloadLatch(op) {
+    try {
+      const reload = this.reload;
+      if (!reload) return;
+      const pending = reload.pending;
+      if (pending === null || pending.requestId !== op.requestId) {
+        return;
+      }
+      reload.pending = null;
+      this.refreshAfterReloadRelease();
+    } catch {
+    }
+  }
+  /**
+   * Refresh the active runtime's readiness after a Reload
+   * release, using that runtime's current context. Never throws.
+   */
+  refreshAfterReloadRelease() {
+    try {
+      const active = this.reload?.active;
+      if (active === null || active === void 0) return;
+      if (active.runtimeId === this.runtimeId) {
+        this.refreshFromLive();
+        this.sendSnapshot(
+          this.running ? 2 /* LOGICAL_STATE_RUNNING */ : 1 /* LOGICAL_STATE_IDLE */
+        );
+        return;
+      }
+      active.notify();
+    } catch {
+    }
+  }
+  /**
+   * Send one Reload dispatch receipt. Nonfatal response-class
+   * admission, like Compact results: an admission miss lets the
+   * waiter expire into unknown instead of disturbing lifecycle
+   * traffic. A lost receipt is unknown, never permission to retry.
+   */
+  sendReloadAck(requestId, outcome, reason, channel = this.channel) {
+    return channel?.sendNonfatal({
+      paneId: this.opts.creds.pane,
+      processId: this.opts.creds.process,
+      runtimeGeneration: this.opts.generation,
+      payload: {
+        $case: "reloadAck",
+        value: ReloadAck.create({ requestId, outcome, reason })
+      }
+    }) ?? false;
+  }
   onStreamEnd(status) {
     this.channel?.close();
     this.channel = null;
@@ -29937,6 +30775,11 @@ function ownerCompactState() {
   const slot = ownerSlot();
   if (!slot.compact) slot.compact = freshCompactLatch();
   return slot.compact;
+}
+function ownerReloadState() {
+  const slot = ownerSlot();
+  if (!slot.reload) slot.reload = freshReloadLatch();
+  return slot.reload;
 }
 function readCredsFromEnv(env = process.env) {
   const target = env[ENV_TARGET];
@@ -30013,10 +30856,11 @@ function createExtension(pi, deps = {}) {
   const nativeSkills = pi;
   const hasSkillsApi = typeof nativeSkills.getCommands === "function";
   const hasInvokeApi = typeof nativeSkills.sendUserMessage === "function";
-  const make = deps.makeRuntime ?? ((c, g, compact) => new Runtime({
+  const make = deps.makeRuntime ?? ((c, g, compact, reload) => new Runtime({
     creds: c,
     generation: g,
     compactState: compact,
+    reloadState: reload,
     setModel: (model) => pi.setModel(model),
     ...getThinkingLevel ? { getThinkingLevel } : {},
     ...setThinkingLevel ? { setThinkingLevel } : {},
@@ -30047,13 +30891,21 @@ function createExtension(pi, deps = {}) {
         next = null;
       }
       if (next === null || next === sessionId) {
+        captureNativeReloadBaseline(ctx, ownerReloadState());
         runtime.onSessionStart(contextView(ctx));
         return;
       }
       runtime.shutdown();
+      const reloadState2 = ownerReloadState();
+      captureNativeReloadBaseline(ctx, reloadState2);
       slot.generation += 1n;
       sessionId = next;
-      runtime = make(slot.creds, slot.generation, ownerCompactState());
+      runtime = make(
+        slot.creds,
+        slot.generation,
+        ownerCompactState(),
+        reloadState2
+      );
       runtime.start(contextView(ctx));
       return;
     }
@@ -30069,7 +30921,14 @@ function createExtension(pi, deps = {}) {
     } catch {
       sessionId = null;
     }
-    runtime = make(creds, slot.generation, ownerCompactState());
+    const reloadState = ownerReloadState();
+    captureNativeReloadBaseline(ctx, reloadState);
+    runtime = make(
+      creds,
+      slot.generation,
+      ownerCompactState(),
+      reloadState
+    );
     runtime.start(contextView(ctx));
   });
   pi.on("agent_start", (_event, ctx) => {
@@ -30083,6 +30942,10 @@ function createExtension(pi, deps = {}) {
   });
   pi.on("agent_settled", (event, ctx) => {
     runtime?.onAgentSettled(contextView(ctx), settledAborted(event));
+  });
+  pi.on("message_start", (event, ctx) => {
+    const role = event.message?.role;
+    runtime?.onMessageStart(contextView(ctx), role);
   });
   pi.on("model_select", (_event, ctx) => {
     runtime?.onModelSelect(contextView(ctx));

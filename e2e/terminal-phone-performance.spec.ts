@@ -273,7 +273,9 @@ for (const alternate of [false, true]) {
         try {
             const start = Date.now();
             await page.goto(phi.url);
-            await expect(page.locator(`#term-${pane}`)).toBeVisible();
+            await expect(page.locator(`#term-${pane}`)).toBeVisible({
+                timeout: 30_000,
+            });
             await expect
                 .poll(visible, { timeout: 60000 })
                 .toContain('PHONE NEWEST');

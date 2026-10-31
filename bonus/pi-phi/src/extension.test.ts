@@ -13,10 +13,12 @@ import {
     hostInvokeSkill,
     hostSkills,
     ownerCompactState,
+    ownerReloadState,
     readCredsFromEnv,
     resetOwnerSlotForTest,
     type FactoryRuntime,
 } from './extension.js';
+import type { ReloadLatchState } from './native-reload.js';
 import type { CompactLatchState, PiContextView } from './runtime.js';
 
 const SAVED = { ...process.env };
@@ -82,6 +84,33 @@ function mockCtxWithSession(sessionId: string): ExtensionContext {
     } as unknown as ExtensionContext;
 }
 
+function mockCtxWithReloadEditor(sessionId: string): ExtensionContext {
+    class CustomEditor {
+        history: string[] = [];
+        text = 'untouched draft';
+        onSubmit = async (_text: string): Promise<void> => {};
+    }
+    const editor = new CustomEditor();
+    const tui = { getFocusedComponent: () => editor };
+    return {
+        sessionManager: {
+            getSessionId: () => sessionId,
+            getLeafId: () => null,
+        },
+        ui: {
+            getEditorComponent: () => undefined,
+            setWidget: (
+                _key: string,
+                factory:
+                    | ((tui: unknown, theme: unknown) => unknown)
+                    | undefined,
+            ) => {
+                factory?.(tui, {});
+            },
+        },
+    } as unknown as ExtensionContext;
+}
+
 function recordingRuntime(): { calls: string[]; runtime: FactoryRuntime } {
     const calls: string[] = [];
     return {
@@ -93,6 +122,8 @@ function recordingRuntime(): { calls: string[]; runtime: FactoryRuntime } {
             onAgentEnd: (stop) => calls.push(`agent_end:${stop}`),
             onTurnEnd: () => calls.push('turn_end'),
             onAgentSettled: (_ctx, aborted) => calls.push(`settled:${aborted}`),
+            onMessageStart: (_ctx, role) =>
+                calls.push(`message_start:${String(role)}`),
             onModelSelect: () => calls.push('model_select'),
             onThinkingLevelSelect: () => calls.push('thinking_level_select'),
             onSessionTree: () => calls.push('session_tree'),
@@ -153,6 +184,7 @@ describe('factory inertness', () => {
             'agent_end',
             'agent_settled',
             'agent_start',
+            'message_start',
             'model_select',
             'session_before_compact',
             'session_compact',
@@ -216,7 +248,7 @@ describe('settings disable', () => {
         const rec = recordingRuntime();
         createExtension(pi, { makeRuntime: () => rec.runtime });
         // Factory registers handlers; the gate runs at session_start.
-        expect(handlers.size).toBe(12);
+        expect(handlers.size).toBe(13);
         handlers.get('session_start')!({}, mockCtx() as never);
         expect(rec.calls).toEqual([]);
         expect(readCredsFromEnv()).toBeNull();
@@ -227,6 +259,21 @@ describe('settings disable', () => {
             mockCtx() as never,
         );
         expect(rec.calls).toEqual([]);
+    });
+
+    it('does not capture a baseline when settings disable the bridge', () => {
+        setEnv();
+        const { pi, handlers } = mockPiWithSettings({
+            phiBridge: { enabled: false },
+        });
+        createExtension(pi, {
+            makeRuntime: () => recordingRuntime().runtime,
+        });
+        handlers.get('session_start')!(
+            {},
+            mockCtxWithReloadEditor('sess') as never,
+        );
+        expect(ownerReloadState().baseline).toBeNull();
     });
 
     it('disables a previously claimed runtime on session replacement', () => {
@@ -325,7 +372,7 @@ describe('owner guard', () => {
         const reloaded = mockPi();
         const rec2 = recordingRuntime();
         createExtension(reloaded.pi, { makeRuntime: () => rec2.runtime });
-        expect(reloaded.handlers.size).toBe(12);
+        expect(reloaded.handlers.size).toBe(13);
         reloaded.handlers.get('session_start')!({}, ctx as never);
         expect(rec2.calls).toEqual(['start']);
     });
@@ -385,6 +432,50 @@ describe('owner guard', () => {
         handlers.get('session_start')!({}, ctx as never);
         handlers.get('turn_end')!({ type: 'turn_end' }, ctx as never);
         expect(rec.calls).toEqual(['start', 'turn_end']);
+    });
+
+    it('captures one native reload baseline for the owning runtime process', () => {
+        setEnv();
+        const { pi, handlers } = mockPi();
+        const states: ReloadLatchState[] = [];
+        createExtension(pi, {
+            makeRuntime: (_c, _g, _compact, reload) => {
+                states.push(reload);
+                return recordingRuntime().runtime;
+            },
+        });
+        handlers.get('session_start')!(
+            {},
+            mockCtxWithReloadEditor('sess-a') as never,
+        );
+        const baseline = ownerReloadState().baseline;
+        expect(baseline).not.toBeNull();
+        handlers.get('session_start')!(
+            {},
+            mockCtxWithReloadEditor('sess-b') as never,
+        );
+        expect(states).toHaveLength(2);
+        expect(states[0]).toBe(states[1]);
+        expect(states[0]!.baseline).toBe(baseline);
+    });
+
+    it('does not capture a baseline from a duplicate extension owner', () => {
+        setEnv();
+        const first = mockPi();
+        createExtension(first.pi, {
+            makeRuntime: () => recordingRuntime().runtime,
+        });
+        first.handlers.get('session_start')!({}, mockCtx() as never);
+
+        const duplicate = mockPi();
+        createExtension(duplicate.pi, {
+            makeRuntime: () => recordingRuntime().runtime,
+        });
+        duplicate.handlers.get('session_start')!(
+            {},
+            mockCtxWithReloadEditor('sess') as never,
+        );
+        expect(ownerReloadState().baseline).toBeNull();
     });
 
     it('retires the runtime on session replacement with a new generation', () => {
@@ -512,12 +603,26 @@ describe('telemetry view and compaction latch', () => {
         expect(latches[0]).toBe(ownerCompactState());
     });
 
-    it('creates the latch once per process', () => {
-        const first = ownerCompactState();
-        expect(ownerCompactState()).toBe(first);
-        expect(first).toEqual({ pending: null, highWater: null, active: null });
+    it('creates each process latch once', () => {
+        const compact = ownerCompactState();
+        const reload = ownerReloadState();
+        expect(ownerCompactState()).toBe(compact);
+        expect(ownerReloadState()).toBe(reload);
+        expect(compact).toEqual({
+            pending: null,
+            highWater: null,
+            active: null,
+        });
+        expect(reload).toEqual({
+            baseline: null,
+            pending: null,
+            highWater: null,
+            drain: null,
+            active: null,
+        });
         resetOwnerSlotForTest();
-        expect(ownerCompactState()).not.toBe(first);
+        expect(ownerCompactState()).not.toBe(compact);
+        expect(ownerReloadState()).not.toBe(reload);
     });
 });
 
@@ -588,5 +693,25 @@ describe('host skill wiring', () => {
                 },
             },
         ]);
+    });
+});
+
+describe('message start', () => {
+    it('forwards only the message role to the runtime', () => {
+        setEnv();
+        const { pi, handlers } = mockPi();
+        const rec = recordingRuntime();
+        createExtension(pi, { makeRuntime: () => rec.runtime });
+        handlers.get('session_start')!({}, mockCtx() as never);
+        handlers.get('message_start')!(
+            { message: { role: 'user' } },
+            mockCtx() as never,
+        );
+        handlers.get('message_start')!(
+            { message: { role: 'assistant' } },
+            mockCtx() as never,
+        );
+        expect(rec.calls).toContain('message_start:user');
+        expect(rec.calls).toContain('message_start:assistant');
     });
 });

@@ -54,6 +54,11 @@ type lease struct {
 	// generation, or lease revoke. A departed waiter never clears
 	// it: native work outlives caller timeouts and reconnects.
 	compact *compactOp
+	// reload is the one process-owned unresolved Reload operation,
+	// retained until a host refusal, release evidence in fresh
+	// same-process readiness, or lease revoke. Runtime replacement
+	// never clears it: the native callback outlives its runtime.
+	reload *reloadOp
 }
 
 type leaseState int
@@ -144,8 +149,9 @@ func (r *registry) revoke(processID string) {
 	l.state = leaseRevoked
 	peer := l.peer
 	l.peer = nil
-	// Process exit releases unresolved Compact work with it.
+	// Process exit releases unresolved Compact and Reload work with it.
 	l.compact = nil
+	l.reload = nil
 	l.mu.Unlock()
 
 	if peer != nil {

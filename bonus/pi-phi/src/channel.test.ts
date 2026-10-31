@@ -433,11 +433,37 @@ describe('BridgeChannel shutdown drain', () => {
         await channel.connect(hello());
         expect(channel.send(hello())).toBe(true);
         expect(channel.send(hello())).toBe(true);
-        await channel.drainAndClose(500);
-        // Hello plus both queued frames landed before the half-close.
-        expect(duplex.order).toEqual(['write', 'write', 'write', 'end']);
+        const draining = channel.drainAndClose(500);
+        await vi.waitFor(() =>
+            expect(duplex.order).toEqual(['write', 'write', 'write', 'end']),
+        );
+        // The channel remains open until the server confirms the
+        // half-close, so a replacement Hello cannot overtake these frames.
+        expect(clientCloses()).toBe(0);
+        duplex.emit('status', {
+            code: 0,
+            details: 'OK',
+            metadata: {},
+        } as ServiceError);
+        await draining;
         expect(clientCloses()).toBe(1);
         expect(channel.pending).toBe(0);
+    });
+
+    it('waits for remote status after the outbound frames drain', async () => {
+        const duplex = new DelayedDuplex();
+        const { channel, clientCloses } = drainedChannel(duplex);
+        await channel.connect(hello());
+        const draining = channel.drainAndClose(500);
+        await vi.waitFor(() => expect(duplex.order).toEqual(['write', 'end']));
+        expect(clientCloses()).toBe(0);
+        duplex.emit('status', {
+            code: 0,
+            details: 'OK',
+            metadata: {},
+        } as ServiceError);
+        await draining;
+        expect(clientCloses()).toBe(1);
     });
 
     it('still closes by the deadline when the stream is wedged', async () => {

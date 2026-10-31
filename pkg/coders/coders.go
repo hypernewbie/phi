@@ -186,6 +186,7 @@ func DefaultRegistry() map[string]Coder {
 				{Name: "/resume", Value: "/resume\r"},
 				{Name: "/model", Value: "/model\r"},
 				{Name: "/compact", Value: "/compact\r"},
+				{Name: "/reload", Value: "/reload\r"},
 				{Name: "ctrl+c", Value: "\x03"},
 				{Name: "ctrl+o", Value: "\x0f"},
 			},

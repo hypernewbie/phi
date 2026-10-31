@@ -5,10 +5,11 @@ import { TabManager } from '../web/terminal.js';
 import { loadCoderRegistry } from '../web/coders.js';
 
 // Focused regression net for the compact command menu: low-frequency
-// values (/quit, /exit, /resume, /sessions, /model + \r) move from the
-// preset row into Cmds ▾ → Built-in Commands, only when the active
-// coder's effective presets advertise them. /model is in that set
-// because the Models picker already covers it.
+// values (/quit, /exit, /resume, /sessions, /model, /reload + \r) move
+// from the preset row into Cmds ▾ → Built-in Commands, only when the
+// active coder's effective presets advertise them. /model is in that
+// set because the Models picker already covers it; /reload is in it
+// because capable Pi tabs execute it natively through the bridge.
 //
 // Harness discipline (as in sendSlashCommand.test.js):
 //   - ctx is Object.create(TabManager.prototype): getActiveTab,
@@ -26,6 +27,7 @@ const PI_PRESETS = [
     { name: '/resume', value: '/resume\r' },
     { name: '/model', value: '/model\r' },
     { name: '/compact', value: '/compact\r' },
+    { name: '/reload', value: '/reload\r' },
     { name: 'esc', value: '\x1b' },
 ];
 
@@ -186,6 +188,7 @@ describe('A1 placement: only advertised low-frequency values move', () => {
         expect(labels).not.toContain('/quit');
         expect(labels).not.toContain('/resume');
         expect(labels).not.toContain('/model');
+        expect(labels).not.toContain('/reload');
         expect(labels).toContain('/compact');
         expect(labels).toContain('esc');
         expect(labels.indexOf('esc')).toBeGreaterThan(
@@ -205,6 +208,7 @@ describe('A1 placement: only advertised low-frequency values move', () => {
             '/quit',
             '/resume',
             '/model',
+            '/reload',
         ]);
         const userRows = Array.from(
             document.querySelectorAll(
@@ -296,6 +300,7 @@ describe('A1 placement: only advertised low-frequency values move', () => {
         expect(slashLabels).not.toContain('/quit');
         expect(slashLabels).not.toContain('/resume');
         expect(slashLabels).not.toContain('/model');
+        expect(slashLabels).not.toContain('/reload');
         expect(slashLabels).toContain('/compact');
         expect(
             tm.presetsContainer.querySelector('.slash-trigger-btn'),
@@ -312,7 +317,7 @@ describe('A1 placement: only advertised low-frequency values move', () => {
         tm.renderQuickCmdsDropup();
         tm.renderQuickCmdsDropup();
         expect(menuHeaders()).toEqual(['Built-in Commands', 'Quick Commands']);
-        expect(builtInButtons()).toHaveLength(3);
+        expect(builtInButtons()).toHaveLength(4);
         tm.renderPresets('pi');
         const first = presetLabels(tm);
         tm.renderPresets('pi');
@@ -747,5 +752,54 @@ describe('A4 custom commands and bridge fallback are untouched', () => {
             ['\x1b[200~/quit\x1b[201~\r'],
         ]);
         expect(fetchSpy).not.toHaveBeenCalled();
+    });
+});
+
+describe('A5 reload menu entry', () => {
+    it('reload click routes through the shared slash path without focus', () => {
+        const tm = makeTm();
+        const tab = makeTab('pi-1', 'pi');
+        tm.tabs.set(tab.paneId, tab);
+        tm.activePaneId = tab.paneId;
+        const spy = vi.spyOn(tm, 'sendSlashCommand');
+        tm.renderQuickCmdsDropup();
+
+        builtInButtons()
+            .find((b) => b.innerText === '/reload')
+            .click();
+        expect(spy).toHaveBeenCalledWith(tab, '/reload', {
+            focusInputOnMobile: false,
+        });
+    });
+
+    it('reload without the bridge keeps the atomic PTY bytes, no fetch', () => {
+        const fetchSpy = mockFetch(() => ({}));
+        const tm = makeTm();
+        const tab = makeTab('pi-1', 'pi');
+        tm.tabs.set(tab.paneId, tab);
+        tm.activePaneId = tab.paneId;
+        tm.renderQuickCmdsDropup();
+
+        builtInButtons()
+            .find((b) => b.innerText === '/reload')
+            .click();
+        vi.runAllTimers();
+        expect(tab.sendInputCalls).toEqual([['\x1b[200~/reload\x1b[201~\r']]);
+        expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('reload click closes the menu', () => {
+        const tm = makeTm();
+        const tab = makeTab('pi-1', 'pi');
+        tm.tabs.set(tab.paneId, tab);
+        tm.activePaneId = tab.paneId;
+        const dropup = document.getElementById('quick-commands-dropup');
+        dropup.classList.remove('hidden');
+        tm.renderQuickCmdsDropup();
+
+        builtInButtons()
+            .find((b) => b.innerText === '/reload')
+            .click();
+        expect(dropup.classList.contains('hidden')).toBe(true);
     });
 });

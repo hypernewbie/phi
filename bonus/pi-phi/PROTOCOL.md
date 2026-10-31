@@ -77,13 +77,15 @@ Runtime identity binds `(generation, runtime_id, session_id)`:
 | `pi.thinking.v1`  | On-demand thinking-level reads and setting       |
 | `pi.context.v1`   | Context usage telemetry in snapshots             |
 | `pi.compact.v1`   | Native compaction on explicit user action        |
+| `pi.reload.v1`    | Native `/reload` dispatch from an interactive editor |
 | `pi.skills.v1`    | On-demand skill list and skill invocation        |
 
-Context and compact negotiate independently on every Hello from
-checked public API availability: `pi.context.v1` needs
-`getContextUsage`; `pi.compact.v1` needs the
-`compact`/`isIdle`/`hasPendingMessages` trio. Either may be absent
-without disabling lifecycle, models, or history.
+Context, Compact, and Reload negotiate independently on every Hello
+from checked host availability: `pi.context.v1` needs `getContextUsage`;
+`pi.compact.v1` needs the `compact`/`isIdle`/`hasPendingMessages` trio;
+`pi.reload.v1` needs the checked interactive editor baseline plus
+`isIdle`/`hasPendingMessages`. Any may be absent without disabling
+lifecycle, models, or history.
 
 ## History reads
 
@@ -243,6 +245,29 @@ current runtime retires the record. After dispatch, an expired or
 interrupted wait reports unknown, never success and never a
 terminal-command retry.
 
+## Native Reload
+
+`pi.reload.v1` is negotiated independently from Compact. It requires the
+checked stock interactive editor baseline and the host's `isIdle` and
+`hasPendingMessages` readers; print-mode Pi does not advertise it. Phi sends
+`ReloadRequest` (field 22) with a monotonic decimal ID plus the admitted
+session, leaf, model, run, and context fences. The extension rereads these
+values and host readiness immediately before entering the editor's fixed
+`/reload` callback. It never sends `/reload` through the PTY.
+
+`ReloadAck` (field 25) reports callback entry only: `DISPATCHED` is not
+reload completion. A refusal reports one safe reason: `duplicate`, `stale`,
+`busy`, `queued`, `compaction-active`, `pending`, or `unavailable`. Pi keeps a
+process-owned latch until the callback settles and publishes fresh readiness.
+Phi keeps the operation unresolved until a same-process readiness snapshot
+covers its ID and explicitly clears `reload_pending`. Reload and Compact are
+mutually exclusive while either operation is unresolved. A timeout, lost
+receipt, disconnect, or runtime replacement does not permit replay. When
+shutdown follows dispatch, the extension drains and half-closes the receipt
+stream, then waits for server status before a replacement runtime sends Hello.
+If an admitted request never reaches Pi, the server cannot prove release; it
+stays pending until the Pi process exits.
+
 ## Lifecycle events
 
 The extension maps Pi events to bridge edges with a monotonic
@@ -331,9 +356,11 @@ Other failures retry with bounded backoff on the same generation.
 - Both pinned hosts expose the context and compact host APIs in print
   and interactive modes: print runs advertise `pi.compact.v1`,
   `pi.context.v1`, `pi.lifecycle.v1`, `pi.models.v1`; interactive runs
-  add `pi.history.v1`.
-- Other Pi versions and installed-release behavior with existing user
-  profiles remain unverified.
+  add `pi.history.v1` and advertise `pi.reload.v1` when the checked stock
+  editor baseline is available.
+- The Reload desktop/mobile browser flow also passed on Pi 1.4.0 in
+  isolated state. Other Pi versions and installed-release behavior with
+  existing user profiles remain unverified.
 
 ## Installation
 

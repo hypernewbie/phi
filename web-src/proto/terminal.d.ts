@@ -116,6 +116,15 @@ export interface TerminalBridgeState {
     compactQueued?: boolean | undefined;
     compactActive?: boolean | undefined;
     compactPending?: boolean | undefined;
+    processId?: string | undefined;
+    runId?: bigint | undefined;
+    contextRevision?: bigint | undefined;
+    reloadIdle?: boolean | undefined;
+    reloadQueued?: boolean | undefined;
+    reloadActive?: boolean | undefined;
+    reloadCompactPending?: boolean | undefined;
+    reloadPending?: boolean | undefined;
+    reloadHighWater?: bigint | undefined;
 }
 /** TerminalSettlement reports one observed Pi run outcome. */
 export interface TerminalSettlement {

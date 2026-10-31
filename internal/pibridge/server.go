@@ -27,7 +27,7 @@ type Server struct {
 
 	grpcServer     *grpc.Server
 	onSettled      func(paneID, processID string, generation, runID uint64, outcome pibridgepb.RunOutcome)
-	onState        func(paneID, processID string, generation, pubRev uint64, running, hasState bool, model, thinkingLevel string, caps []string, usage *ContextUsage, readiness *Readiness)
+	onState        func(paneID, processID string, generation, pubRev uint64, running, hasState bool, model, thinkingLevel string, caps []string, usage *ContextUsage, readiness *Readiness, reload *ReloadReadiness)
 	onPeerDown     func(paneID, processID string, generation uint64)
 	histSeq        atomic.Uint64
 	modelsSeq      atomic.Uint64
@@ -40,6 +40,9 @@ type Server struct {
 	// IDs. IDs are positive canonical decimal uint64 strings,
 	// never wrap, and are never reused or browser-supplied.
 	compactSeq atomic.Uint64
+	// reloadSeq allocates monotonic server-side Reload request
+	// IDs with the same uniqueness contract as compactSeq.
+	reloadSeq atomic.Uint64
 	// pubSeq is the server-owned publication sequence behind
 	// telemetry_revision. It is allocated at lease creation and at
 	// each accepted Hello/state change, so delayed stream callbacks
@@ -83,7 +86,7 @@ func (s *Server) SetOnSettled(fn func(paneID, processID string, generation, runI
 // and readiness are copies of the accepted telemetry, nil when the
 // snapshot carried none: unknown usage is distinct from zero and from
 // an absent capability.
-func (s *Server) SetOnState(fn func(paneID, processID string, generation, pubRev uint64, running, hasState bool, model, thinkingLevel string, caps []string, usage *ContextUsage, readiness *Readiness)) {
+func (s *Server) SetOnState(fn func(paneID, processID string, generation, pubRev uint64, running, hasState bool, model, thinkingLevel string, caps []string, usage *ContextUsage, readiness *Readiness, reload *ReloadReadiness)) {
 	s.onState = fn
 }
 
@@ -117,7 +120,7 @@ func (s *Server) fireState(l *lease, p *peer, pubRev uint64, snap *pibridgepb.St
 			model = m.GetProvider() + "/" + m.GetModel()
 		}
 	}
-	s.onState(paneID, processID, generation, pubRev, running, hasState, model, thinkingLevel, caps, copyContextUsage(snap), copyReadiness(snap))
+	s.onState(paneID, processID, generation, pubRev, running, hasState, model, thinkingLevel, caps, copyContextUsage(snap), copyReadiness(snap), copyReloadReadiness(snap))
 }
 
 // SetOnPeerDown registers the callback fired once when the active peer
@@ -221,6 +224,25 @@ type Readiness struct {
 	BridgePending      bool
 }
 
+// ReloadReadiness is a copy of one native-reload readiness sample.
+// A nil *ReloadReadiness means the snapshot carried none, distinct
+// from a present sample. RunID, ContextRevision, and HighWater
+// preserve explicit presence: a known zero stays present, never
+// unknown, and an absent high-water mark stays absent.
+type ReloadReadiness struct {
+	RunID              uint64
+	HasRunID           bool
+	ContextRevision    uint64
+	HasContextRevision bool
+	Idle               bool
+	HasPendingMessages bool
+	CompactionActive   bool
+	CompactPending     bool
+	ReloadPending      bool
+	HighWater          uint64
+	HasHighWater       bool
+}
+
 // copyContextUsage copies validated telemetry out of a snapshot. A
 // nil snapshot or absent sample yields nil (unknown), never zero.
 func copyContextUsage(snap *pibridgepb.StateSnapshot) *ContextUsage {
@@ -237,6 +259,33 @@ func copyContextUsage(snap *pibridgepb.StateSnapshot) *ContextUsage {
 	}
 	if p := u.Percent; p != nil {
 		out.Percent, out.HasPercent = *p, true
+	}
+	return out
+}
+
+// copyReloadReadiness copies the reload-readiness sample out of a
+// snapshot. A nil snapshot or absent sample yields nil, never an
+// invented sample. Known zero counters stay present.
+func copyReloadReadiness(snap *pibridgepb.StateSnapshot) *ReloadReadiness {
+	r := snap.GetReloadReadiness()
+	if r == nil {
+		return nil
+	}
+	out := &ReloadReadiness{
+		Idle:               r.GetIdle(),
+		HasPendingMessages: r.GetHasPendingMessages(),
+		CompactionActive:   r.GetCompactionActive(),
+		CompactPending:     r.GetCompactPending(),
+		ReloadPending:      r.GetReloadPending(),
+	}
+	if v := r.RunId; v != nil {
+		out.RunID, out.HasRunID = *v, true
+	}
+	if v := r.ContextRevision; v != nil {
+		out.ContextRevision, out.HasContextRevision = *v, true
+	}
+	if v := r.HighWater; v != nil {
+		out.HighWater, out.HasHighWater = *v, true
 	}
 	return out
 }
@@ -281,6 +330,9 @@ type StateView struct {
 	// distinct from zero and from an absent capability.
 	Context   *ContextUsage
 	Readiness *Readiness
+	// Reload is the retained reload-readiness copy, nil when the
+	// snapshot carried none. Known zero counters stay present.
+	Reload *ReloadReadiness
 }
 
 // PaneState returns the nonsecret lease view for one process. It reports
@@ -308,6 +360,7 @@ func (s *Server) paneStateLocked(l *lease) StateView {
 		view.ThinkingLevel = l.lastState.GetThinkingLevel()
 		view.Context = copyContextUsage(l.lastState)
 		view.Readiness = copyReadiness(l.lastState)
+		view.Reload = copyReloadReadiness(l.lastState)
 	}
 	return view
 }
@@ -468,6 +521,9 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 		// runtime. Unresolved process-owned native work still
 		// reports through the fresh authoritative readiness.
 		l.compact = nil
+		// A new generation never clears an unresolved Reload:
+		// the native callback outlives its runtime. The fresh
+		// Hello readiness below retires it on release evidence.
 	}
 	type pendingSettlement struct {
 		runID   uint64
@@ -479,9 +535,12 @@ func (s *Server) Connect(stream pibridgepb.Integration_ConnectServer) error {
 			// Same-generation reconnect baseline: reconcile a
 			// pending-to-released transition before the
 			// overwrite. A new generation already cleared the
-			// operation above.
+			// Compact operation above.
 			reconcileCompactRelease(l, snap)
 		}
+		// Reload retires only on explicit release evidence, on
+		// any current snapshot: replacement alone never clears it.
+		reconcileReloadRetirement(l, snap)
 		l.lastState = snap
 		// Merge the edges the runtime recorded while offline.
 		// Duplicates are ignored; only advancing sequences land. A new
@@ -691,6 +750,7 @@ func (s *Server) handleMessage(l *lease, p *peer, msg *pibridgepb.PiToPhi) error
 		// Reconcile before the overwrite: the retained readiness
 		// is the pending half of a release transition.
 		reconcileCompactRelease(l, snap)
+		reconcileReloadRetirement(l, snap)
 		l.lastState = snap
 		pubRev := s.pubSeq.Add(1)
 		l.pubRev = pubRev
@@ -718,6 +778,9 @@ func (s *Server) handleMessage(l *lease, p *peer, msg *pibridgepb.PiToPhi) error
 		return nil
 	case msg.GetCompactResult() != nil:
 		s.deliverCompact(l, p, msg.GetCompactResult())
+		return nil
+	case msg.GetReloadAck() != nil:
+		s.deliverReload(l, p, msg.GetReloadAck())
 		return nil
 	case msg.GetSkillsResponse() != nil:
 		s.deliverSkills(l, p, msg.GetSkillsResponse())

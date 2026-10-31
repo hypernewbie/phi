@@ -26,6 +26,9 @@ import {
     ModelSnapshot,
     ModelsResponse,
     PiToPhi,
+    ReloadAck,
+    ReloadDispatchOutcome,
+    ReloadReadiness,
     RunOutcome,
     SetModelAck,
     SkillsResponse,
@@ -41,6 +44,7 @@ import { CAPABILITY_CONTEXT } from './protocol.js';
 import { CAPABILITY_HISTORY } from './protocol.js';
 import { CAPABILITY_LIFECYCLE } from './protocol.js';
 import { CAPABILITY_MODELS } from './protocol.js';
+import { CAPABILITY_RELOAD } from './protocol.js';
 import { CAPABILITY_SKILLS } from './protocol.js';
 import { CAPABILITY_THINKING } from './protocol.js';
 import { MAX_COMPACT_IDENTITY_CHARS } from './protocol.js';
@@ -60,6 +64,8 @@ import { RECONNECT_MAX_MS } from './protocol.js';
 import { RECONNECT_STABLE_MS } from './protocol.js';
 import { isHistoryReaderAvailable } from './history-reader.js';
 import { readEditorHistory } from './history-reader.js';
+import { invokeNativeReload } from './native-reload.js';
+import type { ReloadLatchState } from './native-reload.js';
 
 /** Structural Pi session view; satisfied by both pinned host versions. */
 export interface PiSessionView {
@@ -173,6 +179,13 @@ interface CompactOp {
     readonly sessionId: string;
 }
 
+/** Identity of one accepted Reload operation, captured at dispatch. */
+interface ReloadOp {
+    readonly requestId: string;
+    readonly runtimeId: string;
+    readonly sessionId: string;
+}
+
 /** Latest validated context sample; null means no current measurement. */
 interface ContextSample {
     readonly tokens?: number | undefined;
@@ -190,6 +203,8 @@ export interface RuntimeOptions {
      * Shared by every runtime in the process; never a per-runtime copy.
      */
     readonly compactState: CompactLatchState;
+    /** Process-owned native Reload baseline and operation latch. */
+    readonly reloadState?: ReloadLatchState | undefined;
     /** Host model switch; absent in tests that never switch. */
     readonly setModel?: (model: PiModelView) => Promise<boolean>;
     /** Native thinking APIs; both are required to advertise the capability. */
@@ -264,11 +279,12 @@ const COMPACT_ID_PATTERN = /^[1-9][0-9]{0,19}$/;
 const MAX_UINT64 = (1n << 64n) - 1n;
 
 /**
- * Parse a Compact request ID: positive canonical decimal uint64
- * syntax, no leading zeroes, within uint64 range. Null means
- * malformed; the caller drops it without touching the high-water mark.
+ * Parse a native-mutation request ID (Compact or Reload): positive
+ * canonical decimal uint64 syntax, no leading zeroes, within uint64
+ * range. Null means malformed; the caller drops it without touching
+ * the high-water mark.
  */
-function parseCompactId(id: string): bigint | null {
+function parseMutationId(id: string): bigint | null {
     if (typeof id !== 'string' || !COMPACT_ID_PATTERN.test(id)) return null;
     const value = BigInt(id);
     return value <= MAX_UINT64 ? value : null;
@@ -281,6 +297,40 @@ function isValidCompactIdentity(value: unknown): value is string {
         value.length >= 1 &&
         value.length <= MAX_COMPACT_IDENTITY_CHARS
     );
+}
+
+/**
+ * Expected leaf bound for Reload dispatch. Unlike Compact, the empty
+ * string is a known value: a successfully read null leaf on a new
+ * empty session maps to '' on both sides.
+ */
+function isValidReloadLeaf(value: unknown): value is string {
+    return (
+        typeof value === 'string' && value.length <= MAX_COMPACT_IDENTITY_CHARS
+    );
+}
+
+/**
+ * Sample the idle/pending pair. Throwing APIs fail closed (not
+ * idle, messages pending). Never throws.
+ */
+function sampleIdlePair(ctx: PiContextView): {
+    readonly idle: boolean;
+    readonly hasPendingMessages: boolean;
+} {
+    let idle = false;
+    let hasPendingMessages = true;
+    try {
+        idle = ctx.isIdle!() === true;
+    } catch {
+        idle = false;
+    }
+    try {
+        hasPendingMessages = ctx.hasPendingMessages!() !== false;
+    } catch {
+        hasPendingMessages = true;
+    }
+    return { idle, hasPendingMessages };
 }
 
 const INVALID_SAMPLE = Symbol('invalid');
@@ -390,6 +440,12 @@ export class Runtime {
     private running = false;
     private seq = 0n;
     private runId = 0n;
+    /**
+     * Reload context fence. Advances on user-message start,
+     * compaction start, and tree navigation; never on settlement
+     * or assistant output.
+     */
+    private contextRevision = 0n;
     private revision = 0n;
     private journal: JournalRow[] = [];
     private journalGap = false;
@@ -407,15 +463,23 @@ export class Runtime {
     private modelsAccepted = false;
     private thinkingAccepted = false;
     private compactAccepted = false;
+    private reloadAccepted = false;
     private skillsAccepted = false;
     /** getContextUsage present on the latest event context. */
     private contextApi = false;
     /** compact/isIdle/hasPendingMessages present on the latest context. */
     private compactApi = false;
+    /** isIdle/hasPendingMessages present on the latest context. */
+    private reloadApi = false;
     /** Latest validated context measurement; null means none. */
     private contextSample: ContextSample | null = null;
     /** Latest idle/queued sample; null when the trio is unavailable. */
     private readinessSample: {
+        readonly idle: boolean;
+        readonly hasPendingMessages: boolean;
+    } | null = null;
+    /** Latest idle/queued sample for Reload; null without the pair. */
+    private reloadSample: {
         readonly idle: boolean;
         readonly hasPendingMessages: boolean;
     } | null = null;
@@ -426,6 +490,11 @@ export class Runtime {
     /** When the current stream was accepted; null while connecting. */
     private connectedAt: number | null = null;
     private shutdownRequested = false;
+    /** Channel whose drain must wait for a synchronous Reload receipt enqueue. */
+    private reloadDispatchChannel: RuntimeChannel | null = null;
+    private reloadReceiptChannel: RuntimeChannel | null = null;
+    private reloadDrainDeferred = false;
+    private reloadDrainResolve: (() => void) | null = null;
     private backoffMs: number;
     private retryTimer: ReturnType<typeof setTimeout> | null = null;
     private compactSettleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -438,6 +507,11 @@ export class Runtime {
     /** Process-owned compaction latch, shared across runtimes. */
     private get compact(): CompactLatchState {
         return this.opts.compactState;
+    }
+
+    /** Process-owned Reload latch; null in runtimes without one. */
+    private get reload(): ReloadLatchState | null {
+        return this.opts.reloadState ?? null;
     }
 
     /** Begin connecting; never throws, never blocks Pi startup. */
@@ -459,8 +533,33 @@ export class Runtime {
                 }
             },
         };
+        const reload = this.reload;
+        if (reload) {
+            reload.active = {
+                runtimeId: this.runtimeId,
+                notify: () => {
+                    try {
+                        this.refreshFromLive();
+                        this.sendSnapshot(
+                            this.running
+                                ? LogicalState.LOGICAL_STATE_RUNNING
+                                : LogicalState.LOGICAL_STATE_IDLE,
+                        );
+                    } catch {
+                        // Release notifications never throw.
+                    }
+                },
+            };
+        }
         this.noteView(ctx);
-        void this.attempt();
+        const drain = this.opts.reloadState?.drain;
+        if (drain) {
+            void drain.then(() => {
+                if (!this.shutdownRequested) void this.attempt();
+            });
+        } else {
+            void this.attempt();
+        }
     }
 
     /** A replacement session refreshes identities and the snapshot. */
@@ -536,13 +635,13 @@ export class Runtime {
      * Publish the newest sample outside a lifecycle transition.
      * Bounded nonfatal admission: a miss keeps the newest sample
      * for the next authoritative baseline or transition. Sends
-     * nothing when neither telemetry API is available. Never
+     * nothing when no telemetry API is available. Never
      * throws: a publish failure is an admission miss, so the
      * stream receiver and event handlers stay nonthrowing.
      */
     private publishContextOnly(): void {
         if (this.lastCtx) this.sampleTelemetry(this.lastCtx);
-        if (!this.contextApi && !this.compactApi) return;
+        if (!this.contextApi && !this.compactApi && !this.reloadApi) return;
         if (!this.channel) return;
         try {
             this.channel.sendNonfatal({
@@ -562,6 +661,21 @@ export class Runtime {
             // The newest sample stays for the next authoritative
             // baseline or transition.
         }
+    }
+
+    /**
+     * Map one message_start edge. Only the role is inspected, never
+     * message contents. A user message changes the reload context
+     * fence and publishes the new counter at once, including while
+     * a run continues, so a queued follow-up consumed inside one
+     * logical run still invalidates waiting Reload work.
+     */
+    onMessageStart(ctx: PiContextView, role: unknown): void {
+        if (this.shutdownRequested) return;
+        this.noteView(ctx);
+        if (role !== 'user') return;
+        this.contextRevision += 1n;
+        this.publishContextOnly();
     }
 
     /**
@@ -643,6 +757,8 @@ export class Runtime {
     /** Tree navigation refreshes identities and the snapshot. */
     onSessionTree(ctx: PiContextView): void {
         if (this.shutdownRequested) return;
+        // Navigation changes the reload context fence.
+        this.contextRevision += 1n;
         this.noteView(ctx);
         this.sendSnapshot(
             this.running
@@ -660,6 +776,8 @@ export class Runtime {
     onCompactStart(ctx: PiContextView): void {
         if (this.shutdownRequested) return;
         this.compactionActive = true;
+        // Compaction changes the reload context fence.
+        this.contextRevision += 1n;
         this.noteView(ctx);
         this.publishContextOnly();
     }
@@ -717,6 +835,10 @@ export class Runtime {
         if (this.compact.active?.runtimeId === this.runtimeId) {
             this.compact.active = null;
         }
+        const reload = this.reload;
+        if (reload?.active?.runtimeId === this.runtimeId) {
+            reload.active = null;
+        }
         if (this.retryTimer) {
             clearTimeout(this.retryTimer);
             this.retryTimer = null;
@@ -728,12 +850,54 @@ export class Runtime {
         // Drain, don't drop: session_shutdown lands milliseconds
         // after agent_settled, and the settlement edge queued behind
         // context-only snapshots must flush before the stream dies.
-        // Detach first so no later event can send; the bounded drain
-        // closes the old channel even across session replacement.
+        // Detach first so no later event can send. A replacement
+        // runtime waits for terminal status when this stream carried
+        // the Reload receipt, so its Hello cannot overtake the receipt.
         const channel = this.channel;
         this.channel = null;
         this.starting = false;
-        if (channel) void channel.drainAndClose(SHUTDOWN_DRAIN_MS);
+        if (channel) {
+            if (channel === this.reloadDispatchChannel) {
+                this.reloadDrainDeferred = true;
+                this.installReloadDrainBarrier();
+            } else if (channel === this.reloadReceiptChannel) {
+                this.installReloadDrainBarrier();
+                this.drainReloadChannel(channel);
+            } else {
+                void channel.drainAndClose(SHUTDOWN_DRAIN_MS);
+            }
+        }
+    }
+
+    /** Finish the synchronous entry window; drain only after its receipt is queued. */
+    private finishReloadDispatch(channel: RuntimeChannel): void {
+        if (this.reloadDispatchChannel !== channel) return;
+        this.reloadDispatchChannel = null;
+        if (!this.reloadDrainDeferred) return;
+        this.reloadDrainDeferred = false;
+        this.drainReloadChannel(channel);
+    }
+
+    /** Hold a replacement runtime until this stream reaches terminal status. */
+    private installReloadDrainBarrier(): void {
+        const reload = this.opts.reloadState;
+        if (!reload) return;
+        let barrier!: Promise<void>;
+        barrier = new Promise<void>((resolve) => {
+            this.reloadDrainResolve = () => {
+                if (reload.drain === barrier) reload.drain = null;
+                resolve();
+            };
+        });
+        reload.drain = barrier;
+    }
+
+    private drainReloadChannel(channel: RuntimeChannel): void {
+        const resolve = this.reloadDrainResolve;
+        this.reloadDrainResolve = null;
+        const drain = channel.drainAndClose(SHUTDOWN_DRAIN_MS);
+        if (resolve) void drain.then(resolve, resolve);
+        else void drain;
     }
 
     get isRunning(): boolean {
@@ -767,6 +931,9 @@ export class Runtime {
             typeof ctx.compact === 'function' &&
             typeof ctx.isIdle === 'function' &&
             typeof ctx.hasPendingMessages === 'function';
+        this.reloadApi =
+            typeof ctx.isIdle === 'function' &&
+            typeof ctx.hasPendingMessages === 'function';
         if (this.contextApi) {
             try {
                 this.contextSample = normalizeContextUsage(
@@ -781,21 +948,14 @@ export class Runtime {
             this.contextSample = null;
         }
         if (this.compactApi) {
-            let idle = false;
-            let hasPendingMessages = true;
-            try {
-                idle = ctx.isIdle!() === true;
-            } catch {
-                idle = false;
-            }
-            try {
-                hasPendingMessages = ctx.hasPendingMessages!() !== false;
-            } catch {
-                hasPendingMessages = true;
-            }
-            this.readinessSample = { idle, hasPendingMessages };
+            this.readinessSample = sampleIdlePair(ctx);
         } else {
             this.readinessSample = null;
+        }
+        if (this.reloadApi) {
+            this.reloadSample = sampleIdlePair(ctx);
+        } else {
+            this.reloadSample = null;
         }
     }
 
@@ -938,6 +1098,30 @@ export class Runtime {
                       bridgePending: this.compact.pending !== null,
                   })
                 : undefined,
+            reloadReadiness: this.reloadReadiness(),
+        });
+    }
+
+    /**
+     * Reload readiness sample, or undefined when the idle/pending
+     * pair is unavailable. Run and context counters are always
+     * explicit, including zero; only the request high-water mark
+     * stays absent until the first recognized ID.
+     */
+    private reloadReadiness(): ReloadReadiness | undefined {
+        const reload = this.reload;
+        if (!reload || !this.reloadApi || !this.reloadSample) {
+            return undefined;
+        }
+        return ReloadReadiness.create({
+            runId: this.runId,
+            contextRevision: this.contextRevision,
+            idle: this.reloadSample.idle,
+            hasPendingMessages: this.reloadSample.hasPendingMessages,
+            compactionActive: this.compactionActive,
+            compactPending: this.compact.pending !== null,
+            reloadPending: reload.pending !== null,
+            highWater: reload.highWater ?? undefined,
         });
     }
 
@@ -948,13 +1132,20 @@ export class Runtime {
      * lifecycle-only. Models needs only the registry and the host
      * switch call, so it is always advertised. Context needs
      * getContextUsage; compact needs the compact/isIdle/
-     * hasPendingMessages trio; each is independent of the other.
+     * hasPendingMessages trio; reload needs isIdle/
+     * hasPendingMessages plus the stock-editor baseline captured at
+     * session_start. Each is independent of the others.
      * Re-evaluated on every Hello, so reconnects follow API changes.
      */
     private capabilities(): string[] {
         const caps = [CAPABILITY_LIFECYCLE, CAPABILITY_MODELS];
         if (this.contextApi) caps.push(CAPABILITY_CONTEXT);
         if (this.compactApi) caps.push(CAPABILITY_COMPACT);
+        // The compact API is not required for Reload. Current focus
+        // never gates the capability: a selector only refuses the
+        // request, and restoration permits a new explicit one.
+        if (this.reload?.baseline && this.reloadApi)
+            caps.push(CAPABILITY_RELOAD);
         if (isHistoryReaderAvailable(this.ui)) caps.push(CAPABILITY_HISTORY);
         if (this.opts.getThinkingLevel && this.opts.setThinkingLevel)
             caps.push(CAPABILITY_THINKING);
@@ -1023,6 +1214,7 @@ export class Runtime {
         this.modelsAccepted = false;
         this.thinkingAccepted = false;
         this.compactAccepted = false;
+        this.reloadAccepted = false;
         this.skillsAccepted = false;
         // Reconnect carries a fresh baseline: resample through the
         // latest context so the Hello never replays a stale reading.
@@ -1049,6 +1241,8 @@ export class Runtime {
                     accepted.capabilities.includes(CAPABILITY_THINKING);
                 this.compactAccepted =
                     accepted.capabilities.includes(CAPABILITY_COMPACT);
+                this.reloadAccepted =
+                    accepted.capabilities.includes(CAPABILITY_RELOAD);
                 this.skillsAccepted =
                     accepted.capabilities.includes(CAPABILITY_SKILLS);
             }
@@ -1118,6 +1312,11 @@ export class Runtime {
             this.compactAccepted
         ) {
             this.onCompactRequest(msg.payload.value);
+        } else if (
+            msg.payload?.$case === 'reloadRequest' &&
+            this.reloadAccepted
+        ) {
+            this.onReloadRequest(msg.payload.value);
         } else if (
             msg.payload?.$case === 'skillsRequest' &&
             this.skillsAccepted
@@ -1638,7 +1837,7 @@ export class Runtime {
             | { readonly provider: string; readonly model: string }
             | undefined;
     }): void {
-        const id = parseCompactId(req.requestId);
+        const id = parseMutationId(req.requestId);
         // Malformed IDs drop silently, like other empty request ids.
         if (id === null || !this.channel) return;
         const highWater = this.compact.highWater;
@@ -1651,7 +1850,10 @@ export class Runtime {
             return;
         }
         this.compact.highWater = id;
-        if (this.compact.pending !== null) {
+        // Cross-mutation exclusion: neither native mutation runs
+        // while the other remains unresolved.
+        const reloadPending = this.reload?.pending ?? null;
+        if (this.compact.pending !== null || reloadPending !== null) {
             this.sendCompactResult(
                 req.requestId,
                 CompactOutcome.COMPACT_OUTCOME_REFUSED,
@@ -1927,6 +2129,303 @@ export class Runtime {
                 value: CompactResult.create({ requestId, outcome, reason }),
             },
         });
+    }
+
+    /**
+     * Answer one Reload request. Every guard runs before callback
+     * entry; any failure refuses without touching the host. Only a
+     * well-formed ID newer than the process high-water mark can
+     * reach the host, and every recognized ID is consumed so a
+     * refused ID cannot later replay into a mutation. The fixed
+     * native command enters synchronously; the receipt reports
+     * callback entry only, never reload completion.
+     */
+    private onReloadRequest(req: {
+        readonly requestId: string;
+        readonly expectedSessionId: string;
+        readonly expectedLeafId: string;
+        readonly expectedModel?:
+            | { readonly provider: string; readonly model: string }
+            | undefined;
+        readonly expectedRunId?: bigint | undefined;
+        readonly expectedContextRevision?: bigint | undefined;
+    }): void {
+        const id = parseMutationId(req.requestId);
+        // Malformed IDs drop silently, like other empty request ids.
+        if (id === null || !this.channel) return;
+        const reload = this.reload;
+        if (!reload) {
+            this.sendReloadAck(
+                req.requestId,
+                ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_REFUSED,
+                'unavailable',
+            );
+            return;
+        }
+        const highWater = reload.highWater;
+        if (highWater !== null && id <= highWater) {
+            this.sendReloadAck(
+                req.requestId,
+                ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_REFUSED,
+                'duplicate',
+            );
+            return;
+        }
+        reload.highWater = id;
+        // Cross-mutation exclusion: neither native mutation runs
+        // while the other remains unresolved.
+        if (reload.pending !== null || this.compact.pending !== null) {
+            this.sendReloadAck(
+                req.requestId,
+                ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_REFUSED,
+                'pending',
+            );
+            return;
+        }
+        if (
+            !isValidCompactIdentity(req.expectedSessionId) ||
+            !isValidReloadLeaf(req.expectedLeafId) ||
+            (req.expectedModel !== undefined &&
+                (!isValidCompactIdentity(req.expectedModel.provider) ||
+                    !isValidCompactIdentity(req.expectedModel.model)))
+        ) {
+            this.sendReloadAck(
+                req.requestId,
+                ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_REFUSED,
+                'stale',
+            );
+            return;
+        }
+        const ctx = this.lastCtx;
+        if (
+            !ctx ||
+            typeof ctx.isIdle !== 'function' ||
+            typeof ctx.hasPendingMessages !== 'function'
+        ) {
+            this.sendReloadAck(
+                req.requestId,
+                ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_REFUSED,
+                'unavailable',
+            );
+            return;
+        }
+        // Admission fences use a live host read. A throwing getter
+        // fails closed; cached identity is never evidence. An absent
+        // expected model expects an absent live model. A null live
+        // leaf maps to the known empty value, like the Go side.
+        let liveSession: string;
+        let liveLeaf: string;
+        let liveHasModel: boolean;
+        let liveProvider: unknown;
+        let liveModelId: unknown;
+        try {
+            liveSession = ctx.sessionManager.getSessionId();
+            liveLeaf = ctx.sessionManager.getLeafId() ?? '';
+            const liveModel = ctx.model;
+            liveHasModel = liveModel !== undefined && liveModel !== null;
+            liveProvider = liveModel?.provider;
+            liveModelId = liveModel?.id;
+        } catch {
+            this.sendReloadAck(
+                req.requestId,
+                ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_REFUSED,
+                'stale',
+            );
+            return;
+        }
+        const modelFence =
+            req.expectedModel !== undefined
+                ? liveHasModel &&
+                  liveProvider === req.expectedModel.provider &&
+                  liveModelId === req.expectedModel.model
+                : !liveHasModel;
+        if (
+            liveSession !== req.expectedSessionId ||
+            liveLeaf !== req.expectedLeafId ||
+            !modelFence
+        ) {
+            this.sendReloadAck(
+                req.requestId,
+                ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_REFUSED,
+                'stale',
+            );
+            return;
+        }
+        // The server always sends both counters; absence means a
+        // malformed or foreign request, never the current fence.
+        if (
+            req.expectedRunId === undefined ||
+            req.expectedContextRevision === undefined ||
+            req.expectedRunId !== this.runId ||
+            req.expectedContextRevision !== this.contextRevision
+        ) {
+            this.sendReloadAck(
+                req.requestId,
+                ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_REFUSED,
+                'stale',
+            );
+            return;
+        }
+        let idle: boolean;
+        try {
+            idle = ctx.isIdle() === true;
+        } catch {
+            idle = false;
+        }
+        if (!idle) {
+            this.sendReloadAck(
+                req.requestId,
+                ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_REFUSED,
+                'busy',
+            );
+            return;
+        }
+        let queued: boolean;
+        try {
+            queued = ctx.hasPendingMessages() !== false;
+        } catch {
+            queued = true;
+        }
+        if (queued) {
+            this.sendReloadAck(
+                req.requestId,
+                ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_REFUSED,
+                'queued',
+            );
+            return;
+        }
+        if (this.compactionActive) {
+            this.sendReloadAck(
+                req.requestId,
+                ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_REFUSED,
+                'compaction-active',
+            );
+            return;
+        }
+        const op: ReloadOp = {
+            requestId: req.requestId,
+            runtimeId: this.runtimeId,
+            sessionId: liveSession,
+        };
+        const dispatchChannel = this.channel;
+        if (!dispatchChannel) return;
+        reload.pending = { ...op, reported: false };
+        // Publish bridge-pending readiness immediately, before
+        // native entry: even a synchronously settling callback
+        // leaves an observable pending frame for waiters.
+        this.publishContextOnly();
+        // Pi may emit session_shutdown synchronously from /reload.
+        // Keep only this channel's bounded drain deferred until the
+        // callback returns and its receipt has entered the writer queue.
+        this.reloadDispatchChannel = dispatchChannel;
+        try {
+            const attempt = invokeNativeReload(ctx, reload);
+            if (!attempt.entered) {
+                // No native entry: the focus or editor changed under
+                // the request. Release the latch and refuse; a later
+                // explicit request may proceed after restoration.
+                reload.pending = null;
+                // Release readiness retires the server operation, so its
+                // refusal receipt must enter the stream first.
+                this.sendReloadAck(
+                    req.requestId,
+                    ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_REFUSED,
+                    'unavailable',
+                    dispatchChannel,
+                );
+                this.publishContextOnly();
+                return;
+            }
+            if (
+                this.sendReloadAck(
+                    req.requestId,
+                    ReloadDispatchOutcome.RELOAD_DISPATCH_OUTCOME_DISPATCHED,
+                    '',
+                    dispatchChannel,
+                )
+            ) {
+                this.reloadReceiptChannel = dispatchChannel;
+            }
+            // Release the latch when the native callback settles. The
+            // settlement carries no completion evidence: release only.
+            // A lost receipt stays unknown on the server, which retires
+            // from later readiness, never from this callback.
+            attempt.completion.then(
+                () => this.releaseReloadLatch(op),
+                () => this.releaseReloadLatch(op),
+            );
+        } finally {
+            this.finishReloadDispatch(dispatchChannel);
+        }
+    }
+
+    /**
+     * Release one native Reload latch when its callback settles.
+     * Releases only the matching operation, reports nothing, and
+     * refreshes the active runtime's readiness through its current
+     * context. Never throws.
+     */
+    private releaseReloadLatch(op: ReloadOp): void {
+        try {
+            const reload = this.reload;
+            if (!reload) return;
+            const pending = reload.pending;
+            if (pending === null || pending.requestId !== op.requestId) {
+                return;
+            }
+            reload.pending = null;
+            this.refreshAfterReloadRelease();
+        } catch {
+            // Release never throws; the latch is already clear.
+        }
+    }
+
+    /**
+     * Refresh the active runtime's readiness after a Reload
+     * release, using that runtime's current context. Never throws.
+     */
+    private refreshAfterReloadRelease(): void {
+        try {
+            const active = this.reload?.active;
+            if (active === null || active === undefined) return;
+            if (active.runtimeId === this.runtimeId) {
+                this.refreshFromLive();
+                this.sendSnapshot(
+                    this.running
+                        ? LogicalState.LOGICAL_STATE_RUNNING
+                        : LogicalState.LOGICAL_STATE_IDLE,
+                );
+                return;
+            }
+            active.notify();
+        } catch {
+            // Release notifications never throw.
+        }
+    }
+
+    /**
+     * Send one Reload dispatch receipt. Nonfatal response-class
+     * admission, like Compact results: an admission miss lets the
+     * waiter expire into unknown instead of disturbing lifecycle
+     * traffic. A lost receipt is unknown, never permission to retry.
+     */
+    private sendReloadAck(
+        requestId: string,
+        outcome: ReloadDispatchOutcome,
+        reason: string,
+        channel: RuntimeChannel | null = this.channel,
+    ): boolean {
+        return (
+            channel?.sendNonfatal({
+                paneId: this.opts.creds.pane,
+                processId: this.opts.creds.process,
+                runtimeGeneration: this.opts.generation,
+                payload: {
+                    $case: 'reloadAck',
+                    value: ReloadAck.create({ requestId, outcome, reason }),
+                },
+            }) ?? false
+        );
     }
 
     private onStreamEnd(status: ServiceError | null): void {

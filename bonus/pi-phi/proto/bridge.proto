@@ -44,6 +44,7 @@ message PiToPhi {
     CompactResult compact_result = 22;
     SkillsResponse skills_response = 23;
     InvokeSkillAck invoke_skill_ack = 24;
+    ReloadAck reload_ack = 25;
   }
 }
 
@@ -65,6 +66,7 @@ message PhiToPi {
     CompactRequest compact_request = 19;
     SkillsRequest skills_request = 20;
     InvokeSkillRequest invoke_skill_request = 21;
+    ReloadRequest reload_request = 22;
   }
 }
 
@@ -168,6 +170,9 @@ message StateSnapshot {
   // isIdle/hasPendingMessages plus local compaction tracking.
   // Absent when the pi.compact.v1 APIs are unavailable.
   CompactReadiness compact_readiness = 11;
+  // Optional native Reload readiness. Missing counters mean unknown;
+  // they are never inferred to be zero.
+  ReloadReadiness reload_readiness = 12;
 }
 
 // Optional context telemetry. Scalar presence is explicit: an absent
@@ -376,6 +381,49 @@ message CompactResult {
   string request_id = 1;
   CompactOutcome outcome = 2;
   string reason = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Native resource reload
+// ---------------------------------------------------------------------------
+
+// ReloadRequest asks Pi's native interactive editor to run its fixed
+// /reload command. Identity/readiness are rechecked immediately before
+// callback entry. A lost receipt means unknown, never permission to retry.
+message ReloadRequest {
+  string request_id = 1;
+  string expected_session_id = 2;
+  string expected_leaf_id = 3;
+  ModelSnapshot expected_model = 4;
+  optional uint64 expected_run_id = 5;
+  optional uint64 expected_context_revision = 6;
+}
+
+enum ReloadDispatchOutcome {
+  RELOAD_DISPATCH_OUTCOME_UNSPECIFIED = 0;
+  RELOAD_DISPATCH_OUTCOME_DISPATCHED = 1;
+  RELOAD_DISPATCH_OUTCOME_REFUSED = 2;
+}
+
+// ReloadAck reports callback entry only. DISPATCHED does not mean that
+// Pi completed the reload. reason uses a bounded safe vocabulary.
+message ReloadAck {
+  string request_id = 1;
+  ReloadDispatchOutcome outcome = 2;
+  string reason = 3;
+}
+
+// ReloadReadiness carries exact current identity fences and process-owned
+// mutation state. Counter presence distinguishes known zero from unknown.
+message ReloadReadiness {
+  optional uint64 run_id = 1;
+  optional uint64 context_revision = 2;
+  bool idle = 3;
+  bool has_pending_messages = 4;
+  bool compaction_active = 5;
+  bool compact_pending = 6;
+  bool reload_pending = 7;
+  optional uint64 high_water = 8;
 }
 
 // ---------------------------------------------------------------------------

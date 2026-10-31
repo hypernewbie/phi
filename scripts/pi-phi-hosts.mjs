@@ -17,10 +17,11 @@ import {
     readFileSync,
     readdirSync,
     rmSync,
+    statSync,
     writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(fileURLToPath(new URL('.', import.meta.url)), '..');
@@ -268,12 +269,12 @@ async function startTestserver() {
         });
     }
     async function control(op) {
-        server.stdin.write(JSON.stringify(op) + '\n');
+        server.stdin.write(`${JSON.stringify(op)}\n`);
         return JSON.parse(await readLine());
     }
     const ready = JSON.parse(await readLine());
     async function stop() {
-        server.stdin.write(JSON.stringify({ op: 'shutdown' }) + '\n');
+        server.stdin.write(`${JSON.stringify({ op: 'shutdown' })}\n`);
         await new Promise((resolve) => server.once('exit', resolve));
     }
     return { control, target: ready.target, stop };
@@ -392,13 +393,37 @@ const localCli = join(
 );
 if (!existsSync(localCli))
     fail('setup', 'workspace pi 1.0.1 bundle missing', localCli);
-// Pi 1.3.0 runs from a pre-installed copy under tmp so the isolated HOME
-// (which hides the user's pnpm store) cannot break module resolution.
-// Installed once with the outer environment, then invoked via node like
-// the workspace bundle. Network or a warm pnpm store is required here;
-// the Pi spawns themselves are hermetic.
+// Use the local 1.3.0 CLI when provided. This keeps host checks offline;
+// the fallback installs the pinned package into an isolated temp directory.
 let cli130 = '';
-{
+const cli130Override = process.env.PI_PHI_HOST_130_CLI;
+if (cli130Override) {
+    const candidate = resolve(cli130Override);
+    try {
+        const packageDir = dirname(dirname(dirname(candidate)));
+        const packageJson = JSON.parse(
+            readFileSync(join(packageDir, 'package.json'), 'utf8'),
+        );
+        if (
+            !statSync(candidate).isFile() ||
+            basename(dirname(candidate)) !== 'bundle' ||
+            basename(dirname(dirname(candidate))) !== 'dist' ||
+            packageJson.name !== '@earendil-works/pi-coding-agent' ||
+            packageJson.version !== '1.3.0'
+        ) {
+            throw new Error('unexpected Pi package or CLI path');
+        }
+        cli130 = candidate;
+    } catch (error) {
+        fail(
+            'setup',
+            'PI_PHI_HOST_130_CLI must be an existing Pi 1.3.0 dist/bundle/cli.js',
+            `${candidate}: ${String(error)}`,
+        );
+    }
+} else {
+    // Pi 1.3.0 runs from a pre-installed copy under tmp so the isolated HOME
+    // (which hides the user's pnpm store) cannot break module resolution.
     const pkgDir = join(tmp, 'pkg130');
     mkdirSync(pkgDir, { recursive: true });
     writeFileSync(
@@ -581,7 +606,7 @@ for (const version of versions) {
         if (!view.runtimeId) fail(version.name, 'runtime id missing');
         if (
             (view.caps || []).join(',') !==
-            'pi.compact.v1,pi.context.v1,pi.lifecycle.v1,pi.models.v1,pi.thinking.v1'
+            'pi.compact.v1,pi.context.v1,pi.lifecycle.v1,pi.models.v1,pi.skills.v1,pi.thinking.v1'
         ) {
             fail(version.name, 'accepted caps', (view.caps || []).join(','));
         }
@@ -753,7 +778,7 @@ for (const version of versions) {
                 fail(version.name, 'history log unreadable', String(err));
             }
             const start = records.find((r) => r.phase === 'start');
-            if (!start || start.available !== true) {
+            if (start?.available !== true) {
                 fail(
                     version.name,
                     'reader unavailable at session start',
@@ -819,7 +844,7 @@ for (const version of versions) {
                 }
                 if (
                     (tuiView.caps || []).join(',') !==
-                    'pi.compact.v1,pi.context.v1,pi.history.v1,pi.lifecycle.v1,pi.models.v1,pi.thinking.v1'
+                    'pi.compact.v1,pi.context.v1,pi.history.v1,pi.lifecycle.v1,pi.models.v1,pi.reload.v1,pi.skills.v1,pi.thinking.v1'
                 ) {
                     fail(
                         version.name,
@@ -857,5 +882,5 @@ if (failures.length > 0) {
 }
 rmSync(tmp, { recursive: true, force: true });
 console.log(
-    'pi-phi-hosts: both pinned hosts load, flow, and identify; inert and bad-credential runs contained; interactive editor history proven',
+    'pi-phi-hosts: both pinned hosts load, flow, and identify; inert and bad-credential runs contained; interactive editor history and Reload capability proven',
 );

@@ -76,12 +76,12 @@ func handlePiBridgeCompact(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	generation, ok := parseCompactStamp(body.Generation)
+	generation, ok := parsePositiveStamp(body.Generation)
 	if !ok {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	pubRev, ok := parseCompactStamp(body.TelemetryRevision)
+	pubRev, ok := parsePositiveStamp(body.TelemetryRevision)
 	if !ok {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
@@ -92,9 +92,9 @@ func handlePiBridgeCompact(w http.ResponseWriter, r *http.Request) {
 	writeCompactResult(w, res, err)
 }
 
-// parseCompactStamp parses one canonical positive uint64 stamp: digits
+// parsePositiveStamp parses one canonical positive uint64 stamp: digits
 // only, no leading zeroes, no sign or whitespace, at least 1.
-func parseCompactStamp(s string) (uint64, bool) {
+func parsePositiveStamp(s string) (uint64, bool) {
 	if s == "" {
 		return 0, false
 	}

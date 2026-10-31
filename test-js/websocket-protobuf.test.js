@@ -124,6 +124,78 @@ describe('pane notification adapters', () => {
         expect(onControl.mock.calls[0][0]).not.toHaveProperty('reason');
     });
 
+    it('bridge state carries reload identity and readiness exactly', () => {
+        const onControl = vi.fn();
+        const pty = new PTYWebSocket('pane-1', () => {}, onControl);
+        sendPayload(pty, {
+            $case: 'bridgeState',
+            value: {
+                paneId: 'pane-1',
+                state: 'managed',
+                generation: BigInt(2),
+                telemetryRevision: BigInt(7),
+                capabilities: ['pi.reload.v1'],
+                processId: 'proc-1',
+                runId: BigInt(0),
+                contextRevision: BigInt('18446744073709551615'),
+                reloadIdle: true,
+                reloadQueued: false,
+                reloadActive: false,
+                reloadCompactPending: false,
+                reloadPending: false,
+                reloadHighWater: BigInt(12),
+            },
+        });
+        expect(onControl).toHaveBeenCalledTimes(1);
+        expect(onControl).toHaveBeenCalledWith({
+            type: 'pi-bridge-state',
+            pane_id: 'pane-1',
+            state: 'managed',
+            generation: '2',
+            telemetry_revision: '7',
+            capabilities: ['pi.reload.v1'],
+            process_id: 'proc-1',
+            run_id: '0',
+            context_revision: '18446744073709551615',
+            reload_idle: true,
+            reload_queued: false,
+            reload_active: false,
+            reload_compact_pending: false,
+            reload_pending: false,
+            reload_high_water: '12',
+        });
+    });
+
+    it('bridge state omits absent reload keys, never invents them', () => {
+        const onControl = vi.fn();
+        const pty = new PTYWebSocket('pane-1', () => {}, onControl);
+        sendPayload(pty, {
+            $case: 'bridgeState',
+            value: {
+                paneId: 'pane-1',
+                state: 'managed',
+                generation: BigInt(2),
+                telemetryRevision: BigInt(7),
+                capabilities: ['pi.reload.v1'],
+            },
+        });
+        expect(onControl).toHaveBeenCalledTimes(1);
+        const msg = onControl.mock.calls[0][0];
+        for (const key of [
+            'process_id',
+            'run_id',
+            'context_revision',
+            'reload_idle',
+            'reload_queued',
+            'reload_active',
+            'reload_compact_pending',
+            'reload_pending',
+            'reload_high_water',
+        ]) {
+            expect(msg).not.toHaveProperty(key);
+        }
+    });
+
     it('settlement decodes with exact decimal identifiers', () => {
         const onControl = vi.fn();
         const pty = new PTYWebSocket('pane-1', () => {}, onControl);

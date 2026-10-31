@@ -85,6 +85,9 @@ type bridgePane struct {
 	// from an absent capability.
 	lastUsage     *pibridge.ContextUsage
 	lastReadiness *pibridge.Readiness
+	// lastReload is the retained reload-readiness copy, nil when
+	// the latest accepted snapshot carried none.
+	lastReload *pibridge.ReloadReadiness
 	// lastConnected tracks current stream availability: set on every
 	// snapshot, cleared on peer-down. Nil until the first snapshot.
 	// History recall uses it; bell behavior does not.
@@ -503,6 +506,34 @@ func (b *Bridge) RequestPaneSetModel(ctx context.Context, paneID, provider, mode
 	return b.server.RequestSetModel(ctx, processID, provider, model)
 }
 
+// RequestPaneReload resolves a pane to its bridge process and asks
+// the live Pi session to run its fixed native /reload command. The
+// browser's process stamp must match the pane's current process;
+// anything else is stale. Unknown, unmanaged, and peerless panes
+// fail; every error means the host was never invoked or the outcome
+// is unknown, never a silent fallback. The caller owns the deadline:
+// the wait must not exceed 30 seconds.
+func (b *Bridge) RequestPaneReload(ctx context.Context, paneID, processID string, generation, pubRev, runID, contextRev uint64) (pibridge.ReloadResult, error) {
+	if b == nil {
+		return pibridge.ReloadResult{}, fmt.Errorf("pi-bridge: disabled")
+	}
+	b.mu.Lock()
+	p, ok := b.panes[paneID]
+	var current string
+	var managed bool
+	if ok {
+		current, managed = p.processID, p.managed
+	}
+	b.mu.Unlock()
+	if !ok || !managed {
+		return pibridge.ReloadResult{}, &pibridge.ReloadRefusal{Reason: "stale"}
+	}
+	if current != processID {
+		return pibridge.ReloadResult{}, &pibridge.ReloadRefusal{Reason: "stale"}
+	}
+	return b.server.RequestReload(ctx, processID, generation, pubRev, runID, contextRev)
+}
+
 // RequestPaneCompact resolves a pane to its bridge process and asks
 // the live Pi session to run one native compaction. Unknown,
 // unmanaged, and peerless panes fail; every error means the host was
@@ -591,6 +622,18 @@ type BridgePaneState struct {
 	CompactQueued  *bool `json:"compact_queued,omitempty"`
 	CompactActive  *bool `json:"compact_active,omitempty"`
 	CompactPending *bool `json:"compact_pending,omitempty"`
+	// Process identity and reload readiness. The process nonce is
+	// nonsecret; counters are exact decimal strings with explicit
+	// zero. Same names as the WS frame.
+	ProcessID            string `json:"process_id,omitempty"`
+	RunID                string `json:"run_id,omitempty"`
+	ContextRevision      string `json:"context_revision,omitempty"`
+	ReloadIdle           *bool  `json:"reload_idle,omitempty"`
+	ReloadQueued         *bool  `json:"reload_queued,omitempty"`
+	ReloadActive         *bool  `json:"reload_active,omitempty"`
+	ReloadCompactPending *bool  `json:"reload_compact_pending,omitempty"`
+	ReloadPending        *bool  `json:"reload_pending,omitempty"`
+	ReloadHighWater      string `json:"reload_high_water,omitempty"`
 }
 
 // PaneSnapshot reports the bridge view for one pane. Unknown panes and
@@ -620,7 +663,7 @@ func (b *Bridge) PaneSnapshot(paneID string) BridgePaneState {
 	if !managed {
 		return BridgePaneState{State: piBridgeUnavailable, Reason: reason}
 	}
-	st := BridgePaneState{State: piBridgeManaged}
+	st := BridgePaneState{State: piBridgeManaged, ProcessID: processID}
 	if view.hasGen {
 		st.Generation = strconv.FormatUint(view.gen, 10)
 	}
@@ -664,6 +707,19 @@ func (b *Bridge) PaneSnapshot(paneID string) BridgePaneState {
 		idle, queued, active, pending := r.Idle, r.HasPendingMessages, r.CompactionActive, r.BridgePending
 		st.CompactIdle, st.CompactQueued, st.CompactActive, st.CompactPending = &idle, &queued, &active, &pending
 	}
+	if r := view.reload; r != nil {
+		if r.HasRunID {
+			st.RunID = strconv.FormatUint(r.RunID, 10)
+		}
+		if r.HasContextRevision {
+			st.ContextRevision = strconv.FormatUint(r.ContextRevision, 10)
+		}
+		idle, queued, active, compactPending, pending := r.Idle, r.HasPendingMessages, r.CompactionActive, r.CompactPending, r.ReloadPending
+		st.ReloadIdle, st.ReloadQueued, st.ReloadActive, st.ReloadCompactPending, st.ReloadPending = &idle, &queued, &active, &compactPending, &pending
+		if r.HasHighWater {
+			st.ReloadHighWater = strconv.FormatUint(r.HighWater, 10)
+		}
+	}
 	return st
 }
 
@@ -675,7 +731,7 @@ func (b *Bridge) PaneSnapshot(paneID string) BridgePaneState {
 // model/usage of the old process. A callback without state advances
 // the revision floor but keeps model/thinking unknown. It never calls
 // back into the Server; all live values arrive as arguments.
-func (b *Bridge) onState(paneID, processID string, generation, pubRev uint64, running, hasState bool, model, thinkingLevel string, caps []string, usage *pibridge.ContextUsage, readiness *pibridge.Readiness) {
+func (b *Bridge) onState(paneID, processID string, generation, pubRev uint64, running, hasState bool, model, thinkingLevel string, caps []string, usage *pibridge.ContextUsage, readiness *pibridge.Readiness, reload *pibridge.ReloadReadiness) {
 	b.mu.Lock()
 	p, ok := b.panes[paneID]
 	var view bridgeStateView
@@ -701,6 +757,7 @@ func (b *Bridge) onState(paneID, processID string, generation, pubRev uint64, ru
 				// request-specific results with the old state.
 				p.lastUsage = nil
 				p.lastReadiness = nil
+				p.lastReload = nil
 			}
 			p.pubRev = pubRev
 			// Capabilities are negotiated by Hello, not by the
@@ -716,6 +773,7 @@ func (b *Bridge) onState(paneID, processID string, generation, pubRev uint64, ru
 				// telemetry clears to unknown, never inherits.
 				p.lastUsage = copyUsage(usage)
 				p.lastReadiness = copyReadiness(readiness)
+				p.lastReload = copyReloadReadiness(reload)
 			}
 			connected := true
 			p.lastConnected = &connected
@@ -781,6 +839,16 @@ func copyReadiness(r *pibridge.Readiness) *pibridge.Readiness {
 	return &c
 }
 
+// copyReloadReadiness retains one reload-readiness sample by value.
+// Nil stays nil: absent readiness is never invented.
+func copyReloadReadiness(r *pibridge.ReloadReadiness) *pibridge.ReloadReadiness {
+	if r == nil {
+		return nil
+	}
+	c := *r
+	return &c
+}
+
 // bridgeStateView is a lock-free copy of one pane's retained view.
 type bridgeStateView struct {
 	pubRev        uint64
@@ -796,6 +864,8 @@ type bridgeStateView struct {
 	connected     *bool
 	usage         *pibridge.ContextUsage
 	readiness     *pibridge.Readiness
+	reload        *pibridge.ReloadReadiness
+	processID     string
 }
 
 // snapshot copies the retained view. The caller must hold b.mu. The
@@ -826,6 +896,8 @@ func (p *bridgePane) snapshot() bridgeStateView {
 		connected:     connected,
 		usage:         copyUsage(p.lastUsage),
 		readiness:     copyReadiness(p.lastReadiness),
+		reload:        copyReloadReadiness(p.lastReload),
+		processID:     p.processID,
 	}
 }
 
@@ -875,6 +947,25 @@ func encodeBridgeState(paneID string, view bridgeStateView) *wspb.TerminalBridge
 		state.CompactQueued = proto.Bool(r.HasPendingMessages)
 		state.CompactActive = proto.Bool(r.CompactionActive)
 		state.CompactPending = proto.Bool(r.BridgePending)
+	}
+	if view.processID != "" {
+		state.ProcessId = proto.String(view.processID)
+	}
+	if r := view.reload; r != nil {
+		if r.HasRunID {
+			state.RunId = proto.Uint64(r.RunID)
+		}
+		if r.HasContextRevision {
+			state.ContextRevision = proto.Uint64(r.ContextRevision)
+		}
+		state.ReloadIdle = proto.Bool(r.Idle)
+		state.ReloadQueued = proto.Bool(r.HasPendingMessages)
+		state.ReloadActive = proto.Bool(r.CompactionActive)
+		state.ReloadCompactPending = proto.Bool(r.CompactPending)
+		state.ReloadPending = proto.Bool(r.ReloadPending)
+		if r.HasHighWater {
+			state.ReloadHighWater = proto.Uint64(r.HighWater)
+		}
 	}
 	return state
 }

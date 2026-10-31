@@ -3423,6 +3423,26 @@ body.has-terminal-bg
     opacity: 0.7;
 }
 
+/* Reload queue marker and screen-reader status, scoped to the
+   Cmds Reload row. The command label never changes; state rides
+   the title, the marker, and the dismiss sibling. */
+.dropup-model-btn.pi-reload-queued::after {
+    content: ' queued';
+    opacity: 0.7;
+}
+
+.pi-reload-status {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip-path: inset(50%) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+}
+
 .presets-divider {
     width: 1px;
     height: 18px;

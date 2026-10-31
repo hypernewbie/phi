@@ -365,6 +365,24 @@ export class PTYWebSocket {
             msg.compact_active = state.compactActive;
         if (state.compactPending !== undefined)
             msg.compact_pending = state.compactPending;
+        if (state.processId !== undefined) msg.process_id = state.processId;
+        const runId = toUintString(state.runId);
+        if (runId !== undefined) msg.run_id = runId;
+        const contextRevision = toUintString(state.contextRevision);
+        if (contextRevision !== undefined)
+            msg.context_revision = contextRevision;
+        if (state.reloadIdle !== undefined) msg.reload_idle = state.reloadIdle;
+        if (state.reloadQueued !== undefined)
+            msg.reload_queued = state.reloadQueued;
+        if (state.reloadActive !== undefined)
+            msg.reload_active = state.reloadActive;
+        if (state.reloadCompactPending !== undefined)
+            msg.reload_compact_pending = state.reloadCompactPending;
+        if (state.reloadPending !== undefined)
+            msg.reload_pending = state.reloadPending;
+        const reloadHighWater = toUintString(state.reloadHighWater);
+        if (reloadHighWater !== undefined)
+            msg.reload_high_water = reloadHighWater;
         if (state.capabilities.length > 0)
             msg.capabilities = [...state.capabilities];
         this.onControl(msg);

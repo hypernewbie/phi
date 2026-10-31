@@ -780,3 +780,19 @@ func TestResolveLaunch_ExtensionArgsWindowsSpacesBeforeTerminator(t *testing.T) 
 		t.Fatalf("windows wrap lost spaced path: %v", plan.Args)
 	}
 }
+
+// Pi offers /reload from its default presets; the frontend moves it
+// into Cmds → Built-in Commands. Explicit user preset arrays stay
+// authoritative and must add it themselves.
+func TestPiOffersReloadPreset(t *testing.T) {
+	c, ok := DefaultRegistry()["pi"]
+	if !ok {
+		t.Fatal("pi coder missing from defaults")
+	}
+	for _, p := range c.Presets {
+		if p.Name == "/reload" && p.Value == "/reload\r" {
+			return
+		}
+	}
+	t.Error("pi defaults should offer /reload")
+}
