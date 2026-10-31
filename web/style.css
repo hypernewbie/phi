@@ -873,11 +873,6 @@ html[data-sync="stale"] .brand .logo {
        style.width replayed from localStorage by initResizers(). */
     max-width: min(450px, 25vw);
     flex-shrink: 0;
-    /* Inset obsidian edge on the right side mirrors the
-       app-header's bottom edge — glass panels feel 'carved from
-       stone' rather than 'flat translucent strip'. Reuses
-       --accent-trace. */
-    box-shadow: inset -1px 0 0 var(--accent-trace);
 }
 
 .panel-header {
@@ -1459,10 +1454,11 @@ html[data-sync="stale"] .brand .logo {
     box-shadow: 0 0 16px rgba(239, 68, 68, 0.25);
 }
 
-/* DRAGGABLE RESIZE HANDLE */
+/* Overlap the border and existing padding, not adjacent scrollbars or text. */
 .resize-handle {
     position: relative;
-    width: 24px;
+    width: 8px;
+    margin-inline: -1px -7px;
     cursor: col-resize;
     background-color: transparent;
     flex-shrink: 0;
@@ -1475,24 +1471,20 @@ html[data-sync="stale"] .brand .logo {
     position: absolute;
     top: 0;
     bottom: 0;
-    left: 50%;
-    width: 3px;
-    transform: translateX(-50%);
-    background-color: var(--text-muted);
-    opacity: 0.35;
-    transition:
-        opacity 0.2s,
-        width 0.2s,
-        background-color 0.2s,
-        box-shadow 0.2s;
+    left: 0;
+    width: 1px;
+    background-color: var(--accent);
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+#right-resize-handle::before {
+    left: 1px;
 }
 
 .resize-handle:hover::before,
 .resize-handle.dragging::before {
-    width: 4px;
-    background-color: var(--accent);
     opacity: 1;
-    box-shadow: 0 0 14px var(--accent-glow);
 }
 
 #right-resize-handle:has(+ .diff-panel.hidden) {
@@ -1530,25 +1522,18 @@ html[data-sync="stale"] .brand .logo {
         content: "";
         position: absolute;
         top: 50%;
-        left: 10px;
+        left: 14px;
         transform: translateY(-50%);
-        width: 3px;
+        width: 1px;
         height: 40px;
-        border-radius: 3px;
-        background-color: var(--text-muted);
-        opacity: 0.35;
-        transition:
-            opacity 0.2s,
-            background-color 0.2s,
-            width 0.2s;
+        background-color: var(--accent);
+        opacity: 0;
+        transition: opacity 0.2s;
     }
 
     .sidebar-panel .drawer-resize-handle:hover::after,
     .sidebar-panel .drawer-resize-handle.dragging::after {
-        width: 4px;
-        background-color: var(--accent);
         opacity: 1;
-        box-shadow: 0 0 10px var(--accent-glow);
     }
 }
 
@@ -1571,25 +1556,18 @@ html[data-sync="stale"] .brand .logo {
         content: "";
         position: absolute;
         top: 50%;
-        right: 10px;
+        right: 14px;
         transform: translateY(-50%);
-        width: 3px;
+        width: 1px;
         height: 40px;
-        border-radius: 3px;
-        background-color: var(--text-muted);
-        opacity: 0.35;
-        transition:
-            opacity 0.2s,
-            background-color 0.2s,
-            width 0.2s;
+        background-color: var(--accent);
+        opacity: 0;
+        transition: opacity 0.2s;
     }
 
     .diff-panel .drawer-resize-handle:hover::after,
     .diff-panel .drawer-resize-handle.dragging::after {
-        width: 4px;
-        background-color: var(--accent);
         opacity: 1;
-        box-shadow: 0 0 10px var(--accent-glow);
     }
 }
 
@@ -5452,7 +5430,7 @@ html[data-phi-config-page] .settings-modal {
         z-index: 1000;
         transform: translateX(-100%);
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        box-shadow: 10px 0 30px rgba(0, 0, 0, 0.5);
+        box-shadow: none;
         border-right: 1px solid var(--bg-border);
     }
 
@@ -5519,7 +5497,7 @@ html[data-phi-config-page] .settings-modal {
         z-index: 1000;
         transform: translateX(100%);
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        box-shadow: -10px 0 30px rgba(0, 0, 0, 0.5);
+        box-shadow: none;
         border-left: 1px solid var(--bg-border);
     }
 
@@ -5954,7 +5932,7 @@ html[data-phi-config-page] .settings-modal {
         z-index: 1100;
         transform: translateX(-100%);
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        box-shadow: 10px 0 30px rgba(0, 0, 0, 0.5);
+        box-shadow: none;
     }
 
     .sidebar-panel.drawer-open {
@@ -5977,7 +5955,7 @@ html[data-phi-config-page] .settings-modal {
         z-index: 1200;
         transform: translateX(100%);
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        box-shadow: -10px 0 30px rgba(0, 0, 0, 0.5);
+        box-shadow: none;
         border-left: 1px solid var(--bg-border);
     }
 
