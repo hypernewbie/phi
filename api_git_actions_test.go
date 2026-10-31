@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type gitActionFixture struct {
@@ -243,6 +244,79 @@ func TestGitActionPullPushHappyPath(t *testing.T) {
 	refs := string(gitFixtureRun(t, fixture, fixture.remote, "for-each-ref", "--format=%(refname)"))
 	if strings.TrimSpace(refs) != "refs/heads/main" {
 		t.Fatalf("Push widened refs: %q", refs)
+	}
+}
+
+func TestGitActionPushIgnoresWideningConfiguration(t *testing.T) {
+	fixture := newGitActionFixture(t)
+	gitFixtureRun(t, fixture, fixture.project, "commit", "--allow-empty", "-m", "local commit")
+	gitFixtureRun(t, fixture, fixture.project, "tag", "-a", "private-tag", "-m", "private tag")
+	gitFixtureRun(t, fixture, fixture.project, "branch", "private-branch")
+	gitFixtureRun(t, fixture, fixture.project, "config", "remote.origin.mirror", "true")
+	gitFixtureRun(t, fixture, fixture.project, "config", "remote.origin.push", "+HEAD:refs/heads/private-destination")
+	gitFixtureRun(t, fixture, fixture.project, "config", "push.followTags", "true")
+	_, info, response := gitFixtureInfo(t, fixture.project)
+	if info.Target == nil || !info.CanPullPush {
+		t.Fatalf("Push unavailable: %s", response.Body.String())
+	}
+	result := gitFixtureAction(t, fixture.project, "push", *info.Target)
+	if result.Code != http.StatusOK {
+		t.Fatalf("Push status=%d body=%s", result.Code, result.Body.String())
+	}
+	if refs := strings.TrimSpace(string(gitFixtureRun(t, fixture, fixture.remote, "for-each-ref", "--format=%(refname)"))); refs != "refs/heads/main" {
+		t.Fatalf("Push widened refs: %q", refs)
+	}
+	localHead := gitFixtureRun(t, fixture, fixture.project, "rev-parse", "HEAD")
+	remoteHead := gitFixtureRun(t, fixture, fixture.remote, "rev-parse", "refs/heads/main")
+	if !bytes.Equal(localHead, remoteHead) {
+		t.Fatalf("Push did not update main: local=%s remote=%s", localHead, remoteHead)
+	}
+}
+
+func TestGitReadersDoNotRefreshIndex(t *testing.T) {
+	fixture := newGitActionFixture(t)
+	oldTime := time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC)
+	file := filepath.Join(fixture.project, "seed.txt")
+	if err := os.Chtimes(file, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+	index := filepath.Join(fixture.project, ".git", "index")
+	before, err := os.ReadFile(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reader := range []struct {
+		name    string
+		commit  string
+		handler http.HandlerFunc
+	}{
+		{"raw-diff", "", handleRawDiff},
+		{"raw-diff-unstaged", "unstaged", handleRawDiff},
+		{"raw-diff-staged", "staged", handleRawDiff},
+		{"raw-status", "", handleRawStatus},
+		{"info", "", handleGitInfo},
+	} {
+		t.Run(reader.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/api/git/"+reader.name+"?"+url.Values{"cwd": {fixture.project}, "commit": {reader.commit}}.Encode(), nil)
+			response := httptest.NewRecorder()
+			reader.handler(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			after, err := os.ReadFile(index)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(before, after) {
+				t.Error("read-only request refreshed the Git index")
+			}
+			// Restore the original index so every reader is checked independently.
+			t.Cleanup(func() {
+				if err := os.WriteFile(index, before, 0644); err != nil {
+					t.Fatal(err)
+				}
+			})
+		})
 	}
 }
 
