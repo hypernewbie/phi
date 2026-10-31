@@ -83,6 +83,13 @@ function monitorPage(page: Page, baseUrl: string) {
         if (request.resourceType() === 'websocket') return;
         const url = new URL(request.url());
         const error = request.failure()?.errorText ?? 'failed';
+        // A newer worktree refresh may cancel this unrelated background GET.
+        if (
+            request.method() === 'GET' &&
+            url.pathname === '/api/git/worktrees' &&
+            error === 'net::ERR_ABORTED'
+        )
+            return;
         if (
             offlinePhase &&
             url.pathname === '/api/system/cpu' &&
@@ -186,7 +193,6 @@ test('Pi RPC active-session search reveals local transcript rows while offline o
     page.setDefaultTimeout(30_000);
     const sessionPaths = new Map<string, string>();
     const phi = await startPhi({
-        verifyOwnership: true,
         config: { pi_bridge_no_inject: true, auto_reconnect: 'off' },
         env: { PI_OFFLINE: '1', PI_SKIP_VERSION_CHECK: '1' },
         setup(dir) {
@@ -229,7 +235,7 @@ test('Pi RPC active-session search reveals local transcript rows while offline o
 
     let mobileContext: BrowserContext | undefined;
     try {
-        await phi.verifyOwnership?.();
+        phi.verify();
         await page.setViewportSize({ width: 1440, height: 900 });
         const desktopMonitor = monitorPage(page, phi.url);
         await page.goto(phi.url);

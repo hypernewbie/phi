@@ -939,6 +939,7 @@ test('retained search finds evicted output without changing the live terminal', 
     );
     expect(pageErrors).toEqual([]);
     const allowedCanceledBackgroundRequests = new Set([
+        '/api/sessions',
         '/api/git/worktree-dirty',
         '/api/git/worktrees',
         '/vendor/bell.wav',

@@ -143,7 +143,6 @@ test('managed Pi transcript search works through the find bar on desktop and tou
     page.setDefaultTimeout(30_000);
     const provider = await startSkillProvider();
     const phi = await startPhi({
-        verifyOwnership: true,
         config: { auto_reconnect: 'off' },
         env: { PI_OFFLINE: '1', PI_SKIP_VERSION_CHECK: '1' },
         setup(dir) {
@@ -191,7 +190,7 @@ test('managed Pi transcript search works through the find bar on desktop and tou
         | Awaited<ReturnType<typeof browser.newContext>>
         | undefined;
     try {
-        await phi.verifyOwnership?.();
+        phi.verify();
         const cwd = realpathSync(phi.dir);
         const spawn = await request.post(`${phi.url}/api/terminals`, {
             data: { coder: 'pi', cwd, title: 'Transcript search' },
