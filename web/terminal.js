@@ -14972,6 +14972,9 @@ export class TabManager {
             if (!this._piBridgeThinkingEligible(activeTab))
                 this._invalidatePiBridgeThinking(activeTab);
         }
+        const restoreQuickCommandsFocus =
+            this.presetsContainer.contains(document.activeElement) &&
+            document.activeElement?.classList.contains('quick-commands-trigger');
         this.presetsContainer.innerHTML = '';
         // A previous compact render may have parked chips with the input
         // controls; drop them so this render owns the placement.
@@ -15082,7 +15085,8 @@ export class TabManager {
 
         // 3. Render QuickCmds trigger button
         const quickCmdsTriggerBtn = document.createElement('button');
-        quickCmdsTriggerBtn.className = 'preset-btn model-trigger-btn';
+        quickCmdsTriggerBtn.className =
+            'preset-btn model-trigger-btn quick-commands-trigger';
         quickCmdsTriggerBtn.innerText = 'Cmds ▾';
         quickCmdsTriggerBtn.title = 'Open quick commands';
         quickCmdsTriggerBtn.addEventListener('click', (e) => {
@@ -15326,6 +15330,9 @@ export class TabManager {
         // Measured last: the chips above change the composer height, and an
         // open menu must clear the row it was opened over.
         this._syncOpenDropups();
+        // Bridge telemetry may replace the trigger between focus and Enter.
+        if (restoreQuickCommandsFocus)
+            quickCmdsTriggerBtn.focus({ preventScroll: true });
     }
 
     _syncOpenDropups() {

@@ -1236,6 +1236,67 @@ describe('reload Cmds row states', () => {
         expect(dropup.classList.contains('hidden')).toBe(false);
     });
 
+    it.each([
+        ['reload pending', {}, { reload_pending: 'true' }],
+        [
+            'disconnected',
+            {},
+            { state: 'unavailable', connected: 'false', capabilities: '' },
+        ],
+        ['missing capability', {}, { capabilities: '' }],
+        [
+            'absent at startup',
+            { state: 'plain', connected: 'false', capabilities: '' },
+            { state: 'unavailable', connected: 'false', capabilities: '' },
+        ],
+        [
+            'reconnected',
+            { state: 'unavailable', connected: 'false', capabilities: '' },
+            {},
+        ],
+    ])(
+        'keeps Cmds keyboard focus when the bridge becomes %s',
+        (_label, initial, next) => {
+            const tm = makeTm();
+            const tab = makePiTab();
+            tm.tabs.set(tab.paneId, tab);
+            tm.activePaneId = tab.paneId;
+            baseline(tm, tab, httpView(), initial);
+            tm.renderPresets('pi');
+            const trigger = () =>
+                tm.presetsContainer.querySelector(
+                    '[title="Open quick commands"]',
+                );
+            trigger().focus();
+            expect(document.activeElement).toBe(trigger());
+
+            tm._acceptPiBridgeState(
+                tab,
+                wsFrame(tab, { telemetry_revision: '8', ...next }),
+                tab.ws,
+            );
+
+            expect(document.activeElement).toBe(trigger());
+        },
+    );
+
+    it('does not steal input focus when the bridge rebuilds Cmds', () => {
+        const tm = makeTm();
+        const tab = makePiTab();
+        tm.tabs.set(tab.paneId, tab);
+        tm.activePaneId = tab.paneId;
+        baseline(tm, tab);
+        tm.inputTextArea.focus();
+
+        tm._acceptPiBridgeState(
+            tab,
+            wsFrame(tab, { telemetry_revision: '8', reload_pending: 'true' }),
+            tab.ws,
+        );
+
+        expect(document.activeElement).toBe(tm.inputTextArea);
+    });
+
     it('patches the open row in place without replacing focus', async () => {
         const gate = deferred();
         mockFetch(() => gate.promise);
