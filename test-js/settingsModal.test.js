@@ -23,7 +23,7 @@ setupDomHarness();
 function makeAppDom() {
     document.body.innerHTML = `
         <div id="header-config-pill" class="header-config-pill">
-            <button class="btn btn-compact pill-label" type="button">Config</button>
+            <span class="pill-label">Config</span>
             <button id="header-export-btn" class="pill-btn"></button>
             <button id="header-import-btn" class="pill-btn"></button>
         </div>

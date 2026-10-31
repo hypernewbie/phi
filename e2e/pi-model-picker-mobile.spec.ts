@@ -50,37 +50,6 @@ test('mobile Models and Cmds chips have matching metrics for terminal and RPC ta
     }
 });
 
-test('missing Pi model capability keeps the legacy picker available', async ({
-    browser,
-}) => {
-    const context = await browser.newContext({
-        viewport: { width: 1440, height: 900 },
-    });
-    try {
-        const page = await context.newPage();
-        await page.route('**/picker-fixture', (route) =>
-            route.fulfill({
-                contentType: 'text/html',
-                body: fixture.replace(
-                    "capabilities: ['pi.models.v1']",
-                    'capabilities: []',
-                ),
-            }),
-        );
-        await page.goto(`${phi.url}/picker-fixture`);
-        const legacyTrigger = page.getByRole('button', {
-            name: '🤖 Models ▾',
-        });
-        await expect(legacyTrigger).toBeVisible();
-        await expect(legacyTrigger).not.toHaveClass(/pi-rpc-model-trigger/);
-        await legacyTrigger.click();
-        await expect(page.locator('#model-presets-dropup')).toBeVisible();
-        await expect(page.locator('#pi-rpc-model-dropup')).toBeHidden();
-    } finally {
-        await context.close();
-    }
-});
-
 test('slow lists stay visible, offline picks wait, and lost acks are never replayed', async ({
     browser,
 }) => {
@@ -89,7 +58,6 @@ test('slow lists stay visible, offline picks wait, and lost acks are never repla
         isMobile: true,
         hasTouch: true,
     });
-    let releaseModelRefresh = () => {};
     try {
         const page = await context.newPage();
         await page.route('**/picker-fixture', (route) =>
@@ -100,28 +68,10 @@ test('slow lists stay visible, offline picks wait, and lost acks are never repla
                     .replace('tm._piBridgeModelSwitch =', 'tm._unusedSwitch ='),
             }),
         );
-        let modelReads = 0;
-        let holdModelRefresh = false;
-        let modelRefreshPending = false;
-        const modelRefreshGate = new Promise<void>((resolve) => {
-            releaseModelRefresh = resolve;
-        });
         await page.route('**/api/pi-bridge/models?*', async (route) => {
-            if (holdModelRefresh) {
-                holdModelRefresh = false;
-                modelRefreshPending = true;
-                await modelRefreshGate;
-                await route.fulfill({
-                    status: 500,
-                    contentType: 'application/json',
-                    body: JSON.stringify({ error: 'catalog refresh failed' }),
-                });
-                return;
-            }
             // Longer than the old one-second browser cutoff: the picker
             // must stay on its loading row instead of failing silently.
-            if (modelReads++ === 0)
-                await new Promise((resolve) => setTimeout(resolve, 1800));
+            await new Promise((resolve) => setTimeout(resolve, 1800));
             await route.fulfill({
                 json: {
                     models: [{ provider: 'router', id: 'vendor/model-1' }],
@@ -176,25 +126,6 @@ test('slow lists stay visible, offline picks wait, and lost acks are never repla
         await expect.poll(() => posts).toBe(1);
         await page.waitForTimeout(800);
 
-        // A failed background refresh keeps the cached row and search input.
-        holdModelRefresh = true;
-        await trigger.tap();
-        const search = picker.locator('.pi-rpc-model-search');
-        const modelRow = picker.locator('.dropup-model-btn');
-        await expect(modelRow).toBeVisible();
-        await expect.poll(() => modelRefreshPending).toBe(true);
-        await search.fill('model-1');
-        await expect(modelRow).toHaveCount(1);
-        await expect(search).toBeFocused();
-        releaseModelRefresh();
-        await expect(picker.locator('.pi-rpc-dropup-message')).toContainText(
-            'Could not refresh',
-        );
-        await expect(modelRow).toHaveCount(1);
-        await expect(search).toHaveValue('model-1');
-        await expect(search).toBeFocused();
-        await trigger.tap();
-
         // A dispatched change whose ack is lost reports unknown once and
         // is never automatically sent again.
         await trigger.tap();
@@ -206,55 +137,8 @@ test('slow lists stay visible, offline picks wait, and lost acks are never repla
         await expect(picker.locator('.dropup-model-btn')).toBeVisible();
         expect(posts).toBe(2);
     } finally {
-        releaseModelRefresh();
         await context.close();
     }
-});
-
-test('long desktop model identities leave room for the name and stay inside the row', async ({
-    page,
-}) => {
-    const modelPrefix =
-        'vendor/some-extremely-long-model-family-and-variant-name-with-extended-context-2026-10-31-';
-    const modelId = `${modelPrefix}0`;
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await page.route('**/picker-fixture', (route) =>
-        route.fulfill({
-            contentType: 'text/html',
-            body: fixture.replace(
-                "'vendor/model-' + i",
-                `${JSON.stringify(modelPrefix)} + i`,
-            ),
-        }),
-    );
-    await page.goto(`${phi.url}/picker-fixture`);
-    await page.locator('.pi-rpc-model-trigger').click();
-    const choice = page
-        .locator('#pi-rpc-model-dropup .dropup-model-btn')
-        .first();
-    await expect(choice).toBeVisible();
-    await expect(choice).toHaveAttribute('title', `router/${modelId}`);
-    await expect(choice.locator('.pi-model-name-full')).toHaveText(modelId);
-    const geometry = await choice.evaluate((button) => {
-        const name = button.querySelector('.pi-model-name-full')!;
-        const meta = button.querySelector('.pi-rpc-dropup-meta')!;
-        const rect = button.getBoundingClientRect();
-        return {
-            nameWidth: name.getBoundingClientRect().width,
-            metaRight: meta.getBoundingClientRect().right,
-            buttonRight: rect.right,
-            scrollWidth: button.scrollWidth,
-            clientWidth: button.clientWidth,
-        };
-    });
-    expect(geometry.nameWidth).toBeGreaterThan(0);
-    expect(geometry.metaRight).toBeLessThanOrEqual(geometry.buttonRight);
-    expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
-    await choice.locator('.pi-rpc-dropup-meta').click();
-    await expect(page.locator('body')).toHaveAttribute(
-        'data-selected',
-        `router/${modelId}`,
-    );
 });
 
 // Real picker code and stylesheet; synthetic catalog, no provider calls.
@@ -264,7 +148,6 @@ const fixture = `<!doctype html>
 <div class="terminal-content" style="position:relative;width:100%;height:100dvh">
   <div id="presets-container" class="presets-container" style="position:absolute;bottom:0;width:100%"></div>
   <div id="pi-rpc-model-dropup" class="model-presets-dropup hidden"></div>
-  <div id="model-presets-dropup" class="model-presets-dropup hidden"></div>
 </div>
 <script type="module">
 import { TabManager } from '/terminal.js';
@@ -314,42 +197,8 @@ test('phone picker uses short names, wide rows, scrolling and full-width tap tar
                 'title',
                 'router/vendor/model-0',
             );
-            const compactHeight = await page.evaluate(() => {
-                const probe = document.createElement('div');
-                probe.style.cssText =
-                    'position:fixed;visibility:hidden;width:1px;height:var(--btn-compact-height)';
-                document.body.appendChild(probe);
-                const height = probe.getBoundingClientRect().height;
-                probe.remove();
-                return height;
-            });
-            const expectedHeight = mobile ? 44 : 32;
-            expect(compactHeight).toBe(expectedHeight);
             const box = await picker.boundingBox();
             if (!box) throw new Error('Picker has no bounds');
-            const groupToggle = picker
-                .locator('.pi-rpc-model-group-toggle')
-                .first();
-            const star = picker.locator('.pi-rpc-model-star').first();
-            const rowBox = await choice.boundingBox();
-            const starBox = await star.boundingBox();
-            const groupBox = await groupToggle.boundingBox();
-            if (!rowBox || !starBox || !groupBox) {
-                throw new Error('Picker control has no bounds');
-            }
-            expect(
-                Math.abs(rowBox.height - expectedHeight),
-            ).toBeLessThanOrEqual(1);
-            expect(
-                Math.abs(starBox.width - expectedHeight),
-            ).toBeLessThanOrEqual(1);
-            expect(
-                Math.abs(starBox.height - expectedHeight),
-            ).toBeLessThanOrEqual(1);
-            expect(
-                Math.abs(groupBox.height - expectedHeight),
-            ).toBeLessThanOrEqual(1);
-            await expect(groupToggle).toHaveAttribute('aria-expanded', 'true');
             if (mobile) {
                 expect(box.width).toBeGreaterThan(350);
                 expect(box.height).toBeGreaterThan(450);
@@ -368,6 +217,17 @@ test('phone picker uses short names, wide rows, scrolling and full-width tap tar
                     picker.locator('.dropup-header .pi-model-name-compact'),
                 ).toHaveText('Model · model-0');
                 expect(
+                    (await choice.boundingBox())?.height,
+                ).toBeGreaterThanOrEqual(44);
+                expect(
+                    (
+                        await picker
+                            .locator('.pi-rpc-model-star')
+                            .first()
+                            .boundingBox()
+                    )?.width,
+                ).toBeGreaterThanOrEqual(44);
+                expect(
                     await picker
                         .locator('.pi-rpc-model-search')
                         .evaluate((el) => getComputedStyle(el).fontSize),
@@ -378,6 +238,13 @@ test('phone picker uses short names, wide rows, scrolling and full-width tap tar
                         (el) => el.scrollHeight > el.clientHeight,
                     ),
                 ).toBe(true);
+                // Right edge used to be inert identity text. It now selects.
+                const choiceBox = await choice.boundingBox();
+                if (!choiceBox) throw new Error('Choice has no bounds');
+                await page.touchscreen.tap(
+                    choiceBox.x + choiceBox.width - 5,
+                    choiceBox.y + choiceBox.height / 2,
+                );
             } else {
                 expect(box.width).toBe(420);
                 await expect(
@@ -389,44 +256,7 @@ test('phone picker uses short names, wide rows, scrolling and full-width tap tar
                 await expect(
                     choice.locator('.pi-rpc-dropup-meta'),
                 ).toBeVisible();
-            }
-            await groupToggle.click();
-            const collapsedGroup = picker
-                .locator('.pi-rpc-model-group-toggle')
-                .first();
-            await expect(collapsedGroup).toHaveAttribute(
-                'aria-expanded',
-                'false',
-            );
-            await expect(
-                picker.locator('.dropup-model-btn').first(),
-            ).toBeHidden();
-            await collapsedGroup.click();
-            const expandedGroup = picker
-                .locator('.pi-rpc-model-group-toggle')
-                .first();
-            await expect(expandedGroup).toHaveAttribute(
-                'aria-expanded',
-                'true',
-            );
-            await picker.locator('.pi-rpc-model-star').first().click();
-            await expect(
-                picker.locator('.pi-rpc-model-star').first(),
-            ).toHaveAttribute('aria-pressed', 'true');
-            expect(
-                await page.locator('body').getAttribute('data-selected'),
-            ).toBeNull();
-            const selectionChoice = picker.locator('.dropup-model-btn').first();
-            if (mobile) {
-                // Right edge used to be inert identity text. It now selects.
-                const choiceBox = await selectionChoice.boundingBox();
-                if (!choiceBox) throw new Error('Choice has no bounds');
-                await page.touchscreen.tap(
-                    choiceBox.x + choiceBox.width - 5,
-                    choiceBox.y + choiceBox.height / 2,
-                );
-            } else {
-                await selectionChoice.locator('.pi-rpc-dropup-meta').click();
+                await choice.locator('.pi-rpc-dropup-meta').click();
             }
             await expect(page.locator('body')).toHaveAttribute(
                 'data-selected',

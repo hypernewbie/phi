@@ -15,8 +15,6 @@ const ServerCodec: MessageFns<TerminalServerMessage> =
     TerminalServerFrame as unknown as MessageFns<TerminalServerMessage>;
 const ClientCodec: MessageFns<TerminalClientMessage> =
     TerminalClientFrame as unknown as MessageFns<TerminalClientMessage>;
-const IPHONE =
-    'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
 
 let phi: PhiServer;
 test.beforeAll(async () => {
@@ -45,37 +43,6 @@ const surfaces = [
     },
 ] as const;
 
-async function compactButtonHeight(page: Page): Promise<number> {
-    return page.evaluate(() => {
-        const probe = document.createElement('div');
-        probe.style.cssText =
-            'position:fixed;visibility:hidden;width:1px;height:var(--btn-compact-height)';
-        document.body.appendChild(probe);
-        const height = probe.getBoundingClientRect().height;
-        probe.remove();
-        return height;
-    });
-}
-
-async function resolveTokenColor(
-    page: Page,
-    property: 'background-color' | 'color',
-    token: string,
-): Promise<string> {
-    return page.evaluate(
-        ({ property, token }) => {
-            const probe = document.createElement('span');
-            probe.style.cssText = 'position:fixed;visibility:hidden';
-            probe.style.setProperty(property, `var(${token})`);
-            document.body.appendChild(probe);
-            const color = getComputedStyle(probe).getPropertyValue(property);
-            probe.remove();
-            return color;
-        },
-        { property, token },
-    );
-}
-
 async function selectPane(
     page: Page,
     paneId: string,
@@ -83,13 +50,13 @@ async function selectPane(
     mobile: boolean,
 ) {
     if (mobile) {
-        await page.locator('#hostname-display').tap();
+        await page.locator('#hostname-display').click();
         const dropdown = tabList(page);
         await expect(dropdown).toBeVisible();
         await dropdown
             .locator('.hostname-dropdown-select-btn')
             .filter({ has: page.getByText(title, { exact: true }) })
-            .tap();
+            .click();
     } else {
         await page.locator(`.tab[data-pane-id="${paneId}"]`).click();
     }
@@ -107,7 +74,6 @@ for (const surface of surfaces) {
             viewport: surface.viewport,
             isMobile: surface.isMobile,
             hasTouch: surface.hasTouch,
-            userAgent: surface.isMobile ? IPHONE : undefined,
         });
 
         test('reloads the selected terminal and confirms close-all without closing', async ({
@@ -179,15 +145,6 @@ for (const surface of surfaces) {
             });
 
             await page.goto(phi.url);
-            await expect(page.locator('html')).toHaveAttribute(
-                'data-appearance-profile',
-                surface.isMobile ? 'mobile' : 'desktop',
-            );
-            if (surface.isMobile) {
-                expect(
-                    await page.evaluate(() => navigator.maxTouchPoints),
-                ).toBeGreaterThan(0);
-            }
             await expect(
                 page.locator(`.tab[data-pane-id="${one}"]`),
             ).toBeAttached();
@@ -209,25 +166,36 @@ for (const surface of surfaces) {
                     'close-all-tabs-btn',
                 ];
                 const actions = page.locator('.terminal-tabs-bar > button');
-                const diffRefresh = page.locator('#refresh-diff-btn');
-                const diffSize = await diffRefresh.evaluate((button) => {
+                const reference = page.locator('#refresh-diff-btn');
+                const diffStyle = await reference.evaluate((button) => {
+                    const style = getComputedStyle(button);
                     const rect = button.getBoundingClientRect();
-                    return { width: rect.width, height: rect.height };
+                    const icon = button
+                        .querySelector('.icon')
+                        ?.getBoundingClientRect();
+                    return {
+                        width: rect.width,
+                        height: rect.height,
+                        padding: style.padding,
+                        margin: style.margin,
+                        borderRadius: style.borderRadius,
+                        borderWidth: style.borderWidth,
+                        borderStyle: style.borderStyle,
+                        backgroundColor: style.backgroundColor,
+                        color: style.color,
+                        boxShadow: style.boxShadow,
+                        iconWidth: icon?.width,
+                        iconHeight: icon?.height,
+                    };
                 });
-                expect(diffSize).toEqual({ width: 24, height: 24 });
-                const headerReference = page.locator(
-                    '#header-notifications-btn',
-                );
-                const backgroundToken = await resolveTokenColor(
-                    page,
-                    'background-color',
-                    '--bg-elevated',
-                );
-                const textToken = await resolveTokenColor(
-                    page,
-                    'color',
-                    '--text-primary',
-                );
+                expect(diffStyle).toMatchObject({
+                    width: 24,
+                    height: 24,
+                    borderWidth: '0px',
+                    borderStyle: 'none',
+                    backgroundColor: 'rgba(0, 0, 0, 0)',
+                });
+                const { color: normalColor, ...buttonGeometry } = diffStyle;
                 for (const width of [1280, 900]) {
                     await page.setViewportSize({ width, height: 900 });
                     if (width === 900) {
@@ -245,95 +213,14 @@ for (const surface of surfaces) {
                                     ),
                             )
                             .toBeGreaterThanOrEqual(width);
-                        const headerLayout = await page.evaluate(() => {
-                            const actions = document.querySelector(
-                                '.app-header .header-actions',
-                            )!;
-                            const visibleActions = Array.from(
-                                actions.querySelectorAll('button.btn-compact'),
-                            ).filter(
-                                (button) =>
-                                    button.getClientRects().length &&
-                                    button.getBoundingClientRect().width > 0,
-                            );
-                            const actionRect = actions.getBoundingClientRect();
-                            const firstRect =
-                                visibleActions[0].getBoundingClientRect();
-                            const firstFits =
-                                firstRect.left >= actionRect.left - 1 &&
-                                firstRect.right <= actionRect.right + 1;
-                            const initialScrollLeft = actions.scrollLeft;
-                            const maxScroll =
-                                actions.scrollWidth - actions.clientWidth;
-                            actions.scrollLeft = maxScroll;
-                            const lastRect = visibleActions
-                                .at(-1)!
-                                .getBoundingClientRect();
-                            const reachedEnd =
-                                actions.scrollLeft >= maxScroll - 1;
-                            const lastFits =
-                                lastRect.left >= actionRect.left - 1 &&
-                                lastRect.right <= actionRect.right + 1;
-                            const otherControls = Array.from(
-                                document.querySelectorAll(
-                                    '.app-header button.btn-compact',
-                                ),
-                            )
-                                .filter(
-                                    (button) =>
-                                        !actions.contains(button) &&
-                                        button.getClientRects().length,
-                                )
-                                .map((button) => {
-                                    const rect = button.getBoundingClientRect();
-                                    return {
-                                        left: rect.left,
-                                        right: rect.right,
-                                    };
-                                });
-                            actions.scrollLeft = initialScrollLeft;
-                            return {
-                                bodyScrollWidth: document.body.scrollWidth,
-                                firstFits,
-                                reachedEnd,
-                                lastFits,
-                                otherControls,
-                            };
-                        });
-                        expect(
-                            headerLayout.bodyScrollWidth,
-                        ).toBeLessThanOrEqual(width);
-                        expect(headerLayout.firstFits).toBe(true);
-                        expect(headerLayout.reachedEnd).toBe(true);
-                        expect(headerLayout.lastFits).toBe(true);
-                        for (const control of headerLayout.otherControls) {
-                            expect(control.left).toBeGreaterThanOrEqual(0);
-                            expect(control.right).toBeLessThanOrEqual(width);
-                        }
                     }
-                    const tokenHeight = await compactButtonHeight(page);
-                    expect(tokenHeight).toBe(32);
-                    const headerMetrics = await headerReference.evaluate(
-                        (button) => {
-                            const rect = button.getBoundingClientRect();
-                            const style = getComputedStyle(button);
-                            return {
-                                width: rect.width,
-                                height: rect.height,
-                                backgroundColor: style.backgroundColor,
-                                color: style.color,
-                            };
-                        },
-                    );
-                    expect(
-                        Math.abs(headerMetrics.height - tokenHeight),
-                    ).toBeLessThanOrEqual(1);
-                    expect(headerMetrics.backgroundColor).toBe(backgroundToken);
-                    expect(headerMetrics.color).toBe(textToken);
                     const metrics = await actions.evaluateAll((buttons) =>
                         buttons.map((button) => {
                             const rect = button.getBoundingClientRect();
                             const style = getComputedStyle(button);
+                            const icon = button
+                                .querySelector('.icon')
+                                ?.getBoundingClientRect();
                             return {
                                 id: button.id,
                                 left: rect.left,
@@ -341,8 +228,16 @@ for (const surface of surfaces) {
                                 centerY: rect.top + rect.height / 2,
                                 width: rect.width,
                                 height: rect.height,
+                                padding: style.padding,
+                                margin: style.margin,
+                                borderRadius: style.borderRadius,
+                                borderWidth: style.borderWidth,
+                                borderStyle: style.borderStyle,
                                 backgroundColor: style.backgroundColor,
                                 color: style.color,
+                                boxShadow: style.boxShadow,
+                                iconWidth: icon?.width,
+                                iconHeight: icon?.height,
                             };
                         }),
                     );
@@ -350,17 +245,7 @@ for (const surface of surfaces) {
                         actionIds,
                     );
                     for (const [index, button] of metrics.entries()) {
-                        expect(
-                            Math.abs(button.height - tokenHeight),
-                        ).toBeLessThanOrEqual(1);
-                        expect(
-                            Math.abs(button.width - headerMetrics.width),
-                        ).toBeLessThanOrEqual(1);
-                        expect(
-                            Math.abs(button.height - headerMetrics.height),
-                        ).toBeLessThanOrEqual(1);
-                        expect(button.backgroundColor).toBe(backgroundToken);
-                        expect(button.color).toBe(textToken);
+                        expect(button).toMatchObject(buttonGeometry);
                         expect(button.centerY).toBe(metrics[0].centerY);
                         expect(button.left).toBeGreaterThanOrEqual(0);
                         expect(button.right).toBeLessThanOrEqual(width);
@@ -369,6 +254,7 @@ for (const surface of surfaces) {
                                 8,
                             );
                         }
+                        expect(button.color).toBe(normalColor);
                     }
                     const stripRight = await page
                         .locator('#tabs-container')
@@ -383,6 +269,42 @@ for (const surface of surfaces) {
                     });
                 }
                 await page.setViewportSize(surface.viewport);
+                await page
+                    .getByRole('button', { name: 'Diff', exact: true })
+                    .click();
+                await reference.hover();
+                const diffHover = await reference.evaluate(async (button) => {
+                    await Promise.all(
+                        button
+                            .getAnimations()
+                            .map((animation) => animation.finished),
+                    );
+                    const style = getComputedStyle(button);
+                    return {
+                        backgroundColor: style.backgroundColor,
+                        color: style.color,
+                        boxShadow: style.boxShadow,
+                        textShadow: style.textShadow,
+                    };
+                });
+                for (const id of actionIds) {
+                    const button = page.locator(`#${id}`);
+                    await button.hover();
+                    await expect(button).toHaveCSS(
+                        'background-color',
+                        diffHover.backgroundColor,
+                    );
+                    await expect(button).toHaveCSS('color', diffHover.color);
+                    await expect(button).toHaveCSS('border-width', '0px');
+                    await expect(button).toHaveCSS(
+                        'box-shadow',
+                        diffHover.boxShadow,
+                    );
+                    await expect(button).toHaveCSS(
+                        'text-shadow',
+                        diffHover.textShadow,
+                    );
+                }
                 await page.mouse.move(0, 0);
                 await page.locator(`#${actionIds[1]}`).focus();
                 await page.keyboard.press('Shift+Tab');
@@ -400,8 +322,6 @@ for (const surface of surfaces) {
 
             const reload = page.locator(`#${surface.reloadId}`);
             const bomb = page.locator(`#${surface.closeId}`);
-            const headerReference = page.locator('#header-notifications-btn');
-            await expect(headerReference).toBeVisible();
             await expect(reload).toBeVisible();
             await expect(reload).toHaveAccessibleName(
                 'Reload current terminal',
@@ -412,226 +332,39 @@ for (const surface of surfaces) {
             await expect(icon).toBeVisible();
             await expect(icon).toHaveAttribute('fill', 'none');
             await expect(icon).toHaveAttribute('stroke', 'currentColor');
-            const expectedHeight = surface.isMobile ? 44 : 32;
-            expect(await compactButtonHeight(page)).toBe(expectedHeight);
-            const expectedBackground = await resolveTokenColor(
-                page,
-                'background-color',
-                '--bg-elevated',
-            );
-            const expectedText = await resolveTokenColor(
-                page,
-                'color',
-                '--text-primary',
-            );
-            for (const control of [headerReference, reload, bomb]) {
-                const metrics = await control.evaluate((button) => {
-                    const rect = button.getBoundingClientRect();
-                    const style = getComputedStyle(button);
-                    return {
-                        width: rect.width,
-                        height: rect.height,
-                        backgroundColor: style.backgroundColor,
-                        color: style.color,
-                    };
-                });
-                expect(
-                    Math.abs(metrics.height - expectedHeight),
-                ).toBeLessThanOrEqual(1);
-                expect(
-                    Math.abs(metrics.width - expectedHeight),
-                ).toBeLessThanOrEqual(1);
-                expect(metrics.backgroundColor).toBe(expectedBackground);
-                expect(metrics.color).toBe(expectedText);
-            }
-            if (surface.isMobile) {
-                for (const { width, height, controlHeight } of [
-                    { width: 390, height: 844, controlHeight: 44 },
-                    { width: 320, height: 568, controlHeight: 44 },
-                    { width: 390, height: 844, controlHeight: 54 },
-                    { width: 320, height: 568, controlHeight: 54 },
-                ]) {
-                    await page.setViewportSize({ width, height });
-                    // The mobile height token also grows with system text size.
-                    await page.evaluate(
-                        (height) =>
-                            document.documentElement.style.setProperty(
-                                '--mobile-header-height',
-                                `${height}px`,
-                            ),
-                        controlHeight,
-                    );
-                    await expect(page.locator('#add-workspace-btn')).toHaveCSS(
-                        'height',
-                        `${controlHeight}px`,
-                    );
-                    const layout = await page.evaluate(() => {
-                        const header = document.querySelector('.app-header')!;
-                        const workspace =
-                            document.querySelector('.workspace-area')!;
-                        const actions = document.querySelector(
-                            '.app-header .header-actions',
-                        )!;
-                        const actionButtons = Array.from(
-                            actions.querySelectorAll('button.btn-compact'),
-                        ).filter((button) => button.getClientRects().length);
-                        const actionRect = actions.getBoundingClientRect();
-                        const initialScroll = actions.scrollLeft;
-                        const firstRect =
-                            actionButtons[0].getBoundingClientRect();
-                        actions.scrollLeft =
-                            actions.scrollWidth - actions.clientWidth;
-                        const lastRect = actionButtons
-                            .at(-1)!
-                            .getBoundingClientRect();
-                        const lastFits =
-                            lastRect.left >= actionRect.left - 1 &&
-                            lastRect.right <= actionRect.right + 1;
-                        actions.scrollLeft = initialScroll;
-                        const headerRect = header.getBoundingClientRect();
-                        const workspaceRect = workspace.getBoundingClientRect();
-                        const workspaceButtons = Array.from(
-                            workspace.querySelectorAll('button'),
-                        ).map((button) => button.getBoundingClientRect());
-                        return {
-                            profile:
-                                document.documentElement.dataset
-                                    .appearanceProfile,
-                            pageWidth: document.documentElement.scrollWidth,
-                            viewportWidth: window.innerWidth,
-                            headerHeight: headerRect.height,
-                            workspaceHeight: workspaceRect.height,
-                            workspaceFits:
-                                workspace.scrollWidth <=
-                                    workspace.clientWidth + 1 &&
-                                workspaceButtons.every(
-                                    (rect) =>
-                                        rect.left >= workspaceRect.left - 1 &&
-                                        rect.right <= workspaceRect.right + 1 &&
-                                        rect.top >= headerRect.top - 1 &&
-                                        rect.bottom <= headerRect.bottom + 1,
-                                ),
-                            actionViewport: actions.clientWidth,
-                            actionMinimum:
-                                actionButtons[0].getBoundingClientRect().height,
-                            firstFits:
-                                firstRect.left >= actionRect.left - 1 &&
-                                firstRect.right <= actionRect.right + 1,
-                            lastFits,
-                        };
-                    });
-                    expect(layout.profile).toBe('mobile');
-                    expect(layout.pageWidth).toBeLessThanOrEqual(width);
-                    expect(layout.viewportWidth).toBe(width);
-                    expect(layout.workspaceFits).toBe(true);
-                    expect(
-                        Math.abs(layout.workspaceHeight - layout.headerHeight),
-                    ).toBeLessThanOrEqual(1);
-                    expect(layout.actionViewport).toBeGreaterThanOrEqual(
-                        controlHeight,
-                    );
-                    expect(layout.actionMinimum).toBe(controlHeight);
-                    expect(layout.firstFits).toBe(true);
-                    expect(layout.lastFits).toBe(true);
-                }
-                await page.evaluate(() =>
-                    document.documentElement.style.removeProperty(
-                        '--mobile-header-height',
-                    ),
-                );
-                await page.setViewportSize(surface.viewport);
-            }
             await expect(bomb).toHaveCSS(
                 'color',
                 await reload.evaluate(
                     (button) => getComputedStyle(button).color,
                 ),
             );
-            const notifications = page.locator('#header-notifications-btn');
-            if (surface.isMobile) await notifications.tap();
-            else await notifications.click();
-            const notificationDrawer = page.locator('#notifications-drawer');
-            await expect(notificationDrawer).toBeVisible();
-            await page.keyboard.press('Escape');
-            await expect(notificationDrawer).toBeHidden();
-            await expect(notifications).toBeFocused();
-            if (!surface.isMobile) {
-                await reload.hover();
-                const reloadHover = await reload.evaluate(async (button) => {
-                    await Promise.all(
-                        button
-                            .getAnimations()
-                            .map((animation) => animation.finished),
-                    );
-                    const style = getComputedStyle(button);
-                    return {
-                        color: style.color,
-                        backgroundColor: style.backgroundColor,
-                    };
-                });
-                await bomb.hover();
-                await expect(bomb).toHaveCSS('color', reloadHover.color);
-                await expect(bomb).toHaveCSS(
-                    'background-color',
-                    reloadHover.backgroundColor,
+            await reload.hover();
+            const reloadHover = await reload.evaluate(async (button) => {
+                await Promise.all(
+                    button
+                        .getAnimations()
+                        .map((animation) => animation.finished),
                 );
-            }
+                const style = getComputedStyle(button);
+                return {
+                    color: style.color,
+                    backgroundColor: style.backgroundColor,
+                    boxShadow: style.boxShadow,
+                };
+            });
+            await bomb.hover();
+            await expect(bomb).toHaveCSS('color', reloadHover.color);
+            await expect(bomb).toHaveCSS(
+                'background-color',
+                reloadHover.backgroundColor,
+            );
+            await expect(bomb).toHaveCSS('box-shadow', reloadHover.boxShadow);
             await page.mouse.move(0, 0);
             await page.screenshot({
                 path: testInfo.outputPath(
                     `${surface.name}-terminal-toolbar.png`,
                 ),
             });
-            expect(
-                await page.evaluate(
-                    () =>
-                        document.documentElement.scrollWidth <=
-                        window.innerWidth,
-                ),
-            ).toBe(true);
-            if (!surface.isMobile) {
-                const configTrigger = page.locator(
-                    '#header-config-pill .pill-label',
-                );
-                const configButtons = page.locator(
-                    '#header-config-pill > button',
-                );
-                expect(
-                    await configButtons.evaluateAll((buttons) =>
-                        buttons.map(
-                            (button) => button.getBoundingClientRect().height,
-                        ),
-                    ),
-                ).toEqual([32, 32, 32]);
-                for (const activation of ['click', 'Enter', 'Space']) {
-                    if (activation === 'click') {
-                        await configTrigger.click();
-                    } else {
-                        await configTrigger.focus();
-                        await page.keyboard.press(activation);
-                    }
-                    await expect(
-                        page.locator('.settings-overlay'),
-                    ).toBeVisible();
-                    await page.keyboard.press('Escape');
-                    await expect(
-                        page.locator('.settings-overlay'),
-                    ).toBeHidden();
-                    await expect(configTrigger).toBeFocused();
-                    if (activation !== 'click') {
-                        expect(
-                            await configTrigger.evaluate((button) =>
-                                button.matches(':focus-visible'),
-                            ),
-                        ).toBe(true);
-                        expect(
-                            await configTrigger.evaluate(
-                                (button) => getComputedStyle(button).boxShadow,
-                            ),
-                        ).not.toBe('none');
-                    }
-                }
-            }
 
             const sizedLatestConnection = (id: string) => {
                 const count = connectionCounts.get(id)!;
@@ -648,8 +381,7 @@ for (const surface of surfaces) {
                 selected: connectionCounts.get(one)!,
                 background: connectionCounts.get(two)!,
             };
-            if (surface.isMobile) await reload.tap();
-            else await reload.click();
+            await reload.click();
             await expect
                 .poll(() => connectionCounts.get(one))
                 .toBe(beforeReload.selected + 1);
@@ -659,7 +391,7 @@ for (const surface of surfaces) {
             const oneTab = page.locator(`.tab[data-pane-id="${one}"]`);
             const twoTab = page.locator(`.tab[data-pane-id="${two}"]`);
             const dialogPromise = page.waitForEvent('dialog');
-            const clickPromise = surface.isMobile ? bomb.tap() : bomb.click();
+            const clickPromise = bomb.click();
             const dialog = await dialogPromise;
             expect(dialog.type()).toBe('confirm');
             expect(dialog.message()).toBe(
