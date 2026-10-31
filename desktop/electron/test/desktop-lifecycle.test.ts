@@ -209,7 +209,8 @@ const fake = vi.hoisted(() => {
   class FakeNotification extends Events {
     static instances: FakeNotification[] = [];
     static supported = true;
-    static showFails: (options: Record<string, unknown>) => boolean = () => false;
+    static showFails: (options: Record<string, unknown>) => boolean = () =>
+      false;
     readonly options: Record<string, unknown>;
     showCalls = 0;
     showError: Error | null = null;
@@ -602,16 +603,18 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     ctrl.setActive(b.id);
     const win = fake.FakeBrowserWindow.instances[0]!;
     win.focused = false;
-    vi.spyOn(aView.webContents, 'executeJavaScript').mockResolvedValueOnce([
-      {
-        id: 'removed-after-show',
-        profileId: a.id,
-        title: 'Removed profile',
-        message: 'Do not recreate the profile on click.',
-        type: 'info',
-        timestamp: Date.now(),
-      },
-    ]).mockResolvedValue([]);
+    vi.spyOn(aView.webContents, 'executeJavaScript')
+      .mockResolvedValueOnce([
+        {
+          id: 'removed-after-show',
+          profileId: a.id,
+          title: 'Removed profile',
+          message: 'Do not recreate the profile on click.',
+          type: 'info',
+          timestamp: Date.now(),
+        },
+      ])
+      .mockResolvedValue([]);
 
     host.pollDesktopNotifications();
     await flush();
@@ -697,7 +700,9 @@ describe('DesktopHost fake-Electron lifecycle', () => {
 
     expect(fake.FakeNotification.instances).toHaveLength(1);
     expect(fake.FakeNotification.instances[0]!.showCalls).toBe(0);
-    expect(fake.FakeNotification.instances[0]!.listeners.get('click')).toHaveLength(0);
+    expect(
+      fake.FakeNotification.instances[0]!.listeners.get('click'),
+    ).toHaveLength(0);
   });
 
   it('keeps an embedded A result across a same-document switch to B', async () => {
@@ -752,9 +757,7 @@ describe('DesktopHost fake-Electron lifecycle', () => {
 
     expect(ctrl.state().activeId).toBe(b.id);
     expect(fake.FakeNotification.instances).toHaveLength(1);
-    expect(fake.FakeNotification.instances[0]!.options.title).toContain(
-      a.name,
-    );
+    expect(fake.FakeNotification.instances[0]!.options.title).toContain(a.name);
     expect(fake.FakeNotification.instances[0]!.showCalls).toBe(1);
   });
 
@@ -822,7 +825,9 @@ describe('DesktopHost fake-Electron lifecycle', () => {
 
     expect(fake.FakeNotification.instances).toHaveLength(1);
     expect(fake.FakeNotification.instances[0]!.showCalls).toBe(0);
-    expect(fake.FakeNotification.instances[0]!.listeners.get('click')).toHaveLength(0);
+    expect(
+      fake.FakeNotification.instances[0]!.listeners.get('click'),
+    ).toHaveLength(0);
   });
 
   it('isolates a slow or rejected source read from sibling profile delivery', async () => {
@@ -937,7 +942,9 @@ describe('DesktopHost fake-Electron lifecycle', () => {
 
     expect(fake.FakeNotification.instances).toHaveLength(2);
     expect(fake.FakeNotification.instances[0]!.showCalls).toBe(0);
-    expect(fake.FakeNotification.instances[0]!.listeners.get('click')).toHaveLength(0);
+    expect(
+      fake.FakeNotification.instances[0]!.listeners.get('click'),
+    ).toHaveLength(0);
     expect(fake.FakeNotification.instances[1]!.showCalls).toBe(1);
 
     fake.FakeNotification.instances[1]!.emit('failed', 'test');
@@ -957,24 +964,26 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     ctrl.setActive(profile.id);
     const view = host.profileViews!.getView(profile.id)!;
     setCommittedURL(view.webContents, `${profile.origin}?desktop=1`);
-    vi.spyOn(view.webContents, 'executeJavaScript').mockResolvedValueOnce([
-      {
-        id: 'support-probe-failure',
-        profileId: profile.id,
-        title: 'Probe fails',
-        message: 'This entry is consumed.',
-        type: 'info',
-        timestamp: Date.now(),
-      },
-      {
-        id: 'support-probe-sibling',
-        profileId: profile.id,
-        title: 'Sibling delivered',
-        message: 'The next entry still works.',
-        type: 'success',
-        timestamp: Date.now(),
-      },
-    ]).mockResolvedValue([]);
+    vi.spyOn(view.webContents, 'executeJavaScript')
+      .mockResolvedValueOnce([
+        {
+          id: 'support-probe-failure',
+          profileId: profile.id,
+          title: 'Probe fails',
+          message: 'This entry is consumed.',
+          type: 'info',
+          timestamp: Date.now(),
+        },
+        {
+          id: 'support-probe-sibling',
+          profileId: profile.id,
+          title: 'Sibling delivered',
+          message: 'The next entry still works.',
+          type: 'success',
+          timestamp: Date.now(),
+        },
+      ])
+      .mockResolvedValue([]);
     vi.spyOn(fake.FakeNotification, 'isSupported')
       .mockImplementationOnce(() => {
         throw new Error('test support probe failure');
@@ -1071,43 +1080,98 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     expect(ctrl.state().activeId).toBe(a.id);
   });
 
-  it('invalidates an unsettled notification read after a cross-document navigation', async () => {
-    const host = new DesktopHost();
-    await host.start(primary);
-    const ctrl = host.controller!;
-    const profile = ctrl.add('http://alpha.example.test:7070/');
-    host.profileViews!.addProfile(profile.id, profile.origin);
-    ctrl.setActive(profile.id);
-    const view = host.profileViews!.getView(profile.id)!;
-    setCommittedURL(view.webContents, `${profile.origin}?desktop=1`);
-    fake.FakeBrowserWindow.instances[0]!.focused = false;
-    let finishRead: (value: unknown) => void = () => {};
-    vi.spyOn(view.webContents, 'executeJavaScript').mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          finishRead = resolve;
-        }),
-    );
+  it.each([
+    ['phi-app://app/index.html?desktop=1', true],
+    ['phi-app://app:7070/index.html?desktop=1', false],
+    ['phi-app://other/index.html?desktop=1', false],
+    ['phi-app://app/settings.html?desktop=1', false],
+    ['https://unowned.example.test/?desktop=1', false],
+  ])(
+    'reads notification previews only from an owned Phi document: %s',
+    async (url, allowed) => {
+      process.env.PHI_DESKTOP_LOW_MEMORY = '1';
+      const host = new DesktopHost();
+      await host.start(primary);
+      (host as unknown as { platform: string }).platform = 'win32';
+      const ctrl = host.controller!;
+      const profile = ctrl.add('http://alpha.example.test:7070/');
+      host.profileViews!.addProfile(profile.id, profile.origin);
+      ctrl.setActive(profile.id);
+      await flush();
+      const view = host.profileViews!.getView(profile.id)!;
+      setCommittedURL(view.webContents, url);
+      fake.FakeBrowserWindow.instances[0]!.focused = false;
+      const read = vi
+        .spyOn(view.webContents, 'executeJavaScript')
+        .mockResolvedValue([
+          {
+            id: 'owned-document',
+            profileId: profile.id,
+            title: 'Document ownership',
+            message: 'Only the exact embedded authority is trusted.',
+            type: 'info',
+            timestamp: Date.now(),
+          },
+        ]);
 
-    host.pollDesktopNotifications();
-    view.webContents.emit('did-start-navigation', {
-      isMainFrame: true,
-      isSameDocument: false,
-    });
-    finishRead([
-      {
-        id: 'stale-entry',
-        profileId: profile.id,
-        title: 'Stale',
-        message: 'Do not deliver.',
-        type: 'info',
-        timestamp: Date.now(),
-      },
-    ]);
-    await flush();
+      host.pollDesktopNotifications();
+      await flush();
 
-    expect(fake.FakeNotification.instances).toHaveLength(0);
-  });
+      expect(read).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      expect(fake.FakeNotification.instances).toHaveLength(allowed ? 1 : 0);
+      if (allowed)
+        expect(fake.FakeNotification.instances[0]!.showCalls).toBe(1);
+    },
+  );
+
+  it.each([
+    { isMainFrame: true, isSameDocument: false, deliveries: 0 },
+    { isMainFrame: true, isSameDocument: true, deliveries: 1 },
+    { isMainFrame: false, isSameDocument: false, deliveries: 1 },
+  ])(
+    'keeps only current-document notification reads: %j',
+    async ({ isMainFrame, isSameDocument, deliveries }) => {
+      const host = new DesktopHost();
+      await host.start(primary);
+      (host as unknown as { platform: string }).platform = 'win32';
+      const ctrl = host.controller!;
+      const profile = ctrl.add('http://alpha.example.test:7070/');
+      host.profileViews!.addProfile(profile.id, profile.origin);
+      ctrl.setActive(profile.id);
+      const view = host.profileViews!.getView(profile.id)!;
+      setCommittedURL(view.webContents, `${profile.origin}?desktop=1`);
+      fake.FakeBrowserWindow.instances[0]!.focused = false;
+      let finishRead: (value: unknown) => void = () => {};
+      vi.spyOn(view.webContents, 'executeJavaScript').mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finishRead = resolve;
+          }),
+      );
+
+      host.pollDesktopNotifications();
+      view.webContents.emit('did-start-navigation', {
+        isMainFrame,
+        isSameDocument,
+      });
+      finishRead([
+        {
+          id: 'navigation-entry',
+          profileId: profile.id,
+          title: 'Document changed',
+          message:
+            'A subframe or same-document navigation is not a replacement.',
+          type: 'info',
+          timestamp: Date.now(),
+        },
+      ]);
+      await flush();
+
+      expect(fake.FakeNotification.instances).toHaveLength(deliveries);
+      if (deliveries)
+        expect(fake.FakeNotification.instances[0]!.showCalls).toBe(1);
+    },
+  );
 
   it('power resume wakes only the active retained view and tolerates absent/destroyed views', async () => {
     const host = new DesktopHost();

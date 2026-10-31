@@ -5,7 +5,8 @@ const MAX_TITLE_LENGTH = 200;
 const MAX_MESSAGE_LENGTH = 2_000;
 function isDesktopPage() {
     try {
-        return (new URLSearchParams(window.location.search).get('desktop') === '1' ||
+        return (new URLSearchParams(window.location.search).get('desktop') ===
+            '1' ||
             document.documentElement.hasAttribute('data-phi-desktop-root'));
     }
     catch {

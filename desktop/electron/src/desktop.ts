@@ -1807,10 +1807,7 @@ export class DesktopHost {
     win: BrowserWindow,
     ctrl: Controller,
   ): DesktopNotificationSource[] {
-    const sources = new Map<
-      WebContents,
-      DesktopNotificationProfileBinding[]
-    >();
+    const sources = new Map<WebContents, DesktopNotificationProfileBinding[]>();
     for (const profile of ctrl.state().profiles) {
       try {
         const contents = this.profileViews?.getView(profile.id)?.webContents;
@@ -1879,7 +1876,7 @@ export class DesktopHost {
       if (source.profileBindings.length === 0) return null;
       if (
         url.protocol === `${EMBEDDED_SCHEME}:` &&
-        url.hostname === 'app' &&
+        url.host === 'app' &&
         !url.username &&
         !url.password &&
         url.pathname === '/index.html'
@@ -1978,7 +1975,9 @@ export class DesktopHost {
       win,
       ctrl,
     );
-    return current !== null && this.sameDesktopNotificationSource(source, current);
+    return (
+      current !== null && this.sameDesktopNotificationSource(source, current)
+    );
   }
 
   private resolveDesktopNotificationTarget(
@@ -2089,11 +2088,13 @@ export class DesktopHost {
         current =
           capturedId === null
             ? undefined
-            : this.controller?.state().profiles.find(
-                (item) =>
-                  item.id === capturedId &&
-                  toCanonicalAuthOrigin(item.origin) === capturedOrigin,
-              );
+            : this.controller
+                ?.state()
+                .profiles.find(
+                  (item) =>
+                    item.id === capturedId &&
+                    toCanonicalAuthOrigin(item.origin) === capturedOrigin,
+                );
       } catch {
         current = undefined;
       }
@@ -2101,10 +2102,7 @@ export class DesktopHost {
       else this.foreground();
     };
     const onClose = (details: { reason?: string }) => {
-      if (
-        this.platform !== 'win32' ||
-        details.reason === 'userCanceled'
-      ) {
+      if (this.platform !== 'win32' || details.reason === 'userCanceled') {
         release();
       }
     };

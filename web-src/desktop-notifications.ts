@@ -20,7 +20,8 @@ interface DesktopNotificationWindow extends Window {
 function isDesktopPage(): boolean {
     try {
         return (
-            new URLSearchParams(window.location.search).get('desktop') === '1' ||
+            new URLSearchParams(window.location.search).get('desktop') ===
+                '1' ||
             document.documentElement.hasAttribute('data-phi-desktop-root')
         );
     } catch {

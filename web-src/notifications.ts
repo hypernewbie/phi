@@ -151,7 +151,10 @@ function normalizeMetadataList(value: unknown): NotificationMetadata[] {
 }
 
 function forwardDesktopNotification(
-    entry: Pick<NotificationMetadata, 'id' | 'type' | 'title' | 'message' | 'timestamp'>,
+    entry: Pick<
+        NotificationMetadata,
+        'id' | 'type' | 'title' | 'message' | 'timestamp'
+    >,
     store: BackendStore | null,
 ): void {
     const profileId = store?.profileId;

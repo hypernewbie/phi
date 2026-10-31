@@ -159,7 +159,11 @@ describe('desktop notification transport', () => {
             message: 'Late result',
         });
         expect(page()[SLOT]).toMatchObject([
-            { profileId: 'profile-a', title: 'Profile A', message: 'Late result' },
+            {
+                profileId: 'profile-a',
+                title: 'Profile A',
+                message: 'Late result',
+            },
         ]);
     });
 
@@ -190,7 +194,8 @@ describe('desktop notification transport', () => {
         container.className = 'toast-container';
         const restored = document.createElement('div');
         restored.className = 'toast toast-info';
-        restored.innerHTML = '<strong class="toast-title">Restored</strong><span class="toast-message">History only</span>';
+        restored.innerHTML =
+            '<strong class="toast-title">Restored</strong><span class="toast-message">History only</span>';
         container.appendChild(restored);
         document.body.appendChild(container);
         manager = new NotificationManager({
@@ -201,7 +206,8 @@ describe('desktop notification transport', () => {
 
         const live = document.createElement('div');
         live.className = 'toast toast-success';
-        live.innerHTML = '<strong class="toast-title">Legacy</strong><span class="toast-message">Live</span>';
+        live.innerHTML =
+            '<strong class="toast-title">Legacy</strong><span class="toast-message">Live</span>';
         manager['toastContainer'].appendChild(live);
         await Promise.resolve();
         await Promise.resolve();
@@ -223,13 +229,16 @@ describe('desktop notification transport', () => {
             store: new BackendStore('__default__'),
         });
 
-        expect(() => manager.show('Still local', { duration: 0 })).not.toThrow();
+        expect(() =>
+            manager.show('Still local', { duration: 0 }),
+        ).not.toThrow();
         expect(document.querySelector('.toast-message')?.textContent).toBe(
             'Still local',
         );
         manager.open();
-        expect(document.querySelector('.notification-item-message')?.textContent)
-            .toBe('Still local');
+        expect(
+            document.querySelector('.notification-item-message')?.textContent,
+        ).toBe('Still local');
         expect(page()[SLOT]).toEqual([]);
     });
 });
