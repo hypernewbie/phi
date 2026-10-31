@@ -269,8 +269,10 @@ describe('attachment control', () => {
         const { tm, tabA } = makeManager();
         let finishUpload;
         let finishSend;
+        let liveContext;
         mockFetch((url) => {
-            if (url.includes('/context')) return { available: true };
+            if (url.includes('/context'))
+                return liveContext || { available: true };
             if (url.includes('/items/')) {
                 return new Promise((resolve) => {
                     finishUpload = () =>
@@ -329,6 +331,7 @@ describe('attachment control', () => {
             image_available: true,
             available: true,
         };
+        liveContext = { ...tabA._attachmentContext, leaf_id: 'metadata-leaf' };
         tm.inputTextArea.value = 'inspect this';
         tm.inputTextArea.dispatchEvent(new Event('input'));
         tm.sendStagedInput();
@@ -345,6 +348,9 @@ describe('attachment control', () => {
             'new draft while Pi handles the snapshot',
         );
         expect(tabA._attachmentNotice).toContain('Submitted to Pi');
+        expect(tabA._attachmentLastSubmitted.context.leaf_id).toBe(
+            'metadata-leaf',
+        );
     });
 
     it('stages and sends multiple files as one batch', async () => {
@@ -352,7 +358,8 @@ describe('attachment control', () => {
         let sentIDs = null;
         let finishSend;
         mockFetch((url, options) => {
-            if (url.includes('/context')) return { available: true };
+            if (url.includes('/context'))
+                return tabA._attachmentContext || { available: true };
             if (url.includes('/items/')) {
                 const id = String(url).split('/items/')[1].split('?')[0];
                 return {
@@ -428,6 +435,91 @@ describe('attachment control', () => {
         expect(sentIDs).toHaveLength(2);
         expect(tabA._attachmentNotice).toContain('Submitted to Pi');
     });
+
+    it('cancels locally while the live Pi context read is pending', async () => {
+        const { tm, tabA } = makeManager();
+        const context = {
+            process_id: 'process-a',
+            generation: '1',
+            session_id: 'session-a',
+            leaf_id: 'leaf-a',
+            model: null,
+            available: true,
+        };
+        const snapshot = {
+            id: '',
+            owner: tm._captureAttachmentOwner(tabA),
+            scope: tm.app.scope,
+            context,
+            items: [],
+            text: 'keep this prompt',
+            draftRevision: 0,
+            state: 'sending',
+            outboxState: 'waiting',
+        };
+        tabA._attachmentPendingSnapshot = snapshot;
+        let finishRead;
+        mockFetch(
+            () =>
+                new Promise((resolve) => {
+                    finishRead = resolve;
+                }),
+        );
+        const freeze = vi.spyOn(tm.attachmentStore, 'freezeDraft');
+        const sending = tm._freezeAndDispatchAttachmentSnapshot(tabA, snapshot);
+        await vi.waitFor(() => expect(finishRead).toBeTypeOf('function'));
+        await tm._cancelWaitingAttachmentSnapshot(tabA, snapshot);
+        expect(snapshot.state).toBe('cancelled');
+        finishRead(context);
+        await sending;
+        expect(freeze).not.toHaveBeenCalled();
+        expect(snapshot.state).toBe('cancelled');
+        expect(snapshot.text).toBe('keep this prompt');
+        expect(tm.sendInput).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        { process_id: 'replacement' },
+        { generation: '2' },
+        { session_id: 'other-session' },
+        { model: { provider: 'provider', id: 'other-model' } },
+    ])(
+        'does not rebind a new send to a changed Pi origin: %j',
+        async (change) => {
+            const { tm, tabA } = makeManager();
+            const context = {
+                process_id: 'process-a',
+                generation: '1',
+                session_id: 'session-a',
+                leaf_id: 'leaf-a',
+                model: { provider: 'provider', id: 'vision' },
+                available: true,
+            };
+            const snapshot = {
+                id: '',
+                owner: tm._captureAttachmentOwner(tabA),
+                scope: tm.app.scope,
+                context,
+                items: [],
+                text: 'keep this prompt',
+                draftRevision: 0,
+                state: 'sending',
+                outboxState: 'waiting',
+            };
+            tabA._attachmentPendingSnapshot = snapshot;
+            mockFetch(() => ({ ...context, ...change }));
+            const freeze = vi.spyOn(tm.attachmentStore, 'freezeDraft');
+            await tm._freezeAndDispatchAttachmentSnapshot(tabA, snapshot);
+            expect(freeze).not.toHaveBeenCalled();
+            expect(snapshot.state).toBe('refused');
+            expect(snapshot.reason).toBe('stale');
+            expect(snapshot.text).toBe('keep this prompt');
+            expect(tm.sendInput).not.toHaveBeenCalled();
+            expect(tabA._attachmentNotice).toContain(
+                'Attachment not sent. Pi state changed',
+            );
+        },
+    );
 
     it('refuses a ninth staged file without losing the batch', async () => {
         const { tm, tabA } = makeManager();

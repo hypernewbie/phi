@@ -93,6 +93,12 @@ checks the root, basename, file type, size, and SHA-256 before reading. Missing
 host APIs, an unsafe root, unknown image support, a busy/queued turn, active
 compaction, or changed session/model identity prevents dispatch.
 
+With `pi.state.v1`, Phi reads the live Pi context before freezing a new online
+send. Idle extension metadata can change Pi's leaf without a session or model
+switch. An old lifecycle snapshot must not make a fresh send fail as `stale`.
+Already saved and offline sends keep their original target; they are never
+rebound or automatically replayed.
+
 A `DISPATCHED` acknowledgment means Pi's public `sendUserMessage` call returned
 normally and Phi received its matching acknowledgment. It does not prove that
 Pi hooks preserved the image, that the model received it, or that a provider

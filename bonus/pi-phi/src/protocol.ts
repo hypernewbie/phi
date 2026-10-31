@@ -15,6 +15,7 @@ export const CAPABILITY_CONTEXT = 'pi.context.v1';
 export const CAPABILITY_COMPACT = 'pi.compact.v1';
 export const CAPABILITY_SKILLS = 'pi.skills.v1';
 export const CAPABILITY_ATTACHMENTS = 'pi.attachments.v1';
+export const CAPABILITY_STATE = 'pi.state.v1';
 /** Cap on skill entries per SkillsResponse; excess sets truncated. */
 export const MAX_SKILL_ENTRIES = 200;
 /**
@@ -75,6 +76,7 @@ const SUPPORTED = new Set([
     CAPABILITY_COMPACT,
     CAPABILITY_SKILLS,
     CAPABILITY_ATTACHMENTS,
+    CAPABILITY_STATE,
 ]);
 
 /** Intersect advertised names with the supported set. Unknown names are ignored. */

@@ -57,6 +57,7 @@ import {
     newAttachmentID,
     AttachmentRequestError,
     formatChipName,
+    attachmentRefusalNotice,
 } from './attachments.js';
 import { mountDirectoryTree } from './path-picker.js';
 import {
@@ -7020,7 +7021,7 @@ export class TabManager {
             tab._attachmentNotice = pending.state === 'waiting'
                 ? 'Waiting to submit the saved attachment snapshot.'
                 : pending.state === 'refused'
-                  ? `Pi refused the attachment: ${pending.reason || 'unavailable'}. Restore it to edit and send again.`
+                  ? attachmentRefusalNotice(pending.reason)
                   : pending.state === 'cancelled'
                     ? 'Waiting send canceled. Restore it to edit or forget the local copy.'
                     : 'Submission not confirmed. Check Pi before resending.';
@@ -9800,7 +9801,7 @@ export class TabManager {
                 : snapshot.state === 'unknown'
                   ? 'Submission not confirmed. Check Pi before resending.'
                   : snapshot.state === 'refused'
-                    ? `Pi refused the attachment: ${snapshot.reason || 'unavailable'}. Restore it to edit and send again.`
+                    ? attachmentRefusalNotice(snapshot.reason)
                     : snapshot.state === 'cancelled'
                       ? 'Waiting send canceled. Restore it to edit or forget the local copy.'
                       : tab._attachmentNotice || ''
@@ -9875,7 +9876,7 @@ export class TabManager {
 
     async _cancelWaitingAttachmentSnapshot(tab, snapshot) {
         if (tab._attachmentPendingSnapshot !== snapshot || snapshot.outboxState !== 'waiting') return;
-        if (!await this.attachmentStore.cancelWaitingSend(snapshot.id)) return;
+        if (snapshot.id && !await this.attachmentStore.cancelWaitingSend(snapshot.id)) return;
         snapshot.state = 'cancelled';
         snapshot.outboxState = 'cancelled';
         snapshot.reason = 'cancelled';
@@ -11070,11 +11071,47 @@ export class TabManager {
 
     async _freezeAndDispatchAttachmentSnapshot(tab, snapshot) {
         try {
+            if (!snapshot.refreshContextBeforeDispatch) {
+                // Bind a NEW online send to a live leaf, not an event-time
+                // cache. Never change the origin or rebind a saved outbox.
+                // The composer has already responded locally to this click.
+                tab._attachmentNotice = 'Checking Pi state before submitting the attachment.';
+                this._renderAttachmentStatus(tab);
+                try {
+                    const context = await getAttachmentPiContext({ ...snapshot.owner, scope: snapshot.scope });
+                    if (tab._attachmentPendingSnapshot !== snapshot || snapshot.outboxState !== 'waiting') return;
+                    if (
+                        !context.available ||
+                        context.process_id !== snapshot.context.process_id ||
+                        context.generation !== snapshot.context.generation ||
+                        context.session_id !== snapshot.context.session_id ||
+                        context.model?.provider !== snapshot.context.model?.provider ||
+                        context.model?.id !== snapshot.context.model?.id ||
+                        context.leaf_id === null
+                    ) {
+                        this._finishAttachmentSnapshot(tab, snapshot, 'refused', context.available ? 'stale' : 'unavailable');
+                        return;
+                    }
+                    snapshot.context = { ...snapshot.context, leaf_id: context.leaf_id };
+                } catch {
+                    // Keep the original target if this read fails. Save the
+                    // snapshot locally and use the existing strict recovery.
+                    snapshot.refreshContextBeforeDispatch = true;
+                }
+            }
+            if (tab._attachmentPendingSnapshot !== snapshot || snapshot.outboxState !== 'waiting') return;
             const frozen = await this.attachmentStore.freezeDraft(
                 snapshot.owner,
                 snapshot.draftRevision,
                 { text: snapshot.text, context: snapshot.context, items: snapshot.items },
             );
+            if (snapshot.outboxState === 'cancelled') {
+                if (!frozen.conflict) {
+                    snapshot.id = frozen.outbox.id;
+                    await this.attachmentStore.cancelWaitingSend(snapshot.id);
+                }
+                return;
+            }
             if (tab._attachmentPendingSnapshot !== snapshot) return;
             if (frozen.conflict) {
                 this._finishAttachmentSnapshot(tab, snapshot, 'refused', 'stale');
@@ -11182,7 +11219,7 @@ export class TabManager {
         } else if (state === 'unknown') {
             tab._attachmentNotice = 'Submission not confirmed. Check Pi before resending.';
         } else {
-            tab._attachmentNotice = `Pi refused the attachment: ${reason || 'unavailable'}. Restore it to edit and send again.`;
+            tab._attachmentNotice = attachmentRefusalNotice(reason);
         }
         this._renderAttachmentStripForTab(tab);
         this._renderAttachmentStatus(tab);

@@ -24592,6 +24592,7 @@ var CAPABILITY_CONTEXT = "pi.context.v1";
 var CAPABILITY_COMPACT = "pi.compact.v1";
 var CAPABILITY_SKILLS = "pi.skills.v1";
 var CAPABILITY_ATTACHMENTS = "pi.attachments.v1";
+var CAPABILITY_STATE = "pi.state.v1";
 var MAX_SKILL_ENTRIES = 200;
 var MAX_SKILL_NAME_BYTES = 64;
 var MAX_SKILL_DESCRIPTION_BYTES = 1024;
@@ -26161,6 +26162,9 @@ var PhiToPi = {
       case "attachmentPromptRequest":
         AttachmentPromptRequest.encode(message.payload.value, writer.uint32(178).fork()).join();
         break;
+      case "stateRequest":
+        StateRequest.encode(message.payload.value, writer.uint32(186).fork()).join();
+        break;
     }
     return writer;
   },
@@ -26287,6 +26291,13 @@ var PhiToPi = {
             };
             continue;
           }
+          case 23: {
+            if (tag !== 186) {
+              break;
+            }
+            message.payload = { $case: "stateRequest", value: StateRequest.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -26382,6 +26393,12 @@ var PhiToPi = {
             $case: "attachmentPromptRequest",
             value: AttachmentPromptRequest.fromPartial(object.payload.value)
           };
+        }
+        break;
+      }
+      case "stateRequest": {
+        if (object.payload?.value !== void 0 && object.payload?.value !== null) {
+          message.payload = { $case: "stateRequest", value: StateRequest.fromPartial(object.payload.value) };
         }
         break;
       }
@@ -26912,7 +26929,8 @@ function createBaseStateSnapshot() {
     thinkingLevel: "",
     contextUsage: void 0,
     compactReadiness: void 0,
-    attachmentReadiness: void 0
+    attachmentReadiness: void 0,
+    requestId: ""
   };
 }
 var StateSnapshot = {
@@ -26952,6 +26970,9 @@ var StateSnapshot = {
     }
     if (message.attachmentReadiness !== void 0) {
       AttachmentReadiness.encode(message.attachmentReadiness, writer.uint32(98).fork()).join();
+    }
+    if (message.requestId !== "") {
+      writer.uint32(106).string(message.requestId);
     }
     return writer;
   },
@@ -27045,6 +27066,13 @@ var StateSnapshot = {
             message.attachmentReadiness = AttachmentReadiness.decode(reader, reader.uint32());
             continue;
           }
+          case 13: {
+            if (tag !== 106) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -27072,6 +27100,57 @@ var StateSnapshot = {
     message.contextUsage = object.contextUsage !== void 0 && object.contextUsage !== null ? ContextUsageSnapshot.fromPartial(object.contextUsage) : void 0;
     message.compactReadiness = object.compactReadiness !== void 0 && object.compactReadiness !== null ? CompactReadiness.fromPartial(object.compactReadiness) : void 0;
     message.attachmentReadiness = object.attachmentReadiness !== void 0 && object.attachmentReadiness !== null ? AttachmentReadiness.fromPartial(object.attachmentReadiness) : void 0;
+    message.requestId = object.requestId ?? "";
+    return message;
+  }
+};
+function createBaseStateRequest() {
+  return { requestId: "" };
+}
+var StateRequest = {
+  encode(message, writer = new BinaryWriter()) {
+    if (message.requestId !== "") {
+      writer.uint32(10).string(message.requestId);
+    }
+    return writer;
+  },
+  decode(input, length) {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = reader.__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    reader.__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === void 0 ? reader.len : reader.pos + length;
+      const message = createBaseStateRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+            message.requestId = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      reader.__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+  create(base) {
+    return StateRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object) {
+    const message = createBaseStateRequest();
+    message.requestId = object.requestId ?? "";
     return message;
   }
 };
@@ -29351,6 +29430,7 @@ var Runtime = class {
   compactAccepted = false;
   skillsAccepted = false;
   attachmentsAccepted = false;
+  stateAccepted = false;
   /** getContextUsage present on the latest event context. */
   contextApi = false;
   /** compact/isIdle/hasPendingMessages present on the latest context. */
@@ -29835,7 +29915,8 @@ var Runtime = class {
       caps.push(CAPABILITY_THINKING);
     if (this.opts.getSkills && this.opts.invokeSkill)
       caps.push(CAPABILITY_SKILLS);
-    if (this.attachmentApi) caps.push(CAPABILITY_ATTACHMENTS);
+    if (this.attachmentApi)
+      caps.push(CAPABILITY_ATTACHMENTS, CAPABILITY_STATE);
     return caps;
   }
   hello() {
@@ -29887,6 +29968,7 @@ var Runtime = class {
     this.compactAccepted = false;
     this.skillsAccepted = false;
     this.attachmentsAccepted = false;
+    this.stateAccepted = false;
     if (this.lastCtx) this.sampleTelemetry(this.lastCtx);
     const channel = make(this.opts.creds, {
       onMessage: (msg) => {
@@ -29910,6 +29992,7 @@ var Runtime = class {
         this.attachmentsAccepted = accepted.capabilities.includes(
           CAPABILITY_ATTACHMENTS
         );
+        this.stateAccepted = accepted.capabilities.includes(CAPABILITY_STATE);
       }
     } catch (err) {
       channel.close();
@@ -29953,6 +30036,29 @@ var Runtime = class {
       );
     } else if (msg.payload?.$case === "attachmentPromptRequest" && this.attachmentsAccepted) {
       void this.onAttachmentPromptRequest(msg.payload.value);
+    } else if (msg.payload?.$case === "stateRequest" && this.stateAccepted) {
+      const requestId = msg.payload.value.requestId;
+      if (!requestId || requestId.length > 64 || !this.channel) return;
+      const ctx = this.lastCtx;
+      if (!ctx) return;
+      try {
+        this.sessionId = ctx.sessionManager.getSessionId();
+        this.leafId = ctx.sessionManager.getLeafId() ?? "";
+        this.model = ctx.model;
+        this.sampleTelemetry(ctx);
+      } catch {
+        return;
+      }
+      const snapshot = this.snapshot(
+        this.running ? 2 /* LOGICAL_STATE_RUNNING */ : 1 /* LOGICAL_STATE_IDLE */
+      );
+      snapshot.requestId = requestId;
+      this.channel.sendNonfatal({
+        paneId: this.opts.creds.pane,
+        processId: this.opts.creds.process,
+        runtimeGeneration: this.opts.generation,
+        payload: { $case: "stateSnapshot", value: snapshot }
+      });
     }
   }
   /**
@@ -30420,7 +30526,7 @@ var Runtime = class {
       idle = ctx.isIdle() === true;
       queued = ctx.hasPendingMessages() !== false;
     } catch {
-      return "stale";
+      return "unavailable";
     }
     if (session !== req.expectedSessionId || leaf !== req.expectedLeafId)
       return "stale";

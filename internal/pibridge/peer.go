@@ -40,6 +40,9 @@ type peer struct {
 	closeCode   codes.Code
 	closeMsg    string
 
+	stateMu      sync.Mutex
+	statePending map[string]chan struct{}
+
 	histMu      sync.Mutex
 	histPending map[string]chan HistoryResult
 
@@ -75,6 +78,7 @@ func newPeer(generation uint64, sessionID string, stream connectStream) *peer {
 		setThinkingPending: make(map[string]chan SetThinkingResult),
 		skillsPending:      make(map[string]chan SkillsResult),
 		invokeSkillPending: make(map[string]chan InvokeSkillResult),
+		statePending:       make(map[string]chan struct{}),
 		writerDone:         make(chan struct{}),
 	}
 }

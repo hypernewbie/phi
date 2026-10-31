@@ -67,6 +67,7 @@ message PhiToPi {
     SkillsRequest skills_request = 20;
     InvokeSkillRequest invoke_skill_request = 21;
     AttachmentPromptRequest attachment_prompt_request = 22;
+    StateRequest state_request = 23;
   }
 }
 
@@ -173,6 +174,15 @@ message StateSnapshot {
   // Optional Pi attachment readiness. It is independent of Compact APIs.
   // Absence means unavailable, never idle.
   AttachmentReadiness attachment_readiness = 12;
+  // Correlates a live refresh requested with pi.state.v1. Empty on
+  // unsolicited lifecycle/telemetry snapshots and Hello baselines.
+  string request_id = 13;
+}
+
+// Read-only live refresh. The runtime samples identities and readiness,
+// then answers with a StateSnapshot echoing request_id. Never dispatches input.
+message StateRequest {
+  string request_id = 1;
 }
 
 // Optional context telemetry. Scalar presence is explicit: an absent
