@@ -1050,6 +1050,40 @@ test('cached server rows survive offline and refresh failure without crossing pa
                 'cache draft',
             );
 
+            const browsePattern = '**/api/attachments/v2/browse*';
+            writeFileSync(
+                join(fixture.work, 'fresh-cache.txt'),
+                'fresh listing',
+            );
+            let releaseRefresh!: () => void;
+            const heldRefresh = new Promise<void>((resolve) => {
+                releaseRefresh = resolve;
+            });
+            await page.route(browsePattern, async (route) => {
+                await heldRefresh;
+                await route.continue();
+            });
+            try {
+                await openServerModal(page, false);
+                await expect(treeRow(page, 'report.txt')).toBeVisible({
+                    timeout: 2000,
+                });
+                await expect(
+                    page.locator('#attach-server-modal-status'),
+                ).toHaveText('Refreshing. Showing a cached listing.');
+                const reportItem = treeRow(page, 'report.txt').locator(
+                    'xpath=ancestor::*[@role="treeitem"][1]',
+                );
+                await reportItem.focus();
+                releaseRefresh();
+                await expect(treeRow(page, 'fresh-cache.txt')).toBeVisible();
+                await expect(reportItem).toBeFocused();
+                await page.locator('#attach-server-modal-cancel-btn').click();
+            } finally {
+                releaseRefresh();
+                await page.unroute(browsePattern);
+            }
+
             await context.setOffline(true);
             try {
                 await openServerModal(page, false);
@@ -1084,7 +1118,6 @@ test('cached server rows survive offline and refresh failure without crossing pa
             await expect(page.locator('.attachment-state')).toHaveText('Ready');
             expect(fixture.provider.requests).toHaveLength(0);
 
-            const browsePattern = '**/api/attachments/v2/browse*';
             await page.route(browsePattern, (route) => route.abort('failed'));
             try {
                 await openServerModal(page, false);

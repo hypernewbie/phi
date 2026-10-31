@@ -6,6 +6,7 @@ export interface DirectoryTreeOptions {
 }
 
 export interface DirectoryTreeController {
+    updateListing(data: BrowseResponse): void;
     reveal(path: string): Promise<string | null>;
     invalidateDraft(): void;
     destroy(): void;
@@ -962,6 +963,18 @@ function mountDirectoryTree(
     void loadBranch(root);
 
     return {
+        updateListing(data): void {
+            if (disposed) return;
+            const node = nodes.get(pathKey(data.path));
+            if (!node?.loaded) return;
+            const focused = document.activeElement;
+            const hadFocus = node.element?.contains(focused);
+            applyListing(node, data);
+            renderTree();
+            if (hadFocus && focused && !tree.contains(focused)) {
+                nodes.get(focusedKey)?.element?.focus({ preventScroll: true });
+            }
+        },
         reveal,
         invalidateDraft(): void {
             if (disposed) return;

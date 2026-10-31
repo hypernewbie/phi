@@ -796,6 +796,20 @@ function mountDirectoryTree(host, options) {
     renderTree();
     void loadBranch(root);
     return {
+        updateListing(data) {
+            if (disposed)
+                return;
+            const node = nodes.get(pathKey(data.path));
+            if (!node?.loaded)
+                return;
+            const focused = document.activeElement;
+            const hadFocus = node.element?.contains(focused);
+            applyListing(node, data);
+            renderTree();
+            if (hadFocus && focused && !tree.contains(focused)) {
+                nodes.get(focusedKey)?.element?.focus({ preventScroll: true });
+            }
+        },
         reveal,
         invalidateDraft() {
             if (disposed)
