@@ -7,6 +7,7 @@ import {
     type Page,
 } from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
+import { isCancelledWorktreeRead } from './_session-requests.js';
 import { tabList } from './_tabs.js';
 
 // Output stops between bursts so each click exercises a known retained
@@ -233,6 +234,7 @@ for (const width of [1280, 560]) {
         });
         const failedRequests: string[] = [];
         page.on('requestfailed', (request) => {
+            if (isCancelledWorktreeRead(request, phi.url)) return;
             // Pin synchronization can finish with an empty 200 response that
             // Chromium reports as aborted. It does not carry terminal data.
             if (

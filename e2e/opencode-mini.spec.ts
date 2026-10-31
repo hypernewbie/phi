@@ -216,17 +216,22 @@ for (const mode of ['tui', 'mini', 'legacy']) {
                 .poll(async () => (await buffer()).baseY)
                 .toBeGreaterThan(100);
             expect(prevented).toBe(false);
-            expect(inputs.join('')).not.toContain('\x1b\x19');
-            expect(inputs.join('')).not.toContain('\x1b\x05');
             await expect(terminal.locator('.tab-loader')).toBeHidden();
             await terminal.locator('.xterm-screen').hover();
-            const before = (await buffer()).viewportY;
-            // The explicit button click opened the older page at its top.
-            // A real wheel-down now scrolls within that book.
+            let position = await buffer();
+            if (position.viewportY >= position.baseY) {
+                await page.mouse.wheel(0, -240);
+                await expect
+                    .poll(async () => (await buffer()).viewportY)
+                    .toBeLessThan(position.viewportY);
+                position = await buffer();
+            }
             await page.mouse.wheel(0, 240);
             await expect
                 .poll(async () => (await buffer()).viewportY)
-                .toBeGreaterThan(before);
+                .toBeGreaterThan(position.viewportY);
+            expect(inputs.join('')).not.toContain('\x1b\x19');
+            expect(inputs.join('')).not.toContain('\x1b\x05');
         } else {
             expect(prevented).toBe(true);
             await expect.poll(() => inputs.join('')).toContain('\x1b\x19');

@@ -23,7 +23,14 @@ async function harness(mode = 'tui') {
     const button = document.createElement('button');
     document.body.innerHTML =
         '<div id="coder-selector"><button class="coder-tab" data-coder="opencode">OpenCode</button></div><div id="empty-quick-launch"><button class="empty-launch-btn" data-coder="opencode">OpenCode</button></div>';
+    const sessionList = document.createElement('div');
+    document.body.appendChild(sessionList);
     const ctx = Object.assign(Object.create(SessionsManager.prototype), {
+        sessionList,
+        sessionRequests: new Map(),
+        worktreeReads: new Map(),
+        sessionRefreshGeneration: 0,
+        sessionRefreshPromise: null,
         newSessionBtn: button,
         workspaceSelect: document.createElement('select'),
         addWorkspaceBtn: button,

@@ -18,6 +18,10 @@ import {
     type TestInfo,
 } from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
+import {
+    isCancelledSessionListRead,
+    isCancelledWorktreeRead,
+} from './_session-requests.js';
 
 const SHORT_TITLE = 'Short';
 const LONG_TITLE =
@@ -857,12 +861,18 @@ async function installDiagnostics(
             record.terminalPhase = phase;
             record.onlineAtTerminal = online;
         }
+        let classification: string | undefined;
+        if (isCancelledSessionListRead(request, origin))
+            classification = 'cancelled-session-list-read';
+        else if (isCancelledWorktreeRead(request, origin))
+            classification = 'cancelled-worktree-read';
         entries.push({
             phase: metadata?.phase ?? phase,
             kind: 'request-failed',
             message: request.failure()?.errorText ?? 'request failed',
             url: request.url(),
             requestId: metadata?.requestId,
+            classification,
         });
     });
     page.on('pageerror', (error) => {

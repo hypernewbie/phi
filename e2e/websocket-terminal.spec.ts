@@ -13,6 +13,7 @@ import type {
     TerminalServerFrame as TerminalServerMessage,
 } from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+import { isCancelledWorktreeRead } from './_session-requests.js';
 
 // The served bundle carries no types; bind its runtime codecs to the
 // generated declarations so spec-side decoding is fully checked.
@@ -101,6 +102,7 @@ test('terminal pane flows over protobuf in Chromium', async ({ page }) => {
     });
     page.on('pageerror', (err) => pageErrors.push(String(err)));
     page.on('requestfailed', (req) => {
+        if (isCancelledWorktreeRead(req, phi.url)) return;
         // Pin synchronization can finish with an empty 200 response that
         // Chromium reports as aborted. It does not carry terminal data
         // (same filter as terminal-history-floor.spec.ts).

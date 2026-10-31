@@ -9,7 +9,14 @@ function harness(ready = true) {
     document.body.innerHTML =
         '<div id="coder-selector"><button class="coder-tab" data-coder="bash"><span>Shell</span></button><button class="coder-tab" data-coder="claude">Claude</button></div>';
     const button = document.createElement('button');
+    const sessionList = document.createElement('div');
+    document.body.appendChild(sessionList);
     const ctx = Object.assign(Object.create(SessionsManager.prototype), {
+        sessionList,
+        sessionRequests: new Map(),
+        worktreeReads: new Map(),
+        sessionRefreshGeneration: 0,
+        sessionRefreshPromise: null,
         newSessionBtn: button,
         workspaceSelect: document.createElement('select'),
         addWorkspaceBtn: button,

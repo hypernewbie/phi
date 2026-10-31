@@ -9,7 +9,8 @@ import { TabManager } from '../web/terminal.js';
 // without a programmatic scroll, so the derived position stays stale and every
 // viewport-path scroll (wheel, PageUp, scrollToBottom) is clamped — the user
 // cannot reach history after a reload. _resyncViewportScroll forces the
-// position back from the buffer.
+// position back from the buffer. Historical pages use the same round trip but
+// restore their reader row afterward.
 
 function manager() {
     return Object.assign(Object.create(TabManager.prototype), {});
@@ -25,6 +26,7 @@ function tab({ viewportY = 675, baseY = 675, browsing = false } = {}) {
                 buffer: { active: { viewportY, baseY } },
                 scrollToTop: () => calls.push('top'),
                 scrollToBottom: () => calls.push('bottom'),
+                scrollToLine: (line) => calls.push(`line:${line}`),
             },
         },
     };
@@ -52,10 +54,14 @@ describe('_resyncViewportScroll', () => {
         expect(empty.calls).toEqual([]);
     });
 
-    it('leaves frozen browsing views alone', () => {
-        const { calls, tab: t } = tab({ browsing: true });
+    it('resyncs historical views and restores their row', () => {
+        const { calls, tab: t } = tab({
+            viewportY: 23,
+            baseY: 675,
+            browsing: true,
+        });
         manager()._resyncViewportScroll(t);
-        expect(calls).toEqual([]);
+        expect(calls).toEqual(['top', 'bottom', 'line:23']);
     });
 
     it('is a no-op for a missing or closed terminal', () => {

@@ -883,6 +883,34 @@ describe('Add Workspace directory tree', () => {
         expect(pathInput().value).toBe('/ws/branch/target');
     });
 
+    it('keeps workspace selection and loading usable when preference writes are denied', async () => {
+        vi.useFakeTimers();
+        const manager = makeManager();
+        manager.workspaceSelect.innerHTML =
+            '<option value="/changed">Changed</option>';
+        manager.loadWorktrees = vi.fn();
+        manager.updateWorkspaceSelectWidth = vi.fn();
+        manager.app.diffController = { refreshDiff: vi.fn() };
+        const write = vi
+            .spyOn(Storage.prototype, 'setItem')
+            .mockImplementation(() => {
+                throw new DOMException('denied', 'SecurityError');
+            });
+        try {
+            manager.workspaceSelect.dispatchEvent(new Event('change'));
+            expect(manager.activeWorkspace).toBe('/changed');
+            expect(manager.loadWorktrees).toHaveBeenCalledOnce();
+            expect(manager.updateWorkspaceSelectWidth).toHaveBeenCalledOnce();
+            await vi.advanceTimersByTimeAsync(100);
+            expect(
+                manager.app.diffController.refreshDiff,
+            ).toHaveBeenCalledOnce();
+        } finally {
+            write.mockRestore();
+            vi.useRealTimers();
+        }
+    });
+
     it('reports addWorkspace success or failure while preserving the POST shape', async () => {
         const fetchMock = mockFetch((_url, options) => {
             expect(options.method).toBe('POST');

@@ -176,6 +176,14 @@ function makeRealSessionsManager(tm) {
         activeWorkspace: initialSessionsManager.activeWorkspace,
         activeCWD: initialSessionsManager.activeCWD,
         worktreeDirtyRequestId: 0,
+        worktreeLoadRequestId: 0,
+        worktreeRootGeneration: 0,
+        worktreeRootOwner: null,
+        sessionRequests: new Map(),
+        worktreeReads: new Map(),
+        sessionRefreshGeneration: 0,
+        sessionRefreshPromise: null,
+        sessionListPageSize: 10,
         loadWorktreeSessions: vi.fn(),
         loadWorktreeDirtyStates: vi.fn(),
         highlightActiveSession: vi.fn(),
@@ -980,6 +988,12 @@ describe('softCloseTab - stale real worktree responses', () => {
         expect(fetchWorktrees).toHaveBeenCalledTimes(1);
         expect(fetchWorktrees).toHaveBeenCalledWith(
             '/api/git/worktrees?cwd=%2FwsB',
+            expect.objectContaining({
+                cache: 'no-store',
+                credentials: 'same-origin',
+                headers: {},
+                signal: expect.any(AbortSignal),
+            }),
         );
 
         request.resolve({

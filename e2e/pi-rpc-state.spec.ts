@@ -26,6 +26,7 @@ import type {
     StateChangedEvent,
 } from '../web-src/proto/control.js';
 import { configToToml, startPhi, type PhiServer } from './_server.js';
+import { isCancelledWorktreeRead } from './_session-requests.js';
 
 // The served codec carries no types; bind its runtime decoders to the
 // generated declarations so spec-side decoding is fully checked.
@@ -700,11 +701,12 @@ test('M1 real offline Pi rename keeps metadata and the later hydrate coherent', 
         page.on('pageerror', (error) =>
             browserErrors.pageErrors.push(error.message),
         );
-        page.on('requestfailed', (failed) =>
+        page.on('requestfailed', (failed) => {
+            if (isCancelledWorktreeRead(failed, fixture.phi.url)) return;
             browserErrors.failedRequests.push(
                 `${failed.method()} ${failed.url()} ${failed.failure()?.errorText ?? ''}`,
-            ),
-        );
+            );
+        });
         await page.route('**/*', async (route) => {
             const url = new URL(route.request().url());
             if (url.hostname !== '127.0.0.1') {
@@ -939,11 +941,12 @@ test('M2 real offline Pi reset invalidates the old boundary exactly once', async
         page.on('pageerror', (error) =>
             browserErrors.pageErrors.push(error.message),
         );
-        page.on('requestfailed', (failed) =>
+        page.on('requestfailed', (failed) => {
+            if (isCancelledWorktreeRead(failed, fixture.phi.url)) return;
             browserErrors.failedRequests.push(
                 `${failed.method()} ${failed.url()} ${failed.failure()?.errorText ?? ''}`,
-            ),
-        );
+            );
+        });
         await page.route('**/*', async (route) => {
             if (new URL(route.request().url()).hostname !== '127.0.0.1') {
                 browserErrors.nonLoopbackRequests.push(route.request().url());
@@ -1082,11 +1085,12 @@ test('M3 real offline Pi UI reset clears the transcript, keeps narrow and keyboa
         page.on('pageerror', (error) =>
             browserErrors.pageErrors.push(error.message),
         );
-        page.on('requestfailed', (failed) =>
+        page.on('requestfailed', (failed) => {
+            if (isCancelledWorktreeRead(failed, fixture.phi.url)) return;
             browserErrors.failedRequests.push(
                 `${failed.method()} ${failed.url()} ${failed.failure()?.errorText ?? ''}`,
-            ),
-        );
+            );
+        });
         await page.route('**/*', async (route) => {
             if (new URL(route.request().url()).hostname !== '127.0.0.1') {
                 browserErrors.nonLoopbackRequests.push(route.request().url());

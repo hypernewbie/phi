@@ -31,7 +31,14 @@ async function harness(mode = 'tui') {
     serviceBtn.appendChild(label);
     serviceRow.appendChild(serviceBtn);
 
+    const sessionList = document.createElement('div');
+    document.body.appendChild(sessionList);
     const ctx = Object.assign(Object.create(SessionsManager.prototype), {
+        sessionList,
+        sessionRequests: new Map(),
+        worktreeReads: new Map(),
+        sessionRefreshGeneration: 0,
+        sessionRefreshPromise: null,
         openCodeServiceRow: serviceRow,
         openCodeServiceBtn: serviceBtn,
         activeCoder: 'opencode',
