@@ -43,7 +43,7 @@ import {
   type WebContents,
 } from 'electron';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ProfileViewManager } from './views.js';
@@ -2051,7 +2051,10 @@ export class DesktopHost {
       return;
     }
     const profile = target.profile;
-    const groupId = profile ? `phi-profile-${profile.id}` : 'phi-global';
+    // Windows toast group identifiers are limited to 64 characters.
+    const groupId = profile
+      ? createHash('sha256').update(profile.id).digest('hex')
+      : 'phi-global';
     const title = (
       profile
         ? `Phi · ${profile.name} · ${preview.title}`

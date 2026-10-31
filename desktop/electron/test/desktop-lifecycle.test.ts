@@ -572,7 +572,6 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     expect(notification.options).toMatchObject({
       title: `Phi · ${a.name} · Build complete`,
       body: 'The build passed.',
-      groupId: `phi-profile-${a.id}`,
     });
     expect(notification.options).not.toHaveProperty('id');
     expect(notification.showCalls).toBe(1);
@@ -586,6 +585,63 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     host.pollDesktopNotifications();
     await flush();
     expect(fake.FakeNotification.instances).toHaveLength(1);
+  });
+
+  it('keeps native groups bounded, stable, and distinct for long profile IDs', async () => {
+    const host = new DesktopHost();
+    await host.start(primary);
+    (host as unknown as { platform: string }).platform = 'win32';
+    const ctrl = host.controller!;
+    const sharedLabel = 'a'.repeat(63);
+    const a = ctrl.add(`http://${sharedLabel}.alpha.example.test:7070/`);
+    const b = ctrl.add(`http://${sharedLabel}.beta.example.test:7070/`);
+    host.profileViews!.addProfile(a.id, a.origin);
+    host.profileViews!.addProfile(b.id, b.origin);
+    ctrl.setActive(a.id);
+    ctrl.setActive(b.id);
+    ctrl.setActive(a.id);
+    const preview = (profileId: string, id: string) => ({
+      id,
+      profileId,
+      title: 'Long server name',
+      message: 'The native group must not truncate the profile identity.',
+      type: 'info',
+      timestamp: Date.now(),
+    });
+    for (const profile of [a, b]) {
+      const view = host.profileViews!.getView(profile.id)!;
+      setCommittedURL(view.webContents, `${profile.origin}?desktop=1`);
+      vi.spyOn(view.webContents, 'executeJavaScript').mockResolvedValueOnce(
+        profile.id === a.id
+          ? [preview(a.id, 'a-1'), preview(a.id, 'a-2')]
+          : [preview(b.id, 'b-1')],
+      );
+    }
+    // WinRT rejects group identifiers longer than 64 characters.
+    fake.FakeNotification.showFails = (options) =>
+      String(options.groupId).length > 64;
+    fake.FakeBrowserWindow.instances[0]!.focused = false;
+
+    host.pollDesktopNotifications();
+    await flush();
+
+    const notifications = fake.FakeNotification.instances;
+    expect(notifications).toHaveLength(3);
+    for (const notification of notifications) {
+      expect(notification.showCalls).toBe(1);
+      expect(String(notification.options.groupId).length).toBeLessThanOrEqual(
+        64,
+      );
+    }
+    expect(notifications[0]!.options.groupId).toBe(
+      notifications[1]!.options.groupId,
+    );
+    expect(notifications[0]!.options.groupId).not.toBe(
+      notifications[2]!.options.groupId,
+    );
+    notifications[2]!.emit('click');
+    await flush();
+    expect(ctrl.state().activeId).toBe(b.id);
   });
 
   it('foregrounds without selecting a saved profile removed after notification creation', async () => {

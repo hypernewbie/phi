@@ -16,10 +16,11 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
-// Importing the channel constants also typechecks the src modules; the
-// 'electron' import inside single-instance.ts is inert outside Electron
-// (the npm package exports a path string), so this is safe under vitest.
+import { describe, expect, it, vi } from 'vitest';
+// Only channel constants are needed. Stub Electron so importing
+// single-instance.ts cannot load its npm package or trigger installation.
+vi.mock('electron', () => ({ app: {} }));
+
 import { FORWARD_CHANNEL } from '../src/single-instance.js';
 import { DEEPLINK_CHANNEL } from '../src/deeplink.js';
 import {

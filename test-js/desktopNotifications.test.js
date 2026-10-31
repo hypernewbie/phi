@@ -129,6 +129,31 @@ describe('desktop notification transport', () => {
         });
     });
 
+    it('forwards one preview per ready group, not per member update', () => {
+        useDesktopPage();
+        manager = new NotificationManager({
+            storageKey: 'ready-group-history',
+            store: new BackendStore('profile-a'),
+        });
+
+        const first = manager.show('A ready', { readyPaneId: 'a' });
+        expect(manager.show('B ready', { readyPaneId: 'b' })).toBe(first);
+        expect(manager.show('A updated', { readyPaneId: 'a' })).toBe(first);
+        expect(page()[SLOT]).toHaveLength(1);
+        expect(page()[SLOT][0]).toMatchObject({
+            profileId: 'profile-a',
+            message: 'A ready',
+        });
+        const firstId = page()[SLOT][0].id;
+
+        manager.dismissAll();
+        manager.show('New group', { readyPaneId: 'b' });
+
+        expect(page()[SLOT]).toHaveLength(2);
+        expect(page()[SLOT][1].id).not.toBe(firstId);
+        expect(page()[SLOT][1].message).toBe('New group');
+    });
+
     it('normalizes the default profile to an unscoped native target', () => {
         useDesktopPage();
         manager = new NotificationManager({
