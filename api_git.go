@@ -173,7 +173,8 @@ func appendUntrackedDiff(out []byte, fname string, content []byte, ansi bool) []
 // (`--cached`) and unstaged halves are concatenated instead.
 func worktreeDiffOutput(ctx context.Context, cwd, colorFlag, contextLines string) ([]byte, error) {
 	run := func(args ...string) ([]byte, error) {
-		cmd := exec.CommandContext(ctx, "git", args...)
+		// diff.autoRefreshIndex is separate from Git's optional-lock setting.
+		cmd := exec.CommandContext(ctx, "git", append([]string{"--no-optional-locks", "-c", "diff.autoRefreshIndex=false"}, args...)...)
 		cmd.Dir = cwd
 		return cmd.Output()
 	}
@@ -236,11 +237,11 @@ func handleRawDiff(w http.ResponseWriter, r *http.Request) {
 	} else {
 		var cmd *exec.Cmd
 		if commit == "staged" {
-			cmd = exec.CommandContext(ctx, "git", "diff", "--cached", "-w", colorFlag, "-U"+contextLines)
+			cmd = exec.CommandContext(ctx, "git", "--no-optional-locks", "-c", "diff.autoRefreshIndex=false", "diff", "--cached", "-w", colorFlag, "-U"+contextLines)
 		} else if commit == "unstaged" {
-			cmd = exec.CommandContext(ctx, "git", "diff", "-w", colorFlag, "-U"+contextLines)
+			cmd = exec.CommandContext(ctx, "git", "--no-optional-locks", "-c", "diff.autoRefreshIndex=false", "diff", "-w", colorFlag, "-U"+contextLines)
 		} else {
-			cmd = exec.CommandContext(ctx, "git", "show", "-w", colorFlag, "-U"+contextLines, commit)
+			cmd = exec.CommandContext(ctx, "git", "--no-optional-locks", "show", "-w", colorFlag, "-U"+contextLines, commit)
 		}
 		cmd.Dir = cwd
 		out, err = cmd.Output()
@@ -257,7 +258,7 @@ func handleRawDiff(w http.ResponseWriter, r *http.Request) {
 
 	if commit == "" || commit == "unstaged" {
 		statusCtx, statusEnd := obs.Span(r.Context(), "git.status", "cwd", cwd)
-		statusCmd := exec.CommandContext(statusCtx, "git", "status", "--porcelain")
+		statusCmd := exec.CommandContext(statusCtx, "git", "--no-optional-locks", "status", "--porcelain")
 		statusCmd.Dir = cwd
 		statusOut, statusErr := statusCmd.Output()
 		statusEnd(statusErr)
@@ -345,7 +346,7 @@ func handleRawStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx, end := obs.Span(r.Context(), "git.status", "cwd", cwd)
-	cmd := exec.CommandContext(ctx, "git", "--no-pager", "-c", "color.status=always", "status", "--short", "--branch")
+	cmd := exec.CommandContext(ctx, "git", "--no-optional-locks", "--no-pager", "-c", "color.status=always", "status", "--short", "--branch")
 	cmd.Dir = cwd
 	out, err := cmd.CombinedOutput()
 	end(err)
@@ -981,11 +982,6 @@ func gitActionLock(commonDir string) *sync.Mutex {
 
 var gitActionLocks sync.Map
 
-func gitConfigMirrorOption(remote string) string {
-	escaped := strings.NewReplacer("\\", "\\\\", "\"", "\\\"").Replace(remote)
-	return "remote.\"" + escaped + "\".mirror=false"
-}
-
 func handleGitAction(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodPost {
@@ -1063,15 +1059,15 @@ func handleGitAction(w http.ResponseWriter, r *http.Request) {
 	case "pull":
 		cmd = gitCommand(ctx, repo.root, "pull", "--ff-only", "--no-rebase", "--no-autostash", "--no-recurse-submodules", "--", fresh.Remote, fresh.RemoteRef)
 	case "push":
-		cmd = gitCommand(ctx, repo.root, "-c", gitConfigMirrorOption(fresh.Remote), "push", "--no-force", "--no-follow-tags", "--recurse-submodules=no", "--", fresh.Remote, "HEAD:"+fresh.RemoteRef)
+		cmd = gitCommand(ctx, repo.root, "-c", "remote."+fresh.Remote+".mirror=false", "push", "--no-force", "--no-follow-tags", "--recurse-submodules=no", "--", fresh.Remote, "HEAD:"+fresh.RemoteRef)
 	case "commit":
 		cmd = gitCommand(ctx, repo.root, "commit", "--file=-")
 		cmd.Stdin = strings.NewReader(req.Message)
 	}
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
-	gitHeadCache.Clear()
 	err = cmd.Run()
+	gitHeadCache.Clear()
 	if err != nil {
 		if ctx.Err() != nil {
 			http.Error(w, "Git result unconfirmed. Inspect Git state before running again.", http.StatusGatewayTimeout)

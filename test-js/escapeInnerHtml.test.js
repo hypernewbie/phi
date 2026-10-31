@@ -125,6 +125,7 @@ describe('DiffController.loadRichDiff — fetch-error path (diff.ts:~949)', () =
             commitSelect: { value: 'unstaged' },
             currentContextLines: 3,
             captureGitManageContext: () => ({}),
+            isCurrentGitManageContext: () => true,
             gitViewRoot: () => '/ws',
             readGitViewCache: () => null,
             requestGitManage: async (_context, url, options, _timeout, read) =>

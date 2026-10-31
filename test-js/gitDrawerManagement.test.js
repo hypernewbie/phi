@@ -674,7 +674,7 @@ describe('Git drawer action safety', () => {
             if (path === '/api/git/info') return COMMIT_INFO;
             if (path === '/api/git/action') {
                 actionCalls++;
-                return { ok: false, status: 500, text: failure };
+                return { ok: false, status: 500, text: `${failure}\n` };
             }
             throw new Error(`Unexpected fetch ${url}`);
         });
@@ -698,6 +698,191 @@ describe('Git drawer action safety', () => {
         expect(localStorage.getItem(draftKey)).toBe('keep after Git failure');
         expect(document.getElementById('git-action-status').textContent).toBe(
             failure,
+        );
+    });
+
+    it('does not hide an unconfirmed action behind a corrupt older record', () => {
+        const controller = new DiffController(buildApp());
+        const context = controller.captureGitManageContext();
+        localStorage.setItem(`${context.actionPrefix}corrupt`, '{');
+        localStorage.setItem(
+            `${context.actionPrefix}pending`,
+            JSON.stringify({
+                version: 1,
+                id: 'pending',
+                owner: 'previous-page',
+                action: 'pull',
+                target: TARGET,
+                phase: 'sent',
+                createdAt: Date.now(),
+                status: 'Sent',
+            }),
+        );
+
+        bootstrapDom();
+        const reloaded = new DiffController(buildApp());
+        reloaded.captureGitManageContext();
+
+        expect(reloaded.gitManageRecord?.phase).toBe('unconfirmed');
+        expect(document.getElementById('git-pull-btn').disabled).toBe(true);
+    });
+
+    it('can cancel a local action whose initial persistence failed', async () => {
+        mockFetch(() => {
+            throw new Error('No request is allowed');
+        });
+        const controller = new DiffController(buildApp());
+        controller.captureGitManageContext();
+        controller.gitManageInfo = INFO;
+        const storage = vi
+            .spyOn(Storage.prototype, 'setItem')
+            .mockImplementation(() => {
+                throw new DOMException('storage full', 'QuotaExceededError');
+            });
+        await controller.startGitAction('pull');
+        expect(controller.gitManageRecord?.phase).toBe('paused');
+        storage.mockRestore();
+
+        controller.cancelGitAction();
+
+        expect(controller.gitManageRecord).toBeNull();
+        expect(document.getElementById('git-pull-btn').disabled).toBe(false);
+        expect(document.getElementById('git-action-status').textContent).toBe(
+            'Unsent Git action cancelled.',
+        );
+    });
+
+    it('bounds a sent request and ignores its late success without replay', async () => {
+        vi.useFakeTimers();
+        const action = deferred();
+        let posts = 0;
+        mockFetch((url) => {
+            if (new URL(url, window.location.href).pathname === '/api/git/info')
+                return COMMIT_INFO;
+            posts++;
+            return action.promise;
+        });
+        const controller = new DiffController(buildApp());
+        controller.captureGitManageContext();
+        controller.gitManageInfo = COMMIT_INFO;
+        const input = document.getElementById('git-commit-message');
+        input.value = 'keep after timeout';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        const pending = controller.startGitAction('commit');
+        await vi.waitFor(() => expect(posts).toBe(1));
+        await vi.advanceTimersByTimeAsync(150_000);
+        await pending;
+        action.resolve({
+            ok: true,
+            status: 200,
+            json: {
+                action: 'commit',
+                root: TARGET.root,
+                output: 'Commit completed.',
+            },
+        });
+        window.dispatchEvent(new Event('online'));
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        expect(posts).toBe(1);
+        expect(controller.gitManageRecord.phase).toBe('unconfirmed');
+        expect(input.value).toBe('keep after timeout');
+    });
+
+    it('refreshes the visible Git view after a confirmed mutation', async () => {
+        let committed = false;
+        mockFetch((url) => {
+            const path = new URL(url, window.location.href).pathname;
+            if (path === '/api/git/info') return COMMIT_INFO;
+            if (path === '/api/git/action') {
+                committed = true;
+                return {
+                    ok: true,
+                    status: 200,
+                    json: {
+                        action: 'commit',
+                        root: TARGET.root,
+                        output: 'Commit completed.',
+                    },
+                };
+            }
+            if (path === '/api/git/raw-log')
+                return {
+                    ok: true,
+                    status: 200,
+                    text: committed ? 'new commit subject' : 'old log',
+                };
+            throw new Error(`Unexpected fetch ${url}`);
+        });
+        const controller = new DiffController(buildApp());
+        controller.activeTab = 'log';
+        const writes = enableFakeTerminal(controller);
+        await controller.refreshDiff();
+        await vi.waitFor(() =>
+            expect(controller.gitManageInfo?.can_commit).toBe(true),
+        );
+        document.getElementById('git-commit-message').value =
+            'new commit subject';
+
+        await controller.startGitAction('commit');
+
+        await vi.waitFor(() =>
+            expect(writes.join('')).toContain('new commit subject'),
+        );
+    });
+
+    it('keeps a new workspace queue alive when the old sent request aborts', async () => {
+        vi.useFakeTimers();
+        let posts = 0;
+        let infoCalls = 0;
+        const oldAction = deferred();
+        const otherInfo = {
+            ...INFO,
+            target: { ...TARGET, root: '/workspace/other' },
+        };
+        mockFetch((url) => {
+            const parsed = new URL(url, window.location.href);
+            if (parsed.pathname === '/api/git/info') {
+                if (parsed.searchParams.get('cwd') !== '/workspace/other')
+                    return INFO;
+                infoCalls++;
+                if (infoCalls === 1) throw new TypeError('offline');
+                return otherInfo;
+            }
+            posts++;
+            if (posts === 1) return oldAction.promise;
+            return {
+                ok: true,
+                status: 200,
+                json: {
+                    action: 'pull',
+                    root: otherInfo.target.root,
+                    output: 'Pull completed.',
+                },
+            };
+        });
+        const app = buildApp();
+        const controller = new DiffController(app);
+        controller.captureGitManageContext();
+        controller.gitManageInfo = INFO;
+        const first = controller.startGitAction('pull');
+        await vi.waitFor(() => expect(posts).toBe(1));
+        app.sessionsManager.activeCWD = '/workspace/other';
+        controller.captureGitManageContext();
+        controller.gitManageInfo = otherInfo;
+        await controller.startGitAction('pull');
+        await first;
+        await vi.advanceTimersByTimeAsync(1000);
+
+        expect(posts).toBe(2);
+        expect(controller.gitManageRecord.phase).toBe('confirmed');
+        expect(storedRecords()).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    phase: 'unconfirmed',
+                    target: TARGET,
+                }),
+            ]),
         );
     });
 

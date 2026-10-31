@@ -953,7 +953,14 @@ export class DiffController {
                 const storageKey = localStorage.key(i);
                 if (!storageKey?.startsWith(prefix))
                     continue;
-                const parsed = JSON.parse(localStorage.getItem(storageKey) || 'null');
+                let parsed;
+                try {
+                    parsed = JSON.parse(localStorage.getItem(storageKey) || 'null');
+                }
+                catch {
+                    // One corrupt record must not hide other sent actions.
+                    continue;
+                }
                 if (!isGitManageActionRecord(parsed) ||
                     parsed.phase === 'dismissed' ||
                     localStorage.getItem(`${this.gitManageContextKey}:dismissed:${encodeURIComponent(parsed.id)}`) === '1') {
@@ -1600,34 +1607,36 @@ export class DiffController {
                     typeof payload?.output === 'string' &&
                     payload.output.length > 0) {
                     const messageInput = this.gitCommitMessageInput;
-                    if (record.action === 'commit' &&
+                    if (this.isCurrentGitManageContext(context) &&
+                        record.action === 'commit' &&
                         messageInput &&
                         messageInput.value === record.message) {
                         this.clearGitCommitDraftAfterSuccess();
                     }
                     this.finishGitAction(context, record, storageKey, 'confirmed', `${gitManageActionLabel(record.action)} completed.`);
-                    this.refreshGitManagement(context);
+                    this.refreshAfterGitAction(context);
                     return;
                 }
                 this.finishGitAction(context, record, storageKey, 'unconfirmed', 'Result unconfirmed. Inspect Git state before running again.');
                 return;
             }
+            const errorBody = result.body.trim();
             if (result.status === 500 &&
-                result.body ===
+                errorBody ===
                     `Git ${record.action} failed. Partial effects are possible. Inspect Git before running again.`) {
                 this.finishGitAction(context, record, storageKey, 'failed', `Git ${record.action} failed. Partial effects are possible. Inspect Git before running again.`);
-                this.refreshGitManagement(context);
+                this.refreshAfterGitAction(context);
                 return;
             }
             if (result.status === 504 ||
-                result.body ===
+                errorBody ===
                     'Git result unconfirmed. Inspect Git state before running again.' ||
                 result.status >= 500) {
                 this.finishGitAction(context, record, storageKey, 'unconfirmed', 'Result unconfirmed. Inspect Git state before running again.');
                 return;
             }
             this.finishGitAction(context, record, storageKey, 'blocked', `Git action rejected (HTTP ${result.status}). Refresh the target before trying again.`);
-            this.refreshGitManagement(context);
+            this.refreshAfterGitAction(context);
         }
         catch (error) {
             if (record.phase === 'sent') {
@@ -1661,14 +1670,22 @@ export class DiffController {
             }
         }
     }
+    refreshAfterGitAction(context) {
+        if (!this.isCurrentGitManageContext(context))
+            return;
+        void this.refreshDiff();
+        if (this.diffModal && !this.diffModal.classList.contains('hidden')) {
+            void this.loadRichDiff();
+        }
+    }
     finishGitAction(context, record, storageKey, phase, status) {
-        this.clearGitManageRetry();
-        this.gitManageRetryDelay = 1000;
         record.phase = phase;
         record.status = status;
         this.writeGitManageAction(storageKey, record);
         if (!this.isCurrentGitManageContext(context))
             return;
+        this.clearGitManageRetry();
+        this.gitManageRetryDelay = 1000;
         this.gitManageRecord = record;
         this.gitManageStatus = status;
         this.gitManageBusy = false;
@@ -1712,9 +1729,11 @@ export class DiffController {
         this.gitManageRetryDelay = 1000;
         try {
             const stored = JSON.parse(localStorage.getItem(this.gitManageRecordKey) || 'null');
-            if (stored?.id !== record.id ||
-                stored?.owner !== this.gitManagePageId ||
-                !['queued', 'paused'].includes(stored?.phase)) {
+            if (record.owner !== this.gitManagePageId ||
+                (stored !== null &&
+                    (stored?.id !== record.id ||
+                        stored?.owner !== this.gitManagePageId ||
+                        !['queued', 'paused'].includes(stored?.phase)))) {
                 this.gitManageStatus =
                     'Git action ownership changed; it was not cancelled.';
                 this.renderGitManagement();
@@ -2696,8 +2715,8 @@ export class DiffController {
         const fetchRaw = (path) => this.requestGitManage(gitContext, path, { method: 'GET', cache: 'no-store' }, GIT_INFO_TIMEOUT_MS, async (response) => ({
             status: response.status,
             text: await response.text(),
-            head: response.headers.get('X-Git-Head') || '',
-            branch: response.headers.get('X-Git-Branch') || '',
+            head: response.headers.get('X-Phi-Git-Head') || '',
+            branch: response.headers.get('X-Phi-Git-Branch') || '',
         }));
         try {
             if (this.activeTab === 'diff') {
@@ -3271,7 +3290,8 @@ export class DiffController {
                 head: response.headers.get('X-Phi-Git-Head') || '',
                 branch: response.headers.get('X-Phi-Git-Branch') || '',
             }));
-            if (requestToken !== this._richDiffRequestToken)
+            if (requestToken !== this._richDiffRequestToken ||
+                !this.isCurrentGitManageContext(context))
                 return;
             if (result.status !== 200)
                 throw new Error(result.text.trim() ||
@@ -3280,7 +3300,8 @@ export class DiffController {
             paint(result.text, result.head, result.branch);
         }
         catch (error) {
-            if (requestToken !== this._richDiffRequestToken)
+            if (requestToken !== this._richDiffRequestToken ||
+                !this.isCurrentGitManageContext(context))
                 return;
             if (cached) {
                 showCacheNotice();

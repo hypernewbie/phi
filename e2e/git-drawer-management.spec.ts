@@ -21,14 +21,16 @@ let fixtureDir = '';
 
 type FailedRequest = { method: string; url: string; error: string };
 
-// Context changes can abort an obsolete metadata read. Each flow waits for a
-// successful read for its current workspace before it performs Git actions.
+// Context changes can abort obsolete Git metadata and worktree-dirty reads.
+// Each flow waits for a successful metadata read for its current workspace.
 function unexpectedFailedRequests(requests: FailedRequest[]): FailedRequest[] {
     return requests.filter((request) => {
         const url = new URL(request.url);
         return !(
             request.method === 'GET' &&
-            url.pathname === '/api/git/info' &&
+            ['/api/git/info', '/api/git/worktree-dirty'].includes(
+                url.pathname,
+            ) &&
             request.error === 'net::ERR_ABORTED'
         );
     });
@@ -447,12 +449,16 @@ async function exerciseCommitStaged(
     writeFileSync(untrackedFile, 'untracked bytes\n');
 
     await openProject(page);
+    await page.locator('.diff-tab-btn[data-tab="log"]').click();
     await expect(page.locator('#git-commit-btn')).toBeDisabled();
     await enterAndSubmitCommit(page, mode, 'Commit staged version A');
     await expect(page.locator('#git-action-status')).toHaveText(
         'Commit completed.',
     );
     await expect(page.locator('#git-commit-message')).toHaveValue('');
+    await expect
+        .poll(() => readGitTerminal(page))
+        .toContain('Commit staged version A');
 
     const localHead = git(project, 'rev-parse', 'HEAD');
     expect(localHead).not.toBe(baseHead);
@@ -576,7 +582,10 @@ async function exerciseLostCommitResponse(
     const failedPaths = unexpectedFailedRequests(failedRequests).map(
         ({ url }) => new URL(url).pathname,
     );
-    expect(failedPaths).toEqual(['/api/git/action']);
+    expect(
+        failedPaths,
+        JSON.stringify(unexpectedFailedRequests(failedRequests)),
+    ).toEqual(['/api/git/action']);
     const expectedDevUpdateError = `${phi.url}/api/update/status`;
     const unexpectedConsoleErrors = consoleErrors.filter(
         (error) =>
@@ -609,13 +618,19 @@ async function exerciseNetworkSafety(
 ): Promise<void> {
     if (!phi) throw new Error('Phi fixture is not running');
     const consoleErrors: string[] = [];
-    const failedRequests: string[] = [];
+    const failedRequests: FailedRequest[] = [];
     let actionPosts = 0;
     page.on('pageerror', (error) => consoleErrors.push(error.message));
     page.on('console', (message) => {
         if (message.type() === 'error') consoleErrors.push(message.text());
     });
-    page.on('requestfailed', (request) => failedRequests.push(request.url()));
+    page.on('requestfailed', (request) => {
+        failedRequests.push({
+            method: request.method(),
+            url: request.url(),
+            error: request.failure()?.errorText || '',
+        });
+    });
     page.on('request', (request) => {
         if (
             request.method() === 'POST' &&
@@ -698,17 +713,27 @@ async function exerciseNetworkSafety(
         );
     }
 
-    const failedPaths = failedRequests.map((url) => new URL(url).pathname);
+    const failedPaths = failedRequests.map(({ url }) => new URL(url).pathname);
     expect(failedPaths).toContain('/api/git/raw-diff');
     expect(failedPaths).toContain('/api/git/info');
-    expect(
-        failedRequests.filter(
-            (url) =>
-                !['/api/git/raw-diff', '/api/git/info'].includes(
-                    new URL(url).pathname,
-                ),
-        ),
-    ).toEqual([]);
+    const unexpectedFailures = failedRequests.filter((request) => {
+        const url = new URL(request.url);
+        if (request.method !== 'GET') return true;
+        if (url.pathname === '/api/git/raw-diff')
+            return request.error !== 'net::ERR_INTERNET_DISCONNECTED';
+        if (url.pathname === '/api/git/info')
+            return ![
+                'net::ERR_INTERNET_DISCONNECTED',
+                'net::ERR_ABORTED',
+            ].includes(request.error);
+        if (url.pathname === '/api/git/worktree-dirty')
+            return ![
+                'net::ERR_INTERNET_DISCONNECTED',
+                'net::ERR_ABORTED',
+            ].includes(request.error);
+        return true;
+    });
+    expect(unexpectedFailures, JSON.stringify(unexpectedFailures)).toEqual([]);
     const unexpectedConsoleErrors = consoleErrors.filter(
         (error) =>
             !error.includes(
