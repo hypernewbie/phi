@@ -101,6 +101,34 @@ function png(name = 'public.png') {
 }
 
 describe('attachment control', () => {
+    it.each(['local waiter', 'bridge pending'])(
+        'defers background context reads during Reload (%s), then refreshes without losing the draft',
+        async (pending) => {
+            const { tm, tabA } = makeManager();
+            const owner = tm._captureAttachmentOwner(tabA);
+            tabA.draft = 'keep this attachment draft';
+            tm.inputTextArea.value = tabA.draft;
+            tabA.piBridge = { reload_pending: pending === 'bridge pending' };
+            tm._piReloadPending = new Map(
+                pending === 'local waiter' ? [[tabA.paneId, {}]] : [],
+            );
+            const fetchMock = mockFetch(() => ({
+                json: { available: true, idle: true },
+            }));
+            await tm._refreshAttachmentContext(tabA, owner, tm.app.scope);
+            expect(fetchMock).not.toHaveBeenCalled();
+            expect(tabA._attachmentContextNeedsRefresh).toBe(true);
+            expect(tm.inputTextArea.value).toBe('keep this attachment draft');
+            tabA.piBridge.reload_pending = false;
+            tm._piReloadPending.clear();
+            await tm._refreshAttachmentContext(tabA, owner, tm.app.scope);
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            expect(tabA._attachmentContextNeedsRefresh).toBe(false);
+            expect(tabA._attachmentContext.available).toBe(true);
+            expect(tm.inputTextArea.value).toBe('keep this attachment draft');
+        },
+    );
+
     it('keeps submitted recovery in the paperclip menu, not beside the next draft', () => {
         const { tm, tabA } = makeManager();
         const snapshot = {
@@ -586,7 +614,7 @@ describe('attachment control', () => {
         const owner = tabA.draftAttachments[0].owner;
         tabA.piBridge = {
             connected: true,
-            capabilities: ['pi.attachments.v2'],
+            capabilities: ['pi.attachments.v3'],
         };
         tabA._attachmentContextOwnerKey = tm._attachmentOwnerKey(owner);
         tabA._attachmentContext = {
@@ -680,7 +708,7 @@ describe('attachment control', () => {
         const owner = tabA.draftAttachments[0].owner;
         tabA.piBridge = {
             connected: true,
-            capabilities: ['pi.attachments.v2'],
+            capabilities: ['pi.attachments.v3'],
         };
         tabA._attachmentContextOwnerKey = tm._attachmentOwnerKey(owner);
         tabA._attachmentContext = {
@@ -931,7 +959,7 @@ describe('attachment control', () => {
         const { tm, tabA } = makeManager();
         tabA.piBridge = {
             connected: true,
-            capabilities: ['pi.attachments.v2'],
+            capabilities: ['pi.attachments.v3'],
         };
         tm.stagedAttachments = [
             {

@@ -6,6 +6,8 @@ import {
     CAPABILITY_HISTORY,
     CAPABILITY_LIFECYCLE,
     CAPABILITY_MODELS,
+    CAPABILITY_STATE,
+    CAPABILITY_SYNCBOARD,
     CAPABILITY_THINKING,
     isKnownCapability,
     negotiateCapabilities,
@@ -53,14 +55,23 @@ describe('negotiateCapabilities', () => {
         expect(isKnownCapability(CAPABILITY_CONTEXT)).toBe(true);
         expect(isKnownCapability(CAPABILITY_COMPACT)).toBe(true);
     });
-    it('negotiates attachment v2 independently without aliasing the old review protocol', () => {
-        expect(CAPABILITY_ATTACHMENTS).toBe('pi.attachments.v2');
+    it('negotiates current capabilities without aliasing older review protocols', () => {
+        expect(CAPABILITY_ATTACHMENTS).toBe('pi.attachments.v3');
+        expect(CAPABILITY_STATE).toBe('pi.state.v2');
         expect(
             negotiateCapabilities([
                 'pi.attachments.v1',
+                'pi.attachments.v2',
+                'pi.state.v1',
                 CAPABILITY_ATTACHMENTS,
+                CAPABILITY_STATE,
+                CAPABILITY_SYNCBOARD,
             ]),
-        ).toEqual([CAPABILITY_ATTACHMENTS]);
+        ).toEqual([
+            CAPABILITY_ATTACHMENTS,
+            CAPABILITY_STATE,
+            CAPABILITY_SYNCBOARD,
+        ]);
         expect(isKnownCapability(CAPABILITY_ATTACHMENTS)).toBe(true);
     });
     it('yields empty for empty', () => {

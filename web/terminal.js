@@ -9992,7 +9992,7 @@ export class TabManager {
         if (
             tab?.coder === 'pi' &&
             tab.piBridge?.connected === true &&
-            (tab.piBridge.capabilities || []).includes('pi.attachments.v2')
+            (tab.piBridge.capabilities || []).includes('pi.attachments.v3')
         ) {
             void this._refreshAttachmentContext(
                 tab,
@@ -10350,8 +10350,12 @@ export class TabManager {
         if (
             this.getActiveTab() !== tab ||
             !this.attachmentStore.isActive(owner) ||
-            !this._attachmentOwnerCurrent(tab, owner, scope)
+            !this._attachmentOwnerCurrent(tab, owner, scope) ||
+            this._piReloadPending?.has(tab.paneId) ||
+            tab.piBridge?.reload_pending === true
         ) {
+            // Reload replaces the peer. Keep the cached context and draft;
+            // its next readiness publication will trigger a fresh read.
             tab._attachmentContextNeedsRefresh = true;
             return;
         }
@@ -11216,7 +11220,7 @@ export class TabManager {
             this._renderAttachmentStatus(tab);
             return;
         }
-        if (!tab.piBridge || tab.piBridge.connected !== true || !(tab.piBridge.capabilities || []).includes('pi.attachments.v2')) {
+        if (!tab.piBridge || tab.piBridge.connected !== true || !(tab.piBridge.capabilities || []).includes('pi.attachments.v3')) {
             tab._attachmentNotice = 'Pi attachment sending is unavailable for this pane. Existing text and paste/drop behavior is unchanged.';
             this._renderAttachmentStatus(tab);
             return;
@@ -13091,7 +13095,7 @@ export class TabManager {
             this._refreshPiBridgeModels(tabInfo);
             if (
                 tabInfo.piBridge?.connected === true &&
-                (tabInfo.piBridge?.capabilities || []).includes('pi.attachments.v2')
+                (tabInfo.piBridge?.capabilities || []).includes('pi.attachments.v3')
             ) {
                 void this._refreshAttachmentContext(
                     tabInfo,

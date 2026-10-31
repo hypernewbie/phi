@@ -150,7 +150,7 @@ async function spawnPane(
         .toMatchObject({
             state: 'managed',
             connected: true,
-            capabilities: expect.arrayContaining(['pi.attachments.v2']),
+            capabilities: expect.arrayContaining(['pi.attachments.v3']),
         });
     return pane;
 }
@@ -973,7 +973,7 @@ test('native Pi reload preserves attachment drafts without sending until explici
                 expect(before?.capabilities).toEqual(
                     expect.arrayContaining([
                         'pi.reload.v1',
-                        'pi.attachments.v2',
+                        'pi.attachments.v3',
                     ]),
                 );
                 const baseline = fixture.provider.requests.length;

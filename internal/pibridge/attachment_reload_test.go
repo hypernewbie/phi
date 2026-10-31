@@ -18,10 +18,12 @@ func TestAttachmentReloadWireCompatibility(t *testing.T) {
 		number  int
 	}{
 		{&pibridgepb.PhiToPi{}, "reloadRequest", 22},
-		{&pibridgepb.PhiToPi{}, "stateRequest", 23},
+		{&pibridgepb.PhiToPi{}, "stateRequest", 25},
 		{&pibridgepb.PhiToPi{}, "attachmentPromptRequest", 24},
 		{&pibridgepb.PiToPhi{}, "reloadAck", 25},
-		{&pibridgepb.PiToPhi{}, "attachmentPromptAck", 26},
+		{&pibridgepb.PiToPhi{}, "attachmentPromptAck", 27},
+		{&pibridgepb.PhiToPi{}, "syncboardResponse", 23},
+		{&pibridgepb.PiToPhi{}, "syncboardRequest", 26},
 		{&pibridgepb.StateSnapshot{}, "reloadReadiness", 12},
 		{&pibridgepb.StateSnapshot{}, "requestId", 13},
 		{&pibridgepb.StateSnapshot{}, "attachmentReadiness", 14},
@@ -33,8 +35,8 @@ func TestAttachmentReloadWireCompatibility(t *testing.T) {
 			}
 		})
 	}
-	caps := negotiateCapabilities([]string{CapabilityReload, "pi.attachments.v1", CapabilityAttachments})
-	if CapabilityAttachments != "pi.attachments.v2" || caps["pi.attachments.v1"] || !caps[CapabilityAttachments] || !caps[CapabilityReload] {
+	caps := negotiateCapabilities([]string{CapabilityReload, "pi.attachments.v1", CapabilityAttachments}, false)
+	if CapabilityAttachments != "pi.attachments.v3" || caps["pi.attachments.v1"] || !caps[CapabilityAttachments] || !caps[CapabilityReload] {
 		t.Fatalf("attachment versions must not alias: %v", caps)
 	}
 }

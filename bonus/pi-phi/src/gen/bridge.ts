@@ -278,7 +278,7 @@ export interface StateSnapshot {
     | AttachmentReadiness
     | undefined;
   /**
-   * Correlates a live refresh requested with pi.state.v1. Empty on
+   * Correlates a live refresh requested with pi.state.v2. Empty on
    * unsolicited lifecycle/telemetry snapshots and Hello baselines.
    */
   requestId: string;

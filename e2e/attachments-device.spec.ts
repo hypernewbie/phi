@@ -244,7 +244,7 @@ async function spawnPane(
         .toMatchObject({
             state: 'managed',
             connected: true,
-            capabilities: expect.arrayContaining(['pi.attachments.v2']),
+            capabilities: expect.arrayContaining(['pi.attachments.v3']),
         });
     return pane;
 }
@@ -586,6 +586,18 @@ test('idle extension metadata does not falsely stale a fresh attachment send', a
                         await route.continue();
                     },
                 );
+                let releaseAcknowledgment: () => void = () => {};
+                const acknowledgmentGate = new Promise<void>((resolve) => {
+                    releaseAcknowledgment = resolve;
+                });
+                await page.route(
+                    '**/api/pi-bridge/attachments',
+                    async (route) => {
+                        const response = await route.fetch();
+                        await acknowledgmentGate;
+                        await route.fulfill({ response });
+                    },
+                );
                 const before = provider.requests.length;
                 const sent = page.waitForRequest(
                     (req) =>
@@ -596,12 +608,18 @@ test('idle extension metadata does not falsely stale a fresh attachment send', a
                 await page
                     .locator('#input-textarea')
                     .fill('metadata regression image');
-                if (mobile) await page.locator('#send-input-btn').tap();
-                else await page.locator('#send-input-btn').click();
-                await expect(page.locator('#input-textarea')).toHaveValue('');
-                await page
-                    .locator('#input-textarea')
-                    .fill('newer typing stays visible');
+                try {
+                    if (mobile) await page.locator('#send-input-btn').tap();
+                    else await page.locator('#send-input-btn').click();
+                    await expect(page.locator('#input-textarea')).toHaveValue(
+                        '',
+                    );
+                    await page
+                        .locator('#input-textarea')
+                        .fill('newer typing stays visible');
+                } finally {
+                    releaseAcknowledgment();
+                }
                 expect((await sent).postDataJSON().context.leaf_id).toBe(
                     liveLeaf,
                 );
@@ -1183,7 +1201,7 @@ test('extension transformations are not mistaken for model receipt; lost ack is 
             .toMatchObject({
                 state: 'managed',
                 connected: true,
-                capabilities: expect.arrayContaining(['pi.attachments.v2']),
+                capabilities: expect.arrayContaining(['pi.attachments.v3']),
             });
         await page.waitForTimeout(1_500);
         expect(provider.requests).toHaveLength(beforeLostAck + 1);

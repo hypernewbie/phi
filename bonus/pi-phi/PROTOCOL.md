@@ -81,8 +81,8 @@ Runtime identity binds `(generation, runtime_id, session_id)`:
 | `pi.reload.v1`    | Native `/reload` dispatch from an interactive editor |
 | `pi.skills.v1`    | On-demand skill list and skill invocation        |
 | `pi.syncboard.v1` | Direct Pi tool for the owning Phi Syncboard      |
-| `pi.attachments.v2` | Explicit user-triggered attachment prompt dispatch |
-| `pi.state.v1` | Read-only live identity and readiness refresh |
+| `pi.attachments.v3` | Explicit user-triggered attachment prompt dispatch |
+| `pi.state.v2` | Read-only live identity and readiness refresh |
 
 Context, Compact, and Reload negotiate independently on every Hello
 from checked host availability: `pi.context.v1` needs `getContextUsage`;
@@ -227,9 +227,9 @@ shared stream retains 16 KiB and two message slots for lifecycle traffic.
 
 ## Live state reads
 
-`pi.state.v1` lets Phi request a fresh snapshot instead of trusting the last
+`pi.state.v2` lets Phi request a fresh snapshot instead of trusting the last
 lifecycle event. It is advertised with attachment support. Phi sends
-`StateRequest` (field 23) with a correlating request ID. The extension reads
+`StateRequest` (field 25) with a correlating request ID. The extension reads
 live session, leaf, model, and readiness, then sends a normal `StateSnapshot`
 with that ID in field 13. A failed identity read sends no confirmation.
 The server applies the validated snapshot before releasing the waiter.
@@ -246,7 +246,7 @@ replayed. The composer responds locally before the background read completes.
 
 ## Attachment prompt dispatch
 
-`pi.attachments.v2` is advertised only when the provisioned absolute
+`pi.attachments.v3` is advertised only when the provisioned absolute
 `PHI_PI_ATTACHMENT_ROOT` is a checked directory and the public host exposes
 `sendUserMessage`, session identity, `isIdle`, and `hasPendingMessages`.
 Attachment readiness is independent of `pi.compact.v1`; it samples compact
@@ -254,11 +254,13 @@ activity and unresolved bridge work without requiring the Compact API.
 If any required facility is absent, the extension does not advertise this
 capability. Other capabilities and the ordinary Pi input path remain usable.
 
-Version 2 uses request field 24, acknowledgment field 26, and snapshot
-readiness field 14. Released Reload fields 22, 25, and 12 keep their meanings.
-The incompatible `pi.attachments.v1` review protocol is not negotiated or
-aliased to version 2. Mixed-version peers retain their other capabilities;
-new attachment sends stay unavailable until both peers support version 2.
+Version 3 uses request field 24, acknowledgment field 27, and snapshot
+readiness field 14. Released Reload fields 22, 25, and 12 and Syncboard
+request/response fields 26 and 23 keep their meanings. The incompatible
+`pi.attachments.v1`, `pi.attachments.v2`, and `pi.state.v1` review protocols
+are not negotiated or aliased. Live state reads require `pi.state.v2` at
+request field 25. Mixed-version peers retain their other capabilities;
+new attachment sends stay unavailable until both peers support version 3.
 
 Phi sends `AttachmentPromptRequest` (field 24) only after an explicit user
 Send action. It contains one complete user message: bounded text plus checked
@@ -286,7 +288,7 @@ prompt enters Pi's follow-up queue. One handler may be active per Pi process;
 request IDs are monotonic decimal values retained across reconnects. Duplicate
 or older IDs are refused, and reconnect never replays an operation.
 
-`AttachmentPromptAck` (field 26) echoes the request ID. `REFUSED` means a
+`AttachmentPromptAck` (field 27) echoes the request ID. `REFUSED` means a
 known refusal before `sendUserMessage`. `DISPATCHED` means the public
 `sendUserMessage(content, { expandPromptTemplates: false })` call returned
 normally and Phi received the matching acknowledgment. It does **not** prove
@@ -491,7 +493,7 @@ Other failures retry with bounded backoff on the same generation.
   and interactive modes: print runs advertise `pi.compact.v1`,
   `pi.context.v1`, `pi.lifecycle.v1`, `pi.models.v1`; interactive runs
   add `pi.history.v1` and advertise `pi.reload.v1` when the checked stock
-  editor baseline is available. They add `pi.attachments.v2` when the
+  editor baseline is available. They add `pi.attachments.v3` when the
   private handoff root and attachment host APIs are available.
 - The Reload desktop/mobile browser flow also passed on Pi 1.4.0 in
   isolated state. Other Pi versions and installed-release behavior with

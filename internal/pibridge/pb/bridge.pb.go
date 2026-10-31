@@ -1512,7 +1512,7 @@ type StateSnapshot struct {
 	// Optional Pi attachment readiness. It is independent of Compact APIs.
 	// Absence means unavailable, never idle.
 	AttachmentReadiness *AttachmentReadiness `protobuf:"bytes,14,opt,name=attachment_readiness,json=attachmentReadiness,proto3" json:"attachment_readiness,omitempty"`
-	// Correlates a live refresh requested with pi.state.v1. Empty on
+	// Correlates a live refresh requested with pi.state.v2. Empty on
 	// unsolicited lifecycle/telemetry snapshots and Hello baselines.
 	RequestId     string `protobuf:"bytes,13,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	unknownFields protoimpl.UnknownFields

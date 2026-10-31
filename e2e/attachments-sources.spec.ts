@@ -251,7 +251,7 @@ async function spawnPane(
         .toMatchObject({
             state: 'managed',
             connected: true,
-            capabilities: expect.arrayContaining(['pi.attachments.v2']),
+            capabilities: expect.arrayContaining(['pi.attachments.v3']),
         });
     return pane;
 }

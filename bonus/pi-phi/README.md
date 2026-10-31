@@ -116,7 +116,7 @@ refresh keeps it and says it may be out of date.
 
 ## Attachments
 
-A connected regular Pi pane with `pi.attachments.v2` can receive one explicit
+A connected regular Pi pane with `pi.attachments.v3` can receive one explicit
 attachment prompt from Phi. PNG/JPEG files become native Pi image content.
 Other files become a JSON-quoted private snapshot path that Pi's normal file
 tools can read. Unsupported image formats fail clearly; they are not sent as
@@ -129,7 +129,7 @@ checks the root, basename, file type, size, and SHA-256 before reading. Missing
 host APIs, an unsafe root, unknown image support, a busy/queued turn, active
 compaction, or changed session/model identity prevents dispatch.
 
-With `pi.state.v1`, Phi reads the live Pi context before freezing a new online
+With `pi.state.v2`, Phi reads the live Pi context before freezing a new online
 send. Idle extension metadata can change Pi's leaf without a session or model
 switch. An old lifecycle snapshot must not make a fresh send fail as `stale`.
 Already saved and offline sends keep their original target; they are never

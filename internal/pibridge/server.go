@@ -37,8 +37,8 @@ type Server struct {
 	skillsSeq        atomic.Uint64
 	invokeSkillSeq   atomic.Uint64
 	syncboardHandler SyncboardHandler
-	attachmentSeq  atomic.Uint64
-	stateSeq       atomic.Uint64
+	attachmentSeq    atomic.Uint64
+	stateSeq         atomic.Uint64
 	// compactSeq allocates monotonic server-side Compact request
 	// IDs. IDs are positive canonical decimal uint64 strings,
 	// never wrap, and are never reused or browser-supplied.
