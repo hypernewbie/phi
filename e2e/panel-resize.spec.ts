@@ -157,7 +157,8 @@ async function startResizeFixture(): Promise<PhiServer> {
                         session_id: '',
                         cwd: workspace,
                         workspace,
-                        title: `Tab ${index + 1}`,
+                        title:
+                            index === 0 ? 'Tab 1' : 'Long tab title '.repeat(8),
                     })),
                 ),
             );
@@ -204,6 +205,15 @@ async function startResizeFixture(): Promise<PhiServer> {
 
 test.beforeAll(async () => {
     phi = await startResizeFixture();
+    const response = await fetch(`${phi.url}/healthz`, {
+        signal: AbortSignal.timeout(5000),
+    });
+    const health = await response.text();
+    console.log(
+        `resize fixture ${JSON.stringify({ dir: phi.dir, url: phi.url, healthStatus: response.status, health })}`,
+    );
+    expect(response.ok).toBe(true);
+    expect(health.trim()).toBe('ok');
 });
 
 test.afterAll(async () => {
@@ -261,6 +271,7 @@ async function openResponsivePage(
     height: number,
     touch: boolean,
     captureTerminalState = false,
+    initialDrawerLeftWidth?: number,
 ) {
     const context = await browser.newContext({
         viewport: { width, height },
@@ -270,6 +281,16 @@ async function openResponsivePage(
         const page = await context.newPage();
         const smoke = captureTerminalState ? observeSmoke(page) : null;
         if (captureTerminalState) await captureTerminal(page);
+        if (initialDrawerLeftWidth !== undefined) {
+            await page.addInitScript(
+                (width) =>
+                    localStorage.setItem(
+                        'phi_drawer_left_width',
+                        String(width),
+                    ),
+                initialDrawerLeftWidth,
+            );
+        }
         await page.goto(phi!.url);
         await page
             .locator('#sidebar-drawer-resizer')
@@ -547,6 +568,7 @@ async function dispatchTouchPath(
     page: Page,
     points: Array<{ x: number; y: number }>,
     cancelAtEnd = false,
+    moveDelayMs = 0,
 ) {
     const session = await page.context().newCDPSession(page);
     let active = false;
@@ -561,6 +583,7 @@ async function dispatchTouchPath(
                 type: 'touchMove',
                 touchPoints: [{ ...point, id: 1 }],
             });
+            if (moveDelayMs > 0) await page.waitForTimeout(moveDelayMs);
         }
         await session.send('Input.dispatchTouchEvent', {
             type: cancelAtEnd ? 'touchCancel' : 'touchEnd',
@@ -1019,6 +1042,280 @@ async function resizeBothPanels(page: Page, touch: boolean) {
     }
 }
 
+async function assertDrawerEdgeTouch(
+    page: Page,
+    side: 'left' | 'right',
+    controlSelector: string,
+    xFraction: number,
+    delta: number,
+    expectedWidthDelta?: number,
+    expectedSaved?: string | null,
+) {
+    const handleId =
+        side === 'left' ? 'sidebar-drawer-resizer' : 'diff-drawer-resizer';
+    const panelId = side === 'left' ? 'sidebar-panel' : 'diff-panel';
+    const preferenceKey =
+        side === 'left' ? 'phi_drawer_left_width' : 'phi_drawer_right_width';
+    const control = page.locator(controlSelector).first();
+    await expect(control).toBeVisible();
+    await control.scrollIntoViewIfNeeded();
+
+    const start = await page.evaluate(
+        ({
+            handleId: id,
+            side: drawerSide,
+            selector,
+            fraction,
+            preference,
+        }) => {
+            const handle = document.getElementById(id);
+            const panel = document.getElementById(
+                drawerSide === 'left' ? 'sidebar-panel' : 'diff-panel',
+            );
+            const controlElement = document.querySelector(selector);
+            if (!handle || !panel || !controlElement)
+                throw new Error(`Missing drawer edge target: ${selector}`);
+
+            const handleRect = handle.getBoundingClientRect();
+            const controlRect = controlElement.getBoundingClientRect();
+            const state = window as unknown as {
+                __drawerEdgeEvents?: {
+                    type: string;
+                    target: string;
+                    pointerType: string;
+                }[];
+                __drawerEdgeEventsBound?: boolean;
+            };
+            if (!state.__drawerEdgeEventsBound) {
+                state.__drawerEdgeEventsBound = true;
+                state.__drawerEdgeEvents = [];
+                for (const type of [
+                    'pointerdown',
+                    'pointerup',
+                    'pointercancel',
+                    'click',
+                ]) {
+                    document.addEventListener(
+                        type,
+                        (event) => {
+                            const target = event.target as Element | null;
+                            const targetHandle = target?.closest(
+                                '.drawer-resize-handle',
+                            );
+                            const targetName =
+                                targetHandle?.id ||
+                                target?.id ||
+                                (typeof target?.className === 'string'
+                                    ? target.className
+                                    : target?.tagName || 'unknown');
+                            state.__drawerEdgeEvents?.push({
+                                type: event.type,
+                                target: targetName,
+                                pointerType:
+                                    'pointerType' in event
+                                        ? String(event.pointerType)
+                                        : '',
+                            });
+                        },
+                        true,
+                    );
+                }
+            }
+            state.__drawerEdgeEvents = [];
+
+            const snapshot = () => {
+                const currentControl = document.querySelector(selector);
+                const details = currentControl?.closest('details');
+                return {
+                    mode: panel.dataset.panelMode ?? null,
+                    panelOpen:
+                        drawerSide === 'left'
+                            ? panel.classList.contains('drawer-open')
+                            : !panel.classList.contains('hidden') &&
+                              panel.classList.contains('mobile-open'),
+                    selectedPane:
+                        document
+                            .querySelector('#tabs-container .tab.active')
+                            ?.getAttribute('data-pane-id') ?? null,
+                    activeDrawerPane:
+                        document
+                            .querySelector(
+                                '#drawer-tabs-body .hostname-dropdown-row.active',
+                            )
+                            ?.getAttribute('data-pane-id') ?? null,
+                    rows: Array.from(
+                        document.querySelectorAll(
+                            '#drawer-tabs-body .hostname-dropdown-row',
+                        ),
+                        (row) => ({
+                            paneId: (row as HTMLElement).dataset.paneId,
+                            closing: row.classList.contains(
+                                'tab-overflow-closing-row',
+                            ),
+                        }),
+                    ),
+                    detailsOpen: details?.open ?? null,
+                    activeDiffTab:
+                        document
+                            .querySelector('#diff-panel .diff-tab-btn.active')
+                            ?.getAttribute('data-tab') ?? null,
+                    sessionPage:
+                        document
+                            .querySelector('.session-page-label')
+                            ?.textContent?.trim() ?? null,
+                    toasts: Array.from(
+                        document.querySelectorAll('.toast-title'),
+                        (toast) => toast.textContent?.trim(),
+                    ).filter(Boolean),
+                };
+            };
+
+            return {
+                x: handleRect.left + handleRect.width * fraction,
+                y: controlRect.top + controlRect.height / 2,
+                handleLeft: handleRect.left,
+                handleRight: handleRect.right,
+                handleWidth: handleRect.width,
+                handleTop: handleRect.top,
+                handleBottom: handleRect.bottom,
+                controlLeft: controlRect.left,
+                controlRight: controlRect.right,
+                before: snapshot(),
+                saved: localStorage.getItem(preference),
+                width: panel.getBoundingClientRect().width,
+            };
+        },
+        {
+            handleId,
+            side,
+            selector: controlSelector,
+            fraction: xFraction,
+            preference: preferenceKey,
+        },
+    );
+    expect(start.handleWidth).toBe(24);
+    expect(start.x).toBeGreaterThanOrEqual(start.handleLeft);
+    expect(start.x).toBeLessThan(start.handleRight);
+    expect(start.y).toBeGreaterThanOrEqual(start.handleTop);
+    expect(start.y).toBeLessThan(start.handleBottom);
+    const points = Array.from({ length: delta === 0 ? 0 : 5 }, (_, index) => ({
+        x: start.x + (delta * (index + 1)) / 5,
+        y: start.y,
+    }));
+    const gap =
+        side === 'left'
+            ? start.handleLeft - start.controlRight
+            : start.controlLeft - start.handleRight;
+    console.log(
+        `drawer edge touch input ${JSON.stringify({ side, viewport: page.viewportSize(), controlSelector, xFraction, gap, start: { x: start.x, y: start.y }, delta })}`,
+    );
+    await dispatchTouchPath(page, [{ x: start.x, y: start.y }, ...points]);
+
+    const result = await page.evaluate(
+        ({
+            panelId: id,
+            handleId: resizeId,
+            side: drawerSide,
+            selector,
+            preference,
+        }) => {
+            const panel = document.getElementById(id)!;
+            const handle = document.getElementById(resizeId)!;
+            const controlElement = document.querySelector(selector);
+            const state = window as unknown as {
+                __drawerEdgeEvents: {
+                    type: string;
+                    target: string;
+                    pointerType: string;
+                }[];
+            };
+            const details = controlElement?.closest('details');
+            return {
+                events: state.__drawerEdgeEvents,
+                snapshot: {
+                    mode: panel.dataset.panelMode ?? null,
+                    panelOpen:
+                        drawerSide === 'left'
+                            ? panel.classList.contains('drawer-open')
+                            : !panel.classList.contains('hidden') &&
+                              panel.classList.contains('mobile-open'),
+                    selectedPane:
+                        document
+                            .querySelector('#tabs-container .tab.active')
+                            ?.getAttribute('data-pane-id') ?? null,
+                    activeDrawerPane:
+                        document
+                            .querySelector(
+                                '#drawer-tabs-body .hostname-dropdown-row.active',
+                            )
+                            ?.getAttribute('data-pane-id') ?? null,
+                    rows: Array.from(
+                        document.querySelectorAll(
+                            '#drawer-tabs-body .hostname-dropdown-row',
+                        ),
+                        (row) => ({
+                            paneId: (row as HTMLElement).dataset.paneId,
+                            closing: row.classList.contains(
+                                'tab-overflow-closing-row',
+                            ),
+                        }),
+                    ),
+                    detailsOpen: details?.open ?? null,
+                    activeDiffTab:
+                        document
+                            .querySelector('#diff-panel .diff-tab-btn.active')
+                            ?.getAttribute('data-tab') ?? null,
+                    sessionPage:
+                        document
+                            .querySelector('.session-page-label')
+                            ?.textContent?.trim() ?? null,
+                    toasts: Array.from(
+                        document.querySelectorAll('.toast-title'),
+                        (toast) => toast.textContent?.trim(),
+                    ).filter(Boolean),
+                },
+                saved: localStorage.getItem(preference),
+                width: panel.getBoundingClientRect().width,
+                dragging: handle.classList.contains('dragging'),
+                resizing: panel.classList.contains('resizing'),
+            };
+        },
+        {
+            panelId,
+            handleId,
+            side,
+            selector: controlSelector,
+            preference: preferenceKey,
+        },
+    );
+    const pointerDown = result.events.find(
+        (event) => event.type === 'pointerdown',
+    );
+    expect(pointerDown?.target).toBe(handleId);
+    expect(pointerDown?.pointerType).toBe('touch');
+    expect(result.snapshot).toEqual(start.before);
+    expect(result.snapshot.panelOpen).toBe(true);
+    expect(result.dragging).toBe(false);
+    expect(result.resizing).toBe(false);
+
+    const expectedDelta =
+        expectedWidthDelta ?? (side === 'left' ? delta : -delta);
+    const error = Math.abs(result.width - start.width - expectedDelta);
+    console.log(
+        `drawer edge touch result ${JSON.stringify({ side, controlSelector, xFraction, delta, width: result.width, saved: result.saved, error, pointerDown })}`,
+    );
+    if (expectedDelta === 0) {
+        expect(error).toBeLessThan(0.05);
+        expect(result.saved).toBe(expectedSaved ?? start.saved);
+    } else {
+        expect(error).toBeLessThan(1.5);
+        expect(result.saved).not.toBeNull();
+        expect(Math.abs(Number(result.saved) - result.width)).toBeLessThan(
+            0.05,
+        );
+    }
+}
+
 test('desktop docked handles stay inside 24px gutters and resize from both edges', async ({
     browser,
 }) => {
@@ -1082,6 +1379,436 @@ test('desktop docked handles stay inside 24px gutters and resize from both edges
             .toBe('none');
     } finally {
         await context.close();
+    }
+});
+
+test('drawer edge touch MVP does not close a tab', async ({ browser }) => {
+    test.setTimeout(180_000);
+    const gestures = [
+        { name: 'tap', delta: 0, moves: 0, delay: 0 },
+        { name: 'micro-drag', delta: -10, moves: 5, delay: 0 },
+        { name: 'slow-drag', delta: -100, moves: 20, delay: 30 },
+    ];
+
+    for (const gesture of gestures) {
+        const { context, page } = await openResponsivePage(
+            browser,
+            1360,
+            400,
+            true,
+        );
+        try {
+            await openDrawer(page, 'left');
+            const panel = page.locator('#sidebar-panel');
+            await expect(panel).toHaveAttribute('data-panel-mode', 'tabs');
+            const rows = page.locator(
+                '#drawer-tabs-body .hostname-dropdown-row',
+            );
+            await expect(rows).toHaveCount(2);
+            const closeButton = page
+                .locator('#drawer-tabs-body .hostname-dropdown-close-btn')
+                .first();
+            await expect(closeButton).toBeVisible();
+
+            const start = await page.evaluate(() => {
+                const handle = document.getElementById(
+                    'sidebar-drawer-resizer',
+                )!;
+                const button = document.querySelector(
+                    '#drawer-tabs-body .hostname-dropdown-close-btn',
+                )!;
+                const handleRect = handle.getBoundingClientRect();
+                const buttonRect = button.getBoundingClientRect();
+                const x = handleRect.left + handleRect.width * 0.05;
+                const y = buttonRect.top + buttonRect.height / 2;
+                const state = window as unknown as {
+                    __drawerEdgeEvents: { type: string; target: string }[];
+                };
+                state.__drawerEdgeEvents = [];
+                for (const type of [
+                    'pointerdown',
+                    'pointercancel',
+                    'pointerup',
+                    'click',
+                ]) {
+                    document.addEventListener(
+                        type,
+                        (event) => {
+                            const target = event.target as Element;
+                            state.__drawerEdgeEvents.push({
+                                type,
+                                target:
+                                    target.id ||
+                                    (typeof target.className === 'string'
+                                        ? target.className
+                                        : target.tagName),
+                            });
+                        },
+                        true,
+                    );
+                }
+                return {
+                    x,
+                    y,
+                    handleWidth: handleRect.width,
+                    buttonRight: buttonRect.right,
+                    handleLeft: handleRect.left,
+                    panelWidth: document
+                        .getElementById('sidebar-panel')!
+                        .getBoundingClientRect().width,
+                    saved: localStorage.getItem('phi_drawer_left_width'),
+                };
+            });
+            expect(start.handleWidth).toBe(24);
+            expect(start.x).toBeGreaterThanOrEqual(start.handleLeft);
+            expect(start.x).toBeLessThan(start.handleLeft + start.handleWidth);
+            const gap = start.handleLeft - start.buttonRight;
+            const points = Array.from(
+                { length: gesture.moves },
+                (_, index) => ({
+                    x: start.x + (gesture.delta * (index + 1)) / gesture.moves,
+                    y: start.y,
+                }),
+            );
+            console.log(
+                `drawer edge touch MVP ${JSON.stringify({
+                    gesture: gesture.name,
+                    viewport: page.viewportSize(),
+                    handleWidth: start.handleWidth,
+                    buttonHandleGap: gap,
+                    start: { x: start.x, y: start.y },
+                    pointerDelta: gesture.delta,
+                })}`,
+            );
+            await dispatchTouchPath(
+                page,
+                [{ x: start.x, y: start.y }, ...points],
+                false,
+                gesture.delay,
+            );
+
+            const result = await page.evaluate(() => {
+                const state = window as unknown as {
+                    __drawerEdgeEvents: { type: string; target: string }[];
+                };
+                const panel = document.getElementById('sidebar-panel')!;
+                const handle = document.getElementById(
+                    'sidebar-drawer-resizer',
+                )!;
+                return {
+                    events: state.__drawerEdgeEvents,
+                    panelWidth: panel.getBoundingClientRect().width,
+                    saved: localStorage.getItem('phi_drawer_left_width'),
+                    rows: Array.from(
+                        document.querySelectorAll(
+                            '#drawer-tabs-body .hostname-dropdown-row',
+                        ),
+                        (element) => ({
+                            paneId: (element as HTMLElement).dataset.paneId,
+                            closing: element.classList.contains(
+                                'tab-overflow-closing-row',
+                            ),
+                        }),
+                    ),
+                    closedTabToasts: Array.from(
+                        document.querySelectorAll('.toast-title'),
+                        (element) => element.textContent?.trim(),
+                    ).filter((title) => title === 'Tab closed'),
+                    drawerOpen: panel.classList.contains('drawer-open'),
+                    dragging: handle.classList.contains('dragging'),
+                    resizing: panel.classList.contains('resizing'),
+                };
+            });
+            console.log(
+                `drawer edge touch MVP result ${JSON.stringify({
+                    gesture: gesture.name,
+                    result,
+                    widthError:
+                        result.panelWidth - start.panelWidth - gesture.delta,
+                })}`,
+            );
+            expect(
+                result.events.find((event) => event.type === 'pointerdown')
+                    ?.target,
+            ).toBe('sidebar-drawer-resizer');
+            expect(result.rows.map((item) => item.paneId).sort()).toEqual([
+                't1',
+                't2',
+            ]);
+            expect(result.rows.some((item) => item.closing)).toBe(false);
+            expect(result.closedTabToasts).toEqual([]);
+            expect(result.drawerOpen).toBe(true);
+            expect(result.dragging).toBe(false);
+            expect(result.resizing).toBe(false);
+
+            if (gesture.delta === 0) {
+                expect(
+                    Math.abs(result.panelWidth - start.panelWidth),
+                ).toBeLessThan(0.05);
+                expect(result.saved).toBe(start.saved);
+            } else {
+                const error = Math.abs(
+                    result.panelWidth - start.panelWidth - gesture.delta,
+                );
+                expect(error).toBeLessThan(1.5);
+                expect(result.saved).not.toBeNull();
+                expect(
+                    Math.abs(Number(result.saved) - result.panelWidth),
+                ).toBeLessThan(0.05);
+            }
+        } finally {
+            await context.close();
+        }
+    }
+});
+
+test('drawer edge touch keeps tab-close targets usable across the handle', async ({
+    browser,
+}) => {
+    test.setTimeout(240_000);
+    for (const [width, height] of [
+        [1360, 400],
+        [390, 844],
+    ] as const) {
+        for (const xFraction of [0.05, 0.5, 0.95]) {
+            const { context, page } = await openResponsivePage(
+                browser,
+                width,
+                height,
+                true,
+            );
+            try {
+                await openDrawer(page, 'left');
+                await expect(page.locator('#sidebar-panel')).toHaveAttribute(
+                    'data-panel-mode',
+                    'tabs',
+                );
+                await expect(
+                    page.locator('#drawer-tabs-body .hostname-dropdown-row'),
+                ).toHaveCount(2);
+                const closeButton = page
+                    .locator('#drawer-tabs-body .hostname-dropdown-close-btn')
+                    .first();
+                await expect(closeButton).toBeVisible();
+
+                for (const delta of [0, -10, 10]) {
+                    await assertDrawerEdgeTouch(
+                        page,
+                        'left',
+                        '#drawer-tabs-body .hostname-dropdown-close-btn',
+                        xFraction,
+                        delta,
+                    );
+                }
+            } finally {
+                await context.close();
+            }
+        }
+    }
+});
+
+test('drawer edge touch leaves nearby controls and modes unchanged', async ({
+    browser,
+}) => {
+    test.setTimeout(240_000);
+    for (const [width, height] of [
+        [1360, 400],
+        [390, 844],
+    ] as const) {
+        const { context, page } = await openResponsivePage(
+            browser,
+            width,
+            height,
+            true,
+        );
+        try {
+            const panel = await openDrawer(page, 'left');
+            await expect(panel).toHaveAttribute('data-panel-mode', 'tabs');
+            await expect(page.locator('#drawer-back-to-tabs')).toBeHidden();
+
+            for (const selector of [
+                '#drawer-tabs-body .hostname-dropdown-row[data-pane-id="t1"] .hostname-dropdown-close-btn',
+                '#drawer-tabs-body .hostname-dropdown-row[data-pane-id="t2"] .hostname-dropdown-close-btn',
+                '#drawer-tabs-body .tab-overflow-workspace > summary',
+                '#drawer-tabs-body .tab-overflow-worktree > summary',
+                '#drawer-open-sessions',
+            ]) {
+                await assertDrawerEdgeTouch(page, 'left', selector, 0.05, 0);
+                await assertDrawerEdgeTouch(page, 'left', selector, 0.05, -10);
+                await assertDrawerEdgeTouch(page, 'left', selector, 0.05, 10);
+            }
+
+            await page.locator('#drawer-open-sessions').click();
+            await expect(panel).toHaveAttribute('data-panel-mode', 'sessions');
+            const backButton = page.locator('#drawer-back-to-tabs');
+            await expect(backButton).toBeVisible();
+            await assertDrawerEdgeTouch(
+                page,
+                'left',
+                '#drawer-back-to-tabs',
+                0.05,
+                0,
+            );
+            await assertDrawerEdgeTouch(
+                page,
+                'left',
+                '#drawer-back-to-tabs',
+                0.05,
+                -10,
+            );
+        } finally {
+            await context.close();
+        }
+    }
+});
+
+test('drawer edge touch respects minimum width and keeps tab controls usable', async ({
+    browser,
+}) => {
+    for (const [width, height, savedWidth, expectedWidth] of [
+        [390, 400, 160, 180],
+        [274, 400, 226, 226],
+        [390, 844, undefined, 342],
+    ] as const) {
+        const { context, page } = await openResponsivePage(
+            browser,
+            width,
+            height,
+            true,
+            false,
+            savedWidth,
+        );
+        try {
+            const panel = await openDrawer(page, 'left');
+            await expect(panel).toHaveAttribute('data-panel-mode', 'tabs');
+            expect(
+                await panel.evaluate((el) => el.getBoundingClientRect().width),
+            ).toBeCloseTo(expectedWidth, 1);
+            const layout = await page.evaluate(() => {
+                const body = document.getElementById('drawer-tabs-body')!;
+                const rect = body.getBoundingClientRect();
+                const contentRight =
+                    rect.right -
+                    Number.parseFloat(getComputedStyle(body).paddingRight);
+                return {
+                    overflow: document.documentElement.scrollWidth - innerWidth,
+                    contentRight,
+                    scrollHeight: body.scrollHeight,
+                    clientHeight: body.clientHeight,
+                    controls: Array.from(
+                        body.querySelectorAll(
+                            '.hostname-dropdown-select-btn, .hostname-dropdown-close-btn, .tab-overflow-workspace > summary, .tab-overflow-worktree > summary',
+                        ),
+                        (element) => ({
+                            right: element.getBoundingClientRect().right,
+                            visible:
+                                getComputedStyle(element).display !== 'none',
+                        }),
+                    ).filter((control) => control.visible),
+                    titles: Array.from(
+                        body.querySelectorAll('.hostname-dropdown-title'),
+                        (title) => ({
+                            width: (title as HTMLElement).clientWidth,
+                            scrollWidth: (title as HTMLElement).scrollWidth,
+                        }),
+                    ),
+                };
+            });
+            expect(layout.overflow).toBeLessThanOrEqual(0);
+            expect(
+                layout.controls.every(
+                    (control) => control.right <= layout.contentRight + 1,
+                ),
+            ).toBe(true);
+            expect(
+                layout.titles.every(
+                    (title) => title.scrollWidth <= title.width + 1,
+                ),
+            ).toBe(true);
+
+            if (savedWidth === 160) {
+                expect(layout.scrollHeight).toBeGreaterThan(
+                    layout.clientHeight,
+                );
+                const body = page.locator('#drawer-tabs-body');
+                const beforeWidth = await panel.evaluate(
+                    (el) => el.getBoundingClientRect().width,
+                );
+                const beforeActive = await page
+                    .locator('#tabs-container .tab.active')
+                    .getAttribute('data-pane-id');
+                const rect = await body.boundingBox();
+                expect(rect).not.toBeNull();
+                await body.evaluate((el) => {
+                    el.scrollTop = 0;
+                });
+                await dispatchTouchPath(page, [
+                    {
+                        x: rect!.x + rect!.width * 0.45,
+                        y: rect!.y + rect!.height * 0.8,
+                    },
+                    {
+                        x: rect!.x + rect!.width * 0.45,
+                        y: rect!.y + rect!.height * 0.55,
+                    },
+                    {
+                        x: rect!.x + rect!.width * 0.45,
+                        y: rect!.y + rect!.height * 0.3,
+                    },
+                ]);
+                await expect
+                    .poll(() => body.evaluate((el) => el.scrollTop))
+                    .toBeGreaterThan(0);
+                expect(
+                    await panel.evaluate(
+                        (el) => el.getBoundingClientRect().width,
+                    ),
+                ).toBe(beforeWidth);
+                await expect(
+                    page.locator('#tabs-container .tab.active'),
+                ).toHaveAttribute('data-pane-id', beforeActive!);
+                await assertDrawerEdgeTouch(
+                    page,
+                    'left',
+                    '#drawer-tabs-body .hostname-dropdown-close-btn',
+                    0.05,
+                    -10,
+                    0,
+                    '170',
+                );
+                await assertDrawerEdgeTouch(
+                    page,
+                    'left',
+                    '#drawer-tabs-body .hostname-dropdown-close-btn',
+                    0.05,
+                    10,
+                );
+            }
+
+            if (savedWidth === undefined) {
+                const t2 = page.locator(
+                    '#drawer-tabs-body .hostname-dropdown-row[data-pane-id="t2"]',
+                );
+                await t2.locator('.hostname-dropdown-close-btn').click();
+                await expect(t2).toHaveClass(/tab-overflow-closing-row/);
+                await expect(
+                    page.locator(
+                        '#drawer-tabs-body .hostname-dropdown-row.tab-overflow-closing-row',
+                    ),
+                ).toHaveCount(1);
+                const undo = t2.locator('.hostname-dropdown-close-btn');
+                await expect(undo).toHaveAttribute('title', 'Undo close');
+                await undo.click();
+                await expect(t2).not.toHaveClass(/tab-overflow-closing-row/);
+                await openDrawer(page, 'left');
+                await t2.locator('.hostname-dropdown-select-btn').click();
+                await expect(
+                    page.locator('#tabs-container .tab.active'),
+                ).toHaveAttribute('data-pane-id', 't2');
+            }
+        } finally {
+            await context.close();
+        }
     }
 });
 
@@ -1264,8 +1991,24 @@ for (const touch of [false, true]) {
             : await openDesktopPage(browser);
         try {
             await openPiSessions(page);
+            if (touch) {
+                await page.locator('#drawer-back-to-tabs').click();
+                await expect(page.locator('#sidebar-panel')).toHaveAttribute(
+                    'data-panel-mode',
+                    'tabs',
+                );
+            }
             await context.setOffline(true);
             try {
+                if (touch) {
+                    await assertDrawerEdgeTouch(
+                        page,
+                        'left',
+                        '#drawer-tabs-body .hostname-dropdown-close-btn',
+                        0.05,
+                        -10,
+                    );
+                }
                 await resizeBothPanels(page, touch);
                 expect(
                     await page.evaluate(async () => {
