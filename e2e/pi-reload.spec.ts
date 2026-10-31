@@ -5,6 +5,7 @@ import {
     type Page,
 } from '@playwright/test';
 import { startPhi } from './_server.js';
+import { isCancelledWorktreeRead } from './_session-requests.js';
 import {
     COMPACT_SESSION_ID,
     clickReloadDesktop,
@@ -53,6 +54,7 @@ async function watchPage(page: Page, serverOrigin: string) {
     });
     page.on('pageerror', (error) => pageErrors.push(error.message));
     page.on('requestfailed', (request) => {
+        if (isCancelledWorktreeRead(request, serverOrigin)) return;
         const url = new URL(request.url());
         if (url.origin === serverOrigin) {
             localFailures.push(
