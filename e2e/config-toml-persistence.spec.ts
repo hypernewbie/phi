@@ -6,6 +6,7 @@ import {
     type Request,
 } from '@playwright/test';
 import { startPhi } from './_server.js';
+import { isCancelledBackgroundRead } from './_session-requests.js';
 
 function isThemeSave(request: Request): boolean {
     const url = new URL(request.url());
@@ -139,11 +140,12 @@ async function runContext(browser: Browser, mobile: boolean): Promise<void> {
         page.on('console', (message) => {
             if (message.type() === 'error') consoleErrors.push(message.text());
         });
-        page.on('requestfailed', (request) =>
+        page.on('requestfailed', (request) => {
+            if (isCancelledBackgroundRead(request, phi.url)) return;
             failedRequests.push(
                 `${request.url()} ${request.failure()?.errorText}`,
-            ),
-        );
+            );
+        });
         page.on('response', (response) => {
             if (response.status() >= 400)
                 failedRequests.push(`${response.status()} ${response.url()}`);

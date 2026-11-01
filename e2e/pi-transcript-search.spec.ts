@@ -7,6 +7,7 @@ import {
     type Page,
 } from '@playwright/test';
 import { startPhi } from './_server.js';
+import { isCancelledBackgroundRead } from './_session-requests.js';
 import { startSkillProvider } from './_pi-skill-provider.js';
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -89,14 +90,9 @@ function monitorPage(page: Page, baseUrl: string) {
         if (request.resourceType() === 'websocket') return;
         const url = new URL(request.url());
         const error = request.failure()?.errorText ?? 'failed';
-        // The app supersedes an in-flight worktree poll with a newer poll;
-        // the older GET can be aborted after the server has already answered.
-        if (
-            request.method() === 'GET' &&
-            url.pathname === '/api/git/worktree-dirty' &&
-            error === 'net::ERR_ABORTED'
-        )
-            return;
+        // The app supersedes in-flight worktree and session-list reads with
+        // newer ones; the older GET is aborted after the server answered.
+        if (isCancelledBackgroundRead(request, baseUrl)) return;
         if (
             error === 'net::ERR_ABORTED' &&
             isSupersededTranscriptQuery(
