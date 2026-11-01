@@ -169,17 +169,20 @@ describe('Single-Tab Embedded Backend Switching', () => {
         expect(exportClicks).toBe(1);
     });
 
-    it('Test 1b: dispose() releases the background poll intervals', () => {
+    it('Test 1b: dispose() releases the background poll timers', () => {
         app = new App();
         const { idlePollTimer, cpuPollTimer } = app.tabManager;
         expect(idlePollTimer).not.toBeNull();
         expect(cpuPollTimer).not.toBeNull();
 
         const clear = vi.spyOn(globalThis, 'clearInterval');
+        const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
         app.tabManager.dispose();
 
         expect(clear).toHaveBeenCalledWith(idlePollTimer);
-        expect(clear).toHaveBeenCalledWith(cpuPollTimer);
+        // The CPU poll is a self-scheduling chain, so its handle is the turn
+        // that is currently waiting, not an interval.
+        expect(clearTimeoutSpy).toHaveBeenCalledWith(cpuPollTimer);
         expect(app.tabManager.idlePollTimer).toBeNull();
         expect(app.tabManager.cpuPollTimer).toBeNull();
     });
