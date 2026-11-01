@@ -2,10 +2,16 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
-## Unreleased
+## v0.31.0 — 2026-11-01
+
+### Added
+- **Open with Psi for Pi** (`1aa61e86`). Right-click on Pi sessions, coder tab, empty quick launch, or new session to launch with Psi (`psi`), a Go minimal Pi-compatible runner with independent lifecycle while preserving session list, status glyphs, and title syncing.
+- **Git drawer management** (`427ad24d`). Safe Pull, Push, and staged-only Commit directly from the Git drawer.
+- **Session search in chat history** (`e6df31ff`). Search active session chat history.
 
 ### Changed
 - Configuration now lives in `~/.phi/config.toml`; legacy JSON is read-only fallback and no-op saves preserve user comments and formatting.
+- Primary TOML config reads are cached keyed by path plus file identity.
 
 ## v0.26.0 — 2026-10-25
 
