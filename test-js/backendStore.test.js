@@ -311,6 +311,9 @@ describe('Half-Phase 3A: BackendStore & Terminal Snapshot Write-Through', () => 
             getActiveStore: () => store,
         };
         const tm = new TabManager(fakeApp);
+        // This case exercises state capture only; stop the polls so no
+        // interval outlives the jsdom environment.
+        tm.dispose();
         const store = new BackendStore('srv-1');
 
         // Populate open tabs

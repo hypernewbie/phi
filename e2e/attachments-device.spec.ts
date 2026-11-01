@@ -163,7 +163,7 @@ async function startAttachmentPhi() {
             writeFileSync(
                 join(extensions, 'attachment-boundary-fixture.js'),
                 `module.exports = (pi) => {\n` +
-                    `  pi.registerCommand('attachment-metadata-fixture', { description: 'Append harmless fixture metadata', handler: async (_args, ctx) => { pi.appendEntry('attachment-fixture-state', { enabled: true }); require('node:fs').writeFileSync(${JSON.stringify(join(fixtures, 'metadata-leaf'))}, ctx.sessionManager.getLeafId()); } });\n` +
+                    `  pi.registerCommand('attachment-metadata-fixture', { description: 'Append harmless fixture metadata', handler: async (_args, ctx) => { pi.appendEntry('attachment-fixture-state', { enabled: true }); const fs = require('node:fs'), target = ${JSON.stringify(join(fixtures, 'metadata-leaf'))}, staging = target + '.tmp'; fs.writeFileSync(staging, ctx.sessionManager.getLeafId()); fs.renameSync(staging, target); } });\n` +
                     `  pi.on('input', (event) => event.text.includes('${CONSUME_MARKER}') ? { action: 'handled' } : undefined);\n` +
                     `  pi.on('context', (event) => {\n` +
                     `    if (!event.messages.some((message) => message.role === 'user' && JSON.stringify(message.content).includes('${STRIP_MARKER}'))) return;\n` +

@@ -164,6 +164,7 @@ it.each(['success', 'rejection'])(
                 null,
                 null,
                 { managed: true },
+                { piMode: undefined },
             );
         } else expect(ctx.app.showToast).toHaveBeenCalledOnce();
     },

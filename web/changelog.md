@@ -2,6 +2,8 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## Unreleased
+
 ## v0.31.0 — 2026-11-01
 
 ### Added

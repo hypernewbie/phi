@@ -207,6 +207,13 @@ const MOVED_PRESET_VALUES = new Set([
     '/reload\r',
 ]);
 
+// Identity of a preset-row control across a full rebuild. Class plus title,
+// not text: compact viewports rewrite the visible label. Both the capture and
+// the restore must agree on this, so it lives in one place.
+function presetFocusSignature(el) {
+    return `${el.className}\u0000${el.title || ''}`;
+}
+
 // Pi thinking vocabulary, in display order. `max` is a distinct level
 // from `xhigh` in the bridge protocol; keep both.
 const PI_BRIDGE_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -905,12 +912,26 @@ export class TabManager {
         // Initialise the 1-second background visual idle and prompt detection loop.
         // Also poll CPU stats independently so a stats fetch failure cannot
         // break the idle/notification path (CPU is decorative, never load-bearing).
-        setInterval(() => {
+        // Handles are kept so dispose() can stop them (jsdom teardown in tests).
+        this.idlePollTimer = setInterval(() => {
             this.pollTerminalIdleAndNotifications();
         }, 1000);
-        setInterval(() => {
+        this.cpuPollTimer = setInterval(() => {
             this.pollSystemCPU();
         }, 2000);
+    }
+
+    /**
+     * Stop the background polls armed by the constructor. The page creates one
+     * TabManager for its whole lifetime, so production never calls this; test
+     * harnesses do, because an interval still armed after the jsdom environment
+     * is torn down fires against a missing `document` and fails the next spec.
+     */
+    dispose() {
+        clearInterval(this.idlePollTimer);
+        clearInterval(this.cpuPollTimer);
+        this.idlePollTimer = null;
+        this.cpuPollTimer = null;
     }
 
     /**
@@ -7662,6 +7683,7 @@ export class TabManager {
     _renderPiRpcPresets() {
         if (!this.presetsContainer) return;
         const activeTab = this.getActiveTab();
+        const presetFocus = this._presetFocusKey();
         this.presetsContainer.replaceChildren();
         if (activeTab?.coder !== 'pi-rpc') {
             this.presetsContainer.classList.add('hidden');
@@ -7833,6 +7855,7 @@ export class TabManager {
         document
             .querySelectorAll('.model-presets-dropup:not(.hidden)')
             .forEach((d) => this._syncDropupOffset(d));
+        this._restorePresetFocus(presetFocus);
     }
 
     switchTab(paneId, { userInitiated = false } = {}) {
@@ -15568,6 +15591,33 @@ export class TabManager {
         }
     }
 
+    // Every bridge frame and coder switch rebuilds the preset row from
+    // scratch, which used to drop keyboard focus to <body>: the focused button
+    // was removed, so the next Enter went nowhere. Capture the focused
+    // control before the rebuild and hand focus back to its replacement.
+    _presetFocusKey() {
+        const active = document.activeElement;
+        if (!active || !active.classList?.contains('preset-btn')) return null;
+        const signature = presetFocusSignature(active);
+        const peers = [...document.querySelectorAll('.preset-btn')].filter(
+            (el) => presetFocusSignature(el) === signature,
+        );
+        const index = peers.indexOf(active);
+        return index < 0 ? null : { signature, index };
+    }
+
+    _restorePresetFocus(key) {
+        if (!key) return;
+        // Only recover focus the rebuild actually lost. Focus that moved on to
+        // a live element belongs to the user.
+        if (document.activeElement && document.activeElement !== document.body)
+            return;
+        const match = [...document.querySelectorAll('.preset-btn')].filter(
+            (el) => presetFocusSignature(el) === key.signature,
+        )[key.index];
+        match?.focus({ preventScroll: true });
+    }
+
     renderPresets(coderId, { refreshQuickCommands = true } = {}) {
         const activeTab = this.getActiveTab();
         if (activeTab?.coder === 'pi') {
@@ -15609,6 +15659,7 @@ export class TabManager {
             if (!this._piBridgeThinkingEligible(activeTab))
                 this._invalidatePiBridgeThinking(activeTab);
         }
+        const presetFocus = this._presetFocusKey();
         this.presetsContainer.innerHTML = '';
         // A previous compact render may have parked chips with the input
         // controls; drop them so this render owns the placement.
@@ -15963,6 +16014,7 @@ export class TabManager {
         // Measured last: the chips above change the composer height, and an
         // open menu must clear the row it was opened over.
         this._syncOpenDropups();
+        this._restorePresetFocus(presetFocus);
     }
 
     _syncOpenDropups() {

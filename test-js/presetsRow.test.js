@@ -593,3 +593,54 @@ describe('compact presets row', () => {
         }
     });
 });
+
+// A bridge frame repaints the row. The focused control must survive the
+// rebuild, otherwise keyboard users lose their place mid-interaction.
+describe('presets row focus across a repaint', () => {
+    const setWidth = (width) =>
+        Object.defineProperty(window, 'innerWidth', {
+            value: width,
+            configurable: true,
+        });
+    const cmdsButton = (tm) =>
+        [...tm.presetsContainer.querySelectorAll('.preset-btn')].find(
+            (btn) => btn.title === 'Open quick commands',
+        );
+    const modelsButton = (tm) =>
+        tm.presetsContainer.querySelector(
+            '.model-trigger-btn[title="Select the model for this session"]',
+        );
+
+    it('restores focus to the rebuilt trigger', () => {
+        setWidth(1440);
+        const tm = makeTm();
+        tm.renderPresets('pi');
+        const before = cmdsButton(tm);
+        before.focus();
+        expect(document.activeElement).toBe(before);
+
+        tm.renderPresets('pi');
+        const after = cmdsButton(tm);
+        expect(after).not.toBe(before);
+        expect(document.activeElement).toBe(after);
+    });
+
+    it('restores focus after the compact row reparents its controls', () => {
+        setWidth(390);
+        const tm = makeTm();
+        tm.renderPresets('pi');
+        const before = modelsButton(tm);
+        before.focus();
+
+        // Compact rendering rewrites labels and moves the chips into the
+        // composer row, so the replacement is a different node in a
+        // different place.
+        tm.renderPresets('pi');
+        const after = modelsButton(tm);
+        expect(after).not.toBe(before);
+        expect(after.getAttribute('aria-label')).toBe(
+            'Select the model for this session',
+        );
+        expect(document.activeElement).toBe(after);
+    });
+});

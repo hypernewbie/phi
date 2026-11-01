@@ -183,6 +183,8 @@ test('M1 notifications drawer caps compact popups and dismisses locally', async 
             });
             page.on('requestfailed', (requestInfo) => {
                 if (isCancelledWorktreeRead(requestInfo, allowedOrigin)) return;
+                if (isCancelledSessionListRead(requestInfo, allowedOrigin))
+                    return;
                 failedRequests.push(
                     `${requestInfo.method()} ${requestInfo.url()}: ${requestInfo.failure()?.errorText || 'failed'}`,
                 );
