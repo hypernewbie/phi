@@ -231,6 +231,11 @@ type retentionSeg struct {
 	raw     *os.File
 	rsz     *os.File
 	resizes []ResizeMarker
+	// dirty means the files can hold bytes past the admitted lengths:
+	// a write or a later commit step failed. It says nothing about
+	// durability. A clean segment needs no tail repair before the next
+	// commit writes at the admitted end.
+	dirty bool
 }
 
 // retentionFaults injects one-shot failures at each commit boundary for
@@ -246,6 +251,9 @@ type retentionFaults struct {
 	// assert that a flush synced every segment the manifest names.
 	rawSyncs int
 	rszSyncs int
+	// truncates counts tail repairs, so a test can assert that a clean
+	// commit never truncates.
+	truncates int
 }
 
 type stagedKind byte
@@ -1420,8 +1428,13 @@ type commitInput struct {
 // sync makes it durable. On a post-rename directory-sync failure the
 // staged transaction is retained as pending and the caller must retry.
 func (g *retentionGroup) commit(st *stagedCommit, in commitInput) error {
-	if err := g.truncateTails(); err != nil {
-		return err
+	// A failed attempt can leave bytes past the admitted end, and only a
+	// repair removes them. The common case is a clean tail: skipping the
+	// repair keeps two ftruncate calls out of every streamed chunk.
+	if cur := &g.segs[len(g.segs)-1]; cur.dirty {
+		if err := g.truncateTails(); err != nil {
+			return err
+		}
 	}
 	fail := func(err error) error {
 		if st.newRaw != nil {
@@ -1475,6 +1488,10 @@ func (g *retentionGroup) commit(st *stagedCommit, in commitInput) error {
 		}
 	} else {
 		cur := &g.segs[len(g.segs)-1]
+		// Marked before any write in this branch: a short write, a sync
+		// failure, or a manifest failure must all leave the next commit
+		// repairing the tail. publish clears it once the bytes are admitted.
+		cur.dirty = true
 		curBase := filepath.Join(g.dir, retentionSegBase(cur.gen))
 		if len(in.raw) > 0 {
 			if cur.raw == nil {
@@ -1631,6 +1648,7 @@ func (g *retentionGroup) commit(st *stagedCommit, in commitInput) error {
 // truncateTails removes owned uncommitted tails left by a failed attempt
 // before staging again. Committed bytes are never truncated.
 func (g *retentionGroup) truncateTails() error {
+	g.faults.truncates++
 	cur := &g.segs[len(g.segs)-1]
 	if cur.raw != nil {
 		if err := cur.raw.Truncate(int64(cur.rawLen)); err != nil {
@@ -1642,6 +1660,7 @@ func (g *retentionGroup) truncateTails() error {
 			return err
 		}
 	}
+	cur.dirty = false
 	return nil
 }
 
@@ -1691,6 +1710,8 @@ func (g *retentionGroup) publish(st *stagedCommit) {
 			cur.rszCount++
 			cur.resizes = append(cur.resizes, st.marker)
 		}
+		// Admitted lengths now match the files: no tail repair is owed.
+		cur.dirty = false
 	}
 	if st.kind == stagedResize {
 		g.nextOrdinal++

@@ -1045,3 +1045,122 @@ func TestGitAPIRequestBoundaries(t *testing.T) {
 		})
 	}
 }
+
+// gitOperationMarkers is the fixed set of in-progress operation markers the
+// precondition checks. Each one lives in the per-worktree Git directory.
+var gitOperationMarkers = []string{
+	"MERGE_HEAD",
+	"CHERRY_PICK_HEAD",
+	"REVERT_HEAD",
+	"rebase-apply",
+	"rebase-merge",
+	"sequencer",
+}
+
+// TestGitMutationPreconditionMarkers checks the direct-stat marker probe
+// against Git's own path resolution. A marker written by Git must block the
+// action with the existing reason, and a marker in one worktree must not
+// block another worktree sharing the same common directory.
+func TestGitMutationPreconditionMarkers(t *testing.T) {
+	fixture := newGitActionFixture(t)
+	side := filepath.Join(filepath.Dir(fixture.project), "side")
+	gitFixtureRun(t, fixture, fixture.project, "worktree", "add", "-b", "side", side)
+
+	mainRepo := inspectGitRepositoryForTest(t, fixture, fixture.project)
+	sideRepo := inspectGitRepositoryForTest(t, fixture, side)
+	if mainRepo.gitDir == sideRepo.gitDir {
+		t.Fatalf("worktrees share a Git directory: %s", mainRepo.gitDir)
+	}
+	if mainRepo.commonDir != sideRepo.commonDir {
+		t.Fatalf("worktrees do not share a common directory: %s vs %s", mainRepo.commonDir, sideRepo.commonDir)
+	}
+	if mainRepo.gitDir != mainRepo.commonDir {
+		t.Fatalf("ordinary repository Git directory %q differs from its common directory %q", mainRepo.gitDir, mainRepo.commonDir)
+	}
+	// The linked worktree keeps its markers under the main .git directory,
+	// so a commonDir join would silently miss every one of them.
+	if !strings.HasPrefix(sideRepo.gitDir, filepath.Join(mainRepo.commonDir, "worktrees")+string(filepath.Separator)) {
+		t.Fatalf("linked worktree Git directory %q is not under %q/worktrees", sideRepo.gitDir, mainRepo.commonDir)
+	}
+
+	for _, repo := range []*gitActionRepository{mainRepo, sideRepo} {
+		for _, marker := range gitOperationMarkers {
+			want := filepath.Join(repo.gitDir, marker)
+			resolved := outputLine(gitFixtureRun(t, fixture, repo.root, "rev-parse", "--path-format=absolute", "--git-path", marker))
+			if resolved != want {
+				t.Fatalf("%s: git resolves %s to %q, direct join gives %q", repo.root, marker, resolved, want)
+			}
+
+			reason, apiErr := gitMutationPrecondition(t.Context(), repo, "Commit")
+			if apiErr != nil {
+				t.Fatalf("%s: precondition before %s: %v", repo.root, marker, apiErr)
+			}
+			if reason != "" {
+				t.Fatalf("%s: precondition without %s reported %q", repo.root, marker, reason)
+			}
+
+			if err := os.WriteFile(want, []byte("in-progress\n"), 0644); err != nil {
+				t.Fatalf("write %s marker: %v", marker, err)
+			}
+			reason, apiErr = gitMutationPrecondition(t.Context(), repo, "Commit")
+			if apiErr != nil {
+				t.Fatalf("%s: precondition with %s: %v", repo.root, marker, apiErr)
+			}
+			if want := "Finish the current Git operation before Commit."; reason != want {
+				t.Fatalf("%s: %s marker reason=%q want=%q", repo.root, marker, reason, want)
+			}
+
+			// The other worktree must stay usable while this one is mid-operation.
+			other := mainRepo
+			if repo == mainRepo {
+				other = sideRepo
+			}
+			if otherReason, otherErr := gitMutationPrecondition(t.Context(), other, "Commit"); otherErr != nil {
+				t.Fatalf("%s: precondition with %s in the other worktree: %v", other.root, marker, otherErr)
+			} else if otherReason != "" {
+				t.Fatalf("%s: %s marker in %s blocked an unrelated worktree", other.root, marker, repo.root)
+			}
+
+			if err := os.Remove(want); err != nil {
+				t.Fatalf("remove %s marker: %v", marker, err)
+			}
+		}
+	}
+
+	t.Run("unresolved directory", func(t *testing.T) {
+		repo, _, apiErr := inspectGitRepository(t.Context(), fixture.project)
+		if apiErr != nil {
+			t.Fatalf("inspect repository: %v", apiErr)
+		}
+		for _, gitDir := range []string{"", ".git"} {
+			repo.gitDir = gitDir
+			if reason, apiErr := gitMutationPrecondition(t.Context(), repo, "Commit"); apiErr == nil || apiErr.status != http.StatusInternalServerError || reason != "" {
+				t.Fatalf("unresolved Git directory %q: reason=%q err=%v", gitDir, reason, apiErr)
+			}
+		}
+	})
+
+	t.Run("canceled request", func(t *testing.T) {
+		repo, _, apiErr := inspectGitRepository(t.Context(), fixture.project)
+		if apiErr != nil {
+			t.Fatalf("inspect repository: %v", apiErr)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		if reason, apiErr := gitMutationPrecondition(ctx, repo, "Commit"); apiErr == nil || reason != "" {
+			t.Fatalf("canceled request: reason=%q err=%v", reason, apiErr)
+		}
+	})
+}
+
+func inspectGitRepositoryForTest(t *testing.T, fixture *gitActionFixture, dir string) *gitActionRepository {
+	t.Helper()
+	repo, notRepo, err := inspectGitRepository(t.Context(), dir)
+	if err != nil {
+		t.Fatalf("inspect %s: %v", dir, err)
+	}
+	if notRepo || repo == nil || repo.bare {
+		t.Fatalf("%s is not a usable working tree: notRepo=%t repo=%+v", dir, notRepo, repo)
+	}
+	return repo
+}
