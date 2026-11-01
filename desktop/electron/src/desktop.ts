@@ -1911,6 +1911,26 @@ export class DesktopHost {
         continue;
       }
       const profileId = profile.id;
+      // The page reports its hostname/accent on its own title event, which
+      // can arrive while the document is still loading — executeRendererRead
+      // drops reads then, so that observation is lost. Retry on the poll
+      // cadence: without an accent the ACTIVE entry has no colour of its own
+      // and the rail paints it with the transparent root token.
+      if (!this.observedIdentity.has(profileId)) {
+        void this.observeProfileIdentity(view, profile.origin).then(
+          (identity) => {
+            if (
+              identity === null ||
+              !this.isCurrentWindowSession(win, generation)
+            )
+              return;
+            this.pushRailState();
+            if (ctrl.state().activeId !== profileId) return;
+            this.refreshWindowTitle();
+            this.pushActiveServer();
+          },
+        );
+      }
       void this.executeRendererRead<{
         cpu?: unknown;
         activity?: unknown;
