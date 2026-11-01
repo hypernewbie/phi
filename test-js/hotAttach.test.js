@@ -872,7 +872,9 @@ describe('checkpoint upload', () => {
     it('leaves a snapshot behind during output that never goes quiet', () => {
         stubTerminalGlobal();
         const tm = makeTm();
-        const upload = vi.spyOn(tm, '_uploadCheckpoint').mockImplementation(() => {});
+        const upload = vi
+            .spyOn(tm, '_uploadCheckpoint')
+            .mockImplementation(() => {});
         vi.useFakeTimers();
         const originalMatchMedia = window.matchMedia;
         window.matchMedia = (query) => ({
