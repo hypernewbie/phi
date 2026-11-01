@@ -2324,7 +2324,6 @@ export class App {
                     const ls = readDesktopAppearance(this.scope || captureAppearanceScope());
                     // Broadcasts are hints, not authoritative server inheritance.
                     this.ingestAppearance({});
-                    void this.mobileAppearanceStore?.refreshInheritance();
                     this.mobileScrollbackRows =
                         Number(ls?.mobile_scrollback_rows) || 0;
                     this.hostnameOverride = ls?.hostname_override || '';

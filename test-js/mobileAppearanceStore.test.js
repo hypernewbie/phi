@@ -655,23 +655,168 @@ it('ignores reordered GET data but detects a server reset relative to probe star
     expect(f.store.resetDetected).toBe(true);
 });
 
-it('backs off failed reads at 5, 10, 20 and 30 seconds, then resets on success', async () => {
+it('performs no recurring reads after success, error, or late completion', async () => {
     const f = fixture();
     await f.store.sync();
-    f.fetch.mockRejectedValue(new TypeError('offline'));
     await f.store.refresh();
-    let calls = 1;
-    for (const delay of [5000, 10000, 20000, 30000]) {
-        await vi.advanceTimersByTimeAsync(delay - 1);
-        expect(f.fetch).toHaveBeenCalledTimes(calls);
-        await vi.advanceTimersByTimeAsync(1);
-        expect(f.fetch).toHaveBeenCalledTimes(++calls);
+    await vi.advanceTimersByTimeAsync(0);
+    const gets = () =>
+        f.fetch.mock.calls.filter(([, init]) => init?.method !== 'POST').length;
+    expect(gets()).toBe(1);
+    expect(f.inheritanceFetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(gets()).toBe(1);
+    expect(f.inheritanceFetch).toHaveBeenCalledTimes(1);
+    f.fetch.mockRejectedValueOnce(new TypeError('offline'));
+    await f.store.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(gets()).toBe(2);
+    expect(f.inheritanceFetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(gets()).toBe(2);
+    expect(f.inheritanceFetch).toHaveBeenCalledTimes(2);
+    let release;
+    f.fetch.mockImplementationOnce(
+        () =>
+            new Promise((resolve) => {
+                release = resolve;
+            }),
+    );
+    const read = f.store.refresh();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(gets()).toBe(3);
+    release(Response.json(f.server));
+    await read;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(gets()).toBe(3);
+    expect(f.inheritanceFetch).toHaveBeenCalledTimes(3);
+});
+
+it('sends never-dispatched drafts after an online event without fetching appearance', async () => {
+    const f = fixture();
+    await f.store.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const gets = () =>
+        f.fetch.mock.calls.filter(([, init]) => init?.method !== 'POST').length;
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    f.store.edit({ ui_font_size: 21 });
+    await settleEdit();
+    expect(posts(f.fetch)).toHaveLength(0);
+    expect(f.store.pending).toBe(true);
+    window.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(posts(f.fetch)).toHaveLength(0);
+    const baseGets = gets();
+    const baseInheritance = f.inheritanceFetch.mock.calls.length;
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    window.dispatchEvent(new Event('online'));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(posts(f.fetch)).toHaveLength(1);
+    expect(gets()).toBe(baseGets);
+    expect(f.inheritanceFetch.mock.calls.length).toBe(baseInheritance);
+    expect(f.store.pending).toBe(false);
+});
+
+it('saves a cold-start offline draft after a revision read, retaining it when that read fails', async () => {
+    const f = fixture();
+    // The usual fixture has a known revision. Model a first visit with no
+    // cached or durable server state before the initial request fails.
+    localStorage.removeItem(appearanceCacheKey(f.scope));
+    f.store.confirmed = null;
+    f.store.draft.base = null;
+    f.db.owners.set(f.store.owner, {
+        owner: f.store.owner,
+        confirmed: null,
+        counter: 0,
+        attempt: null,
+    });
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    f.fetch.mockRejectedValueOnce(new TypeError('offline'));
+    await f.store.start();
+    await vi.advanceTimersByTimeAsync(0);
+    f.store.edit({ ui_font_size: 21 });
+    await settleEdit();
+    expect(f.store.pending).toBe(true);
+    expect(posts(f.fetch)).toHaveLength(0);
+    const gets = () =>
+        f.fetch.mock.calls.filter(([, init]) => init?.method !== 'POST').length;
+    expect(gets()).toBe(1);
+
+    f.fetch.mockRejectedValueOnce(new TypeError('still offline'));
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    window.dispatchEvent(new Event('online'));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(gets()).toBe(2);
+    expect(posts(f.fetch)).toHaveLength(0);
+    expect(f.store.values.ui_font_size).toBe(21);
+    expect([...f.db.drafts.values()][0].fields.ui_font_size).toBe(21);
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(gets()).toBe(2);
+
+    window.dispatchEvent(new Event('online'));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(gets()).toBe(3);
+    expect(posts(f.fetch)).toHaveLength(1);
+    expect(JSON.parse(posts(f.fetch)[0][1].body)).toEqual({
+        revision: 0,
+        fields: { ui_font_size: 21 },
+    });
+    expect(f.server.ui_font_size).toBe(21);
+    expect(f.store.pending).toBe(false);
+});
+
+it('treats broadcast hints as local-only sync without fetching appearance', async () => {
+    const f = fixture();
+    await f.store.start();
+    await f.store.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.confirmed.revision).toBe(0);
+    const gets = f.fetch.mock.calls.filter(
+        ([, init]) => init?.method !== 'POST',
+    ).length;
+    const inheritance = f.inheritanceFetch.mock.calls.length;
+    const sender = new BroadcastChannel('phi_mobile_appearance');
+    try {
+        await f.db.change(f.store.owner, (record) => {
+            record.confirmed = { ...EMPTY_MOBILE, revision: 5 };
+        });
+        sender.postMessage({ owner: 'someone-else' });
+        await vi.advanceTimersByTimeAsync(100);
+        expect(f.store.confirmed.revision).toBe(0);
+        sender.postMessage({ owner: f.store.owner });
+        await vi.advanceTimersByTimeAsync(100);
+        expect(f.store.confirmed.revision).toBe(5);
+        expect(
+            f.fetch.mock.calls.filter(([, init]) => init?.method !== 'POST'),
+        ).toHaveLength(gets);
+        expect(f.inheritanceFetch).toHaveBeenCalledTimes(inheritance);
+    } finally {
+        sender.close();
     }
-    f.fetch.mockResolvedValue(Response.json(EMPTY_MOBILE));
-    await f.store.refresh();
-    calls++;
-    await vi.advanceTimersByTimeAsync(5000);
-    expect(f.fetch).toHaveBeenCalledTimes(calls + 1);
+});
+
+it('sends an edit queued during a save without a later refresh', async () => {
+    const f = fixture();
+    await f.store.sync();
+    let release;
+    f.fetch.mockImplementation((url, init = {}) =>
+        init.method === 'POST'
+            ? new Promise((resolve) => {
+                  release = resolve;
+              })
+            : Promise.resolve(Response.json(f.server)),
+    );
+    f.store.edit({ ui_font_size: 21 });
+    await settleEdit();
+    f.store.edit({ ui_font_size: 22 });
+    await settleEdit();
+    expect(posts(f.fetch)).toHaveLength(1);
+    release(Response.json({ ...EMPTY_MOBILE, revision: 1, ui_font_size: 21 }));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(posts(f.fetch)).toHaveLength(2);
+    expect(
+        f.fetch.mock.calls.filter(([, init]) => init?.method !== 'POST'),
+    ).toHaveLength(0);
 });
 
 describe('server-owned mobile font inheritance', () => {

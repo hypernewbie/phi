@@ -3,11 +3,13 @@ package main
 import (
 	"encoding/json"
 	"log/slog"
+	"maps"
 	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -187,6 +189,18 @@ type PeerConfig struct {
 
 var configMu sync.RWMutex
 
+// cachedConfig holds the last successfully read primary config plus the file
+// identity it was read from. It is guarded by configMu and mutated only
+// under exclusive access; every hit returns a deep copy. Legacy fallback
+// stays uncached and errors never populate the entry.
+var cachedConfig *configCacheEntry
+
+type configCacheEntry struct {
+	path string
+	id   configFileID
+	cfg  Config
+}
+
 func expandHome(path string) string {
 	if len(path) > 0 && path[0] == '~' {
 		home, err := os.UserHomeDir()
@@ -303,9 +317,9 @@ func loadConfig() Config {
 
 // Startup must not turn a config read error into a disabled access-password gate.
 func loadConfigWithError() (Config, error) {
-	configMu.RLock()
-	defer configMu.RUnlock()
-	cfg, err := readConfigLocked()
+	configMu.Lock()
+	defer configMu.Unlock()
+	cfg, err := readConfigCachedLocked(readPrimaryConfig)
 	if err != nil {
 		return Config{}, err
 	}
@@ -510,7 +524,122 @@ func readConfigLocked() (Config, error) {
 	return cfg, err
 }
 
+// configFileID snapshots the identity of the primary config path: the link
+// itself (Lstat) plus, for symlinks, its target (Stat). A nil lstat means the
+// path is absent or Lstat failed; a nil stat on a symlink means dangling.
+type configFileID struct {
+	lstat os.FileInfo
+	stat  os.FileInfo
+}
+
+func statConfigFile(path string) configFileID {
+	var id configFileID
+	lstat, err := os.Lstat(path)
+	if err != nil {
+		return id
+	}
+	id.lstat = lstat
+	if lstat.Mode()&os.ModeSymlink != 0 {
+		// A dangling link leaves stat nil, which never matches.
+		id.stat, _ = os.Stat(path)
+	}
+	return id
+}
+
+// sameConfigFile reports whether two snapshots describe the same unmodified
+// file: same inode (catches atomic replacement), size, mtime, and mode
+// (catches in-place edits and chmod). Symlink targets must match too;
+// dangling links never match.
+func sameConfigFile(a, b configFileID) bool {
+	if a.lstat == nil || b.lstat == nil {
+		return false
+	}
+	if !os.SameFile(a.lstat, b.lstat) {
+		return false
+	}
+	if a.lstat.Size() != b.lstat.Size() ||
+		!a.lstat.ModTime().Equal(b.lstat.ModTime()) ||
+		a.lstat.Mode() != b.lstat.Mode() {
+		return false
+	}
+	if a.lstat.Mode()&os.ModeSymlink == 0 {
+		return true
+	}
+	if a.stat == nil || b.stat == nil {
+		return false
+	}
+	if !os.SameFile(a.stat, b.stat) {
+		return false
+	}
+	return a.stat.Size() == b.stat.Size() &&
+		a.stat.ModTime().Equal(b.stat.ModTime()) &&
+		a.stat.Mode() == b.stat.Mode()
+}
+
+func clonePtr[T any](p *T) *T {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
+// cloneConfig deep-copies every mutable Config field so cache hits stay
+// isolated from caller mutation and default insertion. Nil-versus-empty
+// distinctions are preserved; the caller applies defaults afterwards.
+func cloneConfig(cfg Config) Config {
+	cfg.Workspaces = slices.Clone(cfg.Workspaces)
+	cfg.ExpandedWorktrees = maps.Clone(cfg.ExpandedWorktrees)
+	cfg.ActiveWorktrees = maps.Clone(cfg.ActiveWorktrees)
+	if cfg.ModelPresets != nil {
+		presets := make(ModelPresetsMap, len(cfg.ModelPresets))
+		for coder, list := range cfg.ModelPresets {
+			presets[coder] = slices.Clone(list)
+		}
+		cfg.ModelPresets = presets
+	}
+	cfg.ThinkingPresets = slices.Clone(cfg.ThinkingPresets)
+	cfg.QuickCommands = slices.Clone(cfg.QuickCommands)
+	cfg.TerminalCommands = slices.Clone(cfg.TerminalCommands)
+	cfg.MarkdownDirs = slices.Clone(cfg.MarkdownDirs)
+	cfg.MobileUIFontFamily = clonePtr(cfg.MobileUIFontFamily)
+	cfg.MobileUIFontSize = clonePtr(cfg.MobileUIFontSize)
+	cfg.MobileTerminalFontFamily = clonePtr(cfg.MobileTerminalFontFamily)
+	cfg.MobileTerminalFontSize = clonePtr(cfg.MobileTerminalFontSize)
+	cfg.ReplayBufferBytes = clonePtr(cfg.ReplayBufferBytes)
+	cfg.Peers = slices.Clone(cfg.Peers)
+	return cfg
+}
+
+// readConfigCachedLocked serves read-only callers from a parsed cache when
+// the primary file is unchanged. The caller must hold configMu exclusively.
+// Production passes readPrimaryConfig; the argument lets tests count real
+// reads without a global hook. A result is cached only when the file is
+// stable across the read; legacy fallback and errors stay uncached.
+func readConfigCachedLocked(readPrimary func() (Config, bool, error)) (Config, error) {
+	path := configFilePath()
+	before := statConfigFile(path)
+	if cachedConfig != nil && cachedConfig.path == path && sameConfigFile(before, cachedConfig.id) {
+		return cloneConfig(cachedConfig.cfg), nil
+	}
+	cachedConfig = nil
+	cfg, present, err := readPrimary()
+	if err != nil || present {
+		if err == nil {
+			if after := statConfigFile(path); sameConfigFile(before, after) {
+				cachedConfig = &configCacheEntry{path: path, id: after, cfg: cloneConfig(cfg)}
+			}
+		}
+		return cfg, err
+	}
+	cfg, _, err = readLegacyConfig()
+	return cfg, err
+}
+
 func writeConfigLocked(cfg Config) error {
+	// Invalidate before every attempt, including no-op and failed ones: a
+	// cheap reread beats reasoning about which failures leave disk stale.
+	cachedConfig = nil
 	cfg.Workspaces = filterOutTestPaths(cfg.Workspaces)
 	before, present, err := readPrimaryConfig()
 	if err != nil {
