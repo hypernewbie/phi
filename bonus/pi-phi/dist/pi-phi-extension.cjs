@@ -32333,7 +32333,10 @@ var Runtime = class {
         return;
       }
       invoking = true;
-      sendUserMessage(prepared.content, { expandPromptTemplates: false });
+      sendUserMessage(prepared.content, {
+        deliverAs: "steer",
+        expandPromptTemplates: false
+      });
       outcome = 2 /* ATTACHMENT_PROMPT_OUTCOME_DISPATCHED */;
       reason = "";
     } catch (error) {
@@ -32362,14 +32365,10 @@ var Runtime = class {
     let session;
     let leaf;
     let model;
-    let idle = false;
-    let queued = true;
     try {
       session = ctx.sessionManager.getSessionId();
       leaf = ctx.sessionManager.getLeafId() ?? "";
       model = ctx.model;
-      idle = ctx.isIdle() === true;
-      queued = ctx.hasPendingMessages() !== false;
     } catch {
       return "unavailable";
     }
@@ -32381,8 +32380,6 @@ var Runtime = class {
     } else if (model) {
       return "stale";
     }
-    if (!idle) return "busy";
-    if (queued) return "queued";
     if (this.compactionActive) return "compaction-active";
     if (this.compact.pending !== null || (this.reload?.pending ?? null) !== null || this.attachments.active !== operation)
       return "pending";

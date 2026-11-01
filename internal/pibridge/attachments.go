@@ -161,15 +161,9 @@ func (s *Server) RequestAttachmentPrompt(ctx context.Context, processID string, 
 		l.mu.Unlock()
 		return AttachmentPromptResult{}, &AttachmentPromptRefusal{Reason: "stale"}
 	}
+	// A busy turn is not a refusal: the host queues the prompt as a steer
+	// message with its images and delivers it before the next model call.
 	ready := snap.GetAttachmentReadiness()
-	if !ready.GetIdle() || snap.GetState() == pibridgepb.LogicalState_LOGICAL_STATE_RUNNING {
-		l.mu.Unlock()
-		return AttachmentPromptResult{}, &AttachmentPromptRefusal{Reason: "busy"}
-	}
-	if ready.GetHasPendingMessages() {
-		l.mu.Unlock()
-		return AttachmentPromptResult{}, &AttachmentPromptRefusal{Reason: "queued"}
-	}
 	if ready.GetCompactionActive() {
 		l.mu.Unlock()
 		return AttachmentPromptResult{}, &AttachmentPromptRefusal{Reason: "compaction-active"}

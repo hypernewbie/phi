@@ -349,6 +349,7 @@ describe('Runtime attachment prompts', () => {
         } as unknown as PiContextView['model'];
         const ch = mockChannel();
         let sendCalls = 0;
+        const sendArgs: unknown[] = [];
         let liveLeaf = 'leaf';
         const rt = new Runtime({
             creds: CREDS,
@@ -356,8 +357,9 @@ describe('Runtime attachment prompts', () => {
             compactState: freshCompactLatch(),
             attachmentRoot: root,
             attachmentState: freshAttachmentLatch(),
-            sendUserMessage: (() => {
+            sendUserMessage: ((content: unknown, options: unknown) => {
                 sendCalls += 1;
+                sendArgs.push({ content, options });
                 return new Promise(() => {});
             }) as never,
             makeChannel: wired(ch),
@@ -419,6 +421,11 @@ describe('Runtime attachment prompts', () => {
                 payload: { $case: 'attachmentPromptRequest', value: request },
             });
             expect(sendCalls).toBe(1);
+            // A busy turn is not a refusal: the message (and its images)
+            // rides Pi's steer queue into the running turn.
+            expect(sendArgs[0]).toMatchObject({
+                options: { deliverAs: 'steer', expandPromptTemplates: false },
+            });
             const ack = ch.nonfatalSends
                 .map((msg) => msg.payload)
                 .find((payload) => payload?.$case === 'attachmentPromptAck');
@@ -576,6 +583,95 @@ describe('Runtime attachment prompts', () => {
             if (hello.$case !== 'hello') throw new Error('missing hello');
             expect(hello.value.capabilities).not.toContain(
                 CAPABILITY_ATTACHMENTS,
+            );
+        } finally {
+            rt.shutdown();
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it('steers an image prompt into a busy turn with queued messages', async () => {
+        const root = mkdtempSync(join(tmpdir(), 'phi-attachment-runtime-'));
+        const basename = 'att-0123456789abcdef.png';
+        const bytes = Buffer.from([
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3,
+        ]);
+        writeFileSync(join(root, basename), bytes, { mode: 0o600 });
+        const model = {
+            provider: 'p',
+            id: 'm',
+            api: 'openai-completions',
+            input: ['text', 'image'],
+        } as unknown as PiContextView['model'];
+        const ch = mockChannel();
+        const sendUserMessage = vi.fn();
+        const rt = new Runtime({
+            creds: CREDS,
+            generation: 1n,
+            compactState: freshCompactLatch(),
+            attachmentRoot: root,
+            attachmentState: freshAttachmentLatch(),
+            sendUserMessage: sendUserMessage as never,
+            makeChannel: wired(ch),
+        });
+        try {
+            rt.start(
+                ctx({
+                    sessionManager: {
+                        getSessionId: () => 'sess',
+                        getLeafId: () => 'leaf',
+                    },
+                    model,
+                    isIdle: () => false,
+                    hasPendingMessages: () => true,
+                }),
+            );
+            await sleep(10);
+            ch.hooks!.onMessage({
+                paneId: CREDS.pane,
+                processId: CREDS.process,
+                runtimeGeneration: 1n,
+                payload: {
+                    $case: 'attachmentPromptRequest',
+                    value: AttachmentPromptRequest.create({
+                        requestId: '1',
+                        expectedSessionId: 'sess',
+                        expectedLeafId: 'leaf',
+                        expectedModel: { provider: 'p', model: 'm' },
+                        text: 'inspect',
+                        attachments: [
+                            {
+                                basename,
+                                sizeBytes: BigInt(bytes.length),
+                                mimeType: 'image/png',
+                                kind: 'image',
+                                sha256: createHash('sha256')
+                                    .update(bytes)
+                                    .digest('hex'),
+                            },
+                        ],
+                    }),
+                },
+            });
+            expect(sendUserMessage).toHaveBeenCalledTimes(1);
+            expect(sendUserMessage).toHaveBeenCalledWith(
+                [
+                    { type: 'text', text: 'inspect' },
+                    {
+                        type: 'image',
+                        mimeType: 'image/png',
+                        data: bytes.toString('base64'),
+                    },
+                ],
+                { deliverAs: 'steer', expandPromptTemplates: false },
+            );
+            const ack = ch.nonfatalSends
+                .map((msg) => msg.payload)
+                .find((payload) => payload?.$case === 'attachmentPromptAck');
+            if (ack?.$case !== 'attachmentPromptAck')
+                throw new Error('missing acknowledgment');
+            expect(ack.value.outcome).toBe(
+                AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_DISPATCHED,
             );
         } finally {
             rt.shutdown();
