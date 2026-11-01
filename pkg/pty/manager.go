@@ -269,9 +269,9 @@ func (m *Manager) SpawnWithOpenCodeMode(ctx context.Context, dir, command string
 type SpawnOptions struct {
 	ID, Title, Workspace, OpenCodeMode, PiMode string
 	Pinned, Marked                             bool
-	ExtraArgs                          []string
-	Cols, Rows                         uint16
-	ObserveOutput                      func([]byte)
+	ExtraArgs                                  []string
+	Cols, Rows                                 uint16
+	ObserveOutput                              func([]byte)
 }
 
 func (m *Manager) SpawnWithOptions(ctx context.Context, dir, command string, args []string, coder, sessionID string, opts SpawnOptions, envOverrides ...map[string]string) (*PTYInstance, error) {

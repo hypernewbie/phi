@@ -481,6 +481,7 @@ describe('spawnNewSession - request-time context', () => {
         null,
         null,
         undefined,
+        { piMode: undefined },
     ];
 
     it('keeps request metadata when A closes before the POST response', async () => {
