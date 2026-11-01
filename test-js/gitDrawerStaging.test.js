@@ -366,6 +366,55 @@ describe('Git drawer staging', () => {
         await vi.waitFor(() => expect(rowButton('a.txt').disabled).toBe(false));
     });
 
+    it('ignores a file list read that started before a stage batch', async () => {
+        const releases = [];
+        let reads = 0;
+        const fetch = mockFetch((url) => {
+            const path = new URL(String(url), window.location.href).pathname;
+            if (path === '/api/git/info') return stageInfo();
+            if (path === '/api/git/status-files') {
+                reads++;
+                if (reads === 1)
+                    return {
+                        files: [{ path: 'a.txt', index: ' ', worktree: '?' }],
+                    };
+                // Every later read waits, so the test decides what arrives
+                // first: the slow pre-batch answer or the post-batch one.
+                return new Promise((resolve) => {
+                    releases.push((files) => resolve({ files }));
+                });
+            }
+            if (path === '/api/git/action')
+                return { ok: true, status: 200, text: 'Stage completed.' };
+            return { ok: false, status: 404, text: 'Not found' };
+        });
+        const controller = new DiffController(buildApp());
+        await controller.refreshDiff();
+        await vi.waitFor(() => expect(rows()).toHaveLength(1));
+
+        // A slow read is already in flight when the user stages the file.
+        void controller.refreshDiff();
+        await vi.waitFor(() => expect(releases).toHaveLength(1));
+        rowButton('a.txt').click();
+        await vi.waitFor(() => expect(releases).toHaveLength(2));
+
+        // The stale answer lands first and must not reach the list or cache.
+        releases[0]([{ path: 'a.txt', index: ' ', worktree: '?' }]);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(rows()[0].label).toBe('Stage');
+
+        // The post-batch answer is the one that counts.
+        releases[1]([{ path: 'a.txt', index: 'A', worktree: ' ' }]);
+        await vi.waitFor(() => expect(rows()[0].label).toBe('Unstage'));
+        const cached = JSON.parse(
+            localStorage.getItem(controller.gitFilesKey) || 'null',
+        );
+        expect(cached.files).toEqual([
+            { path: 'a.txt', index: 'A', worktree: ' ' },
+        ]);
+        expect(actionPosts(fetch)).toHaveLength(1);
+    });
+
     it('does not fetch the file list while the drawer is closed', async () => {
         const fetch = gitRoutes({
             files: () => [{ path: 'src/new.ts', index: ' ', worktree: '?' }],

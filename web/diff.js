@@ -267,6 +267,7 @@ export class DiffController {
     gitFilesPending = new Set();
     gitFilesStatus = '';
     gitFilesTruncated = false;
+    gitFilesEpoch = 0;
     gitFilesRequestKey = '';
     gitFilesRowKey = '';
     gitStageActive = false;
@@ -1242,8 +1243,14 @@ export class DiffController {
         if (!force && this.gitFilesRequestKey === requestKey)
             return;
         this.gitFilesRequestKey = requestKey;
+        // A read that started before a staging batch answers with the old
+        // index. Drop it, or the list would show pre-stage rows and save
+        // them to the cache when the follow-up read is slow or fails.
+        const epoch = this.gitFilesEpoch;
         void this.fetchGitFiles(context)
             .then((payload) => {
+            if (epoch !== this.gitFilesEpoch)
+                return;
             if (!this.isCurrentGitManageContext(context))
                 return;
             if (this.gitFilesKey !== cacheKey)
@@ -1256,6 +1263,8 @@ export class DiffController {
         })
             .catch((error) => {
             if (error?.name === 'AbortError')
+                return;
+            if (epoch !== this.gitFilesEpoch)
                 return;
             if (!this.isCurrentGitManageContext(context))
                 return;
@@ -1370,6 +1379,10 @@ export class DiffController {
         const queue = paths.slice();
         let confirmed = 0;
         this.gitStageActive = true;
+        // An in-flight read answers with the index from before this batch.
+        // Invalidate it and allow the post-action read to start.
+        this.gitFilesEpoch++;
+        this.gitFilesRequestKey = '';
         while (queue.length) {
             const info = this.gitManageInfo;
             const target = info?.target;
@@ -2081,6 +2094,12 @@ export class DiffController {
     refreshAfterGitAction(context) {
         if (!this.isCurrentGitManageContext(context))
             return;
+        // The action changed server state. A read that was already in flight
+        // answers with the old state and wins the request dedupe, so drop it
+        // and let the refresh below issue new ones.
+        this.gitManageRequestKey = '';
+        this.gitFilesRequestKey = '';
+        this.gitFilesEpoch++;
         void this.refreshDiff();
         if (this.diffModal && !this.diffModal.classList.contains('hidden')) {
             void this.loadRichDiff();
