@@ -787,7 +787,7 @@ export class TabManager {
                 this.saveActiveDraft();
                 for (const tab of this.tabs.values()) {
                     if (tab.serializeAddon && !tab.isDead) {
-                        this._uploadCheckpoint(tab);
+                        this._uploadCheckpoint(tab, { unload: true });
                     }
                 }
             });
@@ -3696,7 +3696,7 @@ export class TabManager {
         }, CHECKPOINT_QUIET_MS);
     }
 
-    _uploadCheckpoint(tabInfo) {
+    _uploadCheckpoint(tabInfo, options = {}) {
         if (tabInfo._serverStateAvailable && !isCoarseViewport()) return;
         const pty = tabInfo.ws;
         if (
@@ -3752,15 +3752,30 @@ export class TabManager {
             ansi,
         };
         // Fire-and-forget: a failed upload only means the next attach uses
-        // the bounded-delta fallback instead of the snapshot.
-        fetch(
-            `/api/terminals/${encodeURIComponent(tabInfo.paneId)}/checkpoint`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-            },
-        )
+        // the bounded-delta fallback instead of the snapshot. A beacon is the
+        // correct primitive here — the network service queues it, so a page
+        // navigation or close cannot abort it into a failed request. A
+        // refused beacon (over quota, or no sendBeacon in the embedder)
+        // retries as a plain fetch while the page is still alive.
+        const url = `/api/terminals/${encodeURIComponent(tabInfo.paneId)}/checkpoint`;
+        const body = JSON.stringify(payload);
+        if (options?.unload) {
+            navigator.sendBeacon?.(
+                url,
+                new Blob([body], { type: 'application/json' }),
+            );
+            return;
+        }
+        if (navigator.sendBeacon?.(
+            url,
+            new Blob([body], { type: 'application/json' }),
+        ))
+            return;
+        fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body,
+        })
             .then((res) => {
                 if (res.ok) termPerfMark('ckpt-uploaded');
             })
@@ -4981,26 +4996,10 @@ export class TabManager {
             if (e.deltaY > 0) loadNewer();
         }, { capture: true, passive: true });
         let touchY;
-        let topPageArmed = true;
-        termContainer.addEventListener('touchstart', e => {
-            touchY = e.touches?.[0]?.clientY;
-            topPageArmed = true;
-        }, { passive: true });
+        termContainer.addEventListener('touchstart', e => { touchY = e.touches?.[0]?.clientY; }, { passive: true });
         termContainer.addEventListener('touchmove', e => {
             if (e.touches?.length !== 1) return;
-            if (e.touches[0].clientY < touchY) {
-                loadNewer();
-                return;
-            }
-            // A coarse pointer has no wheel, so a swipe past the top is the
-            // only way to ask for older output. xterm cannot scroll there:
-            // the restored buffer holds no rows above the screen.
-            if (!topPageArmed || !isCoarseViewport() || !tabInfo._historyOmitted) return;
-            if (tabInfo.isDead || tabInfo._historyLoading) return;
-            const buffer = tabInfo.term?.buffer?.active;
-            if (!buffer || buffer.type !== 'normal' || buffer.viewportY > 0) return;
-            topPageArmed = false;
-            this._loadColdHistory(tabInfo);
+            if (e.touches[0].clientY < touchY) loadNewer();
         }, { passive: true });
         // Detect native buffer eviction too; the manual button can recover it.
         term._core?._bufferService?.buffers?.normal?.lines?.onTrim?.(() => {

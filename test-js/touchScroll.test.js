@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { setupDomHarness, stubWebSocket } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
 
@@ -60,7 +60,6 @@ function mountTab({ coder = 'bash' } = {}) {
     tm.createTab('p1', 'sess-p1', 'Title', coder, '', '', false);
     const tab = tm.tabs.get('p1');
     tm._openTermAndViewport(tab);
-    tab._tabManager = tm;
     return tab;
 }
 
@@ -165,89 +164,6 @@ describe('touchscreen terminal scrollback', () => {
         ]);
 
         expect(tab.ws.sendInput).not.toHaveBeenCalled();
-        expect(moveEv.defaultPrevented).toBe(false);
-    });
-});
-
-describe('coarse-pointer history paging', () => {
-    const originalMatchMedia = window.matchMedia;
-    afterEach(() => {
-        if (originalMatchMedia === undefined) delete window.matchMedia;
-        else window.matchMedia = originalMatchMedia;
-    });
-
-    function setPointer(kind) {
-        window.matchMedia = (query) => ({
-            matches: kind === 'coarse' && query === '(pointer: coarse)',
-            media: query,
-        });
-    }
-
-    function mountAtTop(overrides = {}) {
-        const tab = mountTab({ coder: 'bash' });
-        tab.term.buffer.active = {
-            type: 'normal',
-            length: 56,
-            baseY: 0,
-            viewportY: 0,
-            ...overrides.buffer,
-        };
-        tab._historyOmitted = overrides.historyOmitted ?? true;
-        tab.loadColdHistory = vi.fn();
-        tab._tabManager._loadColdHistory = tab.loadColdHistory;
-        return tab;
-    }
-
-    it('pages older history when a coarse swipe passes the top of a restored buffer', () => {
-        setPointer('coarse');
-        const tab = mountAtTop();
-
-        dispatchTouch(tab.termContainer, 'touchstart', [{ clientY: 200 }]);
-        dispatchTouch(tab.termContainer, 'touchmove', [{ clientY: 260 }]);
-        expect(tab.loadColdHistory).toHaveBeenCalledTimes(1);
-
-        // One gesture asks for one book, even while the finger keeps moving.
-        dispatchTouch(tab.termContainer, 'touchmove', [{ clientY: 320 }]);
-        expect(tab.loadColdHistory).toHaveBeenCalledTimes(1);
-    });
-
-    it('leaves a fine pointer to the explicit history button', () => {
-        setPointer('fine');
-        const tab = mountAtTop();
-
-        dispatchTouch(tab.termContainer, 'touchstart', [{ clientY: 200 }]);
-        dispatchTouch(tab.termContainer, 'touchmove', [{ clientY: 260 }]);
-        expect(tab.loadColdHistory).not.toHaveBeenCalled();
-    });
-
-    it('does not page while rows above the viewport remain', () => {
-        setPointer('coarse');
-        const tab = mountAtTop({ buffer: { baseY: 200, viewportY: 40 } });
-
-        dispatchTouch(tab.termContainer, 'touchstart', [{ clientY: 200 }]);
-        dispatchTouch(tab.termContainer, 'touchmove', [{ clientY: 260 }]);
-        expect(tab.loadColdHistory).not.toHaveBeenCalled();
-    });
-
-    it('does not page when no older history is omitted', () => {
-        setPointer('coarse');
-        const tab = mountAtTop({ historyOmitted: false });
-
-        dispatchTouch(tab.termContainer, 'touchstart', [{ clientY: 200 }]);
-        dispatchTouch(tab.termContainer, 'touchmove', [{ clientY: 260 }]);
-        expect(tab.loadColdHistory).not.toHaveBeenCalled();
-    });
-
-    it('keeps whole-buffer swipes on the xterm gesture path', () => {
-        setPointer('coarse');
-        const tab = mountAtTop({ buffer: { baseY: 200, viewportY: 120 } });
-
-        dispatchTouch(tab.termContainer, 'touchstart', [{ clientY: 200 }]);
-        const moveEv = dispatchTouch(tab.termContainer, 'touchmove', [
-            { clientY: 260 },
-        ]);
-        expect(tab.loadColdHistory).not.toHaveBeenCalled();
-        expect(tab.term.scrollLines).not.toHaveBeenCalled();
         expect(moveEv.defaultPrevented).toBe(false);
     });
 });
