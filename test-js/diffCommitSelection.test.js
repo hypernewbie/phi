@@ -19,6 +19,20 @@ function context() {
         syncCommitTarget: null,
         activeTab: 'sync',
         isPanelOpen: true,
+        gitManageMemory: new Map(),
+        gitViewMemory: new Map(),
+        gitManageCancels: new Set(),
+        gitManageRetryTimer: null,
+        gitManageRetryDelay: 1000,
+        gitManageContextKey: '',
+        gitManageInfoKey: '',
+        gitManageInfo: null,
+        gitManageGeneration: 0,
+        gitManageRequestKey: '',
+        gitManageRecord: null,
+        gitManageRecordKey: '',
+        gitManageBusy: false,
+        gitManageStatus: '',
         togglePanel: vi.fn(),
         _setPanel: vi.fn(),
         refreshDiff: vi.fn().mockResolvedValue(undefined),
@@ -122,6 +136,48 @@ describe('Sync Board commit selection', () => {
         await ctx.loadCommits();
         expect(ctx.commitSelect.value).toBe('unstaged');
         expect(ctx.syncCommitTarget).toBeNull();
+    });
+
+    it('drops the previous repository commit list before a new workspace read fails', async () => {
+        const ctx = context();
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => commitsResponse()),
+        );
+        await ctx.loadCommits();
+        ctx.commitSelect.value = 'abcdef0';
+        ctx._syncModalCommitSelect();
+        let reject;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => new Promise((_resolve, fail) => (reject = fail))),
+        );
+        ctx.app.sessionsManager.activeCWD = '/other-project';
+        const loading = ctx.loadCommits();
+        expect(
+            Array.from(ctx.commitSelect.options, (option) => option.value),
+        ).toEqual(['unstaged', 'staged']);
+        expect(ctx.modalCommitSelect.value).toBe('unstaged');
+        reject(new Error('offline'));
+        await loading;
+        expect(ctx.commitSelect.value).toBe('unstaged');
+        expect(
+            ctx.commitSelect.querySelector('option[value="abcdef0"]'),
+        ).toBeNull();
+    });
+
+    it('keeps a newly requested card commit when switching repositories', async () => {
+        const ctx = context();
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => commitsResponse()),
+        );
+        await ctx.loadCommits();
+        ctx.app.sessionsManager.activeCWD = '/other-project';
+        await ctx.openCommitDiff('1234567');
+        await ctx.loadCommits();
+        expect(ctx.commitSelect.value).toBe('1234567');
+        expect(ctx.modalCommitSelect.value).toBe('1234567');
     });
 
     it('rejects invalid hashes without changing the selected view', async () => {

@@ -26,7 +26,10 @@ import {
 import { startPhi } from './_server.js';
 import { tabList } from './_tabs.js';
 import { startBridgeProxy, type BridgeProxy } from './_pi-bridge-proxy.js';
-import { isCancelledWorktreeRead } from './_session-requests.js';
+import {
+    isCancelledGitInfoRead,
+    isCancelledWorktreeRead,
+} from './_session-requests.js';
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const SERVER_TEXT = 'SERVER_SNAPSHOT_FIXTURE_9c4e';
@@ -382,6 +385,7 @@ function watchPage(page: Page, label: string) {
     page.on('requestfailed', (failed) => {
         const errorText = failed.failure()?.errorText || '';
         if (isCancelledWorktreeRead(failed, origin)) return;
+        if (isCancelledGitInfoRead(failed, origin)) return;
         if (isExpectedStartupPinAbort(failed.url(), errorText)) {
             expectedPinAborts.push(`${label}: ${failed.url()} ${errorText}`);
             return;

@@ -26,12 +26,27 @@ function context() {
         isPanelOpen: true,
         currentWs: null,
         _diffStreamToken: 0,
+        gitManageMemory: new Map(),
+        gitViewMemory: new Map(),
+        gitManageCancels: new Set(),
+        gitManageRetryTimer: null,
+        gitManageRetryDelay: 1000,
+        gitManageGeneration: 0,
+        gitManageContextKey: '',
+        gitManageRequestKey: '',
+        gitManageRecord: null,
+        gitManageRecordKey: '',
+        gitManageInfo: null,
+        gitManageInfoKey: '',
+        gitManageBusy: false,
+        gitManageStatus: '',
         commitSelect: { value: 'unstaged' },
         _setPanel: vi.fn(),
         fitTerminal: vi.fn(),
         pendingWrites,
         term: {
             clear: vi.fn(),
+            reset: vi.fn(),
             resize: vi.fn(),
             write: vi.fn((_text, done) => {
                 if (done) pendingWrites.push(done);
@@ -72,7 +87,11 @@ function attach(pty, withCheckpoint = true) {
 beforeEach(() => {
     vi.useFakeTimers();
     vi.stubGlobal('WebSocket', FakeWebSocket);
-    mockFetch(() => ({ pane_id: 'log-pane' }));
+    mockFetch((url) =>
+        new URL(url, window.location.href).pathname === '/api/git/raw-log'
+            ? { ok: false, status: 404, text: 'Not found' }
+            : { pane_id: 'log-pane' },
+    );
 });
 
 afterEach(() => {
@@ -87,9 +106,13 @@ describe('diff log attach wiring', () => {
         expect(ctx.fitTerminal).toHaveBeenCalledTimes(1);
         const pty = ctx.currentWs;
         const release = vi.spyOn(pty, 'release');
-        expect(fetch).toHaveBeenCalledWith(
-            '/api/diff?cwd=%2Flinked%20tree&type=log&commit=unstaged',
-        );
+        expect(
+            fetch.mock.calls.some(
+                ([url]) =>
+                    url ===
+                    '/api/diff?cwd=%2Flinked%20tree&type=log&commit=unstaged',
+            ),
+        ).toBe(true);
         attach(pty);
         expect(ctx.term.resize).toHaveBeenCalledWith(120, 30);
         expect(ctx.term.write).toHaveBeenCalledWith(ansi, expect.any(Function));
@@ -160,11 +183,11 @@ describe('diff log attach wiring', () => {
         );
         expect(ctx.currentWs).not.toBe(first);
         expect(first.ws.onmessage).toBeNull();
-        expect(ctx.fitTerminal).toHaveBeenCalledTimes(1);
+        expect(ctx.fitTerminal).toHaveBeenCalledTimes(2);
         ctx.term.write.mockClear();
         staleAttach({ epoch: 7, oldest: 0, head: 40, ckpt: null });
         expect(release).not.toHaveBeenCalled();
-        expect(ctx.fitTerminal).toHaveBeenCalledTimes(1);
+        expect(ctx.fitTerminal).toHaveBeenCalledTimes(2);
     });
 
     it('decodes a checkpoint that ends mid-codepoint with the live stream', async () => {
@@ -202,14 +225,18 @@ describe('diff log attach wiring', () => {
     it('drops a streaming response the user already replaced', async () => {
         const ctx = context();
         let resolveLog;
-        mockFetch((url) =>
-            String(url).startsWith('/api/diff')
-                ? new Promise((resolve) => {
-                      resolveLog = resolve;
-                  })
-                : { text: 'raw diff body' },
-        );
+        mockFetch((url) => {
+            const path = new URL(url, window.location.href).pathname;
+            if (path === '/api/git/raw-log')
+                return { ok: false, status: 404, text: 'Not found' };
+            if (path === '/api/diff')
+                return new Promise((resolve) => {
+                    resolveLog = resolve;
+                });
+            return { text: 'raw diff body' };
+        });
         const slow = ctx.refreshDiff();
+        await vi.waitFor(() => expect(resolveLog).toBeTypeOf('function'));
         ctx.activeTab = 'diff';
         await ctx.refreshDiff();
         resolveLog({ pane_id: 'stale-pane' });

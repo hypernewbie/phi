@@ -885,11 +885,19 @@ describe('Add Workspace directory tree', () => {
     });
 
     it('keeps workspace selection and loading usable when preference writes are denied', async () => {
-        vi.useFakeTimers();
         const manager = makeManager();
+        manager.activeWorkspace = '/configured';
+        manager.activeCWD = '/configured';
+        manager.worktreeRootOwner = {
+            scope: manager.app.scope,
+            coder: manager.activeCoder,
+            workspace: '/configured',
+        };
         manager.workspaceSelect.innerHTML =
             '<option value="/changed">Changed</option>';
-        manager.loadWorktrees = vi.fn();
+        const loading = vi.spyOn(manager, 'loadWorktrees');
+        let release;
+        mockFetch(() => new Promise((resolve) => (release = resolve)));
         manager.updateWorkspaceSelectWidth = vi.fn();
         manager.app.diffController = { refreshDiff: vi.fn() };
         const write = vi
@@ -900,15 +908,17 @@ describe('Add Workspace directory tree', () => {
         try {
             manager.workspaceSelect.dispatchEvent(new Event('change'));
             expect(manager.activeWorkspace).toBe('/changed');
-            expect(manager.loadWorktrees).toHaveBeenCalledOnce();
+            expect(loading).toHaveBeenCalledOnce();
             expect(manager.updateWorkspaceSelectWidth).toHaveBeenCalledOnce();
-            await vi.advanceTimersByTimeAsync(100);
+            expect(manager.activeCWD).toBe('/changed');
             expect(
                 manager.app.diffController.refreshDiff,
             ).toHaveBeenCalledOnce();
+            release([]);
+            await loading.mock.results[0].value;
+            expect(manager.activeCWD).toBe('/changed');
         } finally {
             write.mockRestore();
-            vi.useRealTimers();
         }
     });
 
