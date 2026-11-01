@@ -41,13 +41,25 @@ jobs:
       - name: Run Go Tests
         run: go test -race -v ./...
 
+      # The tag swaps root's diagnostics_disabled.go for diagnostics_profiling.go,
+      # but no root test exercises the diagnostics API — the only tag-gated root
+      # test file is api_timing_test.go. Run the packages whose source actually
+      # changes under the tag, plus those two tests.
       - name: Run Go Tests (profiling)
-        run: go test -race -tags=profiling ./...
+        run: |
+          go test -tags=profiling ./internal/diagnostics/... ./internal/termstate/... ./internal/termemu/... ./pkg/obs/...
+          go test -tags=profiling -run '^TestTiming' .
 
+      # Only auth_observability_otel_test.go is gated on the otel tag; main.go
+      # is byte-identical with and without it, since the tag swaps the pkg/obs
+      # and pkg/session backends only. Running the full root suite here cost
+      # ~15 min to execute one test.
       - name: Run Go Tests (otel tags)
         run: |
-          go test -race -tags=otel ./pkg/obs .
-          go test -race -tags=profiling,otel ./pkg/obs ./internal/diagnostics .
+          go test -race -tags=otel ./pkg/obs
+          go test -race -tags=otel -run '^TestAccessObservabilitySpansCarryNoCredentials$' .
+          go test -race -tags=profiling,otel ./pkg/obs ./internal/diagnostics
+          go test -race -tags=profiling,otel -run '^(TestTiming|TestAccessObservabilitySpansCarryNoCredentials)' .
 
       # A real native terminal, not the headless screen oracle. No provider
       # credentials, model access, desktop profile, or tmux state is inherited.
@@ -55,14 +67,16 @@ jobs:
         run: python3 scripts/test-phic-native.py --coders bash
 
       # Release builds embed precompressed assets behind -tags=embedassets
-      # (see embed_release.go). Run the root-package tests against that
-      # path so it cannot rot behind the tag.
+      # (see embed_release.go). static_assets_release_test.go is the only root
+      # test file gated on the tag, so run just those tests: running the whole
+      # suite against this path cost ~15 min to exercise five tests. The
+      # remaining tag surface is covered by `go vet -tags=`.
       - name: Release-Tag Assets Smoke
         run: |
           go run ./tools/webdist
           go vet -tags=embedassets ./...
-          go test -tags=embedassets -race .
-          go test -tags=embedassets,profiling -race .
+          go test -tags=embedassets -race -run '^TestRelease' .
+          go test -tags=embedassets,profiling -race -run '^(TestRelease|TestTiming)' .
 
       # The added profiling implementation must compile out of normal
       # builds. This guard checks source, test, dependency, and symbol
@@ -381,8 +395,14 @@ jobs:
         run: pnpm run test:pi-phi:integration
 
   test-e2e:
-    name: Playwright Chromium E2E
+    name: Playwright Chromium E2E (${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
+    # 319 tests on 2 workers took 19 min in a single job. Shard by file across
+    # three runners instead; each shard keeps its own 2 workers.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - name: Checkout Code
         uses: actions/checkout@v5
@@ -420,13 +440,13 @@ jobs:
       - name: Run Playwright suite
         env:
           PLAYWRIGHT_BROWSERS_PATH: 0
-        run: pnpm run test:e2e
+        run: pnpm exec playwright test --shard=${{ matrix.shard }}/3
 
       - name: Upload Playwright artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-artifacts
+          name: playwright-artifacts-${{ matrix.shard }}
           path: |
             playwright-report/
             test-results/

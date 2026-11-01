@@ -22,6 +22,12 @@ import (
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
+// testPaneShutdownGrace is the grace test panes get before Shutdown escalates
+// to SIGKILL. An interactive shell may ignore or defer SIGTERM depending on what
+// it was doing, so a longer window often just delays the escalation by its full
+// length. Throwaway test shells do not need to wind down gracefully.
+const testPaneShutdownGrace = 100 * time.Millisecond
+
 // The production pane, events, and control handlers must each consult the
 // access fence themselves: removing an AdmitAuth call from one handler must
 // fail a test here, not only a fencer unit test.
@@ -102,7 +108,9 @@ func newAuthSocketServer(t *testing.T) (*ws.Hub, string) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	manager := pty.NewManager()
-	t.Cleanup(func() { manager.Shutdown(2 * time.Second) })
+	// An interactive shell may not act on SIGTERM, so a long grace only delays
+	// the escalation by its full length. These shells are throwaway.
+	t.Cleanup(func() { manager.Shutdown(testPaneShutdownGrace) })
 	shell, args := testMainShell()
 	instance, err := manager.SpawnWithOptions(context.Background(), home, shell, args, "pi", "rotate-sid", pty.SpawnOptions{ID: "rotate-pane"})
 	if err != nil {
@@ -249,7 +257,7 @@ func TestAccessWSPaneFenceRejectsStaleUpgrade(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	manager := pty.NewManager()
-	t.Cleanup(func() { manager.Shutdown(2 * time.Second) })
+	t.Cleanup(func() { manager.Shutdown(testPaneShutdownGrace) })
 	shell, args := testMainShell()
 	instance, err := manager.SpawnWithOptions(context.Background(), home, shell, args, "pi", "fence-sid", pty.SpawnOptions{ID: "fence-pane"})
 	if err != nil {
