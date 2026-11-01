@@ -33,7 +33,8 @@ function cpuLevel(cpuPercent) {
  *  tier hasn't changed since the last call (the threshold transitions
  *  are the only state changes worth re-rendering).
  *
- *  The browser Phi page calls this on every CPU poll (every ~2s).
+ *  The browser Phi page calls this on every CPU poll (every ~10s, and
+ *  never while the tab is hidden or low power mode is on).
  *  The desktop main view calls this on every `phi:header-state` IPC
  *  push from the host, which polls the active profile's body
  *  webContents for CPU and forwards the reading.

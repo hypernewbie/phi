@@ -512,6 +512,12 @@ const PI_MODEL_STEP_MS = 200;
 // How long a socket must stay up before it counts as a successful connection
 // rather than a failed attempt that happened to reach onopen.
 const AUTO_RECONNECT_STABLE_MS = 5000;
+// Ambient CPU sampling cadence. The reading only tints the header logo and
+// fills one line of the hover HUD, so it is a coarse background refresh rather
+// than a metric: 10s still catches sustained load, and the whole chain freezes
+// while the tab is hidden or low power mode is on (see _cpuPollAllowed).
+// Sampling costs the server ~1us; the request is the expense.
+const CPU_POLL_INTERVAL_MS = 10000;
 
 // Configuration for performance marks and the bounded screen-checkpoint
 // pipeline: hot live stream plus cold recording fetch.
@@ -766,6 +772,8 @@ export class TabManager {
         });
         this.stagedAttachments = []; // Legacy and v2 items share the chip strip.
         this.lastCpuPercent = null; // updated by applyCPUIndicator; read by the self-HUD popover
+        this.lastCpuSampleAt = 0; // when lastCpuPercent was sampled; the HUD ages it out
+        this.cpuPollTimer = null; // pending turn of the gated CPU poll chain
         // Last-seen window dims for classifyGeometryChange. On touch
         // shells a height-only change is the software keyboard, which
         // must NEVER refit (frozen rows) — see setupEventListeners.
@@ -916,6 +924,11 @@ export class TabManager {
                 }
                 this._reviveActiveTabIfDead();
                 this._queueActiveRefresh();
+                // A hidden tab samples nothing, so coming back is the moment to
+                // restart the chain (and refresh the reading the HUD shows).
+                this.resumeCpuPolling();
+            } else {
+                this._stopCpuPolling();
             }
         });
         // Network restore, bfcache restore and window focus are the "we may have
@@ -934,9 +947,10 @@ export class TabManager {
         this.idlePollTimer = setInterval(() => {
             this.pollTerminalIdleAndNotifications();
         }, 1000);
-        this.cpuPollTimer = setInterval(() => {
-            this.pollSystemCPU();
-        }, 2000);
+        // CPU rides its own gated chain rather than an interval: it stops while
+        // the tab is hidden or low power mode is on, and resumeCpuPolling
+        // revives it from the visibility, wake and low-power paths.
+        this.resumeCpuPolling();
     }
 
     /**
@@ -947,7 +961,9 @@ export class TabManager {
      */
     dispose() {
         clearInterval(this.idlePollTimer);
-        clearInterval(this.cpuPollTimer);
+        // A pending CPU turn is a timeout, not an interval: the chain re-arms
+        // itself after each sample, so the handle is whichever turn is waiting.
+        clearTimeout(this.cpuPollTimer);
         this.idlePollTimer = null;
         this.cpuPollTimer = null;
     }
@@ -961,7 +977,12 @@ export class TabManager {
      */
     async pollSystemCPU() {
         try {
-            const res = await fetch('/api/system/cpu');
+            // Bounded like every other ambient fetch: the chain re-arms only
+            // after this settles, so a hung request would freeze the tint.
+            const timeout = typeof AbortSignal?.timeout === 'function'
+                ? AbortSignal.timeout(CPU_POLL_INTERVAL_MS)
+                : undefined;
+            const res = await fetch('/api/system/cpu', { signal: timeout });
             if (!res.ok) return;
             const data = await res.json();
             const cpu = typeof data.cpu === 'number' ? data.cpu : 0;
@@ -971,10 +992,85 @@ export class TabManager {
         }
     }
 
+    // _cpuPollAllowed reports whether an ambient CPU sample is worth taking:
+    // the tab is visible and the effects profile ("low power mode" in the
+    // settings dialog and the desktop tray) is off. App.applyFastMode is the
+    // only writer of that body class, and the scrollback clamp reads it the
+    // same way. It is forced on for mobile viewports, so a phone takes no
+    // ambient samples at all. Read on every turn, so hiding the tab, waking it,
+    // and flipping the switch all take effect without restarting the chain.
+    _cpuPollAllowed() {
+        if (typeof document === 'undefined' || document.hidden) return false;
+        return !document?.body?.classList?.contains('fast-mode');
+    }
+
+    // _hudCpuPercent is the CPU line the hover HUD shows. A reading is only
+    // current for a few poll turns: once the chain stops (hidden tab, low power
+    // mode) the last sample must decay to "unknown" rather than present an
+    // hours-old number as the machine's current load.
+    _hudCpuPercent() {
+        if (typeof this.lastCpuPercent !== 'number') return null;
+        const age = Date.now() - (this.lastCpuSampleAt || 0);
+        return age < CPU_POLL_INTERVAL_MS * 3 ? this.lastCpuPercent : null;
+    }
+
+    // _scheduleCpuPoll arms exactly one turn of the CPU chain. A turn that
+    // lands with a gate closed rearms nothing, so the chain stays stopped until
+    // something calls resumeCpuPolling(). The timer id is held for the whole
+    // turn, including the fetch, so a resume that lands mid-turn cannot stack a
+    // second one.
+    _scheduleCpuPoll(delay = CPU_POLL_INTERVAL_MS) {
+        this._stopCpuPolling();
+        if (!this._cpuPollAllowed()) return;
+        this.cpuPollTimer = setTimeout(async () => {
+            // A gate closed while this turn was waiting (hidden tab, low power
+            // switched on) drops the sample instead of taking it late.
+            if (!this._cpuPollAllowed()) {
+                this.cpuPollTimer = null;
+                return;
+            }
+            await this.pollSystemCPU();
+            this.cpuPollTimer = null;
+            this._scheduleCpuPoll();
+        }, delay);
+    }
+
+    _stopCpuPolling() {
+        if (this.cpuPollTimer) clearTimeout(this.cpuPollTimer);
+        this.cpuPollTimer = null;
+    }
+
+    // resumeCpuPolling starts the chain (now, then every CPU_POLL_INTERVAL_MS)
+    // unless it is already running or both gates say no.
+    resumeCpuPolling() {
+        if (this.cpuPollTimer) return;
+        this._scheduleCpuPoll(0);
+    }
+
+    // syncCpuPolling reconciles the chain with the effects profile and is what
+    // App.applyFastMode calls after it flips the body class. Low power on: stop
+    // sampling and drop the reading, so neither the brand tint nor the HUD
+    // keeps asserting a value nobody refreshes. Low power off: resume at once.
+    // The hidden path never comes through here — a hidden tab keeps its last
+    // reading for the desktop host to mirror.
+    syncCpuPolling() {
+        if (typeof document === 'undefined') return;
+        if (!document?.body?.classList?.contains('fast-mode')) {
+            this.resumeCpuPolling();
+            return;
+        }
+        this._stopCpuPolling();
+        this.lastCpuPercent = null;
+        this.lastCpuSampleAt = 0;
+        applyBrandCpuTier(0);
+    }
+
     applyCPUIndicator(cpuPercent) {
         // Cache for the self-state HUD so hovering doesn't trigger a fetch.
-        // The HUD reads this on every render — polling keeps it fresh.
+        // The HUD reads this on every render — polling keeps it fresh, and
+        // _hudCpuPercent ages it out once polling stops.
         this.lastCpuPercent = cpuPercent;
+        this.lastCpuSampleAt = Date.now();
         const status = applyBrandCpuTier(cpuPercent);
         // The tiers are static now, so the change itself has to be what
         // moves. A finite burst costs ~2.4ms/frame for its duration and
@@ -11105,10 +11201,7 @@ export class TabManager {
         const hud = buildSelfHud({
             hostname: this.app?.hostname || '',
             version,
-            cpuPercent:
-                typeof this.lastCpuPercent === 'number'
-                    ? this.lastCpuPercent
-                    : null,
+            cpuPercent: this._hudCpuPercent(),
             tabs: this.tabs.values(),
         });
 

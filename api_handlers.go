@@ -765,7 +765,8 @@ func handleWorktreeStateUpdate(w http.ResponseWriter, r *http.Request) {
 
 // handleSystemCPU returns the current system-wide CPU percent (0.0–100.0)
 // for the ambient CPU indicator in the UI header. Polled by the
-// frontend at 1s; cheap enough to handle synchronously without caching.
+// frontend every 10s, and only while its tab is visible with low power
+// mode off; cheap enough to handle synchronously without caching.
 // On sampling failure, returns 0.0 with HTTP 200 (the UI treats 0 as
 // 'no data, leave indicator idle').
 func handleSystemCPU(w http.ResponseWriter, r *http.Request) {

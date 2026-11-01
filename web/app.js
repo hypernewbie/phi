@@ -1931,6 +1931,11 @@ export class App {
             mobile ||
             deviceMobile;
         document.body.classList.toggle('fast-mode', on);
+        // The same switch gates ambient polling: turning low power off resumes
+        // the CPU chain, turning it on stops it and drops the stale reading.
+        // Every writer — the settings toggle, the desktop tray fan-out, the
+        // legacy config reload — ends here, so this is the one hook to place.
+        this.tabManager?.syncCpuPolling?.();
     }
 
     // setLowPowerMode is the single writer of the browser preference:

@@ -1610,13 +1610,13 @@ describe('src/desktop.ts (per-server CPU observation: rail intensity + taskbar p
     expect(desktopSource).toContain('setProgressBar(-1)');
   });
 
-  it('polls every retained view at the remote 2s cadence; the taskbar follows only the selected server', () => {
+  it('mirrors every retained view at the 10s CPU cadence; the taskbar follows only the selected server', () => {
     const intervalIdx = desktopSource.indexOf('cpuInterval = setInterval');
     expect(intervalIdx).toBeGreaterThan(-1);
     expect(desktopSource.indexOf('pollCpu()', intervalIdx)).toBeGreaterThan(
       intervalIdx,
     );
-    expect(desktopSource.indexOf('2_000', intervalIdx)).toBeGreaterThan(
+    expect(desktopSource.indexOf('10_000', intervalIdx)).toBeGreaterThan(
       intervalIdx,
     );
     const pollIdx = desktopSource.indexOf('pollCpu(): void');
@@ -1678,6 +1678,42 @@ describe('src/desktop.ts (per-server CPU observation: rail intensity + taskbar p
     expect(
       desktopSource.indexOf('observedCpu.delete(id)', handlerIdx),
     ).toBeGreaterThan(handlerIdx);
+  });
+
+  it('freezes the CPU poll while low power mode is on or the window is hidden', () => {
+    const pollIdx = desktopSource.indexOf('pollCpu(): void');
+    expect(pollIdx).toBeGreaterThan(-1);
+    // Low power first: it drops the readings the taskbar and rail were driven
+    // from, so neither can freeze at a stale percentage.
+    const lowPowerIdx = desktopSource.indexOf(
+      'if (ctrl.getLowPowerMode()) {',
+      pollIdx,
+    );
+    expect(lowPowerIdx).toBeGreaterThan(pollIdx);
+    expect(
+      desktopSource.indexOf('this.observedCpu.clear()', pollIdx),
+    ).toBeGreaterThan(lowPowerIdx);
+    // The tint on the main view is cleared with the rest of the readings.
+    expect(
+      desktopSource.indexOf('this.pushHeaderState(', lowPowerIdx),
+    ).toBeGreaterThan(lowPowerIdx);
+    // Turning the switch back off restarts the reading at once.
+    expect(
+      desktopSource.indexOf(
+        'if (!enabled) this.pollCpu();',
+        desktopSource.indexOf('applyLowPowerMode(enabled: boolean)'),
+      ),
+    ).toBeGreaterThan(-1);
+    // Then the hidden/minimized gate, which keeps the last valid reading.
+    const hiddenIdx = desktopSource.indexOf(
+      'if (win.isMinimized() || !win.isVisible()) return;',
+      pollIdx,
+    );
+    expect(hiddenIdx).toBeGreaterThan(lowPowerIdx);
+    // Both gates precede every read of a retained view.
+    expect(
+      desktopSource.indexOf('for (const profile of st.profiles)', pollIdx),
+    ).toBeGreaterThan(hiddenIdx);
   });
 
   it('polls health every 30 seconds as documented', () => {
