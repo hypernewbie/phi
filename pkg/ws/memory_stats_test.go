@@ -74,7 +74,7 @@ func TestMemoryStatsCheckpointReplacementAndArchiveRehydration(t *testing.T) {
 	if !live.Complete || *live.LiveOwnerCount != 1 || *live.ArchiveOwnerCount != 0 {
 		t.Fatalf("live owner counts = %+v", live)
 	}
-	if *live.RingCapacityBytes != 32 || *live.CheckpointCapacityBytes != 23 || *live.WasmLinearBytes == 0 {
+	if *live.RingCapacityBytes != 32 || *live.CheckpointCapacityBytes != 23 || *live.WasmLinearBytes != 0 || *live.NativeResidentBytes == 0 {
 		t.Fatalf("live memory stats = %+v", live)
 	}
 	afterSnapshot, ok := h.Recording("owned", 0, head)
@@ -87,7 +87,7 @@ func TestMemoryStatsCheckpointReplacementAndArchiveRehydration(t *testing.T) {
 	if !archived.Complete || *archived.LiveOwnerCount != 0 || *archived.ArchiveOwnerCount != 1 {
 		t.Fatalf("archive owner counts = %+v", archived)
 	}
-	if *archived.RingCapacityBytes != 0 || *archived.CheckpointCapacityBytes != 0 || *archived.WasmLinearBytes != 0 {
+	if *archived.RingCapacityBytes != 0 || *archived.CheckpointCapacityBytes != 0 || *archived.WasmLinearBytes != 0 || *archived.NativeResidentBytes != 0 {
 		t.Fatalf("closed pane retained live buffers: %+v", archived)
 	}
 
@@ -101,7 +101,7 @@ func TestMemoryStatsCheckpointReplacementAndArchiveRehydration(t *testing.T) {
 	if !rehydrated.Complete || *rehydrated.LiveOwnerCount != 1 || *rehydrated.ArchiveOwnerCount != 0 {
 		t.Fatalf("rehydrated owner counts = %+v", rehydrated)
 	}
-	if *rehydrated.RingCapacityBytes != 32 || *rehydrated.WasmLinearBytes == 0 {
+	if *rehydrated.RingCapacityBytes != 32 || *rehydrated.WasmLinearBytes != 0 || *rehydrated.NativeResidentBytes == 0 {
 		t.Fatalf("rehydrated memory stats = %+v", rehydrated)
 	}
 	afterRehydrate, ok := h.Recording("owned", 0, head)
@@ -118,7 +118,7 @@ func TestMemoryStatsBusyHubReturnsNullCounters(t *testing.T) {
 	if got.Complete || got.Reason != "hub_busy" {
 		t.Fatalf("busy hub status = %+v", got)
 	}
-	if got.LiveOwnerCount != nil || got.ArchiveOwnerCount != nil || got.SkippedOwnerCount != nil || got.RingCapacityBytes != nil || got.CheckpointCapacityBytes != nil || got.WasmLinearBytes != nil {
+	if got.LiveOwnerCount != nil || got.ArchiveOwnerCount != nil || got.SkippedOwnerCount != nil || got.RingCapacityBytes != nil || got.CheckpointCapacityBytes != nil || got.WasmLinearBytes != nil || got.NativeResidentBytes != nil {
 		t.Fatalf("busy hub reported counters: %+v", got)
 	}
 }
@@ -133,7 +133,7 @@ func TestMemoryStatsSkipsBusyPaneWithoutInventingTotals(t *testing.T) {
 	if got.Complete || got.LiveOwnerCount == nil || *got.LiveOwnerCount != 1 || got.SkippedOwnerCount == nil || *got.SkippedOwnerCount != 1 {
 		t.Fatalf("busy pane status = %+v", got)
 	}
-	if *got.RingCapacityBytes != 0 || *got.CheckpointCapacityBytes != 0 || *got.WasmLinearBytes != 0 {
+	if *got.RingCapacityBytes != 0 || *got.CheckpointCapacityBytes != 0 || *got.WasmLinearBytes != 0 || *got.NativeResidentBytes != 0 {
 		t.Fatalf("busy pane totals should contain no guessed values: %+v", got)
 	}
 }

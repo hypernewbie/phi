@@ -227,6 +227,16 @@ GHOSTTY_API void ghostty_formatter_free(GhosttyFormatter formatter);
 
 /** @} */
 
+GHOSTTY_API GhosttyResult ghostty_phi_state_format_alloc(
+    GhosttyTerminal terminal, const GhosttyAllocator* allocator,
+    uint8_t** out_ptr, size_t* out_len);
+
+GHOSTTY_API GhosttyResult ghostty_formatter_terminal_screen_new(
+    const GhosttyAllocator* allocator,
+    GhosttyFormatter* formatter,
+    GhosttyTerminal terminal,
+    GhosttyFormatterTerminalOptions options);
+
 #ifdef __cplusplus
 }
 #endif

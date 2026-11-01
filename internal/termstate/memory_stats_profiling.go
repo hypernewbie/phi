@@ -2,19 +2,24 @@
 
 package termstate
 
-import "errors"
+/*
+#include <ghostty/vt.h>
+*/
+import "C"
 
-var errLinearMemoryUnavailable = errors.New("terminal linear memory unavailable")
+import "unsafe"
 
-// LinearMemoryBytes reports the current addressable WASM memory size. Call
-// under the pane lock; Grow(0) reads the page count without changing it.
-func (t *Terminal) LinearMemoryBytes() (uint64, error) {
-	if t == nil || t.module == nil {
+// ResidentMemoryBytes reports native screen-page and image memory, excluding
+// other terminal allocations and allocator overhead. Call under the pane lock.
+func (t *Terminal) ResidentMemoryBytes() (uint64, error) {
+	if t == nil || t.handle == nil {
 		return 0, nil
 	}
-	pages, ok := t.module.Memory().Grow(0)
-	if !ok {
-		return 0, errLinearMemoryUnavailable
+	var usage C.GhosttyTerminalMemoryUsage
+	usage.size = C.size_t(C.sizeof_GhosttyTerminalMemoryUsage)
+	if rc := C.ghostty_terminal_get(t.handle, C.GHOSTTY_TERMINAL_DATA_MEMORY_USAGE, unsafe.Pointer(&usage)); rc != C.GHOSTTY_SUCCESS {
+		return 0, statusErr("ghostty_terminal_get", rc)
 	}
-	return uint64(pages) * 65536, nil
+	return uint64(usage.primary_resident_bytes + usage.alternate_resident_bytes +
+		usage.primary_image_bytes + usage.alternate_image_bytes), nil
 }

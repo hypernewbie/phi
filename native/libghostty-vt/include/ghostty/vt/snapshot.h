@@ -609,6 +609,10 @@ GHOSTTY_API GhosttyResult ghostty_snapshot_decoder_get_multi(
 
 /** @} */
 
+GHOSTTY_API GhosttyResult ghostty_snapshot_encode_ready_alloc(
+    GhosttyTerminal terminal, const GhosttyAllocator* allocator,
+    uint8_t** out_ptr, size_t* out_len);
+
 #ifdef __cplusplus
 }
 #endif

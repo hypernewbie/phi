@@ -208,6 +208,25 @@ func TestReadyWindowBoundsLocalHistoryWithoutChangingSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A request below one page cannot prune: the retained window is the page
+	// suffix that covers the active area, and that page width follows the
+	// platform page size. Measure the floor from the engine instead of
+	// hardcoding one backend's page size.
+	floor, err := New(t.Context(), 80, 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer floor.Close()
+	if err = floor.Feed(input); err != nil {
+		t.Fatal(err)
+	}
+	if err = floor.LimitScrollbackLines(0); err != nil {
+		t.Fatal(err)
+	}
+	floorRows, err := floor.HistoryRows()
+	if err != nil {
+		t.Fatal(err)
+	}
 	local, err := New(t.Context(), 80, 24)
 	if err != nil {
 		t.Fatal(err)
@@ -220,8 +239,8 @@ func TestReadyWindowBoundsLocalHistoryWithoutChangingSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if before <= after || after > 64+256 {
-		t.Fatalf("server history=%d local page-bounded history=%d", before, after)
+	if before <= after || after > floorRows {
+		t.Fatalf("server history=%d local page-bounded history=%d one-page floor=%d", before, after, floorRows)
 	}
 	fullScreen, err := original.FormatVTState()
 	if err != nil {

@@ -263,8 +263,8 @@ func (h *Hub) HistoricalState(paneID string, epoch, through uint64) (PanePositio
 
 // Historical reconstruction has its own parser. Hold the pane lock only for
 // bounded journal reads, never for VT replay or snapshot formatting, so a
-// history request cannot stall live ingestion. Request cancellation also
-// cancels its WASM work; disposing the parser stays on this owner.
+// history request cannot stall live ingestion. Request cancellation stops
+// replay at chunk boundaries; disposing the parser stays on this owner.
 func (h *Hub) HistoricalStateContext(ctx context.Context, paneID string, epoch, through uint64) (PanePosition, []byte, int, int, error) {
 	return h.historicalStateContext(ctx, paneID, epoch, through, false)
 }
@@ -411,6 +411,12 @@ func (h *Hub) historicalStateContext(ctx context.Context, paneID string, epoch, 
 		snapshot, err = state.FormatVTState()
 	} else {
 		snapshot, err = state.ReadyWindow(historyCheckpointRows)
+	}
+	if err != nil {
+		return pos, nil, 0, 0, err
+	}
+	if err := ctx.Err(); err != nil {
+		return pos, nil, 0, 0, err
 	}
 	cols, rows := state.Geometry()
 	ph.mu.Lock()
