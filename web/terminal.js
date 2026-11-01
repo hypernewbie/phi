@@ -3753,28 +3753,23 @@ export class TabManager {
         };
         // Fire-and-forget: a failed upload only means the next attach uses
         // the bounded-delta fallback instead of the snapshot. A beacon is the
-        // correct primitive here — the network service queues it, so a page
-        // navigation or close cannot abort it into a failed request. A
-        // refused beacon (over quota, or no sendBeacon in the embedder)
-        // retries as a plain fetch while the page is still alive.
+        // right primitive here: the network service owns the body, so a page
+        // navigation or close cannot abort it into a failed request. An
+        // unload upload has no time to retry, so a refused beacon is simply
+        // lost; while the page is still alive a refusal falls back to fetch.
         const url = `/api/terminals/${encodeURIComponent(tabInfo.paneId)}/checkpoint`;
-        const body = JSON.stringify(payload);
+        const blob = new Blob([JSON.stringify(payload)], {
+            type: 'application/json',
+        });
         if (options?.unload) {
-            navigator.sendBeacon?.(
-                url,
-                new Blob([body], { type: 'application/json' }),
-            );
+            navigator.sendBeacon?.(url, blob);
             return;
         }
-        if (navigator.sendBeacon?.(
-            url,
-            new Blob([body], { type: 'application/json' }),
-        ))
-            return;
+        if (navigator.sendBeacon?.(url, blob)) return;
         fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body,
+            body: blob,
         })
             .then((res) => {
                 if (res.ok) termPerfMark('ckpt-uploaded');
