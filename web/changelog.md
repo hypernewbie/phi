@@ -4,6 +4,9 @@ All notable changes to phi are documented here. Newest versions first.
 
 ## Unreleased
 
+### Changed
+- **The CPU indicator polls on demand instead of always.** The header logo's CPU tint came from a 2s `/api/system/cpu` fetch on every open tab, forever, whether or not anyone could see it. It now samples once every 10s, samples nothing while the tab is hidden (the chain stops and restarts from `visibilitychange`), and samples nothing at all while low power mode is on. Low power mode is the effects profile the settings toggle and the desktop tray already write; it is forced on for mobile viewports, so a phone takes no ambient samples. The hover HUD ages a sample out after three turns and shows `cpu —` instead of a stale number. The desktop host mirrors the same 10s cadence and freezes its per-view reads while its window is hidden or minimized, or while its own low power switch is on; the `phic` TUI polls the same endpoint on the same 10s cadence. Sampling costs the server about 1µs, so the request, not the sample, was the expense.
+
 ## v0.33.0 — 2026-11-01
 
 ### Added

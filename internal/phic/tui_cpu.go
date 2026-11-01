@@ -64,7 +64,10 @@ type msgCPUPulse struct{}
 // burst on tier entry, then the static tier look holds.
 const cpuFlourishDuration = 480 * time.Millisecond
 
-const cpuPollInterval = 2 * time.Second
+// cpuPollInterval is the ambient tier cadence, matching CPU_POLL_INTERVAL_MS
+// in web/terminal.js: the reading only tints the brand glyph, so a slow sample
+// is enough. Sampling costs the server ~1us; the request is the expense.
+const cpuPollInterval = 10 * time.Second
 
 const identityPollCooldown = 15 * time.Second
 

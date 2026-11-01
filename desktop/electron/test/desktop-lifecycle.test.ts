@@ -172,6 +172,9 @@ const fake = vi.hoisted(() => {
     isMinimized(): boolean {
       return this.minimized;
     }
+    isVisible(): boolean {
+      return !this.hidden && !this.minimized && !this.destroyed;
+    }
     restore(): void {
       this.minimized = false;
     }

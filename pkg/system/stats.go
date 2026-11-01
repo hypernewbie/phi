@@ -52,8 +52,9 @@ func NewSampler() *Sampler {
 //
 // We intentionally use cpu.Percent(0, false) (no blocking interval,
 // all cores aggregated) rather than a fixed sampling interval — the
-// frontend already polls at 1s, so the delta will represent roughly
-// one second of activity.
+// frontend polls every 10s, so on one client the delta covers that
+// window. The next step up in cost is the request, not the sample
+// (~1us here).
 func (s *Sampler) Sample(ctx context.Context) (Stats, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
