@@ -1121,6 +1121,20 @@ async function classifyExpectedDiagnostics(
                 entry.classification = 'offline-network-disconnection';
                 continue;
             }
+            // The tracker marks online before the browser network restores,
+            // so a background poll fired in that gap fails disconnected with
+            // a recovery-phase record. Same origin plus a known offline
+            // error keeps this narrow.
+            if (
+                entry.kind === 'request-failed' &&
+                entry.phase === 'recovery' &&
+                request?.phase === 'recovery' &&
+                request.origin === item.origin &&
+                OFFLINE_NETWORK_ERRORS.has(entry.message)
+            ) {
+                entry.classification = 'offline-network-disconnection';
+                continue;
+            }
             if (
                 entry.kind === 'console-error' &&
                 (entry.phase === 'offline' || entry.phase === 'recovery') &&
@@ -1130,8 +1144,9 @@ async function classifyExpectedDiagnostics(
                 item.requestRecords.some(
                     (candidate) =>
                         candidate.url === entry.url &&
-                        candidate.phase === 'offline' &&
-                        !candidate.onlineAtStart &&
+                        ((candidate.phase === 'offline' &&
+                            !candidate.onlineAtStart) ||
+                            candidate.phase === 'recovery') &&
                         candidate.terminal?.kind === 'failed' &&
                         candidate.terminal.errorText ===
                             'net::ERR_INTERNET_DISCONNECTED',
