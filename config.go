@@ -621,6 +621,8 @@ func cloneConfig(cfg Config) Config {
 	cfg.MobileTerminalFontSize = clonePtr(cfg.MobileTerminalFontSize)
 	cfg.ReplayBufferBytes = clonePtr(cfg.ReplayBufferBytes)
 	cfg.Peers = slices.Clone(cfg.Peers)
+	cfg.AuthOrigins = slices.Clone(cfg.AuthOrigins)
+	cfg.AccessAuthMigration = clonePtr(cfg.AccessAuthMigration)
 	return cfg
 }
 
