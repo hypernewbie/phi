@@ -3685,7 +3685,9 @@ export class TabManager {
     }
 
     _scheduleCheckpointUpload(tabInfo) {
-        if (tabInfo._serverStateAvailable) return;
+        // A coarse pointer has no wheel and the server's ANSI state carries no
+        // scrollback, so the client keeps its own 256-row snapshot current.
+        if (tabInfo._serverStateAvailable && !isCoarseViewport()) return;
         if (!tabInfo.serializeAddon || !tabInfo._ckptEnabled) return;
         clearTimeout(tabInfo._ckptTimer);
         tabInfo._ckptTimer = setTimeout(() => {
@@ -3695,7 +3697,7 @@ export class TabManager {
     }
 
     _uploadCheckpoint(tabInfo) {
-        if (tabInfo._serverStateAvailable) return;
+        if (tabInfo._serverStateAvailable && !isCoarseViewport()) return;
         const pty = tabInfo.ws;
         if (
             !tabInfo.serializeAddon ||
@@ -4979,10 +4981,26 @@ export class TabManager {
             if (e.deltaY > 0) loadNewer();
         }, { capture: true, passive: true });
         let touchY;
-        termContainer.addEventListener('touchstart', e => { touchY = e.touches?.[0]?.clientY; }, { passive: true });
+        let topPageArmed = true;
+        termContainer.addEventListener('touchstart', e => {
+            touchY = e.touches?.[0]?.clientY;
+            topPageArmed = true;
+        }, { passive: true });
         termContainer.addEventListener('touchmove', e => {
             if (e.touches?.length !== 1) return;
-            if (e.touches[0].clientY < touchY) loadNewer();
+            if (e.touches[0].clientY < touchY) {
+                loadNewer();
+                return;
+            }
+            // A coarse pointer has no wheel, so a swipe past the top is the
+            // only way to ask for older output. xterm cannot scroll there:
+            // the restored buffer holds no rows above the screen.
+            if (!topPageArmed || !isCoarseViewport() || !tabInfo._historyOmitted) return;
+            if (tabInfo.isDead || tabInfo._historyLoading) return;
+            const buffer = tabInfo.term?.buffer?.active;
+            if (!buffer || buffer.type !== 'normal' || buffer.viewportY > 0) return;
+            topPageArmed = false;
+            this._loadColdHistory(tabInfo);
         }, { passive: true });
         // Detect native buffer eviction too; the manual button can recover it.
         term._core?._bufferService?.buffers?.normal?.lines?.onTrim?.(() => {

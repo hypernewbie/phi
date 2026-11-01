@@ -484,8 +484,17 @@ func (h *Hub) AttachHot(paneID string, client *Client) {
 		}
 		var snapshot []byte
 		var err error
+		cols, rows := ph.state.Geometry()
 		if client.NativeState {
 			snapshot, err = ph.state.ReadyWindow(256)
+		} else if stored := ph.ckpt; stored != nil && stored.Through == pos.Head {
+			// The server formatter emits the visible screen alone, so an ANSI
+			// attach would restore a terminal with no rows to scroll. A client
+			// checkpoint is the only ANSI snapshot that carries scrollback. An
+			// exact head match keeps it current; anything older falls back to
+			// the screen and the client's delta.
+			snapshot = stored.Ansi
+			cols, rows = int(stored.Cols), int(stored.Rows)
 		} else {
 			var screen, continuation []byte
 			screen, err = ph.state.FormatVTState()
@@ -501,7 +510,6 @@ func (h *Hub) AttachHot(paneID string, client *Client) {
 			}
 			return
 		}
-		cols, rows := ph.state.Geometry()
 		kind := "ghostty-ready-v1"
 		if client.AnsiState {
 			kind = "ansi-v1"

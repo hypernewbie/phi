@@ -773,6 +773,42 @@ describe('checkpoint upload', () => {
         expect(body.ansi).toBe('SNAPSHOT');
     });
 
+    it('keeps uploading on a coarse pointer even when the server owns the state', () => {
+        stubTerminalGlobal();
+        const tm = makeTm();
+        const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+        vi.stubGlobal('fetch', fetchMock);
+        // A phone cannot scroll a restored screen: its own snapshot is the
+        // only ANSI state that carries scrollback, so it must keep refreshing
+        // the stored checkpoint even after a server-state attach.
+        const originalMatchMedia = window.matchMedia;
+        window.matchMedia = (query) => ({
+            matches: query === '(pointer: coarse)',
+            media: query,
+        });
+
+        tm.createTab('p9', 's9', 'T', 'bash', '', '', false);
+        const tab = tm.tabs.get('p9');
+        tab.ws.ws.emitAttachHead({ epoch: 7, oldest: 0, head: 50 });
+        tab.serializeAddon = { serialize: () => 'SNAPSHOT' };
+        tab.paneEpoch = 7;
+        tab.drainedSeq = 50;
+        tab.term.cols = 63;
+        tab.term.rows = 56;
+        tab._serverStateAvailable = true;
+
+        tm._uploadCheckpoint(tab);
+
+        if (originalMatchMedia === undefined) delete window.matchMedia;
+        else window.matchMedia = originalMatchMedia;
+        const request = fetchMock.mock.calls.find(
+            ([url, init]) =>
+                String(url).includes('/api/terminals/p9/checkpoint') &&
+                init?.method === 'POST',
+        );
+        expect(request).toBeDefined();
+    });
+
     it('drops the upload when the terminal is gone instead of throwing', () => {
         stubTerminalGlobal();
         const tm = makeTm();

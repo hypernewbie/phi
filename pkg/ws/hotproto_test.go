@@ -194,6 +194,52 @@ func TestStoreCheckpointRules(t *testing.T) {
 	}
 }
 
+func TestAnsiAttachPrefersCurrentClientCheckpoint(t *testing.T) {
+	h := NewHub(1024)
+	if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
+		t.Fatalf("SetRecordingDirectory: %v", err)
+	}
+	h.Ingest("p", []byte("hello")) // head=5
+	ph, ok := h.LookupPane("p")
+	if !ok {
+		t.Fatal("pane missing")
+	}
+	ph.mu.Lock()
+	epoch := ph.epoch
+	ph.mu.Unlock()
+
+	// A coarse-pointer client snapshot at the exact head carries scrollback
+	// the server formatter cannot emit; an ANSI attach must serve it verbatim.
+	if !h.StoreCheckpoint("p", CheckpointUpload{Epoch: epoch, Through: 5, Cols: 63, Rows: 56, Ansi: []byte("CLIENT-SNAPSHOT")}) {
+		t.Fatal("valid checkpoint rejected")
+	}
+	c := &Client{Send: make(chan []byte, 4), AnsiState: true}
+	h.AttachHot("p", c)
+	ckpt := parseAttach(t, drainOne(c.Send)).GetCheckpoint()
+	if ckpt == nil || ckpt.GetKind() != "ansi-v1" {
+		t.Fatalf("checkpoint = %+v", ckpt)
+	}
+	if string(ckpt.GetData()) != "CLIENT-SNAPSHOT" || ckpt.GetThrough() != 5 {
+		t.Fatalf("snapshot not served verbatim: %+v %q", ckpt, ckpt.GetData())
+	}
+	if ckpt.GetCols() != 63 || ckpt.GetRows() != 56 {
+		t.Fatalf("snapshot geometry lost: %dx%d", ckpt.GetCols(), ckpt.GetRows())
+	}
+
+	// Head moved past the snapshot: it is stale, so the attach must fall
+	// back to the live screen state instead of the old scrollback bytes.
+	h.Ingest("p", []byte(" world")) // head=11
+	c2 := &Client{Send: make(chan []byte, 4), AnsiState: true}
+	h.AttachHot("p", c2)
+	ckpt2 := parseAttach(t, drainOne(c2.Send)).GetCheckpoint()
+	if ckpt2 == nil || ckpt2.GetThrough() != 11 {
+		t.Fatalf("fallback checkpoint = %+v", ckpt2)
+	}
+	if bytes.Contains(ckpt2.GetData(), []byte("CLIENT-SNAPSHOT")) {
+		t.Fatal("stale client snapshot served after the head advanced")
+	}
+}
+
 func TestAttachHeadDropsCheckpointBelowRetentionFloor(t *testing.T) {
 	h := NewHub(8)
 	if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
