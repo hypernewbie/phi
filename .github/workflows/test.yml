@@ -70,15 +70,6 @@ jobs:
       - name: Profiling Partition Guard
         run: bash scripts/check-profiling-build.sh "$(mktemp -d)/partition"
 
-      # The main server must build with and without the profiling tag
-      # on every supported platform. Linux is covered natively above.
-      - name: Build server (darwin/windows, both tags)
-        run: |
-          for goos in darwin windows; do
-            GOOS=$goos CGO_ENABLED=0 go build -o /tmp/phi-server-${goos} .
-            GOOS=$goos CGO_ENABLED=0 go build -tags=profiling -o /tmp/phi-server-${goos}-profiling .
-          done
-
       # Both binaries link the native VT engine, so cross-builds need a C
       # toolchain per target; the sha256 gate keeps the compiler supply
       # chain fixed. Host linux/amd64 is covered by the full test run above.
@@ -100,9 +91,13 @@ jobs:
           CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC="zig cc -target aarch64-linux-gnu" \
             go build -o /tmp/phi-linux-arm64 .
           CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC="zig cc -target aarch64-linux-gnu" \
+            go build -tags=profiling -o /tmp/phi-linux-arm64-profiling .
+          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC="zig cc -target aarch64-linux-gnu" \
             go build -o /tmp/phic-linux-arm64 ./cmd/phic
           CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC="zig cc -target x86_64-windows-gnu" \
             go build -o /tmp/phi-windows-amd64.exe .
+          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC="zig cc -target x86_64-windows-gnu" \
+            go build -tags=profiling -o /tmp/phi-windows-amd64-profiling.exe .
           CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC="zig cc -target x86_64-windows-gnu" \
             go build -o /tmp/phic-windows-amd64.exe ./cmd/phic
 
@@ -133,12 +128,16 @@ jobs:
       - name: Build both binaries (arm64 + amd64)
         run: |
           CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 CC="clang -arch arm64" go build -o /tmp/phi-darwin-arm64 .
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 CC="clang -arch arm64" go build -tags=profiling -o /tmp/phi-darwin-arm64-profiling .
           CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 CC="clang -arch arm64" go build -o /tmp/phic-darwin-arm64 ./cmd/phic
           CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 CC="clang -arch x86_64" go build -o /tmp/phi-darwin-amd64 .
+          CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 CC="clang -arch x86_64" go build -tags=profiling -o /tmp/phi-darwin-amd64-profiling .
           CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 CC="clang -arch x86_64" go build -o /tmp/phic-darwin-amd64 ./cmd/phic
 
-      - name: Engine tests (host arch)
-        run: go test ./internal/termstate/... ./internal/termemu/
+      - name: Engine tests (host arch, both tags)
+        run: |
+          go test ./internal/termstate/... ./internal/termemu/
+          go test -tags=profiling ./internal/termstate/... ./internal/termemu/
 
   test-windows:
     name: Windows native builds + engine tests
@@ -176,15 +175,20 @@ jobs:
           $env:CC = 'zig cc -target x86_64-windows-gnu'
           go build -o (Join-Path $env:RUNNER_TEMP 'phi.exe') .
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go build -tags=profiling -o (Join-Path $env:RUNNER_TEMP 'phi-profiling.exe') .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go build -o (Join-Path $env:RUNNER_TEMP 'phic.exe') ./cmd/phic
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Engine tests
+      - name: Engine tests (both tags)
         shell: pwsh
         run: |
           $env:CGO_ENABLED = '1'
           $env:CC = 'zig cc -target x86_64-windows-gnu'
           go test ./internal/termstate/... ./internal/termemu/
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -tags=profiling ./internal/termstate/... ./internal/termemu/
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   goreleaser-check:
     name: GoReleaser config check
