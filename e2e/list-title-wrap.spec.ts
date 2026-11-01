@@ -19,7 +19,7 @@ import {
 } from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
 import {
-    isCancelledGitInfoRead,
+    isCancelledGitRead,
     isCancelledSessionListRead,
     isCancelledWorktreeRead,
 } from './_session-requests.js';
@@ -867,7 +867,7 @@ async function installDiagnostics(
             classification = 'cancelled-session-list-read';
         else if (isCancelledWorktreeRead(request, origin))
             classification = 'cancelled-worktree-read';
-        else if (isCancelledGitInfoRead(request, origin))
+        else if (isCancelledGitRead(request, origin))
             classification = 'cancelled-git-info-read';
         entries.push({
             phase: metadata?.phase ?? phase,

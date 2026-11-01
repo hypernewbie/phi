@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-    isCancelledGitInfoRead,
+    isCancelledGitRead,
     isCancelledSessionListRead,
     isCancelledWorktreeRead,
 } from '../e2e/_session-requests.ts';
@@ -66,14 +66,12 @@ describe('expected background session-list cancellation diagnostics', () => {
     });
 });
 
-describe('expected Git-info cancellation diagnostics', () => {
-    it('recognizes a canceled same-origin GET with a cwd query', () => {
-        expect(
-            isCancelledGitInfoRead(
-                request(`${origin}/api/git/info?cwd=%2Fwork`),
-                origin,
-            ),
-        ).toBe(true);
+describe('expected Git read cancellation diagnostics', () => {
+    it.each([
+        [`${origin}/api/git/info?cwd=%2Fwork`],
+        [`${origin}/api/git/status-files?cwd=%2Fwork`],
+    ])('recognizes a canceled same-origin GET of %s', (url) => {
+        expect(isCancelledGitRead(request(url), origin)).toBe(true);
     });
 
     it.each([
@@ -82,11 +80,19 @@ describe('expected Git-info cancellation diagnostics', () => {
         [`${origin}/api/git/info`, 'GET', 'net::ERR_FAILED'],
         [`${origin}/api/git/info`, 'GET', null],
         [`${origin}/api/git/info/extra`, 'GET', 'net::ERR_ABORTED'],
+        [`${origin}/api/git/status-files`, 'POST', 'net::ERR_ABORTED'],
+        [`${origin}/api/git/status-files`, 'GET', 'net::ERR_FAILED'],
+        [`${origin}/api/git/status-files/extra`, 'GET', 'net::ERR_ABORTED'],
         ['http://127.0.0.1:17778/api/git/info', 'GET', 'net::ERR_ABORTED'],
         ['http://localhost:17777/api/git/info', 'GET', 'net::ERR_ABORTED'],
+        [
+            'http://127.0.0.1:17778/api/git/status-files?cwd=%2Fwork',
+            'GET',
+            'net::ERR_ABORTED',
+        ],
     ])('does not exempt %s %s %s', (url, method, errorText) => {
         expect(
-            isCancelledGitInfoRead(request(url, method, errorText), origin),
+            isCancelledGitRead(request(url, method, errorText), origin),
         ).toBe(false);
     });
 });
