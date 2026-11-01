@@ -19,7 +19,7 @@
 // terminal.js / app.js convert; once they do, the test continues
 // working as a no-op safety net.
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import { TabManager } from '../web/terminal.js';
 import { SessionsManager } from '../web/sessions.js';
 import { DiffController } from '../web/diff.js';
@@ -274,15 +274,25 @@ const appExpectations = [
 ];
 
 describe('manager surface smoke', () => {
+    // Instances are throwaways, but TabManager arms two background polls in
+    // its constructor. Release whatever the last check built, so no interval
+    // fires into the next test or past the jsdom teardown.
+    let instance = null;
+    const build = (newFn) => (instance = newFn());
+    afterEach(() => {
+        instance?.dispose?.();
+        instance = null;
+    });
+
     for (const { cls, newFn, method, field } of expectations) {
         for (const name of method) {
             it(`${cls}.prototype.${name} is a function`, () => {
-                expect(typeof newFn()[name]).toBe('function');
+                expect(typeof build(newFn)[name]).toBe('function');
             });
         }
         for (const name of field) {
             it(`${cls} instance has ${name} field`, () => {
-                expect(name in newFn()).toBe(true);
+                expect(name in build(newFn)).toBe(true);
             });
         }
     }

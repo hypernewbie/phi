@@ -138,6 +138,7 @@ describe('Single-Tab Embedded Backend Switching', () => {
     });
 
     afterEach(() => {
+        app?.tabManager?.dispose();
         setEmbeddedBackend('', '');
         backendStores.clear();
     });
@@ -166,6 +167,21 @@ describe('Single-Tab Embedded Backend Switching', () => {
         expect(app._initializedOnce).toBe(true);
         // Handler should not have been added a second time
         expect(exportClicks).toBe(1);
+    });
+
+    it('Test 1b: dispose() releases the background poll intervals', () => {
+        app = new App();
+        const { idlePollTimer, cpuPollTimer } = app.tabManager;
+        expect(idlePollTimer).not.toBeNull();
+        expect(cpuPollTimer).not.toBeNull();
+
+        const clear = vi.spyOn(globalThis, 'clearInterval');
+        app.tabManager.dispose();
+
+        expect(clear).toHaveBeenCalledWith(idlePollTimer);
+        expect(clear).toHaveBeenCalledWith(cpuPollTimer);
+        expect(app.tabManager.idlePollTimer).toBeNull();
+        expect(app.tabManager.cpuPollTimer).toBeNull();
     });
 
     it('Test 2: window.__phiEmbed.switchTo(id, origin) performs full switch cycle', async () => {
