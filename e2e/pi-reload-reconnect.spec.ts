@@ -17,10 +17,24 @@ import {
 
 async function watchDiagnostics(page: Page, serverOrigin: string) {
     const consoleErrors: string[] = [];
+    const offlineConsoleErrors: string[] = [];
+    let offlinePhase = false;
     const pageErrors: string[] = [];
     const localFailures: string[] = [];
     page.on('console', (message) => {
-        if (message.type() === 'error') consoleErrors.push(message.text());
+        if (message.type() !== 'error') return;
+        const text = message.text();
+        if (
+            offlinePhase &&
+            (text ===
+                'Failed to load resource: net::ERR_INTERNET_DISCONNECTED' ||
+                text ===
+                    '[term] Failed to sync pin on backend: TypeError: Failed to fetch')
+        ) {
+            offlineConsoleErrors.push(text);
+            return;
+        }
+        consoleErrors.push(text);
     });
     page.on('pageerror', (error) => pageErrors.push(error.message));
     page.on('response', (response) => {
@@ -65,7 +79,15 @@ async function watchDiagnostics(page: Page, serverOrigin: string) {
             await route.continue();
         }
     });
-    return { consoleErrors, pageErrors, localFailures };
+    return {
+        consoleErrors,
+        offlineConsoleErrors,
+        pageErrors,
+        localFailures,
+        setOfflinePhase(offline: boolean) {
+            offlinePhase = offline;
+        },
+    };
 }
 
 test('offline reload waits for reconnect and restores without replay', async ({
@@ -134,6 +156,7 @@ test('offline reload waits for reconnect and restores without replay', async ({
 
         // Dropping the browser offline holds the press visibly and
         // sends nothing; the draft stays staged.
+        watch.setOfflinePhase(true);
         await context.setOffline(true);
         await page.getByRole('button', { name: 'Cmds ▾' }).focus();
         await page.keyboard.press('Enter');
@@ -157,6 +180,7 @@ test('offline reload waits for reconnect and restores without replay', async ({
         // Drop the proxied pane socket after restoring network so this test
         // exercises the real attach/state resync that releases the queue.
         await context.setOffline(false);
+        watch.setOfflinePhase(false);
         if (!firstPaneSocket) throw new Error('pane socket was not routed');
         await firstPaneSocket.close({
             code: 1001,
@@ -326,6 +350,7 @@ test('offline reload waits for reconnect and restores without replay', async ({
             .locator('#input-textarea')
             .fill('MOBILE RECONNECT DRAFT');
         await stageReloadAttachment(mobilePage);
+        mobileWatch.setOfflinePhase(true);
         await mobilePage.context().setOffline(true);
         await mobilePage.getByRole('button', { name: 'Cmds ▾' }).tap();
         const mobileMenu = mobilePage.locator('#quick-commands-dropup');
@@ -346,6 +371,7 @@ test('offline reload waits for reconnect and restores without replay', async ({
         ).toHaveCount(1);
 
         await mobilePage.context().setOffline(false);
+        mobileWatch.setOfflinePhase(false);
         if (!firstMobilePaneSocket)
             throw new Error('mobile pane socket was not routed');
         await firstMobilePaneSocket.close({
@@ -467,6 +493,10 @@ test('offline reload waits for reconnect and restores without replay', async ({
                     desktopViewport: '1440x900',
                     mobileViewport: '390x844',
                     mobileTouch: true,
+                    offlineConsoleErrors: {
+                        desktop: watch.offlineConsoleErrors,
+                        mobile: mobileWatch.offlineConsoleErrors,
+                    },
                     desktopReloadResponses: reloads.calls.map(
                         ({ status }) => status,
                     ),
