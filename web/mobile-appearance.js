@@ -177,6 +177,21 @@ export function readDesktopAppearance(scope) {
 export function mobileSystemTextRatio(size) {
     return Number.isFinite(size) && size > 0 ? Math.max(1, size / 17) : 1;
 }
+// Authored UI text is sized in px per profile; the profile base is the
+// setting value at which --ui-scale is 1.
+const UI_SCALE_BASE = {
+    mobile: 13,
+    desktop: 14,
+};
+// Clamp to the range the Settings control offers (10..24) so a corrupt or
+// stale stored value cannot blow up the layout. A value below 10 means
+// "unset" and keeps the profile's authored sizes.
+export function appearanceFontScale(profile, size) {
+    if (!Number.isFinite(size) || size < 10)
+        return 1;
+    const clamped = Math.min(24, Math.max(10, size));
+    return clamped / UI_SCALE_BASE[profile];
+}
 let systemTextProbe = null;
 let systemTextObserver = null;
 let systemTextRatio = 1;
@@ -227,6 +242,12 @@ export function applyAppearanceFonts(profile, appearance) {
         systemTextRatio = 1;
     }
     const size = appearance.ui_font_size * (profile === 'mobile' ? systemTextRatio : 1);
+    // Authored UI text is sized in px; this scale carries the font-size
+    // setting into every rule. 1 keeps the profile's default size.
+    document.documentElement.style.setProperty('--ui-scale', String(appearance.ui_font_size >= 10
+        ? appearanceFontScale(profile, appearance.ui_font_size) *
+            (profile === 'mobile' ? systemTextRatio : 1)
+        : 1));
     document.documentElement.dataset.appearanceProfile = profile;
     document.documentElement.style.setProperty('--mobile-ui-size', `${size || 17}px`);
     // A CSSOM property assignment keeps saved font stacks out of stylesheet source.
