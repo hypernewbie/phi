@@ -5584,11 +5584,13 @@ html[data-phi-config-page] .settings-modal {
         overscroll-behavior: none;
     }
 
-    /* Prevent iOS WebKit auto-zoom on input focus */
+    /* Prevent iOS WebKit auto-zoom on input focus. The floor stays 16px so
+       a small UI size cannot re-enable focus zoom; above it the inputs follow
+       the configured size like the rest of the UI. */
     input,
     select,
     textarea {
-        font-size: max(16px, var(--mobile-ui-size, 17px)) !important;
+        font-size: max(16px, calc(16px * var(--ui-scale))) !important;
     }
 
     /* Use dynamic viewport height to perfectly adapt to mobile address/navigation bars and prevent cutoffs.
