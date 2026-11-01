@@ -654,10 +654,17 @@ describe('Runtime attachment prompts', () => {
                 },
             });
             expect(sendUserMessage).toHaveBeenCalledTimes(1);
-            expect(sendUserMessage.mock.calls[0]![1]).toEqual({
-                deliverAs: 'steer',
-                expandPromptTemplates: false,
-            });
+            expect(sendUserMessage).toHaveBeenCalledWith(
+                [
+                    { type: 'text', text: 'inspect' },
+                    {
+                        type: 'image',
+                        mimeType: 'image/png',
+                        data: bytes.toString('base64'),
+                    },
+                ],
+                { deliverAs: 'steer', expandPromptTemplates: false },
+            );
             const ack = ch.nonfatalSends
                 .map((msg) => msg.payload)
                 .find((payload) => payload?.$case === 'attachmentPromptAck');

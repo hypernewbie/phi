@@ -830,72 +830,88 @@ describe('attachment control', () => {
         },
     );
 
-    it('submits a saved attachment send as a steer while Pi is busy', async () => {
-        const { tm, tabA } = makeManager();
-        const owner = tm._captureAttachmentOwner(tabA);
-        const context = {
-            process_id: 'process-a',
-            generation: '1',
-            session_id: 'session-a',
-            leaf_id: 'leaf-a',
-            model: { provider: 'provider', id: 'vision' },
-            available: true,
-        };
-        const frozen = await tm.attachmentStore.freezeDraft(owner, 0, {
-            text: 'inspect this',
-            context,
-            items: [],
-        });
-        const snapshot = {
-            id: frozen.outbox.id,
-            pane: tabA.paneId,
-            owner,
-            ownerKey: tm._attachmentOwnerKey(owner),
-            scope: tm.app.scope,
-            context,
-            items: [],
-            text: 'inspect this',
-            state: 'sending',
-            outboxState: 'waiting',
-        };
-        tabA._attachmentPendingSnapshot = snapshot;
-        expect(tm.attachmentStore.isActive(owner)).toBe(true);
-        expect(tm._attachmentOwnerCurrent(tabA, owner, tm.app.scope)).toBe(
-            true,
-        );
-        expect(tm._attachmentNetworkOffline()).toBe(false);
-        const sent = [];
-        mockFetch((url, options) => {
-            if (
-                options?.method === 'POST' &&
-                String(url).endsWith('/api/pi-bridge/attachments')
-            ) {
-                sent.push(JSON.parse(options.body));
+    it.each([true, false])(
+        'recovers a saved image into a busy turn only with image support (%s)',
+        async (imageAvailable) => {
+            const { tm, tabA } = makeManager();
+            const owner = tm._captureAttachmentOwner(tabA);
+            const context = {
+                process_id: 'process-a',
+                generation: '1',
+                session_id: 'session-a',
+                leaf_id: 'leaf-a',
+                model: { provider: 'provider', id: 'vision' },
+                available: true,
+            };
+            const item = {
+                id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+                name: 'public.png',
+                kind: 'image',
+                mimeType: 'image/png',
+                uploadState: 'ready',
+                phiAttachment: true,
+                owner,
+            };
+            const frozen = await tm.attachmentStore.freezeDraft(owner, 0, {
+                text: 'inspect this',
+                context,
+                items: [item],
+            });
+            const snapshot = {
+                id: frozen.outbox.id,
+                pane: tabA.paneId,
+                owner,
+                ownerKey: tm._attachmentOwnerKey(owner),
+                scope: tm.app.scope,
+                context,
+                items: [item],
+                text: 'inspect this',
+                state: 'sending',
+                outboxState: 'waiting',
+            };
+            tabA._attachmentPendingSnapshot = snapshot;
+            tm.inputTextArea.value = 'next draft';
+            const sent = [];
+            mockFetch((url, options) => {
+                if (
+                    options?.method === 'POST' &&
+                    url.endsWith('/api/pi-bridge/attachments')
+                ) {
+                    sent.push(JSON.parse(options.body));
+                    return { id: snapshot.id, state: 'dispatched', reason: '' };
+                }
                 return {
-                    json: {
-                        id: snapshot.id,
-                        state: 'dispatched',
-                        reason: '',
-                    },
-                };
-            }
-            // A busy turn with queued messages is a steer target, not a
-            // reason to hold the saved send back.
-            return {
-                json: {
                     ...context,
                     idle: false,
                     queued: true,
-                    image_available: true,
-                },
-            };
-        });
-        await tm._recoverAttachmentOutbox(tabA, snapshot, true);
-        expect(sent).toHaveLength(1);
-        expect(sent[0].text).toBe('inspect this');
-        expect(tabA._attachmentPendingSnapshot).toBeNull();
-        expect(tabA._attachmentNotice).toBe('Submitted to Pi.');
-    });
+                    image_available: imageAvailable,
+                };
+            });
+            await tm._recoverAttachmentOutbox(tabA, snapshot, true);
+            // A repeated recovery must not dispatch the same saved send twice.
+            await tm._recoverAttachmentOutbox(tabA, snapshot, true);
+            if (imageAvailable) {
+                expect(sent).toEqual([
+                    {
+                        id: snapshot.id,
+                        pane: tabA.paneId,
+                        context,
+                        text: 'inspect this',
+                        attachment_ids: [item.id],
+                    },
+                ]);
+                expect(tabA._attachmentPendingSnapshot).toBeNull();
+                expect(tabA._attachmentNotice).toBe('Submitted to Pi.');
+            } else {
+                expect(sent).toEqual([]);
+                expect(snapshot.state).toBe('refused');
+                expect(snapshot.reason).toBe('unsupported-model');
+                expect(snapshot.items).toEqual([item]);
+                expect(tabA._attachmentPendingSnapshot).toBe(snapshot);
+            }
+            expect(tm.inputTextArea.value).toBe('next draft');
+        },
+    );
 
     it('refuses a ninth staged file without losing the batch', async () => {
         const { tm, tabA } = makeManager();

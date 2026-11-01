@@ -187,12 +187,18 @@ func TestRequestAttachmentPromptBusyTurnSteers(t *testing.T) {
 			stream, proc, cancel := openAttachmentStream(t, s, sock, "pane-busy", ready)
 			defer cancel()
 			ref := AttachmentRef{Basename: "att-0123456789abcdef.png", SizeBytes: 8, MIMEType: "image/png", Kind: "image", SHA256: strings.Repeat("a", 64)}
-			done := make(chan error, 1)
+			done := make(chan struct {
+				result AttachmentPromptResult
+				err    error
+			}, 1)
 			go func() {
 				ctx, stop := context.WithTimeout(context.Background(), 2*time.Second)
 				defer stop()
-				_, err := s.RequestAttachmentPrompt(ctx, proc, 1, "session", "leaf", &pibridgepb.ModelSnapshot{Provider: "provider", Model: "model"}, "inspect", []AttachmentRef{ref}, true)
-				done <- err
+				result, err := s.RequestAttachmentPrompt(ctx, proc, 1, "session", "leaf", &pibridgepb.ModelSnapshot{Provider: "provider", Model: "model"}, "inspect", []AttachmentRef{ref}, true)
+				done <- struct {
+					result AttachmentPromptResult
+					err    error
+				}{result, err}
 			}()
 			ctx, stop := context.WithTimeout(context.Background(), 2*time.Second)
 			defer stop()
@@ -217,9 +223,9 @@ func TestRequestAttachmentPromptBusyTurnSteers(t *testing.T) {
 				t.Fatal(err)
 			}
 			select {
-			case err := <-done:
-				if err != nil {
-					t.Fatalf("busy turn refused instead of steering: %v", err)
+			case got := <-done:
+				if got.err != nil || got.result.Outcome != pibridgepb.AttachmentPromptOutcome_ATTACHMENT_PROMPT_OUTCOME_DISPATCHED || got.result.RequestID != request.GetRequestId() {
+					t.Fatalf("result=%+v err=%v, want correlated dispatch", got.result, got.err)
 				}
 			case <-ctx.Done():
 				t.Fatal("timed out waiting for the steered dispatch")

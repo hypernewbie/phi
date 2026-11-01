@@ -764,9 +764,17 @@ test('a busy Pi turn takes an attachment send as a steer', async ({
                     throw new Error(
                         `${mobile ? 'touch' : 'desktop'}: the steered request must carry the image`,
                     );
+                const images = anthropicImages(steer, true);
+                expect(images).toHaveLength(1);
+                expect(images[0]!.mediaType).toBe('image/png');
+                expect(Buffer.from(images[0]!.data, 'base64')).toEqual(
+                    readFileSync(pngPath),
+                );
                 expect(anthropicUserText(steer)).toContain(
                     'steer this image into the turn',
                 );
+                await waitForIdle(request, phi.url, pane);
+                expect(provider.requests).toHaveLength(beforeImage + 1);
                 expect(
                     await page.evaluate(
                         () =>
