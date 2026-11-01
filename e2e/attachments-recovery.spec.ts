@@ -992,7 +992,7 @@ test('native Pi reload preserves attachment drafts without sending until explici
                 await expect(page.locator('#input-bar-container')).toBeHidden();
                 await expect(
                     page.locator('.presets-toolbar button:visible'),
-                ).toHaveCount(2);
+                ).toHaveCount(mobile ? 3 : 2);
                 if (mobile) await toggle.tap();
                 else {
                     await toggle.focus();

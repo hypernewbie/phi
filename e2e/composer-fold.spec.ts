@@ -29,7 +29,7 @@ for (const mobile of [false, true]) {
             hasTouch: mobile,
         });
 
-        test('keeps only Interrupt and Expand, preserves drafts, and works offline', async ({
+        test('keeps only Interrupt, touch Search, and Expand, preserves drafts, and works offline', async ({
             page,
             context,
         }) => {
@@ -63,14 +63,16 @@ for (const mobile of [false, true]) {
             await expect(toggle).toHaveAccessibleName(/expand/);
             await expect(
                 page.locator('.presets-toolbar button:visible'),
-            ).toHaveCount(2);
+            ).toHaveCount(mobile ? 3 : 2);
             await expect(interrupt).toBeVisible();
             const collapsed = await page
                 .locator('.presets-toolbar')
                 .boundingBox();
             expect(collapsed!.height).toBeLessThan(mobile ? 60 : 40);
             if (mobile) {
-                for (const control of [toggle, interrupt]) {
+                const search = page.locator('#session-search-btn');
+                await expect(search).toBeVisible();
+                for (const control of [toggle, interrupt, search]) {
                     const bounds = await control.boundingBox();
                     expect(bounds!.width).toBeGreaterThanOrEqual(48);
                     expect(bounds!.height).toBeGreaterThanOrEqual(48);

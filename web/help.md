@@ -110,6 +110,8 @@ Automatic reconnection is **on by default** (`auto_reconnect: "visible"`) and ca
 
 `Ctrl+Shift+F` opens a find bar in the active terminal. Incremental search with next/prev navigation and match highlighting.
 
+On a phone or touch screen, tap the magnifier beside the input controls. The same find bar opens over the terminal, searches the loaded output, and keeps whatever you typed in the input bar.
+
 ### Find In Terminal Output
 
 Terminal scrollback is set to 10000 lines so the replay buffer is not truncated client-side.

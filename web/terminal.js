@@ -72,9 +72,12 @@ import {
     getCoder,
     isShell,
 } from './coders.js';
+import { createSessionSearchBar } from './session-search.js';
 import {
     mountRpcChat,
     rpcChatSend,
+    rpcChatSearch,
+    rpcChatReveal,
     destroyRpcChat,
     getPiRpcStatus,
     getPiRpcControls,
@@ -536,6 +539,26 @@ const HISTORY_MIN_STEP_BYTES = 4 * 1024;
 // checkpoint so the next attach restores instantly.
 const CHECKPOINT_QUIET_MS = 2000;
 
+function isTerminalFindShortcut(e) {
+    return (
+        e.type === 'keydown' &&
+        !e.altKey &&
+        !e.isComposing &&
+        e.key?.toLowerCase() === 'f' &&
+        ((e.ctrlKey && !e.metaKey && !e.shiftKey) ||
+            (e.metaKey && !e.ctrlKey && !e.shiftKey) ||
+            (e.ctrlKey && e.shiftKey && !e.metaKey))
+    );
+}
+
+function isFindBarTarget(target) {
+    return (
+        typeof Element !== 'undefined' &&
+        target instanceof Element &&
+        target.closest('.find-bar') !== null
+    );
+}
+
 // Each name written through these two helpers keeps at most one entry, so
 // repeated tab selections and overlapping switches cannot grow the User
 // Timing buffer without limit. termPerfMeasureSince below still appends
@@ -748,6 +771,9 @@ export class TabManager {
         this.selfHudCloseTimer = null;
         this.sendInputBtn = document.getElementById('send-input-btn');
         this.cancelInputBtn = document.getElementById('cancel-input-btn');
+        this.sessionSearchBtn = document.getElementById(
+            'session-search-btn',
+        );
         this.copyInputBtn = document.getElementById('copy-input-btn');
         this.thinkingVisibilityBtn = document.getElementById(
             'thinking-visibility-btn',
@@ -2067,7 +2093,8 @@ export class TabManager {
             const t = e.target;
             if (
                 t instanceof Element &&
-                (t.closest('#tab-overflow-dropdown') ||
+                (isFindBarTarget(t) ||
+                    t.closest('#tab-overflow-dropdown') ||
                     t.closest('#tab-overflow-btn') ||
                     t.closest('#sort-tabs-btn') ||
                     t.closest('#desktop-sidebar-toggle') ||
@@ -2081,6 +2108,10 @@ export class TabManager {
                     // Bottom-bar controls keep native keyboard activation,
                     // including Expand and Interrupt in direct-input mode.
                     t.closest('.presets-actions') ||
+                    // The search launcher parks in the bottom bar when input
+                    // is collapsed but sits in the composer row when it is
+                    // staged. Its Enter/Tab must open search, never type.
+                    t.closest('#session-search-btn') ||
                     // Thinking is UI-only: its Enter/Tab must not reach the
                     // PTY as raw keys on coarse pointers.
                     t.closest('.pi-rpc-thinking-trigger') ||
@@ -2124,6 +2155,19 @@ export class TabManager {
             this.copyInputBtn.addEventListener('click', () => {
                 this.sendRawInput('/copy\r', { submit: true });
                 this.inputTextArea.focus({ preventScroll: true });
+            });
+        }
+
+        if (this.sessionSearchBtn) {
+            this.sessionSearchBtn.addEventListener('click', () => {
+                const activeTab = this.getActiveTab();
+                if (!this._sessionSearchEligible(activeTab)) return;
+                // Direct-mode search returns to the terminal, staged search
+                // to the composer that owned the focus before the tap.
+                this.toggleFindBar(
+                    activeTab,
+                    activeTab.directMode ? null : this.inputTextArea,
+                );
             });
         }
 
@@ -4134,13 +4178,17 @@ export class TabManager {
             this.renderPresets(tab.coder);
         }
 
-        // Keep the same interrupt button and handler in the collapsed row;
-        // restore it beside Send when staged input returns.
+        // Keep the same interrupt and search buttons, with their handlers, in
+        // the collapsed row; restore them beside Send when staged input returns.
         if (this.cancelInputBtn) {
             if (tab.directMode) {
                 this.directModeToggle.before(this.cancelInputBtn);
+                if (this.sessionSearchBtn)
+                    this.cancelInputBtn.before(this.sessionSearchBtn);
             } else {
                 this.sendInputBtn?.parentElement?.append(this.cancelInputBtn);
+                if (this.sessionSearchBtn)
+                    this.sendInputBtn?.before(this.sessionSearchBtn);
             }
         }
         this.directModeToggle.setAttribute(
@@ -4532,6 +4580,9 @@ export class TabManager {
         );
 
         term.attachCustomKeyEventHandler((e) => {
+            // Let the document handler open the bar exactly once. Returning
+            // false keeps either find chord out of the PTY in both modes.
+            if (isTerminalFindShortcut(e)) return false;
             if (
                 e.type === 'keydown' &&
                 this.app?.handlePanelResizeShortcut?.(e)
@@ -4588,13 +4639,6 @@ export class TabManager {
                 (e.key === 'r' || e.key === 'R')
             ) {
                 this.handleGlobalTabShortcuts(e);
-                return false;
-            }
-            // Support Ctrl+Shift+F inside xterm
-            if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'f') {
-                if (e.type === 'keydown') {
-                    this.handleGlobalTabShortcuts(e);
-                }
                 return false;
             }
             // Support Alt+1..9 (and Cmd+1..9 / Option+1..9 on macOS) tab switching inside xterm
@@ -4656,7 +4700,14 @@ export class TabManager {
             return true;
         });
 
+        // Search selects matches, including during delayed live-output
+        // refreshes. Those are not copy gestures: the HTTP clipboard fallback
+        // focuses a hidden textarea and would take focus from the find bar.
+        let selectingSearchMatch = false;
+        searchAddon.onBeforeSearch?.(() => { selectingSearchMatch = true; });
+        searchAddon.onAfterSearch?.(() => { selectingSearchMatch = false; });
         term.onSelectionChange(() => {
+            if (selectingSearchMatch) return;
             const sel = term.getSelection();
             if (sel) {
                 this.copyTextRobustly(sel, true);
@@ -4669,6 +4720,7 @@ export class TabManager {
         termContainer.addEventListener(
             'wheel',
             (e) => {
+                if (isFindBarTarget(e.target)) return;
                 if (tabInfo._historyBrowsing || tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo)) return;
 
                 const isUp = e.deltaY < 0;
@@ -4697,6 +4749,7 @@ export class TabManager {
         termContainer.addEventListener(
             'touchstart',
             (e) => {
+                if (isFindBarTarget(e.target)) return;
                 if (tabInfo._historyBrowsing || tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo)) return;
                 if (e.touches.length === 1) {
                     termTouchStartY = e.touches[0].clientY;
@@ -4709,6 +4762,7 @@ export class TabManager {
         termContainer.addEventListener(
             'touchmove',
             (e) => {
+                if (isFindBarTarget(e.target)) return;
                 if (tabInfo._historyBrowsing || tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo)) return;
                 if (e.touches.length === 1 && termTouchStartY !== null) {
                     const currentY = e.touches[0].clientY;
@@ -5416,6 +5470,14 @@ export class TabManager {
         bar.replaceChildren(cwdEl, mainRow);
     }
 
+    // A pane can be searched whenever it renders output in this browser:
+    // live or disconnected, bridged or not. Never gate on a request.
+    _sessionSearchEligible(tab) {
+        return Boolean(
+            tab?.termContainer && (tab.term || tab.coder === 'pi-rpc'),
+        );
+    }
+
     _setPiRpcActionVisibility(tab) {
         const hidden = tab?.coder === 'pi-rpc';
         for (const element of [this.copyInputBtn, this.directModeToggle]) {
@@ -5423,6 +5485,10 @@ export class TabManager {
         }
         this.thinkingVisibilityBtn?.classList.toggle('hidden', !hidden);
         if (hidden) this.directModeToggle?.classList.remove('active');
+        if (this.sessionSearchBtn) {
+            this.sessionSearchBtn.disabled =
+                !this._sessionSearchEligible(tab);
+        }
     }
 
     _closePiSubagentViewerIfOpen() {
@@ -13798,82 +13864,620 @@ export class TabManager {
         return true;
     }
 
-    toggleFindBar(tabInfo) {
+    toggleFindBar(tabInfo, focusOrigin = document.activeElement) {
         const existing = tabInfo.termContainer.querySelector('.find-bar');
         if (existing) {
-            existing.remove();
-            if (tabInfo.searchAddon) {
-                tabInfo.searchAddon.clearDecorations();
-            }
-            tabInfo.term.focus();
+            existing.querySelector('.find-input')?.focus({ preventScroll: true });
             return;
         }
 
-        const bar = document.createElement('div');
-        bar.className = 'find-bar';
-        bar.innerHTML = `
-            <input type="text" class="find-input" placeholder="Find in terminal..." />
-            <button class="find-btn find-prev">▲</button>
-            <button class="find-btn find-next">▼</button>
-            <button class="find-btn find-close">✕</button>
-        `;
+        const previousFocus = focusOrigin;
+        const isRpc = tabInfo.coder === 'pi-rpc';
+        const transcriptAvailableAtOpen =
+            !isRpc && this._piBridgeTranscriptSearchEligible(tabInfo);
+        let activeSource = transcriptAvailableAtOpen ? 'transcript' : 'terminal';
+        let searchBar = null;
+        let cancelRpcSearch = () => {};
+        let transcriptGeneration = 0;
+        let transcriptQuery = '';
+        let transcriptResults = [];
+        let transcriptIndex = -1;
+        let transcriptComplete = false;
+        let transcriptCapped = false;
+        let transcriptSocket = null;
+        let transcriptBridgeGeneration = '';
+        let transcriptController = null;
+        let transcriptDeadline = null;
+        let pendingTranscriptDirection = null;
+        let rpcGeneration = 0;
+        let rpcQuery = '';
+        let rpcResults = [];
+        let rpcIndex = -1;
+        let rpcRevision = null;
+        let rpcComplete = false;
+        let rpcCapped = false;
+        let pendingDirection = null;
 
-        const input = bar.querySelector('.find-input');
-        const prevBtn = bar.querySelector('.find-prev');
-        const nextBtn = bar.querySelector('.find-next');
-        const closeBtn = bar.querySelector('.find-close');
-
-        const doSearch = (direction) => {
-            const val = input.value;
-            if (!val) {
-                if (tabInfo.searchAddon) tabInfo.searchAddon.clearDecorations();
+        const restoreFocus = () => {
+            if (
+                this.tabs?.get(tabInfo.paneId) !== tabInfo ||
+                this.getActiveTab?.() !== tabInfo
+            )
                 return;
-            }
-            if (tabInfo.searchAddon) {
-                if (direction === 'prev') {
-                    tabInfo.searchAddon.findPrevious(val, {
-                        decorations: {
-                            matchBackground: 'rgba(255,255,0,0.3)',
-                            activeMatchBackground: 'rgba(255,165,0,0.5)',
-                        },
-                    });
-                } else {
-                    tabInfo.searchAddon.findNext(val, {
-                        decorations: {
-                            matchBackground: 'rgba(255,255,0,0.3)',
-                            activeMatchBackground: 'rgba(255,165,0,0.5)',
-                        },
-                    });
-                }
+            if (
+                previousFocus instanceof HTMLElement &&
+                previousFocus.isConnected &&
+                (previousFocus === this.inputTextArea ||
+                    tabInfo.termContainer.contains(previousFocus))
+            ) {
+                previousFocus.focus({ preventScroll: true });
+            } else if (tabInfo.term) {
+                tabInfo.term.focus();
+            } else {
+                this.inputTextArea?.focus({ preventScroll: true });
             }
         };
 
-        input.addEventListener('input', () => {
-            doSearch('next');
-        });
+        // A bounded delay that aborts with the search it belongs to.
+        const searchDelay = (delay, signal) =>
+            new Promise((resolve, reject) => {
+                if (signal.aborted) {
+                    reject(signal.reason || new Error('search canceled'));
+                    return;
+                }
+                const timer = setTimeout(() => {
+                    signal.removeEventListener('abort', abort);
+                    resolve();
+                }, delay);
+                const abort = () => {
+                    clearTimeout(timer);
+                    reject(signal.reason || new Error('search canceled'));
+                };
+                signal.addEventListener('abort', abort, { once: true });
+            });
 
-        input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                doSearch(e.shiftKey ? 'prev' : 'next');
-            } else if (e.key === 'Escape') {
-                e.preventDefault();
-                bar.remove();
-                if (tabInfo.searchAddon) tabInfo.searchAddon.clearDecorations();
-                tabInfo.term.focus();
+        const searchTerminal = (direction, query) => {
+            if (!query) {
+                searchBar?.setStatus('');
+                tabInfo.searchAddon?.clearDecorations();
+                return;
             }
-        });
+            if (!tabInfo.searchAddon) {
+                searchBar?.setStatus('Search is unavailable for this terminal.');
+                return;
+            }
+            const cursorColor = tabInfo.term?.options?.theme?.cursor;
+            const activeMatchBackground =
+                typeof cursorColor === 'string' &&
+                /^#[\da-f]{6}$/i.test(cursorColor)
+                    ? cursorColor
+                    : '#7c6af7';
+            const searchOptions = {
+                decorations: {
+                    matchBackground: `${activeMatchBackground}40`,
+                    activeMatchBackground,
+                },
+            };
+            const found =
+                direction === 'previous'
+                    ? tabInfo.searchAddon.findPrevious(query, searchOptions)
+                    : tabInfo.searchAddon.findNext(query, searchOptions);
+            searchBar?.setStatus(
+                found ? '' : 'No match in loaded terminal output.',
+                !found,
+            );
+        };
 
-        prevBtn.addEventListener('click', () => doSearch('prev'));
-        nextBtn.addEventListener('click', () => doSearch('next'));
-        closeBtn.addEventListener('click', () => {
-            bar.remove();
-            if (tabInfo.searchAddon) tabInfo.searchAddon.clearDecorations();
-            tabInfo.term.focus();
-        });
+        const rpcStatus = () => {
+            if (!rpcQuery) return '';
+            if (rpcResults.length === 0)
+                return rpcComplete
+                    ? 'No matches in Pi RPC transcript.'
+                    : 'Searching Pi RPC transcript…';
+            let summary = rpcCapped
+                ? '200 results shown; refine the search.'
+                : rpcComplete
+                  ? `${rpcResults.length} matches in Pi RPC transcript.`
+                  : `${rpcResults.length} matches so far; searching transcript…`;
+            if (rpcIndex >= 0)
+                summary += ` ${rpcIndex + 1} of ${rpcResults.length}.`;
+            return summary;
+        };
 
-        tabInfo.termContainer.appendChild(bar);
-        input.focus({ preventScroll: true });
+        const navigateRpc = (direction) => {
+            if (!searchBar || !rpcQuery) return;
+            if (rpcResults.length === 0) {
+                if (!rpcComplete) {
+                    pendingDirection = direction;
+                    searchBar.setStatus('Searching Pi RPC transcript…', false);
+                } else {
+                    searchBar.setStatus('No matches in Pi RPC transcript.', false);
+                }
+                return;
+            }
+            const nextIndex =
+                rpcIndex < 0
+                    ? direction === 'next'
+                        ? 0
+                        : rpcResults.length - 1
+                    : (rpcIndex +
+                          (direction === 'next' ? 1 : -1) +
+                          rpcResults.length) %
+                      rpcResults.length;
+            const result = rpcResults[nextIndex];
+            if (!rpcChatReveal(tabInfo.paneId, result)) {
+                rpcIndex = -1;
+                rpcRevision = null;
+                searchBar.setPreview(null);
+                startRpcSearch(rpcQuery);
+                return;
+            }
+            rpcIndex = nextIndex;
+            searchBar.setPreview(result.snippet);
+            searchBar.setStatus(rpcStatus(), false);
+        };
+
+        const receiveRpcUpdate = (generation, query, update) => {
+            if (
+                generation !== rpcGeneration ||
+                query !== rpcQuery ||
+                !searchBar?.root.isConnected
+            )
+                return;
+            if (rpcRevision !== null && rpcRevision !== update.revision) {
+                rpcIndex = -1;
+                searchBar.setPreview(null);
+            }
+            rpcRevision = update.revision;
+            rpcResults = update.results;
+            rpcComplete = update.complete;
+            rpcCapped = update.capped;
+            if (update.failed) {
+                searchBar.setStatus('Pi RPC transcript search failed.');
+                return;
+            }
+            searchBar.setStatus(rpcStatus(), false);
+            if (pendingDirection && rpcResults.length) {
+                const direction = pendingDirection;
+                pendingDirection = null;
+                navigateRpc(direction);
+            }
+        };
+
+        const startRpcSearch = (query) => {
+            cancelRpcSearch();
+            cancelRpcSearch = () => {};
+            const generation = ++rpcGeneration;
+            rpcQuery = query;
+            rpcResults = [];
+            rpcIndex = -1;
+            rpcRevision = null;
+            rpcComplete = !query;
+            rpcCapped = false;
+            pendingDirection = null;
+            searchBar?.setPreview(null);
+            if (!query) {
+                searchBar?.setStatus('');
+                return;
+            }
+            searchBar?.setStatus('Searching Pi RPC transcript…', false);
+            const cancel = rpcChatSearch(
+                tabInfo.paneId,
+                query,
+                (update) => receiveRpcUpdate(generation, query, update),
+            );
+            if (!cancel) {
+                searchBar?.setStatus('Pi RPC transcript search is unavailable.');
+                return;
+            }
+            cancelRpcSearch = cancel;
+        };
+
+        const cancelTranscriptRequest = () => {
+            transcriptController?.abort();
+            transcriptController = null;
+            if (transcriptDeadline) clearTimeout(transcriptDeadline);
+            transcriptDeadline = null;
+        };
+
+        const transcriptStatus = () => {
+            if (!transcriptQuery) return '';
+            if (transcriptResults.length === 0)
+                return transcriptComplete
+                    ? 'No matches in Pi transcript.'
+                    : 'Searching Pi transcript…';
+            let summary = transcriptCapped
+                ? '200 results shown; refine the search.'
+                : transcriptComplete
+                  ? `${transcriptResults.length} matches in Pi transcript.`
+                  : `${transcriptResults.length} matches so far; searching transcript…`;
+            if (transcriptIndex >= 0)
+                summary += ` ${transcriptIndex + 1} of ${transcriptResults.length}.`;
+            return summary;
+        };
+
+        const navigateTranscript = (direction) => {
+            if (!searchBar || !transcriptQuery) return;
+            if (!this._piBridgeTranscriptSearchEligible(tabInfo)) {
+                transcriptGeneration++;
+                cancelTranscriptRequest();
+                activeSource = 'terminal';
+                searchBar.setSource('terminal');
+                searchTerminal(direction, searchBar.input.value);
+                searchBar.setPreview(null);
+                searchBar.setStatus(
+                    'Pi transcript unavailable; showing loaded terminal output.',
+                    false,
+                );
+                return;
+            }
+            if (
+                tabInfo.ws !== transcriptSocket ||
+                String(tabInfo.piBridge?.generation || '') !== transcriptBridgeGeneration
+            ) {
+                startPiTranscriptSearch(searchBar.input.value);
+                pendingTranscriptDirection = direction;
+                return;
+            }
+            if (transcriptResults.length === 0) {
+                if (!transcriptComplete) {
+                    pendingTranscriptDirection = direction;
+                    searchBar.setStatus('Searching Pi transcript…', false);
+                } else {
+                    searchBar.setStatus('No matches in Pi transcript.', false);
+                }
+                return;
+            }
+            transcriptIndex =
+                transcriptIndex < 0
+                    ? direction === 'next'
+                        ? 0
+                        : transcriptResults.length - 1
+                    : (transcriptIndex +
+                          (direction === 'next' ? 1 : -1) +
+                          transcriptResults.length) %
+                      transcriptResults.length;
+            searchBar.setPreview(transcriptResults[transcriptIndex].snippet);
+            searchBar.setStatus(transcriptStatus(), false);
+            const cached = tabInfo._piTranscriptSearchCache;
+            if (cached?.query === transcriptQuery)
+                cached.index = transcriptIndex;
+        };
+
+        const startPiTranscriptSearch = (query) => {
+            cancelTranscriptRequest();
+            const generation = ++transcriptGeneration;
+            transcriptQuery = query;
+            pendingTranscriptDirection = null;
+            const socket = tabInfo.ws;
+            const bridgeGeneration = String(tabInfo.piBridge?.generation || '');
+            transcriptSocket = socket;
+            transcriptBridgeGeneration = bridgeGeneration;
+            const cached = tabInfo._piTranscriptSearchCache;
+            const cacheUsable =
+                !!query &&
+                cached?.query === query &&
+                cached.generation === bridgeGeneration &&
+                cached.socket === socket &&
+                Array.isArray(cached.results);
+            if (cacheUsable) {
+                transcriptResults = cached.results.slice(0, 200);
+                transcriptIndex = cached.index;
+                transcriptComplete = cached.complete === true;
+                transcriptCapped = cached.capped === true;
+                searchBar?.setPreview(
+                    transcriptIndex >= 0
+                        ? transcriptResults[transcriptIndex]?.snippet || null
+                        : null,
+                );
+            } else {
+                transcriptResults = [];
+                transcriptIndex = -1;
+                transcriptComplete = !query;
+                transcriptCapped = false;
+                searchBar?.setPreview(null);
+            }
+            if (!query) {
+                searchBar?.setStatus('');
+                return;
+            }
+            if (!this._piBridgeTranscriptSearchEligible(tabInfo)) {
+                activeSource = 'terminal';
+                searchBar?.setSource('terminal');
+                transcriptResults = [];
+                transcriptIndex = -1;
+                transcriptComplete = true;
+                transcriptCapped = false;
+                searchBar?.setPreview(null);
+                searchBar?.setStatus(
+                    'Pi transcript unavailable; showing loaded terminal output.',
+                    false,
+                );
+                return;
+            }
+
+            const controller = new AbortController();
+            transcriptController = controller;
+            transcriptDeadline = setTimeout(() => controller.abort(), 15000);
+            const isCurrent = () =>
+                transcriptGeneration === generation &&
+                transcriptQuery === query &&
+                searchBar?.root.isConnected === true &&
+                this.tabs?.get(tabInfo.paneId) === tabInfo &&
+                tabInfo.ws === socket &&
+                String(tabInfo.piBridge?.generation || '') === bridgeGeneration;
+            const isReady = () =>
+                this._piBridgeTranscriptSearchEligible(tabInfo) &&
+                String(tabInfo.piBridge?.generation || '') === bridgeGeneration;
+            const readTranscriptPage = async (body) => {
+                const delays = [500, 1500];
+                for (let attempt = 0; ; attempt++) {
+                    if (controller.signal.aborted || !isCurrent() || !isReady())
+                        throw new Error('transcript search canceled');
+                    try {
+                        const response = await fetch('/api/pi-bridge/transcript-search', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(body),
+                            signal: controller.signal,
+                        });
+                        if (
+                            response.ok ||
+                            (response.status < 500 && response.status !== 429) ||
+                            attempt >= delays.length
+                        )
+                            return response;
+                        await response.body?.cancel();
+                    } catch (error) {
+                        if (controller.signal.aborted || attempt >= delays.length)
+                            throw error;
+                    }
+                    await searchDelay(delays[attempt], controller.signal);
+                }
+            };
+            searchBar?.setStatus(
+                cacheUsable
+                    ? 'Refreshing Pi transcript; cached matches remain available.'
+                    : 'Searching Pi transcript; loaded output remains available…',
+                false,
+            );
+
+            void (async () => {
+                let initial = true;
+                let startIndex = 0;
+                let processId = '';
+                let sessionId = '';
+                let anchorLeafId = '';
+                const seenEntries = new Set();
+                const queryPattern = new RegExp(
+                    query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+                    'iu',
+                );
+                const freshResults = [];
+                let complete = false;
+                let capped = false;
+                try {
+                    await searchDelay(250, controller.signal);
+                    while (true) {
+                        if (!isCurrent()) return;
+                        if (!isReady()) throw new Error('bridge unavailable');
+                        const body = {
+                            pane: tabInfo.paneId,
+                            query,
+                            generation: bridgeGeneration,
+                            initial,
+                            start_index: startIndex,
+                        };
+                        if (!initial) {
+                            Object.assign(body, {
+                                process_id: processId,
+                                session_id: sessionId,
+                                anchor_leaf_id: anchorLeafId,
+                            });
+                        }
+                        const response = await readTranscriptPage(body);
+                        if (!response.ok) throw new Error('search unavailable');
+                        const page = await response.json();
+                        if (
+                            !isCurrent() ||
+                            page?.unavailable === true ||
+                            typeof page?.session_id !== 'string' ||
+                            !page.session_id ||
+                            typeof page?.anchor_leaf_id !== 'string' ||
+                            !Number.isSafeInteger(page?.next_index) ||
+                            page.next_index < startIndex ||
+                            page.next_index > startIndex + 256 ||
+                            !Array.isArray(page?.matches) ||
+                            page.matches.length > 50 ||
+                            typeof page?.complete !== 'boolean' ||
+                            page?.process_id === '' ||
+                            typeof page?.process_id !== 'string' ||
+                            page?.generation !== bridgeGeneration
+                        )
+                            throw new Error('invalid search page');
+                        if (initial) {
+                            processId = page.process_id;
+                            sessionId = page.session_id;
+                            anchorLeafId = page.anchor_leaf_id;
+                            if (
+                                anchorLeafId === '' &&
+                                !(page.complete && page.next_index === 0 && page.matches.length === 0)
+                            )
+                                throw new Error('invalid empty transcript');
+                        } else if (
+                            page.process_id !== processId ||
+                            page.session_id !== sessionId ||
+                            page.anchor_leaf_id !== anchorLeafId ||
+                            (!page.complete && page.next_index <= startIndex)
+                        ) {
+                            throw new Error('stale transcript page');
+                        }
+                        if (page.unavailable || (!page.complete && page.next_index <= startIndex))
+                            throw new Error('incomplete transcript page');
+                        for (const match of page.matches) {
+                            if (
+                                typeof match?.entry_id !== 'string' ||
+                                !match.entry_id ||
+                                !['user', 'assistant', 'toolResult'].includes(match.role) ||
+                                typeof match.snippet !== 'string' ||
+                                new TextEncoder().encode(match.snippet).byteLength > 2048 ||
+                                !queryPattern.test(match.snippet) ||
+                                seenEntries.has(match.entry_id)
+                            )
+                                throw new Error('invalid transcript match');
+                            seenEntries.add(match.entry_id);
+                            freshResults.push(match);
+                            if (freshResults.length >= 200) break;
+                        }
+                        if (freshResults.length >= 200) {
+                            freshResults.length = 200;
+                            capped = true;
+                            break;
+                        }
+                        if (page.complete) {
+                            complete = true;
+                            break;
+                        }
+                        startIndex = page.next_index;
+                        initial = false;
+                    }
+                    if (!isCurrent()) return;
+                    transcriptResults = freshResults;
+                    transcriptIndex =
+                        cacheUsable && transcriptResults.length
+                            ? Math.min(cached.index, transcriptResults.length - 1)
+                            : -1;
+                    transcriptComplete = complete;
+                    transcriptCapped = capped;
+                    searchBar?.setPreview(
+                        transcriptIndex >= 0
+                            ? transcriptResults[transcriptIndex]?.snippet || null
+                            : null,
+                    );
+                    const resultCache = {
+                        query,
+                        generation: bridgeGeneration,
+                        socket,
+                        results: transcriptResults.slice(),
+                        complete,
+                        capped,
+                        index: transcriptIndex,
+                    };
+                    tabInfo._piTranscriptSearchCache = resultCache;
+                    if (pendingTranscriptDirection && transcriptResults.length) {
+                        const direction = pendingTranscriptDirection;
+                        pendingTranscriptDirection = null;
+                        navigateTranscript(direction);
+                    } else {
+                        searchBar?.setStatus(transcriptStatus(), false);
+                    }
+                } catch {
+                    if (!isCurrent()) return;
+                    if (cacheUsable) {
+                        transcriptResults = cached.results.slice(0, 200);
+                        transcriptIndex = cached.index;
+                        transcriptComplete = cached.complete === true;
+                        transcriptCapped = cached.capped === true;
+                        searchBar?.setPreview(
+                            transcriptIndex >= 0
+                                ? transcriptResults[transcriptIndex]?.snippet || null
+                                : null,
+                        );
+                        searchBar?.setStatus(
+                            'Pi transcript refresh unavailable; showing cached matches.',
+                            false,
+                        );
+                    } else {
+                        activeSource = 'terminal';
+                        searchBar?.setSource('terminal');
+                        transcriptResults = [];
+                        transcriptIndex = -1;
+                        transcriptComplete = true;
+                        transcriptCapped = false;
+                        searchBar?.setPreview(null);
+                        searchTerminal('next', query);
+                        searchBar?.setStatus(
+                            'Pi transcript unavailable; showing loaded terminal output.',
+                            false,
+                        );
+                    }
+                } finally {
+                    if (transcriptGeneration === generation) {
+                        if (transcriptDeadline) clearTimeout(transcriptDeadline);
+                        transcriptDeadline = null;
+                        transcriptController = null;
+                    }
+                }
+            })();
+        };
+
+        searchBar = createSessionSearchBar({
+            container: tabInfo.termContainer,
+            sourceLabel: isRpc ? 'Pi RPC transcript' : 'Loaded terminal output',
+            sources: isRpc
+                ? undefined
+                : transcriptAvailableAtOpen
+                  ? [
+                        { value: 'terminal', label: 'Loaded output' },
+                        { value: 'transcript', label: 'Pi transcript' },
+                    ]
+                  : undefined,
+            selectedSource: activeSource,
+            onSourceChange: (source) => {
+                activeSource = source;
+                const query = searchBar.input.value;
+                if (source === 'transcript') {
+                    searchTerminal('next', query);
+                    startPiTranscriptSearch(query);
+                    return;
+                }
+                transcriptGeneration++;
+                cancelTranscriptRequest();
+                transcriptQuery = '';
+                transcriptResults = [];
+                transcriptIndex = -1;
+                transcriptComplete = false;
+                transcriptCapped = false;
+                searchBar.setPreview(null);
+                searchTerminal('next', query);
+            },
+            ariaLabel: isRpc
+                ? 'Search Pi RPC transcript'
+                : 'Search active terminal history',
+            showPreview: true,
+            onQuery: (query) => {
+                if (isRpc) {
+                    startRpcSearch(query);
+                    return;
+                }
+                searchTerminal('next', query);
+                if (activeSource !== 'transcript') {
+                    transcriptGeneration++;
+                    cancelTranscriptRequest();
+                    transcriptQuery = '';
+                    searchBar.setPreview(null);
+                }
+                if (activeSource === 'transcript') startPiTranscriptSearch(query);
+            },
+            onNavigate: (direction) => {
+                if (isRpc) {
+                    navigateRpc(direction);
+                    return;
+                }
+                if (activeSource === 'transcript') navigateTranscript(direction);
+                else searchTerminal(direction, searchBar.input.value);
+            },
+            onClose: () => {
+                rpcGeneration++;
+                cancelRpcSearch();
+                transcriptGeneration++;
+                cancelTranscriptRequest();
+                if (!isRpc) tabInfo.searchAddon?.clearDecorations();
+                restoreFocus();
+            },
+        });
+        searchBar.input.focus({ preventScroll: true });
+        searchBar.search();
     }
 
     /**
@@ -13919,6 +14523,31 @@ export class TabManager {
             return;
         }
 
+        if (isTerminalFindShortcut(e) && !e.defaultPrevented) {
+            const activeTab = this.getActiveTab();
+            const target = e.target instanceof Element ? e.target : null;
+            const isEditable =
+                target?.isContentEditable ||
+                target?.closest('input, textarea, select, [contenteditable="true"]');
+            const allowedEditable =
+                !isEditable ||
+                target === this.inputTextArea ||
+                isFindBarTarget(target) ||
+                activeTab?.termContainer?.contains(target);
+            const modalOpen = document.querySelector(
+                '.modal-overlay:not(.hidden), .md-modal-overlay:not(.hidden)',
+            );
+            if (
+                (activeTab?.term || activeTab?.coder === 'pi-rpc') &&
+                allowedEditable &&
+                !modalOpen
+            ) {
+                e.preventDefault();
+                this.toggleFindBar(activeTab);
+            }
+            return;
+        }
+
         // Shift+F5 or Ctrl/Cmd+Shift+R: Reconnect / refresh all tabs in current workspace (Idea A)
         if (
             (e.shiftKey &&
@@ -13944,7 +14573,7 @@ export class TabManager {
             e.key.toLowerCase() === 'f'
         ) {
             const activeTab = this.getActiveTab();
-            if (activeTab?.term) {
+            if (activeTab?.term || activeTab?.coder === 'pi-rpc') {
                 e.preventDefault();
                 this.toggleFindBar(activeTab);
             }
@@ -16915,6 +17544,14 @@ export class TabManager {
             Array.isArray(tab.piBridge.capabilities) &&
             tab.piBridge.capabilities.includes('pi.thinking.v1')
         );
+    }
+
+    // Transcript search is an optional source; the terminal search remains
+    // available when the pane is unmanaged, disconnected, or missing the cap.
+    _piBridgeTranscriptSearchEligible(tab) {
+        return tab?.coder === 'pi' && !tab.isDead &&
+            piBridgeCapable(tab, 'pi.transcript-search.v2') &&
+            /^[1-9]\d*$/.test(String(tab.piBridge?.generation || ''));
     }
 
     // The skills picker needs the skills capability; anything else

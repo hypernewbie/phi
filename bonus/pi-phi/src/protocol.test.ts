@@ -9,9 +9,11 @@ import {
     CAPABILITY_STATE,
     CAPABILITY_SYNCBOARD,
     CAPABILITY_THINKING,
+    CAPABILITY_TRANSCRIPT_SEARCH,
     isKnownCapability,
     negotiateCapabilities,
 } from './protocol.js';
+import { PhiToPi, PiToPhi } from './gen/bridge.js';
 
 describe('negotiateCapabilities', () => {
     it('accepts known and ignores unknown', () => {
@@ -74,9 +76,37 @@ describe('negotiateCapabilities', () => {
         ]);
         expect(isKnownCapability(CAPABILITY_ATTACHMENTS)).toBe(true);
     });
+    it('accepts search v2 but rejects legacy search without dropping lifecycle', () => {
+        expect(
+            negotiateCapabilities([
+                'pi.transcript-search.v1',
+                CAPABILITY_TRANSCRIPT_SEARCH,
+                CAPABILITY_LIFECYCLE,
+            ]),
+        ).toEqual([CAPABILITY_TRANSCRIPT_SEARCH, CAPABILITY_LIFECYCLE]);
+        expect(isKnownCapability('pi.transcript-search.v1')).toBe(false);
+    });
     it('yields empty for empty', () => {
         expect(negotiateCapabilities([])).toEqual([]);
         expect(isKnownCapability('nope')).toBe(false);
         expect(isKnownCapability(CAPABILITY_LIFECYCLE)).toBe(true);
+    });
+});
+
+describe('transcript search wire allocation', () => {
+    it('uses request 26 and response 28, not attachment or state fields', () => {
+        const request = PhiToPi.create({
+            payload: { $case: 'transcriptSearchRequest', value: {} },
+        });
+        const response = PiToPhi.create({
+            payload: { $case: 'transcriptSearchResponse', value: {} },
+        });
+        // Length-delimited field tags followed by an empty message.
+        expect(Array.from(PhiToPi.encode(request).finish())).toEqual([
+            0xd2, 0x01, 0x00,
+        ]);
+        expect(Array.from(PiToPhi.encode(response).finish())).toEqual([
+            0xe2, 0x01, 0x00,
+        ]);
     });
 });
