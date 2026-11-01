@@ -144,8 +144,6 @@ func TestRequestAttachmentPromptReadinessRefusals(t *testing.T) {
 		image bool
 	}{
 		{name: "missing readiness", ready: nil, want: "unavailable"},
-		{name: "busy", ready: &pibridgepb.AttachmentReadiness{Idle: false}, want: "busy"},
-		{name: "queued", ready: &pibridgepb.AttachmentReadiness{Idle: true, HasPendingMessages: true}, want: "queued"},
 		{name: "compaction", ready: &pibridgepb.AttachmentReadiness{Idle: true, CompactionActive: true}, want: "compaction-active"},
 		{name: "bridge pending", ready: &pibridgepb.AttachmentReadiness{Idle: true, BridgePending: true}, want: "pending"},
 		{name: "unknown image support", ready: &pibridgepb.AttachmentReadiness{Idle: true}, want: "unsupported-model", image: true},
@@ -177,6 +175,66 @@ func TestRequestAttachmentPromptReadinessRefusals(t *testing.T) {
 		})
 	}
 }
+
+func TestRequestAttachmentPromptBusyTurnSteers(t *testing.T) {
+	for name, ready := range map[string]*pibridgepb.AttachmentReadiness{
+		"busy":   {Idle: false, ImageAvailable: boolPtr(true)},
+		"queued": {Idle: true, HasPendingMessages: true, ImageAvailable: boolPtr(true)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, sock, cleanup := testServer(t)
+			defer cleanup()
+			stream, proc, cancel := openAttachmentStream(t, s, sock, "pane-busy", ready)
+			defer cancel()
+			ref := AttachmentRef{Basename: "att-0123456789abcdef.png", SizeBytes: 8, MIMEType: "image/png", Kind: "image", SHA256: strings.Repeat("a", 64)}
+			done := make(chan struct {
+				result AttachmentPromptResult
+				err    error
+			}, 1)
+			go func() {
+				ctx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+				defer stop()
+				result, err := s.RequestAttachmentPrompt(ctx, proc, 1, "session", "leaf", &pibridgepb.ModelSnapshot{Provider: "provider", Model: "model"}, "inspect", []AttachmentRef{ref}, true)
+				done <- struct {
+					result AttachmentPromptResult
+					err    error
+				}{result, err}
+			}()
+			ctx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+			defer stop()
+			message := make(chan *pibridgepb.PhiToPi, 1)
+			go func() { msg, _ := stream.Recv(); message <- msg }()
+			var request *pibridgepb.AttachmentPromptRequest
+			select {
+			case msg := <-message:
+				request = msg.GetAttachmentPromptRequest()
+			case <-ctx.Done():
+				t.Fatal("timed out waiting for the steered attachment prompt")
+			}
+			if request == nil || len(request.GetAttachments()) != 1 {
+				t.Fatalf("unexpected request: %+v", request)
+			}
+			if err := stream.Send(&pibridgepb.PiToPhi{
+				PaneId: "pane-busy", ProcessId: proc, RuntimeGeneration: 1,
+				Payload: &pibridgepb.PiToPhi_AttachmentPromptAck{AttachmentPromptAck: &pibridgepb.AttachmentPromptAck{
+					RequestId: request.GetRequestId(), Outcome: pibridgepb.AttachmentPromptOutcome_ATTACHMENT_PROMPT_OUTCOME_DISPATCHED,
+				}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case got := <-done:
+				if got.err != nil || got.result.Outcome != pibridgepb.AttachmentPromptOutcome_ATTACHMENT_PROMPT_OUTCOME_DISPATCHED || got.result.RequestID != request.GetRequestId() {
+					t.Fatalf("result=%+v err=%v, want correlated dispatch", got.result, got.err)
+				}
+			case <-ctx.Done():
+				t.Fatal("timed out waiting for the steered dispatch")
+			}
+		})
+	}
+}
+
+func boolPtr(value bool) *bool { return &value }
 
 func TestRequestAttachmentPromptPeerLossIsUnknown(t *testing.T) {
 	s, sock, cleanup := testServer(t)

@@ -2521,8 +2521,14 @@ export class Runtime {
             }
             // This public API returns void. Its normal return is the
             // synchronous dispatch boundary, not host or model acceptance.
+            // A busy turn keeps working: deliverAs steers the message (and
+            // its images) into the running turn before the next model call,
+            // and is ignored when the host is idle.
             invoking = true;
-            sendUserMessage(prepared.content, { expandPromptTemplates: false });
+            sendUserMessage(prepared.content, {
+                deliverAs: 'steer',
+                expandPromptTemplates: false,
+            });
             outcome =
                 AttachmentPromptOutcome.ATTACHMENT_PROMPT_OUTCOME_DISPATCHED;
             reason = '';
@@ -2569,14 +2575,10 @@ export class Runtime {
         let session: string;
         let leaf: string;
         let model: PiModelView | undefined;
-        let idle = false;
-        let queued = true;
         try {
             session = ctx.sessionManager.getSessionId();
             leaf = ctx.sessionManager.getLeafId() ?? '';
             model = ctx.model;
-            idle = ctx.isIdle() === true;
-            queued = ctx.hasPendingMessages() !== false;
         } catch {
             return 'unavailable';
         }
@@ -2592,8 +2594,6 @@ export class Runtime {
         } else if (model) {
             return 'stale';
         }
-        if (!idle) return 'busy';
-        if (queued) return 'queued';
         if (this.compactionActive) return 'compaction-active';
         if (
             this.compact.pending !== null ||

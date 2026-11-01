@@ -138,8 +138,10 @@ paths. The browser and server limit each file to 25 MiB and prompt text to
 The bridge receives generated references, never file bytes or browser paths.
 Phi provisions `PHI_PI_ATTACHMENT_ROOT` for each Pi process. The extension
 checks the root, basename, file type, size, and SHA-256 before reading. Missing
-host APIs, an unsafe root, unknown image support, a busy/queued turn, active
-compaction, or changed session/model identity prevents dispatch.
+host APIs, an unsafe root, unknown image support, active compaction, or changed
+session/model identity prevents dispatch. A busy turn does not: the prompt and
+its images are steered into the running turn and delivered before the next
+model call.
 
 With `pi.state.v2`, Phi reads the live Pi context before freezing a new online
 send. Idle extension metadata can change Pi's leaf without a session or model
@@ -147,8 +149,10 @@ switch. An old lifecycle snapshot must not make a fresh send fail as `stale`.
 Already saved and offline sends keep their original target; they are never
 rebound or automatically replayed.
 
-A `DISPATCHED` acknowledgment means Pi's public `sendUserMessage` call returned
-normally and Phi received its matching acknowledgment. It does not prove that
+A `DISPATCHED` acknowledgment means Pi's public `sendUserMessage(content, {
+  deliverAs: 'steer', expandPromptTemplates: false
+})` call returned normally and Phi received its matching acknowledgment. It
+does not prove that
 Pi hooks preserved the image, that the model received it, or that a provider
 completed. Phi shows “Submitted to Pi.” It never retries an uncertain send.
 
