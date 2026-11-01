@@ -4,6 +4,16 @@ All notable changes to phi are documented here. Newest versions first.
 
 ## Unreleased
 
+## v0.32.0 — 2026-11-01
+
+### Changed
+- **Native terminal engine** (`acd63402`). Server-side terminal state now decodes with `libghostty-vt` linked through CGO instead of the bundled WASM module. The server binary is 15.9% smaller (28.2 MB vs 33.5 MB), a ready snapshot decodes in about 12 µs, and the WASM runtime is gone. Epochs, recorded state, and client behavior are unchanged.
+- Builds now require CGO. Release archives ship a static engine for darwin-arm64, darwin-amd64, linux-arm64, linux-amd64, and windows-amd64; Windows cross-builds use `zig cc`.
+- Server profiling reports `native_resident_bytes`; `wasm_linear_bytes` remains in the payload as zero.
+
+### Removed
+- The embedded `ghostty-vt.wasm` module, its build script, and non-CGO server builds.
+
 ## v0.31.0 — 2026-11-01
 
 ### Added
