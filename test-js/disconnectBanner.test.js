@@ -39,14 +39,12 @@ describe('Disconnect Banner UX', () => {
             const tab = makeTab({ exitCode });
             tabManager.tabs.set(tab.paneId, tab);
             tabManager.app.showToast = vi.fn();
-            tabManager._updateHistoryButton = vi.fn();
             tabManager.updateDocumentTitle = vi.fn();
             tabManager.maybeAutoReconnect = vi.fn();
 
             tabManager._handleTerminalDisconnect(tab);
 
             expect(tabManager.app.showToast).not.toHaveBeenCalled();
-            expect(tabManager._updateHistoryButton).toHaveBeenCalledWith(tab);
             expect(tabManager.updateDocumentTitle).toHaveBeenCalledOnce();
             expect(tabManager.maybeAutoReconnect).toHaveBeenCalledWith(tab);
         },
@@ -56,7 +54,6 @@ describe('Disconnect Banner UX', () => {
         const tab = makeTab();
         tabManager.tabs.set(tab.paneId, tab);
         tabManager.app.showToast = vi.fn();
-        tabManager._updateHistoryButton = vi.fn();
         tabManager.updateDocumentTitle = vi.fn();
         tabManager.maybeAutoReconnect = vi.fn();
 

@@ -570,7 +570,7 @@ describe('A3 dispatch and focus match the old preset buttons', () => {
 describe('A4 custom commands and bridge fallback are untouched', () => {
     it.each(
         ['staged', 'quick'].flatMap((mode) =>
-            ['dead', 'false', 'partial', 'retained'].map((failure) => [
+            ['dead', 'false', 'partial'].map((failure) => [
                 mode,
                 failure,
             ]),
@@ -583,7 +583,6 @@ describe('A4 custom commands and bridge fallback are untouched', () => {
             tm.tabs.set(tab.paneId, tab);
             tm.activePaneId = tab.paneId;
             tm.saveActiveDraft = TabManager.prototype.saveActiveDraft;
-            tm._resyncRetainedView = vi.fn();
             tm.inputTextArea.value = tm.lastInputValue =
                 'keep this unsent draft';
             tm.stagedAttachments = [
@@ -604,7 +603,6 @@ describe('A4 custom commands and bridge fallback are untouched', () => {
                 return false;
             });
             if (failure === 'dead') tab.isDead = true;
-            if (failure === 'retained') tab._resyncNeeded = true;
             tm.inputTextArea.focus();
             if (mode === 'staged') tm.sendStagedInput();
             else {

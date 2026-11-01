@@ -22,9 +22,6 @@ function makeTab(paneId) {
         coder: 'bash',
         term: {},
         ws: { close: vi.fn() },
-        _historyRequestId: `${paneId}-history`,
-        _historyBrowsing: true,
-        _forceStateRefresh: `${paneId}-force`,
         userFollowBottom: paneId === 'pane-two',
     };
 }
@@ -55,7 +52,6 @@ function setupManager() {
             'thinking-visibility-btn',
         ),
         reconnectTab: vi.fn(),
-        _cancelHistoryRequest: vi.fn(),
         closeTab: vi.fn(),
         _initHieroPreview: vi.fn(),
         _setupContainerDragHandlers: vi.fn(),
@@ -387,19 +383,13 @@ describe('terminal toolbar markup and bindings', () => {
             const secondState = { ...second };
 
             document.getElementById(reloadId).click();
-            expect(manager._cancelHistoryRequest.mock.calls).toEqual([[first]]);
             expect(manager.reconnectTab.mock.calls).toEqual([[first]]);
-            expect(first._forceStateRefresh).toBe(true);
             expect(first.userFollowBottom).toBe(true);
             expect(second).toMatchObject(secondState);
             expect(second.ws).toBe(secondState.ws);
 
             manager.activePaneId = second.paneId;
             document.getElementById(reloadId).click();
-            expect(manager._cancelHistoryRequest.mock.calls).toEqual([
-                [first],
-                [second],
-            ]);
             expect(manager.reconnectTab.mock.calls).toEqual([
                 [first],
                 [second],

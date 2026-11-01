@@ -3,6 +3,7 @@
 import type {
     TerminalAttach,
     TerminalBridgeState,
+    TerminalGeometry,
     TerminalOutput,
     TerminalSettlement,
     TerminalTitle,
@@ -60,12 +61,12 @@ export interface PTYWebSocketCallbacks {
     onOpen?: () => void;
 }
 
-// Hot-v1 terminal protocol over generated protobuf. The socket
+// Hot-v2 terminal protocol over generated protobuf. The socket
 // negotiates the terminal subprotocol; the server answers with an
-// attach frame (epoch / oldest / head + optional opaque screen
-// checkpoint) and then output frames carrying absolute byte seqs.
-// Deep history never enters the live stream — it is fetched over
-// HTTP as bounded recording ranges instead.
+// attach frame (epoch / oldest / head + replay baseline and durability
+// warnings) and then output and geometry frames carrying absolute byte
+// seqs. History never enters the live stream — it is fetched over HTTP
+// as bounded replay pages instead.
 export interface AttachCheckpoint {
     kind: 'ansi-v1';
     through: number;
@@ -84,6 +85,14 @@ export interface AttachHeadInfo {
     oldest: number;
     head: number;
     ckpt: AttachCheckpoint | null;
+    // Replay baseline: the geometry byte zero was produced under.
+    initialCols: number;
+    initialRows: number;
+    // Head fence for the first /replay page.
+    eventCursor: string;
+    // Durability warnings, repeated on every replay page.
+    historyIncomplete: boolean;
+    ephemeral: boolean;
     // Server-certified plain-text line reset; unknown servers provide none.
     replayFrom?: number;
 }
@@ -106,6 +115,16 @@ function toSafeInt(v: bigint | undefined): number | undefined {
     if (v === undefined) return undefined;
     if (v < 0 || v > BigInt(Number.MAX_SAFE_INTEGER)) return undefined;
     return Number(v);
+}
+
+// Event cursors fence geometry ordinals. Anything malformed is a bad
+// frame, never an expired boundary.
+function isEventCursor(v: unknown): v is string {
+    return (
+        typeof v === 'string' &&
+        v.length <= 128 &&
+        /^v1\.\d+\.\d+\.\d+$/.test(v)
+    );
 }
 
 // Narrow one 64-bit field to an exact decimal string. Only presence
@@ -171,15 +190,6 @@ export class PTYWebSocket {
     private holding = true;
     private held: Array<{ start: number; bytes: Uint8Array }> = [];
     private heldBytes = 0;
-    /** Retained view: validate and sequence live frames, but store nothing. */
-    private discarding = false;
-    /** Replay fence: retain raw spans from the capture origin so a reset can
-     * resume at the fence instead of re-requesting bytes already received.
-     * Null when not capturing. */
-    private capturing: { from: number } | null = null;
-    private captured: Array<{ start: number; bytes: Uint8Array }> = [];
-    private capturedBytes = 0;
-    private captureOverflow = false;
 
     constructor(
         paneId: string,
@@ -266,6 +276,9 @@ export class PTYWebSocket {
                     break;
                 case 'output':
                     this._handleLiveOutput(payload.value);
+                    break;
+                case 'geometry':
+                    this._handleGeometry(payload.value);
                     break;
                 case 'pong':
                     // Pong received successfully
@@ -439,15 +452,60 @@ export class PTYWebSocket {
         this.onControl(msg);
     }
 
+    private _handleGeometry(geom: TerminalGeometry) {
+        if (this.mode !== 'hot' || this.liveSeq === undefined) {
+            // Geometry without the atomic attach frontier is unorderable.
+            try {
+                this.ws.close();
+            } catch (_e) {}
+            return;
+        }
+        const atSeq = toSafeInt(geom.atSeq);
+        const cols = geom.cols;
+        const rows = geom.rows;
+        if (
+            atSeq === undefined ||
+            !Number.isInteger(cols) ||
+            (cols as number) <= 0 ||
+            (cols as number) > 65535 ||
+            !Number.isInteger(rows) ||
+            (rows as number) <= 0 ||
+            (rows as number) > 65535 ||
+            !isEventCursor(geom.eventCursor)
+        ) {
+            try {
+                this.ws.close();
+            } catch (_e) {}
+            return;
+        }
+        if (this.onControl)
+            this.onControl({
+                type: 'terminal-geometry',
+                at_seq: atSeq,
+                cols: cols as number,
+                rows: rows as number,
+                event_cursor: geom.eventCursor as string,
+            });
+    }
+
     private _handleAttachHead(attach: TerminalAttach) {
         const epoch = toSafeInt(attach.epoch);
         const oldest = toSafeInt(attach.oldest);
         const head = toSafeInt(attach.head);
+        const initialCols = attach.initialCols;
+        const initialRows = attach.initialRows;
         if (
             epoch === undefined ||
             oldest === undefined ||
             head === undefined ||
-            oldest > head
+            oldest > head ||
+            !Number.isInteger(initialCols) ||
+            (initialCols as number) <= 0 ||
+            (initialCols as number) > 65535 ||
+            !Number.isInteger(initialRows) ||
+            (initialRows as number) <= 0 ||
+            (initialRows as number) > 65535 ||
+            !isEventCursor(attach.eventCursor)
         ) {
             console.error('[ws] Malformed ATTACH_HEAD frame');
             // No head means no seq base: staying held would brick the tab
@@ -462,10 +520,7 @@ export class PTYWebSocket {
         this.lastFrameEnd = head;
         let ckpt: AttachCheckpoint | null = null;
         const c = attach.checkpoint;
-        const validCursor = (v: unknown): v is string =>
-            typeof v === 'string' &&
-            v.length <= 128 &&
-            /^v1\.\d+\.\d+\.\d+$/.test(v);
+        const validCursor = isEventCursor;
         if (c) {
             const through = toSafeInt(c.through);
             const data = c.data ?? new Uint8Array();
@@ -510,6 +565,11 @@ export class PTYWebSocket {
             oldest,
             head,
             ckpt,
+            initialCols: initialCols as number,
+            initialRows: initialRows as number,
+            eventCursor: attach.eventCursor as string,
+            historyIncomplete: attach.historyIncomplete === true,
+            ephemeral: attach.ephemeral === true,
             ...(replayFrom !== undefined &&
             replayFrom >= oldest &&
             replayFrom <= head
@@ -549,23 +609,6 @@ export class PTYWebSocket {
             // original offset would regress liveSeq (or trim it twice
             // when a bootstrap-held frame is released).
             start = this.liveSeq;
-        }
-        if (this.capturing) {
-            // The fence is not known yet, so retain everything from the
-            // current received frontier. finishCapture() trims below C.
-            this._captureFrame(start, bytes);
-            this.lastFrameEnd = Math.max(
-                this.lastFrameEnd ?? 0,
-                start + bytes.byteLength,
-            );
-            return;
-        }
-        if (this.discarding) {
-            // A retained view owns the screen. W may cross holes here; P never
-            // does, because nothing is parsed, queued, or gap-fetched.
-            this.liveSeq = start + bytes.byteLength;
-            this.lastFrameEnd = this.liveSeq;
-            return;
         }
         if (start > this.liveSeq) {
             // Gap: hold delivery until the host patches the missing range.
@@ -654,122 +697,10 @@ export class PTYWebSocket {
         }
     }
 
-    /** release() starts live delivery. Call after the bootstrap writes
-     * (checkpoint + delta) are queued so live frames land after them. */
+    /** release() starts live delivery. Call after the bootstrap replay is
+     * queued so live frames land after it. */
     hold() {
         this.holding = true;
-    }
-
-    /** discard() freezes live delivery for a retained view: later frames are
-     * sequenced and dropped, so nothing accumulates and no gap is reported.
-     * Only an explicit resync rebuilds the stream. */
-    discard() {
-        this.discarding = true;
-        this.capturing = null;
-        this.captured = [];
-        this.capturedBytes = 0;
-        this.captureOverflow = false;
-        this.held = [];
-        this.heldBytes = 0;
-    }
-
-    /** The received frontier, which a reset has to cover to lose nothing. */
-    get receivedThrough(): number {
-        return Math.max(this.lastFrameEnd ?? 0, this.liveSeq ?? 0);
-    }
-
-    /** beginCapture() switches a held delivery to raw retention from `from`.
-     * Bytes at or below `from` are already covered by the reset, so they are
-     * neither stored nor parsed. */
-    beginCapture(from: number): boolean {
-        if (this.mode !== 'hot' || !Number.isSafeInteger(from) || from < 0)
-            return false;
-        this.capturing = { from };
-        this.captured = [];
-        this.capturedBytes = 0;
-        this.captureOverflow = false;
-        this.discarding = false;
-        this.held = [];
-        this.heldBytes = 0;
-        return true;
-    }
-
-    /** abortCapture() drops the window and returns to discard: the attempt
-     * cannot certify a frontier from what it holds. */
-    abortCapture() {
-        this.capturing = null;
-        this.captured = [];
-        this.capturedBytes = 0;
-        this.captureOverflow = false;
-        this.discarding = true;
-    }
-
-    /** Capture is bounded like a hold: overflow abandons the window instead
-     * of growing without limit, and the caller falls back to retained. */
-    private _captureFrame(start: number, bytes: Uint8Array) {
-        const next = this.capturedBytes + bytes.byteLength;
-        if (
-            this.captureOverflow ||
-            this.captured.length >= MAX_HELD_SPANS ||
-            next > MAX_HELD_BYTES
-        ) {
-            this.captureOverflow = true;
-            this.captured = [];
-            this.capturedBytes = 0;
-            return;
-        }
-        this.captured.push({ start, bytes });
-        this.capturedBytes = next;
-    }
-
-    /** finishCapture() returns the contiguous captured suffix from `from`.
-     * A hole, an overflow, or no active window returns null: the caller must
-     * stay retained rather than deliver a stream with a missing interval.
-     * On success the stream is live from the returned frontier, and later
-     * frames are delivered through the normal hold/release path. */
-    finishCapture(
-        from: number,
-    ): { from: number; through: number; bytes: Uint8Array } | null {
-        const cap = this.capturing;
-        this.capturing = null;
-        const spans = this.captured;
-        const overflowed = this.captureOverflow;
-        this.captured = [];
-        this.capturedBytes = 0;
-        this.captureOverflow = false;
-        if (!cap || overflowed || !Number.isSafeInteger(from)) {
-            this.discarding = true;
-            return null;
-        }
-        let cursor = Math.max(from, cap.from);
-        const parts: Uint8Array[] = [];
-        for (let i = 0; i < spans.length; i++) {
-            const span = spans[i];
-            const end = span.start + span.bytes.byteLength;
-            if (end <= cursor) continue;
-            if (span.start > cursor) {
-                // A hole inside the window cannot be delivered as a suffix.
-                this.discarding = true;
-                this.liveSeq = cursor;
-                this.lastFrameEnd = Math.max(this.lastFrameEnd ?? 0, cursor);
-                return null;
-            }
-            const skip = cursor - span.start;
-            parts.push(skip > 0 ? span.bytes.subarray(skip) : span.bytes);
-            cursor = end;
-        }
-        let total = 0;
-        for (const part of parts) total += part.byteLength;
-        const bytes = new Uint8Array(total);
-        let offset = 0;
-        for (const part of parts) {
-            bytes.set(part, offset);
-            offset += part.byteLength;
-        }
-        this.discarding = false;
-        this.liveSeq = cursor;
-        this.lastFrameEnd = Math.max(this.lastFrameEnd ?? 0, cursor);
-        return { from, through: cursor, bytes };
     }
 
     /** A hold is bounded: an unbounded queue behind a stalled bootstrap is a

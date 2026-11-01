@@ -2701,10 +2701,8 @@ body.has-terminal-bg
     background-color: var(--bg-base) !important;
 }
 
-/* Floating terminal navigation buttons: jump to live at the bottom-right,
-   load older history at the top-right. Both use the same circular style. */
-.scroll-to-bottom-btn,
-.load-history-btn {
+/* Floating terminal navigation button: jump to live at the bottom-right. */
+.scroll-to-bottom-btn {
     position: absolute;
     right: 14px;
     bottom: 14px;
@@ -2732,21 +2730,12 @@ body.has-terminal-bg
         transform 0.18s ease,
         background-color 0.15s ease;
 }
-.load-history-btn {
-    top: 14px;
-    bottom: auto;
-}
-.load-history-btn:disabled {
-    cursor: wait;
-}
-.scroll-to-bottom-btn.hidden,
-.load-history-btn.hidden {
+.scroll-to-bottom-btn.hidden {
     opacity: 0;
     transform: translateY(8px);
     pointer-events: none;
 }
-.scroll-to-bottom-btn:hover,
-.load-history-btn:not(:disabled):hover {
+.scroll-to-bottom-btn:hover {
     background-color: rgba(20, 20, 25, 0.95);
     border-color: var(--accent);
     box-shadow:
@@ -7896,6 +7885,25 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     font-family: var(--font-mono);
     font-size: calc(12px * var(--ui-scale));
     color: var(--text-muted);
+}
+
+.replay-progress {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--bg-border);
+    border-radius: 8px;
+    padding: 6px 10px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+    font-family: var(--font-mono);
+    font-size: calc(12px * var(--ui-scale));
+    color: var(--text-muted);
+    white-space: nowrap;
 }
 
 .reconnect-btn {

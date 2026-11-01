@@ -46,6 +46,12 @@ type Pty struct {
 	// every time a new PTY is created. Empty for PTYs created before
 	// this field existed.
 	clipFile string
+
+	// Cols and Rows are the actual initial geometry, normalized to 80x24
+	// when the spawn request carried none. The journal baseline copies
+	// these before the read loop admits bytes.
+	Cols uint16
+	Rows uint16
 }
 
 // ExitCode returns the wait status code of the PTY command.
@@ -138,11 +144,14 @@ func startWithSize(ctx context.Context, dir string, command string, args []strin
 		return nil, err
 	}
 
-	if cols != 0 && rows != 0 {
-		if err := pt.Resize(int(cols), int(rows)); err != nil {
-			_ = pt.Close()
-			return nil, err
-		}
+	// The journal baseline needs the actual initial geometry: normalize
+	// absent dimensions instead of leaving the platform default.
+	if cols == 0 || rows == 0 {
+		cols, rows = 80, 24
+	}
+	if err := pt.Resize(int(cols), int(rows)); err != nil {
+		_ = pt.Close()
+		return nil, err
 	}
 
 	// Create session-isolated temporary directory for clipboard shims
@@ -254,6 +263,8 @@ func startWithSize(ctx context.Context, dir string, command string, args []strin
 		Closed:   make(chan struct{}),
 		clipFile: clipFile,
 		exitCode: -1,
+		Cols:     cols,
+		Rows:     rows,
 	}
 
 	go func() {
@@ -359,6 +370,40 @@ func (p *Pty) Read(b []byte) (int, error) {
 	return n, err
 }
 
+// masterFiler is the go-pty Unix PTY's master handle. Windows ConPTY
+// has no equivalent, so the assertion below simply fails there and
+// reads stay uncoalesced.
+type masterFiler interface {
+	Master() *os.File
+}
+
+// ReadBatch blocks for the next output, then drains whatever else is
+// already buffered into the same call, up to len(buf). Each journal
+// admission pays a fixed fsync cost, so a flood of line-sized reads
+// would journal at kilobytes per second; one admission per drain
+// restores megabyte throughput. Idle latency is unchanged: the first
+// read still blocks, and the drain never waits for more data.
+func (p *Pty) ReadBatch(buf []byte) (int, error) {
+	n, err := p.Read(buf)
+	if n <= 0 {
+		return n, err
+	}
+	mp, ok := p.pt.(masterFiler)
+	if !ok {
+		return n, err
+	}
+	master := mp.Master()
+	if master == nil {
+		return n, err
+	}
+	// A short drain is best effort: whatever it misses, the next
+	// blocking read picks up.
+	if m, derr := drainAvailable(master, buf[n:]); derr == nil {
+		n += m
+	}
+	return n, err
+}
+
 func (p *Pty) Write(b []byte) (int, error) {
 	// On Windows, a carriage return that shares a single ConPTY input-pipe
 	// write with preceding bytes gets coalesced: charm/Bubble Tea's input
@@ -407,13 +452,33 @@ func (p *Pty) Resize(cols, rows uint16) error {
 
 // ResizeRecorded orders the journal marker and physical resize together, so
 // concurrent clients cannot record A,B but apply the sizes in order B,A.
-func (p *Pty) ResizeRecorded(cols, rows uint16, record func()) error {
+//
+// The stage callback writes and syncs the journal marker without
+// committing it, and returns the commit/abort pair. A staging failure
+// refuses the physical resize. A physical failure abandons the stage.
+// The commit runs only after the physical resize succeeded.
+func (p *Pty) ResizeRecorded(cols, rows uint16, stage func() (commit func() error, abort func(), err error)) error {
 	p.resizeMu.Lock()
 	defer p.resizeMu.Unlock()
-	if record != nil {
-		record()
+	var commit func() error
+	var abort func()
+	if stage != nil {
+		var err error
+		commit, abort, err = stage()
+		if err != nil {
+			return err
+		}
 	}
-	return p.resizeAndRefresh(cols, rows)
+	if err := p.resizeAndRefresh(cols, rows); err != nil {
+		if abort != nil {
+			abort()
+		}
+		return err
+	}
+	if commit != nil {
+		return commit()
+	}
+	return nil
 }
 
 func (p *Pty) Kill() error {

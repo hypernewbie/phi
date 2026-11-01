@@ -43,7 +43,7 @@ describe('embedded view dials the configured backend', () => {
         const pty = new PTYWebSocket('pane-1', () => {});
 
         expect(pty.url).toBe(`${backend}/ws/pane/pane-1?state=ansi-v1`);
-        expect(seen[0][1]).toBe('phi.terminal.protobuf.v1');
+        expect(seen[0][1]).toBe('phi.terminal.protobuf.v2');
         pty.close();
     });
 

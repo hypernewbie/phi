@@ -42,49 +42,8 @@ it('every zero-delta resume sends current dimensions even when the grid is uncha
     }
 });
 
-it('history reconnect remeasures the panel instead of using the archive or stale saved grid', async () => {
-    const h = replayHarness(encode(''));
-    try {
-        h.term.resize(80, 24);
-        h.pty.ws.head({ epoch: 7, oldest: 0, head: 0 });
-        await h.settle();
-        h.tab._historyBrowsing = true;
-        h.tab._historyLiveState = {
-            cols: 80,
-            rows: 24,
-            through: 0,
-            head: 0,
-            epoch: 7,
-            ansi: 'LIVE',
-        };
-        h.term.resize(30, 5);
-        const fit = vi.fn(() => h.term.resize(100, 30));
-        h.tab.fitAddon = { fit };
-        h.manager.getActiveTab = () => h.tab;
-        h.manager.resolveTerminalFontSize = () => 14;
-        h.manager._spamScroll = vi.fn();
-        const next = h.socket();
-        const resize = vi.spyOn(next, 'sendResize');
-        next.ws.head({ epoch: 7, oldest: 0, head: 0 });
-        await h.settle();
-        await new Promise((resolve) => requestAnimationFrame(resolve));
-        expect(resize).toHaveBeenCalledExactlyOnceWith(100, 30);
-        expect(fit).toHaveBeenCalledOnce();
-        expect(h.term.cols).toBe(100);
-        expect(h.tab._historyLiveState.cols).toBe(100);
-        await h.manager._restoreLatestHistory(h.tab);
-        expect(resize).toHaveBeenLastCalledWith(100, 30);
-        expect(h.tab._historyBrowsing).toBe(false);
-        expect(h.term.buffer.active.getLine(0).translateToString(true)).toBe(
-            'LIVE',
-        );
-    } finally {
-        h.dispose();
-    }
-});
-
-it('checkpoint parsing finishes before fit, backend resize and held-live release', async () => {
-    const h = replayHarness(encode(''));
+it('replay parsing finishes before fit, backend resize and held-live release', async () => {
+    const h = replayHarness(encode('SNAP'));
     let finish;
     let parsed;
     const barrier = new Promise((resolve) => {
@@ -100,12 +59,7 @@ it('checkpoint parsing finishes before fit, backend resize and held-live release
     const fit = vi.fn(() => h.term.resize(100, 30));
     h.tab.fitAddon = { fit };
     try {
-        h.pty.ws.head({
-            epoch: 7,
-            oldest: 0,
-            head: 100,
-            ckpt: { through: 100, cols: 80, rows: 24, ansi: 'SNAP', len: 4 },
-        });
+        h.pty.ws.head({ epoch: 7, oldest: 0, head: 4 });
         await barrier;
         expect(fit).not.toHaveBeenCalled();
         expect(resize).not.toHaveBeenCalled();
@@ -153,26 +107,21 @@ it('a failed bootstrap fit closes and clears its gate, then recovers without rep
 });
 
 it.each([false, true])(
-    'replacement epoch restores checkpoint geometry before painting (alternate=%s)',
+    'replacement epoch restores recorded geometry before painting (alternate=%s)',
     async (alternate) => {
-        const h = replayHarness(encode(''));
+        const ansi = `${alternate ? '\x1b[?1049h' : ''}\x1b[6;71HRIGHT`;
+        const h = replayHarness(encode(ansi));
         try {
             h.term.resize(20, 4);
             h.pty.ws.head({ epoch: 7, oldest: 0, head: 0 });
             await h.settle();
             const next = h.socket();
-            const ansi = `${alternate ? '\x1b[?1049h' : ''}\x1b[6;71HRIGHT`;
             next.ws.head({
                 epoch: 8,
                 oldest: 0,
-                head: 100,
-                ckpt: {
-                    through: 100,
-                    cols: 80,
-                    rows: 6,
-                    ansi,
-                    len: encode(ansi).length,
-                },
+                head: encode(ansi).length,
+                initialCols: 80,
+                initialRows: 6,
             });
             await h.settle();
             expect(h.term.cols).toBe(80);
@@ -180,7 +129,7 @@ it.each([false, true])(
             expect(
                 h.term.buffer.active.getLine(5).translateToString(true),
             ).toContain('RIGHT');
-            expect(h.tab.drainedSeq).toBe(100);
+            expect(h.tab.drainedSeq).toBe(encode(ansi).length);
         } finally {
             h.dispose();
         }
@@ -206,7 +155,15 @@ it.each([
         });
         try {
             await write(reference, program);
-            h.pty.ws.head({ epoch: 7, oldest: 0, head: 0 });
+            // The fresh parser starts at the recorded baseline, so the
+            // fixture baseline matches the reference grid exactly.
+            h.pty.ws.head({
+                epoch: 7,
+                oldest: 0,
+                head: 0,
+                initialCols: 240,
+                initialRows: 12,
+            });
             await h.settle();
             for (let i = 0; i < source.length; i++) {
                 h.tab.ws.ws.output(i, source.slice(i, i + 1));

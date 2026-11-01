@@ -210,7 +210,6 @@ it.each([false, true])(
         );
         if (live) {
             tab.isDead = false;
-            manager._cancelHistoryRequest = vi.fn();
             manager.refreshConsole();
         } else manager.reconnectTab(tab, { auto: true });
         expect(tab.isDead).toBe(true);

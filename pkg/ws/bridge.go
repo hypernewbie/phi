@@ -172,11 +172,13 @@ func (c *Client) readPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub,
 				return
 			}
 			if inst.Pty != nil {
-				// Record the resize marker at the pane's current output head
-				// so archive replay can order it against output.
-				// Recorded before the PTY takes the new size: bytes after the
-				// marker were produced under it.
-				resizeErr := inst.Pty.ResizeRecorded(uint16(cols), uint16(rows), func() { hub.RecordResize(inst.ID, uint16(cols), uint16(rows)) })
+				// Stage the resize marker at the pane's current output
+				// head so replay can order it against output. Staged
+				// before the PTY takes the new size, committed only
+				// after: bytes after the marker were produced under it.
+				resizeErr := inst.Pty.ResizeRecorded(uint16(cols), uint16(rows), func() (func() error, func(), error) {
+					return hub.StagePaneResize(inst.ID, uint16(cols), uint16(rows))
+				})
 				if resizeErr != nil {
 					logger.Error("ws pty resize error", "err", resizeErr)
 					// A refused geometry/refresh is not success. Reattach with
@@ -217,12 +219,20 @@ func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
 	// Register the owner before the goroutine starts: a same-ID retry
 	// must win over a delayed old exit that is still draining.
 	hub.notePaneOwner(inst)
+	// Open the journal with the actual spawn geometry before the read
+	// loop admits bytes. A failure here is not fatal: Ingest retries
+	// the open (and backpressures the reader) until it succeeds.
+	if err := hub.InitPaneJournal(inst.ID, inst.Pty.Cols, inst.Pty.Rows); err != nil {
+		componentLogger().With("pane", inst.ID).Error("terminal journal open failed; ingest will retry", "err", err)
+	}
 	logger := componentLogger().With("pane", inst.ID)
 	go obs.DoFeature("terminal", func(_ context.Context) {
 		defer close(done)
-		buf := make([]byte, 32*1024)
+		// One admission per drain: ReadBatch coalesces a flood into
+		// 64 KiB journal appends instead of line-sized ones.
+		buf := make([]byte, 64*1024)
 		for {
-			n, err := inst.Pty.Read(buf)
+			n, err := inst.Pty.ReadBatch(buf)
 			if n > 0 {
 				if inst.ObserveOutput != nil {
 					inst.ObserveOutput(buf[:n])

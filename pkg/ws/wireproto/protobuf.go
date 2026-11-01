@@ -24,7 +24,7 @@ import (
 // TerminalSubprotocol is the WebSocket subprotocol every pane client must
 // request. The handler rejects any other selection with HTTP 426 before
 // accepting application data.
-const TerminalSubprotocol = "phi.terminal.protobuf.v1"
+const TerminalSubprotocol = "phi.terminal.protobuf.v2"
 
 // EventsSubprotocol is the WebSocket subprotocol every listen-only
 // events client must request. Missing or wrong tokens are rejected
@@ -162,6 +162,19 @@ func EncodeOutputFrame(start uint64, data []byte) ([]byte, error) {
 		Payload: &wspb.TerminalServerFrame_Output{Output: &wspb.TerminalOutput{
 			Start: proto.Uint64(start),
 			Data:  data,
+		}},
+	})
+}
+
+// EncodeGeometryFrame wraps one committed backend resize and marshals it.
+// Every byte at seq >= atSeq was produced under cols x rows.
+func EncodeGeometryFrame(atSeq uint64, cols, rows uint32, eventCursor string) ([]byte, error) {
+	return proto.Marshal(&wspb.TerminalServerFrame{
+		Payload: &wspb.TerminalServerFrame_Geometry{Geometry: &wspb.TerminalGeometry{
+			AtSeq:       proto.Uint64(atSeq),
+			Cols:        proto.Uint32(cols),
+			Rows:        proto.Uint32(rows),
+			EventCursor: proto.String(eventCursor),
 		}},
 	})
 }

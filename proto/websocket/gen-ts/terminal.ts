@@ -38,6 +38,7 @@ export interface TerminalServerFrame {
     | { $case: "bridgeState"; value: TerminalBridgeState }
     | { $case: "settlement"; value: TerminalSettlement }
     | { $case: "notification"; value: Notification }
+    | { $case: "geometry"; value: TerminalGeometry }
     | undefined;
 }
 
@@ -47,6 +48,11 @@ export interface TerminalAttach {
   head?: bigint | undefined;
   checkpoint: TerminalCheckpoint | undefined;
   replayFrom?: bigint | undefined;
+  initialCols?: number | undefined;
+  initialRows?: number | undefined;
+  eventCursor?: string | undefined;
+  historyIncomplete?: boolean | undefined;
+  ephemeral?: boolean | undefined;
 }
 
 export interface TerminalCheckpoint {
@@ -61,6 +67,18 @@ export interface TerminalCheckpoint {
 export interface TerminalOutput {
   start?: bigint | undefined;
   data: Uint8Array;
+}
+
+/**
+ * TerminalGeometry is one committed backend resize on the live stream.
+ * Every byte at seq >= at_seq was produced under cols x rows. Receivers
+ * adopt it for their parser and never answer with a resize of their own.
+ */
+export interface TerminalGeometry {
+  atSeq?: bigint | undefined;
+  cols?: number | undefined;
+  rows?: number | undefined;
+  eventCursor?: string | undefined;
 }
 
 export interface TerminalPong {
@@ -375,6 +393,9 @@ export const TerminalServerFrame: MessageFns<TerminalServerFrame> = {
       case "notification":
         Notification.encode(message.payload.value, writer.uint32(194).fork()).join();
         break;
+      case "geometry":
+        TerminalGeometry.encode(message.payload.value, writer.uint32(202).fork()).join();
+        break;
     }
     return writer;
   },
@@ -464,6 +485,14 @@ export const TerminalServerFrame: MessageFns<TerminalServerFrame> = {
             message.payload = { $case: "notification", value: Notification.decode(reader, reader.uint32()) };
             continue;
           }
+          case 25: {
+            if (tag !== 202) {
+              break;
+            }
+
+            message.payload = { $case: "geometry", value: TerminalGeometry.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -536,13 +565,30 @@ export const TerminalServerFrame: MessageFns<TerminalServerFrame> = {
         }
         break;
       }
+      case "geometry": {
+        if (object.payload?.value !== undefined && object.payload?.value !== null) {
+          message.payload = { $case: "geometry", value: TerminalGeometry.fromPartial(object.payload.value) };
+        }
+        break;
+      }
     }
     return message;
   },
 };
 
 function createBaseTerminalAttach(): TerminalAttach {
-  return { epoch: undefined, oldest: undefined, head: undefined, checkpoint: undefined, replayFrom: undefined };
+  return {
+    epoch: undefined,
+    oldest: undefined,
+    head: undefined,
+    checkpoint: undefined,
+    replayFrom: undefined,
+    initialCols: undefined,
+    initialRows: undefined,
+    eventCursor: undefined,
+    historyIncomplete: undefined,
+    ephemeral: undefined,
+  };
 }
 
 export const TerminalAttach: MessageFns<TerminalAttach> = {
@@ -573,6 +619,21 @@ export const TerminalAttach: MessageFns<TerminalAttach> = {
         throw new globalThis.Error("value provided for field message.replayFrom of type uint64 too large");
       }
       writer.uint32(40).uint64(message.replayFrom);
+    }
+    if (message.initialCols !== undefined) {
+      writer.uint32(48).uint32(message.initialCols);
+    }
+    if (message.initialRows !== undefined) {
+      writer.uint32(56).uint32(message.initialRows);
+    }
+    if (message.eventCursor !== undefined) {
+      writer.uint32(66).string(message.eventCursor);
+    }
+    if (message.historyIncomplete !== undefined) {
+      writer.uint32(72).bool(message.historyIncomplete);
+    }
+    if (message.ephemeral !== undefined) {
+      writer.uint32(80).bool(message.ephemeral);
     }
     return writer;
   },
@@ -630,6 +691,46 @@ export const TerminalAttach: MessageFns<TerminalAttach> = {
             message.replayFrom = reader.uint64() as bigint;
             continue;
           }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+
+            message.initialCols = reader.uint32();
+            continue;
+          }
+          case 7: {
+            if (tag !== 56) {
+              break;
+            }
+
+            message.initialRows = reader.uint32();
+            continue;
+          }
+          case 8: {
+            if (tag !== 66) {
+              break;
+            }
+
+            message.eventCursor = reader.string();
+            continue;
+          }
+          case 9: {
+            if (tag !== 72) {
+              break;
+            }
+
+            message.historyIncomplete = reader.bool();
+            continue;
+          }
+          case 10: {
+            if (tag !== 80) {
+              break;
+            }
+
+            message.ephemeral = reader.bool();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -656,6 +757,11 @@ export const TerminalAttach: MessageFns<TerminalAttach> = {
     message.replayFrom = (object.replayFrom !== undefined && object.replayFrom !== null)
       ? BigInt(object.replayFrom)
       : undefined;
+    message.initialCols = object.initialCols ?? undefined;
+    message.initialRows = object.initialRows ?? undefined;
+    message.eventCursor = object.eventCursor ?? undefined;
+    message.historyIncomplete = object.historyIncomplete ?? undefined;
+    message.ephemeral = object.ephemeral ?? undefined;
     return message;
   },
 };
@@ -851,6 +957,100 @@ export const TerminalOutput: MessageFns<TerminalOutput> = {
     const message = createBaseTerminalOutput();
     message.start = (object.start !== undefined && object.start !== null) ? BigInt(object.start) : undefined;
     message.data = object.data ?? new Uint8Array(0);
+    return message;
+  },
+};
+
+function createBaseTerminalGeometry(): TerminalGeometry {
+  return { atSeq: undefined, cols: undefined, rows: undefined, eventCursor: undefined };
+}
+
+export const TerminalGeometry: MessageFns<TerminalGeometry> = {
+  encode(message: TerminalGeometry, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.atSeq !== undefined) {
+      if (BigInt.asUintN(64, message.atSeq) !== message.atSeq) {
+        throw new globalThis.Error("value provided for field message.atSeq of type uint64 too large");
+      }
+      writer.uint32(8).uint64(message.atSeq);
+    }
+    if (message.cols !== undefined) {
+      writer.uint32(16).uint32(message.cols);
+    }
+    if (message.rows !== undefined) {
+      writer.uint32(24).uint32(message.rows);
+    }
+    if (message.eventCursor !== undefined) {
+      writer.uint32(34).string(message.eventCursor);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): TerminalGeometry {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseTerminalGeometry();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.atSeq = reader.uint64() as bigint;
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.cols = reader.uint32();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.rows = reader.uint32();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.eventCursor = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<TerminalGeometry>, I>>(base?: I): TerminalGeometry {
+    return TerminalGeometry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TerminalGeometry>, I>>(object: I): TerminalGeometry {
+    const message = createBaseTerminalGeometry();
+    message.atSeq = (object.atSeq !== undefined && object.atSeq !== null) ? BigInt(object.atSeq) : undefined;
+    message.cols = object.cols ?? undefined;
+    message.rows = object.rows ?? undefined;
+    message.eventCursor = object.eventCursor ?? undefined;
     return message;
   },
 };

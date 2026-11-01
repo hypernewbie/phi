@@ -75,7 +75,6 @@ function makeTm() {
     tm.focusActiveTerminal = vi.fn();
     tm.updateDocumentTitle = vi.fn();
     tm._showReconnectOverlay = vi.fn();
-    tm._updateHistoryButton = vi.fn();
     tm.maybeAutoReconnect = vi.fn();
     tm.updateDisconnectBanner = vi.fn();
     tm._piThinkingLevels = new Map();

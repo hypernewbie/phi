@@ -47,9 +47,6 @@ function reloadHarness() {
         paneId: 'active',
         coder: 'bash',
         isDead: false,
-        _historyRequestId: 'active-history',
-        _historyBrowsing: true,
-        _forceStateRefresh: false,
         userFollowBottom: false,
     });
     const healthyBackground = {
@@ -58,9 +55,6 @@ function reloadHarness() {
         term: {},
         ws: { close: vi.fn() },
         isDead: false,
-        _historyRequestId: 'healthy-history',
-        _historyBrowsing: true,
-        _forceStateRefresh: 'preserve-healthy',
         userFollowBottom: false,
     };
     const deadBackground = {
@@ -69,9 +63,6 @@ function reloadHarness() {
         term: {},
         ws: { close: vi.fn() },
         isDead: true,
-        _historyRequestId: 'dead-history',
-        _historyBrowsing: true,
-        _forceStateRefresh: 'preserve-dead',
         userFollowBottom: true,
     };
     const tabs = new Map([
@@ -84,7 +75,6 @@ function reloadHarness() {
         activePaneId: active.paneId,
         getActiveTab: TabManager.prototype.getActiveTab,
         reconnectTab: vi.fn(),
-        _cancelHistoryRequest: vi.fn(),
         restartTab: vi.fn(),
         closeTab: vi.fn(),
         createTab: vi.fn(),
@@ -111,10 +101,6 @@ it.each([
 
         h.manager.refreshConsole();
 
-        expect(h.manager._cancelHistoryRequest.mock.calls).toEqual([
-            [h.active],
-        ]);
-        expect(h.active._forceStateRefresh).toBe(true);
         expect(h.active.userFollowBottom).toBe(true);
         expect(h.manager.reconnectTab.mock.calls).toEqual([[h.active]]);
         expect(h.manager.tabs).toBe(h.tabs);
@@ -140,15 +126,10 @@ it('uses the current active selection on each reload call', () => {
     h.manager.activePaneId = h.healthyBackground.paneId;
     h.manager.refreshConsole();
 
-    expect(h.manager._cancelHistoryRequest.mock.calls).toEqual([
-        [h.active],
-        [h.healthyBackground],
-    ]);
     expect(h.manager.reconnectTab.mock.calls).toEqual([
         [h.active],
         [h.healthyBackground],
     ]);
-    expect(h.deadBackground._forceStateRefresh).toBe('preserve-dead');
     expect(h.deadBackground.userFollowBottom).toBe(true);
     expect(h.fetchSpy).not.toHaveBeenCalled();
 });
@@ -172,7 +153,6 @@ it.each([
 
     h.manager.refreshConsole();
 
-    expect(h.manager._cancelHistoryRequest).not.toHaveBeenCalled();
     expect(h.manager.reconnectTab).not.toHaveBeenCalled();
     expect(h.active).toMatchObject(before);
     expect(h.manager.restartTab).not.toHaveBeenCalled();
@@ -222,15 +202,6 @@ it('a force request survives a bootstrap gate and an ordinary observer fit', () 
     h.frames.shift()();
     expect(h.ws.sendResize).toHaveBeenCalledOnce();
     expect(h.term.refresh).toHaveBeenCalledOnce();
-});
-it('historical views keep the live process at the actual panel grid on reactivation', () => {
-    const h = harness();
-    h.tab._historyBrowsing = true;
-    h.tab._historyLiveState = { cols: 40, rows: 12 };
-    h.manager.fitActiveTerminal({ forceResize: true });
-    expect(h.tab._historyLiveState).toEqual({ cols: 80, rows: 24 });
-    expect(h.ws.sendResize).toHaveBeenCalledWith(80, 24);
-    expect(h.term.refresh).toHaveBeenCalledWith(0, 23);
 });
 it('zero-delta reconnect refreshes both renderers before releasing live delivery', async () => {
     const h = harness();

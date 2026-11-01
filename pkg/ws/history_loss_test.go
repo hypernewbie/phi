@@ -3,7 +3,6 @@ package ws
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"runtime"
 	"strings"
 	"testing"
@@ -13,28 +12,43 @@ import (
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
-// A replay-memory cap is an optimization, not permission to delete recording
-// bytes. Cold recording reads must still cover the complete ingested stream.
+// A page cap is an optimization, not permission to delete replay bytes.
+// Chaining 2 MiB pages across a larger journal must return every byte.
 func TestRecordingSurvivesReplayMemoryLimits(t *testing.T) {
 	source := []byte("FIRST\r\n" + strings.Repeat("retained history 你好 🙂\r\n", 80) + "LAST\r\n")
-	for _, capacity := range []int{0, 8, 64, 1024} {
-		for _, chunkSize := range []int{1, 7, 32768} {
-			t.Run(fmt.Sprintf("capacity_%d_chunk_%d", capacity, chunkSize), func(t *testing.T) {
-				hub := NewHub(capacity)
-				for start := 0; start < len(source); start += chunkSize {
-					end := min(start+chunkSize, len(source))
-					hub.Ingest("p", source[start:end])
-				}
-				rec, ok := hub.Recording("p", 0, uint64(len(source)))
-				if !ok || rec.Start != 0 || rec.End != uint64(len(source)) || !bytes.Equal(rec.Data, source) {
-					t.Fatalf("memory limit cut output: span=[%d,%d), bytes=%d, want [0,%d) and exact original bytes", rec.Start, rec.End, len(rec.Data), len(source))
-				}
-				_, used, cap := hub.PaneStats("p")
-				if used > capacity || cap > capacity {
-					t.Fatalf("recovery must not remove the memory optimization: used=%d capacity=%d configured=%d", used, cap, capacity)
-				}
-			})
+	big := bytes.Repeat(source, (2<<20)/len(source)+2)
+	hub := NewHub(64)
+	if err := hub.SetRecordingDirectory(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.InitPaneJournal("p", 80, 24); err != nil {
+		t.Fatal(err)
+	}
+	for start := 0; start < len(big); start += 64 << 10 {
+		end := min(start+(64<<10), len(big))
+		hub.Ingest("p", big[start:end])
+	}
+	ph, _ := hub.LookupPane("p")
+	epoch := ph.EpochOf()
+	var got []byte
+	var after string
+	from := uint64(0)
+	for pages := 0; ; pages++ {
+		if pages > 16 {
+			t.Fatal("paging did not terminate")
 		}
+		page, err := hub.Replay("p", ReplayRequest{Epoch: epoch, From: from, Latest: true, AfterCursor: after})
+		if err != nil {
+			t.Fatalf("replay: %v", err)
+		}
+		got = append(got, page.Data...)
+		if page.End == uint64(len(big)) {
+			break
+		}
+		from, after = page.End, page.EndCursor
+	}
+	if !bytes.Equal(got, big) {
+		t.Fatalf("paged replay cut output: got %d bytes, want %d", len(got), len(big))
 	}
 }
 
@@ -61,8 +75,16 @@ func testProcessExitRecording(t *testing.T, exitBeforeReader bool) {
 		t.Fatal(err)
 	}
 	hub := NewHub(4096)
+	if err := hub.SetRecordingDirectory(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
 	client := &Client{Send: make(chan []byte, 32)}
 	hub.Register(inst.ID, client)
+	live, ok := hub.LookupPane(inst.ID)
+	if !ok {
+		t.Fatal("pane missing after register")
+	}
+	epoch := live.EpochOf()
 	if exitBeforeReader {
 		select {
 		case <-inst.Pty.Closed:
@@ -93,9 +115,9 @@ exited:
 		}
 		runtime.Gosched()
 	}
-	recording, ok := hub.Recording(inst.ID, 0, 4096)
-	if !ok || !bytes.Contains(recording.Data, []byte("retain output after process exit")) {
-		t.Fatal("normal process exit destroyed bytes needed for history on reload")
+	page, err := hub.Replay(inst.ID, ReplayRequest{Epoch: epoch, From: 0, Latest: true})
+	if err != nil || !bytes.Contains(page.Data, []byte("retain output after process exit")) {
+		t.Fatalf("normal process exit destroyed bytes needed for history on reload: %v", err)
 	}
 }
 
@@ -112,14 +134,31 @@ func TestHotDropWarningUsesTheClientsActualControlEnvelope(t *testing.T) {
 
 func TestColdRecordingRetainsItsStartingResize(t *testing.T) {
 	hub := NewHub(8192)
-	hub.RecordResize("p", 80, 24)
+	if err := hub.SetRecordingDirectory(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.InitPaneJournal("p", 80, 24); err != nil {
+		t.Fatal(err)
+	}
 	hub.Ingest("p", []byte("first\r\n"))
-	for i := 0; i < 600; i++ {
-		hub.RecordResize("p", uint16(80+i%2), 24)
+	for i := 0; i < 60; i++ {
+		commit, _, err := hub.StagePaneResize("p", uint16(80+i%2), 24)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := commit(); err != nil {
+			t.Fatal(err)
+		}
 		hub.Ingest("p", []byte("x"))
 	}
-	rec, ok := hub.Recording("p", 0, 7)
-	if !ok || len(rec.Resizes) == 0 || rec.Resizes[0].AtSeq != 0 || rec.Resizes[0].Cols != 80 {
-		t.Fatalf("resize optimization destroyed the geometry needed to replay old bytes: %v", rec.Resizes)
+	ph, _ := hub.LookupPane("p")
+	page, err := hub.Replay("p", ReplayRequest{Epoch: ph.EpochOf(), From: 0, Latest: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The baseline survives any number of later resizes; it is the
+	// geometry old bytes replay under.
+	if page.InitCols != 80 || page.InitRows != 24 {
+		t.Fatalf("resize churn destroyed the starting geometry: %dx%d", page.InitCols, page.InitRows)
 	}
 }

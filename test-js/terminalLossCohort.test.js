@@ -172,7 +172,7 @@ for (const phase of ['initial attach', 'live gap']) {
                     }
                     await h.settle();
                     const ranges = h.requests.filter((r) =>
-                        r.url.includes('/recording?'),
+                        r.url.includes('/replay?'),
                     );
                     expect(
                         ranges.length,
@@ -182,12 +182,9 @@ for (const phase of ['initial attach', 'live gap']) {
                         h.tape.join(''),
                         'no failed-range bytes may enter the parser',
                     ).not.toContain('retained history');
-                    if (phase === 'initial attach') {
-                        expect(
-                            h.requests.some((r) => r.url.includes('/state?')),
-                            'the expired span recovers through the live checkpoint',
-                        ).toBe(true);
-                    }
+                    // The journal never evicts, so a permanent failure
+                    // is a rebirth: recovery is a fresh atomic attach,
+                    // not a patch around the hole.
                     expect(h.tab._bootstrapGate).toBe(null);
                     expect(h.pty.ws.closed).toBe(true);
                 } finally {
@@ -211,7 +208,18 @@ for (const phase of [
                 const source = encode(
                     `FIRST\r\n${'x'.repeat(size)}\r\nLAST\r\n`,
                 );
-                const h = replayHarness(source);
+                // The server caps each page at 2 MiB; the client
+                // chains pages until the span is covered.
+                const served = [];
+                const h = replayHarness(source, ({ from, to }) => {
+                    const end = Math.min(to, from + LIMIT);
+                    served.push([from, end]);
+                    return recordingEnvelope(
+                        source.slice(from, end),
+                        from,
+                        end,
+                    );
+                });
                 try {
                     if (
                         phase === 'same-pane reconnect' ||
@@ -234,9 +242,20 @@ for (const phase of [
                     await h.settle();
                     assertComplete(h, source);
                     expect(
-                        h.requests.every((r) => r.to - r.from <= LIMIT),
-                        'recovery stays bounded per request',
+                        served.length,
+                        'an over-limit span pages instead of arriving whole',
+                    ).toBeGreaterThan(1);
+                    expect(
+                        served.every(([a, b]) => b - a <= LIMIT),
+                        'recovery stays bounded per page',
                     ).toBe(true);
+                    for (const [i, [a, b]] of served.entries()) {
+                        expect(
+                            a,
+                            'pages chain without gaps or overlaps',
+                        ).toBe(i === 0 ? served[0][0] : served[i - 1][1]);
+                        expect(b).toBeGreaterThan(a);
+                    }
                     const buffer = h.term.buffer.active;
                     const liveTail = Array.from(
                         { length: Math.min(24, buffer.length) },

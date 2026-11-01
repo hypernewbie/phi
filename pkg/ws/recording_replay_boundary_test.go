@@ -5,52 +5,6 @@ import (
 	"testing"
 )
 
-func TestAttachCertifiesRawTailOnlyForPlainCRLFHistory(t *testing.T) {
-	body := bytes.Repeat([]byte("numbered ASCII terminal output\r\n"), 100000)
-	for _, prefix := range []string{"", "\x1b[31m", "\x1b[?1049h", "\t", "界", "bare LF\n"} {
-		t.Run(prefix, func(t *testing.T) {
-			h := NewHub(8)
-			if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
-				t.Fatal(err)
-			}
-			data := append([]byte(prefix), body...)
-			if err := h.Ingest("p", data); err != nil {
-				t.Fatal(err)
-			}
-			c := &Client{Send: make(chan []byte, 8)}
-			h.AttachHot("p", c)
-			header := parseAttach(t, drainOne(c.Send))
-			if prefix != "" {
-				if header.GetReplayFrom() != 0 {
-					t.Fatalf("unsafe prefix certified at %d", header.GetReplayFrom())
-				}
-				return
-			}
-			if header.GetReplayFrom() == 0 || header.GetHead()-header.GetReplayFrom() > 2*1024*1024 {
-				t.Fatalf("plain tail must be bounded and certified: %+v", header)
-			}
-			if !bytes.Equal(data[header.GetReplayFrom()-2:header.GetReplayFrom()], []byte("\r\n")) {
-				t.Fatal("raw tail does not begin after a line reset")
-			}
-			if err := h.Close(); err != nil {
-				t.Fatal(err)
-			}
-			reopened := NewHub(8)
-			t.Cleanup(func() { _ = reopened.Close() })
-			if err := reopened.SetRecordingDirectory(h.recordingDirectory); err != nil {
-				t.Fatal(err)
-			}
-			cold := reopened.recordingForRead("p")
-			if cold == nil || cold.recording == nil {
-				t.Fatal("restart lost the retained group")
-			}
-			if got := cold.recording.replayStart(); got != header.GetReplayFrom() {
-				t.Fatalf("restart changed the prefix certificate: %d != %d", got, header.GetReplayFrom())
-			}
-		})
-	}
-}
-
 func TestPlainHistoryWithoutEnoughLineResetsCannotSkipItsPrefix(t *testing.T) {
 	for _, data := range [][]byte{
 		bytes.Repeat([]byte("X"), 3*1024*1024),
@@ -71,53 +25,5 @@ func TestPlainHistoryWithoutEnoughLineResetsCannotSkipItsPrefix(t *testing.T) {
 		if err := g.close(); err != nil {
 			t.Fatal(err)
 		}
-	}
-}
-
-// A stored checkpoint and a certified replay window describe the same stream
-// from different ends. Publishing both lets a client that already holds a
-// coherent parser resume instead of repainting, while an old client keeps
-// using the checkpoint it understands.
-func TestAttachPublishesReplayWindowAlongsideAStoredCheckpoint(t *testing.T) {
-	data := bytes.Repeat([]byte("numbered ASCII terminal output\r\n"), 100000)
-	h := NewHub(8)
-	if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.Ingest("p", data); err != nil {
-		t.Fatal(err)
-	}
-	h.mu.Lock()
-	ph, ok := h.panes["p"]
-	if !ok {
-		h.mu.Unlock()
-		t.Fatal("pane missing")
-	}
-	ph.mu.Lock()
-	epoch := ph.epoch
-	head := ph.total
-	ph.mu.Unlock()
-	h.mu.Unlock()
-	if !h.StoreCheckpoint("p", CheckpointUpload{
-		Epoch:   epoch,
-		Through: head,
-		Cols:    80,
-		Rows:    24,
-		Ansi:    []byte("CHECKPOINT"),
-	}) {
-		t.Fatal("checkpoint rejected")
-	}
-
-	c := &Client{Send: make(chan []byte, 8)}
-	h.AttachHot("p", c)
-	header := parseAttach(t, drainOne(c.Send))
-	if header.GetCheckpoint() == nil {
-		t.Fatal("checkpoint dropped")
-	}
-	if header.GetReplayFrom() == 0 {
-		t.Fatal("certified replay window missing next to the checkpoint")
-	}
-	if header.GetReplayFrom() > header.GetHead() {
-		t.Fatalf("window starts past the head: %d > %d", header.GetReplayFrom(), header.GetHead())
 	}
 }

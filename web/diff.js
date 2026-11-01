@@ -3204,7 +3204,7 @@ export class DiffController {
             if (data?.notGitRepo)
                 return notAGitRepo('this view', true);
             // Connect and stream diff/log output. The PTY holds output
-            // until the checkpoint is rendered and release() runs.
+            // until the replay prefix is rendered and release() runs.
             let streamOutput = '';
             const ws = new PTYWebSocket(data.pane_id, (text) => {
                 this.term.write(text);
@@ -3218,7 +3218,11 @@ export class DiffController {
                 onAttachHead: (info) => {
                     if (this.currentWs !== ws)
                         return;
-                    if (!info.ckpt) {
+                    try {
+                        this.term.resize(info.initialCols, info.initialRows);
+                    }
+                    catch { }
+                    if (!info.head) {
                         if (paintedCache) {
                             this.term.reset();
                             this.term.clear();
@@ -3227,37 +3231,117 @@ export class DiffController {
                         ws.release();
                         return;
                     }
-                    try {
-                        this.term.resize(info.ckpt.cols, info.ckpt.rows);
-                    }
-                    catch { }
-                    const checkpointText = info.ckpt.bytes
-                        ? ws.decodeOutput(info.ckpt.bytes)
-                        : info.ckpt.ansi;
-                    if (paintedCache) {
-                        this.term.reset();
-                        this.term.clear();
-                    }
-                    streamOutput = checkpointText;
-                    if (this.activeTab === 'log' &&
-                        this.isCurrentGitManageContext(gitContext)) {
-                        this.cacheGitView(gitContext, this.gitViewRoot(gitContext), 'log', 'recent', streamOutput, this.gitManageInfo?.target?.head || '', this.gitManageInfo?.target?.branch || '');
-                    }
-                    this.term.write(
-                    // Decode through the socket's own decoder: a
-                    // checkpoint can end mid-codepoint, and only
-                    // the stream decoder carries the split bytes
-                    // into the next live frame.
-                    checkpointText, () => {
-                        if (this.currentWs === ws)
+                    // The log prefix replays from the raw journal. A
+                    // failed fetch degrades to live output only.
+                    const paneId = data.pane_id;
+                    void (async () => {
+                        try {
+                            // The server caps pages at 2 MiB; chain them
+                            // with the end cursor. The attach fence
+                            // certifies the head; without it the server
+                            // answers 400.
+                            const fence = info.eventCursor;
+                            if (typeof fence !== 'string' || !fence)
+                                throw new Error('replay: no head fence');
+                            const chunks = [];
+                            const resizes = [];
+                            let start = 0;
+                            let after;
+                            for (;;) {
+                                const afterParam = after === undefined
+                                    ? ''
+                                    : `&after_event_cursor=${encodeURIComponent(after)}`;
+                                const response = await fetch(`/api/terminals/${encodeURIComponent(paneId)}/replay?from=${start}&through=${info.head}&epoch=${info.epoch}&through_event_cursor=${encodeURIComponent(fence)}${afterParam}`, { credentials: 'same-origin' });
+                                if (!response.ok)
+                                    throw new Error(`replay: HTTP ${response.status}`);
+                                const buf = new Uint8Array(await response.arrayBuffer());
+                                if (buf.length < 4)
+                                    throw new Error('replay: short header');
+                                const jsonLen = new DataView(buf.buffer, buf.byteOffset, 4).getUint32(0, false);
+                                if (4 + jsonLen > buf.length)
+                                    throw new Error('replay: short body');
+                                const hdr = JSON.parse(new TextDecoder().decode(buf.subarray(4, 4 + jsonLen)));
+                                const dataBytes = buf.subarray(4 + jsonLen);
+                                if (hdr.epoch !== info.epoch ||
+                                    hdr.start !== start ||
+                                    hdr.end < start ||
+                                    hdr.end > info.head ||
+                                    dataBytes.byteLength !==
+                                        hdr.end - hdr.start ||
+                                    !Array.isArray(hdr.resizes))
+                                    throw new Error('replay: envelope mismatch');
+                                if (hdr.end === start && hdr.event_cursor === after)
+                                    throw new Error('replay: no progress');
+                                chunks.push(dataBytes);
+                                for (const m of hdr.resizes) {
+                                    if (!Array.isArray(m) ||
+                                        m.length !== 3)
+                                        throw new Error('replay: bad marker');
+                                    resizes.push(m);
+                                }
+                                start = hdr.end;
+                                after = hdr.event_cursor;
+                                if (start >= info.head)
+                                    break;
+                            }
+                            if (this.currentWs !== ws)
+                                return;
+                            let totalBytes = 0;
+                            for (const c of chunks)
+                                totalBytes += c.byteLength;
+                            const dataBytes = new Uint8Array(totalBytes);
+                            let writeAt = 0;
+                            for (const c of chunks) {
+                                dataBytes.set(c, writeAt);
+                                writeAt += c.byteLength;
+                            }
+                            for (const [at, cols, rows] of resizes) {
+                                if (at <= info.head) {
+                                    try {
+                                        this.term.resize(cols, rows);
+                                    }
+                                    catch { }
+                                }
+                            }
+                            const prefixText = ws.decodeOutput(dataBytes);
+                            if (paintedCache) {
+                                this.term.reset();
+                                this.term.clear();
+                            }
+                            streamOutput = prefixText;
+                            if (this.activeTab === 'log' &&
+                                this.isCurrentGitManageContext(gitContext)) {
+                                this.cacheGitView(gitContext, this.gitViewRoot(gitContext), 'log', 'recent', streamOutput, this.gitManageInfo?.target?.head ||
+                                    '', this.gitManageInfo?.target?.branch ||
+                                    '');
+                            }
+                            this.term.write(
+                            // Decode through the socket's own
+                            // decoder: the replay can end
+                            // mid-codepoint, and only the stream
+                            // decoder carries the split bytes into
+                            // the next live frame.
+                            prefixText, () => {
+                                if (this.currentWs === ws)
+                                    this.fitTerminal();
+                            });
+                        }
+                        catch (e) {
+                            console.warn('[diff] replay failed, showing live output:', e);
+                            if (this.currentWs !== ws)
+                                return;
                             this.fitTerminal();
-                    });
-                    ws.release();
+                        }
+                        finally {
+                            if (this.currentWs === ws)
+                                ws.release();
+                        }
+                    })();
                 },
             });
             this.currentWs = ws;
             // Fit now: geometry must not depend on the attach frame.
-            // The checkpoint resize above corrects it when it arrives.
+            // The replay baseline resize above corrects it when it arrives.
             this.fitTerminal();
         }
         catch (e) {

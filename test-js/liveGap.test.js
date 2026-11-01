@@ -16,7 +16,7 @@ setupDomHarness();
 
 function ctx(fetchImpl) {
     const c = Object.create(TabManager.prototype);
-    c._fetchRecordingRange = vi.fn(fetchImpl);
+    c._fetchReplayPages = vi.fn(fetchImpl);
     c.writeToTerminal = vi.fn();
     return c;
 }
@@ -114,11 +114,10 @@ describe('_onLiveGap', () => {
     });
 
     it.each([
-        { end: 104, byteLength: 4, bytes: new Uint8Array(4) },
         { end: 106, byteLength: 6, bytes: new Uint8Array(6) },
         { end: 105, byteLength: 5, bytes: new Uint8Array(4) },
     ])(
-        'rejects a patch whose byte span does not exactly cover the hole (%j)',
+        'rejects a patch whose byte span overruns or misreports the hole (%j)',
         async (range) => {
             const p = pty();
             const c = ctx(async () => ({ start: 100, ...range }));
@@ -128,6 +127,24 @@ describe('_onLiveGap', () => {
             expect(p.ws.close).toHaveBeenCalledOnce();
         },
     );
+
+    it('pages a short response until the hole is covered', async () => {
+        // The server caps pages at 2 MiB: a short page is normal and the
+        // patch loops for the rest instead of reconnecting.
+        const p = pty();
+        const c = ctx(async (_paneId, from) =>
+            from === 100
+                ? { start: 100, end: 104, byteLength: 4, bytes: new Uint8Array(4) }
+                : { start: 104, end: 105, byteLength: 1, bytes: new Uint8Array(1) },
+        );
+        const t = tab(p);
+        await c._onLiveGap(t, 100, 105);
+        expect(c._fetchReplayPages).toHaveBeenCalledTimes(2);
+        expect(p.applyGapPatch).toHaveBeenCalledTimes(2);
+        expect(p.abandonGap).not.toHaveBeenCalled();
+        expect(p.ws.close).not.toHaveBeenCalled();
+        expect(p.release).toHaveBeenCalledOnce();
+    });
 
     it('ignores non-hot sockets', async () => {
         const p = pty();
@@ -337,7 +354,7 @@ describe('_bootstrapDelta watermarks wait for parse', () => {
         const c = Object.create(TabManager.prototype);
         c.updateDocumentTitle = vi.fn();
         c._scheduleCheckpointUpload = vi.fn();
-        c._fetchRecordingRange = vi.fn(async () => ({
+        c._fetchReplayPages = vi.fn(async () => ({
             start: 90,
             end: 100,
             byteLength: 10,
@@ -368,7 +385,7 @@ describe('_bootstrapDelta watermarks wait for parse', () => {
         const c = Object.create(TabManager.prototype);
         c.updateDocumentTitle = vi.fn();
         c._scheduleCheckpointUpload = vi.fn();
-        c._fetchRecordingRange = vi.fn(async () => ({
+        c._fetchReplayPages = vi.fn(async () => ({
             start: 90,
             end: 100,
             byteLength: 10,
@@ -603,7 +620,7 @@ describe('bootstrap gate', () => {
 function recordingEnvelope(text, start, end) {
     const bytes = new TextEncoder().encode(text);
     const json = new TextEncoder().encode(
-        JSON.stringify({ epoch: 7, start, end, resizes: [] }),
+        JSON.stringify({ epoch: 7, start, end, event_cursor: `v1.7.${end}.0`, resizes: [], initial_cols: 80, initial_rows: 24 }),
     );
     const buf = new Uint8Array(4 + json.byteLength + bytes.byteLength);
     new DataView(buf.buffer).setUint32(0, json.byteLength, false);
@@ -624,7 +641,7 @@ describe('recording fetch', () => {
             }),
         );
         try {
-            const d = await c._fetchRecordingRange('p', 0, 5);
+            const d = await c._fetchReplayPages('p', 0, 5);
             expect(d.text).toBe('delta');
             expect(seenInit?.signal instanceof AbortSignal).toBe(true);
         } finally {
@@ -648,7 +665,7 @@ describe('recording fetch', () => {
                 configurable: true,
                 value: undefined,
             });
-            const d = await c._fetchRecordingRange('p', 0, 5);
+            const d = await c._fetchReplayPages('p', 0, 5);
             expect(d.text).toBe('delta');
             expect(seenInit?.signal).toBe(undefined);
         } finally {
@@ -666,7 +683,7 @@ describe('_bootstrappedRelease generation', () => {
         const c = Object.create(TabManager.prototype);
         c.writeToTerminal = vi.fn();
         const resolvers = [];
-        c._fetchRecordingRange = vi.fn(
+        c._fetchReplayPages = vi.fn(
             () =>
                 new Promise((r) => {
                     resolvers.push(r);
@@ -689,6 +706,7 @@ describe('_bootstrappedRelease generation', () => {
             end: 100,
             byteLength: 100,
             text: 'STALE'.padEnd(100),
+            bytes: new TextEncoder().encode('STALE'.padEnd(100)),
         });
         await new Promise((r) => setTimeout(r, 0));
         resolvers[1]({
@@ -696,6 +714,7 @@ describe('_bootstrappedRelease generation', () => {
             end: 100,
             byteLength: 50,
             text: 'FRESH'.padEnd(50),
+            bytes: new TextEncoder().encode('FRESH'.padEnd(50)),
         });
         await Promise.all(tab._pendingBootstraps || []);
         await new Promise((r) => setTimeout(r, 0));
@@ -734,32 +753,16 @@ describe('_trackBootstrap', () => {
 });
 
 describe('_bootstrapDelta', () => {
-    it('rejects an oversized response to a bounded request without touching watermarks', async () => {
-        const oversize = 3 * 1024 * 1024;
-        const c = ctx(async () => ({
-            start: 0,
-            end: oversize,
-            byteLength: oversize,
-            text: 'x'.repeat(oversize),
-        }));
-        const t = {
-            isDead: false,
-            paneId: 'p',
-            queuedSeq: 0,
-            drainedSeq: 0,
-        };
-        await c._bootstrapDelta(t, 0, oversize);
-        expect(c.writeToTerminal).not.toHaveBeenCalled();
-        expect(t.queuedSeq).toBe(0);
-        expect(t.drainedSeq).toBe(0);
-    });
-
     it('appends an in-bounds delta and advances the watermarks', async () => {
+        // Raw replay has no size bound by design: the server pages at
+        // 2 MiB and the delta loops until the fence. A large span that
+        // exactly covers the request is applied, not rejected.
         const c = ctx(async () => ({
             start: 90,
             end: 100,
             byteLength: 10,
             text: '0123456789',
+            bytes: new TextEncoder().encode('0123456789'),
         }));
         const t = {
             isDead: false,

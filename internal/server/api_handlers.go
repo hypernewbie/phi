@@ -193,109 +193,24 @@ func (app *Server) handleFallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/terminals/") && strings.HasSuffix(r.URL.Path, "/state") {
-		app.handleTerminalState(w, r)
+		http.Error(w, "server-rendered terminal state is retired; replay with /replay", http.StatusUpgradeRequired)
+		return
+	}
+
+	if strings.HasPrefix(r.URL.Path, "/api/terminals/") && strings.HasSuffix(r.URL.Path, "/replay") {
+		app.handleTerminalReplay(w, r)
 		return
 	}
 
 	if strings.HasPrefix(r.URL.Path, "/api/terminals/") && strings.HasSuffix(r.URL.Path, "/recording") {
-		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/terminals/"), "/recording")
-		var from, through uint64
-		if v, err := strconv.ParseUint(r.URL.Query().Get("from"), 10, 64); err == nil {
-			from = v
-		}
-		if v, err := strconv.ParseUint(r.URL.Query().Get("through"), 10, 64); err == nil {
-			through = v
-		}
-		var wantEpoch uint64
-		var hasEpoch bool
-		if v, err := strconv.ParseUint(r.URL.Query().Get("epoch"), 10, 64); err == nil {
-			wantEpoch = v
-			hasEpoch = true
-		}
-		// The span is bounded after the retention floor is applied, in
-		// the hub: it is the only place that knows where the floor is,
-		// and a request that starts below it must still answer with the
-		// retained window instead of an inverted one.
-		after := r.URL.Query().Get("after_event_cursor")
-		var rec ws.Recording
-		if after != "" {
-			var endCursor string
-			var cerr error
-			rec, endCursor, cerr = app.hub.RecordingAfterCursor(id, from, through, after)
-			if cerr != nil {
-				if errors.Is(cerr, ws.ErrEventCursorExpired) {
-					http.Error(w, cerr.Error(), http.StatusConflict)
-					return
-				}
-				http.Error(w, "from is beyond the pane head", http.StatusBadRequest)
-				return
-			}
-			rec.EventCursor = endCursor
-		} else {
-			var ok bool
-			rec, ok = app.hub.Recording(id, from, through)
-			if !ok {
-				http.Error(w, "from is beyond the pane head", http.StatusBadRequest)
-				return
-			}
-		}
-		if hasEpoch && rec.Epoch != wantEpoch {
-			http.Error(w, "epoch mismatch", http.StatusConflict)
-			return
-		}
-		// Hash-cache negotiation: the client declares the chunks it
-		// already holds; verified prefixes are skipped and only the
-		// first uncovered run is returned (same envelope). Fully
-		// covered spans answer 204 with no body. Absent or garbage
-		// declarations behave exactly as before (full range).
-		if have := r.URL.Query().Get("have"); have != "" {
-			mfrom, mthrough, haveAll := ws.MissingRun(from, through, rec.Data, rec.Start, ws.ParseHave(have))
-			if haveAll {
-				w.WriteHeader(http.StatusNoContent)
-				return
-			}
-			if mfrom > from {
-				// Re-derive the run from the narrowed span so Start/End
-				// and markers stay consistent with the bytes sent.
-				if after != "" {
-					var endCursor string
-					var cerr error
-					rec, endCursor, cerr = app.hub.RecordingAfterCursor(id, mfrom, mthrough, after)
-					if cerr != nil {
-						if errors.Is(cerr, ws.ErrEventCursorExpired) {
-							http.Error(w, cerr.Error(), http.StatusConflict)
-							return
-						}
-						http.Error(w, "from is beyond the pane head", http.StatusBadRequest)
-						return
-					}
-					rec.EventCursor = endCursor
-				} else {
-					var ok bool
-					rec, ok = app.hub.Recording(id, mfrom, mthrough)
-					if !ok {
-						http.Error(w, "from is beyond the pane head", http.StatusBadRequest)
-						return
-					}
-				}
-				if hasEpoch && rec.Epoch != wantEpoch {
-					http.Error(w, "epoch mismatch", http.StatusConflict)
-					return
-				}
-			}
-		}
-		resizes := make([][3]uint64, 0, len(rec.Resizes))
-		for _, m := range rec.Resizes {
-			resizes = append(resizes, [3]uint64{m.AtSeq, uint64(m.Cols), uint64(m.Rows)})
-		}
-		hdr, _ := json.Marshal(ws.RecordingHeaderJSON{
-			Epoch: rec.Epoch, Start: rec.Start, End: rec.End, Resizes: resizes, EventCursor: rec.EventCursor,
-		})
-		writeRecordingResponse(w, r, hdr, rec.Data)
+		http.Error(w, "terminal recording v1 is retired; replay with /replay", http.StatusUpgradeRequired)
 		return
 	}
 
 	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/terminals/") && strings.HasSuffix(r.URL.Path, "/checkpoint") {
+		// Client checkpoint uploads stay: mobile clients keep sending
+		// them and local previews keep working. The v2 attach never
+		// serves a stored checkpoint; raw replay is the only recovery.
 		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/terminals/"), "/checkpoint")
 		var req struct {
 			Epoch   uint64 `json:"epoch"`
@@ -908,16 +823,23 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
+// terminalProtocolVersion is the raw-replay terminal protocol version
+// advertised in /api/version. v2 clients refuse servers that report a
+// different version (or none); v1 clients are blocked by HTTP 426 on
+// the pane socket and the retired recovery endpoints.
+const terminalProtocolVersion = "2"
+
 func (app *Server) handleGetVersion(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{
-		"api":            "1",
-		"version":        app.version,
-		"commit":         app.commit,
-		"date":           app.date,
-		"build_source":   app.buildSource,
-		"install_method": update.DetectInstallMethod(app.buildSource),
-		"started_at":     fmt.Sprintf("%d", app.startedAt),
+		"api":               "1",
+		"version":           app.version,
+		"commit":            app.commit,
+		"date":              app.date,
+		"build_source":      app.buildSource,
+		"install_method":    update.DetectInstallMethod(app.buildSource),
+		"started_at":        fmt.Sprintf("%d", app.startedAt),
+		"terminal_protocol": terminalProtocolVersion,
 	})
 }
 
