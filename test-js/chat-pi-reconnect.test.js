@@ -177,5 +177,43 @@ describe('Pi chat over a real control socket', () => {
 
         chat.destroy();
         expect(promptTexts(redialed)).toEqual(['second']);
+        client.close();
+    });
+
+    it('waits for a due refresh before dialing with the current token', async () => {
+        vi.stubGlobal('WebSocket', FakeWebSocket);
+        const previousBridge = window.phiAccessAuth;
+        let releaseRefresh;
+        const refresh = new Promise((resolve) => {
+            releaseRefresh = resolve;
+        });
+        window.phiAccessAuth = {
+            refreshAccessIfDue: vi.fn(() => refresh),
+            webSocketURL: (url) => {
+                url.searchParams.set('token', 'refreshed');
+                return url;
+            },
+        };
+
+        const client = connectControl();
+        try {
+            expect(
+                window.phiAccessAuth.refreshAccessIfDue,
+            ).toHaveBeenCalledOnce();
+            expect(FakeWebSocket.instances).toHaveLength(0);
+
+            releaseRefresh();
+            await settle();
+            expect(FakeWebSocket.instances).toHaveLength(1);
+            expect(
+                new URL(FakeWebSocket.instances[0].url).searchParams.get(
+                    'token',
+                ),
+            ).toBe('refreshed');
+        } finally {
+            client.close();
+            if (previousBridge === undefined) delete window.phiAccessAuth;
+            else window.phiAccessAuth = previousBridge;
+        }
     });
 });

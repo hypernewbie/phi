@@ -130,3 +130,80 @@ func TestHandleMarkdownAsset(t *testing.T) {
 		}
 	})
 }
+
+// markdownAssetHeadRequest builds a HEAD request against handleMarkdownAsset.
+func markdownAssetHeadRequest(t *testing.T, path string) *http.Request {
+	t.Helper()
+	q := url.Values{"path": {path}, "cwd": {""}}
+	return httptest.NewRequest(http.MethodHead, "/api/markdown/asset?"+q.Encode(), nil)
+}
+
+// TestHandleMarkdownAssetHEAD pins the HEAD contract added for cache
+// revalidation and preload: the same gate and headers as GET, no body.
+func TestHandleMarkdownAssetHEAD(t *testing.T) {
+	withTempConfig(t)
+	allowed := t.TempDir()
+	writeConfigWithMarkdownDirs(t, allowed)
+	origCWD := activeCWD
+	activeCWD = allowed
+	t.Cleanup(func() { activeCWD = origCWD })
+
+	body := strings.Repeat("markdown-image-bytes", 64)
+	pngPath := filepath.Join(allowed, "head.png")
+	if err := os.WriteFile(pngPath, []byte(body), 0644); err != nil {
+		t.Fatalf("write png: %v", err)
+	}
+
+	get := assetRequest(t, pngPath)
+	if get.Code != http.StatusOK {
+		t.Fatalf("GET: %d %s", get.Code, get.Body.String())
+	}
+	if get.Body.Len() != len(body) {
+		t.Fatalf("GET body = %d bytes want %d", get.Body.Len(), len(body))
+	}
+
+	w := httptest.NewRecorder()
+	handleMarkdownAsset(w, markdownAssetHeadRequest(t, pngPath))
+	if w.Code != http.StatusOK {
+		t.Fatalf("HEAD: %d %s", w.Code, w.Body.String())
+	}
+	if w.Body.Len() != 0 {
+		t.Errorf("HEAD body = %d bytes want 0", w.Body.Len())
+	}
+	for _, header := range []string{"Content-Type", "Content-Length", "Content-Security-Policy"} {
+		if got, want := w.Header().Get(header), get.Header().Get(header); got != want {
+			t.Errorf("HEAD %s = %q want %q", header, got, want)
+		}
+	}
+
+	// HEAD is not a bypass: a rejected path or method stays rejected.
+	outside := t.TempDir()
+	outsidePng := filepath.Join(outside, "outside.png")
+	if err := os.WriteFile(outsidePng, []byte("outside"), 0644); err != nil {
+		t.Fatalf("write outside png: %v", err)
+	}
+	for name, path := range map[string]string{
+		"outside allowed dirs": outsidePng,
+		"non image extension":  filepath.Join(allowed, "notes.txt"),
+	} {
+		if name == "non image extension" {
+			if err := os.WriteFile(path, []byte("text"), 0644); err != nil {
+				t.Fatalf("write txt: %v", err)
+			}
+		}
+		w := httptest.NewRecorder()
+		handleMarkdownAsset(w, markdownAssetHeadRequest(t, path))
+		if w.Code == http.StatusOK {
+			t.Errorf("%s: HEAD accepted (%d)", name, w.Code)
+		}
+	}
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
+		request := markdownAssetHeadRequest(t, pngPath)
+		request.Method = method
+		w := httptest.NewRecorder()
+		handleMarkdownAsset(w, request)
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s: status = %d want 405", method, w.Code)
+		}
+	}
+}

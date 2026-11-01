@@ -51,6 +51,20 @@ describe('rewriteRelativeImages', () => {
         );
     });
 
+    it('points images at the same-origin asset path with no credential', () => {
+        const c = containerWith('<img src="pic.png">');
+        rewriteRelativeImages(c, '/docs/readme.md', '/docs');
+        const src = c.querySelector('img').getAttribute('src');
+        expect(src).toBe(
+            `/api/markdown/asset?path=${encodeURIComponent('/docs/pic.png')}` +
+                `&cwd=${encodeURIComponent('/docs')}`,
+        );
+        // The scoped phi_access_asset cookie authorizes the load; a token in
+        // the address would leak it into history, referrers and logs.
+        expect(src).not.toContain('token');
+        expect(src.startsWith('blob:')).toBe(false);
+    });
+
     it('leaves absolute and special srcs untouched', () => {
         const untouched = [
             'https://cdn.example/x.png',

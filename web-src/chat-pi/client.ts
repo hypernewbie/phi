@@ -270,9 +270,39 @@ export function connectControl(
     const dial = (): void => {
         if (closed || broken || dialing || opened) return;
         dialing = true;
+        // The server closes a socket at the admitted token exp, so a redial
+        // must carry the current bearer. Refresh first when it is due; a
+        // failed refresh still dials, because the retry owner below decides
+        // what happens next, not the refresh.
+        let refresh: Promise<unknown> | undefined;
+        try {
+            refresh = window.phiAccessAuth?.refreshAccessIfDue?.();
+        } catch (_e) {}
+        const start = (): void => {
+            if (closed || broken) {
+                dialing = false;
+                return;
+            }
+            openDial();
+        };
+        // No auth module (or a v1 session) dials synchronously: bridge-free
+        // behavior must stay byte-identical.
+        if (refresh && typeof refresh.then === 'function') {
+            void refresh.catch(() => {}).then(start);
+        } else {
+            start();
+        }
+    };
+
+    const openDial = (): void => {
         let socket: WebSocket;
         try {
-            socket = new WebSocket(wsUrl('/ws/control'), controlSubprotocol);
+            const socketURL = new URL(wsUrl('/ws/control'));
+            socket = new WebSocket(
+                (window.phiAccessAuth?.webSocketURL?.(socketURL) ?? socketURL)
+                    .href,
+                controlSubprotocol,
+            );
         } catch (error) {
             dialing = false;
             reportStreamFailure(

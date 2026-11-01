@@ -203,7 +203,9 @@ func TestHandlePiBridgeTranscriptSearchValidationAndFallback(t *testing.T) {
 func TestTranscriptSearchRouteUsesAccessAuthGate(t *testing.T) {
 	withTempConfig(t)
 	auth := useTestAccessAuth(t)
-	if err := auth.configure(testAccessHash()); err != nil {
+	// auth.db is authoritative after migration; configure() leaves the gate
+	// disabled, so commit the verifier through the password transaction.
+	if err := setTestAccessRecord(auth, testAccessHash()); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()

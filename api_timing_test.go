@@ -46,8 +46,9 @@ func timingTestCookie(t *testing.T) *http.Cookie {
 }
 
 func TestTimingSkipsRejectedAuthRequests(t *testing.T) {
+	withTempConfig(t)
 	auth := useTestAccessAuth(t)
-	if err := auth.configure(testAccessHash()); err != nil {
+	if err := setTestAccessRecord(auth, testAccessHash()); err != nil {
 		t.Fatal(err)
 	}
 	reached := false
@@ -74,8 +75,9 @@ func TestTimingSkipsRejectedAuthRequests(t *testing.T) {
 }
 
 func TestTimingRecordsAuthenticatedRequests(t *testing.T) {
+	withTempConfig(t)
 	auth := useTestAccessAuth(t)
-	if err := auth.configure(testAccessHash()); err != nil {
+	if err := setTestAccessRecord(auth, testAccessHash()); err != nil {
 		t.Fatal(err)
 	}
 	cookie := timingTestCookie(t)

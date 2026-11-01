@@ -5,7 +5,14 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { safeStorage } from 'electron';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -43,8 +50,24 @@ const fake = vi.hoisted(() => {
   class FakeWebContents extends Events {
     destroyed = false;
     readonly sent: Array<[string, unknown]> = [];
+    /** Recorded cookie-jar traffic: the body asset handle is the only cookie
+     *  a renderer may receive, so tests assert the exact writes. */
+    readonly cookies = {
+      setCalls: [] as Array<Record<string, unknown>>,
+      removeCalls: [] as Array<[string, string]>,
+      set(details: Record<string, unknown>): Promise<void> {
+        this.setCalls.push(details);
+        return Promise.resolve();
+      },
+      remove(url: string, name: string): Promise<void> {
+        this.removeCalls.push([url, name]);
+        return Promise.resolve();
+      },
+    };
+    readonly session = { cookies: this.cookies };
     zoom = 0;
     loadFileCalls: string[] = [];
+    url = '';
     send(channel: string, payload: unknown): void {
       this.sent.push([channel, payload]);
     }
@@ -58,8 +81,12 @@ const fake = vi.hoisted(() => {
       this.loadFileCalls.push(file);
       return Promise.resolve();
     }
-    loadURL(): Promise<void> {
+    loadURL(url?: string): Promise<void> {
+      if (typeof url === 'string') this.url = url;
       return Promise.resolve();
+    }
+    getURL(): string {
+      return this.url;
     }
     executeJavaScript(
       _code?: string,
@@ -218,6 +245,25 @@ const fake = vi.hoisted(() => {
     handle: (channel: string, listener: Listener) =>
       ipcHandlers.set(channel, listener),
   };
+  // Controllable safeStorage for credential-persistence tests. The
+  // "ciphertext" is a prefix plus base64 so a test can prove the plaintext
+  // bearer never reaches the file.
+  const safeStorage = {
+    available: false,
+    backend: 'keychain',
+    failEncrypt: false,
+    isEncryptionAvailable: () => safeStorage.available,
+    getSelectedStorageBackend: () => safeStorage.backend,
+    encryptString: (value: string) => {
+      if (safeStorage.failEncrypt) throw new Error('encrypt failed');
+      return Buffer.from(`enc:${Buffer.from(value).toString('base64')}`);
+    },
+    decryptString: (value: Buffer) => {
+      const text = value.toString();
+      if (!text.startsWith('enc:')) throw new Error('decrypt failed');
+      return Buffer.from(text.slice(4), 'base64').toString();
+    },
+  };
   return {
     FakeBrowserWindow,
     FakeWebContentsView,
@@ -226,6 +272,7 @@ const fake = vi.hoisted(() => {
     powerMonitor,
     ipcEvents,
     ipcHandlers,
+    safeStorage,
     setUserData: (value: string) => (userData = value),
     reset: () => {
       FakeBrowserWindow.instances.length = 0;
@@ -234,6 +281,9 @@ const fake = vi.hoisted(() => {
       powerMonitor.listeners.clear();
       ipcEvents.clear();
       ipcHandlers.clear();
+      safeStorage.available = false;
+      safeStorage.backend = 'keychain';
+      safeStorage.failEncrypt = false;
     },
   };
 });
@@ -254,11 +304,7 @@ vi.mock('electron', () => ({
   Notification: class {
     show(): void {}
   },
-  safeStorage: {
-    isEncryptionAvailable: () => false,
-    encryptString: (value: string) => Buffer.from(value),
-    decryptString: (value: Buffer) => value.toString('utf8'),
-  },
+  safeStorage: fake.safeStorage,
   session: { defaultSession: {} },
   shell: { openExternal: vi.fn(), openPath: vi.fn() },
   Tray: class {
@@ -272,9 +318,21 @@ vi.mock('electron', () => ({
   powerMonitor: fake.powerMonitor,
 }));
 
-import { AccessAuth, type StoredCredential } from '../src/access-auth.js';
+import {
+  AccessAuth,
+  type StoredCredential,
+  type V2Bundle,
+} from '../src/access-auth.js';
 import { Controller } from '../src/controller.js';
-import { DesktopHost } from '../src/desktop.js';
+import { EMBEDDED_ORIGIN } from '../src/embedded-transport.js';
+import {
+  attachNavGuard,
+  DesktopHost,
+  type CredentialStoreFs,
+  isAllowedNavigationTarget,
+  realCredentialStoreFs,
+  resolveV2BodyAuthTarget,
+} from '../src/desktop.js';
 import { FORWARD_CHANNEL } from '../src/single-instance.js';
 import { WAKE_PAGE_SCRIPT } from '../src/injected.js';
 
@@ -411,6 +469,7 @@ describe('DesktopHost fake-Electron lifecycle', () => {
           return new Response(
             JSON.stringify({
               enabled: true,
+              authenticated: false,
               version: 'v1',
               algorithm: credential.algorithm,
               iterations: credential.iterations,
@@ -497,6 +556,62 @@ describe('DesktopHost fake-Electron lifecycle', () => {
         }
       },
     );
+  });
+
+  it('keeps a timed-out identity read from queuing poll scripts', async () => {
+    const host = new DesktopHost();
+    await host.start(primary);
+    const win = fake.FakeBrowserWindow.instances[0];
+    win.webContents.emit('did-finish-load');
+    await flush();
+    const ctrl = host.controller!;
+    const profile = ctrl.add('http://alpha.example.test:7070/');
+    host.profileViews!.addProfile(profile.id, profile.origin);
+    ctrl.setActive(profile.id);
+    const view = host.viewByOrigin.get(profile.origin)!;
+    let finish: (value: unknown) => void = () => {};
+    const execute = vi
+      .spyOn(view.webContents, 'executeJavaScript')
+      .mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      );
+
+    vi.useFakeTimers();
+    try {
+      const identity = host.observeProfileIdentity(view, profile.origin);
+      await flush();
+      expect(execute).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await identity).toBeNull();
+
+      host.pollCpu();
+      host.pollCpu();
+      host.pollFileAction();
+      host.pollFileAction();
+      expect(execute).toHaveBeenCalledTimes(1);
+
+      finish({ hostname: 'ALPHA', accent: '#123456' });
+      await flush();
+
+      host.pollFileAction();
+      host.pollFileAction();
+      expect(execute).toHaveBeenCalledTimes(2);
+      expect(execute.mock.calls[1][0]).toContain('__phiFileAction');
+      finish(null);
+      await flush();
+
+      host.pollCpu();
+      expect(execute).toHaveBeenCalledTimes(3);
+      expect(execute.mock.calls[2][0]).toContain('cpu:');
+      finish({ cpu: 62, activity: true, workspace: '/alpha/code' });
+      await flush();
+      expect(host.observedCpu.get(profile.id)).toBe(62);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('power resume wakes only the active retained view and tolerates absent/destroyed views', async () => {
@@ -982,6 +1097,7 @@ describe('DesktopHost fake-Electron lifecycle', () => {
           ok: true,
           json: async () => ({
             enabled: true,
+            authenticated: false,
             version: 'v1',
             algorithm: 'pbkdf2-sha256',
             iterations: 600_000,
@@ -1099,6 +1215,194 @@ describe('DesktopHost fake-Electron lifecycle', () => {
       }
       vi.unstubAllGlobals();
     }
+  });
+
+  it.each([
+    'remote',
+    'embedded',
+    'embedded-rejected',
+    'embedded-cancelled',
+    'embedded-destroyed',
+  ])('completes the v2 body handoff without a v1 proof: %s', async (mode) => {
+    const embedded = mode !== 'remote';
+    process.env.PHI_DESKTOP_LOW_MEMORY = embedded ? '1' : '0';
+    const salt = Buffer.from('0123456789abcdef0123456789abcdef', 'hex');
+    vi.stubGlobal('fetch', async (url: string | URL, init?: RequestInit) => {
+      const u = url.toString();
+      if (!u.startsWith('https://minerva.example.test')) {
+        return { status: 404, ok: false, json: async () => ({}) } as Response;
+      }
+      if (u.includes('/api/auth/status')) {
+        return {
+          status: 200,
+          ok: true,
+          json: async () => ({
+            enabled: true,
+            authenticated: false,
+            protocols: ['v1', 'v2'],
+            version: 'v1',
+            algorithm: 'pbkdf2-sha256',
+            iterations: 600_000,
+            salt: salt.toString('base64url'),
+            challenge: 'test-challenge',
+          }),
+        } as Response;
+      }
+      if (u.includes('/api/auth/v2/login')) {
+        // A v2 success is the credential bundle plus the rotating refresh
+        // cookie; a bare token is not a success this host may accept.
+        const handle = Buffer.alloc(32, 0x5a).toString('base64url');
+        const body = JSON.stringify({
+          token: 'host-token',
+          expires_at: 1_700_003_600,
+          expires_in: 3_600,
+          refresh_idle_expires_at: 1_702_592_000,
+          refresh_absolute_expires_at: 1_707_776_000,
+        });
+        return {
+          status: 200,
+          ok: true,
+          text: async () => body,
+          json: async () => JSON.parse(body),
+          headers: {
+            getSetCookie: () => [
+              `phi_access_refresh=${handle}; Path=/api/auth/v2/refresh; HttpOnly; SameSite=Strict`,
+            ],
+            get: (name: string) =>
+              name.toLowerCase() === 'set-cookie'
+                ? `phi_access_refresh=${handle}; Path=/api/auth/v2/refresh; HttpOnly; SameSite=Strict`
+                : null,
+          },
+        } as unknown as Response;
+      }
+      if (u.includes('/api/config')) {
+        const headers = (init?.headers as Record<string, string>) ?? {};
+        const authorization = headers.Authorization || headers.authorization;
+        if (authorization === 'Bearer host-token') {
+          const body = JSON.stringify({
+            hostname: 'minerva',
+            workspaces: ['/Users/minerva/project'],
+            active_cwd: '/Users/minerva/project',
+          });
+          return {
+            status: 200,
+            ok: true,
+            text: async () => body,
+            json: async () => JSON.parse(body),
+          } as Response;
+        }
+        return {
+          status: 401,
+          ok: false,
+          text: async () => 'access authentication required',
+        } as Response;
+      }
+      return { status: 200, ok: true, json: async () => ({}) } as Response;
+    });
+
+    const host = new DesktopHost();
+    await host.start(primary);
+    const win = fake.FakeBrowserWindow.instances[0];
+    win.webContents.emit('did-finish-load');
+    await flush();
+
+    const profile = host.controller?.add('https://minerva.example.test/');
+    if (!profile) throw new Error('controller missing');
+    host.profileViews!.addProfile(profile.id, profile.origin);
+    host.controller?.setActive(profile.id);
+    await flush();
+
+    const bodyViews = fake.FakeWebContentsView.instances;
+    const bodyView = bodyViews[bodyViews.length - 1];
+    const scripts: string[] = [];
+    bodyView.webContents.executeJavaScript = async (script: string) => {
+      scripts.push(script);
+      if (script.includes('completeHostSession')) {
+        if (mode === 'embedded-destroyed')
+          bodyView.webContents.destroyed = true;
+        if (mode === 'embedded-cancelled') {
+          const cancel = fake.ipcHandlers.get('phi:auth-unlock');
+          if (!cancel) throw new Error('auth-unlock handler missing');
+          await cancel(
+            { sender: win.webContents },
+            { requestId, password: null },
+          );
+        }
+        return mode !== 'embedded-rejected';
+      }
+      if (script.includes('installToken')) return 200;
+      return null;
+    };
+    bodyView.webContents.emit('did-finish-load');
+    await flush();
+
+    const configHandler = fake.ipcHandlers.get('phi:server-config');
+    if (!configHandler) throw new Error('server-config handler missing');
+    await configHandler({ sender: win.webContents });
+    await flush();
+
+    const required = win.webContents.sent.filter(
+      ([channel]) => channel === 'phi:auth-required',
+    );
+    expect(required.length).toBeGreaterThan(0);
+    const requestId = (
+      required[required.length - 1][1] as { requestId: string }
+    ).requestId;
+
+    const unlockHandler = fake.ipcHandlers.get('phi:auth-unlock');
+    if (!unlockHandler) throw new Error('auth-unlock handler missing');
+    const result = (await unlockHandler(
+      { sender: win.webContents },
+      { requestId, password: 'a long enough password' },
+    )) as unknown as { ok: boolean; code?: string };
+    if (embedded) {
+      expect(result).toMatchObject(
+        mode === 'embedded'
+          ? { ok: true }
+          : {
+              ok: false,
+              code: mode === 'embedded-rejected' ? 'unavailable' : 'stale',
+            },
+      );
+      expect(scripts).toContain(
+        'window.phiAccessAuth?.completeHostSession?.()',
+      );
+      expect(
+        scripts.some(
+          (script) =>
+            script.includes('host-token') ||
+            script.includes('installToken') ||
+            script.includes('/api/auth/login'),
+        ),
+      ).toBe(false);
+      expect(bodyView.webContents.cookies.setCalls).toEqual([]);
+      expect(
+        win.webContents.sent.some(
+          ([channel]) => channel === 'phi:auth-resolved',
+        ),
+      ).toBe(mode === 'embedded');
+      return;
+    }
+    expect(result).toEqual({ ok: true, config: expect.anything() });
+
+    // The v2 body receives the bearer; the legacy one-time proof is never
+    // used, and the page is not reloaded (a reload would discard it).
+    expect(
+      scripts.some(
+        (script) =>
+          script.includes('installToken') && script.includes('"host-token"'),
+      ),
+    ).toBe(true);
+    expect(scripts.some((script) => script.includes('/api/auth/login'))).toBe(
+      false,
+    );
+    // The foreground install also gives that body the scoped asset cookie and
+    // nothing else: the refresh handle stays host-side.
+    expect(bodyView.webContents.cookies.setCalls.at(-1)).toMatchObject({
+      name: 'phi_access_asset',
+      value: 'host-token',
+      path: '/api',
+    });
   });
 
   it('rejects stale old-session main-frame senders for controller mutations and window-minimize (sender trust)', async () => {
@@ -1242,6 +1546,7 @@ describe('DesktopHost fake-Electron lifecycle', () => {
           ok: true,
           json: async () => ({
             enabled: true,
+            authenticated: false,
             version: 'v1',
             algorithm: 'pbkdf2-sha256',
             iterations: 600_000,
@@ -1357,6 +1662,7 @@ describe('DesktopHost fake-Electron lifecycle', () => {
           ok: true,
           json: async () => ({
             enabled: true,
+            authenticated: false,
             version: 'v1',
             algorithm: 'pbkdf2-sha256',
             iterations: 600_000,
@@ -1452,6 +1758,7 @@ describe('DesktopHost fake-Electron lifecycle', () => {
           ok: true,
           json: async () => ({
             enabled: true,
+            authenticated: false,
             version: 'v1',
             algorithm: 'pbkdf2-sha256',
             iterations: 600_000,
@@ -1586,4 +1893,1069 @@ describe('DesktopHost fake-Electron lifecycle', () => {
 
     win.finishClose();
   };
+});
+
+describe('DesktopHost credential persistence (v1 + v2)', () => {
+  const originA = 'https://a.example.test';
+  const originB = 'https://b.example.test';
+  const v1Entry = {
+    version: 'v1' as const,
+    algorithm: 'pbkdf2-sha256' as const,
+    iterations: 600_000,
+    salt: Buffer.alloc(16, 0x11),
+    verifier: Buffer.alloc(32, 0x22),
+  };
+  /** A stored v2 entry: the whole rotating bundle, never a bare token. */
+  const v2Entry = (
+    jwt: string,
+    overrides: Record<string, unknown> = {},
+  ): Record<string, unknown> => ({
+    version: 'v2',
+    jwt,
+    expiresAt: 1_900_000_000,
+    expiresIn: 3600,
+    refreshHandle: Buffer.alloc(32, 0x33).toString('base64url'),
+    refreshIdleExpiresAt: 1_900_500_000,
+    refreshAbsoluteExpiresAt: 1_900_900_000,
+    ...overrides,
+  });
+  /** The body-renderer surface these tests observe: its recorded cookie jar
+   *  and script calls, cast off the fake Electron WebContents. */
+  type BodyContents = {
+    url: string;
+    destroyed: boolean;
+    executeJavaScript: (script: string) => Promise<unknown>;
+    cookies: {
+      setCalls: Array<Record<string, unknown>>;
+      removeCalls: Array<[string, string]>;
+    };
+  };
+  const newBodyContents = (): BodyContents =>
+    new fake.FakeBrowserWindow({}).webContents as unknown as BodyContents;
+
+  type TestHost = {
+    storedCredentials: Map<string, unknown>;
+    saveStoredCredentials(): void;
+    loadStoredCredentials(): void;
+    bootstrapV2Token(
+      origin: string,
+      jwt: string,
+      auth: AccessAuth,
+      generation: number,
+    ): Promise<void>;
+    sessionGeneration: number;
+    credentialsPath: string;
+    credentialFs: CredentialStoreFs;
+    watchBundles(auth: AccessAuth): AccessAuth;
+    persistBundle(origin: string, bundle: V2Bundle | null): void;
+    bodyTokens: Map<string, string>;
+    viewByOrigin: Map<string, { webContents: BodyContents }>;
+    installBodyToken(
+      contents: unknown,
+      origin: string,
+      auth: AccessAuth,
+      generation: number,
+    ): void;
+    tryReauthWithStoredCredential(
+      origin: string,
+      auth: AccessAuth,
+      generation: number,
+    ): Promise<boolean>;
+  };
+  const hostOf = (): TestHost => new DesktopHost() as unknown as TestHost;
+  const encrypted = (origins: Record<string, unknown>): Buffer =>
+    fake.safeStorage.encryptString(JSON.stringify({ origins }));
+
+  let temp = '';
+
+  beforeEach(() => {
+    fake.reset();
+    temp = mkdtempSync(path.join(os.tmpdir(), 'phi-desktop-creds-'));
+    fake.setUserData(temp);
+    fake.safeStorage.available = true;
+  });
+
+  afterEach(() => {
+    rmSync(temp, { recursive: true, force: true });
+    vi.unstubAllGlobals();
+  });
+
+  it('round-trips mixed v1/v2 entries without writing the v2 plaintext', () => {
+    const host = hostOf();
+    host.storedCredentials.set(originA, v1Entry);
+    host.storedCredentials.set(originB, v2Entry('jwt-secret'));
+    host.saveStoredCredentials();
+
+    const onDisk = readFileSync(host.credentialsPath);
+    expect(onDisk.toString()).not.toContain('jwt-secret');
+    expect(onDisk.toString()).not.toContain(
+      v1Entry.verifier.toString('base64url'),
+    );
+
+    const reloaded = hostOf();
+    reloaded.loadStoredCredentials();
+    expect(reloaded.storedCredentials.size).toBe(2);
+    expect(reloaded.storedCredentials.get(originA)).toMatchObject({
+      version: 'v1',
+      iterations: 600_000,
+    });
+    expect(reloaded.storedCredentials.get(originB)).toEqual(
+      v2Entry('jwt-secret'),
+    );
+  });
+
+  it('loads a legacy v1-only file', () => {
+    const host = hostOf();
+    writeFileSync(
+      host.credentialsPath,
+      encrypted({
+        [originA]: {
+          version: 'v1',
+          algorithm: 'pbkdf2-sha256',
+          iterations: 600_000,
+          saltBase64: v1Entry.salt.toString('base64url'),
+          verifierBase64: v1Entry.verifier.toString('base64url'),
+        },
+      }),
+    );
+    host.loadStoredCredentials();
+    expect(host.storedCredentials.get(originA)).toMatchObject({
+      version: 'v1',
+      iterations: 600_000,
+    });
+  });
+
+  it('drops malformed entries independently', () => {
+    const host = hostOf();
+    writeFileSync(
+      host.credentialsPath,
+      encrypted({
+        [originA]: {
+          version: 'v1',
+          algorithm: 'pbkdf2-sha256',
+          iterations: 600_000,
+          saltBase64: v1Entry.salt.toString('base64url'),
+          verifierBase64: v1Entry.verifier.toString('base64url'),
+        },
+        'https://bad-v1.example.test': {
+          version: 'v1',
+          algorithm: 'pbkdf2-sha256',
+          iterations: 600_000,
+          saltBase64: '',
+          verifierBase64: 'AAAA',
+        },
+        [originB]: v2Entry('ok-token'),
+        'https://bad-v2.example.test': { ...v2Entry('bad'), expiresAt: 'soon' },
+        'not a url': v2Entry('ignored'),
+      }),
+    );
+    host.loadStoredCredentials();
+    expect(Array.from(host.storedCredentials.keys()).sort()).toEqual(
+      [originA, originB].sort(),
+    );
+  });
+
+  it('clears the store when the file cannot be decrypted', () => {
+    const host = hostOf();
+    writeFileSync(host.credentialsPath, Buffer.from('not encrypted'));
+    host.storedCredentials.set(originA, v1Entry);
+    host.loadStoredCredentials();
+    expect(host.storedCredentials.size).toBe(0);
+  });
+
+  it('neither reads nor writes when encryption is unavailable', () => {
+    fake.safeStorage.available = false;
+    const host = hostOf();
+    writeFileSync(
+      host.credentialsPath,
+      encrypted({ [originA]: v2Entry('tok') }),
+    );
+    host.loadStoredCredentials();
+    expect(host.storedCredentials.size).toBe(0);
+
+    const before = readFileSync(host.credentialsPath);
+    host.storedCredentials.set(originA, v2Entry('new-tok') as never);
+    host.saveStoredCredentials();
+    expect(readFileSync(host.credentialsPath)).toEqual(before);
+  });
+
+  it('refuses v2 writes and v2 loads on the Linux basic_text backend', () => {
+    vi.stubGlobal(
+      'process',
+      Object.create(process, {
+        platform: { value: 'linux' },
+      }) as NodeJS.Process,
+    );
+    fake.safeStorage.backend = 'basic_text';
+    const host = hostOf();
+    writeFileSync(
+      host.credentialsPath,
+      encrypted({
+        [originA]: {
+          version: 'v1',
+          algorithm: 'pbkdf2-sha256',
+          iterations: 600_000,
+          saltBase64: v1Entry.salt.toString('base64url'),
+          verifierBase64: v1Entry.verifier.toString('base64url'),
+        },
+        [originB]: v2Entry('tok'),
+      }),
+    );
+    host.loadStoredCredentials();
+    expect(host.storedCredentials.has(originA)).toBe(true);
+    expect(host.storedCredentials.has(originB)).toBe(false);
+
+    const before = readFileSync(host.credentialsPath);
+    host.storedCredentials.set(originB, v2Entry('new-tok') as never);
+    host.saveStoredCredentials();
+    expect(readFileSync(host.credentialsPath)).toEqual(before);
+
+    // A v1-only store still writes through the legacy backend.
+    host.storedCredentials.delete(originB);
+    host.saveStoredCredentials();
+    expect(readFileSync(host.credentialsPath)).not.toEqual(before);
+  });
+
+  it('leaves the old file intact when encryption throws', () => {
+    const host = hostOf();
+    host.storedCredentials.set(originA, v1Entry);
+    host.saveStoredCredentials();
+    const before = readFileSync(host.credentialsPath);
+    fake.safeStorage.failEncrypt = true;
+    host.storedCredentials.set(originB, v2Entry('tok') as never);
+    host.saveStoredCredentials();
+    expect(readFileSync(host.credentialsPath)).toEqual(before);
+  });
+
+  it('swallows a write failure without losing memory state', () => {
+    const host = hostOf();
+    mkdirSync(host.credentialsPath);
+    host.storedCredentials.set(originB, v2Entry('tok') as never);
+    expect(() => host.saveStoredCredentials()).not.toThrow();
+    expect(host.storedCredentials.get(originB)).toEqual(v2Entry('tok'));
+    expect(existsSync(host.credentialsPath)).toBe(true);
+  });
+
+  it('keeps a valid token and clears only the rejected one', async () => {
+    const host = hostOf();
+    const auth = new AccessAuth((async (url: URL) => {
+      if (url.pathname === '/api/auth/v2/status') {
+        return new Response(
+          JSON.stringify({ enabled: true, authenticated: true }),
+          {
+            status: 200,
+          },
+        );
+      }
+      throw new Error('unexpected');
+    }) as unknown as typeof fetch);
+    host.storedCredentials.set(originA, v2Entry('good') as never);
+    await host.bootstrapV2Token(originA, 'good', auth, host.sessionGeneration);
+    expect(auth.getToken(originA)).toBe('good');
+    expect(host.storedCredentials.has(originA)).toBe(true);
+
+    const rejecting = new AccessAuth(
+      (async () =>
+        new Response('', { status: 401 })) as unknown as typeof fetch,
+    );
+    host.storedCredentials.set(originB, v2Entry('bad') as never);
+    await host.bootstrapV2Token(
+      originB,
+      'bad',
+      rejecting,
+      host.sessionGeneration,
+    );
+    expect(rejecting.getToken(originB)).toBeNull();
+    expect(rejecting.getSelectedProtocol(originB)).toBe('v2');
+    expect(host.storedCredentials.has(originB)).toBe(false);
+  });
+
+  it('withholds a restored bearer from the body until the server validates it', async () => {
+    const host = hostOf() as TestHost & { bodyTokens: Map<string, string> };
+    const transient = new AccessAuth(
+      (async () =>
+        new Response('', { status: 503 })) as unknown as typeof fetch,
+    );
+    host.storedCredentials.set(originA, v2Entry('restored') as never);
+    await host.bootstrapV2Token(
+      originA,
+      'restored',
+      transient,
+      host.sessionGeneration,
+    );
+    // Native retries keep the token; a renderer must not receive an
+    // unconfirmed bearer.
+    expect(transient.getToken(originA)).toBe('restored');
+    expect(host.bodyTokens.has(originA)).toBe(false);
+
+    const valid = new AccessAuth(
+      (async () =>
+        new Response(JSON.stringify({ enabled: true, authenticated: true }), {
+          status: 200,
+        })) as unknown as typeof fetch,
+    );
+    await host.bootstrapV2Token(
+      originB,
+      'checked',
+      valid,
+      host.sessionGeneration,
+    );
+    expect(host.bodyTokens.get(originB)).toBe('checked');
+  });
+
+  it('installs the host bearer into a popout only after the origin authorized it', () => {
+    const host = hostOf() as TestHost & {
+      bodyTokens: Map<string, string>;
+      installPopoutToken(
+        contents: unknown,
+        origin: string,
+        auth: AccessAuth,
+        generation: number,
+        isCurrent: () => boolean,
+      ): void;
+    };
+    const auth = new AccessAuth();
+    auth.installToken(originA, 'popout-token');
+    const child = new fake.FakeBrowserWindow({}).webContents;
+    child.url = `${originA}/md.html`;
+    const scripts: string[] = [];
+    child.executeJavaScript = async (script: string) => {
+      scripts.push(script);
+      return null;
+    };
+    host.installPopoutToken(
+      child,
+      originA,
+      auth,
+      host.sessionGeneration,
+      () => true,
+    );
+
+    // A popout has no cookie to inherit, but an unconfirmed bearer must not
+    // reach a renderer either.
+    child.emit('did-finish-load');
+    expect(scripts).toHaveLength(0);
+    host.bodyTokens.set(originA, 'popout-token');
+    child.emit('did-finish-load');
+    expect(scripts.some((s) => s.includes('"popout-token"'))).toBe(true);
+  });
+
+  it('keeps a token on a transient failure and never overwrites a newer one', async () => {
+    const host = hostOf();
+    const transient = new AccessAuth(
+      (async () =>
+        new Response('', { status: 503 })) as unknown as typeof fetch,
+    );
+    host.storedCredentials.set(originA, v2Entry('kept') as never);
+    await host.bootstrapV2Token(
+      originA,
+      'kept',
+      transient,
+      host.sessionGeneration,
+    );
+    expect(transient.getToken(originA)).toBe('kept');
+    expect(host.storedCredentials.has(originA)).toBe(true);
+
+    const newer = new AccessAuth();
+    newer.installToken(originB, 'newer');
+    host.storedCredentials.set(originB, v2Entry('older') as never);
+    await host.bootstrapV2Token(
+      originB,
+      'older',
+      newer,
+      host.sessionGeneration,
+    );
+    expect(newer.getToken(originB)).toBe('newer');
+    expect(host.storedCredentials.get(originB)).toEqual(v2Entry('older'));
+  });
+
+  it('keeps a native unlock ready when a stale token is accepted late', async () => {
+    const host = hostOf() as TestHost & { bodyTokens: Map<string, string> };
+    let release!: (res: Response) => void;
+    const auth = new AccessAuth(
+      (async () =>
+        new Promise<Response>((resolve) => {
+          release = resolve;
+        })) as unknown as typeof fetch,
+    );
+    host.storedCredentials.set(originA, v2Entry('restored') as never);
+    const pending = host.bootstrapV2Token(
+      originA,
+      'restored',
+      auth,
+      host.sessionGeneration,
+    );
+    // The native unlock finishes while the restored token is still checking.
+    auth.installToken(originA, 'fresh');
+    host.bodyTokens.set(originA, 'fresh');
+    release(
+      new Response(JSON.stringify({ enabled: true, authenticated: true }), {
+        status: 200,
+      }),
+    );
+    await pending;
+    expect(auth.getToken(originA)).toBe('fresh');
+    expect(host.bodyTokens.get(originA)).toBe('fresh');
+  });
+
+  it('keeps a native unlock ready when a stale token is rejected late', async () => {
+    const host = hostOf() as TestHost & { bodyTokens: Map<string, string> };
+    let release!: (res: Response) => void;
+    const auth = new AccessAuth(
+      (async () =>
+        new Promise<Response>((resolve) => {
+          release = resolve;
+        })) as unknown as typeof fetch,
+    );
+    host.storedCredentials.set(originA, v2Entry('restored') as never);
+    const pending = host.bootstrapV2Token(
+      originA,
+      'restored',
+      auth,
+      host.sessionGeneration,
+    );
+    auth.installToken(originA, 'fresh');
+    host.bodyTokens.set(originA, 'fresh');
+    release(new Response('', { status: 401 }));
+    await pending;
+    expect(auth.getToken(originA)).toBe('fresh');
+    expect(host.bodyTokens.get(originA)).toBe('fresh');
+  });
+  it('round-trips the whole rotating bundle and writes no plaintext', () => {
+    const host = hostOf();
+    const bundle: V2Bundle = {
+      token: 'jwt-roundtrip',
+      expiresAt: 1_900_000_000,
+      expiresIn: 3600,
+      refreshHandle: Buffer.alloc(32, 0x44).toString('base64url'),
+      refreshIdleExpiresAt: 1_900_500_000,
+      refreshAbsoluteExpiresAt: 1_900_900_000,
+    };
+    host.persistBundle(originA, bundle);
+
+    const raw = readFileSync(host.credentialsPath);
+    expect(raw.toString()).not.toContain('jwt-roundtrip');
+    expect(raw.toString()).not.toContain(bundle.refreshHandle);
+
+    const reloaded = hostOf();
+    reloaded.loadStoredCredentials();
+    expect(reloaded.storedCredentials.get(originA)).toEqual({
+      version: 'v2',
+      jwt: 'jwt-roundtrip',
+      expiresAt: 1_900_000_000,
+      expiresIn: 3600,
+      refreshHandle: bundle.refreshHandle,
+      refreshIdleExpiresAt: 1_900_500_000,
+      refreshAbsoluteExpiresAt: 1_900_900_000,
+    });
+  });
+
+  it('drops a legacy jwt-only entry while keeping v1 entries', () => {
+    const host = hostOf();
+    writeFileSync(
+      host.credentialsPath,
+      encrypted({
+        [originA]: {
+          version: 'v1',
+          algorithm: 'pbkdf2-sha256',
+          iterations: 600_000,
+          saltBase64: v1Entry.salt.toString('base64url'),
+          verifierBase64: v1Entry.verifier.toString('base64url'),
+        },
+        [originB]: { version: 'v2', jwt: 'old-bare-token' },
+      }),
+    );
+    host.loadStoredCredentials();
+    expect(host.storedCredentials.has(originA)).toBe(true);
+    // A bare token has no refresh handle, so it cannot be restored.
+    expect(host.storedCredentials.has(originB)).toBe(false);
+    const rewritten = JSON.parse(
+      fake.safeStorage.decryptString(readFileSync(host.credentialsPath)),
+    ) as { origins: Record<string, unknown> };
+    expect(Object.keys(rewritten.origins)).toEqual([originA]);
+  });
+
+  it('renews an expired access token from a live refresh family', async () => {
+    const host = hostOf();
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const oldHandle = Buffer.alloc(32, 0x55).toString('base64url');
+    const newHandle = Buffer.alloc(32, 0x66).toString('base64url');
+    host.storedCredentials.set(
+      originA,
+      v2Entry('expired-access', {
+        expiresAt: nowSeconds - 10,
+        expiresIn: 0,
+        refreshHandle: oldHandle,
+      }) as never,
+    );
+    const calls: string[] = [];
+    const auth = host.watchBundles(
+      new AccessAuth((async (url: URL) => {
+        calls.push(url.pathname);
+        if (url.pathname === '/api/auth/v2/refresh') {
+          return new Response(
+            JSON.stringify({
+              token: 'renewed-access',
+              expires_at: nowSeconds + 3600,
+              expires_in: 3600,
+              refresh_idle_expires_at: nowSeconds + 2_592_000,
+              refresh_absolute_expires_at: nowSeconds + 7_776_000,
+            }),
+            {
+              status: 200,
+              headers: {
+                'content-type': 'application/json',
+                'set-cookie': `phi_access_refresh=${newHandle}; Path=/api/auth/v2/refresh; HttpOnly; SameSite=Strict`,
+              },
+            },
+          );
+        }
+        return new Response(
+          JSON.stringify({ enabled: true, authenticated: true }),
+          { status: 200 },
+        );
+      }) as unknown as typeof fetch),
+    );
+
+    await host.bootstrapV2Token(
+      originA,
+      'expired-access',
+      auth,
+      host.sessionGeneration,
+    );
+
+    // A live family renews: no prompt, and the store now holds the rotation.
+    expect(calls).toContain('/api/auth/v2/refresh');
+    expect(auth.getToken(originA)).toBe('renewed-access');
+    expect(host.storedCredentials.get(originA)).toMatchObject({
+      version: 'v2',
+      jwt: 'renewed-access',
+      refreshHandle: newHandle,
+    });
+  });
+
+  it('requires a fresh login when the stored handle is already dead', async () => {
+    const host = hostOf();
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    host.storedCredentials.set(
+      originA,
+      v2Entry('stale-access', {
+        expiresAt: nowSeconds - 10,
+        expiresIn: 0,
+      }) as never,
+    );
+    const auth = host.watchBundles(
+      new AccessAuth(
+        (async () =>
+          new Response('', { status: 401 })) as unknown as typeof fetch,
+      ),
+    );
+
+    await host.bootstrapV2Token(
+      originA,
+      'stale-access',
+      auth,
+      host.sessionGeneration,
+    );
+
+    // Terminal: the family is gone, so the stored bundle goes away and the
+    // next launch asks for the password. v2 stays selected: no v1 fallback.
+    expect(auth.getToken(originA)).toBeNull();
+    expect(auth.getSelectedProtocol(originA)).toBe('v2');
+    expect(host.storedCredentials.has(originA)).toBe(false);
+  });
+
+  it('keeps the bundle through a non-401 refresh failure', async () => {
+    const host = hostOf();
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    host.storedCredentials.set(
+      originA,
+      v2Entry('stale-access', {
+        expiresAt: nowSeconds - 10,
+        expiresIn: 0,
+      }) as never,
+    );
+    const auth = host.watchBundles(
+      new AccessAuth(
+        (async () =>
+          new Response('', { status: 503 })) as unknown as typeof fetch,
+      ),
+    );
+
+    await host.bootstrapV2Token(
+      originA,
+      'stale-access',
+      auth,
+      host.sessionGeneration,
+    );
+
+    expect(host.storedCredentials.get(originA)).toMatchObject({
+      version: 'v2',
+      jwt: 'stale-access',
+    });
+    expect(auth.getBundle(originA)).not.toBeNull();
+  });
+
+  it('keeps the newest bundle in memory when the store write fails', () => {
+    const host = hostOf();
+    host.persistBundle(originA, {
+      token: 'first-token',
+      expiresAt: 1_900_000_000,
+      expiresIn: 3600,
+      refreshHandle: Buffer.alloc(32, 0x77).toString('base64url'),
+      refreshIdleExpiresAt: 1_900_500_000,
+      refreshAbsoluteExpiresAt: 1_900_900_000,
+    });
+    const before = readFileSync(host.credentialsPath);
+
+    host.credentialFs = {
+      ...realCredentialStoreFs,
+      rename: () => {
+        throw new Error('rename refused');
+      },
+    };
+    host.persistBundle(originA, {
+      token: 'rotated-token',
+      expiresAt: 1_900_003_600,
+      expiresIn: 3600,
+      refreshHandle: Buffer.alloc(32, 0x88).toString('base64url'),
+      refreshIdleExpiresAt: 1_900_500_000,
+      refreshAbsoluteExpiresAt: 1_900_900_000,
+    });
+
+    // The old handle is consumed server-side, so the disk copy is stale; the
+    // in-memory bundle is the newest truth and must survive the failed save.
+    expect(host.storedCredentials.get(originA)).toMatchObject({
+      jwt: 'rotated-token',
+    });
+    expect(readFileSync(host.credentialsPath)).toEqual(before);
+    expect(existsSync(`${host.credentialsPath}.tmp`)).toBe(false);
+  });
+
+  it('reports each credential-store failure and keeps the old file', () => {
+    const host = hostOf();
+    host.storedCredentials.set(originA, v1Entry);
+    host.saveStoredCredentials();
+    const before = readFileSync(host.credentialsPath);
+    host.storedCredentials.set(originA, v2Entry('newer') as never);
+
+    const failures: Array<[string, Partial<CredentialStoreFs>]> = [
+      [
+        'writeNew',
+        {
+          writeNew: () => {
+            throw new Error('disk full');
+          },
+        },
+      ],
+      [
+        'syncFile',
+        {
+          syncFile: () => {
+            throw new Error('sync refused');
+          },
+        },
+      ],
+      [
+        'rename',
+        {
+          rename: () => {
+            throw new Error('rename refused');
+          },
+        },
+      ],
+    ];
+    for (const [label, override] of failures) {
+      host.credentialFs = { ...realCredentialStoreFs, ...override };
+      expect(host.saveStoredCredentials(), label).toBe(false);
+      expect(readFileSync(host.credentialsPath), label).toEqual(before);
+      expect(existsSync(`${host.credentialsPath}.tmp`), label).toBe(false);
+    }
+
+    // A post-rename durability failure is an ambiguous commit: reported, but
+    // the new file is already in place.
+    host.credentialFs = {
+      ...realCredentialStoreFs,
+      syncDir: () => {
+        throw new Error('directory sync refused');
+      },
+    };
+    expect(host.saveStoredCredentials()).toBe(false);
+    expect(readFileSync(host.credentialsPath)).not.toEqual(before);
+  });
+
+  it('propagates a real directory-sync failure instead of claiming a commit', () => {
+    // The real adapter decides what is durable. A platform that cannot open a
+    // directory handle has nothing to claim, but a real I/O failure must reach
+    // the caller so an ambiguous commit is never reported as a durable one.
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'phi-fsync-'));
+    try {
+      // A supported directory syncs and stays silent.
+      expect(() => realCredentialStoreFs.syncDir(dir)).not.toThrow();
+      // A directory that cannot be opened is a genuine failure, not a
+      // platform limitation: it must throw so saveStoredCredentials() takes
+      // its ambiguous-commit branch.
+      expect(() =>
+        realCredentialStoreFs.syncDir(path.join(dir, 'missing')),
+      ).toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a v2 write through the Linux basic_text backend after a rotation', () => {
+    vi.stubGlobal(
+      'process',
+      Object.create(process, {
+        platform: { value: 'linux' },
+      }) as NodeJS.Process,
+    );
+    fake.safeStorage.backend = 'basic_text';
+    const host = hostOf();
+    host.persistBundle(originA, {
+      token: 'never-written',
+      expiresAt: 1_900_000_000,
+      expiresIn: 3600,
+      refreshHandle: Buffer.alloc(32, 0x99).toString('base64url'),
+      refreshIdleExpiresAt: 1_900_500_000,
+      refreshAbsoluteExpiresAt: 1_900_900_000,
+    });
+    expect(existsSync(host.credentialsPath)).toBe(false);
+    // Memory keeps the credential; only the disk copy is refused.
+    expect(host.storedCredentials.get(originA)).toMatchObject({
+      jwt: 'never-written',
+    });
+  });
+
+  describe('trusted body credential scope (M3c)', () => {
+    // A fixed clock makes a receipt-relative deadline assertable at all.
+    const FIXED_NOW = 1_900_000_000_000;
+    beforeEach(() => {
+      vi.useFakeTimers({ now: FIXED_NOW });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /** A host with one authorized v2 bundle whose body may be installed. */
+    const authorizedHost = (
+      origin: string,
+      token: string,
+      overrides: Record<string, unknown> = {},
+    ): { host: TestHost; auth: AccessAuth; contents: BodyContents } => {
+      const host = hostOf();
+      const auth = host.watchBundles(new AccessAuth());
+      const entry = v2Entry(token, overrides);
+      auth.installBundle(origin, {
+        token: entry.jwt as string,
+        expiresAt: entry.expiresAt as number,
+        expiresIn: entry.expiresIn as number,
+        refreshHandle: entry.refreshHandle as string,
+        refreshIdleExpiresAt: entry.refreshIdleExpiresAt as number,
+        refreshAbsoluteExpiresAt: entry.refreshAbsoluteExpiresAt as number,
+      });
+      host.bodyTokens.set(origin, token);
+      const contents = newBodyContents();
+      contents.url = `${origin}/index.html`;
+      return { host, auth, contents };
+    };
+
+    it('installs only the scoped asset cookie, never the refresh handle', () => {
+      const { host, auth, contents } = authorizedHost(originA, 'body-token');
+      const scripts: string[] = [];
+      contents.executeJavaScript = async (script: string) => {
+        scripts.push(script);
+        return 200;
+      };
+
+      host.installBodyToken(contents, originA, auth, host.sessionGeneration);
+
+      // Exactly one cookie, with the server's own attributes. Its deadline is
+      // the receipt time plus the server's remaining duration: the absolute
+      // timestamp never meets this machine's clock.
+      expect(contents.cookies.setCalls).toEqual([
+        {
+          url: `${originA}/api`,
+          name: 'phi_access_asset',
+          value: 'body-token',
+          path: '/api',
+          httpOnly: true,
+          sameSite: 'strict',
+          secure: true,
+          expirationDate: Math.floor(FIXED_NOW / 1000) + 3600,
+        },
+      ]);
+      expect(contents.cookies.removeCalls).toEqual([]);
+      // The memory install carries the same token; the rotating handle is
+      // host-side only, in the cookie and in every renderer script.
+      expect(scripts).toHaveLength(1);
+      expect(scripts[0]).toContain('"body-token"');
+      const handle = v2Entry('unused').refreshHandle as string;
+      expect(scripts[0]).not.toContain(handle);
+      expect(JSON.stringify(contents.cookies.setCalls)).not.toContain(handle);
+    });
+
+    it('drops the asset cookie when the credential is cleared', () => {
+      const { host, auth, contents } = authorizedHost(originA, 'body-token');
+      host.viewByOrigin.set(originA, { webContents: contents });
+      contents.executeJavaScript = async () => 200;
+      host.installBodyToken(contents, originA, auth, host.sessionGeneration);
+      expect(contents.cookies.setCalls).toHaveLength(1);
+
+      // A terminal rejection clears the bundle: the asset handle must not
+      // outlive the session it belongs to.
+      auth.rejectToken(originA, 'body-token');
+      expect(contents.cookies.removeCalls).toEqual([
+        [`${originA}/api`, 'phi_access_asset'],
+      ]);
+    });
+
+    it('renews the asset cookie deadline with the rotated token', () => {
+      const { host, auth, contents } = authorizedHost(originA, 'body-token');
+      contents.executeJavaScript = async () => 200;
+      host.installBodyToken(contents, originA, auth, host.sessionGeneration);
+
+      // A host refresh rotates the bundle; the next install mirrors the new
+      // token and its later deadline instead of leaving the old one behind.
+      // `expiresAt` here is a server clock that disagrees with this machine,
+      // and it must make no difference.
+      vi.setSystemTime(FIXED_NOW + 60_000);
+      auth.installBundle(originA, {
+        token: 'rotated-token',
+        expiresAt: 1_000_000,
+        expiresIn: 3600,
+        refreshHandle: Buffer.alloc(32, 0x44).toString('base64url'),
+        refreshIdleExpiresAt: 1_900_500_000,
+        refreshAbsoluteExpiresAt: 1_900_900_000,
+      });
+      host.bodyTokens.set(originA, 'rotated-token');
+      host.installBodyToken(contents, originA, auth, host.sessionGeneration);
+
+      expect(contents.cookies.setCalls.at(-1)).toMatchObject({
+        value: 'rotated-token',
+        expirationDate: Math.floor((FIXED_NOW + 60_000) / 1000) + 3600,
+      });
+      vi.useRealTimers();
+    });
+
+    it('writes no body credential for a redirected, destroyed, or unauthorized frame', () => {
+      const { host, auth, contents } = authorizedHost(originA, 'body-token');
+      const scripts: string[] = [];
+      contents.executeJavaScript = async (script: string) => {
+        scripts.push(script);
+        return 200;
+      };
+
+      // Redirected main frame: the origin check refuses before the mutation.
+      contents.url = `${originB}/index.html`;
+      host.installBodyToken(contents, originA, auth, host.sessionGeneration);
+      expect(contents.cookies.setCalls).toEqual([]);
+      expect(scripts).toEqual([]);
+
+      // Destroyed view: nothing is written either.
+      contents.url = `${originA}/index.html`;
+      contents.destroyed = true;
+      host.installBodyToken(contents, originA, auth, host.sessionGeneration);
+      expect(contents.cookies.setCalls).toEqual([]);
+
+      // An unconfirmed token never authorized a native request, so no frame
+      // receives it.
+      const fresh = newBodyContents();
+      fresh.url = `${originA}/index.html`;
+      host.bodyTokens.delete(originA);
+      host.installBodyToken(fresh, originA, auth, host.sessionGeneration);
+      expect(fresh.cookies.setCalls).toEqual([]);
+    });
+
+    it('never falls back to the v1 verifier after a selected-v2 rejection', async () => {
+      const host = hostOf();
+      const auth = host.watchBundles(new AccessAuth());
+      auth.installBundle(originA, {
+        token: 'body-token',
+        expiresAt: 1_900_000_000,
+        expiresIn: 3600,
+        refreshHandle: Buffer.alloc(32, 0x55).toString('base64url'),
+        refreshIdleExpiresAt: 1_900_500_000,
+        refreshAbsoluteExpiresAt: 1_900_900_000,
+      });
+      // A terminal rejection drops the token but keeps v2 selected, so the
+      // legacy cookie and saved verifier stay off the table.
+      auth.rejectToken(originA, 'body-token');
+      expect(auth.getToken(originA)).toBeNull();
+      expect(auth.getSelectedProtocol(originA)).toBe('v2');
+      host.storedCredentials.set(originA, v1Entry);
+      await expect(
+        host.tryReauthWithStoredCredential(
+          originA,
+          auth,
+          host.sessionGeneration,
+        ),
+      ).resolves.toBe(false);
+    });
+  });
+});
+
+/**
+ * The one navigation rule for a retained view. The embedded shell reports
+ * origin "null", so these cases pin the scheme/host identity a browser-only
+ * origin comparison cannot express, and the deny path that also covers
+ * `will-redirect` targets.
+ */
+describe('isAllowedNavigationTarget', () => {
+  const embedded = EMBEDDED_ORIGIN;
+  const ownOrigin = 'https://phi.example';
+  const sameServerOnly = (target: URL): boolean => target.origin === ownOrigin;
+
+  const allows = (
+    target: string,
+    allowedOrigin: string,
+    same = sameServerOnly,
+  ) => isAllowedNavigationTarget(new URL(target), allowedOrigin, same);
+
+  it('allows only the embedded app routes inside the embedded shell', () => {
+    for (const route of [
+      '/',
+      '/index.html',
+      '/md.html',
+      '/config.html',
+      '/input.html',
+    ]) {
+      expect(allows(`phi-app://app${route}`, embedded)).toBe(true);
+    }
+  });
+
+  it('denies every other embedded-shell target', () => {
+    // A different host on the same scheme, a foreign scheme that also reports
+    // origin "null" (file://), and a non-app route all fail.
+    expect(allows('phi-app://other/index.html', embedded)).toBe(false);
+    expect(allows('file:///index.html', embedded)).toBe(false);
+    expect(allows('phi-app://app/tokens.json', embedded)).toBe(false);
+    expect(allows('https://evil.example/', embedded)).toBe(false);
+    expect(allows('javascript:alert(1)', embedded)).toBe(false);
+  });
+
+  it('allows the bound profile origin in a remote view and nothing else', () => {
+    expect(allows(`${ownOrigin}/`, ownOrigin)).toBe(true);
+    expect(allows(`${ownOrigin}/md.html`, ownOrigin)).toBe(true);
+    expect(allows('https://evil.example/', ownOrigin)).toBe(false);
+    expect(allows('https://evil.example/md.html', ownOrigin)).toBe(false);
+    expect(allows('phi-app://app/', ownOrigin)).toBe(false);
+  });
+});
+
+describe('resolveV2BodyAuthTarget', () => {
+  const origin = 'https://phi.example';
+
+  it('accepts the embedded shell without injecting a credential into it', () => {
+    // Single-tab mode: one phi-app://app view serves every profile. The host
+    // proxy attaches the bearer per request, so a host-authorized sign-in is
+    // already complete and no token install is needed.
+    expect(
+      resolveV2BodyAuthTarget(`${EMBEDDED_ORIGIN}/index.html?x=1`, origin),
+    ).toBe('embedded');
+    expect(resolveV2BodyAuthTarget(EMBEDDED_ORIGIN, origin)).toBe('embedded');
+  });
+
+  it('refuses a body that is not exactly the authenticated origin', () => {
+    // Everything here reports origin "null" or a foreign origin; none of it may
+    // receive the bearer.
+    expect(resolveV2BodyAuthTarget('file:///index.html', origin)).toBe(
+      'refuse',
+    );
+    expect(resolveV2BodyAuthTarget('phi-app://evil/index.html', origin)).toBe(
+      'refuse',
+    );
+    expect(resolveV2BodyAuthTarget('https://evil.example/', origin)).toBe(
+      'refuse',
+    );
+    expect(resolveV2BodyAuthTarget('', origin)).toBe('refuse');
+    // A loopback spelling of the same server is a different origin.
+    expect(resolveV2BodyAuthTarget('http://127.0.0.1:8080/', origin)).toBe(
+      'refuse',
+    );
+  });
+
+  it('installs into a body whose origin is exactly the credential origin', () => {
+    // The credential origin is canonical by contract (`toCanonicalAuthOrigin`),
+    // so the view's own origin must match it exactly.
+    expect(resolveV2BodyAuthTarget(`${origin}/index.html`, origin)).toBe(
+      'exact',
+    );
+    expect(resolveV2BodyAuthTarget(`${origin}/md.html?x=1`, origin)).toBe(
+      'exact',
+    );
+  });
+});
+
+describe('attachNavGuard', () => {
+  /** Records what a fake WebContents registered and what it loaded. */
+  const guardTarget = () => {
+    const listeners = new Map<string, (event: any, url: string) => void>();
+    const loaded: string[] = [];
+    const contents = {
+      on: (event: string, listener: (event: any, url: string) => void) => {
+        listeners.set(event, listener);
+      },
+      loadURL: async (url: string) => {
+        loaded.push(url);
+      },
+    };
+    const fire = (event: string, url: string) => {
+      const listener = listeners.get(event);
+      if (!listener) throw new Error(`no listener for ${event}`);
+      let prevented = false;
+      listener({ preventDefault: () => (prevented = true) }, url);
+      return prevented;
+    };
+    return { contents, fire, loaded, listeners };
+  };
+
+  const embeddedAllow = (target: URL): boolean =>
+    isAllowedNavigationTarget(target, EMBEDDED_ORIGIN, () => false);
+
+  it('denies a file:// or foreign phi-app redirect in the embedded shell', () => {
+    const { contents, fire, loaded } = guardTarget();
+    const handedOff: string[] = [];
+    attachNavGuard(contents, embeddedAllow, (url) => handedOff.push(url));
+
+    for (const event of ['will-navigate', 'will-redirect']) {
+      // Both report origin "null", exactly like the shell does. Scheme and
+      // host are the only usable identity.
+      expect(fire(event, 'file:///index.html'), event).toBe(true);
+      expect(fire(event, 'phi-app://evil/index.html'), event).toBe(true);
+      // A permitted in-app target is never intercepted.
+      expect(fire(event, 'phi-app://app/index.html'), event).toBe(false);
+    }
+    // A denied target is never loaded in-app. It is offered to the OS opener,
+    // which itself only opens web and mail URLs, so a denied scheme stays
+    // nowhere; the permitted in-app navigation is not offered at all.
+    expect(loaded).toEqual([]);
+    expect(handedOff).toEqual([
+      'file:///index.html',
+      'phi-app://evil/index.html',
+      'file:///index.html',
+      'phi-app://evil/index.html',
+    ]);
+  });
+
+  it('validates a main-process loadURL even though it emits no event', async () => {
+    const { contents, loaded, listeners } = guardTarget();
+    attachNavGuard(
+      contents,
+      (target) =>
+        isAllowedNavigationTarget(
+          target,
+          'https://phi.example',
+          (candidate) => candidate.origin === 'https://phi.example',
+        ),
+      () => {},
+    );
+    // loadURL emits neither will-navigate nor will-redirect.
+    expect(listeners.size).toBe(2);
+    await contents.loadURL('file:///index.html');
+    await contents.loadURL('https://evil.example/');
+    expect(loaded).toEqual([]);
+    await contents.loadURL('https://phi.example/index.html');
+    expect(loaded).toEqual(['https://phi.example/index.html']);
+  });
 });

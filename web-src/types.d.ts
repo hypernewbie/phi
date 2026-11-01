@@ -60,3 +60,23 @@ export interface AppLike {
     importCmdsConfig?: (...args: any[]) => void;
     exportTerminalCommandsConfig?: (...args: any[]) => void;
 }
+
+// Optional browser bridge installed by web/auth.js. The desktop host uses it
+// to install a memory-only v2 token; the socket constructors use it to carry
+// that token as one query parameter.
+export interface PhiAccessAuthBridge {
+    installToken(token: string): boolean;
+    completeHostSession?(): Promise<boolean>;
+    getAccessToken(): string | null;
+    webSocketURL(url: URL): URL;
+    // refreshAccessIfDue renews a due credential without a round-trip when the
+    // in-memory token is still fresh. Reconnecting sockets call it before a
+    // dial so a socket closed at the admitted exp does not redial stale.
+    refreshAccessIfDue?(): Promise<void> | undefined;
+}
+
+declare global {
+    interface Window {
+        phiAccessAuth?: PhiAccessAuthBridge;
+    }
+}
