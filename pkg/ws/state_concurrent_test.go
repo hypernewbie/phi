@@ -65,6 +65,25 @@ func TestHistoryRequestsAreCancelableAndCannotChangeConcurrentLiveState(t *testi
 	}
 }
 
+// historyBarrierContext pauses the fifth Err check: after capture and New,
+// before replay in the base-free request below. All errors come from the real
+// cancellable parent; this adds no hook to the live server.
+type historyBarrierContext struct {
+	context.Context
+	checks  int
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (c *historyBarrierContext) Err() error {
+	c.checks++
+	if c.checks == 5 {
+		close(c.entered)
+		<-c.release
+	}
+	return c.Context.Err()
+}
+
 func TestHistoryRequestPausedAfterCaptureDoesNotHoldPaneLock(t *testing.T) {
 	h := NewHub(4096)
 	if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
@@ -78,26 +97,32 @@ func TestHistoryRequestPausedAfterCaptureDoesNotHoldPaneLock(t *testing.T) {
 	ph.mu.Lock()
 	epoch := ph.epoch
 	ph.mu.Unlock()
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	testHistoryBarrier = func() {
-		close(entered)
-		<-release
-	}
-	t.Cleanup(func() { testHistoryBarrier = nil })
 	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
+	barrier := &historyBarrierContext{Context: ctx, entered: make(chan struct{}), release: make(chan struct{})}
+	var release sync.Once
+	dismiss := func() { release.Do(func() { close(barrier.release) }) }
 	type result struct {
 		data []byte
 		err  error
 	}
 	done := make(chan result, 1)
+	finished := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		dismiss()
+		select {
+		case <-finished:
+		case <-time.After(30 * time.Second):
+			t.Error("history request did not exit during cleanup")
+		}
+	})
 	go func() {
-		_, data, _, _, err := h.HistoricalStateContext(ctx, "paused", epoch, uint64(len(source)))
+		defer close(finished)
+		_, data, _, _, err := h.HistoricalStateContext(barrier, "paused", epoch, uint64(len(source)))
 		done <- result{data: data, err: err}
 	}()
 	select {
-	case <-entered:
+	case <-barrier.entered:
 	case <-time.After(30 * time.Second):
 		t.Fatal("history request did not reach the post-capture check")
 	}
@@ -112,7 +137,7 @@ func TestHistoryRequestPausedAfterCaptureDoesNotHoldPaneLock(t *testing.T) {
 		t.Fatal("live Ingest blocked behind a paused history request")
 	}
 	cancel()
-	close(release)
+	dismiss()
 	select {
 	case r := <-done:
 		if !errors.Is(r.err, context.Canceled) {

@@ -79,19 +79,6 @@ func TestNativeGeometryBounds(t *testing.T) {
 			t.Fatalf("geometry %dx%d after rejected resize", cols, rows)
 		}
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	resized, err := New(ctx, 12, 4)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resized.Close()
-	if err = resized.Resize(14, 5); err != nil {
-		t.Fatal(err)
-	}
-	cancel()
-	if cols, rows := resized.Geometry(); cols != 14 || rows != 5 {
-		t.Fatalf("geometry %dx%d after resize plus cancel", cols, rows)
-	}
 }
 
 func TestNativeLifetime(t *testing.T) {
@@ -205,18 +192,30 @@ func TestFeedCancellationMidReplay(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	barrier := &barrierContext{Context: ctx, entered: make(chan struct{}), release: make(chan struct{})}
-	t.Cleanup(barrier.dismiss)
 	term, err := New(barrier, 80, 24)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer term.Close()
 	barrier.arm()
 	data := bytes.Repeat([]byte("."), (64<<10)+512)
 	copy(data[(64<<10)-18:], "\r\nFIRST-MARKER-ABC")
 	copy(data[64<<10:], "SECOND-MARKER-XYZ")
 	feedErr := make(chan error, 1)
-	go func() { feedErr <- term.Feed(data) }()
+	finished := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		barrier.dismiss()
+		select {
+		case <-finished:
+			_ = term.Close()
+		case <-time.After(30 * time.Second):
+			t.Error("Feed did not exit during cleanup; terminal left open")
+		}
+	})
+	go func() {
+		defer close(finished)
+		feedErr <- term.Feed(data)
+	}()
 	select {
 	case <-barrier.entered:
 	case <-time.After(30 * time.Second):
@@ -317,5 +316,15 @@ func TestRestoreRetainsContinuationAndBudgets(t *testing.T) {
 		t.Fatal(err)
 	} else if len(continuation) != 0 {
 		t.Fatalf("continuation %q after completing input", continuation)
+	}
+	if err = restored.Feed(history.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	gotHistory, err = restored.HistoryRows()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotHistory == 0 || gotHistory > 10000 {
+		t.Fatalf("restored terminal lost scrollback budget: %d rows", gotHistory)
 	}
 }

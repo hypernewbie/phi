@@ -118,21 +118,27 @@ func (t *Terminal) Resize(cols, rows int) error {
 	if t.handle == nil {
 		return fmt.Errorf("terminal state is closed")
 	}
+	if err := t.ctx.Err(); err != nil {
+		return err
+	}
 	if rc := C.ghostty_terminal_resize(t.handle, C.uint16_t(cols), C.uint16_t(rows), 1, 1); rc != C.GHOSTTY_SUCCESS {
 		return statusErr("ghostty_terminal_resize", rc)
 	}
 	t.cols, t.rows = cols, rows
-	return nil
+	return t.ctx.Err()
 }
 
 func (t *Terminal) Geometry() (int, int) { return t.cols, t.rows }
 
-func takeBytes(ptr *C.uint8_t, n C.size_t) []byte {
-	if n == 0 {
-		return nil
-	}
+func (t *Terminal) takeBytes(ptr *C.uint8_t, n C.size_t) ([]byte, error) {
 	defer C.ghostty_free(nil, ptr, n)
-	return C.GoBytes(unsafe.Pointer(ptr), C.int(n))
+	if err := t.ctx.Err(); err != nil {
+		return nil, err
+	}
+	if n > 1<<31-1 {
+		return nil, fmt.Errorf("engine output exceeds GoBytes limit")
+	}
+	return C.GoBytes(unsafe.Pointer(ptr), C.int(n)), nil
 }
 
 func (t *Terminal) Continuation() ([]byte, error) {
@@ -141,19 +147,28 @@ func (t *Terminal) Continuation() ([]byte, error) {
 	}
 	var ptr *C.uint8_t
 	var n C.size_t
+	if err := t.ctx.Err(); err != nil {
+		return nil, err
+	}
 	if rc := C.ghostty_terminal_continuation_alloc(t.handle, nil, &ptr, &n); rc != C.GHOSTTY_SUCCESS {
 		return nil, statusErr("ghostty_terminal_continuation_alloc", rc)
 	}
-	return takeBytes(ptr, n), nil
+	return t.takeBytes(ptr, n)
 }
 
 func (t *Terminal) LimitScrollbackLines(lines uint32) error {
+	if err := t.ctx.Err(); err != nil {
+		return err
+	}
 	return t.setSize(C.GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, uint64(lines))
 }
 
 func (t *Terminal) IsAlternate() (bool, error) {
 	if t.handle == nil {
 		return false, fmt.Errorf("terminal state is closed")
+	}
+	if err := t.ctx.Err(); err != nil {
+		return false, err
 	}
 	var screen C.GhosttyTerminalScreen
 	if rc := C.ghostty_terminal_get(t.handle, C.GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN, unsafe.Pointer(&screen)); rc != C.GHOSTTY_SUCCESS {
@@ -170,10 +185,13 @@ func (t *Terminal) FormatVTState() ([]byte, error) {
 	}
 	var ptr *C.uint8_t
 	var n C.size_t
+	if err := t.ctx.Err(); err != nil {
+		return nil, err
+	}
 	if rc := C.ghostty_phi_state_format_alloc(t.handle, nil, &ptr, &n); rc != C.GHOSTTY_SUCCESS {
 		return nil, statusErr("ghostty_phi_state_format_alloc", rc)
 	}
-	return takeBytes(ptr, n), nil
+	return t.takeBytes(ptr, n)
 }
 
 func (t *Terminal) FormatViewportVT() ([]byte, error) {
@@ -199,6 +217,9 @@ func (t *Terminal) FormatViewportVT() ([]byte, error) {
 func (t *Terminal) FormatVT() ([]byte, error) {
 	if t.handle == nil {
 		return nil, fmt.Errorf("terminal state is closed")
+	}
+	if err := t.ctx.Err(); err != nil {
+		return nil, err
 	}
 	var opts C.GhosttyFormatterTerminalOptions
 	opts.size = C.size_t(C.sizeof_GhosttyFormatterTerminalOptions)
@@ -227,7 +248,7 @@ func (t *Terminal) FormatVT() ([]byte, error) {
 	if rc := C.ghostty_formatter_format_alloc(formatter, nil, &ptr, &n); rc != C.GHOSTTY_SUCCESS {
 		return nil, statusErr("ghostty_formatter_format_alloc", rc)
 	}
-	return takeBytes(ptr, n), nil
+	return t.takeBytes(ptr, n)
 }
 
 func (t *Terminal) ReadyWindow(historyRows uint32) ([]byte, error) {
@@ -254,6 +275,9 @@ func (t *Terminal) HistoryRows() (uint32, error) {
 	if t.handle == nil {
 		return 0, fmt.Errorf("terminal state is closed")
 	}
+	if err := t.ctx.Err(); err != nil {
+		return 0, err
+	}
 	var n C.size_t
 	if rc := C.ghostty_terminal_get(t.handle, C.GHOSTTY_TERMINAL_DATA_SCROLLBACK_ROWS, unsafe.Pointer(&n)); rc != C.GHOSTTY_SUCCESS {
 		return 0, statusErr("ghostty_terminal_get", rc)
@@ -267,15 +291,21 @@ func (t *Terminal) Ready() ([]byte, error) {
 	}
 	var ptr *C.uint8_t
 	var n C.size_t
+	if err := t.ctx.Err(); err != nil {
+		return nil, err
+	}
 	if rc := C.ghostty_snapshot_encode_ready_alloc(t.handle, nil, &ptr, &n); rc != C.GHOSTTY_SUCCESS {
 		return nil, statusErr("ghostty_snapshot_encode_ready_alloc", rc)
 	}
-	data := takeBytes(ptr, n)
+	data, err := t.takeBytes(ptr, n)
+	if err != nil {
+		return nil, err
+	}
 	end, err := ReadyEnd(data)
 	if err != nil {
 		return nil, err
 	}
-	return append([]byte(nil), data[:end]...), nil
+	return data[:end], nil
 }
 
 // ReadyEnd selects the complete renderable prefix, never old HISTORY pages.

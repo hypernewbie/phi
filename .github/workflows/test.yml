@@ -85,7 +85,7 @@ jobs:
       - name: Set up Zig cross compiler
         run: |
           set -euo pipefail
-          curl -fsSL --connect-timeout 15 --max-time 600 --retry 2 --retry-all-errors \
+          curl -fsSL --connect-timeout 15 --max-time 600 --retry 2 \
             https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz -o /tmp/zig.tar.xz
           echo '70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  /tmp/zig.tar.xz' | sha256sum --check
           mkdir -p "$HOME/.local/zig-0.16.0"
@@ -158,7 +158,8 @@ jobs:
         run: |
           $url = 'https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip'
           $zip = Join-Path $env:RUNNER_TEMP 'zig-0.16.0.zip'
-          Invoke-WebRequest -Uri $url -OutFile $zip
+          curl.exe -fsSL --connect-timeout 15 --max-time 600 --retry 2 $url -o $zip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $hash = (Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLower()
           if ($hash -ne '68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e') {
             throw "zig checksum mismatch: $hash"
@@ -174,7 +175,9 @@ jobs:
           $env:CGO_ENABLED = '1'
           $env:CC = 'zig cc -target x86_64-windows-gnu'
           go build -o (Join-Path $env:RUNNER_TEMP 'phi.exe') .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go build -o (Join-Path $env:RUNNER_TEMP 'phic.exe') ./cmd/phic
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Engine tests
         shell: pwsh

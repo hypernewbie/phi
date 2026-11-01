@@ -106,62 +106,18 @@ func loadCompatFixture(t *testing.T) compatFixture {
 	return fixture
 }
 
-func checkDecodedANSI(t *testing.T, where string, cols, rows int, refANSI, actANSI []byte) {
+func compareDecodedTerminal(t *testing.T, where string, ref, act termemu.Terminal) {
 	t.Helper()
-	ref := newDecodedConsumer(t, cols, rows)
-	defer ref.Close()
-	act := newDecodedConsumer(t, cols, rows)
-	defer act.Close()
-	if err := ref.Feed(refANSI, termemu.SourceReplay); err != nil {
+	refFrame, err := ref.Snapshot()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := act.Feed(actANSI, termemu.SourceReplay); err != nil {
+	actFrame, err := act.Snapshot()
+	if err != nil {
 		t.Fatal(err)
 	}
-	refPrimary, refAlt := snapshotBothScreens(t, ref)
-	actPrimary, actAlt := snapshotBothScreens(t, act)
-	compareDecodedFrame(t, where+"/primary", refPrimary, actPrimary)
-	compareDecodedFrame(t, where+"/alternate", refAlt, actAlt)
+	compareDecodedFrame(t, where, refFrame, actFrame)
 	compareDecodedModes(t, where, ref, act)
-}
-
-func TestDecodedCompatMatchesWasmFixture(t *testing.T) {
-	fixture := loadCompatFixture(t)
-	for _, c := range fixture.Cases {
-		term, err := New(t.Context(), c.Cols, c.Rows)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err = term.Feed(c.Prefix); err != nil {
-			term.Close()
-			t.Fatal(err)
-		}
-		ansi, err := term.FormatVTState()
-		if err != nil {
-			term.Close()
-			t.Fatal(err)
-		}
-		checkDecodedANSI(t, c.Name+"/initial", c.Cols, c.Rows, c.Initial.FormatVTState, ansi)
-		for i, op := range c.Ops {
-			where := fmt.Sprintf("%s/op%d", c.Name, i)
-			if op.Resize != nil {
-				if err = term.Resize(op.Resize.Cols, op.Resize.Rows); err != nil {
-					term.Close()
-					t.Fatal(err)
-				}
-			} else if err = term.Feed(op.Feed); err != nil {
-				term.Close()
-				t.Fatal(err)
-			}
-			ansi, err := term.FormatVTState()
-			if err != nil {
-				term.Close()
-				t.Fatal(err)
-			}
-			checkDecodedANSI(t, where, op.Observe.Cols, op.Observe.Rows, op.Observe.FormatVTState, ansi)
-		}
-		term.Close()
-	}
 }
 
 func TestNativeReadyRestoresInClient(t *testing.T) {
@@ -198,10 +154,26 @@ func TestNativeReadyRestoresInClient(t *testing.T) {
 		if err = actRestorer.RestoreReady(nativeReady); err != nil {
 			t.Fatal(err)
 		}
+		// Observe the active screen before synthetic switches can hide a wrong
+		// active-screen flag or consume an unfinished parser sequence.
+		compareDecodedTerminal(t, c.Name+"/ready", ref, act)
+		for i, op := range c.Ops {
+			for _, consumer := range []termemu.Terminal{ref, act} {
+				if op.Resize != nil {
+					err = consumer.Resize(op.Resize.Cols, op.Resize.Rows)
+				} else {
+					err = consumer.Feed(op.Feed, termemu.SourceReplay)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			compareDecodedTerminal(t, fmt.Sprintf("%s/op%d", c.Name, i), ref, act)
+		}
+		// The fixture suffixes finish all pending input before these switches.
 		refPrimary, refAlt := snapshotBothScreens(t, ref)
 		actPrimary, actAlt := snapshotBothScreens(t, act)
-		compareDecodedFrame(t, c.Name+"/ready-primary", refPrimary, actPrimary)
-		compareDecodedFrame(t, c.Name+"/ready-alternate", refAlt, actAlt)
-		compareDecodedModes(t, c.Name+"/ready", ref, act)
+		compareDecodedFrame(t, c.Name+"/primary", refPrimary, actPrimary)
+		compareDecodedFrame(t, c.Name+"/alternate", refAlt, actAlt)
 	}
 }

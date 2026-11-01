@@ -279,11 +279,6 @@ func (h *Hub) HistoricalANSIStateContext(ctx context.Context, paneID string, epo
 // cannot be opened. Callers map it to 404, never a transient retry.
 var ErrStateNotFound = errors.New("pane recording unavailable")
 
-// testHistoryBarrier pauses a history request at the post-capture context
-// check. Tests use it to prove live ingestion proceeds without the pane
-// lock. It is nil outside tests.
-var testHistoryBarrier func()
-
 func (h *Hub) historicalStateContext(ctx context.Context, paneID string, epoch, through uint64, ansi bool) (PanePosition, []byte, int, int, error) {
 	ph := h.recordingForRead(paneID)
 	if ph == nil {
@@ -389,9 +384,6 @@ func (h *Hub) historicalStateContext(ctx context.Context, paneID string, epoch, 
 	if err := ctx.Err(); err != nil {
 		return pos, nil, 0, 0, err
 	}
-	if testHistoryBarrier != nil {
-		testHistoryBarrier()
-	}
 	at := from
 	for _, r := range resizes {
 		offset := max(at, r.AtSeq)
@@ -419,6 +411,12 @@ func (h *Hub) historicalStateContext(ctx context.Context, paneID string, epoch, 
 		snapshot, err = state.FormatVTState()
 	} else {
 		snapshot, err = state.ReadyWindow(historyCheckpointRows)
+	}
+	if err != nil {
+		return pos, nil, 0, 0, err
+	}
+	if err := ctx.Err(); err != nil {
+		return pos, nil, 0, 0, err
 	}
 	cols, rows := state.Geometry()
 	ph.mu.Lock()
