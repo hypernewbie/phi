@@ -447,11 +447,17 @@ type gitStatusFileEntry struct {
 type gitStatusFilesResponse struct {
 	NotGitRepo bool                 `json:"notGitRepo"`
 	Files      []gitStatusFileEntry `json:"files"`
+	Truncated  bool                 `json:"truncated"`
 }
 
 // gitActionPathLimit bounds one stage or unstage request. The UI sends the
 // selection it already rendered, so a large repository never exceeds it.
 const gitActionPathLimit = 200
+
+// gitStatusFilesLimit bounds the file list, mirroring the browse endpoint.
+// A repository without a .gitignore can hold tens of thousands of untracked
+// files; the drawer renders one row per entry, so the list stops here.
+const gitStatusFilesLimit = 1000
 
 // gitActionPathAllowed rejects anything the server did not read from its own
 // status output. Paths arrive as repository-relative names, so an absolute
@@ -471,7 +477,9 @@ func gitActionPathAllowed(path string) bool {
 		return false
 	}
 	for _, segment := range strings.Split(path, "/") {
-		if segment == ".." {
+		// Git never lists the repository metadata directory, and add
+		// accepts a forged .git path as a silent no-op. Refuse it outright.
+		if segment == ".." || segment == ".git" {
 			return false
 		}
 	}
@@ -523,7 +531,12 @@ func handleGitStatusFiles(w http.ResponseWriter, r *http.Request) {
 		writeGitAPIError(w, gitReadAPIError(ctx))
 		return
 	}
-	_ = json.NewEncoder(w).Encode(gitStatusFilesResponse{Files: parseGitStatusFiles(out)})
+	files := parseGitStatusFiles(out)
+	truncated := len(files) > gitStatusFilesLimit
+	if truncated {
+		files = files[:gitStatusFilesLimit]
+	}
+	_ = json.NewEncoder(w).Encode(gitStatusFilesResponse{Files: files, Truncated: truncated})
 }
 
 func gitHeadExists(ctx context.Context, root string) bool {

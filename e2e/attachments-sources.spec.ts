@@ -45,7 +45,11 @@ function isExpectedStartupPinAbort(url: string, errorText: string): boolean {
 function isExpectedPinSyncConsoleError(message: string): boolean {
     return (
         message.startsWith('[term] Failed to sync pin on backend:') &&
-        /AbortError|BackendScope aborted/.test(message)
+        // AbortError covers a scope change; TypeError covers the offline
+        // window this test opens while a pin sync poll is in flight.
+        /AbortError|BackendScope aborted|TypeError: Failed to fetch/.test(
+            message,
+        )
     );
 }
 

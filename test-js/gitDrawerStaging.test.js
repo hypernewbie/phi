@@ -113,12 +113,14 @@ function actionPosts(fetch) {
 function gitRoutes({
     info = () => stageInfo(),
     files = () => [],
+    truncated = false,
     action = () => ({ action: 'stage', root: TARGET.root, output: 'ok' }),
 } = {}) {
     const fetch = mockFetch((url, init) => {
         const path = new URL(String(url), window.location.href).pathname;
         if (path === '/api/git/info') return info();
-        if (path === '/api/git/status-files') return { files: files() };
+        if (path === '/api/git/status-files')
+            return { files: files(), truncated };
         if (path === '/api/git/action')
             return { ok: true, status: 200, json: action(init) };
         return { ok: false, status: 404, text: 'Not found' };
@@ -319,6 +321,49 @@ describe('Git drawer staging', () => {
         expect(rows()).toHaveLength(1);
         expect(rows()[0].label).toBe('Stage');
         expect(actionPosts(fetch)).toHaveLength(1);
+    });
+
+    it('explains a truncated file list instead of hiding files silently', async () => {
+        gitRoutes({
+            files: () => [
+                { path: 'a.txt', index: ' ', worktree: '?' },
+                { path: 'b.txt', index: ' ', worktree: '?' },
+            ],
+            truncated: true,
+        });
+        const controller = new DiffController(buildApp());
+        await controller.refreshDiff();
+        await vi.waitFor(() =>
+            expect(
+                document.getElementById('git-files-note').textContent,
+            ).toContain('more files than this list can show'),
+        );
+        expect(rows()).toHaveLength(2);
+    });
+
+    it('runs one staging batch at a time', async () => {
+        let release;
+        const gate = new Promise((resolve) => {
+            release = resolve;
+        });
+        const fetch = gitRoutes({
+            files: () => [{ path: 'a.txt', index: ' ', worktree: '?' }],
+            action: () => {
+                release();
+                return { action: 'stage', root: TARGET.root, output: 'ok' };
+            },
+        });
+        const controller = new DiffController(buildApp());
+        await controller.refreshDiff();
+        await vi.waitFor(() => expect(rows()).toHaveLength(1));
+
+        const first = controller.stageGitPaths('stage', ['a.txt']);
+        rowButton('a.txt').click();
+        await gate;
+        expect(actionPosts(fetch)).toHaveLength(1);
+        expect(rowButton('a.txt').disabled).toBe(true);
+        await first;
+        await vi.waitFor(() => expect(rowButton('a.txt').disabled).toBe(false));
     });
 
     it('does not fetch the file list while the drawer is closed', async () => {

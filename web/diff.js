@@ -266,8 +266,10 @@ export class DiffController {
     gitFilesMemory = new Map();
     gitFilesPending = new Set();
     gitFilesStatus = '';
+    gitFilesTruncated = false;
     gitFilesRequestKey = '';
     gitFilesRowKey = '';
+    gitStageActive = false;
     gitManageInfo = null;
     gitManageInfoKey = '';
     gitManageContextKey = '';
@@ -1160,21 +1162,36 @@ export class DiffController {
             return memory;
         try {
             const parsed = JSON.parse(localStorage.getItem(key) || 'null');
-            if (!Array.isArray(parsed))
+            // An older cache holds the bare file array.
+            const container = Array.isArray(parsed)
+                ? { files: parsed, truncated: false }
+                : parsed;
+            if (!container ||
+                typeof container !== 'object' ||
+                !Array.isArray(container.files))
                 return null;
-            const files = parsed.filter(isGitStatusFileEntry);
-            this.gitFilesMemory.set(key, files);
-            return files;
+            const files = container.files.filter(isGitStatusFileEntry);
+            this.gitFilesMemory.set(key, {
+                files,
+                truncated: container.truncated === true,
+            });
+            return {
+                files,
+                truncated: container.truncated === true,
+            };
         }
         catch {
             return null;
         }
     }
-    cacheGitFiles(context, files) {
+    cacheGitFiles(context, payload) {
         const key = `${context.infoKey}:files`;
-        this.gitFilesMemory.set(key, files);
+        this.gitFilesMemory.set(key, payload);
         try {
-            localStorage.setItem(key, JSON.stringify(files));
+            localStorage.setItem(key, JSON.stringify({
+                files: payload.files,
+                truncated: payload.truncated,
+            }));
         }
         catch {
             /* In-memory state remains usable when browser storage is unavailable. */
@@ -1194,16 +1211,21 @@ export class DiffController {
                 throw new Error('Invalid Git file list response');
             }
             if (parsed?.notGitRepo)
-                return [];
+                return { files: [], truncated: false };
             if (!Array.isArray(parsed?.files))
                 throw new Error('Invalid Git file list response');
-            return parsed.files.filter(isGitStatusFileEntry);
+            return {
+                files: parsed.files.filter(isGitStatusFileEntry),
+                truncated: parsed.truncated === true,
+            };
         });
     }
     refreshGitFiles(context, force = false) {
         const cacheKey = `${context.infoKey}:files`;
         if (this.gitFilesKey !== cacheKey) {
-            this.gitFiles = this.readCachedGitFiles(context) || [];
+            const cached = this.readCachedGitFiles(context);
+            this.gitFiles = cached?.files || [];
+            this.gitFilesTruncated = cached?.truncated === true;
             this.gitFilesKey = cacheKey;
             this.gitFilesPending.clear();
             this.gitFilesStatus = '';
@@ -1221,13 +1243,14 @@ export class DiffController {
             return;
         this.gitFilesRequestKey = requestKey;
         void this.fetchGitFiles(context)
-            .then((files) => {
+            .then((payload) => {
             if (!this.isCurrentGitManageContext(context))
                 return;
             if (this.gitFilesKey !== cacheKey)
                 return;
-            this.gitFiles = files;
-            this.cacheGitFiles(context, files);
+            this.gitFiles = payload.files;
+            this.gitFilesTruncated = payload.truncated;
+            this.cacheGitFiles(context, payload);
             this.gitFilesStatus = '';
             this.renderGitFiles();
         })
@@ -1297,7 +1320,9 @@ export class DiffController {
                 restored?.focus();
             }
         }
-        const busy = this.gitManageBusy || this.gitFilesPending.size > 0;
+        const busy = this.gitManageBusy ||
+            this.gitStageActive ||
+            this.gitFilesPending.size > 0;
         for (const button of list
             ? list.querySelectorAll('.git-file-toggle')
             : []) {
@@ -1317,8 +1342,12 @@ export class DiffController {
             this.gitStageAllBtn.disabled = busy || this.gitFiles.length === 0;
         }
         if (this.gitFilesNote) {
-            this.gitFilesNote.textContent = this.gitFilesStatus;
-            this.gitFilesNote.classList.toggle('hidden', !this.gitFilesStatus);
+            const note = this.gitFilesStatus ||
+                (this.gitFilesTruncated
+                    ? 'The working tree has more files than this list can show. Stage the rest from a terminal.'
+                    : '');
+            this.gitFilesNote.textContent = note;
+            this.gitFilesNote.classList.toggle('hidden', !note);
         }
     }
     toggleGitStageAll() {
@@ -1333,10 +1362,14 @@ export class DiffController {
         void this.stageGitPaths(allStaged ? 'unstage' : 'stage', paths);
     }
     async stageGitPaths(action, paths) {
+        // One batch at a time: the server locks a repository to one action,
+        // so a second batch would only collide with the first.
+        if (this.gitStageActive || this.gitManageBusy)
+            return;
         const context = this.captureGitManageContext();
         const queue = paths.slice();
         let confirmed = 0;
-        this.gitFilesStatus = '';
+        this.gitStageActive = true;
         while (queue.length) {
             const info = this.gitManageInfo;
             const target = info?.target;
@@ -1404,12 +1437,17 @@ export class DiffController {
             this.gitManageInfo = fresh;
             this.gitManageInfoKey = context.infoKey;
         }
+        if (queue.length > 0 &&
+            !this.gitFilesStatus &&
+            this.isCurrentGitManageContext(context)) {
+            this.gitFilesStatus = `Git ${action} stopped early. Refresh, then repeat it for the remaining files.`;
+        }
+        this.gitStageActive = false;
         if (confirmed > 0) {
             this.gitFilesStatus = '';
             this.refreshAfterGitAction(context);
         }
-        if (this.gitFilesStatus)
-            this.renderGitFiles();
+        this.renderGitFiles();
     }
     gitCommitPrerequisite(info, target, actionWaiting) {
         if (!info) {

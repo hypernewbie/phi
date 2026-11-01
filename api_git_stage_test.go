@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -101,6 +102,26 @@ func TestGitStatusFilesReportsIndexAndWorktreeState(t *testing.T) {
 		if got.Index != want.index || got.Worktree != want.worktree {
 			t.Fatalf("%s = %q/%q want %q/%q", want.path, got.Index, got.Worktree, want.index, want.worktree)
 		}
+	}
+}
+
+func TestGitStatusFilesTruncatesLargeRepositories(t *testing.T) {
+	fixture := newGitActionFixture(t)
+	for i := 0; i < gitStatusFilesLimit+1; i++ {
+		name := fmt.Sprintf("untracked-%04d.txt", i)
+		if err := os.WriteFile(filepath.Join(fixture.project, name), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, got, response := gitFixtureStatusFiles(t, fixture.project)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status files: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !got.Truncated {
+		t.Fatal("expected the file list to report truncation")
+	}
+	if len(got.Files) != gitStatusFilesLimit {
+		t.Fatalf("file list length=%d want=%d", len(got.Files), gitStatusFilesLimit)
 	}
 }
 
@@ -230,13 +251,15 @@ func TestGitActionUnstageRestoresIndexWithoutTouchingFiles(t *testing.T) {
 
 func TestGitActionStageRejectsUnsafePaths(t *testing.T) {
 	cases := map[string]string{
-		"parent traversal": "../outside.txt",
-		"absolute":         "/etc/passwd",
-		"option injection": "-rf",
-		"pathspec magic":   ":!seed.txt",
-		"nul byte":         "a\x00b",
-		"empty":            "",
-		"current dir":      ".",
+		"parent traversal":    "../outside.txt",
+		"absolute":            "/etc/passwd",
+		"option injection":    "-rf",
+		"pathspec magic":      ":!seed.txt",
+		"nul byte":            "a\x00b",
+		"empty":               "",
+		"current dir":         ".",
+		"git metadata":        ".git/config",
+		"nested git metadata": "sub/.git/hooks/pre-commit",
 	}
 	for name, path := range cases {
 		t.Run(name, func(t *testing.T) {
