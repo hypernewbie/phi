@@ -149,12 +149,25 @@ function findExactRule(rules, selector) {
 }
 
 function hasDeclaration(body, property, value) {
-    const declaration = `${property}: ${value}`.replace(
-        /[.*+?^${}()|[\]\\]/g,
-        '\\$&',
-    );
-    return new RegExp(`(?:^|[;\\n])\\s*${declaration}\\s*;`).test(
-        maskCssComments(body),
+    const declares = (candidate) => {
+        const declaration = `${property}: ${candidate}`.replace(
+            /[.*+?^${}()|[\]\\]/g,
+            '\\$&',
+        );
+        return new RegExp(`(?:^|[;\\n])\\s*${declaration}\\s*;`).test(
+            maskCssComments(body),
+        );
+    };
+    // UI typography is authored in px and scaled by the appearance setting,
+    // so an authored size is expected as calc(<px> * var(--ui-scale)).
+    const scaled = value.match(/^([0-9.]+)px( !important)?$/);
+    return (
+        declares(value) ||
+        (property === 'font-size' &&
+            !!scaled &&
+            declares(
+                `calc(${scaled[1]}px * var(--ui-scale))${scaled[2] || ''}`,
+            ))
     );
 }
 

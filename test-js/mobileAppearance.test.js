@@ -9,6 +9,7 @@ import {
     effectiveAppearance,
     applyAppearanceFonts,
     mobileSystemTextRatio,
+    appearanceFontScale,
     captureAppearanceScope,
     appearanceOwner,
     appearanceCacheKey,
@@ -473,5 +474,19 @@ describe('existing Settings mobile event handlers', () => {
         expect(
             document.getElementById('settings-mobile-appearance').hidden,
         ).toBe(false);
+    });
+});
+
+describe('appearanceFontScale', () => {
+    it('scales from the authored px base and clamps the setting range', () => {
+        expect(appearanceFontScale('mobile', 13)).toBe(1);
+        expect(appearanceFontScale('mobile', 24)).toBeCloseTo(24 / 13, 5);
+        expect(appearanceFontScale('mobile', 10)).toBeCloseTo(10 / 13, 5);
+        expect(appearanceFontScale('desktop', 14)).toBe(1);
+        expect(appearanceFontScale('desktop', 24)).toBeCloseTo(24 / 14, 5);
+        expect(appearanceFontScale('desktop', 99)).toBeCloseTo(24 / 14, 5);
+        expect(appearanceFontScale('mobile', 0)).toBe(1);
+        expect(appearanceFontScale('mobile', 9)).toBe(1);
+        expect(appearanceFontScale('mobile', Number.NaN)).toBe(1);
     });
 });
