@@ -687,6 +687,105 @@ test('idle extension metadata does not falsely stale a fresh attachment send', a
     }
 });
 
+test('a busy Pi turn takes an attachment send as a steer', async ({
+    browser,
+    request,
+}) => {
+    test.setTimeout(180_000);
+    const { provider, phi, pngPath, work, proxySocket } =
+        await startAttachmentPhi();
+    let proxy: BridgeProxy | null = null;
+    try {
+        proxy = await startAttachmentProxy(phi.dir, proxySocket);
+        for (const mobile of [false, true]) {
+            const pane = await spawnPane(
+                request,
+                phi.url,
+                work,
+                `Busy steer ${mobile ? 'touch' : 'desktop'}`,
+            );
+            await waitForIdle(request, phi.url, pane);
+            const context = await browser.newContext(
+                mobile
+                    ? devices['Pixel 7']
+                    : { viewport: { width: 1440, height: 900 } },
+            );
+            try {
+                const page = await context.newPage();
+                const errors: string[] = [];
+                page.on('pageerror', (error) => errors.push(error.message));
+                await blockExternalRequests(page, (url) =>
+                    errors.push(`external: ${url}`),
+                );
+                await page.goto(phi.url);
+                await selectPane(page, pane, mobile);
+                // Hold the first model reply so the turn stays running while
+                // the attachment is sent.
+                const releaseTurn = provider.holdNext();
+                const firstRequests = provider.requests.length;
+                await page.locator('#input-textarea').fill('start a busy turn');
+                if (mobile) await page.locator('#send-input-btn').tap();
+                else await page.locator('#send-input-btn').click();
+                await waitForProvider(provider, firstRequests + 1);
+                await expect
+                    .poll(
+                        async () => {
+                            const response = await request.get(
+                                `${phi.url}/api/pi-bridge/attachments/context?pane=${encodeURIComponent(pane)}`,
+                            );
+                            if (!response.ok()) return null;
+                            return response.json();
+                        },
+                        { timeout: 30_000 },
+                    )
+                    .toMatchObject({ available: true, idle: false });
+
+                const beforeImage = provider.requests.length;
+                await chooseFile(page, pngPath, mobile);
+                await expect(page.locator('.attachment-chip')).toContainText(
+                    'Ready',
+                    { timeout: 30_000 },
+                );
+                await page
+                    .locator('#input-textarea')
+                    .fill('steer this image into the turn');
+                if (mobile) await page.locator('#send-input-btn').tap();
+                else await page.locator('#send-input-btn').click();
+                await expect(page.locator('#attachment-status')).toHaveText(
+                    'Submitted to Pi.',
+                    { timeout: 15_000 },
+                );
+                releaseTurn();
+                await waitForProvider(provider, beforeImage + 1);
+                const steer = provider.requests
+                    .slice(beforeImage)
+                    .find((candidate) => anthropicImages(candidate).length > 0);
+                if (!steer)
+                    throw new Error(
+                        `${mobile ? 'touch' : 'desktop'}: the steered request must carry the image`,
+                    );
+                expect(anthropicUserText(steer)).toContain(
+                    'steer this image into the turn',
+                );
+                expect(
+                    await page.evaluate(
+                        () =>
+                            document.documentElement.scrollWidth <=
+                            window.innerWidth,
+                    ),
+                ).toBe(true);
+                expect(errors).toEqual([]);
+            } finally {
+                await context.close();
+            }
+        }
+    } finally {
+        await proxy?.close();
+        await phi.stop();
+        await provider.close();
+    }
+});
+
 test('device attachments reach interactive Pi as images and readable files on desktop and touch', async ({
     browser,
     request,

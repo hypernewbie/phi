@@ -317,17 +317,22 @@ references and 50 MiB total, with
 64 KiB of UTF-8 prompt text. No image bytes travel in the bridge message.
 
 Before the host call, the extension rechecks runtime, session, leaf, model,
-readiness, and image-input support. Image sends refuse unknown, text-only, or
-`pi-virtual` models. Commands beginning with `/` or `!`, busy/queued work,
-active compaction, and unresolved bridge work are also refused. No attachment
-prompt enters Pi's follow-up queue. One handler may be active per Pi process;
+and image-input support. Image sends refuse unknown, text-only, or
+`pi-virtual` models. The prompt is always delivered as a steer:
+`sendUserMessage(content, { deliverAs: 'steer', expandPromptTemplates: false })`.
+While Pi streams, the host queues the message and its images and delivers them
+before the next model call, so a busy turn or a pending message never refuses
+the send. Commands beginning with `/` or `!`, active compaction, and unresolved
+bridge work are refused. No attachment prompt enters Pi's follow-up queue. One
+handler may be active per Pi process;
 request IDs are monotonic decimal values retained across reconnects. Duplicate
 or older IDs are refused, and reconnect never replays an operation.
 
 `AttachmentPromptAck` (field 27) echoes the request ID. `REFUSED` means a
 known refusal before `sendUserMessage`. `DISPATCHED` means the public
-`sendUserMessage(content, { expandPromptTemplates: false })` call returned
-normally and Phi received the matching acknowledgment. It does **not** prove
+`sendUserMessage(content, { deliverAs: 'steer', expandPromptTemplates: false })`
+call returned normally and Phi received the matching acknowledgment. It does
+**not** prove
 that Pi accepted the input, that hooks preserved the content, that the model
 received an image, or that a provider completed. A synchronous throw after
 invocation begins, a lost acknowledgment, or peer loss is `UNKNOWN`; it is

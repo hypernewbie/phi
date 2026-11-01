@@ -830,6 +830,73 @@ describe('attachment control', () => {
         },
     );
 
+    it('submits a saved attachment send as a steer while Pi is busy', async () => {
+        const { tm, tabA } = makeManager();
+        const owner = tm._captureAttachmentOwner(tabA);
+        const context = {
+            process_id: 'process-a',
+            generation: '1',
+            session_id: 'session-a',
+            leaf_id: 'leaf-a',
+            model: { provider: 'provider', id: 'vision' },
+            available: true,
+        };
+        const frozen = await tm.attachmentStore.freezeDraft(owner, 0, {
+            text: 'inspect this',
+            context,
+            items: [],
+        });
+        const snapshot = {
+            id: frozen.outbox.id,
+            pane: tabA.paneId,
+            owner,
+            ownerKey: tm._attachmentOwnerKey(owner),
+            scope: tm.app.scope,
+            context,
+            items: [],
+            text: 'inspect this',
+            state: 'sending',
+            outboxState: 'waiting',
+        };
+        tabA._attachmentPendingSnapshot = snapshot;
+        expect(tm.attachmentStore.isActive(owner)).toBe(true);
+        expect(tm._attachmentOwnerCurrent(tabA, owner, tm.app.scope)).toBe(
+            true,
+        );
+        expect(tm._attachmentNetworkOffline()).toBe(false);
+        const sent = [];
+        mockFetch((url, options) => {
+            if (
+                options?.method === 'POST' &&
+                String(url).endsWith('/api/pi-bridge/attachments')
+            ) {
+                sent.push(JSON.parse(options.body));
+                return {
+                    json: {
+                        id: snapshot.id,
+                        state: 'dispatched',
+                        reason: '',
+                    },
+                };
+            }
+            // A busy turn with queued messages is a steer target, not a
+            // reason to hold the saved send back.
+            return {
+                json: {
+                    ...context,
+                    idle: false,
+                    queued: true,
+                    image_available: true,
+                },
+            };
+        });
+        await tm._recoverAttachmentOutbox(tabA, snapshot, true);
+        expect(sent).toHaveLength(1);
+        expect(sent[0].text).toBe('inspect this');
+        expect(tabA._attachmentPendingSnapshot).toBeNull();
+        expect(tabA._attachmentNotice).toBe('Submitted to Pi.');
+    });
+
     it('refuses a ninth staged file without losing the batch', async () => {
         const { tm, tabA } = makeManager();
         mockFetch((url) => {

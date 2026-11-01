@@ -10524,11 +10524,8 @@ export class TabManager {
                 this._finishAttachmentSnapshot(tab, snapshot, 'refused', 'stale');
                 return;
             }
-            if (context.idle !== true || context.queued !== false) {
-                tab._attachmentNotice = context.queued ? 'Pi has queued messages. Press Send again after Pi is idle.' : 'Pi is busy. Press Send again after the current turn.';
-                this._renderAttachmentStatus(tab);
-                return;
-            }
+            // A busy turn is not a refusal: Pi queues the prompt as a steer
+            // message and delivers it before the next model call.
             if (snapshot.items.some((item) => item.kind === 'image') && context.image_available !== true) {
                 await this.attachmentStore.updateOutbox(snapshot.id, 'refused', 'unsupported-model');
                 this._finishAttachmentSnapshot(tab, snapshot, 'refused', 'unsupported-model');
