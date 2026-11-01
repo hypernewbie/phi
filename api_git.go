@@ -47,6 +47,86 @@ var gitHeadCache sync.Map // map[string]gitHeadCacheEntry
 
 const gitHeadCacheTTL = 5 * time.Second
 
+// gitInfoMemo remembers the staged snapshot the read path last computed for a
+// repository, so a repeated /api/git/info poll does not respawn git for bytes
+// that cannot have changed. Only an unchanged index identity and HEAD may hit,
+// and only for a short window: a config-only change (diff.orderFile, diff
+// drivers, attributes) alters the token without touching either. The commit
+// path never reads this memo; it recomputes before comparing tokens.
+type gitInfoMemoEntry struct {
+	head      string
+	indexInfo os.FileInfo
+	cachedAt  time.Time
+	hasStaged bool
+	token     string
+}
+
+const (
+	gitInfoMemoCap    = 64
+	gitInfoMemoMaxAge = 5 * time.Second
+)
+
+var (
+	gitInfoMemoMu sync.Mutex
+	gitInfoMemo   = map[string]gitInfoMemoEntry{}
+)
+
+// gitInfoMemoKey names the repository by its Git directory, which
+// inspectGitRepository already canonicalized. An unusable directory is not
+// cacheable.
+func gitInfoMemoKey(repo *gitActionRepository) (string, bool) {
+	if repo == nil || repo.gitDir == "" || !filepath.IsAbs(repo.gitDir) {
+		return "", false
+	}
+	return repo.gitDir, true
+}
+
+func sameGitIndexInfo(a, b os.FileInfo) bool {
+	return a != nil && b != nil && b.Mode().IsRegular() &&
+		os.SameFile(a, b) && a.Size() == b.Size() &&
+		a.Mode() == b.Mode() && a.ModTime().Equal(b.ModTime())
+}
+
+// gitInfoMemoLookup returns a stored snapshot for head when the index identity
+// still matches and the entry is young enough. A hit never extends the age.
+func gitInfoMemoLookup(key, head string, indexInfo os.FileInfo) (bool, string, bool) {
+	gitInfoMemoMu.Lock()
+	entry, ok := gitInfoMemo[key]
+	gitInfoMemoMu.Unlock()
+	if !ok || entry.head != head || !sameGitIndexInfo(entry.indexInfo, indexInfo) {
+		return false, "", false
+	}
+	if time.Since(entry.cachedAt) >= gitInfoMemoMaxAge {
+		return false, "", false
+	}
+	return entry.hasStaged, entry.token, true
+}
+
+// gitInfoMemoStoreAt records a snapshot. cachedAt is explicit so tests can
+// age an entry without a clock hook.
+func gitInfoMemoStoreAt(key, head string, indexInfo os.FileInfo, hasStaged bool, token string, cachedAt time.Time) {
+	gitInfoMemoMu.Lock()
+	defer gitInfoMemoMu.Unlock()
+	if _, exists := gitInfoMemo[key]; !exists && len(gitInfoMemo) >= gitInfoMemoCap {
+		clear(gitInfoMemo)
+	}
+	gitInfoMemo[key] = gitInfoMemoEntry{
+		head:      head,
+		indexInfo: indexInfo,
+		cachedAt:  cachedAt,
+		hasStaged: hasStaged,
+		token:     token,
+	}
+}
+
+// gitInfoMemoInvalidate drops a repository's entry. Any action attempt changes
+// what the next read may observe, including attempts that end in a rejection.
+func gitInfoMemoInvalidate(key string) {
+	gitInfoMemoMu.Lock()
+	delete(gitInfoMemo, key)
+	gitInfoMemoMu.Unlock()
+}
+
 // lookupGitHead returns the cached HEAD/branch pair for cwd, or
 // fetches them with two `git rev-parse` calls on cache miss. Empty
 // strings indicate a detached HEAD, unborn branch, or non-git cwd —
@@ -439,6 +519,7 @@ type gitActionRequest struct {
 type gitActionRepository struct {
 	root      string
 	commonDir string
+	gitDir    string
 	bare      bool
 }
 
@@ -607,7 +688,15 @@ func inspectGitRepository(ctx context.Context, cwd string) (*gitActionRepository
 	if err != nil {
 		return nil, false, gitReadAPIError(ctx)
 	}
-	return &gitActionRepository{root: root, commonDir: commonDir}, false, nil
+	gitDirOut, _, err := gitOutput(ctx, root, "rev-parse", "--path-format=absolute", "--git-dir")
+	if err != nil {
+		return nil, false, gitReadAPIError(ctx)
+	}
+	gitDir, err := canonicalGitDirectory(outputLine(gitDirOut))
+	if err != nil {
+		return nil, false, gitReadAPIError(ctx)
+	}
+	return &gitActionRepository{root: root, commonDir: commonDir, gitDir: gitDir}, false, nil
 }
 
 func parseGitWorktreeRoots(output []byte) []string {
@@ -810,6 +899,14 @@ func isExitCode(err error, code int) bool {
 }
 
 func gitIndexSnapshot(ctx context.Context, repo *gitActionRepository) (bool, string, *gitAPIError) {
+	return gitIndexSnapshotForHead(ctx, repo, "")
+}
+
+// gitIndexSnapshotForHead hashes the staged state as seen against head. An
+// empty head keeps the implicit-HEAD behavior of plain `git diff --cached`.
+// Pinning a resolved commit keeps the result consistent with the HEAD a caller
+// already reported, even if the branch moves during the scan.
+func gitIndexSnapshotForHead(ctx context.Context, repo *gitActionRepository, head string) (bool, string, *gitAPIError) {
 	stageHash := sha256.New()
 	stageCmd := gitCommand(ctx, repo.root, "ls-files", "--stage", "-z")
 	stageCmd.Stdout = stageHash
@@ -819,11 +916,16 @@ func gitIndexSnapshot(ctx context.Context, repo *gitActionRepository) (bool, str
 	}
 
 	deltaHash := sha256.New()
-	deltaCmd := gitCommand(ctx, repo.root,
+	diffArgs := []string{
 		"diff", "--cached", "--raw", "--no-abbrev", "--no-renames",
 		"--no-ext-diff", "--no-textconv", "--ita-invisible-in-index",
-		"--ignore-submodules=none", "-z", "--exit-code", "--",
-	)
+		"--ignore-submodules=none", "-z", "--exit-code",
+	}
+	if head != "" {
+		diffArgs = append(diffArgs, head)
+	}
+	diffArgs = append(diffArgs, "--")
+	deltaCmd := gitCommand(ctx, repo.root, diffArgs...)
 	deltaCmd.Stdout = deltaHash
 	deltaCmd.Stderr = io.Discard
 	deltaErr := deltaCmd.Run()
@@ -834,6 +936,49 @@ func gitIndexSnapshot(ctx context.Context, repo *gitActionRepository) (bool, str
 
 	combined := sha256.Sum256([]byte(fmt.Sprintf("%x:%x", stageHash.Sum(nil), deltaHash.Sum(nil))))
 	return hasStaged, hex.EncodeToString(combined[:]), nil
+}
+
+// gitInfoIndexSnapshot serves the staged snapshot for the read path. A recent
+// result is reused only while the index identity, HEAD, and age all match.
+// Repeated polls of /api/git/info were the most expensive handler measured.
+func gitInfoIndexSnapshot(ctx context.Context, repo *gitActionRepository, target gitActionTarget) (bool, string, *gitAPIError) {
+	return gitInfoMemoRead(ctx, repo, target, func(ctx context.Context) (bool, string, *gitAPIError) {
+		return gitIndexSnapshotForHead(ctx, repo, target.Head)
+	})
+}
+
+// gitInfoMemoRead is gitInfoIndexSnapshot with the computation supplied by the
+// caller, so tests can count loads and drive HEAD/index changes mid-load.
+func gitInfoMemoRead(ctx context.Context, repo *gitActionRepository, target gitActionTarget, load func(context.Context) (bool, string, *gitAPIError)) (bool, string, *gitAPIError) {
+	key, cacheable := gitInfoMemoKey(repo)
+	var indexPath string
+	var before os.FileInfo
+	if cacheable && target.Head != "" {
+		indexPath = filepath.Join(repo.gitDir, "index")
+		if info, err := os.Lstat(indexPath); err == nil && info.Mode().IsRegular() {
+			before = info
+			if hasStaged, token, hit := gitInfoMemoLookup(key, target.Head, before); hit {
+				if ctx.Err() != nil {
+					return false, "", gitReadAPIError(ctx)
+				}
+				return hasStaged, token, nil
+			}
+		}
+	}
+
+	hasStaged, token, err := load(ctx)
+	if err != nil {
+		return hasStaged, token, err
+	}
+	// A canceled request must not populate the memo, and an index that moved
+	// during the scan leaves the result unpinned from its own metadata.
+	if before == nil || ctx.Err() != nil {
+		return hasStaged, token, nil
+	}
+	if after, statErr := os.Lstat(indexPath); statErr == nil && sameGitIndexInfo(before, after) {
+		gitInfoMemoStoreAt(key, target.Head, after, hasStaged, token, time.Now())
+	}
+	return hasStaged, token, nil
 }
 
 func gitCommitTarget(target gitActionTarget) gitActionTarget {
@@ -859,6 +1004,15 @@ func gitCanCommit(ctx context.Context, repo *gitActionRepository, target gitActi
 }
 
 func gitMutationPrecondition(ctx context.Context, repo *gitActionRepository, action string) (string, *gitAPIError) {
+	// Marker paths resolve against the per-worktree Git directory, not the
+	// shared common directory: a rebase or cherry-pick in one worktree must
+	// not block actions in another.
+	if repo.gitDir == "" || !filepath.IsAbs(repo.gitDir) {
+		return "", gitReadAPIError(ctx)
+	}
+	if ctx.Err() != nil {
+		return "", gitReadAPIError(ctx)
+	}
 	for _, marker := range []string{
 		"MERGE_HEAD",
 		"CHERRY_PICK_HEAD",
@@ -867,15 +1021,7 @@ func gitMutationPrecondition(ctx context.Context, repo *gitActionRepository, act
 		"rebase-merge",
 		"sequencer",
 	} {
-		pathOut, _, err := gitOutput(ctx, repo.root, "rev-parse", "--git-path", marker)
-		if err != nil {
-			return "", gitReadAPIError(ctx)
-		}
-		path := outputLine(pathOut)
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(repo.root, path)
-		}
-		if _, err := os.Lstat(path); err == nil {
+		if _, err := os.Lstat(filepath.Join(repo.gitDir, marker)); err == nil {
 			return fmt.Sprintf("Finish the current Git operation before %s.", action), nil
 		} else if !os.IsNotExist(err) {
 			return "", gitReadAPIError(ctx)
@@ -914,7 +1060,7 @@ func handleGitInfo(w http.ResponseWriter, r *http.Request) {
 		writeGitAPIError(w, err)
 		return
 	}
-	hasStaged, indexToken, indexErr := gitIndexSnapshot(ctx, repo)
+	hasStaged, indexToken, indexErr := gitInfoIndexSnapshot(ctx, repo, target)
 	if indexErr != nil {
 		writeGitAPIError(w, indexErr)
 		return
@@ -1019,6 +1165,11 @@ func handleGitAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer lock.Unlock()
+	// Every action attempt can change what the next read observes, including
+	// attempts that end in a stale-token rejection or a partial failure.
+	if key, ok := gitInfoMemoKey(repo); ok {
+		defer gitInfoMemoInvalidate(key)
+	}
 	fresh, canPullPush, reason, err := targetForGitRepository(ctx, repo)
 	if err != nil {
 		writeGitAPIError(w, err)

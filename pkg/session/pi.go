@@ -265,7 +265,7 @@ func listPiSessionsPage(cwd string, offset, limit int) ([]Session, error) {
 			continue
 		}
 
-		title := extractPiSessionTitle(filePath)
+		title := piSessionTitle(filePath, info)
 		if title == "" {
 			shortID := header.ID
 			if len(shortID) > 8 {
@@ -296,9 +296,17 @@ func listPiSessionsPage(cwd string, offset, limit int) ([]Session, error) {
 }
 
 func extractPiSessionTitle(filePath string) string {
+	title, _ := extractPiSessionTitleResult(filePath)
+	return title
+}
+
+// extractPiSessionTitleResult reports whether the title is safe to remember.
+// A partial title from a file that produced a warning is not: the next read
+// must retry and log the warning again.
+func extractPiSessionTitleResult(filePath string) (string, bool) {
 	file, err := os.Open(filePath)
 	if err != nil {
-		return ""
+		return "", false
 	}
 	defer file.Close()
 
@@ -327,8 +335,9 @@ func extractPiSessionTitle(filePath string) string {
 	}
 	if warning != nil {
 		log.Printf("[session] Pi title extraction warning in %s: %v", filePath, warning)
+		return state.Title(), false
 	}
-	return state.Title()
+	return state.Title(), true
 }
 
 // ResolvePiSessionPath returns the exact validated session path for cwd.
