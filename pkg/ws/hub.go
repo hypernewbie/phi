@@ -484,16 +484,19 @@ func (h *Hub) AttachHot(paneID string, client *Client) {
 		}
 		var snapshot []byte
 		var err error
+		through := pos.Head
 		cols, rows := ph.state.Geometry()
 		if client.NativeState {
 			snapshot, err = ph.state.ReadyWindow(256)
-		} else if stored := ph.ckpt; stored != nil && stored.Through == pos.Head {
+		} else if stored := ph.ckpt; stored != nil && stored.Through <= pos.Head && stored.Through >= pos.Oldest {
 			// The server formatter emits the visible screen alone, so an ANSI
 			// attach would restore a terminal with no rows to scroll. A client
-			// checkpoint is the only ANSI snapshot that carries scrollback. An
-			// exact head match keeps it current; anything older falls back to
-			// the screen and the client's delta.
+			// checkpoint is the only ANSI snapshot that carries scrollback. It
+			// need not sit at the head: the attach publishes its own through,
+			// and the client replays the bytes after it. Only a snapshot below
+			// the retention floor is unusable.
 			snapshot = stored.Ansi
+			through = stored.Through
 			cols, rows = int(stored.Cols), int(stored.Rows)
 		} else {
 			var screen, continuation []byte
@@ -522,7 +525,7 @@ func (h *Hub) AttachHot(paneID string, client *Client) {
 			return
 		}
 		ckpt := &wspb.TerminalCheckpoint{
-			Through: proto.Uint64(pos.Head),
+			Through: proto.Uint64(through),
 			Cols:    proto.Uint32(uint32(cols)),
 			Rows:    proto.Uint32(uint32(rows)),
 			Data:    snapshot,

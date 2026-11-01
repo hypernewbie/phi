@@ -226,17 +226,57 @@ func TestAnsiAttachPrefersCurrentClientCheckpoint(t *testing.T) {
 		t.Fatalf("snapshot geometry lost: %dx%d", ckpt.GetCols(), ckpt.GetRows())
 	}
 
-	// Head moved past the snapshot: it is stale, so the attach must fall
-	// back to the live screen state instead of the old scrollback bytes.
+	// Head moved past the snapshot. The snapshot is still newer than the
+	// retention floor, so the attach serves it with its own through: the
+	// client replays the bytes after that frontier instead of losing the
+	// scrollback to a few bytes of output that arrived late.
 	h.Ingest("p", []byte(" world")) // head=11
 	c2 := &Client{Send: make(chan []byte, 4), AnsiState: true}
 	h.AttachHot("p", c2)
 	ckpt2 := parseAttach(t, drainOne(c2.Send)).GetCheckpoint()
-	if ckpt2 == nil || ckpt2.GetThrough() != 11 {
-		t.Fatalf("fallback checkpoint = %+v", ckpt2)
+	if ckpt2 == nil || ckpt2.GetThrough() != 5 {
+		t.Fatalf("stale checkpoint = %+v", ckpt2)
 	}
-	if bytes.Contains(ckpt2.GetData(), []byte("CLIENT-SNAPSHOT")) {
-		t.Fatal("stale client snapshot served after the head advanced")
+	if string(ckpt2.GetData()) != "CLIENT-SNAPSHOT" {
+		t.Fatalf("stale scrollback discarded: %q", ckpt2.GetData())
+	}
+}
+
+func TestAnsiAttachIgnoresCheckpointBelowRetentionFloor(t *testing.T) {
+	h := NewHub(8)
+	if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
+		t.Fatalf("SetRecordingDirectory: %v", err)
+	}
+	h.Ingest("p", []byte("0123456789")) // head=10
+	ph, ok := h.LookupPane("p")
+	if !ok {
+		t.Fatal("pane missing")
+	}
+	ph.mu.Lock()
+	epoch := ph.epoch
+	ph.mu.Unlock()
+	if !h.StoreCheckpoint("p", CheckpointUpload{Epoch: epoch, Through: 1, Cols: 80, Rows: 24, Ansi: []byte("snap-below-floor")}) {
+		t.Fatal("valid checkpoint rejected")
+	}
+	// Rotate the retained window past the stored checkpoint.
+	chunk := bytes.Repeat([]byte("A"), 64<<10)
+	for i := 0; i < int(retentionHistoryCap)/len(chunk)+40; i++ {
+		h.Ingest("p", chunk)
+	}
+	ph.mu.Lock()
+	pos := ph.positionLocked()
+	ph.mu.Unlock()
+	if pos.Oldest <= 1 {
+		t.Fatalf("floor did not pass the checkpoint: %+v", pos)
+	}
+	c := &Client{Send: make(chan []byte, 4), AnsiState: true}
+	h.AttachHot("p", c)
+	ckpt := parseAttach(t, drainOne(c.Send)).GetCheckpoint()
+	if ckpt == nil || ckpt.GetThrough() != pos.Head {
+		t.Fatalf("checkpoint = %+v, want head %d", ckpt, pos.Head)
+	}
+	if bytes.Contains(ckpt.GetData(), []byte("snap-below-floor")) {
+		t.Fatal("checkpoint below the retention floor served")
 	}
 }
 

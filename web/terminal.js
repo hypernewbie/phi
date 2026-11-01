@@ -516,6 +516,14 @@ const MAX_DELTA_BYTES = 2 * 1024 * 1024;
 // pane stays retained and the reader retries explicitly. It bounds the work,
 // not the attempt.
 const MAX_CAPTURE_MS = 30_000;
+// The server accepts a 2 MiB checkpoint, but sendBeacon refuses a body over
+// 64 KiB. A coarse pointer serializes at most PHONE_CHECKPOINT_ROWS, so keep
+// that lane's snapshot under the beacon cap: every upload then survives a
+// navigation instead of falling back to a fetch the browser cancels on the
+// way out.
+const COARSE_CHECKPOINT_BYTES = 48 * 1024;
+// The server bounds a checkpoint body; the coarse lane tightens this to fit a
+// beacon.
 const MAX_CHECKPOINT_BYTES = 2 * 1024 * 1024;
 const MAX_WRITE_CHARS = 64 * 1024;
 // Full live scrollback, desktop and unset-mobile alike. The mobile lane
@@ -538,6 +546,11 @@ const HISTORY_MIN_STEP_BYTES = 4 * 1024;
 // After output stays quiet this long, the client uploads a screen
 // checkpoint so the next attach restores instantly.
 const CHECKPOINT_QUIET_MS = 2000;
+// Sustained output never goes quiet. Without a ceiling the snapshot waits for
+// the first silence, so a reader who reloads mid-stream has nothing to
+// restore. The upload is bounded by COARSE_CHECKPOINT_BYTES, so this costs at
+// most one beacon of that size per window.
+const CHECKPOINT_MAX_WAIT_MS = 5000;
 
 function isTerminalFindShortcut(e) {
     return (
@@ -779,17 +792,22 @@ export class TabManager {
             'thinking-visibility-btn',
         );
 
-        // On pagehide, leave a fresh screen checkpoint behind so the next
-        // client restores instantly instead of falling back to the bounded
-        // delta.
+        // Leave a fresh screen checkpoint behind so the next client restores
+        // instantly instead of falling back to the bounded delta. A hidden
+        // page counts as leaving: iOS can kill a backgrounded page without
+        // ever firing pagehide, and the beacon needs to be queued first.
         if (typeof window !== 'undefined') {
-            window.addEventListener('pagehide', () => {
+            const leaveCheckpoint = () => {
                 this.saveActiveDraft();
                 for (const tab of this.tabs.values()) {
                     if (tab.serializeAddon && !tab.isDead) {
                         this._uploadCheckpoint(tab, { unload: true });
                     }
                 }
+            };
+            window.addEventListener('pagehide', leaveCheckpoint);
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'hidden') leaveCheckpoint();
             });
         }
         this.directModeToggle = document.getElementById('direct-mode-toggle');
@@ -3690,10 +3708,15 @@ export class TabManager {
         if (tabInfo._serverStateAvailable && !isCoarseViewport()) return;
         if (!tabInfo.serializeAddon || !tabInfo._ckptEnabled) return;
         clearTimeout(tabInfo._ckptTimer);
+        const now = Date.now();
+        if (!tabInfo._ckptWaitingSince) tabInfo._ckptWaitingSince = now;
+        const wait = now - tabInfo._ckptWaitingSince >= CHECKPOINT_MAX_WAIT_MS
+            ? 0
+            : CHECKPOINT_QUIET_MS;
         tabInfo._ckptTimer = setTimeout(() => {
             tabInfo._ckptTimer = null;
             this._uploadCheckpoint(tabInfo);
-        }, CHECKPOINT_QUIET_MS);
+        }, wait);
     }
 
     _uploadCheckpoint(tabInfo, options = {}) {
@@ -3719,6 +3742,9 @@ export class TabManager {
         let ansi = '';
         try {
             let scrollback = isCoarseViewport() ? PHONE_CHECKPOINT_ROWS : LIVE_SCROLLBACK_ROWS;
+            const budget = isCoarseViewport()
+                ? COARSE_CHECKPOINT_BYTES
+                : MAX_CHECKPOINT_BYTES;
             for (let attempt = 0; ; attempt++) {
                 const snapshot = terminalSnapshot(tabInfo.term, tabInfo.serializeAddon, { scrollback });
                 if (!snapshot && !mouseMode) return;
@@ -3727,14 +3753,14 @@ export class TabManager {
                 ansi = mouseMode + snapshot;
                 // The server bounds UTF-8 bytes, not UTF-16 string length.
                 const bytes = new TextEncoder().encode(ansi).byteLength;
-                if (bytes <= MAX_CHECKPOINT_BYTES) break;
+                if (bytes <= budget) break;
                 // Never post a snapshot the server cannot accept. The cold
                 // recording, not a truncated string, owns omitted history.
                 if (scrollback === 0) return;
                 const lines = Math.min(scrollback,
                     tabInfo.term.buffer?.active?.baseY ?? scrollback) + tabInfo.term.rows;
                 const target = Math.max(0,
-                    Math.floor(MAX_CHECKPOINT_BYTES * lines / bytes) - tabInfo.term.rows);
+                    Math.floor(budget * lines / bytes) - tabInfo.term.rows);
                 scrollback = Math.min(scrollback - 1, target,
                     attempt ? Math.floor(scrollback / 2) : scrollback);
             }
@@ -3757,6 +3783,7 @@ export class TabManager {
         // navigation or close cannot abort it into a failed request. An
         // unload upload has no time to retry, so a refused beacon is simply
         // lost; while the page is still alive a refusal falls back to fetch.
+        tabInfo._ckptWaitingSince = 0;
         const url = `/api/terminals/${encodeURIComponent(tabInfo.paneId)}/checkpoint`;
         const json = JSON.stringify(payload);
         const beacon = () =>
