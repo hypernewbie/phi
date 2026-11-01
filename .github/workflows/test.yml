@@ -41,11 +41,14 @@ jobs:
       - name: Run Go Tests
         run: go test -race -v ./...
 
-      # No -race here: the detector is the main cost multiplier and the run
-      # above already exercises every test with it. This step only proves the
-      # profiling partition works under the tag.
+      # The tag swaps root's diagnostics_disabled.go for diagnostics_profiling.go,
+      # but no root test exercises the diagnostics API — the only tag-gated root
+      # test file is api_timing_test.go. Run the packages whose source actually
+      # changes under the tag, plus those two tests.
       - name: Run Go Tests (profiling)
-        run: go test -tags=profiling ./...
+        run: |
+          go test -tags=profiling ./internal/diagnostics/... ./internal/termstate/... ./internal/termemu/... ./pkg/obs/...
+          go test -tags=profiling -run '^TestTiming' .
 
       # Only auth_observability_otel_test.go is gated on the otel tag; main.go
       # is byte-identical with and without it, since the tag swaps the pkg/obs
@@ -392,8 +395,14 @@ jobs:
         run: pnpm run test:pi-phi:integration
 
   test-e2e:
-    name: Playwright Chromium E2E
+    name: Playwright Chromium E2E (${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
+    # 319 tests on 2 workers took 19 min in a single job. Shard by file across
+    # three runners instead; each shard keeps its own 2 workers.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - name: Checkout Code
         uses: actions/checkout@v5
@@ -431,13 +440,13 @@ jobs:
       - name: Run Playwright suite
         env:
           PLAYWRIGHT_BROWSERS_PATH: 0
-        run: pnpm run test:e2e
+        run: pnpm exec playwright test --shard=${{ matrix.shard }}/3
 
       - name: Upload Playwright artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-artifacts
+          name: playwright-artifacts-${{ matrix.shard }}
           path: |
             playwright-report/
             test-results/
