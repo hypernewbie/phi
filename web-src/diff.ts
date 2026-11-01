@@ -1107,6 +1107,17 @@ export class DiffController {
             requestAvailable = false;
         }
         if (this.gitManageContextKey !== key) {
+            if (this.gitManageContextKey) {
+                const selectedCommit =
+                    this.syncCommitTarget?.cwd === cwd
+                        ? this.syncCommitTarget
+                        : null;
+                this._resetCommitSelect();
+                if (selectedCommit) {
+                    this.syncCommitTarget = selectedCommit;
+                    this._ensureCommitOption(selectedCommit.hash);
+                }
+            }
             this.persistGitCommitDraft();
             if (this.gitManageRecord?.phase === 'queued') {
                 this.gitManageRecord.phase = 'paused';
@@ -2424,10 +2435,10 @@ export class DiffController {
 
     async loadCommits(): Promise<void> {
         if (!this.commitSelect) return;
+        const context = this.captureGitManageContext();
         this._commitLoadToken = (this._commitLoadToken || 0) + 1;
         const requestToken = this._commitLoadToken;
         const cwd = this.app.sessionsManager.activeCWD || '';
-        const context = this.captureGitManageContext();
         const cached = this.readGitViewCache(
             context,
             this.gitViewRoot(context),

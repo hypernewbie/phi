@@ -925,7 +925,7 @@ test.beforeAll(async () => {
         writeFileSync(
             join(home, '.phi', 'config.toml'),
             configToToml({
-                workspaces: [project],
+                workspaces: [project, peer],
                 auto_reconnect: 'off',
                 pi_bridge_no_inject: true,
             }),
@@ -971,6 +971,123 @@ test.afterAll(async () => {
     expectSameOwnership(phi);
     await phi.stop();
 });
+
+for (const mode of ['desktop', 'touch'] as const) {
+    test(`Workspace switches isolate Git targets and drafts (${mode})`, async ({
+        browser,
+    }, testInfo) => {
+        if (!phi) throw new Error('Phi fixture is not running');
+        const context = await browser.newContext(
+            mode === 'touch'
+                ? {
+                      viewport: { width: 390, height: 844 },
+                      isMobile: true,
+                      hasTouch: true,
+                  }
+                : { viewport: { width: 1440, height: 900 } },
+        );
+        let releaseInfo!: () => void;
+        let releaseTrees!: () => void;
+        let releaseRefresh!: () => void;
+        const infoGate = new Promise<void>(
+            (resolve) => (releaseInfo = resolve),
+        );
+        const treeGate = new Promise<void>(
+            (resolve) => (releaseTrees = resolve),
+        );
+        const refreshGate = new Promise<void>(
+            (resolve) => (releaseRefresh = resolve),
+        );
+        try {
+            const page = await context.newPage();
+            const errors: string[] = [];
+            const actionPosts: string[] = [];
+            page.on('pageerror', (error) => errors.push(String(error)));
+            page.on('request', (request) => {
+                if (
+                    request.method() === 'POST' &&
+                    new URL(request.url()).pathname === '/api/git/action'
+                )
+                    actionPosts.push(request.postData() || '');
+            });
+            await navigateToProject(page);
+            // The native workspace select lives in the header on both layouts.
+            const selectWorkspace = (cwd: string) =>
+                page.locator('#workspace-select').selectOption(cwd);
+            const draft = page.locator('#git-commit-message');
+            await draft.fill('Draft for project');
+            await page.route('**/api/git/worktrees?**', async (route) => {
+                if (
+                    new URL(route.request().url()).searchParams.get('cwd') !==
+                    peer
+                )
+                    return route.continue();
+                await treeGate;
+                await route.fulfill({
+                    status: 503,
+                    body: 'fixture worktree read unavailable',
+                });
+            });
+            await page.route('**/api/git/info?**', async (route) => {
+                if (
+                    new URL(route.request().url()).searchParams.get('cwd') ===
+                    peer
+                )
+                    await infoGate;
+                await route.continue();
+            });
+            await selectWorkspace(peer);
+            // Neither B read has answered. A's actions and draft must already
+            // be retired, not merely replaced after a successful response.
+            await expect(page.locator('#git-target-label')).toHaveText(
+                'No cached Git information',
+            );
+            await expect(draft).toHaveValue('');
+            for (const id of ['git-pull-btn', 'git-push-btn', 'git-commit-btn'])
+                await expect(page.locator(`#${id}`)).toBeDisabled();
+            releaseInfo();
+            await expect(page.locator('#git-target-label')).toContainText(peer);
+            await draft.fill('Draft for peer');
+            releaseTrees();
+            await expect(
+                page.locator('#session-list .error-sessions'),
+            ).toContainText('Error scanning worktrees');
+            await expect(page.locator('#git-target-label')).toContainText(peer);
+
+            // Hold ALL revalidation reads. Switching back must restore the
+            // matching saved target and draft without waiting for the network.
+            await page.route('**/api/git/info?**', async (route) => {
+                await refreshGate;
+                await route.continue();
+            });
+            await selectWorkspace(project);
+            await expect(page.locator('#git-target-label')).toContainText(
+                project,
+            );
+            await expect(draft).toHaveValue('Draft for project');
+            await selectWorkspace(peer);
+            await expect(page.locator('#git-target-label')).toContainText(peer);
+            await expect(draft).toHaveValue('Draft for peer');
+            expect(actionPosts).toEqual([]);
+            expect(errors).toEqual([]);
+            expect(
+                await page.evaluate(
+                    () =>
+                        document.documentElement.scrollWidth >
+                        window.innerWidth,
+                ),
+            ).toBe(false);
+            await page.screenshot({
+                path: testInfo.outputPath(`workspace-${mode}.png`),
+            });
+        } finally {
+            releaseInfo();
+            releaseTrees();
+            releaseRefresh();
+            await context.close();
+        }
+    });
+}
 
 test('Git drawer actions stay safe in desktop and mobile contexts', async ({
     browser,
