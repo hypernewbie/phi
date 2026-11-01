@@ -1932,27 +1932,7 @@ export class DesktopHost {
         continue;
       }
       const profileId = profile.id;
-      // The page reports its hostname/accent on its own title event, which
-      // can arrive while the document is still loading — executeRendererRead
-      // drops reads then, so that observation is lost. Retry on the poll
-      // cadence: without an accent the ACTIVE entry has no colour of its own
-      // and the rail paints it with the transparent root token.
-      if (!this.observedIdentity.has(profileId)) {
-        void this.observeProfileIdentity(view, profile.origin).then(
-          (identity) => {
-            if (
-              identity === null ||
-              !this.isCurrentWindowSession(win, generation)
-            )
-              return;
-            this.pushRailState();
-            if (ctrl.state().activeId !== profileId) return;
-            this.refreshWindowTitle();
-            this.pushActiveServer();
-          },
-        );
-      }
-      void this.executeRendererRead<{
+      const polled = this.executeRendererRead<{
         cpu?: unknown;
         activity?: unknown;
         workspace?: unknown;
@@ -1998,7 +1978,46 @@ export class DesktopHost {
           this.pushHeaderState(next, activity, workspace);
         })
         .catch(() => {});
+      // A page reports its hostname/accent on its own title event, which can
+      // arrive while the document is still loading; executeRendererRead drops
+      // reads then, so that observation is lost and the ACTIVE entry stays
+      // painted with the transparent root accent token. Retry on the poll
+      // cadence, but only after the poll read above released the page's single
+      // read slot: a page that never reports an identity would otherwise
+      // starve the CPU/activity reading forever.
+      if (!this.observedIdentity.has(profileId)) {
+        void polled.then(() =>
+          this.catchUpIdentity(view, profile, win, generation),
+        );
+      }
     }
+  }
+
+  /** Re-observes a profile's identity when no earlier read cached one, then
+   *  refreshes what the identity feeds: the rail accent, the window title and
+   *  the active-server push. No-op once an identity is cached. */
+  private catchUpIdentity(
+    view: WebContentsView,
+    profile: { id: string; origin: string },
+    win: BrowserWindow,
+    generation: number,
+  ): void {
+    if (
+      this.observedIdentity.has(profile.id) ||
+      !this.isCurrentWindowSession(win, generation) ||
+      view.webContents.isDestroyed()
+    )
+      return;
+    void this.observeProfileIdentity(view, profile.origin, generation).then(
+      (identity) => {
+        if (identity === null || !this.isCurrentWindowSession(win, generation))
+          return;
+        this.pushRailState();
+        if (this.controller?.state().activeId !== profile.id) return;
+        this.refreshWindowTitle();
+        this.pushActiveServer();
+      },
+    );
   }
 
   /** Pushes the active server's CPU percent and terminal-activity
