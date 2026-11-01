@@ -87,10 +87,6 @@ test('desktop and mobile sizes stay independent through drawer, editing and relo
         await pc.goto(phi.url);
         await pc.locator('#header-config-pill .pill-label').click();
         await expect(pc.locator('.settings-overlay')).toBeVisible();
-        const baseline = await fontSize(
-            pc,
-            'label[for="settings-ui-font-size"]',
-        );
         await pc.locator('#settings-ui-font-size').fill('16');
         await expect.poll(() => fontSize(pc)).toBe('16px');
         await expect
@@ -140,6 +136,11 @@ test('desktop and mobile sizes stay independent through drawer, editing and relo
         await expect.poll(() => fontSize(phone)).toBe('21px');
         await pc.locator('#header-config-pill .pill-label').click();
         await pc.locator('#settings-mobile-view').click();
+        // Desktop UI font size scales this page; the mobile value must not.
+        const baseline = await fontSize(
+            pc,
+            'label[for="settings-mobile-ui-font-size"]',
+        );
         await pc.locator('#settings-mobile-ui-font-size').fill('22');
         await expect(pc.locator('#settings-mobile-status')).toHaveText('Saved');
         await expect.poll(() => fontSize(pc)).toBe('16px');
@@ -1915,5 +1916,63 @@ test('auth-status-offline startup remains locked without deleting retained draft
         );
     } finally {
         await context.close();
+    }
+});
+
+test('narrow screens scale with the UI size and keep inputs zoom-safe', async ({
+    browser,
+}) => {
+    const mobile = await browser.newContext({
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+        userAgent: IPHONE,
+    });
+    try {
+        const phone = await mobile.newPage();
+        const px = async (selector: string) =>
+            parseFloat(await fontSize(phone, selector));
+        const scale = async () =>
+            parseFloat(
+                await phone.evaluate(() =>
+                    getComputedStyle(document.documentElement).getPropertyValue(
+                        '--ui-scale',
+                    ),
+                ),
+            );
+        await phone.goto(phi.url);
+        await openDrawerSettings(phone);
+        await phone.locator('#settings-mobile-ui-font-size').fill('24');
+        await expect(phone.locator('#settings-mobile-status')).toHaveText(
+            'Saved',
+        );
+        await expect.poll(scale).toBeGreaterThan(1.8);
+        await phone.locator('.settings-overlay .modal-close-btn').click();
+        await expect.poll(() => px('#input-textarea')).toBeGreaterThan(23);
+        expect(
+            await phone.evaluate(
+                () =>
+                    document.documentElement.scrollWidth <=
+                    document.documentElement.clientWidth,
+            ),
+        ).toBe(true);
+
+        // The 16px floor survives a small setting: iOS must not zoom on focus.
+        await openDrawerSettings(phone);
+        await phone.locator('#settings-mobile-ui-font-size').fill('10');
+        await expect(phone.locator('#settings-mobile-status')).toHaveText(
+            'Saved',
+        );
+        await phone.locator('.settings-overlay .modal-close-btn').click();
+        await expect.poll(() => px('#input-textarea')).toBe(16);
+
+        // Cached appearance keeps the last applied scale when the API is
+        // blocked: no reset to 1, no dependency on the round trip.
+        const before = await scale();
+        await phone.route('**/api/config**', (route) => route.abort());
+        await phone.reload();
+        await expect.poll(scale).toBeCloseTo(before, 3);
+    } finally {
+        await mobile.close();
     }
 });
