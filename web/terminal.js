@@ -3758,18 +3758,21 @@ export class TabManager {
         // unload upload has no time to retry, so a refused beacon is simply
         // lost; while the page is still alive a refusal falls back to fetch.
         const url = `/api/terminals/${encodeURIComponent(tabInfo.paneId)}/checkpoint`;
-        const blob = new Blob([JSON.stringify(payload)], {
-            type: 'application/json',
-        });
+        const json = JSON.stringify(payload);
+        const beacon = () =>
+            navigator.sendBeacon?.(
+                url,
+                new Blob([json], { type: 'application/json' }),
+            );
         if (options?.unload) {
-            navigator.sendBeacon?.(url, blob);
+            beacon();
             return;
         }
-        if (navigator.sendBeacon?.(url, blob)) return;
+        if (beacon()) return;
         fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: blob,
+            body: json,
         })
             .then((res) => {
                 if (res.ok) termPerfMark('ckpt-uploaded');
