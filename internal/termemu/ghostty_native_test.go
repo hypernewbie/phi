@@ -1,4 +1,4 @@
-//go:build termemu_ghostty
+//go:build cgo && (((darwin || linux) && (amd64 || arm64)) || (windows && amd64))
 
 package termemu
 

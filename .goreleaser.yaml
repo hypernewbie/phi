@@ -6,16 +6,19 @@ before:
     - go mod tidy
 
 builds:
-  # Server build. Embeds the web assets so the binary is
-  # self-contained.
+  # Server build. Embeds the web assets so the binary is self-contained.
+  # CGO is mandatory: the server links the pinned libghostty-vt archive.
+  # Linux and Windows targets cross-compile with pinned zig cc from Ubuntu.
+  # Darwin targets cannot zig-cross-link (no macOS system libraries), so the
+  # darwin-build macOS job produces those archives; goreleaser picks them up
+  # for checksums and the release job uploads them to the draft release.
   - id: phi
     main: .
     binary: phi
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
     goos:
       - linux
-      - darwin
       - windows
     goarch:
       - amd64
@@ -23,6 +26,19 @@ builds:
     ignore:
       - goos: windows
         goarch: arm64
+    overrides:
+      - goos: linux
+        goarch: amd64
+        env:
+          - CC=zig cc -target x86_64-linux-gnu
+      - goos: linux
+        goarch: arm64
+        env:
+          - CC=zig cc -target aarch64-linux-gnu
+      - goos: windows
+        goarch: amd64
+        env:
+          - CC=zig cc -target x86_64-windows-gnu
     flags:
       - -trimpath
       - -tags=embedassets
@@ -34,7 +50,7 @@ builds:
   # Native VT console: CGO is mandatory; never ship an emulator-less stub.
   # Linux targets cross-compile with pinned zig cc from any host. Darwin
   # targets cannot zig-cross-link (no macOS system libraries), so the
-  # phic-darwin-build macOS job produces those archives; goreleaser picks
+  # darwin-build macOS job produces those archives; goreleaser picks
   # them up for checksums and this job uploads them to the draft release.
   # The archive is phi_<version>_<os>_<arch>_phic.tar.gz with the binary at
   # its root.
@@ -81,8 +97,8 @@ archives:
 
 checksum:
   name_template: "checksums.txt"
-  # Darwin phic archives are built on a macOS runner (zig cannot cross-link
-  # macOS system libraries); they still belong in checksums.txt.
+  # Darwin archives (phi and phic) are built on a macOS runner (zig cannot
+  # cross-link macOS system libraries); they still belong in checksums.txt.
   extra_files:
     - glob: prebuilt/*.tar.gz
 

@@ -5,6 +5,8 @@
     "commit": "c3203ea4b169a18eb2ccfe92847e426d8afea858",
     "license": "MIT",
     "zig_version": "0.16.0",
+    "patch_sha256": "12b604224feac74e87b275d4f94d7644a59d4d84e71564217df8eba94f03b288",
+    "phi_format_sha256": "9faab174aee9f4272d856a8fcb1ab51f08a8b313fdd253463a38f2d3d299c639",
     "build": "zig build -Demit-lib-vt -Doptimize=ReleaseSafe",
     "notes": "Reproduces the artifacts that the TUI evaluation compared against Phi's xterm reference. Building requires Zig 0.16.0; the produced static library does not."
   },
@@ -23,12 +25,19 @@
         "-DGHOSTTY_STATIC"
       ],
       "artifact": {
-        "sha256": "923dd2f08f119883ef99f0132f0d50cf0a3fb13520d4148b4824ac18bb35fac6",
-        "size": 11022512,
-        "built": "2026-10-06",
+        "sha256": "0a3d50a69c0652f40367558f3f609700096d1b519b4796161d38330d2c67f62f",
+        "size": 13505848,
+        "built": "2026-10-31",
         "host": "macOS arm64 (Zig 0.16.0)",
-        "verified_by": "native runtime cohort and adapter tests"
-      }
+        "verified_by": "patched exports verified; host runtime exercised (M1-M3 gates)"
+      },
+      "build_flags": [
+        "-Demit-lib-vt=true",
+        "-Demit-xcframework=false",
+        "-Doptimize=ReleaseSafe",
+        "-Dcpu=baseline",
+        "-Dtarget=aarch64-macos"
+      ]
     },
     {
       "id": "darwin-amd64",
@@ -44,11 +53,11 @@
         "-DGHOSTTY_STATIC"
       ],
       "artifact": {
-        "sha256": "51c91ed33d762d74634b1e57f6de1a891e20fb45efafadba501dbeabba9fa457",
-        "size": 14610616,
-        "built": "2026-10-06",
+        "sha256": "f060c1e79fd41fb5ece521542ce51a8590dd40274777fafd50a537610166da45",
+        "size": 14645640,
+        "built": "2026-10-31",
         "host": "macOS arm64 (Zig 0.16.0)",
-        "verified_by": "CGO-enabled client link; runtime not run"
+        "verified_by": "patched exports verified; cross-link matrix passed (M3)"
       },
       "build_flags": [
         "-Demit-lib-vt",
@@ -73,11 +82,11 @@
         "-DGHOSTTY_STATIC"
       ],
       "artifact": {
-        "sha256": "4f7d9954974c537450fba34858e1dbefd1985eb9d836274bc58dfb5b2502afc6",
-        "size": 21622082,
-        "built": "2026-10-06",
+        "sha256": "ea27a230eacf12305749ef8b24874950ea585608a258035321e64eb37f0caa60",
+        "size": 21664402,
+        "built": "2026-10-31",
         "host": "macOS arm64 (Zig 0.16.0)",
-        "verified_by": "CGO-enabled client link; runtime not run"
+        "verified_by": "patched exports verified; cross-link matrix passed (M3)"
       },
       "build_flags": [
         "-Demit-lib-vt",
@@ -102,11 +111,11 @@
         "-DGHOSTTY_STATIC"
       ],
       "artifact": {
-        "sha256": "bc0347cd0cbf10343e510e3b403010bd04d40b0ede86dd211318f51df03ee4db",
-        "size": 21898954,
-        "built": "2026-10-06",
+        "sha256": "4e2ff7efa50219a90c55539b77ad34bd99d0c4634c0ddb25ebe15a55ba6f6ec8",
+        "size": 21961314,
+        "built": "2026-10-31",
         "host": "macOS arm64 (Zig 0.16.0)",
-        "verified_by": "CGO-enabled client link; runtime not run"
+        "verified_by": "patched exports verified; cross-link matrix passed (M3)"
       },
       "build_flags": [
         "-Demit-lib-vt",
@@ -127,12 +136,19 @@
         "-DGHOSTTY_STATIC"
       ],
       "artifact": {
-        "sha256": "e592e94d31f17834e5ed63404b337d23b767ddaf7a057d35a19f015472b849d7",
-        "size": 11194808,
-        "built": "2026-10-06",
+        "sha256": "62e1202080b79f5ea994e3122c559d58188c64ba6f3576bfd2115233343369ca",
+        "size": 13233796,
+        "built": "2026-10-31",
         "host": "macOS arm64 (Zig 0.16.0)",
-        "verified_by": "CGO-enabled client link; runtime not run"
-      }
+        "verified_by": "patched exports verified; cross-link matrix passed (M3); runtime awaits CI"
+      },
+      "build_flags": [
+        "-Demit-lib-vt",
+        "-Demit-xcframework=false",
+        "-Doptimize=ReleaseSafe",
+        "-Dcpu=baseline",
+        "-Dtarget=x86_64-windows-gnu"
+      ]
     }
   ]
 }

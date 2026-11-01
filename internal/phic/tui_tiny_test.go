@@ -53,10 +53,7 @@ func TestTinyConsoleAttachesAndForwardsNormalInputWithoutRecoveryMode(t *testing
 	defer srv.Close()
 	m := newModelWithServer(t, srv)
 	defer m.closeAll()
-	if probe, err := termemu.NewGhostty(termemu.Options{Cols: 1, Rows: 1}); err == nil {
-		probe.Close()
-		m.build = termemu.NewGhostty
-	}
+	m.build = termemu.NewGhostty
 	m.width, m.height = 1, 1
 	tab := m.ensureTab(m.currentOrigin(), "p", spawnCapture{project: "/work", coder: "shell"})
 	m.activateCurrentTab()

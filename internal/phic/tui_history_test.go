@@ -22,7 +22,7 @@ func TestRequestedHistoryReplacesOnlyTheViewAndCanReturnToLive(t *testing.T) {
 	}
 	live, err := termemu.NewGhostty(termemu.Options{Cols: 80, Rows: 24, ScrollbackBytes: 64 << 20, ScrollbackLines: 10000})
 	if err != nil {
-		t.Skip(err)
+		t.Fatal(err)
 	}
 	defer live.Close()
 	if err = live.Feed([]byte("LIVE PROCESS"), termemu.SourceLive); err != nil {

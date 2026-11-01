@@ -58,7 +58,16 @@ percent_of_one_core = 100 * cpu_seconds / elapsed_seconds
 
 Require `elapsed_seconds > 0` and a nondecreasing CPU counter. Do not divide by the number of cores or clamp the result: it is process CPU as a percentage of one core, not host CPU percentage.
 
-The optional `ownership` object reports known live/archive pane owners and three separate measures: `ring_capacity_bytes` (allocated backing capacity), `checkpoint_capacity_bytes` (retained ANSI checkpoint capacity), and `wasm_linear_bytes` (addressable WASM memory). These values are not additive and are not RSS estimates. `complete=false` means the view skipped one or more busy owners; check `skipped_owner_count`. A busy hub returns null counters and `reason="hub_busy"`. A missing hub returns `ownership: null`.
+The optional `ownership` object reports known live/archive pane owners and separate memory measures:
+
+- `ring_capacity_bytes`: allocated backing capacity.
+- `checkpoint_capacity_bytes`: retained ANSI checkpoint capacity.
+- `native_resident_bytes`: native screen-page and image memory for both terminal screens. This excludes other terminal allocations and allocator overhead.
+- `wasm_linear_bytes`: addressable WASM memory, retained for compatibility. Native-engine builds report zero.
+
+These values are not additive and are not RSS estimates.
+`complete=false` means the view skipped one or more busy owners. Check `skipped_owner_count`.
+A busy hub returns null counters and `reason="hub_busy"`. A missing hub returns `ownership: null`.
 
 ## Capture operation timings (primary flame-graph path)
 

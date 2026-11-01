@@ -10,7 +10,8 @@ type memoryStats struct {
 	SkippedOwnerCount       *int    `json:"skipped_owner_count"`
 	RingCapacityBytes       *uint64 `json:"ring_capacity_bytes"`
 	CheckpointCapacityBytes *uint64 `json:"checkpoint_capacity_bytes"`
-	WasmLinearBytes         *uint64 `json:"wasm_linear_bytes"`
+	WasmLinearBytes         *uint64 `json:"wasm_linear_bytes"` // Kept for compatibility; zero without WASM.
+	NativeResidentBytes     *uint64 `json:"native_resident_bytes"`
 	Complete                bool    `json:"complete"`
 	Reason                  string  `json:"reason,omitempty"`
 }
@@ -51,7 +52,7 @@ func (h *Hub) MemoryStats() memoryStats {
 	h.mu.RUnlock()
 
 	liveCount, archiveCount, skippedCount := 0, 0, 0
-	var ringBytes, checkpointBytes, wasmBytes uint64
+	var ringBytes, checkpointBytes, wasmBytes, nativeBytes uint64
 	complete := true
 	for _, owner := range owners {
 		if owner.archive {
@@ -81,7 +82,7 @@ func (h *Hub) MemoryStats() memoryStats {
 		var terminalBytes uint64
 		if owner.pane.state != nil {
 			var err error
-			terminalBytes, err = owner.pane.state.LinearMemoryBytes()
+			terminalBytes, err = owner.pane.state.ResidentMemoryBytes()
 			if err != nil {
 				owner.pane.mu.Unlock()
 				skippedCount++
@@ -93,7 +94,7 @@ func (h *Hub) MemoryStats() memoryStats {
 
 		ringBytes += ringCapacity
 		checkpointBytes += checkpointCapacity
-		wasmBytes += terminalBytes
+		nativeBytes += terminalBytes
 	}
 
 	return memoryStats{
@@ -103,6 +104,7 @@ func (h *Hub) MemoryStats() memoryStats {
 		RingCapacityBytes:       &ringBytes,
 		CheckpointCapacityBytes: &checkpointBytes,
 		WasmLinearBytes:         &wasmBytes,
+		NativeResidentBytes:     &nativeBytes,
 		Complete:                complete,
 	}
 }

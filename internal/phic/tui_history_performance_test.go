@@ -15,7 +15,7 @@ func BenchmarkConsoleHistoryScroll(b *testing.B) {
 	r := m.terminalInner()
 	emu, err := termemu.NewGhostty(termemu.Options{Cols: r.W, Rows: r.H, ScrollbackBytes: 64 << 20, ScrollbackLines: 10000})
 	if err != nil {
-		b.Skip(err)
+		b.Fatal(err)
 	}
 	defer emu.Close()
 	output := []byte(strings.Repeat("\x1b[36mhistory book 你🙂\x1b[0m\r\n", 120000))
