@@ -1715,7 +1715,7 @@ export class TabManager {
                     }
                 } else {
                     const cachedScreen = screens instanceof Map ? screens.get(paneId) : screens?.[paneId] ?? null;
-                    const createOpts = (!live || cachedScreen) ? [{ live, cachedScreen }] : [];
+                    const createOpts = (!live || cachedScreen || t.pi_mode) ? [{ live, cachedScreen, ...(t.pi_mode ? { piMode: t.pi_mode } : {}) }] : [];
                     this.createTab(
                         paneId,
                         t.session_id,
@@ -1807,6 +1807,7 @@ export class TabManager {
                 pinned: !!tab.pinned,
                 marked: !!tab.marked,
                 opencode_mode: tab.opencodeMode || null,
+                pi_mode: tab.piMode || null,
                 pi_bridge: tab._piBridgeState || undefined,
             });
 
@@ -4866,6 +4867,9 @@ export class TabManager {
             // profiles with no advertised mode retain legacy behavior.
             opencodeMode: coder === 'opencode'
                 ? (opencodeMode || getCoder(coder)?.opencode_mode || 'legacy')
+                : null,
+            piMode: coder === 'pi'
+                ? (options?.piMode || null)
                 : null,
             term,
             fitAddon,
@@ -10051,7 +10055,7 @@ export class TabManager {
 
     _updateAttachmentControl(tab) {
         if (!this.attachInputBtn) return;
-        this.attachInputBtn.classList.toggle('hidden', tab?.coder !== 'pi');
+        this.attachInputBtn.classList.toggle('hidden', tab?.coder !== 'pi' || tab?.piMode === 'psi');
         if (tab?.coder === 'pi') void this._restoreAttachmentDraft(tab, this.app?.scope);
         if (
             tab?.coder === 'pi' &&
@@ -13549,6 +13553,7 @@ export class TabManager {
                 title: tabInfo.title || '',
                 workspace: tabInfo.workspace || '',
                 ...(tabInfo.coder === 'opencode' ? { opencode_mini: isOpenCodeMini(tabInfo) } : {}),
+                ...(tabInfo.coder === 'pi' && tabInfo.piMode === 'psi' ? { pi_psi: true } : {}),
             }),
         })
             .then((res) => {
@@ -13564,6 +13569,9 @@ export class TabManager {
                 tabInfo.sessionId = data.session_id;
                 if (tabInfo.coder === 'opencode') {
                     tabInfo.opencodeMode = openCodePaneMode(data.opencode_mode);
+                }
+                if (tabInfo.coder === 'pi') {
+                    tabInfo.piMode = data.pi_mode || null;
                 }
                 // A restart provisions a fresh lease; drop bridge state.
                 // The HTTP baseline seeds below, after the new socket

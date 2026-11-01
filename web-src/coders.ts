@@ -37,6 +37,7 @@ export interface CoderDescriptor {
     model_switch_disabled: boolean;
     opencode_mode?: 'tui' | 'mini' | 'legacy';
     opencode_mini_presets?: Array<{ name: string; value: string }>;
+    pi_mode?: string;
 }
 
 export interface RecipeStep {
@@ -316,6 +317,7 @@ function coerceDescriptor(id: string, raw: unknown): CoderDescriptor | null {
                 ? r.opencode_mode
                 : undefined,
         opencode_mini_presets: coercePresets(r.opencode_mini_presets),
+        pi_mode: typeof r.pi_mode === 'string' ? r.pi_mode : undefined,
     };
 }
 

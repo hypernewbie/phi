@@ -18,6 +18,7 @@ type BuiltinOptions struct {
 	OpenCodeLegacy        bool
 	OpenCodeCommand       string
 	OpenCodeLegacyCommand string
+	PsiCommand            string
 }
 
 func OpenCodeMiniPresets() []Preset {

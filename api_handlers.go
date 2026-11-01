@@ -425,6 +425,7 @@ type SpawnRequest struct {
 	Title        string   `json:"title"`
 	Workspace    string   `json:"workspace"`
 	OpenCodeMini bool     `json:"opencode_mini,omitempty"`
+	PiPsi        bool     `json:"pi_psi,omitempty"`
 	Cols         uint16   `json:"cols,omitempty"`
 	Rows         uint16   `json:"rows,omitempty"`
 }
@@ -436,6 +437,18 @@ func terminalOpenCodeMode(inst *pty.PTYInstance) string {
 	if coderManager != nil {
 		if c, ok := coderManager.Get(inst.Coder); ok {
 			return c.OpenCodeMode
+		}
+	}
+	return ""
+}
+
+func terminalPiMode(inst *pty.PTYInstance) string {
+	if inst.PiMode != "" {
+		return inst.PiMode
+	}
+	if coderManager != nil {
+		if c, ok := coderManager.Get(inst.Coder); ok {
+			return c.PiMode
 		}
 	}
 	return ""
@@ -454,8 +467,9 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		for _, inst := range instances {
 			snapshot := inst.Snapshot()
 			snapshot.OpenCodeMode = terminalOpenCodeMode(inst)
+			snapshot.PiMode = terminalPiMode(inst)
 			view := terminalView{PTYInstanceSnapshot: snapshot, ActiveWS: snapshot.ActiveWS, ActiveWSCount: snapshot.ActiveWSCount}
-			if piBridgeForCoder(snapshot.Coder) {
+			if piBridgeForCoder(snapshot.Coder) && snapshot.PiMode != "psi" {
 				state := piBridge.PaneSnapshot(snapshot.ID)
 				view.PiBridge = &state
 			}
@@ -491,6 +505,14 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if req.PiPsi {
+		var err error
+		c, err = coders.PiPsi(c)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 
 	// Reattach only to the requested presentation of this session. Mini
 	// and full TUI clients may coexist; never replace a running process.
@@ -502,12 +524,19 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 				if req.Coder == "opencode" && ok && c.OpenCodeMode != "" && mode != c.OpenCodeMode {
 					continue
 				}
+				piMode := terminalPiMode(inst)
+				if req.Coder == "pi" && ok && c.PiMode != "" && piMode != c.PiMode {
+					continue
+				}
 				w.Header().Set("Content-Type", "application/json")
 				payload := map[string]any{"pane_id": snapshot.ID, "session_id": snapshot.SessionID}
 				if mode != "" {
 					payload["opencode_mode"] = mode
 				}
-				if piBridgeForCoder(snapshot.Coder) {
+				if piMode != "" {
+					payload["pi_mode"] = piMode
+				}
+				if piBridgeForCoder(snapshot.Coder) && piMode != "psi" {
 					payload["pi_bridge"] = piBridge.PaneSnapshot(snapshot.ID)
 				}
 				_ = json.NewEncoder(w).Encode(payload)
@@ -542,7 +571,10 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 	if c.OpenCodeMode != "" {
 		payload["opencode_mode"] = c.OpenCodeMode
 	}
-	if piBridgeForCoder(inst.Coder) {
+	if c.PiMode != "" {
+		payload["pi_mode"] = c.PiMode
+	}
+	if piBridgeForCoder(inst.Coder) && inst.PiMode != "psi" {
 		payload["pi_bridge"] = piBridge.PaneSnapshot(inst.ID)
 	}
 	_ = json.NewEncoder(w).Encode(payload)

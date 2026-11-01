@@ -133,6 +133,7 @@ type Config struct {
 	OpenCodeLegacy        bool   `json:"opencode_legacy" toml:"opencode_legacy"`
 	OpenCodeCommand       string `json:"opencode_command,omitempty" toml:"opencode_command,omitempty"`
 	OpenCodeLegacyCommand string `json:"opencode_legacy_command,omitempty" toml:"opencode_legacy_command,omitempty"`
+	PsiCommand            string `json:"psi_command,omitempty" toml:"psi_command,omitempty"`
 
 	// OpenCodeIdleStopMinutes stops the OpenCode background service after this
 	// many minutes of inactivity across all OpenCode tabs in Phi. 0 disables it.

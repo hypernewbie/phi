@@ -613,7 +613,12 @@ func inspectGitRepository(ctx context.Context, cwd string) (*gitActionRepository
 func parseGitWorktreeRoots(output []byte) []string {
 	seen := make(map[string]bool)
 	var roots []string
-	for _, field := range bytes.Split(output, []byte{0}) {
+	delim := byte(0)
+	if !bytes.Contains(output, []byte{0}) {
+		delim = '\n'
+	}
+	for _, field := range bytes.Split(output, []byte{delim}) {
+		field = bytes.TrimRight(field, "\r")
 		if !bytes.HasPrefix(field, []byte("worktree ")) {
 			continue
 		}
@@ -631,6 +636,9 @@ func registeredGitWorktrees(ctx context.Context, trustedRoots []string) ([]strin
 	var registered []string
 	for _, trusted := range trustedRoots {
 		out, stderr, err := gitOutput(ctx, trusted, "worktree", "list", "--porcelain", "-z")
+		if err != nil && isExitCode(err, 129) {
+			out, stderr, err = gitOutput(ctx, trusted, "worktree", "list", "--porcelain")
+		}
 		if err != nil {
 			if isGitNotRepository(err, stderr) {
 				continue

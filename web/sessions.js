@@ -414,15 +414,25 @@ export class SessionsManager {
             });
             coderContainer.addEventListener('contextmenu', (e) => {
                 const target = e.target?.closest('.coder-tab[data-coder="opencode"]');
-                if (!target ||
-                    !this.quickLaunchReady ||
-                    !this._canOpenCodeMini())
+                if (target &&
+                    this.quickLaunchReady &&
+                    this._canOpenCodeMini()) {
+                    e.preventDefault();
+                    this._showOpenCodeMiniMenu(e, () => {
+                        this.switchCoder('opencode');
+                        this.spawnNewSession(true);
+                    });
                     return;
-                e.preventDefault();
-                this._showOpenCodeMiniMenu(e, () => {
-                    this.switchCoder('opencode');
-                    this.spawnNewSession(true);
-                });
+                }
+                const piTarget = e.target?.closest('.coder-tab[data-coder="pi"]');
+                if (piTarget && this.quickLaunchReady) {
+                    e.preventDefault();
+                    this._showPiPsiMenu(e, () => {
+                        this.switchCoder('pi');
+                        this.spawnNewSession(false, true);
+                    });
+                    return;
+                }
             });
         }
         // Empty-state quick launch buttons: same delegated pattern
@@ -442,15 +452,25 @@ export class SessionsManager {
             });
             emptyQuickLaunch.addEventListener('contextmenu', (e) => {
                 const target = e.target?.closest('.empty-launch-btn[data-coder="opencode"]');
-                if (!target ||
-                    !this.quickLaunchReady ||
-                    !this._canOpenCodeMini())
+                if (target &&
+                    this.quickLaunchReady &&
+                    this._canOpenCodeMini()) {
+                    e.preventDefault();
+                    this._showOpenCodeMiniMenu(e, () => {
+                        this.switchCoder('opencode');
+                        this.spawnNewSession(true);
+                    });
                     return;
-                e.preventDefault();
-                this._showOpenCodeMiniMenu(e, () => {
-                    this.switchCoder('opencode');
-                    this.spawnNewSession(true);
-                });
+                }
+                const piTarget = e.target?.closest('.empty-launch-btn[data-coder="pi"]');
+                if (piTarget && this.quickLaunchReady) {
+                    e.preventDefault();
+                    this._showPiPsiMenu(e, () => {
+                        this.switchCoder('pi');
+                        this.spawnNewSession(false, true);
+                    });
+                    return;
+                }
             });
         }
         // New Session Trigger
@@ -458,6 +478,14 @@ export class SessionsManager {
             this.spawnNewSession();
         });
         this.newSessionBtn.addEventListener('contextmenu', (e) => {
+            if (this.activeCoder === 'pi' && this.quickLaunchReady) {
+                e.preventDefault();
+                this._showPiPsiMenu(e, () => {
+                    this.switchCoder('pi');
+                    this.spawnNewSession(false, true);
+                });
+                return;
+            }
             if (this.activeCoder !== 'opencode' ||
                 !this.quickLaunchReady ||
                 !this._canOpenCodeMini())
@@ -1889,7 +1917,7 @@ export class SessionsManager {
             }
         });
     }
-    async spawnNewSession(mini = false) {
+    async spawnNewSession(mini = false, psi = false) {
         try {
             if (isCompactViewport()) {
                 document
@@ -1904,7 +1932,7 @@ export class SessionsManager {
                 coder?.short_label ??
                 coder?.name ??
                 'Shell';
-            const title = `+ ${coderName}`;
+            const title = psi ? '+ Psi' : `+ ${coderName}`;
             const res = await fetch('/api/terminals', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1915,6 +1943,7 @@ export class SessionsManager {
                     title: title,
                     workspace,
                     ...(mini ? { opencode_mini: true } : {}),
+                    ...(psi ? { pi_psi: true } : {}),
                 }),
             });
             if (!res.ok) {
@@ -1934,7 +1963,15 @@ export class SessionsManager {
                     openCodePaneMode(data.opencode_mode),
                     data.pi_bridge,
                 ]
-                : [true, false, '', null, null, data.pi_bridge]));
+                : [
+                    true,
+                    false,
+                    '',
+                    null,
+                    null,
+                    data.pi_bridge,
+                    { piMode: data.pi_mode },
+                ]));
             this.loadSessions();
             if (coderId === 'opencode') {
                 setTimeout(() => this.fetchOpenCodeServiceStatus(), 1200);
@@ -1944,7 +1981,7 @@ export class SessionsManager {
             this.app.showToast(e.message, { type: 'error' });
         }
     }
-    async launchSession(sessionId, title, extraArgs = [], mini = false) {
+    async launchSession(sessionId, title, extraArgs = [], mini = false, psi = false) {
         try {
             const coderId = this.activeCoder, cwd = this.activeCWD, workspace = this.activeWorkspace;
             const res = await fetch('/api/terminals', {
@@ -1958,6 +1995,7 @@ export class SessionsManager {
                     title: title,
                     workspace,
                     ...(mini ? { opencode_mini: true } : {}),
+                    ...(psi ? { pi_psi: true } : {}),
                 }),
             });
             if (!res.ok) {
@@ -1977,7 +2015,15 @@ export class SessionsManager {
                     openCodePaneMode(data.opencode_mode),
                     data.pi_bridge,
                 ]
-                : [true, false, '', null, null, data.pi_bridge]));
+                : [
+                    true,
+                    false,
+                    '',
+                    null,
+                    null,
+                    data.pi_bridge,
+                    { piMode: data.pi_mode },
+                ]));
             this.highlightActiveSession(sessionId);
             if (coderId === 'opencode') {
                 setTimeout(() => this.fetchOpenCodeServiceStatus(), 1200);
@@ -2011,6 +2057,14 @@ export class SessionsManager {
         if (this.activeCoder === 'opencode' && this._canOpenCodeMini()) {
             mkItem('Open Mini', () => {
                 this.launchSession(sess.id, sess.title, [], true);
+            });
+        }
+        if (this.activeCoder === 'pi' || sess.coder === 'pi') {
+            mkItem('Open with Psi', () => {
+                this.launchSession(sess.id, sess.title, [], false, true);
+                const sidebar = document.getElementById('sidebar-panel');
+                if (sidebar)
+                    sidebar.classList.remove('drawer-open');
             });
         }
         mkItem('⚙ Launch with args…', () => {
@@ -2163,6 +2217,30 @@ export class SessionsManager {
         const item = document.createElement('div');
         item.className = 'session-ctx-item';
         item.textContent = 'Open Mini';
+        item.setAttribute('role', 'menuitem');
+        item.tabIndex = 0;
+        const activate = () => {
+            this._dismissContextMenu();
+            launch();
+        };
+        item.addEventListener('click', activate);
+        item.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                activate();
+            }
+        });
+        menu.appendChild(item);
+        this._mountSessionContextMenu(e, menu);
+    }
+    _showPiPsiMenu(e, launch) {
+        this._dismissContextMenu();
+        const menu = document.createElement('div');
+        menu.className = 'session-ctx-menu';
+        menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:9999`;
+        const item = document.createElement('div');
+        item.className = 'session-ctx-item';
+        item.textContent = 'Open with Psi';
         item.setAttribute('role', 'menuitem');
         item.tabIndex = 0;
         const activate = () => {

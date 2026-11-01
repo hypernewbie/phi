@@ -44,7 +44,7 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg Co
 	// managed coders; SpawnWithOptions adopts an explicit opts.ID.
 	var bridgeEnv map[string]string
 	var bridgeExtArgs []string
-	if piBridgeForCoder(c.ID) {
+	if piBridgeForCoder(c.ID) && c.PiMode != "psi" {
 		if opts.ID == "" {
 			opts.ID = pty.GenerateID()
 		}
@@ -53,7 +53,7 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg Co
 		_ = managed // recorded; the launch proceeds on either path
 	}
 	revokeBridge := func() {
-		if piBridgeForCoder(c.ID) && opts.ID != "" {
+		if piBridgeForCoder(c.ID) && c.PiMode != "psi" && opts.ID != "" {
 			piBridge.RevokePane(opts.ID)
 		}
 	}
@@ -64,7 +64,7 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg Co
 		revokeBridge()
 		return bad(err)
 	}
-	opts.Title, opts.Workspace, opts.OpenCodeMode = req.Title, req.Workspace, c.OpenCodeMode
+	opts.Title, opts.Workspace, opts.OpenCodeMode, opts.PiMode = req.Title, req.Workspace, c.OpenCodeMode, c.PiMode
 	opts.Cols, opts.Rows = req.Cols, req.Rows
 	opts.ExtraArgs = req.ExtraArgs
 	var inst *pty.PTYInstance
@@ -85,7 +85,9 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg Co
 		revokeBridge()
 		return nil, terminalLaunchError{http.StatusInternalServerError, err}
 	}
-	piBridge.Complete(inst)
+	if piBridgeForCoder(c.ID) && c.PiMode != "psi" {
+		piBridge.Complete(inst)
+	}
 	if piTitleService != nil {
 		piTitleService.Register(inst)
 	}
@@ -191,6 +193,13 @@ func restoreSavedTab(tab pty.SavedTab) {
 			c = coders.OpenCodeTUI(c)
 		}
 	}
+	if known && c.ID == "pi" {
+		if tab.PiMode == "psi" {
+			if psiCoder, err := coders.PiPsi(c); err == nil {
+				c = psiCoder
+			}
+		}
+	}
 	req := SpawnRequest{Coder: c.ID, Cwd: tab.Cwd, Workspace: tab.Workspace, Title: tab.Title, SessionID: tab.SessionID, ExtraArgs: tab.ExtraArgs}
 	if !known || c.IsShell {
 		req.SessionID = ""
@@ -233,7 +242,7 @@ func restoreSavedTab(tab pty.SavedTab) {
 			req.SessionID = ""
 		}
 	}
-	opts := pty.SpawnOptions{ID: tab.ID, Pinned: tab.Pinned, Marked: tab.Marked}
+	opts := pty.SpawnOptions{ID: tab.ID, Pinned: tab.Pinned, Marked: tab.Marked, PiMode: tab.PiMode}
 	attempt := func(profile coders.Coder, probe bool) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancel()

@@ -53,6 +53,7 @@ type PTYInstance struct {
 	Coder            string       `json:"coder"`
 	SessionID        string       `json:"session_id"`
 	OpenCodeMode     string       `json:"opencode_mode,omitempty"` // immutable launch mode
+	PiMode           string       `json:"pi_mode,omitempty"`       // immutable launch mode
 	ExtraArgs        []string     `json:"-"`                       // private launch options, persisted separately
 	ObserveOutput    func([]byte) `json:"-"`
 	readLoopDone     chan struct{}
@@ -266,8 +267,8 @@ func (m *Manager) SpawnWithOpenCodeMode(ctx context.Context, dir, command string
 // SpawnOptions initializes tab identity and presentation before publication.
 // Saved tabs reuse their pane ID; a restarted process is not a new UI tab.
 type SpawnOptions struct {
-	ID, Title, Workspace, OpenCodeMode string
-	Pinned, Marked                     bool
+	ID, Title, Workspace, OpenCodeMode, PiMode string
+	Pinned, Marked                             bool
 	ExtraArgs                          []string
 	Cols, Rows                         uint16
 	ObserveOutput                      func([]byte)
@@ -300,6 +301,7 @@ func (m *Manager) SpawnWithOptions(ctx context.Context, dir, command string, arg
 		Coder:        coder,
 		SessionID:    sessionID,
 		OpenCodeMode: opts.OpenCodeMode,
+		PiMode:       opts.PiMode,
 		Title:        opts.Title, Workspace: opts.Workspace, Pinned: opts.Pinned, Marked: opts.Marked,
 		ExtraArgs: append([]string(nil), opts.ExtraArgs...), ObserveOutput: opts.ObserveOutput,
 		LastOutputAt: time.Now(),
@@ -542,6 +544,7 @@ type PTYInstanceSnapshot struct {
 	Coder            string `json:"coder"`
 	SessionID        string `json:"session_id"`
 	OpenCodeMode     string `json:"opencode_mode,omitempty"`
+	PiMode           string `json:"pi_mode,omitempty"`
 	ActiveWS         bool   `json:"-"`
 	ActiveWSCount    int    `json:"-"`
 	Pinned           bool   `json:"pinned"`
@@ -565,6 +568,7 @@ func (inst *PTYInstance) Snapshot() PTYInstanceSnapshot {
 		Coder:            inst.Coder,
 		SessionID:        inst.SessionID,
 		OpenCodeMode:     inst.OpenCodeMode,
+		PiMode:           inst.PiMode,
 		ActiveWS:         inst.ActiveWS,
 		ActiveWSCount:    inst.ActiveWSCount,
 		Pinned:           inst.Pinned,

@@ -26,6 +26,7 @@ export interface TabMeta {
     pinned: boolean;
     marked: boolean;
     opencode_mode?: string | null;
+    pi_mode?: string | null;
     pi_bridge?: any;
 }
 
