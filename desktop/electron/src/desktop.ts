@@ -1523,7 +1523,7 @@ export class DesktopHost {
     );
     this.trayHandle?.rebuildMenu();
     // Turning it off restarts the ambient reading now instead of on the next
-    // 10s turn, mirroring the page's applyFastMode → resumeCpuPolling.
+    // 10s turn, mirroring the page's applyFastMode → syncCpuPolling.
     if (!enabled) this.pollCpu();
   }
 
