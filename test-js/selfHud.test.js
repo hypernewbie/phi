@@ -201,6 +201,9 @@ describe('brand HUD popover', () => {
         const m = Object.create(TabManager.prototype);
         m.tabs = new Map();
         m.lastCpuPercent = 42;
+        // The HUD ages a sample out after a few poll turns, so the fixture has
+        // to look like a reading taken just now.
+        m.lastCpuSampleAt = Date.now();
         m.app = {
             hostname: 'atlas',
             versionInfo: { version: '0.10.1' },
@@ -406,6 +409,7 @@ describe('brand HUD vs sessions slide-out drawer', () => {
         const m = Object.create(TabManager.prototype);
         m.tabs = new Map();
         m.lastCpuPercent = 42;
+        m.lastCpuSampleAt = Date.now();
         m.app = {
             hostname: 'atlas',
             versionInfo: { version: '0.10.1' },

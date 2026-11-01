@@ -1522,6 +1522,9 @@ export class DesktopHost {
       `phi-desktop: low-power ${enabled ? 'ON' : 'OFF'} — fanned out to every server`,
     );
     this.trayHandle?.rebuildMenu();
+    // Turning it off restarts the ambient reading now instead of on the next
+    // 10s turn, mirroring the page's applyFastMode → syncCpuPolling.
+    if (!enabled) this.pollCpu();
   }
 
   /**
@@ -1899,6 +1902,24 @@ export class DesktopHost {
     const ctrl = this.controller;
     if (!win || !ctrl) return;
     const st = ctrl.state();
+    // Low power mode ends ambient observation, so drop the readings it drove:
+    // otherwise the taskbar bar, the rail intensity and the main view's brand
+    // tint freeze at the last percentage for as long as the switch stays on.
+    if (ctrl.getLowPowerMode()) {
+      if (this.observedCpu.size > 0) {
+        this.observedCpu.clear();
+        if (!win.isDestroyed()) win.setProgressBar(-1);
+        this.pushHeaderState(
+          null,
+          this.observedActivity.get(st.activeId) ?? false,
+        );
+        this.pushRailState();
+      }
+      return;
+    }
+    // A hidden or minimized window has no header to drive. Keep the last
+    // reading (and the taskbar bar) rather than clearing a valid one.
+    if (win.isMinimized() || !win.isVisible()) return;
     for (const profile of st.profiles) {
       const view = this.viewByOrigin.get(profile.origin);
       if (!view?.webContents || view.webContents.isDestroyed()) {
@@ -5928,11 +5949,12 @@ export class DesktopHost {
         void this.controller?.updateHealth(realHealthChecker);
       }, 30_000);
     }
-    // Poll every retained view at the remote page's own 2s CPU cadence
-    // (never reached in smoke mode — the smoke gate returns before this
-    // line).
+    // Mirror every retained view at the remote page's own 10s CPU cadence —
+    // the host reads a reading the page took, so it can never be fresher than
+    // the page's own sample (never reached in smoke mode — the smoke gate
+    // returns before this line).
     if (this.cpuInterval === null) {
-      this.cpuInterval = setInterval(() => this.pollCpu(), 2_000);
+      this.cpuInterval = setInterval(() => this.pollCpu(), 10_000);
     }
     // Poll the active view for a recorded file-tree gesture at a short
     // cadence (never reached in smoke mode — the smoke gate returns before
