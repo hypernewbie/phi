@@ -28,7 +28,7 @@ import { tabList } from './_tabs.js';
 import { startBridgeProxy, type BridgeProxy } from './_pi-bridge-proxy.js';
 import {
     isCancelledGitInfoRead,
-    isCancelledWorktreeRead,
+    isCancelledBackgroundRead,
 } from './_session-requests.js';
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -384,7 +384,7 @@ function watchPage(page: Page, label: string) {
     });
     page.on('requestfailed', (failed) => {
         const errorText = failed.failure()?.errorText || '';
-        if (isCancelledWorktreeRead(failed, origin)) return;
+        if (isCancelledBackgroundRead(failed, origin)) return;
         if (isCancelledGitInfoRead(failed, origin)) return;
         if (isExpectedStartupPinAbort(failed.url(), errorText)) {
             expectedPinAborts.push(`${label}: ${failed.url()} ${errorText}`);

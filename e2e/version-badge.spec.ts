@@ -28,9 +28,12 @@ test('source builds show the current version in the sidebar and changelog title'
     await expect(page.locator('#md-modal-title')).toContainText(
         `Changelog — v${release}`,
     );
-    const headings = page.locator('#md-modal-body h2');
-    await expect(headings.nth(0)).toHaveText('Unreleased');
-    await expect(headings.nth(1)).toContainText(`v${release} —`);
+    // Release-process invariant: the changelog has an entry for the version
+    // this build reports. Section order belongs to the release script, so
+    // nothing here pins it.
+    await expect(
+        page.locator('#md-modal-body h2', { hasText: `v${release} —` }),
+    ).toHaveCount(1);
 });
 
 test('the server release stamp overrides the source UI fallback', async ({

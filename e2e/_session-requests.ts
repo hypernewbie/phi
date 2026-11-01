@@ -40,3 +40,16 @@ export function isCancelledGitInfoRead(
         url.pathname === '/api/git/info'
     );
 }
+
+// Any background read the sidebar may supersede. Specs that assert "no
+// unexpected failed requests" use this so an ordinary supersede does not
+// read as a regression.
+export function isCancelledBackgroundRead(
+    request: Request,
+    origin: string,
+): boolean {
+    return (
+        isCancelledWorktreeRead(request, origin) ||
+        isCancelledSessionListRead(request, origin)
+    );
+}
