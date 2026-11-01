@@ -596,6 +596,10 @@ describe('DesktopHost fake-Electron lifecycle', () => {
       host.pollFileAction();
       expect(execute).toHaveBeenCalledTimes(1);
 
+      // Drain the poll ticks' identity catch-ups while the hung read still
+      // holds the page's read slot; otherwise they fire the moment it clears.
+      await flush();
+      expect(execute).toHaveBeenCalledTimes(1);
       finish({ hostname: 'ALPHA', accent: '#123456' });
       await flush();
 
@@ -608,20 +612,18 @@ describe('DesktopHost fake-Electron lifecycle', () => {
 
       host.pollCpu();
       expect(execute).toHaveBeenCalledTimes(3);
-      // The timed-out identity was never cached, so this poll tick retries it
-      // first — still one script in flight at a time — and the CPU read waits
-      // for the next tick.
-      expect(execute.mock.calls[2][0]).toContain('hostname-display');
-      finish({ hostname: 'ALPHA', accent: '#123456' });
-      await flush();
-      expect(host.observedIdentity.get(profile.id)?.accent).toBe('#123456');
-
-      host.pollCpu();
-      expect(execute).toHaveBeenCalledTimes(4);
-      expect(execute.mock.calls[3][0]).toContain('cpu:');
+      // The CPU read keeps the page's single read slot; the identity catch-up
+      // waits for it to settle, so an unreported identity never starves the
+      // poll.
+      expect(execute.mock.calls[2][0]).toContain('cpu:');
       finish({ cpu: 62, activity: true, workspace: '/alpha/code' });
       await flush();
       expect(host.observedCpu.get(profile.id)).toBe(62);
+      expect(execute).toHaveBeenCalledTimes(4);
+      expect(execute.mock.calls[3][0]).toContain('hostname-display');
+      finish({ hostname: 'ALPHA', accent: '#123456' });
+      await flush();
+      expect(host.observedIdentity.get(profile.id)?.accent).toBe('#123456');
     } finally {
       vi.useRealTimers();
     }
@@ -654,18 +656,52 @@ describe('DesktopHost fake-Electron lifecycle', () => {
 
     host.pollCpu();
     await flush();
-    expect(String(execute.mock.calls[0][0])).toContain('hostname-display');
+    expect(String(execute.mock.calls[0][0])).toContain('cpu:');
+    expect(String(execute.mock.calls[1][0])).toContain('hostname-display');
     expect(host.observedIdentity.get(profile.id)?.accent).toBe('#123456');
 
     // Observed once: the cadence returns to the CPU poll alone.
     host.pollCpu();
     await flush();
-    expect(String(execute.mock.calls[1][0])).toContain('cpu:');
+    expect(String(execute.mock.calls[2][0])).toContain('cpu:');
     expect(
       execute.mock.calls.filter((call) =>
         String(call[0]).includes('hostname-display'),
       ),
     ).toHaveLength(1);
+  });
+
+  it('keeps polling CPU while a page never reports an identity', async () => {
+    const host = new DesktopHost();
+    await host.start(primary);
+    const win = fake.FakeBrowserWindow.instances[0];
+    win.webContents.emit('did-finish-load');
+    await flush();
+    const ctrl = host.controller!;
+    const profile = ctrl.add('http://alpha.example.test:7070/');
+    host.profileViews!.addProfile(profile.id, profile.origin);
+    ctrl.setActive(profile.id);
+    const view = host.viewByOrigin.get(profile.origin)!;
+    let cpu = 10;
+    vi.spyOn(view.webContents, 'executeJavaScript').mockImplementation(
+      (code?: string) =>
+        Promise.resolve(
+          String(code).includes('cpu:')
+            ? { cpu: cpu++, activity: false, workspace: null }
+            : { hostname: '', accent: '' },
+        ),
+    );
+
+    host.pollCpu();
+    await flush();
+    expect(host.observedCpu.get(profile.id)).toBe(10);
+
+    host.pollCpu();
+    await flush();
+    // The identity read never lands (empty page), but it must not hold the
+    // page's read slot: the CPU reading still advances every tick.
+    expect(host.observedCpu.get(profile.id)).toBe(11);
+    expect(host.observedIdentity.has(profile.id)).toBe(false);
   });
 
   it('power resume wakes only the active retained view and tolerates absent/destroyed views', async () => {
