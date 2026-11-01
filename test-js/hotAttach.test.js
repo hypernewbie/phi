@@ -773,6 +773,135 @@ describe('checkpoint upload', () => {
         expect(body.ansi).toBe('SNAPSHOT');
     });
 
+    it('keeps uploading on a coarse pointer even when the server owns the state', () => {
+        stubTerminalGlobal();
+        const tm = makeTm();
+        const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+        vi.stubGlobal('fetch', fetchMock);
+        // A phone cannot scroll a restored screen: its own snapshot is the
+        // only ANSI state that carries scrollback, so it must keep refreshing
+        // the stored checkpoint even after a server-state attach.
+        const originalMatchMedia = window.matchMedia;
+        window.matchMedia = (query) => ({
+            matches: query === '(pointer: coarse)',
+            media: query,
+        });
+
+        tm.createTab('p9', 's9', 'T', 'bash', '', '', false);
+        const tab = tm.tabs.get('p9');
+        tab.ws.ws.emitAttachHead({ epoch: 7, oldest: 0, head: 50 });
+        tab.serializeAddon = { serialize: () => 'SNAPSHOT' };
+        tab.paneEpoch = 7;
+        tab.drainedSeq = 50;
+        tab.term.cols = 63;
+        tab.term.rows = 56;
+        tab._serverStateAvailable = true;
+
+        tm._uploadCheckpoint(tab);
+
+        if (originalMatchMedia === undefined) delete window.matchMedia;
+        else window.matchMedia = originalMatchMedia;
+        const request = fetchMock.mock.calls.find(
+            ([url, init]) =>
+                String(url).includes('/api/terminals/p9/checkpoint') &&
+                init?.method === 'POST',
+        );
+        expect(request).toBeDefined();
+    });
+
+    it('keeps a coarse snapshot inside the beacon body limit', async () => {
+        stubTerminalGlobal();
+        const tm = makeTm();
+        const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+        vi.stubGlobal('fetch', fetchMock);
+        const sent = [];
+        Object.defineProperty(window.navigator, 'sendBeacon', {
+            configurable: true,
+            value: (url, body) => {
+                sent.push({ url, body });
+                return true;
+            },
+        });
+        const originalMatchMedia = window.matchMedia;
+        window.matchMedia = (query) => ({
+            matches: query === '(pointer: coarse)',
+            media: query,
+        });
+        // Real output runs several hundred bytes per dense colored row, so a
+        // 256-row phone snapshot can exceed the 64 KiB a beacon carries.
+        let usedScrollback = 0;
+        const rows = 56;
+
+        try {
+            tm.createTab('p10', 's10', 'T', 'bash', '', '', false);
+            const tab = tm.tabs.get('p10');
+            tab.ws.ws.emitAttachHead({ epoch: 7, oldest: 0, head: 50 });
+            tab.serializeAddon = {
+                serialize: ({ scrollback }) => {
+                    usedScrollback = scrollback;
+                    return 'X'.repeat((scrollback + rows) * 400);
+                },
+            };
+            tab.paneEpoch = 7;
+            tab.drainedSeq = 50;
+            tab.term.cols = 120;
+            tab.term.rows = rows;
+            tab._serverStateAvailable = true;
+
+            tm._uploadCheckpoint(tab);
+            await new Promise((r) => setTimeout(r, 0));
+        } finally {
+            delete window.navigator.sendBeacon;
+            if (originalMatchMedia === undefined) delete window.matchMedia;
+            else window.matchMedia = originalMatchMedia;
+        }
+
+        // A body the beacon refuses falls back to a fetch the browser aborts
+        // on the next navigation, which is the whole point of the beacon.
+        expect(
+            fetchMock.mock.calls.filter(([url]) =>
+                String(url).includes('/checkpoint'),
+            ),
+        ).toHaveLength(0);
+        expect(sent).toHaveLength(1);
+        expect(sent[0].url).toContain('/api/terminals/p10/checkpoint');
+        expect(sent[0].body.size).toBeLessThanOrEqual(64 * 1024);
+        expect(usedScrollback).toBeLessThan(256);
+    });
+
+    it('leaves a snapshot behind during output that never goes quiet', () => {
+        stubTerminalGlobal();
+        const tm = makeTm();
+        const upload = vi
+            .spyOn(tm, '_uploadCheckpoint')
+            .mockImplementation(() => {});
+        vi.useFakeTimers();
+        const originalMatchMedia = window.matchMedia;
+        window.matchMedia = (query) => ({
+            matches: query === '(pointer: coarse)',
+            media: query,
+        });
+
+        try {
+            tm.createTab('p11', 's11', 'T', 'bash', '', '', false);
+            const tab = tm.tabs.get('p11');
+            tab.serializeAddon = { serialize: () => 'SNAPSHOT' };
+            tab._ckptEnabled = true;
+            // Every parsed batch re-arms the quiet timer, so continuous
+            // output would otherwise never store a snapshot.
+            for (let i = 0; i < 60; i++) {
+                tm._scheduleCheckpointUpload(tab);
+                vi.advanceTimersByTime(100);
+            }
+        } finally {
+            vi.useRealTimers();
+            if (originalMatchMedia === undefined) delete window.matchMedia;
+            else window.matchMedia = originalMatchMedia;
+        }
+
+        expect(upload).toHaveBeenCalled();
+    });
+
     it('drops the upload when the terminal is gone instead of throwing', () => {
         stubTerminalGlobal();
         const tm = makeTm();
