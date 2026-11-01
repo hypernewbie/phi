@@ -155,6 +155,10 @@ mobile_ui_font_size = 21
 mobile_terminal_font_family = "MTF"
 mobile_terminal_font_size = 22
 mobile_appearance_revision = 7
+auth_origins = ["https://one.test", "https://two.test"]
+[access_auth_migration]
+state = "pending"
+id = "AAAAAAAAAAAAAAAAAAAAAA"
 [[quick_commands]]
 name = "q"
 command = "echo q"
@@ -198,6 +202,8 @@ pi = ["m1", "m2"]
 		*first.MobileTerminalFontFamily = "MUT"
 		*first.MobileTerminalFontSize = 99
 		*first.ReplayBufferBytes = 999
+		first.AuthOrigins[0] = "MUT"
+		first.AccessAuthMigration.State = "MUT"
 
 		second, err := cachedLoad(&n)
 		if err != nil {
@@ -215,7 +221,9 @@ pi = ["m1", "m2"]
 			len(second.ModelPresets) != 4 || // pi plus opencode/claude/agy defaults
 			*second.MobileUIFontFamily != "MUI" || *second.MobileUIFontSize != 21 ||
 			*second.MobileTerminalFontFamily != "MTF" || *second.MobileTerminalFontSize != 22 ||
-			second.MobileAppearanceRevision != 7 || *second.ReplayBufferBytes != 123 {
+			second.MobileAppearanceRevision != 7 || *second.ReplayBufferBytes != 123 ||
+			second.AuthOrigins[0] != "https://one.test" || len(second.AuthOrigins) != 2 ||
+			second.AccessAuthMigration.State != "pending" {
 			t.Fatalf("caller mutation leaked into cache: %+v", second)
 		}
 		first = second
@@ -239,7 +247,7 @@ pi = ["m1", "m2"]
 		raw.TerminalCommands != nil || raw.MarkdownDirs != nil || raw.Peers != nil ||
 		raw.MobileUIFontFamily != nil || raw.MobileUIFontSize != nil ||
 		raw.MobileTerminalFontFamily != nil || raw.MobileTerminalFontSize != nil ||
-		raw.ReplayBufferBytes != nil {
+		raw.ReplayBufferBytes != nil || raw.AuthOrigins != nil || raw.AccessAuthMigration != nil {
 		t.Fatalf("defaults leaked into raw cache entry: %+v", raw)
 	}
 }

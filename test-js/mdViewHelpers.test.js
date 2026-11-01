@@ -1,5 +1,12 @@
-import { describe, it, expect } from 'vitest';
-import { decodeNotificationDir, mdEventMatchesPath } from '../web/md-view.js';
+// @vitest-environment jsdom
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import {
+    decodeNotificationDir,
+    initMdView,
+    mdEventMatchesPath,
+    mdEventRetryDelay,
+} from '../web/md-view.js';
+import { installToken, __test__ } from '../web/auth.js';
 import { Notification } from '../web/proto/events.js';
 
 // Pure helpers of the standalone markdown viewer (web-src/md-view.ts).
@@ -71,5 +78,252 @@ describe('mdEventMatchesPath', () => {
 
     it('matches Windows backslash paths', () => {
         expect(mdEventMatchesPath('C:\\ws', 'C:\\ws\\x.md')).toBe(true);
+    });
+});
+
+// initMdView renders either a whitelisted static page or one workspace file.
+// md.html decides whether to bootstrap first; these tests pin what each branch
+// touches so a public help page can never start a login or a protected call.
+function mdHarness() {
+    document.body.innerHTML = '<main id="md-view-body"></main>';
+    const sockets = [];
+    vi.stubGlobal(
+        'WebSocket',
+        class {
+            constructor(url) {
+                this.url = url;
+                this.binaryType = '';
+                sockets.push(this);
+            }
+            send() {}
+            close() {}
+        },
+    );
+    const fetchSpy = vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        text: async () => '# page',
+        json: async () => ({}),
+    }));
+    vi.stubGlobal('fetch', fetchSpy);
+    return { sockets, fetchSpy };
+}
+
+afterEach(() => {
+    window.history.replaceState({}, '', '/md.html');
+    document.body.innerHTML = '';
+    vi.unstubAllGlobals();
+    __test__.resetAccessState();
+});
+
+describe('initMdView', () => {
+    it('loads a static page without auth or a socket', async () => {
+        const { sockets, fetchSpy } = mdHarness();
+        window.history.replaceState({}, '', '/md.html?page=help');
+        initMdView();
+        await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+        expect(fetchSpy.mock.calls[0][0]).toBe('help.md');
+        expect(sockets).toHaveLength(0);
+        expect(
+            fetchSpy.mock.calls.some(([url]) =>
+                String(url).startsWith('/api/auth/'),
+            ),
+        ).toBe(false);
+    });
+
+    it('loads a workspace file and dials the events socket', async () => {
+        const { sockets, fetchSpy } = mdHarness();
+        window.history.replaceState({}, '', '/md.html?path=a.md&cwd=/w');
+        initMdView();
+        await vi.waitFor(() => expect(sockets).toHaveLength(1));
+        expect(String(fetchSpy.mock.calls[0][0])).toContain(
+            '/api/markdown/file?',
+        );
+        const url = new URL(sockets[0].url);
+        expect(url.pathname).toBe('/ws/md-events');
+        expect(url.searchParams.get('token')).toBeNull();
+    });
+
+    it('carries the v2 token on the events socket', async () => {
+        const { sockets } = mdHarness();
+        installToken('jwt-a');
+        window.history.replaceState({}, '', '/md.html?path=a.md&cwd=/w');
+        initMdView();
+        await vi.waitFor(() => expect(sockets).toHaveLength(1));
+        expect(new URL(sockets[0].url).searchParams.get('token')).toBe('jwt-a');
+    });
+
+    it('keeps an unchanged render in place when a refresh lands first', async () => {
+        // Overlapping loads resolve out of order (onopen + 0x07 event). An
+        // identical refresh must leave the content on screen untouched: no
+        // re-render, no scroll jump, and the image node keeps its address.
+        document.body.innerHTML = '<main id="md-view-body"></main>';
+        const sockets = [];
+        vi.stubGlobal(
+            'WebSocket',
+            class {
+                constructor(url) {
+                    this.url = url;
+                    this.binaryType = '';
+                    sockets.push(this);
+                }
+                send() {}
+                close() {}
+            },
+        );
+        const raw = '<img src="pic.png">\n';
+        vi.stubGlobal('marked', { parse: (s) => s });
+        vi.stubGlobal('DOMPurify', { sanitize: (html) => html });
+        let releaseSecond = () => {};
+        const fetchSpy = vi.fn(async () => {
+            if (fetchSpy.mock.calls.length === 1) {
+                return { ok: true, status: 200, text: async () => raw };
+            }
+            await new Promise((resolve) => {
+                releaseSecond = resolve;
+            });
+            return { ok: true, status: 200, text: async () => raw };
+        });
+        vi.stubGlobal('fetch', fetchSpy);
+
+        window.history.replaceState({}, '', '/md.html?path=a.md&cwd=/w');
+        initMdView();
+        await vi.waitFor(() =>
+            expect(document.querySelector('.md-rendered img')).toBeTruthy(),
+        );
+        const img = document.querySelector('.md-rendered img');
+        // `a.md` has no directory, so the relative image resolves at the root.
+        const assetSrc = `/api/markdown/asset?path=${encodeURIComponent('/pic.png')}&cwd=${encodeURIComponent('/w')}`;
+        expect(img.getAttribute('src')).toBe(assetSrc);
+
+        // The events socket refreshes while the first load is still on screen.
+        sockets[0].onopen();
+        await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+        releaseSecond();
+        await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+        // Same node, same address: the render was not replaced.
+        expect(document.querySelector('.md-rendered img')).toBe(img);
+        expect(img.getAttribute('src')).toBe(assetSrc);
+    });
+});
+
+describe('mdEventRetryDelay', () => {
+    it('keeps every retry above the floor so a flapping server is not hot-looped', () => {
+        for (let attempt = 1; attempt <= 12; attempt += 1) {
+            expect(mdEventRetryDelay(attempt, () => 0)).toBe(500);
+        }
+    });
+
+    it('grows exponentially and caps at 20s plus the floor', () => {
+        expect(mdEventRetryDelay(1, () => 1)).toBe(1500);
+        expect(mdEventRetryDelay(2, () => 1)).toBe(2500);
+        expect(mdEventRetryDelay(3, () => 1)).toBe(4500);
+        expect(mdEventRetryDelay(9, () => 1)).toBe(20500);
+        expect(mdEventRetryDelay(40, () => 1)).toBe(20500);
+    });
+
+    it('applies full jitter inside the capped window', () => {
+        expect(mdEventRetryDelay(4, () => 0.5)).toBe(4500);
+        // Attempt 0 or a negative attempt cannot invert the exponent.
+        expect(mdEventRetryDelay(0, () => 0)).toBe(500);
+    });
+});
+
+describe('md events reconnect', () => {
+    it('retries a closed events socket on bounded backoff, not a fixed 10s', async () => {
+        vi.useFakeTimers();
+        try {
+            const { sockets } = mdHarness();
+            window.history.replaceState({}, '', '/md.html?path=a.md&cwd=/w');
+            initMdView();
+            await vi.waitFor(() => expect(sockets).toHaveLength(1));
+
+            // Maximum jitter makes the schedule deterministic: attempt 1 waits
+            // floor + 1000, attempt 2 waits floor + 2000.
+            const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(1);
+            sockets[0].onclose();
+            await vi.advanceTimersByTimeAsync(1499);
+            expect(sockets).toHaveLength(1);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(sockets).toHaveLength(2);
+
+            sockets[1].onclose();
+            await vi.advanceTimersByTimeAsync(2499);
+            expect(sockets).toHaveLength(2);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(sockets).toHaveLength(3);
+            randomSpy.mockRestore();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('keeps backing off when a flapping socket opens and drops again', async () => {
+        vi.useFakeTimers();
+        try {
+            const { sockets } = mdHarness();
+            window.history.replaceState({}, '', '/md.html?path=a.md&cwd=/w');
+            initMdView();
+            await vi.waitFor(() => expect(sockets).toHaveLength(1));
+
+            const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(1);
+            // The server accepts, then drops well before the connection is
+            // stable. An unconditional reset on open would dial again in the
+            // first window forever, so attempt 2 must still be used.
+            sockets[0].onopen();
+            sockets[0].onclose();
+            await vi.advanceTimersByTimeAsync(1499);
+            expect(sockets).toHaveLength(1);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(sockets).toHaveLength(2);
+
+            sockets[1].onopen();
+            sockets[1].onclose();
+            await vi.advanceTimersByTimeAsync(2499);
+            expect(sockets).toHaveLength(2);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(sockets).toHaveLength(3);
+            randomSpy.mockRestore();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('resets the backoff only after a connection stays up', async () => {
+        vi.useFakeTimers();
+        try {
+            const { sockets } = mdHarness();
+            window.history.replaceState({}, '', '/md.html?path=a.md&cwd=/w');
+            initMdView();
+            await vi.waitFor(() => expect(sockets).toHaveLength(1));
+
+            const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(1);
+            // Grow the attempt count first.
+            sockets[0].onclose();
+            await vi.advanceTimersByTimeAsync(1500);
+            expect(sockets).toHaveLength(2);
+
+            // A connection that survives the stability window resets it, so the
+            // next drop waits in the first window again.
+            sockets[1].onopen();
+            await vi.advanceTimersByTimeAsync(10000);
+            sockets[1].onclose();
+            await vi.advanceTimersByTimeAsync(1499);
+            expect(sockets).toHaveLength(2);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(sockets).toHaveLength(3);
+            randomSpy.mockRestore();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('dials synchronously when no refresh is due', async () => {
+        // A v1 cookie session has no in-memory token, so refreshAccessIfDue
+        // returns undefined and the dial must not be deferred by a microtask.
+        const { sockets } = mdHarness();
+        window.history.replaceState({}, '', '/md.html?path=a.md&cwd=/w');
+        initMdView();
+        expect(sockets).toHaveLength(1);
     });
 });

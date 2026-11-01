@@ -1314,7 +1314,7 @@ func TestWebSocketProtobufConversionFailures(t *testing.T) {
 	t.Run("text_frames_are_rejected", func(t *testing.T) {
 		mgr, _, commands := newFullControlManager(t)
 		// Text hello: the upgrade stays open, the first frame closes 1002.
-		rawDial := dial(t, HandleControl(mgr, func() string { return "" }))
+		rawDial := dial(t, HandleControl(nil, mgr, func() string { return "" }))
 		hello, err := proto.Marshal(&wspb.ControlClientFrame{Payload: &wspb.ControlClientFrame_Hello{
 			Hello: &wspb.ControlHello{Version: uint32(rpc.ProtocolVersion)},
 		}})

@@ -29,8 +29,10 @@ const ControlOperationTimeout = 30 * time.Second
 const CompactOperationTimeout = 10 * time.Minute
 
 // HandleControl returns the /ws/control handler. defaultCwd supplies the
-// spawn cwd when a spawn call omits it (main passes activeCWD).
-func HandleControl(mgr *rpc.Manager, defaultCwd func() string) http.HandlerFunc {
+// spawn cwd when a spawn call omits it (main passes activeCWD). hub fences the
+// socket to the access generation it was admitted at; nil disables fencing
+// (tests).
+func HandleControl(hub *Hub, mgr *rpc.Manager, defaultCwd func() string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !wireproto.ClientRequestedSubprotocol(r, wireproto.ControlSubprotocol) {
 			http.Error(w, "expected WebSocket subprotocol "+wireproto.ControlSubprotocol, http.StatusUpgradeRequired)
@@ -45,6 +47,12 @@ func HandleControl(mgr *rpc.Manager, defaultCwd func() string) http.HandlerFunc 
 			return
 		}
 		defer c.Close()
+		if hub != nil {
+			if fence, fenced := AuthFenceFrom(r.Context()); fenced && !hub.AdmitAuth(c, fence) {
+				return
+			}
+			defer hub.ForgetAuth(c)
+		}
 		// SetReadLimit bounds the compressed wire; ReadBoundedMessage bounds
 		// the decompressed body. Both stages are required.
 		c.SetReadLimit(wireproto.MaxControlMessageBytes)

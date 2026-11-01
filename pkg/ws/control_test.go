@@ -60,7 +60,7 @@ func readFrame(t *testing.T, c *websocket.Conn) *wspb.ControlServerFrame {
 }
 
 func helloDial(t *testing.T, mgr *rpc.Manager) *websocket.Conn {
-	c := dial(t, HandleControl(mgr, func() string { return "" }))
+	c := dial(t, HandleControl(nil, mgr, func() string { return "" }))
 	writeFrame(t, c, &wspb.ControlClientFrame{Payload: &wspb.ControlClientFrame_Hello{
 		Hello: &wspb.ControlHello{Version: uint32(rpc.ProtocolVersion)},
 	}})
@@ -478,7 +478,7 @@ func TestControlHelloWelcomeListSessions(t *testing.T) {
 }
 
 func TestControlRejectsMissingHello(t *testing.T) {
-	c := dial(t, HandleControl(rpc.NewManager(), nil))
+	c := dial(t, HandleControl(nil, rpc.NewManager(), nil))
 	sendCall(t, c, &wspb.ControlCall{
 		Id:   "x",
 		Call: &wspb.ControlCall_ListSessions{ListSessions: &wspb.ListSessionsCall{}},

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -296,7 +297,7 @@ func TestConfigCompressionDefaultsBeforeDecode(t *testing.T) {
 	}
 }
 
-func TestConfigLegacyFallbackAndMigration(t *testing.T) {
+func TestConfigLegacyFallbackIsReadOnly(t *testing.T) {
 	primary := withTempConfig(t)
 	legacy := withTempLegacyConfig(t)
 	if err := os.Remove(primary); err != nil {
@@ -310,26 +311,18 @@ func TestConfigLegacyFallbackAndMigration(t *testing.T) {
 	if err != nil || cfg.ThemeColor != "amber" || !reflect.DeepEqual(cfg.ModelPresets["pi"], []string{"legacy-model"}) {
 		t.Fatalf("legacy fallback: cfg=%+v err=%v", cfg, err)
 	}
-	migrateLegacyConfig()
-	if _, err := os.Stat(primary); err != nil {
-		t.Fatalf("migration did not create TOML: %v", err)
+	if _, err := os.Lstat(primary); !os.IsNotExist(err) {
+		t.Fatalf("read-only fallback created TOML: %v", err)
 	}
 	after, err := os.ReadFile(legacy)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(after, legacyBytes) {
-		t.Fatal("migration modified legacy JSON")
+		t.Fatal("fallback read modified legacy JSON")
 	}
 	if got := loadConfig(); got.ThemeColor != "amber" {
-		t.Fatalf("migrated theme = %q", got.ThemeColor)
-	}
-	if err := os.WriteFile(primary, append(mustRead(t, primary), []byte("# migration sentinel\n")...), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	migrateLegacyConfig()
-	if !strings.Contains(string(mustRead(t, primary)), "# migration sentinel") {
-		t.Fatal("second migration rewrote existing TOML")
+		t.Fatalf("fallback theme = %q", got.ThemeColor)
 	}
 }
 
@@ -553,7 +546,24 @@ func TestConfigMalformedPrimaryIsNotOverwrittenBySave(t *testing.T) {
 	}
 }
 
-func TestConfigMalformedLegacyDoesNotCreatePrimary(t *testing.T) {
+func TestConfigInvalidMigrationMarkerCannotBeOverwritten(t *testing.T) {
+	path := withTempConfig(t)
+	id := base64.RawURLEncoding.EncodeToString(make([]byte, 16))
+	before := []byte("[access_auth_migration]\nstate = \"complete\"\nid = \"" + id + "\"\nextra = true\n")
+	if err := os.WriteFile(path, before, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{ThemeColor: "amber", CompressionEnabled: true}
+	if err := writeConfigLocked(cfg); err == nil {
+		t.Fatal("writer accepted unknown reserved auth metadata")
+	}
+	saveConfig(cfg)
+	if got := mustRead(t, path); !reflect.DeepEqual(got, before) {
+		t.Fatalf("invalid marker changed: got %q want %q", got, before)
+	}
+}
+
+func TestConfigMalformedLegacyRemainsReadOnly(t *testing.T) {
 	primary := withTempConfig(t)
 	legacy := withTempLegacyConfig(t)
 	if err := os.Remove(primary); err != nil {
@@ -563,16 +573,18 @@ func TestConfigMalformedLegacyDoesNotCreatePrimary(t *testing.T) {
 	if err := os.WriteFile(legacy, legacyBytes, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	migrateLegacyConfig()
+	if _, err := readConfigLocked(); err == nil {
+		t.Fatal("malformed legacy JSON was accepted")
+	}
 	if _, err := os.Lstat(primary); !os.IsNotExist(err) {
-		t.Fatalf("malformed legacy JSON created primary: stat error=%v", err)
+		t.Fatalf("fallback read created TOML: stat error=%v", err)
 	}
 	if got := mustRead(t, legacy); !reflect.DeepEqual(got, legacyBytes) {
 		t.Fatalf("legacy JSON changed: got %q want %q", got, legacyBytes)
 	}
 }
 
-func TestConfigDanglingPrimarySymlinkBlocksLegacyFallbackAndMigration(t *testing.T) {
+func TestConfigDanglingPrimarySymlinkBlocksLegacyFallback(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation may require elevated privileges on Windows")
 	}
@@ -591,57 +603,14 @@ func TestConfigDanglingPrimarySymlinkBlocksLegacyFallbackAndMigration(t *testing
 	if cfg, err := readConfigLocked(); err == nil || cfg.ThemeColor == "stale-legacy" {
 		t.Fatalf("dangling primary used legacy fallback: cfg=%+v err=%v", cfg, err)
 	}
-	migrateLegacyConfig()
 	info, err := os.Lstat(primary)
 	if err != nil {
-		t.Fatalf("migration removed dangling symlink: %v", err)
+		t.Fatalf("read-only fallback removed dangling symlink: %v", err)
 	}
 	if info.Mode()&os.ModeSymlink == 0 {
-		t.Fatal("migration replaced dangling primary symlink")
+		t.Fatal("read-only fallback replaced dangling primary symlink")
 	}
 	if got := mustRead(t, legacy); !reflect.DeepEqual(got, legacyBytes) {
 		t.Fatalf("legacy JSON changed: got %q want %q", got, legacyBytes)
-	}
-}
-
-func TestConfigMigrationWriteFailurePreservesLegacy(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("directory permission semantics differ on Windows")
-	}
-	dir := filepath.Join(t.TempDir(), "config-dir")
-	if err := os.Mkdir(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
-	primary := filepath.Join(dir, "config.toml")
-	originalPath := testConfigPath
-	testConfigPath = primary
-	t.Cleanup(func() { testConfigPath = originalPath })
-	legacy := withTempLegacyConfig(t)
-	legacyBytes := []byte(`{"theme_color":"amber"}`)
-	if err := os.WriteFile(legacy, legacyBytes, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(dir, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	probe := filepath.Join(dir, "write-probe")
-	if err := os.WriteFile(probe, []byte("probe"), 0o600); err == nil {
-		_ = os.Remove(probe)
-		_ = os.Chmod(dir, 0o700)
-		t.Skip("filesystem permits writes despite restrictive directory mode")
-	} else if !os.IsPermission(err) {
-		t.Fatalf("write probe failed for unexpected reason: %v", err)
-	}
-
-	migrateLegacyConfig()
-	if _, err := os.Lstat(primary); !os.IsNotExist(err) {
-		t.Fatalf("failed migration created primary: stat error=%v", err)
-	}
-	if got := mustRead(t, legacy); !reflect.DeepEqual(got, legacyBytes) {
-		t.Fatalf("legacy JSON changed: got %q want %q", got, legacyBytes)
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
 	}
 }

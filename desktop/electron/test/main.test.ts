@@ -497,14 +497,13 @@ describe('src/desktop.ts (step 6B view manager + rail renderer wiring)', () => {
   });
 
   it('presents same-origin popup children as hidden native windows, shown on ready-to-show and navigation-guarded', () => {
-    const guardIdx = desktopSource.indexOf('const attachNavGuard =');
+    const guardIdx = desktopSource.indexOf('export function attachNavGuard(');
     expect(guardIdx).toBeGreaterThan(-1);
     expect(
-      desktopSource.indexOf('attachNavGuard(view.webContents)', guardIdx),
+      desktopSource.indexOf('attachNavGuard(', guardIdx + 1),
     ).toBeGreaterThan(guardIdx);
     const createIdx = desktopSource.indexOf('createWindow: (options) => {');
     expect(createIdx).toBeGreaterThan(-1);
-    expect(guardIdx).toBeGreaterThan(createIdx);
     const childIdx = desktopSource.indexOf('new BrowserWindow({', createIdx);
     expect(childIdx).toBeGreaterThan(createIdx);
     expect(desktopSource.indexOf('show: false', childIdx)).toBeGreaterThan(
@@ -516,9 +515,9 @@ describe('src/desktop.ts (step 6B view manager + rail renderer wiring)', () => {
     expect(
       desktopSource.indexOf("child.once('ready-to-show'", childIdx),
     ).toBeGreaterThan(childIdx);
-    expect(
-      desktopSource.indexOf('attachNavGuard(child.webContents)', childIdx),
-    ).toBeGreaterThan(childIdx);
+    expect(desktopSource.indexOf('attachNavGuard(', childIdx)).toBeGreaterThan(
+      childIdx,
+    );
     const childRegion = desktopSource.slice(
       childIdx,
       desktopSource.indexOf('return child.webContents;', childIdx),
@@ -533,33 +532,50 @@ describe('src/desktop.ts (step 6B view manager + rail renderer wiring)', () => {
     ).toBeGreaterThan(sizeIdx);
   });
 
-  it('computes the normalized comparison origin once and uses it in both guard paths', () => {
-    // The origin comparison must be computed once (normalized via
-    // `new URL(origin).origin`) before setWindowOpenHandler, and both
-    // handler paths (window-open and will-navigate) must compare against
-    // the same `allowedOrigin` constant.
+  it('routes every navigation path through one policy that names the embedded scheme and host', () => {
+    // The embedded view reports origin "null" (a non-special scheme has no
+    // tuple origin), so an origin equality test can never match
+    // phi-app://app and would wrongly match file://. The policy must compare
+    // scheme and host explicitly, and one predicate must serve window opens,
+    // will-navigate, will-redirect, and main-process loadURL targets.
+    // The shell's origin is the literal string "null", so a caller that
+    // normalizes it destroys the only thing that identifies the shell.
     expect(desktopSource).toContain(
-      'const allowedOrigin = new URL(origin).origin',
+      'origin === EMBEDDED_ORIGIN ? EMBEDDED_ORIGIN : new URL(origin).origin',
     );
-    const allowedIdx = desktopSource.indexOf(
-      'const allowedOrigin = new URL(origin).origin',
+    expect(desktopSource).toContain('const target = resolveV2BodyAuthTarget(');
+    expect(desktopSource).toContain(
+      'export function isAllowedNavigationTarget(',
     );
-    const openHandlerIdx = desktopSource.indexOf(
-      'setWindowOpenHandler',
-      allowedIdx,
+    expect(desktopSource).toContain(
+      'const isAllowedNavigation = (target: URL): boolean =>',
     );
-    expect(openHandlerIdx).toBeGreaterThan(allowedIdx);
-    const windowOpenCompare = desktopSource.indexOf(
-      'target.origin === allowedOrigin',
-      openHandlerIdx,
+    expect(desktopSource).toContain(
+      'target.protocol === `${EMBEDDED_SCHEME}:`',
     );
-    expect(windowOpenCompare).toBeGreaterThan(openHandlerIdx);
-    const navGuardCompare = desktopSource.indexOf(
-      'target.origin === allowedOrigin',
-      windowOpenCompare + 1,
+    expect(desktopSource).toContain('target.host === EMBEDDED_HOST');
+    const policyIdx = desktopSource.indexOf(
+      'const isAllowedNavigation = (target: URL): boolean =>',
     );
-    expect(navGuardCompare).toBeGreaterThan(windowOpenCompare);
-    // No stale direct comparison to the raw origin string remains in either path.
+    expect(
+      desktopSource.indexOf('setWindowOpenHandler', policyIdx),
+    ).toBeGreaterThan(policyIdx);
+    const guardIdx = desktopSource.indexOf('export function attachNavGuard(');
+    expect(guardIdx).toBeGreaterThan(-1);
+    expect(desktopSource.indexOf("'will-navigate'", guardIdx)).toBeGreaterThan(
+      guardIdx,
+    );
+    expect(desktopSource.indexOf("'will-redirect'", guardIdx)).toBeGreaterThan(
+      guardIdx,
+    );
+    // A main-process loadURL emits neither navigation event, so its target is
+    // validated explicitly rather than treated as exempt.
+    const loadURLIdx = desktopSource.indexOf('contents.loadURL = ((', guardIdx);
+    expect(loadURLIdx).toBeGreaterThan(guardIdx);
+    expect(
+      desktopSource.indexOf('isAllowedNavigation(new URL(url))', loadURLIdx),
+    ).toBeGreaterThan(loadURLIdx);
+    // No stale direct comparison to the raw origin string remains.
     expect(desktopSource.match(/target\.origin === origin/g)).toBeNull();
   });
 
@@ -986,8 +1002,8 @@ describe('src/desktop.ts (observed rail identity + accent)', () => {
       "document.getElementById('hostname-display')",
     );
     expect(desktopSource).toContain("getPropertyValue('--accent')");
-    expect(desktopSource).toMatch(
-      /executeJavaScript\(\s*REMOTE_IDENTITY_SCRIPT/,
+    expect(desktopSource).toContain(
+      'executeRendererRead(view.webContents, REMOTE_IDENTITY_SCRIPT)',
     );
   });
 
@@ -1578,8 +1594,11 @@ describe('src/desktop.ts (per-server CPU observation: rail intensity + taskbar p
     expect(desktopSource).toContain(
       "document.querySelector('.brand .logo')?.dataset.cpuPct",
     );
-    expect(desktopSource).toContain('executeJavaScript(REMOTE_CPU_SCRIPT)');
-    // The script is a fixed constant — page data is never interpolated into it.
+    expect(desktopSource).toContain('REMOTE_PROFILE_POLL_SCRIPT)');
+    expect(desktopSource).toMatch(/cpu: \$\{REMOTE_CPU_SCRIPT\}/);
+    expect(desktopSource).toMatch(/activity: \$\{REMOTE_ACTIVITY_SCRIPT\}/);
+    expect(desktopSource).toMatch(/workspace: \$\{READ_WORKSPACE_SCRIPT\}/);
+    // The scripts are fixed constants — page data is never interpolated.
     expect(desktopSource).toContain('const REMOTE_CPU_SCRIPT = `(() => {');
   });
 
@@ -1636,6 +1655,8 @@ describe('src/desktop.ts (per-server CPU observation: rail intensity + taskbar p
     expect(
       desktopSource.indexOf('Number.isFinite(cpu)', pollIdx),
     ).toBeGreaterThan(pollIdx);
+    expect(desktopSource).toContain('pendingRendererReads.has(contents)');
+    expect(desktopSource).toContain('contents.isLoading()');
   });
 
   it('merges each profile CPU reading into the rail snapshot and clears it when the view or profile is gone', () => {

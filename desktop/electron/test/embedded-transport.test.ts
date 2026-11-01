@@ -8,10 +8,88 @@ import {
   EMBEDDED_ORIGIN,
   EMBEDDED_PARTITION,
   EMBEDDED_SCHEME,
+  type EmbeddedAuthHost,
   type EmbeddedProfile,
   EmbeddedTransport,
   registerEmbeddedScheme,
+  SOCKET_TOKEN_HEADER,
 } from '../src/embedded-transport.js';
+import type { AuthAttempt, V2Bundle } from '../src/access-auth.js';
+
+/** The per-origin attempt counter the fake host fences against. */
+const attemptFence = new Map<string, number>();
+
+/** Simulates a newer credential attempt winning the race for `origin`. */
+function bumpFence(origin: string): void {
+  attemptFence.set(origin, (attemptFence.get(origin) ?? 0) + 1);
+}
+
+/** A canonical refresh handle: 32 base64url bytes. */
+const AUTH_HANDLE = Buffer.alloc(32, 0xc3).toString('base64url');
+
+/** A usable bundle the host owner could hold. */
+const AUTH_BUNDLE: V2Bundle = Object.freeze({
+  token: 'host-access-token',
+  expiresAt: 4_000_000_000,
+  expiresIn: 3_600,
+  refreshHandle: AUTH_HANDLE,
+  refreshIdleExpiresAt: 4_000_100_000,
+  refreshAbsoluteExpiresAt: 4_000_600_000,
+});
+
+/** The token-free credential answer the server sends a host client. */
+function credentialResponse(token = 'fresh-access-token'): Response {
+  return new Response(
+    JSON.stringify({
+      token,
+      expires_at: 4_000_000_000,
+      expires_in: 3_600,
+      refresh_idle_expires_at: 4_000_100_000,
+      refresh_absolute_expires_at: 4_000_600_000,
+    }),
+    {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+        'set-cookie': `phi_access_refresh=${AUTH_HANDLE}; Path=/api/auth/v2/refresh; HttpOnly; SameSite=Strict`,
+      },
+    },
+  );
+}
+
+/** A host credential-owner stand-in. Every protected row is authorized through
+ *  this interface; the transport never invents a credential of its own. */
+function fakeAuthHost(
+  overrides: Partial<EmbeddedAuthHost> = {},
+): EmbeddedAuthHost & {
+  [K in keyof EmbeddedAuthHost]: ReturnType<typeof vi.fn>;
+} {
+  return {
+    getToken: vi.fn(() => AUTH_BUNDLE.token),
+    getSelectedProtocol: vi.fn(() => 'v2'),
+    getBundle: vi.fn(() => AUTH_BUNDLE),
+    installBundle: vi.fn(() => true),
+    // The fence is a counter: any other attempt (a second login, an install,
+    // a clear) advances it, which is exactly what the transport must respect.
+    captureAttempt: vi.fn((origin: string) => {
+      const attempt = attemptFence.get(origin) ?? 0;
+      return {
+        origin,
+        isCurrent: () => (attemptFence.get(origin) ?? 0) === attempt,
+      };
+    }),
+    installBundleForAttempt: vi.fn(
+      (origin: string, _bundle: V2Bundle, attempt: AuthAttempt) =>
+        attempt.isCurrent() && attempt.origin === origin,
+    ),
+    clearBundleForAttempt: vi.fn((attempt: AuthAttempt) => attempt.isCurrent()),
+    refreshAccess: vi.fn(async () => ({ kind: 'ok', bundle: AUTH_BUNDLE })),
+    logout: vi.fn(async () => ({ kind: 'ok' })),
+    ...overrides,
+  } as EmbeddedAuthHost & {
+    [K in keyof EmbeddedAuthHost]: ReturnType<typeof vi.fn>;
+  };
+}
 
 describe('embedded-transport', () => {
   let tempDir: string;
@@ -21,6 +99,7 @@ describe('embedded-transport', () => {
 
   beforeEach(() => {
     tempDir = mkdtempSync(path.join(tmpdir(), 'phi-embedded-test-'));
+    attemptFence.clear();
     profiles = new Map([
       ['prof1', { id: 'prof1', origin: 'http://127.0.0.1:8080' }],
       ['prof2', { id: 'prof2', origin: 'https://backend2.example.com:8443' }],
@@ -343,7 +422,10 @@ describe('embedded-transport', () => {
       expect(calledUrl).toBe('http://127.0.0.1:8080/api/config?extra=1');
       expect(calledOpts.method).toBe('GET');
       expect(calledOpts.redirect).toBe('manual');
-      expect(calledOpts.headers.get('Origin')).toBe('http://127.0.0.1:8080');
+      // The proxy no longer forges an Origin: a v2 POST row must arrive with no
+      // Fetch-Metadata, because a phi-app://app page presents values the server
+      // rejects, and no route outside the v2 auth set reads Origin.
+      expect(calledOpts.headers.get('Origin')).toBeNull();
     });
 
     it('X-Phi-Backend header overrides the active profile', async () => {
@@ -373,9 +455,7 @@ describe('embedded-transport', () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
       const [calledUrl, calledOpts] = mockFetch.mock.calls[0];
       expect(calledUrl).toBe('https://backend2.example.com:8443/api/terminals');
-      expect(calledOpts.headers.get('Origin')).toBe(
-        'https://backend2.example.com:8443',
-      );
+      expect(calledOpts.headers.get('Origin')).toBeNull();
       expect(calledOpts.headers.get('x-phi-backend')).toBeNull();
     });
 
@@ -427,7 +507,7 @@ describe('embedded-transport', () => {
       expect(calledOpts.method).toBe('POST');
       expect(calledOpts.headers.get('X-Custom-Header')).toBe('keep-me');
       expect(calledOpts.headers.get('Host')).toBeNull();
-      expect(calledOpts.headers.get('Origin')).toBe('http://127.0.0.1:8080');
+      expect(calledOpts.headers.get('Origin')).toBeNull();
       expect(calledOpts.headers.get('Connection')).toBeNull();
       expect(calledOpts.headers.get('Content-Length')).toBeNull();
     });
@@ -464,6 +544,511 @@ describe('embedded-transport', () => {
       );
       expect(validQueryRes.status).toBe(200);
       expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // Section 6's request/response table: the shell page holds no credential, so
+  // every protected row is authorized by the host and every answer that reaches
+  // the page is token-free.
+  describe('host-authenticated v2 rows', () => {
+    let auth: ReturnType<typeof fakeAuthHost>;
+    let authed: EmbeddedTransport;
+
+    const send = (
+      pathname: string,
+      init: RequestInit = {},
+    ): Promise<Response> =>
+      authed.handleRequest(
+        new Request(`phi-app://app${pathname}`, {
+          ...init,
+          headers: { 'X-Phi-Backend': 'prof1', ...(init.headers as object) },
+        }),
+      );
+
+    /** The options the single upstream call was made with. */
+    const upstreamCall = (): { url: string; init: any } => {
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const [url, init] = mockFetch.mock.calls[0];
+      return { url: String(url), init };
+    };
+
+    beforeEach(() => {
+      auth = fakeAuthHost();
+      authed = new EmbeddedTransport({
+        embeddedDir: tempDir,
+        resolveProfile: (id) => profiles.get(id) ?? null,
+        listProfiles: () => Array.from(profiles.values()),
+        fetchImpl: mockFetch as unknown as typeof fetch,
+        auth,
+      });
+    });
+
+    it.each(['v1', 'v2', null] as const)(
+      'reports host protocol %s without trusting page or upstream metadata',
+      async (protocol) => {
+        Object.assign(auth, { getSelectedProtocol: vi.fn(() => protocol) });
+        auth.getToken.mockReturnValue(null);
+        const body =
+          '{"enabled":true,"authenticated":true,"protocols":["v1","v2"]}';
+        mockFetch.mockResolvedValueOnce(
+          new Response(body, {
+            headers: { 'X-Phi-Host-Auth-Protocol': 'v1' },
+          }),
+        );
+        const res = await send('/api/auth/status', {
+          headers: { 'X-Phi-Host-Auth-Protocol': 'v1' },
+        });
+        expect(res.headers.get('X-Phi-Host-Auth-Protocol')).toBe(protocol);
+        expect(await res.text()).toBe(body);
+        const { init } = upstreamCall();
+        expect(init.headers.get('X-Phi-Host-Auth-Protocol')).toBeNull();
+      },
+    );
+
+    it('reads the selected protocol separately for each backend', async () => {
+      Object.assign(auth, {
+        getSelectedProtocol: vi.fn((origin: string) =>
+          origin === profiles.get('prof1')?.origin ? 'v1' : 'v2',
+        ),
+      });
+      mockFetch.mockImplementation(async () => new Response('{}'));
+      const first = await send('/api/auth/status');
+      const second = await send('/api/auth/status', {
+        headers: { 'X-Phi-Backend': 'prof2' },
+      });
+      expect(first.headers.get('X-Phi-Host-Auth-Protocol')).toBe('v1');
+      expect(second.headers.get('X-Phi-Host-Auth-Protocol')).toBe('v2');
+    });
+
+    it('authorizes the status row with the host bearer and reports the host session', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ enabled: true, authenticated: true, owned: true }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      );
+      const res = await send('/api/auth/v2/status', {
+        headers: {
+          Authorization: 'Bearer page-token',
+          Cookie: 'phi_access_refresh=page-handle',
+          'X-Phi-Auth': 'v2',
+          Origin: 'phi-app://app',
+          'Sec-Fetch-Site': 'cross-site',
+        },
+      });
+      // The proxied answer carries the host's session state, not the page's.
+      expect(await res.json()).toEqual({
+        enabled: true,
+        authenticated: true,
+        owned: true,
+      });
+      const { url, init } = upstreamCall();
+      expect(url).toBe('http://127.0.0.1:8080/api/auth/v2/status');
+      expect(init.headers.get('Authorization')).toBe(
+        `Bearer ${AUTH_BUNDLE.token}`,
+      );
+      // No page-supplied credential, cookie, or browser metadata survives.
+      expect(init.headers.get('X-Phi-Auth')).toBeNull();
+      expect(init.headers.get('Origin')).toBeNull();
+      expect(init.headers.get('Sec-Fetch-Site')).toBeNull();
+      expect(init.headers.get('Cookie')).toBeNull();
+    });
+
+    it('sends the host cookie jar, never the page-supplied cookie', async () => {
+      authed.setCookie('prof1', 'phi_session', 'jar-value');
+      mockFetch.mockResolvedValueOnce(new Response('{}', { status: 200 }));
+      await send('/api/auth/v2/status', {
+        headers: { Cookie: 'phi_session=page-value' },
+      });
+      const { init } = upstreamCall();
+      expect(init.headers.get('Cookie')).toBe('phi_session=jar-value');
+    });
+
+    it('sends the host bearer on a password change and returns the token-free shape', async () => {
+      mockFetch.mockResolvedValueOnce(credentialResponse());
+      const body = JSON.stringify({ password: 'correct-horse-battery' });
+      const res = await send('/api/auth/v2/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('{"ok":true,"enabled":true}');
+      // The bundle is consumed by the host and never reaches the page.
+      expect(res.headers.get('set-cookie')).toBeNull();
+      const { url, init } = upstreamCall();
+      expect(url).toBe('http://127.0.0.1:8080/api/auth/v2/password');
+      expect(init.headers.get('Authorization')).toBe(
+        `Bearer ${AUTH_BUNDLE.token}`,
+      );
+      expect(init.headers.get('X-Phi-Auth')).toBe('v2');
+      expect(Buffer.from(init.body).toString('utf8')).toBe(body);
+      expect(auth.installBundleForAttempt).toHaveBeenCalledWith(
+        'http://127.0.0.1:8080',
+        expect.objectContaining({ token: 'fresh-access-token' }),
+        expect.objectContaining({ origin: 'http://127.0.0.1:8080' }),
+      );
+      expect(auth.installBundle).not.toHaveBeenCalled();
+    });
+
+    it('sends no bearer on a login even when the host holds a token', async () => {
+      mockFetch.mockResolvedValueOnce(credentialResponse());
+      const res = await send('/api/auth/v2/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: 'correct-horse-battery' }),
+      });
+      expect(await res.text()).toBe('{"ok":true,"enabled":true}');
+      const { init } = upstreamCall();
+      expect(init.headers.get('Authorization')).toBeNull();
+      expect(init.headers.get('X-Phi-Auth')).toBe('v2');
+      expect(auth.installBundleForAttempt).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports the server password-clear response as the token-free cleared shape', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ enabled: false }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+      const res = await send('/api/auth/v2/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: '' }),
+      });
+      expect(await res.text()).toBe('{"ok":true,"enabled":false}');
+      // Nothing is installed for a clear, and the host bearer authorizes it.
+      expect(auth.installBundleForAttempt).not.toHaveBeenCalled();
+      expect(auth.clearBundleForAttempt).toHaveBeenCalledTimes(1);
+      expect(upstreamCall().init.headers.get('Authorization')).toBe(
+        `Bearer ${AUTH_BUNDLE.token}`,
+      );
+    });
+
+    it('treats a malformed credential answer as a host error, not a bundle', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ token: 'discarded-token-value' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+      const res = await send('/api/auth/v2/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: 'x' }),
+      });
+      expect(res.status).toBe(502);
+      expect(await res.text()).toBe('{"error":"invalid credential response"}');
+      expect(auth.installBundle).not.toHaveBeenCalled();
+    });
+
+    it('rejects an oversized credential answer without parsing it', async () => {
+      const padding = 'x'.repeat(65 * 1024);
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ token: padding }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+      const res = await send('/api/auth/v2/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: 'x' }),
+      });
+      expect(res.status).toBe(502);
+      expect(await res.text()).toBe('{"error":"invalid credential response"}');
+      expect(auth.installBundle).not.toHaveBeenCalled();
+    });
+
+    it('answers the refresh row from the host owner without touching the server', async () => {
+      const res = await send('/api/auth/v2/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ handle: 'page-supplied-handle' }),
+      });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('{"ok":true}');
+      // One refresh owner: the page's request never reaches the server.
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(auth.refreshAccess).toHaveBeenCalledWith('http://127.0.0.1:8080');
+    });
+
+    it('turns a terminal refresh failure into a token-free 401', async () => {
+      auth.refreshAccess.mockResolvedValueOnce({ kind: 'unauthorized' });
+      const res = await send('/api/auth/v2/refresh', { method: 'POST' });
+      expect(res.status).toBe(401);
+      expect(await res.text()).toBe('{"error":"unauthorized"}');
+      expect(auth.logout).not.toHaveBeenCalled();
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('keeps the bundle on a retryable refresh failure and answers 503', async () => {
+      auth.refreshAccess.mockResolvedValueOnce({
+        kind: 'unavailable',
+        reason: 'network',
+        retryAfterMs: 5_000,
+      });
+      const res = await send('/api/auth/v2/refresh', { method: 'POST' });
+      expect(res.status).toBe(503);
+      expect(res.headers.get('Retry-After')).toBe('5');
+      expect(await res.text()).toBe('{"error":"unavailable"}');
+      // A retryable failure never drops the credential.
+      expect(auth.logout).not.toHaveBeenCalled();
+      expect(auth.installBundle).not.toHaveBeenCalled();
+    });
+
+    it('shares one host refresh between two concurrent page requests', async () => {
+      let settle: (value: unknown) => void = () => {};
+      const ownerPromise = new Promise((resolve) => {
+        settle = resolve;
+      });
+      auth.refreshAccess.mockImplementation(() =>
+        ownerPromise.then(() => ({ kind: 'ok', bundle: AUTH_BUNDLE })),
+      );
+      const first = send('/api/auth/v2/refresh', { method: 'POST' });
+      const second = send('/api/auth/v2/refresh', { method: 'POST' });
+      settle(null);
+      // A renderer reload races a renewal: both rows answer from the host
+      // owner (whose rotation is single-flight, proven in access-auth.test.ts)
+      // and neither builds a proxy-local refresh request.
+      expect(await Promise.all([first, second])).toHaveLength(2);
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(auth.refreshAccess).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps a v2 refresh handle out of the pathless cookie jar', async () => {
+      // The login answer carries the handle in Set-Cookie. The jar is replayed
+      // on every API row and every socket upgrade, so a handle stored there
+      // would travel far past its one allowed path.
+      mockFetch.mockResolvedValueOnce(credentialResponse());
+      await send('/api/auth/v2/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: 'correct-horse-battery' }),
+      });
+      expect(authed.getCookieHeader('prof1')).toBe('');
+      // The same applies to a v1 cookie value planted directly.
+      authed.setCookie('prof1', 'phi_access_refresh', AUTH_HANDLE);
+      expect(authed.getCookieHeader('prof1')).toBe('');
+
+      mockFetch.mockResolvedValueOnce(new Response('{}', { status: 200 }));
+      await send('/api/config');
+      expect(mockFetch.mock.calls.at(-1)![1].headers.get('Cookie')).toBeNull();
+    });
+
+    it('does not install a login that lost the race to a newer attempt', async () => {
+      // A slow response A must never replace a credential B installed while A
+      // was in flight: the fence advances mid-request.
+      mockFetch.mockImplementationOnce(async () => {
+        bumpFence('http://127.0.0.1:8080');
+        return credentialResponse();
+      });
+      const res = await send('/api/auth/v2/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: 'correct-horse-battery' }),
+      });
+      expect(res.status).toBe(409);
+      expect(await res.text()).toBe('{"error":"superseded"}');
+      expect(auth.installBundle).not.toHaveBeenCalled();
+    });
+
+    it('rejects an invalid clear answer without dropping the host credential', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ enabled: false, token: 'unexpected-token' }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        ),
+      );
+      const res = await send('/api/auth/v2/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: '' }),
+      });
+      expect(res.status).toBe(502);
+      expect(auth.clearBundleForAttempt).not.toHaveBeenCalled();
+    });
+
+    it('does not interpret a login answer as a password clear', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ enabled: false }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+      const res = await send('/api/auth/v2/login', {
+        method: 'POST',
+        body: JSON.stringify({ password: 'correct-horse-battery' }),
+      });
+      expect(res.status).toBe(502);
+      expect(auth.clearBundleForAttempt).not.toHaveBeenCalled();
+      expect(auth.installBundleForAttempt).not.toHaveBeenCalled();
+    });
+
+    it.each(['login', 'password'])(
+      'does not send a superseded %s whose request body arrived late',
+      async (route) => {
+        const req = new Request(`phi-app://app/api/auth/v2/${route}`, {
+          method: 'POST',
+          headers: { 'X-Phi-Backend': 'prof1' },
+          body: JSON.stringify({ password: 'correct-horse-battery' }),
+        });
+        const readBody = req.arrayBuffer.bind(req);
+        vi.spyOn(req, 'arrayBuffer').mockImplementationOnce(async () => {
+          bumpFence('http://127.0.0.1:8080');
+          return readBody();
+        });
+        mockFetch.mockResolvedValueOnce(credentialResponse());
+        const res = await authed.handleRequest(req);
+        expect(res.status).toBe(409);
+        expect(mockFetch).not.toHaveBeenCalled();
+        expect(auth.installBundleForAttempt).not.toHaveBeenCalled();
+        expect(auth.clearBundleForAttempt).not.toHaveBeenCalled();
+      },
+    );
+
+    it('refuses to clear a credential a newer attempt installed', async () => {
+      mockFetch.mockImplementationOnce(async () => {
+        bumpFence('http://127.0.0.1:8080');
+        return new Response(JSON.stringify({ enabled: false }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      });
+      const res = await send('/api/auth/v2/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: '' }),
+      });
+      expect(res.status).toBe(503);
+      expect(auth.clearBundleForAttempt).toHaveBeenCalledTimes(1);
+    });
+
+    it('recovers a stale host token on an idempotent row instead of prompting', async () => {
+      mockFetch
+        .mockResolvedValueOnce(new Response('{}', { status: 401 }))
+        .mockResolvedValueOnce(new Response('{"ok":1}', { status: 200 }));
+      auth.getToken
+        .mockReturnValueOnce('stale-token')
+        .mockReturnValue('fresh-token');
+      const res = await send('/api/config');
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('{"ok":1}');
+      // The host owner is the one refresher, and the retry carries the token it
+      // installed rather than the stale one.
+      expect(auth.refreshAccess).toHaveBeenCalledWith('http://127.0.0.1:8080');
+      expect(mockFetch.mock.calls.at(-1)![1].headers.get('Authorization')).toBe(
+        'Bearer fresh-token',
+      );
+    });
+
+    it('never replays a mutation after recovering a stale token', async () => {
+      mockFetch.mockResolvedValueOnce(new Response('{}', { status: 401 }));
+      const res = await send('/api/pty/new', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cmd: 'ls' }),
+      });
+      expect(res.status).toBe(503);
+      expect(await res.text()).toBe('{"error":"unavailable"}');
+      // One upstream call only: a mutation is never sent twice.
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(auth.refreshAccess).toHaveBeenCalledTimes(1);
+    });
+
+    it('prompts only when the host refresh itself was refused', async () => {
+      mockFetch.mockResolvedValueOnce(new Response('{}', { status: 401 }));
+      auth.refreshAccess.mockResolvedValueOnce({ kind: 'unauthorized' });
+      const res = await send('/api/config');
+      expect(res.status).toBe(401);
+      expect(await res.text()).toBe('{"error":"unauthorized"}');
+    });
+
+    it('delegates the one logout to the host owner with the page\u2019s scope', async () => {
+      const res = await send('/api/auth/v2/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ all: true }),
+      });
+      expect(await res.text()).toBe('{"ok":true}');
+      // Exactly one logout leaves the host: the proxy does not also fetch it,
+      // which would send a second request with whatever token is current then.
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(auth.logout).toHaveBeenCalledTimes(1);
+      expect(auth.logout).toHaveBeenCalledWith('http://127.0.0.1:8080', true);
+    });
+
+    it.each([false, true])(
+      'keeps a newer sign-in when the old logout body arrives late (all=%s)',
+      async (all) => {
+        const req = new Request('phi-app://app/api/auth/v2/logout', {
+          method: 'POST',
+          headers: { 'X-Phi-Backend': 'prof1' },
+          body: JSON.stringify({ all }),
+        });
+        const readBody = req.arrayBuffer.bind(req);
+        vi.spyOn(req, 'arrayBuffer').mockImplementationOnce(async () => {
+          bumpFence('http://127.0.0.1:8080');
+          return readBody();
+        });
+        const res = await authed.handleRequest(req);
+        expect(res.status).toBe(409);
+        expect(await res.text()).toBe('{"error":"superseded"}');
+        expect(auth.logout).not.toHaveBeenCalled();
+        expect(mockFetch).not.toHaveBeenCalled();
+      },
+    );
+
+    it('reports a failed logout instead of claiming the session ended', async () => {
+      auth.logout.mockResolvedValueOnce({
+        kind: 'unavailable',
+        reason: 'connection reset',
+      });
+      const res = await send('/api/auth/v2/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ all: false }),
+      });
+      expect(res.status).toBe(502);
+      expect(await res.text()).toBe('{"error":"upstream request failed"}');
+    });
+
+    it('answers unavailable when no host owner is wired', async () => {
+      const bare = new EmbeddedTransport({
+        embeddedDir: tempDir,
+        resolveProfile: (id) => profiles.get(id) ?? null,
+        listProfiles: () => Array.from(profiles.values()),
+        fetchImpl: mockFetch as unknown as typeof fetch,
+      });
+      const res = await bare.handleRequest(
+        new Request('phi-app://app/api/auth/v2/refresh', {
+          method: 'POST',
+          headers: { 'X-Phi-Backend': 'prof1' },
+        }),
+      );
+      expect(res.status).toBe(503);
+      expect(await res.text()).toBe('{"error":"unavailable"}');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('never puts an upstream failure body in a page response', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ error: 'token host-access-token expired' }),
+          { status: 500, headers: { 'content-type': 'application/json' } },
+        ),
+      );
+      const res = await send('/api/auth/v2/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: 'x' }),
+      });
+      expect(res.status).toBe(500);
+      expect(await res.text()).toBe('{"error":"authentication failed"}');
     });
   });
 
@@ -703,6 +1288,7 @@ describe('embedded-transport', () => {
       transport.setCookie('prof2', 'ws_token', 'token_99');
 
       // Set active profile to prof1
+      transport.setActiveProfile('prof1');
       transport.setCookie('prof1', 'auth', 'val1');
 
       // Test matched webContentsId and matched prof1 host
@@ -788,7 +1374,7 @@ describe('embedded-transport', () => {
       expect(resultHeaders).toEqual({ origin: 'phi-app://app' });
     });
 
-    it('matches non-active profile via listProfiles if host matches', () => {
+    it('never borrows another profile\u2019s credential for a socket', () => {
       let listener: ((details: any, callback: any) => void) | undefined;
       const mockSession = {
         webRequest: {
@@ -799,7 +1385,10 @@ describe('embedded-transport', () => {
       };
 
       transport.attachWebSocketHeaderBridge(mockSession, () => 42);
-      // Active is prof1, but URL connects to prof2: https://backend2.example.com:8443
+      // The shell is bound to prof1 and prof2 is configured with a cookie jar:
+      // a socket to prof2 must still carry nothing, or the page could pick
+      // whose credential it borrows.
+      transport.setActiveProfile('prof1');
       transport.setCookie('prof2', 'cookie2', 'val2');
 
       let resultHeaders: Record<string, string> | undefined;
@@ -816,10 +1405,127 @@ describe('embedded-transport', () => {
         },
       );
 
-      expect(resultHeaders!['Origin']).toBe(
-        'https://backend2.example.com:8443',
+      expect(resultHeaders).toEqual({ origin: 'phi-app://app' });
+    });
+
+    it('refuses a scheme downgrade so no host token travels cleartext', () => {
+      const bridge = attachWithHostToken('host-socket-token');
+      // The profile is https, the upgrade is cleartext ws: same host, not the
+      // same origin. Sending the bearer here would expose it on the wire.
+      bridge.setProfile('prof1', 'https://127.0.0.1:8080');
+      const headers = bridge.fire({
+        url: 'ws://127.0.0.1:8080/ws',
+        requestHeaders: { origin: 'phi-app://app' },
+      });
+      expect(headers[SOCKET_TOKEN_HEADER]).toBeUndefined();
+      expect(headers['Origin']).toBeUndefined();
+    });
+
+    /** A transport whose host owner holds a working access token. */
+    const attachWithHostToken = (
+      token: string | null,
+    ): {
+      fire: (details: {
+        url: string;
+        webContentsId?: number;
+        requestHeaders: Record<string, string>;
+      }) => Record<string, string>;
+      setProfile: (id: string, origin: string) => void;
+    } => {
+      let listener: ((details: any, callback: any) => void) | undefined;
+      const mockSession = {
+        webRequest: {
+          onBeforeSendHeaders: vi.fn((_filter, l) => {
+            listener = l;
+          }),
+        },
+      };
+      const socketTransport = new EmbeddedTransport({
+        embeddedDir: tempDir,
+        resolveProfile: (id) => profiles.get(id) ?? null,
+        listProfiles: () => Array.from(profiles.values()),
+        fetchImpl: mockFetch as unknown as typeof fetch,
+        auth: fakeAuthHost({ getToken: vi.fn(() => token) }),
+      });
+      socketTransport.attachWebSocketHeaderBridge(mockSession, () => 42);
+      socketTransport.setActiveProfile('prof1');
+      return {
+        fire: (details) => {
+          let result: Record<string, string> | undefined;
+          listener!(
+            { ...details, webContentsId: details.webContentsId ?? 42 },
+            (resp: any) => {
+              result = resp.requestHeaders;
+            },
+          );
+          return result!;
+        },
+        setProfile: (id, origin) => {
+          profiles.set(id, { id, origin });
+          socketTransport.setActiveProfile(id);
+        },
+      };
+    };
+
+    it('adds the host socket token to a /ws upgrade and keeps subprotocols and query', () => {
+      const bridge = attachWithHostToken('host-socket-token');
+      const url = 'ws://127.0.0.1:8080/ws/term?state=ansi-v1&pane=p1';
+      const headers = bridge.fire({
+        url,
+        requestHeaders: {
+          'Sec-WebSocket-Protocol': 'phi-term-v1, phi-term-v2',
+          origin: 'phi-app://app',
+        },
+      });
+      // The carrier is a header: the URL is never rewritten, so the pane and
+      // state parameters reach the server exactly as the page sent them.
+      expect(url).toBe('ws://127.0.0.1:8080/ws/term?state=ansi-v1&pane=p1');
+      expect(headers['Sec-WebSocket-Protocol']).toBe(
+        'phi-term-v1, phi-term-v2',
       );
-      expect(resultHeaders!['Cookie']).toBe('cookie2=val2');
+      expect(headers[SOCKET_TOKEN_HEADER]).toBe('host-socket-token');
+    });
+
+    it('replaces a page-supplied socket token with the host token', () => {
+      const bridge = attachWithHostToken('host-socket-token');
+      const headers = bridge.fire({
+        url: 'ws://127.0.0.1:8080/ws',
+        requestHeaders: { [SOCKET_TOKEN_HEADER]: 'page-chosen-token' },
+      });
+      expect(headers[SOCKET_TOKEN_HEADER]).toBe('host-socket-token');
+    });
+
+    it('drops a page-supplied socket token when the host holds none', () => {
+      const bridge = attachWithHostToken(null);
+      const headers = bridge.fire({
+        url: 'ws://127.0.0.1:8080/ws',
+        requestHeaders: {
+          'x-phi-socket-token': 'page-chosen-token',
+          'user-agent': 'TestClient',
+        },
+      });
+      expect(headers[SOCKET_TOKEN_HEADER]).toBeUndefined();
+      expect(headers['x-phi-socket-token']).toBeUndefined();
+      expect(headers['user-agent']).toBe('TestClient');
+    });
+
+    it('adds no socket token outside /ws paths', () => {
+      const bridge = attachWithHostToken('host-socket-token');
+      const headers = bridge.fire({
+        url: 'ws://127.0.0.1:8080/terminals/ws/1',
+        requestHeaders: { origin: 'phi-app://app' },
+      });
+      expect(headers[SOCKET_TOKEN_HEADER]).toBeUndefined();
+    });
+
+    it('adds no socket token to a mismatched webContentsId', () => {
+      const bridge = attachWithHostToken('host-socket-token');
+      const headers = bridge.fire({
+        url: 'ws://127.0.0.1:8080/ws',
+        webContentsId: 99,
+        requestHeaders: { origin: 'phi-app://app' },
+      });
+      expect(headers[SOCKET_TOKEN_HEADER]).toBeUndefined();
     });
   });
 

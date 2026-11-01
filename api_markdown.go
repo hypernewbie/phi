@@ -232,7 +232,10 @@ func handleMarkdownFile(w http.ResponseWriter, r *http.Request) {
 // (e.g. ![x](./img.png)). Mirrors handleMarkdownFile's allowed-dirs gate,
 // with an image-extension allowlist in place of the .md gate.
 func handleMarkdownAsset(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	// HEAD keeps the same gate and headers as GET: http.ServeFile answers it
+	// without a body, which is what a browser preload or cache revalidation
+	// sends.
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
