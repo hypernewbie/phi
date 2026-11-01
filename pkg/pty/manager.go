@@ -204,18 +204,31 @@ func (m *Manager) Shutdown(grace time.Duration) {
 		}
 	}
 
-	// Wait for the cleanup goroutines to finish (each instance's PTY exit
-	// triggers temp-dir removal). Bounded by 2x grace so a stuck child
-	// can't hang us forever.
+	// Wait for each child to be reaped. p.Closed is closed only after pty.go's
+	// exit goroutine removed the shim temp dir, which is the cleanup this wait
+	// exists for. The registry is deliberately not drained when a child exits
+	// (dead instances stay in m.instances so the UI can reconnect or restart
+	// them), so polling len(m.instances) could never reach zero and every call
+	// burned the full deadline before escalating. Bounded by 2x grace so a
+	// stuck child can't hang us forever.
 	deadline := time.Now().Add(2 * grace)
-	for time.Now().Before(deadline) {
-		m.mu.RLock()
-		remaining := len(m.instances)
-		m.mu.RUnlock()
-		if remaining == 0 {
-			return
+	for _, inst := range insts {
+		inst.mu.Lock()
+		p := inst.Pty
+		inst.mu.Unlock()
+		if p == nil {
+			continue
 		}
-		time.Sleep(50 * time.Millisecond)
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		timer := time.NewTimer(remaining)
+		select {
+		case <-p.Closed:
+		case <-timer.C:
+		}
+		timer.Stop()
 	}
 
 	// Escalate. Anything still registered ignored SIGTERM or is wedged, and
