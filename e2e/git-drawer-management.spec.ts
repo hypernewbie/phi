@@ -28,15 +28,17 @@ type FailedRequest = {
 };
 
 // Context changes can abort obsolete Git metadata and worktree-dirty reads.
-// Each flow waits for a successful metadata read for its current workspace.
+// The file list is a metadata read with the same lifecycle.
 function unexpectedFailedRequests(requests: FailedRequest[]): FailedRequest[] {
     return requests.filter((request) => {
         const url = new URL(request.url);
         return !(
             request.method === 'GET' &&
-            ['/api/git/info', '/api/git/worktree-dirty'].includes(
-                url.pathname,
-            ) &&
+            [
+                '/api/git/info',
+                '/api/git/status-files',
+                '/api/git/worktree-dirty',
+            ].includes(url.pathname) &&
             request.error === 'net::ERR_ABORTED'
         );
     });
@@ -1084,6 +1086,97 @@ for (const mode of ['desktop', 'touch'] as const) {
             releaseInfo();
             releaseTrees();
             releaseRefresh();
+            await context.close();
+        }
+    });
+}
+
+for (const mode of ['desktop', 'touch'] as const) {
+    test(`Git drawer stages and unstages one file (${mode})`, async ({
+        browser,
+    }, testInfo) => {
+        if (!phi) throw new Error('Phi fixture is not running');
+        const context = await browser.newContext(
+            mode === 'touch'
+                ? {
+                      viewport: { width: 390, height: 844 },
+                      isMobile: true,
+                      hasTouch: true,
+                  }
+                : { viewport: { width: 1440, height: 900 } },
+        );
+        const errors: string[] = [];
+        const pointer = mode === 'touch' ? 'touch' : 'keyboard';
+        const untrackedToggle =
+            '.git-file-row:has-text("untracked.txt") .git-file-toggle';
+        const seedToggle =
+            '.git-file-row:has-text("seed.txt") .git-file-toggle';
+        try {
+            resetFixture();
+            const page = await context.newPage();
+            page.on('pageerror', (error) => errors.push(String(error)));
+            writeFileSync(join(project, 'seed.txt'), 'staged by drawer\n');
+            writeFileSync(join(project, 'untracked.txt'), 'untracked\n');
+
+            await openProject(page);
+            await expect(page.locator('#git-files')).toBeVisible();
+            await expect(
+                page.locator('#git-file-list .git-file-row'),
+            ).toHaveCount(2);
+            await expect(page.locator(untrackedToggle)).toHaveText('Stage');
+            await expect(page.locator(seedToggle)).toHaveText('Stage');
+
+            await activate(page, untrackedToggle, pointer);
+            await expect(page.locator(untrackedToggle)).toHaveText('Unstage');
+            await expect(page.locator(seedToggle)).toHaveText('Stage');
+            await expect
+                .poll(() => git(project, 'diff', '--cached', '--name-only'))
+                .toContain('untracked.txt');
+            expect(git(project, 'diff', '--name-only')).toContain('seed.txt');
+            expect(
+                git(project, 'diff', '--cached', '--name-only'),
+            ).not.toContain('seed.txt');
+
+            await page.locator('#git-commit-message').fill('stage one file');
+            await expect(page.locator('#git-commit-btn')).toBeEnabled();
+            await expect(page.locator('#git-files-note')).toBeHidden();
+            const stagingOverflow = await page
+                .locator('#git-management')
+                .evaluate((element) => ({
+                    client: element.clientWidth,
+                    scroll: element.scrollWidth,
+                }));
+            expect(stagingOverflow.scroll).toBeLessThanOrEqual(
+                stagingOverflow.client + 1,
+            );
+            const rowHeights = await page
+                .locator('#git-file-list .git-file-toggle')
+                .evaluateAll((buttons) =>
+                    buttons.map(
+                        (button) => button.getBoundingClientRect().height,
+                    ),
+                );
+            for (const height of rowHeights) {
+                expect(height).toBeGreaterThanOrEqual(
+                    mode === 'touch' ? 44 : 24,
+                );
+            }
+            await page.screenshot({
+                path: testInfo.outputPath(`staging-${mode}.png`),
+            });
+
+            await activate(page, untrackedToggle, pointer);
+            await expect(page.locator(untrackedToggle)).toHaveText('Stage');
+            await expect
+                .poll(() => git(project, 'diff', '--cached', '--name-only'))
+                .toBe('');
+            expect(
+                git(project, 'status', '--porcelain', '--', 'untracked.txt'),
+            ).toContain('?? untracked.txt');
+            expect(git(project, 'diff', '--name-only')).toContain('seed.txt');
+            expect(errors).toEqual([]);
+        } finally {
+            resetFixture();
             await context.close();
         }
     });

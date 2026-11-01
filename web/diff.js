@@ -2,6 +2,19 @@
 import { PTYWebSocket } from './ws.js';
 import { getLastFolderName, worktreeGlyph, isCoarseViewport, isDiffDrawerViewport, terminalPreferredFontSize, responsiveTerminalFontSize, DIFF_TERMINAL_TARGET_COLUMNS, openExternalLink, installTerminalLinkProvider, getEmbeddedBackendOrigin, getEmbeddedProfileId, serverKey, } from './util.js';
 import { buildVSCodeURI, buildVSCodeRemoteURI, normalizeHostname, isVSCodeLaunchUnsupported, } from './vscode.js';
+function isGitStatusFileEntry(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return false;
+    const entry = value;
+    return (typeof entry.path === 'string' &&
+        typeof entry.index === 'string' &&
+        typeof entry.worktree === 'string');
+}
+// A file is stageable unless Git reports it as already handled in the index
+// for that half. "??" entries are untracked and can only be staged.
+function isGitFileStaged(entry) {
+    return entry.index !== '?' && entry.index !== ' ';
+}
 class GitManageHTTPError extends Error {
     status;
     body;
@@ -16,6 +29,9 @@ const GIT_VIEW_STORAGE_PREFIX = 'phi_git_view_v1';
 const GIT_VIEW_CACHE_MAX_ENTRIES = 12;
 const GIT_VIEW_CACHE_MAX_BYTES = 256 * 1024;
 const GIT_INFO_TIMEOUT_MS = 30_000;
+// Mirrors gitActionPathLimit on the server. A larger selection continues in
+// batches, each validated against a fresh index token.
+const GIT_STAGE_PATH_LIMIT = 200;
 const GIT_ACTION_TIMEOUT_MS = 150_000;
 function isGitManageTarget(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -39,6 +55,9 @@ function sameGitManageTarget(a, b, action) {
                 a.remote_ref === b.remote_ref &&
                 a.remote_token === b.remote_token)));
 }
+function gitCommitShapedTarget(target) {
+    return { ...target, remote: '', remote_ref: '', remote_token: '' };
+}
 function isGitManageInfo(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value))
         return false;
@@ -55,7 +74,8 @@ function isGitManageInfo(value) {
         (info.can_commit === undefined ||
             typeof info.can_commit === 'boolean') &&
         (info.commit_reason === undefined ||
-            typeof info.commit_reason === 'string'));
+            typeof info.commit_reason === 'string') &&
+        (info.can_stage === undefined || typeof info.can_stage === 'boolean'));
 }
 function normalizeGitManageInfo(info) {
     if (info.notGitRepo) {
@@ -237,6 +257,17 @@ export class DiffController {
     gitActionResumeBtn;
     gitActionCancelBtn;
     gitActionDismissBtn;
+    gitFilesSection;
+    gitFileList;
+    gitStageAllBtn;
+    gitFilesNote;
+    gitFiles = [];
+    gitFilesKey = '';
+    gitFilesMemory = new Map();
+    gitFilesPending = new Set();
+    gitFilesStatus = '';
+    gitFilesRequestKey = '';
+    gitFilesRowKey = '';
     gitManageInfo = null;
     gitManageInfoKey = '';
     gitManageContextKey = '';
@@ -329,6 +360,10 @@ export class DiffController {
         this.gitActionResumeBtn = document.getElementById('git-action-resume-btn');
         this.gitActionCancelBtn = document.getElementById('git-action-cancel-btn');
         this.gitActionDismissBtn = document.getElementById('git-action-dismiss-btn');
+        this.gitFilesSection = document.getElementById('git-files');
+        this.gitFileList = document.getElementById('git-file-list');
+        this.gitStageAllBtn = document.getElementById('git-stage-all-btn');
+        this.gitFilesNote = document.getElementById('git-files-note');
         this._loadReviewDraft();
         this.setupEventListeners();
     }
@@ -411,6 +446,15 @@ export class DiffController {
         this.gitPullBtn?.addEventListener('click', () => this.startGitAction('pull'));
         this.gitPushBtn?.addEventListener('click', () => this.startGitAction('push'));
         this.gitCommitBtn?.addEventListener('click', () => this.startGitAction('commit'));
+        this.gitStageAllBtn?.addEventListener('click', () => this.toggleGitStageAll());
+        this.gitFileList?.addEventListener('click', (event) => {
+            const target = event.target;
+            const button = target?.closest('.git-file-toggle');
+            const path = button?.dataset.path;
+            if (!button || !path)
+                return;
+            this.stageGitPaths(isGitFileStaged(this.gitFilesFor(path)) ? 'unstage' : 'stage', [path]);
+        });
         this.gitCommitMessageInput?.addEventListener('input', () => {
             if (!this.gitCommitDraftKey) {
                 const value = this.gitCommitMessageInput?.value || '';
@@ -1100,6 +1144,268 @@ export class DiffController {
         document
             .getElementById('git-management')
             ?.setAttribute('aria-busy', String(this.gitManageBusy));
+        this.renderGitFiles();
+    }
+    gitFilesFor(path) {
+        return (this.gitFiles.find((entry) => entry.path === path) || {
+            path,
+            index: ' ',
+            worktree: ' ',
+        });
+    }
+    readCachedGitFiles(context) {
+        const key = `${context.infoKey}:files`;
+        const memory = this.gitFilesMemory.get(key);
+        if (memory)
+            return memory;
+        try {
+            const parsed = JSON.parse(localStorage.getItem(key) || 'null');
+            if (!Array.isArray(parsed))
+                return null;
+            const files = parsed.filter(isGitStatusFileEntry);
+            this.gitFilesMemory.set(key, files);
+            return files;
+        }
+        catch {
+            return null;
+        }
+    }
+    cacheGitFiles(context, files) {
+        const key = `${context.infoKey}:files`;
+        this.gitFilesMemory.set(key, files);
+        try {
+            localStorage.setItem(key, JSON.stringify(files));
+        }
+        catch {
+            /* In-memory state remains usable when browser storage is unavailable. */
+        }
+    }
+    async fetchGitFiles(context) {
+        const query = new URLSearchParams({ cwd: context.cwd });
+        return this.requestGitManage(context, `/api/git/status-files?${query}`, { method: 'GET', cache: 'no-store' }, GIT_INFO_TIMEOUT_MS, async (response) => {
+            const body = await response.text();
+            if (!response.ok)
+                throw new GitManageHTTPError(response.status, body);
+            let parsed;
+            try {
+                parsed = JSON.parse(body);
+            }
+            catch {
+                throw new Error('Invalid Git file list response');
+            }
+            if (parsed?.notGitRepo)
+                return [];
+            if (!Array.isArray(parsed?.files))
+                throw new Error('Invalid Git file list response');
+            return parsed.files.filter(isGitStatusFileEntry);
+        });
+    }
+    refreshGitFiles(context, force = false) {
+        const cacheKey = `${context.infoKey}:files`;
+        if (this.gitFilesKey !== cacheKey) {
+            this.gitFiles = this.readCachedGitFiles(context) || [];
+            this.gitFilesKey = cacheKey;
+            this.gitFilesPending.clear();
+            this.gitFilesStatus = '';
+            this.gitFilesRowKey = '';
+        }
+        this.renderGitFiles();
+        if (!context.cwd || !context.requestAvailable)
+            return;
+        const requestKey = `${cacheKey}:${context.generation}`;
+        if (!force && this.gitFilesRequestKey === requestKey)
+            return;
+        this.gitFilesRequestKey = requestKey;
+        void this.fetchGitFiles(context)
+            .then((files) => {
+            if (!this.isCurrentGitManageContext(context))
+                return;
+            if (this.gitFilesKey !== cacheKey)
+                return;
+            this.gitFiles = files;
+            this.cacheGitFiles(context, files);
+            this.gitFilesStatus = '';
+            this.renderGitFiles();
+        })
+            .catch((error) => {
+            if (error?.name === 'AbortError')
+                return;
+            if (!this.isCurrentGitManageContext(context))
+                return;
+            if (this.gitFilesKey !== cacheKey)
+                return;
+            this.gitFilesStatus = this.gitFiles.length
+                ? 'File list refresh failed; showing the last saved list.'
+                : 'File list is unavailable. Refresh to try again.';
+            this.renderGitFiles();
+        })
+            .finally(() => {
+            if (this.gitFilesRequestKey === requestKey)
+                this.gitFilesRequestKey = '';
+        });
+    }
+    buildGitFileRow(entry) {
+        const row = document.createElement('li');
+        row.className = 'git-file-row';
+        const status = document.createElement('span');
+        status.className = 'git-file-status';
+        status.setAttribute('aria-hidden', 'true');
+        const stageChar = isGitFileStaged(entry) ? entry.index : entry.worktree;
+        status.textContent = stageChar.trim() || '·';
+        const path = document.createElement('span');
+        path.className = 'git-file-path';
+        path.textContent = entry.path;
+        path.title = entry.path;
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'btn git-management-btn git-file-toggle';
+        toggle.dataset.path = entry.path;
+        row.append(status, path, toggle);
+        return row;
+    }
+    renderGitFiles() {
+        const section = this.gitFilesSection;
+        if (!section)
+            return;
+        const available = this.gitManageInfo?.can_stage === true;
+        section.classList.toggle('hidden', !available);
+        if (!available) {
+            this.gitFilesRowKey = '';
+            return;
+        }
+        const list = this.gitFileList;
+        const rowKey = this.gitFiles
+            .map((entry) => `${entry.index}${entry.worktree}${entry.path}`)
+            .join('\u0000');
+        if (list && rowKey !== this.gitFilesRowKey) {
+            // Rebuild only when the server list changes, so keyboard focus
+            // survives the frequent re-renders around typing and actions.
+            const focused = document.activeElement;
+            const focusedPath = focused instanceof HTMLElement
+                ? focused.dataset?.path || ''
+                : '';
+            this.gitFilesRowKey = rowKey;
+            list.replaceChildren(...this.gitFiles.map((entry) => this.buildGitFileRow(entry)));
+            if (focusedPath) {
+                const restored = [
+                    ...list.querySelectorAll('.git-file-toggle'),
+                ].find((button) => button.dataset.path === focusedPath);
+                restored?.focus();
+            }
+        }
+        const busy = this.gitManageBusy || this.gitFilesPending.size > 0;
+        for (const button of list
+            ? list.querySelectorAll('.git-file-toggle')
+            : []) {
+            const path = button.dataset.path || '';
+            const staged = isGitFileStaged(this.gitFilesFor(path));
+            const label = staged ? 'Unstage' : 'Stage';
+            button.textContent = label;
+            button.setAttribute('aria-label', `${label} ${path}`);
+            button.disabled = busy;
+        }
+        if (this.gitStageAllBtn) {
+            const allStaged = this.gitFiles.length > 0 &&
+                this.gitFiles.every(isGitFileStaged);
+            this.gitStageAllBtn.textContent = allStaged
+                ? 'Unstage all'
+                : 'Stage all';
+            this.gitStageAllBtn.disabled = busy || this.gitFiles.length === 0;
+        }
+        if (this.gitFilesNote) {
+            this.gitFilesNote.textContent = this.gitFilesStatus;
+            this.gitFilesNote.classList.toggle('hidden', !this.gitFilesStatus);
+        }
+    }
+    toggleGitStageAll() {
+        const allStaged = this.gitFiles.length > 0 && this.gitFiles.every(isGitFileStaged);
+        const paths = allStaged
+            ? this.gitFiles.map((entry) => entry.path)
+            : this.gitFiles
+                .filter((entry) => !isGitFileStaged(entry))
+                .map((entry) => entry.path);
+        if (!paths.length)
+            return;
+        void this.stageGitPaths(allStaged ? 'unstage' : 'stage', paths);
+    }
+    async stageGitPaths(action, paths) {
+        const context = this.captureGitManageContext();
+        const queue = paths.slice();
+        let confirmed = 0;
+        this.gitFilesStatus = '';
+        while (queue.length) {
+            const info = this.gitManageInfo;
+            const target = info?.target;
+            const token = info?.index_token || '';
+            if (info?.can_stage !== true ||
+                !target ||
+                !/^[0-9a-f]{64}$/i.test(token)) {
+                this.gitFilesStatus =
+                    'Git staging is unavailable. Refresh, then try again.';
+                break;
+            }
+            // The server bounds one request. Larger selections continue with
+            // a fresh index token so a late change still aborts the batch.
+            const chunk = queue.splice(0, GIT_STAGE_PATH_LIMIT);
+            for (const path of chunk)
+                this.gitFilesPending.add(path);
+            this.renderGitFiles();
+            try {
+                const result = await this.requestGitManage(context, '/api/git/action', {
+                    method: 'POST',
+                    redirect: 'error',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        cwd: context.cwd,
+                        action,
+                        target: gitCommitShapedTarget(target),
+                        index_token: token,
+                        paths: chunk,
+                    }),
+                }, GIT_ACTION_TIMEOUT_MS, async (response) => ({
+                    status: response.status,
+                    ok: response.ok,
+                    body: await response.text(),
+                }));
+                if (!result.ok) {
+                    const message = result.body.trim();
+                    this.gitFilesStatus = message.startsWith('Git index changed')
+                        ? 'The staged set changed; the list is refreshing.'
+                        : message || `Git ${action} failed.`;
+                    break;
+                }
+                confirmed += chunk.length;
+            }
+            catch (error) {
+                if (error?.name === 'AbortError') {
+                    this.gitFilesStatus =
+                        'Git staging result unconfirmed. Refresh to recheck the index.';
+                }
+                else {
+                    this.gitFilesStatus = `Git ${action} result unconfirmed. Refresh to recheck the index.`;
+                }
+                break;
+            }
+            finally {
+                for (const path of chunk)
+                    this.gitFilesPending.delete(path);
+                this.renderGitFiles();
+            }
+            if (!queue.length || !this.isCurrentGitManageContext(context))
+                break;
+            const fresh = await this.fetchGitManageInfo(context).catch(() => null);
+            if (!fresh || !this.isCurrentGitManageContext(context))
+                break;
+            this.cacheGitManageInfo(context, fresh);
+            this.gitManageInfo = fresh;
+            this.gitManageInfoKey = context.infoKey;
+        }
+        if (confirmed > 0) {
+            this.gitFilesStatus = '';
+            this.refreshAfterGitAction(context);
+        }
+        if (this.gitFilesStatus)
+            this.renderGitFiles();
     }
     gitCommitPrerequisite(info, target, actionWaiting) {
         if (!info) {
@@ -1331,6 +1637,7 @@ export class DiffController {
             return;
         }
         this.gitManageRequestKey = requestKey;
+        this.refreshGitFiles(context);
         void this.fetchGitManageInfo(context)
             .then((info) => {
             if (!this.isCurrentGitManageContext(context))

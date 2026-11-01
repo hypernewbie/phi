@@ -292,6 +292,7 @@ func main() {
 	http.HandleFunc("/api/git/raw-log", handleRawLog)
 	http.HandleFunc("/api/git/commits", handleGetCommits)
 	http.HandleFunc("/api/git/info", handleGitInfo)
+	http.HandleFunc("/api/git/status-files", handleGitStatusFiles)
 	http.HandleFunc("/api/git/action", handleGitAction)
 	http.HandleFunc("/api/config", handleConfig)
 	http.HandleFunc("/api/config/pushover", func(w http.ResponseWriter, r *http.Request) {
