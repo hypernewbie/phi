@@ -268,6 +268,7 @@ function coerceDescriptor(id, raw) {
             ? r.opencode_mode
             : undefined,
         opencode_mini_presets: coercePresets(r.opencode_mini_presets),
+        pi_mode: typeof r.pi_mode === 'string' ? r.pi_mode : undefined,
     };
 }
 function coercePresets(raw) {

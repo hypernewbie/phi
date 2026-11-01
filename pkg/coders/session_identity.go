@@ -11,7 +11,7 @@ func FreshSession(c Coder) (Coder, string) {
 	switch {
 	case c.ID == "claude" && c.SessionSource == "claude_files":
 		flag = "--session-id"
-	case c.ID == "pi" && c.SessionSource == "pi_files":
+	case c.ID == "pi" && c.SessionSource == "pi_files" && c.PiMode != "psi":
 		flag = "--session-id"
 	case c.ID == "opencode" && c.SessionSource == "opencode_v2":
 		flag = "--session"

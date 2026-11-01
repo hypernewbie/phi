@@ -60,6 +60,8 @@ type Coder struct {
 	InputMode             string            `json:"input_mode"` // "staged" | "direct"
 	ModelSwitchDisabled   bool              `json:"model_switch_disabled"`
 	OpenCodeMode          string            `json:"opencode_mode,omitempty"` // "tui" / "mini" (v2) | "legacy" (v1)
+	PiMode                string            `json:"pi_mode,omitempty"`       // "psi" | ""
+	PsiCommand            string            `json:"psi_command,omitempty"`
 	Capabilities          Capabilities      `json:"capabilities"`
 }
 
@@ -259,6 +261,8 @@ func frozenCoder(in Coder) Coder {
 		InputMode:           in.InputMode,
 		ModelSwitchDisabled: in.ModelSwitchDisabled,
 		OpenCodeMode:        in.OpenCodeMode,
+		PiMode:              in.PiMode,
+		PsiCommand:          in.PsiCommand,
 		Capabilities:        in.Capabilities,
 	}
 	if in.Args != nil {
@@ -323,6 +327,11 @@ func NewManagerWithOptions(opts BuiltinOptions) *Manager {
 		oc.Command = opts.OpenCodeCommand
 	}
 	defaults["opencode"] = oc
+	pi := defaults["pi"]
+	if opts.PsiCommand != "" {
+		pi.PsiCommand = opts.PsiCommand
+	}
+	defaults["pi"] = pi
 	m.data = make(map[string]Coder, len(defaults))
 	for id, c := range defaults {
 		m.data[id] = frozenCoder(c)

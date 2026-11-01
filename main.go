@@ -179,6 +179,7 @@ func main() {
 		OpenCodeLegacy:        cfg.OpenCodeLegacy,
 		OpenCodeCommand:       cfg.OpenCodeCommand,
 		OpenCodeLegacyCommand: cfg.OpenCodeLegacyCommand,
+		PsiCommand:            cfg.PsiCommand,
 	})
 	// Load custom backend files from ~/.phi/backends/*.json. Built-ins
 	// are already seeded by NewManager; custom profiles patch / add.
