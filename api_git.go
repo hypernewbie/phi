@@ -506,6 +506,7 @@ type gitInfoResponse struct {
 	IndexToken   string           `json:"index_token"`
 	CanCommit    bool             `json:"can_commit"`
 	CommitReason string           `json:"commit_reason"`
+	CanStage     bool             `json:"can_stage"`
 }
 
 type gitActionRequest struct {
@@ -514,6 +515,113 @@ type gitActionRequest struct {
 	Target     gitActionTarget `json:"target"`
 	Message    string          `json:"message"`
 	IndexToken string          `json:"index_token"`
+	Paths      []string        `json:"paths"`
+}
+
+type gitStatusFileEntry struct {
+	Path     string `json:"path"`
+	Index    string `json:"index"`
+	Worktree string `json:"worktree"`
+}
+
+type gitStatusFilesResponse struct {
+	NotGitRepo bool                 `json:"notGitRepo"`
+	Files      []gitStatusFileEntry `json:"files"`
+	Truncated  bool                 `json:"truncated"`
+}
+
+// gitActionPathLimit bounds one stage or unstage request. The UI sends the
+// selection it already rendered, so a large repository never exceeds it.
+const gitActionPathLimit = 200
+
+// gitStatusFilesLimit bounds the file list, mirroring the browse endpoint.
+// A repository without a .gitignore can hold tens of thousands of untracked
+// files; the drawer renders one row per entry, so the list stops here.
+const gitStatusFilesLimit = 1000
+
+// gitActionPathAllowed rejects anything the server did not read from its own
+// status output. Paths arrive as repository-relative names, so an absolute
+// path, a parent segment, a leading dash or pathspec colon, and a NUL byte all
+// signal a forged request rather than a real file.
+func gitActionPathAllowed(path string) bool {
+	if path == "" || path == "." || path == ".." || len(path) > 4096 {
+		return false
+	}
+	if strings.ContainsAny(path, "\x00\r\n") {
+		return false
+	}
+	if strings.HasPrefix(path, "-") || strings.HasPrefix(path, ":") {
+		return false
+	}
+	if filepath.IsAbs(path) {
+		return false
+	}
+	for _, segment := range strings.Split(path, "/") {
+		// Git never lists the repository metadata directory, and add
+		// accepts a forged .git path as a silent no-op. Refuse it outright.
+		if segment == ".." || segment == ".git" {
+			return false
+		}
+	}
+	return true
+}
+
+func parseGitStatusFiles(output []byte) []gitStatusFileEntry {
+	files := make([]gitStatusFileEntry, 0, 16)
+	for _, field := range bytes.Split(output, []byte{0}) {
+		if len(field) < 4 {
+			continue
+		}
+		files = append(files, gitStatusFileEntry{
+			Index:    string(field[0:1]),
+			Worktree: string(field[1:2]),
+			Path:     string(field[3:]),
+		})
+	}
+	return files
+}
+
+// handleGitStatusFiles returns the working tree as structured entries so the
+// drawer can offer per-file staging without parsing colored text.
+func handleGitStatusFiles(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), gitReadTimeout)
+	defer cancel()
+	repo, notRepo, err := resolveAuthorizedGitRepository(ctx, r.URL.Query().Get("cwd"))
+	if err != nil {
+		writeGitAPIError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if notRepo {
+		_ = json.NewEncoder(w).Encode(gitStatusFilesResponse{NotGitRepo: true, Files: []gitStatusFileEntry{}})
+		return
+	}
+	out, _, statusErr := gitOutput(ctx, repo.root,
+		"--no-optional-locks", "-c", "status.renames=false",
+		"status", "--porcelain", "--untracked-files=all", "--no-renames",
+		"--ignore-submodules=none", "-z",
+	)
+	if statusErr != nil {
+		writeGitAPIError(w, gitReadAPIError(ctx))
+		return
+	}
+	files := parseGitStatusFiles(out)
+	truncated := len(files) > gitStatusFilesLimit
+	if truncated {
+		files = files[:gitStatusFilesLimit]
+	}
+	_ = json.NewEncoder(w).Encode(gitStatusFilesResponse{Files: files, Truncated: truncated})
+}
+
+func gitHeadExists(ctx context.Context, root string) bool {
+	_, _, err := gitOutput(ctx, root, "rev-parse", "--verify", "--quiet", "HEAD")
+	return err == nil
 }
 
 type gitActionRepository struct {
@@ -1079,6 +1187,7 @@ func handleGitInfo(w http.ResponseWriter, r *http.Request) {
 		IndexToken:   indexToken,
 		CanCommit:    canCommit,
 		CommitReason: commitReason,
+		CanStage:     true,
 	})
 }
 
@@ -1114,6 +1223,25 @@ func decodeGitActionRequest(w http.ResponseWriter, r *http.Request) (gitActionRe
 		}
 		if _, err := hex.DecodeString(req.IndexToken); err != nil {
 			return gitActionRequest{}, http.StatusBadRequest, "A commit message and complete local Git target are required"
+		}
+		return req, 0, ""
+	}
+	if req.Action == "stage" || req.Action == "unstage" {
+		if req.Target.Root == "" || (req.Target.Head == "" && req.Target.Branch == "") ||
+			req.Target.Remote != "" || req.Target.RemoteRef != "" || req.Target.RemoteToken != "" ||
+			req.Message != "" || len(req.IndexToken) != sha256.Size*2 {
+			return gitActionRequest{}, http.StatusBadRequest, "A local Git target and index token are required"
+		}
+		if _, err := hex.DecodeString(req.IndexToken); err != nil {
+			return gitActionRequest{}, http.StatusBadRequest, "A local Git target and index token are required"
+		}
+		if len(req.Paths) == 0 || len(req.Paths) > gitActionPathLimit {
+			return gitActionRequest{}, http.StatusBadRequest, "A file list is required"
+		}
+		for _, path := range req.Paths {
+			if !gitActionPathAllowed(path) {
+				return gitActionRequest{}, http.StatusBadRequest, "Invalid file path"
+			}
 		}
 		return req, 0, ""
 	}
@@ -1175,7 +1303,7 @@ func handleGitAction(w http.ResponseWriter, r *http.Request) {
 		writeGitAPIError(w, err)
 		return
 	}
-	if req.Action == "commit" {
+	if req.Action == "commit" || req.Action == "stage" || req.Action == "unstage" {
 		fresh = gitCommitTarget(fresh)
 		if fresh != req.Target {
 			http.Error(w, "Git target changed; refresh before trying again", http.StatusConflict)
@@ -1187,17 +1315,23 @@ func handleGitAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if indexToken != req.IndexToken {
-			http.Error(w, "Git index changed; refresh before committing", http.StatusConflict)
+			if req.Action == "commit" {
+				http.Error(w, "Git index changed; refresh before committing", http.StatusConflict)
+			} else {
+				http.Error(w, "Git index changed; refresh before trying again", http.StatusConflict)
+			}
 			return
 		}
-		canCommit, commitReason, commitErr := gitCanCommit(ctx, repo, fresh, hasStaged)
-		if commitErr != nil {
-			writeGitAPIError(w, commitErr)
-			return
-		}
-		if !canCommit {
-			http.Error(w, commitReason, http.StatusConflict)
-			return
+		if req.Action == "commit" {
+			canCommit, commitReason, commitErr := gitCanCommit(ctx, repo, fresh, hasStaged)
+			if commitErr != nil {
+				writeGitAPIError(w, commitErr)
+				return
+			}
+			if !canCommit {
+				http.Error(w, commitReason, http.StatusConflict)
+				return
+			}
 		}
 	} else {
 		if fresh != req.Target {
@@ -1222,6 +1356,16 @@ func handleGitAction(w http.ResponseWriter, r *http.Request) {
 	case "commit":
 		cmd = gitCommand(ctx, repo.root, "commit", "--file=-")
 		cmd.Stdin = strings.NewReader(req.Message)
+	case "stage":
+		cmd = gitCommand(ctx, repo.root, append([]string{"add", "--"}, req.Paths...)...)
+	case "unstage":
+		if gitHeadExists(ctx, repo.root) {
+			cmd = gitCommand(ctx, repo.root, append([]string{"restore", "--staged", "--"}, req.Paths...)...)
+		} else {
+			// An unborn branch has no HEAD to restore from, so the index
+			// entries are dropped directly. --cached keeps working files.
+			cmd = gitCommand(ctx, repo.root, append([]string{"rm", "--cached", "--quiet", "--force", "--"}, req.Paths...)...)
+		}
 	}
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard

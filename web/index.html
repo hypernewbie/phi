@@ -1229,6 +1229,14 @@ eager to avoid a first-open unstyled flash. -->
                     <div class="diff-action-bar hidden" id="diff-action-bar">
                         <section class="git-management" id="git-management" aria-label="Git actions">
                             <div class="git-target-label" id="git-target-label">No cached Git information</div>
+                            <div class="git-files hidden" id="git-files">
+                                <div class="git-files-head">
+                                    <span class="git-files-title">Working tree</span>
+                                    <button id="git-stage-all-btn" type="button" class="btn git-management-btn" disabled>Stage all</button>
+                                </div>
+                                <ul class="git-file-list" id="git-file-list" aria-label="Working tree files"></ul>
+                                <div class="git-files-note hidden" id="git-files-note" role="status" aria-live="polite"></div>
+                            </div>
                             <label class="git-commit-label" for="git-commit-message">Commit message</label>
                             <textarea id="git-commit-message" class="diff-comment-textarea git-commit-message" rows="2" aria-describedby="git-commit-hint git-commit-draft-status"></textarea>
                             <div class="git-action-status hidden" id="git-commit-draft-status" role="status" aria-live="polite"></div>

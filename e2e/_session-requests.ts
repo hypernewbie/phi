@@ -28,16 +28,15 @@ export function isCancelledSessionListRead(
     );
 }
 
-export function isCancelledGitInfoRead(
-    request: Request,
-    origin: string,
-): boolean {
+// Sidebar ownership changes deliberately cancel these background reads.
+export function isCancelledGitRead(request: Request, origin: string): boolean {
     const url = new URL(request.url());
     return (
         request.method() === 'GET' &&
         request.failure()?.errorText === 'net::ERR_ABORTED' &&
         url.origin === new URL(origin).origin &&
-        url.pathname === '/api/git/info'
+        (url.pathname === '/api/git/info' ||
+            url.pathname === '/api/git/status-files')
     );
 }
 

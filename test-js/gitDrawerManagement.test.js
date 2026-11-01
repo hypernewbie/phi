@@ -1119,6 +1119,8 @@ describe('Git drawer action safety', () => {
                 if (infoCalls === 1) throw new TypeError('offline');
                 return otherInfo;
             }
+            if (parsed.pathname === '/api/git/status-files')
+                return { files: [] };
             posts++;
             if (posts === 1) return oldAction.promise;
             return {

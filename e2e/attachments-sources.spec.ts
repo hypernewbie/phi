@@ -27,8 +27,8 @@ import { startPhi } from './_server.js';
 import { tabList } from './_tabs.js';
 import { startBridgeProxy, type BridgeProxy } from './_pi-bridge-proxy.js';
 import {
-    isCancelledGitInfoRead,
     isCancelledBackgroundRead,
+    isCancelledGitRead,
 } from './_session-requests.js';
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -45,7 +45,11 @@ function isExpectedStartupPinAbort(url: string, errorText: string): boolean {
 function isExpectedPinSyncConsoleError(message: string): boolean {
     return (
         message.startsWith('[term] Failed to sync pin on backend:') &&
-        /AbortError|BackendScope aborted/.test(message)
+        // AbortError covers a scope change; TypeError covers the offline
+        // window this test opens while a pin sync poll is in flight.
+        /AbortError|BackendScope aborted|TypeError: Failed to fetch/.test(
+            message,
+        )
     );
 }
 
@@ -385,7 +389,7 @@ function watchPage(page: Page, label: string) {
     page.on('requestfailed', (failed) => {
         const errorText = failed.failure()?.errorText || '';
         if (isCancelledBackgroundRead(failed, origin)) return;
-        if (isCancelledGitInfoRead(failed, origin)) return;
+        if (isCancelledGitRead(failed, origin)) return;
         if (isExpectedStartupPinAbort(failed.url(), errorText)) {
             expectedPinAborts.push(`${label}: ${failed.url()} ${errorText}`);
             return;
