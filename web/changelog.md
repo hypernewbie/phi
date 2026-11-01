@@ -4,6 +4,21 @@ All notable changes to phi are documented here. Newest versions first.
 
 ## Unreleased
 
+## v0.33.0 — 2026-11-01
+
+### Added
+- **Auth v2** (`5d15e0bf`). The access verifier and session state move into `auth.db`, an authoritative SQLite store that imports the legacy verifier and session state in a one-time migration. After verified completion the verifier is omitted from `config.toml` and `auth-v2-state.json` is removed, and a cleanup failure is logged instead of restoring Config as authority. Downgrading a migrated install to an older binary is unsupported and blocked; a missing or corrupt `auth.db` restores from a matching backup and never reads as disabled authentication.
+- **Attachment send steers into a busy Pi turn** (`4447c81a`). A staged attachment send that was refused with busy/queued while Pi streamed a turn now goes into the running turn with `deliverAs: 'steer'`, so the prompt is delivered before the next model call. Saved sends recover into the busy turn instead of waiting for idle; every other refusal is unchanged.
+
+### Changed
+- **UI scales with the configured font size** (`883ada68`). Every authored UI font size is expressed as `calc(<px> * var(--ui-scale))`, and the appearance setting publishes the multiplier (desktop base 14, mobile base 13, 1 when unset). Glyph-only controls keep their authored size, text badges scale their box, the mobile header grows with the brand mark, and narrow inputs keep the 16px iOS focus-zoom floor.
+
+### Fixed
+- **Touch scrollback returns after a cold mobile attach** (`3f653f35`). A reloaded phone held only the visible screen, so nothing could scroll. Ansi-v1 attaches now serve the stored client checkpoint with its own `through` so the client replays the delta, checkpoints stay capped at 48 KiB so a beacon can carry them, and uploads ride beacons and fire when the page is hidden.
+
+### Performance
+- **Fewer Git scans per request** (`3fe9ae1e`). Read-only Git index snapshots are cached, mutation markers are filesystem checks instead of subprocesses, Pi session titles are memoized by file identity, and clean commits skip retention tail repair. `/api/git/info` warm mean fell from 771.2 ms to 116.6 ms, `/api/sessions` from 41.6 ms to 1.9 ms, and Git subprocesses per info request from 25 to 14. Git actions still read a fresh index and invalidate the read cache under the repository lock.
+
 ## v0.32.0 — 2026-11-01
 
 ### Changed
