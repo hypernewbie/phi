@@ -321,6 +321,24 @@ describe('Git drawer staging', () => {
         expect(actionPosts(fetch)).toHaveLength(1);
     });
 
+    it('does not fetch the file list while the drawer is closed', async () => {
+        const fetch = gitRoutes({
+            files: () => [{ path: 'src/new.ts', index: ' ', worktree: '?' }],
+        });
+        const controller = new DiffController(buildApp());
+        controller.togglePanel(false);
+        await controller.refreshDiff();
+        await vi.waitFor(() =>
+            expect(
+                fetch.mock.calls.filter(([url]) =>
+                    String(url).includes('/api/git/status-files'),
+                ),
+            ).toHaveLength(0),
+        );
+        expect(rows()).toHaveLength(0);
+        expect(fetch.mock.calls.length).toBeGreaterThan(0);
+    });
+
     it('degrades to a note when the file list request fails', async () => {
         mockFetch((url) => {
             const path = new URL(String(url), window.location.href).pathname;

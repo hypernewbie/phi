@@ -1210,6 +1210,10 @@ export class DiffController {
             this.gitFilesRowKey = '';
         }
         this.renderGitFiles();
+        // A closed drawer renders from cache only. Opening it calls
+        // refreshDiff, which fetches the live list once.
+        if (!this.isPanelOpen)
+            return;
         if (!context.cwd || !context.requestAvailable)
             return;
         const requestKey = `${cacheKey}:${context.generation}`;
