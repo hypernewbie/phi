@@ -62,6 +62,9 @@ func TestRetentionPendingPayloadSurvivesInterveningResize(t *testing.T) {
 	if got := ph.recording.head; got != uint64(len(want)+4) {
 		t.Fatalf("head = %d, want %d (no duplicate admission)", got, len(want)+4)
 	}
+	if ph.recording.faults.truncates != 0 || ph.recording.segs[len(ph.recording.segs)-1].dirty {
+		t.Fatal("pending publication must admit its owned tail without a repair")
+	}
 }
 
 func TestReadRetentionManifestIsBoundedAndRegular(t *testing.T) {
@@ -255,6 +258,13 @@ func TestRetentionPayloadCommitFailuresRetryExactlyOnce(t *testing.T) {
 			if !ok || !bytes.Equal(rec.Data, []byte("seed0123456789abcdef")) {
 				t.Fatalf("%s retry bytes=%q ok=%t", stage.name, rec.Data, ok)
 			}
+			wantRepairs := 1
+			if stage.name == "dirSync" {
+				wantRepairs = 0 // The pending transaction still owns these bytes.
+			}
+			if got := ph.recording.faults.truncates; got != wantRepairs {
+				t.Fatalf("%s retry repairs=%d, want %d", stage.name, got, wantRepairs)
+			}
 			if stage.name == "rename" {
 				// No resizes and no rotation: exactly the manifest and
 				// one raw file. A failed rename must not leave a temp
@@ -397,6 +407,13 @@ func TestRetentionResizeCommitFailuresRetryWithoutDuplicates(t *testing.T) {
 			}
 			if err := h.Ingest("p", []byte("after")); err != nil {
 				t.Fatalf("%s retry: %v", stage.name, err)
+			}
+			wantRepairs := 1
+			if stage.name == "dirSync" {
+				wantRepairs = 0
+			}
+			if got := ph.recording.faults.truncates; got != wantRepairs {
+				t.Fatalf("%s resize retry repairs=%d, want %d", stage.name, got, wantRepairs)
 			}
 			rec, ok := h.Recording("p", 0, 100)
 			if !ok {
