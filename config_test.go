@@ -31,10 +31,13 @@ func TestConfigConcurrentAccess(t *testing.T) {
 	cfg.ThemeColor = "purple"
 	saveConfig(cfg)
 
-	// Stress concurrent reads and writes
+	// Stress concurrent reads and writes. Each writer iteration is a load plus
+	// a full TOML save, so cost is dominated by disk writes rather than by
+	// contention. Fifty goroutines racing ten writes each still exercises the
+	// mutex; a hundred each only buys ~35s of blocked test time.
 	var wg sync.WaitGroup
 	numRoutines := 50
-	operationsPerRoutine := 100
+	operationsPerRoutine := 10
 
 	for i := 0; i < numRoutines; i++ {
 		wg.Add(2)

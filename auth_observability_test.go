@@ -153,7 +153,7 @@ func TestAccessObservabilityLogsNoCredentials(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	manager := pty.NewManager()
-	t.Cleanup(func() { manager.Shutdown(2 * time.Second) })
+	t.Cleanup(func() { manager.Shutdown(testPaneShutdownGrace) })
 	shell, args := testMainShell()
 	instance, err := manager.SpawnWithOptions(context.Background(), home, shell, args, "pi", "obs-sid", pty.SpawnOptions{ID: "obs-pane"})
 	if err != nil {
@@ -398,7 +398,7 @@ func TestAccessObservabilityLogsNoRefreshOrCookieCredentials(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	manager := pty.NewManager()
-	t.Cleanup(func() { manager.Shutdown(2 * time.Second) })
+	t.Cleanup(func() { manager.Shutdown(testPaneShutdownGrace) })
 	shell, args := testMainShell()
 	instance, err := manager.SpawnWithOptions(context.Background(), home, shell, args, "pi", "obs2-sid", pty.SpawnOptions{ID: "obs2-pane"})
 	if err != nil {

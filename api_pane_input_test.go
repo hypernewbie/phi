@@ -25,7 +25,7 @@ func withPaneManager(t *testing.T) *pty.Manager {
 	ptyManager = m
 	t.Cleanup(func() {
 		ptyManager = orig
-		m.Shutdown(2 * time.Second)
+		m.Shutdown(testPaneShutdownGrace)
 	})
 	return m
 }
