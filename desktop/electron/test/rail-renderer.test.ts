@@ -469,6 +469,25 @@ describe('rail identity and accent (src/renderer.ts)', () => {
     });
   });
 
+  it('flags the rail while the active accent is unobserved so the selected entry stays visible', () => {
+    // Regression: the active chip is painted only with accent tokens, and
+    // the root fallback is transparent — an unobserved accent erased the
+    // selected server from the rail.
+    expect(cssSource).toMatch(/#rail\.no-accent \.rail-item\.active/);
+    expect(cssSource).toMatch(
+      /#rail\.no-accent \.rail-item\.active[\s\S]*?background-color: var\(--bg-elevated\)/,
+    );
+    withPage(htmlSource, (doc) => {
+      const list = doc.getElementById('rail-list')!;
+      const rail = doc.getElementById('rail')!;
+      // SNAPSHOT is active on 'b', whose accent is unobserved.
+      render(SNAPSHOT, list);
+      expect(rail.classList.contains('no-accent')).toBe(true);
+      render({ ...SNAPSHOT, activeId: 'a' }, list);
+      expect(rail.classList.contains('no-accent')).toBe(false);
+    });
+  });
+
   it('renders a Greek glyph for an IP-looking name and keeps the conservative text label', () => {
     withPage('<ul id="rail-list"></ul>', (doc) => {
       const list = doc.getElementById('rail-list')!;

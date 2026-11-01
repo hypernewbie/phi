@@ -100,6 +100,24 @@ body {
     0 0 calc(4px + 12px * var(--cpu-strength)) var(--cpu-glow);
 }
 
+/* An unobserved accent must not erase the selected server: the accent
+   tokens resolve to transparent until the server page reports its own
+   colour, which would leave the active chip with no border, no glyph and
+   no glow — the entry reads as deleted. While the rail carries no accent
+   the active chip keeps the resting material and a neutral stroke, and
+   the Ctrl hint stays legible. */
+#rail.no-accent .rail-item.active,
+#rail.no-accent .rail-item.active .shortcut-hint {
+  color: var(--text);
+  text-shadow: none;
+}
+
+#rail.no-accent .rail-item.active {
+  background-color: var(--bg-elevated);
+  border-color: var(--border);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
 /* Number shortcut hint shown when holding Control (Ctrl+1..9). Replaces
    the Greek glyph with zero layout shift. */
 .rail-item .shortcut-hint {

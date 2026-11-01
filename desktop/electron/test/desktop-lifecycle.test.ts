@@ -605,13 +605,64 @@ describe('DesktopHost fake-Electron lifecycle', () => {
 
       host.pollCpu();
       expect(execute).toHaveBeenCalledTimes(3);
-      expect(execute.mock.calls[2][0]).toContain('cpu:');
+      // The timed-out identity was never cached, so this poll tick retries it
+      // first — still one script in flight at a time — and the CPU read waits
+      // for the next tick.
+      expect(execute.mock.calls[2][0]).toContain('hostname-display');
+      finish({ hostname: 'ALPHA', accent: '#123456' });
+      await flush();
+      expect(host.observedIdentity.get(profile.id)?.accent).toBe('#123456');
+
+      host.pollCpu();
+      expect(execute).toHaveBeenCalledTimes(4);
+      expect(execute.mock.calls[3][0]).toContain('cpu:');
       finish({ cpu: 62, activity: true, workspace: '/alpha/code' });
       await flush();
       expect(host.observedCpu.get(profile.id)).toBe(62);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('retries a skipped identity read on the poll cadence so the active chip keeps its accent', async () => {
+    const host = new DesktopHost();
+    await host.start(primary);
+    const win = fake.FakeBrowserWindow.instances[0];
+    win.webContents.emit('did-finish-load');
+    await flush();
+    const ctrl = host.controller!;
+    const profile = ctrl.add('http://alpha.example.test:7070/');
+    host.profileViews!.addProfile(profile.id, profile.origin);
+    ctrl.setActive(profile.id);
+    const view = host.viewByOrigin.get(profile.origin)!;
+    // The title event fired while the page was still loading, so
+    // executeRendererRead dropped that observation; the rail then has no
+    // accent for the active entry.
+    expect(host.observedIdentity.has(profile.id)).toBe(false);
+    const execute = vi
+      .spyOn(view.webContents, 'executeJavaScript')
+      .mockImplementation((code?: string) =>
+        Promise.resolve(
+          String(code).includes('cpu:')
+            ? { cpu: null, activity: false, workspace: null }
+            : { hostname: 'ALPHA', accent: '#123456' },
+        ),
+      );
+
+    host.pollCpu();
+    await flush();
+    expect(String(execute.mock.calls[0][0])).toContain('hostname-display');
+    expect(host.observedIdentity.get(profile.id)?.accent).toBe('#123456');
+
+    // Observed once: the cadence returns to the CPU poll alone.
+    host.pollCpu();
+    await flush();
+    expect(String(execute.mock.calls[1][0])).toContain('cpu:');
+    expect(
+      execute.mock.calls.filter((call) =>
+        String(call[0]).includes('hostname-display'),
+      ),
+    ).toHaveLength(1);
   });
 
   it('power resume wakes only the active retained view and tolerates absent/destroyed views', async () => {

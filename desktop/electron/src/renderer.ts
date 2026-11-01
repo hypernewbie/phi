@@ -126,6 +126,10 @@ export function render(
   if (rail !== null) {
     if (active?.accent) rail.style.setProperty('--accent', active.accent);
     else rail.style.removeProperty('--accent');
+    // The accent tokens are transparent until the server page reports its
+    // own colour, so flag the interval: the active chip then keeps a
+    // readable neutral material instead of vanishing into the rail.
+    rail.classList.toggle('no-accent', !active?.accent);
   }
   list.textContent = '';
   // Glyphs already shown in this render; collision resolution picks a
