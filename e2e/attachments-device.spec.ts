@@ -23,7 +23,10 @@ import {
 import { startPhi } from './_server.js';
 import { tabList } from './_tabs.js';
 import { startBridgeProxy, type BridgeProxy } from './_pi-bridge-proxy.js';
-import { isCancelledWorktreeRead } from './_session-requests.js';
+import {
+    isCancelledSessionListRead,
+    isCancelledWorktreeRead,
+} from './_session-requests.js';
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const FILE_CONTENT = 'PHI_ATTACHMENT_READ_FIXTURE_3f7a';
@@ -763,6 +766,7 @@ test('device attachments reach interactive Pi as images and readable files on de
                     const errorText = failed.failure()?.errorText || '';
                     const line = `${contextCase.label}: ${failed.url()} ${errorText}`;
                     if (isCancelledWorktreeRead(failed, phi.url)) return;
+                    if (isCancelledSessionListRead(failed, phi.url)) return;
                     if (isExpectedStartupPinAbort(failed.url(), errorText))
                         expectedPinAborts.push(line);
                     else failedRequests.push(line);
@@ -1008,6 +1012,7 @@ test('pinned Pi OpenAI-compatible provider receives an image block', async ({
         page.on('requestfailed', (failed) => {
             const errorText = failed.failure()?.errorText || '';
             if (isCancelledWorktreeRead(failed, phi.url)) return;
+            if (isCancelledSessionListRead(failed, phi.url)) return;
             const line = `${failed.url()} ${errorText}`;
             if (isExpectedStartupPinAbort(failed.url(), errorText))
                 expectedPinAborts.push(line);
@@ -1113,6 +1118,7 @@ test('extension transformations are not mistaken for model receipt; lost ack is 
         page.on('requestfailed', (failed) => {
             const errorText = failed.failure()?.errorText || '';
             if (isCancelledWorktreeRead(failed, phi.url)) return;
+            if (isCancelledSessionListRead(failed, phi.url)) return;
             const line = `${failed.url()} ${errorText}`;
             if (isExpectedStartupPinAbort(failed.url(), errorText))
                 expectedPinAborts.push(line);
@@ -1294,6 +1300,7 @@ test('bridge-free Pi keeps ordinary text usable and retains attachment drafts', 
         page.on('requestfailed', (failed) => {
             const errorText = failed.failure()?.errorText || '';
             if (isCancelledWorktreeRead(failed, phi.url)) return;
+            if (isCancelledSessionListRead(failed, phi.url)) return;
             if (!isExpectedStartupPinAbort(failed.url(), errorText))
                 failures.push(`${failed.url()} ${errorText}`);
         });
@@ -1410,6 +1417,7 @@ test('bridge loss before Send refuses without dispatch or later replay', async (
         page.on('requestfailed', (failed) => {
             const errorText = failed.failure()?.errorText || '';
             if (isCancelledWorktreeRead(failed, phi.url)) return;
+            if (isCancelledSessionListRead(failed, phi.url)) return;
             if (!isExpectedStartupPinAbort(failed.url(), errorText))
                 failures.push(`${failed.url()} ${errorText}`);
         });
