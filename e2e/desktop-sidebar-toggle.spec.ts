@@ -23,7 +23,7 @@ import type {
     TerminalClientFrame as TerminalClientMessage,
 } from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
-import { isCancelledWorktreeRead } from './_session-requests.js';
+import { isCancelledBackgroundRead } from './_session-requests.js';
 
 test.skip(
     process.platform === 'win32',
@@ -129,7 +129,7 @@ async function watchPage(page: Page, origin: string): Promise<PageDiagnostics> {
         if (response.status() >= 400) diagnostics.httpFailures.push(record);
     });
     page.on('requestfailed', (request) => {
-        if (isCancelledWorktreeRead(request, origin)) return;
+        if (isCancelledBackgroundRead(request, origin)) return;
         const url = new URL(request.url());
         diagnostics.failedRequests.push({
             method: request.method(),

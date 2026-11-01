@@ -8,6 +8,7 @@ import {
     type Page,
 } from '@playwright/test';
 import { configToToml, startPhi } from './_server.js';
+import { isCancelledBackgroundRead } from './_session-requests.js';
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const timestamp = '2026-10-03T00:00:00.000Z';
@@ -93,15 +94,8 @@ function monitorPage(page: Page, baseUrl: string) {
         if (request.resourceType() === 'websocket') return;
         const url = new URL(request.url());
         const error = request.failure()?.errorText ?? 'failed';
-        // A newer worktree refresh may cancel this unrelated background GET.
-        if (
-            url.origin === origin &&
-            request.method() === 'GET' &&
-            ['/api/git/worktrees', '/api/git/worktree-dirty'].includes(
-                url.pathname,
-            ) &&
-            error === 'net::ERR_ABORTED'
-        ) {
+        // A newer poll or sidebar load may cancel this background GET.
+        if (isCancelledBackgroundRead(request, origin)) {
             cancelledRequests.push(
                 `${request.method()} ${request.url()}: ${error}`,
             );

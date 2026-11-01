@@ -221,19 +221,26 @@ export async function clickReloadDesktop(page: Page): Promise<void> {
     await expect(menu).toBeHidden();
 }
 
-// Count toasts before the click, then wait for one more with the
-// text: earlier reloads leave theirs on screen, so a bare
-// visibility wait goes strict-mode, and counting after the click
-// races the new toast.
+// Mark the toasts already on screen, then wait for an unmarked one
+// with the text. Counting before the click races the toast that
+// dismisses while the new one appears: the replacement takes the
+// index the count promised, and an index wait never sees it.
 export async function expectNewToast(
     page: Page,
     text: string,
     click: () => Promise<void>,
 ): Promise<void> {
-    const locator = page.locator('.toast', { hasText: text });
-    const before = await locator.count();
+    const existing = page.locator('.toast', { hasText: text });
+    const before = await existing.count();
+    for (let index = 0; index < before; index++) {
+        await existing
+            .nth(index)
+            .evaluate((toast) => toast.setAttribute('data-toast-seen', ''));
+    }
     await click();
-    await expect(locator.nth(before)).toBeVisible({ timeout: 60_000 });
+    await expect(
+        page.locator('.toast:not([data-toast-seen])', { hasText: text }),
+    ).toBeVisible({ timeout: 60_000 });
 }
 
 // Review hold for PHI_RELOAD_REVIEW=1: print the owned server and

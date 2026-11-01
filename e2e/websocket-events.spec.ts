@@ -7,6 +7,7 @@ import type {
     Notification as NotificationMessage,
 } from '../web-src/proto/events.js';
 import { startPhi, type PhiServer } from './_server.js';
+import { isCancelledBackgroundRead } from './_session-requests.js';
 
 // The served bundle carries no types; bind its runtime codec to the
 // generated declarations so spec-side decoding is fully checked.
@@ -52,7 +53,10 @@ test('watcher-driven markdown change and reconnect refresh the viewer', async ({
         consoleErrors.push(msg.text());
     });
     page.on('pageerror', (err) => pageErrors.push(String(err)));
-    page.on('requestfailed', (req) => failedRequests.push(req.url()));
+    page.on('requestfailed', (req) => {
+        if (isCancelledBackgroundRead(req, phi.url)) return;
+        failedRequests.push(req.url());
+    });
 
     // The watcher follows live pane cwds: a pane rooted in the docs
     // dir keeps the note under watch.
