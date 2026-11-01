@@ -888,6 +888,23 @@ export async function startPhi(
                     JSON.stringify(serverIdentity, null, 2),
                     { mode: 0o600 },
                 );
+                // Main's owned build record reaches the server log with the
+                // same field names, so the shared ownership test holds.
+                append(
+                    Buffer.from(
+                        `${JSON.stringify({
+                            revision: buildRevision,
+                            goVersion: goVersion.trim(),
+                            dirty: buildDirty,
+                            sha256: binarySha256,
+                            pid: serverIdentity.pid,
+                            start: serverIdentity.startTime,
+                            binary: executable,
+                            bind: `127.0.0.1:${port}`,
+                            dir,
+                        })}\n`,
+                    ),
+                );
                 await waitForOwnedServer(child, serverIdentity, process.cwd());
                 if (startupError) throw startupError;
             } catch (error) {
