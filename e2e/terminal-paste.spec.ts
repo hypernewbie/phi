@@ -349,11 +349,14 @@ for (const touch of [false, true]) {
                 await refreshGate;
                 await route.continue();
             });
-            // Wake the existing background refresh listeners and prove a real HTTP
-            // request is pending before checking local paste recovery.
+            // Wake the existing background refresh listeners, then prove the
+            // network is really blocked before checking local paste recovery.
+            // The pending request is issued here rather than left to ambient
+            // traffic: the CPU indicator's cadence is not this test's subject.
             await page.evaluate(() => {
                 document.dispatchEvent(new Event('visibilitychange'));
                 window.dispatchEvent(new Event('focus'));
+                void fetch('/api/system/cpu').catch(() => {});
             });
             await expect.poll(() => held.length).toBeGreaterThan(0);
             consumed = await terminalPaste(page, pane, 'REFUSED_SPAN');
