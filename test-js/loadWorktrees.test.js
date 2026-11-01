@@ -562,6 +562,126 @@ describe('loadWorktrees — stale requests', () => {
     });
 });
 
+describe('loadWorktrees — workspace view ownership', () => {
+    function switchedContext() {
+        const ctx = makeCtx({ activeWorkspace: '/old', activeCWD: '/old' });
+        ctx.worktreeRootOwner = {
+            scope: ctx.app.scope,
+            coder: ctx.activeCoder,
+            workspace: '/old',
+        };
+        const views = [];
+        ctx.app.diffController.refreshDiff.mockImplementation(() => {
+            views.push(ctx.activeCWD);
+        });
+        ctx.app.markdownManager = { refreshFiles: vi.fn() };
+        ctx.activeWorkspace = '/new';
+        return { ctx, views };
+    }
+
+    it.each(['HTTP error', 'fetch rejection', 'empty list'])(
+        'retires the old target before a cache-miss switch ends in %s',
+        async (result) => {
+            const requests = pendingFetches();
+            const { ctx, views } = switchedContext();
+            const pending = startLoad(ctx);
+            // This must happen synchronously, before any network answer.
+            expect(ctx.activeCWD).toBe('/new');
+            expect(views).toEqual(['/new']);
+            expect(ctx.app.markdownManager.refreshFiles).toHaveBeenCalledWith({
+                force: false,
+            });
+            if (result === 'fetch rejection') {
+                requests[0].reject(new Error('offline'));
+            } else {
+                requests[0].resolve(
+                    result === 'HTTP error'
+                        ? {
+                              ok: false,
+                              status: 503,
+                              text: async () => 'offline',
+                          }
+                        : worktreeResponse([]),
+                );
+            }
+            await pending;
+            expect(ctx.activeCWD).toBe('/new');
+            expect(views).toEqual(['/new']);
+        },
+    );
+
+    it('paints the cached active worktree before refresh and keeps it on failure', async () => {
+        const requests = pendingFetches();
+        const { ctx, views } = switchedContext();
+        localStorage.setItem(
+            FEATURE_CACHE_KEY('/api/git/worktrees?cwd=%2Fnew'),
+            FEATURE_CACHE_VALUE([
+                { path: '/new', active: false },
+                { path: '/new-feature', active: true },
+            ]),
+        );
+        const pending = startLoad(ctx);
+        expect(ctx.activeCWD).toBe('/new-feature');
+        expect(activePath(ctx)).toBe('/new-feature');
+        expect(views).toEqual(['/new-feature']);
+        requests[0].reject(new Error('offline'));
+        await pending;
+        expect(activePath(ctx)).toBe('/new-feature');
+        expect(views).toEqual(['/new-feature']);
+    });
+
+    it('refreshes the accepted worktree but never the late reply from an older workspace', async () => {
+        const requests = pendingFetches();
+        const { ctx, views } = switchedContext();
+        const older = startLoad(ctx);
+        ctx.activeWorkspace = '/latest';
+        const latest = startLoad(ctx);
+        requests[1].resolve(
+            worktreeResponse([{ path: '/latest-feature', active: true }]),
+        );
+        await latest;
+        requests[0].resolve(
+            worktreeResponse([{ path: '/obsolete', active: true }]),
+        );
+        await older;
+        expect(ctx.activeCWD).toBe('/latest-feature');
+        expect(activePath(ctx)).toBe('/latest-feature');
+        expect(views).toEqual(['/new', '/latest', '/latest-feature']);
+    });
+
+    it('reconciles a cache-miss workspace with its saved active worktree', async () => {
+        const requests = pendingFetches();
+        const { ctx, views } = switchedContext();
+        const pending = startLoad(ctx);
+        expect(ctx.activeCWD).toBe('/new');
+        requests[0].resolve(
+            worktreeResponse([
+                { path: '/new', active: false },
+                { path: '/new-saved', active: true },
+            ]),
+        );
+        await pending;
+        expect(activePath(ctx)).toBe('/new-saved');
+        expect(views).toEqual(['/new', '/new-saved']);
+    });
+
+    it('keeps a worktree selected by the user while its list is refreshing', async () => {
+        const requests = pendingFetches();
+        const { ctx, views } = switchedContext();
+        const pending = startLoad(ctx);
+        ctx.activeCWD = '/new-user-choice';
+        requests[0].resolve(
+            worktreeResponse([
+                { path: '/new-server-choice', active: true },
+                { path: '/new-user-choice' },
+            ]),
+        );
+        await pending;
+        expect(activePath(ctx)).toBe('/new-user-choice');
+        expect(views).not.toContain('/new-server-choice');
+    });
+});
+
 describe('loadWorktrees — worktree glyph matches tab glyph', () => {
     // The user pointed out they can't visually match tabs to worktree
     // sections in the left panel. The fix: render the same worktree-
