@@ -104,7 +104,7 @@ func TestCLIAuthenticatedFreshPaneRawReplayAndDetach(t *testing.T) {
 			if resume {
 				prefixLen += len("\x1b[6n")
 			}
-			const epoch = uint64(9007199254740993)
+			const epoch = uint64(9007199254740991) // highest v2/JS-safe epoch
 			var mu sync.Mutex
 			var spawn SpawnRequest
 			var applicationInput []byte

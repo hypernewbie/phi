@@ -34,6 +34,9 @@ class WireSocket {
                         epoch: BigInt(7),
                         oldest: BigInt(0),
                         head: BigInt(head),
+                        initialCols: 80,
+                        initialRows: 24,
+                        eventCursor: `v1.7.${head}.0`,
                     },
                 },
             }),
@@ -54,7 +57,19 @@ class WireSocket {
 }
 
 function recording(bytes, start, end) {
-    const json = encode(JSON.stringify({ epoch: 7, start, end, resizes: [] }));
+    const json = encode(
+        JSON.stringify({
+            epoch: 7,
+            start,
+            end,
+            event_cursor: `v1.7.${end}.0`,
+            through: end,
+            through_event_cursor: `v1.7.${end}.0`,
+            resizes: [],
+            initial_cols: 80,
+            initial_rows: 24,
+        }),
+    );
     const body = new Uint8Array(4 + json.length + bytes.length);
     new DataView(body.buffer).setUint32(0, json.length, false);
     body.set(json, 4);
@@ -110,7 +125,8 @@ function harness(source, head = 0) {
     const fetch = vi.fn(async (url) => {
         const params = new URL(url, 'http://localhost').searchParams;
         const from = Number(params.get('from'));
-        const to = Number(params.get('through'));
+        const through = params.get('through');
+        const to = through === 'latest' ? source.length : Number(through);
         return recording(source.slice(from, to), from, to);
     });
     vi.stubGlobal('fetch', fetch);
@@ -289,73 +305,57 @@ describe('actual xterm byte-stream recovery', () => {
         }
     });
 
-    it('drains an epoch reset banner before resizing to the checkpoint grid', async () => {
-        const h = harness(encode(''));
-        const writes = [];
-        const callbacks = [];
-        const order = [];
-        const resize = h.term.resize.bind(h.term);
+    it('reports a restart without inserting local banner bytes into the replay parser', async () => {
+        const h = harness(encode('REPLAY'));
         h.tab._termOpened = true;
-        h.tab._pendingResetBanner = 'RESET BANNER';
-        h.manager._cancelHistoryRequest = vi.fn();
-        h.manager._clearHistoryState = vi.fn();
-        h.manager._bootstrappedRelease = vi.fn();
-        h.term.write = (data, callback) => {
-            writes.push(data);
-            callbacks.push(callback);
-        };
-        vi.spyOn(h.term, 'resize').mockImplementation((cols, rows) => {
-            order.push({ kind: 'resize', pending: h.tab.writePending });
-            resize(cols, rows);
-        });
-
+        h.tab._pendingRestartNotice = true;
+        h.manager.app = { showToast: vi.fn() };
+        h.manager._fetchReplayPages = vi.fn(async () => ({
+            start: 0,
+            end: 6,
+            byteLength: 6,
+            bytes: encode('REPLAY'),
+            endCursor: 'v1.8.6.0',
+        }));
         try {
-            const attach = h.manager._onAttachHead(h.tab, {
+            await h.manager._onAttachHead(h.tab, {
                 epoch: 8,
                 oldest: 0,
-                head: 0,
-                ckpt: { through: 0, cols: 100, rows: 30, ansi: 'CHECKPOINT' },
+                head: 6,
+                initialCols: 100,
+                initialRows: 30,
+                eventCursor: 'v1.8.6.0',
             });
-            await Promise.resolve();
-
-            expect(writes).toEqual(['RESET BANNER']);
-            expect(order).toEqual([]);
-            expect(h.tab.writePending).toBe(true);
-
-            callbacks.shift()();
-            await attach;
-
-            expect(order).toEqual([{ kind: 'resize', pending: false }]);
-            expect(writes).toEqual(['RESET BANNER', 'CHECKPOINT']);
-            expect([h.term.cols, h.term.rows]).toEqual([100, 30]);
-            callbacks.shift()();
-            await Promise.resolve();
+            await h.tab._bootstrapGate;
+            await h.manager._drainSettled(h.tab);
+            expect(
+                h.term.buffer.active.getLine(0).translateToString(true),
+            ).toBe('REPLAY');
+            expect(h.manager.app.showToast).toHaveBeenCalledWith(
+                'Session restarted.',
+                { type: 'info', title: 'Terminal' },
+            );
+            expect(h.tab._pendingRestartNotice).toBe(false);
         } finally {
             h.term.dispose();
         }
     });
 
-    it('drains a recovered checkpoint and fits before releasing held live output', async () => {
+    it('drains the replay and fits before releasing held live output', async () => {
         const h = harness(encode(''));
         const order = [];
-        let finishCheckpoint;
+        let finishReplay;
         h.tab.fitAddon = {
             fit: vi.fn(() => {
                 order.push('fit');
                 h.term.resize(90, 8);
             }),
         };
-        h.manager._fetchRecordingRange = vi.fn(async () => {
-            const error = new Error('recording expired');
-            error.historyPermanent = true;
-            throw error;
-        });
-        h.manager._fetchTerminalState = vi.fn(async () => ({
-            cols: 80,
-            rows: 8,
-            ansi: 'RECOVERED CHECKPOINT',
-            through: 1,
-            oldest: 0,
+        h.manager._fetchReplayPages = vi.fn(async () => ({
+            start: 0,
+            end: 1,
+            byteLength: 1,
+            bytes: encode('R'),
         }));
         h.manager._refreshTerminalScreen = vi.fn(() => order.push('refresh'));
         h.manager._terminalPanelVisible = () => true;
@@ -369,10 +369,10 @@ describe('actual xterm byte-stream recovery', () => {
             return release();
         };
         h.term.write = (data, callback) => {
-            expect(data).toBe('RECOVERED CHECKPOINT');
-            order.push('checkpoint-write');
-            finishCheckpoint = () => {
-                order.push('checkpoint-parsed');
+            expect(data).toBe('R');
+            order.push('replay-write');
+            finishReplay = () => {
+                order.push('replay-parsed');
                 callback();
             };
         };
@@ -380,22 +380,22 @@ describe('actual xterm byte-stream recovery', () => {
         h.pty.hold();
         try {
             h.manager._bootstrappedRelease(h.tab, h.pty, 0, 1);
-            for (let i = 0; i < 10 && !finishCheckpoint; i++)
+            for (let i = 0; i < 10 && !finishReplay; i++)
                 await Promise.resolve();
-            expect(finishCheckpoint).toBeTypeOf('function');
+            expect(finishReplay).toBeTypeOf('function');
             await Promise.resolve();
 
-            expect(order).toEqual(['checkpoint-write']);
+            expect(order).toEqual(['replay-write']);
             expect(h.tab.writePending).toBe(true);
             expect(h.pty.sendResize).not.toHaveBeenCalled();
             expect(h.pty.ws.closed).toBeUndefined();
 
-            finishCheckpoint();
+            finishReplay();
             await Promise.all([...(h.tab._pendingBootstraps || [])]);
 
             expect(order).toEqual([
-                'checkpoint-write',
-                'checkpoint-parsed',
+                'replay-write',
+                'replay-parsed',
                 'fit',
                 'refresh',
                 'resize:90x8',
@@ -403,7 +403,7 @@ describe('actual xterm byte-stream recovery', () => {
             ]);
             expect(h.tab.writePending).toBe(false);
         } finally {
-            if (finishCheckpoint && h.tab.writePending) finishCheckpoint();
+            if (finishReplay && h.tab.writePending) finishReplay();
             await Promise.all([...(h.tab._pendingBootstraps || [])]);
             h.term.dispose();
         }

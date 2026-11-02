@@ -32,6 +32,7 @@ message TerminalServerFrame {
     TerminalBridgeState bridge_state = 22;
     TerminalSettlement settlement = 23;
     phi.websocket.events.v1.Notification notification = 24;
+    TerminalGeometry geometry = 25;
   }
 }
 
@@ -41,6 +42,11 @@ message TerminalAttach {
   optional uint64 head = 3;
   TerminalCheckpoint checkpoint = 4;
   optional uint64 replay_from = 5;
+  optional uint32 initial_cols = 6;
+  optional uint32 initial_rows = 7;
+  optional string event_cursor = 8;
+  optional bool history_incomplete = 9;
+  optional bool ephemeral = 10;
 }
 
 message TerminalCheckpoint {
@@ -55,6 +61,16 @@ message TerminalCheckpoint {
 message TerminalOutput {
   optional uint64 start = 1;
   bytes data = 2;
+}
+
+// TerminalGeometry is one committed backend resize on the live stream.
+// Every byte at seq >= at_seq was produced under cols x rows. Receivers
+// adopt it for their parser and never answer with a resize of their own.
+message TerminalGeometry {
+  optional uint64 at_seq = 1;
+  optional uint32 cols = 2;
+  optional uint32 rows = 3;
+  optional string event_cursor = 4;
 }
 
 message TerminalPong {}

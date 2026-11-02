@@ -1,8 +1,6 @@
 package phic
 
 import (
-	"encoding/binary"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -38,11 +36,8 @@ func TestExplicitRefreshClosesAllClientsAndRebuildsEachOriginWithoutDeletingPane
 			if phase.Load() > 0 {
 				state = []byte(label + " REBUILT")
 			}
-			if strings.HasSuffix(r.URL.Path, "/recording") {
-				h, _ := json.Marshal(wireproto.RecordingHeader{Epoch: 7, Start: 0, End: uint64(len(state))})
-				var prefix [4]byte
-				binary.BigEndian.PutUint32(prefix[:], uint32(len(h)))
-				_, _ = w.Write(append(append(prefix[:], h...), state...))
+			if strings.HasSuffix(r.URL.Path, "/replay") {
+				serveNativeReplay(w, r, state, nil)
 				return
 			}
 			if !strings.HasPrefix(r.URL.Path, "/ws/pane/") {
@@ -54,7 +49,7 @@ func TestExplicitRefreshClosesAllClientsAndRebuildsEachOriginWithoutDeletingPane
 				return
 			}
 			defer conn.Close()
-			_ = conn.WriteMessage(websocket.BinaryMessage, testAttachCkpt(t, 7, uint64(len(state)), "ansi-v1", uint64(len(state)), 80, 20, state))
+			_ = conn.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, uint64(len(state))))
 			for {
 				if _, _, err := conn.ReadMessage(); err != nil {
 					closed <- label

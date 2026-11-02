@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { expect, test, type WebSocketRoute } from '@playwright/test';
 import { TerminalServerFrame } from '../web/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+import { replayAttach, replayEnvelope } from './_terminal-replay.js';
 
 let phi: PhiServer;
 test.beforeAll(async () => {
@@ -58,7 +59,7 @@ interface Checkpoint {
 // compilation is recorded separately from terminal work, so these tests do
 // not mistake unrelated page compilation for a terminal parser stall.
 for (const alternate of [false, true]) {
-    test(`phone ${alternate ? 'alternate' : 'normal'} replay and checkpoint keep the event loop responsive`, async ({
+    test(`phone ${alternate ? 'alternate' : 'normal'} raw replay and preview upload keep the event loop responsive`, async ({
         browser,
     }, info) => {
         const context = await browser.newContext({
@@ -208,26 +209,25 @@ for (const alternate of [false, true]) {
                 await route.fulfill({ json: {} });
             },
         );
-        await page.route(`**/api/terminals/${pane}/recording?*`, (route) => {
+        await page.route(`**/api/terminals/${pane}/replay?*`, (route) => {
             const query = new URL(route.request().url()).searchParams;
             const from = Number(query.get('from'));
             const end = Math.min(Number(query.get('through')), retained.length);
-            const hdr = Buffer.from(
-                JSON.stringify({ epoch: 7, start: from, end, resizes: [] }),
-            );
-            const size = Buffer.alloc(4);
-            size.writeUInt32BE(hdr.length);
+
             return route.fulfill({
                 contentType: 'application/octet-stream',
-                body: Buffer.concat([size, hdr, retained.subarray(from, end)]),
+                body: replayEnvelope(
+                    retained.subarray(from, end),
+                    7,
+                    80,
+                    24,
+                    from,
+                ),
             });
         });
         let liveSocket: WebSocketRoute | undefined;
         await page.routeWebSocket(`**/ws/pane/${pane}?*`, (socket) => {
             liveSocket = socket;
-            const ansi = checkpoint
-                ? Buffer.from(checkpoint.ansi)
-                : Buffer.alloc(0);
             socket.send(
                 Buffer.from(
                     TerminalServerFrame.encode(
@@ -235,21 +235,7 @@ for (const alternate of [false, true]) {
                             payload: {
                                 $case: 'attach',
                                 value: {
-                                    epoch: BigInt(7),
-                                    oldest: BigInt(0),
-                                    head: BigInt(retained.length),
-                                    ...(checkpoint
-                                        ? {
-                                              checkpoint: {
-                                                  through: BigInt(
-                                                      checkpoint.through,
-                                                  ),
-                                                  cols: checkpoint.cols,
-                                                  rows: checkpoint.rows,
-                                                  data: new Uint8Array(ansi),
-                                              },
-                                          }
-                                        : {}),
+                                    ...replayAttach(7, retained.length),
                                 },
                             },
                         }),

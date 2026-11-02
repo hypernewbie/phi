@@ -183,10 +183,17 @@ func TestWebSocketProtobufTerminalCore(t *testing.T) {
 		if err != nil {
 			t.Fatalf("spawn: %v", err)
 		}
+		if err := hub.SetRecordingDirectory(t.TempDir()); err != nil {
+			t.Fatal(err)
+		}
+		if err := hub.InitPaneJournal(inst.ID, inst.Pty.Cols, inst.Pty.Rows); err != nil {
+			t.Fatal(err)
+		}
 		hub.Ingest(inst.ID, []byte("shell output"))
 		server := protobufTestServer(t, hub, manager, inst)
 		conn := dialTerminal(t, terminalURL(server))
-		if attach := readServerFrame(t, conn).GetAttach(); attach == nil {
+		attach := readServerFrame(t, conn).GetAttach()
+		if attach == nil {
 			t.Fatal("first frame is not an attach")
 		}
 
@@ -196,11 +203,11 @@ func TestWebSocketProtobufTerminalCore(t *testing.T) {
 				Rows: proto.Uint32(30),
 			}},
 		})
-		deadline := time.Now().Add(3 * time.Second)
+		deadline := time.Now().Add(10 * time.Second)
 		for {
-			rec, ok := hub.Recording(inst.ID, 0, 1<<20)
-			if ok {
-				for _, m := range rec.Resizes {
+			page, err := hub.Replay(inst.ID, ReplayRequest{Epoch: attach.GetEpoch(), From: 0, Latest: true})
+			if err == nil {
+				for _, m := range page.Resizes {
 					if m.Cols == 100 && m.Rows == 30 {
 						return
 					}

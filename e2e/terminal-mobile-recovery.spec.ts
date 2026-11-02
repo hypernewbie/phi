@@ -7,6 +7,7 @@ import type {
     TerminalServerFrame as TerminalServerMessage,
 } from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+import { replayAttach, replayEnvelope } from './_terminal-replay.js';
 
 // The served bundle carries no types; bind its runtime codecs to the
 // generated declarations so spec-side encoding is fully checked.
@@ -50,7 +51,7 @@ interface Checkpoint {
 }
 
 for (const alternate of [false, true]) {
-    test(`slow touch browser recovers split UTF-8, reconnect and checkpoint reload (${alternate ? 'TUI' : 'normal'})`, async ({
+    test(`slow touch browser recovers split UTF-8, reconnect and raw replay reload (${alternate ? 'TUI' : 'normal'})`, async ({
         browser,
     }) => {
         const context = await browser.newContext({
@@ -121,23 +122,21 @@ for (const alternate of [false, true]) {
                 checkpoint = route.request().postDataJSON() as Checkpoint;
                 return route.fulfill({ json: {} });
             });
-            await page.route(`**/api/terminals/${id}/recording?*`, (route) => {
+            await page.route(`**/api/terminals/${id}/replay?*`, (route) => {
                 const query = new URL(route.request().url()).searchParams;
                 expect(query.has('have')).toBe(false);
                 const from = Number(query.get('from'));
                 const end = Math.min(Number(query.get('through')), head);
-                const header = Buffer.from(
-                    JSON.stringify({ epoch: 7, start: from, end, resizes: [] }),
-                );
-                const size = Buffer.alloc(4);
-                size.writeUInt32BE(header.length);
+
                 return route.fulfill({
                     contentType: 'application/octet-stream',
-                    body: Buffer.concat([
-                        size,
-                        header,
+                    body: replayEnvelope(
                         bytes.subarray(from, end),
-                    ]),
+                        7,
+                        80,
+                        24,
+                        from,
+                    ),
                 });
             });
             await page.routeWebSocket(`**/ws/pane/${id}?*`, (socket) => {
@@ -157,23 +156,7 @@ for (const alternate of [false, true]) {
                                 payload: {
                                     $case: 'attach',
                                     value: {
-                                        epoch: BigInt(7),
-                                        oldest: BigInt(0),
-                                        head: BigInt(head),
-                                        ...(checkpoint
-                                            ? {
-                                                  checkpoint: {
-                                                      through: BigInt(
-                                                          checkpoint.through,
-                                                      ),
-                                                      cols: checkpoint.cols,
-                                                      rows: checkpoint.rows,
-                                                      data: new TextEncoder().encode(
-                                                          checkpoint.ansi,
-                                                      ),
-                                                  },
-                                              }
-                                            : {}),
+                                        ...replayAttach(7, head),
                                     },
                                 },
                             }),

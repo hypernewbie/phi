@@ -415,21 +415,6 @@ describe('reader anchor unit cases', () => {
         }
     });
 
-    it('does not anchor while browsing history', async () => {
-        const model = serverModel(1 << 24);
-        const h = replayHarness(encode(''));
-        installFetch(model);
-        try {
-            await paint(h, model, 15000);
-            h.tab._historyBrowsing = true;
-            h.tab.term.scrollLines(-5);
-            h.manager._captureReaderAnchor(h.tab);
-            expect(h.tab.term._phiReaderAnchor ?? null).toBe(null);
-        } finally {
-            h.dispose();
-        }
-    });
-
     it('keyboard scrolling after a notch is not undone by output', async () => {
         const model = serverModel(1 << 24);
         const h = replayHarness(encode(''));

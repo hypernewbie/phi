@@ -95,8 +95,15 @@ func (app *Server) spawnTerminal(ctx context.Context, c coders.Coder, req SpawnR
 	if app.titles != nil {
 		app.titles.Register(inst)
 	}
-	if req.Cols != 0 && req.Rows != 0 {
-		app.hub.RecordResize(inst.ID, req.Cols, req.Rows)
+	// Open the journal with the actual PTY geometry and record the
+	// restored size before the read loop admits new output. Failures
+	// are not fatal: Ingest retries the open until storage recovers.
+	if err := app.hub.InitPaneJournal(inst.ID, inst.Pty.Cols, inst.Pty.Rows); err != nil {
+		log.Printf("[ws] pane %s: terminal journal open failed; ingest will retry: %v", inst.ID, err)
+	} else if req.Cols != 0 && req.Rows != 0 {
+		if err := app.hub.RecordRestoreGeometry(inst.ID, req.Cols, req.Rows); err != nil {
+			log.Printf("[ws] pane %s: terminal restore geometry failed: %v", inst.ID, err)
+		}
 	}
 	ws.StartPTYReadLoop(inst, app.hub)
 	if probe {

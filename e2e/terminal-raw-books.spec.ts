@@ -7,6 +7,7 @@ import type {
     TerminalServerFrame as TerminalServerMessage,
 } from '../web-src/proto/terminal.js';
 import { startPhi } from './_server.js';
+import { readReplay } from './_terminal-replay.js';
 
 // The served bundle carries no types; bind its runtime codec to the
 // generated declarations so spec-side decoding is fully checked.
@@ -34,9 +35,9 @@ interface StateWindow {
     Terminal: StateConstructor;
 }
 
-// Unlike the mocked transport performance test, this exercises the actual
-// server formatter -> ANSI checkpoint -> browser stream decoder -> xterm.
-test('real bounded attach preserves alternate screen, split UTF-8 and return to primary', async ({
+// Real raw journal -> browser stream decoder -> xterm, including a split
+// glyph in the alternate buffer and the saved primary buffer on return.
+test('raw replay preserves alternate screen, split UTF-8 and return to primary', async ({
     page,
     request,
 }) => {
@@ -79,29 +80,22 @@ while True: time.sleep(1)
         });
         expect(spawned.ok()).toBe(true);
         const pane = (await spawned.json()).pane_id as string;
-        const recordingURL = `${phi.url}/api/terminals/${pane}/recording?from=0&through=18446744073709551615`;
         await expect
             .poll(
-                async () => {
-                    const from =
-                        Buffer.byteLength('archive book payload\r\n') * 100000 -
-                        256;
-                    const response = await request.get(
-                        `${phi.url}/api/terminals/${pane}/recording?from=${from}&through=18446744073709551615`,
-                    );
-                    const body = await response.body();
-                    return response.ok() && body.includes(prefix);
-                },
+                async () =>
+                    (await readReplay(phi.url, pane)).data.includes(prefix),
                 { timeout: 30_000 },
             )
             .toBe(true);
-        const sourceResponse = await request.get(recordingURL);
-        const sourceBytes = (await sourceResponse.body()).length;
+        const sourceBytes = (await readReplay(phi.url, pane)).data.length;
         const attachSizes: number[] = [];
         const browserRecordingRequests: string[] = [];
+        const browserReplayRequests: string[] = [];
         page.on('request', (req) => {
             if (req.url().includes(`/api/terminals/${pane}/recording?`))
                 browserRecordingRequests.push(req.url());
+            if (req.url().includes(`/api/terminals/${pane}/replay?`))
+                browserReplayRequests.push(req.url());
         });
         page.on('websocket', (socket) => {
             if (!socket.url().includes(`/ws/pane/${pane}?`)) return;
@@ -161,6 +155,7 @@ while True: time.sleep(1)
         await expect.poll(screenText).toContain('ALT_BOOK');
         expect(attachSizes).toHaveLength(1);
         expect(attachSizes[0]).toBeLessThan(sourceBytes / 20);
+        expect(browserReplayRequests.length).toBeGreaterThan(0);
         expect(browserRecordingRequests).toHaveLength(0);
         writeFileSync(join(phi.dir, 'home', 'finish-utf8'), 'go');
         await expect.poll(screenText).toContain('ALT_BOOK 🙂 LIVE_READY');

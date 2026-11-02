@@ -4,6 +4,7 @@ package server
 
 import (
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -145,11 +146,14 @@ func (app *Server) closeResources() {
 		app.pty.BeginDrain()
 		app.pty.Shutdown(100 * time.Millisecond)
 	}
+	// Close journals before handing off access ownership to a new process.
+	if app.hub != nil {
+		if err := app.hub.Close(); err != nil {
+			slog.Error("hub shutdown", "err", err)
+		}
+	}
 	app.accessManager.BeginRestart()
 	app.bridge.Stop()
-	if app.hub != nil {
-		_ = app.hub.Close()
-	}
 	if app.fleet != nil {
 		app.fleet.Start(nil)
 	}

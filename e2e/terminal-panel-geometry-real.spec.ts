@@ -3,7 +3,9 @@ import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
 import {
+    isCancelledBellAudio,
     isCancelledSessionListRead,
+    isCancelledTerminalReplay,
     isCancelledWorktreeRead,
 } from './_session-requests.js';
 
@@ -161,7 +163,9 @@ function observeBrowser(page: Page, origin: string): BrowserEvents {
     page.on('requestfailed', (request) => {
         if (
             isCancelledSessionListRead(request, origin) ||
-            isCancelledWorktreeRead(request, origin)
+            isCancelledWorktreeRead(request, origin) ||
+            isCancelledTerminalReplay(request, origin) ||
+            isCancelledBellAudio(request, origin)
         )
             return;
         const url = new URL(request.url());

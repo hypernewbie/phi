@@ -777,13 +777,8 @@ func (m *tuiModel) renderFooter() string {
 	if m.focus == focusTerminal {
 		if tab := m.activeTabModel(); tab != nil && tab.actor != nil {
 			history := tab.actor.historyViewCopy()
-			switch {
-			case history.Loading:
-				hints = "Loading older history…  Ctrl-] End live"
-			case history.Older && history.NearTop:
-				hints = "Ctrl-] PgUp older history  Ctrl-] End live  Ctrl-] ? help"
-			case history.Browsing:
-				hints = "Ctrl-] End live  Ctrl-] ? help"
+			if history.Browsing {
+				hints = "Local scrollback  Ctrl-] End live  Ctrl-] ? help"
 			}
 		}
 	}
@@ -857,8 +852,7 @@ func (m *tuiModel) renderModal() string {
 		}
 	case modalWorktree, modalCoder, modalOpenCode:
 		body.WriteString(m.renderItems(14))
-	case modalHistory:
-		body.WriteString(m.renderHistory())
+
 	case modalDiffSelect:
 		body.WriteString(m.renderItems(14))
 		if m.modal.help != "" {
@@ -877,9 +871,7 @@ func (m *tuiModel) renderModal() string {
 		body.WriteString(lg.NewStyle().Foreground(tuiMuted).Render("working…"))
 	}
 	footer := "\n\n" + lg.NewStyle().Foreground(tuiMuted).Render("Enter confirm   Esc cancel")
-	if m.modal.kind == modalHistory {
-		footer = "\n\n" + lg.NewStyle().Foreground(tuiMuted).Render("↑↓ scroll  [/] earlier/later  x hex  y copy  Esc close")
-	}
+
 	content := body.String() + footer
 	return lg.NewStyle().
 		Border(lg.RoundedBorder()).
@@ -920,35 +912,6 @@ func (m *tuiModel) renderItems(maxItems int) string {
 		} else {
 			b.WriteString(lg.NewStyle().Foreground(tuiFgColor()).Render("  " + label))
 		}
-		b.WriteString("\n")
-	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
-func (m *tuiModel) renderHistory() string {
-	if m.history.loading {
-		return lg.NewStyle().Foreground(tuiMuted).Render("loading bounded recording window…")
-	}
-	if m.history.err != "" {
-		return lg.NewStyle().Foreground(tuiError).Render("history failed: " + m.history.err)
-	}
-	if len(m.history.lines) == 0 {
-		return lg.NewStyle().Foreground(tuiMuted).Render("no retained output")
-	}
-	height := max(6, min(24, m.height-12))
-	width := max(40, min(110, m.width-12))
-	start := m.history.scroll
-	if start > len(m.history.lines)-1 {
-		start = max(0, len(m.history.lines)-1)
-	}
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Source bytes [%d,%d) of %d · text/hex\n", m.history.start, m.history.end, m.history.head))
-	for i := 0; i < height && start+i < len(m.history.lines); i++ {
-		line := m.history.lines[start+i]
-		if lg.Width(line) > width {
-			line = truncateCells(line, width)
-		}
-		b.WriteString(lg.NewStyle().Foreground(tuiFgColor()).Render(line))
 		b.WriteString("\n")
 	}
 	return strings.TrimRight(b.String(), "\n")

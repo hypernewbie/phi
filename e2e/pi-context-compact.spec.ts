@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import { startPhi } from './_server.js';
+import { readReplay } from './_terminal-replay.js';
 import {
     COMPACT_FOLLOWUP_TOKENS,
     COMPACT_MODEL,
@@ -185,12 +186,9 @@ test('native desktop compact: known meter, one entry, unknown, recovery', async 
         await expect
             .poll(
                 async () => {
-                    const rec = await request.get(
-                        `${phi.url}/api/terminals/${absentPane}/recording?from=0&through=2097152`,
-                    );
-                    return rec.ok()
-                        ? (await rec.body()).toString('utf8').toLowerCase()
-                        : '';
+                    return (await readReplay(phi.url, absentPane)).data
+                        .toString('utf8')
+                        .toLowerCase();
                 },
                 { timeout: 20_000 },
             )

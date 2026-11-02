@@ -33,13 +33,13 @@ func TestMemoryStatsUsesRingCapacityNotFill(t *testing.T) {
 	}
 }
 
-func TestMemoryStatsCheckpointReplacementAndArchiveRehydration(t *testing.T) {
+func TestMemoryStatsCheckpointReplacementAndRawReplayOwnership(t *testing.T) {
 	h := NewHub(32)
 	t.Cleanup(func() { _ = h.Close() })
-	if err := h.Ingest("owned", []byte("initial output")); err != nil {
+	if err := h.InitPaneJournal("owned", 80, 24); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, _, err := h.State("owned"); err != nil {
+	if err := h.Ingest("owned", []byte("initial output")); err != nil {
 		t.Fatal(err)
 	}
 	pane, ok := h.LookupPane("owned")
@@ -66,20 +66,24 @@ func TestMemoryStatsCheckpointReplacementAndArchiveRehydration(t *testing.T) {
 		t.Fatal("replacement checkpoint rejected")
 	}
 
-	before, ok := h.Recording("owned", 0, head)
-	if !ok {
-		t.Fatal("recording unavailable before snapshot")
+	request := ReplayRequest{Epoch: epoch, Latest: true}
+	before, err := h.Replay("owned", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Start != 0 || before.End != head || !bytes.Equal(before.Data, []byte("initial output more")) {
+		t.Fatalf("wrong replay baseline: %+v", before)
 	}
 	live := h.MemoryStats()
 	if !live.Complete || *live.LiveOwnerCount != 1 || *live.ArchiveOwnerCount != 0 {
 		t.Fatalf("live owner counts = %+v", live)
 	}
-	if *live.RingCapacityBytes != 32 || *live.CheckpointCapacityBytes != 23 || *live.WasmLinearBytes != 0 || *live.NativeResidentBytes == 0 {
+	if *live.RingCapacityBytes != 32 || *live.CheckpointCapacityBytes != 23 || *live.WasmLinearBytes != 0 || *live.NativeResidentBytes != 0 {
 		t.Fatalf("live memory stats = %+v", live)
 	}
-	afterSnapshot, ok := h.Recording("owned", 0, head)
-	if !ok || !bytes.Equal(afterSnapshot.Data, before.Data) {
-		t.Fatal("memory snapshot changed recording bytes")
+	afterSnapshot, err := h.Replay("owned", request)
+	if err != nil || !bytes.Equal(afterSnapshot.Data, before.Data) {
+		t.Fatalf("memory snapshot changed replay bytes: %v", err)
 	}
 
 	h.ClosePane("owned")
@@ -91,22 +95,21 @@ func TestMemoryStatsCheckpointReplacementAndArchiveRehydration(t *testing.T) {
 		t.Fatalf("closed pane retained live buffers: %+v", archived)
 	}
 
-	if _, err := h.GetOrCreatePaneHub("owned"); err != nil {
+	pane, err = h.GetOrCreatePaneHub("owned")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, _, err := h.State("owned"); err != nil {
-		t.Fatal(err)
-	}
+	request.Epoch = pane.EpochOf()
 	rehydrated := h.MemoryStats()
 	if !rehydrated.Complete || *rehydrated.LiveOwnerCount != 1 || *rehydrated.ArchiveOwnerCount != 0 {
 		t.Fatalf("rehydrated owner counts = %+v", rehydrated)
 	}
-	if *rehydrated.RingCapacityBytes != 32 || *rehydrated.WasmLinearBytes != 0 || *rehydrated.NativeResidentBytes == 0 {
+	if *rehydrated.RingCapacityBytes != 32 || *rehydrated.CheckpointCapacityBytes != 0 || *rehydrated.WasmLinearBytes != 0 || *rehydrated.NativeResidentBytes != 0 {
 		t.Fatalf("rehydrated memory stats = %+v", rehydrated)
 	}
-	afterRehydrate, ok := h.Recording("owned", 0, head)
-	if !ok || !bytes.Equal(afterRehydrate.Data, before.Data) {
-		t.Fatal("archive rehydration changed recording bytes")
+	afterRehydrate, err := h.Replay("owned", request)
+	if err != nil || !bytes.Equal(afterRehydrate.Data, before.Data) {
+		t.Fatalf("archive rehydration changed replay bytes: %v", err)
 	}
 }
 

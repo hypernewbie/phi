@@ -167,13 +167,10 @@ describe('paste recovery draft storage', () => {
         const tm = manager();
         const tab = tm.getActiveTab();
         tab.pasteRecovery = 'unconfirmed';
-        tab._resyncNeeded = true;
         tm.stagedAttachments = [{ id: 'attachment' }];
         tm.saveActiveDraft();
         expect(tab.pasteRecovery).toBeUndefined();
-        expect(tab._inputRestriction).toBe(
-            'Paste held until live output is resynced.',
-        );
+        expect(tab._inputRestriction ?? '').toBe('');
         expect(
             JSON.parse(localStorage.getItem('phi_tab_draft_stable-pane')),
         ).not.toHaveProperty('pasteRecovery');

@@ -120,6 +120,16 @@ func TestReplayGeometryCannotSuppressPanelResize(t *testing.T) {
 	if err := p.handleInput(paneInput{Kind: paneInputResize, Cols: cols, Rows: rows, ForceResize: true}); err != nil {
 		t.Fatal(err)
 	}
+	if p.emuCols != 140 || p.emuRows != 35 || p.dirty {
+		t.Fatal("requested resize changed the parser before commitment")
+	}
+	marker, err := wireproto.EncodeGeometryFrame(0, uint32(cols), uint32(rows), (replayPosition{p.epochValue(), 0, 1}).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.handleFrame(marker); err != nil {
+		t.Fatal(err)
+	}
 	frame, err := p.emu.Snapshot()
 	if err != nil {
 		t.Fatal(err)

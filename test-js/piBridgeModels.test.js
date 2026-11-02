@@ -921,7 +921,6 @@ describe('bridge picker availability loss', () => {
             tab.tabEl = document.createElement('div');
             const { tm, dropup } = harness(tab);
             for (const name of [
-                '_updateHistoryButton',
                 'updateDocumentTitle',
                 '_showReconnectOverlay',
                 'maybeAutoReconnect',

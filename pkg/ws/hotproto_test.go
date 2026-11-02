@@ -5,14 +5,14 @@ package ws
 //
 //   - attach is atomic: a client gets an attach frame with the head H and
 //     then only output frames with start >= H (no gap, no dupes);
-//   - seq accounting is exact across ring wraparound;
+//   - seq accounting is exact; the journal never evicts;
 //   - the recording endpoint view matches the bytes the live stream
 //     carried, including resize marker ordering;
-//   - checkpoints are opaque, bounded, and newest-wins.
+//   - checkpoints are opaque, bounded, upload-only; attach never serves one.
 
 import (
-	"bytes"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -98,57 +98,129 @@ func TestAttachHotIsAtomicAndLiveOnly(t *testing.T) {
 }
 
 func TestSeqAccountingAcrossWraparound(t *testing.T) {
-	h := NewHub(8)                    // tiny ring forces wrap
-	h.Ingest("p", []byte("12345678")) // total=8, oldest=0
-	h.Ingest("p", []byte("9ABCDEF"))  // total=15, oldest=7
+	h := NewHub(8)
+	if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.InitPaneJournal("p", 80, 24); err != nil {
+		t.Fatal(err)
+	}
+	h.Ingest("p", []byte("12345678")) // total=8
+	h.Ingest("p", []byte("9ABCDEF"))  // total=15
+	ph, _ := h.LookupPane("p")
+	epoch := ph.EpochOf()
 
-	rec, ok := h.Recording("p", 0, 100)
-	if !ok {
-		t.Fatal("recording failed")
+	page, err := h.Replay("p", ReplayRequest{Epoch: epoch, From: 0, Latest: true})
+	if err != nil {
+		t.Fatalf("replay: %v", err)
 	}
-	if rec.Start != 0 || rec.End != 15 {
-		t.Fatalf("recording span [%d,%d), want [0,15)", rec.Start, rec.End)
+	if page.Start != 0 || page.End != 15 {
+		t.Fatalf("replay span [%d,%d), want [0,15)", page.Start, page.End)
 	}
-	if string(rec.Data) != "123456789ABCDEF" {
-		t.Fatalf("recording data = %q; replay eviction must not delete history", rec.Data)
+	if string(page.Data) != "123456789ABCDEF" {
+		t.Fatalf("replay data = %q; the journal never evicts", page.Data)
 	}
 
 	// Partial range inside the retained window.
-	rec2, _ := h.Recording("p", 9, 12)
-	if rec2.Start != 9 || rec2.End != 12 || string(rec2.Data) != "ABC" {
-		t.Fatalf("partial recording = %+v %q", rec2, rec2.Data)
+	partial, err := h.Replay("p", ReplayRequest{Epoch: epoch, From: 9, Through: 12, ThroughCursor: EncodeEventCursor(epoch, 12, 0)})
+	if err != nil {
+		t.Fatalf("partial replay: %v", err)
+	}
+	if partial.Start != 9 || partial.End != 12 || string(partial.Data) != "ABC" {
+		t.Fatalf("partial replay = %+v %q", partial, partial.Data)
 	}
 
 	// from beyond head is an error.
-	if _, ok := h.Recording("p", 16, 20); ok {
-		t.Fatal("recording from beyond head must fail")
+	if _, err := h.Replay("p", ReplayRequest{Epoch: epoch, From: 16, Latest: true}); err == nil {
+		t.Fatal("replay from beyond head must fail")
+	}
+
+	// A numeric through without its attach fence is an error: the fence
+	// certifies the head the caller attached to.
+	if _, err := h.Replay("p", ReplayRequest{Epoch: epoch, From: 0, Through: 15}); !errors.Is(err, ErrReplayBadRequest) {
+		t.Fatalf("unfenced through must fail bad-request, got %v", err)
+	}
+}
+
+func TestIngestPublishesCommittedResizeWhenPayloadFails(t *testing.T) {
+	h := NewHub(1024)
+	if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.InitPaneJournal("p", 80, 24); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{Send: make(chan []byte, 8)}
+	h.AttachHot("p", c)
+	drainOne(c.Send) // attach
+	// The commit fails after its OS step; the stage stays pending.
+	commit, _, err := h.StagePaneResize("p", 100, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ph, _ := h.LookupPane("p")
+	ph.mu.Lock()
+	ph.journal.faults.manifestSync = errors.New("injected")
+	ph.mu.Unlock()
+	if err := commit(); err == nil {
+		t.Fatal("commit with manifest fault must fail")
+	}
+	// Admission finishes the staged commit, then the payload fails. The
+	// marker is durable, so live clients must still receive it.
+	ph.mu.Lock()
+	ph.journal.faults.manifestSync = nil
+	ph.journal.faults.journalSync = errors.New("injected")
+	ph.mu.Unlock()
+	if err := h.Ingest("p", []byte("x")); err == nil {
+		t.Fatal("payload with journal fault must fail")
+	}
+	frame, err := wireproto.DecodeServerFrame(drainOne(c.Send))
+	if err != nil || frame.GetGeometry() == nil {
+		t.Fatalf("committed resize never reached live clients: %+v %v", frame, err)
+	}
+	if g := frame.GetGeometry(); g.GetCols() != 100 || g.GetRows() != 30 {
+		t.Fatalf("geometry = %dx%d", g.GetCols(), g.GetRows())
 	}
 }
 
 func TestRecordResizeMarkersOrderAgainstOutput(t *testing.T) {
 	h := NewHub(1024)
+	if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.InitPaneJournal("p", 80, 24); err != nil {
+		t.Fatal(err)
+	}
+	commit := func(cols, rows uint16) {
+		t.Helper()
+		commit, _, err := h.StagePaneResize("p", cols, rows)
+		if err != nil {
+			t.Fatalf("stage %dx%d: %v", cols, rows, err)
+		}
+		if err := commit(); err != nil {
+			t.Fatalf("commit %dx%d: %v", cols, rows, err)
+		}
+	}
 	h.Ingest("p", []byte("aaaa")) // 0..4
-	h.RecordResize("p", 80, 24)
+	commit(120, 40)
 	h.Ingest("p", []byte("bb")) // 4..6
-	h.RecordResize("p", 120, 40)
-	h.RecordResize("p", 120, 40) // duplicate suppressed
-	h.Ingest("p", []byte("cc"))  // 6..8
+	commit(120, 40)             // duplicate suppressed
+	h.Ingest("p", []byte("cc")) // 6..8
 
-	rec, _ := h.Recording("p", 0, 8)
-	if len(rec.Resizes) != 2 {
-		t.Fatalf("want 2 markers (dup suppressed), got %+v", rec.Resizes)
+	ph, _ := h.LookupPane("p")
+	page, err := h.Replay("p", ReplayRequest{Epoch: ph.EpochOf(), From: 0, Latest: true})
+	if err != nil {
+		t.Fatalf("replay: %v", err)
 	}
-	if rec.Resizes[0].AtSeq != 4 || rec.Resizes[0].Cols != 80 || rec.Resizes[0].Rows != 24 {
-		t.Fatalf("marker[0] = %+v", rec.Resizes[0])
+	// The 80x24 baseline is initial geometry, not a marker.
+	if len(page.Resizes) != 1 {
+		t.Fatalf("want 1 marker (dup suppressed), got %+v", page.Resizes)
 	}
-	if rec.Resizes[1].AtSeq != 6 || rec.Resizes[1].Cols != 120 {
-		t.Fatalf("marker[1] = %+v", rec.Resizes[1])
+	if m := page.Resizes[0]; m.AtSeq != 4 || m.Cols != 120 || m.Rows != 40 {
+		t.Fatalf("marker = %+v", m)
 	}
-
-	// A range also carries the geometry already in force at its start.
-	rec2, _ := h.Recording("p", 5, 8)
-	if len(rec2.Resizes) != 2 || rec2.Resizes[0].AtSeq != 4 || rec2.Resizes[1].AtSeq != 6 {
-		t.Fatalf("range markers = %+v", rec2.Resizes)
+	if page.InitCols != 80 || page.InitRows != 24 {
+		t.Fatalf("initial geometry = %dx%d", page.InitCols, page.InitRows)
 	}
 }
 
@@ -182,145 +254,12 @@ func TestStoreCheckpointRules(t *testing.T) {
 		t.Fatal("stale upload is accepted but must not replace")
 	}
 
-	// AttachHot must hand the newest snapshot through, verbatim.
+	// A v2 attach never serves snapshots: replay is the only recovery
+	// path, so uploads stay stored but unread on attach.
 	c := &Client{Send: make(chan []byte, 4)}
 	h.AttachHot("p", c)
-	ckpt := parseAttach(t, drainOne(c.Send)).GetCheckpoint()
-	if ckpt == nil || ckpt.GetThrough() != 3 || len(ckpt.GetData()) != len("snap-old") {
-		t.Fatalf("ckpt = %+v", ckpt)
-	}
-	if string(ckpt.GetData()) != "snap-old" {
-		t.Fatalf("ckpt ansi = %q", ckpt.GetData())
-	}
-}
-
-func TestAnsiAttachPrefersCurrentClientCheckpoint(t *testing.T) {
-	h := NewHub(1024)
-	if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
-		t.Fatalf("SetRecordingDirectory: %v", err)
-	}
-	h.Ingest("p", []byte("hello")) // head=5
-	ph, ok := h.LookupPane("p")
-	if !ok {
-		t.Fatal("pane missing")
-	}
-	ph.mu.Lock()
-	epoch := ph.epoch
-	ph.mu.Unlock()
-
-	// A coarse-pointer client snapshot at the exact head carries scrollback
-	// the server formatter cannot emit; an ANSI attach must serve it verbatim.
-	if !h.StoreCheckpoint("p", CheckpointUpload{Epoch: epoch, Through: 5, Cols: 63, Rows: 56, Ansi: []byte("CLIENT-SNAPSHOT")}) {
-		t.Fatal("valid checkpoint rejected")
-	}
-	c := &Client{Send: make(chan []byte, 4), AnsiState: true}
-	h.AttachHot("p", c)
-	ckpt := parseAttach(t, drainOne(c.Send)).GetCheckpoint()
-	if ckpt == nil || ckpt.GetKind() != "ansi-v1" {
-		t.Fatalf("checkpoint = %+v", ckpt)
-	}
-	if string(ckpt.GetData()) != "CLIENT-SNAPSHOT" || ckpt.GetThrough() != 5 {
-		t.Fatalf("snapshot not served verbatim: %+v %q", ckpt, ckpt.GetData())
-	}
-	if ckpt.GetCols() != 63 || ckpt.GetRows() != 56 {
-		t.Fatalf("snapshot geometry lost: %dx%d", ckpt.GetCols(), ckpt.GetRows())
-	}
-
-	// Head moved past the snapshot. The snapshot is still newer than the
-	// retention floor, so the attach serves it with its own through: the
-	// client replays the bytes after that frontier instead of losing the
-	// scrollback to a few bytes of output that arrived late.
-	h.Ingest("p", []byte(" world")) // head=11
-	c2 := &Client{Send: make(chan []byte, 4), AnsiState: true}
-	h.AttachHot("p", c2)
-	ckpt2 := parseAttach(t, drainOne(c2.Send)).GetCheckpoint()
-	if ckpt2 == nil || ckpt2.GetThrough() != 5 {
-		t.Fatalf("stale checkpoint = %+v", ckpt2)
-	}
-	if string(ckpt2.GetData()) != "CLIENT-SNAPSHOT" {
-		t.Fatalf("stale scrollback discarded: %q", ckpt2.GetData())
-	}
-}
-
-func TestAnsiAttachIgnoresCheckpointBelowRetentionFloor(t *testing.T) {
-	h := NewHub(8)
-	if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
-		t.Fatalf("SetRecordingDirectory: %v", err)
-	}
-	h.Ingest("p", []byte("0123456789")) // head=10
-	ph, ok := h.LookupPane("p")
-	if !ok {
-		t.Fatal("pane missing")
-	}
-	ph.mu.Lock()
-	epoch := ph.epoch
-	ph.mu.Unlock()
-	if !h.StoreCheckpoint("p", CheckpointUpload{Epoch: epoch, Through: 1, Cols: 80, Rows: 24, Ansi: []byte("snap-below-floor")}) {
-		t.Fatal("valid checkpoint rejected")
-	}
-	// Rotate the retained window past the stored checkpoint.
-	chunk := bytes.Repeat([]byte("A"), 64<<10)
-	for i := 0; i < int(retentionHistoryCap)/len(chunk)+40; i++ {
-		h.Ingest("p", chunk)
-	}
-	ph.mu.Lock()
-	pos := ph.positionLocked()
-	ph.mu.Unlock()
-	if pos.Oldest <= 1 {
-		t.Fatalf("floor did not pass the checkpoint: %+v", pos)
-	}
-	c := &Client{Send: make(chan []byte, 4), AnsiState: true}
-	h.AttachHot("p", c)
-	ckpt := parseAttach(t, drainOne(c.Send)).GetCheckpoint()
-	if ckpt == nil || ckpt.GetThrough() != pos.Head {
-		t.Fatalf("checkpoint = %+v, want head %d", ckpt, pos.Head)
-	}
-	if bytes.Contains(ckpt.GetData(), []byte("snap-below-floor")) {
-		t.Fatal("checkpoint below the retention floor served")
-	}
-}
-
-func TestAttachHeadDropsCheckpointBelowRetentionFloor(t *testing.T) {
-	h := NewHub(8)
-	if err := h.SetRecordingDirectory(t.TempDir()); err != nil {
-		t.Fatalf("SetRecordingDirectory: %v", err)
-	}
-	h.Ingest("p", []byte("0123456789"))
-	ph, ok := h.LookupPane("p")
-	if !ok {
-		t.Fatal("pane missing")
-	}
-	ph.mu.Lock()
-	epoch := ph.epoch
-	ph.mu.Unlock()
-	if !h.StoreCheckpoint("p", CheckpointUpload{Epoch: epoch, Through: 10, Cols: 80, Rows: 24, Ansi: []byte("snap-old")}) {
-		t.Fatal("valid checkpoint rejected")
-	}
-	// Rotate the retained window well past the stored checkpoint.
-	chunk := bytes.Repeat([]byte("A"), 64<<10)
-	for i := 0; i < int(retentionHistoryCap)/len(chunk)+40; i++ {
-		h.Ingest("p", chunk)
-	}
-	ph.mu.Lock()
-	pos := ph.positionLocked()
-	ph.mu.Unlock()
-	if pos.Oldest <= 10 {
-		t.Fatalf("floor did not pass the checkpoint: %+v", pos)
-	}
-	c := &Client{Send: make(chan []byte, 4)}
-	h.AttachHot("p", c)
-	attach := parseAttach(t, drainOne(c.Send))
-	if attach.GetCheckpoint() != nil {
-		t.Fatalf("attach advertised checkpoint %+v below floor %d", attach.GetCheckpoint(), attach.GetOldest())
-	}
-	if attach.GetOldest() != pos.Oldest || attach.GetHead() != pos.Head {
-		t.Fatalf("attach %+v != position %+v", attach, pos)
-	}
-	ph.mu.Lock()
-	replayFrom := ph.recording.replayStart()
-	ph.mu.Unlock()
-	if replayFrom != attach.GetReplayFrom() {
-		t.Fatalf("ReplayFrom = %d, want %d", attach.GetReplayFrom(), replayFrom)
+	if ckpt := parseAttach(t, drainOne(c.Send)).GetCheckpoint(); ckpt != nil {
+		t.Fatalf("attach served checkpoint %+v", ckpt)
 	}
 }
 

@@ -172,9 +172,9 @@ func (app *Server) Run(ctx context.Context) error {
 		app.bridge.LoadConfig = app.configStore().LoadWithError
 	}
 	app.restoreSavedTabs()
-	// Expiry starts only after restoration completes so saved panes
-	// are live (and protected) before the first sweep runs.
-	app.hub.StartRetentionSweeps()
+	// No retention sweep runs: the v3 journal never evicts, and the
+	// retired v2 sweep must not touch pre-upgrade files. Expiry for
+	// closed v3 panes arrives with the VT removal.
 	app.titles = NewPiTerminalTitleService(app.pty, app.hub)
 	app.titles.Start()
 

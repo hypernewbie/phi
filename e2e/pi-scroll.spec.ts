@@ -1,17 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
-import { TerminalServerFrame } from '../web/proto/terminal.js';
-import type {
-    MessageFns,
-    TerminalServerFrame as TerminalServerMessage,
-} from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
-
-// The served bundle carries no types; bind its runtime codec to the
-// generated declarations so spec-side encoding is fully checked.
-const ServerCodec: MessageFns<TerminalServerMessage> =
-    TerminalServerFrame as unknown as MessageFns<TerminalServerMessage>;
 
 // A deterministic PTY app using Pi fullscreen's real DEC/SGR mouse protocol.
 // No model calls, credentials, or replacements for xterm parsing/scrolling.
@@ -122,110 +112,6 @@ async function firstRow(page: Page, pane: string): Promise<string> {
         );
     }, pane);
 }
-
-test('manual history button fetches output omitted by a valid compact checkpoint', async ({
-    page,
-}) => {
-    await observeXterm(page);
-    const pane = 'compact-history';
-    const history = Array.from(
-        { length: 300 },
-        (_, i) => `ARCHIVE ROW ${String(i).padStart(4, '0')}\r\n`,
-    ).join('');
-    const bytes = Buffer.from(history);
-    const checkpoint = Buffer.from(
-        history.split('\r\n').slice(-7).join('\r\n'),
-    );
-    const fetched: Array<{ from: number; through: number }> = [];
-    await page.route('**/api/terminals', (route) =>
-        route.fulfill({
-            json: [
-                {
-                    id: pane,
-                    title: 'History',
-                    coder: 'pi',
-                    cwd: phi.dir,
-                    workspace: phi.dir,
-                    session_id: '',
-                    pinned: false,
-                },
-            ],
-        }),
-    );
-    await page.route('**/api/terminals/compact-history/**', (route) =>
-        route.fulfill({ json: {} }),
-    );
-    await page.route(
-        '**/api/terminals/compact-history/recording?*',
-        (route) => {
-            const query = new URL(route.request().url()).searchParams;
-            const from = Number(query.get('from'));
-            const through = Math.min(
-                Number(query.get('through')),
-                bytes.length,
-            );
-            fetched.push({ from, through });
-            const json = Buffer.from(
-                JSON.stringify({
-                    epoch: 7,
-                    start: from,
-                    end: through,
-                    resizes: [],
-                }),
-            );
-            const length = Buffer.alloc(4);
-            length.writeUInt32BE(json.length);
-            return route.fulfill({
-                contentType: 'application/octet-stream',
-                body: Buffer.concat([
-                    length,
-                    json,
-                    bytes.subarray(from, through),
-                ]),
-            });
-        },
-    );
-    await page.routeWebSocket('**/ws/pane/compact-history?*', (socket) => {
-        socket.send(
-            Buffer.from(
-                ServerCodec.encode(
-                    ServerCodec.fromPartial({
-                        payload: {
-                            $case: 'attach',
-                            value: {
-                                epoch: BigInt(7),
-                                oldest: BigInt(0),
-                                head: BigInt(bytes.length),
-                                checkpoint: {
-                                    through: BigInt(bytes.length),
-                                    cols: 80,
-                                    rows: 24,
-                                    data: new Uint8Array(checkpoint),
-                                },
-                            },
-                        },
-                    }),
-                ).finish(),
-            ),
-        );
-    });
-    await page.goto(phi.url);
-    await page.locator(`.tab[data-pane-id="${pane}"]`).click();
-    await expect.poll(() => firstRow(page, pane)).toBe('ARCHIVE ROW 0294');
-    // The compact checkpoint must remain the fast-paint path.
-    expect(fetched).toHaveLength(0);
-    await page.locator(`#term-${pane} .xterm-screen`).hover();
-    await page.mouse.wheel(0, -1200);
-    const historyButton = page.locator(`#term-${pane} .load-history-btn`);
-    await expect(historyButton).toBeEnabled();
-    expect(fetched).toHaveLength(0);
-    await historyButton.click();
-    await expect
-        .poll(() => fetched.some((range) => range.from === 0))
-        .toBe(true);
-    await expect.poll(() => firstRow(page, pane)).toBe('ARCHIVE ROW 0000');
-    await expect(historyButton).toHaveClass(/hidden/);
-});
 
 for (const situation of [
     'new pane',

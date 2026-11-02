@@ -61,61 +61,66 @@ func TestRecordingConcurrentColdReadersCannotTruncateLiveWriter(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = h.Close() })
+	if err := h.InitPaneJournal("pane", 80, 24); err != nil {
+		t.Fatal(err)
+	}
 	const count = 150000
 	if err := h.Ingest("pane", bytes.Repeat([]byte("X"), count)); err != nil {
 		t.Fatal(err)
 	}
 	h.ClosePane("pane")
-	done := make(chan struct{}, 24)
+	// Promote back to live; readers use the promoted epoch.
+	if err := h.Ingest("pane", []byte("PROMOTE")); err != nil {
+		t.Fatal(err)
+	}
+	ph, ok := h.LookupPane("pane")
+	if !ok {
+		t.Fatal("pane missing after promotion")
+	}
+	epoch := ph.EpochOf()
+	// Replay and Ingest serialize on the pane mutex, so every
+	// concurrent read is an exact prefix of the final stream.
+	reads := make(chan []byte, 24*20)
+	errs := make(chan error, 24*20)
 	var wg sync.WaitGroup
 	for i := 0; i < 24; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			h.Recording("pane", 0, 1)
-			done <- struct{}{}
+			for j := 0; j < 20; j++ {
+				page, err := h.Replay("pane", ReplayRequest{Epoch: epoch, From: 0, Latest: true})
+				if err != nil {
+					errs <- err
+					return
+				}
+				reads <- page.Data
+			}
 		}()
 	}
-	<-done
-	cold := h.recordingForRead("pane")
-	ph, gerr := h.GetOrCreatePaneHub("pane")
-	if gerr != nil {
-		t.Fatal(gerr)
-	}
-	if ph != cold {
-		t.Fatal("cold-to-live promotion split the journal's mutex ownership")
-	}
 	payload := bytes.Repeat([]byte("N"), 4096)
-	stop := make(chan struct{})
-	go func() { wg.Wait(); close(stop) }()
 	const writes = 128
 	for i := 0; i < writes; i++ {
 		if err := h.Ingest("pane", payload); err != nil {
 			t.Fatal(err)
 		}
 	}
-	<-stop
-	ph.mu.Lock()
-	for _, s := range ph.recording.segs {
-		info, err := s.raw.Stat()
-		if err != nil {
-			ph.mu.Unlock()
-			t.Fatal(err)
-		}
-		if uint64(info.Size()) != s.rawLen {
-			ph.mu.Unlock()
-			t.Fatalf("concurrent cold opener truncated admitted writer bytes: size=%d expected=%d", info.Size(), s.rawLen)
-		}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent replay: %v", err)
 	}
-	ph.mu.Unlock()
-	rec, ok := h.Recording("pane", count, uint64(count+writes*len(payload)))
-	expected := bytes.Repeat(payload, writes)
-	if !ok || !bytes.Equal(rec.Data, expected) {
-		for i := 0; i < len(rec.Data) && i < len(expected); i++ {
-			if rec.Data[i] != expected[i] {
-				t.Fatalf("concurrent recovery corrupted appended data at seq=%d: expected=%#x actual=%#x (read ok=%t)", count+i, expected[i], rec.Data[i], ok)
-			}
+	close(reads)
+	final, err := h.Replay("pane", ReplayRequest{Epoch: epoch, From: 0, Latest: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append(append(bytes.Repeat([]byte("X"), count), []byte("PROMOTE")...), bytes.Repeat([]byte("N"), 4096*writes)...)
+	if !bytes.Equal(final.Data, want) {
+		t.Fatalf("final replay has %d bytes, want %d", len(final.Data), len(want))
+	}
+	for r := range reads {
+		if !bytes.Equal(r, want[:len(r)]) {
+			t.Fatal("concurrent replay was not an exact prefix of the final stream")
 		}
-		t.Fatalf("concurrent recovery corrupted appended data; ok=%t actual length=%d expected=%d", ok, len(rec.Data), len(expected))
 	}
 }

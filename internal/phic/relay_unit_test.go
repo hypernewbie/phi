@@ -103,6 +103,7 @@ func TestServerURLIsAnOrigin(t *testing.T) {
 func TestRelayClosesMalformedStreamWith1002(t *testing.T) {
 	attach, err := wireproto.EncodeAttachFrame(&wspb.TerminalAttach{
 		Epoch: proto.Uint64(1), Oldest: proto.Uint64(0), Head: proto.Uint64(0),
+		InitialCols: proto.Uint32(80), InitialRows: proto.Uint32(24), EventCursor: proto.String("v1.1.0.0"),
 	})
 	if err != nil {
 		t.Fatal(err)

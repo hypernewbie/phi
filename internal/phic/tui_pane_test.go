@@ -2,8 +2,6 @@ package phic
 
 import (
 	"context"
-	"encoding/binary"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -76,11 +74,8 @@ func TestPaneActorAttachLiveInputExit(t *testing.T) {
 	up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 	inputs := make(chan string, 16)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/terminals/p/recording" {
-			h, _ := json.Marshal(wireproto.RecordingHeader{Epoch: 7, Start: uint64(len(source)), End: uint64(len(source))})
-			var prefix [4]byte
-			binary.BigEndian.PutUint32(prefix[:], uint32(len(h)))
-			_, _ = w.Write(append(prefix[:], h...))
+		if r.URL.Path == "/api/terminals/p/replay" {
+			serveNativeReplay(w, r, source, nil)
 			return
 		}
 		if r.URL.Path != "/ws/pane/p" {

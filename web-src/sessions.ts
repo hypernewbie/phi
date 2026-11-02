@@ -2493,6 +2493,7 @@ export class SessionsManager {
                           null,
                           openCodePaneMode(data.opencode_mode),
                           data.pi_bridge,
+                          ...(data.new_pane === true ? [{ fresh: true }] : []),
                       ]
                     : [
                           true,
@@ -2501,7 +2502,12 @@ export class SessionsManager {
                           null,
                           null,
                           data.pi_bridge,
-                          { piMode: data.pi_mode },
+                          {
+                              piMode: data.pi_mode,
+                              ...(data.new_pane === true
+                                  ? { fresh: true }
+                                  : {}),
+                          },
                       ]),
             );
 
@@ -2562,6 +2568,7 @@ export class SessionsManager {
                           null,
                           openCodePaneMode(data.opencode_mode),
                           data.pi_bridge,
+                          ...(data.new_pane === true ? [{ fresh: true }] : []),
                       ]
                     : [
                           true,
@@ -2570,7 +2577,12 @@ export class SessionsManager {
                           null,
                           null,
                           data.pi_bridge,
-                          { piMode: data.pi_mode },
+                          {
+                              piMode: data.pi_mode,
+                              ...(data.new_pane === true
+                                  ? { fresh: true }
+                                  : {}),
+                          },
                       ]),
             );
 

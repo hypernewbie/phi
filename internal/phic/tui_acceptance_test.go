@@ -1,18 +1,12 @@
 package phic
 
 import (
-	"context"
-	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/gorilla/websocket"
@@ -154,56 +148,6 @@ func TestTUILockedServerOpensPasswordModal(t *testing.T) {
 	}
 	if !m.data[m.currentOrigin()].needAuth {
 		t.Fatal("locked state not recorded")
-	}
-}
-
-// TestTUIHistoryFetchIsBounded covers HIST-01: browsing asks for a bounded
-// tail of the recording and ends exactly at the attach head.
-func TestTUIHistoryFetchIsBounded(t *testing.T) {
-	head := uint64(historyWindowBytes + 100)
-	var mu sync.Mutex
-	var queries [][2]uint64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/recording") {
-			http.NotFound(w, r)
-			return
-		}
-		from, _ := strconv.ParseUint(r.URL.Query().Get("from"), 10, 64)
-		through, _ := strconv.ParseUint(r.URL.Query().Get("through"), 10, 64)
-		mu.Lock()
-		queries = append(queries, [2]uint64{from, through})
-		mu.Unlock()
-		hdr, _ := json.Marshal(wireproto.RecordingHeader{Epoch: 7, Start: from, End: through})
-		var size [4]byte
-		binary.BigEndian.PutUint32(size[:], uint32(len(hdr)))
-		_, _ = w.Write(size[:])
-		_, _ = w.Write(hdr)
-		_, _ = w.Write(make([]byte, through-from))
-	}))
-	defer srv.Close()
-
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	if _, err := fetchHistoryText(ctx, mustAPI(t, srv.URL), "p", 7, head, stubBuild); err != nil {
-		t.Fatal(err)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if len(queries) == 0 {
-		t.Fatal("history made no recording requests")
-	}
-	if queries[0][0] != head-historyWindowBytes {
-		t.Fatalf("history window start = %d, want %d", queries[0][0], head-historyWindowBytes)
-	}
-	if queries[len(queries)-1][1] != head {
-		t.Fatalf("history did not end at the attach head: %+v", queries)
-	}
-	total := uint64(0)
-	for _, q := range queries {
-		total += q[1] - q[0]
-	}
-	if total != historyWindowBytes {
-		t.Fatalf("history fetched %d bytes, want %d", total, historyWindowBytes)
 	}
 }
 

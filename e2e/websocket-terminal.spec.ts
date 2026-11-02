@@ -13,7 +13,10 @@ import type {
     TerminalServerFrame as TerminalServerMessage,
 } from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
-import { isCancelledBackgroundRead } from './_session-requests.js';
+import {
+    isCancelledBackgroundRead,
+    isCancelledBellAudio,
+} from './_session-requests.js';
 
 // The served bundle carries no types; bind its runtime codecs to the
 // generated declarations so spec-side decoding is fully checked.
@@ -23,7 +26,7 @@ const ClientCodec: MessageFns<TerminalClientMessage> =
     TerminalClientFrame as unknown as MessageFns<TerminalClientMessage>;
 
 // M1 terminal gate: the smallest real pane flows over generated protobuf,
-// in Chromium and through the actual phic console plus the relay. Both
+// in Chromium and through the actual phic native console. Both
 // cases must run and pass; a skip is not a pass.
 
 const execFileAsync = promisify(execFile);
@@ -89,7 +92,7 @@ test('terminal pane flows over protobuf in Chromium', async ({ page }) => {
         const url = new URL(msg.location().url || phi.url);
         // The isolated home has no OpenCode database or update checker.
         // These unrelated optional services already fail without this
-        // flow (same filter as terminal-history-floor.spec.ts).
+        // flow; deliberate background cancellations are not failures.
         if (url.pathname === '/api/update/status' && msg.text().includes('503'))
             return;
         if (
@@ -102,20 +105,14 @@ test('terminal pane flows over protobuf in Chromium', async ({ page }) => {
     });
     page.on('pageerror', (err) => pageErrors.push(String(err)));
     page.on('requestfailed', (req) => {
-        if (isCancelledBackgroundRead(req, phi.url)) return;
-        const url = new URL(req.url());
-        // Restarting a chime can cancel its previous media range request.
         if (
-            req.method() === 'GET' &&
-            req.resourceType() === 'media' &&
-            url.origin === new URL(phi.url).origin &&
-            url.pathname === '/vendor/bell.wav' &&
-            req.failure()?.errorText === 'net::ERR_ABORTED'
+            isCancelledBackgroundRead(req, phi.url) ||
+            isCancelledBellAudio(req, phi.url)
         )
             return;
         // Pin synchronization can finish with an empty 200 response that
         // Chromium reports as aborted. It does not carry terminal data
-        // (same filter as terminal-history-floor.spec.ts).
+        // (background cancellations are deliberate).
         if (
             /^\/api\/terminals\/[^/]+\/pin$/.test(
                 new URL(req.url()).pathname,
@@ -215,14 +212,14 @@ test('terminal pane flows over protobuf in Chromium', async ({ page }) => {
                     ws.onerror = () => resolve('rejected');
                 });
             return {
-                token: await open('phi.terminal.protobuf.v1'),
+                token: await open('phi.terminal.protobuf.v2'),
                 bare: await open(),
             };
         },
         { base: phi.url, id: probePane.pane_id },
     );
     await probePage.close();
-    expect(admission.token).toBe('open:phi.terminal.protobuf.v1');
+    expect(admission.token).toBe('open:phi.terminal.protobuf.v2');
     expect(admission.bare).toBe('rejected');
     consoleErrors.length = 0;
     pageErrors.length = 0;
@@ -373,7 +370,7 @@ test('terminal pane flows over protobuf in Chromium', async ({ page }) => {
     expect(failedRequests).toEqual([]);
 });
 
-test('terminal pane flows through the real phic console and relay', async () => {
+test('terminal pane flows through the real phic console', async () => {
     const dir = join(phi.dir, 'accept-native');
     mkdirSync(dir, { recursive: true });
     let stdout: string;

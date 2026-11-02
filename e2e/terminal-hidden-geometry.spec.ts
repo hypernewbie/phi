@@ -7,6 +7,7 @@ import type {
     TerminalServerFrame as TerminalServerMessage,
 } from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+import { replayAttach, replayEnvelope } from './_terminal-replay.js';
 
 // The served bundle carries no types; bind its runtime codecs to the
 // generated declarations so spec-side encoding is fully checked.
@@ -168,11 +169,14 @@ for (const route of ['bootstrap', 'live-gap', 'font-size', 'font-family']) {
                     if (route === 'bootstrap')
                         await manager._bootstrapDelta(tab, 0, 0);
                     if (route === 'live-gap') {
-                        manager._fetchRecordingRange = async () => ({
+                        manager._fetchReplayPages = async () => ({
                             start: 0,
                             end: 1,
                             byteLength: 1,
                             bytes: new Uint8Array([32]),
+                            endCursor: 'v1.7.1.0',
+                            through: 1,
+                            throughCursor: 'v1.7.1.0',
                             resizes: [],
                         });
                         await manager._onLiveGap(tab, 0, 1);
@@ -258,6 +262,7 @@ test('initial background attachment never fits the hidden panel, including its o
     const one = 'hidden-one',
         two = 'hidden-two';
     const sockets = new Map<string, WebSocketRoute>();
+    const recordings = new Map<string, Buffer>();
     const firstSizes: number[][] = [];
     const sizes = new Map<string, number[][]>([
         [one, firstSizes],
@@ -326,6 +331,23 @@ test('initial background attachment never fits the hidden panel, including its o
     await page.route('**/api/terminals/hidden-*/**', (r) =>
         r.fulfill({ json: {} }),
     );
+    await page.route('**/api/terminals/hidden-*/replay?*', (route) => {
+        const url = new URL(route.request().url());
+        const bytes =
+            recordings.get(url.pathname.split('/')[3]) ?? Buffer.alloc(0);
+        const from = Number(url.searchParams.get('from'));
+        const through = Number(url.searchParams.get('through'));
+        return route.fulfill({
+            contentType: 'application/octet-stream',
+            body: replayEnvelope(
+                bytes.subarray(from, through),
+                7,
+                80,
+                24,
+                from,
+            ),
+        });
+    });
     await page.routeWebSocket('**/ws/pane/hidden-*?*', (socket) => {
         const id = new URL(socket.url()).pathname.split('/').at(-1) ?? '';
         const sent = sizes.get(id);
@@ -383,6 +405,7 @@ test('initial background attachment never fits the hidden panel, including its o
     expect(sizes.get(one)).toHaveLength(resizeCount);
     const head = (id: string, bytes?: Buffer) => {
         const through = bytes?.length ?? 0;
+        recordings.set(id, bytes ?? Buffer.alloc(0));
         const socket = sockets.get(id);
         if (!socket) throw new Error(`Missing attach socket: ${id}`);
         socket.send(
@@ -392,20 +415,7 @@ test('initial background attachment never fits the hidden panel, including its o
                         payload: {
                             $case: 'attach',
                             value: {
-                                epoch: BigInt(7),
-                                oldest: BigInt(0),
-                                head: BigInt(through),
-                                ...(bytes
-                                    ? {
-                                          checkpoint: {
-                                              kind: 'ansi-v1',
-                                              through: BigInt(through),
-                                              cols: 80,
-                                              rows: 24,
-                                              data: new Uint8Array(bytes),
-                                          },
-                                      }
-                                    : {}),
+                                ...replayAttach(7, through),
                             },
                         },
                     }),

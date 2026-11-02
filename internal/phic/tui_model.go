@@ -41,7 +41,6 @@ const (
 	// by explicit choice, retained per tab afterwards.
 	modalOpenCode
 	modalHelp
-	modalHistory
 	modalMarkdown
 	modalDiff
 	modalDiffSelect
@@ -248,7 +247,6 @@ type tuiModel struct {
 
 	diff     diffState
 	markdown markdownState
-	history  historyState
 
 	sessionCursor int
 	sessionSearch textField
@@ -807,8 +805,7 @@ func (m *tuiModel) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m.applyConsoleReset(msg)
 	case worktreesMsg:
 		return m.applyWorktrees(msg)
-	case historyLoadedMsg:
-		return m.applyHistoryLoaded(msg)
+
 	case msgCloseExpired:
 		return m.applyCloseExpired(msg)
 	}
@@ -956,7 +953,10 @@ func (m *tuiModel) applySpawnDone(msg spawnDoneMsg) (tea.Model, tea.Cmd) {
 	}
 	tab := m.ensureTab(msg.capture.origin, msg.resp.PaneID, msg.capture)
 	tab.startupInput = msg.capture.startupInput
-	tab.fresh = msg.capture.sessionID == ""
+	tab.fresh = msg.capture.sessionID == "" // Compatibility with synthetic/older spawn replies.
+	if msg.resp.NewPane != nil {
+		tab.fresh = *msg.resp.NewPane
+	}
 	if msg.resp.OpenCodeMode != "" {
 		tab.view.OpenCodeMode = msg.resp.OpenCodeMode
 	}
@@ -1814,7 +1814,7 @@ func (m *tuiModel) openHelp() {
   Ctrl-] d        toggle reader panel (Diff / Markdown)
   Ctrl-] M        Markdown file list and viewer
   Ctrl-] h        recording browser
-  Ctrl-] PgUp     load one older terminal history book
+  Ctrl-] PgUp     open local terminal scrollback
   Ctrl-] End      return to live output
   Ctrl-] p        project context
   Ctrl-] w        worktree context
@@ -1836,8 +1836,8 @@ Switching tabs syncs project, worktree, coder, sessions, diff,
 and Markdown to the active terminal.
 
 In terminal focus: Tab, arrows, digits, Escape, and Ctrl-C go to the
-backend. Wheel scrolling stays within the loaded history book.
-Older books require Ctrl-] PgUp. They never load automatically.
+backend. Wheel scrolling stays within the local 10,000-row buffer.
+Ctrl-] PgUp opens local scrollback; Ctrl-] End returns to live output.
 Application chrome: Tab cycles regions, Enter activates,
 Esc returns to terminal focus; Esc twice in chrome opens the Quit dialog.`
 
@@ -1845,23 +1845,11 @@ Esc returns to terminal focus; Esc twice in chrome opens the Quit dialog.`
 }
 
 func (m *tuiModel) openHistory() tea.Cmd {
-	key, ok := m.activeTabKey()
-	if !ok {
-		return nil
+	if tab := m.activeTabModel(); tab != nil && tab.actor != nil {
+		tab.actor.loadHistory()
+		m.focus = focusTerminal
 	}
-	tab := m.findTab(key)
-	if tab == nil || tab.actor == nil {
-		m.setStatus("attach the pane before opening history", true)
-		return nil
-	}
-	s := m.currentServer()
-	if s == nil || s.api == nil {
-		return nil
-	}
-	_, head, _, _, _, _ := tab.actor.state()
-	m.history = historyState{open: true, key: key, head: head, ticket: m.history.ticket + 1}
-	m.modal.open(modalHistory, "Recording · "+tab.label())
-	return m.historyPage(head)
+	return nil
 }
 
 // ---- layout ----

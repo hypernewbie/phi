@@ -108,7 +108,7 @@ Console keys:
   Prefix: Ctrl-]   (Ctrl-] Ctrl-] sends a literal prefix)
   Ctrl-] 1..9     switch server      Ctrl-] b  server rail
   Ctrl-] s        sessions sidebar   Ctrl-] t  terminal tabs
-  Ctrl-] d        diff panel         Ctrl-] h  bounded history browser
+  Ctrl-] d        diff panel         Ctrl-] h  local scrollback
   Ctrl-] p        project context    Ctrl-] w  worktree context
   Ctrl-] c        coder selector     Ctrl-] n  new session
   Ctrl-] o        OpenCode Mini      Ctrl-] S  Shell session

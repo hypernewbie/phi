@@ -44,7 +44,7 @@ test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 // resolves to the owned fixture, never to a user's server.
 
 const EVENTS = 'phi.events.protobuf.v1';
-const TERMINAL = 'phi.terminal.protobuf.v1';
+const TERMINAL = 'phi.terminal.protobuf.v2';
 const CONTROL = 'phi.control.protobuf.v1';
 
 const PASSWORD = 'auth transition pass 1';

@@ -10,6 +10,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { configToToml, startPhi } from './_server.js';
 import {
     isCancelledSessionListRead,
+    isCancelledTerminalReplay,
     isCancelledWorktreeRead,
 } from './_session-requests.js';
 
@@ -66,7 +67,8 @@ async function watchPage(page: Page, serverOrigin: string) {
     page.on('requestfailed', (request) => {
         if (
             isCancelledWorktreeRead(request, serverOrigin) ||
-            isCancelledSessionListRead(request, serverOrigin)
+            isCancelledSessionListRead(request, serverOrigin) ||
+            isCancelledTerminalReplay(request, serverOrigin)
         )
             return;
         const url = new URL(request.url());

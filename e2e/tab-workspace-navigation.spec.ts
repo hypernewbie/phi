@@ -9,6 +9,7 @@ import {
     type TestInfo,
 } from '@playwright/test';
 import { configToToml, startPhi, type PhiServer } from './_server.js';
+import { readReplay } from './_terminal-replay.js';
 
 const seedOrder = ['b1', 'a1', 'b2'];
 
@@ -88,10 +89,7 @@ async function waitForFixtureTabs(page: Page, url: string) {
     await waitForTabCount(page, 3);
     await expect
         .poll(async () => {
-            const response = await fetch(
-                `${url}/api/terminals/b1/recording?from=0&through=4096`,
-            );
-            return response.ok ? response.text() : '';
+            return (await readReplay(url, 'b1')).data.toString('utf8');
         })
         .toContain('bash fixture ready');
 }
@@ -588,10 +586,7 @@ test('long navigator scrolls at desktop widths and keeps compact navigation unch
         await waitForTabCount(page, 24);
         await expect
             .poll(async () => {
-                const response = await request.get(
-                    `${phi.url}/api/terminals/b1/recording?from=0&through=4096`,
-                );
-                return response.ok() ? response.text() : '';
+                return (await readReplay(phi.url, 'b1')).data.toString('utf8');
             })
             .toContain('bash fixture ready');
 
