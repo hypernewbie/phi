@@ -122,6 +122,18 @@ it.each([
     ['unsafe epoch', { epoch: Number.MAX_SAFE_INTEGER + 1 }],
     ['wrong byte length', { end: 5 }],
     ['no progress', { end: 0, event_cursor: undefined }],
+    ['missing geometry event', { event_cursor: 'v1.7.4.1' }],
+    [
+        'uncounted geometry event',
+        { event_cursor: 'v1.7.4.0', resizes: [[2, 100, 30]] },
+    ],
+    [
+        'too many geometry events',
+        {
+            event_cursor: 'v1.7.4.257',
+            resizes: Array.from({ length: 257 }, () => [2, 100, 30]),
+        },
+    ],
     ['marker past end', { resizes: [[5, 80, 24]] }],
     ['zero columns', { resizes: [[0, 0, 24]] }],
     ['noninteger rows', { resizes: [[0, 80, 1.5]] }],
@@ -141,6 +153,31 @@ it.each([
         vi.fn(async () => recordingEnvelope(encode('data'), 0, 4, extra)),
     );
     expect(await manager()._fetchReplayPagesOnce('p', 0, 4, 7)).toBeNull();
+});
+
+it('fenced pages must certify the exact requested byte and geometry target', async () => {
+    for (const extra of [
+        { through: 5, through_event_cursor: 'v1.7.5.1' },
+        { through_event_cursor: 'v1.7.4.2' },
+        { through_event_cursor: undefined },
+    ]) {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () =>
+                recordingEnvelope(encode('data'), 0, 4, {
+                    event_cursor: 'v1.7.4.1',
+                    resizes: [[2, 100, 30]],
+                    ...extra,
+                }),
+            ),
+        );
+        expect(
+            await manager()._fetchReplayPagesOnce('p', 0, 4, 7, undefined, {
+                afterCursor: 'v1.7.0.0',
+                throughCursor: 'v1.7.4.1',
+            }),
+        ).toBeNull();
+    }
 });
 
 it.each([204, 500])(

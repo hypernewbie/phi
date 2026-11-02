@@ -118,17 +118,17 @@ export class ReplayWire {
 
 export function recordingEnvelope(bytes, start, end, extra = {}) {
     const epoch = extra.epoch ?? 7;
+    const eventCursor =
+        extra.event_cursor ??
+        `v1.${epoch}.${end}.${extra.resizes?.length ?? 0}`;
     const json = encode(
         JSON.stringify({
             epoch,
             start,
             end,
             through: extra.through ?? end,
-            through_event_cursor:
-                extra.through_event_cursor ??
-                extra.event_cursor ??
-                `v1.${epoch}.${end}.0`,
-            event_cursor: `v1.${epoch}.${end}.0`,
+            through_event_cursor: extra.through_event_cursor ?? eventCursor,
+            event_cursor: eventCursor,
             resizes: [],
             initial_cols: 80,
             initial_rows: 24,

@@ -257,6 +257,7 @@ describe('hidden replay and history geometry ownership', () => {
                 epoch: 7,
                 oldest: 0,
                 head: source.length,
+                eventCursor: `v1.7.${source.length}.1`,
                 initialCols: 240,
                 initialRows: 12,
             });
@@ -326,7 +327,12 @@ describe('hidden replay and history geometry ownership', () => {
             await write(reference, prefix);
             reference.resize(120, 10);
             await write(reference, suffix);
-            h.pty.ws.head({ epoch: 7, oldest: 0, head: source.length });
+            h.pty.ws.head({
+                epoch: 7,
+                oldest: 0,
+                head: source.length,
+                eventCursor: `v1.7.${source.length}.2`,
+            });
             await h.settle();
             expectDeferred(h.tab);
             expect(snapshot(h.term)).toEqual(snapshot(reference));
@@ -360,6 +366,7 @@ describe('hidden replay and history geometry ownership', () => {
                 epoch: 7,
                 oldest: 0,
                 head: source.length,
+                eventCursor: `v1.7.${source.length}.1`,
                 initialCols: 240,
                 initialRows: 12,
             });

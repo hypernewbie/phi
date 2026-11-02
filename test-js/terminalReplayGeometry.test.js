@@ -230,6 +230,7 @@ it('parses resize-only pages through the geometry fence at byte head zero', asyn
         const first = q.get('after_event_cursor') === 'v1.7.0.0';
         return recordingEnvelope(new Uint8Array(), 0, 0, {
             event_cursor: first ? 'v1.7.0.256' : 'v1.7.0.300',
+            through_event_cursor: 'v1.7.0.300',
             resizes: Array.from({ length: first ? 256 : 44 }, (_, i) => [
                 0,
                 first ? 80 + i : 100 + i,

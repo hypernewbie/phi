@@ -2828,20 +2828,22 @@ export class TabManager {
                     !validCursor(hdr.event_cursor) ||
                     !Number.isInteger(hdr.initial_cols) || hdr.initial_cols <= 0 || hdr.initial_cols > 65535 ||
                     !Number.isInteger(hdr.initial_rows) || hdr.initial_rows <= 0 || hdr.initial_rows > 65535 ||
-                    (hdr.resizes !== undefined && (!Array.isArray(hdr.resizes) ||
+                    (hdr.resizes !== undefined && (!Array.isArray(hdr.resizes) || hdr.resizes.length > 256 ||
                         hdr.resizes.some((m, i) => !Array.isArray(m) || m.length !== 3 ||
                             !seq(m[0]) || m[0] < hdr.start || m[0] > hdr.end || (i > 0 && m[0] < hdr.resizes[i - 1][0]) || !Number.isInteger(m[1]) ||
                             !Number.isInteger(m[2]) || m[1] <= 0 || m[2] <= 0 || m[1] > 65535 || m[2] > 65535)))) return null;
 
                 const event = hdr.event_cursor.split('.').slice(1).map(Number);
                 const afterOrdinal = chained === undefined ? 0 : Number(chained.split('.').at(-1));
-                if (event.some(n => !seq(n)) || event[0] !== hdr.epoch || event[1] !== hdr.end || event[2] < afterOrdinal ||
+                if (event.some(n => !seq(n)) || event[0] !== hdr.epoch || event[1] !== hdr.end || event[2] - afterOrdinal !== (hdr.resizes?.length ?? 0) ||
                     (!latest && throughCursor !== undefined && event[2] > Number(throughCursor.split('.').at(-1)))) return null;
                 if (latest) {
                     if (!seq(hdr.through) || hdr.through < hdr.end || !validCursor(hdr.through_event_cursor)) return null;
                     const target = hdr.through_event_cursor.split('.').slice(1).map(Number);
                     if (target.some(n => !seq(n)) || target[0] !== hdr.epoch || target[1] !== hdr.through || target[2] < event[2]) return null;
                 }
+                if (!latest && throughCursor !== undefined &&
+                    (hdr.through !== throughParam || hdr.through_event_cursor !== throughCursor)) return null;
                 targetThrough = hdr.through;
                 targetCursor = hdr.through_event_cursor;
                 if (!pageInit) pageInit = { initCols: hdr.initial_cols, initRows: hdr.initial_rows };

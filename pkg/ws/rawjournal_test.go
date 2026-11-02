@@ -1,7 +1,9 @@
 package ws
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -84,6 +86,55 @@ func TestRawJournalIdenticalRetryAdmitsOnce(t *testing.T) {
 	if err != nil || string(data) != string(payload) {
 		t.Fatalf("read after retry: %q, %v", data, err)
 	}
+	if err := j.markClosed(time.Now().UnixNano()); err != nil || j.historyIncomplete() {
+		t.Fatalf("completed retry must permit a clean closure: incomplete=%v, error=%v", j.historyIncomplete(), err)
+	}
+}
+
+func TestRawJournalCloseAfterFailedOutputPreservesUncertainty(t *testing.T) {
+	for _, fault := range []string{"journalSync", "manifestSync", "dirSync"} {
+		t.Run(fault, func(t *testing.T) {
+			dir := t.TempDir()
+			j := openTestRawJournal(t, dir)
+			if _, err := j.appendPayload([]byte("accepted")); err != nil {
+				t.Fatal(err)
+			}
+			injected := errors.New("injected write failure")
+			switch fault {
+			case "journalSync":
+				j.faults.journalSync = injected
+			case "manifestSync":
+				j.faults.manifestSync = injected
+			case "dirSync":
+				j.faults.dirSync = injected
+			}
+			if _, err := j.appendPayload([]byte("unconfirmed")); err == nil {
+				t.Fatal("fault must hold output admission")
+			}
+			// Shutdown wins before the read loop can retry. Clearing the
+			// fault must not let closure certify the incomplete admission.
+			j.faults = rawFaults{}
+			closeErr := j.markClosed(time.Now().UnixNano())
+			if !j.historyIncomplete() {
+				t.Error("closure hid the unconfirmed output")
+			}
+			if fault == "dirSync" && closeErr == nil {
+				t.Error("closure must not overwrite an ambiguously published frontier")
+			}
+			if err := j.close(); err != nil {
+				t.Fatal(err)
+			}
+			r := openTestRawJournal(t, dir)
+			want := "accepted"
+			if fault == "dirSync" {
+				want += "unconfirmed"
+			}
+			data, _, _, err := r.readOrd(0, r.head, 0)
+			if err != nil || string(data) != want || !r.historyIncomplete() {
+				t.Fatalf("recovered %q, incomplete=%v, error=%v; want %q with uncertainty visible", data, r.historyIncomplete(), err, want)
+			}
+		})
+	}
 }
 
 func TestRawJournalMismatchedRetryRejected(t *testing.T) {
@@ -131,46 +182,57 @@ func TestRawJournalSyncFaultsAdmitNothing(t *testing.T) {
 		if j.head != 4 {
 			t.Fatalf("%s: head = %d", fault, j.head)
 		}
+		if err := j.markClosed(time.Now().UnixNano()); err != nil || j.historyIncomplete() {
+			t.Fatalf("%s: completed retry must permit a clean closure: incomplete=%v, error=%v", fault, j.historyIncomplete(), err)
+		}
 	}
 }
 
 func TestRawJournalMiddleCorruptionFailsClosed(t *testing.T) {
-	dir := t.TempDir()
-	j := openTestRawJournal(t, dir)
-	for _, p := range []string{"alpha", "beta", "gamma"} {
-		if _, err := j.appendPayload([]byte(p)); err != nil {
-			t.Fatalf("append: %v", err)
-		}
-	}
-	if err := j.close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-	path := filepath.Join(dir, "journal")
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read journal: %v", err)
-	}
-	// Corrupt a middle header (record 2 starts at offset 10): the certified
-	// prefix must fail closed, and the files must stay exactly as they
-	// were for forensics. Payload bytes carry no checksum by design.
-	before[10] = 0xFF
-	if err := os.WriteFile(path, before, 0600); err != nil {
-		t.Fatalf("corrupt journal: %v", err)
-	}
-	if _, err := openRawJournal(dir, 80, 24, nil); err == nil {
-		t.Fatal("corrupt certified prefix must fail closed")
-	}
-	after, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read journal after: %v", err)
-	}
-	if len(after) != len(before) {
-		t.Fatalf("failed open truncated evidence: %d -> %d", len(before), len(after))
-	}
-	for i := range before {
-		if after[i] != before[i] {
-			t.Fatal("failed open modified the journal file")
-		}
+	for _, tail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("uncommitted_tail=%v", tail), func(t *testing.T) {
+			dir := t.TempDir()
+			j := openTestRawJournal(t, dir)
+			for _, p := range []string{"alpha", "beta", "gamma"} {
+				if _, err := j.appendPayload([]byte(p)); err != nil {
+					t.Fatalf("append: %v", err)
+				}
+			}
+			if err := j.close(); err != nil {
+				t.Fatalf("close: %v", err)
+			}
+			path := filepath.Join(dir, "journal")
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A bad certified header must prevent all recovery mutation,
+			// even when an otherwise truncatable tail follows it.
+			before[10] = 0xFF
+			if tail {
+				before = append(before, []byte("uncommitted tail")...)
+			}
+			if err := os.WriteFile(path, before, 0600); err != nil {
+				t.Fatal(err)
+			}
+			tmp := filepath.Join(dir, "MANIFEST.tmp")
+			if err := os.WriteFile(tmp, []byte("unpublished manifest"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			manifest, err := os.ReadFile(filepath.Join(dir, "MANIFEST"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := openRawJournal(dir, 80, 24, nil); err == nil {
+				t.Fatal("corrupt certified prefix must fail closed")
+			}
+			for name, want := range map[string][]byte{"journal": before, "MANIFEST": manifest, "MANIFEST.tmp": []byte("unpublished manifest")} {
+				got, err := os.ReadFile(filepath.Join(dir, name))
+				if err != nil || !bytes.Equal(got, want) {
+					t.Errorf("failed open modified %s: length %d -> %d, error %v", name, len(want), len(got), err)
+				}
+			}
+		})
 	}
 }
 

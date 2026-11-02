@@ -123,6 +123,8 @@ describe('diff log replay', () => {
             queries.push(u.searchParams);
             const from = Number(u.searchParams.get('from'));
             return recordingEnvelope(bytes, from, from + bytes.length, {
+                through: head,
+                through_event_cursor: `v1.7.${head}.0`,
                 initial_cols: 120,
                 initial_rows: 30,
             });

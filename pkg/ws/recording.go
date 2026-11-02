@@ -473,6 +473,8 @@ type rawJournal struct {
 	pending      *rawPending
 	faults       rawFaults
 	now          func() time.Time
+
+	unconfirmedOutput bool // a failed admission must not become a clean closure
 }
 
 // openRawJournal opens or creates the raw journal at dir. An empty dir
@@ -511,19 +513,10 @@ func openRawJournalMode(dir string, initCols, initRows uint16, now func() time.T
 	} else if !fi.Mode().IsDir() {
 		return nil, fmt.Errorf("raw journal path is not a directory: %s", dir)
 	}
-	if !readOnly {
-		if err := os.Chmod(dir, 0700); err != nil {
-			return nil, err
-		}
-	}
 	if now == nil {
 		now = time.Now
 	}
 	j := &rawJournal{dir: dir, ephemeral: ephemeral, readOnly: readOnly, nextOrdinal: 1, now: now}
-	// Cold readers never remove, truncate, chmod or publish anything.
-	if !readOnly {
-		_ = os.Remove(filepath.Join(dir, "MANIFEST.tmp"))
-	}
 	journalPath := filepath.Join(dir, "journal")
 	raw, err := readRetentionManifest(filepath.Join(dir, "MANIFEST"))
 	if err != nil {
@@ -537,6 +530,9 @@ func openRawJournalMode(dir string, initCols, initRows uint16, now func() time.T
 		}
 		if initCols == 0 || initRows == 0 {
 			return nil, fmt.Errorf("raw journal needs positive initial geometry")
+		}
+		if err := os.Chmod(dir, 0700); err != nil {
+			return nil, err
 		}
 		f, err := os.OpenFile(journalPath, os.O_RDWR|os.O_CREATE, 0600)
 		if err != nil {
@@ -570,12 +566,7 @@ func openRawJournalMode(dir string, initCols, initRows uint16, now func() time.T
 	if fi, serr := os.Stat(journalPath); serr == nil {
 		preSize = fi.Size()
 	}
-	var f *os.File
-	if readOnly {
-		f, err = openRawFileReadOnly(journalPath, m.committedLen)
-	} else {
-		f, err = openCommitFile(journalPath, m.committedLen)
-	}
+	f, err := openRawFile(journalPath, m.committedLen, readOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -588,12 +579,30 @@ func openRawJournalMode(dir string, initCols, initRows uint16, now func() time.T
 	j.closedAtNs = m.closedAtNs
 	j.createdNs = m.createdNs
 	j.lastUpdateNs = m.lastUpdateNs
-	if !readOnly && preSize > m.committedLen {
-		j.faults.truncates++
-	}
 	if err := j.loadCertified(); err != nil {
 		f.Close()
 		return nil, err
+	}
+	// Validate the entire certified prefix before repairing its tail or
+	// removing interrupted metadata. Corruption must leave evidence intact.
+	// Cold readers never remove, truncate, chmod or publish anything.
+	if !readOnly {
+		if err := os.Chmod(dir, 0700); err != nil {
+			f.Close()
+			return nil, err
+		}
+		if err := f.Chmod(0600); err != nil {
+			f.Close()
+			return nil, err
+		}
+		if preSize > m.committedLen {
+			if err := f.Truncate(m.committedLen); err != nil {
+				f.Close()
+				return nil, err
+			}
+			j.faults.truncates++
+		}
+		_ = os.Remove(filepath.Join(dir, "MANIFEST.tmp"))
 	}
 	// A truncated tail proves a crash, and a lifetime that never
 	// recorded its closure may have lost output. Either keeps the
@@ -615,7 +624,7 @@ func openRawJournalMode(dir string, initCols, initRows uint16, now func() time.T
 	return j, nil
 }
 
-func openRawFileReadOnly(path string, committedLen int64) (*os.File, error) {
+func openRawFile(path string, committedLen int64, readOnly bool) (*os.File, error) {
 	fi, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
@@ -623,7 +632,11 @@ func openRawFileReadOnly(path string, committedLen int64) (*os.File, error) {
 	if !fi.Mode().IsRegular() || fi.Size() < committedLen {
 		return nil, fmt.Errorf("raw journal: missing certified file: %s", path)
 	}
-	f, err := os.Open(path)
+	flag := os.O_RDONLY
+	if !readOnly {
+		flag = os.O_RDWR
+	}
+	f, err := os.OpenFile(path, flag, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -752,6 +765,7 @@ func (j *rawJournal) appendPayload(payload []byte) ([]rawOrdMarker, error) {
 	if j.closed {
 		return nil, errRawJournalClosed
 	}
+	j.unconfirmedOutput = true
 	if len(payload) > rawRecordMaxLen {
 		return nil, fmt.Errorf("raw journal: payload exceeds %d bytes", rawRecordMaxLen)
 	}
@@ -776,6 +790,7 @@ func (j *rawJournal) appendPayload(payload []byte) ([]rawOrdMarker, error) {
 		}
 		j.advancePayload(j.pending.newHead, j.pending.newOffset, len(payload))
 		j.pending = nil
+		j.unconfirmedOutput = false
 		return applied, nil
 	}
 	at := j.committedLen
@@ -806,6 +821,7 @@ func (j *rawJournal) appendPayload(payload []byte) ([]rawOrdMarker, error) {
 		return applied, err
 	}
 	j.advancePayload(newHead, newOffset, len(payload))
+	j.unconfirmedOutput = false
 	return applied, nil
 }
 
@@ -981,6 +997,15 @@ func (j *rawJournal) readOrdThrough(from, end, afterOrdinal, throughOrdinal uint
 func (j *rawJournal) markClosed(ns int64) error {
 	if j.closed {
 		return errRawJournalClosed
+	}
+	if j.unconfirmedOutput {
+		j.flags |= rawFlagIncomplete
+	}
+	// A rename may already expose the pending output. Publishing the old
+	// in-memory head here would roll that certified frontier back. Leave
+	// the lifetime open on disk; recovery retains it and warns instead.
+	if j.pending != nil && j.pending.kind == rawPendingPayload {
+		return fmt.Errorf("raw journal: output commit still awaits admission")
 	}
 	if j.staged != nil && j.staged.osApplied {
 		if _, err := j.finishStaged(); err != nil {
