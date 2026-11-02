@@ -4,8 +4,21 @@ All notable changes to phi are documented here. Newest versions first.
 
 ## Unreleased
 
+## v0.34.0 — 2026-11-02
+
+### Added
+- **The server replays raw terminal output instead of storing terminal state** (`e65502ac`). Each pane records its PTY byte stream with ordered resize markers in a v3 journal and serves that stream through the paged `/replay` endpoint. The browser and the native `phic` console decode the bytes in their own terminal engines, so a reopened pane replays from byte zero: scrollback is no longer truncated at a snapshot, a restart restores the whole output, and a long restore shows a progress pill with Cancel that never blocks typing. `/state` and `/recording` answer 426, and the socket protocol is v2, so older clients must update.
+- **Chat keeps the delivery queue and retained extension dialogs** (`0d424953`). While Pi streams, a send queues as `Steering:` or `Follow-up:` with restore, copy, and discard; a failed submit keeps its row under the same item ID, and the reconnect resubmits that ID once. Extension dialogs use the shared modal chrome, rebuild from `hydrate`, and close when answered.
+- **React frontend sign-in and settings MVP** (`ba176b79`). `packages/web-react` gains the login screen, a settings store with retry and queued toggles, and reconciliation against the server state. The Go frontend remains the shipped default.
+
 ### Changed
-- **The CPU indicator polls on demand instead of always.** The header logo's CPU tint came from a 2s `/api/system/cpu` fetch on every open tab, forever, whether or not anyone could see it. It now samples once every 10s, samples nothing while the tab is hidden (the chain stops and restarts from `visibilitychange`), and samples nothing at all while low power mode is on. Low power mode is the effects profile the settings toggle and the desktop tray already write; it is forced on for mobile viewports, so a phone takes no ambient samples. The hover HUD ages a sample out after three turns and shows `cpu —` instead of a stale number. The desktop host mirrors the same 10s cadence and freezes its per-view reads while its window is hidden or minimized, or while its own low power switch is on; the `phic` TUI polls the same endpoint on the same 10s cadence. Sampling costs the server about 1µs, so the request, not the sample, was the expense.
+- **Server domains leave package main** (`1991137c`). HTTP, WebSocket, restore, and replay handlers now live in `internal/server`; the root package keeps startup wiring.
+
+### Performance
+- **PTY output reaches the journal in batches** (`e65502ac`). A blocking read is followed by a non-blocking drain of what the child already wrote, so one journal admission covers a full batch. Ingest rose from 68 KB/s to about 1 MB/s, and an idle keystroke pays one yield plus one short sleep.
+
+### Fixed
+- **A closing PTY can no longer invalidate a batch drain** (`77b68334`). The drain pins the descriptor lifetime with `SyscallConn.Control` instead of reading a raw descriptor that `Close` could free or recycle, which removes the data race the race detector reported.
 
 ## v0.33.0 — 2026-11-01
 
