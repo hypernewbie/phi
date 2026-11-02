@@ -964,11 +964,6 @@ func TestPassthroughEventsAdvanceSequenceWithoutMutatingSnapshot(t *testing.T) {
 			line:    `{"type":"tool_execution_update","toolCallId":"call-1","partialResult":{"content":[{"type":"text","text":"out"}]}}`,
 		},
 		{
-			piEvent: "queue_update",
-			phiEvt:  EvtQueueUpdate,
-			line:    `{"type":"queue_update","steering":["one"],"followUp":["two"]}`,
-		},
-		{
 			piEvent: "extension_error",
 			phiEvt:  EvtExtensionError,
 			line:    `{"type":"extension_error","error":"x"}`,
@@ -1021,7 +1016,10 @@ func TestToolAndQueuePassthroughEventsAdvanceConsecutiveSequence(t *testing.T) {
 	if _, err := fp.stdoutW.Write([]byte(strings.Join(lines, "\n") + "\n")); err != nil {
 		t.Fatal(err)
 	}
-	wantEvents := []string{EvtToolExecutionUpdate, EvtQueueUpdate}
+	// queue_update carries no item identity the control protocol can carry, so
+	// it is dropped server-side: emitting it would fail event conversion and
+	// close the control socket. Only the tool update is published.
+	wantEvents := []string{EvtToolExecutionUpdate}
 	for index, want := range wantEvents {
 		event := nextWireEvent(t, sub)
 		if event.Evt != want || event.Seq != uint64(index+1) {
@@ -1032,7 +1030,7 @@ func TestToolAndQueuePassthroughEventsAdvanceConsecutiveSequence(t *testing.T) {
 			t.Fatalf("event[%d] payload = %T %s, want %s", index, event.Data, raw, lines[index])
 		}
 	}
-	if snapshot := inst.SnapshotCopy(); len(snapshot.Messages) != 0 || snapshot.LastSeq != 2 {
+	if snapshot := inst.SnapshotCopy(); len(snapshot.Messages) != 0 || snapshot.LastSeq != 1 {
 		t.Fatalf("tool/queue passthrough changed snapshot: %+v", snapshot)
 	}
 }

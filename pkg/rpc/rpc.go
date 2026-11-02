@@ -39,7 +39,6 @@ const (
 	EvtRpcExited           = "rpcExited"
 	EvtSubagentFleet       = "subagentFleet"
 	EvtToolExecutionUpdate = "toolExecutionUpdate"
-	EvtQueueUpdate         = "queueUpdate"
 	EvtQueueChanged        = "queueChanged"
 	EvtExtensionUIRequest  = "extensionUiRequest"
 	EvtExtensionUIClosed   = "extensionUiClosed"

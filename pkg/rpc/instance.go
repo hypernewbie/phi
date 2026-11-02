@@ -217,8 +217,6 @@ type Instance struct {
 	// JSONL write boundary; promoted items without an entry are still local.
 	queueDispatchGenerations map[string]uint64
 	queueBlocked             bool
-	piSteering               []string
-	piFollowUp               []string
 
 	dialogMu     sync.Mutex
 	dialogs      map[string]ExtensionUIDialog

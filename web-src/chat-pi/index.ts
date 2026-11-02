@@ -1232,13 +1232,13 @@ export function mountChatPi(
     };
 
     // Best-effort: a discard that never reached the server stays queued, so it
-    // is retried on reconnect instead of delivering the message later.
+    // is retried on reconnect instead of delivering the message later. Any
+    // answered result retires the retry; only a transport error keeps it.
     const servePendingDiscards = (): void => {
         if (!sid || !ready || exited || !queueSessionEpoch) return;
         for (const id of [...pendingDiscards]) {
-            runQueueAction('queueDiscard', id, (result) => {
-                if (result.discarded === true || result.reason === 'pi-owned')
-                    pendingDiscards.delete(id);
+            runQueueAction('queueDiscard', id, () => {
+                pendingDiscards.delete(id);
             });
         }
     };

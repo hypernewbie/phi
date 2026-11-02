@@ -25,14 +25,6 @@ const (
 	QueueConsumed  QueueState = "consumed"
 	QueueCancelled QueueState = "cancelled"
 	QueuePromoted  QueueState = "promoted"
-
-	QueueStateLocal     = QueueLocal
-	QueueStateSending   = QueueSending
-	QueueStateAccepted  = QueueAccepted
-	QueueStateUncertain = QueueUncertain
-	QueueStateConsumed  = QueueConsumed
-	QueueStateCancelled = QueueCancelled
-	QueueStatePromoted  = QueuePromoted
 )
 
 // QueueDelivery is the Pi command represented by one queue item.
@@ -42,10 +34,6 @@ const (
 	QueuePrompt   QueueDelivery = "prompt"
 	QueueSteer    QueueDelivery = "steer"
 	QueueFollowUp QueueDelivery = "followUp"
-
-	QueueDeliveryPrompt   = QueuePrompt
-	QueueDeliverySteer    = QueueSteer
-	QueueDeliveryFollowUp = QueueFollowUp
 )
 
 // QueueAttachment is the opaque attachment metadata owned by a queue item.
@@ -670,23 +658,6 @@ func (i *Instance) settleAcceptedQueueItems() {
 	if changed {
 		i.emitQueueChanged(depth)
 	}
-}
-
-// reconcileQueueUpdate stores Pi's authoritative queue arrays. They have no
-// item IDs, so this path deliberately never consumes a ledger item by text or
-// position.
-func (i *Instance) reconcileQueueUpdate(data json.RawMessage) {
-	var update struct {
-		Steering []string `json:"steering"`
-		FollowUp []string `json:"followUp"`
-	}
-	if err := json.Unmarshal(data, &update); err != nil {
-		return
-	}
-	i.queueMu.Lock()
-	i.piSteering = append([]string{}, update.Steering...)
-	i.piFollowUp = append([]string{}, update.FollowUp...)
-	i.queueMu.Unlock()
 }
 
 func (i *Instance) markQueueUncertainOnExit() {
