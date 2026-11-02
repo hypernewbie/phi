@@ -21,7 +21,6 @@ import {
     SIDEBAR_PANEL_CAP,
     DIFF_PANEL_CAP,
     clampPanelWidth,
-    setServerHostOverride,
     openExternalLink,
     resolveLowPowerEnabled,
     writeLowPowerLocal,
@@ -905,7 +904,6 @@ export class App {
             .getElementById('sidebar-panel')
             ?.classList.remove('drawer-open');
         this.tabManager?._closeSelfHudNow?.();
-        setServerHostOverride('');
         const fp = document.getElementById('fleet-panel');
         if (fp) fp.style.display = 'none';
 
@@ -1984,7 +1982,6 @@ export class App {
         };
         this.mobileScrollbackRows = Number(ls.mobile_scrollback_rows ?? data.mobile_scrollback_rows) || 0;
         this.hostnameOverride = ls.hostname_override ?? data.hostname_override ?? '';
-        setServerHostOverride(this.hostnameOverride);
         this.customFontName = ls.custom_font_name || '';
         this.terminalBgName = ls.terminal_bg_name || '';
         this.terminalBgDarkness = ls.terminal_bg_darkness ?? 98;
@@ -2332,7 +2329,6 @@ export class App {
                     this.mobileScrollbackRows =
                         Number(ls?.mobile_scrollback_rows) || 0;
                     this.hostnameOverride = ls?.hostname_override || '';
-                    setServerHostOverride(this.hostnameOverride);
                     this.customFontName = ls?.custom_font_name || '';
                     this.terminalBgName = ls?.terminal_bg_name || '';
                     this.terminalBgDarkness =

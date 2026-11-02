@@ -1,18 +1,9 @@
 /* Φ phi — pure, framework-free helpers (unit-tested in test-js/) */
 
-// Server-host override — a DISPLAY LABEL only. It is what phi reports
-// itself as in the UI, the config payload, push notification titles,
-// status dumps, and the like. It does NOT influence socket dialing —
-// every WebSocket dials the real page origin. This decoupling exists
-// so a user on a corp-managed PC named `CORP01` can display `phi on
-// dusty_potato` in their own browser without asking IT to rename the
-// machine. The label is intentionally free-form: a haiku, a codename,
-// whatever reads well to the user.
-let defaultServerHostOverride = '';
-
-export function setServerHostOverride(label: string | null | undefined): void {
-    defaultServerHostOverride = label || '';
-}
+// The hostname LABEL is server state: it rides the config payload as
+// hostname_override and every display surface reads it from there (see
+// web/config.js). Socket dialing always uses the real page origin, so the
+// client keeps no copy of the label.
 
 let embeddedProfileId = '';
 let embeddedBackendOrigin = '';

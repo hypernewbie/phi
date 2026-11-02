@@ -1,24 +1,20 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { setServerHostOverride } from '../web/util.js';
 import { PTYWebSocket } from '../web/ws.js';
 import { openSettingsModal } from '../web/settings.js';
 
-// hostname_override is a DISPLAY LABEL only. It is what phi reports
-// itself as in the UI, push titles, and status dumps. It never
-// influences socket dialing: every WebSocket dials the real page
-// origin, always. The label is free-form text — a corp PC named
-// CORP01 can display as "dusty_potato", or as a 50-character Japanese
-// haiku, because the value never has to resolve as a hostname. The
-// override and the real hostname are two separate concepts: one is a
-// cosmetic string, the other is where the browser actually connects.
+// hostname_override is a DISPLAY LABEL only: server state that rides the
+// config payload. Socket dialing always uses the real page origin, and the
+// client keeps no copy of the label at all — so no label value, however
+// absurd, can reach a socket URL. The label is free-form text: a corp PC
+// named CORP01 can display as "dusty_potato" or a 50-character haiku
+// because it never has to resolve as a hostname.
 
 afterEach(() => {
-    setServerHostOverride('');
     vi.unstubAllGlobals();
 });
 
-describe('socket URLs ignore hostname_override', () => {
+describe('socket URLs use the page origin', () => {
     function stubSocket() {
         const seen = [];
         vi.stubGlobal(
@@ -33,9 +29,9 @@ describe('socket URLs ignore hostname_override', () => {
         );
         return seen;
     }
-    it('pane socket dials the page origin with a label set', () => {
+
+    it('pane socket dials the page origin', () => {
         const seen = stubSocket();
-        setServerHostOverride('dusty_potato');
         const pty = new PTYWebSocket('p1', () => {});
         expect(pty.url).toBe(
             `${window.location.origin}/ws/pane/p1?state=ansi-v1`,
@@ -43,82 +39,6 @@ describe('socket URLs ignore hostname_override', () => {
         expect(seen[0][1]).toBe('phi.terminal.protobuf.v2');
         pty.ws?.close?.();
     });
-    it('pane socket dials the page origin with the label unset', () => {
-        stubSocket();
-        const pty = new PTYWebSocket('p1', () => {});
-        expect(pty.url).toBe(
-            `${window.location.origin}/ws/pane/p1?state=ansi-v1`,
-        );
-        pty.ws?.close?.();
-    });
-    it('the label never appears in any socket URL, whatever it is', () => {
-        stubSocket();
-        const labels = [
-            'dusty_potato',
-            'EUROPA',
-            'EUROPA:7070',
-            'etraces fugaces — a haiku',
-            'おきぬかげ さやかに映る 山ざくら', // Japanese haiku (control vector below uses a longer one)
-        ];
-        for (const label of labels) {
-            setServerHostOverride(label);
-            const pty = new PTYWebSocket('p1', () => {});
-            expect(pty.url).toBe(
-                `${window.location.origin}/ws/pane/p1?state=ansi-v1`,
-            );
-            expect(pty.url).not.toContain(label);
-            pty.ws?.close?.();
-        }
-    });
-});
-
-describe('hostname_override is a free-form display label', () => {
-    // 50 characters of Japanese haiku — there is no possible way this
-    // is a hostname, and that is precisely the point: the label is a
-    // cosmetic string with no hostname constraints. The real hostname
-    // (what the browser dials) is a separate concept entirely.
-    const HAIKU_50 = 'ふるいけやかわずとびこむみずのおと'.repeat(5);
-    const HAIKU = HAIKU_50.slice(0, 50);
-
-    it('a 50-character Japanese haiku is accepted as the label', () => {
-        expect(HAIKU.length).toBe(50);
-        setServerHostOverride(HAIKU);
-        // The label module stores it verbatim — no validation, no
-        // rejection, because it never has to be a hostname.
-        const { hostnameOverride } = readStoredLabel(HAIKU);
-        expect(hostnameOverride).toBe(HAIKU);
-    });
-
-    it('a 50-character Japanese haiku changes no socket URL', () => {
-        const seen = [];
-        vi.stubGlobal(
-            'WebSocket',
-            class {
-                constructor(url) {
-                    seen.push(url);
-                    this.readyState = 0;
-                }
-            },
-        );
-        setServerHostOverride(HAIKU);
-        const pty = new PTYWebSocket('p1', () => {});
-        expect(pty.url).toBe(
-            `${window.location.origin}/ws/pane/p1?state=ansi-v1`,
-        );
-        pty.ws?.close?.();
-    });
-
-    it('a corp codename label reads back verbatim', () => {
-        const { hostnameOverride } = readStoredLabel('dusty_potato');
-        expect(hostnameOverride).toBe('dusty_potato');
-    });
-
-    function readStoredLabel(value) {
-        // Simulate the settings→app→module flow: the input value lands
-        // on app.hostnameOverride and the module default, verbatim.
-        setServerHostOverride(value);
-        return { hostnameOverride: value };
-    }
 });
 
 describe('settings hostname row', () => {
@@ -146,7 +66,8 @@ describe('settings hostname row', () => {
             _saveAppearanceLocal: vi.fn(),
         };
     }
-    it('renders blank by default with a nickname placeholder', async () => {
+
+    it('renders blank by default with a nickname placeholder', () => {
         document.body.innerHTML = '<div id="settings-root"></div>';
         openSettingsModal(buildApp(), []);
         const input = document.getElementById('settings-hostname-override');
@@ -155,7 +76,8 @@ describe('settings hostname row', () => {
         // The placeholder suggests a label, not a dial target.
         expect(input.placeholder).toContain('dusty_potato');
     });
-    it('typing a haiku updates the label without touching sockets', async () => {
+
+    it('typing a haiku updates the label without touching sockets', () => {
         const seen = [];
         vi.stubGlobal(
             'WebSocket',
@@ -178,7 +100,8 @@ describe('settings hostname row', () => {
         // No socket was constructed by typing a label.
         expect(seen.length).toBe(0);
     });
-    it('clearing restores the real hostname as the label', async () => {
+
+    it('clearing restores the real hostname as the label', () => {
         document.body.innerHTML = '<div id="settings-root"></div>';
         const app = buildApp();
         app.hostnameOverride = 'dusty_potato';
