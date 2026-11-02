@@ -49,3 +49,12 @@ native/libghostty-vt/*/*.dll
 
 # Local verification scratch (server + HOME under .tmp-e2e)
 .tmp-e2e/
+
+# Playwright/E2E worktree artifacts
+.playwright-browsers/
+.playwright/
+test-results/
+
+# Local e2e scratch state
+test/e2e/.runtime-home/
+test/e2e/.manual-review-home/

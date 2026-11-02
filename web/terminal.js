@@ -1978,6 +1978,7 @@ export class TabManager {
         document.addEventListener('keydown', (e) =>
             this.handleGlobalTabShortcuts(e),
         );
+        this._listenQueueRecovery();
         window.addEventListener('keydown', (e) => {
             if (e.key === 'Alt') {
                 this.updateTabShortcutHints(true);
@@ -2141,7 +2142,10 @@ export class TabManager {
 
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                this.sendStagedInput();
+                // Alt+Enter queues a follow-up behind the running turn on
+                // pi-rpc panes, matching Pi's TUI. Other coders keep the
+                // plain submit path.
+                this.sendStagedInput(e.altKey ? { followUp: true } : undefined);
             } else if (e.key === 'Escape') {
                 if (this._handlePiRpcEscape(e)) return;
                 // Return focus to terminal in Hybrid mode
@@ -5386,6 +5390,52 @@ export class TabManager {
             if (clear) dropup.replaceChildren();
         }
         return changed;
+    }
+
+    // Draft recovery for a queue item cancelled or copied on the server. The
+    // chat pane owns the ledger, the terminal owns the composer, so the pane
+    // reports recovery as a document event instead of writing input state.
+    _listenQueueRecovery() {
+        if (this._queueRecoveryListening) return;
+        this._queueRecoveryListening = true;
+        document.addEventListener('phi:pi-queue-recovery', (event) =>
+            this._restoreQueueRecovery(event.detail),
+        );
+    }
+
+    // _restoreQueueRecovery puts one queue item's text back into the composer,
+    // mirroring pi's TUI restoreQueuedMessagesToEditor: the restored text goes
+    // before whatever the user has typed, and an inactive pane parks it on the
+    // tab draft instead of touching the shared textarea.
+    _restoreQueueRecovery(detail) {
+        const paneId = detail?.paneId;
+        const item = detail?.recovery?.item;
+        if (!paneId || !item) return;
+        const tab = this.tabs.get(paneId);
+        if (!tab) return;
+        // Text only: the browser never holds the bytes behind a queued
+        // attachment, so staging a chip here would send a path that does not
+        // exist. Pi's TUI restores queued text into the editor the same way.
+        const text = typeof item.message === 'string' ? item.message : '';
+        if (text === '') return;
+        if (this.getActiveTab()?.paneId !== paneId) {
+            tab.draft = tab.draft?.trim() ? `${text}\n\n${tab.draft}` : text;
+            return;
+        }
+        const draft = this.inputTextArea.value;
+        this.inputTextArea.value = draft.trim() ? `${text}\n\n${draft}` : text;
+        this.lastInputValue = this.inputTextArea.value;
+        // Keep the tab's parked draft in step with the composer, the same
+        // way saveActiveDraft() does.
+        tab.draft = this.inputTextArea.value;
+        this._historyCursor = -1;
+        this._historyPreCycleValue = undefined;
+        this._resetPiRecall({ flush: true });
+        tab.chatHistoryCursor = -1;
+        tab.chatHistoryPreCycleValue = undefined;
+        this.adjustInputHeight();
+        this.inputTextArea.focus({ preventScroll: true });
+        this._placeCursorAtEnd();
     }
 
     _interruptActivePiRpc() {
@@ -10956,7 +11006,7 @@ export class TabManager {
         `;
     }
 
-    sendStagedInput() {
+    sendStagedInput(options) {
         const activeTab = this.getActiveTab();
         if (!activeTab) return;
 
@@ -10988,7 +11038,7 @@ export class TabManager {
         let payload = lines.join('\n');
 
         if (coder === 'pi-rpc') {
-            if (!rpcChatSend(activeTab.paneId, payload)) {
+            if (!rpcChatSend(activeTab.paneId, payload, options)) {
                 this.app.showToast('pi chat: not ready', { type: 'error' });
                 return;
             }

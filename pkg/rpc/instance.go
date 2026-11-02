@@ -31,6 +31,7 @@ type State struct {
 	ContextWindowTokens *int64   `json:"contextWindowTokens"`
 	CacheReadTokens     *int64   `json:"cacheReadTokens"`
 	CacheWriteTokens    *int64   `json:"cacheWriteTokens"`
+	Cost                *float64 `json:"cost"`
 	Skills              []string `json:"skills"`
 	Busy                bool     `json:"busy"`
 	Status              string   `json:"status"` // "live" | "exited"
@@ -107,7 +108,62 @@ func cloneState(state State) State {
 	if state.Skills != nil {
 		state.Skills = append([]string{}, state.Skills...)
 	}
+	if state.Cost != nil {
+		cost := *state.Cost
+		state.Cost = &cost
+	}
 	return state
+}
+
+// ExtensionUIDialog is the server-owned record for one blocking Pi dialog.
+// Optional fields are populated only for the matching dialog method.
+type ExtensionUIDialog struct {
+	ID          string   `json:"id"`
+	Method      string   `json:"method"`
+	Title       string   `json:"title"`
+	Options     []string `json:"options,omitempty"`
+	Message     string   `json:"message,omitempty"`
+	Placeholder string   `json:"placeholder,omitempty"`
+	Prefill     string   `json:"prefill,omitempty"`
+	Timeout     int      `json:"timeout"`
+	CreatedAt   int64    `json:"createdAt"`
+}
+
+func cloneExtensionUIDialog(dialog ExtensionUIDialog) ExtensionUIDialog {
+	if dialog.Options != nil {
+		dialog.Options = append([]string{}, dialog.Options...)
+	}
+	return dialog
+}
+
+func isBlockingExtensionUIMethod(method string) bool {
+	switch method {
+	case "select", "confirm", "input", "editor":
+		return true
+	default:
+		return false
+	}
+}
+
+func isKnownFireAndForgetExtensionUIMethod(method string) bool {
+	switch method {
+	case "notify", "setStatus", "setWidget", "setTitle", "set_editor_text":
+		return true
+	default:
+		return false
+	}
+}
+
+// QueueSubmitOptions carries the access-session owner and attachment bridge
+// captured at the WebSocket upgrade boundary.
+type QueueSubmitOptions struct {
+	Owner    string
+	Resolver QueueAttachmentResolver
+}
+
+type queueClaim struct {
+	options QueueSubmitOptions
+	leased  bool
 }
 
 type pendingResult struct {
@@ -150,6 +206,21 @@ type Instance struct {
 	subs    *SubscriberSet
 
 	state State
+
+	queueMu                   sync.Mutex
+	sessionEpoch              string
+	queueItems                map[string]QueueItem
+	queueClaims               map[string]queueClaim
+	queueSending              bool
+	queueSettlementGeneration uint64
+	// queueDispatchGenerations records only commands that crossed the Pi
+	// JSONL write boundary; promoted items without an entry are still local.
+	queueDispatchGenerations map[string]uint64
+	queueBlocked             bool
+
+	dialogMu     sync.Mutex
+	dialogs      map[string]ExtensionUIDialog
+	dialogTimers map[string]*time.Timer
 
 	sessionPath   string
 	sessionPathMu sync.RWMutex
@@ -608,13 +679,18 @@ func (i *Instance) OnExit(reason string) {
 		i.mu.Lock()
 		i.alive = false
 		i.mu.Unlock()
+		i.failPending(ErrNotAlive)
+		i.markQueueUncertainOnExit()
+		// Dialog close events must be sequenced before rpcExited so clients can
+		// dismiss every retained overlay while the instance identity is still
+		// available. No response is attempted after alive is false.
+		i.closeExtensionUIDialogs("childExit")
 		i.eventMu.Lock()
 		st := cloneState(i.state)
 		st.Status = "exited"
 		i.state = st
 		i.publishLocked(EvtRpcExited, nil, map[string]any{"reason": reason}, false)
 		i.eventMu.Unlock()
-		i.failPending(ErrNotAlive)
 		if i.subs != nil {
 			i.subs.CloseAll()
 		}

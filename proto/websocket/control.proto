@@ -57,6 +57,12 @@ message ControlCall {
     DlgCall dlg = 28;
     DlgClosedCall dlg_closed = 29;
     ActivateTabCall activate_tab = 30;
+    QueueSubmitCall queue_submit = 31;
+    QueueRestoreCall queue_restore = 32;
+    QueueCopyCall queue_copy = 33;
+    QueueDiscardCall queue_discard = 34;
+    ExtensionUIResponseCall extension_ui_response = 35;
+    ExtensionUICancelCall extension_ui_cancel = 36;
   }
 }
 
@@ -87,6 +93,12 @@ message ControlResponse {
     StubResult dlg = 28;
     StubResult dlg_closed = 29;
     StubResult activate_tab = 30;
+    QueueItemResult queue_submit = 31;
+    QueueRestoreResult queue_restore = 32;
+    QueueCopyResult queue_copy = 33;
+    QueueDiscardResult queue_discard = 34;
+    ExtensionUIResponseResult extension_ui_response = 35;
+    ExtensionUICancelResult extension_ui_cancel = 36;
   }
 }
 
@@ -112,6 +124,10 @@ message ControlEvent {
     SummarizationRetryFinishedEvent summarization_retry_finished = 20;
     CompactionEndEvent compaction_end = 21;
     ExtensionErrorEvent extension_error = 22;
+    QueueChangedEvent queue_changed = 23;
+    ExtensionUIRequestEvent extension_ui_request = 24;
+    ExtensionUIClosedEvent extension_ui_closed = 25;
+    ToolExecutionUpdateEvent tool_execution_update = 26;
   }
 }
 
@@ -136,6 +152,9 @@ message ControlState {
   string status = 14;
   uint32 queue_depth = 15;
   optional string session_path = 16;
+  // cost is the session's accumulated spend as Pi reports it. Absent until
+  // the first get_session_stats response carries a value.
+  optional double cost = 17;
 }
 
 // Message is one transcript entry. message_end carries the authoritative
@@ -173,6 +192,9 @@ message TranscriptSnapshot {
 message SpawnCall {
   optional string cwd = 1;
   optional string session_path = 2;
+  // spawn_id makes a retried spawn idempotent: the same id with the same
+  // arguments reuses the existing child instead of starting a second one.
+  optional string spawn_id = 3;
 }
 
 message ListSessionsCall {}
@@ -260,6 +282,131 @@ message ActivateTabCall {
   optional string sid = 1;
 }
 
+// ---- delivery queue ----
+
+// QueueAttachment is one opaque browser-owned attachment bound to a queued
+// message. The bytes stay process-local; only this metadata crosses the wire.
+message QueueAttachment {
+  string ref = 1;
+  string name = 2;
+  string mime_type = 3;
+  int64 size_bytes = 4;
+}
+
+// QueueItem is one process-local delivery record. state keeps the ledger
+// vocabulary: local, sending, accepted, uncertain, consumed, cancelled,
+// promoted. error is present only for a failed or uncertain delivery.
+message QueueItem {
+  string id = 1;
+  string sid = 2;
+  string session_epoch = 3;
+  string message = 4;
+  string delivery = 5;
+  repeated QueueAttachment attachments = 6;
+  string state = 7;
+  optional string error = 8;
+  int64 created_at = 9;
+}
+
+// QueueSnapshot is the hydrate, state, and queue_changed queue payload.
+message QueueSnapshot {
+  string session_epoch = 1;
+  repeated QueueItem items = 2;
+}
+
+message QueueSubmitCall {
+  string sid = 1;
+  string item_id = 2;
+  string session_epoch = 3;
+  string message = 4;
+  string delivery = 5;
+  repeated string attachment_refs = 6;
+}
+
+message QueueRestoreCall {
+  string sid = 1;
+  string item_id = 2;
+  string session_epoch = 3;
+}
+
+message QueueCopyCall {
+  string sid = 1;
+  string item_id = 2;
+  string session_epoch = 3;
+}
+
+message QueueDiscardCall {
+  string sid = 1;
+  string item_id = 2;
+  string session_epoch = 3;
+}
+
+message QueueItemResult {
+  QueueItem item = 1;
+}
+
+// QueueRestoreResult reports draft recovery for a Phi-owned local item.
+message QueueRestoreResult {
+  bool restored = 1;
+  QueueItem item = 2;
+  optional string reason = 3;
+}
+
+// QueueCopyResult returns a fresh unsent draft for an uncertain item. The
+// copied message is never resubmitted by the server.
+message QueueCopyResult {
+  bool copied = 1;
+  optional string message = 2;
+  repeated string attachment_refs = 3;
+  repeated QueueAttachment attachments = 4;
+  optional string reason = 5;
+}
+
+message QueueDiscardResult {
+  bool discarded = 1;
+  QueueItem item = 2;
+  optional string reason = 3;
+}
+
+// ---- extension UI dialogs ----
+
+// ExtensionUIDialog is one retained blocking Pi dialog. Optional fields are
+// populated only for the matching method: options for select, message for
+// confirm, placeholder for input, prefill for editor.
+message ExtensionUIDialog {
+  string id = 1;
+  string method = 2;
+  string title = 3;
+  repeated string options = 4;
+  optional string message = 5;
+  optional string placeholder = 6;
+  optional string prefill = 7;
+  int32 timeout = 8;
+  int64 created_at = 9;
+}
+
+message ExtensionUIResponseCall {
+  string sid = 1;
+  string request_id = 2;
+  optional string value = 3;
+  optional bool confirmed = 4;
+  bool cancelled = 5;
+}
+
+message ExtensionUIResponseResult {
+  bool resolved = 1;
+}
+
+message ExtensionUICancelCall {
+  string sid = 1;
+  // reason keeps the existing tabClosed/server vocabulary.
+  string reason = 2;
+}
+
+message ExtensionUICancelResult {
+  uint32 cancelled = 1;
+}
+
 // ---- results ----
 
 message SpawnResult {
@@ -276,10 +423,14 @@ message ListSessionsResult {
 
 message StateResult {
   ControlState state = 1;
+  QueueSnapshot queue = 2;
+  repeated ExtensionUIDialog dialogs = 3;
 }
 
 message TranscriptResult {
   TranscriptSnapshot session = 1;
+  QueueSnapshot queue = 2;
+  repeated ExtensionUIDialog dialogs = 3;
 }
 
 message PromptResult {
@@ -417,6 +568,31 @@ message CompactionEndEvent {
 
 message ExtensionErrorEvent {
   optional string error = 1;
+}
+
+// QueueChangedEvent carries the whole delivery ledger after a change. Clients
+// replace their ledger with this snapshot rather than patching item by item.
+message QueueChangedEvent {
+  QueueSnapshot queue = 1;
+}
+
+// ExtensionUIRequestEvent carries Pi's blocking dialog request verbatim so the
+// browser keeps the existing method-specific shape.
+message ExtensionUIRequestEvent {
+  optional ExternalValue request = 1;
+}
+
+// ExtensionUIClosedEvent retires one retained dialog. reason keeps the
+// timeout, childExit, tabClosed, server, and unsupported values.
+message ExtensionUIClosedEvent {
+  string id = 1;
+  optional string reason = 2;
+}
+
+// ToolExecutionUpdateEvent is Pi's tool progress payload, passed through as
+// external data because its shape is owned by Pi.
+message ToolExecutionUpdateEvent {
+  optional ExternalValue payload = 1;
 }
 
 // ---- external data ----

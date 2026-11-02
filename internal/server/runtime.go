@@ -457,6 +457,13 @@ func (app *Server) gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace
 			slog.Error("shutdown tab snapshot", "err", err)
 		}
 	}
+	// Pi RPC children are separate processes: kill them with the server so a
+	// restart never leaves an orphaned Pi session behind.
+	if app.rpc != nil {
+		for _, inst := range app.rpc.List() {
+			inst.Kill()
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), grace)
 	defer cancel()
 	var wg sync.WaitGroup
