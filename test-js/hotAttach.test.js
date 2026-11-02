@@ -290,11 +290,11 @@ describe('PTYWebSocket hot framing', () => {
         const pty = new PTYWebSocket('p', data, null, null, null, { onGap });
         pty.ws.emitAttachHead({ epoch: 7, oldest: 0, head: 100 });
         pty.ws.emitHot(100, 'aa'); // held (pre-release)
-        pty.ws.emitHot(110, 'bb'); // held + onGap(100, 110)
-        expect(onGap).toHaveBeenCalledWith(100, 110);
+        pty.ws.emitHot(110, 'bb'); // held; no gap decision before release
+        expect(onGap).not.toHaveBeenCalled();
         pty.release();
         expect(data.mock.calls.map((c) => c[0])).toEqual(['aa']);
-        expect(onGap).toHaveBeenLastCalledWith(102, 110);
+        expect(onGap).toHaveBeenCalledExactlyOnceWith(102, 110);
         expect(pty.liveSeq).toBe(102);
         // Host patches the remainder; the held tail flushes in order.
         pty.applyGapPatch(new TextEncoder().encode('01234567'));

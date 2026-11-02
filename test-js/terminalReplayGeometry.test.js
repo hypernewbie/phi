@@ -404,4 +404,8 @@ it('holds output and geometry together until each preceding write has parsed', a
         'parsed:after',
     ]);
     expect(h.tab._replayCursor).toBe('v1.7.12.2');
+    // Contiguous frames held behind geometry are not missing output.
+    // Starting a gap replay here races the geometry's cursor update.
+    expect(h.fetcher).not.toHaveBeenCalled();
+    expect(h.pty.ws.closed).not.toBe(true);
 });

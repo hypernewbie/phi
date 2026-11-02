@@ -624,14 +624,16 @@ export class PTYWebSocket {
             // when a bootstrap-held frame is released).
             start = this.liveSeq;
         }
+        // A geometry/bootstrap hold deliberately leaves liveSeq behind.
+        // Queue first; release checks for real holes after those frames drain.
+        if (this.holding) {
+            this._holdFrame(start, bytes);
+            return;
+        }
         if (start > this.liveSeq) {
             // Gap: hold delivery until the host patches the missing range.
             if (!this._holdFrame(start, bytes)) return;
             this._notify(this.onGap, this.liveSeq, start);
-            return;
-        }
-        if (this.holding) {
-            this._holdFrame(start, bytes);
             return;
         }
         this._deliver(start, bytes);
