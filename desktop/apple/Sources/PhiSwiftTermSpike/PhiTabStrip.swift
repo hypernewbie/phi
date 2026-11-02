@@ -199,12 +199,42 @@ final class PhiTabView: NSView {
     if hit(at: point) == .select { onSelect?(id) }
   }
 
+  /// Hovering lifts an inactive tab, the way `.tab:hover` does in the web app.
+  override func mouseEntered(with event: NSEvent) {
+    isHovered = true
+  }
+
+  override func mouseExited(with event: NSEvent) {
+    isHovered = false
+  }
+
+  override func updateTrackingAreas() {
+    super.updateTrackingAreas()
+    for area in trackingAreas { removeTrackingArea(area) }
+    addTrackingArea(
+      NSTrackingArea(
+        rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow],
+        owner: self, userInfo: nil))
+  }
+
+  private var isHovered = false {
+    didSet { applyAppearance() }
+  }
+
   private func applyAppearance() {
-    layer?.backgroundColor = (isActive ? PhiTheme.base : PhiTheme.panel).cgColor
+    let background: NSColor
+    if isActive {
+      background = PhiTheme.base
+    } else if isHovered {
+      background = PhiTheme.elevated
+    } else {
+      background = PhiTheme.panel
+    }
+    layer?.backgroundColor = background.cgColor
     layer?.borderColor = PhiTheme.border.cgColor
     layer?.borderWidth = isActive ? 1 : 0
     accentLine.isHidden = !isActive
-    label.textColor = isActive ? PhiTheme.textPrimary : PhiTheme.textMuted
+    label.textColor = (isActive || isHovered) ? PhiTheme.textPrimary : PhiTheme.textMuted
     label.font = PhiTheme.ui(13, weight: isActive ? .medium : .regular)
   }
 
