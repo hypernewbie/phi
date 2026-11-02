@@ -740,20 +740,69 @@ export class MarkdownManager {
         };
         this._updateModalActions();
         this.modal.classList.remove('hidden');
+        // Deltas make the counters actionable: an absolute number cannot say
+        // whether a subsystem is growing. The first successful sample becomes
+        // the baseline, so every row reports growth since the panel opened.
+        const baseline = new Map();
+        let lastRendered = null;
+        const readNumber = (value) => typeof value === 'number' && Number.isFinite(value) ? value : 0;
+        const rendererCounters = () => {
+            const memory = performance.memory;
+            const counters = {
+                dom_nodes: document.getElementsByTagName('*').length,
+            };
+            if (typeof memory?.usedJSHeapSize === 'number') {
+                counters.js_heap_mb = memory.usedJSHeapSize / (1024 * 1024);
+            }
+            return counters;
+        };
+        const deltaCell = (key, value, unit) => {
+            const base = baseline.get(key);
+            if (base === undefined) {
+                baseline.set(key, value);
+                return '';
+            }
+            const diff = value - base;
+            if (Math.abs(diff) < (unit === 'MB' ? 0.1 : 1))
+                return '';
+            const sign = diff > 0 ? '+' : '';
+            const amount = unit === 'MB' ? diff.toFixed(1) : String(Math.round(diff));
+            return `<span class="diag-delta">${sign}${amount} ${unit}</span>`;
+        };
+        const counterRow = (label, key, value, text, unit) => `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(text)}${deltaCell(key, value, unit)}</td></tr>`;
         const render = (d) => {
             if (!d) {
                 this.modalBody.innerHTML = `<div class="md-list-error">No data.</div>`;
                 return;
             }
-            const rows = [
+            const rings = `${readNumber(d.ring_bytes_total)}/${readNumber(d.ring_capacity_total)} B`;
+            const processRows = [
+                counterRow('Go heap alloc', 'mem_alloc_mb', readNumber(d.mem_alloc_mb), `${readNumber(d.mem_alloc_mb).toFixed(1)} MB `, 'MB'),
+                counterRow('Heap in use', 'mem_heap_inuse_mb', readNumber(d.mem_heap_inuse_mb), `${readNumber(d.mem_heap_inuse_mb).toFixed(1)} MB `, 'MB'),
+                counterRow('Reserved (sys)', 'mem_sys_mb', readNumber(d.mem_sys_mb), `${readNumber(d.mem_sys_mb).toFixed(1)} MB `, 'MB'),
+                counterRow('Goroutine stacks', 'mem_stack_mb', readNumber(d.mem_stack_mb), `${readNumber(d.mem_stack_mb).toFixed(1)} MB `, 'MB'),
+                counterRow('Live heap objects', 'heap_objects', readNumber(d.heap_objects), `${readNumber(d.heap_objects)} `, 'objects'),
+                counterRow('Goroutines', 'goroutines', readNumber(d.goroutines), `${readNumber(d.goroutines)} `, 'goroutines'),
+                counterRow('GC cycles', 'num_gc', readNumber(d.num_gc), `${readNumber(d.num_gc)} `, 'cycles'),
+            ].join('');
+            const terminalRows = [
+                counterRow('PTYs', 'pty_count', readNumber(d.pty_count), `${readNumber(d.pty_count)} `, 'PTYs'),
+                counterRow('Scrollback rings', 'ring_bytes_total', readNumber(d.ring_bytes_total), rings, 'bytes'),
+                counterRow('WS clients', 'ws_clients_total', readNumber(d.ws_clients_total), `${readNumber(d.ws_clients_total)} `, 'clients'),
+            ].join('');
+            const page = rendererCounters();
+            const pageRows = [
+                counterRow('JS heap', 'js_heap_mb', page.js_heap_mb ?? 0, page.js_heap_mb === undefined
+                    ? 'not exposed '
+                    : `${page.js_heap_mb.toFixed(1)} MB `, 'MB'),
+                counterRow('DOM nodes', 'dom_nodes', page.dom_nodes, `${page.dom_nodes} `, 'nodes'),
+            ].join('');
+            const infoRows = [
                 ['Version', d.version || 'dev'],
                 ['Install', d.install_method || '—'],
                 ['Uptime (s)', (d.uptime_seconds || 0).toFixed(0)],
-                ['Goroutines', d.goroutines],
-                ['Mem alloc (MB)', d.mem_alloc_mb.toFixed(1)],
-                ['PTYs', d.pty_count],
             ];
-            const body = rows
+            const body = infoRows
                 .map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`)
                 .join('');
             const panes = (d.panes || [])
@@ -773,16 +822,26 @@ export class MarkdownManager {
             this.modalBody.innerHTML = `
                 <div class="diag-panel">
                     <table class="diag-table"><tbody>${body}</tbody></table>
+                    <h4>Memory</h4>
+                    <table class="diag-table"><tbody>${processRows}</tbody></table>
+                    <h4>Terminals</h4>
+                    <table class="diag-table"><tbody>${terminalRows}</tbody></table>
+                    <h4>This page</h4>
+                    <table class="diag-table"><tbody>${pageRows}</tbody></table>
                     <h4>Panes (${(d.panes || []).length})</h4>
                     <table class="diag-table diag-table-panes">
                         <thead><tr><th>Title</th><th>Coder</th><th>Clients</th><th>Ring</th><th>State</th></tr></thead>
                         <tbody>${panes || '<tr><td colspan=5>(no panes)</td></tr>'}</tbody>
                     </table>
-                    <p class="diag-foot">Auto-refreshing every 2s. Close to stop.</p>
+                    <p class="diag-foot" id="phi-diag-foot">Live counters, change since this panel opened. Auto-refreshing every 2s.</p>
                 </div>
             `;
+            lastRendered = d;
         };
+        // A failed background poll must not blank counters the reader is
+        // watching: keep the last good table and say so on the status line.
         const refresh = async () => {
+            const foot = () => document.getElementById('phi-diag-foot');
             try {
                 const res = await fetch('/api/diag');
                 if (!res.ok)
@@ -791,7 +850,14 @@ export class MarkdownManager {
                 render(data);
             }
             catch (err) {
-                this.modalBody.innerHTML = `<div class="md-list-error">Failed: ${escapeHtml(err.message)}</div>`;
+                if (!lastRendered) {
+                    this.modalBody.innerHTML = `<div class="md-list-error">Failed: ${escapeHtml(err.message)}</div>`;
+                    return;
+                }
+                const el = foot();
+                if (el) {
+                    el.textContent = `Refresh failed (${err.message}) — showing the last reading.`;
+                }
             }
         };
         await refresh();

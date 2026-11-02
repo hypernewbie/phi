@@ -431,13 +431,30 @@ Disable update checks in config:
 
 ## Diagnostics
 
-`Ctrl+Shift+D` opens a diagnostics modal showing:
+Open **Settings → About → View counters**, or press `Ctrl+Shift+D`, for the
+diagnostics modal:
 
 - phi version and install method
 - uptime, goroutine count, memory allocation
 - PTY count and per-pane stats (client count, ring buffer fill, busy state, last activity)
 
-The same data is available via `GET /api/diag`.
+The modal is also a memory screen. It groups counts by owner and reports the
+change since the panel opened, because a count alone cannot say whether it is
+growing.
+
+- **Memory** — Go heap alloc / in use / reserved, goroutine stacks, live heap
+  objects, goroutine count, GC cycles.
+- **Terminals** — PTY count, scrollback ring bytes against their capacity,
+  connected WebSocket clients.
+- **This page** — the browser's JS heap and DOM node count.
+
+A row that keeps climbing is the subsystem to investigate. The same data is
+available via `GET /api/diag`.
+
+For exact numbers, run a `-tags=profiling` build (`make dev-server-profile`).
+It adds native per-terminal resident bytes and `/debug/phi` snapshots, plus
+`/debug/pprof/heap` and `/debug/pprof/goroutine`, on a private loopback
+listener.
 
 ## Security Notes
 

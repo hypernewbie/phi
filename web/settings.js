@@ -492,6 +492,29 @@ export function openSettingsModal(app, accentColors, opts = {}) {
         ),
     );
 
+    // The diagnostics modal used to be reachable only by Ctrl+Shift+D, so
+    // nobody found it. This is the settings row that names it.
+    const diagRow = document.createElement('div');
+    diagRow.className = 'settings-row';
+    const diagLabel = document.createElement('label');
+    diagLabel.htmlFor = 'settings-diag-btn';
+    diagLabel.textContent = 'Diagnostics';
+    diagRow.appendChild(diagLabel);
+    const diagControls = document.createElement('div');
+    diagControls.className = 'settings-row-controls';
+    const diagBtn = document.createElement('button');
+    diagBtn.className = 'btn btn-primary';
+    diagBtn.type = 'button';
+    diagBtn.id = 'settings-diag-btn';
+    diagBtn.textContent = 'View counters';
+    diagBtn.addEventListener('click', () => {
+        close();
+        app.markdownManager?.openDiagModal?.();
+    });
+    diagControls.appendChild(diagBtn);
+    diagRow.appendChild(diagControls);
+    aboutGroup.appendChild(diagRow);
+
     modal.appendChild(header);
     modal.appendChild(body);
 

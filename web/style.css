@@ -12088,6 +12088,21 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     margin: 0;
 }
 
+/* Growth since the panel opened. Muted by default so a stable system reads
+   as quiet; growth takes the accent so the moving number is the one seen. */
+.diag-delta {
+    margin-left: 8px;
+    font-size: calc(11px * var(--ui-scale));
+    color: var(--text-muted);
+    opacity: 0.75;
+    white-space: nowrap;
+}
+
+.diag-delta:not(:empty) {
+    color: var(--accent-bright);
+    opacity: 1;
+}
+
 /* Vikunja Features: native subtask roll-ups. */
 .kanban-view-switch {
     display: inline-flex;

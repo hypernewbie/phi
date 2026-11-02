@@ -4,6 +4,9 @@ All notable changes to phi are documented here. Newest versions first.
 
 ## Unreleased
 
+### Added
+- **Diagnostics is a memory screen you can reach.** The diagnostics modal was reachable only by `Ctrl+Shift+D`, so almost nobody found it — a phone has no key for it at all. It now also opens from **Settings → About → View counters**, and it reports counts grouped by owner instead of one total: Go heap alloc/in use/reserved, goroutine stacks, live heap objects, goroutine count and GC cycles; PTY count, scrollback used against its capacity, and WebSocket clients; and the browser's own JS heap and DOM node count. Every counted row shows the change since the panel opened, because an absolute count cannot say whether it is growing; a row that keeps climbing is the subsystem to investigate. A counter the server did not send reads `—`, never a measured zero. `GET /api/diag` gains `mem_sys_mb`, `mem_heap_inuse_mb`, `mem_stack_mb`, `heap_objects`, `ring_bytes_total`, `ring_capacity_total` and `ws_clients_total`, additively. Exact per-terminal native bytes stay behind the `-tags=profiling` build (`make dev-server-profile`), which also exposes `/debug/phi`, `/debug/pprof/heap` and `/debug/pprof/goroutine` on a private loopback listener. A failed refresh keeps the last reading on screen instead of blanking the panel, and the 2s poll is bounded so a stalled link cannot stack requests.
+
 ## v0.34.0 — 2026-11-02
 
 ### Added
