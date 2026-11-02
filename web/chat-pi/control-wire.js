@@ -43,6 +43,22 @@ function optionalStringArg(args, key) {
         throw conversionError(`${key} must be a string`);
     return value;
 }
+function optionalBoolArg(args, key) {
+    const value = args[key];
+    if (value === undefined || value === null)
+        return undefined;
+    if (typeof value !== 'boolean')
+        throw conversionError(`${key} must be a boolean`);
+    return value;
+}
+function stringArrayArg(args, key) {
+    const value = args[key];
+    if (value === undefined || value === null)
+        return [];
+    if (!Array.isArray(value) || value.some((item) => typeof item !== 'string'))
+        throw conversionError(`${key} must be a string array`);
+    return [...value];
+}
 /** Encodes the hello frame that opens a control connection. */
 export function encodeHello(version) {
     return ControlClientFrame.encode(ControlClientFrame.fromPartial({
@@ -152,6 +168,61 @@ export function buildCall(id, op, sid, rawArgs) {
             return call({
                 $case: 'activateTab',
                 value: { sid: scope === '' ? undefined : scope },
+            });
+        case 'queueSubmit':
+            return call({
+                $case: 'queueSubmit',
+                value: {
+                    sid: scope,
+                    itemId: stringArg(args, 'itemId'),
+                    sessionEpoch: stringArg(args, 'sessionEpoch'),
+                    message: stringArg(args, 'message'),
+                    delivery: stringArg(args, 'delivery'),
+                    attachmentRefs: stringArrayArg(args, 'attachmentRefs'),
+                },
+            });
+        case 'queueRestore':
+            return call({
+                $case: 'queueRestore',
+                value: {
+                    sid: scope,
+                    itemId: stringArg(args, 'itemId'),
+                    sessionEpoch: stringArg(args, 'sessionEpoch'),
+                },
+            });
+        case 'queueCopy':
+            return call({
+                $case: 'queueCopy',
+                value: {
+                    sid: scope,
+                    itemId: stringArg(args, 'itemId'),
+                    sessionEpoch: stringArg(args, 'sessionEpoch'),
+                },
+            });
+        case 'queueDiscard':
+            return call({
+                $case: 'queueDiscard',
+                value: {
+                    sid: scope,
+                    itemId: stringArg(args, 'itemId'),
+                    sessionEpoch: stringArg(args, 'sessionEpoch'),
+                },
+            });
+        case 'extensionUiResponse':
+            return call({
+                $case: 'extensionUiResponse',
+                value: {
+                    sid: scope,
+                    requestId: stringArg(args, 'requestId'),
+                    value: optionalStringArg(args, 'value'),
+                    confirmed: optionalBoolArg(args, 'confirmed'),
+                    cancelled: args.cancelled === true,
+                },
+            });
+        case 'extensionUiCancel':
+            return call({
+                $case: 'extensionUiCancel',
+                value: { sid: scope, reason: stringArg(args, 'reason') },
             });
     }
     throw conversionError(`unknown control operation: ${op}`);
@@ -317,9 +388,58 @@ export function stateFromWire(state) {
         out.model = state.model;
     if (present(state.thinking) && state.thinking !== '')
         out.thinking = state.thinking;
+    if (present(state.cost))
+        out.cost = state.cost;
     if (present(state.sessionPath) && state.sessionPath !== '')
         out.sessionPath = state.sessionPath;
     return out;
+}
+function queueItemFromWire(item) {
+    const out = {
+        id: item.id,
+        sid: item.sid,
+        sessionEpoch: item.sessionEpoch,
+        message: item.message,
+        delivery: item.delivery,
+        attachments: item.attachments.map((attachment) => ({
+            ref: attachment.ref,
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            sizeBytes: safeNumber(attachment.sizeBytes, 'attachment size'),
+        })),
+        state: item.state,
+        createdAt: safeNumber(item.createdAt, 'queue item createdAt'),
+    };
+    if (present(item.error) && item.error !== '')
+        out.error = item.error;
+    return out;
+}
+function queueSnapshotFromWire(snapshot) {
+    if (snapshot === undefined)
+        return { sessionEpoch: '', items: [] };
+    return {
+        sessionEpoch: snapshot.sessionEpoch,
+        items: snapshot.items.map(queueItemFromWire),
+    };
+}
+function dialogsFromWire(dialogs) {
+    return dialogs.map((dialog) => {
+        const out = {
+            id: dialog.id,
+            method: dialog.method,
+            title: dialog.title,
+            options: [...dialog.options],
+            timeout: dialog.timeout,
+            createdAt: safeNumber(dialog.createdAt, 'dialog createdAt'),
+        };
+        if (present(dialog.message) && dialog.message !== '')
+            out.message = dialog.message;
+        if (present(dialog.placeholder) && dialog.placeholder !== '')
+            out.placeholder = dialog.placeholder;
+        if (present(dialog.prefill) && dialog.prefill !== '')
+            out.prefill = dialog.prefill;
+        return out;
+    });
 }
 function messageFromWire(message) {
     if (message === undefined)
@@ -427,8 +547,56 @@ export function resultFromWire(op, response) {
                 messages: snapshot.messages,
                 lastSeq: snapshot.lastSeq,
                 state: stateFromWire(result.value.session?.state),
+                queue: queueSnapshotFromWire(result.value.queue),
+                dialogs: dialogsFromWire(result.value.dialogs),
             };
         }
+        case 'queueSubmit': {
+            if (result.value.item === undefined)
+                throw conversionError('queue submit result has no item');
+            return { item: queueItemFromWire(result.value.item) };
+        }
+        case 'queueRestore': {
+            const out = {
+                restored: result.value.restored,
+            };
+            if (result.value.item !== undefined)
+                out.item = queueItemFromWire(result.value.item);
+            if (present(result.value.reason) && result.value.reason !== '')
+                out.reason = result.value.reason;
+            return out;
+        }
+        case 'queueCopy': {
+            const out = {
+                copied: result.value.copied,
+                attachmentRefs: [...result.value.attachmentRefs],
+                attachments: result.value.attachments.map((attachment) => ({
+                    ref: attachment.ref,
+                    name: attachment.name,
+                    mimeType: attachment.mimeType,
+                    sizeBytes: safeNumber(attachment.sizeBytes, 'attachment size'),
+                })),
+            };
+            if (present(result.value.message) && result.value.message !== '')
+                out.message = result.value.message;
+            if (present(result.value.reason) && result.value.reason !== '')
+                out.reason = result.value.reason;
+            return out;
+        }
+        case 'queueDiscard': {
+            const out = {
+                discarded: result.value.discarded,
+            };
+            if (result.value.item !== undefined)
+                out.item = queueItemFromWire(result.value.item);
+            if (present(result.value.reason) && result.value.reason !== '')
+                out.reason = result.value.reason;
+            return out;
+        }
+        case 'extensionUiResponse':
+            return { resolved: result.value.resolved };
+        case 'extensionUiCancel':
+            return { cancelled: Number(result.value.cancelled) };
         case 'prompt':
             return { accepted: result.value.accepted };
         case 'getAvailableModels':
@@ -623,6 +791,30 @@ export function eventFromWire(event) {
                 data.error = payload.value.error;
             return { ...envelope, evt: 'extensionError', data };
         }
+        case 'queueChanged':
+            return {
+                ...envelope,
+                evt: 'queueChanged',
+                data: queueSnapshotFromWire(payload.value.queue),
+            };
+        case 'extensionUiRequest':
+            return {
+                ...envelope,
+                evt: 'extensionUiRequest',
+                data: externalToJS(payload.value.request),
+            };
+        case 'extensionUiClosed': {
+            const data = { id: payload.value.id };
+            if (present(payload.value.reason) && payload.value.reason !== '')
+                data.reason = payload.value.reason;
+            return { ...envelope, evt: 'extensionUiClosed', data };
+        }
+        case 'toolExecutionUpdate':
+            return {
+                ...envelope,
+                evt: 'toolExecutionUpdate',
+                data: externalToJS(payload.value.payload),
+            };
     }
     throw conversionError('control event has an unsupported variant');
 }

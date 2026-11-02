@@ -64,6 +64,12 @@ export interface ControlCall {
     | { $case: "dlg"; value: DlgCall }
     | { $case: "dlgClosed"; value: DlgClosedCall }
     | { $case: "activateTab"; value: ActivateTabCall }
+    | { $case: "queueSubmit"; value: QueueSubmitCall }
+    | { $case: "queueRestore"; value: QueueRestoreCall }
+    | { $case: "queueCopy"; value: QueueCopyCall }
+    | { $case: "queueDiscard"; value: QueueDiscardCall }
+    | { $case: "extensionUiResponse"; value: ExtensionUIResponseCall }
+    | { $case: "extensionUiCancel"; value: ExtensionUICancelCall }
     | undefined;
 }
 
@@ -96,6 +102,12 @@ export interface ControlResponse {
     | { $case: "dlg"; value: StubResult }
     | { $case: "dlgClosed"; value: StubResult }
     | { $case: "activateTab"; value: StubResult }
+    | { $case: "queueSubmit"; value: QueueItemResult }
+    | { $case: "queueRestore"; value: QueueRestoreResult }
+    | { $case: "queueCopy"; value: QueueCopyResult }
+    | { $case: "queueDiscard"; value: QueueDiscardResult }
+    | { $case: "extensionUiResponse"; value: ExtensionUIResponseResult }
+    | { $case: "extensionUiCancel"; value: ExtensionUICancelResult }
     | undefined;
 }
 
@@ -121,6 +133,10 @@ export interface ControlEvent {
     | { $case: "summarizationRetryFinished"; value: SummarizationRetryFinishedEvent }
     | { $case: "compactionEnd"; value: CompactionEndEvent }
     | { $case: "extensionError"; value: ExtensionErrorEvent }
+    | { $case: "queueChanged"; value: QueueChangedEvent }
+    | { $case: "extensionUiRequest"; value: ExtensionUIRequestEvent }
+    | { $case: "extensionUiClosed"; value: ExtensionUIClosedEvent }
+    | { $case: "toolExecutionUpdate"; value: ToolExecutionUpdateEvent }
     | undefined;
 }
 
@@ -146,7 +162,14 @@ export interface ControlState {
   busy: boolean;
   status: string;
   queueDepth: number;
-  sessionPath?: string | undefined;
+  sessionPath?:
+    | string
+    | undefined;
+  /**
+   * cost is the session's accumulated spend as Pi reports it. Absent until
+   * the first get_session_stats response carries a value.
+   */
+  cost?: number | undefined;
 }
 
 /**
@@ -185,7 +208,14 @@ export interface TranscriptSnapshot {
  */
 export interface SpawnCall {
   cwd?: string | undefined;
-  sessionPath?: string | undefined;
+  sessionPath?:
+    | string
+    | undefined;
+  /**
+   * spawn_id makes a retried spawn idempotent: the same id with the same
+   * arguments reuses the existing child instead of starting a second one.
+   */
+  spawnId?: string | undefined;
 }
 
 export interface ListSessionsCall {
@@ -274,6 +304,135 @@ export interface ActivateTabCall {
   sid?: string | undefined;
 }
 
+/**
+ * QueueAttachment is one opaque browser-owned attachment bound to a queued
+ * message. The bytes stay process-local; only this metadata crosses the wire.
+ */
+export interface QueueAttachment {
+  ref: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: bigint;
+}
+
+/**
+ * QueueItem is one process-local delivery record. state keeps the ledger
+ * vocabulary: local, sending, accepted, uncertain, consumed, cancelled,
+ * promoted. error is present only for a failed or uncertain delivery.
+ */
+export interface QueueItem {
+  id: string;
+  sid: string;
+  sessionEpoch: string;
+  message: string;
+  delivery: string;
+  attachments: QueueAttachment[];
+  state: string;
+  error?: string | undefined;
+  createdAt: bigint;
+}
+
+/** QueueSnapshot is the hydrate, state, and queue_changed queue payload. */
+export interface QueueSnapshot {
+  sessionEpoch: string;
+  items: QueueItem[];
+}
+
+export interface QueueSubmitCall {
+  sid: string;
+  itemId: string;
+  sessionEpoch: string;
+  message: string;
+  delivery: string;
+  attachmentRefs: string[];
+}
+
+export interface QueueRestoreCall {
+  sid: string;
+  itemId: string;
+  sessionEpoch: string;
+}
+
+export interface QueueCopyCall {
+  sid: string;
+  itemId: string;
+  sessionEpoch: string;
+}
+
+export interface QueueDiscardCall {
+  sid: string;
+  itemId: string;
+  sessionEpoch: string;
+}
+
+export interface QueueItemResult {
+  item: QueueItem | undefined;
+}
+
+/** QueueRestoreResult reports draft recovery for a Phi-owned local item. */
+export interface QueueRestoreResult {
+  restored: boolean;
+  item: QueueItem | undefined;
+  reason?: string | undefined;
+}
+
+/**
+ * QueueCopyResult returns a fresh unsent draft for an uncertain item. The
+ * copied message is never resubmitted by the server.
+ */
+export interface QueueCopyResult {
+  copied: boolean;
+  message?: string | undefined;
+  attachmentRefs: string[];
+  attachments: QueueAttachment[];
+  reason?: string | undefined;
+}
+
+export interface QueueDiscardResult {
+  discarded: boolean;
+  item: QueueItem | undefined;
+  reason?: string | undefined;
+}
+
+/**
+ * ExtensionUIDialog is one retained blocking Pi dialog. Optional fields are
+ * populated only for the matching method: options for select, message for
+ * confirm, placeholder for input, prefill for editor.
+ */
+export interface ExtensionUIDialog {
+  id: string;
+  method: string;
+  title: string;
+  options: string[];
+  message?: string | undefined;
+  placeholder?: string | undefined;
+  prefill?: string | undefined;
+  timeout: number;
+  createdAt: bigint;
+}
+
+export interface ExtensionUIResponseCall {
+  sid: string;
+  requestId: string;
+  value?: string | undefined;
+  confirmed?: boolean | undefined;
+  cancelled: boolean;
+}
+
+export interface ExtensionUIResponseResult {
+  resolved: boolean;
+}
+
+export interface ExtensionUICancelCall {
+  sid: string;
+  /** reason keeps the existing tabClosed/server vocabulary. */
+  reason: string;
+}
+
+export interface ExtensionUICancelResult {
+  cancelled: number;
+}
+
 export interface SpawnResult {
   sid: string;
   title: string;
@@ -288,10 +447,14 @@ export interface ListSessionsResult {
 
 export interface StateResult {
   state: ControlState | undefined;
+  queue: QueueSnapshot | undefined;
+  dialogs: ExtensionUIDialog[];
 }
 
 export interface TranscriptResult {
   session: TranscriptSnapshot | undefined;
+  queue: QueueSnapshot | undefined;
+  dialogs: ExtensionUIDialog[];
 }
 
 export interface PromptResult {
@@ -439,6 +602,39 @@ export interface CompactionEndEvent {
 
 export interface ExtensionErrorEvent {
   error?: string | undefined;
+}
+
+/**
+ * QueueChangedEvent carries the whole delivery ledger after a change. Clients
+ * replace their ledger with this snapshot rather than patching item by item.
+ */
+export interface QueueChangedEvent {
+  queue: QueueSnapshot | undefined;
+}
+
+/**
+ * ExtensionUIRequestEvent carries Pi's blocking dialog request verbatim so the
+ * browser keeps the existing method-specific shape.
+ */
+export interface ExtensionUIRequestEvent {
+  request?: ExternalValue | undefined;
+}
+
+/**
+ * ExtensionUIClosedEvent retires one retained dialog. reason keeps the
+ * timeout, childExit, tabClosed, server, and unsupported values.
+ */
+export interface ExtensionUIClosedEvent {
+  id: string;
+  reason?: string | undefined;
+}
+
+/**
+ * ToolExecutionUpdateEvent is Pi's tool progress payload, passed through as
+ * external data because its shape is owned by Pi.
+ */
+export interface ToolExecutionUpdateEvent {
+  payload?: ExternalValue | undefined;
 }
 
 /**
@@ -837,6 +1033,24 @@ export const ControlCall: MessageFns<ControlCall> = {
       case "activateTab":
         ActivateTabCall.encode(message.call.value, writer.uint32(242).fork()).join();
         break;
+      case "queueSubmit":
+        QueueSubmitCall.encode(message.call.value, writer.uint32(250).fork()).join();
+        break;
+      case "queueRestore":
+        QueueRestoreCall.encode(message.call.value, writer.uint32(258).fork()).join();
+        break;
+      case "queueCopy":
+        QueueCopyCall.encode(message.call.value, writer.uint32(266).fork()).join();
+        break;
+      case "queueDiscard":
+        QueueDiscardCall.encode(message.call.value, writer.uint32(274).fork()).join();
+        break;
+      case "extensionUiResponse":
+        ExtensionUIResponseCall.encode(message.call.value, writer.uint32(282).fork()).join();
+        break;
+      case "extensionUiCancel":
+        ExtensionUICancelCall.encode(message.call.value, writer.uint32(290).fork()).join();
+        break;
     }
     return writer;
   },
@@ -1039,6 +1253,57 @@ export const ControlCall: MessageFns<ControlCall> = {
             message.call = { $case: "activateTab", value: ActivateTabCall.decode(reader, reader.uint32()) };
             continue;
           }
+          case 31: {
+            if (tag !== 250) {
+              break;
+            }
+
+            message.call = { $case: "queueSubmit", value: QueueSubmitCall.decode(reader, reader.uint32()) };
+            continue;
+          }
+          case 32: {
+            if (tag !== 258) {
+              break;
+            }
+
+            message.call = { $case: "queueRestore", value: QueueRestoreCall.decode(reader, reader.uint32()) };
+            continue;
+          }
+          case 33: {
+            if (tag !== 266) {
+              break;
+            }
+
+            message.call = { $case: "queueCopy", value: QueueCopyCall.decode(reader, reader.uint32()) };
+            continue;
+          }
+          case 34: {
+            if (tag !== 274) {
+              break;
+            }
+
+            message.call = { $case: "queueDiscard", value: QueueDiscardCall.decode(reader, reader.uint32()) };
+            continue;
+          }
+          case 35: {
+            if (tag !== 282) {
+              break;
+            }
+
+            message.call = {
+              $case: "extensionUiResponse",
+              value: ExtensionUIResponseCall.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
+          case 36: {
+            if (tag !== 290) {
+              break;
+            }
+
+            message.call = { $case: "extensionUiCancel", value: ExtensionUICancelCall.decode(reader, reader.uint32()) };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1187,6 +1452,45 @@ export const ControlCall: MessageFns<ControlCall> = {
         }
         break;
       }
+      case "queueSubmit": {
+        if (object.call?.value !== undefined && object.call?.value !== null) {
+          message.call = { $case: "queueSubmit", value: QueueSubmitCall.fromPartial(object.call.value) };
+        }
+        break;
+      }
+      case "queueRestore": {
+        if (object.call?.value !== undefined && object.call?.value !== null) {
+          message.call = { $case: "queueRestore", value: QueueRestoreCall.fromPartial(object.call.value) };
+        }
+        break;
+      }
+      case "queueCopy": {
+        if (object.call?.value !== undefined && object.call?.value !== null) {
+          message.call = { $case: "queueCopy", value: QueueCopyCall.fromPartial(object.call.value) };
+        }
+        break;
+      }
+      case "queueDiscard": {
+        if (object.call?.value !== undefined && object.call?.value !== null) {
+          message.call = { $case: "queueDiscard", value: QueueDiscardCall.fromPartial(object.call.value) };
+        }
+        break;
+      }
+      case "extensionUiResponse": {
+        if (object.call?.value !== undefined && object.call?.value !== null) {
+          message.call = {
+            $case: "extensionUiResponse",
+            value: ExtensionUIResponseCall.fromPartial(object.call.value),
+          };
+        }
+        break;
+      }
+      case "extensionUiCancel": {
+        if (object.call?.value !== undefined && object.call?.value !== null) {
+          message.call = { $case: "extensionUiCancel", value: ExtensionUICancelCall.fromPartial(object.call.value) };
+        }
+        break;
+      }
     }
     return message;
   },
@@ -1267,6 +1571,24 @@ export const ControlResponse: MessageFns<ControlResponse> = {
         break;
       case "activateTab":
         StubResult.encode(message.result.value, writer.uint32(242).fork()).join();
+        break;
+      case "queueSubmit":
+        QueueItemResult.encode(message.result.value, writer.uint32(250).fork()).join();
+        break;
+      case "queueRestore":
+        QueueRestoreResult.encode(message.result.value, writer.uint32(258).fork()).join();
+        break;
+      case "queueCopy":
+        QueueCopyResult.encode(message.result.value, writer.uint32(266).fork()).join();
+        break;
+      case "queueDiscard":
+        QueueDiscardResult.encode(message.result.value, writer.uint32(274).fork()).join();
+        break;
+      case "extensionUiResponse":
+        ExtensionUIResponseResult.encode(message.result.value, writer.uint32(282).fork()).join();
+        break;
+      case "extensionUiCancel":
+        ExtensionUICancelResult.encode(message.result.value, writer.uint32(290).fork()).join();
         break;
     }
     return writer;
@@ -1475,6 +1797,60 @@ export const ControlResponse: MessageFns<ControlResponse> = {
             message.result = { $case: "activateTab", value: StubResult.decode(reader, reader.uint32()) };
             continue;
           }
+          case 31: {
+            if (tag !== 250) {
+              break;
+            }
+
+            message.result = { $case: "queueSubmit", value: QueueItemResult.decode(reader, reader.uint32()) };
+            continue;
+          }
+          case 32: {
+            if (tag !== 258) {
+              break;
+            }
+
+            message.result = { $case: "queueRestore", value: QueueRestoreResult.decode(reader, reader.uint32()) };
+            continue;
+          }
+          case 33: {
+            if (tag !== 266) {
+              break;
+            }
+
+            message.result = { $case: "queueCopy", value: QueueCopyResult.decode(reader, reader.uint32()) };
+            continue;
+          }
+          case 34: {
+            if (tag !== 274) {
+              break;
+            }
+
+            message.result = { $case: "queueDiscard", value: QueueDiscardResult.decode(reader, reader.uint32()) };
+            continue;
+          }
+          case 35: {
+            if (tag !== 282) {
+              break;
+            }
+
+            message.result = {
+              $case: "extensionUiResponse",
+              value: ExtensionUIResponseResult.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
+          case 36: {
+            if (tag !== 290) {
+              break;
+            }
+
+            message.result = {
+              $case: "extensionUiCancel",
+              value: ExtensionUICancelResult.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1632,6 +2008,48 @@ export const ControlResponse: MessageFns<ControlResponse> = {
         }
         break;
       }
+      case "queueSubmit": {
+        if (object.result?.value !== undefined && object.result?.value !== null) {
+          message.result = { $case: "queueSubmit", value: QueueItemResult.fromPartial(object.result.value) };
+        }
+        break;
+      }
+      case "queueRestore": {
+        if (object.result?.value !== undefined && object.result?.value !== null) {
+          message.result = { $case: "queueRestore", value: QueueRestoreResult.fromPartial(object.result.value) };
+        }
+        break;
+      }
+      case "queueCopy": {
+        if (object.result?.value !== undefined && object.result?.value !== null) {
+          message.result = { $case: "queueCopy", value: QueueCopyResult.fromPartial(object.result.value) };
+        }
+        break;
+      }
+      case "queueDiscard": {
+        if (object.result?.value !== undefined && object.result?.value !== null) {
+          message.result = { $case: "queueDiscard", value: QueueDiscardResult.fromPartial(object.result.value) };
+        }
+        break;
+      }
+      case "extensionUiResponse": {
+        if (object.result?.value !== undefined && object.result?.value !== null) {
+          message.result = {
+            $case: "extensionUiResponse",
+            value: ExtensionUIResponseResult.fromPartial(object.result.value),
+          };
+        }
+        break;
+      }
+      case "extensionUiCancel": {
+        if (object.result?.value !== undefined && object.result?.value !== null) {
+          message.result = {
+            $case: "extensionUiCancel",
+            value: ExtensionUICancelResult.fromPartial(object.result.value),
+          };
+        }
+        break;
+      }
     }
     return message;
   },
@@ -1746,6 +2164,18 @@ export const ControlEvent: MessageFns<ControlEvent> = {
         break;
       case "extensionError":
         ExtensionErrorEvent.encode(message.event.value, writer.uint32(178).fork()).join();
+        break;
+      case "queueChanged":
+        QueueChangedEvent.encode(message.event.value, writer.uint32(186).fork()).join();
+        break;
+      case "extensionUiRequest":
+        ExtensionUIRequestEvent.encode(message.event.value, writer.uint32(194).fork()).join();
+        break;
+      case "extensionUiClosed":
+        ExtensionUIClosedEvent.encode(message.event.value, writer.uint32(202).fork()).join();
+        break;
+      case "toolExecutionUpdate":
+        ToolExecutionUpdateEvent.encode(message.event.value, writer.uint32(210).fork()).join();
         break;
     }
     return writer;
@@ -1890,6 +2320,47 @@ export const ControlEvent: MessageFns<ControlEvent> = {
             message.event = { $case: "extensionError", value: ExtensionErrorEvent.decode(reader, reader.uint32()) };
             continue;
           }
+          case 23: {
+            if (tag !== 186) {
+              break;
+            }
+
+            message.event = { $case: "queueChanged", value: QueueChangedEvent.decode(reader, reader.uint32()) };
+            continue;
+          }
+          case 24: {
+            if (tag !== 194) {
+              break;
+            }
+
+            message.event = {
+              $case: "extensionUiRequest",
+              value: ExtensionUIRequestEvent.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
+          case 25: {
+            if (tag !== 202) {
+              break;
+            }
+
+            message.event = {
+              $case: "extensionUiClosed",
+              value: ExtensionUIClosedEvent.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
+          case 26: {
+            if (tag !== 210) {
+              break;
+            }
+
+            message.event = {
+              $case: "toolExecutionUpdate",
+              value: ToolExecutionUpdateEvent.decode(reader, reader.uint32()),
+            };
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1994,6 +2465,36 @@ export const ControlEvent: MessageFns<ControlEvent> = {
         }
         break;
       }
+      case "queueChanged": {
+        if (object.event?.value !== undefined && object.event?.value !== null) {
+          message.event = { $case: "queueChanged", value: QueueChangedEvent.fromPartial(object.event.value) };
+        }
+        break;
+      }
+      case "extensionUiRequest": {
+        if (object.event?.value !== undefined && object.event?.value !== null) {
+          message.event = {
+            $case: "extensionUiRequest",
+            value: ExtensionUIRequestEvent.fromPartial(object.event.value),
+          };
+        }
+        break;
+      }
+      case "extensionUiClosed": {
+        if (object.event?.value !== undefined && object.event?.value !== null) {
+          message.event = { $case: "extensionUiClosed", value: ExtensionUIClosedEvent.fromPartial(object.event.value) };
+        }
+        break;
+      }
+      case "toolExecutionUpdate": {
+        if (object.event?.value !== undefined && object.event?.value !== null) {
+          message.event = {
+            $case: "toolExecutionUpdate",
+            value: ToolExecutionUpdateEvent.fromPartial(object.event.value),
+          };
+        }
+        break;
+      }
     }
     return message;
   },
@@ -2017,6 +2518,7 @@ function createBaseControlState(): ControlState {
     status: "",
     queueDepth: 0,
     sessionPath: undefined,
+    cost: undefined,
   };
 }
 
@@ -2087,6 +2589,9 @@ export const ControlState: MessageFns<ControlState> = {
     }
     if (message.sessionPath !== undefined) {
       writer.uint32(130).string(message.sessionPath);
+    }
+    if (message.cost !== undefined) {
+      writer.uint32(137).double(message.cost);
     }
     return writer;
   },
@@ -2232,6 +2737,14 @@ export const ControlState: MessageFns<ControlState> = {
             message.sessionPath = reader.string();
             continue;
           }
+          case 17: {
+            if (tag !== 137) {
+              break;
+            }
+
+            message.cost = reader.double();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -2277,6 +2790,7 @@ export const ControlState: MessageFns<ControlState> = {
     message.status = object.status ?? "";
     message.queueDepth = object.queueDepth ?? 0;
     message.sessionPath = object.sessionPath ?? undefined;
+    message.cost = object.cost ?? undefined;
     return message;
   },
 };
@@ -2625,7 +3139,7 @@ export const TranscriptSnapshot: MessageFns<TranscriptSnapshot> = {
 };
 
 function createBaseSpawnCall(): SpawnCall {
-  return { cwd: undefined, sessionPath: undefined };
+  return { cwd: undefined, sessionPath: undefined, spawnId: undefined };
 }
 
 export const SpawnCall: MessageFns<SpawnCall> = {
@@ -2635,6 +3149,9 @@ export const SpawnCall: MessageFns<SpawnCall> = {
     }
     if (message.sessionPath !== undefined) {
       writer.uint32(18).string(message.sessionPath);
+    }
+    if (message.spawnId !== undefined) {
+      writer.uint32(26).string(message.spawnId);
     }
     return writer;
   },
@@ -2668,6 +3185,14 @@ export const SpawnCall: MessageFns<SpawnCall> = {
             message.sessionPath = reader.string();
             continue;
           }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.spawnId = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -2687,6 +3212,7 @@ export const SpawnCall: MessageFns<SpawnCall> = {
     const message = createBaseSpawnCall();
     message.cwd = object.cwd ?? undefined;
     message.sessionPath = object.sessionPath ?? undefined;
+    message.spawnId = object.spawnId ?? undefined;
     return message;
   },
 };
@@ -3853,6 +4379,1443 @@ export const ActivateTabCall: MessageFns<ActivateTabCall> = {
   },
 };
 
+function createBaseQueueAttachment(): QueueAttachment {
+  return { ref: "", name: "", mimeType: "", sizeBytes: 0n };
+}
+
+export const QueueAttachment: MessageFns<QueueAttachment> = {
+  encode(message: QueueAttachment, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.ref !== "") {
+      writer.uint32(10).string(message.ref);
+    }
+    if (message.name !== "") {
+      writer.uint32(18).string(message.name);
+    }
+    if (message.mimeType !== "") {
+      writer.uint32(26).string(message.mimeType);
+    }
+    if (message.sizeBytes !== 0n) {
+      if (BigInt.asIntN(64, message.sizeBytes) !== message.sizeBytes) {
+        throw new globalThis.Error("value provided for field message.sizeBytes of type int64 too large");
+      }
+      writer.uint32(32).int64(message.sizeBytes);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): QueueAttachment {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseQueueAttachment();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.ref = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.name = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.mimeType = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.sizeBytes = reader.int64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<QueueAttachment>, I>>(base?: I): QueueAttachment {
+    return QueueAttachment.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<QueueAttachment>, I>>(object: I): QueueAttachment {
+    const message = createBaseQueueAttachment();
+    message.ref = object.ref ?? "";
+    message.name = object.name ?? "";
+    message.mimeType = object.mimeType ?? "";
+    message.sizeBytes = (object.sizeBytes !== undefined && object.sizeBytes !== null) ? BigInt(object.sizeBytes) : 0n;
+    return message;
+  },
+};
+
+function createBaseQueueItem(): QueueItem {
+  return {
+    id: "",
+    sid: "",
+    sessionEpoch: "",
+    message: "",
+    delivery: "",
+    attachments: [],
+    state: "",
+    error: undefined,
+    createdAt: 0n,
+  };
+}
+
+export const QueueItem: MessageFns<QueueItem> = {
+  encode(message: QueueItem, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.id !== "") {
+      writer.uint32(10).string(message.id);
+    }
+    if (message.sid !== "") {
+      writer.uint32(18).string(message.sid);
+    }
+    if (message.sessionEpoch !== "") {
+      writer.uint32(26).string(message.sessionEpoch);
+    }
+    if (message.message !== "") {
+      writer.uint32(34).string(message.message);
+    }
+    if (message.delivery !== "") {
+      writer.uint32(42).string(message.delivery);
+    }
+    for (const v of message.attachments) {
+      QueueAttachment.encode(v!, writer.uint32(50).fork()).join();
+    }
+    if (message.state !== "") {
+      writer.uint32(58).string(message.state);
+    }
+    if (message.error !== undefined) {
+      writer.uint32(66).string(message.error);
+    }
+    if (message.createdAt !== 0n) {
+      if (BigInt.asIntN(64, message.createdAt) !== message.createdAt) {
+        throw new globalThis.Error("value provided for field message.createdAt of type int64 too large");
+      }
+      writer.uint32(72).int64(message.createdAt);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): QueueItem {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseQueueItem();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.id = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.sid = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.sessionEpoch = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.message = reader.string();
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.delivery = reader.string();
+            continue;
+          }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+
+            message.attachments.push(QueueAttachment.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 7: {
+            if (tag !== 58) {
+              break;
+            }
+
+            message.state = reader.string();
+            continue;
+          }
+          case 8: {
+            if (tag !== 66) {
+              break;
+            }
+
+            message.error = reader.string();
+            continue;
+          }
+          case 9: {
+            if (tag !== 72) {
+              break;
+            }
+
+            message.createdAt = reader.int64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<QueueItem>, I>>(base?: I): QueueItem {
+    return QueueItem.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<QueueItem>, I>>(object: I): QueueItem {
+    const message = createBaseQueueItem();
+    message.id = object.id ?? "";
+    message.sid = object.sid ?? "";
+    message.sessionEpoch = object.sessionEpoch ?? "";
+    message.message = object.message ?? "";
+    message.delivery = object.delivery ?? "";
+    message.attachments = object.attachments?.map((e) => QueueAttachment.fromPartial(e)) || [];
+    message.state = object.state ?? "";
+    message.error = object.error ?? undefined;
+    message.createdAt = (object.createdAt !== undefined && object.createdAt !== null) ? BigInt(object.createdAt) : 0n;
+    return message;
+  },
+};
+
+function createBaseQueueSnapshot(): QueueSnapshot {
+  return { sessionEpoch: "", items: [] };
+}
+
+export const QueueSnapshot: MessageFns<QueueSnapshot> = {
+  encode(message: QueueSnapshot, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.sessionEpoch !== "") {
+      writer.uint32(10).string(message.sessionEpoch);
+    }
+    for (const v of message.items) {
+      QueueItem.encode(v!, writer.uint32(18).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): QueueSnapshot {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseQueueSnapshot();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.sessionEpoch = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.items.push(QueueItem.decode(reader, reader.uint32()));
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<QueueSnapshot>, I>>(base?: I): QueueSnapshot {
+    return QueueSnapshot.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<QueueSnapshot>, I>>(object: I): QueueSnapshot {
+    const message = createBaseQueueSnapshot();
+    message.sessionEpoch = object.sessionEpoch ?? "";
+    message.items = object.items?.map((e) => QueueItem.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseQueueSubmitCall(): QueueSubmitCall {
+  return { sid: "", itemId: "", sessionEpoch: "", message: "", delivery: "", attachmentRefs: [] };
+}
+
+export const QueueSubmitCall: MessageFns<QueueSubmitCall> = {
+  encode(message: QueueSubmitCall, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.sid !== "") {
+      writer.uint32(10).string(message.sid);
+    }
+    if (message.itemId !== "") {
+      writer.uint32(18).string(message.itemId);
+    }
+    if (message.sessionEpoch !== "") {
+      writer.uint32(26).string(message.sessionEpoch);
+    }
+    if (message.message !== "") {
+      writer.uint32(34).string(message.message);
+    }
+    if (message.delivery !== "") {
+      writer.uint32(42).string(message.delivery);
+    }
+    for (const v of message.attachmentRefs) {
+      writer.uint32(50).string(v!);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): QueueSubmitCall {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseQueueSubmitCall();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.sid = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.itemId = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.sessionEpoch = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.message = reader.string();
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.delivery = reader.string();
+            continue;
+          }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+
+            message.attachmentRefs.push(reader.string());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<QueueSubmitCall>, I>>(base?: I): QueueSubmitCall {
+    return QueueSubmitCall.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<QueueSubmitCall>, I>>(object: I): QueueSubmitCall {
+    const message = createBaseQueueSubmitCall();
+    message.sid = object.sid ?? "";
+    message.itemId = object.itemId ?? "";
+    message.sessionEpoch = object.sessionEpoch ?? "";
+    message.message = object.message ?? "";
+    message.delivery = object.delivery ?? "";
+    message.attachmentRefs = object.attachmentRefs?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseQueueRestoreCall(): QueueRestoreCall {
+  return { sid: "", itemId: "", sessionEpoch: "" };
+}
+
+export const QueueRestoreCall: MessageFns<QueueRestoreCall> = {
+  encode(message: QueueRestoreCall, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.sid !== "") {
+      writer.uint32(10).string(message.sid);
+    }
+    if (message.itemId !== "") {
+      writer.uint32(18).string(message.itemId);
+    }
+    if (message.sessionEpoch !== "") {
+      writer.uint32(26).string(message.sessionEpoch);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): QueueRestoreCall {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseQueueRestoreCall();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.sid = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.itemId = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.sessionEpoch = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<QueueRestoreCall>, I>>(base?: I): QueueRestoreCall {
+    return QueueRestoreCall.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<QueueRestoreCall>, I>>(object: I): QueueRestoreCall {
+    const message = createBaseQueueRestoreCall();
+    message.sid = object.sid ?? "";
+    message.itemId = object.itemId ?? "";
+    message.sessionEpoch = object.sessionEpoch ?? "";
+    return message;
+  },
+};
+
+function createBaseQueueCopyCall(): QueueCopyCall {
+  return { sid: "", itemId: "", sessionEpoch: "" };
+}
+
+export const QueueCopyCall: MessageFns<QueueCopyCall> = {
+  encode(message: QueueCopyCall, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.sid !== "") {
+      writer.uint32(10).string(message.sid);
+    }
+    if (message.itemId !== "") {
+      writer.uint32(18).string(message.itemId);
+    }
+    if (message.sessionEpoch !== "") {
+      writer.uint32(26).string(message.sessionEpoch);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): QueueCopyCall {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseQueueCopyCall();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.sid = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.itemId = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.sessionEpoch = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<QueueCopyCall>, I>>(base?: I): QueueCopyCall {
+    return QueueCopyCall.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<QueueCopyCall>, I>>(object: I): QueueCopyCall {
+    const message = createBaseQueueCopyCall();
+    message.sid = object.sid ?? "";
+    message.itemId = object.itemId ?? "";
+    message.sessionEpoch = object.sessionEpoch ?? "";
+    return message;
+  },
+};
+
+function createBaseQueueDiscardCall(): QueueDiscardCall {
+  return { sid: "", itemId: "", sessionEpoch: "" };
+}
+
+export const QueueDiscardCall: MessageFns<QueueDiscardCall> = {
+  encode(message: QueueDiscardCall, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.sid !== "") {
+      writer.uint32(10).string(message.sid);
+    }
+    if (message.itemId !== "") {
+      writer.uint32(18).string(message.itemId);
+    }
+    if (message.sessionEpoch !== "") {
+      writer.uint32(26).string(message.sessionEpoch);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): QueueDiscardCall {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseQueueDiscardCall();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.sid = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.itemId = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.sessionEpoch = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<QueueDiscardCall>, I>>(base?: I): QueueDiscardCall {
+    return QueueDiscardCall.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<QueueDiscardCall>, I>>(object: I): QueueDiscardCall {
+    const message = createBaseQueueDiscardCall();
+    message.sid = object.sid ?? "";
+    message.itemId = object.itemId ?? "";
+    message.sessionEpoch = object.sessionEpoch ?? "";
+    return message;
+  },
+};
+
+function createBaseQueueItemResult(): QueueItemResult {
+  return { item: undefined };
+}
+
+export const QueueItemResult: MessageFns<QueueItemResult> = {
+  encode(message: QueueItemResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.item !== undefined) {
+      QueueItem.encode(message.item, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): QueueItemResult {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseQueueItemResult();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.item = QueueItem.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<QueueItemResult>, I>>(base?: I): QueueItemResult {
+    return QueueItemResult.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<QueueItemResult>, I>>(object: I): QueueItemResult {
+    const message = createBaseQueueItemResult();
+    message.item = (object.item !== undefined && object.item !== null) ? QueueItem.fromPartial(object.item) : undefined;
+    return message;
+  },
+};
+
+function createBaseQueueRestoreResult(): QueueRestoreResult {
+  return { restored: false, item: undefined, reason: undefined };
+}
+
+export const QueueRestoreResult: MessageFns<QueueRestoreResult> = {
+  encode(message: QueueRestoreResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.restored !== false) {
+      writer.uint32(8).bool(message.restored);
+    }
+    if (message.item !== undefined) {
+      QueueItem.encode(message.item, writer.uint32(18).fork()).join();
+    }
+    if (message.reason !== undefined) {
+      writer.uint32(26).string(message.reason);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): QueueRestoreResult {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseQueueRestoreResult();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.restored = reader.bool();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.item = QueueItem.decode(reader, reader.uint32());
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<QueueRestoreResult>, I>>(base?: I): QueueRestoreResult {
+    return QueueRestoreResult.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<QueueRestoreResult>, I>>(object: I): QueueRestoreResult {
+    const message = createBaseQueueRestoreResult();
+    message.restored = object.restored ?? false;
+    message.item = (object.item !== undefined && object.item !== null) ? QueueItem.fromPartial(object.item) : undefined;
+    message.reason = object.reason ?? undefined;
+    return message;
+  },
+};
+
+function createBaseQueueCopyResult(): QueueCopyResult {
+  return { copied: false, message: undefined, attachmentRefs: [], attachments: [], reason: undefined };
+}
+
+export const QueueCopyResult: MessageFns<QueueCopyResult> = {
+  encode(message: QueueCopyResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.copied !== false) {
+      writer.uint32(8).bool(message.copied);
+    }
+    if (message.message !== undefined) {
+      writer.uint32(18).string(message.message);
+    }
+    for (const v of message.attachmentRefs) {
+      writer.uint32(26).string(v!);
+    }
+    for (const v of message.attachments) {
+      QueueAttachment.encode(v!, writer.uint32(34).fork()).join();
+    }
+    if (message.reason !== undefined) {
+      writer.uint32(42).string(message.reason);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): QueueCopyResult {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseQueueCopyResult();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.copied = reader.bool();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.message = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.attachmentRefs.push(reader.string());
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.attachments.push(QueueAttachment.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<QueueCopyResult>, I>>(base?: I): QueueCopyResult {
+    return QueueCopyResult.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<QueueCopyResult>, I>>(object: I): QueueCopyResult {
+    const message = createBaseQueueCopyResult();
+    message.copied = object.copied ?? false;
+    message.message = object.message ?? undefined;
+    message.attachmentRefs = object.attachmentRefs?.map((e) => e) || [];
+    message.attachments = object.attachments?.map((e) => QueueAttachment.fromPartial(e)) || [];
+    message.reason = object.reason ?? undefined;
+    return message;
+  },
+};
+
+function createBaseQueueDiscardResult(): QueueDiscardResult {
+  return { discarded: false, item: undefined, reason: undefined };
+}
+
+export const QueueDiscardResult: MessageFns<QueueDiscardResult> = {
+  encode(message: QueueDiscardResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.discarded !== false) {
+      writer.uint32(8).bool(message.discarded);
+    }
+    if (message.item !== undefined) {
+      QueueItem.encode(message.item, writer.uint32(18).fork()).join();
+    }
+    if (message.reason !== undefined) {
+      writer.uint32(26).string(message.reason);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): QueueDiscardResult {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseQueueDiscardResult();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.discarded = reader.bool();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.item = QueueItem.decode(reader, reader.uint32());
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<QueueDiscardResult>, I>>(base?: I): QueueDiscardResult {
+    return QueueDiscardResult.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<QueueDiscardResult>, I>>(object: I): QueueDiscardResult {
+    const message = createBaseQueueDiscardResult();
+    message.discarded = object.discarded ?? false;
+    message.item = (object.item !== undefined && object.item !== null) ? QueueItem.fromPartial(object.item) : undefined;
+    message.reason = object.reason ?? undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionUIDialog(): ExtensionUIDialog {
+  return {
+    id: "",
+    method: "",
+    title: "",
+    options: [],
+    message: undefined,
+    placeholder: undefined,
+    prefill: undefined,
+    timeout: 0,
+    createdAt: 0n,
+  };
+}
+
+export const ExtensionUIDialog: MessageFns<ExtensionUIDialog> = {
+  encode(message: ExtensionUIDialog, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.id !== "") {
+      writer.uint32(10).string(message.id);
+    }
+    if (message.method !== "") {
+      writer.uint32(18).string(message.method);
+    }
+    if (message.title !== "") {
+      writer.uint32(26).string(message.title);
+    }
+    for (const v of message.options) {
+      writer.uint32(34).string(v!);
+    }
+    if (message.message !== undefined) {
+      writer.uint32(42).string(message.message);
+    }
+    if (message.placeholder !== undefined) {
+      writer.uint32(50).string(message.placeholder);
+    }
+    if (message.prefill !== undefined) {
+      writer.uint32(58).string(message.prefill);
+    }
+    if (message.timeout !== 0) {
+      writer.uint32(64).int32(message.timeout);
+    }
+    if (message.createdAt !== 0n) {
+      if (BigInt.asIntN(64, message.createdAt) !== message.createdAt) {
+        throw new globalThis.Error("value provided for field message.createdAt of type int64 too large");
+      }
+      writer.uint32(72).int64(message.createdAt);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ExtensionUIDialog {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseExtensionUIDialog();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.id = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.method = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.title = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.options.push(reader.string());
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.message = reader.string();
+            continue;
+          }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+
+            message.placeholder = reader.string();
+            continue;
+          }
+          case 7: {
+            if (tag !== 58) {
+              break;
+            }
+
+            message.prefill = reader.string();
+            continue;
+          }
+          case 8: {
+            if (tag !== 64) {
+              break;
+            }
+
+            message.timeout = reader.int32();
+            continue;
+          }
+          case 9: {
+            if (tag !== 72) {
+              break;
+            }
+
+            message.createdAt = reader.int64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionUIDialog>, I>>(base?: I): ExtensionUIDialog {
+    return ExtensionUIDialog.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionUIDialog>, I>>(object: I): ExtensionUIDialog {
+    const message = createBaseExtensionUIDialog();
+    message.id = object.id ?? "";
+    message.method = object.method ?? "";
+    message.title = object.title ?? "";
+    message.options = object.options?.map((e) => e) || [];
+    message.message = object.message ?? undefined;
+    message.placeholder = object.placeholder ?? undefined;
+    message.prefill = object.prefill ?? undefined;
+    message.timeout = object.timeout ?? 0;
+    message.createdAt = (object.createdAt !== undefined && object.createdAt !== null) ? BigInt(object.createdAt) : 0n;
+    return message;
+  },
+};
+
+function createBaseExtensionUIResponseCall(): ExtensionUIResponseCall {
+  return { sid: "", requestId: "", value: undefined, confirmed: undefined, cancelled: false };
+}
+
+export const ExtensionUIResponseCall: MessageFns<ExtensionUIResponseCall> = {
+  encode(message: ExtensionUIResponseCall, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.sid !== "") {
+      writer.uint32(10).string(message.sid);
+    }
+    if (message.requestId !== "") {
+      writer.uint32(18).string(message.requestId);
+    }
+    if (message.value !== undefined) {
+      writer.uint32(26).string(message.value);
+    }
+    if (message.confirmed !== undefined) {
+      writer.uint32(32).bool(message.confirmed);
+    }
+    if (message.cancelled !== false) {
+      writer.uint32(40).bool(message.cancelled);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ExtensionUIResponseCall {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseExtensionUIResponseCall();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.sid = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.requestId = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.value = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.confirmed = reader.bool();
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.cancelled = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionUIResponseCall>, I>>(base?: I): ExtensionUIResponseCall {
+    return ExtensionUIResponseCall.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionUIResponseCall>, I>>(object: I): ExtensionUIResponseCall {
+    const message = createBaseExtensionUIResponseCall();
+    message.sid = object.sid ?? "";
+    message.requestId = object.requestId ?? "";
+    message.value = object.value ?? undefined;
+    message.confirmed = object.confirmed ?? undefined;
+    message.cancelled = object.cancelled ?? false;
+    return message;
+  },
+};
+
+function createBaseExtensionUIResponseResult(): ExtensionUIResponseResult {
+  return { resolved: false };
+}
+
+export const ExtensionUIResponseResult: MessageFns<ExtensionUIResponseResult> = {
+  encode(message: ExtensionUIResponseResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.resolved !== false) {
+      writer.uint32(8).bool(message.resolved);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ExtensionUIResponseResult {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseExtensionUIResponseResult();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.resolved = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionUIResponseResult>, I>>(base?: I): ExtensionUIResponseResult {
+    return ExtensionUIResponseResult.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionUIResponseResult>, I>>(object: I): ExtensionUIResponseResult {
+    const message = createBaseExtensionUIResponseResult();
+    message.resolved = object.resolved ?? false;
+    return message;
+  },
+};
+
+function createBaseExtensionUICancelCall(): ExtensionUICancelCall {
+  return { sid: "", reason: "" };
+}
+
+export const ExtensionUICancelCall: MessageFns<ExtensionUICancelCall> = {
+  encode(message: ExtensionUICancelCall, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.sid !== "") {
+      writer.uint32(10).string(message.sid);
+    }
+    if (message.reason !== "") {
+      writer.uint32(18).string(message.reason);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ExtensionUICancelCall {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseExtensionUICancelCall();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.sid = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionUICancelCall>, I>>(base?: I): ExtensionUICancelCall {
+    return ExtensionUICancelCall.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionUICancelCall>, I>>(object: I): ExtensionUICancelCall {
+    const message = createBaseExtensionUICancelCall();
+    message.sid = object.sid ?? "";
+    message.reason = object.reason ?? "";
+    return message;
+  },
+};
+
+function createBaseExtensionUICancelResult(): ExtensionUICancelResult {
+  return { cancelled: 0 };
+}
+
+export const ExtensionUICancelResult: MessageFns<ExtensionUICancelResult> = {
+  encode(message: ExtensionUICancelResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.cancelled !== 0) {
+      writer.uint32(8).uint32(message.cancelled);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ExtensionUICancelResult {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseExtensionUICancelResult();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.cancelled = reader.uint32();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionUICancelResult>, I>>(base?: I): ExtensionUICancelResult {
+    return ExtensionUICancelResult.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionUICancelResult>, I>>(object: I): ExtensionUICancelResult {
+    const message = createBaseExtensionUICancelResult();
+    message.cancelled = object.cancelled ?? 0;
+    return message;
+  },
+};
+
 function createBaseSpawnResult(): SpawnResult {
   return { sid: "", title: "", cwd: "", session: undefined, state: undefined };
 }
@@ -4016,13 +5979,19 @@ export const ListSessionsResult: MessageFns<ListSessionsResult> = {
 };
 
 function createBaseStateResult(): StateResult {
-  return { state: undefined };
+  return { state: undefined, queue: undefined, dialogs: [] };
 }
 
 export const StateResult: MessageFns<StateResult> = {
   encode(message: StateResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.state !== undefined) {
       ControlState.encode(message.state, writer.uint32(10).fork()).join();
+    }
+    if (message.queue !== undefined) {
+      QueueSnapshot.encode(message.queue, writer.uint32(18).fork()).join();
+    }
+    for (const v of message.dialogs) {
+      ExtensionUIDialog.encode(v!, writer.uint32(26).fork()).join();
     }
     return writer;
   },
@@ -4048,6 +6017,22 @@ export const StateResult: MessageFns<StateResult> = {
             message.state = ControlState.decode(reader, reader.uint32());
             continue;
           }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.queue = QueueSnapshot.decode(reader, reader.uint32());
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.dialogs.push(ExtensionUIDialog.decode(reader, reader.uint32()));
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -4068,18 +6053,28 @@ export const StateResult: MessageFns<StateResult> = {
     message.state = (object.state !== undefined && object.state !== null)
       ? ControlState.fromPartial(object.state)
       : undefined;
+    message.queue = (object.queue !== undefined && object.queue !== null)
+      ? QueueSnapshot.fromPartial(object.queue)
+      : undefined;
+    message.dialogs = object.dialogs?.map((e) => ExtensionUIDialog.fromPartial(e)) || [];
     return message;
   },
 };
 
 function createBaseTranscriptResult(): TranscriptResult {
-  return { session: undefined };
+  return { session: undefined, queue: undefined, dialogs: [] };
 }
 
 export const TranscriptResult: MessageFns<TranscriptResult> = {
   encode(message: TranscriptResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.session !== undefined) {
       TranscriptSnapshot.encode(message.session, writer.uint32(10).fork()).join();
+    }
+    if (message.queue !== undefined) {
+      QueueSnapshot.encode(message.queue, writer.uint32(18).fork()).join();
+    }
+    for (const v of message.dialogs) {
+      ExtensionUIDialog.encode(v!, writer.uint32(26).fork()).join();
     }
     return writer;
   },
@@ -4105,6 +6100,22 @@ export const TranscriptResult: MessageFns<TranscriptResult> = {
             message.session = TranscriptSnapshot.decode(reader, reader.uint32());
             continue;
           }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.queue = QueueSnapshot.decode(reader, reader.uint32());
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.dialogs.push(ExtensionUIDialog.decode(reader, reader.uint32()));
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -4125,6 +6136,10 @@ export const TranscriptResult: MessageFns<TranscriptResult> = {
     message.session = (object.session !== undefined && object.session !== null)
       ? TranscriptSnapshot.fromPartial(object.session)
       : undefined;
+    message.queue = (object.queue !== undefined && object.queue !== null)
+      ? QueueSnapshot.fromPartial(object.queue)
+      : undefined;
+    message.dialogs = object.dialogs?.map((e) => ExtensionUIDialog.fromPartial(e)) || [];
     return message;
   },
 };
@@ -5755,6 +7770,244 @@ export const ExtensionErrorEvent: MessageFns<ExtensionErrorEvent> = {
   fromPartial<I extends Exact<DeepPartial<ExtensionErrorEvent>, I>>(object: I): ExtensionErrorEvent {
     const message = createBaseExtensionErrorEvent();
     message.error = object.error ?? undefined;
+    return message;
+  },
+};
+
+function createBaseQueueChangedEvent(): QueueChangedEvent {
+  return { queue: undefined };
+}
+
+export const QueueChangedEvent: MessageFns<QueueChangedEvent> = {
+  encode(message: QueueChangedEvent, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.queue !== undefined) {
+      QueueSnapshot.encode(message.queue, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): QueueChangedEvent {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseQueueChangedEvent();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.queue = QueueSnapshot.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<QueueChangedEvent>, I>>(base?: I): QueueChangedEvent {
+    return QueueChangedEvent.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<QueueChangedEvent>, I>>(object: I): QueueChangedEvent {
+    const message = createBaseQueueChangedEvent();
+    message.queue = (object.queue !== undefined && object.queue !== null)
+      ? QueueSnapshot.fromPartial(object.queue)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionUIRequestEvent(): ExtensionUIRequestEvent {
+  return { request: undefined };
+}
+
+export const ExtensionUIRequestEvent: MessageFns<ExtensionUIRequestEvent> = {
+  encode(message: ExtensionUIRequestEvent, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.request !== undefined) {
+      ExternalValue.encode(message.request, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ExtensionUIRequestEvent {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseExtensionUIRequestEvent();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.request = ExternalValue.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionUIRequestEvent>, I>>(base?: I): ExtensionUIRequestEvent {
+    return ExtensionUIRequestEvent.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionUIRequestEvent>, I>>(object: I): ExtensionUIRequestEvent {
+    const message = createBaseExtensionUIRequestEvent();
+    message.request = (object.request !== undefined && object.request !== null)
+      ? ExternalValue.fromPartial(object.request)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseExtensionUIClosedEvent(): ExtensionUIClosedEvent {
+  return { id: "", reason: undefined };
+}
+
+export const ExtensionUIClosedEvent: MessageFns<ExtensionUIClosedEvent> = {
+  encode(message: ExtensionUIClosedEvent, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.id !== "") {
+      writer.uint32(10).string(message.id);
+    }
+    if (message.reason !== undefined) {
+      writer.uint32(18).string(message.reason);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ExtensionUIClosedEvent {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseExtensionUIClosedEvent();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.id = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.reason = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<ExtensionUIClosedEvent>, I>>(base?: I): ExtensionUIClosedEvent {
+    return ExtensionUIClosedEvent.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ExtensionUIClosedEvent>, I>>(object: I): ExtensionUIClosedEvent {
+    const message = createBaseExtensionUIClosedEvent();
+    message.id = object.id ?? "";
+    message.reason = object.reason ?? undefined;
+    return message;
+  },
+};
+
+function createBaseToolExecutionUpdateEvent(): ToolExecutionUpdateEvent {
+  return { payload: undefined };
+}
+
+export const ToolExecutionUpdateEvent: MessageFns<ToolExecutionUpdateEvent> = {
+  encode(message: ToolExecutionUpdateEvent, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.payload !== undefined) {
+      ExternalValue.encode(message.payload, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ToolExecutionUpdateEvent {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseToolExecutionUpdateEvent();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.payload = ExternalValue.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<ToolExecutionUpdateEvent>, I>>(base?: I): ToolExecutionUpdateEvent {
+    return ToolExecutionUpdateEvent.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ToolExecutionUpdateEvent>, I>>(object: I): ToolExecutionUpdateEvent {
+    const message = createBaseToolExecutionUpdateEvent();
+    message.payload = (object.payload !== undefined && object.payload !== null)
+      ? ExternalValue.fromPartial(object.payload)
+      : undefined;
     return message;
   },
 };

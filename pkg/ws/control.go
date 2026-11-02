@@ -28,11 +28,20 @@ const ControlOperationTimeout = 30 * time.Second
 // so compact needs its own budget instead of the shared control one.
 const CompactOperationTimeout = 10 * time.Minute
 
-// HandleControl returns the /ws/control handler. defaultCwd supplies the
-// spawn cwd when a spawn call omits it (main passes activeCWD). hub fences the
-// socket to the access generation it was admitted at; nil disables fencing
-// (tests).
+// AttachmentOwnerFunc captures the immutable access-session owner at the
+// WebSocket upgrade boundary. It must not inspect later control frames.
+type AttachmentOwnerFunc func(*http.Request) string
+
+// HandleControl returns the /ws/control handler without an attachment bridge.
+// Existing callers keep this compatibility form; attachment-aware callers use
+// HandleControlWithAttachments below.
 func HandleControl(hub *Hub, mgr *rpc.Manager, defaultCwd func() string) http.HandlerFunc {
+	return HandleControlWithAttachments(hub, mgr, defaultCwd, nil, nil)
+}
+
+// HandleControlWithAttachments binds the attachment resolver and captures the
+// request owner before the control connection starts reading frames.
+func HandleControlWithAttachments(hub *Hub, mgr *rpc.Manager, defaultCwd func() string, resolver rpc.QueueAttachmentResolver, owner AttachmentOwnerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !wireproto.ClientRequestedSubprotocol(r, wireproto.ControlSubprotocol) {
 			http.Error(w, "expected WebSocket subprotocol "+wireproto.ControlSubprotocol, http.StatusUpgradeRequired)
@@ -56,7 +65,11 @@ func HandleControl(hub *Hub, mgr *rpc.Manager, defaultCwd func() string) http.Ha
 		// SetReadLimit bounds the compressed wire; ReadBoundedMessage bounds
 		// the decompressed body. Both stages are required.
 		c.SetReadLimit(wireproto.MaxControlMessageBytes)
-		runConn(r, c, mgr, defaultCwd)
+		capturedOwner := ""
+		if owner != nil {
+			capturedOwner = owner(r)
+		}
+		runConn(r, c, mgr, defaultCwd, resolver, capturedOwner)
 	}
 }
 
@@ -194,6 +207,9 @@ type controlServer struct {
 	mgr               *rpc.Manager
 	defaultCwd        func() string
 	subscribeInstance func(*rpc.Instance)
+
+	attachmentResolver rpc.QueueAttachmentResolver
+	attachmentOwner    string
 }
 
 // dispatch runs one typed call and attaches the call id. Every known
@@ -221,6 +237,7 @@ func (s *controlServer) dispatchResult(ctx context.Context, call *wspb.ControlCa
 		if err != nil {
 			return nil, err
 		}
+		opts.SpawnID = payload.Spawn.GetSpawnId()
 		lease, err := s.mgr.BeginSpawn(ctx, opts)
 		if err != nil {
 			return nil, err
@@ -300,7 +317,11 @@ func (s *controlServer) dispatchResult(ctx context.Context, call *wspb.ControlCa
 			return nil, err
 		}
 		return &wspb.ControlResponse{Result: &wspb.ControlResponse_GetState{
-			GetState: &wspb.StateResult{State: stateToWire(inst.StateCopy())},
+			GetState: &wspb.StateResult{
+				State:   stateToWire(inst.StateCopy()),
+				Queue:   queueSnapshotToWire(inst.QueueSnapshotCopy()),
+				Dialogs: dialogsToWire(inst.ExtensionUIDialogsCopy()),
+			},
 		}}, nil
 
 	case *wspb.ControlCall_Prompt:
@@ -317,6 +338,92 @@ func (s *controlServer) dispatchResult(ctx context.Context, call *wspb.ControlCa
 		}
 		return &wspb.ControlResponse{Result: &wspb.ControlResponse_Prompt{
 			Prompt: &wspb.PromptResult{Accepted: true},
+		}}, nil
+
+	case *wspb.ControlCall_QueueSubmit:
+		inst, err := lookupSid(s.mgr, payload.QueueSubmit.GetSid())
+		if err != nil {
+			return nil, err
+		}
+		item, err := inst.SubmitQueue(ctx, payload.QueueSubmit.GetItemId(), payload.QueueSubmit.GetSessionEpoch(),
+			payload.QueueSubmit.GetMessage(), rpc.QueueDelivery(payload.QueueSubmit.GetDelivery()),
+			payload.QueueSubmit.GetAttachmentRefs(), s.queueOptions())
+		if err != nil {
+			return nil, err
+		}
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_QueueSubmit{
+			QueueSubmit: &wspb.QueueItemResult{Item: queueItemToWire(item)},
+		}}, nil
+
+	case *wspb.ControlCall_QueueRestore:
+		inst, err := lookupSid(s.mgr, payload.QueueRestore.GetSid())
+		if err != nil {
+			return nil, err
+		}
+		item, err := inst.QueueRestore(payload.QueueRestore.GetItemId(), payload.QueueRestore.GetSessionEpoch(), s.queueOptions())
+		if err != nil {
+			return nil, err
+		}
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_QueueRestore{
+			QueueRestore: queueRestoreToWire(item),
+		}}, nil
+
+	case *wspb.ControlCall_QueueCopy:
+		inst, err := lookupSid(s.mgr, payload.QueueCopy.GetSid())
+		if err != nil {
+			return nil, err
+		}
+		item, err := inst.QueueCopy(payload.QueueCopy.GetItemId(), payload.QueueCopy.GetSessionEpoch(), s.queueOptions())
+		if err != nil {
+			return nil, err
+		}
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_QueueCopy{
+			QueueCopy: queueCopyToWire(item),
+		}}, nil
+
+	case *wspb.ControlCall_QueueDiscard:
+		inst, err := lookupSid(s.mgr, payload.QueueDiscard.GetSid())
+		if err != nil {
+			return nil, err
+		}
+		item, err := inst.QueueDiscard(payload.QueueDiscard.GetItemId(), payload.QueueDiscard.GetSessionEpoch(), s.queueOptions())
+		if err != nil {
+			return nil, err
+		}
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_QueueDiscard{
+			QueueDiscard: queueDiscardToWire(item),
+		}}, nil
+
+	case *wspb.ControlCall_ExtensionUiResponse:
+		inst, err := lookupSid(s.mgr, payload.ExtensionUiResponse.GetSid())
+		if err != nil {
+			return nil, err
+		}
+		requestID := payload.ExtensionUiResponse.GetRequestId()
+		if requestID == "" {
+			return nil, errors.New("requestId is required")
+		}
+		resolved, err := inst.ResolveExtensionUIDialog(requestID,
+			payload.ExtensionUiResponse.Value, payload.ExtensionUiResponse.Confirmed,
+			payload.ExtensionUiResponse.GetCancelled())
+		if err != nil {
+			return nil, err
+		}
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_ExtensionUiResponse{
+			ExtensionUiResponse: &wspb.ExtensionUIResponseResult{Resolved: resolved},
+		}}, nil
+
+	case *wspb.ControlCall_ExtensionUiCancel:
+		inst, err := lookupSid(s.mgr, payload.ExtensionUiCancel.GetSid())
+		if err != nil {
+			return nil, err
+		}
+		reason := payload.ExtensionUiCancel.GetReason()
+		if reason != "tabClosed" && reason != "server" {
+			return nil, errors.New("reason must be tabClosed or server")
+		}
+		return &wspb.ControlResponse{Result: &wspb.ControlResponse_ExtensionUiCancel{
+			ExtensionUiCancel: &wspb.ExtensionUICancelResult{Cancelled: uint32(inst.CancelExtensionUIDialogs(reason))},
 		}}, nil
 
 	case *wspb.ControlCall_GetAvailableModels:
@@ -545,6 +652,12 @@ func (s *controlServer) dispatchResult(ctx context.Context, call *wspb.ControlCa
 	}
 }
 
+// queueOptions binds the upgrade-boundary owner and attachment resolver to
+// one queue operation.
+func (s *controlServer) queueOptions() rpc.QueueSubmitOptions {
+	return rpc.QueueSubmitOptions{Owner: s.attachmentOwner, Resolver: s.attachmentResolver}
+}
+
 // transcriptResult serves hydrate and getMessages from one snapshot. Both
 // subscribe; only hydrate participates in the hydrate fence.
 func (s *controlServer) transcriptResult(sid string, subscribe, getMessages bool) (*wspb.ControlResponse, error) {
@@ -561,13 +674,15 @@ func (s *controlServer) transcriptResult(sid string, subscribe, getMessages bool
 		return nil, err
 	}
 	snapshot.State = stateToWire(state)
+	queue := queueSnapshotToWire(inst.QueueSnapshotCopy())
+	dialogs := dialogsToWire(inst.ExtensionUIDialogsCopy())
 	if getMessages {
 		return &wspb.ControlResponse{Result: &wspb.ControlResponse_GetMessages{
-			GetMessages: &wspb.TranscriptResult{Session: snapshot},
+			GetMessages: &wspb.TranscriptResult{Session: snapshot, Queue: queue, Dialogs: dialogs},
 		}}, nil
 	}
 	return &wspb.ControlResponse{Result: &wspb.ControlResponse_Hydrate{
-		Hydrate: &wspb.TranscriptResult{Session: snapshot},
+		Hydrate: &wspb.TranscriptResult{Session: snapshot, Queue: queue, Dialogs: dialogs},
 	}}, nil
 }
 
@@ -639,7 +754,7 @@ func (c *controlConn) close(code int, reason string) {
 	})
 }
 
-func runConn(r *http.Request, c *websocket.Conn, mgr *rpc.Manager, defaultCwd func() string) {
+func runConn(r *http.Request, c *websocket.Conn, mgr *rpc.Manager, defaultCwd func() string, resolver rpc.QueueAttachmentResolver, owner string) {
 	conn := &controlConn{conn: c}
 
 	// Admission is already enforced by the handler; the first application
@@ -710,7 +825,7 @@ func runConn(r *http.Request, c *websocket.Conn, mgr *rpc.Manager, defaultCwd fu
 	merge := make(chan rpc.Event, 256)
 	var subMu sync.Mutex
 	subs := map[string]*rpc.Subscriber{}
-	server := &controlServer{mgr: mgr, defaultCwd: defaultCwd}
+	server := &controlServer{mgr: mgr, defaultCwd: defaultCwd, attachmentResolver: resolver, attachmentOwner: owner}
 	server.subscribeInstance = func(inst *rpc.Instance) {
 		if inst == nil || ctx.Err() != nil {
 			return

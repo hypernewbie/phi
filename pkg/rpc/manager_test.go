@@ -191,6 +191,99 @@ func TestManagerSpawnDeadSessionPathAllowsNewChild(t *testing.T) {
 	}
 }
 
+func TestManagerSpawnIDIsIdempotent(t *testing.T) {
+	var calls atomic.Int32
+	m := NewManagerWithSpawner(func(SpawnOptions) (Cmd, WriteCloser, ReadCloser, error) {
+		calls.Add(1)
+		fp := newFakeProc()
+		return fp, fp.stdinW, fp.stdoutR, nil
+	})
+	first, err := m.Spawn(SpawnOptions{Cwd: "/w/spawn-id", SpawnID: "spawn-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := m.Spawn(SpawnOptions{Cwd: "/w/spawn-id", SpawnID: "spawn-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second || calls.Load() != 1 {
+		t.Fatalf("spawn ID was not idempotent: first=%p second=%p calls=%d", first, second, calls.Load())
+	}
+	if _, err := m.Spawn(SpawnOptions{Cwd: "/w/other", SpawnID: "spawn-1"}); !errors.Is(err, ErrSpawnIDConflict) {
+		t.Fatalf("mismatched spawn ID error = %v", err)
+	}
+}
+
+func TestManagerSpawnIDConcurrentCallsShareReservation(t *testing.T) {
+	var calls atomic.Int32
+	m := NewManagerWithSpawner(func(SpawnOptions) (Cmd, WriteCloser, ReadCloser, error) {
+		calls.Add(1)
+		fp := newFakeProc()
+		return fp, fp.stdinW, fp.stdoutR, nil
+	})
+	const workers = 16
+	instances := make(chan *Instance, workers)
+	errs := make(chan error, workers)
+	var group sync.WaitGroup
+	for index := 0; index < workers; index++ {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			inst, err := m.Spawn(SpawnOptions{Cwd: "/w/spawn-id-concurrent", SpawnID: "spawn-concurrent"})
+			if err != nil {
+				errs <- err
+				return
+			}
+			instances <- inst
+		}()
+	}
+	group.Wait()
+	close(instances)
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	var first *Instance
+	for inst := range instances {
+		if first == nil {
+			first = inst
+		} else if inst != first {
+			t.Fatalf("concurrent spawn ID returned distinct instances: %p and %p", first, inst)
+		}
+	}
+	if first == nil || calls.Load() != 1 {
+		t.Fatalf("concurrent spawn ID created %d children", calls.Load())
+	}
+}
+
+func TestManagerSpawnIDFailureRemovesKey(t *testing.T) {
+	var calls atomic.Int32
+	m := NewManagerWithSpawner(func(SpawnOptions) (Cmd, WriteCloser, ReadCloser, error) {
+		calls.Add(1)
+		fp := newFakeProc()
+		return fp, fp.stdinW, fp.stdoutR, nil
+	})
+	first, err := m.BeginSpawn(context.Background(), SpawnOptions{Cwd: "/w/spawn-id-failure", SpawnID: "spawn-failure"})
+	if err != nil || !first.Created() {
+		t.Fatalf("first spawn lease = %#v err=%v", first, err)
+	}
+	bootstrapErr := errors.New("bootstrap failed")
+	if err := m.FinishSpawn(first, bootstrapErr); err != bootstrapErr {
+		t.Fatalf("FinishSpawn error = %v, want %v", err, bootstrapErr)
+	}
+	second, err := m.BeginSpawn(context.Background(), SpawnOptions{Cwd: "/w/spawn-id-failure", SpawnID: "spawn-failure"})
+	if err != nil || !second.Created() {
+		t.Fatalf("failed spawn ID was not released: lease=%#v err=%v", second, err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("spawn ID retry created %d children, want 2", calls.Load())
+	}
+	if err := m.FinishSpawn(second, nil); err != nil {
+		t.Fatal(err)
+	}
+	second.Instance().Kill()
+}
+
 func TestManagerSpawnEmptyPathAlwaysCreatesChild(t *testing.T) {
 	var calls atomic.Int32
 	m := NewManagerWithSpawner(func(SpawnOptions) (Cmd, WriteCloser, ReadCloser, error) {

@@ -25,6 +25,7 @@ type Manager struct {
 	spawnMu sync.Mutex
 
 	reservations map[string]*spawnReservation
+	spawnKeys    map[string]*spawnReservation
 	initializing map[*Instance]struct{}
 
 	subMu             sync.Mutex
@@ -35,12 +36,16 @@ type Manager struct {
 }
 
 type spawnReservation struct {
-	mu       sync.Mutex
-	path     string
-	instance *Instance
-	err      error
-	done     chan struct{}
-	closed   bool
+	mu        sync.Mutex
+	path      string
+	spawnIDs  map[string]struct{}
+	cwd       string
+	title     string
+	piOffline bool
+	instance  *Instance
+	err       error
+	done      chan struct{}
+	closed    bool
 }
 
 // SpawnLease is the creator/reuser handoff for a two-phase child bootstrap.
@@ -78,6 +83,7 @@ func newManager(spawn func(SpawnOptions) (Cmd, WriteCloser, ReadCloser, error)) 
 		inst:              map[string]*Instance{},
 		spawnFn:           spawn,
 		reservations:      map[string]*spawnReservation{},
+		spawnKeys:         map[string]*spawnReservation{},
 		initializing:      map[*Instance]struct{}{},
 		subscriptions:     map[*Instance]int{},
 		detachTimers:      map[*Instance]*time.Timer{},
@@ -94,6 +100,8 @@ func NewManagerWithSpawner(spawn func(SpawnOptions) (Cmd, WriteCloser, ReadClose
 // SpawnOptions configures child creation.
 type SpawnOptions struct {
 	Cwd             string
+	Title           string
+	SpawnID         string
 	PiOffline       bool
 	SessionPath     string
 	InitialMessages []Message
@@ -101,8 +109,9 @@ type SpawnOptions struct {
 
 // Sentinel errors.
 var (
-	ErrUnknownSession = errors.New("rpc unknown session")
-	ErrEmptyCwd       = errors.New("rpc empty cwd")
+	ErrUnknownSession  = errors.New("rpc unknown session")
+	ErrEmptyCwd        = errors.New("rpc empty cwd")
+	ErrSpawnIDConflict = errors.New("rpc spawnId already belongs to a different spawn")
 )
 
 // Lookup returns the Instance for sid.
@@ -174,18 +183,25 @@ func (m *Manager) newInstance(opts SpawnOptions, cmd Cmd, stdin WriteCloser, std
 	if err != nil {
 		return nil, err
 	}
+	sessionEpoch, err := newID()
+	if err != nil {
+		return nil, err
+	}
 	inst := &Instance{
-		ID:        id,
-		Cwd:       opts.Cwd,
-		CreatedAt: time.Now(),
-		cmd:       cmd,
-		stdin:     stdin,
-		stdout:    stdout,
-		sc:        NewLineScanner(stdout),
-		alive:     true,
-		pending:   make(map[string]*pendingWaiter),
-		subs:      newSubscriberSet(),
-		snap:      &Snapshot{Messages: cloneMessages(opts.InitialMessages)},
+		ID:           id,
+		Cwd:          opts.Cwd,
+		CreatedAt:    time.Now(),
+		cmd:          cmd,
+		stdin:        stdin,
+		stdout:       stdout,
+		sc:           NewLineScanner(stdout),
+		alive:        true,
+		pending:      make(map[string]*pendingWaiter),
+		sessionEpoch: sessionEpoch,
+		queueItems:   make(map[string]QueueItem),
+		queueClaims:  make(map[string]queueClaim),
+		subs:         newSubscriberSet(),
+		snap:         &Snapshot{Messages: cloneMessages(opts.InitialMessages)},
 	}
 	// Seed the request fallback once, before the read loop can publish, and let
 	// it decide the opening title. A supplied startup label is not an alias.
@@ -203,6 +219,42 @@ func (m *Manager) pathReservation(path string) *spawnReservation {
 		return nil
 	}
 	return m.reservations[path]
+}
+
+func newSpawnReservation(opts SpawnOptions) *spawnReservation {
+	return &spawnReservation{
+		path:      opts.SessionPath,
+		spawnIDs:  spawnIDSet(opts.SpawnID),
+		cwd:       opts.Cwd,
+		title:     opts.Title,
+		piOffline: opts.PiOffline,
+		done:      make(chan struct{}),
+	}
+}
+
+func spawnIDSet(spawnID string) map[string]struct{} {
+	if spawnID == "" {
+		return nil
+	}
+	return map[string]struct{}{spawnID: {}}
+}
+
+func (r *spawnReservation) matches(opts SpawnOptions) bool {
+	return r.cwd == opts.Cwd && r.title == opts.Title && r.piOffline == opts.PiOffline && r.path == opts.SessionPath
+}
+
+func (m *Manager) removeSpawnReservationLocked(reservation *spawnReservation) {
+	if reservation == nil {
+		return
+	}
+	if reservation.path != "" && m.reservations[reservation.path] == reservation {
+		delete(m.reservations, reservation.path)
+	}
+	for spawnID := range reservation.spawnIDs {
+		if m.spawnKeys[spawnID] == reservation {
+			delete(m.spawnKeys, spawnID)
+		}
+	}
 }
 
 // BeginSpawn creates an initializing child reservation or waits for the
@@ -223,11 +275,44 @@ func (m *Manager) BeginSpawn(ctx context.Context, opts SpawnOptions) (*SpawnLeas
 	if m.reservations == nil {
 		m.reservations = make(map[string]*spawnReservation)
 	}
+	if m.spawnKeys == nil {
+		m.spawnKeys = make(map[string]*spawnReservation)
+	}
 	if m.inst == nil {
 		m.inst = make(map[string]*Instance)
 	}
+
+	if opts.SpawnID != "" {
+		if reservation := m.spawnKeys[opts.SpawnID]; reservation != nil {
+			if !reservation.matches(opts) {
+				m.spawnMu.Unlock()
+				return nil, fmt.Errorf("%w: %s", ErrSpawnIDConflict, opts.SpawnID)
+			}
+			m.spawnMu.Unlock()
+			inst, err := waitSpawnReservation(ctx, reservation)
+			if err != nil {
+				return nil, err
+			}
+			if inst == nil || !inst.IsAlive() {
+				return nil, ErrNotAlive
+			}
+			return &SpawnLease{manager: m, instance: inst, created: false}, nil
+		}
+	}
+
 	if opts.SessionPath != "" {
 		if reservation := m.pathReservation(opts.SessionPath); reservation != nil {
+			if opts.SpawnID != "" && !reservation.matches(opts) {
+				m.spawnMu.Unlock()
+				return nil, fmt.Errorf("%w: session path reservation", ErrSpawnIDConflict)
+			}
+			if opts.SpawnID != "" {
+				if reservation.spawnIDs == nil {
+					reservation.spawnIDs = make(map[string]struct{})
+				}
+				reservation.spawnIDs[opts.SpawnID] = struct{}{}
+				m.spawnKeys[opts.SpawnID] = reservation
+			}
 			m.spawnMu.Unlock()
 			inst, err := waitSpawnReservation(ctx, reservation)
 			if err != nil {
@@ -243,16 +328,26 @@ func (m *Manager) BeginSpawn(ctx context.Context, opts SpawnOptions) (*SpawnLeas
 			return &SpawnLease{manager: m, instance: inst, created: false}, nil
 		}
 		for _, inst := range m.instanceRefs() {
-			if inst.SessionPathCopy() == opts.SessionPath && inst.IsAlive() {
-				m.spawnMu.Unlock()
-				return &SpawnLease{manager: m, instance: inst, created: false}, nil
+			if inst.SessionPathCopy() != opts.SessionPath || !inst.IsAlive() {
+				continue
 			}
+			if opts.SpawnID != "" {
+				binding := newSpawnReservation(opts)
+				binding.instance = inst
+				binding.complete(inst, nil)
+				m.spawnKeys[opts.SpawnID] = binding
+			}
+			m.spawnMu.Unlock()
+			return &SpawnLease{manager: m, instance: inst, created: false}, nil
 		}
 	}
 
-	reservation := &spawnReservation{path: opts.SessionPath, done: make(chan struct{})}
+	reservation := newSpawnReservation(opts)
 	if opts.SessionPath != "" {
 		m.reservations[opts.SessionPath] = reservation
+	}
+	if opts.SpawnID != "" {
+		m.spawnKeys[opts.SpawnID] = reservation
 	}
 	spawn := m.spawnFn
 	if spawn == nil {
@@ -260,10 +355,8 @@ func (m *Manager) BeginSpawn(ctx context.Context, opts SpawnOptions) (*SpawnLeas
 	}
 	cmd, stdin, stdout, err := spawn(opts)
 	if err != nil {
-		if reservation != nil {
-			delete(m.reservations, reservation.path)
-			reservation.complete(nil, err)
-		}
+		m.removeSpawnReservationLocked(reservation)
+		reservation.complete(nil, err)
 		m.spawnMu.Unlock()
 		return nil, err
 	}
@@ -275,16 +368,12 @@ func (m *Manager) BeginSpawn(ctx context.Context, opts SpawnOptions) (*SpawnLeas
 		if cmd != nil {
 			_ = cmd.Kill()
 		}
-		if reservation != nil {
-			delete(m.reservations, reservation.path)
-			reservation.complete(nil, err)
-		}
+		m.removeSpawnReservationLocked(reservation)
+		reservation.complete(nil, err)
 		m.spawnMu.Unlock()
 		return nil, err
 	}
-	if reservation != nil {
-		reservation.instance = inst
-	}
+	reservation.instance = inst
 	m.initializing[inst] = struct{}{}
 	lease := &SpawnLease{manager: m, instance: inst, reservation: reservation, created: true}
 	m.spawnMu.Unlock()
@@ -314,18 +403,18 @@ func (m *Manager) FinishSpawn(lease *SpawnLease, bootstrapErr error) error {
 		m.inst[inst.ID] = inst
 		m.mu.Unlock()
 		m.armDetachIfUnsubscribed(inst)
-		if reservation != nil {
+		// A completed spawn keeps its spawn-id bindings so a retried spawn with
+		// the same id reuses this instance instead of starting a second child.
+		// Only the path reservation is retired here; removeLifecycle retires the
+		// spawn-id bindings when the child exits.
+		if reservation != nil && reservation.path != "" {
 			if current := m.reservations[reservation.path]; current == reservation {
 				delete(m.reservations, reservation.path)
 			}
 		}
 	} else {
 		delete(m.initializing, inst)
-		if reservation != nil {
-			if current := m.reservations[reservation.path]; current == reservation {
-				delete(m.reservations, reservation.path)
-			}
-		}
+		m.removeSpawnReservationLocked(reservation)
 	}
 	if reservation != nil {
 		reservation.complete(inst, bootstrapErr)
@@ -596,6 +685,11 @@ func (m *Manager) removeLifecycle(inst *Instance) {
 	m.subMu.Unlock()
 	m.spawnMu.Lock()
 	delete(m.initializing, inst)
+	for spawnID, reservation := range m.spawnKeys {
+		if reservation.instance == inst {
+			delete(m.spawnKeys, spawnID)
+		}
+	}
 	m.spawnMu.Unlock()
 	m.mu.Lock()
 	if m.inst[inst.ID] == inst {

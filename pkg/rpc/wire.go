@@ -111,6 +111,7 @@ func mergeStatsMetadata(inst *Instance, resp piResponse) bool {
 			Tokens        *int64 `json:"tokens"`
 			ContextWindow *int64 `json:"contextWindow"`
 		} `json:"contextUsage"`
+		Cost *float64 `json:"cost"`
 	}
 	if err := json.Unmarshal(resp.Data, &data); err != nil {
 		return false
@@ -120,6 +121,7 @@ func mergeStatsMetadata(inst *Instance, resp piResponse) bool {
 		state.OutputTokens = data.Tokens.Output
 		state.CacheReadTokens = data.Tokens.CacheRead
 		state.CacheWriteTokens = data.Tokens.CacheWrite
+		state.Cost = data.Cost
 		state.ContextUsedTokens = nil
 		state.ContextWindowTokens = nil
 		if data.ContextUsage != nil {
@@ -267,6 +269,8 @@ var piEvtToPhi = map[string]string{
 	"message_start":                 EvtMessageStart,
 	"message_update":                EvtMessageUpdate,
 	"message_end":                   EvtMessageEnd,
+	"tool_execution_update":         EvtToolExecutionUpdate,
+	"queue_update":                  EvtQueueUpdate,
 	"auto_retry_start":              EvtAutoRetryStart,
 	"auto_retry_end":                EvtAutoRetryEnd,
 	"compaction_end":                EvtCompactionEnd,
@@ -277,13 +281,17 @@ var piEvtToPhi = map[string]string{
 
 func (m *Manager) handlePiEvent(inst *Instance, line []byte, ev piEvent) {
 	switch ev.Type {
-	case "message_start", "message_update":
-		// Raw passthrough: message_update's assistantMessageEvent deltas are not
-		// captured by piEvent; the raw line IS the payload. Copy because line
-		// aliases LineScanner's reusable buffer and is overwritten by the next
-		// Scan; json.Unmarshal would copy elsewhere but we don't unmarshal here.
+	case "message_start", "message_update", "tool_execution_update", "queue_update":
+		// Raw passthrough: message_update's assistantMessageEvent deltas,
+		// tool execution updates, and queue updates are not captured by
+		// piEvent; the raw line IS the payload. Copy because line aliases
+		// LineScanner's reusable buffer and is overwritten by the next Scan;
+		// json.Unmarshal would copy elsewhere but we don't unmarshal here.
 		payload := append([]byte(nil), line...)
 		inst.Emit(piEvtToPhi[ev.Type], nil, json.RawMessage(payload))
+		if ev.Type == "queue_update" {
+			inst.reconcileQueueUpdate(json.RawMessage(payload))
+		}
 	case "message_end":
 		var probe struct {
 			Role         string          `json:"role"`
@@ -369,10 +377,11 @@ func (m *Manager) handlePiEvent(inst *Instance, line []byte, ev piEvent) {
 		// Publish it before the idle-state update so subscribers that act on
 		// the busy=false boundary already see the resume path.
 		m.promoteSessionPath(inst)
+		inst.settleAcceptedQueueItems()
+		// agent_settled is the lifecycle boundary even when Busy was already
+		// false; the stateChanged signal retires stale authoritative queue rows
+		// in clients that never observed an agent_start edge.
 		inst.updateState(func(state *State) bool {
-			if !state.Busy {
-				return false
-			}
 			state.Busy = false
 			return true
 		})
@@ -414,28 +423,61 @@ func (m *Manager) handlePiEvent(inst *Instance, line []byte, ev piEvent) {
 		payload := append([]byte(nil), line...)
 		inst.Emit(piEvtToPhi[ev.Type], nil, json.RawMessage(payload))
 	case "extension_ui_request":
-		// pi-subagents drives its TUI fleet strip through setWidget on the
-		// extension UI channel. Only the "subagent-async" widget is ours:
-		// everything else on this channel (dialog select/confirm prompts,
-		// other extension widgets) is intentionally ignored so dialogs keep
-		// working. Fire-and-forget mapping to a sequenced event: msg is nil,
-		// the hydrate snapshot is untouched. pi's rpc-mode serializes
-		// setWidget(key, undefined) with widgetLines dropped by JSON.stringify,
-		// so a missing, empty, or [""] widgetLines all mean "widget cleared"
-		// and emit nil data so the browser hides the strip. The payload is
+		m.handleExtensionUIRequest(inst, line)
+	default:
+		// Unknown pi events are ignored.
+	}
+}
+
+func (m *Manager) handleExtensionUIRequest(inst *Instance, line []byte) {
+	// pi-subagents drives its TUI fleet strip through setWidget on the
+	// extension UI channel. The four blocking dialog methods are retained;
+	// other supported fire-and-forget methods remain intentionally ignored.
+	var req struct {
+		ID          string   `json:"id"`
+		Method      string   `json:"method"`
+		Title       string   `json:"title"`
+		Options     []string `json:"options"`
+		Message     string   `json:"message"`
+		Placeholder string   `json:"placeholder"`
+		Prefill     string   `json:"prefill"`
+		Timeout     int      `json:"timeout"`
+		WidgetKey   string   `json:"widgetKey"`
+		WidgetLines []string `json:"widgetLines"`
+	}
+	if err := json.Unmarshal(line, &req); err != nil {
+		return
+	}
+	if isBlockingExtensionUIMethod(req.Method) {
+		dialog := ExtensionUIDialog{
+			ID:      req.ID,
+			Method:  req.Method,
+			Title:   req.Title,
+			Timeout: req.Timeout,
+		}
+		switch req.Method {
+		case "select":
+			dialog.Options = req.Options
+		case "confirm":
+			dialog.Message = req.Message
+		case "input":
+			dialog.Placeholder = req.Placeholder
+		case "editor":
+			dialog.Prefill = req.Prefill
+		}
+		if !inst.retainExtensionUIDialog(dialog) {
+			return
+		}
+		payload := append([]byte(nil), line...)
+		inst.Emit(EvtExtensionUIRequest, nil, json.RawMessage(payload))
+		return
+	}
+	if req.Method == "setWidget" && req.WidgetKey == "subagent-async" {
+		// pi's rpc-mode serializes setWidget(key, undefined) with widgetLines
+		// dropped by JSON.stringify, so a missing, empty, or [""] widgetLines
+		// all mean "widget cleared" and emit nil data. The payload is
 		// re-derived from the decoded WidgetLines string, never sliced from
 		// line — the scanner reuses that buffer.
-		var req struct {
-			Method      string   `json:"method"`
-			WidgetKey   string   `json:"widgetKey"`
-			WidgetLines []string `json:"widgetLines"`
-		}
-		if err := json.Unmarshal(line, &req); err != nil {
-			return
-		}
-		if req.Method != "setWidget" || req.WidgetKey != "subagent-async" {
-			return
-		}
 		if len(req.WidgetLines) == 0 || req.WidgetLines[0] == "" {
 			inst.Emit(EvtSubagentFleet, nil, nil)
 			return
@@ -448,7 +490,13 @@ func (m *Manager) handlePiEvent(inst *Instance, line []byte, ev piEvent) {
 		if json.Valid(remainder) {
 			inst.Emit(EvtSubagentFleet, nil, remainder)
 		}
-	default:
-		// Unknown pi events are ignored.
+		return
 	}
+	if isKnownFireAndForgetExtensionUIMethod(req.Method) {
+		return
+	}
+	// An unknown extension method may be blocking. Cancel it immediately so
+	// Pi cannot remain stuck, while keeping the normal browser dialog path for
+	// methods whose wire contract Phi understands.
+	inst.cancelUnsupportedExtensionUI(req.ID)
 }

@@ -69,6 +69,8 @@ var (
 	// (the value jumps forward when the user restarts phi) and clear
 	// localStorage references to tabs that no longer exist.
 	StartedAt = time.Now().Unix()
+
+	rpcManagerForShutdown *rpc.Manager
 )
 
 func rollbackPreviousBinary() (string, error) {
@@ -205,6 +207,7 @@ func main() {
 		log.Printf("[backends] failed to load custom backends: %v", err)
 	}
 	rpcMgr := rpc.NewManager()
+	rpcManagerForShutdown = rpcMgr
 	// Saved tabs are restored as new live processes after the hub exists.
 	// Never deserialize OS process handles or publish nil-PTY ghosts.
 	if err := LoadSyncStore(); err != nil {
@@ -848,6 +851,12 @@ func gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace, grace time.D
 		if err := ptyManager.FlushSaveState(); err != nil {
 			slog.Error("shutdown tab snapshot", "err", err)
 		}
+	}
+	if rpcManagerForShutdown != nil {
+		for _, inst := range rpcManagerForShutdown.List() {
+			inst.Kill()
+		}
+		rpcManagerForShutdown = nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), grace)
 	defer cancel()
