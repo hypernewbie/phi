@@ -123,17 +123,6 @@ test('terminal pane flows over protobuf in Chromium', async ({ page }) => {
             req.failure()?.errorText === 'net::ERR_ABORTED'
         )
             return;
-        // Chromium may abort an already-served audio range when another
-        // pane creates its bell element. Do not exempt failed terminal reads.
-        const url = new URL(req.url());
-        if (
-            req.method() === 'GET' &&
-            req.resourceType() === 'media' &&
-            url.origin === new URL(phi.url).origin &&
-            url.pathname === '/vendor/bell.wav' &&
-            req.failure()?.errorText === 'net::ERR_ABORTED'
-        )
-            return;
         failedRequests.push(req.url());
     });
 
