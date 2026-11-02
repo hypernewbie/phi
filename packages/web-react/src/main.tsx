@@ -10,9 +10,14 @@ import './styles/global.css';
 const host = document.getElementById('root');
 if (!host) throw new Error('The application root is missing.');
 
+// Phi-served builds talk same-origin, so the page origin is the server.
+// Dev-proxy builds keep the baked phi origin for the guard header.
+const directUpstream = __PHI_DIRECT_SERVE__
+    ? window.location.origin
+    : undefined;
 const session = createAuthSession(
-    createConnectionService(),
-    createServerStateAdapter(),
+    createConnectionService(undefined, directUpstream),
+    createServerStateAdapter(undefined, directUpstream),
 );
 
 createRoot(host).render(

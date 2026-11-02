@@ -70,7 +70,12 @@ export function makeViteConfig(port = process.env.PHI_PORT) {
     };
     return {
         envPrefix: [],
-        define: { __PHI_UPSTREAM_ORIGIN__: JSON.stringify(upstreamOrigin) },
+        define: {
+            __PHI_UPSTREAM_ORIGIN__: JSON.stringify(upstreamOrigin),
+            __PHI_DIRECT_SERVE__: JSON.stringify(
+                process.env.PHI_DIRECT === '1',
+            ),
+        },
         server: {
             host: '127.0.0.1',
             port: 5173,
