@@ -81,7 +81,7 @@ test('browser guard blocks redirects before external or forbidden API requests',
             throw new Error('Missing fixture port.');
         targetUrl = `http://127.0.0.1:${targetAddress.port}`;
         const sourceUrl = `http://127.0.0.1:${sourceAddress.port}`;
-        const violations = await guardBrowserContext(context, {
+        const guard = await guardBrowserContext(context, {
             reactUrl: sourceUrl,
             phiUrl: sourceUrl,
         });
@@ -105,10 +105,11 @@ test('browser guard blocks redirects before external or forbidden API requests',
             ).rejects.toThrow();
             expect(targetHits).toBe(0);
         }
-        expect(violations).toEqual([
+        expect(guard.violations).toEqual([
             `Redirect GET ${sourceUrl}/redirect`,
             `Redirect GET ${sourceUrl}/redirect`,
         ]);
+        await guard.dispose();
     } finally {
         await context.close();
         for (const server of [source, target]) {
@@ -118,7 +119,82 @@ test('browser guard blocks redirects before external or forbidden API requests',
     }
 });
 
-test('real base server reports unsupported v2 without falling back to v1', async ({
+test('guard applies the page credential policy to cookies on handled responses', async ({
+    browser,
+}) => {
+    const source = createServer((request, response) => {
+        if (request.url === '/') {
+            response.end('<!doctype html><link rel="icon" href="data:,">');
+            return;
+        }
+        response.writeHead(404);
+        response.end();
+    });
+    try {
+        await new Promise<void>((done, fail) => {
+            source.once('error', fail);
+            source.listen(0, '127.0.0.1', done);
+        });
+        const address = source.address();
+        if (!address || typeof address === 'string')
+            throw new Error('Missing fixture port.');
+        const sourceUrl = `http://127.0.0.1:${address.port}`;
+        for (const [credentials, installed] of [
+            ['omit', false],
+            ['same-origin', true],
+        ] as const) {
+            const context = await browser.newContext({
+                serviceWorkers: 'block',
+            });
+            try {
+                const guard = await guardBrowserContext(
+                    context,
+                    { reactUrl: sourceUrl, phiUrl: sourceUrl },
+                    {
+                        statusMock: {
+                            reply: {
+                                body: {
+                                    enabled: false,
+                                    authenticated: false,
+                                },
+                                setCookie:
+                                    'synthetic=fixture-only; Path=/; HttpOnly',
+                            },
+                        },
+                    },
+                );
+                try {
+                    const page = await context.newPage();
+                    await page.goto(sourceUrl);
+                    expect(
+                        await page.evaluate(async (mode) => {
+                            const response = await fetch(
+                                '/api/auth/v2/status',
+                                { credentials: mode },
+                            );
+                            return response.json();
+                        }, credentials),
+                    ).toEqual({ enabled: false, authenticated: false });
+                    expect(
+                        (await context.cookies()).some(
+                            (cookie) => cookie.name === 'synthetic',
+                        ),
+                    ).toBe(installed);
+                    expect(guard.violations).toEqual([]);
+                } finally {
+                    await guard.dispose();
+                }
+            } finally {
+                await context.close();
+            }
+        }
+    } finally {
+        source.closeAllConnections();
+        await new Promise<void>((done) => source.close(() => done()));
+    }
+});
+
+test('real base server reports owned/disabled v2 without falling back to v1', async ({
     page,
     stack,
 }) => {
@@ -126,9 +202,15 @@ test('real base server reports unsupported v2 without falling back to v1', async
         reply.url().endsWith('/api/auth/v2/status'),
     );
     await page.goto(stack.reactUrl);
-    expect((await response).status()).toBe(404);
+    const reply = await response;
+    expect(reply.status()).toBe(200);
+    expect(await reply.json()).toMatchObject({
+        enabled: false,
+        authenticated: false,
+        owned: true,
+    });
     await expect(page.getByRole('status')).toHaveText(
-        'This server does not support v2 authentication.',
+        'Connected. Password protection is disabled.',
     );
     await expect(page.getByRole('banner')).toBeVisible();
     await expect(page.getByRole('navigation', { name: 'Main' })).toBeVisible();
@@ -142,18 +224,8 @@ test('real base server reports unsupported v2 without falling back to v1', async
 for (const [name, body, text] of [
     [
         'disabled',
-        { enabled: false, authenticated: false },
+        { enabled: false, authenticated: false, owned: true },
         'Connected. Password protection is disabled.',
-    ],
-    [
-        'protected',
-        { enabled: true, authenticated: false },
-        'Server requires sign-in. Login is not available in this stage.',
-    ],
-    [
-        'not a restored session',
-        { enabled: true, authenticated: true },
-        'Server requires sign-in. Login is not available in this stage.',
     ],
     [
         'invalid fields',
@@ -171,6 +243,37 @@ for (const [name, body, text] of [
     });
 }
 
+test('status: protected opens sign-in', async ({ page, stack, statusMock }) => {
+    statusMock.reply = {
+        body: { enabled: true, authenticated: false, owned: true },
+    };
+    await page.goto(stack.reactUrl);
+    await expect(
+        page.getByRole('heading', { name: 'Sign in to Phi' }),
+    ).toBeVisible();
+    await expect(page.getByLabel('Password')).toBeVisible();
+    await expect(
+        page.getByRole('button', { name: 'Retry', exact: true }),
+    ).toHaveCount(0);
+});
+
+test('status: credentialless read claiming authenticated is unavailable', async ({
+    page,
+    stack,
+    statusMock,
+}) => {
+    statusMock.reply = {
+        body: { enabled: true, authenticated: true, owned: true },
+    };
+    await page.goto(stack.reactUrl);
+    await expect(page.getByRole('status')).toHaveText(
+        'Cannot check this server. Retry the connection.',
+    );
+    await expect(
+        page.getByRole('button', { name: 'Retry', exact: true }),
+    ).toBeEnabled();
+});
+
 for (const status of [201, 401, 403, 500]) {
     test(`HTTP ${status} is unavailable, not successful authentication`, async ({
         page,
@@ -179,7 +282,7 @@ for (const status of [201, 401, 403, 500]) {
     }) => {
         statusMock.reply = {
             status,
-            body: { enabled: false, authenticated: false },
+            body: { enabled: false, authenticated: false, owned: true },
         };
         await page.goto(stack.reactUrl);
         await expect(page.getByRole('status')).toHaveText(
@@ -195,7 +298,7 @@ test('keeps the status node, keyboard navigation, and disabled/busy retry behavi
 }) => {
     let release = () => {};
     statusMock.reply = {
-        body: { enabled: false, authenticated: false },
+        body: { enabled: false, authenticated: false, owned: true },
         wait: new Promise<void>((done) => {
             release = done;
         }),
@@ -227,6 +330,11 @@ test('keeps the status node, keyboard navigation, and disabled/busy retry behavi
             page.getByRole('button', { name: 'Connection', exact: true }),
         ).toBeFocused();
         statusMock.reply = { status: 405, raw: 'unsupported' };
+        await page.keyboard.press('Tab');
+        // The Settings nav button is a tab stop once the session is ready.
+        await expect(
+            page.getByRole('button', { name: 'Settings', exact: true }),
+        ).toBeFocused();
         await page.keyboard.press('Tab');
         const retry = page.getByRole('button', { name: 'Retry', exact: true });
         await expect(retry).toBeFocused();
@@ -262,7 +370,9 @@ for (const activity of [
         statusMock,
     }) => {
         let release = () => {};
-        statusMock.reply = { body: { enabled: false, authenticated: false } };
+        statusMock.reply = {
+            body: { enabled: false, authenticated: false, owned: true },
+        };
         try {
             await page.goto(stack.reactUrl);
             const retry = page.getByRole('button', {
@@ -271,7 +381,7 @@ for (const activity of [
             });
             await expect(retry).toBeEnabled();
             statusMock.reply = {
-                body: { enabled: false, authenticated: false },
+                body: { enabled: false, authenticated: false, owned: true },
                 wait: new Promise<void>((done) => {
                     release = done;
                 }),

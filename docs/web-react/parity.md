@@ -2,7 +2,7 @@
 
 ## Stage 02 status
 
-**Date:** 2026-10-27. **State:** `in-review`, not integrated.
+**Date:** 2026-10-27. **State:** merged into `main` as `092e8025` (PR #39, "Stage 02: React foundation with reusable Phi controls"). The in-review record below is historical.
 
 The branch was rebased from `64fdea3` onto `main` `45dd7ea` and force-pushed as `9a6a822`. `main` has since advanced to `df73de3`, so the branch trails it by one commit. No CI run exists: `Run Tests` triggers only on a pull request to `main` or a push to `main`.
 Verified on that base: both required builds, `pnpm typecheck`, `pnpm check:code`, `pnpm lint:web`, `pnpm check:vendors`, `pnpm exec vitest run --maxWorkers=8` (3188 passed), all 36 React Playwright cases, and the legacy root suite (110 passed / 6 failed, every failure classified as pre-existing on `main` or load-sensitive).
@@ -42,6 +42,143 @@ At that time no integration, fetch, rebase, push, publication, or device deploym
 > New files occupy `packages/phi-core/`, `packages/web-react/`, and this document.
 > Legacy/Go/desktop runtime code and root source/build TypeScript configurations remain unchanged. The index is empty.
 
+## Stage 03 status (v2 sign-in MVP)
+
+**Date:** 2026-11-02. **State:** implemented in a worktree, not committed, not reviewed for integration. Deferred migration scope is not new implementation authority.
+
+| Reference | Value |
+| --- | --- |
+| Base | `origin/main` `875c14aa` (HEAD, clean at execution) |
+| Branch | `frontend-auth-mvp`, from `origin/main` |
+| Worktree | `/Users/n0mad/code/phi-worktrees/frontend-auth-mvp` |
+| Auth dependency | V2 landed on `main` (PR #80); routes, bundle, refresh cookie, and lifetimes verified field-for-field before execution |
+| Plan | `/Users/n0mad/code/phi/plan/2026-08-24_02-52-07_frontend-migration.md` revision 6 (ignored, outside this worktree) |
+| Authorization | User supplied `EXECUTE` on 2026-11-02. Direct, non-independent review (no subagent tool). No commit, push, merge, or deletion authorized. |
+
+Milestones M1 (real sign-in), M2 (reload restoration and session lifecycle), and M3 (bounded network recovery) are complete. M4 is this review and handoff; it adds no features. Login, refresh, renewal, recovery, and server-scoped binding/hostname cache are implemented only to the evidence below.
+
+### Final verification block
+
+All commands ran from the worktree root on 2026-11-02. Browser commands used command-scoped `SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"` on loopback fixtures with synthetic passwords. No check used a user server, real-user state, or production service.
+
+| Final command | Exit | Result |
+| --- | --- | --- |
+| `pnpm build:web` | 0 | Required legacy web build, before pet |
+| `pnpm --dir desktop/pet build` | 0 | Required pet build; no tree drift afterward |
+| `pnpm typecheck` | 0 | All compiler passes |
+| `pnpm check:vendors` | 0 | Vendored bytes unchanged |
+| `pnpm exec biome ci ./packages/phi-core ./packages/web-react` | 0 | No findings in the changed packages |
+| `pnpm exec vitest run packages/phi-core/test packages/web-react/test --maxWorkers=4` | 0 | 12 files, 254 tests passed |
+| `pnpm exec playwright test --config packages/web-react/playwright.config.ts` | 0 | 70 Chromium cases (desktop + narrow touch), including auth 22, auth-network 10, connection 38 |
+
+One earlier full run reported 68 passed / 2 failed under parallel-worker load; the failures did not reproduce across two later full runs (70/70 each, including this final block) and are recorded as an unreproduced contention flake, not a pass by rerun without record.
+
+Changed files stay inside the plan allowlist: `C/src/{auth.ts,index.ts}`, `R/src/{main.tsx,App.tsx,copy/auth.ts,platform/{http,auth-session,server-state}.ts,screens/{ConnectionScreen,LoginScreen}.tsx,screens/login.module.css}`, `R/vite.config.js`, `R/playwright.config.ts`, `R/test/{app,http,fixture,vite-config,login,auth-session,server-state}.test.*`, `R/test/e2e/{phi-server.ts,fixtures.ts,connection.spec.ts,auth.spec.ts,auth-network.spec.ts}`, and this document. `C` is `packages/phi-core/`, `R` is `packages/web-react/`.
+
+### Functional results
+
+- Real v2 sign-in shows the authorized hostname; wrong passwords keep the form; short passwords are rejected locally; single submit sends one POST.
+- Reload restores via the HttpOnly refresh cookie without a password; password rotation revokes to Login; a second tab restores through the shared session.
+- Missing-cookie and storage-denied sign-ins work in memory and cannot restore after reload.
+- One refresh per chain; renewal at lifetime minus min(60 s, lifetime/2) on a monotonic clock; expired tokens are never sent as bearers; Web Locks serialize bundle exchanges under `phi.react.auth:<upstream>` with a 15 s bound, one fallback, and no bypass on timeout.
+- One recovery timer with 2/4/8/16/30 s backoff plus 0-20% jitter, reset only after a completed fresh read; server Retry-After replaces the step and Infinity pauses; Retry joins immediately; login 503 with a wait cools down; login never auto-retries.
+- Offline keeps token/cache with zero app-initiated forwards and recovers on return; 403 reads keep the session without logging out.
+- Isolated Chrome DevTools checks (fresh context per milestone): sign-in, reload restore, and offline-stale plus online recovery, desktop and 390x844 touch. Console held only Vite/React noise, the known password-form note, expected offline errors, and one dev-favicon 404. Owned stacks stopped with no remaining listeners.
+
+### Design results
+
+- Login converts the `.access-auth-dialog` geometry, spacing, and input/focus behavior; the sign-in surface is a screen, not a modal dialog, following the Stage 02 pattern.
+- Normal-text contrast meets 4.5:1 with a Login-local muted tone (see intentional differences); control/focus contrast meets 3:1 via the shared accent boundary and focus ring.
+- Targets measure 38 px (password field) and 36 px (Sign in) at 320 px width; no horizontal overflow at 320/390/1280 px.
+- Login CSS has no transitions, so reduced motion needs no override; shared Button behavior is unchanged.
+- Screenshots: per-run `test-results/web-react/browser/auth-*/{login,ready,restored,stale}.png` in desktop and narrow projects, inspected for this handoff; artifacts regenerate on every run.
+
+### Intentional differences
+
+- Login muted text uses a Login-local `#8e8ca0` (5.61:1 on the card), not the shared `--text-muted` (4.16:1), to meet normal-text contrast. Stage 02 set the precedent of not copying sub-4.5 muted text.
+- The stale presentation labels the cached value "Last known server" with an inline note and keeps Retry; the legacy UI has no equivalent React-state presentation.
+- No other visual departure from the reference dialog was needed.
+
+### Pending human checks
+
+| Check | Required evidence | Current result |
+| --- | --- | --- |
+| Safari visual comparison | Sign-in, restored, and stale states at 1280x800 and 390x844 | Pending |
+| Safari reflow and text zoom | 320 CSS px and actual 200% zoom, no clipped controls or lost actions | Pending |
+| Safari keyboard/focus | Logical order, visible focus, pending/rate-limit/disabled activation | Pending |
+| Safari reduced motion | No nonessential transitions | Pending |
+| macOS VoiceOver with Safari | Landmarks, field/button names, one polite announcement per changed status | Pending |
+
+Chromium unit/browser evidence does not establish cross-browser or screen-reader behavior. These checks remain pending human operation, not passes or integration authority.
+
+## Stage 04 MVP status (settings page)
+
+**Date:** 2026-11-02. **State:** implemented in a worktree, not committed, not reviewed for integration. Deferred migration scope is not new implementation authority.
+
+| Reference | Value |
+| --- | --- |
+| Base | `origin/main` `1991137c` with Stage 03 (`724e303a..f18ae12d`) rebased atop, clean rebase |
+| Branch | `stage-04-settings`, from `frontend-auth-mvp` |
+| Worktree | `/Users/n0mad/code/phi-worktrees/stage-04-settings` |
+| Plan | `/Users/n0mad/code/phi/plan/2026-11-02_21-23-24_stage-04-settings.md` revision 3 |
+| Authorization | User supplied `EXECUTE` on 2026-11-02. Direct, non-independent review. No commit, push, merge, or deletion authorized. |
+
+Milestones M0 (rebase + baselines), M1 (authenticated read + About), and M2 (Behavior writes) are complete. M3 is this review; it adds no features. The MVP mirrors `web/config.html` as a page: About group, Behavior toggles, last-good cache, and refresh. Modal shell, Appearance, Security, mobile-appearance fence, This-browser profile, and native popout are full-stage scope, not this MVP.
+
+### Final verification block
+
+All commands ran from the worktree root on 2026-11-02. Browser commands used command-scoped `SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"` on loopback fixtures with synthetic passwords. No check used a user server, real-user state, or production service.
+
+| Final command | Exit | Result |
+| --- | --- | --- |
+| `pnpm build:web` | 0 | Required legacy web build, before pet |
+| `pnpm --dir desktop/pet build` | 0 | Required pet build; no tree drift afterward |
+| `pnpm typecheck` | 0 | All compiler passes |
+| `pnpm check:vendors` | 0 | Vendored bytes unchanged |
+| `pnpm exec biome ci ./packages/phi-core ./packages/web-react` | 0 | No findings in the changed packages |
+| `pnpm exec vitest run packages/phi-core/test packages/web-react/test --maxWorkers=4` | 0 | 14 files, 304 tests passed |
+| `pnpm exec playwright test --config packages/web-react/playwright.config.ts` (twice) | 0 | 82 Chromium cases each (desktop + narrow touch), including settings 12 |
+
+Changed files stay inside the plan allowlist: `R/package.json` + `pnpm-lock.yaml` (zod, user-approved), `R/src/{App.tsx,main.tsx,copy/settings.ts,platform/{auth-session,http,settings-store}.ts,screens/SettingsScreen.tsx}`, `R/test/{app,auth-session,settings,settings-store}.test.*`, `R/test/e2e/{fixtures.ts,connection.spec.ts,settings.spec.ts}`, and this document. `R` is `packages/web-react/`. No Go, legacy `web/`, or `phi-core` changes.
+
+### Functional results
+
+- Settings nav enables only when the session is ready; the page loads config plus version with the per-request session bearer (`credentials: omit`, no cookies).
+- About shows uppercased hostname, build source, workspace count, and version with short commit (`v?` fallback when the version read fails).
+- Last-good cache (schema 1, rendered fields only) renders on failure with a stale note; refresh never erases user-edited values.
+- All seven Behavior toggles save optimistically with keep-state-on-failure parity; hidden-terminal forces reuse-tab disabled in both directions; auto-reconnect maps on/off to `visible`/`off`.
+- OpenCode idle-stop posts `{minutes}` and ignores invalid values; low power stays browser-local under the legacy `phi_low_power` key with one-time server migration.
+- Successful saves broadcast `behavior` (toggles) or `low-power` with `{enabled}` on `phi_config_sync`, matching the legacy channel contract.
+- Zod schemas validate the wire and cache shapes from one definition (user-approved dependency; Stage 03 auth decoders stay manual).
+- Isolated Chrome DevTools checks (fresh context per milestone): About render, keyboard-only toggle flip persisted server-side, and 320px mobile/touch with no overflow. Console fully clean on the final pass.
+- One `connection.spec.ts` keyboard test gained a tab stop for the new Settings nav button; the product tab order is correct.
+
+### Design results
+
+- Settings is a page following the `config.html` precedent, not the modal; the modal shell belongs to the full stage.
+- One scoped module (`settings.module.css`): the Behavior fieldset keeps native disabled-group semantics without the browser groove border, the legend matches the About h2, and checkbox rows wrap with a hanging indent. No new colors: contrast and focus rings are inherited from verified tokens.
+- The header nav is a wrapping flex row (one row on desktop, full-width lines on narrow screens); single-button screens render unchanged.
+- All controls are keyboard-reachable with visible focus; the idle select carries id and name; the region marks `aria-busy` while loading.
+- No horizontal overflow at 320/390/1280 px; no transitions, so reduced motion needs no override.
+
+### Intentional differences
+
+- Page-first instead of modal-first (see above); the modal shell, focus trap, and opener refocus arrive with the full stage.
+- Edited values survive refresh for the store lifetime (app session), where the legacy modal tracks edits per open dialog. Same rule, longer window; revisit if cross-tab edit conflicts surface.
+- No other departure from legacy save/error semantics.
+
+### Pending human checks
+
+| Check | Required evidence | Current result |
+| --- | --- | --- |
+| Safari visual comparison | Settings About + Behavior at 1280x800 and 390x844 | Pending |
+| Safari reflow and text zoom | 320 CSS px and actual 200% zoom, no clipped controls | Pending |
+| Safari keyboard/focus | Nav gating, toggle flips, disabled states, visible focus | Pending |
+| Safari reduced motion | No nonessential transitions | Pending |
+| macOS VoiceOver with Safari | Landmarks, toggle/select names, one polite announcement per note | Pending |
+
+Chromium unit/browser evidence does not establish cross-browser or screen-reader behavior. These checks remain pending human operation, not passes or integration authority.
+
 ## Architecture and ownership
 
 `@phi/core` exports an empty TypeScript module. Its source compiler excludes DOM and ambient Node types.
@@ -60,7 +197,7 @@ Enabled protection always produces the protected presentation, even with `authen
 HTTP 404/405 means unsupported v2. Other failures mean unavailable.
 Caller cancellation and obsolete generations cannot replace the current status.
 The adapter aborts its owned request before every return, including errors with unread response bodies.
-There is no login, v1 fallback, restored session, storage, protected operation, or automatic polling.
+Stage 02 had no login, v1 fallback, restored session, storage, protected operation, or automatic polling. Stage 03 adds a v2 sign-in MVP behind the same service boundary (see Stage 03 status); there is still no v1 fallback and no logout/password-change UI.
 
 Vite binds `127.0.0.1:5173` with a strict port.
 The validated `PHI_PORT` selects the loopback backend, with 7070 as the development default.
@@ -194,7 +331,7 @@ The Stage 02 foundation is a new screen and is not a claim of converted full-she
 | Required outcome | Source anchor | Owner | Status | Automated evidence | Desktop result | Narrow result | Remaining gap |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Connection foundation and shared controls | Implementation baseline: `web/style.css` controls/auth-card, `web/index.html` brand | 02 | partial | Package unit tests; 36 Playwright cases; October 20 DevTools evidence | Chrome geometry/fonts/Retry focus pass | Chrome 390/320 px reflow and Retry focus pass | Safari/VoiceOver and manual zoom |
-| Auth entrypoints, login, expiry, server-scoped persistence | `web/auth.js`, `web/config.html` | 03 | missing | — | — | — | Landed v2 auth and complete client behavior |
+| Auth entrypoints, login, expiry, server-scoped persistence | `web/auth.js`, `web/config.html` | 03 | partial (v2 sign-in MVP only, worktree) | 254 package unit tests; 70 Chromium cases (auth 22, auth-network 10, connection 38); isolated DevTools sign-in/restore/offline checks | 1280 px sign-in/restore/stale pass | 390 px touch + 320 px Login reflow pass | Safari/VoiceOver/zoom; logout/password-change UI; Settings; asset-cookie flows; commit/review/integration |
 | Settings, appearance, configuration save/error outcomes | `web/settings.js`, `web/config.js`, `web/config.html` | 04 | missing | — | — | — | All configuration surfaces |
 | Session/coder capability and workspace service contracts | `web-src/sessions.ts`, `web-src/coders.ts` | 05 | missing | — | — | — | Shared contracts and adapters |
 | Session list/spawn/rename, coder and workspace selection | `web/index.html`: `#session-list`, `#coder-selector`, `#workspace-select` | 06 | missing | — | — | — | All session/workspace UI |
@@ -383,7 +520,7 @@ The fixture cleanup risk and pending Safari/VoiceOver/zoom checks remain open fo
 | macOS VoiceOver with Safari | Landmarks, button names, focus, one polite announcement per changed status | Pending |
 
 The executor did not operate Safari or VoiceOver. Unit or Chromium results cannot substitute for these manual checks.
-The stage remains `in-review` until the required human evidence and implementation review are complete.
+These manual checks stayed pending at merge and carry forward to the Stage 03 record below.
 
 For an isolated manual session, run this command from the worktree root:
 
