@@ -19,7 +19,13 @@ it('uses only loopback, the default port, strict ownership, and no automatic env
     expect(config.envPrefix).toEqual([]);
     expect(config.define).toEqual({
         __PHI_UPSTREAM_ORIGIN__: '"http://127.0.0.1:7070"',
+        __PHI_DIRECT_SERVE__: 'false',
     });
+});
+
+it('marks a phi-served build when PHI_DIRECT=1', () => {
+    vi.stubEnv('PHI_DIRECT', '1');
+    expect(makeViteConfig().define?.__PHI_DIRECT_SERVE__).toBe('true');
 });
 
 it.each(['1', '65535', '17070'])('uses validated PHI_PORT %s', (port) => {
