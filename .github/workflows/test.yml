@@ -41,14 +41,10 @@ jobs:
       - name: Run Go Tests
         run: go test -race -v ./...
 
-      # The tag swaps root's diagnostics_disabled.go for diagnostics_profiling.go,
-      # but no root test exercises the diagnostics API — the only tag-gated root
-      # test file is api_timing_test.go. Run the packages whose source actually
-      # changes under the tag, plus those two tests.
+      # Run packages whose source changes under profiling. The server owns
+      # both diagnostics and the tag-gated HTTP timing tests.
       - name: Run Go Tests (profiling)
-        run: |
-          go test -tags=profiling ./internal/diagnostics/... ./internal/termstate/... ./internal/termemu/... ./pkg/obs/...
-          go test -tags=profiling -run '^TestTiming' .
+        run: go test -tags=profiling ./internal/diagnostics/... ./internal/server/... ./internal/termstate/... ./internal/termemu/... ./pkg/obs/...
 
       # Only auth_observability_otel_test.go is gated on the otel tag; main.go
       # is byte-identical with and without it, since the tag swaps the pkg/obs
@@ -57,9 +53,10 @@ jobs:
       - name: Run Go Tests (otel tags)
         run: |
           go test -race -tags=otel ./pkg/obs
-          go test -race -tags=otel -run '^TestAccessObservabilitySpansCarryNoCredentials$' .
+          go test -race -tags=otel -run '^TestAccessObservabilitySpansCarryNoCredentials$' ./internal/access
           go test -race -tags=profiling,otel ./pkg/obs ./internal/diagnostics
-          go test -race -tags=profiling,otel -run '^(TestTiming|TestAccessObservabilitySpansCarryNoCredentials)' .
+          go test -race -tags=profiling,otel -run '^TestTiming' ./internal/server
+          go test -race -tags=profiling,otel -run '^TestAccessObservabilitySpansCarryNoCredentials$' ./internal/access
 
       # A real native terminal, not the headless screen oracle. No provider
       # credentials, model access, desktop profile, or tmux state is inherited.
@@ -76,7 +73,7 @@ jobs:
           go run ./tools/webdist
           go vet -tags=embedassets ./...
           go test -tags=embedassets -race -run '^TestRelease' .
-          go test -tags=embedassets,profiling -race -run '^(TestRelease|TestTiming)' .
+          go test -tags=embedassets,profiling -race -run '^(TestRelease|TestTiming)' . ./internal/server
 
       # The added profiling implementation must compile out of normal
       # builds. This guard checks source, test, dependency, and symbol

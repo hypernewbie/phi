@@ -450,6 +450,58 @@ it('keeps memory-only input when Restore cannot preserve the current draft', asy
     expect(f.store.storageWarning).toContain('memory');
 });
 
+it('bases a new edit on its acknowledged save while local sync is pending', async () => {
+    const f = fixture();
+    await f.store.sync();
+    let releaseSave;
+    f.fetch.mockImplementationOnce(
+        () =>
+            new Promise((resolve) => {
+                releaseSave = resolve;
+            }),
+    );
+    f.store.edit({ terminal_font_family: 'monospace' });
+    await settleEdit();
+    expect(posts(f.fetch)).toHaveLength(1);
+
+    const sync = f.store.sync.bind(f.store);
+    let releaseSync;
+    vi.spyOn(f.store, 'sync').mockImplementationOnce(
+        () =>
+            new Promise((resolve) => {
+                releaseSync = () => sync().then(resolve);
+            }),
+    );
+    f.server = {
+        ...EMPTY_MOBILE,
+        revision: 1,
+        terminal_font_family: 'monospace',
+    };
+    releaseSave(Response.json(f.server));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(releaseSync).toBeTypeOf('function');
+    expect(f.store.pending).toBe(false);
+
+    // Real IndexedDB sync yields after the old draft fields are cleared.
+    f.store.edit({ terminal_font_size: 20 });
+    await vi.advanceTimersByTimeAsync(0);
+    await releaseSync();
+    await settleEdit();
+    expect(posts(f.fetch)).toHaveLength(2);
+    expect(JSON.parse(posts(f.fetch)[1][1].body)).toEqual({
+        revision: 1,
+        fields: { terminal_font_size: 20 },
+    });
+    expect(f.store.conflict).toBe(false);
+    expect(f.store.pending).toBe(false);
+    expect(f.store.status).toBe('Saved');
+    expect(f.server).toMatchObject({
+        revision: 2,
+        terminal_font_family: 'monospace',
+        terminal_font_size: 20,
+    });
+});
+
 it('preserves later edits when an earlier save acknowledges', async () => {
     const f = fixture();
     await f.store.sync();

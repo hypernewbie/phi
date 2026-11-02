@@ -1037,6 +1037,8 @@ export class MobileAppearanceStore {
                 response.status === 200 &&
                 released &&
                 this.draft.id === attempt.draftId) {
+                // A new edit can start while the following IndexedDB sync waits.
+                this.adopt(state);
                 for (const key of KEYS)
                     if (this.draft.versions[key] === attempt.versions[key]) {
                         delete this.draft.fields[key];

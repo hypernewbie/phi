@@ -40,18 +40,18 @@ func TestReleaseIdentityMatchesSourceTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read web/vendor/xterm.js from disk: %v", err)
 	}
-	got, err := fs.ReadFile(webRoot, "vendor/xterm.js")
+	got, err := fs.ReadFile(testWebRoot, "vendor/xterm.js")
 	if err != nil {
-		t.Fatalf("read vendor/xterm.js from webRoot: %v", err)
+		t.Fatalf("read vendor/xterm.js from testWebRoot: %v", err)
 	}
 	if !bytes.Equal(got, src) {
-		t.Fatal("decompressed webRoot bytes differ from web/vendor/xterm.js")
+		t.Fatal("decompressed testWebRoot bytes differ from web/vendor/xterm.js")
 	}
 }
 
 func TestReleaseETagIdentityDerived(t *testing.T) {
 	setupStaticAssets(t)
-	src, err := fs.ReadFile(webRoot, "app.js")
+	src, err := fs.ReadFile(testWebRoot, "app.js")
 	if err != nil {
 		t.Fatalf("read app.js: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestReleaseETagIdentityDerived(t *testing.T) {
 
 func TestReleaseWebRootSeekable(t *testing.T) {
 	setupStaticAssets(t)
-	f, err := webRoot.Open("app.js")
+	f, err := testWebRoot.Open("app.js")
 	if err != nil {
 		t.Fatalf("open app.js: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestReleaseWebRootSeekable(t *testing.T) {
 	// http.ServeContent needs Seek for Range; MapFS providing it is an
 	// implementation detail of testing/fstest — this assertion pins it.
 	if _, ok := f.(io.Seeker); !ok {
-		t.Fatal("webRoot files must implement io.Seeker for Range support")
+		t.Fatal("testWebRoot files must implement io.Seeker for Range support")
 	}
 }
 
@@ -83,12 +83,12 @@ func TestReleaseFirstPartyMinified(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read web/%s from disk: %v", p, err)
 		}
-		got, err := fs.ReadFile(webRoot, p)
+		got, err := fs.ReadFile(testWebRoot, p)
 		if err != nil {
-			t.Fatalf("read %s from webRoot: %v", p, err)
+			t.Fatalf("read %s from testWebRoot: %v", p, err)
 		}
 		if len(got) == 0 || len(got) >= len(src) {
-			t.Fatalf("%s: webRoot %d bytes, source %d — expected minified (smaller, non-empty)", p, len(got), len(src))
+			t.Fatalf("%s: testWebRoot %d bytes, source %d — expected minified (smaller, non-empty)", p, len(got), len(src))
 		}
 	}
 }
