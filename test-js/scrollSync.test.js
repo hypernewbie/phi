@@ -445,9 +445,7 @@ describe('terminal paste refusal sends zero bytes and holds one copy', () => {
         expect(tm.inputTextArea.value).toBe('seeded draftFROZEN_LINE');
         expect(tab.draft).toBe('seeded draftFROZEN_LINE');
         expect(tab.pasteRecovery).toBe('not_sent');
-        expect(tab._inputRestriction).toBe(
-            'Paste saved locally, not sent.',
-        );
+        expect(tab._inputRestriction).toBe('Paste saved locally, not sent.');
         expect(tab._terminalPaste).toBeFalsy();
     });
     it('normalizes CRLF/CR to newlines in the held copy', () => {
@@ -573,9 +571,7 @@ describe('terminal paste recovery stays pane-owned', () => {
         document.body.appendChild(line);
         tm.activePaneId = 'p1';
         tm._renderInputRestriction();
-        expect(line.textContent).toBe(
-            'Paste saved locally, not sent.',
-        );
+        expect(line.textContent).toBe('Paste saved locally, not sent.');
         expect(line.classList.contains('hidden')).toBe(false);
     });
     it('does not save under a pane ID now owned by a replacement', () => {
@@ -949,7 +945,6 @@ describe('DOM scroll listener installed by createTab (drives the real handler)',
     });
 });
 
-
 // clientHeight/scrollHeight are getter-only in jsdom (no layout engine), so
 // they need defineProperty; scrollTop is a plain writable property.
 function setViewportScrollMetrics(
@@ -1240,5 +1235,4 @@ describe('replay provenance for OSC 52', () => {
         tab._historyParsing = false;
         expect(tm._agentClipboardCopy).not.toHaveBeenCalled();
     });
-
 });

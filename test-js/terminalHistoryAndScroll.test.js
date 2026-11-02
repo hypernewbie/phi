@@ -87,8 +87,7 @@ class FakeWebSocket {
                             : {}),
                         initialCols: hdr.initialCols ?? 80,
                         initialRows: hdr.initialRows ?? 24,
-                        eventCursor:
-                            hdr.eventCursor ?? `v1.${epoch}.${head}.0`,
+                        eventCursor: hdr.eventCursor ?? `v1.${epoch}.${head}.0`,
                     },
                 },
             }),

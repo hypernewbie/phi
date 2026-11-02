@@ -87,21 +87,40 @@ describe('retained terminal lifecycle preserves the geometry that produced each 
             const suffix = program(after[1], 'LATEST');
             const source = encode(prefix + suffix);
             const cut = encode(prefix).length;
-            const markers = [
-                [0, before[0], before[1]],
-                [cut, after[0], after[1]],
-            ];
-            const h = replayHarness(source, ({ from, to }) => {
-                const end = chunked
-                    ? Math.min(
-                          to,
-                          from + Math.max(1, Math.floor((to - from) / 2)),
-                      )
-                    : to;
-                return recordingEnvelope(source.slice(from, end), from, end, {
-                    resizes: markers.filter((m) => m[0] <= end),
-                });
-            });
+            const h = replayHarness(
+                source,
+                ({ from, to, throughCursor, afterCursor }) => {
+                    const end = chunked
+                        ? Math.min(
+                              to,
+                              from + Math.max(1, Math.floor((to - from) / 2)),
+                          )
+                        : to;
+                    const allowed =
+                        !throughCursor || throughCursor.endsWith('.1');
+                    const consumed = afterCursor?.endsWith('.1');
+                    const ordinal = consumed || (allowed && cut <= end) ? 1 : 0;
+                    return recordingEnvelope(
+                        source.slice(from, end),
+                        from,
+                        end,
+                        {
+                            initial_cols: before[0],
+                            initial_rows: before[1],
+                            event_cursor: `v1.7.${end}.${ordinal}`,
+                            through: to,
+                            through_event_cursor: `v1.7.${to}.${allowed ? 1 : 0}`,
+                            resizes:
+                                allowed &&
+                                !consumed &&
+                                cut >= from &&
+                                cut <= end
+                                    ? [[cut, after[0], after[1]]]
+                                    : [],
+                        },
+                    );
+                },
+            );
             const reference = new Terminal({
                 cols: before[0],
                 rows: before[1],
@@ -115,7 +134,7 @@ describe('retained terminal lifecycle preserves the geometry that produced each 
                 if (route === 'reconnect' || route === 'live-gap') {
                     h.term.resize(...before);
                     await write(h.term, prefix);
-                    if (route === 'reconnect') h.term.resize(...after);
+                    h.tab._replayCursor = `v1.7.${cut}.0`;
                     h.tab._termOpened = true;
                     h.tab.drainedSeq = cut;
                     h.tab.queuedSeq = cut;
@@ -124,6 +143,9 @@ describe('retained terminal lifecycle preserves the geometry that produced each 
                     epoch: 7,
                     oldest: 0,
                     head: route === 'live-gap' ? cut : source.length,
+                    initialCols: before[0],
+                    initialRows: before[1],
+                    eventCursor: `v1.7.${route === 'live-gap' ? cut : source.length}.${route === 'live-gap' ? 0 : 1}`,
                 });
                 await h.settle();
                 if (route === 'live-gap') {

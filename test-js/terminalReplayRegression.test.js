@@ -63,6 +63,8 @@ function recording(bytes, start, end) {
             start,
             end,
             event_cursor: `v1.7.${end}.0`,
+            through: end,
+            through_event_cursor: `v1.7.${end}.0`,
             resizes: [],
             initial_cols: 80,
             initial_rows: 24,
@@ -303,45 +305,37 @@ describe('actual xterm byte-stream recovery', () => {
         }
     });
 
-    it('drains an epoch reset banner before resizing to the replay baseline', async () => {
-        const h = harness(encode(''));
-        const writes = [];
-        const callbacks = [];
-        const order = [];
-        const resize = h.term.resize.bind(h.term);
+    it('reports a restart without inserting local banner bytes into the replay parser', async () => {
+        const h = harness(encode('REPLAY'));
         h.tab._termOpened = true;
-        h.tab._pendingResetBanner = 'RESET BANNER';
-        h.manager._bootstrappedRelease = vi.fn();
-        h.term.write = (data, callback) => {
-            writes.push(data);
-            callbacks.push(callback);
-        };
-        vi.spyOn(h.term, 'resize').mockImplementation((cols, rows) => {
-            order.push({ kind: 'resize', pending: h.tab.writePending });
-            resize(cols, rows);
-        });
-
+        h.tab._pendingRestartNotice = true;
+        h.manager.app = { showToast: vi.fn() };
+        h.manager._fetchReplayPages = vi.fn(async () => ({
+            start: 0,
+            end: 6,
+            byteLength: 6,
+            bytes: encode('REPLAY'),
+            endCursor: 'v1.8.6.0',
+        }));
         try {
-            const attach = h.manager._onAttachHead(h.tab, {
+            await h.manager._onAttachHead(h.tab, {
                 epoch: 8,
                 oldest: 0,
-                head: 0,
+                head: 6,
                 initialCols: 100,
                 initialRows: 30,
-                eventCursor: 'v1.8.0.0',
+                eventCursor: 'v1.8.6.0',
             });
-            await Promise.resolve();
-
-            expect(writes).toEqual(['RESET BANNER']);
-            expect(order).toEqual([]);
-            expect(h.tab.writePending).toBe(true);
-
-            callbacks.shift()();
-            await attach;
-
-            expect(order).toEqual([{ kind: 'resize', pending: false }]);
-            expect(writes).toEqual(['RESET BANNER']);
-            expect([h.term.cols, h.term.rows]).toEqual([100, 30]);
+            await h.tab._bootstrapGate;
+            await h.manager._drainSettled(h.tab);
+            expect(
+                h.term.buffer.active.getLine(0).translateToString(true),
+            ).toBe('REPLAY');
+            expect(h.manager.app.showToast).toHaveBeenCalledWith(
+                'Session restarted.',
+                { type: 'info', title: 'Terminal' },
+            );
+            expect(h.tab._pendingRestartNotice).toBe(false);
         } finally {
             h.term.dispose();
         }

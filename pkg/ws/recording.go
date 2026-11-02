@@ -456,6 +456,7 @@ type rawJournal struct {
 	dir          string
 	file         *os.File
 	ephemeral    bool
+	readOnly     bool
 	closed       bool
 	committedLen int64
 	head         uint64
@@ -479,6 +480,17 @@ type rawJournal struct {
 // reads only the manifest-certified prefix; an uncommitted tail is
 // truncated and a malformed certified prefix fails closed.
 func openRawJournal(dir string, initCols, initRows uint16, now func() time.Time) (*rawJournal, error) {
+	return openRawJournalMode(dir, initCols, initRows, now, false)
+}
+
+func openRawJournalReadOnly(dir string, now func() time.Time) (*rawJournal, error) {
+	return openRawJournalMode(dir, 0, 0, now, true)
+}
+
+func openRawJournalMode(dir string, initCols, initRows uint16, now func() time.Time, readOnly bool) (*rawJournal, error) {
+	if readOnly && dir == "" {
+		return nil, os.ErrNotExist
+	}
 	ephemeral := dir == ""
 	if ephemeral {
 		tmp, err := os.MkdirTemp("", "phi-rawjournal-*")
@@ -487,7 +499,7 @@ func openRawJournal(dir string, initCols, initRows uint16, now func() time.Time)
 		}
 		dir = tmp
 	} else if fi, err := os.Lstat(dir); err != nil {
-		if !os.IsNotExist(err) {
+		if readOnly || !os.IsNotExist(err) {
 			return nil, err
 		}
 		if err := os.MkdirAll(dir, 0700); err != nil {
@@ -499,19 +511,23 @@ func openRawJournal(dir string, initCols, initRows uint16, now func() time.Time)
 	} else if !fi.Mode().IsDir() {
 		return nil, fmt.Errorf("raw journal path is not a directory: %s", dir)
 	}
-	if err := os.Chmod(dir, 0700); err != nil {
-		return nil, err
+	if !readOnly {
+		if err := os.Chmod(dir, 0700); err != nil {
+			return nil, err
+		}
 	}
 	if now == nil {
 		now = time.Now
 	}
-	j := &rawJournal{dir: dir, ephemeral: ephemeral, nextOrdinal: 1, now: now}
-	// A temp manifest is never referenced; a crashed commit may leave one.
-	_ = os.Remove(filepath.Join(dir, "MANIFEST.tmp"))
+	j := &rawJournal{dir: dir, ephemeral: ephemeral, readOnly: readOnly, nextOrdinal: 1, now: now}
+	// Cold readers never remove, truncate, chmod or publish anything.
+	if !readOnly {
+		_ = os.Remove(filepath.Join(dir, "MANIFEST.tmp"))
+	}
 	journalPath := filepath.Join(dir, "journal")
 	raw, err := readRetentionManifest(filepath.Join(dir, "MANIFEST"))
 	if err != nil {
-		if !os.IsNotExist(err) {
+		if readOnly || !os.IsNotExist(err) {
 			return nil, err
 		}
 		if _, serr := os.Lstat(journalPath); serr == nil {
@@ -554,7 +570,12 @@ func openRawJournal(dir string, initCols, initRows uint16, now func() time.Time)
 	if fi, serr := os.Stat(journalPath); serr == nil {
 		preSize = fi.Size()
 	}
-	f, err := openCommitFile(journalPath, m.committedLen)
+	var f *os.File
+	if readOnly {
+		f, err = openRawFileReadOnly(journalPath, m.committedLen)
+	} else {
+		f, err = openCommitFile(journalPath, m.committedLen)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -567,7 +588,7 @@ func openRawJournal(dir string, initCols, initRows uint16, now func() time.Time)
 	j.closedAtNs = m.closedAtNs
 	j.createdNs = m.createdNs
 	j.lastUpdateNs = m.lastUpdateNs
-	if preSize > m.committedLen {
+	if !readOnly && preSize > m.committedLen {
 		j.faults.truncates++
 	}
 	if err := j.loadCertified(); err != nil {
@@ -581,7 +602,7 @@ func openRawJournal(dir string, initCols, initRows uint16, now func() time.Time)
 	if preSize > m.committedLen || (m.flags&rawFlagClosed == 0 && (m.head > 0 || m.nextOrdinal > 1)) {
 		j.flags |= rawFlagIncomplete
 	}
-	if j.flags != m.flags {
+	if !readOnly && j.flags != m.flags {
 		if err := j.publishManifest(j.head, j.committedLen, j.nextOrdinal); err != nil {
 			f.Close()
 			return nil, err
@@ -592,6 +613,25 @@ func openRawJournal(dir string, initCols, initRows uint16, now func() time.Time)
 		}
 	}
 	return j, nil
+}
+
+func openRawFileReadOnly(path string, committedLen int64) (*os.File, error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() || fi.Size() < committedLen {
+		return nil, fmt.Errorf("raw journal: missing certified file: %s", path)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	if opened, err := f.Stat(); err != nil || !os.SameFile(fi, opened) {
+		_ = f.Close()
+		return nil, fmt.Errorf("raw journal changed during open: %s", path)
+	}
+	return f, nil
 }
 
 // loadCertified validates the manifest-certified prefix and rebuilds the
@@ -881,13 +921,19 @@ func (j *rawJournal) abandonStaged() error {
 // omitted marker's bytes, unless the markers sit exactly at the start,
 // in which case an empty span still advances the geometry ordinal.
 func (j *rawJournal) readOrd(from, end uint64, afterOrdinal uint64) ([]byte, []rawOrdMarker, uint64, error) {
+	return j.readOrdThrough(from, end, afterOrdinal, j.nextOrdinal-1)
+}
+
+// readOrdThrough excludes geometry committed after the caller's atomic
+// fence, including later resizes at the exact same byte position.
+func (j *rawJournal) readOrdThrough(from, end, afterOrdinal, throughOrdinal uint64) ([]byte, []rawOrdMarker, uint64, error) {
 	if j.closed {
 		return nil, nil, 0, errRawJournalClosed
 	}
 	if end < from || end > j.head {
 		return nil, nil, 0, fmt.Errorf("invalid raw journal range")
 	}
-	if afterOrdinal >= j.nextOrdinal {
+	if afterOrdinal > throughOrdinal || throughOrdinal >= j.nextOrdinal {
 		return nil, nil, 0, fmt.Errorf("invalid raw journal cursor")
 	}
 	at := sort.Search(len(j.resizes), func(i int) bool { return j.resizes[i].ordinal > afterOrdinal })
@@ -897,7 +943,7 @@ func (j *rawJournal) readOrd(from, end uint64, afterOrdinal uint64) ([]byte, []r
 		if m.AtSeq < from {
 			continue
 		}
-		if m.AtSeq > end {
+		if m.AtSeq > end || m.ordinal > throughOrdinal {
 			break
 		}
 		markers = append(markers, m)

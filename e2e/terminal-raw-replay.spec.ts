@@ -28,15 +28,14 @@ interface ReplayTerminal {
     cols: number;
     rows: number;
     modes?: Record<string, unknown>;
+    resize(cols: number, rows: number): void;
     buffer: {
         active: {
             type: string;
             length: number;
             cursorX: number;
             cursorY: number;
-            getLine(
-                i: number,
-            ):
+            getLine(i: number):
                 | {
                       length: number;
                       translateToString(trim?: boolean): string;
@@ -80,11 +79,7 @@ interface ScreenState {
     modes: string;
 }
 
-function waitFlag(
-    dir: string,
-    name: string,
-    timeoutMs: number,
-): Promise<void> {
+function waitFlag(dir: string, name: string, timeoutMs: number): Promise<void> {
     const path = join(dir, 'home', name);
     const deadline = Date.now() + timeoutMs;
     return new Promise((resolve, reject) => {
@@ -161,10 +156,7 @@ async function installTermTracker(page: Page): Promise<void> {
                         super(options);
                         w.replayTerms.push(this);
                     }
-                    write(
-                        data: string | Uint8Array,
-                        callback?: () => void,
-                    ) {
+                    write(data: string | Uint8Array, callback?: () => void) {
                         w.replayPending++;
                         super.write(data, () => {
                             w.replayPending--;
@@ -181,8 +173,7 @@ const screenText = (page: Page, pane: string): Promise<string> =>
     page.evaluate((id) => {
         const w = window as unknown as ReplayWindow;
         const term = w.replayTerms.find(
-            (t) =>
-                t.element?.closest('.term-container')?.id === `term-${id}`,
+            (t) => t.element?.closest('.term-container')?.id === `term-${id}`,
         );
         if (!term || w.replayPending !== 0) return '';
         const buf = term.buffer.active;
@@ -199,8 +190,7 @@ const screenState = (page: Page, pane: string): Promise<ScreenState | null> =>
     page.evaluate((id) => {
         const w = window as unknown as ReplayWindow;
         const term = w.replayTerms.find(
-            (t) =>
-                t.element?.closest('.term-container')?.id === `term-${id}`,
+            (t) => t.element?.closest('.term-container')?.id === `term-${id}`,
         );
         if (!term || w.replayPending !== 0) return null;
         const buf = term.buffer.active;
@@ -214,9 +204,7 @@ const screenState = (page: Page, pane: string): Promise<ScreenState | null> =>
         const flag = (cell: NonNullable<typeof probe>, name: string) => {
             const fn = (cell as Record<string, unknown>)[name];
             return typeof fn === 'function'
-                ? Number(
-                      (fn as (this: unknown) => unknown).call(cell) ? 1 : 0,
-                  )
+                ? Number((fn as (this: unknown) => unknown).call(cell) ? 1 : 0)
                 : 0;
         };
         for (let i = 0; i < buf.length; i++) {
@@ -283,7 +271,11 @@ async function readJournal(
     url: string,
     pane: string,
     epoch: number,
-): Promise<{ bytes: Buffer; markers: Array<[number, number, number]>; init: [number, number] }> {
+): Promise<{
+    bytes: Buffer;
+    markers: Array<[number, number, number]>;
+    init: [number, number];
+}> {
     const chunks: Buffer[] = [];
     const markers: Array<[number, number, number]> = [];
     let from = 0;
@@ -584,9 +576,9 @@ test('raw replay matches an uninterrupted terminal past 32 MiB', async ({
                 expect(typeof attach.initialRows).toBe('number');
             }
             const version = await request.get(`${phi.url}/api/version`);
-            expect(
-                (await version.json()).terminal_protocol as string,
-            ).toBe('2');
+            expect((await version.json()).terminal_protocol as string).toBe(
+                '2',
+            );
 
             // A same-epoch reconnect preserves the parser and decoder,
             // and settled viewers stop resizing.

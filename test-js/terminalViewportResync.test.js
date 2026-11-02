@@ -53,7 +53,6 @@ describe('_resyncViewportScroll', () => {
         expect(empty.calls).toEqual([]);
     });
 
-
     it('is a no-op for a missing or closed terminal', () => {
         const m = manager();
         expect(() => m._resyncViewportScroll(undefined)).not.toThrow();

@@ -24,6 +24,7 @@ import (
 	"github.com/hypernewbie/phi/pkg/system"
 	"github.com/hypernewbie/phi/pkg/update"
 	"github.com/hypernewbie/phi/pkg/ws"
+	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
 // paneInputPayload composes the exact byte sequence the main UI's staged
@@ -193,7 +194,7 @@ func (app *Server) handleFallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/terminals/") && strings.HasSuffix(r.URL.Path, "/state") {
-		http.Error(w, "server-rendered terminal state is retired; replay with /replay", http.StatusUpgradeRequired)
+		http.Error(w, "server-rendered terminal state is retired; use /replay with "+wireproto.TerminalSubprotocol, http.StatusUpgradeRequired)
 		return
 	}
 
@@ -203,7 +204,7 @@ func (app *Server) handleFallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.HasPrefix(r.URL.Path, "/api/terminals/") && strings.HasSuffix(r.URL.Path, "/recording") {
-		http.Error(w, "terminal recording v1 is retired; replay with /replay", http.StatusUpgradeRequired)
+		http.Error(w, "terminal recording v1 is retired; use /replay with "+wireproto.TerminalSubprotocol, http.StatusUpgradeRequired)
 		return
 	}
 
@@ -445,7 +446,7 @@ func (app *Server) handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				w.Header().Set("Content-Type", "application/json")
-				payload := map[string]any{"pane_id": snapshot.ID, "session_id": snapshot.SessionID}
+				payload := map[string]any{"pane_id": snapshot.ID, "session_id": snapshot.SessionID, "new_pane": false}
 				if mode != "" {
 					payload["opencode_mode"] = mode
 				}
@@ -483,7 +484,7 @@ func (app *Server) handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	payload := map[string]any{"pane_id": inst.ID, "session_id": inst.Snapshot().SessionID}
+	payload := map[string]any{"pane_id": inst.ID, "session_id": inst.Snapshot().SessionID, "new_pane": true}
 	if c.OpenCodeMode != "" {
 		payload["opencode_mode"] = c.OpenCodeMode
 	}

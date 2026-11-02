@@ -89,13 +89,14 @@ describe('attach replay window', () => {
         );
     });
 
-    it('a new lifetime resets and replays from zero at the baseline grid', async () => {
+    it('holds the old view and schedules a fresh replay baseline for a new lifetime', async () => {
         const { tm, tab, pty } = harness({ drainedSeq: 100 });
         await tm._onAttachHead(tab, attach({ epoch: 8 }));
 
         expect(pty.hold).toHaveBeenCalledOnce();
-        expect(tm._resetPaneBuffer).toHaveBeenCalledWith(tab);
-        expect(tab.term.resize).toHaveBeenCalledWith(120, 30);
+        expect(tm._resetPaneBuffer).not.toHaveBeenCalled();
+        expect(tab.term.resize).not.toHaveBeenCalled();
+        expect(tab._replayBaseline).toEqual({ cols: 120, rows: 30 });
         expect(tab.drainedSeq).toBe(0);
         expect(tm._bootstrappedRelease).toHaveBeenCalledWith(
             tab,

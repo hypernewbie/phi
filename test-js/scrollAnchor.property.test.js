@@ -415,7 +415,6 @@ describe('reader anchor unit cases', () => {
         }
     });
 
-
     it('keyboard scrolling after a notch is not undone by output', async () => {
         const model = serverModel(1 << 24);
         const h = replayHarness(encode(''));

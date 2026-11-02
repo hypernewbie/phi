@@ -4029,7 +4029,22 @@ export class DiffController {
                         );
                     }
                 },
-                null,
+                (control) => {
+                    if (
+                        control.type !== 'terminal-geometry' ||
+                        this.currentWs !== ws
+                    )
+                        return;
+                    ws.hold();
+                    this.term.write('', () => {
+                        if (this.currentWs !== ws) return;
+                        this.term.resize(
+                            Number(control.cols),
+                            Number(control.rows),
+                        );
+                        ws.release();
+                    });
+                },
                 () =>
                     console.log(`[diff] Stream finished for ${this.activeTab}`),
                 null,
@@ -4042,7 +4057,10 @@ export class DiffController {
                                 info.initialRows,
                             );
                         } catch {}
-                        if (!info.head) {
+                        if (
+                            !info.head &&
+                            info.eventCursor === `v1.${info.epoch}.0.0`
+                        ) {
                             if (paintedCache) {
                                 this.term.reset();
                                 this.term.clear();
@@ -4051,108 +4069,88 @@ export class DiffController {
                             ws.release();
                             return;
                         }
-                        // The log prefix replays from the raw journal. A
-                        // failed fetch degrades to live output only.
+                        // The log prefix replays from the raw journal.
+                        // Missing history never authorizes skipping bytes.
                         const paneId = data.pane_id;
                         void (async () => {
                             try {
-                                // The server caps pages at 2 MiB; chain them
-                                // with the end cursor. The attach fence
-                                // certifies the head; without it the server
-                                // answers 400.
-                                const fence = info.eventCursor;
-                                if (typeof fence !== 'string' || !fence)
-                                    throw new Error('replay: no head fence');
-                                const chunks: Uint8Array[] = [];
-                                const resizes: Array<[number, number, number]> =
-                                    [];
+                                // Share the terminal's bounded, validated fetch
+                                // path. Parse each page before fetching another;
+                                // never collect an entire archive in memory.
                                 let start = 0;
-                                let after: string | undefined;
-                                for (;;) {
-                                    const afterParam =
-                                        after === undefined
-                                            ? ''
-                                            : `&after_event_cursor=${encodeURIComponent(after)}`;
-                                    const response = await fetch(
-                                        `/api/terminals/${encodeURIComponent(paneId)}/replay?from=${start}&through=${info.head}&epoch=${info.epoch}&through_event_cursor=${encodeURIComponent(fence)}${afterParam}`,
-                                        { credentials: 'same-origin' },
-                                    );
-                                    if (!response.ok)
-                                        throw new Error(
-                                            `replay: HTTP ${response.status}`,
+                                let after = `v1.${info.epoch}.0.0`;
+                                const current = () => this.currentWs === ws;
+                                let reset = false;
+                                const write = (bytes: Uint8Array) =>
+                                    new Promise<void>((resolve) => {
+                                        const text = ws.decodeOutput(bytes);
+                                        streamOutput += text;
+                                        this.term.write(text, resolve);
+                                    });
+                                while (
+                                    start < info.head ||
+                                    after !== info.eventCursor
+                                ) {
+                                    const page =
+                                        await this.app.tabManager._fetchReplayPages(
+                                            paneId,
+                                            start,
+                                            info.head,
+                                            info.epoch,
+                                            {
+                                                throughCursor: info.eventCursor,
+                                                afterCursor: after,
+                                            },
                                         );
-                                    const buf = new Uint8Array(
-                                        await response.arrayBuffer(),
-                                    );
-                                    if (buf.length < 4)
-                                        throw new Error('replay: short header');
-                                    const jsonLen = new DataView(
-                                        buf.buffer,
-                                        buf.byteOffset,
-                                        4,
-                                    ).getUint32(0, false);
-                                    if (4 + jsonLen > buf.length)
-                                        throw new Error('replay: short body');
-                                    const hdr = JSON.parse(
-                                        new TextDecoder().decode(
-                                            buf.subarray(4, 4 + jsonLen),
-                                        ),
-                                    );
-                                    const dataBytes = buf.subarray(4 + jsonLen);
+                                    if (!current()) return;
                                     if (
-                                        hdr.epoch !== info.epoch ||
-                                        hdr.start !== start ||
-                                        hdr.end < start ||
-                                        hdr.end > info.head ||
-                                        dataBytes.byteLength !==
-                                            hdr.end - hdr.start ||
-                                        !Array.isArray(hdr.resizes)
+                                        !page ||
+                                        (page.end === start &&
+                                            page.endCursor === after)
                                     )
                                         throw new Error(
-                                            'replay: envelope mismatch',
+                                            'replay: incomplete prefix',
                                         );
-                                    if (hdr.end === start && hdr.event_cursor === after)
-                                        throw new Error('replay: no progress');
-                                    chunks.push(dataBytes);
-                                    for (const m of hdr.resizes) {
-                                        if (
-                                            !Array.isArray(m) ||
-                                            m.length !== 3
-                                        )
-                                            throw new Error(
-                                                'replay: bad marker',
+                                    if (!reset) {
+                                        if (paintedCache) {
+                                            this.term.reset();
+                                            this.term.clear();
+                                        }
+                                        this.term.resize(
+                                            info.initialCols,
+                                            info.initialRows,
+                                        );
+                                        reset = true;
+                                    }
+                                    let at = page.start;
+                                    for (const [
+                                        seq,
+                                        cols,
+                                        rows,
+                                    ] of page.resizes) {
+                                        if (seq > at) {
+                                            await write(
+                                                page.bytes.subarray(
+                                                    at - page.start,
+                                                    seq - page.start,
+                                                ),
                                             );
-                                        resizes.push(
-                                            m as [number, number, number],
+                                            if (!current()) return;
+                                        }
+                                        this.term.resize(cols, rows);
+                                        at = seq;
+                                    }
+                                    if (at < page.end) {
+                                        await write(
+                                            page.bytes.subarray(
+                                                at - page.start,
+                                            ),
                                         );
+                                        if (!current()) return;
                                     }
-                                    start = hdr.end;
-                                    after = hdr.event_cursor;
-                                    if (start >= info.head) break;
+                                    start = page.end;
+                                    after = page.endCursor;
                                 }
-                                if (this.currentWs !== ws) return;
-                                let totalBytes = 0;
-                                for (const c of chunks) totalBytes += c.byteLength;
-                                const dataBytes = new Uint8Array(totalBytes);
-                                let writeAt = 0;
-                                for (const c of chunks) {
-                                    dataBytes.set(c, writeAt);
-                                    writeAt += c.byteLength;
-                                }
-                                for (const [at, cols, rows] of resizes) {
-                                    if (at <= info.head) {
-                                        try {
-                                            this.term.resize(cols, rows);
-                                        } catch {}
-                                    }
-                                }
-                                const prefixText =
-                                    ws.decodeOutput(dataBytes);
-                                if (paintedCache) {
-                                    this.term.reset();
-                                    this.term.clear();
-                                }
-                                streamOutput = prefixText;
                                 if (
                                     this.activeTab === 'log' &&
                                     this.isCurrentGitManageContext(gitContext)
@@ -4163,33 +4161,23 @@ export class DiffController {
                                         'log',
                                         'recent',
                                         streamOutput,
-                                        this.gitManageInfo?.target?.head ||
-                                            '',
+                                        this.gitManageInfo?.target?.head || '',
                                         this.gitManageInfo?.target?.branch ||
                                             '',
                                     );
                                 }
-                                this.term.write(
-                                    // Decode through the socket's own
-                                    // decoder: the replay can end
-                                    // mid-codepoint, and only the stream
-                                    // decoder carries the split bytes into
-                                    // the next live frame.
-                                    prefixText,
-                                    () => {
-                                        if (this.currentWs === ws)
-                                            this.fitTerminal();
-                                    },
-                                );
-                            } catch (e) {
-                                console.warn(
-                                    '[diff] replay failed, showing live output:',
-                                    e,
-                                );
-                                if (this.currentWs !== ws) return;
                                 this.fitTerminal();
-                            } finally {
-                                if (this.currentWs === ws) ws.release();
+                                ws.release();
+                            } catch (e) {
+                                console.warn('[diff] replay failed:', e);
+                                if (this.currentWs !== ws) return;
+                                // A missing prefix is not a complete recovery.
+                                // Keep the last view; stop rather than silently
+                                // joining live output to an untrusted parser.
+                                ws.close();
+                                this.term.write(
+                                    '\r\nHistory replay failed. Refresh this view to retry.\r\n',
+                                );
                             }
                         })();
                     },

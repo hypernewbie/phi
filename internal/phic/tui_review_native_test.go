@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,11 +17,16 @@ import (
 	"github.com/hypernewbie/phi/internal/termemu"
 	wspb "github.com/hypernewbie/phi/pkg/ws/pb"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
+	"google.golang.org/protobuf/proto"
 )
 
 func serveReviewRecording(w http.ResponseWriter, r *http.Request, b []byte, resizes [][3]uint64) {
 	from, _ := strconv.ParseUint(r.URL.Query().Get("from"), 10, 64)
 	end, _ := strconv.ParseUint(r.URL.Query().Get("through"), 10, 64)
+	if strings.HasSuffix(r.URL.Path, "/replay") {
+		serveNativeReplay(w, r, b, resizes)
+		return
+	}
 	end = min(end, uint64(len(b)))
 	var sizes [][3]uint64
 	for _, s := range resizes {
@@ -36,12 +42,146 @@ func serveReviewRecording(w http.ResponseWriter, r *http.Request, b []byte, resi
 	_, _ = w.Write(b[from:end])
 }
 
+func TestNativeShutdownReconnectsInsteadOfAdoptingOldChildExit(t *testing.T) {
+	all := []byte("before\r\nafter-restart\r\n")
+	var connections atomic.Int32
+	var drainingUntil atomic.Int64
+	up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
+	shutdown, err := proto.Marshal(&wspb.TerminalServerFrame{Payload: &wspb.TerminalServerFrame_Notification{Notification: &wspb.Notification{Kind: &wspb.Notification_Shutdown{Shutdown: &wspb.ServerShutdown{Reason: proto.String("shutdown")}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/readyz" {
+			if time.Now().UnixNano() < drainingUntil.Load() {
+				w.WriteHeader(http.StatusServiceUnavailable)
+			}
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/replay") {
+			serveNativeReplay(w, r, all, nil)
+			return
+		}
+		ws, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer ws.Close()
+		if connections.Add(1) == 1 {
+			drainingUntil.Store(time.Now().Add(500 * time.Millisecond).UnixNano())
+			_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, 0))
+			_ = ws.WriteMessage(websocket.BinaryMessage, testOutput(t, 0, []byte("before\r\n")))
+			_ = ws.WriteMessage(websocket.BinaryMessage, shutdown)
+			_ = ws.WriteMessage(websocket.BinaryMessage, testExit(t, 143))
+		} else {
+			_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, uint64(len(all))))
+			if time.Now().UnixNano() < drainingUntil.Load() {
+				_ = ws.WriteMessage(websocket.BinaryMessage, testExit(t, 143))
+			}
+		}
+		for {
+			if _, _, err := ws.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+	events := make(chan paneEvent, 64)
+	p, err := newPaneActor(t.Context(), mustAPI(t, srv.URL), paneSpec{Key: paneKey{Origin: srv.URL, ID: "p"}, Cols: 80, Rows: 12}, events, termemu.NewGhostty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.close()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		frame, _ := p.snapshotCopy()
+		frontier, _, _, exited, _, _ := p.state()
+		if exited {
+			t.Fatal("shutdown adopted the old child's exit")
+		}
+		if connections.Load() > 1 && frontier == uint64(len(all)) && strings.Contains(frameText(frame), "after-restart") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("console did not reconnect and recover the retained prefix")
+}
+
+func TestNativePartialColdReplayDoesNotReclassifyHistoricalQueriesAsLive(t *testing.T) {
+	old := []byte("A\x1b[6n")
+	all := []byte("A\x1b[6n\x1b[6nL")
+	var connections atomic.Int32
+	inputs := make(chan string, 8)
+	up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/replay") {
+			if connections.Load() == 1 {
+				if r.URL.Query().Get("from") != "0" {
+					http.Error(w, "temporary replay failure", http.StatusServiceUnavailable)
+					return
+				}
+				h := wireproto.ReplayHeader{Epoch: 7, Start: 0, End: 1, Through: uint64(len(old)), ThroughCursor: (replayPosition{7, uint64(len(old)), 0}).String(), EventCursor: "v1.7.1.0", InitCols: 80, InitRows: 24}
+				writeReplayFixture(w, h, old[:1])
+				return
+			}
+			serveNativeReplay(w, r, all, nil)
+			return
+		}
+		ws, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer ws.Close()
+		head := len(old)
+		if connections.Add(1) > 1 {
+			head = len(all)
+		}
+		_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, uint64(head)))
+		for {
+			_, data, err := ws.ReadMessage()
+			if err != nil {
+				return
+			}
+			frame, err := wireproto.DecodeClientFrame(data)
+			if err == nil {
+				if in, ok := frame.GetPayload().(*wspb.TerminalClientFrame_Input); ok {
+					inputs <- string(in.Input)
+				}
+			}
+		}
+	}))
+	defer srv.Close()
+	p, err := newPaneActor(t.Context(), mustAPI(t, srv.URL), paneSpec{Key: paneKey{Origin: srv.URL, ID: "p"}, Cols: 80, Rows: 24}, make(chan paneEvent, 64), termemu.NewGhostty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.close()
+	select {
+	case reply := <-inputs:
+		if reply != "\x1b[1;2R" {
+			t.Fatalf("live query reply=%q", reply)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("later live query did not receive its reply")
+	}
+	select {
+	case duplicate := <-inputs:
+		t.Fatalf("historical query repeated after a partial failure: %q", duplicate)
+	case <-time.After(150 * time.Millisecond):
+	}
+	frontier, _, _, _, _, _ := p.state()
+	frame, _ := p.snapshotCopy()
+	if frontier != uint64(len(all)) || !strings.Contains(frameText(frame), "AL") {
+		t.Fatalf("partial recovery lost output: frontier=%d frame=%q", frontier, frameText(frame))
+	}
+}
+
 func TestReviewNativeExitDrainsUnannouncedFinalBytes(t *testing.T) {
 	first := []byte("first\r\n")
 	all := append(append([]byte{}, first...), []byte("LAST-RETAINED\r\n")...)
 	up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/recording") {
+		if strings.HasSuffix(r.URL.Path, "/replay") {
 			serveReviewRecording(w, r, all, nil)
 			return
 		}
@@ -82,7 +222,7 @@ func TestReviewNativeReplayUsesRecordedGeometryAndFreshReplies(t *testing.T) {
 	up := websocket.Upgrader{Subprotocols: []string{wireproto.TerminalSubprotocol}}
 	inputs := make(chan string, 64)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/recording") {
+		if strings.HasSuffix(r.URL.Path, "/replay") {
 			serveReviewRecording(w, r, all, sizes)
 			return
 		}
@@ -91,7 +231,12 @@ func TestReviewNativeReplayUsesRecordedGeometryAndFreshReplies(t *testing.T) {
 			return
 		}
 		defer ws.Close()
-		_ = ws.WriteMessage(websocket.BinaryMessage, testAttach(t, 7, uint64(len(all))))
+		attach, _ := wireproto.EncodeAttachFrame(&wspb.TerminalAttach{
+			Epoch: proto.Uint64(7), Oldest: proto.Uint64(0), Head: proto.Uint64(uint64(len(all))),
+			InitialCols: proto.Uint32(8), InitialRows: proto.Uint32(4),
+			EventCursor: proto.String((replayPosition{7, uint64(len(all)), 1}).String()),
+		})
+		_ = ws.WriteMessage(websocket.BinaryMessage, attach)
 		for {
 			_, data, err := ws.ReadMessage()
 			if err != nil {
@@ -121,7 +266,6 @@ func TestReviewNativeReplayUsesRecordedGeometryAndFreshReplies(t *testing.T) {
 	_ = ref.Feed(a, termemu.SourceReplay)
 	_ = ref.Resize(12, 6)
 	_ = ref.Feed(b, termemu.SourceReplay)
-	_ = ref.Resize(20, 8)
 	want, _ := ref.Snapshot()
 	got, ok := p.snapshotCopy()
 	if !ok || frameText(got) != frameText(want) || got.Cursor != want.Cursor {

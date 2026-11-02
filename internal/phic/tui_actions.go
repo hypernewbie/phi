@@ -562,40 +562,6 @@ func (m *tuiModel) handleModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleQuitKey(msg)
 	}
 	k := msg.Key()
-	if m.modal.kind == modalHistory {
-		switch k.Code {
-		case tea.KeyUp, 'k':
-			if m.history.scroll > 0 {
-				m.history.scroll--
-			}
-		case tea.KeyDown, 'j':
-			if m.history.scroll < len(m.history.lines)-1 {
-				m.history.scroll++
-			}
-		case '[':
-			if m.history.start > 0 {
-				return m, m.historyPage(m.history.start)
-			}
-		case ']':
-			if m.history.end < m.history.head {
-				return m, m.historyPage(min(m.history.head, m.history.end+historyWindowBytes))
-			}
-		case 'x':
-			m.toggleHistoryHex()
-		case tea.KeyPgUp:
-			m.history.scroll = max(0, m.history.scroll-10)
-		case tea.KeyPgDown:
-			m.history.scroll = min(max(0, len(m.history.lines)-1), m.history.scroll+10)
-		case tea.KeyEscape, 'q':
-			m.history.open = false
-			m.closeModal()
-		case 'y':
-			if m.history.text != "" {
-				return m, tea.SetClipboard(m.history.text)
-			}
-		}
-		return m, nil
-	}
 	if m.modal.kind == modalHelp {
 		m.closeModal()
 		return m, nil

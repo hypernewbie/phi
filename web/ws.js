@@ -385,14 +385,24 @@ export class PTYWebSocket {
             catch (_e) { }
             return;
         }
-        if (this.onControl)
-            this.onControl({
-                type: 'terminal-geometry',
-                at_seq: atSeq,
-                cols: cols,
-                rows: rows,
-                event_cursor: geom.eventCursor,
-            });
+        // Geometry shares the output queue. Dispatching it immediately
+        // would resize the parser ahead of bytes held during bootstrap.
+        if (this.holding) {
+            this._holdFrame(atSeq, new Uint8Array(), geom);
+            return;
+        }
+        if (atSeq > this.liveSeq) {
+            if (this._holdFrame(atSeq, new Uint8Array(), geom))
+                this._notify(this.onGap, this.liveSeq, atSeq);
+            return;
+        }
+        this.onControl?.({
+            type: 'terminal-geometry',
+            at_seq: atSeq,
+            cols: cols,
+            rows: rows,
+            event_cursor: geom.eventCursor,
+        });
     }
     _handleAttachHead(attach) {
         const epoch = toSafeInt(attach.epoch);
@@ -571,6 +581,19 @@ export class PTYWebSocket {
         this.held = [];
         this.heldBytes = 0;
         for (let i = 0; i < frames.length; i++) {
+            // A geometry host may hold while preceding writes drain.
+            // Preserve the remainder, including its overflow accounting.
+            if (this.holding || frames[i].start > (this.liveSeq ?? 0)) {
+                this.held = frames.slice(i).concat(this.held);
+                this.heldBytes = this.held.reduce((n, f) => n + f.bytes.byteLength, 0);
+                if (!this.holding)
+                    this._notify(this.onGap, this.liveSeq ?? 0, frames[i].start);
+                return;
+            }
+            if (frames[i].geometry) {
+                this._handleGeometry(frames[i].geometry);
+                continue;
+            }
             // Seq moved past a held frame's start (patch already covered
             // it); trim or drop it like a duplicate.
             let start = frames[i].start;
@@ -602,7 +625,7 @@ export class PTYWebSocket {
     /** A hold is bounded: an unbounded queue behind a stalled bootstrap is a
      * memory leak, and no caller can replay more than the cap in one pass.
      * Overflow reconnects instead of silently dropping bytes into a parser. */
-    _holdFrame(start, bytes) {
+    _holdFrame(start, bytes, geometry) {
         const next = this.heldBytes + bytes.byteLength;
         if (this.held.length >= MAX_HELD_SPANS || next > MAX_HELD_BYTES) {
             this.held = [];
@@ -614,7 +637,7 @@ export class PTYWebSocket {
             catch (_e) { }
             return false;
         }
-        this.held.push({ start, bytes });
+        this.held.push({ start, bytes, geometry });
         this.heldBytes = next;
         return true;
     }

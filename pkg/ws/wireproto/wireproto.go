@@ -50,6 +50,8 @@ type RecordingHeader struct {
 // below the 64 KiB client parse bound. HistoryIncomplete and Ephemeral
 // repeat the attach durability warnings on every page.
 type ReplayHeader struct {
+	Through           uint64      `json:"through"`
+	ThroughCursor     string      `json:"through_event_cursor"`
 	Epoch             uint64      `json:"epoch"`
 	Start             uint64      `json:"start"`
 	End               uint64      `json:"end"`

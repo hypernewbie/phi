@@ -83,6 +83,7 @@ type SpawnRequest struct {
 
 // SpawnResponse is the JSON returned by POST /api/terminals.
 type SpawnResponse struct {
+	NewPane      *bool  `json:"new_pane,omitempty"`
 	PaneID       string `json:"pane_id"`
 	SessionID    string `json:"session_id"`
 	OpenCodeMode string `json:"opencode_mode,omitempty"`

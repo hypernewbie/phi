@@ -22,9 +22,11 @@ func wsUpgrader() websocket.Upgrader {
 
 func attachHeadFrame(epoch, head uint64) []byte {
 	raw, err := wireproto.EncodeAttachFrame(&wspb.TerminalAttach{
-		Epoch:  proto.Uint64(epoch),
-		Oldest: proto.Uint64(0),
-		Head:   proto.Uint64(head),
+		Epoch:       proto.Uint64(epoch),
+		Oldest:      proto.Uint64(0),
+		Head:        proto.Uint64(head),
+		InitialCols: proto.Uint32(80), InitialRows: proto.Uint32(24),
+		EventCursor: proto.String((replayPosition{epoch, head, 0}).String()),
 	})
 	if err != nil {
 		panic(err)

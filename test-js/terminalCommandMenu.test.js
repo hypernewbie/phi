@@ -570,10 +570,7 @@ describe('A3 dispatch and focus match the old preset buttons', () => {
 describe('A4 custom commands and bridge fallback are untouched', () => {
     it.each(
         ['staged', 'quick'].flatMap((mode) =>
-            ['dead', 'false', 'partial'].map((failure) => [
-                mode,
-                failure,
-            ]),
+            ['dead', 'false', 'partial'].map((failure) => [mode, failure]),
         ),
     )(
         '%s retains its exact saved draft and attachments after %s',

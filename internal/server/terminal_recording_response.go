@@ -75,11 +75,9 @@ func (app *Server) handleTerminalReplay(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "epoch is required", http.StatusBadRequest)
 		return
 	}
-	if v := q.Get("from"); v != "" {
-		if req.From, err = strconv.ParseUint(v, 10, 64); err != nil {
-			http.Error(w, "bad from", http.StatusBadRequest)
-			return
-		}
+	if req.From, err = strconv.ParseUint(q.Get("from"), 10, 64); err != nil {
+		http.Error(w, "from is required", http.StatusBadRequest)
+		return
 	}
 	if q.Get("through") == "latest" {
 		req.Latest = true
@@ -110,7 +108,11 @@ func (app *Server) handleTerminalReplay(w http.ResponseWriter, r *http.Request) 
 	for _, m := range page.Resizes {
 		resizes = append(resizes, [3]uint64{m.AtSeq, uint64(m.Cols), uint64(m.Rows)})
 	}
+	if r.Context().Err() != nil {
+		return
+	}
 	hdr, _ := json.Marshal(wireproto.ReplayHeader{
+		Through: page.Through, ThroughCursor: page.ThroughCursor,
 		Epoch: page.Epoch, Start: page.Start, End: page.End, Resizes: resizes, EventCursor: page.EndCursor,
 		InitCols: uint32(page.InitCols), InitRows: uint32(page.InitRows),
 		HistoryIncomplete: page.Incomplete, Ephemeral: page.Ephemeral,

@@ -175,6 +175,8 @@ function recordingResponse(text, start, end, epoch = 7) {
             start,
             end,
             event_cursor: `v1.${epoch}.${end}.0`,
+            through: end,
+            through_event_cursor: `v1.${epoch}.${end}.0`,
             resizes: [],
             initial_cols: 80,
             initial_rows: 24,
@@ -960,6 +962,4 @@ describe('a held live queue is bounded', () => {
         expect(close).toHaveBeenCalled();
         expect(data).not.toHaveBeenCalled();
     });
-
 });
-

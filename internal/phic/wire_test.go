@@ -9,153 +9,54 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// TestParseAttachHead pins protobuf attach decoding: epoch, span, and
-// checkpoint bytes must survive the round trip.
-func TestParseAttachHead(t *testing.T) {
-	raw, err := wireproto.EncodeAttachFrame(&wspb.TerminalAttach{
-		Epoch:  proto.Uint64(7),
-		Oldest: proto.Uint64(1),
-		Head:   proto.Uint64(5),
-		Checkpoint: &wspb.TerminalCheckpoint{
-			Through: proto.Uint64(3),
-			Cols:    proto.Uint32(80),
-			Rows:    proto.Uint32(24),
-			Data:    []byte("snap"),
-		},
-	})
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	got, err := ParseAttachHead(raw)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if got.GetEpoch() != 7 || got.GetHead() != 5 || got.GetCheckpoint() == nil {
-		t.Fatalf("header: %+v", got)
-	}
-	if !bytes.Equal(got.GetCheckpoint().GetData(), []byte("snap")) {
-		t.Fatalf("checkpoint = %q", got.GetCheckpoint().GetData())
+func TestParseAttachRequiresCompleteV2Baseline(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*wspb.TerminalAttach)
+		valid  bool
+	}{
+		{"v2", func(*wspb.TerminalAttach) {}, true},
+		{"zero epoch", func(h *wspb.TerminalAttach) { h.Epoch = proto.Uint64(0); h.EventCursor = proto.String("v1.0.5.0") }, true},
+		{"missing baseline", func(h *wspb.TerminalAttach) { h.InitialCols = nil }, false},
+		{"oversized grid", func(h *wspb.TerminalAttach) { h.InitialRows = proto.Uint32(65536) }, false},
+		{"missing fence", func(h *wspb.TerminalAttach) { h.EventCursor = nil }, false},
+		{"wrong cursor epoch", func(h *wspb.TerminalAttach) { h.EventCursor = proto.String("v1.8.5.0") }, false},
+		{"wrong cursor position", func(h *wspb.TerminalAttach) { h.EventCursor = proto.String("v1.7.4.0") }, false},
+		{"truncated history", func(h *wspb.TerminalAttach) { h.Oldest = proto.Uint64(1) }, false},
+		{"replay skip", func(h *wspb.TerminalAttach) { h.ReplayFrom = proto.Uint64(1) }, false},
+		{"checkpoint", func(h *wspb.TerminalAttach) { h.Checkpoint = &wspb.TerminalCheckpoint{Data: []byte("snap")} }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &wspb.TerminalAttach{Epoch: proto.Uint64(7), Oldest: proto.Uint64(0), Head: proto.Uint64(5), InitialCols: proto.Uint32(80), InitialRows: proto.Uint32(24), EventCursor: proto.String("v1.7.5.0")}
+			tc.mutate(h)
+			raw, err := wireproto.EncodeAttachFrame(h)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = ParseAttachHead(raw)
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v err=%v", tc.valid, err)
+			}
+		})
 	}
 }
 
-// TestParseAttachHeadTruncated ensures a truncated frame errors rather
-// than decoding a partial span: a partial frame is the default case on a
-// stream, not an exception.
 func TestParseAttachHeadTruncated(t *testing.T) {
 	raw := testAttach(t, 7, 5)
 	if _, err := ParseAttachHead(raw[:len(raw)-1]); err == nil {
-		t.Fatal("expected error on truncated frame")
+		t.Fatal("truncated frame accepted")
 	}
 }
-
-// TestParseLiveOutput asserts the output start sequence and payload
-// survive the round trip verbatim.
 func TestParseLiveOutput(t *testing.T) {
-	raw := testOutput(t, 100, []byte("xy"))
-	start, payload, err := ParseLiveOutput(raw)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if start != 100 {
-		t.Fatalf("start = %d", start)
-	}
-	if !bytes.Equal(payload, []byte("xy")) {
-		t.Fatalf("payload = %q", payload)
+	start, payload, err := ParseLiveOutput(testOutput(t, 100, []byte("xy")))
+	if err != nil || start != 100 || !bytes.Equal(payload, []byte("xy")) {
+		t.Fatalf("changed output: start=%d data=%q err=%v", start, payload, err)
 	}
 }
-
 func FuzzWireParsersNeverPanic(f *testing.F) {
-	attach, err := wireproto.EncodeAttachFrame(&wspb.TerminalAttach{Epoch: proto.Uint64(7), Head: proto.Uint64(5)})
-	if err != nil {
-		f.Fatal(err)
-	}
-	out, err := wireproto.EncodeOutputFrame(100, []byte("xy"))
-	if err != nil {
-		f.Fatal(err)
-	}
-	f.Add([]byte{})
+	attach, _ := wireproto.EncodeAttachFrame(&wspb.TerminalAttach{Epoch: proto.Uint64(7), Oldest: proto.Uint64(0), Head: proto.Uint64(0), InitialCols: proto.Uint32(80), InitialRows: proto.Uint32(24), EventCursor: proto.String("v1.7.0.0")})
 	f.Add(attach)
-	f.Add(out)
+	f.Add([]byte{})
 	f.Add([]byte{0xff, 0xfe, 0x00})
-	f.Fuzz(func(t *testing.T, frame []byte) {
-		_, _ = ParseAttachHead(frame)
-		_, _, _ = ParseLiveOutput(frame)
-	})
-}
-
-// TestParseAttachHeadCheckpointGeometry pins the checkpoint geometry range:
-// the protobuf field is uint32, but the native console still renders uint16
-// dimensions and must reject anything a uint16 could not express.
-func TestParseAttachHeadCheckpointGeometry(t *testing.T) {
-	build := func(cols, rows uint32) []byte {
-		t.Helper()
-		raw, err := wireproto.EncodeAttachFrame(&wspb.TerminalAttach{
-			Epoch:  proto.Uint64(7),
-			Oldest: proto.Uint64(1),
-			Head:   proto.Uint64(5),
-			Checkpoint: &wspb.TerminalCheckpoint{
-				Through: proto.Uint64(3),
-				Cols:    proto.Uint32(cols),
-				Rows:    proto.Uint32(rows),
-				Data:    []byte("snap"),
-			},
-		})
-		if err != nil {
-			t.Fatalf("encode: %v", err)
-		}
-		return raw
-	}
-	accepted := []struct{ cols, rows uint32 }{
-		{1, 1},
-		{65535, 65535},
-		{80, 24},
-	}
-	for _, dims := range accepted {
-		if _, err := ParseAttachHead(build(dims.cols, dims.rows)); err != nil {
-			t.Fatalf("%dx%d rejected: %v", dims.cols, dims.rows, err)
-		}
-	}
-	rejected := []struct{ cols, rows uint32 }{
-		{0, 24},
-		{80, 0},
-		{65536, 24},
-		{80, 65536},
-	}
-	for _, dims := range rejected {
-		if _, err := ParseAttachHead(build(dims.cols, dims.rows)); err == nil {
-			t.Fatalf("%dx%d accepted", dims.cols, dims.rows)
-		}
-	}
-}
-
-// An empty checkpoint is not a restorable screen. Accepting it turns a
-// server-side blank snapshot into a native repaint that never arrives, so
-// the bootstrap retries forever instead of failing the protocol.
-func TestParseAttachHeadRejectsEmptyCheckpoint(t *testing.T) {
-	attach := &wspb.TerminalAttach{
-		Epoch:  proto.Uint64(7),
-		Oldest: proto.Uint64(0),
-		Head:   proto.Uint64(0),
-		Checkpoint: &wspb.TerminalCheckpoint{
-			Through: proto.Uint64(0),
-			Cols:    proto.Uint32(80),
-			Rows:    proto.Uint32(24),
-			Kind:    proto.String("ghostty-ready-v1"),
-		},
-	}
-	raw, err := wireproto.EncodeAttachFrame(attach)
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	if _, err := ParseAttachHead(raw); err == nil {
-		t.Fatal("empty checkpoint accepted")
-	}
-	attach.Checkpoint.Data = []byte("snap")
-	raw, err = wireproto.EncodeAttachFrame(attach)
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	if _, err := ParseAttachHead(raw); err != nil {
-		t.Fatalf("non-empty checkpoint rejected: %v", err)
-	}
+	f.Fuzz(func(t *testing.T, frame []byte) { _, _ = ParseAttachHead(frame); _, _, _ = ParseLiveOutput(frame) })
 }

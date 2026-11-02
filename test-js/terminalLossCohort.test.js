@@ -218,6 +218,7 @@ for (const phase of [
                         source.slice(from, end),
                         from,
                         end,
+                        { through: to, through_event_cursor: `v1.7.${to}.0` },
                     );
                 });
                 try {
@@ -250,10 +251,9 @@ for (const phase of [
                         'recovery stays bounded per page',
                     ).toBe(true);
                     for (const [i, [a, b]] of served.entries()) {
-                        expect(
-                            a,
-                            'pages chain without gaps or overlaps',
-                        ).toBe(i === 0 ? served[0][0] : served[i - 1][1]);
+                        expect(a, 'pages chain without gaps or overlaps').toBe(
+                            i === 0 ? served[0][0] : served[i - 1][1],
+                        );
                         expect(b).toBeGreaterThan(a);
                     }
                     const buffer = h.term.buffer.active;

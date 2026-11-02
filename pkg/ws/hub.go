@@ -339,6 +339,12 @@ func (h *Hub) GetOrCreatePaneHub(paneID string) (*PaneHub, error) {
 		} else {
 			ph = &PaneHub{clients: make(map[*Client]bool)}
 		}
+		ph.mu.Lock()
+		defer ph.mu.Unlock()
+		if ph.journal != nil && ph.journal.readOnly {
+			_ = ph.journal.close()
+			ph.journal = nil
+		}
 		// Open the journal when an on-disk group or a stored spawn
 		// geometry exists; otherwise InitPaneJournal (spawn/restore) or
 		// the first Ingest opens it. A failed open is sticky: callers
@@ -347,8 +353,6 @@ func (h *Hub) GetOrCreatePaneHub(paneID string) (*PaneHub, error) {
 			ph.journal, ph.journalErr = h.openPaneJournal(paneID, ph)
 		}
 		h.takeRawClock(ph.journal)
-		ph.mu.Lock()
-		defer ph.mu.Unlock()
 		ph.closedAtUnixNano = 0
 		if ph.journal != nil {
 			if err := ph.journal.markOpen(); err != nil {
@@ -384,8 +388,12 @@ func (h *Hub) GetOrCreatePaneHub(paneID string) (*PaneHub, error) {
 func (h *Hub) openPaneJournal(paneID string, ph *PaneHub) (*rawJournal, error) {
 	path := h.recordingPath(paneID)
 	if path == "" {
-		// Ephemeral storage (lease lost or persistence disabled).
-		return openRawJournal("", ph.initColsOrDefault(), ph.initRowsOrDefault(), h.wallClock)
+		// InitPaneJournal must seed ephemeral histories with the actual
+		// spawn geometry too, not the first GetOrCreate's defaults.
+		if ph.initCols == 0 || ph.initRows == 0 {
+			return nil, nil
+		}
+		return openRawJournal("", ph.initCols, ph.initRows, h.wallClock)
 	}
 	if _, err := os.Stat(path); err == nil {
 		return openRawJournal(path, 0, 0, h.wallClock)
@@ -410,6 +418,11 @@ func (h *Hub) ensurePaneJournalLocked(paneID string, ph *PaneHub) error {
 	}
 	ph.journalRetryAt = now
 	ph.journal, ph.journalErr = h.openPaneJournal(paneID, ph)
+	// Nonpersistent helper callers may admit output without a spawn.
+	// Production initializes explicitly before any PTY read is admitted.
+	if ph.journal == nil && ph.journalErr == nil && h.recordingDirectory == "" {
+		ph.journal, ph.journalErr = openRawJournal("", ph.initColsOrDefault(), ph.initRowsOrDefault(), h.wallClock)
+	}
 	h.takeRawClock(ph.journal)
 	if ph.journalErr != nil {
 		return ph.journalErr
@@ -630,16 +643,18 @@ type ReplayRequest struct {
 // ReplayPage is one raw replay page: output bytes plus the geometry that
 // orders them. End and EndCursor fence the next request.
 type ReplayPage struct {
-	Epoch      uint64
-	Start      uint64
-	End        uint64
-	Data       []byte
-	Resizes    []ResizeMarker
-	EndCursor  string
-	InitCols   uint16
-	InitRows   uint16
-	Incomplete bool
-	Ephemeral  bool
+	Through       uint64
+	ThroughCursor string
+	Epoch         uint64
+	Start         uint64
+	End           uint64
+	Data          []byte
+	Resizes       []ResizeMarker
+	EndCursor     string
+	InitCols      uint16
+	InitRows      uint16
+	Incomplete    bool
+	Ephemeral     bool
 }
 
 // Replay serves one raw replay page from the pane journal. The journal
@@ -653,11 +668,7 @@ func (h *Hub) Replay(paneID string, req ReplayRequest) (ReplayPage, error) {
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
 	if ph.journal == nil {
-		if ph.journalErr != nil {
-			return ReplayPage{}, ErrReplayUnavailable
-		}
-		// A live pane before its first commit: empty history, not an error.
-		return ReplayPage{Epoch: ph.epoch, EndCursor: EncodeEventCursor(ph.epoch, 0, 0), InitCols: ph.initColsOrDefault(), InitRows: ph.initRowsOrDefault()}, nil
+		return ReplayPage{}, ErrReplayUnavailable
 	}
 	head := ph.journal.head
 	if req.Epoch != ph.epoch {
@@ -667,13 +678,14 @@ func (h *Hub) Replay(paneID string, req ReplayRequest) (ReplayPage, error) {
 		return ReplayPage{}, fmt.Errorf("%w: from past head", ErrReplayBadRequest)
 	}
 	through := req.Through
+	throughOrdinal := ph.journal.nextOrdinal - 1
 	if req.Latest {
 		through = head
 	} else {
 		if req.ThroughCursor == "" {
 			return ReplayPage{}, fmt.Errorf("%w: through requires its fence", ErrReplayBadRequest)
 		}
-		cEpoch, cPos, _, err := ParseEventCursor(req.ThroughCursor)
+		cEpoch, cPos, cOrd, err := ParseEventCursor(req.ThroughCursor)
 		if err != nil {
 			return ReplayPage{}, fmt.Errorf("%w: bad through fence", ErrReplayBadRequest)
 		}
@@ -683,9 +695,21 @@ func (h *Hub) Replay(paneID string, req ReplayRequest) (ReplayPage, error) {
 		if cPos != through {
 			return ReplayPage{}, fmt.Errorf("%w: fence certifies a different end", ErrReplayBadRequest)
 		}
-		if through > head {
+		if through > head || cOrd >= ph.journal.nextOrdinal {
 			return ReplayPage{}, ErrReplayFuture
 		}
+		throughOrdinal = cOrd
+	}
+	// A fence may exclude later events at its own byte position, never
+	// events before that position or events that have not happened yet.
+	validPosition := func(pos, ord uint64) bool {
+		markers := ph.journal.resizes
+		return ord < ph.journal.nextOrdinal &&
+			(ord == 0 || markers[ord-1].AtSeq <= pos) &&
+			(ord == uint64(len(markers)) || markers[ord].AtSeq >= pos)
+	}
+	if !validPosition(through, throughOrdinal) {
+		return ReplayPage{}, fmt.Errorf("%w: inconsistent through cursor", ErrReplayBadRequest)
 	}
 	if through < req.From {
 		return ReplayPage{}, fmt.Errorf("%w: through before from", ErrReplayBadRequest)
@@ -699,16 +723,22 @@ func (h *Hub) Replay(paneID string, req ReplayRequest) (ReplayPage, error) {
 	}
 	var afterOrdinal uint64
 	if req.AfterCursor != "" {
-		cEpoch, _, cOrd, err := ParseEventCursor(req.AfterCursor)
+		cEpoch, cPos, cOrd, err := ParseEventCursor(req.AfterCursor)
 		if err != nil {
 			return ReplayPage{}, fmt.Errorf("%w: bad paging cursor", ErrReplayBadRequest)
 		}
 		if cEpoch != ph.epoch {
 			return ReplayPage{}, ErrReplayEpoch
 		}
+		if cPos != req.From {
+			return ReplayPage{}, fmt.Errorf("%w: paging cursor certifies a different start", ErrReplayBadRequest)
+		}
 		afterOrdinal = cOrd
 	}
-	data, ordMarkers, endOrdinal, err := ph.journal.readOrd(req.From, end, afterOrdinal)
+	if afterOrdinal > throughOrdinal || !validPosition(req.From, afterOrdinal) {
+		return ReplayPage{}, fmt.Errorf("%w: inconsistent paging cursor", ErrReplayBadRequest)
+	}
+	data, ordMarkers, endOrdinal, err := ph.journal.readOrdThrough(req.From, end, afterOrdinal, throughOrdinal)
 	if err != nil {
 		return ReplayPage{}, ErrReplayUnavailable
 	}
@@ -719,16 +749,18 @@ func (h *Hub) Replay(paneID string, req ReplayRequest) (ReplayPage, error) {
 	}
 	initCols, initRows := ph.journal.initialGeometry()
 	return ReplayPage{
-		Epoch:      ph.epoch,
-		Start:      req.From,
-		End:        finalEnd,
-		Data:       data,
-		Resizes:    resizes,
-		EndCursor:  EncodeEventCursor(ph.epoch, finalEnd, endOrdinal),
-		InitCols:   initCols,
-		InitRows:   initRows,
-		Incomplete: ph.journal.historyIncomplete(),
-		Ephemeral:  ph.journal.ephemeral,
+		Through:       through,
+		ThroughCursor: EncodeEventCursor(ph.epoch, through, throughOrdinal),
+		Epoch:         ph.epoch,
+		Start:         req.From,
+		End:           finalEnd,
+		Data:          data,
+		Resizes:       resizes,
+		EndCursor:     EncodeEventCursor(ph.epoch, finalEnd, endOrdinal),
+		InitCols:      initCols,
+		InitRows:      initRows,
+		Incomplete:    ph.journal.historyIncomplete(),
+		Ephemeral:     ph.journal.ephemeral,
 	}, nil
 }
 
@@ -966,8 +998,8 @@ func (h *Hub) recordingForRead(paneID string) *PaneHub {
 	if ph != nil {
 		return ph
 	}
-	// Opening includes journal recovery. Serialize it with every other
-	// opener and publish exactly one owner before any writer can append.
+	// Cold opens read the certified prefix without recovery writes.
+	// Publish one owner so promotion serializes against in-flight reads.
 	h.mu.Lock()
 	if ph = h.panes[paneID]; ph != nil {
 		h.mu.Unlock()
@@ -982,11 +1014,17 @@ func (h *Hub) recordingForRead(paneID string) *PaneHub {
 		h.mu.Unlock()
 		return nil
 	}
-	if _, err := os.Stat(path); err == nil {
-		journal, err := openRawJournal(path, 0, 0, h.wallClock)
+	_, statErr := os.Lstat(path)
+	if statErr != nil && !os.IsNotExist(statErr) {
+		h.mu.Unlock()
+		return &PaneHub{journalErr: statErr}
+	}
+	if statErr == nil {
+		journal, err := openRawJournalReadOnly(path, h.wallClock)
 		if err != nil {
+			ph = &PaneHub{clients: make(map[*Client]bool), epoch: randomEpoch(), journalErr: err}
 			h.mu.Unlock()
-			return nil
+			return ph // unavailable is not absent history
 		}
 		h.takeRawClock(journal)
 		ph = &PaneHub{
@@ -1000,8 +1038,7 @@ func (h *Hub) recordingForRead(paneID string) *PaneHub {
 		return ph
 	}
 	h.mu.Unlock()
-	// No v3 journal, no history: pre-upgrade files are never adopted,
-	// and a failed open above already read as absent.
+	// No v3 journal, no history: pre-upgrade files are never adopted.
 	return nil
 }
 
@@ -1226,7 +1263,7 @@ func (h *Hub) ClosePane(paneID string) {
 // caller holds h.mu and ph.mu. A failed closure persist keeps the last
 // committed bytes; the reopening warns instead of hiding the gap.
 func (h *Hub) markPaneClosedLocked(ph *PaneHub, paneID string, closedAt int64) {
-	if ph.journal == nil || ph.journal.flags&rawFlagClosed != 0 {
+	if ph.journal == nil || ph.journal.readOnly || ph.journal.flags&rawFlagClosed != 0 {
 		return
 	}
 	if err := ph.journal.markClosed(closedAt); err != nil {

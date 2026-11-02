@@ -2713,8 +2713,8 @@ export class TabManager {
     // No negotiated cached prefix, hashes, or omitted response bodies.
     async _fetchReplayPages(paneId, from, through, epoch, fences = {}) {
         for (let attempt = 0; attempt < 3; attempt++) {
-            const range = await this._fetchReplayPagesOnce(paneId, from, through, epoch, undefined, fences);
-            if (range) return range;
+            const range = await this._fetchReplayPagesOnce(paneId, from, through, epoch, fences.signal, fences);
+            if (range || fences.signal?.aborted) return range;
             if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 25 * (attempt + 1)));
         }
         return null;
@@ -2742,18 +2742,20 @@ export class TabManager {
             let cursor = from;
             let chained = afterCursor;
             let endCursor;
+            let targetThrough;
+            let targetCursor;
             let pageInit = null;
             let incomplete = false;
             let ephemeralPage = false;
             // Through stays fenced at the attach head for every page: the
             // server caps each response at 2 MiB and the end cursor chains
             // marker filtering. Only the start advances.
-            const throughParam = latest ? 'latest' : through;
+            const throughParam = latest ? 'latest' : (fences.requestThrough ?? through);
             const fenceParam = !latest && throughCursor !== undefined ? `&through_event_cursor=${encodeURIComponent(throughCursor)}` : '';
             // One request per call: the caller pages, parses, yields, and
             // reports progress between responses. A marker-only page
             // advances the chain without moving the bytes.
-            if (cursor >= through) return null;
+            if (cursor > through) return null;
             let bytes;
             let resizes;
             {
@@ -2771,8 +2773,33 @@ export class TabManager {
                     throw this._historyPermanentError(`Terminal history unavailable (${res.status}); the requested range was not skipped.`);
                 }
                 if (!res.ok) return null;
-                const buf = new Uint8Array(await res.arrayBuffer());
-                if (buf.byteLength < 4) return null;
+                // Bound decompressed data too: Content-Length can name
+                // compressed bytes or be absent entirely.
+                const maxBytes = 4 + 65536 + (2 << 20);
+                let buf;
+                if (res.body?.getReader) {
+                    const reader = res.body.getReader();
+                    const parts = [];
+                    let size = 0;
+                    try {
+                        for (;;) {
+                            const { value, done } = await reader.read();
+                            if (done) break;
+                            size += value.byteLength;
+                            if (size > maxBytes) {
+                                await reader.cancel();
+                                return null;
+                            }
+                            parts.push(value);
+                        }
+                    } finally { reader.releaseLock(); }
+                    buf = new Uint8Array(size);
+                    let offset = 0;
+                    for (const part of parts) { buf.set(part, offset); offset += part.byteLength; }
+                } else {
+                    buf = new Uint8Array(await res.arrayBuffer());
+                }
+                if (buf.byteLength < 4 || buf.byteLength > maxBytes) return null;
                 const jsonLen =
                     ((buf[0] << 24) |
                         (buf[1] << 16) |
@@ -2796,16 +2823,27 @@ export class TabManager {
                     (epoch !== undefined && hdr.epoch !== epoch) ||
                     !seq(hdr.start) || !seq(hdr.end) ||
                     hdr.start !== cursor || hdr.end < hdr.start ||
-                    (!latest && hdr.end > through) ||
+                    (!latest && hdr.end > throughParam) ||
                     data.byteLength !== hdr.end - hdr.start ||
-                    (hdr.event_cursor !== undefined && !validCursor(hdr.event_cursor)) ||
+                    !validCursor(hdr.event_cursor) ||
                     !Number.isInteger(hdr.initial_cols) || hdr.initial_cols <= 0 || hdr.initial_cols > 65535 ||
                     !Number.isInteger(hdr.initial_rows) || hdr.initial_rows <= 0 || hdr.initial_rows > 65535 ||
                     (hdr.resizes !== undefined && (!Array.isArray(hdr.resizes) ||
                         hdr.resizes.some((m, i) => !Array.isArray(m) || m.length !== 3 ||
-                            !seq(m[0]) || m[0] > hdr.end || (i > 0 && m[0] < hdr.resizes[i - 1][0]) || !Number.isInteger(m[1]) ||
+                            !seq(m[0]) || m[0] < hdr.start || m[0] > hdr.end || (i > 0 && m[0] < hdr.resizes[i - 1][0]) || !Number.isInteger(m[1]) ||
                             !Number.isInteger(m[2]) || m[1] <= 0 || m[2] <= 0 || m[1] > 65535 || m[2] > 65535)))) return null;
 
+                const event = hdr.event_cursor.split('.').slice(1).map(Number);
+                const afterOrdinal = chained === undefined ? 0 : Number(chained.split('.').at(-1));
+                if (event.some(n => !seq(n)) || event[0] !== hdr.epoch || event[1] !== hdr.end || event[2] < afterOrdinal ||
+                    (!latest && throughCursor !== undefined && event[2] > Number(throughCursor.split('.').at(-1)))) return null;
+                if (latest) {
+                    if (!seq(hdr.through) || hdr.through < hdr.end || !validCursor(hdr.through_event_cursor)) return null;
+                    const target = hdr.through_event_cursor.split('.').slice(1).map(Number);
+                    if (target.some(n => !seq(n)) || target[0] !== hdr.epoch || target[1] !== hdr.through || target[2] < event[2]) return null;
+                }
+                targetThrough = hdr.through;
+                targetCursor = hdr.through_event_cursor;
                 if (!pageInit) pageInit = { initCols: hdr.initial_cols, initRows: hdr.initial_rows };
                 if (hdr.history_incomplete === true) incomplete = true;
                 if (hdr.ephemeral === true) ephemeralPage = true;
@@ -2819,6 +2857,9 @@ export class TabManager {
                     pageData = data.subarray(0, through - cursor);
                     pageResizes = pageResizes.filter(m => m[0] <= through);
                     pageEnd = through;
+                    // The response cursor certifies the untrimmed page.
+                    // Carry only the geometry actually parsed by this view.
+                    hdr.event_cursor = `v1.${hdr.epoch}.${pageEnd}.${afterOrdinal + pageResizes.length}`;
                 }
                 bytes = pageData;
                 resizes = pageResizes;
@@ -2841,6 +2882,8 @@ export class TabManager {
             return {
                 start: from,
                 end: cursor,
+                through: targetThrough,
+                throughCursor: targetCursor,
                 byteLength: bytes.byteLength,
                 bytes,
                 // Production replay consumes bytes through its stream decoder.
@@ -2879,6 +2922,11 @@ export class TabManager {
         if (pty?.mode !== 'hot') return;
         const prevEpoch = tabInfo.paneEpoch;
         const samePane = prevEpoch !== undefined && prevEpoch === info.epoch;
+        if (!samePane || !tabInfo._termOpened) {
+            tabInfo._replayHistorical = !!tabInfo._termOpened || !tabInfo._freshReplay;
+            tabInfo._historicalReplayFence = tabInfo._replayHistorical
+                ? { head: info.head, cursor: info.eventCursor } : null;
+        }
         if (!samePane) {
             // A different pane lifetime owns a different byte stream.
             pty.hold?.();
@@ -2911,6 +2959,7 @@ export class TabManager {
             tabInfo.paneOldest = info.oldest;
             tabInfo.queuedSeq = 0;
             tabInfo.drainedSeq = 0;
+            tabInfo._replayCursor = `v1.${info.epoch}.0.0`;
             this._openTermAndViewport(tabInfo);
             this._bootstrappedRelease(tabInfo, pty, 0, info.head, info.eventCursor);
             return;
@@ -2977,32 +3026,16 @@ export class TabManager {
             return;
         }
 
-        // Different pane lifetime under the same id: fresh start. The
-        // existing buffer belongs to a dead epoch — reset it.
+        // Keep the old lifetime's coherent view until a validated page
+        // arrives. A slow or failed request must not erase the last view.
         pty.decoder = new TextDecoder('utf-8');
         tabInfo._streamDecoder = pty.decoder;
-        try {
-            this._resetPaneBuffer(tabInfo);
-        } catch (e) {
-            console.error('[term] reset on epoch change failed:', e);
-        }
-        if (tabInfo._pendingResetBanner) {
-            this.writeToTerminal(tabInfo, tabInfo._pendingResetBanner);
-            tabInfo._pendingResetBanner = null;
-            await this._drainSettled(tabInfo);
-            if (tabInfo.ws !== pty || tabInfo.paneEpoch !== info.epoch || tabInfo.finalizing) return;
-        }
-        // A fresh parser starts at the replay baseline, not the previous
-        // lifetime's fitted grid. The post-replay fit restores the panel.
-        try {
-            tabInfo.term.resize(info.initialCols, info.initialRows);
-        } catch (_e) {
-            /* default size; post-replay fit corrects it */
-        }
+        tabInfo._replayBaseline = { cols: info.initialCols, rows: info.initialRows };
         tabInfo.paneEpoch = info.epoch;
         tabInfo.paneOldest = info.oldest;
         tabInfo.queuedSeq = 0;
         tabInfo.drainedSeq = 0;
+        tabInfo._replayCursor = `v1.${info.epoch}.0.0`;
         this._bootstrappedRelease(tabInfo, pty, 0, info.head, info.eventCursor);
     }
 
@@ -3060,9 +3093,10 @@ export class TabManager {
                     }
                     tabInfo.queuedSeq = head;
                     tabInfo.drainedSeq = head;
+                    pty.decoder = new TextDecoder('utf-8');
                     tabInfo._streamDecoder = pty.decoder;
+                    tabInfo._replayCursor = throughCursor;
                     this._fitVisibleTerminal(tabInfo);
-                    this._flushPendingGeometry(tabInfo, pty);
                     releaseOnce();
                     this.app?.showToast?.('Replay cancelled; showing live output only.', { type: 'info', title: 'Terminal' });
                     return;
@@ -3131,6 +3165,7 @@ export class TabManager {
             el.innerHTML = '<span class="replay-progress-text"></span><button class="replay-progress-cancel btn">Cancel</button>';
             el.querySelector('.replay-progress-cancel').addEventListener('click', () => {
                 tabInfo._replayCancel = true;
+                tabInfo._replayAbort?.abort();
             });
             tabInfo.termContainer?.appendChild(el);
             tabInfo._replayProgressEl = el;
@@ -3147,46 +3182,41 @@ export class TabManager {
 
     // A received geometry marker is adopted, never answered: adopting must
     // not emit another resize, or two viewers would echo forever.
-    _adoptLiveGeometry(tabInfo, geom, socket = tabInfo?.ws) {
-        if (!geom || this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing || socket !== tabInfo.ws) return;
-        // Stale-lifetime geometry dies here: the cursor carries its epoch.
+    async _adoptLiveGeometry(tabInfo, geom, socket = tabInfo?.ws) {
+        const current = () => this.tabs.get(tabInfo.paneId) === tabInfo && !tabInfo.finalizing && socket === tabInfo.ws;
+        if (!geom || !current()) return;
         const m = /^v1\.(\d+)\.(\d+)\.(\d+)$/.exec(geom.event_cursor || '');
         if (!m || Number(m[1]) !== tabInfo.paneEpoch) return;
         const cols = geom.cols;
         const rows = geom.rows;
         if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols <= 0 || rows <= 0 || cols > 65535 || rows > 65535) return;
-        if (tabInfo._bootstrapGate || tabInfo._gapInFlight) {
-            // Held output owns the ordering: queue behind the replay/gap
-            // and adopt in arrival order before the held bytes release.
-            (tabInfo._pendingGeometry ??= []).push({ cols, rows });
+        // Stop socket delivery synchronously, before yielding to xterm.
+        // Bytes on each side of this marker must parse in different grids.
+        socket.hold?.();
+        await this._drainSettled(tabInfo);
+        if (!current()) return;
+        try {
+            const ordinal = Number(m[3]);
+            const previous = Number(tabInfo._replayCursor?.split('.').at(-1) ?? '0');
+            if (ordinal <= previous) { socket.release?.(); return; }
+            if (Number(m[2]) !== (tabInfo.drainedSeq ?? 0) || ordinal !== previous + 1) {
+                socket.ws?.close();
+                return;
+            }
+            if (tabInfo.term && (tabInfo.term.cols !== cols || tabInfo.term.rows !== rows))
+                tabInfo.term.resize(cols, rows);
+            tabInfo._replayCursor = geom.event_cursor;
+        } catch (_e) {
+            try { socket.ws?.close(); } catch (_ignored) {}
             return;
         }
-        if (tabInfo.term && (tabInfo.term.cols !== cols || tabInfo.term.rows !== rows)) {
-            try {
-                tabInfo.term.resize(cols, rows);
-            } catch (_e) {}
-        }
-    }
-
-    _flushPendingGeometry(tabInfo, socket = tabInfo?.ws) {
-        const pending = tabInfo._pendingGeometry;
-        tabInfo._pendingGeometry = [];
-        if (!pending?.length) return;
-        if (this.tabs.get(tabInfo.paneId) !== tabInfo || tabInfo.finalizing || socket !== tabInfo.ws) return;
-        // Arrival order collapses: only the newest grid matters, since no
-        // bytes parsed between the queued markers.
-        const last = pending[pending.length - 1];
-        if (tabInfo.term && (tabInfo.term.cols !== last.cols || tabInfo.term.rows !== last.rows)) {
-            try {
-                tabInfo.term.resize(last.cols, last.rows);
-            } catch (_e) {}
-        }
+        socket.release?.();
     }
 
 
 
 
-    async _parseRecordingRange(tabInfo, range, current, deliver, decodeSocket = tabInfo.ws) {
+    async _parseRecordingRange(tabInfo, range, current, deliver, decodeSocket = tabInfo.ws, historical = true) {
         // Resize only after preceding bytes reach the parser. Applying
         // geometry to a queued write interprets that write in the new grid.
         await this._drainSettled(tabInfo);
@@ -3202,11 +3232,12 @@ export class TabManager {
         // Replayed bytes can make xterm answer old queries; those replies
         // must not reach the live app. The input path suppresses non-user
         // output while this flag stands.
-        tabInfo._historyParsing = true;
+        tabInfo._historyParsing = historical;
         let cursor = range.start;
         const parse = async (end) => {
             while (cursor < end) {
-                const bytes = range.bytes.subarray(cursor - range.start, end - range.start);
+                const batchEnd = Math.min(end, cursor + (64 << 10));
+                const bytes = range.bytes.subarray(cursor - range.start, batchEnd - range.start);
                 if (deliver) {
                     // The socket alone owns decoding and gap sequencing.
                     deliver(bytes);
@@ -3218,7 +3249,7 @@ export class TabManager {
                 }
                 await this._drainSettled(tabInfo);
                 if (!current()) return false;
-                cursor = end;
+                cursor = batchEnd;
             }
             return true;
         };
@@ -3237,6 +3268,7 @@ export class TabManager {
     async _bootstrapDelta(tabInfo, from, head, expectGen, onReady, throughCursor) {
         const ws = tabInfo.ws;
         const epoch = tabInfo.paneEpoch;
+        const historicalFence = tabInfo._historicalReplayFence;
         let admitted = false;
         const current = () => !tabInfo.finalizing && tabInfo.paneEpoch === epoch &&
             (tabInfo.ws === ws || admitted) &&
@@ -3250,19 +3282,44 @@ export class TabManager {
         }
         let cursor = from;
         const target = head;
-        let chained;
+        // Cursor position includes the last parsed resize, not merely
+        // the byte frontier. A zero-byte delta can still change geometry.
+        const ordinal = tabInfo._replayCursor?.split('.').at(-1) ?? '0';
+        let chained = `v1.${epoch}.${from}.${ordinal}`;
         tabInfo._replayCancel = false;
+        const abort = new AbortController();
+        tabInfo._replayAbort = abort;
         this._showReplayProgress(tabInfo, cursor, target);
-        while (cursor < target) {
+        const prepareParser = () => {
+            const baseline = tabInfo._replayBaseline;
+            if (!baseline) return current();
+            this._resetPaneBuffer(tabInfo);
+            tabInfo.term.resize(baseline.cols, baseline.rows);
+            tabInfo._replayBaseline = null;
+            if (tabInfo._pendingRestartNotice) {
+                tabInfo._pendingRestartNotice = false;
+                this.app?.showToast?.('Session restarted.', { type: 'info', title: 'Terminal' });
+            }
+            return current();
+        };
+        while (cursor < target || (throughCursor !== undefined && chained !== throughCursor)) {
             if (tabInfo._replayCancel) {
                 this._hideReplayProgress(tabInfo);
                 return { kind: 'live-now' };
             }
+            // Finish the original cold prefix silently after a failed page.
+            // Later bytes missed while disconnected keep live reply handling.
+            const historical = historicalFence
+                ? cursor < historicalFence.head || (cursor === historicalFence.head &&
+                    Number(chained.split('.').at(-1)) < Number(historicalFence.cursor.split('.').at(-1)))
+                : tabInfo._replayHistorical !== false;
+            const pageTarget = historicalFence && historical ? historicalFence.head : target;
+            const pageFence = historicalFence && historical ? historicalFence.cursor : throughCursor;
             let d;
             try {
                 // Through stays fenced at the attach head: the server
                 // caps each page at 2 MiB and the end cursor chains.
-                d = await this._fetchReplayPages(tabInfo.paneId, cursor, target, tabInfo.paneEpoch, { throughCursor, afterCursor: chained });
+                d = await this._fetchReplayPages(tabInfo.paneId, cursor, pageTarget, tabInfo.paneEpoch, { throughCursor: pageFence, afterCursor: chained, signal: abort.signal });
             } catch (error) {
                 this._hideReplayProgress(tabInfo);
                 if (!error?.historyPermanent) throw error;
@@ -3277,6 +3334,10 @@ export class TabManager {
                 this._hideReplayProgress(tabInfo);
                 return { kind: 'cancelled', reason: 'stale' };
             }
+            if (tabInfo._replayCancel) {
+                this._hideReplayProgress(tabInfo);
+                return { kind: 'live-now' };
+            }
             if (!d || d.start !== cursor || d.end < cursor || d.end > target || d.byteLength !== d.end - cursor ||
                 (d.bytes && d.bytes.byteLength !== d.byteLength)) {
                 this._hideReplayProgress(tabInfo);
@@ -3288,12 +3349,16 @@ export class TabManager {
                 return { kind: 'failed', error: new Error('replay page made no progress') };
             }
             admitted = true;
+            if (!prepareParser()) {
+                this._hideReplayProgress(tabInfo);
+                return { kind: 'cancelled', reason: 'stale' };
+            }
             if (d.endCursor !== undefined) chained = d.endCursor;
             this._noteReplayDurability(tabInfo, d);
-            if (d.bytes?.byteLength) {
+            if (d.bytes?.byteLength || d.resizes?.length) {
                 // A false here is a stale intent: the parser stopped because
                 // this attempt no longer owns the pane.
-                if (!await this._parseRecordingRange(tabInfo, d, current, undefined, ws)) {
+                if (!await this._parseRecordingRange(tabInfo, d, current, undefined, ws, historical)) {
                     this._hideReplayProgress(tabInfo);
                     return { kind: 'cancelled', reason: 'stale' };
                 }
@@ -3308,14 +3373,16 @@ export class TabManager {
                 tabInfo.drainedSeq = d.end;
             }
             cursor = d.end;
+            if (chained !== undefined) tabInfo._replayCursor = chained;
             this._showReplayProgress(tabInfo, cursor, target);
             // Yield between pages so typing, scrolling, tab switching,
             // and touch stay responsive during a long replay.
             await new Promise(resolve => setTimeout(resolve, 0));
         }
         this._hideReplayProgress(tabInfo);
-        // Recovery can append its checkpoint after the delta loop. Drain it
-        // before fitting and releasing held live output.
+        // An empty, geometry-free attach is already a complete baseline.
+        if (!prepareParser()) return { kind: 'cancelled', reason: 'stale' };
+        // Finish replay writes before fitting and releasing live output.
         await this._drainSettled(tabInfo);
         if (!current()) return { kind: 'cancelled', reason: 'stale' };
         // Restore visible panel geometry; hidden parsers keep the recorded
@@ -3334,12 +3401,12 @@ export class TabManager {
             tabInfo._pendingPanelFit = true;
             tabInfo._pendingForceResize = true;
         }
-        // Adopt geometry that arrived while the socket was held, in order,
-        // before the held output it orders is released.
-        this._flushPendingGeometry(tabInfo, ws);
         onReady?.();
         // Client uploads stay for local previews; replay always reads
         // the raw prefix regardless of any stored checkpoint.
+        tabInfo._freshReplay = false;
+        tabInfo._replayHistorical = false;
+        tabInfo._historicalReplayFence = null;
         this._scheduleCheckpointUpload(tabInfo);
         return { kind: 'applied', through: cursor };
     }
@@ -3378,13 +3445,23 @@ export class TabManager {
         const current = () => !tabInfo.finalizing && tabInfo.ws === pty && tabInfo._bootstrapGen === bootGen;
         let recovered = false;
         try {
-            let chained;
+            const ordinal = tabInfo._replayCursor?.split('.').at(-1) ?? '0';
+            let chained = `v1.${tabInfo.paneEpoch}.${from}.${ordinal}`;
+            let targetThrough;
+            let targetCursor;
             for (let cursor = from; cursor < to;) {
                 let d;
                 try {
-                    // No fence certifies the hole's end: drain with
-                    // through=latest and trim the page to the hole.
-                    d = await this._fetchReplayPages(tabInfo.paneId, cursor, to, tabInfo.paneEpoch, { latest: true, afterCursor: chained });
+                    // Resolve latest once, then keep that finite fence
+                    // even if the process continues producing output.
+                    d = await this._fetchReplayPages(tabInfo.paneId, cursor, to, tabInfo.paneEpoch, {
+                        latest: targetCursor === undefined, requestThrough: targetThrough,
+                        throughCursor: targetCursor, afterCursor: chained,
+                    });
+                    if (d && targetCursor === undefined) {
+                        targetThrough = d.through;
+                        targetCursor = d.throughCursor;
+                    }
                 } catch (error) {
                     // The journal never evicts: retry through a new
                     // atomic attach instead of patching around it.
@@ -3405,11 +3482,12 @@ export class TabManager {
                 }
                 if (d.endCursor !== undefined) chained = d.endCursor;
                 this._noteReplayDurability(tabInfo, d);
-                if (!await this._parseRecordingRange(tabInfo, d, current, bytes => pty.applyGapPatch(bytes))) return;
+                if (!await this._parseRecordingRange(tabInfo, d, current, bytes => pty.applyGapPatch(bytes), pty, false)) return;
                 tabInfo.queuedSeq = pty.lastFrameEnd;
+                tabInfo.drainedSeq = d.end;
+                tabInfo._replayCursor = chained;
                 cursor = d.end;
             }
-            this._flushPendingGeometry(tabInfo, pty);
             this._fitVisibleTerminal(tabInfo);
             recovered = true;
         } finally {
@@ -3418,6 +3496,42 @@ export class TabManager {
             // owns the gate. Re-fire after relinquishing it, not before.
             if (recovered && tabInfo.ws === pty && !tabInfo.finalizing) pty.release?.();
         }
+    }
+
+    // Exit carries no head. Finish the already-admitted bootstrap, then
+    // capture one finite tail fence and parse through both bytes and events.
+    async _drainReplayTail(tabInfo, socket = tabInfo.ws) {
+        const gate = tabInfo._bootstrapGate;
+        if (gate) await gate;
+        const epoch = tabInfo.paneEpoch;
+        const current = () => tabInfo.ws === socket && tabInfo.paneEpoch === epoch && !tabInfo.finalizing;
+        await this._drainSettled(tabInfo);
+        if (!current()) return;
+        socket.hold?.();
+        let from = tabInfo.drainedSeq ?? 0;
+        const ordinal = tabInfo._replayCursor?.split('.').at(-1) ?? '0';
+        let after = `v1.${epoch}.${from}.${ordinal}`;
+        let through = Number.MAX_SAFE_INTEGER;
+        let throughCursor;
+        do {
+            const page = await this._fetchReplayPages(tabInfo.paneId, from, through, epoch, {
+                latest: throughCursor === undefined, throughCursor, afterCursor: after,
+            });
+            if (!current()) return;
+            if (!page) throw new Error('final output replay unavailable; the tail was not skipped');
+            if (throughCursor === undefined) {
+                through = page.through;
+                throughCursor = page.throughCursor;
+            }
+            if (page.end === from && page.endCursor === after && after !== throughCursor)
+                throw new Error('final output replay made no progress');
+            if (!await this._parseRecordingRange(tabInfo, page, current, undefined, socket, false)) return;
+            from = page.end;
+            after = page.endCursor;
+            tabInfo.queuedSeq = tabInfo.drainedSeq = from;
+            tabInfo._replayCursor = after;
+            this._noteReplayDurability(tabInfo, page);
+        } while (from < through || after !== throughCursor);
     }
 
     _scheduleCheckpointUpload(tabInfo) {
@@ -4621,6 +4735,7 @@ export class TabManager {
             sessionId,
             title,
             coder,
+            _freshReplay: options?.fresh === true,
             workspace: activeWS,
             cwd: activeCWD,
             // Pin the server's launch mode to this pane. Older servers and
@@ -12780,6 +12895,15 @@ export class TabManager {
             }
             tabInfo.autoReconnectPending = false;
             tabInfo.reconnectInFlight = false;
+            if (socket?.mode === 'hot' && !tabInfo._exitDrain) {
+                const drain = this._drainReplayTail(tabInfo, socket).catch(error => {
+                    if (tabInfo.ws !== socket || tabInfo.finalizing) return;
+                    console.warn('[term] final output replay failed:', error);
+                    this.app?.showToast?.('Final terminal output could not be recovered. The missing tail was not skipped.', { type: 'warning', title: 'Terminal' });
+                });
+                tabInfo._exitDrain = drain;
+                this._trackBootstrap(tabInfo, drain);
+            }
             tabInfo.exitCode = control.code;
             tabInfo.isDead = true;
             tabInfo.tabEl.classList.add('dead');
@@ -13317,13 +13441,11 @@ export class TabManager {
                     this.activePaneId = data.pane_id;
                 }
 
-                // Reset terminal screen; the visual cue is written after the
-                // hot attach bootstrap lands (an epoch change resets again,
-                // which would erase a banner written now).
+                // Report the restart outside the parser: a local banner
+                // would shift the raw replay away from its initial baseline.
                 tabInfo.term.reset();
                 this._clearReaderAnchor(tabInfo);
-                tabInfo._pendingResetBanner =
-                    '\x1b[2J\x1b[H\r\n\x1b[33m[Restarted Session]\x1b[0m\r\n';
+                tabInfo._pendingRestartNotice = true;
 
                 let opened = false;
                 const newWs = new PTYWebSocket(

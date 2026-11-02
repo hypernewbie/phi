@@ -134,8 +134,18 @@ describe('_onLiveGap', () => {
         const p = pty();
         const c = ctx(async (_paneId, from) =>
             from === 100
-                ? { start: 100, end: 104, byteLength: 4, bytes: new Uint8Array(4) }
-                : { start: 104, end: 105, byteLength: 1, bytes: new Uint8Array(1) },
+                ? {
+                      start: 100,
+                      end: 104,
+                      byteLength: 4,
+                      bytes: new Uint8Array(4),
+                  }
+                : {
+                      start: 104,
+                      end: 105,
+                      byteLength: 1,
+                      bytes: new Uint8Array(1),
+                  },
         );
         const t = tab(p);
         await c._onLiveGap(t, 100, 105);
@@ -620,7 +630,17 @@ describe('bootstrap gate', () => {
 function recordingEnvelope(text, start, end) {
     const bytes = new TextEncoder().encode(text);
     const json = new TextEncoder().encode(
-        JSON.stringify({ epoch: 7, start, end, event_cursor: `v1.7.${end}.0`, resizes: [], initial_cols: 80, initial_rows: 24 }),
+        JSON.stringify({
+            epoch: 7,
+            start,
+            end,
+            event_cursor: `v1.7.${end}.0`,
+            through: end,
+            through_event_cursor: `v1.7.${end}.0`,
+            resizes: [],
+            initial_cols: 80,
+            initial_rows: 24,
+        }),
     );
     const buf = new Uint8Array(4 + json.byteLength + bytes.byteLength);
     new DataView(buf.buffer).setUint32(0, json.byteLength, false);

@@ -123,6 +123,11 @@ export function recordingEnvelope(bytes, start, end, extra = {}) {
             epoch,
             start,
             end,
+            through: extra.through ?? end,
+            through_event_cursor:
+                extra.through_event_cursor ??
+                extra.event_cursor ??
+                `v1.${epoch}.${end}.0`,
             event_cursor: `v1.${epoch}.${end}.0`,
             resizes: [],
             initial_cols: 80,
@@ -177,16 +182,33 @@ export function replayHarness(source, fault = null) {
         const to = through === 'latest' ? source.length : Number(through);
         const epoch = Number(query.get('epoch') ?? 7);
         requests.push({ from, to, url: String(url) });
-        const result = fault?.({ from, to, attempt: requests.length });
+        const result = fault?.({
+            from,
+            to,
+            attempt: requests.length,
+            throughCursor: query.get('through_event_cursor'),
+            afterCursor: query.get('after_event_cursor'),
+        });
         if (result !== undefined && result !== null) return result;
-        return recordingEnvelope(source.slice(from, to), from, to, { epoch });
+        const end = Math.min(to, from + (2 << 20));
+        return recordingEnvelope(source.slice(from, end), from, end, {
+            epoch,
+            through: to,
+            through_event_cursor: `v1.${epoch}.${to}.0`,
+        });
     });
     vi.stubGlobal('fetch', fetcher);
     const socket = () => {
         const pty = new PTYWebSocket(
             tab.paneId,
             (text) => manager._paneData(tab, text),
-            null,
+            (control) => {
+                if (control.type === 'terminal-geometry') {
+                    const task = manager._adoptLiveGeometry(tab, control, pty);
+                    tasks.push(task);
+                    return task;
+                }
+            },
             null,
             null,
             {
@@ -206,6 +228,7 @@ export function replayHarness(source, fault = null) {
         return pty;
     };
     const pty = socket();
+    manager.tabs.set(tab.paneId, tab);
     return {
         manager,
         term,

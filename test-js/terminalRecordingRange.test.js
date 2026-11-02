@@ -18,18 +18,14 @@ it('recovery reads bytes and current geometry without hashes or cached-prefix ne
         return recordingEnvelope(encode('data'), 0, 4, { resizes });
     });
     vi.stubGlobal('fetch', fetcher);
-    expect((await m._fetchReplayPages('p', 0, 4, 7)).resizes).toEqual(
-        resizes,
-    );
+    expect((await m._fetchReplayPages('p', 0, 4, 7)).resizes).toEqual(resizes);
     // Geometry metadata can change at the same output frontier. Byte-only
     // cache validation cannot authorize reusing an older geometry header.
     resizes = [
         [0, 80, 24],
         [4, 120, 40],
     ];
-    expect((await m._fetchReplayPages('p', 0, 4, 7)).resizes).toEqual(
-        resizes,
-    );
+    expect((await m._fetchReplayPages('p', 0, 4, 7)).resizes).toEqual(resizes);
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(m._recChunkCache).toBeUndefined();
 });
@@ -107,9 +103,16 @@ it('latest mode trims an overrunning page to the requested end', async () => {
             return recordingEnvelope(encode('0123456789'), 0, 10);
         }),
     );
-    const page = await manager()._fetchReplayPagesOnce('p', 0, 5, 7, undefined, {
-        latest: true,
-    });
+    const page = await manager()._fetchReplayPagesOnce(
+        'p',
+        0,
+        5,
+        7,
+        undefined,
+        {
+            latest: true,
+        },
+    );
     expect([page.start, page.end, page.byteLength]).toEqual([0, 5, 5]);
     expect(Array.from(page.bytes)).toEqual(Array.from(encode('01234')));
 });
@@ -147,9 +150,7 @@ it.each([204, 500])(
             'fetch',
             vi.fn(async () => ({ ok: status === 204, status })),
         );
-        expect(
-            await manager()._fetchReplayPagesOnce('p', 0, 4, 7),
-        ).toBeNull();
+        expect(await manager()._fetchReplayPagesOnce('p', 0, 4, 7)).toBeNull();
     },
 );
 

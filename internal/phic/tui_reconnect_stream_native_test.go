@@ -43,7 +43,7 @@ func TestNativeReconnectMatchesUninterruptedByteStream(t *testing.T) {
 			for i := range source {
 				// One missing byte recovered per attachment, including every UTF-8
 				// and escape-sequence boundary. No scheduler sleeps or screen polling.
-				if err := p.bootstrap(wireAttach{Header: &wspb.TerminalAttach{Epoch: proto.Uint64(7), Head: proto.Uint64(uint64(i + 1))}}); err != nil {
+				if err := p.bootstrap(wireAttach{Header: &wspb.TerminalAttach{Epoch: proto.Uint64(7), Head: proto.Uint64(uint64(i + 1)), InitialCols: proto.Uint32(80), InitialRows: proto.Uint32(12), EventCursor: proto.String((replayPosition{7, uint64(i + 1), 0}).String())}}); err != nil {
 					t.Fatal(err)
 				}
 				<-p.outbox // Every bootstrap must admit its final sizing.
@@ -92,6 +92,16 @@ func TestNativeReplayGridIsRestoredToPanelEvenWhenDesiredSizeDidNotChange(t *tes
 	if err := p.handleInput(paneInput{Kind: paneInputResize, Cols: 20, Rows: 4}); err != nil {
 		t.Fatal(err)
 	}
+	if p.emuCols != 40 || p.emuRows != 8 {
+		t.Fatal("requested resize changed the parser before commitment")
+	}
+	marker, err := wireproto.EncodeGeometryFrame(0, 20, 4, "v1.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.handleFrame(marker); err != nil {
+		t.Fatal(err)
+	}
 	frame, err := p.emu.Snapshot()
 	if err != nil {
 		t.Fatal(err)
@@ -115,14 +125,14 @@ func TestNativeZeroEpochReplacementStartsANewParser(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = p.emu.Close() }()
-	if err := p.bootstrap(wireAttach{Header: &wspb.TerminalAttach{}}); err != nil {
+	if err := p.bootstrap(wireAttach{Header: &wspb.TerminalAttach{Epoch: proto.Uint64(0), InitialCols: proto.Uint32(80), InitialRows: proto.Uint32(12), EventCursor: proto.String("v1.0.0.0")}}); err != nil {
 		t.Fatal(err)
 	}
 	<-p.outbox
 	if err := p.handleFrame(testOutput(t, 0, []byte("OLD"))); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.bootstrap(wireAttach{Header: &wspb.TerminalAttach{Epoch: proto.Uint64(7), Head: proto.Uint64(3)}}); err != nil {
+	if err := p.bootstrap(wireAttach{Header: &wspb.TerminalAttach{Epoch: proto.Uint64(7), Head: proto.Uint64(3), InitialCols: proto.Uint32(80), InitialRows: proto.Uint32(12), EventCursor: proto.String("v1.7.3.0")}}); err != nil {
 		t.Fatal(err)
 	}
 	<-p.outbox
