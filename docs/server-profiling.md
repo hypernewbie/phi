@@ -69,6 +69,23 @@ These values are not additive and are not RSS estimates.
 `complete=false` means the view skipped one or more busy owners. Check `skipped_owner_count`.
 A busy hub returns null counters and `reason="hub_busy"`. A missing hub returns `ownership: null`.
 
+The `runtime.journal` object reports five cumulative raw-journal counters for the process lifetime:
+
+- `appends`: accepted PTY payload admissions, including one resumed after an ambiguous manifest
+  sync. Failed admissions and mismatched retries add nothing.
+- `bytes`: payload bytes summed over those admissions. Empty payloads count as one admission
+  with zero bytes.
+- `syncs`: journal-file `Sync` attempts, including resize staging. Ephemeral journals skip the
+  syscall and add nothing. Manifest-file and directory syncs are not included.
+- `sync_failures`: failed journal-file `Sync` attempts. Injected test faults count here too.
+- `pending_recoveries`: payload admissions resumed from ambiguous-commit state.
+
+These counters accumulate in every profiling build, with or without `--diagnostics-dir`. Read rates
+as deltas between snapshots of the same process epoch. Each field is one atomic load; the whole
+object is not a transaction, so exact cross-field equalities hold only while writes are stopped.
+`syncs` divided by `appends` is not generally 1: resizes, retries, and ephemeral journals all
+move the two counters independently.
+
 ## Capture operation timings (primary flame-graph path)
 
 Timing capture records explicit start/end intervals for API-handler requests plus fixed nested operation spans. It retains short requests that a ~100 Hz CPU sampler misses. Units are nanoseconds of handler elapsed time, which includes waits. This is not CPU usage, client latency, or an individual request timeline.
@@ -99,7 +116,13 @@ go tool pprof -http=127.0.0.1:0 -no_browser timing.pprof
 # Open the printed URL, then the flamegraph view.
 ```
 
-The profile carries one `phi_timing=` JSON comment with machine-readable counts: `roots_seen/admitted/exported/dropped`, `discarded_open/invalid/capacity`, `nodes_recorded/dropped`, `root_duration_ns`, `exported_span_counts`, and `complete`. `complete=true` means no loss. An empty capture is valid: zero roots, zero duration. Partial loss never reports as zero cost; check the counters.
+The profile carries one `phi_timing=` JSON comment with machine-readable counts: `roots_seen/admitted/exported/dropped`, `discarded_open/invalid/capacity`, `nodes_recorded/dropped`, `root_duration_ns`, `exported_span_counts`, `exported_root_counts`, `exported_root_max_ns`, `exported_root_total_ns`, and `complete`. `complete=true` means no loss. An empty capture is valid: zero roots, zero duration, empty aggregate maps. Partial loss never reports as zero cost; check the counters.
+
+The three `exported_root_*` maps aggregate exported roots by their fixed `method + mux pattern`
+name. Durations are inclusive nanoseconds per root: max and total over all exported roots with
+that name. Discarded roots contribute nothing. Zero-duration roots keep their keys with zero
+values. The sum of `exported_root_counts` equals `roots_exported`, and the sum of
+`exported_root_total_ns` equals `root_duration_ns`.
 
 Each HTTP root name contains the fixed method and registered mux pattern, for example `http GET /api/version`. Raw paths, queries, headers, and IDs never become names.
 

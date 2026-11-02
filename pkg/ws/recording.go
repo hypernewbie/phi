@@ -747,13 +747,19 @@ func (j *rawJournal) syncManifestDir() error {
 
 func (j *rawJournal) syncJournal() error {
 	if j.faults.journalSync != nil {
+		countJournalSyncFailure()
 		return j.faults.journalSync
 	}
 	j.faults.syncs++
 	if j.ephemeral {
 		return nil
 	}
-	return j.file.Sync()
+	countJournalSync()
+	if err := j.file.Sync(); err != nil {
+		countJournalSyncFailure()
+		return err
+	}
+	return nil
 }
 
 // appendPayload commits one PTY output chunk and returns the geometry
@@ -789,6 +795,7 @@ func (j *rawJournal) appendPayload(payload []byte) ([]rawOrdMarker, error) {
 			return applied, err
 		}
 		j.advancePayload(j.pending.newHead, j.pending.newOffset, len(payload))
+		countJournalPendingRecovery()
 		j.pending = nil
 		j.unconfirmedOutput = false
 		return applied, nil
@@ -830,6 +837,7 @@ func (j *rawJournal) advancePayload(newHead uint64, newOffset int64, payloadLen 
 	j.head = newHead
 	j.committedLen = newOffset
 	j.lastUpdateNs = j.now().UnixNano()
+	countJournalAppend(payloadLen)
 }
 
 // stageResize writes and syncs a geometry record without committing it.

@@ -100,6 +100,9 @@ func TestStartUsesPrivateLoopbackFilesAndAuth(t *testing.T) {
 	if got.Ownership != nil {
 		t.Fatalf("ownership = %v, want null without a callback", got.Ownership)
 	}
+	if got.Runtime != nil {
+		t.Fatalf("runtime = %v, want null without a callback", got.Runtime)
+	}
 	if got.snapshot.Process.RSSBytes == nil || *got.snapshot.Process.RSSBytes != 4096 || got.snapshot.Process.CPUTotalSeconds == nil || *got.snapshot.Process.CPUTotalSeconds != 0.5 {
 		t.Fatalf("process snapshot = %+v", got.snapshot.Process)
 	}
@@ -115,6 +118,11 @@ func TestSnapshotIncludesOptionalOwnershipCallback(t *testing.T) {
 		calls.Add(1)
 		return map[string]any{"complete": true, "ring_capacity_bytes": 64}
 	})
+	var runtimeCalls atomic.Int32
+	s.SetRuntimeStats(func() any {
+		runtimeCalls.Add(1)
+		return map[string]any{"journal": map[string]any{"appends": 3}}
+	})
 
 	resp := request(s, http.MethodGet, "/debug/phi", "Bearer "+s.token)
 	defer resp.Body.Close()
@@ -123,12 +131,17 @@ func TestSnapshotIncludesOptionalOwnershipCallback(t *testing.T) {
 	}
 	var got struct {
 		Ownership map[string]any `json:"ownership"`
+		Runtime   map[string]any `json:"runtime"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 1 || got.Ownership["complete"] != true || got.Ownership["ring_capacity_bytes"] != float64(64) {
 		t.Fatalf("ownership = %v, callback calls = %d", got.Ownership, calls.Load())
+	}
+	journal, _ := got.Runtime["journal"].(map[string]any)
+	if runtimeCalls.Load() != 1 || journal["appends"] != float64(3) {
+		t.Fatalf("runtime = %v, callback calls = %d", got.Runtime, runtimeCalls.Load())
 	}
 }
 
