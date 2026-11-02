@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"os"
@@ -11,21 +11,21 @@ import (
 // the empty state afterwards, so entries never leak across tests.
 func resetConfigCache(t *testing.T) {
 	t.Helper()
-	configMu.Lock()
-	cachedConfig = nil
-	configMu.Unlock()
+	currentStore().mu.Lock()
+	currentStore().cache = nil
+	currentStore().mu.Unlock()
 	t.Cleanup(func() {
-		configMu.Lock()
-		cachedConfig = nil
-		configMu.Unlock()
+		currentStore().mu.Lock()
+		currentStore().cache = nil
+		currentStore().mu.Unlock()
 	})
 }
 
 // cachedLoad exercises the cached read path exactly as loadConfigWithError
 // does, counting real primary reads through counter.
 func cachedLoad(counter *int) (Config, error) {
-	configMu.Lock()
-	defer configMu.Unlock()
+	currentStore().mu.Lock()
+	defer currentStore().mu.Unlock()
 	cfg, err := readConfigCachedLocked(func() (Config, bool, error) {
 		*counter++
 		return readPrimaryConfig()
@@ -33,17 +33,17 @@ func cachedLoad(counter *int) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	return applyConfigDefaults(cfg), nil
+	return applyDefaults(cfg), nil
 }
 
 // cachedRaw returns a copy of the raw cached Config, if any.
 func cachedRaw() (Config, bool) {
-	configMu.Lock()
-	defer configMu.Unlock()
-	if cachedConfig == nil {
+	currentStore().mu.Lock()
+	defer currentStore().mu.Unlock()
+	if currentStore().cache == nil {
 		return Config{}, false
 	}
-	return cloneConfig(cachedConfig.cfg), true
+	return cloneConfig(currentStore().cache.cfg), true
 }
 
 func writePrimary(t *testing.T, path, content string) {
@@ -403,9 +403,9 @@ func TestConfigCacheWriteInvalidation(t *testing.T) {
 			t.Fatal(err)
 		}
 		first.ThemeColor = "written"
-		configMu.Lock()
+		currentStore().mu.Lock()
 		werr := writeConfigLocked(first)
-		configMu.Unlock()
+		currentStore().mu.Unlock()
 		if werr != nil {
 			t.Fatal(werr)
 		}
@@ -426,9 +426,9 @@ func TestConfigCacheWriteInvalidation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		configMu.Lock()
+		currentStore().mu.Lock()
 		werr := writeConfigLocked(loaded)
-		configMu.Unlock()
+		currentStore().mu.Unlock()
 		if werr != nil {
 			t.Fatal(werr)
 		}
@@ -450,9 +450,9 @@ func TestConfigCacheWriteInvalidation(t *testing.T) {
 			t.Fatal(err)
 		}
 		writePrimary(t, path, "theme_color = [\n")
-		configMu.Lock()
+		currentStore().mu.Lock()
 		werr := writeConfigLocked(Config{ThemeColor: "bogus", CompressionEnabled: true})
-		configMu.Unlock()
+		currentStore().mu.Unlock()
 		if werr == nil {
 			t.Fatal("writeConfigLocked accepted malformed primary TOML")
 		}
@@ -482,7 +482,7 @@ func TestConfigCacheUnstableReadNotPublished(t *testing.T) {
 	// the swapping callback below actually runs.
 	writePrimary(t, path, "theme_color = \"mid-read-base\"\n")
 	var swapErr error
-	configMu.Lock()
+	currentStore().mu.Lock()
 	cfg, err := readConfigCachedLocked(func() (Config, bool, error) {
 		c, p, e := readPrimaryConfig()
 		if e == nil && p {
@@ -492,7 +492,7 @@ func TestConfigCacheUnstableReadNotPublished(t *testing.T) {
 		}
 		return c, p, e
 	})
-	configMu.Unlock()
+	currentStore().mu.Unlock()
 	if swapErr != nil {
 		t.Fatal(swapErr)
 	}

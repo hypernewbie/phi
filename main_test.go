@@ -172,20 +172,8 @@ func TestModelPresets_BackwardCompatibilityAndDefaults(t *testing.T) {
 		t.Errorf("expected legacy presets to migrate to 'pi', got %v", cfg.ModelPresets)
 	}
 
-	// Trigger defaults merging helper
-	cfg.ModelPresets = ensureModelPresetDefaults(cfg.ModelPresets)
-
-	// Verify defaults merged for other backends
-	opencodeModels := cfg.ModelPresets["opencode"]
-	if len(opencodeModels) != 1 || opencodeModels[0] != "opencode/big-pickle" {
-		t.Errorf("expected 'opencode' default 'opencode/big-pickle', got %v", opencodeModels)
-	}
-
-	claudeModels := cfg.ModelPresets["claude"]
-	wantClaudeModels := []string{"fable", "opus", "sonnet", "haiku"}
-	if !reflect.DeepEqual(claudeModels, wantClaudeModels) {
-		t.Errorf("expected Claude defaults %v, got %v", wantClaudeModels, claudeModels)
-	}
+	// Defaults merging is covered in internal/config; this test keeps the
+	// public unmarshal behavior in the main package.
 
 	// Test mapping format unmarshal works natively too
 	mapJSON := `{"model_presets": {"opencode": ["custom-pickle"], "pi": ["pi-model"]}}`
@@ -3355,4 +3343,14 @@ func TestThinkingPresets_AppearInConfigResponse(t *testing.T) {
 	if !reflect.DeepEqual(levels, []string{"medium"}) {
 		t.Fatalf("got %v", levels)
 	}
+}
+
+// mustRead returns the file contents or fails the test.
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

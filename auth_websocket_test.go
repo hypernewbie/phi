@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/rpc"
+	"github.com/hypernewbie/phi/pkg/system"
 	"github.com/hypernewbie/phi/pkg/ws"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
@@ -1198,13 +1199,16 @@ func TestAccessWSClearAndRehashCloseSockets(t *testing.T) {
 
 		// A same-encoded submission must not touch Config: the deterministic v1
 		// signature cannot rotate, so only the state file changes.
-		previousWriter := writeConfigFile
+		previousWriter := configWriter
+		if previousWriter == nil {
+			previousWriter = system.WriteFileAtomicPreserveExisting
+		}
 		configWrites := 0
-		writeConfigFile = func(path string, data []byte, mode os.FileMode) error {
+		setConfigWriter(func(path string, data []byte, mode os.FileMode) error {
 			configWrites++
 			return previousWriter(path, data, mode)
-		}
-		t.Cleanup(func() { writeConfigFile = previousWriter })
+		})
+		t.Cleanup(func() { setConfigWriter(nil) })
 
 		cookieSocket := requireDialed(t, socketURL, "/ws/md-events", wireproto.EventsSubprotocol, "", cookie)
 		firstSocket := requireDialed(t, socketURL, "/ws/md-events", wireproto.EventsSubprotocol, first, "")

@@ -14,6 +14,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/hypernewbie/phi/internal/config"
 )
 
 // resolvedSessionListPageSize defaults 0 (unset) to 10 and clamps every other
@@ -60,7 +62,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		"claude_dangerously_skip_permissions": cfg.ClaudeDangerouslySkipPermissions,
 		"agy_theme_ansi":                      cfg.AgyThemeAnsi,
 		"auto_reconnect":                      cfg.AutoReconnect,
-		"sync_coordinator":                    cfg.syncCoordinatorURL(addr),
+		"sync_coordinator":                    cfg.SyncCoordinatorURL(addr),
 		"ui_font_family":                      cfg.UIFontFamily,
 		"ui_font_size":                        cfg.UIFontSize,
 		"terminal_font_family":                cfg.TerminalFontFamily,
@@ -222,9 +224,7 @@ func validateThinkingPresetList(levels []string) ([]string, bool) {
 func handleThinkingPresets(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		configMu.Lock()
-		cfg, err := readConfigCachedLocked(readPrimaryConfig)
-		configMu.Unlock()
+		cfg, err := configStore().LoadWithError()
 		if err != nil {
 			http.Error(w, "Failed to read config", http.StatusInternalServerError)
 			return
@@ -236,10 +236,10 @@ func handleThinkingPresets(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string][]string{"thinking_presets": levels})
 	case http.MethodPut:
-		configMu.Lock()
-		defer configMu.Unlock()
-		cfg, err := readConfigLocked()
-		if err != nil {
+		// Read before decoding so an unreadable config stays a 500 even for a
+		// malformed body. The write path rereads under the store lock, so a
+		// stale snapshot can never drop another field.
+		if _, err := configStore().ReadAuthoritative(); err != nil {
 			http.Error(w, "Failed to read config", http.StatusInternalServerError)
 			return
 		}
@@ -264,8 +264,10 @@ func handleThinkingPresets(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Invalid thinking preset list", http.StatusBadRequest)
 			return
 		}
-		cfg.ThinkingPresets = levels
-		if err := writeConfigLocked(cfg); err != nil {
+		if _, err := configStore().Update(func(cfg *Config) error {
+			cfg.ThinkingPresets = levels
+			return nil
+		}); err != nil {
 			http.Error(w, "Failed to write config", http.StatusInternalServerError)
 			return
 		}
@@ -510,21 +512,27 @@ func mobileAppearanceFromConfig(cfg Config) mobileAppearanceState {
 }
 
 func handleMobileAppearance(w http.ResponseWriter, r *http.Request) {
-	serveMobileAppearance(w, r, false, writeConfigLocked)
+	serveMobileAppearance(w, r, false, configStore().Update)
 }
 
 func handleMobileAppearanceFence(w http.ResponseWriter, r *http.Request) {
-	serveMobileAppearance(w, r, true, writeConfigLocked)
+	serveMobileAppearance(w, r, true, configStore().Update)
 }
 
-// The writer argument permits deterministic disk-failure tests without a global hook.
-func serveMobileAppearance(w http.ResponseWriter, r *http.Request, fence bool, write func(Config) error) {
+// Revision outcomes the writer reports back so the handler can map them to
+// status codes. A conflict still returns the current state with 409.
+var (
+	errMobileAppearanceConflict  = errors.New("mobile appearance revision conflict")
+	errMobileAppearanceInvalid   = errors.New("invalid stored mobile appearance revision")
+	errMobileAppearanceExhausted = errors.New("mobile appearance revision exhausted")
+)
+
+// The update argument permits deterministic disk-failure tests without a global hook.
+func serveMobileAppearance(w http.ResponseWriter, r *http.Request, fence bool, update func(func(*Config) error) (Config, error)) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method == http.MethodGet && !fence {
-		configMu.Lock()
-		cfg, err := readConfigCachedLocked(readPrimaryConfig)
+		cfg, err := configStore().LoadWithError()
 		state := mobileAppearanceFromConfig(cfg)
-		configMu.Unlock()
 		if err != nil || state.Revision > maxMobileAppearanceRevision {
 			http.Error(w, "Failed to read config", http.StatusInternalServerError)
 			return
@@ -620,35 +628,39 @@ func serveMobileAppearance(w http.ResponseWriter, r *http.Request, fence bool, w
 		return
 	}
 
-	configMu.Lock()
-	cfg, err := readConfigLocked()
-	status := http.StatusOK
-	if err == nil {
+	cfg, err := update(func(cfg *Config) error {
 		if cfg.MobileAppearanceRevision > maxMobileAppearanceRevision {
-			err = errors.New("invalid stored revision")
-		} else if !fence && cfg.MobileAppearanceRevision != revision {
-			status = http.StatusConflict
-		} else if cfg.MobileAppearanceRevision == maxMobileAppearanceRevision {
-			err = errors.New("revision exhausted")
-		} else {
-			if _, ok := fields["ui_font_size"]; ok {
-				cfg.MobileUIFontSize = patch.UIFontSize
-			}
-			if _, ok := fields["terminal_font_size"]; ok {
-				cfg.MobileTerminalFontSize = patch.TerminalFontSize
-			}
-			if _, ok := fields["ui_font_family"]; ok {
-				cfg.MobileUIFontFamily = patch.UIFontFamily
-			}
-			if _, ok := fields["terminal_font_family"]; ok {
-				cfg.MobileTerminalFontFamily = patch.TerminalFontFamily
-			}
-			cfg.MobileAppearanceRevision++
-			err = write(cfg)
+			return errMobileAppearanceInvalid
 		}
+		if !fence && cfg.MobileAppearanceRevision != revision {
+			return errMobileAppearanceConflict
+		}
+		if cfg.MobileAppearanceRevision == maxMobileAppearanceRevision {
+			return errMobileAppearanceExhausted
+		}
+		if _, ok := fields["ui_font_size"]; ok {
+			cfg.MobileUIFontSize = patch.UIFontSize
+		}
+		if _, ok := fields["terminal_font_size"]; ok {
+			cfg.MobileTerminalFontSize = patch.TerminalFontSize
+		}
+		if _, ok := fields["ui_font_family"]; ok {
+			cfg.MobileUIFontFamily = patch.UIFontFamily
+		}
+		if _, ok := fields["terminal_font_family"]; ok {
+			cfg.MobileTerminalFontFamily = patch.TerminalFontFamily
+		}
+		cfg.MobileAppearanceRevision++
+		return nil
+	})
+	status := http.StatusOK
+	switch {
+	case errors.Is(err, errMobileAppearanceConflict):
+		status, err = http.StatusConflict, nil
+	case errors.Is(err, errMobileAppearanceInvalid), errors.Is(err, errMobileAppearanceExhausted):
+		status = http.StatusInternalServerError
 	}
 	state := mobileAppearanceFromConfig(cfg)
-	configMu.Unlock()
 	if err != nil {
 		http.Error(w, "Failed to save config", http.StatusInternalServerError)
 		return
@@ -974,7 +986,7 @@ func handleOpenCodeIdleStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	val := normalizeOpenCodeIdleStopMinutes(*req.Minutes)
+	val := config.NormalizeOpenCodeIdleStopMinutes(*req.Minutes)
 	cfg := loadConfig()
 	cfg.OpenCodeIdleStopMinutes = val
 	saveConfig(cfg)

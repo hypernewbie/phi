@@ -174,7 +174,7 @@ func TestPiSyncboardDefaultTargetMatchesConfigForBoundListeners(t *testing.T) {
 			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 				t.Fatal(err)
 			}
-			want := (Config{}).syncCoordinatorURL(addr)
+			want := (Config{}).SyncCoordinatorURL(addr)
 			if got := body["sync_coordinator"]; got != want {
 				t.Fatalf("GET /api/config target = %v, syncCoordinatorURL = %q", got, want)
 			}

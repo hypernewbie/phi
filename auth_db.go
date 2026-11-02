@@ -1,17 +1,13 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/url"
 	"os"
@@ -22,7 +18,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/BurntSushi/toml"
+	"github.com/hypernewbie/phi/internal/config"
 	_ "modernc.org/sqlite"
 )
 
@@ -727,44 +723,20 @@ func updateAccessDBFamilies(tx *sql.Tx, oldFamilies, nextFamilies []accessV2Fami
 	return nil
 }
 
-// accessAuthMigrationMarker makes the Config/SQLite import crash-recoverable.
-// Its ID is random but non-secret; the verifier and all sessions remain in auth.db.
-type accessAuthMigrationMarker struct {
-	State string `json:"state" toml:"state"`
-	ID    string `json:"id" toml:"id"`
-}
-
-func accessMigrationID(marker *accessAuthMigrationMarker) ([16]byte, error) {
-	var id [16]byte
-	if marker == nil || (marker.State != "pending" && marker.State != "complete") {
-		return id, errors.New("invalid auth migration marker state")
-	}
-	decoded, err := base64.RawURLEncoding.DecodeString(marker.ID)
-	if err != nil || len(decoded) != len(id) || base64.RawURLEncoding.EncodeToString(decoded) != marker.ID {
-		return id, errors.New("invalid auth migration marker ID")
-	}
-	copy(id[:], decoded)
-	return id, nil
-}
-
-func newAccessMigrationMarker(state string) (*accessAuthMigrationMarker, error) {
-	id := make([]byte, 16)
-	if _, err := rand.Read(id); err != nil {
-		return nil, err
-	}
-	marker := &accessAuthMigrationMarker{State: state, ID: base64.RawURLEncoding.EncodeToString(id)}
-	if _, err := accessMigrationID(marker); err != nil {
-		return nil, err
-	}
-	return marker, nil
-}
-
+// readAccessMigrationConfig reads the stored verifier and marker for the
+// rollback guard. A read error keeps rollback refused.
 func readAccessMigrationConfig() (Config, error) {
-	configMu.RLock()
-	defer configMu.RUnlock()
-	return readAccessMigrationConfigLocked()
+	return configStore().ReadAuthoritative()
 }
 
+// writeAccessMigrationConfig is the access-side seam over the store's locked
+// compare-and-swap. It moves with the access manager into internal/access.
+func writeAccessMigrationConfig(expected *accessAuthMigrationMarker, expectedVerifier string, next *accessAuthMigrationMarker, nextVerifier string) error {
+	return configStore().CompareAndSwapMigration(expected, expectedVerifier, next, nextVerifier)
+}
+
+// acquireAccessRollbackGuard takes the access state lock and refuses a
+// rollback once the Config/SQLite import has started or left any state.
 func acquireAccessRollbackGuard() (func(), error) {
 	lock := &accessStateLock{}
 	if !lock.tryAcquire(accessV2LockPath()) {
@@ -790,178 +762,6 @@ func acquireAccessRollbackGuard() (func(), error) {
 		}
 	}
 	return release, nil
-}
-
-func validateAccessMigrationTOML(metadata toml.MetaData, cfg Config) error {
-	fields := make(map[string]bool, 2)
-	present := false
-	for _, key := range metadata.Keys() {
-		if len(key) == 0 || key[0] != "access_auth_migration" {
-			continue
-		}
-		present = true
-		if len(key) == 1 {
-			continue
-		}
-		if len(key) != 2 || (key[1] != "state" && key[1] != "id") {
-			return errors.New("invalid auth migration marker key")
-		}
-		fields[key[1]] = true
-	}
-	if !present {
-		if cfg.AccessAuthMigration != nil {
-			return errors.New("invalid auth migration marker")
-		}
-		return nil
-	}
-	if cfg.AccessAuthMigration == nil || !fields["state"] || !fields["id"] || len(fields) != 2 {
-		return errors.New("invalid auth migration marker")
-	}
-	if _, err := accessMigrationID(cfg.AccessAuthMigration); err != nil {
-		return err
-	}
-	return nil
-}
-
-func decodeAccessMigrationJSON(raw []byte, cfg *Config) error {
-	if err := validateOneJSONValue(raw, true); err != nil {
-		return err
-	}
-	if err := json.Unmarshal(raw, cfg); err != nil {
-		return err
-	}
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &top); err != nil {
-		return err
-	}
-	markerRaw, ok := top["access_auth_migration"]
-	if !ok {
-		return nil
-	}
-	var marker accessAuthMigrationMarker
-	decoder := json.NewDecoder(bytes.NewReader(markerRaw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&marker); err != nil {
-		return err
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return errors.New("invalid auth migration marker")
-	}
-	if _, err := accessMigrationID(&marker); err != nil {
-		return err
-	}
-	cfg.AccessAuthMigration = &marker
-	return nil
-}
-
-func readAccessMigrationConfigLocked() (Config, error) {
-	return readConfigLocked()
-}
-
-func validateOneJSONValue(raw []byte, objectOnly bool) error {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	first, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	if objectOnly && first != json.Delim('{') {
-		return errors.New("configuration must be one JSON object")
-	}
-	if err := scanStrictJSONValue(decoder, first); err != nil {
-		return err
-	}
-	if _, err := decoder.Token(); err != io.EOF {
-		if err == nil {
-			return errors.New("trailing JSON value")
-		}
-		return err
-	}
-	return nil
-}
-
-func scanStrictJSONValue(decoder *json.Decoder, token json.Token) error {
-	delim, ok := token.(json.Delim)
-	if !ok {
-		return nil
-	}
-	switch delim {
-	case '{':
-		seen := make(map[string]struct{})
-		for decoder.More() {
-			keyToken, err := decoder.Token()
-			if err != nil {
-				return err
-			}
-			key, ok := keyToken.(string)
-			if !ok {
-				return errors.New("JSON object key is not a string")
-			}
-			if _, duplicate := seen[key]; duplicate {
-				return errors.New("duplicate JSON object key")
-			}
-			seen[key] = struct{}{}
-			value, err := decoder.Token()
-			if err != nil {
-				return err
-			}
-			if err := scanStrictJSONValue(decoder, value); err != nil {
-				return err
-			}
-		}
-		close, err := decoder.Token()
-		if err != nil || close != json.Delim('}') {
-			return errors.New("invalid JSON object")
-		}
-	case '[':
-		for decoder.More() {
-			value, err := decoder.Token()
-			if err != nil {
-				return err
-			}
-			if err := scanStrictJSONValue(decoder, value); err != nil {
-				return err
-			}
-		}
-		close, err := decoder.Token()
-		if err != nil || close != json.Delim(']') {
-			return errors.New("invalid JSON array")
-		}
-	default:
-		return errors.New("invalid JSON delimiter")
-	}
-	return nil
-}
-
-func writeAccessMigrationConfig(expected *accessAuthMigrationMarker, expectedVerifier string, next *accessAuthMigrationMarker, nextVerifier string) error {
-	configMu.Lock()
-	defer configMu.Unlock()
-	cfg, err := readAccessMigrationConfigLocked()
-	if err != nil {
-		return err
-	}
-	if cfg.AccessPasswordHash != expectedVerifier || !sameAccessMigrationMarker(cfg.AccessAuthMigration, expected) {
-		return errors.New("auth migration Config changed during startup")
-	}
-	cfg.AccessPasswordHash = nextVerifier
-	cfg.AccessAuthMigration = next
-	if err := writeConfigContentsLocked(cfg); err != nil {
-		return err
-	}
-	written, err := readAccessMigrationConfigLocked()
-	if err != nil {
-		return err
-	}
-	if written.AccessPasswordHash != nextVerifier || !sameAccessMigrationMarker(written.AccessAuthMigration, next) {
-		return errors.New("auth migration Config write did not verify")
-	}
-	return nil
-}
-
-func sameAccessMigrationMarker(a, b *accessAuthMigrationMarker) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	return a.State == b.State && a.ID == b.ID
 }
 
 func importAccessLegacyState(encoded string) (accessV2ActiveState, bool, error) {
@@ -1016,7 +816,7 @@ func (m *accessAuthManager) openMigratedAccessDB() (accessDBState, *accessDB, er
 		if _, err := parseAccessPasswordHash(cfg.AccessPasswordHash); err != nil {
 			return accessDBState{}, nil, err
 		}
-		marker, err := newAccessMigrationMarker("pending")
+		marker, err := config.NewMigrationMarker("pending")
 		if err != nil {
 			return accessDBState{}, nil, err
 		}
@@ -1025,7 +825,7 @@ func (m *accessAuthManager) openMigratedAccessDB() (accessDBState, *accessDB, er
 		}
 		cfg.AccessAuthMigration = marker
 	}
-	migrationID, err := accessMigrationID(cfg.AccessAuthMigration)
+	migrationID, err := config.MigrationMarkerID(cfg.AccessAuthMigration)
 	if err != nil {
 		return accessDBState{}, nil, err
 	}
@@ -1083,7 +883,7 @@ func (m *accessAuthManager) openMigratedAccessDB() (accessDBState, *accessDB, er
 			return accessDBState{}, nil, err
 		}
 		verifiedConfig, err := readAccessMigrationConfig()
-		if err != nil || verifiedConfig.AccessPasswordHash != "" || !sameAccessMigrationMarker(verifiedConfig.AccessAuthMigration, &complete) {
+		if err != nil || verifiedConfig.AccessPasswordHash != "" || !config.SameMigrationMarker(verifiedConfig.AccessAuthMigration, &complete) {
 			store.close()
 			if err == nil {
 				err = errors.New("completed auth migration Config did not verify")
@@ -1115,7 +915,7 @@ func (m *accessAuthManager) openMigratedAccessDB() (accessDBState, *accessDB, er
 			return accessDBState{}, nil, err
 		}
 		verifiedConfig, err := readAccessMigrationConfig()
-		if err != nil || verifiedConfig.AccessPasswordHash != "" || !sameAccessMigrationMarker(verifiedConfig.AccessAuthMigration, &marker) {
+		if err != nil || verifiedConfig.AccessPasswordHash != "" || !config.SameMigrationMarker(verifiedConfig.AccessAuthMigration, &marker) {
 			store.close()
 			if err == nil {
 				err = errors.New("completed auth migration Config did not verify")

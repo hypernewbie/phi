@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/hypernewbie/phi/internal/config"
 	"github.com/hypernewbie/phi/pkg/ws"
 )
 
@@ -484,7 +485,7 @@ func loadAccessV2StateFile(path string) (*accessV2StateFile, error) {
 	if len(raw) > maxAccessV2StateBytes {
 		return nil, errors.New("access state exceeds the size bound")
 	}
-	if err := validateOneJSONValue(raw, true); err != nil {
+	if err := config.ValidateJSONValue(raw, true); err != nil {
 		return nil, err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))

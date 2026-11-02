@@ -19,7 +19,7 @@ func mobileRequest(t *testing.T, fence bool, body string, want int) mobileAppear
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/config/mobile-appearance", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json; charset=utf-8")
-	serveMobileAppearance(w, r, fence, writeConfigLocked)
+	serveMobileAppearance(w, r, fence, configStore().Update)
 	if w.Code != want {
 		t.Fatalf("status=%d want=%d body=%s", w.Code, want, w.Body.String())
 	}
@@ -154,7 +154,7 @@ func TestMobileAppearanceRejectsWithoutMutation(t *testing.T) {
 			if ct != "missing" {
 				r.Header.Set("Content-Type", ct)
 			}
-			serveMobileAppearance(w, r, tc.fence, writeConfigLocked)
+			serveMobileAppearance(w, r, tc.fence, configStore().Update)
 			if w.Code != tc.status {
 				t.Fatalf("status=%d want=%d body=%s", w.Code, tc.status, w.Body.String())
 			}
@@ -213,19 +213,22 @@ func TestMobileAppearanceReadWriteErrorsAndRevisionLimit(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"revision":1,"fields":{"ui_font_size":24}}`))
 	r.Header.Set("Content-Type", "application/json")
-	serveMobileAppearance(w, r, false, func(Config) error { return errors.New("injected failure") })
+	serveMobileAppearance(w, r, false, func(mutate func(*Config) error) (Config, error) {
+		cfg, err := configStore().ReadAuthoritative()
+		if err != nil {
+			return Config{}, err
+		}
+		_ = mutate(&cfg)
+		return cfg, errors.New("injected failure")
+	})
 	after, _ := os.ReadFile(path)
 	if w.Code != 500 || !bytes.Equal(before, after) {
 		t.Fatalf("failed write status=%d mutated=%t", w.Code, !bytes.Equal(before, after))
 	}
-	configMu.Lock()
-	cfg, err := readConfigLocked()
-	if err == nil {
+	if _, err := configStore().Update(func(cfg *Config) error {
 		cfg.MobileAppearanceRevision = maxMobileAppearanceRevision
-		err = writeConfigLocked(cfg)
-	}
-	configMu.Unlock()
-	if err != nil {
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	mobileRequest(t, false, `{"revision":9007199254740991,"fields":{"ui_font_size":24}}`, 500)
@@ -249,7 +252,7 @@ func TestMobileAppearanceMethodsAndAuthorization(t *testing.T) {
 	auth := useTestAccessAuth(t)
 	for _, fence := range []bool{false, true} {
 		w := httptest.NewRecorder()
-		serveMobileAppearance(w, httptest.NewRequest(http.MethodDelete, "/", nil), fence, writeConfigLocked)
+		serveMobileAppearance(w, httptest.NewRequest(http.MethodDelete, "/", nil), fence, configStore().Update)
 		if w.Code != 405 {
 			t.Fatalf("DELETE=%d", w.Code)
 		}

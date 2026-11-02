@@ -1,4 +1,4 @@
-package main
+package webassets
 
 import (
 	"bytes"
@@ -14,39 +14,31 @@ import (
 	"github.com/andybalholm/brotli"
 )
 
-// setupStaticAssets initializes webRoot and the ETag map from the real
-// embedded assets. Re-inits every call: initStaticAssets captures
-// compression_enabled at startup, so each test gets the default-true
-// snapshot from its own temp config regardless of what an earlier test
-// captured. Returns the temp config path for tests that rewrite it.
-func setupStaticAssets(t *testing.T) string {
+// testRoot is the real web/ tree from the repository. Embedded trees are
+// built from the same files, so serving behavior against disk matches it.
+func testRoot() fs.FS { return os.DirFS("../../web") }
+
+// newTestHandler builds a handler over testRoot with compression on.
+// Each call re-reads the tree, which is what a process restart does.
+func newTestHandler(t *testing.T) *Handler {
 	t.Helper()
-	cfgPath := withTempConfig(t)
-	if webRoot == nil {
-		root, err := newWebRoot()
-		if err != nil {
-			t.Fatalf("newWebRoot: %v", err)
-		}
-		webRoot = root
-	}
-	initStaticAssets(webRoot)
-	return cfgPath
+	return New(testRoot(), nil, true)
 }
 
-func getStatic(t *testing.T, target string, hdr map[string]string) *httptest.ResponseRecorder {
+func getStatic(t *testing.T, h *Handler, target string, hdr map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, target, nil)
 	for k, v := range hdr {
 		req.Header.Set(k, v)
 	}
 	rec := httptest.NewRecorder()
-	serveStatic(rec, req)
+	h.ServeHTTP(rec, req)
 	return rec
 }
 
 func TestStaticETagAndCacheControl(t *testing.T) {
-	setupStaticAssets(t)
-	rec := getStatic(t, "/app.js", nil)
+	h := newTestHandler(t)
+	rec := getStatic(t, h, "/app.js", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -57,19 +49,19 @@ func TestStaticETagAndCacheControl(t *testing.T) {
 	if cc := rec.Header().Get("Cache-Control"); cc != "no-cache" {
 		t.Fatalf("Cache-Control = %q, want no-cache", cc)
 	}
-	want, err := fs.ReadFile(webRoot, "app.js")
+	want, err := fs.ReadFile(testRoot(), "app.js")
 	if err != nil {
-		t.Fatalf("read embedded app.js: %v", err)
+		t.Fatalf("read app.js: %v", err)
 	}
 	if rec.Body.String() != string(want) {
-		t.Fatal("body differs from embedded app.js")
+		t.Fatal("body differs from app.js")
 	}
 }
 
 func TestStaticConditionalGet304(t *testing.T) {
-	setupStaticAssets(t)
-	etag := getStatic(t, "/app.js", nil).Header().Get("Etag")
-	rec := getStatic(t, "/app.js", map[string]string{"If-None-Match": etag})
+	h := newTestHandler(t)
+	etag := getStatic(t, h, "/app.js", nil).Header().Get("Etag")
+	rec := getStatic(t, h, "/app.js", map[string]string{"If-None-Match": etag})
 	if rec.Code != http.StatusNotModified {
 		t.Fatalf("status = %d, want 304", rec.Code)
 	}
@@ -79,34 +71,34 @@ func TestStaticConditionalGet304(t *testing.T) {
 }
 
 func TestStaticRootSharesIndexETag(t *testing.T) {
-	setupStaticAssets(t)
-	root := getStatic(t, "/", nil).Header().Get("Etag")
-	index := staticAssets["index.html"].etag("")
+	h := newTestHandler(t)
+	root := getStatic(t, h, "/", nil).Header().Get("Etag")
+	index := h.assets["index.html"].etag("")
 	if root != index {
 		t.Fatalf("ETag for / = %q, want index.html's %q", root, index)
 	}
 }
 
 func TestStaticNonGetUntouched(t *testing.T) {
-	setupStaticAssets(t)
+	h := newTestHandler(t)
 	req := httptest.NewRequest(http.MethodPost, "/app.js", nil)
 	rec := httptest.NewRecorder()
-	serveStatic(rec, req)
+	h.ServeHTTP(rec, req)
 	if rec.Header().Get("Etag") != "" || rec.Header().Get("Cache-Control") != "" {
 		t.Fatal("POST must not receive cache headers")
 	}
 }
 
 func TestStaticBellHasETag(t *testing.T) {
-	setupStaticAssets(t)
-	if getStatic(t, "/vendor/bell.wav", nil).Header().Get("Etag") == "" {
+	h := newTestHandler(t)
+	if getStatic(t, h, "/vendor/bell.wav", nil).Header().Get("Etag") == "" {
 		t.Fatal("bell.wav missing ETag")
 	}
 }
 
 func TestStaticGzipNegotiation(t *testing.T) {
-	setupStaticAssets(t)
-	rec := getStatic(t, "/app.js", map[string]string{"Accept-Encoding": "gzip"})
+	h := newTestHandler(t)
+	rec := getStatic(t, h, "/app.js", map[string]string{"Accept-Encoding": "gzip"})
 	if ce := rec.Header().Get("Content-Encoding"); ce != "gzip" {
 		t.Fatalf("Content-Encoding = %q, want gzip", ce)
 	}
@@ -121,15 +113,15 @@ func TestStaticGzipNegotiation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gunzip: %v", err)
 	}
-	want, _ := fs.ReadFile(webRoot, "app.js")
+	want, _ := fs.ReadFile(testRoot(), "app.js")
 	if !bytes.Equal(got, want) {
-		t.Fatal("gunzipped body differs from embedded app.js")
+		t.Fatal("gunzipped body differs from app.js")
 	}
 }
 
 func TestStaticBrotliPreferredOverGzip(t *testing.T) {
-	setupStaticAssets(t)
-	rec := getStatic(t, "/style.css", map[string]string{"Accept-Encoding": "gzip, deflate, br"})
+	h := newTestHandler(t)
+	rec := getStatic(t, h, "/style.css", map[string]string{"Accept-Encoding": "gzip, deflate, br"})
 	if ce := rec.Header().Get("Content-Encoding"); ce != "br" {
 		t.Fatalf("Content-Encoding = %q, want br", ce)
 	}
@@ -137,23 +129,23 @@ func TestStaticBrotliPreferredOverGzip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("brotli decode: %v", err)
 	}
-	want, _ := fs.ReadFile(webRoot, "style.css")
+	want, _ := fs.ReadFile(testRoot(), "style.css")
 	if !bytes.Equal(got, want) {
-		t.Fatal("brotli body differs from embedded style.css")
+		t.Fatal("brotli body differs from style.css")
 	}
 }
 
 func TestStaticUnknownEncodingIdentity(t *testing.T) {
-	setupStaticAssets(t)
-	rec := getStatic(t, "/app.js", map[string]string{"Accept-Encoding": "zstd"})
+	h := newTestHandler(t)
+	rec := getStatic(t, h, "/app.js", map[string]string{"Accept-Encoding": "zstd"})
 	if ce := rec.Header().Get("Content-Encoding"); ce != "" {
 		t.Fatalf("Content-Encoding = %q, want identity", ce)
 	}
 }
 
 func TestStaticSkipListNotCompressed(t *testing.T) {
-	setupStaticAssets(t)
-	rec := getStatic(t, "/vendor/logos/claude.png", map[string]string{"Accept-Encoding": "gzip, br"})
+	h := newTestHandler(t)
+	rec := getStatic(t, h, "/vendor/logos/claude.png", map[string]string{"Accept-Encoding": "gzip, br"})
 	if ce := rec.Header().Get("Content-Encoding"); ce != "" {
 		t.Fatalf("png got Content-Encoding %q", ce)
 	}
@@ -163,25 +155,25 @@ func TestStaticSkipListNotCompressed(t *testing.T) {
 }
 
 func TestStaticBellCompresses(t *testing.T) {
-	setupStaticAssets(t)
-	rec := getStatic(t, "/vendor/bell.wav", map[string]string{"Accept-Encoding": "gzip"})
+	h := newTestHandler(t)
+	rec := getStatic(t, h, "/vendor/bell.wav", map[string]string{"Accept-Encoding": "gzip"})
 	if ce := rec.Header().Get("Content-Encoding"); ce != "gzip" {
 		t.Fatalf("bell.wav Content-Encoding = %q, want gzip", ce)
 	}
-	orig, _ := fs.ReadFile(webRoot, "vendor/bell.wav")
+	orig, _ := fs.ReadFile(testRoot(), "vendor/bell.wav")
 	if rec.Body.Len() >= len(orig) {
 		t.Fatalf("compressed bell (%d) not smaller than original (%d)", rec.Body.Len(), len(orig))
 	}
 }
 
 func TestStaticCompressed304UsesVariantETag(t *testing.T) {
-	setupStaticAssets(t)
-	first := getStatic(t, "/app.js", map[string]string{"Accept-Encoding": "gzip"})
+	h := newTestHandler(t)
+	first := getStatic(t, h, "/app.js", map[string]string{"Accept-Encoding": "gzip"})
 	etag := first.Header().Get("Etag")
 	if !strings.HasSuffix(etag, `-gzip"`) {
 		t.Fatalf("variant ETag = %q, want -gzip suffix", etag)
 	}
-	rec := getStatic(t, "/app.js", map[string]string{
+	rec := getStatic(t, h, "/app.js", map[string]string{
 		"Accept-Encoding": "gzip",
 		"If-None-Match":   etag,
 	})
@@ -194,8 +186,8 @@ func TestStaticCompressed304UsesVariantETag(t *testing.T) {
 }
 
 func TestStaticRangeServedIdentity(t *testing.T) {
-	setupStaticAssets(t)
-	rec := getStatic(t, "/app.js", map[string]string{
+	h := newTestHandler(t)
+	rec := getStatic(t, h, "/app.js", map[string]string{
 		"Accept-Encoding": "gzip",
 		"Range":           "bytes=0-99",
 	})
@@ -210,15 +202,12 @@ func TestStaticRangeServedIdentity(t *testing.T) {
 	}
 }
 
-func TestStaticCompressionDisabledByConfig(t *testing.T) {
-	cfgPath := setupStaticAssets(t)
-	if err := os.WriteFile(cfgPath, []byte("compression_enabled = false\n"), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	// The flag is captured at startup, not per request — re-init to
-	// simulate a restart with the new config.
-	initStaticAssets(webRoot)
-	rec := getStatic(t, "/app.js", map[string]string{"Accept-Encoding": "gzip, br"})
+// TestStaticCompressionDisabled pins the startup-only compression
+// snapshot: a handler built with compression=false never encodes, but
+// keeps ETags.
+func TestStaticCompressionDisabled(t *testing.T) {
+	h := New(testRoot(), nil, false)
+	rec := getStatic(t, h, "/app.js", map[string]string{"Accept-Encoding": "gzip, br"})
 	if ce := rec.Header().Get("Content-Encoding"); ce != "" {
 		t.Fatalf("Content-Encoding = %q, want identity when disabled", ce)
 	}
@@ -231,8 +220,8 @@ func TestStaticCompressionDisabledByConfig(t *testing.T) {
 }
 
 func TestStaticIfMatchMismatch412(t *testing.T) {
-	setupStaticAssets(t)
-	rec := getStatic(t, "/app.js", map[string]string{
+	h := newTestHandler(t)
+	rec := getStatic(t, h, "/app.js", map[string]string{
 		"Accept-Encoding": "gzip",
 		"If-Match":        `"stale-tag"`,
 	})
@@ -245,9 +234,9 @@ func TestStaticIfMatchMismatch412(t *testing.T) {
 }
 
 func TestStaticIfMatchCurrentTag200(t *testing.T) {
-	setupStaticAssets(t)
-	etag := getStatic(t, "/app.js", map[string]string{"Accept-Encoding": "gzip"}).Header().Get("Etag")
-	rec := getStatic(t, "/app.js", map[string]string{
+	h := newTestHandler(t)
+	etag := getStatic(t, h, "/app.js", map[string]string{"Accept-Encoding": "gzip"}).Header().Get("Etag")
+	rec := getStatic(t, h, "/app.js", map[string]string{
 		"Accept-Encoding": "gzip",
 		"If-Match":        `"other-tag", ` + etag,
 	})
@@ -266,8 +255,8 @@ func TestStaticIfMatchCurrentTag200(t *testing.T) {
 // is load-bearing for the file viewer feature — the previous Windows
 // behavior would break module loading with no error log.
 func TestStaticMjsMimeOverride(t *testing.T) {
-	setupStaticAssets(t)
-	rec := getStatic(t, "/vendor/pdfjs/pdf.min.mjs", nil)
+	h := newTestHandler(t)
+	rec := getStatic(t, h, "/vendor/pdfjs/pdf.min.mjs", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -281,8 +270,8 @@ func TestStaticMjsMimeOverride(t *testing.T) {
 }
 
 func TestStaticWasmMimeOverride(t *testing.T) {
-	setupStaticAssets(t)
-	rec := getStatic(t, "/vendor/pdfjs/image_decoders/pdf.image_decoders.min.mjs", nil)
+	h := newTestHandler(t)
+	rec := getStatic(t, h, "/vendor/pdfjs/image_decoders/pdf.image_decoders.min.mjs", nil)
 	// .mjs files in image_decoders/ are loaded by the pdfjs worker as
 	// ES modules. They get the same MIME override.
 	if rec.Code != http.StatusOK {
@@ -294,12 +283,11 @@ func TestStaticWasmMimeOverride(t *testing.T) {
 }
 
 func TestStaticMjsCompresses(t *testing.T) {
-	// .mjs is text — gzip should shrink it ~70% (verified by the
-	// encoding-end-to-end test below; this is a regression guard
-	// against accidentally excluding .mjs from the compressible
-	// extensions list).
-	setupStaticAssets(t)
-	rec := getStatic(t, "/vendor/pdfjs/pdf.min.mjs", map[string]string{
+	// .mjs is text — gzip should shrink it ~70%. This is a regression
+	// guard against accidentally excluding .mjs from the compressible
+	// extensions list.
+	h := newTestHandler(t)
+	rec := getStatic(t, h, "/vendor/pdfjs/pdf.min.mjs", map[string]string{
 		"Accept-Encoding": "gzip",
 	})
 	if rec.Code != http.StatusOK {
@@ -318,9 +306,9 @@ func TestStaticMjsCompresses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gzip read: %v", err)
 	}
-	want, err := fs.ReadFile(webRoot, "vendor/pdfjs/pdf.min.mjs")
+	want, err := fs.ReadFile(testRoot(), "vendor/pdfjs/pdf.min.mjs")
 	if err != nil {
-		t.Fatalf("read embedded: %v", err)
+		t.Fatalf("read source: %v", err)
 	}
 	if !bytes.Equal(decoded, want) {
 		t.Errorf("decoded body length = %d, want %d", len(decoded), len(want))
@@ -328,9 +316,9 @@ func TestStaticMjsCompresses(t *testing.T) {
 }
 
 func TestStaticIfMatchWeakTagFails(t *testing.T) {
-	setupStaticAssets(t)
-	etag := getStatic(t, "/app.js", map[string]string{"Accept-Encoding": "gzip"}).Header().Get("Etag")
-	rec := getStatic(t, "/app.js", map[string]string{
+	h := newTestHandler(t)
+	etag := getStatic(t, h, "/app.js", map[string]string{"Accept-Encoding": "gzip"}).Header().Get("Etag")
+	rec := getStatic(t, h, "/app.js", map[string]string{
 		"Accept-Encoding": "gzip",
 		"If-Match":        "W/" + etag,
 	})

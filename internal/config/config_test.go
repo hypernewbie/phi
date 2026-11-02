@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"encoding/base64"
@@ -75,12 +75,12 @@ func TestConfigConcurrentAccess(t *testing.T) {
 }
 
 // Regression test for the 2026-07-14 poisoning incident: a test that
-// forgot withTempConfig silently wrote three fake workspaces into the
-// user's live ~/.phi/config.toml. The guard in configFilePath() now
-// panics if a test calls it without setting testConfigPath. This test
+// forgot isolation silently wrote three fake workspaces into the
+// user's live ~/.phi/config.toml. The store's path guard now panics
+// when a test resolves a path without an explicit primary. This test
 // pins the panic behavior so the guard is never accidentally weakened.
 func TestConfigFilePathPanicsUnderTestWithoutOverride(t *testing.T) {
-	// Save and clear testConfigPath for the duration of this sub-test.
+	// Save and clear the test path for the duration of this sub-test.
 	saved := testConfigPath
 	testConfigPath = ""
 	defer func() { testConfigPath = saved }()
@@ -89,19 +89,19 @@ func TestConfigFilePathPanicsUnderTestWithoutOverride(t *testing.T) {
 		if r := recover(); r != nil {
 			msg, ok := r.(string)
 			if !ok {
-				t.Fatalf("configFilePath() panicked with non-string: %v", r)
+				t.Fatalf("PrimaryPath() panicked with non-string: %v", r)
 			}
-			if !strings.Contains(msg, "testConfigPath") {
-				t.Fatalf("panic message should mention testConfigPath, got: %s", msg)
+			if !strings.Contains(msg, "temp file") {
+				t.Fatalf("panic message should name the temp-file requirement, got: %s", msg)
 			}
 			// OK — guard fired as expected.
 			return
 		}
-		t.Fatal("configFilePath() did not panic under test without testConfigPath; " +
+		t.Fatal("PrimaryPath() did not panic under test without an explicit path; " +
 			"the live-config guard has been silently weakened.")
 	}()
 
-	_ = configFilePath()
+	_ = currentStore().PrimaryPath()
 }
 
 // Regression test for the sanitize-on-save defense: even if a test
@@ -260,7 +260,7 @@ func TestConfigTOMLRoundTrip(t *testing.T) {
 
 func TestConfigChangeDetectionNoOp(t *testing.T) {
 	path := withTempConfig(t)
-	cfg := applyConfigDefaults(Config{CompressionEnabled: true})
+	cfg := applyDefaults(Config{CompressionEnabled: true})
 	if err := writeConfigLocked(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +403,7 @@ func TestConfigTOMLPrecedenceAndNoFallbackWhenPresent(t *testing.T) {
 
 func TestConfigNoOpSavePreservesCommentAndChangedValueRewrites(t *testing.T) {
 	path := withTempConfig(t)
-	cfg := applyConfigDefaults(Config{CompressionEnabled: true, ThemeColor: "purple", ThinkingPresets: []string{"low"}})
+	cfg := applyDefaults(Config{CompressionEnabled: true, ThemeColor: "purple", ThinkingPresets: []string{"low"}})
 	if err := writeConfigLocked(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -411,8 +411,13 @@ func TestConfigNoOpSavePreservesCommentAndChangedValueRewrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	saveConfig(cfg)
-	if w := thinkingPresetsRequest(t, "PUT", `{"thinking_presets":["low"]}`); w.Code != 200 {
-		t.Fatalf("thinking presets status %d", w.Code)
+	// The handler path this used to drive is now an HTTP-level test; the
+	// store update below is the same no-op write the handler performs.
+	if _, err := currentStore().Update(func(cfg *Config) error {
+		cfg.ThinkingPresets = []string{"low"}
+		return nil
+	}); err != nil {
+		t.Fatalf("thinking presets update: %v", err)
 	}
 	if !strings.Contains(string(mustRead(t, path)), "# preserved") {
 		t.Fatal("no-op writer removed comment")
@@ -615,5 +620,28 @@ func TestConfigDanglingPrimarySymlinkBlocksLegacyFallback(t *testing.T) {
 	}
 	if got := mustRead(t, legacy); !reflect.DeepEqual(got, legacyBytes) {
 		t.Fatalf("legacy JSON changed: got %q want %q", got, legacyBytes)
+	}
+}
+
+// TestModelPresetDefaultsMerge pins that legacy list presets migrate under
+// "pi" and fixed coders keep their defaults. The pre-split main-package test
+// asserted this through the same helper.
+func TestModelPresetDefaultsMerge(t *testing.T) {
+	merged := ensureModelPresetDefaults(ModelPresetsMap{"pi": {"test-model-1", "test-model-2"}})
+	if !reflect.DeepEqual(merged["pi"], []string{"test-model-1", "test-model-2"}) {
+		t.Errorf("pi presets changed: %v", merged["pi"])
+	}
+	if !reflect.DeepEqual(merged["opencode"], []string{"opencode/big-pickle"}) {
+		t.Errorf("opencode defaults = %v", merged["opencode"])
+	}
+	if !reflect.DeepEqual(merged["claude"], []string{"fable", "opus", "sonnet", "haiku"}) {
+		t.Errorf("claude defaults = %v", merged["claude"])
+	}
+	if !reflect.DeepEqual(merged["agy"], []string{"gemini-3.5-flash", "gemini-3.1-pro", "gemini-1.5-pro", "gemini-1.5-flash"}) {
+		t.Errorf("agy defaults = %v", merged["agy"])
+	}
+	// An explicit empty list is a user choice, not a missing default.
+	if got := ensureModelPresetDefaults(ModelPresetsMap{"claude": {}}); len(got["claude"]) != 0 {
+		t.Errorf("explicit empty claude list must stay empty, got %v", got["claude"])
 	}
 }

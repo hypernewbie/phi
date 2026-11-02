@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"log"
 	"log/slog"
 	"net"
@@ -23,6 +22,7 @@ import (
 	"time"
 
 	"github.com/hypernewbie/phi/internal/pibridge"
+	"github.com/hypernewbie/phi/internal/webassets"
 	"github.com/hypernewbie/phi/pkg/bindaddr"
 	"github.com/hypernewbie/phi/pkg/coders"
 	"github.com/hypernewbie/phi/pkg/fleet"
@@ -49,8 +49,7 @@ var (
 	cpuSampler     = system.NewSampler()
 	activeCWD      string
 	serverPort     = 7070
-	webRoot        fs.FS
-	diskStatic     http.Handler
+	staticHandler  http.Handler
 	fleetPoller    = fleet.NewPoller()
 
 	Version     = "dev"
@@ -145,13 +144,13 @@ func main() {
 	}
 
 	if *webFlag != "" {
-		diskRoot, err := openDiskWebRoot(*webFlag)
+		diskRoot, err := webassets.OpenDiskRoot(*webFlag)
 		if err != nil {
 			slog.Error("failed to open web asset directory", "dir", *webFlag, "err", err)
 			os.Exit(1)
 		}
 		defer diskRoot.Close()
-		diskStatic = newDiskStaticHandler(diskRoot.FS())
+		staticHandler = webassets.NewDisk(diskRoot.FS())
 		slog.Info("serving web assets from disk", "dir", diskRoot.Name())
 	}
 
@@ -160,7 +159,7 @@ func main() {
 	// Ensure config directory exists and contains CWD as a workspace
 	cfg, err := loadConfigWithError()
 	if err != nil {
-		logConfigReadError(configFilePath(), err)
+		slog.Error("config read failed", "path", configFilePath(), "err", err)
 		os.Exit(1)
 	}
 	if err := accessAuth.configure(cfg.AccessPasswordHash); err != nil {
@@ -291,14 +290,14 @@ func main() {
 
 	// Without --web, use embedded assets from any working directory.
 	// Ordinary builds embed web/ raw; release builds decompress webdist/.
-	if diskStatic == nil {
-		var subErr error
-		webRoot, subErr = newWebRoot()
+	if staticHandler == nil {
+		root, precompressed, subErr := newWebRoot()
 		if subErr != nil {
 			slog.Error("failed to load embedded web assets", "err", subErr)
 			os.Exit(1)
 		}
-		initStaticAssets(webRoot)
+		// compression_enabled is captured once here; toggling it needs a restart.
+		staticHandler = webassets.New(root, precompressed, cfg.CompressionEnabled)
 	}
 
 	// API Routing
@@ -718,7 +717,7 @@ func printWelcomeBanner(cfg Config, addrs []bindaddr.Addr, port int) {
 	fmt.Printf("  %sCWD:%s          %s\n", colorEsc, resetEsc, activeCWD)
 	fmt.Printf("  %sWorkspaces:%s   %d active\n", colorEsc, resetEsc, len(cfg.Workspaces))
 	fmt.Printf("  %sHostname:%s     %s\n", colorEsc, resetEsc, strings.ToUpper(host))
-	fmt.Printf("  %sCoordinator:%s  %s\n", colorEsc, resetEsc, cfg.syncCoordinatorURL(coordinatorAddr))
+	fmt.Printf("  %sCoordinator:%s  %s\n", colorEsc, resetEsc, cfg.SyncCoordinatorURL(coordinatorAddr))
 	fmt.Printf("  %sPort:%s         %d\n", colorEsc, resetEsc, port)
 	fmt.Printf("  %sTheme:%s        %s\n", colorEsc, resetEsc, cfg.ThemeColor)
 	fmt.Printf("%s────────────────────────────────────────────────────────%s\n\n", dimEsc, resetEsc)

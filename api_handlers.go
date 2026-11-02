@@ -339,7 +339,7 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fallback to static assets (embedded by default, disk with --web).
-	serveStatic(w, r)
+	staticHandler.ServeHTTP(w, r)
 }
 
 func handleGetCoders(w http.ResponseWriter, r *http.Request) {

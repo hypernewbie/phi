@@ -1,18 +1,52 @@
 package main
 
 import (
-	"errors"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
-	"runtime"
-	"strconv"
-	"syscall"
 	"testing"
 	"time"
+
+	"github.com/hypernewbie/phi/internal/webassets"
+)
+
+// setupStaticAssets installs a handler over the real embedded tree as the
+// process-wide static handler. The embedded tree is read once at startup,
+// so each call re-reads it, which is what a restart does. Returns the temp
+// config path for tests that rewrite it.
+func setupStaticAssets(t *testing.T) string {
+	t.Helper()
+	cfgPath := withTempConfig(t)
+	root, precompressed, err := newWebRoot()
+	if err != nil {
+		t.Fatalf("newWebRoot: %v", err)
+	}
+	h := webassets.New(root, precompressed, loadConfig().CompressionEnabled)
+	testWebRoot = root
+	testStatic = h
+	staticHandler = h
+	t.Cleanup(func() {
+		testWebRoot, testStatic, staticHandler = nil, nil, nil
+	})
+	return cfgPath
+}
+
+func getStatic(t *testing.T, target string, hdr map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	testStatic.ServeHTTP(rec, req)
+	return rec
+}
+
+var (
+	testStatic  *webassets.Handler
+	testWebRoot fs.FS
 )
 
 func writeDiskAsset(t *testing.T, dir, name, body string) {
@@ -24,12 +58,12 @@ func writeDiskAsset(t *testing.T, dir, name, body string) {
 
 func diskHandler(t *testing.T, dir string) http.Handler {
 	t.Helper()
-	root, err := openDiskWebRoot(dir)
+	root, err := webassets.OpenDiskRoot(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { root.Close() })
-	return newDiskStaticHandler(root.FS())
+	return webassets.NewDisk(root.FS())
 }
 
 func requestDisk(h http.Handler, method, target string, headers map[string]string) *httptest.ResponseRecorder {
@@ -55,203 +89,17 @@ func assertDiskResponse(t *testing.T, rec *httptest.ResponseRecorder, status int
 	}
 }
 
-func TestDiskRootPaths(t *testing.T) {
-	dir := t.TempDir()
-	writeDiskAsset(t, dir, "app.js", "disk asset")
-	for _, relative := range []bool{false, true} {
-		name := "absolute"
-		if relative {
-			name = "relative"
-		}
-		t.Run(name, func(t *testing.T) {
-			selected := dir
-			if relative {
-				t.Chdir(filepath.Dir(dir))
-				selected = filepath.Base(dir)
-			}
-			root, err := openDiskWebRoot(selected)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { root.Close() })
-			if !filepath.IsAbs(root.Name()) || root.Name() != dir {
-				t.Fatalf("root name = %q, want absolute %q", root.Name(), dir)
-			}
-			// The selected root stays anchored after a later working-directory change.
-			t.Chdir(t.TempDir())
-			data, err := fs.ReadFile(root.FS(), "app.js")
-			if err != nil || string(data) != "disk asset" {
-				t.Fatalf("root read = %q, %v", data, err)
-			}
-		})
-	}
-	for _, name := range []string{"missing", "app.js"} {
-		t.Run(name, func(t *testing.T) {
-			root, err := openDiskWebRoot(filepath.Join(dir, name))
-			if root != nil {
-				root.Close()
-				t.Fatal("invalid directory returned an open root")
-			}
-			if err == nil {
-				t.Fatal("invalid directory did not return an error")
-			}
-		})
-	}
-}
-
-func TestDiskRootSymlinks(t *testing.T) {
-	for _, outside := range []bool{false, true} {
-		name := "internal"
-		if outside {
-			name = "external"
-		}
-		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
-			target := "target.txt"
-			writeDiskAsset(t, dir, target, "inside")
-			if outside {
-				external := t.TempDir()
-				writeDiskAsset(t, external, target, "outside secret")
-				var err error
-				target, err = filepath.Rel(dir, filepath.Join(external, target))
-				if err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := os.Symlink(target, filepath.Join(dir, "link.txt")); err != nil {
-				if runtime.GOOS == "windows" && (errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.Errno(1314))) {
-					t.Skipf("symlink creation is not permitted: %v", err)
-				}
-				t.Fatal(err)
-			}
-			rec := requestDisk(diskHandler(t, dir), http.MethodGet, "/link.txt", nil)
-			if outside {
-				if rec.Code == http.StatusOK || rec.Body.String() == "outside secret" {
-					t.Fatalf("external symlink escaped root: %d %q", rec.Code, rec.Body.String())
-				}
-				return
-			}
-			assertDiskResponse(t, rec, http.StatusOK, "inside")
-		})
-	}
-}
-
-func TestDiskFreshBytes(t *testing.T) {
-	for _, asset := range []struct{ name, before, after string }{
-		{"page.html", "<p>old</p>", "<p>new</p>"},
-		{"app.js", "window.old=1;", "window.new=2;"},
-		{"style.css", "p{color:red}", "p{color:tan}"},
-		{"data.bin", "\x00\x01\x02", "\x00\x03\x04"},
-	} {
-		t.Run(asset.name, func(t *testing.T) {
-			dir := t.TempDir()
-			file := filepath.Join(dir, asset.name)
-			stamp := time.Unix(1_700_000_000, 0).UTC()
-			write := func(body string) {
-				writeDiskAsset(t, dir, asset.name, body)
-				if err := os.Chtimes(file, stamp, stamp); err != nil {
-					t.Fatal(err)
-				}
-			}
-			write(asset.before)
-			h := diskHandler(t, dir)
-			assertDiskResponse(t, requestDisk(h, http.MethodGet, "/"+asset.name, nil), http.StatusOK, asset.before)
-			if len(asset.before) != len(asset.after) {
-				t.Fatal("fixture replacement must retain the original length")
-			}
-			write(asset.after)
-			for _, validators := range []map[string]string{
-				{},
-				{"If-Modified-Since": stamp.Format(http.TimeFormat)},
-				{"If-None-Match": `"old-embedded-tag"`},
-				{"If-None-Match": "*"},
-				{"If-None-Match": "*", "If-Modified-Since": stamp.Format(http.TimeFormat)},
-			} {
-				validators["Accept-Encoding"] = "gzip, br"
-				assertDiskResponse(t, requestDisk(h, http.MethodGet, "/"+asset.name, validators), http.StatusOK, asset.after)
-			}
-		})
-	}
-}
-
-func TestDiskFileChanges(t *testing.T) {
-	dir := t.TempDir()
-	h := diskHandler(t, dir)
-	if rec := requestDisk(h, http.MethodGet, "/new.js", nil); rec.Code != http.StatusNotFound {
-		t.Fatalf("missing file status = %d", rec.Code)
-	}
-	writeDiskAsset(t, dir, "new.js", "created")
-	assertDiskResponse(t, requestDisk(h, http.MethodGet, "/new.js", nil), http.StatusOK, "created")
-	if err := os.Remove(filepath.Join(dir, "new.js")); err != nil {
-		t.Fatal(err)
-	}
-	if rec := requestDisk(h, http.MethodGet, "/new.js", nil); rec.Code != http.StatusNotFound {
-		t.Fatalf("deleted file status = %d", rec.Code)
-	}
-}
-
-func TestDiskHTTP(t *testing.T) {
-	dir := t.TempDir()
-	writeDiskAsset(t, dir, "index.html", "old index")
-	writeDiskAsset(t, dir, "app.js", "old bytes")
-	h := diskHandler(t, dir)
-	assertDiskResponse(t, requestDisk(h, http.MethodGet, "/", nil), http.StatusOK, "old index")
-	writeDiskAsset(t, dir, "index.html", "new index")
-	writeDiskAsset(t, dir, "app.js", "current bytes")
-	assertDiskResponse(t, requestDisk(h, http.MethodGet, "/", nil), http.StatusOK, "new index")
-	redirect := requestDisk(h, http.MethodGet, "/index.html", nil)
-	if redirect.Code != http.StatusMovedPermanently || redirect.Header().Get("Location") != "./" {
-		t.Fatalf("index redirect = %d %v", redirect.Code, redirect.Header())
-	}
-
-	head := requestDisk(h, http.MethodHead, "/app.js", map[string]string{"If-None-Match": "*", "Accept-Encoding": "gzip, br"})
-	assertDiskResponse(t, head, http.StatusOK, "")
-	if got := head.Header().Get("Content-Length"); got != strconv.Itoa(len("current bytes")) {
-		t.Fatalf("HEAD length = %q", got)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/app.js", nil)
-	req.Header.Set("Range", "bytes=1-3")
-	req.Header.Set("If-None-Match", "*")
-	req.Header.Set("If-Modified-Since", time.Now().Add(time.Hour).UTC().Format(http.TimeFormat))
-	req.Header.Set("X-Test", "preserved")
-	headers := req.Header.Clone()
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	assertDiskResponse(t, rec, http.StatusPartialContent, "urr")
-	if !reflect.DeepEqual(req.Header, headers) {
-		t.Fatalf("handler changed original request headers: %v", req.Header)
-	}
-	if rec.Header().Get("Content-Range") != "bytes 1-3/13" {
-		t.Fatalf("range response = %v", rec.Header())
-	}
-
-	for name, ctype := range map[string]string{
-		"module.mjs":  "text/javascript; charset=utf-8",
-		"module.wasm": "application/wasm",
-	} {
-		writeDiskAsset(t, dir, name, "mime fixture")
-		rec := requestDisk(h, http.MethodGet, "/"+name, nil)
-		assertDiskResponse(t, rec, http.StatusOK, "mime fixture")
-		if got := rec.Header().Get("Content-Type"); got != ctype {
-			t.Fatalf("%s Content-Type = %q, want %q", name, got, ctype)
-		}
-	}
-
-	post := requestDisk(h, http.MethodPost, "/app.js", map[string]string{"If-None-Match": "*"})
-	if post.Code != http.StatusPreconditionFailed {
-		t.Fatalf("POST lost its precondition: status = %d", post.Code)
-	}
-}
-
+// TestDiskDispatch pins the --web precedence rule: a disk override wins
+// over the embedded handler, and dropping it restores embedded serving
+// with its own validators. Pure disk serving lives in internal/webassets.
 func TestDiskDispatch(t *testing.T) {
-	savedHandler, savedRoot := diskStatic, webRoot
-	savedAssets, savedBrotli, savedCompression := staticAssets, preBrotli, staticCompressionOn
+	diskHandlerSaved, testStaticSaved := staticHandler, testStatic
+	testWebRootSaved := testWebRoot
 	t.Cleanup(func() {
-		diskStatic, webRoot = savedHandler, savedRoot
-		staticAssets, preBrotli, staticCompressionOn = savedAssets, savedBrotli, savedCompression
+		staticHandler, testStatic = diskHandlerSaved, testStaticSaved
+		testWebRoot = testWebRootSaved
 	})
-	diskStatic = nil
+	staticHandler = nil
 	setupStaticAssets(t)
 	etags := make(map[string]string)
 	for _, enc := range []string{"gzip", "br"} {
@@ -263,16 +111,16 @@ func TestDiskDispatch(t *testing.T) {
 	}
 	dir := t.TempDir()
 	writeDiskAsset(t, dir, "app.js", "fresh disk bytes")
-	diskStatic = diskHandler(t, dir)
+	staticHandler = diskHandler(t, dir)
 	for _, enc := range []string{"gzip", "br"} {
-		rec := getStatic(t, "/app.js", map[string]string{
+		rec := requestDisk(staticHandler, http.MethodGet, "/app.js", map[string]string{
 			"Accept-Encoding":   enc,
 			"If-None-Match":     etags[enc],
 			"If-Modified-Since": time.Now().Add(time.Hour).UTC().Format(http.TimeFormat),
 		})
 		assertDiskResponse(t, rec, http.StatusOK, "fresh disk bytes")
 	}
-	diskStatic = nil
+	staticHandler = testStatic
 	for _, enc := range []string{"gzip", "br"} {
 		rec := getStatic(t, "/app.js", map[string]string{"Accept-Encoding": enc})
 		if rec.Header().Get("Etag") != etags[enc] || rec.Header().Get("Content-Encoding") != enc || rec.Header().Get("Cache-Control") != "no-cache" {

@@ -1,7 +1,15 @@
-package main
+// Package config owns Phi's configuration file: its TOML/JSON formats, the
+// in-process cache, and every read-modify-write of the file.
+//
+// One Store instance is one configuration file. Paths are resolved lazily so
+// system.PhiDataDir() can be redirected before the first read. All writes go
+// through a single mutex, compare against the on-disk state, and never delete
+// an unreadable file: a malformed config is an error, not a blank slate.
+package config
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"maps"
 	"net"
@@ -160,7 +168,7 @@ type Config struct {
 	// (absent key keeps the default; explicit false wins). Operators
 	// running phi behind a reverse proxy that owns compression set this
 	// to false. Caching headers (ETag/no-cache) are unaffected. Read
-	// once at startup (initStaticAssets) — changing it needs a restart.
+	// once at startup (webassets.New) — changing it needs a restart.
 	CompressionEnabled bool `json:"compression_enabled" toml:"compression_enabled"`
 
 	ReplayBufferBytes *int `json:"replay_buffer_bytes" toml:"replay_buffer_bytes"`
@@ -177,9 +185,9 @@ type Config struct {
 	KanbanURL         string `json:"kanban_url,omitempty" toml:"kanban_url,omitempty"`
 	// AccessPasswordHash is the legacy browser-derived verifier. After auth.db
 	// migration it is omitted from TOML; auth.db is authoritative.
-	AccessPasswordHash  string                     `json:"access_password_hash,omitempty" toml:"access_password_hash,omitempty"`
-	AccessAuthMigration *accessAuthMigrationMarker `json:"access_auth_migration,omitempty" toml:"access_auth_migration,omitempty"`
-	SyncCoordinator     string                     `json:"sync_coordinator" toml:"sync_coordinator"`
+	AccessPasswordHash  string           `json:"access_password_hash,omitempty" toml:"access_password_hash,omitempty"`
+	AccessAuthMigration *MigrationMarker `json:"access_auth_migration,omitempty" toml:"access_auth_migration,omitempty"`
+	SyncCoordinator     string           `json:"sync_coordinator" toml:"sync_coordinator"`
 
 	// AuthOrigins lists extra origins a browser may present to the v2 auth
 	// routes when a reverse proxy terminates TLS. Same-origin requests never
@@ -194,152 +202,207 @@ type PeerConfig struct {
 	URL  string `json:"url" toml:"url"`
 }
 
-var configMu sync.RWMutex
+// Paths selects the files a Store owns. Empty fields resolve under
+// system.PhiDataDir() at first use; an explicit Primary disables the JSON
+// fallback unless Legacy names it, which is how tests stay isolated.
+type Paths struct {
+	Primary string
+	Legacy  string
+}
 
-// cachedConfig holds the last successfully read primary config plus the file
-// identity it was read from. It is guarded by configMu and mutated only
-// under exclusive access; every hit returns a deep copy. Legacy fallback
-// stays uncached and errors never populate the entry.
-var cachedConfig *configCacheEntry
+// Writer replaces the config file atomically. Production uses the strict
+// variant that never deletes an existing config.
+type Writer func(path string, data []byte, perm os.FileMode) error
 
-type configCacheEntry struct {
+// Store is one configuration file plus its in-process cache. It is safe for
+// concurrent use; every write is a locked read-modify-write against disk.
+type Store struct {
+	paths Paths
+	write Writer
+
+	mu              sync.Mutex
+	cache           *cacheEntry
+	readErrorLogged atomic.Bool
+}
+
+type cacheEntry struct {
 	path string
-	id   configFileID
+	id   fileID
 	cfg  Config
 }
 
-func expandHome(path string) string {
-	if len(path) > 0 && path[0] == '~' {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			return home + path[1:]
-		}
+// NewStore returns a store for paths. A nil writer uses the atomic
+// preserve-existing writer; tests pass a failing writer to inject errors.
+func NewStore(paths Paths, write Writer) *Store {
+	if write == nil {
+		write = system.WriteFileAtomicPreserveExisting
 	}
-	return path
+	return &Store{paths: paths, write: write}
 }
 
-// testConfigPath points configFilePath() at a temp file during tests.
-// Set this (via withTempConfig or directly) so tests never touch
-// ~/.phi/config.toml. Anything else will trigger the guard below.
-var testConfigPath string
-var testLegacyConfigPath string
-var configReadErrorLogged atomic.Bool
-
-// testCustomBackendsDir points customBackendsDir() at a temp dir
-// during tests. Same isolation contract as testConfigPath: an unset
-// value under `go test` panics so a test that forgets withTempBackends
-// cannot silently scan the user's real ~/.phi/backends directory
-// (R3). Production code always goes through customBackendsDir.
-var testCustomBackendsDir string
-
-// configFilePath returns the active config path. Tests MUST override
-// testConfigPath to point at a temp file — otherwise the guard in
-// this function refuses to return the live ~/.phi/config.toml path.
-// Without this guard, a test that forgets withTempConfig(t) silently
-// reads/writes the user's real config (as happened with the
-// `phi-test-alpha/beta/gamma` workspace poisoning on 2026-07-14).
-func configFilePath() string {
-	if testConfigPath != "" {
-		return testConfigPath
+// PrimaryPath returns the resolved config.toml path. Under `go test` an
+// unset path panics: a test that forgets isolation must not read or write
+// the developer's live config (2026-07-14 workspace poisoning incident).
+func (s *Store) PrimaryPath() string {
+	if s.paths.Primary != "" {
+		return s.paths.Primary
 	}
 	if testing.Testing() {
-		panic("configFilePath() called under `go test` without testConfigPath set. " +
-			"Use withTempConfig(t) (or set testConfigPath directly) to " +
-			"isolate this test from ~/.phi/config.toml — see the doc comment on " +
-			"testConfigPath.")
+		panic("config.Store used under `go test` without an explicit primary path. " +
+			"Point the test store at a temp file so it cannot touch ~/.phi/config.toml.")
 	}
 	return filepath.Join(system.PhiDataDir(), "config.toml")
 }
 
-// legacyConfigFilePath returns the read-only JSON fallback. Tests must opt in explicitly.
-func legacyConfigFilePath() string {
-	if testLegacyConfigPath != "" {
-		return testLegacyConfigPath
+// LegacyPath returns the JSON fallback path, or "" when it is disabled.
+func (s *Store) LegacyPath() string {
+	if s.paths.Legacy != "" {
+		return s.paths.Legacy
 	}
-	if testing.Testing() {
+	if s.paths.Primary != "" || testing.Testing() {
 		return ""
 	}
 	return filepath.Join(system.PhiDataDir(), "config.json")
 }
 
-// customBackendsDir returns the directory phi scans for custom
-// backend JSON files at startup. Each `*.json` file is parsed as a
-// sparse CoderPatch and merged onto the matching built-in (or
-// inserted as a new coder if the ID is novel). Production path is
-// `~/.phi/backends/`; tests override via testCustomBackendsDir.
-//
-// The panic-under-`go test` guard mirrors configFilePath's. A test
-// that reads the live backends dir without isolating itself would
-// either pick up the developer's local profiles (surprising) or
-// silently shadow them (worse).
-func customBackendsDir() string {
-	if testCustomBackendsDir != "" {
-		return testCustomBackendsDir
-	}
-	if testing.Testing() {
-		panic("customBackendsDir() called under `go test` without testCustomBackendsDir set. " +
-			"Use withTempBackends(t) (or set testCustomBackendsDir directly) to " +
-			"isolate this test from ~/.phi/backends/ — see the doc comment on " +
-			"testCustomBackendsDir.")
-	}
-	return filepath.Join(system.PhiDataDir(), "backends")
-}
-
-// overrideDisplayName returns the hostname_override label for identity
-// reporting (config payload, status dump, push titles). The stored
-// value is a free-form display label — validated by
-// sanitizeHostnameOverride (length + printable-only) — and is reported
-// verbatim: the whole point of the override is that it can be a
-// nickname or codename that ISN'T a real hostname ("dusty_potato" on
-// a corp PC named CORP01), so there is nothing to strip or reduce.
-func overrideDisplayName(v string) string {
-	return strings.TrimSpace(v)
-}
-
-// reportedHostname is the machine identity the backend stamps on
-// everything it emits: the config payload's hostname field, the
-// startup status dump, idle/push notification titles. A set
-// HostnameOverride (the display label) wins; blank falls back to the
-// OS hostname, then localhost. This is a COSMETIC identity only —
-// socket dialing always uses the real page origin and never sees
-// this value. One name everywhere, no drift.
-func reportedHostname(cfg Config) string {
-	if h := overrideDisplayName(cfg.HostnameOverride); h != "" {
-		return h
-	}
-	if h, _ := os.Hostname(); h != "" {
-		return h
-	}
-	return "localhost"
-}
-
-func loadConfig() Config {
-	cfg, err := loadConfigWithError()
+// Load returns the config with defaults applied, logging a read error once
+// and falling back to defaults so startup keeps working.
+func (s *Store) Load() Config {
+	cfg, err := s.LoadWithError()
 	if err != nil {
-		logConfigReadError(configFilePath(), err)
-		return applyConfigDefaults(Config{CompressionEnabled: true})
+		s.logReadError(err)
+		return applyDefaults(Config{CompressionEnabled: true})
 	}
 	return cfg
 }
 
-// Startup must not turn a config read error into a disabled access-password gate.
-func loadConfigWithError() (Config, error) {
-	configMu.Lock()
-	defer configMu.Unlock()
-	cfg, err := readConfigCachedLocked(readPrimaryConfig)
+// LoadWithError returns the config with defaults applied. Startup must not
+// turn a config read error into a disabled access-password gate, so callers
+// that gate security on config use this instead of Load.
+func (s *Store) LoadWithError() (Config, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cfg, err := s.readCachedLocked()
 	if err != nil {
 		return Config{}, err
 	}
-	return applyConfigDefaults(cfg), nil
+	return applyDefaults(cfg), nil
 }
 
-func logConfigReadError(path string, err error) {
-	if err != nil && configReadErrorLogged.CompareAndSwap(false, true) {
-		slog.Error("config read or migration failed", "path", path, "err", err)
+// ReadAuthoritative returns the config exactly as stored, without defaults.
+// An unreadable config is an error: authentication must become unavailable
+// rather than look like "no password set".
+func (s *Store) ReadAuthoritative() (Config, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.readLocked()
+}
+
+// SaveLegacy persists a full snapshot from a caller that does not own any
+// field exclusively. Fields with their own flows (thinking presets, mobile
+// appearance, the auth verifier and migration marker) keep their latest
+// on-disk values. An unreadable file is never replaced.
+func (s *Store) SaveLegacy(cfg Config) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	latest, err := s.readLocked()
+	if err != nil {
+		return
+	}
+	cfg.ThinkingPresets = latest.ThinkingPresets
+	cfg.MobileUIFontFamily = latest.MobileUIFontFamily
+	cfg.MobileUIFontSize = latest.MobileUIFontSize
+	cfg.MobileTerminalFontFamily = latest.MobileTerminalFontFamily
+	cfg.MobileTerminalFontSize = latest.MobileTerminalFontSize
+	cfg.MobileAppearanceRevision = latest.MobileAppearanceRevision
+	cfg.AccessPasswordHash = latest.AccessPasswordHash
+	cfg.AccessAuthMigration = latest.AccessAuthMigration
+	_ = s.writeContentsLocked(cfg)
+}
+
+// Update applies mutate to the latest on-disk config under the store lock and
+// writes the result. It returns the config it read (plus any mutation) even
+// when mutate or the write fails, so handlers can echo current state.
+func (s *Store) Update(mutate func(*Config) error) (Config, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cfg, err := s.readLocked()
+	if err != nil {
+		return Config{}, err
+	}
+	if err := mutate(&cfg); err != nil {
+		return cfg, err
+	}
+	if err := s.writeContentsLocked(cfg); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+// SaveAccessPasswordHash persists only the access verifier, so a password
+// change never rewrites the rest of the config from a stale snapshot.
+func (s *Store) SaveAccessPasswordHash(encoded string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cfg, err := s.readLocked()
+	if err != nil {
+		return err
+	}
+	cfg.AccessPasswordHash = encoded
+	return s.writeContentsLocked(cfg)
+}
+
+// CompareAndSwapMigration moves the Config/SQLite import marker in one locked
+// sequence: read, compare verifier and marker, write, read back. A concurrent
+// change fails the compare instead of overwriting it.
+func (s *Store) CompareAndSwapMigration(expected *MigrationMarker, expectedVerifier string, next *MigrationMarker, nextVerifier string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cfg, err := s.readLocked()
+	if err != nil {
+		return err
+	}
+	if cfg.AccessPasswordHash != expectedVerifier || !SameMigrationMarker(cfg.AccessAuthMigration, expected) {
+		return errors.New("auth migration Config changed during startup")
+	}
+	cfg.AccessPasswordHash = nextVerifier
+	cfg.AccessAuthMigration = next
+	if err := s.writeContentsLocked(cfg); err != nil {
+		return err
+	}
+	written, err := s.readLocked()
+	if err != nil {
+		return err
+	}
+	if written.AccessPasswordHash != nextVerifier || !SameMigrationMarker(written.AccessAuthMigration, next) {
+		return errors.New("auth migration Config write did not verify")
+	}
+	return nil
+}
+
+// ReadStored returns the primary file exactly as stored, plus whether it
+// exists. It bypasses the cache and defaults; diagnostics and tests use it.
+func (s *Store) ReadStored() (Config, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.readPrimary()
+}
+
+// ResetCache drops the parsed cache so the next read hits disk. Tests use it
+// after touching the file behind the store's back.
+func (s *Store) ResetCache() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cache = nil
+}
+
+func (s *Store) logReadError(err error) {
+	if err != nil && s.readErrorLogged.CompareAndSwap(false, true) {
+		slog.Error("config read or migration failed", "path", s.PrimaryPath(), "err", err)
 	}
 }
 
-func applyConfigDefaults(cfg Config) Config {
+func applyDefaults(cfg Config) Config {
 	if cfg.Workspaces == nil {
 		cfg.Workspaces = []string{}
 	}
@@ -381,12 +444,13 @@ func applyConfigDefaults(cfg Config) Config {
 	if cfg.Peers == nil {
 		cfg.Peers = []PeerConfig{}
 	}
-	cfg.OpenCodeIdleStopMinutes = normalizeOpenCodeIdleStopMinutes(cfg.OpenCodeIdleStopMinutes)
+	cfg.OpenCodeIdleStopMinutes = NormalizeOpenCodeIdleStopMinutes(cfg.OpenCodeIdleStopMinutes)
 	return cfg
 }
 
-// Resolve the default at use time so saving config does not pin the port.
-func (cfg Config) syncCoordinatorURL(addr *net.TCPAddr) string {
+// SyncCoordinatorURL resolves the default at use time so saving config does
+// not pin the port.
+func (cfg Config) SyncCoordinatorURL(addr *net.TCPAddr) string {
 	if cfg.SyncCoordinator != "" {
 		return cfg.SyncCoordinator
 	}
@@ -397,7 +461,9 @@ func (cfg Config) syncCoordinatorURL(addr *net.TCPAddr) string {
 	return (&url.URL{Scheme: "http", Host: address}).String()
 }
 
-func normalizeOpenCodeIdleStopMinutes(mins int) int {
+// NormalizeOpenCodeIdleStopMinutes clamps the idle stop to 0 (disabled) or
+// 5..1440 minutes.
+func NormalizeOpenCodeIdleStopMinutes(mins int) int {
 	if mins <= 0 {
 		return 0
 	}
@@ -445,40 +511,11 @@ func ensureModelPresetDefaults(m ModelPresetsMap) ModelPresetsMap {
 	return m
 }
 
-func saveConfig(cfg Config) {
-	configMu.Lock()
-	defer configMu.Unlock()
-
-	// Legacy callers hold a full snapshot from loadConfig, which may be
-	// older than disk. Thinking presets, the auth verifier, and the internal
-	// migration marker are owned by their own flows, so keep the latest values.
-	// An unreadable or malformed file is not a safe base: skip the write rather
-	// than destroy it.
-	latest, err := readConfigLocked()
-	if err != nil {
-		return
-	}
-	cfg.ThinkingPresets = latest.ThinkingPresets
-	cfg.MobileUIFontFamily = latest.MobileUIFontFamily
-	cfg.MobileUIFontSize = latest.MobileUIFontSize
-	cfg.MobileTerminalFontFamily = latest.MobileTerminalFontFamily
-	cfg.MobileTerminalFontSize = latest.MobileTerminalFontSize
-	cfg.MobileAppearanceRevision = latest.MobileAppearanceRevision
-	cfg.AccessPasswordHash = latest.AccessPasswordHash
-	cfg.AccessAuthMigration = latest.AccessAuthMigration
-
-	// Defense in depth: never persist a workspace whose path looks
-	// like a test scratch dir (e.g. /tmp/phi-test-alpha). This guards
-	// against the earlier poisoning incident where a test wrote three
-	// fake workspaces into the live ~/.phi/config.toml.
-	_ = writeConfigLocked(cfg)
-}
-
-// readPrimaryConfig decodes TOML and reports physical presence independently of contents.
-func readPrimaryConfig() (Config, bool, error) {
+// readPrimary decodes TOML and reports physical presence independently of contents.
+func (s *Store) readPrimary() (Config, bool, error) {
 	var cfg Config
 	cfg.CompressionEnabled = true
-	path := configFilePath()
+	path := s.PrimaryPath()
 	if _, err := os.Lstat(path); err != nil {
 		if os.IsNotExist(err) {
 			return cfg, false, nil
@@ -496,16 +533,16 @@ func readPrimaryConfig() (Config, bool, error) {
 	if err != nil {
 		return cfg, true, err
 	}
-	if err := validateAccessMigrationTOML(metadata, cfg); err != nil {
+	if err := validateMigrationTOML(metadata, cfg); err != nil {
 		return cfg, true, err
 	}
 	return cfg, true, nil
 }
 
-func readLegacyConfig() (Config, bool, error) {
+func (s *Store) readLegacy() (Config, bool, error) {
 	var cfg Config
 	cfg.CompressionEnabled = true
-	path := legacyConfigFilePath()
+	path := s.LegacyPath()
 	if path == "" {
 		return cfg, false, nil
 	}
@@ -522,31 +559,31 @@ func readLegacyConfig() (Config, bool, error) {
 	if len(b) == 0 || strings.TrimSpace(string(b)) == "" {
 		return cfg, true, nil
 	}
-	if err := decodeAccessMigrationJSON(b, &cfg); err != nil {
+	if err := decodeMigrationJSON(b, &cfg); err != nil {
 		return cfg, true, err
 	}
 	return cfg, true, nil
 }
 
-func readConfigLocked() (Config, error) {
-	cfg, present, err := readPrimaryConfig()
+func (s *Store) readLocked() (Config, error) {
+	cfg, present, err := s.readPrimary()
 	if err != nil || present {
 		return cfg, err
 	}
-	cfg, _, err = readLegacyConfig()
+	cfg, _, err = s.readLegacy()
 	return cfg, err
 }
 
-// configFileID snapshots the identity of the primary config path: the link
-// itself (Lstat) plus, for symlinks, its target (Stat). A nil lstat means the
-// path is absent or Lstat failed; a nil stat on a symlink means dangling.
-type configFileID struct {
+// fileID snapshots the identity of the primary config path: the link itself
+// (Lstat) plus, for symlinks, its target (Stat). A nil lstat means the path is
+// absent or Lstat failed; a nil stat on a symlink means dangling.
+type fileID struct {
 	lstat os.FileInfo
 	stat  os.FileInfo
 }
 
-func statConfigFile(path string) configFileID {
-	var id configFileID
+func statFile(path string) fileID {
+	var id fileID
 	lstat, err := os.Lstat(path)
 	if err != nil {
 		return id
@@ -559,11 +596,11 @@ func statConfigFile(path string) configFileID {
 	return id
 }
 
-// sameConfigFile reports whether two snapshots describe the same unmodified
-// file: same inode (catches atomic replacement), size, mtime, and mode
-// (catches in-place edits and chmod). Symlink targets must match too;
-// dangling links never match.
-func sameConfigFile(a, b configFileID) bool {
+// sameFile reports whether two snapshots describe the same unmodified file:
+// same inode (catches atomic replacement), size, mtime, and mode (catches
+// in-place edits and chmod). Symlink targets must match too; dangling links
+// never match.
+func sameFile(a, b fileID) bool {
 	if a.lstat == nil || b.lstat == nil {
 		return false
 	}
@@ -626,63 +663,51 @@ func cloneConfig(cfg Config) Config {
 	return cfg
 }
 
-// readConfigCachedLocked serves read-only callers from a parsed cache when
-// the primary file is unchanged. The caller must hold configMu exclusively.
-// Production passes readPrimaryConfig; the argument lets tests count real
-// reads without a global hook. A result is cached only when the file is
-// stable across the read; legacy fallback and errors stay uncached.
-func readConfigCachedLocked(readPrimary func() (Config, bool, error)) (Config, error) {
-	path := configFilePath()
-	before := statConfigFile(path)
-	if cachedConfig != nil && cachedConfig.path == path && sameConfigFile(before, cachedConfig.id) {
-		return cloneConfig(cachedConfig.cfg), nil
+// readCachedLocked serves read-only callers from a parsed cache when the
+// primary file is unchanged. The caller must hold s.mu. A result is cached
+// only when the file is stable across the read; legacy fallback and errors
+// stay uncached.
+func (s *Store) readCachedLocked() (Config, error) {
+	return s.readCachedLockedWith(s.readPrimary)
+}
+
+// readCachedLockedWith is readCachedLocked with an injectable primary reader,
+// so cache tests can simulate a file swap in the middle of a read.
+func (s *Store) readCachedLockedWith(readPrimary func() (Config, bool, error)) (Config, error) {
+	path := s.PrimaryPath()
+	before := statFile(path)
+	if s.cache != nil && s.cache.path == path && sameFile(before, s.cache.id) {
+		return cloneConfig(s.cache.cfg), nil
 	}
-	cachedConfig = nil
+	s.cache = nil
 	cfg, present, err := readPrimary()
 	if err != nil || present {
 		if err == nil {
-			if after := statConfigFile(path); sameConfigFile(before, after) {
-				cachedConfig = &configCacheEntry{path: path, id: after, cfg: cloneConfig(cfg)}
+			if after := statFile(path); sameFile(before, after) {
+				s.cache = &cacheEntry{path: path, id: after, cfg: cloneConfig(cfg)}
 			}
 		}
 		return cfg, err
 	}
-	cfg, _, err = readLegacyConfig()
+	cfg, _, err = s.readLegacy()
 	return cfg, err
 }
 
-// writeConfigFile is the atomic writer used for config writes. Tests replace
-// it to exercise persistence failures; production uses the strict variant that
-// never deletes the existing config.
-var writeConfigFile = system.WriteFileAtomicPreserveExisting
-
-// writeConfigLocked persists cfg without taking configMu. Callers must
-// hold it. Auth-owned fields are preserved from the latest file.
-func writeConfigLocked(cfg Config) error {
-	latest, err := readConfigLocked()
-	if err != nil {
-		return err
-	}
-	cfg.AccessPasswordHash = latest.AccessPasswordHash
-	cfg.AccessAuthMigration = latest.AccessAuthMigration
-	return writeConfigContentsLocked(cfg)
-}
-
-// writeConfigContentsLocked writes a config whose auth-owned fields are already
-// current. Callers must hold configMu.
-func writeConfigContentsLocked(cfg Config) error {
+// writeContentsLocked writes a config whose caller-owned fields are already
+// current. Callers must hold s.mu.
+func (s *Store) writeContentsLocked(cfg Config) error {
 	// Invalidate before every attempt, including no-op and failed ones: a
 	// cheap reread beats reasoning about which failures leave disk stale.
-	cachedConfig = nil
+	s.cache = nil
 	cfg.Workspaces = filterOutTestPaths(cfg.Workspaces)
-	before, present, err := readPrimaryConfig()
+	before, present, err := s.readPrimary()
 	if err != nil {
 		return err
 	}
-	if present && reflect.DeepEqual(applyConfigDefaults(before), applyConfigDefaults(cfg)) {
+	if present && reflect.DeepEqual(applyDefaults(before), applyDefaults(cfg)) {
 		return nil
 	}
-	path := configFilePath()
+	path := s.PrimaryPath()
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
@@ -693,42 +718,14 @@ func writeConfigContentsLocked(cfg Config) error {
 		return err
 	}
 	// PreserveExisting keeps the old config on a failed replacement.
-	return writeConfigFile(path, b, 0600)
-}
-
-// saveAccessPasswordHash persists only the access verifier, so a password
-// change never rewrites the rest of the config from a stale snapshot. A
-// malformed file is an error because replacing it could discard operator data.
-func saveAccessPasswordHash(encoded string) error {
-	configMu.Lock()
-	defer configMu.Unlock()
-	cfg, err := readConfigLocked()
-	if err != nil {
-		return err
-	}
-	cfg.AccessPasswordHash = encoded
-	return writeConfigContentsLocked(cfg)
-}
-
-// accessPasswordHashAuthoritative reads the durable record for auth activation.
-// Unlike loadConfig it reports errors, because an unreadable Config must make
-// authentication unavailable instead of looking like "no password set". A
-// missing or empty file keeps first-run semantics.
-func accessPasswordHashAuthoritative() (string, error) {
-	configMu.Lock()
-	defer configMu.Unlock()
-	cfg, err := readConfigLocked()
-	if err != nil {
-		return "", err
-	}
-	return cfg.AccessPasswordHash, nil
+	return s.write(path, b, 0600)
 }
 
 // looksLikeTestArtifact returns true if `path` looks like a scratch
 // directory a Go test created via MkdirTemp / os.CreateTemp with a
 // phi-prefixed pattern. Used as a final defense-in-depth check: even
-// if saveConfig is somehow called during a test that bypassed the
-// withTempConfig guard, refuse to persist a workspace that lives
+// if a save is somehow called during a test that bypassed the
+// temp-path guard, refuse to persist a workspace that lives
 // inside a phi-prefixed test scratch directory anywhere in its path.
 //
 // Heuristic: any path segment starts with `phi-test-` or `phi-shims-`.
@@ -765,7 +762,7 @@ func looksLikeTestArtifact(path string) bool {
 }
 
 // filterOutTestPaths returns a new slice containing only paths that
-// don't look like a test scratch directory. See saveConfig for the
+// don't look like a test scratch directory. See SaveLegacy for the
 // call site (workspace list dedup is the primary use).
 func filterOutTestPaths(in []string) []string {
 	out := make([]string, 0, len(in))

@@ -18,6 +18,8 @@ import (
 	"testing"
 
 	"github.com/BurntSushi/toml"
+	"github.com/hypernewbie/phi/internal/config"
+	"github.com/hypernewbie/phi/pkg/system"
 )
 
 func failAccessDBCommitForTest(t *testing.T, auth *accessAuthManager) func() {
@@ -593,11 +595,10 @@ func TestAccessMigrationConfigWriteFailuresRecoverIdempotently(t *testing.T) {
 		withTempConfig(t)
 		encoded := testAccessHash()
 		seedTestLegacyConfig(t, encoded)
-		previousWriter := writeConfigFile
-		writeConfigFile = func(string, []byte, os.FileMode) error {
+		setConfigWriter(func(string, []byte, os.FileMode) error {
 			return errors.New("injected initial marker write failure")
-		}
-		t.Cleanup(func() { writeConfigFile = previousWriter })
+		})
+		t.Cleanup(func() { setConfigWriter(nil) })
 
 		manager := newAccessAuthManager()
 		if err := manager.configure(encoded); err == nil {
@@ -616,7 +617,7 @@ func TestAccessMigrationConfigWriteFailuresRecoverIdempotently(t *testing.T) {
 		if _, err := os.Lstat(accessDBPath()); !os.IsNotExist(err) {
 			t.Fatalf("initial marker failure created auth database: %v", err)
 		}
-		writeConfigFile = previousWriter
+		setConfigWriter(nil)
 		retry := newAccessAuthManager()
 		if err := retry.configure(encoded); err != nil {
 			retry.close()
@@ -639,9 +640,12 @@ func TestAccessMigrationConfigWriteFailuresRecoverIdempotently(t *testing.T) {
 			encoded := testAccessHash()
 			seedTestLegacyConfig(t, encoded)
 			writeLegacyAccessStateForTest(t, legacyAccessStateForTest(t, encoded))
-			previousWriter := writeConfigFile
+			previousWriter := configWriter
+			if previousWriter == nil {
+				previousWriter = system.WriteFileAtomicPreserveExisting
+			}
 			completeWriteAttempted := false
-			writeConfigFile = func(path string, contents []byte, mode os.FileMode) error {
+			setConfigWriter(func(path string, contents []byte, mode os.FileMode) error {
 				var cfg Config
 				if err := toml.Unmarshal(contents, &cfg); err != nil {
 					return err
@@ -656,21 +660,21 @@ func TestAccessMigrationConfigWriteFailuresRecoverIdempotently(t *testing.T) {
 					return errors.New("injected finalization write failure")
 				}
 				return previousWriter(path, contents, mode)
-			}
+			})
 
 			first := newAccessAuthManager()
 			if err := first.configure(encoded); err == nil {
 				first.close()
-				writeConfigFile = previousWriter
+				setConfigWriter(previousWriter)
 				t.Fatal("finalization write failure started auth")
 			}
 			if !completeWriteAttempted || !first.faulted || first.record != nil {
 				first.close()
-				writeConfigFile = previousWriter
+				setConfigWriter(previousWriter)
 				t.Fatalf("failed finalization state: attempted=%v faulted=%v record=%v", completeWriteAttempted, first.faulted, first.record)
 			}
 			first.close()
-			writeConfigFile = previousWriter
+			setConfigWriter(previousWriter)
 
 			cfg, err := readAccessMigrationConfig()
 			if err != nil {
@@ -731,7 +735,7 @@ func TestAccessMigrationCompletedMarkerRejectsUntrustedDatabaseState(t *testing.
 				if err != nil {
 					t.Fatal(err)
 				}
-				id, err := accessMigrationID(cfg.AccessAuthMigration)
+				id, err := config.MigrationMarkerID(cfg.AccessAuthMigration)
 				if err != nil {
 					store.close()
 					t.Fatal(err)
@@ -789,7 +793,7 @@ func TestAccessMigrationPendingRetriesAbsentOrPristineDatabase(t *testing.T) {
 			withTempConfig(t)
 			encoded := testAccessHash()
 			seedTestLegacyConfig(t, encoded)
-			marker, err := newAccessMigrationMarker("pending")
+			marker, err := config.NewMigrationMarker("pending")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -824,7 +828,7 @@ func TestAccessMigrationPendingRetriesAbsentOrPristineDatabase(t *testing.T) {
 
 func migrationIDForTest(t *testing.T, marker *accessAuthMigrationMarker) [16]byte {
 	t.Helper()
-	id, err := accessMigrationID(marker)
+	id, err := config.MigrationMarkerID(marker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -837,7 +841,7 @@ func TestAccessMigrationPendingRejectsMismatchedOrUnsupportedDatabase(t *testing
 			withTempConfig(t)
 			encoded := testAccessHash()
 			seedTestLegacyConfig(t, encoded)
-			marker, err := newAccessMigrationMarker("pending")
+			marker, err := config.NewMigrationMarker("pending")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1108,14 +1112,14 @@ func TestAccessMigrationPendingMarkerRecoversInitializedDatabase(t *testing.T) {
 	withTempConfig(t)
 	encoded := testAccessHash()
 	seedTestLegacyConfig(t, encoded)
-	marker, err := newAccessMigrationMarker("pending")
+	marker, err := config.NewMigrationMarker("pending")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := writeAccessMigrationConfig(nil, encoded, marker, encoded); err != nil {
 		t.Fatal(err)
 	}
-	migrationID, err := accessMigrationID(marker)
+	migrationID, err := config.MigrationMarkerID(marker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1148,7 +1152,7 @@ func TestAccessMigrationPendingMarkerRecoversInitializedDatabase(t *testing.T) {
 func TestAccessMigrationRejectsCompletedMarkerWithoutDatabase(t *testing.T) {
 	withTempConfig(t)
 	seedTestLegacyConfig(t, testAccessHash())
-	marker, err := newAccessMigrationMarker("complete")
+	marker, err := config.NewMigrationMarker("complete")
 	if err != nil {
 		t.Fatal(err)
 	}

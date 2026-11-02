@@ -51,7 +51,7 @@ func (b *Bridge) handleSyncboard(ctx context.Context, processID string, req *pib
 	if cfg.SyncCoordinator == "" && addr == nil {
 		return refuse(pibridge.SyncboardReasonNotReady)
 	}
-	base, err := parseSyncboardBase(cfg.syncCoordinatorURL(addr))
+	base, err := parseSyncboardBase(cfg.SyncCoordinatorURL(addr))
 	if err != nil {
 		return refuse(pibridge.SyncboardReasonInvalidConfig)
 	}
