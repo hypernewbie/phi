@@ -24,8 +24,11 @@ export function formatPiRpcStatus(status) {
             : `${numberOrDash(status?.contextUsedTokens)} / ${numberOrDash(status?.contextWindowTokens)}`,
         cacheRead: numberOrDash(status?.cacheReadTokens),
         cacheWrite: numberOrDash(status?.cacheWriteTokens),
-        // Pi's footer prints the session cost as $0.123 (footer.js).
-        cost: typeof status?.cost === 'number' && Number.isFinite(status.cost)
+        // Pi's footer prints the session cost as $0.123, and hides it
+        // while zero (footer.js: `if (usageTotals.cost ...)`).
+        cost: typeof status?.cost === 'number' &&
+            Number.isFinite(status.cost) &&
+            status.cost !== 0
             ? `$${status.cost.toFixed(3)}`
             : '—',
         title: typeof status?.title === 'string' ? status.title : '',

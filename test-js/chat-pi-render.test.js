@@ -60,10 +60,9 @@ describe('render', () => {
         ).toBe('— / 200K');
         expect(formatPiRpcStatus({ cwd: '/work/demo' }).context).toBe('—');
         // Pi's footer prints the running session cost as $0.123.
-        expect(formatPiRpcStatus({ cwd: '/w', cost: 0.5 }).cost).toBe(
-            '$0.500',
-        );
+        expect(formatPiRpcStatus({ cwd: '/w', cost: 0.5 }).cost).toBe('$0.500');
         expect(formatPiRpcStatus({ cwd: '/w', cost: null }).cost).toBe('—');
+        expect(formatPiRpcStatus({ cwd: '/w', cost: 0 }).cost).toBe('—');
         expect(
             formatPiRpcStatus({ cwd: '/work/demo', skills: ['a', 'b'] }).skills,
         ).toBe('a, b');

@@ -830,6 +830,7 @@ export class TabManager {
         this._piRpcModelNextByPane = new Map();
         this._piRpcModelInflight = new Map();
         this._piRpcModelQuery = '';
+        this._piRpcSkillQuery = '';
         this._piRpcModelExpandedGroup = null;
         this._piBridgeSkills = null;
         this._piBridgeSkillQuery = '';
