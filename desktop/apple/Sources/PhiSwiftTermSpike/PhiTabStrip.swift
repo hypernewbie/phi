@@ -36,9 +36,11 @@ final class PhiTabStrip: NSView {
 
   var onSelect: ((String) -> Void)?
   var onClose: ((String) -> Void)?
+  var onNewTab: (() -> Void)?
 
   private var tabViews: [String: PhiTabView] = [:]
   private let hairline = NSView()
+  private let newTabButton = NSButton(title: "＋", target: nil, action: nil)
 
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
@@ -49,6 +51,15 @@ final class PhiTabStrip: NSView {
     hairline.wantsLayer = true
     hairline.layer?.backgroundColor = PhiTheme.border.cgColor
     addSubview(hairline)
+
+    newTabButton.isBordered = false
+    newTabButton.font = PhiTheme.ui(14)
+    newTabButton.contentTintColor = PhiTheme.textMuted
+    newTabButton.target = self
+    newTabButton.action = #selector(newTabClicked)
+    newTabButton.toolTip = "New tab"
+    newTabButton.setAccessibilityLabel("New tab")
+    addSubview(newTabButton)
   }
 
   required init?(coder: NSCoder) {
@@ -58,8 +69,10 @@ final class PhiTabStrip: NSView {
   override func layout() {
     super.layout()
     hairline.frame = NSRect(x: 0, y: 0, width: bounds.width, height: 1)
+    newTabButton.frame = NSRect(
+      x: bounds.width - 32, y: (bounds.height - 24) / 2, width: 24, height: 24)
     var x = Self.leadingInset
-    let available = max(bounds.width - Self.leadingInset * 2, Self.minimumTabWidth)
+    let available = max(bounds.width - Self.leadingInset - 40, Self.minimumTabWidth)
     let width = min(
       Self.maximumTabWidth,
       max(
@@ -76,6 +89,10 @@ final class PhiTabStrip: NSView {
 
   /// The view for one tab, so a caller can drive it like a click would.
   func tab(_ id: String) -> PhiTabView? { tabViews[id] }
+
+  @objc private func newTabClicked() {
+    onNewTab?()
+  }
 
   private func applyActiveState() {
     for (id, tab) in tabViews { tab.isActive = (id == activeID) }

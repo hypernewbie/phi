@@ -76,7 +76,15 @@ final class SpikeUIDumpTests: XCTestCase {
       ]))
     XCTAssertEqual(request.imagePath.path, "/tmp/catalog.png")
     XCTAssertEqual(request.connectOrigin?.host, "127.0.0.1")
-    XCTAssertTrue(request.attachFirstPane)
+    XCTAssertEqual(request.attachPanes, 1)
+    let two = try XCTUnwrap(
+      SpikeUIDump.Request.fromEnvironment([
+        "PHI_SPIKE_UI_DUMP": "/tmp/catalog.png", "PHI_SPIKE_UI_ATTACH": "2",
+      ]))
+    XCTAssertEqual(two.attachPanes, 2, "a count attaches that many panes")
+    let none = try XCTUnwrap(
+      SpikeUIDump.Request.fromEnvironment(["PHI_SPIKE_UI_DUMP": "/tmp/catalog.png"]))
+    XCTAssertEqual(none.attachPanes, 0)
   }
 
   @MainActor

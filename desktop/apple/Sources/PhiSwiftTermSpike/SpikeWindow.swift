@@ -7,6 +7,10 @@ import Dispatch
 import SwiftTerm
 #endif
 
+/// The window: a tab strip, one visible terminal, a prompt bar, and a footer.
+///
+/// Pane state lives in `PaneTab`; this class lays out views, swaps the terminal
+/// that is on screen, and forwards user actions to the active tab.
 @MainActor
 final class SpikeWindow: NSWindowController, NSWindowDelegate {
   private let rootView = NSView()
@@ -17,39 +21,43 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
   private let composer = PhiComposerView()
   private let statusStrip = PhiStatusStrip()
   private let tabStrip = PhiTabStrip()
-  /// The pane this window shows, used to focus an already open window and to
-  /// key its saved draft.
-  var paneID = "" {
-    didSet {
-      composer.draftKey = PhiComposerView.draftKey(paneID: paneID)
-      tabStrip.items = [PhiTabStrip.Item(id: paneID, title: paneTitle)]
-    }
-  }
-  /// What the tab calls this pane: the pane title, or its coder.
-  var paneTitle = "pane" {
-    didSet {
-      guard !paneID.isEmpty else { return }
-      tabStrip.items = [PhiTabStrip.Item(id: paneID, title: paneTitle)]
-    }
-  }
-  private(set) var terminalView: SpikeTerminalView!
-  private var session: PaneSession?
+
+  private var tabs: [PaneTab] = []
+  private(set) var activeTab: PaneTab?
+  private var statuses: [String: PaneTab.Status] = [:]
   private var closed = false
-  private var liveConnection: UUID?
-  private var geometryRevision: UInt64 = 0
-  var closeTerminalView: (SpikeTerminalView) -> Bool = { $0.updateUiClosed() }
+  /// Shown until the first tab arrives, so layout and tests have a view.
+  private let placeholder = SpikeTerminalView()
+  /// The tab that exists before a session starts. Tests and callers drive a
+  /// window's terminal directly, so one always exists.
+  private lazy var unstartedTab = PaneTab(
+    paneID: "", title: "pane", terminalView: placeholder)
+
+  /// The pane named before the window starts. After that it mirrors the active
+  /// tab, so callers can find an open window by pane.
+  var paneID = ""
+  /// What the active tab calls its pane: the pane title, or its coder.
+  var paneTitle = "pane"
+
+  /// Test seam: reports whether a terminal view released its GPU resources.
+  var closeTerminalView: (SpikeTerminalView) -> Bool = { $0.updateUiClosed() } {
+    didSet { wire(unstartedTab); for tab in tabs { tab.closeTerminalView = closeTerminalView } }
+  }
   /// Called once the window closes, so the owner can release this controller.
   var onClose: (() -> Void)?
-  private(set) var retiringViews: [SpikeTerminalView] = []
-  private var retirementTask: Task<Void, Never>?
-  private var retirementOwner: SpikeWindow?
-  private var retirementBlocked = false
+  /// Called when the user asks for another tab; the owner picks the pane.
+  var onNewTab: ((SpikeWindow) -> Void)?
+
+  /// The tab whose terminal is on screen.
+  private var currentTab: PaneTab { activeTab ?? unstartedTab }
+  var terminalView: SpikeTerminalView { currentTab.terminalView }
+  var retiringViews: [SpikeTerminalView] { currentTab.retiringViews }
+
 #if DEBUG
   private var debugSnapshotDirectory: URL?
   private var debugSignal: DispatchSourceSignal?
   private var debugExportTask: Task<Void, Never>?
   private var debugExportInFlight = false
-  private var debugCachedSession = DebugSnapshotCachedSession()
 #endif
 
   init() {
@@ -76,13 +84,18 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     tabStrip.frame = NSRect(
       x: 0, y: 620 - PhiTabStrip.height, width: 1000, height: PhiTabStrip.height)
     tabStrip.autoresizingMask = [.width, .minYMargin]
-    tabStrip.onSelect = { [weak self] _ in self?.window?.makeKeyAndOrderFront(nil) }
-    tabStrip.onClose = { [weak self] _ in self?.window?.performClose(nil) }
+    tabStrip.onSelect = { [weak self] id in self?.selectTab(paneID: id) }
+    tabStrip.onClose = { [weak self] id in self?.closeTab(paneID: id) }
+    tabStrip.onNewTab = { [weak self] in
+      guard let self else { return }
+      self.onNewTab?(self)
+    }
     rootView.addSubview(tabStrip)
-    terminalView = SpikeTerminalView()
-    terminalView.frame = viewportBounds
-    terminalView.autoresizingMask = [.minYMargin]
-    terminalContainer.addSubview(terminalView)
+
+    placeholder.frame = viewportBounds
+    placeholder.autoresizingMask = [.minYMargin]
+    terminalContainer.addSubview(placeholder)
+
     statusStrip.text = "connecting"
     statusStrip.frame = NSRect(x: 0, y: 0, width: 1000, height: PhiStatusStrip.height)
     statusStrip.autoresizingMask = [.width, .maxYMargin]
@@ -96,131 +109,157 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     composer.onSend = { [weak self] text in self?.sendPrompt(text) ?? false }
     composer.onEscape = { [weak self] in self?.focusTerminal() }
     rootView.addSubview(composer)
-    updateMinimumContentSize(for: terminalView)
+    updateMinimumContentSize(for: placeholder)
+    wire(unstartedTab)
   }
 
   required init?(coder: NSCoder) {
     fatalError("init(coder:) has not been implemented")
   }
 
+  // MARK: tabs
+
   func start(session: PaneSession) {
-    startSession(session)
-  }
-
+    addTab(paneID: paneID.isEmpty ? "pane" : paneID, title: paneTitle, session: session)
 #if DEBUG
-  func start(session: PaneSession, stateDirectory: URL) {
-    debugSnapshotDirectory = stateDirectory
-    startSession(session)
-    installDebugSnapshotSignal()
-  }
+    // Installed here so a test that starts a session gets the same signal.
+    installDebugSnapshotSignalIfNeeded()
 #endif
-
-  private func startSession(_ session: PaneSession) {
-    guard !closed else { return }
-    self.session = session
-    configure(terminalView)
-    session.onUpdate = { [weak self] snapshot in
-      guard let self, !self.closed else { return }
-#if DEBUG
-      self.debugCachedSession = DebugSnapshotCachedSession(status: snapshot.status)
-#endif
-      self.updateStatus(snapshot)
-    }
-    session.resize(
-      cols: terminalView.terminalDimensions.cols, rows: terminalView.terminalDimensions.rows)
     showWindow(nil)
     // Typing starts in the composer: keystrokes stay local until a prompt is
     // submitted. Click the terminal, or press Escape, to type at the PTY.
     composer.focus()
     NSApplication.shared.activate(ignoringOtherApps: true)
-    session.start()
   }
 
-  func apply(_ event: TerminalObservation) throws {
-    guard !closed, !retirementBlocked else { throw SpikeWindowError.staleConnection }
-    switch event {
-    case .reset(let connection, let epoch, let frontier, let cols, let rows, _):
-      guard retiringViews.isEmpty else { throw SpikeWindowError.staleConnection }
-      let replacesConnection = terminalView?.connectionID != connection
-      guard cols >= 2, rows >= 1 else { throw SpikeWindowError.unsupportedGeometry }
-      let replacement = SpikeTerminalView(cols: cols, rows: rows)
-      configure(replacement)
-      do {
-        try replacement.apply(event)
-        guard !closed, replacement.connectionID == connection else {
-          throw SpikeWindowError.staleConnection
-        }
-      } catch {
-        retire(replacement)
-        throw error
-      }
-      liveConnection = nil
-      let wasFirstResponder = window?.firstResponder === terminalView
-      retire(terminalView)
-      terminalView.removeFromSuperview()
-      terminalView = replacement
-      replacement.autoresizingMask = [.minYMargin]
-      terminalContainer.addSubview(replacement)
-      positionTerminal()
-      updateMinimumContentSize(for: replacement)
-      if wasFirstResponder { window?.makeFirstResponder(replacement) }
-      geometryRevision = replacesConnection ? 1 : geometryRevision &+ 1
-      statusStrip.text = "epoch \(epoch) · frontier \(frontier) · \(cols)×\(rows)"
+  /// Opens another pane in this window and shows it.
+  @discardableResult
+  func addTab(paneID: String, title: String, session: PaneSession) -> PaneTab {
+    let tab = addTab(paneID: paneID, title: title)
+    tab.start(session: session)
+    return tab
+  }
 
-    case .bytes, .resize:
-      try terminalView.apply(event)
-      if case .resize = event {
-        geometryRevision &+= 1
-        liveConnection = nil
-        positionTerminal()
+  /// Adds a tab with no session yet, for a pane that is about to be attached or
+  /// for a test that only drives the window.
+  @discardableResult
+  func addTab(paneID: String, title: String) -> PaneTab {
+    let view = SpikeTerminalView()
+    view.frame = viewportBounds
+    view.autoresizingMask = [.minYMargin]
+    let tab = PaneTab(paneID: paneID, title: title, terminalView: view)
+    wire(tab)
+    placeholder.removeFromSuperview()
+    tabs.append(tab)
+    refreshStrip()
+    selectTab(paneID: paneID)
+    return tab
+  }
+
+  /// Whether this window already shows a pane.
+  func contains(paneID: String) -> Bool {
+    tabs.contains { $0.paneID == paneID }
+  }
+
+  func selectTab(paneID: String) {
+    guard let tab = tabs.first(where: { $0.paneID == paneID }) else { return }
+    if activeTab === tab {
+      tabStrip.activeID = paneID
+      return
+    }
+    if let current = activeTab, current.terminalView.superview === terminalContainer {
+      current.terminalView.removeFromSuperview()
+    }
+    activeTab = tab
+    self.paneID = tab.paneID
+    paneTitle = tab.title
+    terminalContainer.addSubview(tab.terminalView)
+    tabStrip.activeID = tab.paneID
+    composer.draftKey = tab.draftKey
+    renderStatus(statuses[tab.paneID])
+    updateMinimumContentSize(for: tab.terminalView)
+    window?.makeFirstResponder(tab.terminalView)
+  }
+
+  func closeTab(paneID: String) {
+    guard let index = tabs.firstIndex(where: { $0.paneID == paneID }) else { return }
+    let tab = tabs.remove(at: index)
+    tab.terminalView.removeFromSuperview()
+    tab.close()
+    statuses[paneID] = nil
+    refreshStrip()
+    if activeTab === tab {
+      activeTab = nil
+      if !tabs.isEmpty {
+        selectTab(paneID: tabs[min(index, tabs.count - 1)].paneID)
       }
     }
+    if tabs.isEmpty, !closed {
+      // Nothing is unsaved, so close directly: `performClose` waits on a
+      // visible window and would leave a hidden one open.
+      window?.close()
+    }
+  }
+
+  /// Connects one tab's callbacks to the window. Used for the tab that exists
+  /// before a session starts and for every tab opened later.
+  private func wire(_ tab: PaneTab) {
+    tab.closeTerminalView = closeTerminalView
+    tab.onStatus = { [weak self, weak tab] status in
+      guard let self, let tab else { return }
+      self.statuses[tab.paneID] = status
+      if self.currentTab === tab { self.renderStatus(status) }
+    }
+    tab.onTerminalReplaced = { [weak self, weak tab] retired, replacement in
+      guard let self, let tab, self.currentTab === tab else { return }
+      self.swapTerminalView(retired: retired, replacement: replacement)
+    }
+    tab.onReadyToFit = { [weak self, weak tab] in
+      guard let self, let tab, self.currentTab === tab else { return }
+      self.fitTerminalToViewport()
+    }
+  }
+
+  private func refreshStrip() {
+    tabStrip.items = tabs.map { PhiTabStrip.Item(id: $0.paneID, title: $0.title) }
+  }
+
+  private func swapTerminalView(retired: SpikeTerminalView, replacement: SpikeTerminalView) {
+    let wasFirstResponder = window?.firstResponder === retired
+    retired.removeFromSuperview()
+    replacement.autoresizingMask = [.minYMargin]
+    terminalContainer.addSubview(replacement)
+    positionTerminal()
+    updateMinimumContentSize(for: replacement)
+    if wasFirstResponder { window?.makeFirstResponder(replacement) }
+  }
+
+  // MARK: observations
+
+  func apply(_ event: TerminalObservation) throws {
+    guard !closed else { throw SpikeWindowError.staleConnection }
+    try currentTab.apply(event)
+  }
+
+  /// Routes one pane's events, so several tabs can share this window.
+  func apply(_ event: TerminalObservation, paneID: String) throws {
+    guard !closed, let tab = tabs.first(where: { $0.paneID == paneID }) else {
+      throw SpikeWindowError.staleConnection
+    }
+    try tab.apply(event)
   }
 
   func windowDidResize(_ notification: Notification) {
-    guard !closed, let terminalView else { return }
-    let current = terminalView.terminalDimensions
-    let optimal = terminalView.getOptimalFrameSize()
+    guard !closed else { return }
+    let tab = currentTab
+    let current = tab.terminalView.terminalDimensions
+    let optimal = tab.terminalView.getOptimalFrameSize()
     guard optimal.width > 0, optimal.height > 0 else { return }
     let cols = max(2, Int(viewportBounds.width / (optimal.width / CGFloat(current.cols))))
     let rows = max(1, Int(viewportBounds.height / (optimal.height / CGFloat(current.rows))))
-    if terminalView.connectionID == nil || liveConnection == terminalView.connectionID {
-      fitTerminalToViewport()
-    } else {
-      positionTerminal()
-    }
-    session?.resize(cols: cols, rows: rows)
+    tab.andFitAllowed { fitTerminalToViewport() }
+    tab.resize(cols: cols, rows: rows)
   }
-
-  #if DEBUG
-  /// Writes the terminal view as PNG for the self-capture.
-  ///
-  /// The view is captured directly, not through its window: SwiftTerm renders in
-  /// its own layer, and a window-level capture returns the background alone.
-  /// Rendering is unsuspended first, so an occluded window still yields its
-  /// current screen.
-  /// Captures the whole window, not only the terminal view: the view draws in
-  /// its own layer, and the footer strip lives beside it, so a window-level
-  /// cache would show neither. `rootView` is layer-backed for this reason.
-  func writeUIDumpPNG(to path: URL) async throws -> (bytes: Int, width: Int, height: Int) {
-    guard let view = terminalView else { throw SpikeWindowError.staleConnection }
-    let originalSuspension = view.suspendsRenderingWhenNotVisible
-    let initialFrames = view.diagnostics.frames
-    view.suspendsRenderingWhenNotVisible = false
-    defer { view.suspendsRenderingWhenNotVisible = originalSuspension }
-    view.requestRedraw()
-    let deadline = ContinuousClock().now.advanced(by: .seconds(3))
-    while view.diagnostics.frames <= initialFrames, ContinuousClock().now < deadline {
-      try? await Task.sleep(for: .milliseconds(16))
-    }
-    // The window must really be on screen: AppKit skips drawing for a window it
-    // considers hidden, and a status line set after launch would never appear.
-    window?.orderFrontRegardless()
-    rootView.layoutSubtreeIfNeeded()
-    let bytes = try SpikeUIDump.writePNG(of: rootView, compositing: [view], to: path)
-    return (bytes, Int(rootView.bounds.width), Int(rootView.bounds.height))
-  }
-  #endif
 
   func windowWillClose(_ notification: Notification) {
     closeSession()
@@ -236,42 +275,45 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     debugExportTask?.cancel()
     debugExportTask = nil
 #endif
-    if let terminalView { retire(terminalView) }
-    session?.stop()
-    session = nil
+    for tab in tabs { tab.close() }
+    tabs.removeAll()
+    // The tab that never got a session still holds a terminal view.
+    unstartedTab.close()
+    activeTab = nil
   }
 
-  private func retire(_ view: SpikeTerminalView) {
-    view.onInput = nil
-    view.onGridResize = nil
-    view.terminalDelegate = nil
-    guard !closeTerminalView(view) else { return }
-    retiringViews.append(view)
-    // shortcut: stalled GPU graphs stay retained until process exit; add recovery only when enabling Metal.
-    retirementOwner = self
-    guard retirementTask == nil else { return }
-    retirementTask = Task { [self] in
-      defer {
-        retirementTask = nil
-        if retiringViews.isEmpty { retirementOwner = nil }
-      }
-      let deadline = ContinuousClock.now + .seconds(5)
-      while !retiringViews.isEmpty {
-        retiringViews.removeAll { closeTerminalView($0) }
-        if retiringViews.isEmpty { return }
-        guard ContinuousClock.now < deadline else {
-          retirementBlocked = true
-          if !closed { statusStrip.text = "terminal teardown timed out; views retained" }
-          return
-        }
-        do { try await Task.sleep(for: .milliseconds(10)) } catch {
-          retirementBlocked = true
-          return
-        }
-      }
+  #if DEBUG
+  /// Writes the terminal view as PNG for the self-capture.
+  ///
+  /// The view is captured directly, not through its window: SwiftTerm renders in
+  /// its own layer, and a window-level capture returns the background alone.
+  /// Rendering is unsuspended first, so an occluded window still yields its
+  /// current screen.
+  /// Captures the whole window, not only the terminal view: the view draws in
+  /// its own layer, and the footer strip lives beside it, so a window-level
+  /// cache would show neither. `rootView` is layer-backed for this reason.
+  func writeUIDumpPNG(to path: URL) async throws -> (bytes: Int, width: Int, height: Int) {
+    guard activeTab != nil else { throw SpikeWindowError.staleConnection }
+    let view = terminalView
+    let originalSuspension = view.suspendsRenderingWhenNotVisible
+    let initialFrames = view.diagnostics.frames
+    view.suspendsRenderingWhenNotVisible = false
+    defer { view.suspendsRenderingWhenNotVisible = originalSuspension }
+    view.requestRedraw()
+    let deadline = ContinuousClock().now.advanced(by: .seconds(3))
+    while view.diagnostics.frames <= initialFrames, ContinuousClock().now < deadline {
+      try? await Task.sleep(for: .milliseconds(16))
     }
+    // The window must really be on screen: AppKit skips drawing for a window it
+    // considers hidden, and a status line set after launch would never appear.
+    window?.orderFrontRegardless()
+    window?.displayIfNeeded()
+    rootView.layoutSubtreeIfNeeded()
+    rootView.displayIfNeeded()
+    let bytes = try SpikeUIDump.writePNG(of: rootView, compositing: [view], to: path)
+    return (bytes, Int(rootView.bounds.width), Int(rootView.bounds.height))
   }
-
+  #endif
 #if DEBUG
   func exportDebugSnapshot(to stateDirectory: URL) async throws -> URL {
     guard !closed else { throw DebugSnapshotError.closed }
@@ -279,7 +321,7 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     debugExportInFlight = true
     defer { debugExportInFlight = false }
 
-    let view = terminalView!
+    let view = terminalView
     let captured = try await captureDebugSnapshot(from: view)
     try checkDebugSnapshotRequest(for: view)
     let writer = Task.detached(priority: .utility) {
@@ -295,7 +337,7 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     })
   }
 
-  private func installDebugSnapshotSignal() {
+  private func installDebugSnapshotSignalIfNeeded() {
     guard !closed, debugSignal == nil else { return }
     signal(SIGINFO, SIG_IGN)
     let source = DispatchSource.makeSignalSource(signal: SIGINFO, queue: .main)
@@ -399,7 +441,8 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
         frontier: String(view.sourceFrontier)),
       viewport: DebugSnapshotViewport(snapshot: terminal),
       modes: DebugSnapshotModes(snapshot: terminal.inputState),
-      cachedSession: debugCachedSession,
+      cachedSession: DebugSnapshotCachedSession(
+        status: activeTab?.lastSnapshot?.status ?? PaneWireClient.Status()),
       image: DebugSnapshotImage(exists: png != nil, errorCode: imageError))
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
@@ -409,15 +452,17 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
   }
 #endif
 
-  private func configure(_ view: SpikeTerminalView) {
-    view.onInput = { [weak session] bytes in session?.send(bytes: bytes) }
-    view.onGridResize = { [weak session] cols, rows in session?.resize(cols: cols, rows: rows) }
+#if DEBUG
+  func start(session: PaneSession, stateDirectory: URL) {
+    debugSnapshotDirectory = stateDirectory
+    start(session: session)
   }
+#endif
 
   /// Sends one submitted prompt. The composer keeps the draft when this fails.
   private func sendPrompt(_ text: String) -> Bool {
-    guard let session, let bytes = PhiPrompt.bytes(for: text) else { return false }
-    session.send(bytes: bytes)
+    guard let tab = activeTab, let bytes = PhiPrompt.bytes(for: text) else { return false }
+    tab.send(bytes: bytes)
     return true
   }
 
@@ -430,25 +475,27 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     window?.makeFirstResponder(terminalView)
   }
 
+  // MARK: DEBUG hooks
+#if DEBUG
+  /// The tab the capture reads, so a test can hand the window a session.
+  var debugTab: PaneTab { currentTab }
+#endif
+
+  /// For tests and callers that drive one pane: the current tab's status.
   func updateStatus(_ snapshot: PaneSession.Snapshot) {
-    guard !closed else { return }
-    guard !retirementBlocked else {
-      statusStrip.text = "terminal teardown timed out; views retained"
-      statusStrip.textColor = PhiTheme.danger
+    currentTab.updateStatus(snapshot)
+  }
+
+  private func renderStatus(_ status: PaneTab.Status?) {
+    guard let status else {
+      statusStrip.text = "connecting"
+      statusStrip.textColor = PhiTheme.textMuted
       return
     }
-    if snapshot.status.attached, !snapshot.status.recovering,
-       snapshot.status.geometryRevision == geometryRevision, let connection = terminalView.connectionID,
-       snapshot.status.connectionID == connection, liveConnection != connection {
-      liveConnection = connection
-      fitTerminalToViewport()
-    }
-    let dimensions = terminalView.terminalDimensions
-    statusStrip.text =
-      "\(snapshot.statusLine) · view \(dimensions.cols)×\(dimensions.rows)"
+    statusStrip.text = status.text
     statusStrip.textColor =
-      snapshot.status.attached
-      ? PhiTheme.active : (snapshot.status.recovering ? PhiTheme.textMuted : PhiTheme.danger)
+      status.attached
+      ? PhiTheme.active : (status.recovering ? PhiTheme.textMuted : PhiTheme.danger)
   }
 
   private func updateMinimumContentSize(for view: SpikeTerminalView) {

@@ -24,7 +24,7 @@ final class SpikeLaunchTests: XCTestCase {
   }
 
   func testStateDirectoryAloneOpensTheCatalog() throws {
-    XCTAssertEqual(try parse([]).launch, .catalog)
+    XCTAssertEqual(try parse([]).launch, .catalog(nil))
   }
 
   func testNamedPaneAndServerOpenDirectly() throws {
@@ -32,8 +32,10 @@ final class SpikeLaunchTests: XCTestCase {
     XCTAssertEqual(options.launch, .pane(URL(string: "http://127.0.0.1:7070")!, "pane-1"))
   }
 
-  func testAServerWithoutAPaneIsRejected() {
-    XCTAssertThrowsError(try parse(["--server", "http://127.0.0.1:7070"]))
+  func testAServerWithoutAPaneOpensTheCatalogThere() throws {
+    XCTAssertEqual(
+      try parse(["--server", "http://127.0.0.1:7070"]).launch,
+      .catalog(URL(string: "http://127.0.0.1:7070")))
   }
 
   func testAPaneWithoutAServerIsRejected() {
@@ -47,7 +49,7 @@ final class SpikeLaunchTests: XCTestCase {
 
   func testTheKeychainFlagStaysAccepted() throws {
     XCTAssertEqual(
-      try parse(["--no-keychain"]).launch, .catalog,
+      try parse(["--no-keychain"]).launch, .catalog(nil),
       "Earlier preview instructions pass --no-keychain; the preview never uses the Keychain.")
   }
 
@@ -77,5 +79,15 @@ final class SpikeLaunchTests: XCTestCase {
   func testANonexistentStateDirectoryIsRejected() {
     let missing = stateDirectory.appendingPathComponent("absent", isDirectory: true)
     XCTAssertThrowsError(try SpikeOptions.parse(["--state-dir", missing.path]))
+  }
+}
+
+extension SpikeLaunchTests {
+  func testAServerAloneOpensTheCatalogThere() throws {
+    let options = try parse(["--server", "http://hyperion.example.ts.net:18640"])
+    XCTAssertEqual(options.launch, .catalog(URL(string: "http://hyperion.example.ts.net:18640")))
+  }
+  func testAServerAloneOpensTheCatalogThereButNotACredentialledOne() throws {
+    XCTAssertThrowsError(try parse(["--server", "http://user:secret@host:7070"]))
   }
 }

@@ -276,3 +276,63 @@ final class TabStripRenderTests: XCTestCase {
   }
 
 }
+
+@MainActor
+final class MultiTabTests: XCTestCase {
+  func testASecondTabShowsItsOwnTerminalAndTheFirstComesBack() throws {
+    let window = SpikeWindow()
+    guard let host = window.window else { return XCTFail("no window") }
+    defer { window.closeSession(); host.close() }
+    let container = try XCTUnwrap(
+      host.contentView?.subviews.compactMap { $0.subviews.first(where: { $0 is SpikeTerminalView }) }
+        .first?.superview)
+
+    window.addTab(paneID: "a1", title: "bash")
+    let first = window.terminalView
+    XCTAssertTrue(container.subviews.contains { $0 === first })
+
+    window.addTab(paneID: "b2", title: "pi")
+    let second = window.terminalView
+    XCTAssertFalse(first === second, "a second tab brings its own terminal")
+    XCTAssertTrue(container.subviews.contains { $0 === second })
+    XCTAssertFalse(container.subviews.contains { $0 === first }, "the hidden tab leaves the screen")
+
+    window.selectTab(paneID: "a1")
+    XCTAssertTrue(window.terminalView === first, "switching back shows the first terminal")
+    XCTAssertTrue(container.subviews.contains { $0 === first })
+    XCTAssertFalse(container.subviews.contains { $0 === second })
+
+    XCTAssertEqual(window.contains(paneID: "a1"), true)
+    XCTAssertEqual(window.contains(paneID: "b2"), true)
+  }
+
+  func testClosingOneTabLeavesTheOtherOpen() throws {
+    let window = SpikeWindow()
+    guard let host = window.window else { return XCTFail("no window") }
+    var closedWithWindow = false
+    window.onClose = { closedWithWindow = true }
+    defer { window.closeSession(); host.close() }
+
+    window.addTab(paneID: "a1", title: "bash")
+    window.addTab(paneID: "b2", title: "pi")
+
+    window.closeTab(paneID: "a1")
+
+    XCTAssertFalse(window.contains(paneID: "a1"))
+    XCTAssertTrue(window.contains(paneID: "b2"))
+    XCTAssertFalse(closedWithWindow, "the window stays open while a tab remains")
+    XCTAssertEqual(window.paneID, "b2", "the neighbour becomes active")
+  }
+
+  func testClosingTheLastTabClosesTheWindow() {
+    let window = SpikeWindow()
+    var closed = false
+    window.onClose = { closed = true }
+    window.addTab(paneID: "a1", title: "bash")
+
+    window.closeTab(paneID: "a1")
+
+    XCTAssertFalse(window.contains(paneID: "a1"))
+    XCTAssertTrue(closed, "closing the last tab closes its window")
+  }
+}

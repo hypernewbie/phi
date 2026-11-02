@@ -19,7 +19,9 @@ enum SpikeUIDump {
   struct Request {
     let imagePath: URL
     let connectOrigin: URL?
-    let attachFirstPane: Bool
+    /// How many listed panes to attach before capturing; 0 captures the
+    /// catalog alone.
+    let attachPanes: Int
 
     /// Reads the environment, or returns nil when no capture was requested.
     static func fromEnvironment(
@@ -30,7 +32,7 @@ enum SpikeUIDump {
       return Request(
         imagePath: URL(fileURLWithPath: path),
         connectOrigin: origin,
-        attachFirstPane: environment["PHI_SPIKE_UI_ATTACH"] == "1")
+        attachPanes: Int(environment["PHI_SPIKE_UI_ATTACH"] ?? "") ?? 0)
     }
   }
 
@@ -42,10 +44,12 @@ enum SpikeUIDump {
       catalog.setOriginText(origin)
       await catalog.loadPanes(origin: origin)
     }
-    if request.attachFirstPane {
-      catalog.attachRow(0)
-      // Let the new session attach before anything is captured.
-      try await Task.sleep(nanoseconds: 2_000_000_000)
+    if request.attachPanes > 0 {
+      for row in 0..<request.attachPanes {
+        catalog.attachRow(row)
+        // Let the new session attach before anything is captured.
+        try await Task.sleep(nanoseconds: 3_000_000_000)
+      }
     }
     // Let the layout and any row views settle before reading the pixels.
     for _ in 0..<3 {

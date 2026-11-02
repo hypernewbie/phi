@@ -33,7 +33,7 @@ struct SpikeOptions {
   /// Where the app opens: one named pane, or the pane catalog.
   enum Launch: Equatable {
     case pane(URL, String)
-    case catalog
+    case catalog(URL?)
   }
 
   let stateDirectory: URL
@@ -78,14 +78,18 @@ struct SpikeOptions {
     let launch: Launch
     switch (server, pane) {
     case (nil, nil):
-      launch = .catalog
+      launch = .catalog(nil)
     case (let server?, let pane?):
       guard !pane.isEmpty, let origin = origin(from: server) else {
         throw SpikeArgumentsError.invalid
       }
       launch = .pane(origin, pane)
-    default:
-      // A named pane needs its server; either both or neither.
+    case (let server?, nil):
+      // A server alone opens the catalog at that origin.
+      guard let origin = origin(from: server) else { throw SpikeArgumentsError.invalid }
+      launch = .catalog(origin)
+    case (nil, _?):
+      // A named pane needs its server.
       throw SpikeArgumentsError.invalid
     }
     return SpikeOptions(stateDirectory: stateDirectory, launch: launch)
@@ -121,8 +125,8 @@ final class SpikeApplicationDelegate: NSObject, NSApplicationDelegate {
     switch options.launch {
     case .pane(let origin, let pane):
       _ = open(origin: origin, pane: pane, title: pane, password: nil)
-    case .catalog:
-      showCatalog()
+    case .catalog(let origin):
+      showCatalog(prefilling: origin)
     }
 #if DEBUG
     if let catalog { runRequestedUIDump(on: catalog) }
@@ -136,6 +140,10 @@ final class SpikeApplicationDelegate: NSObject, NSApplicationDelegate {
   }
 
   @objc private func showCatalog() {
+    showCatalog(prefilling: nil)
+  }
+
+  private func showCatalog(prefilling origin: URL?) {
     let catalog: SpikeCatalogWindow
     if let existing = self.catalog {
       catalog = existing
@@ -148,6 +156,10 @@ final class SpikeApplicationDelegate: NSObject, NSApplicationDelegate {
             origin: origin, pane: pane.id, title: Self.title(of: pane), password: password)
         })
       self.catalog = catalog
+    }
+    if let origin {
+      catalog.setOriginText(origin)
+      Task { await catalog.loadPanes(origin: origin) }
     }
     catalog.showWindow(nil)
     catalog.window?.makeKeyAndOrderFront(nil)
@@ -183,13 +195,19 @@ final class SpikeApplicationDelegate: NSObject, NSApplicationDelegate {
   private func open(
     origin: URL, pane: String, title: String, password: AccessAuth.PasswordProvider?
   ) -> String? {
-    if let existing = windows.first(where: { $0.paneID == pane }) {
+    if let existing = windows.first(where: { $0.contains(paneID: pane) }) {
+      existing.selectTab(paneID: pane)
       existing.window?.makeKeyAndOrderFront(nil)
       return nil
     }
-    let controller = SpikeWindow()
-    controller.paneID = pane
-    controller.paneTitle = title
+    // A visible window takes another tab; otherwise this pane gets its own.
+    let reusesWindow = windows.contains { $0.window?.isVisible == true }
+    let controller: SpikeWindow
+    if let visible = windows.last(where: { $0.window?.isVisible == true }) {
+      controller = visible
+    } else {
+      controller = makeWindow()
+    }
     let session: PaneSession
     do {
       session = try PaneSession(
@@ -197,21 +215,49 @@ final class SpikeApplicationDelegate: NSObject, NSApplicationDelegate {
         useKeychain: false, password: password,
         terminalObserver: { [weak controller] event in
           guard let controller else { throw SpikeWindowError.staleConnection }
-          try await controller.apply(event)
+          try await controller.apply(event, paneID: pane)
         })
     } catch {
+      if !reusesWindow { closeEmptyWindow(controller) }
       return error.localizedDescription
     }
-    windows.append(controller)
+#if DEBUG
+    if reusesWindow {
+      controller.addTab(paneID: pane, title: title, session: session)
+    } else {
+      controller.paneID = pane
+      controller.paneTitle = title
+      controller.start(session: session, stateDirectory: options.stateDirectory)
+    }
+#else
+    if reusesWindow {
+      controller.addTab(paneID: pane, title: title, session: session)
+    } else {
+      controller.paneID = pane
+      controller.paneTitle = title
+      controller.start(session: session)
+    }
+#endif
+    controller.showWindow(nil)
+    controller.window?.makeKeyAndOrderFront(nil)
+    return nil
+  }
+
+  /// A new window that reports back when it closes.
+  private func makeWindow() -> SpikeWindow {
+    let controller = SpikeWindow()
     controller.onClose = { [weak self] in
       self?.windows.removeAll { $0 === controller }
     }
-#if DEBUG
-    controller.start(session: session, stateDirectory: options.stateDirectory)
-#else
-    controller.start(session: session)
-#endif
-    return nil
+    controller.onNewTab = { [weak self] _ in self?.showCatalog() }
+    windows.append(controller)
+    return controller
+  }
+
+  /// Drops a window that never got a pane, so a failed attach leaves nothing.
+  private func closeEmptyWindow(_ controller: SpikeWindow) {
+    windows.removeAll { $0 === controller }
+    controller.window?.close()
   }
 
   // MARK: menu
@@ -266,12 +312,19 @@ final class SpikeApplicationDelegate: NSObject, NSApplicationDelegate {
     windowMenu.addItem(.separator())
     let catalogItem = windowMenu.addItem(
       withTitle: "Pane Catalog", action: #selector(openCatalogFromMenu), keyEquivalent: "0")
+    windowMenu.addItem(.separator())
+    windowMenu.addItem(
+      withTitle: "New Tab", action: #selector(newTabFromMenu), keyEquivalent: "t")
     catalogItem.target = self
     windowItem.submenu = windowMenu
     mainMenu.addItem(windowItem)
     NSApplication.shared.windowsMenu = windowMenu
 
     NSApplication.shared.mainMenu = mainMenu
+  }
+
+  @objc private func newTabFromMenu() {
+    showCatalog()
   }
 
   @objc private func openCatalogFromMenu() {

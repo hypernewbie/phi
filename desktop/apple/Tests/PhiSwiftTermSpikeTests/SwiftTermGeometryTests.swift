@@ -96,7 +96,7 @@ final class SwiftTermGeometryTests: XCTestCase {
     let controller = SpikeWindow()
     let window = try XCTUnwrap(controller.window)
     defer { controller.closeSession(); window.close() }
-    let original = controller.terminalView!
+    let original = controller.terminalView
     var closed: Set<ObjectIdentifier> = []
     controller.closeTerminalView = { view in
       closed.insert(ObjectIdentifier(view))
@@ -106,7 +106,7 @@ final class SwiftTermGeometryTests: XCTestCase {
       connection: UUID(), epoch: 7, frontier: 0, cols: 80, rows: 24, bytes: Data()))
     XCTAssertTrue(closed.contains(ObjectIdentifier(original)))
     XCTAssertNil(original.terminalDelegate)
-    let current = controller.terminalView!
+    let current = controller.terminalView
     controller.closeSession()
     XCTAssertTrue(closed.contains(ObjectIdentifier(current)))
     XCTAssertNil(current.terminalDelegate)
@@ -117,7 +117,7 @@ final class SwiftTermGeometryTests: XCTestCase {
     let controller = SpikeWindow()
     let window = try XCTUnwrap(controller.window)
     defer { controller.closeSession(); window.close() }
-    let original = controller.terminalView!
+    let original = controller.terminalView
     var complete = false
     controller.closeTerminalView = { view in
       let closed = view.updateUiClosed()
@@ -145,7 +145,7 @@ final class SwiftTermGeometryTests: XCTestCase {
     let controller = SpikeWindow()
     let window = try XCTUnwrap(controller.window)
     defer { controller.closeSession(); window.close() }
-    let original = controller.terminalView!
+    let original = controller.terminalView
     var closed = 0
     controller.closeTerminalView = { view in closed += 1; return view.updateUiClosed() }
     do {

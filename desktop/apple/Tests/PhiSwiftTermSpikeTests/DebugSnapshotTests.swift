@@ -16,7 +16,7 @@ final class DebugSnapshotTests: XCTestCase {
   func testFixtureExportsReadablePNGAndViewportJSON() async throws {
     let stateDirectory = try makeStateDirectory()
     let window = SpikeWindow()
-    let view = window.terminalView!
+    let view = window.terminalView
     let connection = UUID()
     let frontier: UInt64 = 9_007_199_254_740_993
     let fixtureText =
@@ -154,7 +154,7 @@ final class DebugSnapshotTests: XCTestCase {
       window.closeSession()
       window.window?.close()
     }
-    let view = window.terminalView!
+    let view = window.terminalView
     var inputCalls = 0
     var resizeCalls = 0
     view.onInput = { _ in inputCalls += 1 }
@@ -212,7 +212,7 @@ final class DebugSnapshotTests: XCTestCase {
       window.closeSession()
       window.window?.close()
     }
-    let view = window.terminalView!
+    let view = window.terminalView
     let previous = try await window.exportDebugSnapshot(to: stateDirectory)
     let previousImage = try Data(contentsOf: previous.appendingPathComponent("terminal.png"))
     let previousState = try Data(contentsOf: previous.appendingPathComponent("state.json"))
@@ -253,7 +253,7 @@ final class DebugSnapshotTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: stateDirectory) }
     let window = SpikeWindow()
     defer { window.window?.close() }
-    let view = window.terminalView!
+    let view = window.terminalView
     let connectionID = view.connectionID
     let epoch = view.epoch
     let frontier = view.sourceFrontier
@@ -279,7 +279,7 @@ final class DebugSnapshotTests: XCTestCase {
   func testPreparationRestoresVisibilityOnCancellationCloseAndReset() async throws {
     let cancelDirectory = try makeStateDirectory()
     let cancelWindow = SpikeWindow()
-    let cancelView = cancelWindow.terminalView!
+    let cancelView = cancelWindow.terminalView
     let cancelTask = Task { @MainActor in
       try await cancelWindow.exportDebugSnapshot(to: cancelDirectory)
     }
@@ -299,7 +299,7 @@ final class DebugSnapshotTests: XCTestCase {
 
     let closeDirectory = try makeStateDirectory()
     let closeWindow = SpikeWindow()
-    let closeView = closeWindow.terminalView!
+    let closeView = closeWindow.terminalView
     let closeTask = Task { @MainActor in
       try await closeWindow.exportDebugSnapshot(to: closeDirectory)
     }
@@ -319,7 +319,7 @@ final class DebugSnapshotTests: XCTestCase {
 
     let resetDirectory = try makeStateDirectory()
     let resetWindow = SpikeWindow()
-    let retiredView = resetWindow.terminalView!
+    let retiredView = resetWindow.terminalView
     let resetTask = Task { @MainActor in
       try await resetWindow.exportDebugSnapshot(to: resetDirectory)
     }
