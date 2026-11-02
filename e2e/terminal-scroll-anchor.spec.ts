@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
+import { readReplay } from './_terminal-replay.js';
 
 // One wheel notch must keep the reader on the line they saw, even when a burst
 // of output lands right after the gesture. The fixture waits for attachment
@@ -220,10 +221,7 @@ test('one wheel notch keeps the reading row when a burst follows', async ({
     await expect
         .poll(
             async () => {
-                const recording = await request.get(
-                    `${phi.url}/api/terminals/${pane}/recording?from=0&through=18446744073709551615`,
-                );
-                return (await recording.body()).includes(
+                return (await readReplay(phi.url, pane)).data.includes(
                     Buffer.from('ANCHOR ATTACHED'),
                 );
             },

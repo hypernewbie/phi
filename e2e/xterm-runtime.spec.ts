@@ -5,6 +5,7 @@ import type {
     TerminalServerFrame as TerminalServerMessage,
 } from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+import { replayAttach, replayEnvelope } from './_terminal-replay.js';
 
 // The served bundle carries no types; bind its runtime codec to the
 // generated declarations so spec-side encoding is fully checked.
@@ -66,24 +67,17 @@ test('real browser xterm recovers a gap and overlaps across a split UTF-8 bootst
     const text = '你好 🙂 \x1b[31mcolored — terminal output\x1b[0m\r\nEND\r\n';
     const bytes = Buffer.from(text);
     const ranges: string[] = [];
-    await page.route('**/api/terminals/recovery-test/recording?*', (route) => {
+    await page.route('**/api/terminals/recovery-test/replay?*', (route) => {
         const params = new URL(route.request().url()).searchParams;
         const from = Number(params.get('from'));
-        const through = Number(params.get('through'));
-        ranges.push(`${from}:${through}`);
-        const json = Buffer.from(
-            JSON.stringify({
-                epoch: 7,
-                start: from,
-                end: through,
-                resizes: [],
-            }),
-        );
-        const length = Buffer.alloc(4);
-        length.writeUInt32BE(json.length);
+        const through =
+            params.get('through') === 'latest'
+                ? bytes.length
+                : Number(params.get('through'));
+        ranges.push(`${from}:${params.get('through')}`);
         return route.fulfill({
             contentType: 'application/octet-stream',
-            body: Buffer.concat([length, json, bytes.subarray(from, through)]),
+            body: replayEnvelope(bytes.subarray(from, through), 7, 80, 5, from),
         });
     });
     await page.routeWebSocket('**/ws/pane/recovery-test?*', (route) => {
@@ -94,9 +88,7 @@ test('real browser xterm recovers a gap and overlaps across a split UTF-8 bootst
                         payload: {
                             $case: 'attach',
                             value: {
-                                epoch: BigInt(7),
-                                oldest: BigInt(0),
-                                head: BigInt(1),
+                                ...replayAttach(7, 1, 80, 5),
                             },
                         },
                     }),
@@ -187,9 +179,19 @@ test('real browser xterm recovers a gap and overlaps across a split UTF-8 bootst
             null,
             null,
             {
-                onAttachHead(info: { epoch: number; head: number }) {
+                onAttachHead(info: {
+                    epoch: number;
+                    head: number;
+                    eventCursor: string;
+                }) {
                     tab.paneEpoch = info.epoch;
-                    manager._bootstrappedRelease(tab, socket, 0, info.head);
+                    manager._bootstrappedRelease(
+                        tab,
+                        socket,
+                        0,
+                        info.head,
+                        info.eventCursor,
+                    );
                 },
                 onGap(from: number, to: number) {
                     return manager._onLiveGap(tab, from, to);
@@ -220,5 +222,5 @@ test('real browser xterm recovers a gap and overlaps across a split UTF-8 bootst
     expect(result.rows.join('\n')).not.toMatch(/output bytes dropped|�/);
     expect(result.seq).toBe(bytes.length);
     expect(result.drained).toBe(bytes.length);
-    expect(ranges).toEqual(['0:1', '40:45']);
+    expect(ranges).toEqual(['0:1', '40:latest']);
 });

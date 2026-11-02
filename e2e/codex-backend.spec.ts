@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
+import { readReplay } from './_terminal-replay.js';
 
 let phi: PhiServer;
 function launchArgs(): string | null {
@@ -71,10 +72,9 @@ test('Codex launches safely and Models sends only the native picker command', as
     // so check the authoritative recording instead of racing the socket.
     await expect
         .poll(async () => {
-            const recording = await request.get(
-                `${phi.url}/api/terminals/${pane.pane_id}/recording?from=0&through=65536`,
+            return (await readReplay(phi.url, pane.pane_id)).data.toString(
+                'utf8',
             );
-            return recording.ok() ? recording.text() : '';
         })
         .toContain('codex ready');
     await page

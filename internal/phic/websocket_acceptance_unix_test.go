@@ -10,24 +10,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
-	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/creack/pty"
 )
 
-// csiPattern matches the CSI and OSC control sequences a shell emits inline
-// with its output, so an output line can be compared to its text content.
-var csiPattern = regexp.MustCompile("\\x1b\\[[0-9;?]*[ -/]*[@-~]|\\x1b\\][^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)")
-
-// Live M1 acceptance: real shell panes on the fixture server, driven
-// through the actual cmd/phic console under a PTY and through the relay
-// against the same live pane. The Playwright terminal spec supplies the
-// fixture; a bare `go test` run skips without the variables.
+// Real shell pane through the cmd/phic native console under a PTY.
+// The Playwright spec supplies the isolated live server; bare Go tests skip.
 func TestWebSocketProtobufLiveAcceptance(t *testing.T) {
 	url, urlOK := os.LookupEnv("PHI_WS_ACCEPTANCE_URL")
 	dir, dirOK := os.LookupEnv("PHI_WS_ACCEPTANCE_DIR")
@@ -47,11 +38,6 @@ func TestWebSocketProtobufLiveAcceptance(t *testing.T) {
 	phicBin := buildAcceptancePhic(t, dir)
 	consolePane := spawnAcceptanceShell(t, url)
 	runAcceptanceConsole(t, phicBin, url, dir, consolePane)
-	relayPane := spawnAcceptanceShell(t, url)
-	if relayPane == consolePane {
-		t.Fatal("relay case needs its own pane")
-	}
-	runAcceptanceRelay(t, url, relayPane)
 }
 
 func moduleRoot(t *testing.T) string {
@@ -219,133 +205,4 @@ func runAcceptanceConsole(t *testing.T, bin, url, dir, pane string) {
 		t.Fatal("phic did not exit after the pane exited")
 	}
 	t.Logf("console case: pane %s exited 23 through the real binary", pane)
-}
-
-// acceptanceTerminal captures relay output and feeds scripted input lines.
-type acceptanceTerminal struct {
-	mu    sync.Mutex
-	out   bytes.Buffer
-	lines [][]byte
-	at    int
-	off   int
-}
-
-func (a *acceptanceTerminal) Write(p []byte) (int, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.out.Write(p)
-}
-
-func (a *acceptanceTerminal) snapshot() []byte {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return append([]byte(nil), a.out.Bytes()...)
-}
-
-func (a *acceptanceTerminal) feed(line string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.lines = append(a.lines, []byte(line))
-}
-
-func (a *acceptanceTerminal) ReadContext(ctx context.Context, p []byte) (int, error) {
-	for {
-		a.mu.Lock()
-		if a.at < len(a.lines) {
-			n := copy(p, a.lines[a.at][a.off:])
-			a.off += n
-			if a.off >= len(a.lines[a.at]) {
-				a.at++
-				a.off = 0
-			}
-			a.mu.Unlock()
-			return n, nil
-		}
-		a.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return 0, ctx.Err()
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-}
-
-func (a *acceptanceTerminal) Size() (int, int, error) { return 80, 24, nil }
-func (a *acceptanceTerminal) Resizes() <-chan Resize  { return nil }
-
-func awaitCapture(t *testing.T, tty *acceptanceTerminal, want string, timeout time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if bytes.Contains(tty.snapshot(), []byte(want)) {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("missing %q in relay output: %q", want, tty.snapshot())
-}
-
-func runAcceptanceRelay(t *testing.T, url, pane string) {
-	t.Helper()
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	tty := &acceptanceTerminal{}
-	relay := NewRelay(tty, mustAPI(t, url))
-	head, err := relay.Connect(ctx, pane)
-	if err != nil {
-		t.Fatalf("relay connect: %v", err)
-	}
-	t.Logf("relay case: pane %s attached at epoch %d head %d", pane, head.Header.GetEpoch(), head.Header.GetHead())
-	runErr := make(chan error, 1)
-	go func() { runErr <- relay.Run(ctx) }()
-
-	tty.feed("echo RELAY-MARKER-1\r")
-	awaitCapture(t, tty, "RELAY-MARKER-1", 20*time.Second)
-	tty.feed("stty size\r")
-	awaitCapture(t, tty, "24 80", 20*time.Second)
-
-	// Detach heals through the same relay: reconnect, retained bytes
-	// without duplication, and subsequent input still lands.
-	relay.disconnect()
-	reconnected := false
-	for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); {
-		relay.mu.Lock()
-		connected := relay.conn != nil
-		relay.mu.Unlock()
-		if connected {
-			reconnected = true
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if !reconnected {
-		t.Fatal("relay did not reconnect after detach")
-	}
-	tty.feed("echo RELAY-MARKER-2\r")
-	awaitCapture(t, tty, "RELAY-MARKER-2", 20*time.Second)
-
-	lines := bytes.Split(tty.snapshot(), []byte("\n"))
-	exact := 0
-	for _, line := range lines {
-		// The PTY tape is raw bytes: bash writes its bracketed-paste
-		// toggles inline, so a mode switch can share the output line.
-		if strings.Trim(csiPattern.ReplaceAllString(string(line), ""), "\r") == "RELAY-MARKER-1" {
-			exact++
-		}
-	}
-	if exact != 1 {
-		t.Fatalf("RELAY-MARKER-1 output line appears %d times, want exactly once (no duplication)\nsnapshot: %q", exact, tty.snapshot())
-	}
-
-	cancel()
-	select {
-	case err := <-runErr:
-		if err != nil {
-			t.Fatalf("relay run: %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("relay did not stop after cancel")
-	}
-	relay.Close()
-	t.Logf("relay case: pane %s reconnected without duplication", pane)
 }

@@ -749,7 +749,10 @@ export class PTYWebSocket {
         if (this.held.length >= MAX_HELD_SPANS || next > MAX_HELD_BYTES) {
             this.held = [];
             this.heldBytes = 0;
-            this.holding = false;
+            this.holding = true;
+            // close() is asynchronous. Already-queued browser messages and
+            // an in-flight gap read must not resume this invalidated stream.
+            this.mode = 'unknown';
             try {
                 this.ws.close();
             } catch (_e) {}

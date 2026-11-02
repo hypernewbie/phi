@@ -14,6 +14,7 @@ import type {
     TerminalClientFrame as TerminalClientMessage,
 } from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+import { readReplay } from './_terminal-replay.js';
 
 // The served bundle carries no types; bind its runtime codec to the
 // generated declarations so spec-side decoding is fully checked.
@@ -102,15 +103,12 @@ for (const mode of ['tui', 'mini', 'legacy']) {
                     ? '\n'
                     : `${mode === 'mini' ? 'mini ' : ''}--session ${pane.session_id}\n`,
             );
-        // Attach after the complete burst, so this test always exercises the
-        // compact checkpoint and manual history path, even when run alone.
+        // Attach after the complete burst, so cold raw replay is deterministic.
         await expect
             .poll(async () => {
-                const recording = await request.get(
-                    `${phi.url}/api/terminals/${pane.pane_id}/recording?from=0&through=18446744073709551615`,
+                return (await readReplay(phi.url, pane.pane_id)).data.toString(
+                    'utf8',
                 );
-                expect(recording.ok()).toBe(true);
-                return (await recording.body()).toString('utf8');
             })
             .toContain('ready');
         await page.addInitScript(() => {
@@ -194,7 +192,7 @@ for (const mode of ['tui', 'mini', 'legacy']) {
             .poll(async () => (await buffer()).type)
             .toBe(mode === 'mini' ? 'normal' : 'alternate');
         // Drive the real capture listener deterministically. For Mini,
-        // xterm owns scrolling; older pages require the manual history button.
+        // xterm owns the resident scrollback restored by raw replay.
         // Legacy TUIs route wheel-up as navigation keys instead.
         const prevented = await terminal.evaluate((el) => {
             const event = new WheelEvent('wheel', {
@@ -206,12 +204,8 @@ for (const mode of ['tui', 'mini', 'legacy']) {
             return event.defaultPrevented;
         });
         if (mode === 'mini') {
-            const historyButton = terminal.locator('.load-history-btn');
             await terminal.locator('.xterm-screen').hover();
             await page.mouse.wheel(0, -4000);
-            await expect(historyButton).toBeVisible();
-            await historyButton.click();
-            await expect(historyButton).toHaveAttribute('aria-busy', 'false');
             await expect
                 .poll(async () => (await buffer()).baseY)
                 .toBeGreaterThan(100);

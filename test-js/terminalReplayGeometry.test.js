@@ -267,6 +267,57 @@ it('retains the parsed geometry cursor across a same-epoch reconnect', async () 
     expect(h.tab._replayCursor).toBe('v1.7.0.257');
 });
 
+it('does not admit queued messages after a held-stream overflow closes the socket', async () => {
+    h = replayHarness(new Uint8Array());
+    h.manager._fitVisibleTerminal = () => {};
+    h.pty.ws.head({ epoch: 7, oldest: 0, head: 0 });
+    await h.settle();
+    h.pty.hold();
+    for (let i = 0; i < 257; i++) h.pty.ws.output(i, encode('X'));
+    expect(h.pty.ws.closed).toBe(true);
+    // Browsers may dispatch already-queued messages before onclose runs.
+    h.pty.ws.output(0, encode('WRONG'));
+    await h.settle();
+    expect(h.tape.join('')).toBe('');
+    expect(h.tab.drainedSeq).toBe(0);
+});
+
+it.each([false, true])(
+    'retains the parsed byte/resize position when a page is interrupted (gap=%s)',
+    async (gap) => {
+        h = replayHarness(new Uint8Array());
+        h.manager._fitVisibleTerminal = () => {};
+        h.pty.ws.head({ epoch: 7, oldest: 0, head: 0 });
+        await h.settle();
+        let current = true;
+        const write = h.term.write.bind(h.term);
+        h.term.write = (text, done) =>
+            write(text, () => {
+                current = false;
+                done?.();
+            });
+        const applied = await h.manager._parseRecordingRange(
+            h.tab,
+            {
+                start: 0,
+                end: 2,
+                bytes: encode('AB'),
+                resizes: [[0, 100, 12]],
+            },
+            () => current,
+            gap ? (bytes) => h.pty.applyGapPatch(bytes) : undefined,
+            h.pty,
+            false,
+        );
+        expect(applied).toBe(false);
+        expect(h.tab.drainedSeq).toBe(2);
+        expect(h.term.cols).toBe(100);
+        // The next attach reconstructs its after cursor from this ordinal and
+        // drainedSeq. Losing the ordinal produces a permanent server-side 400.
+        expect(h.tab._replayCursor).toBe('v1.7.0.1');
+    },
+);
+
 it('holds output and geometry together until each preceding write has parsed', async () => {
     h = replayHarness(new Uint8Array());
     h.manager._fitVisibleTerminal = () => {};

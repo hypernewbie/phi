@@ -1193,7 +1193,11 @@ test('cached server rows survive offline and refresh failure without crossing pa
                 line.includes('/api/attachments/v2/browse'),
             );
             const otherFailures = watched.failedRequests.filter(
-                (line) => !line.includes('/api/attachments/v2/browse'),
+                (line) =>
+                    !line.includes('/api/attachments/v2/browse') &&
+                    // Optional terminal preview uploads may already be queued
+                    // when the context goes offline. They do not gate input.
+                    !/\/checkpoint net::ERR_INTERNET_DISCONNECTED$/.test(line),
             );
             expect(browseAborts.length).toBeGreaterThan(0);
             expect(otherFailures).toEqual([]);

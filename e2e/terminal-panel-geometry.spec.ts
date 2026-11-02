@@ -7,6 +7,7 @@ import type {
     TerminalServerFrame as TerminalServerMessage,
 } from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+import { replayAttach, replayEnvelope } from './_terminal-replay.js';
 
 // The served bundle carries no types; bind its runtime codecs to the
 // generated declarations so spec-side encoding is fully checked.
@@ -110,7 +111,7 @@ test('actual panel CSS resize, tab activation and refresh synchronize backend di
     await page.route('**/api/terminals/panel-*/**', (route) =>
         route.fulfill({ json: {} }),
     );
-    await page.route('**/api/terminals/panel-*/recording?*', (route) => {
+    await page.route('**/api/terminals/panel-*/replay?*', (route) => {
         const url = new URL(route.request().url()),
             id = url.pathname.split('/')[3];
         const source = recordings.get(id)!;
@@ -119,14 +120,9 @@ test('actual panel CSS resize, tab activation and refresh synchronize backend di
                 Number(url.searchParams.get('through')),
                 source.length,
             );
-        const hdr = Buffer.from(
-            JSON.stringify({ epoch: 7, start, end, resizes: [] }),
-        );
-        const length = Buffer.alloc(4);
-        length.writeUInt32BE(hdr.length);
         return route.fulfill({
             contentType: 'application/octet-stream',
-            body: Buffer.concat([length, hdr, source.subarray(start, end)]),
+            body: replayEnvelope(source.subarray(start, end), 7, 80, 24, start),
         });
     });
     await page.routeWebSocket('**/ws/pane/panel-*?*', (socket) => {
@@ -139,9 +135,7 @@ test('actual panel CSS resize, tab activation and refresh synchronize backend di
                         payload: {
                             $case: 'attach',
                             value: {
-                                epoch: BigInt(7),
-                                oldest: BigInt(0),
-                                head: BigInt(recordings.get(id)!.length),
+                                ...replayAttach(7, recordings.get(id)!.length),
                             },
                         },
                     }),

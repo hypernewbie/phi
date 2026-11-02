@@ -2,12 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { startPhi } from './_server.js';
-
-// Read the real backend envelope, not a browser stub or a fake scrollback.
-function output(body: Buffer): string {
-    const headerSize = body.readUInt32BE(0);
-    return body.subarray(4 + headerSize).toString('utf8');
-}
+import { readReplay } from './_terminal-replay.js';
 
 for (const situation of [
     'replay cache disabled',
@@ -59,10 +54,7 @@ while True: time.sleep(1)
             expect(spawned.ok()).toBe(true);
             const pane = (await spawned.json()).pane_id as string;
             const recording = async () => {
-                const response = await request.get(
-                    `${phi.url}/api/terminals/${pane}/recording?from=0&through=18446744073709551615`,
-                );
-                return response.ok() ? output(await response.body()) : '';
+                return (await readReplay(phi.url, pane)).data.toString('utf8');
             };
             await expect.poll(recording).toContain('LAST');
             if (situation === 'Phi server restart') {

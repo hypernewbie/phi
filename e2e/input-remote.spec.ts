@@ -84,7 +84,7 @@ test('input.html sends keystrokes into a live pane', async ({ page }) => {
             const codec = (await import(codecPath)) as Codec;
             const ws = new WebSocket(
                 `${url.replace(/^http/, 'ws')}/ws/pane/${id}`,
-                'phi.terminal.protobuf.v1',
+                'phi.terminal.protobuf.v2',
             );
             ws.binaryType = 'arraybuffer';
             const decoder = new TextDecoder();

@@ -7,6 +7,7 @@ import {
     type Page,
 } from '@playwright/test';
 import { startPhi } from './_server.js';
+import { readReplay } from './_terminal-replay.js';
 import { isCancelledBackgroundRead } from './_session-requests.js';
 import { startSkillProvider } from './_pi-skill-provider.js';
 
@@ -218,10 +219,9 @@ test('managed Pi transcript search works through the find bar on desktop and tou
         await expect
             .poll(
                 async () => {
-                    const recording = await request.get(
-                        `${phi.url}/api/terminals/${pane}/recording?from=0&through=2097152`,
+                    return (await readReplay(phi.url, pane)).data.toString(
+                        'utf8',
                     );
-                    return recording.ok() ? recording.text() : '';
                 },
                 { timeout: 30_000 },
             )

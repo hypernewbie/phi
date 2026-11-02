@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     isCancelledGitRead,
     isCancelledSessionListRead,
+    isCancelledTerminalReplay,
     isCancelledWorktreeRead,
 } from '../e2e/_session-requests.ts';
 
@@ -62,6 +63,44 @@ describe('expected background session-list cancellation diagnostics', () => {
     ])('does not exempt %s %s %s', (url, method, errorText) => {
         expect(
             isCancelledSessionListRead(request(url, method, errorText), origin),
+        ).toBe(false);
+    });
+});
+
+describe('expected terminal replay cancellation diagnostics', () => {
+    it('recognizes only an aborted same-origin GET replay', () => {
+        expect(
+            isCancelledTerminalReplay(
+                request(`${origin}/api/terminals/pane/replay?from=0`),
+                origin,
+            ),
+        ).toBe(true);
+    });
+
+    it.each([
+        [`${origin}/api/terminals/pane/replay`, 'POST', 'net::ERR_ABORTED'],
+        [`${origin}/api/terminals/pane/replay`, 'GET', 'net::ERR_FAILED'],
+        [
+            `${origin}/api/terminals/pane/replay`,
+            'GET',
+            'net::ERR_CONNECTION_RESET',
+        ],
+        [`${origin}/api/terminals/pane/replay`, 'GET', null],
+        [
+            `${origin}/api/terminals/pane/replay/extra`,
+            'GET',
+            'net::ERR_ABORTED',
+        ],
+        [`${origin}/api/terminals/pane/input`, 'POST', 'net::ERR_ABORTED'],
+        [`${origin}/api/terminals`, 'GET', 'net::ERR_ABORTED'],
+        [
+            'http://127.0.0.1:17778/api/terminals/pane/replay',
+            'GET',
+            'net::ERR_ABORTED',
+        ],
+    ])('does not exempt %s %s %s', (url, method, errorText) => {
+        expect(
+            isCancelledTerminalReplay(request(url, method, errorText), origin),
         ).toBe(false);
     });
 });

@@ -3184,7 +3184,7 @@ export class TabManager {
     // not emit another resize, or two viewers would echo forever.
     async _adoptLiveGeometry(tabInfo, geom, socket = tabInfo?.ws) {
         const current = () => this.tabs.get(tabInfo.paneId) === tabInfo && !tabInfo.finalizing && socket === tabInfo.ws;
-        if (!geom || !current()) return;
+        if (!geom || socket?.mode !== 'hot' || !current()) return;
         const m = /^v1\.(\d+)\.(\d+)\.(\d+)$/.exec(geom.event_cursor || '');
         if (!m || Number(m[1]) !== tabInfo.paneEpoch) return;
         const cols = geom.cols;
@@ -3233,6 +3233,8 @@ export class TabManager {
         // must not reach the live app. The input path suppresses non-user
         // output while this flag stands.
         tabInfo._historyParsing = historical;
+        const epoch = tabInfo.paneEpoch;
+        let ordinal = Number(tabInfo._replayCursor?.split('.').at(-1) ?? '0');
         let cursor = range.start;
         const parse = async (end) => {
             while (cursor < end) {
@@ -3248,6 +3250,12 @@ export class TabManager {
                     this.writeToTerminal(tabInfo, text);
                 }
                 await this._drainSettled(tabInfo);
+                // A disconnect can cancel the rest of this page, not bytes
+                // already parsed. Keep its byte/event position recoverable.
+                if (!tabInfo.finalizing && tabInfo.paneEpoch === epoch) {
+                    tabInfo.queuedSeq = Math.max(tabInfo.queuedSeq ?? 0, batchEnd);
+                    this._advanceDrained(tabInfo, batchEnd);
+                }
                 if (!current()) return false;
                 cursor = batchEnd;
             }
@@ -3258,6 +3266,7 @@ export class TabManager {
                 if (!await parse(Math.max(range.start, at))) return false;
                 if (!current()) return false;
                 if (tabInfo.term.cols !== cols || tabInfo.term.rows !== rows) tabInfo.term.resize(cols, rows);
+                if (at >= range.start) tabInfo._replayCursor = `v1.${epoch}.${at}.${++ordinal}`;
             }
             return await parse(range.end);
         } finally {
@@ -3442,7 +3451,7 @@ export class TabManager {
         if (tabInfo._gapInFlight) return;
         tabInfo._gapInFlight = true;
         pty.hold?.();
-        const current = () => !tabInfo.finalizing && tabInfo.ws === pty && tabInfo._bootstrapGen === bootGen;
+        const current = () => !tabInfo.finalizing && tabInfo.ws === pty && pty.mode === 'hot' && tabInfo._bootstrapGen === bootGen;
         let recovered = false;
         try {
             const ordinal = tabInfo._replayCursor?.split('.').at(-1) ?? '0';

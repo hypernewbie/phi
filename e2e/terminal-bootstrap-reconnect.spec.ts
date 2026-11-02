@@ -6,6 +6,7 @@ import type {
     TerminalServerFrame as TerminalServerMessage,
 } from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+import { replayAttach, replayEnvelope } from './_terminal-replay.js';
 
 // The served bundle carries no types; bind its runtime codec to the
 // generated declarations so spec-side encoding is fully checked.
@@ -149,7 +150,7 @@ for (const pauseBatch of [1, 3]) {
             route.fulfill({ json: {} }),
         );
         await page.route(
-            '**/api/terminals/interrupted-bootstrap/recording?*',
+            '**/api/terminals/interrupted-bootstrap/replay?*',
             (route) => {
                 const query = new URL(route.request().url()).searchParams;
                 const from = Number(query.get('from'));
@@ -158,23 +159,17 @@ for (const pauseBatch of [1, 3]) {
                     source.length,
                 );
                 requests.push({ from, through });
-                const hdr = Buffer.from(
-                    JSON.stringify({
-                        epoch: 7,
-                        start: from,
-                        end: through,
-                        resizes: [],
-                    }),
-                );
-                const size = Buffer.alloc(4);
-                size.writeUInt32BE(hdr.length);
+                const end = Math.min(through, from + (2 << 20));
                 return route.fulfill({
                     contentType: 'application/octet-stream',
-                    body: Buffer.concat([
-                        size,
-                        hdr,
-                        source.subarray(from, through),
-                    ]),
+                    body: replayEnvelope(
+                        source.subarray(from, end),
+                        7,
+                        80,
+                        24,
+                        from,
+                        through,
+                    ),
                 });
             },
         );
@@ -190,9 +185,7 @@ for (const pauseBatch of [1, 3]) {
                                 payload: {
                                     $case: 'attach',
                                     value: {
-                                        epoch: BigInt(7),
-                                        oldest: BigInt(0),
-                                        head: BigInt(source.length),
+                                        ...replayAttach(7, source.length),
                                     },
                                 },
                             }),

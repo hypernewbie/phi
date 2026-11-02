@@ -40,6 +40,20 @@ export function isCancelledGitRead(request: Request, origin: string): boolean {
     );
 }
 
+// A pane refresh, close, or replacement aborts its in-flight replay fetch.
+export function isCancelledTerminalReplay(
+    request: Request,
+    origin: string,
+): boolean {
+    const url = new URL(request.url());
+    return (
+        request.method() === 'GET' &&
+        request.failure()?.errorText === 'net::ERR_ABORTED' &&
+        url.origin === new URL(origin).origin &&
+        /^\/api\/terminals\/[^/]+\/replay$/.test(url.pathname)
+    );
+}
+
 // Any background read the sidebar may supersede. Specs that assert "no
 // unexpected failed requests" use this so an ordinary supersede does not
 // read as a regression.

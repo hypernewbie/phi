@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import { startPhi } from './_server.js';
+import { readReplay } from './_terminal-replay.js';
 import { startBridgeProxy } from './_pi-bridge-proxy.js';
 import {
     COMPACT_FOLLOWUP_TOKENS,
@@ -56,11 +57,7 @@ async function recordingText(
     url: string,
     paneID: string,
 ): Promise<string> {
-    const rec = await request.get(
-        `${url}/api/terminals/${paneID}/recording?from=0&through=2097152`,
-    );
-    if (!rec.ok()) return '';
-    return (await rec.body()).toString('utf8');
+    return (await readReplay(url, paneID)).data.toString('utf8');
 }
 
 test('bridge-only peer loss: unknown caller, live Pi, no replay on reconnect', async ({

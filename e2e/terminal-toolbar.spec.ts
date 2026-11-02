@@ -7,6 +7,7 @@ import type {
     TerminalServerFrame as TerminalServerMessage,
 } from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
+import { replayAttach } from './_terminal-replay.js';
 import { tabList } from './_tabs.js';
 
 // The served bundle carries no types; bind its runtime codecs to the
@@ -133,9 +134,7 @@ for (const surface of surfaces) {
                                 payload: {
                                     $case: 'attach',
                                     value: {
-                                        epoch: BigInt(7),
-                                        oldest: BigInt(0),
-                                        head: BigInt(0),
+                                        ...replayAttach(7, 0),
                                     },
                                 },
                             }),

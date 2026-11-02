@@ -7,6 +7,7 @@ import {
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { startPhi } from './_server.js';
+import { readReplay } from './_terminal-replay.js';
 
 // Two long sessions per run; with tracing on, the artifact cleanup of the
 // first test races the second one's context close (ENOENT on the trace
@@ -77,36 +78,11 @@ async function oldestVisible(page: Page, pane: string) {
     return ids.length ? Math.min(...ids) : Number.POSITIVE_INFINITY;
 }
 
-async function scrollOlder(
-    page: Page,
-    pane: string,
-    mode: string,
-    oldest: number,
-) {
+async function scrollOlder(page: Page, pane: string, oldest: number) {
     await page
         .locator(`#term-${pane} .xterm-screen`)
         .hover({ position: { x: 100, y: 60 } });
     for (let i = 0; i < 8; i++) await page.mouse.wheel(0, -500);
-    if (mode === 'regular') {
-        const button = page.locator(`#term-${pane} .load-history-btn`);
-        // A reload can contain only the bounded current screen. Wheels scroll
-        // resident rows; archived rows now require an explicit button click.
-        await expect
-            .poll(
-                async () => {
-                    const olderResidentRow =
-                        (await oldestVisible(page, pane)) < oldest;
-                    const className = await button.getAttribute('class');
-                    const canLoadBook =
-                        className !== null &&
-                        !className.split(' ').includes('hidden');
-                    return olderResidentRow || canLoadBook;
-                },
-                { timeout: 8000 },
-            )
-            .toBe(true);
-        if ((await oldestVisible(page, pane)) >= oldest) await button.click();
-    }
     await expect
         .poll(() => oldestVisible(page, pane), { timeout: 8000 })
         .toBeLessThan(oldest);
@@ -209,12 +185,9 @@ for (const mode of ['fullscreen', 'regular']) {
             await expect
                 .poll(
                     async () => {
-                        const output = await request.get(
-                            `${phi.url}/api/terminals/${pane}/recording?from=0&through=2097152`,
+                        return (await readReplay(phi.url, pane)).data.toString(
+                            'utf8',
                         );
-                        return output.ok()
-                            ? (await output.body()).toString('utf8')
-                            : '';
                     },
                     { timeout: 20000 },
                 )
@@ -226,7 +199,7 @@ for (const mode of ['fullscreen', 'regular']) {
                 .toContain('NATIVE HISTORY 0099');
             await page.screenshot({ path: info.outputPath('fresh.png') });
             const freshOldest = await oldestVisible(page, pane);
-            await scrollOlder(page, pane, mode, freshOldest);
+            await scrollOlder(page, pane, freshOldest);
             // Distinguish stale replay from Pi correctly retaining its own
             // chosen transcript position. Return the native app to latest.
             if (mode === 'fullscreen') {
@@ -244,7 +217,7 @@ for (const mode of ['fullscreen', 'regular']) {
                 .toContain('NATIVE HISTORY 0099');
             await page.screenshot({ path: info.outputPath('reload.png') });
             const reloadOldest = await oldestVisible(page, pane);
-            await scrollOlder(page, pane, mode, reloadOldest);
+            await scrollOlder(page, pane, reloadOldest);
             appendFileSync(
                 sessionFile,
                 JSON.stringify({
