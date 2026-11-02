@@ -13,8 +13,11 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
   private let terminalContainer = NSView()
   private let composer = PhiComposerView()
   private let statusStrip = PhiStatusStrip()
-  /// The pane this window shows, used to focus an already open window.
-  var paneID = ""
+  /// The pane this window shows, used to focus an already open window and to
+  /// key its saved draft.
+  var paneID = "" {
+    didSet { composer.draftKey = "phi.spike.draft.\(paneID)" }
+  }
   private(set) var terminalView: SpikeTerminalView!
   private var session: PaneSession?
   private var closed = false
@@ -398,7 +401,9 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
   }
 
   /// The footer text, for the DEBUG capture record.
+#if DEBUG
   var statusText: String { statusStrip.text }
+#endif
 
   private func focusTerminal() {
     window?.makeFirstResponder(terminalView)
@@ -429,7 +434,7 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     let dimensions = view.terminalDimensions
     let optimal = view.getOptimalFrameSize()
     let minimum = NSSize(
-      width: optimal.width / CGFloat(dimensions.cols) * 2,
+      width: max(optimal.width / CGFloat(dimensions.cols) * 2, PhiComposerView.minimumWidth),
       height: optimal.height / CGFloat(dimensions.rows) + PhiStatusStrip.height
         + PhiComposerView.barHeight)
     window?.contentMinSize = minimum

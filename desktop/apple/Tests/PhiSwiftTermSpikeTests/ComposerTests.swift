@@ -36,6 +36,10 @@ final class PhiPromptTests: XCTestCase {
   func testEscapeBytesInsideAPromptAreNeutralised() {
     XCTAssertEqual(string("a\n\u{1B}[31mb"), "\u{1B}[200~a\n\u{241B}[31mb\u{1B}[201~\r")
   }
+
+  func testAShortPromptIsAlsoCleanedOfEscapeBytes() {
+    XCTAssertEqual(string("a\u{1B}[2Jb"), "a\u{241B}[2Jb\r")
+  }
 }
 
 final class ComposerTests: XCTestCase {
@@ -120,5 +124,44 @@ final class ComposerLayoutTests: XCTestCase {
     XCTAssertEqual(composer.frame.height, PhiComposerView.barHeight, accuracy: 0.5)
     XCTAssertLessThanOrEqual(strip.frame.maxY, composer.frame.minY)
     XCTAssertEqual(terminalFrame.minY, composer.frame.maxY, accuracy: 0.5)
+  }
+}
+
+final class ComposerDraftTests: XCTestCase {
+  private let key = "phi.spike.draft.test-\(UUID().uuidString)"
+
+  override func tearDown() {
+    UserDefaults.standard.removeObject(forKey: key)
+    super.tearDown()
+  }
+
+  @MainActor
+  func testADraftSurvivesTheComposerAndIsClearedOnSend() throws {
+    let first = PhiComposerView(frame: NSRect(x: 0, y: 0, width: 600, height: 54))
+    first.draftKey = key
+    first.prompt = "a long prompt in progress"
+    XCTAssertEqual(
+      UserDefaults.standard.string(forKey: key), "a long prompt in progress")
+
+    let second = PhiComposerView(frame: NSRect(x: 0, y: 0, width: 600, height: 54))
+    second.draftKey = key
+    XCTAssertEqual(second.prompt, "a long prompt in progress")
+
+    second.onSend = { _ in true }
+    second.send()
+    XCTAssertNil(UserDefaults.standard.string(forKey: key), "a sent draft is not restored next time")
+  }
+
+  @MainActor
+  func testTheWindowKeepsTheComposerWideEnoughToUse() throws {
+    let controller = SpikeWindow()
+    let window = try XCTUnwrap(controller.window)
+    defer {
+      controller.closeSession()
+      window.close()
+    }
+    XCTAssertGreaterThanOrEqual(
+      window.contentMinSize.width, PhiComposerView.minimumWidth,
+      "a narrower window would push the Send button over the field")
   }
 }

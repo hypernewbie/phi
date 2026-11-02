@@ -167,10 +167,15 @@ the web composer (`sendStagedInput` in `web/terminal.js`):
 | `Escape` | Leaves the field and focuses the terminal, for tools that need raw keys |
 | Empty or whitespace draft | Nothing is sent |
 
-A draft longer than 16 characters, or one with a line break, travels inside bracketed paste
-`ESC[200~ … ESC[201~`, and any `ESC` inside it becomes `U+241B`. That keeps a TUI from
-autocompleting or slowly painting the prompt. `PhiPrompt.bytes(for:)` owns this rule and is unit
-tested; `PhiComposerView` is the field and button.
+A prompt longer than 16 characters, or one with a line break, travels inside bracketed paste
+`ESC[200~ … ESC[201~`. Any `ESC` inside a draft becomes `U+241B` whatever its length, so a pasted
+control sequence cannot reach the pane as a command. That also keeps a TUI from autocompleting or
+slowly painting the prompt. `PhiPrompt.bytes(for:)` owns this rule and is unit tested;
+`PhiComposerView` is the field and button.
+
+An unsent draft is kept per pane and restored when the window reopens, so a long prompt outlives an
+accidental close. The window also has a minimum width that keeps the field and the Send button from
+overlapping.
 
 A capture may miss text that was set after the window opened, such as the footer status line: AppKit
 draws a layer-backed window only when it displays. The JSON sidecar records that text next to each

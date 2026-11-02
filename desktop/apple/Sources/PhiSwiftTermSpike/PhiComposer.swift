@@ -9,9 +9,12 @@ enum PhiPrompt {
   static func bytes(for text: String) -> [UInt8]? {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
-    var payload = trimmed
+    // An escape byte typed or pasted into a prompt would reach the pane as a
+    // control sequence, so it becomes the visible replacement character.
+    let safe = trimmed.replacingOccurrences(of: "\u{1B}", with: "\u{241B}")
+    var payload = safe
     if trimmed.utf16.count > 16 || trimmed.contains("\n") {
-      payload = "\u{1B}[200~\(trimmed.replacingOccurrences(of: "\u{1B}", with: "\u{241B}"))\u{1B}[201~"
+      payload = "\u{1B}[200~\(safe)\u{1B}[201~"
     }
     return Array("\(payload)\r".utf8)
   }
@@ -24,6 +27,8 @@ enum PhiPrompt {
 /// so a slow link costs one round trip per command instead of one per keystroke.
 final class PhiComposerView: NSView, NSTextFieldDelegate {
   static let barHeight: CGFloat = 54
+  /// Narrower than this and the field and the Send button collide.
+  static let minimumWidth: CGFloat = 260
   static let fieldHeight: CGFloat = 38
   static let sideInset: CGFloat = 12
 
@@ -33,12 +38,18 @@ final class PhiComposerView: NSView, NSTextFieldDelegate {
   var onSend: ((String) -> Bool)?
   /// Escape leaves the composer, the way the web app returns to the terminal.
   var onEscape: (() -> Void)?
+  /// Where this pane's draft is kept across window closes, like the web app's
+  /// per-tab draft. Nil keeps the draft in memory only.
+  var draftKey: String? {
+    didSet { restoreDraft() }
+  }
 
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
     wantsLayer = true
 
     field.placeholderString = "Type a prompt…"
+    field.setAccessibilityLabel("Prompt")
     PhiTheme.styleField(field)
     field.backgroundColor = PhiTheme.base
     field.font = PhiTheme.ui(13)
@@ -57,7 +68,10 @@ final class PhiComposerView: NSView, NSTextFieldDelegate {
 
   var prompt: String {
     get { field.stringValue }
-    set { field.stringValue = newValue }
+    set {
+      field.stringValue = newValue
+      saveDraft()
+    }
   }
 
   override var isOpaque: Bool { true }
@@ -89,6 +103,26 @@ final class PhiComposerView: NSView, NSTextFieldDelegate {
     guard PhiPrompt.bytes(for: field.stringValue) != nil else { return }
     guard onSend?(field.stringValue) ?? false else { return }
     field.stringValue = ""
+    saveDraft()
+  }
+
+  func controlTextDidChange(_ notification: Notification) {
+    saveDraft()
+  }
+
+  private func saveDraft() {
+    guard let draftKey else { return }
+    let defaults = UserDefaults.standard
+    if field.stringValue.isEmpty {
+      defaults.removeObject(forKey: draftKey)
+    } else {
+      defaults.set(field.stringValue, forKey: draftKey)
+    }
+  }
+
+  private func restoreDraft() {
+    guard let draftKey else { return }
+    field.stringValue = UserDefaults.standard.string(forKey: draftKey) ?? ""
   }
 
   func control(
