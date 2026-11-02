@@ -32,6 +32,8 @@ export interface PiRpcControls {
     hasTranscript: boolean;
     model: string;
     thinking: string;
+    /** Skill command names published by this Pi session. */
+    skills: string[];
 }
 
 export interface ChatPiHandle {
@@ -183,6 +185,7 @@ function mergeState(
         'contextWindowTokens',
         'cacheReadTokens',
         'cacheWriteTokens',
+        'cost',
     ] as const;
     for (const field of numbers) {
         if (!Object.hasOwn(source, field)) continue;
@@ -497,6 +500,7 @@ export function mountChatPi(
             hasTranscript: buffer.getMessageCount() > 0,
             model: localStatus.model ?? '',
             thinking: localStatus.thinking ?? '',
+            skills: localStatus.skills ? [...localStatus.skills] : [],
         });
     const applyState = (state: unknown): void => {
         const source = state as Record<string, unknown> | null;
@@ -599,6 +603,7 @@ export function mountChatPi(
         hasTranscript: false,
         model: '',
         thinking: '',
+        skills: [],
     });
 
     const view = createReviewTranscriptView(root, {
