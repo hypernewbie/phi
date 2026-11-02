@@ -64,3 +64,19 @@ final class AppMenuTests: XCTestCase {
       "catalog mode must put its window on screen")
   }
 }
+
+extension AppMenuTests {
+  @MainActor
+  func testCommandWClosesTheActiveTab() throws {
+    let window = SpikeWindow()
+    guard let host = window.window else { return XCTFail("no window") }
+    defer { window.closeSession(); host.close() }
+    window.addTab(paneID: "a1", title: "bash")
+    window.addTab(paneID: "b2", title: "pi")
+
+    window.closeActiveTab()
+
+    XCTAssertEqual(window.tabCount, 1, "⌘W closes one pane, not the window")
+    XCTAssertEqual(window.paneID, "a1")
+  }
+}

@@ -211,6 +211,12 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     }
   }
 
+  /// Closes the pane on screen; the last tab closes the window.
+  func closeActiveTab() {
+    guard let activeTab else { return }
+    closeTab(paneID: activeTab.paneID)
+  }
+
   /// Connects one tab's callbacks to the window. Used for the tab that exists
   /// before a session starts and for every tab opened later.
   private func wire(_ tab: PaneTab) {

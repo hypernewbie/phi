@@ -315,6 +315,9 @@ final class SpikeApplicationDelegate: NSObject, NSApplicationDelegate {
     windowMenu.addItem(.separator())
     windowMenu.addItem(
       withTitle: "New Tab", action: #selector(newTabFromMenu), keyEquivalent: "t")
+    let closeTabItem = windowMenu.addItem(
+      withTitle: "Close Tab", action: #selector(closeTabFromMenu), keyEquivalent: "w")
+    closeTabItem.target = self
     catalogItem.target = self
     windowItem.submenu = windowMenu
     mainMenu.addItem(windowItem)
@@ -325,6 +328,13 @@ final class SpikeApplicationDelegate: NSObject, NSApplicationDelegate {
 
   @objc private func newTabFromMenu() {
     showCatalog()
+  }
+
+  /// ⌘W closes the pane on screen, like the web app's tab; the last one closes
+  /// the window.
+  @objc private func closeTabFromMenu() {
+    let target = windows.first { $0.window?.isKeyWindow == true } ?? windows.last
+    target?.closeActiveTab()
   }
 
   @objc private func openCatalogFromMenu() {
