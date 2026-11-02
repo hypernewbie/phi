@@ -12,12 +12,23 @@ final class SpikeTerminalView: TerminalView, TerminalViewDelegate {
   var onGridResize: ((Int, Int) -> Void)?
   nonisolated let discardedParserReplies = ParserReplyCounter()
 
+  /// The server's terminal already answered the queries in its byte stream, so
+  /// this parser's replies must not echo back. User input, paste included,
+  /// arrives through the same delegate hook and is told apart by whether a
+  /// server feed is in progress.
+  private let feedState = FeedState()
+
+  /// Lines kept above the viewport. The default of 500 is too short to read
+  /// back through a build log.
+  static let scrollbackLines = 10_000
+
   init(cols: UInt16 = 80, rows: UInt16 = 24) {
     super.init(
       frame: .zero,
       font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
       options: TerminalOptions(cols: Int(cols), rows: Int(rows)))
     scrollerStyle = .overlay
+    changeScrollback(Self.scrollbackLines)
     terminalDelegate = self
   }
 
@@ -26,7 +37,18 @@ final class SpikeTerminalView: TerminalView, TerminalViewDelegate {
   }
 
   nonisolated override func send(source: Terminal, data: ArraySlice<UInt8>) {
-    discardedParserReplies.record()
+    guard !feedState.isFeeding else {
+      discardedParserReplies.record()
+      return
+    }
+    // Paste, mouse reports, and focus reports reach the pane through here.
+    super.send(source: source, data: data)
+  }
+
+  private func feedFromServer(_ bytes: [UInt8]) {
+    feedState.beginFeed()
+    defer { feedState.endFeed() }
+    feed(byteArray: bytes[...])
   }
 
   func apply(_ event: TerminalObservation) throws {
@@ -40,14 +62,14 @@ final class SpikeTerminalView: TerminalView, TerminalViewDelegate {
       self.epoch = epoch
       sourceFrontier = frontier
       remoteGeometry = TerminalDimensions(cols: Int(cols), rows: Int(rows))
-      feed(byteArray: Array(bytes)[...])
+      feedFromServer(Array(bytes))
 
     case .bytes(let connection, let epoch, let start, let end, let bytes):
       guard connectionID == connection, self.epoch == epoch,
             end >= start, end - start == UInt64(bytes.count), start == sourceFrontier else {
         throw SpikeWindowError.outOfOrderBytes
       }
-      feed(byteArray: Array(bytes)[...])
+      feedFromServer(Array(bytes))
       sourceFrontier = end
 
     case .resize(let connection, let epoch, let position, let cols, let rows):
@@ -102,6 +124,29 @@ enum SpikeWindowError: Error, Sendable {
   case staleConnection
   case unsupportedGeometry
   case outOfOrderBytes
+}
+
+final class FeedState: @unchecked Sendable {
+  private let lock = NSLock()
+  private var depth = 0
+
+  func beginFeed() {
+    lock.lock()
+    depth += 1
+    lock.unlock()
+  }
+
+  func endFeed() {
+    lock.lock()
+    depth = max(0, depth - 1)
+    lock.unlock()
+  }
+
+  var isFeeding: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return depth > 0
+  }
 }
 
 final class ParserReplyCounter: @unchecked Sendable {
