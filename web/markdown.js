@@ -3,6 +3,7 @@ import { relativeToCwd, escapeHtml } from './util.js';
 import { renderMarkdownSafe, rewriteRelativeImages, highlightCodeIn, } from './md-render.js';
 import { normalizePath } from './sessions.js';
 import { formatAttachment } from './attachments.js';
+import { createDeltaTracker, PAGE_COUNTERS, PROCESS_COUNTERS, renderCounterRows, TERMINAL_COUNTERS, } from './diag-counters.js';
 import { tryNative } from './desktop.js';
 import { kindFor } from './file-viewer.js';
 export class MarkdownManager {
@@ -743,9 +744,9 @@ export class MarkdownManager {
         // Deltas make the counters actionable: an absolute number cannot say
         // whether a subsystem is growing. The first successful sample becomes
         // the baseline, so every row reports growth since the panel opened.
-        const baseline = new Map();
+        const tracker = createDeltaTracker();
         let lastRendered = null;
-        const readNumber = (value) => typeof value === 'number' && Number.isFinite(value) ? value : 0;
+        let inFlight = false;
         const rendererCounters = () => {
             const memory = performance.memory;
             const counters = {
@@ -756,47 +757,18 @@ export class MarkdownManager {
             }
             return counters;
         };
-        const deltaCell = (key, value, unit) => {
-            const base = baseline.get(key);
-            if (base === undefined) {
-                baseline.set(key, value);
-                return '';
-            }
-            const diff = value - base;
-            if (Math.abs(diff) < (unit === 'MB' ? 0.1 : 1))
-                return '';
-            const sign = diff > 0 ? '+' : '';
-            const amount = unit === 'MB' ? diff.toFixed(1) : String(Math.round(diff));
-            return `<span class="diag-delta">${sign}${amount} ${unit}</span>`;
-        };
-        const counterRow = (label, key, value, text, unit) => `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(text)}${deltaCell(key, value, unit)}</td></tr>`;
         const render = (d) => {
             if (!d) {
                 this.modalBody.innerHTML = `<div class="md-list-error">No data.</div>`;
                 return;
             }
-            const rings = `${readNumber(d.ring_bytes_total)}/${readNumber(d.ring_capacity_total)} B`;
-            const processRows = [
-                counterRow('Go heap alloc', 'mem_alloc_mb', readNumber(d.mem_alloc_mb), `${readNumber(d.mem_alloc_mb).toFixed(1)} MB `, 'MB'),
-                counterRow('Heap in use', 'mem_heap_inuse_mb', readNumber(d.mem_heap_inuse_mb), `${readNumber(d.mem_heap_inuse_mb).toFixed(1)} MB `, 'MB'),
-                counterRow('Reserved (sys)', 'mem_sys_mb', readNumber(d.mem_sys_mb), `${readNumber(d.mem_sys_mb).toFixed(1)} MB `, 'MB'),
-                counterRow('Goroutine stacks', 'mem_stack_mb', readNumber(d.mem_stack_mb), `${readNumber(d.mem_stack_mb).toFixed(1)} MB `, 'MB'),
-                counterRow('Live heap objects', 'heap_objects', readNumber(d.heap_objects), `${readNumber(d.heap_objects)} `, 'objects'),
-                counterRow('Goroutines', 'goroutines', readNumber(d.goroutines), `${readNumber(d.goroutines)} `, 'goroutines'),
-                counterRow('GC cycles', 'num_gc', readNumber(d.num_gc), `${readNumber(d.num_gc)} `, 'cycles'),
-            ].join('');
-            const terminalRows = [
-                counterRow('PTYs', 'pty_count', readNumber(d.pty_count), `${readNumber(d.pty_count)} `, 'PTYs'),
-                counterRow('Scrollback rings', 'ring_bytes_total', readNumber(d.ring_bytes_total), rings, 'bytes'),
-                counterRow('WS clients', 'ws_clients_total', readNumber(d.ws_clients_total), `${readNumber(d.ws_clients_total)} `, 'clients'),
-            ].join('');
-            const page = rendererCounters();
-            const pageRows = [
-                counterRow('JS heap', 'js_heap_mb', page.js_heap_mb ?? 0, page.js_heap_mb === undefined
-                    ? 'not exposed '
-                    : `${page.js_heap_mb.toFixed(1)} MB `, 'MB'),
-                counterRow('DOM nodes', 'dom_nodes', page.dom_nodes, `${page.dom_nodes} `, 'nodes'),
-            ].join('');
+            const values = {
+                ...d,
+                ...rendererCounters(),
+            };
+            const processRows = renderCounterRows(PROCESS_COUNTERS, values, tracker);
+            const terminalRows = renderCounterRows(TERMINAL_COUNTERS, values, tracker);
+            const pageRows = renderCounterRows(PAGE_COUNTERS, values, tracker);
             const infoRows = [
                 ['Version', d.version || 'dev'],
                 ['Install', d.install_method || '—'],
@@ -841,9 +813,17 @@ export class MarkdownManager {
         // A failed background poll must not blank counters the reader is
         // watching: keep the last good table and say so on the status line.
         const refresh = async () => {
+            // One request in flight at a time with a bounded wait: against a
+            // stalled link (a remote server, a sleeping laptop) the 2s tick
+            // would otherwise stack a pending fetch on every turn.
+            if (inFlight)
+                return;
+            inFlight = true;
             const foot = () => document.getElementById('phi-diag-foot');
             try {
-                const res = await fetch('/api/diag');
+                const res = await fetch('/api/diag', {
+                    signal: AbortSignal.timeout(5000),
+                });
                 if (!res.ok)
                     throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
@@ -858,6 +838,9 @@ export class MarkdownManager {
                 if (el) {
                     el.textContent = `Refresh failed (${err.message}) — showing the last reading.`;
                 }
+            }
+            finally {
+                inFlight = false;
             }
         };
         await refresh();

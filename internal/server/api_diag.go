@@ -56,8 +56,9 @@ type DiagResponse struct {
 }
 
 // handleDiag returns a snapshot of server state for the diag panel.
-// GET /api/diag. Intentionally unauthenticated — this is a local
-// tool, not a public API. Pair with risk R6 (v0.9 auth) for hardening.
+// GET /api/diag. Reachable only from an authorized session: the whole mux
+// is wrapped by accessManager.Middleware, and accessAuthPublicPath does not
+// exempt this route.
 func (app *Server) handleDiag(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
