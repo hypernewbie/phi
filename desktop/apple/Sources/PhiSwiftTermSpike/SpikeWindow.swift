@@ -459,15 +459,19 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
         optimal.width / CGFloat(dimensions.cols) * 2 + Self.terminalPadding * 2,
         PhiComposerView.minimumWidth),
       height: optimal.height / CGFloat(dimensions.rows) + PhiStatusStrip.height
-        + PhiComposerView.barHeight)
+        + PhiComposerView.barHeight + PhiTabStrip.height)
     window?.contentMinSize = minimum
   }
 
   /// The area the terminal may fill, inset from the window edges the way the web
   /// app insets `.xterm`.
   private var viewportBounds: NSRect {
-    terminalContainer.bounds.insetBy(
+    let inset = terminalContainer.bounds.insetBy(
       dx: Self.terminalPadding, dy: Self.terminalPadding)
+    // A window dragged below the minimum still must not produce a negative
+    // frame the terminal cannot draw into.
+    return NSRect(
+      x: inset.minX, y: inset.minY, width: max(inset.width, 0), height: max(inset.height, 0))
   }
 
   private func fitTerminalToViewport() {

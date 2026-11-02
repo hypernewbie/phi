@@ -231,3 +231,22 @@ private final class ViewObservationSink: @unchecked Sendable {
     try view.apply(event)
   }
 }
+
+extension SwiftTermGeometryTests {
+  @MainActor
+  func testMinimumWindowHeightLeavesRoomForTheTabStrip() throws {
+    let controller = SpikeWindow()
+    let window = try XCTUnwrap(controller.window)
+    defer { controller.closeSession(); window.close() }
+    let connection = UUID()
+    try controller.apply(.reset(
+      connection: connection, epoch: 1, frontier: 0, cols: 80, rows: 24, bytes: Data()))
+    window.contentView?.layoutSubtreeIfNeeded()
+
+    let minimum = window.contentMinSize.height
+    let chrome = PhiStatusStrip.height + PhiComposerView.barHeight + PhiTabStrip.height
+    XCTAssertGreaterThan(
+      minimum, chrome,
+      "the minimum height must fit the tab strip, the composer, and the footer")
+  }
+}

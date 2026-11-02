@@ -161,3 +161,21 @@ extension CatalogRulesTests {
       "a draft for a pane the server dropped must not stay on disk")
   }
 }
+
+@MainActor
+final class PaneTitleTests: XCTestCase {
+  func testTheTabUsesThePaneTitleAndFallsBackToItsCoder() {
+    XCTAssertEqual(
+      SpikeApplicationDelegate.title(
+        of: PaneCatalog.Pane(id: "a1", coder: "bash", title: "release build", cwd: nil)),
+      "release build")
+    XCTAssertEqual(
+      SpikeApplicationDelegate.title(
+        of: PaneCatalog.Pane(id: "a1", coder: "bash", title: nil, cwd: nil)),
+      "bash")
+    XCTAssertEqual(
+      SpikeApplicationDelegate.title(
+        of: PaneCatalog.Pane(id: "a1", coder: "pi", title: "", cwd: nil)),
+      "pi", "an empty title is no title")
+  }
+}

@@ -44,6 +44,8 @@ final class PhiTabStrip: NSView {
     super.init(frame: frameRect)
     wantsLayer = true
     layer?.backgroundColor = PhiTheme.panel.cgColor
+    // Tabs past the right edge are cut here instead of painting over the window.
+    clipsToBounds = true
     hairline.wantsLayer = true
     hairline.layer?.backgroundColor = PhiTheme.border.cgColor
     addSubview(hairline)
@@ -107,7 +109,11 @@ final class PhiTabView: NSView {
   let id: String
   var title: String {
     get { label.stringValue }
-    set { label.stringValue = newValue }
+    set {
+      label.stringValue = newValue
+      setAccessibilityLabel(newValue)
+      closeButton.setAccessibilityLabel("Close \(newValue)")
+    }
   }
 
   var isActive = false {
@@ -146,6 +152,10 @@ final class PhiTabView: NSView {
     closeButton.action = #selector(closeClicked)
     closeButton.toolTip = "Close pane"
     addSubview(closeButton)
+
+    setAccessibilityRole(.button)
+    setAccessibilityLabel(title)
+    closeButton.setAccessibilityLabel("Close \(title)")
 
     applyAppearance()
   }
