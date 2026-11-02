@@ -151,3 +151,20 @@ func TestRestoreCorruptFileNeverAbortsStartup(t *testing.T) {
 		t.Fatal("corrupt state published ghost tabs")
 	}
 }
+
+func TestPiBridgeInjectsExtensionOnlyForForeignCoders(t *testing.T) {
+	cases := []struct {
+		name   string
+		coder  coders.Coder
+		inject bool
+	}{
+		{"psi", coders.Coder{ID: "pi", PiMode: "psi"}, false},
+		{"pi", coders.Coder{ID: "pi"}, true},
+		{"pi-explicit", coders.Coder{ID: "pi", PiMode: "pi"}, true},
+	}
+	for _, tc := range cases {
+		if got := piBridgeInjectsExtension(tc.coder); got != tc.inject {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.inject)
+		}
+	}
+}
