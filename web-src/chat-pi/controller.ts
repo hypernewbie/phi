@@ -72,6 +72,16 @@ export function mountRpcChat(
         (status) => setPiRpcStatus(paneId, status),
         (state) => setPiRpcControls(paneId, state),
         (snapshot) => lastFleetSnapshots.set(paneId, snapshot),
+        // The composer and staged attachments belong to the terminal, so a
+        // recovered draft travels as a document event rather than a second
+        // DOM writer.
+        (recovery) => {
+            document.dispatchEvent(
+                new CustomEvent('phi:pi-queue-recovery', {
+                    detail: { paneId, recovery },
+                }),
+            );
+        },
     );
     reportStreamFailure = (message) => chat.streamFailed(message);
     chats.set(paneId, chat);

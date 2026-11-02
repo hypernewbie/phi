@@ -1995,6 +1995,7 @@ export class TabManager {
         document.addEventListener('keydown', (e) =>
             this.handleGlobalTabShortcuts(e),
         );
+        this._listenQueueRecovery();
         window.addEventListener('keydown', (e) => {
             if (e.key === 'Alt') {
                 this.updateTabShortcutHints(true);
@@ -5691,6 +5692,73 @@ export class TabManager {
             if (clear) dropup.replaceChildren();
         }
         return changed;
+    }
+
+    // Draft recovery for a queue item cancelled or copied on the server. The
+    // chat pane owns the ledger, the terminal owns the composer, so the pane
+    // reports recovery as a document event instead of writing input state.
+    _listenQueueRecovery() {
+        if (this._queueRecoveryListening) return;
+        this._queueRecoveryListening = true;
+        document.addEventListener('phi:pi-queue-recovery', (event) =>
+            this._restoreQueueRecovery(event.detail),
+        );
+    }
+
+    // _restoreQueueRecovery puts one queue item's text back into the composer,
+    // mirroring pi's TUI restoreQueuedMessagesToEditor: the restored text goes
+    // before whatever the user has typed, and an inactive pane parks it on the
+    // tab draft instead of touching the shared textarea.
+    _restoreQueueRecovery(detail) {
+        const paneId = detail?.paneId;
+        const item = detail?.recovery?.item;
+        if (!paneId || !item) return;
+        const tab = this.tabs.get(paneId);
+        if (!tab) return;
+        const text = typeof item.message === 'string' ? item.message : '';
+        const staged = (item.attachments || []).
+            filter((attachment) => attachment?.ref && attachment?.name).
+            map((attachment) => ({
+                id: `piq-${attachment.ref.slice(0, 12)}`,
+                ref: attachment.ref,
+                name: attachment.name,
+                type: attachment.mimeType,
+                sizeBytes: attachment.sizeBytes,
+                source: 'pi-queue',
+            }));
+        if (text === '' && staged.length === 0) return;
+        tab.draftAttachments = [...staged, ...(tab.draftAttachments || [])];
+        if (this.getActiveTab()?.paneId !== paneId) {
+            tab.draft = text !== '' && tab.draft?.trim()
+                ? `${text}\n\n${tab.draft}`
+                : text !== ''
+                  ? text
+                  : tab.draft;
+            return;
+        }
+        if (text !== '') {
+            const draft = this.inputTextArea.value;
+            this.inputTextArea.value = draft.trim()
+                ? `${text}\n\n${draft}`
+                : text;
+            this.lastInputValue = this.inputTextArea.value;
+            // Keep the tab's parked draft in step with the composer, the same
+            // way saveActiveDraft() does.
+            tab.draft = this.inputTextArea.value;
+            this._historyCursor = -1;
+            this._historyPreCycleValue = undefined;
+            this._resetPiRecall({ flush: true });
+            tab.chatHistoryCursor = -1;
+            tab.chatHistoryPreCycleValue = undefined;
+            this.adjustInputHeight();
+        }
+        if (staged.length > 0) {
+            this.stagedAttachments = [...staged, ...this.stagedAttachments];
+            tab.draftAttachments = this.stagedAttachments;
+            this._renderAttachmentStrip();
+        }
+        this.inputTextArea.focus({ preventScroll: true });
+        this._placeCursorAtEnd();
     }
 
     _interruptActivePiRpc() {

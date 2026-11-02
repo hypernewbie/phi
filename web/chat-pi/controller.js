@@ -45,7 +45,15 @@ export function mountRpcChat(paneId, container, cwd, sessionPath) {
     // The transport can refuse the stream while no call is pending; report
     // that to the mounted chat instead of leaving it looking ready.
     let reportStreamFailure = null;
-    const chat = mountChatPi(container, cwd, connectControl((message) => reportStreamFailure?.(message)), sessionPath, (status) => setPiRpcStatus(paneId, status), (state) => setPiRpcControls(paneId, state), (snapshot) => lastFleetSnapshots.set(paneId, snapshot));
+    const chat = mountChatPi(container, cwd, connectControl((message) => reportStreamFailure?.(message)), sessionPath, (status) => setPiRpcStatus(paneId, status), (state) => setPiRpcControls(paneId, state), (snapshot) => lastFleetSnapshots.set(paneId, snapshot), 
+    // The composer and staged attachments belong to the terminal, so a
+    // recovered draft travels as a document event rather than a second
+    // DOM writer.
+    (recovery) => {
+        document.dispatchEvent(new CustomEvent('phi:pi-queue-recovery', {
+            detail: { paneId, recovery },
+        }));
+    });
     reportStreamFailure = (message) => chat.streamFailed(message);
     chats.set(paneId, chat);
 }

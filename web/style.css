@@ -13210,6 +13210,108 @@ body.md-standalone #md-view-body {
     padding: 0.4em 1em;
     color: var(--text-secondary);
 }
+/* Pending delivery queue. Pi's TUI shows one dim truncated line per queued
+   message between the transcript and the composer
+   (interactive-mode.js updatePendingMessagesDisplay), so the strip matches
+   that shape and keeps the same -pfx labels. */
+.pi-queue-strip {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15em;
+    padding: 0.4em 1em;
+    color: var(--text-secondary);
+    font-size: 0.9em;
+}
+.pi-queue-strip.hidden {
+    display: none;
+}
+.pi-queue-item,
+.pi-queue-authoritative {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4em;
+    min-width: 0;
+}
+.pi-queue-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.pi-queue-error,
+.pi-queue-state {
+    color: var(--text-muted);
+    flex: none;
+}
+.pi-queue-strip button.pi-queue-restore,
+.pi-queue-strip button.pi-queue-copy,
+.pi-queue-strip button.pi-queue-discard {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    flex: none;
+    font: inherit;
+    padding: 0 0.2em;
+}
+.pi-queue-strip button:hover {
+    color: var(--text-primary);
+}
+.pi-queue-strip button:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 1px;
+}
+/* Retained Pi dialog content. The chrome (overlay, content box, header, body,
+   footer, buttons) comes from the shared .modal-* rules; only the Pi-specific
+   rows live here. Pi's select list marks the current option with an arrow and
+   the accent colour (extension-selector.js). */
+.pi-extension-dialog-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35em;
+}
+.pi-extension-dialog-option {
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: var(--text-primary);
+    cursor: pointer;
+    font: inherit;
+    padding: 0.35em 0.5em;
+    text-align: left;
+}
+.pi-extension-dialog-option:hover {
+    background-color: var(--bg-elevated);
+}
+.pi-extension-dialog-option:focus-visible,
+.pi-extension-dialog-option:focus {
+    background-color: var(--accent-wash);
+    border-color: var(--accent-edge);
+    color: var(--accent-bright);
+    outline: none;
+}
+.pi-extension-dialog-message {
+    color: var(--text-primary);
+    white-space: pre-wrap;
+}
+.pi-extension-dialog-input,
+.pi-extension-dialog-editor {
+    background-color: var(--bg-base);
+    border: 1px solid var(--bg-border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: calc(13px * var(--ui-scale));
+    padding: 8px 10px;
+    width: 100%;
+}
+.pi-extension-dialog-editor {
+    min-height: 8em;
+    resize: vertical;
+}
+.pi-extension-dialog-error {
+    color: var(--red);
+    font-size: calc(12px * var(--ui-scale));
+}
 .pi-active-turn.hidden,
 .pi-active-prompt-overlay.hidden {
     display: none;

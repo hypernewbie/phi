@@ -5,6 +5,8 @@ import { savePersisted } from './persist.js';
 import { renderedUserText } from './render.js';
 import { createReviewTranscriptView } from '../review-transcript.js';
 import { createSubagentStrip, createSubagentViewer } from './subagents.js';
+import { renderQueuePanel } from './queue.js';
+import { createPiDialogController } from './dialogs.js';
 function cloneStatus(status) {
     return {
         ...status,
@@ -133,6 +135,131 @@ function mergeState(status, state, canonical = false) {
     }
     return changed;
 }
+/** One browser-visible queue item, or null when the wire value is unusable. */
+function queueItemFromUnknown(value, epoch) {
+    if (!value || typeof value !== 'object')
+        return null;
+    const source = value;
+    if (typeof source.id !== 'string' || source.id === '')
+        return null;
+    if (typeof source.message !== 'string')
+        return null;
+    const delivery = source.delivery === 'steer' || source.delivery === 'followUp'
+        ? source.delivery
+        : 'prompt';
+    const attachments = Array.isArray(source.attachments)
+        ? source.attachments.flatMap((raw) => {
+            if (!raw || typeof raw !== 'object')
+                return [];
+            const attachment = raw;
+            if (typeof attachment.ref !== 'string')
+                return [];
+            return [
+                {
+                    ref: attachment.ref,
+                    name: typeof attachment.name === 'string'
+                        ? attachment.name
+                        : '',
+                    mimeType: typeof attachment.mimeType === 'string'
+                        ? attachment.mimeType
+                        : '',
+                    sizeBytes: typeof attachment.sizeBytes === 'number'
+                        ? attachment.sizeBytes
+                        : 0,
+                },
+            ];
+        })
+        : [];
+    return {
+        id: source.id,
+        sid: typeof source.sid === 'string' ? source.sid : '',
+        sessionEpoch: typeof source.sessionEpoch === 'string'
+            ? source.sessionEpoch
+            : epoch,
+        message: source.message,
+        delivery,
+        attachments,
+        state: typeof source.state === 'string' ? source.state : 'local',
+        ...(typeof source.error === 'string' ? { error: source.error } : {}),
+        createdAt: typeof source.createdAt === 'number' ? source.createdAt : 0,
+    };
+}
+/** The hydrate, state, and queueChanged queue payload, or null when malformed. */
+function queueSnapshotFromUnknown(value) {
+    if (!value || typeof value !== 'object')
+        return null;
+    const source = value;
+    if (!Array.isArray(source.items))
+        return null;
+    const epoch = typeof source.sessionEpoch === 'string' ? source.sessionEpoch : '';
+    const items = [];
+    for (const raw of source.items) {
+        const item = queueItemFromUnknown(raw, epoch);
+        if (item)
+            items.push(item);
+    }
+    return { sessionEpoch: epoch, items };
+}
+/** One retained blocking Pi dialog, or null when its method is unsupported. */
+function dialogFromUnknown(value) {
+    if (!value || typeof value !== 'object')
+        return null;
+    const source = value;
+    if (typeof source.id !== 'string' || source.id === '')
+        return null;
+    const method = source.method;
+    if (method !== 'select' &&
+        method !== 'confirm' &&
+        method !== 'input' &&
+        method !== 'editor')
+        return null;
+    const options = Array.isArray(source.options)
+        ? source.options.filter((option) => typeof option === 'string')
+        : [];
+    return {
+        id: source.id,
+        method,
+        title: typeof source.title === 'string' ? source.title : '',
+        options,
+        ...(typeof source.message === 'string'
+            ? { message: source.message }
+            : {}),
+        ...(typeof source.placeholder === 'string'
+            ? { placeholder: source.placeholder }
+            : {}),
+        ...(typeof source.prefill === 'string'
+            ? { prefill: source.prefill }
+            : {}),
+        timeout: typeof source.timeout === 'number' ? source.timeout : 0,
+        createdAt: typeof source.createdAt === 'number' ? source.createdAt : 0,
+    };
+}
+function dialogListFromUnknown(value) {
+    if (!Array.isArray(value))
+        return [];
+    const dialogs = [];
+    for (const raw of value) {
+        const dialog = dialogFromUnknown(raw);
+        if (dialog)
+            dialogs.push(dialog);
+    }
+    return dialogs;
+}
+/** Server close reasons map onto the existing close vocabulary. */
+function dialogCloseReason(value) {
+    switch (value) {
+        case 'resolved':
+        case 'cancelled':
+        case 'timeout':
+        case 'childExit':
+        case 'tabClosed':
+        case 'unsupported':
+        case 'late':
+            return value;
+        default:
+            return 'server';
+    }
+}
 function isSnapshot(value) {
     if (!value || typeof value !== 'object')
         return false;
@@ -178,7 +305,7 @@ function validThinkingLevels(value) {
 function invokeControl(client, op, sid, args, timeoutMs) {
     return client.call(op, sid, args, timeoutMs ? { timeoutMs } : undefined);
 }
-export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () => { }, onControlChange = () => { }, onFleetChange = () => { }) {
+export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () => { }, onControlChange = () => { }, onFleetChange = () => { }, onQueueRecovery = () => { }) {
     const wire = client;
     const buffer = new MessageBuffer();
     const localStatus = { cwd };
@@ -217,6 +344,18 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
     let pendingImmediateSave = false;
     let hydrateGeneration = 0;
     let activeHydrate = null;
+    // Server-owned delivery ledger. The server settles every state transition;
+    // this mirror only adds local rows the socket has not accepted yet, and
+    // those keep their generated item ID so a retry cannot deliver twice.
+    let queueItems = [];
+    let queueSessionEpoch = '';
+    let queueSeq = 0;
+    // Pi's steering/follow-up arrays carry no item identity and the control
+    // protocol does not expose them yet, so the display side stays empty.
+    const authoritativeQueue = {
+        steering: [],
+        followUp: [],
+    };
     const notifyStatus = () => onStatusChange(cloneStatus(localStatus));
     const notifyControls = () => onControlChange({
         ready,
@@ -331,6 +470,49 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
         pageSize: 50,
     });
     const status = view.status;
+    // Pi renders the pending queue between the transcript and the composer
+    // (interactive-mode.js mount order: transcript, pendingMessages, editor).
+    // The pane root ends above the shared input bar, so appending here lands
+    // in the same slot; the working row, when present, stays below it.
+    const queueStrip = document.createElement('div');
+    queueStrip.className = 'pi-queue-strip hidden';
+    queueStrip.setAttribute('aria-live', 'polite');
+    const workingRow = root.querySelector('.pi-active-turn');
+    if (workingRow)
+        root.insertBefore(queueStrip, workingRow);
+    else
+        root.appendChild(queueStrip);
+    // Retained blocking dialogs. Absent extension UI requests leave this
+    // inert: nothing mounts, nothing is disabled, every other control works.
+    const dialogController = createPiDialogController({
+        host: root,
+        isActive: () => !destroyed && root.classList.contains('active'),
+        fallbackFocus: () => document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null,
+        respond: (record, answer) => {
+            if (!sid || exited)
+                return Promise.reject(new Error('Pi RPC is not ready'));
+            return invokeControl(wire, 'extensionUiResponse', sid, {
+                requestId: record.id,
+                cancelled: 'cancelled' in answer,
+                ...('value' in answer ? { value: answer.value } : {}),
+                ...('confirmed' in answer
+                    ? { confirmed: answer.confirmed }
+                    : {}),
+            });
+        },
+        cancelAll: () => {
+            if (!sid || exited)
+                return Promise.resolve();
+            return invokeControl(wire, 'extensionUiCancel', sid, {
+                reason: 'tabClosed',
+            });
+        },
+        announce: (message) => {
+            status.textContent = message;
+        },
+    });
     // One terminal transition shared by the rpcExited event and a canonical
     // exited snapshot, which can arrive at a cursor that makes the event stale.
     // Idempotent, so a duplicate or late signal cannot repeat teardown.
@@ -518,6 +700,26 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
             rebaseOutgoing();
             reconcileOutgoing();
             applyState(data.state);
+            // The snapshot owns the ledger and the retained dialogs, so a
+            // reload or a lost queueChanged cannot strand either one.
+            const snapshotSource = data;
+            const queue = queueSnapshotFromUnknown(snapshotSource.queue);
+            if (queue) {
+                if (queue.sessionEpoch !== '')
+                    queueSessionEpoch = queue.sessionEpoch;
+                // A local row whose text is already in the new transcript
+                // was delivered by a submit whose response was lost. Drop
+                // it instead of sending a second copy.
+                const landed = new Set(buffer
+                    .getMessages()
+                    .map((message) => message?.role === 'user'
+                    ? renderedUserText(message.content)
+                    : ''));
+                queueItems = queue.items.filter((item) => item.state !== 'local' ||
+                    !landed.has(item.message));
+                renderQueue();
+            }
+            dialogController.setDialogs(dialogListFromUnknown(snapshotSource.dialogs));
             // A snapshot that lands unblocks anything queued while the
             // history was unknown (a reset clears readiness for it).
             flushQueue();
@@ -723,6 +925,15 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
             status.textContent = dispatch.reason;
             return false;
         }
+        // Pi is already streaming: hand the text to the server ledger so the
+        // row survives a socket outage and the server steers it into the
+        // running turn. The row is its only representation while queued, so
+        // no optimistic bubble is created (Pi's TUI does the same).
+        if (busy &&
+            dispatch.kind === 'prompt' &&
+            queueSessionEpoch !== '' &&
+            submitLocalItem(dispatch.message, 'steer'))
+            return true;
         const local = {
             id: `out-${++outgoingSeq}`,
             text: dispatch.message,
@@ -767,6 +978,146 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
             return rejected('Pi RPC is not ready');
         const currentSid = sid;
         return invokeControl(wire, 'setThinking', currentSid, { level });
+    };
+    // ── delivery queue ──
+    const renderQueue = () => {
+        if (destroyed)
+            return;
+        renderQueuePanel(queueStrip, queueItems, authoritativeQueue, {
+            restore: (item) => {
+                void queueRestore(item.id);
+            },
+            copy: (item) => {
+                void queueCopy(item.id);
+            },
+            discard: (item) => {
+                void queueDiscard(item.id);
+            },
+        });
+    };
+    const adoptQueueItem = (value) => {
+        const item = queueItemFromUnknown(value, queueSessionEpoch);
+        if (!item)
+            return;
+        queueItems = queueItems.filter((existing) => existing.id !== item.id);
+        queueItems.push(item);
+        renderQueue();
+    };
+    const queueOperation = (op, itemId) => {
+        if (!sid || !ready || exited)
+            return rejected('Pi RPC is not ready');
+        if (!queueSessionEpoch)
+            return rejected('Pi RPC queue is not hydrated yet');
+        return invokeControl(wire, op, sid, {
+            itemId,
+            sessionEpoch: queueSessionEpoch,
+        }).catch((error) => {
+            if (!destroyed)
+                status.textContent = `Error: ${String(error)}`;
+            throw error;
+        });
+    };
+    const queueRestore = (itemId) => queueOperation('queueRestore', itemId).then((result) => {
+        if (destroyed || result?.restored !== true)
+            return result;
+        queueItems = queueItems.filter((item) => item.id !== itemId);
+        renderQueue();
+        // The composer belongs to the terminal: hand the draft back
+        // instead of writing input state from two places.
+        const item = queueItemFromUnknown(result.item, queueSessionEpoch);
+        if (item)
+            onQueueRecovery({ restored: true, item });
+        return result;
+    });
+    const queueCopy = (itemId) => queueOperation('queueCopy', itemId).then((result) => {
+        if (destroyed || result?.copied !== true)
+            return result;
+        const source = queueItems.find((item) => item.id === itemId);
+        if (!source)
+            return result;
+        const copied = queueItemFromUnknown({
+            id: itemId,
+            message: result.message,
+            attachments: result.attachments,
+        }, queueSessionEpoch);
+        // Copying never resubmits: the fresh draft goes to the composer.
+        onQueueRecovery({
+            restored: true,
+            item: {
+                ...source,
+                message: copied?.message ?? source.message,
+                attachments: copied?.attachments ?? [],
+            },
+        });
+        return result;
+    });
+    const queueDiscard = (itemId) => queueOperation('queueDiscard', itemId).then((result) => {
+        if (destroyed)
+            return result;
+        if (result?.discarded === true) {
+            queueItems = queueItems.filter((item) => item.id !== itemId);
+            renderQueue();
+        }
+        else if (typeof result?.reason === 'string') {
+            status.textContent = `Error: ${result.reason}`;
+        }
+        return result;
+    });
+    // One queued send. A failed submit keeps the row as local: the text stays
+    // visible, and the generated item ID makes the next attempt idempotent.
+    const submitQueued = (itemId, message, delivery) => {
+        const currentSid = sid;
+        if (destroyed || !currentSid || !queueSessionEpoch || exited)
+            return;
+        void invokeControl(wire, 'queueSubmit', currentSid, {
+            itemId,
+            sessionEpoch: queueSessionEpoch,
+            message,
+            delivery,
+            attachmentRefs: [],
+        })
+            .then((data) => {
+            if (destroyed)
+                return;
+            adoptQueueItem(data?.item);
+        })
+            .catch((error) => {
+            if (destroyed)
+                return;
+            queueItems = queueItems.map((item) => item.id === itemId
+                ? {
+                    ...item,
+                    state: 'local',
+                    error: `Not sent: ${String(error)}`,
+                }
+                : item);
+            renderQueue();
+        });
+    };
+    const submitLocalItem = (message, delivery) => {
+        if (destroyed || !sid || !queueSessionEpoch)
+            return false;
+        const itemId = `phi-${++queueSeq}-${Date.now().toString(36)}`;
+        queueItems.push({
+            id: itemId,
+            sid,
+            sessionEpoch: queueSessionEpoch,
+            message,
+            delivery,
+            attachments: [],
+            state: 'local',
+            createdAt: Date.now(),
+        });
+        renderQueue();
+        submitQueued(itemId, message, delivery);
+        return true;
+    };
+    // Reconnect: every local row is still the user's text. Resubmitting the
+    // same item ID delivers it once even if the earlier frame did land.
+    const resubmitLocalQueue = () => {
+        for (const item of queueItems)
+            if (item.state === 'local')
+                submitQueued(item.id, item.message, item.delivery);
     };
     const interrupt = () => {
         if (!sid || !ready || exited || !sessionActive)
@@ -930,6 +1281,25 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
             if (env.data?.error)
                 status.textContent = `pi: ${String(env.data.error)}`;
             applyState(env.data);
+        }
+        if (env.evt === 'queueChanged') {
+            const queue = queueSnapshotFromUnknown(env.data);
+            if (queue) {
+                if (queue.sessionEpoch !== '')
+                    queueSessionEpoch = queue.sessionEpoch;
+                queueItems = queue.items;
+                renderQueue();
+            }
+        }
+        if (env.evt === 'extensionUiRequest') {
+            const dialog = dialogFromUnknown(env.data);
+            if (dialog)
+                dialogController.upsertDialog(dialog);
+        }
+        if (env.evt === 'extensionUiClosed') {
+            const data = env.data;
+            if (typeof data?.id === 'string' && data.id !== '')
+                dialogController.closeDialog(data.id, dialogCloseReason(data.reason));
         }
         if (env.evt === 'rpcExited') {
             enterExited();
@@ -1200,6 +1570,7 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
             status.textContent = 'Ready';
             requestHydrate(false);
             flushQueue();
+            resubmitLocalQueue();
         })
         : () => { };
     return {
@@ -1214,6 +1585,7 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
             client.close();
             subagentViewer.destroy();
             strip.destroy();
+            dialogController.destroy();
             root.replaceChildren();
             onStatusChange(null);
             onControlChange(null);
