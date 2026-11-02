@@ -4715,38 +4715,9 @@ export class TabManager {
             bellAudio.play().catch(() => {});
         });
 
-        // Graceful WebGL/Canvas renderer.
-        //
-        // The try/catch only covers a renderer that fails to construct. A
-        // context lost at runtime is the other failure, and the damaging one:
-        // the addon keeps drawing into a dead GL context, so the terminal
-        // renders garbage and never recovers. Mobile GPUs drop contexts under
-        // memory pressure and on backgrounding, and heavy scrollback churn can
-        // provoke it on the desktop too. Disposing hands rendering back to the
-        // DOM renderer -- slower, but correct.
-        try {
-            const webgl = new window.WebglAddon.WebglAddon();
-            if (typeof webgl.onContextLoss === 'function') {
-                webgl.onContextLoss(() => {
-                    console.warn(
-                        '[term] WebGL context lost; falling back to the DOM renderer',
-                    );
-                    try {
-                        webgl.dispose();
-                    } catch (e) {
-                        console.error('[term] WebGL dispose failed:', e);
-                    }
-                    requestAnimationFrame(() => {
-                        const tab = this.tabs.get(paneId);
-                        if (tab) this._queuePanelFit(tab, { forceResize: true });
-                    });
-                });
-            }
-            term.loadAddon(webgl);
-            console.log('[term] Loaded WebGL hardware acceleration');
-        } catch (_e) {
-            console.warn('[term] Falling back to standard canvas renderer');
-        }
+        // Graceful WebGL/Canvas renderer. The addon is attached on first
+        // activation, not here: see _attachTermWebgl for why one GL context
+        // per open tab is too expensive to hold for hidden tabs.
 
         // Load Unicode 11 Addon for correct emoji cell width measurements
         try {
@@ -7925,6 +7896,7 @@ export class TabManager {
             }
             prevTab.tabEl.classList.remove('active');
             prevTab.termContainer.classList.remove('active');
+            this._detachTermWebgl(prevTab);
             // Leaving a Pi tab revokes its pending Thinking operation so a
             // late reply cannot act after the user navigates back.
             if (prevTab.coder === 'pi')
@@ -15383,12 +15355,77 @@ export class TabManager {
         }
     }
 
+    // WebGL renderer lifecycle.
+    //
+    // Each xterm WebglAddon owns a full-window GL framebuffer (about 11 MB of
+    // pixels at 1x, four times that on a retina display) plus the GPU-side
+    // IOSurface copies Chromium makes for compositing, and Chromium keeps
+    // every live context until it is disposed. Attaching only for the visible
+    // tab keeps one context instead of one per open tab; hidden tabs render
+    // through the DOM renderer and keep their buffer and scrollback.
+    //
+    // The try/catch only covers a renderer that fails to construct. A context
+    // lost at runtime is the other failure, and the damaging one: the addon
+    // keeps drawing into a dead GL context, so the terminal renders garbage
+    // and never recovers. Mobile GPUs drop contexts under memory pressure and
+    // on backgrounding, and heavy scrollback churn can provoke it on the
+    // desktop too. Disposing hands rendering back to the DOM renderer --
+    // slower, but correct.
+    _attachTermWebgl(tabInfo) {
+        const term = tabInfo?.term;
+        if (!term || term._phiWebgl || term._phiWebglUnsupported) return;
+        try {
+            const webgl = new window.WebglAddon.WebglAddon();
+            if (typeof webgl.onContextLoss === 'function') {
+                webgl.onContextLoss(() => {
+                    console.warn(
+                        '[term] WebGL context lost; falling back to the DOM renderer',
+                    );
+                    term._phiWebgl = null;
+                    try {
+                        webgl.dispose();
+                    } catch (e) {
+                        console.error('[term] WebGL dispose failed:', e);
+                    }
+                    requestAnimationFrame(() => {
+                        const tab = this.tabs.get(tabInfo.paneId);
+                        if (tab) this._queuePanelFit(tab, { forceResize: true });
+                    });
+                });
+            }
+            term.loadAddon(webgl);
+            term._phiWebgl = webgl;
+        } catch (_e) {
+            // One attempt per terminal: a browser without a usable GL context
+            // must not log on every tab switch.
+            term._phiWebglUnsupported = true;
+            console.warn('[term] Falling back to standard canvas renderer');
+        }
+    }
+
+    // Releases the GL context of a tab that is no longer visible. xterm falls
+    // back to the DOM renderer, so only the framebuffer goes away.
+    _detachTermWebgl(tabInfo) {
+        const term = tabInfo?.term;
+        const webgl = term?._phiWebgl;
+        if (!webgl) return;
+        term._phiWebgl = null;
+        try {
+            webgl.dispose();
+        } catch (e) {
+            console.error('[term] WebGL dispose failed:', e);
+        }
+    }
+
     activateTabViewport(
         tabInfo,
         { scrollToBottom = true, autoReconnect = true, force = false } = {},
     ) {
         if (!tabInfo || this.tabs.get(tabInfo.paneId) !== tabInfo ||
             tabInfo.finalizing || tabInfo.softClosing) return;
+
+        // Attach before the fit so the GL canvas is sized once, not twice.
+        this._attachTermWebgl(tabInfo);
 
         // Fit after layout, not after a guessed 50ms settling interval.
         // Coalescing retains the force bit through bootstrap/history gates.
