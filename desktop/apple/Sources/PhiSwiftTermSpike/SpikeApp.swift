@@ -129,8 +129,28 @@ final class SpikeApplicationDelegate: NSObject, NSApplicationDelegate {
       self.catalog = catalog
       catalog.showWindow(nil)
       NSApp.activate(ignoringOtherApps: true)
+#if DEBUG
+      runRequestedUIDump(on: catalog)
+#endif
     }
   }
+
+#if DEBUG
+  private func runRequestedUIDump(on catalog: SpikeCatalogWindow) {
+    guard let request = SpikeUIDump.Request.fromEnvironment() else { return }
+    Task {
+      do {
+        try await SpikeUIDump.run(
+          request, on: catalog,
+          terminalWindows: { [weak self] in self?.windows.compactMap(\.window) ?? [] })
+        fputs("PhiSwiftTermSpike: wrote \(request.imagePath.path)\n", stderr)
+      } catch {
+        fputs("PhiSwiftTermSpike: UI dump failed: \(error)\n", stderr)
+      }
+      NSApp.terminate(nil)
+    }
+  }
+#endif
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 

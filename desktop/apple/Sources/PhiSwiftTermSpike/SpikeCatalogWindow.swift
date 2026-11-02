@@ -44,6 +44,7 @@ final class SpikeCatalogWindow: NSWindowController, NSWindowDelegate,
     window.isReleasedWhenClosed = false
     window.minSize = NSSize(width: 460, height: 320)
     buildContent()
+    setStatus("Enter a server address, then press Connect.", isError: false)
     window.center()
     window.makeFirstResponder(originField)
   }
@@ -123,10 +124,10 @@ final class SpikeCatalogWindow: NSWindowController, NSWindowDelegate,
 
     let paneColumn = NSTableColumn(identifier: .init("pane"))
     paneColumn.title = "Pane"
-    paneColumn.width = 280
+    paneColumn.width = 170
     let idColumn = NSTableColumn(identifier: .init("id"))
     idColumn.title = "ID"
-    idColumn.width = 200
+    idColumn.width = 330
     tableView.addTableColumn(paneColumn)
     tableView.addTableColumn(idColumn)
     tableView.usesAlternatingRowBackgroundColors = true
@@ -184,8 +185,7 @@ final class SpikeCatalogWindow: NSWindowController, NSWindowDelegate,
       setStatus("Enter an http(s) server address, with no path or credentials.", isError: true)
       return
     }
-    UserDefaults.standard.set(origin.absoluteString, forKey: Self.originDefaultsKey)
-    Task { await load(origin: origin) }
+    Task { await loadPanes(origin: origin) }
   }
 
   @objc private func refresh() {
@@ -193,18 +193,17 @@ final class SpikeCatalogWindow: NSWindowController, NSWindowDelegate,
       setStatus("Enter an http(s) server address, with no path or credentials.", isError: true)
       return
     }
-    Task { await load(origin: origin) }
+    Task { await loadPanes(origin: origin) }
   }
 
   @objc private func attachSelected() {
-    let row = tableView.selectedRow
-    guard row >= 0, row < panes.count, let origin = enteredOrigin() else { return }
-    let pane = panes[row]
-    onAttach(origin, pane.id, passwordProvider)
-    setStatus("Opened \(pane.title ?? pane.coder).", isError: false)
+    _ = attachRow(tableView.selectedRow)
   }
 
-  private func load(origin: URL) async {
+  /// Loads the catalog for `origin`. Also used by the DEBUG self-capture.
+  func loadPanes(origin: URL) async {
+    guard !loading else { return }
+    UserDefaults.standard.set(origin.absoluteString, forKey: Self.originDefaultsKey)
     loading = true
     updateControls()
     setStatus("Connecting…", isError: false)
@@ -224,6 +223,36 @@ final class SpikeCatalogWindow: NSWindowController, NSWindowDelegate,
     }
     loading = false
     updateControls()
+  }
+
+  /// Attaches one catalog row. Returns false for a row that holds no pane.
+  @discardableResult
+  func attachRow(_ row: Int) -> Bool {
+    guard row >= 0, row < panes.count, let origin = enteredOrigin() else { return false }
+    let pane = panes[row]
+    tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+    onAttach(origin, pane.id, passwordProvider)
+    setStatus("Opened \(name(of: pane)).", isError: false)
+    return true
+  }
+
+  /// A pane is identified by its title when it has one; the coder is the fallback.
+  private func name(of pane: PaneCatalog.Pane) -> String {
+    Self.displayName(title: pane.title, coder: pane.coder)
+  }
+
+  /// The server sends an empty title for an unnamed pane; show the coder instead.
+  static func displayName(title: String?, coder: String) -> String {
+    guard let title, !title.isEmpty else { return coder }
+    return title
+  }
+
+  var catalogSummary: (panes: Int, status: String) {
+    (panes.count, statusLabel.stringValue)
+  }
+
+  func setOriginText(_ origin: URL) {
+    originField.stringValue = origin.absoluteString
   }
 
   private func describe(_ error: Error) -> String {
@@ -273,7 +302,7 @@ final class SpikeCatalogWindow: NSWindowController, NSWindowDelegate,
       cell.lineBreakMode = .byTruncatingTail
       cell.font = .systemFont(ofSize: 12)
     }
-    cell.stringValue = identifier.rawValue == "pane" ? (pane.title ?? pane.coder) : pane.coder
+    cell.stringValue = identifier.rawValue == "pane" ? name(of: pane) : pane.id
     return cell
   }
 

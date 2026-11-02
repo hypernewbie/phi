@@ -124,6 +124,28 @@ Snapshots contain visible terminal text and must remain private. They are not at
 The request temporarily permits rendering for a hidden view; it also works while the console is locked.
 Release builds omit this feature and its signal handler.
 
+### Window self-capture
+
+A Debug build can also write a PNG of the windows it drew itself, without screen-recording permission and without clicking.
+This is how the connect window and the pane catalog were inspected.
+
+```sh
+PHI_SPIKE_UI_DUMP=/abs/path/catalog.png \
+PHI_SPIKE_UI_CONNECT=http://127.0.0.1:7070 \
+PHI_SPIKE_UI_ATTACH=1 \
+"$BIN/PhiSwiftTermSpike" --state-dir "$STATE"
+```
+
+| Variable | Effect |
+| --- | --- |
+| `PHI_SPIKE_UI_DUMP` | Absolute `.png` path. Required; without it nothing is captured |
+| `PHI_SPIKE_UI_CONNECT` | Optional http(s) origin loaded into the catalog before the capture |
+| `PHI_SPIKE_UI_ATTACH` | `1` attaches the first listed pane and lets it connect before the capture |
+
+The app writes the catalog PNG plus one PNG per terminal window, a JSON sidecar with window size, pane count, status, and file names, then exits.
+The PNGs show visible terminal text and must remain private.
+Nothing is uploaded or written anywhere else, and Release builds contain none of this code.
+
 ## Sources and notices
 
 | Path | Purpose |
