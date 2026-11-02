@@ -41,11 +41,24 @@ type DiagResponse struct {
 	GOMAXPROCS int    `json:"gomaxprocs"`
 	NumCPU     int    `json:"num_cpu"`
 	NumGC      uint32 `json:"num_gc"`
+
+	// Additive memory counters. A leak hunt needs growth per subsystem, not
+	// one total: MemAllocMB alone cannot tell a terminal buffer apart from
+	// retained sockets or a runaway goroutine stack.
+	MemSysMB       float64 `json:"mem_sys_mb"`
+	MemHeapInuseMB float64 `json:"mem_heap_inuse_mb"`
+	MemStackMB     float64 `json:"mem_stack_mb"`
+	HeapObjects    uint64  `json:"heap_objects"`
+	// Terminal memory: the ring buffers are the panes' retained scrollback.
+	RingBytesTotal    int `json:"ring_bytes_total"`
+	RingCapacityTotal int `json:"ring_capacity_total"`
+	WSClientsTotal    int `json:"ws_clients_total"`
 }
 
 // handleDiag returns a snapshot of server state for the diag panel.
-// GET /api/diag. Intentionally unauthenticated — this is a local
-// tool, not a public API. Pair with risk R6 (v0.9 auth) for hardening.
+// GET /api/diag. Reachable only from an authorized session: the whole mux
+// is wrapped by accessManager.Middleware, and accessAuthPublicPath does not
+// exempt this route.
 func (app *Server) handleDiag(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -67,6 +80,10 @@ func (app *Server) handleDiag(w http.ResponseWriter, r *http.Request) {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	resp.MemAllocMB = float64(m.Alloc) / (1024 * 1024)
+	resp.MemSysMB = float64(m.Sys) / (1024 * 1024)
+	resp.MemHeapInuseMB = float64(m.HeapInuse) / (1024 * 1024)
+	resp.MemStackMB = float64(m.StackInuse) / (1024 * 1024)
+	resp.HeapObjects = m.HeapObjects
 	resp.NumGC = m.NumGC
 
 	if app.pty != nil {
@@ -84,6 +101,9 @@ func (app *Server) handleDiag(w http.ResponseWriter, r *http.Request) {
 			if app.hub != nil {
 				pd.ClientCount, pd.RingBytes, pd.RingCapacity = app.hub.PaneStats(inst.ID)
 			}
+			resp.WSClientsTotal += pd.ClientCount
+			resp.RingBytesTotal += pd.RingBytes
+			resp.RingCapacityTotal += pd.RingCapacity
 			resp.Panes = append(resp.Panes, pd)
 		}
 	}

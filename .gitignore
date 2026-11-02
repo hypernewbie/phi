@@ -58,3 +58,6 @@ test-results/
 # Local e2e scratch state
 test/e2e/.runtime-home/
 test/e2e/.manual-review-home/
+
+# Local profiling build diagnostics dir (make dev-server-profile)
+.phi-profile/

@@ -3,6 +3,7 @@ import { relativeToCwd, escapeHtml } from './util.js';
 import { renderMarkdownSafe, rewriteRelativeImages, highlightCodeIn, } from './md-render.js';
 import { normalizePath } from './sessions.js';
 import { formatAttachment } from './attachments.js';
+import { createDeltaTracker, PAGE_COUNTERS, PROCESS_COUNTERS, renderCounterRows, TERMINAL_COUNTERS, } from './diag-counters.js';
 import { tryNative } from './desktop.js';
 import { kindFor } from './file-viewer.js';
 export class MarkdownManager {
@@ -740,20 +741,40 @@ export class MarkdownManager {
         };
         this._updateModalActions();
         this.modal.classList.remove('hidden');
+        // Deltas make the counters actionable: an absolute number cannot say
+        // whether a subsystem is growing. The first successful sample becomes
+        // the baseline, so every row reports growth since the panel opened.
+        const tracker = createDeltaTracker();
+        let lastRendered = null;
+        let inFlight = false;
+        const rendererCounters = () => {
+            const memory = performance.memory;
+            const counters = {
+                dom_nodes: document.getElementsByTagName('*').length,
+            };
+            if (typeof memory?.usedJSHeapSize === 'number') {
+                counters.js_heap_mb = memory.usedJSHeapSize / (1024 * 1024);
+            }
+            return counters;
+        };
         const render = (d) => {
             if (!d) {
                 this.modalBody.innerHTML = `<div class="md-list-error">No data.</div>`;
                 return;
             }
-            const rows = [
+            const values = {
+                ...d,
+                ...rendererCounters(),
+            };
+            const processRows = renderCounterRows(PROCESS_COUNTERS, values, tracker);
+            const terminalRows = renderCounterRows(TERMINAL_COUNTERS, values, tracker);
+            const pageRows = renderCounterRows(PAGE_COUNTERS, values, tracker);
+            const infoRows = [
                 ['Version', d.version || 'dev'],
                 ['Install', d.install_method || '—'],
                 ['Uptime (s)', (d.uptime_seconds || 0).toFixed(0)],
-                ['Goroutines', d.goroutines],
-                ['Mem alloc (MB)', d.mem_alloc_mb.toFixed(1)],
-                ['PTYs', d.pty_count],
             ];
-            const body = rows
+            const body = infoRows
                 .map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`)
                 .join('');
             const panes = (d.panes || [])
@@ -773,25 +794,53 @@ export class MarkdownManager {
             this.modalBody.innerHTML = `
                 <div class="diag-panel">
                     <table class="diag-table"><tbody>${body}</tbody></table>
+                    <h4>Memory</h4>
+                    <table class="diag-table"><tbody>${processRows}</tbody></table>
+                    <h4>Terminals</h4>
+                    <table class="diag-table"><tbody>${terminalRows}</tbody></table>
+                    <h4>This page</h4>
+                    <table class="diag-table"><tbody>${pageRows}</tbody></table>
                     <h4>Panes (${(d.panes || []).length})</h4>
                     <table class="diag-table diag-table-panes">
                         <thead><tr><th>Title</th><th>Coder</th><th>Clients</th><th>Ring</th><th>State</th></tr></thead>
                         <tbody>${panes || '<tr><td colspan=5>(no panes)</td></tr>'}</tbody>
                     </table>
-                    <p class="diag-foot">Auto-refreshing every 2s. Close to stop.</p>
+                    <p class="diag-foot" id="phi-diag-foot">Live counters, change since this panel opened. Auto-refreshing every 2s.</p>
                 </div>
             `;
+            lastRendered = d;
         };
+        // A failed background poll must not blank counters the reader is
+        // watching: keep the last good table and say so on the status line.
         const refresh = async () => {
+            // One request in flight at a time with a bounded wait: against a
+            // stalled link (a remote server, a sleeping laptop) the 2s tick
+            // would otherwise stack a pending fetch on every turn.
+            if (inFlight)
+                return;
+            inFlight = true;
+            const foot = () => document.getElementById('phi-diag-foot');
             try {
-                const res = await fetch('/api/diag');
+                const res = await fetch('/api/diag', {
+                    signal: AbortSignal.timeout(5000),
+                });
                 if (!res.ok)
                     throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
                 render(data);
             }
             catch (err) {
-                this.modalBody.innerHTML = `<div class="md-list-error">Failed: ${escapeHtml(err.message)}</div>`;
+                if (!lastRendered) {
+                    this.modalBody.innerHTML = `<div class="md-list-error">Failed: ${escapeHtml(err.message)}</div>`;
+                    return;
+                }
+                const el = foot();
+                if (el) {
+                    el.textContent = `Refresh failed (${err.message}) — showing the last reading.`;
+                }
+            }
+            finally {
+                inFlight = false;
             }
         };
         await refresh();
