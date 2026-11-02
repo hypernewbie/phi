@@ -13,7 +13,10 @@ import type {
     TerminalServerFrame as TerminalServerMessage,
 } from '../web-src/proto/terminal.js';
 import { startPhi, type PhiServer } from './_server.js';
-import { isCancelledBackgroundRead } from './_session-requests.js';
+import {
+    isCancelledBackgroundRead,
+    isCancelledBellAudio,
+} from './_session-requests.js';
 
 // The served bundle carries no types; bind its runtime codecs to the
 // generated declarations so spec-side decoding is fully checked.
@@ -102,15 +105,9 @@ test('terminal pane flows over protobuf in Chromium', async ({ page }) => {
     });
     page.on('pageerror', (err) => pageErrors.push(String(err)));
     page.on('requestfailed', (req) => {
-        if (isCancelledBackgroundRead(req, phi.url)) return;
-        const url = new URL(req.url());
-        // Restarting a chime can cancel its previous media range request.
         if (
-            req.method() === 'GET' &&
-            req.resourceType() === 'media' &&
-            url.origin === new URL(phi.url).origin &&
-            url.pathname === '/vendor/bell.wav' &&
-            req.failure()?.errorText === 'net::ERR_ABORTED'
+            isCancelledBackgroundRead(req, phi.url) ||
+            isCancelledBellAudio(req, phi.url)
         )
             return;
         // Pin synchronization can finish with an empty 200 response that
