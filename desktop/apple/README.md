@@ -143,8 +143,16 @@ PHI_SPIKE_UI_ATTACH=1 \
 | `PHI_SPIKE_UI_ATTACH` | `1` attaches the first listed pane and lets it connect before the capture |
 
 The app writes the catalog PNG plus one PNG per terminal window, a JSON sidecar with window size, pane count, status, and file names, then exits.
+A terminal window is captured as its terminal view, not as the whole window: SwiftTerm draws in its own layer, and a window-level capture returns the empty background.
 The PNGs show visible terminal text and must remain private.
 Nothing is uploaded or written anywhere else, and Release builds contain none of this code.
+
+## Appearance
+
+The client wears Phi's own design tokens, taken from `web/style.css` and mirrored in
+`Sources/PhiSwiftTermSpike/PhiTheme.swift`: the same near-black surfaces, the purple accent for
+primary actions, muted grey secondary text, and a monospace voice for pane ids and the status line.
+A capture session does not overwrite the remembered server address.
 
 ## Sources and notices
 

@@ -117,22 +117,39 @@ final class SpikeApplicationDelegate: NSObject, NSApplicationDelegate {
   }
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    installMenu()
     switch options.launch {
     case .pane(let origin, let pane):
-      open(origin: origin, pane: pane, password: nil)
+      _ = open(origin: origin, pane: pane, password: nil)
     case .catalog:
-      let catalog = SpikeCatalogWindow(
+      showCatalog()
+    }
+#if DEBUG
+    if let catalog { runRequestedUIDump(on: catalog) }
+#endif
+  }
+
+  func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+  func applicationWillTerminate(_ notification: Notification) {
+    for window in windows { window.closeSession() }
+  }
+
+  @objc private func showCatalog() {
+    let catalog: SpikeCatalogWindow
+    if let existing = self.catalog {
+      catalog = existing
+    } else {
+      catalog = SpikeCatalogWindow(
         stateDirectory: options.stateDirectory,
         onAttach: { [weak self] origin, pane, password in
           self?.open(origin: origin, pane: pane, password: password)
         })
       self.catalog = catalog
-      catalog.showWindow(nil)
-      NSApp.activate(ignoringOtherApps: true)
-#if DEBUG
-      runRequestedUIDump(on: catalog)
-#endif
     }
+    catalog.showWindow(nil)
+    catalog.window?.makeKeyAndOrderFront(nil)
+    NSApplication.shared.activate(ignoringOtherApps: true)
   }
 
 #if DEBUG
@@ -142,24 +159,28 @@ final class SpikeApplicationDelegate: NSObject, NSApplicationDelegate {
       do {
         try await SpikeUIDump.run(
           request, on: catalog,
-          terminalWindows: { [weak self] in self?.windows.compactMap(\.window) ?? [] })
+          terminalWindows: { [weak self] in self?.windows ?? [] })
         fputs("PhiSwiftTermSpike: wrote \(request.imagePath.path)\n", stderr)
       } catch {
         fputs("PhiSwiftTermSpike: UI dump failed: \(error)\n", stderr)
       }
-      NSApp.terminate(nil)
+      NSApplication.shared.terminate(nil)
     }
   }
 #endif
 
-  func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
-
-  func applicationWillTerminate(_ notification: Notification) {
-    for window in windows { window.closeSession() }
-  }
-
-  private func open(origin: URL, pane: String, password: AccessAuth.PasswordProvider?) {
+  /// Opens one pane window, or brings the existing one forward.
+  /// Returns a message when the pane could not be opened.
+  @discardableResult
+  private func open(
+    origin: URL, pane: String, password: AccessAuth.PasswordProvider?
+  ) -> String? {
+    if let existing = windows.first(where: { $0.paneID == pane }) {
+      existing.window?.makeKeyAndOrderFront(nil)
+      return nil
+    }
     let controller = SpikeWindow()
+    controller.paneID = pane
     let session: PaneSession
     do {
       session = try PaneSession(
@@ -170,8 +191,7 @@ final class SpikeApplicationDelegate: NSObject, NSApplicationDelegate {
           try await controller.apply(event)
         })
     } catch {
-      fputs("PhiSwiftTermSpike: failed to start the pane session\n", stderr)
-      return
+      return error.localizedDescription
     }
     windows.append(controller)
     controller.onClose = { [weak self] in
@@ -182,5 +202,70 @@ final class SpikeApplicationDelegate: NSObject, NSApplicationDelegate {
 #else
     controller.start(session: session)
 #endif
+    return nil
+  }
+
+  // MARK: menu
+
+  /// A native menu, so Quit, Hide, Copy/Paste, and reopening the catalog work.
+  private func installMenu() {
+    let mainMenu = NSMenu()
+
+    let appItem = NSMenuItem()
+    let appMenu = NSMenu(title: "Phi")
+    appMenu.addItem(
+      withTitle: "About Phi", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+      keyEquivalent: "")
+    appMenu.addItem(.separator())
+    appMenu.addItem(
+      withTitle: "Hide Phi", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+    appMenu.addItem(
+      withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)),
+      keyEquivalent: "h")
+    appMenu.items.last?.keyEquivalentModifierMask = [.command, .option]
+    appMenu.addItem(
+      withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)),
+      keyEquivalent: "")
+    appMenu.addItem(.separator())
+    appMenu.addItem(
+      withTitle: "Quit Phi", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    appItem.submenu = appMenu
+    mainMenu.addItem(appItem)
+
+    let editItem = NSMenuItem()
+    let editMenu = NSMenu(title: "Edit")
+    for (title, action, key) in [
+      ("Undo", #selector(UndoManager.undo), "z"),
+      ("Redo", #selector(UndoManager.redo), "Z"),
+      ("Cut", #selector(NSText.cut(_:)), "x"),
+      ("Copy", #selector(NSText.copy(_:)), "c"),
+      ("Paste", #selector(NSText.paste(_:)), "v"),
+      ("Select All", #selector(NSText.selectAll(_:)), "a"),
+    ] {
+      editMenu.addItem(withTitle: title, action: action, keyEquivalent: key)
+    }
+    editItem.submenu = editMenu
+    mainMenu.addItem(editItem)
+
+    let windowItem = NSMenuItem()
+    let windowMenu = NSMenu(title: "Window")
+    windowMenu.addItem(
+      withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)),
+      keyEquivalent: "m")
+    windowMenu.addItem(
+      withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+    windowMenu.addItem(.separator())
+    let catalogItem = windowMenu.addItem(
+      withTitle: "Pane Catalog", action: #selector(openCatalogFromMenu), keyEquivalent: "0")
+    catalogItem.target = self
+    windowItem.submenu = windowMenu
+    mainMenu.addItem(windowItem)
+    NSApplication.shared.windowsMenu = windowMenu
+
+    NSApplication.shared.mainMenu = mainMenu
+  }
+
+  @objc private func openCatalogFromMenu() {
+    showCatalog()
   }
 }

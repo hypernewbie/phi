@@ -11,7 +11,9 @@ import SwiftTerm
 final class SpikeWindow: NSWindowController, NSWindowDelegate {
   private let rootView = NSView()
   private let terminalContainer = NSView()
-  private let statusLabel = NSTextField(labelWithString: "connecting")
+  private let statusLabel = PhiTheme.label("connecting", size: 11, color: PhiTheme.textMuted, monospaced: true)
+  /// The pane this window shows, used to focus an already open window.
+  var paneID = ""
   private(set) var terminalView: SpikeTerminalView!
   private var session: PaneSession?
   private var closed = false
@@ -38,7 +40,8 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
       styleMask: [.titled, .closable, .miniaturizable, .resizable],
       backing: .buffered, defer: false)
     super.init(window: window)
-    window.title = "Phi SwiftTerm Spike"
+    window.title = "Phi"
+    window.backgroundColor = PhiTheme.base
     window.delegate = self
     window.isReleasedWhenClosed = false
     rootView.autoresizingMask = [.width, .height]
@@ -52,8 +55,18 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     terminalView.frame = terminalContainer.bounds
     terminalView.autoresizingMask = [.minYMargin]
     terminalContainer.addSubview(terminalView)
-    statusLabel.frame = NSRect(x: 8, y: 0, width: 984, height: 22)
+    statusLabel.frame = NSRect(x: 10, y: 2, width: 980, height: 16)
     statusLabel.autoresizingMask = [.width, .maxYMargin]
+
+    // Phi's footer: a panel strip with a hairline above it.
+    let statusBar = PhiBackgroundView(frame: NSRect(x: 0, y: 0, width: 1000, height: 22))
+    statusBar.fillColor = PhiTheme.panel
+    statusBar.autoresizingMask = [.width, .maxYMargin]
+    rootView.addSubview(statusBar)
+    let hairline = PhiBackgroundView(frame: NSRect(x: 0, y: 21, width: 1000, height: 1))
+    hairline.fillColor = PhiTheme.border
+    hairline.autoresizingMask = [.width, .maxYMargin]
+    rootView.addSubview(hairline)
     rootView.addSubview(statusLabel)
     updateMinimumContentSize(for: terminalView)
   }
@@ -89,7 +102,7 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
       cols: terminalView.terminalDimensions.cols, rows: terminalView.terminalDimensions.rows)
     showWindow(nil)
     window?.makeFirstResponder(terminalView)
-    NSApp.activate(ignoringOtherApps: true)
+    NSApplication.shared.activate(ignoringOtherApps: true)
     session.start()
   }
 
@@ -148,6 +161,29 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     }
     session?.resize(cols: cols, rows: rows)
   }
+
+  #if DEBUG
+  /// Writes the terminal view as PNG for the self-capture.
+  ///
+  /// The view is captured directly, not through its window: SwiftTerm renders in
+  /// its own layer, and a window-level capture returns the background alone.
+  /// Rendering is unsuspended first, so an occluded window still yields its
+  /// current screen.
+  func writeUIDumpPNG(to path: URL) async throws -> (bytes: Int, width: Int, height: Int) {
+    guard let view = terminalView else { throw SpikeWindowError.staleConnection }
+    let originalSuspension = view.suspendsRenderingWhenNotVisible
+    let initialFrames = view.diagnostics.frames
+    view.suspendsRenderingWhenNotVisible = false
+    defer { view.suspendsRenderingWhenNotVisible = originalSuspension }
+    view.requestRedraw()
+    let deadline = ContinuousClock().now.advanced(by: .seconds(3))
+    while view.diagnostics.frames <= initialFrames, ContinuousClock().now < deadline {
+      try? await Task.sleep(for: .milliseconds(16))
+    }
+    let bytes = try SpikeUIDump.writePNG(of: view, to: path)
+    return (bytes, Int(view.bounds.width), Int(view.bounds.height))
+  }
+  #endif
 
   func windowWillClose(_ notification: Notification) {
     closeSession()
@@ -345,6 +381,7 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     guard !closed else { return }
     guard !retirementBlocked else {
       statusLabel.stringValue = "terminal teardown timed out; views retained"
+      statusLabel.textColor = PhiTheme.danger
       return
     }
     if snapshot.status.attached, !snapshot.status.recovering,
@@ -356,6 +393,9 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     let dimensions = terminalView.terminalDimensions
     statusLabel.stringValue =
       "\(snapshot.statusLine) · view \(dimensions.cols)×\(dimensions.rows)"
+    statusLabel.textColor =
+      snapshot.status.attached
+      ? PhiTheme.active : (snapshot.status.recovering ? PhiTheme.textMuted : PhiTheme.danger)
   }
 
   private func updateMinimumContentSize(for view: SpikeTerminalView) {

@@ -23,7 +23,9 @@ final class SwiftTermGeometryTests: XCTestCase {
     contentView.layoutSubtreeIfNeeded()
 
     XCTAssertGreaterThan(contentView.bounds.height, initialHeight)
-    XCTAssertEqual(label.frame.minY, 0, accuracy: 0.5)
+    // The strip keeps its bottom padding and never climbs into the terminal.
+    XCTAssertGreaterThanOrEqual(label.frame.minY, 0)
+    XCTAssertLessThanOrEqual(label.frame.maxY, 22)
     let terminalFrame = controller.terminalView.convert(controller.terminalView.bounds, to: contentView)
     XCTAssertLessThanOrEqual(label.frame.maxY, terminalFrame.minY + 0.5)
   }

@@ -22,7 +22,7 @@ final class SpikeUIDumpTests: XCTestCase {
 
   @MainActor
   private func makeCatalog() -> SpikeCatalogWindow {
-    SpikeCatalogWindow(stateDirectory: workDirectory, onAttach: { _, _, _ in })
+    SpikeCatalogWindow(stateDirectory: workDirectory, onAttach: { _, _, _ in nil })
   }
 
   @MainActor

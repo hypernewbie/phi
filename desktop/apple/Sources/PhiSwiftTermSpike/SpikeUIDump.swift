@@ -36,7 +36,7 @@ enum SpikeUIDump {
 
   static func run(
     _ request: Request, on catalog: SpikeCatalogWindow,
-    terminalWindows: () -> [NSWindow] = { [] }
+    terminalWindows: () -> [SpikeWindow] = { [] }
   ) async throws {
     if let origin = request.connectOrigin {
       catalog.setOriginText(origin)
@@ -65,16 +65,14 @@ enum SpikeUIDump {
     ]
     let terminals = terminalWindows()
     var terminalRecords: [[String: Any]] = []
-    for (index, window) in terminals.enumerated() {
-      guard let content = window.contentView else { continue }
-      window.displayIfNeeded()
+    for (index, controller) in terminals.enumerated() {
       let path = request.imagePath.deletingPathExtension()
         .appendingPathExtension("terminal-\(index)").appendingPathExtension("png")
-      let size = try writePNG(of: content, to: path)
+      let capture = try await controller.writeUIDumpPNG(to: path)
       terminalRecords.append([
-        "window": window.title, "file": path.lastPathComponent,
-        "width": Int(content.bounds.width), "height": Int(content.bounds.height),
-        "pngBytes": size,
+        "window": controller.window?.title ?? "", "file": path.lastPathComponent,
+        "width": capture.width, "height": capture.height,
+        "pngBytes": capture.bytes,
       ])
     }
     record["terminals"] = terminalRecords
