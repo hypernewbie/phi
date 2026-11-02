@@ -19,23 +19,30 @@ enum PhiSwiftTermSpike {
     } catch {
       fputs("PhiSwiftTermSpike: \(error)\n", stderr)
       fputs(
-        "Usage: PhiSwiftTermSpike --server <origin> --pane <id> --state-dir <owned-path> --no-keychain\n",
-        stderr)
+        """
+        Usage: PhiSwiftTermSpike --state-dir <owned-path> --server <origin> --pane <id>
+               PhiSwiftTermSpike --state-dir <owned-path>    # choose the server in the window
+
+        """, stderr)
       exit(64)
     }
   }
 }
 
-private struct SpikeOptions {
-  let server: URL
-  let pane: String
+struct SpikeOptions {
+  /// Where the app opens: one named pane, or the pane catalog.
+  enum Launch: Equatable {
+    case pane(URL, String)
+    case catalog
+  }
+
   let stateDirectory: URL
+  let launch: Launch
 
   static func parse(_ arguments: [String]) throws -> SpikeOptions {
     var server: String?
     var pane: String?
     var statePath: String?
-    var noKeychain = false
     var index = 0
     while index < arguments.count {
       switch arguments[index] {
@@ -52,20 +59,14 @@ private struct SpikeOptions {
         statePath = arguments[index + 1]
         index += 2
       case "--no-keychain":
-        guard !noKeychain else { throw SpikeArgumentsError.invalid }
-        noKeychain = true
+        // Accepted for earlier preview instructions. This preview never uses the
+        // Keychain: a password is held in memory for one connection only.
         index += 1
       default:
         throw SpikeArgumentsError.invalid
       }
     }
-    guard noKeychain, let server, let pane, !pane.isEmpty, let statePath,
-          let origin = URL(string: server),
-          ["http", "https"].contains(origin.scheme?.lowercased() ?? ""),
-          origin.host != nil, origin.user == nil, origin.password == nil,
-          origin.query == nil, origin.fragment == nil,
-          origin.path.isEmpty || origin.path == "/",
-          statePath.hasPrefix("/"), statePath != "/" else {
+    guard let statePath, statePath.hasPrefix("/"), statePath != "/" else {
       throw SpikeArgumentsError.invalid
     }
     let stateDirectory = URL(fileURLWithPath: statePath, isDirectory: true).standardizedFileURL
@@ -74,47 +75,92 @@ private struct SpikeOptions {
           (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == getuid() else {
       throw SpikeArgumentsError.invalid
     }
-    return SpikeOptions(server: origin, pane: pane, stateDirectory: stateDirectory)
+    let launch: Launch
+    switch (server, pane) {
+    case (nil, nil):
+      launch = .catalog
+    case (let server?, let pane?):
+      guard !pane.isEmpty, let origin = origin(from: server) else {
+        throw SpikeArgumentsError.invalid
+      }
+      launch = .pane(origin, pane)
+    default:
+      // A named pane needs its server; either both or neither.
+      throw SpikeArgumentsError.invalid
+    }
+    return SpikeOptions(stateDirectory: stateDirectory, launch: launch)
+  }
+
+  /// An http(s) origin with no credentials, query, fragment, or path prefix.
+  static func origin(from text: String) -> URL? {
+    guard let origin = URL(string: text),
+          ["http", "https"].contains(origin.scheme?.lowercased() ?? ""),
+          origin.host != nil, origin.user == nil, origin.password == nil,
+          origin.query == nil, origin.fragment == nil,
+          origin.path.isEmpty || origin.path == "/" else { return nil }
+    return origin
   }
 }
 
-private enum SpikeArgumentsError: Error {
+enum SpikeArgumentsError: Error {
   case invalid
 }
 
 @MainActor
-private final class SpikeApplicationDelegate: NSObject, NSApplicationDelegate {
+final class SpikeApplicationDelegate: NSObject, NSApplicationDelegate {
   private let options: SpikeOptions
-  private var controller: SpikeWindow?
+  private var catalog: SpikeCatalogWindow?
+  private var windows: [SpikeWindow] = []
 
   init(options: SpikeOptions) {
     self.options = options
   }
 
   func applicationDidFinishLaunching(_ notification: Notification) {
-    let controller = SpikeWindow()
-    self.controller = controller
-    do {
-      let session = try PaneSession(
-        origin: options.server, paneID: options.pane, stateDir: options.stateDirectory,
-        useKeychain: false, terminalObserver: { [weak controller] event in
-          guard let controller else { throw SpikeWindowError.staleConnection }
-          try await controller.apply(event)
+    switch options.launch {
+    case .pane(let origin, let pane):
+      open(origin: origin, pane: pane, password: nil)
+    case .catalog:
+      let catalog = SpikeCatalogWindow(
+        stateDirectory: options.stateDirectory,
+        onAttach: { [weak self] origin, pane, password in
+          self?.open(origin: origin, pane: pane, password: password)
         })
-#if DEBUG
-      controller.start(session: session, stateDirectory: options.stateDirectory)
-#else
-      controller.start(session: session)
-#endif
-    } catch {
-      fputs("PhiSwiftTermSpike: failed to start the pane session\n", stderr)
-      NSApp.terminate(nil)
+      self.catalog = catalog
+      catalog.showWindow(nil)
+      NSApp.activate(ignoringOtherApps: true)
     }
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
   func applicationWillTerminate(_ notification: Notification) {
-    controller?.closeSession()
+    for window in windows { window.closeSession() }
+  }
+
+  private func open(origin: URL, pane: String, password: AccessAuth.PasswordProvider?) {
+    let controller = SpikeWindow()
+    let session: PaneSession
+    do {
+      session = try PaneSession(
+        origin: origin, paneID: pane, stateDir: options.stateDirectory,
+        useKeychain: false, password: password,
+        terminalObserver: { [weak controller] event in
+          guard let controller else { throw SpikeWindowError.staleConnection }
+          try await controller.apply(event)
+        })
+    } catch {
+      fputs("PhiSwiftTermSpike: failed to start the pane session\n", stderr)
+      return
+    }
+    windows.append(controller)
+    controller.onClose = { [weak self] in
+      self?.windows.removeAll { $0 === controller }
+    }
+#if DEBUG
+    controller.start(session: session, stateDirectory: options.stateDirectory)
+#else
+    controller.start(session: session)
+#endif
   }
 }

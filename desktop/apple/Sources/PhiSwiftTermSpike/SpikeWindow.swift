@@ -18,6 +18,8 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
   private var liveConnection: UUID?
   private var geometryRevision: UInt64 = 0
   var closeTerminalView: (SpikeTerminalView) -> Bool = { $0.updateUiClosed() }
+  /// Called once the window closes, so the owner can release this controller.
+  var onClose: (() -> Void)?
   private(set) var retiringViews: [SpikeTerminalView] = []
   private var retirementTask: Task<Void, Never>?
   private var retirementOwner: SpikeWindow?
@@ -149,6 +151,7 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
 
   func windowWillClose(_ notification: Notification) {
     closeSession()
+    onClose?()
   }
 
   func closeSession() {

@@ -15,7 +15,8 @@ This does not establish standalone SwiftTerm protocol compatibility or productio
 - Network access for the pinned Swift packages on the first build.
 - An existing Phi pane on a server without an access password.
 
-The preview has no password prompt and requires `--no-keychain`.
+The connect window takes the server address and, when the server has one, the access password.
+The password is used once to derive a verifier and is never stored or written to the Keychain.
 Use a separate test server. Do not disable the password on a shared server.
 Use HTTPS or a trusted private network. Plain HTTP does not encrypt terminal traffic.
 
@@ -33,6 +34,25 @@ The xcframework contains macOS, iOS, and iOS-simulator slices. This preview does
 
 ## Open a pane
 
+Build the executable once, then choose where it opens.
+
+### Choose the server in the window
+
+```sh
+STATE="$HOME/Library/Application Support/PhiSwiftTermPreview/test-server"
+BIN="$(swift build -c release --show-bin-path --disable-automatic-resolution)"
+umask 077
+mkdir -p "$STATE"
+"$BIN/PhiSwiftTermSpike" --state-dir "$STATE"
+```
+
+The window asks for the server address and an optional access password, then lists the panes from `GET /api/terminals`.
+Double-click a pane, or select it and press Attach, to open it in its own terminal window.
+The catalog window stays open, so several panes can be attached one at a time.
+Closing a pane window disconnects only that client.
+
+### Open one named pane directly
+
 1. Get an existing pane ID from your Phi server's `GET /api/terminals` response.
 2. Replace the server origin and pane ID in this example.
 3. Run the commands from `desktop/apple`.
@@ -47,9 +67,11 @@ mkdir -p "$STATE"
 "$BIN/PhiSwiftTermSpike" \
   --server "$SERVER" \
   --pane "$PANE" \
-  --state-dir "$STATE" \
-  --no-keychain
+  --state-dir "$STATE"
 ```
+
+A named pane has no password prompt; use the window to reach a password-protected server.
+`--no-keychain` is still accepted for earlier instructions and changes nothing: the Keychain is never used.
 
 The server value must be an HTTP(S) origin without credentials, a query, or a path prefix.
 The state directory must already exist, belong to your user, and have an absolute path.
