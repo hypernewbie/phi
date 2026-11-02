@@ -1,4 +1,4 @@
-package main
+package piapp
 
 import (
 	"context"
@@ -20,7 +20,7 @@ const (
 // handlePiBridgeTranscriptSearch serves one bounded page from the live Pi
 // transcript. Request origins are checked by Bridge and Server before the
 // page is dispatched; no process identity selects a route.
-func handlePiBridgeTranscriptSearch(w http.ResponseWriter, r *http.Request) {
+func (a *API) HandlePiBridgeTranscriptSearch(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -77,7 +77,7 @@ func handlePiBridgeTranscriptSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), piBridgeTranscriptSearchTimeout)
 	defer cancel()
-	res, err := piBridge.RequestPaneTranscriptSearch(ctx, body.Pane, body.ProcessID, generation, req)
+	res, err := a.bridgeOrNil().RequestPaneTranscriptSearch(ctx, body.Pane, body.ProcessID, generation, req)
 	if err != nil || res.Unavailable {
 		http.Error(w, "pi transcript search unavailable", http.StatusServiceUnavailable)
 		return

@@ -1,4 +1,4 @@
-package main
+package piapp
 
 import (
 	"context"
@@ -37,7 +37,7 @@ const piBridgeCompactMaxBody = 4096
 // cancellation with its safe reason), and unknown (504, dispatched
 // but unresolved). Malformed, forbidden, and wrong-method
 // requests are 400, 403, and 405. Nothing here is cached.
-func handlePiBridgeCompact(w http.ResponseWriter, r *http.Request) {
+func (a *API) HandlePiBridgeCompact(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -88,7 +88,7 @@ func handlePiBridgeCompact(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), piBridgeCompactTimeout)
 	defer cancel()
-	res, err := piBridge.RequestPaneCompact(ctx, body.Pane, generation, pubRev)
+	res, err := a.bridgeOrNil().RequestPaneCompact(ctx, body.Pane, generation, pubRev)
 	writeCompactResult(w, res, err)
 }
 

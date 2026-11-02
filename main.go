@@ -3,10 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"log/slog"
 	"net"
@@ -24,7 +22,7 @@ import (
 	"github.com/hypernewbie/phi/internal/access"
 	"github.com/hypernewbie/phi/internal/attachments"
 	"github.com/hypernewbie/phi/internal/gitapi"
-	"github.com/hypernewbie/phi/internal/pibridge"
+	"github.com/hypernewbie/phi/internal/piapp"
 	"github.com/hypernewbie/phi/internal/webassets"
 	"github.com/hypernewbie/phi/pkg/bindaddr"
 	"github.com/hypernewbie/phi/pkg/coders"
@@ -46,7 +44,12 @@ var (
 	ptyManager     *pty.Manager
 	coderManager   *coders.Manager
 	wsHub          *ws.Hub
-	piBridge       *Bridge
+	piBridge       *piapp.Bridge
+	piAPI          = piapp.NewAPI(
+		func() *piapp.Bridge { return piBridge },
+		func() *attachments.AttachmentStore { return attachments.Default },
+		func() *pty.Manager { return ptyManager },
+	)
 	mdWatcher      *fswatch.Watcher
 	piTitleService *piTerminalTitleService
 	cpuSampler     = system.NewSampler()
@@ -274,7 +277,11 @@ func main() {
 	// The Pi bridge serves before saved Pi tabs restore so relaunched
 	// panes provision against a live listener. A nil bridge (listener
 	// failure) leaves every launch on the unmanaged path.
-	piBridge = startPiBridge(wsHub)
+	piBridge = piapp.StartBridge(wsHub, piPhiRuntime, strings.TrimSpace(piPhiVersionAsset))
+	if piBridge != nil {
+		piBridge.Syncboard = http.HandlerFunc(handleSyncMessages)
+		piBridge.LoadConfig = loadConfigWithError
+	}
 	restoreSavedTabs()
 	// Expiry starts only after restoration completes so saved panes
 	// are live (and protected) before the first sweep runs.
@@ -420,21 +427,21 @@ func main() {
 	})
 	http.HandleFunc("/api/prompt-history/append", handlePromptHistoryAppend)
 	http.HandleFunc("/api/prompt-history/recent", handlePromptHistoryRecent)
-	http.HandleFunc("/api/pi-history", handlePiBridgeHistory)
-	http.HandleFunc("/api/pi-bridge/models", handlePiBridgeModels)
-	http.HandleFunc("/api/pi-bridge/model", handlePiBridgeSetModel)
-	http.HandleFunc("/api/pi-bridge/thinking-levels", handlePiBridgeThinkingLevels)
-	http.HandleFunc("/api/pi-bridge/thinking", handlePiBridgeSetThinking)
-	http.HandleFunc("/api/pi-bridge/compact", handlePiBridgeCompact)
-	http.HandleFunc("/api/pi-bridge/reload", handlePiBridgeReload)
-	http.HandleFunc("/api/pi-bridge/skills", handlePiBridgeSkills)
-	http.HandleFunc("/api/pi-bridge/skill", handlePiBridgeInvokeSkill)
-	http.HandleFunc("/api/pi-bridge/attachments/context", handlePiBridgeAttachmentContext)
-	http.HandleFunc("/api/pi-bridge/attachments", handlePiBridgeAttachments)
+	http.HandleFunc("/api/pi-history", piAPI.HandlePiBridgeHistory)
+	http.HandleFunc("/api/pi-bridge/models", piAPI.HandlePiBridgeModels)
+	http.HandleFunc("/api/pi-bridge/model", piAPI.HandlePiBridgeSetModel)
+	http.HandleFunc("/api/pi-bridge/thinking-levels", piAPI.HandlePiBridgeThinkingLevels)
+	http.HandleFunc("/api/pi-bridge/thinking", piAPI.HandlePiBridgeSetThinking)
+	http.HandleFunc("/api/pi-bridge/compact", piAPI.HandlePiBridgeCompact)
+	http.HandleFunc("/api/pi-bridge/reload", piAPI.HandlePiBridgeReload)
+	http.HandleFunc("/api/pi-bridge/skills", piAPI.HandlePiBridgeSkills)
+	http.HandleFunc("/api/pi-bridge/skill", piAPI.HandlePiBridgeInvokeSkill)
+	http.HandleFunc("/api/pi-bridge/attachments/context", piAPI.HandlePiBridgeAttachmentContext)
+	http.HandleFunc("/api/pi-bridge/attachments", piAPI.HandlePiBridgeAttachments)
 	http.HandleFunc("/api/attachments/v2/browse", attachments.HandleV2Browse)
 	http.HandleFunc("/api/attachments/v2/server-items", attachments.HandleV2ServerItem)
 	http.HandleFunc("/api/attachments/v2/items/", attachments.HandleV2Item)
-	http.HandleFunc("/api/pi-bridge/transcript-search", handlePiBridgeTranscriptSearch)
+	http.HandleFunc("/api/pi-bridge/transcript-search", piAPI.HandlePiBridgeTranscriptSearch)
 	http.HandleFunc("/api/attachments", attachments.HandleClipboard)
 	http.HandleFunc("/api/clipboard", handleGetClipboard)
 	http.HandleFunc("/api/system/cpu", handleSystemCPU)
@@ -959,275 +966,4 @@ func handlePromptHistoryRecent(w http.ResponseWriter, r *http.Request) {
 	s, _ := promptHistoryLazyStore() // error ignored here; Recent on empty store returns []
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(s.Recent(cwd, n))
-}
-
-const piBridgeOnDemandTimeout = time.Second
-
-// Model operations can wait behind native host work. This is local IPC time;
-// the browser allows a longer network budget for mobile connections.
-const piBridgeModelTimeout = 30 * time.Second
-
-// handlePiBridgeHistory uses the existing API auth gate. Errors reveal no
-// prompt text or bridge internals; successful snapshots must not be cached.
-func handlePiBridgeHistory(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	paneID := r.URL.Query().Get("pane")
-	if paneID == "" {
-		http.Error(w, "missing pane", http.StatusBadRequest)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), piBridgeOnDemandTimeout)
-	defer cancel()
-	res, err := piBridge.RequestPaneHistory(ctx, paneID)
-	if err != nil {
-		http.Error(w, "pi history unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	entries := res.Entries
-	if entries == nil {
-		entries = []string{}
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"entries": entries, "unavailable": res.Unavailable})
-}
-
-// handlePiBridgeModels uses the existing API auth gate. Errors reveal
-// no bridge internals; successful lists must not be cached. Model is
-// mapped to id at this edge so the web UI renders bridge rows
-// exactly like Pi RPC rows.
-func handlePiBridgeModels(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	paneID := r.URL.Query().Get("pane")
-	if paneID == "" {
-		http.Error(w, "missing pane", http.StatusBadRequest)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), piBridgeModelTimeout)
-	defer cancel()
-	res, err := piBridge.RequestPaneModels(ctx, paneID)
-	if err != nil {
-		http.Error(w, "pi models unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	models := make([]map[string]string, 0, len(res.Models))
-	for _, m := range res.Models {
-		models = append(models, map[string]string{"provider": m.Provider, "id": m.Model})
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"models": models, "truncated": res.Truncated, "unavailable": res.Unavailable})
-}
-
-// handlePiBridgeThinkingLevels returns the supported levels and the exact
-// process generation that answered. The origin must be echoed for setters.
-func handlePiBridgeThinkingLevels(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	paneID := r.URL.Query().Get("pane")
-	if paneID == "" || len(paneID) > 256 {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), piBridgeOnDemandTimeout)
-	defer cancel()
-	res, err := piBridge.RequestPaneThinkingLevels(ctx, paneID)
-	if err != nil {
-		http.Error(w, "pi thinking unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	levels := res.Levels
-	if levels == nil {
-		levels = []string{}
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"levels": levels, "provider": res.Provider, "model": res.Model,
-		"unavailable": res.Unavailable, "process_id": res.ProcessID,
-		"generation": strconv.FormatUint(res.Generation, 10),
-	})
-}
-
-func parseBridgeGeneration(value string) (uint64, bool) {
-	if value == "" || len(value) > 20 {
-		return 0, false
-	}
-	for i := 0; i < len(value); i++ {
-		if value[i] < '0' || value[i] > '9' {
-			return 0, false
-		}
-	}
-	generation, err := strconv.ParseUint(value, 10, 64)
-	return generation, err == nil && generation != 0
-}
-
-// handlePiBridgeSetThinking requires the process/generation origin from the
-// list response. Malformed or stale origins fail before mutation.
-func handlePiBridgeSetThinking(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var body struct {
-		Pane       string `json:"pane"`
-		Level      string `json:"level"`
-		Provider   string `json:"provider"`
-		Model      string `json:"model"`
-		ProcessID  string `json:"process_id"`
-		Generation string `json:"generation"`
-	}
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	generation, validGeneration := parseBridgeGeneration(body.Generation)
-	if body.Pane == "" || len(body.Pane) > 256 || body.ProcessID == "" || len(body.ProcessID) > 256 ||
-		!pibridge.IsThinkingLevel(body.Level) || len(body.Level) > 16 ||
-		body.Provider == "" || len(body.Provider) > 256 || body.Model == "" || len(body.Model) > 256 || !validGeneration {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), piBridgeOnDemandTimeout)
-	defer cancel()
-	res, err := piBridge.RequestPaneSetThinking(ctx, body.Pane, body.ProcessID, generation, body.Level, body.Provider, body.Model)
-	if err != nil {
-		http.Error(w, "pi thinking unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": res.OK, "reason": res.Reason})
-}
-
-// handlePiBridgeSkills uses the existing API auth gate. Errors reveal
-// no bridge internals; successful lists must not be cached.
-func handlePiBridgeSkills(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	paneID := r.URL.Query().Get("pane")
-	if paneID == "" || len(paneID) > 256 {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), piBridgeOnDemandTimeout)
-	defer cancel()
-	res, err := piBridge.RequestPaneSkills(ctx, paneID)
-	if err != nil {
-		http.Error(w, "pi skills unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	skills := make([]map[string]string, 0, len(res.Skills))
-	for _, s := range res.Skills {
-		skills = append(skills, map[string]string{"name": s.Name, "description": s.Description})
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"skills": skills, "truncated": res.Truncated, "unavailable": res.Unavailable,
-		"process_id": res.ProcessID, "generation": strconv.FormatUint(res.Generation, 10),
-	})
-}
-
-// handlePiBridgeInvokeSkill sends one skill to the live Pi session. The
-// ack means the request was dispatched, never that the agent accepted or
-// completed it; the reason vocabulary is safe to surface. The origin of
-// the list that produced the row must be echoed: a session that moved on
-// refuses the request instead of receiving the skill.
-func handlePiBridgeInvokeSkill(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var body struct {
-		Pane       string `json:"pane"`
-		Name       string `json:"name"`
-		ProcessID  string `json:"process_id"`
-		Generation string `json:"generation"`
-	}
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	generation, validGeneration := parseBridgeGeneration(body.Generation)
-	if body.Pane == "" || len(body.Pane) > 256 || !pibridge.IsSkillName(body.Name) ||
-		body.ProcessID == "" || len(body.ProcessID) > 256 || !validGeneration {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), piBridgeOnDemandTimeout)
-	defer cancel()
-	res, err := piBridge.RequestPaneInvokeSkill(ctx, body.Pane, body.ProcessID, generation, body.Name)
-	if err != nil {
-		if errors.Is(err, pibridge.ErrSkillOriginStale) {
-			// The runtime that produced the list is gone: the
-			// request was never dispatched, so it is a refusal.
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "reason": "unavailable"})
-			return
-		}
-		http.Error(w, "pi skill unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": res.OK, "reason": res.Reason})
-}
-
-// handlePiBridgeSetModel uses the existing API auth gate. The body
-// names one catalog entry; failures are 503 without bridge
-// internals, and the ack reason vocabulary is safe to surface.
-func handlePiBridgeSetModel(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var body struct {
-		Pane     string `json:"pane"`
-		Provider string `json:"provider"`
-		Model    string `json:"model"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	if body.Pane == "" || body.Provider == "" || body.Model == "" ||
-		len(body.Pane) > 256 || len(body.Provider) > 256 || len(body.Model) > 256 {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), piBridgeModelTimeout)
-	defer cancel()
-	res, err := piBridge.RequestPaneSetModel(ctx, body.Pane, body.Provider, body.Model)
-	if err != nil {
-		http.Error(w, "pi model switch unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": res.OK, "reason": res.Reason})
 }

@@ -1,4 +1,4 @@
-package main
+package piapp
 
 import (
 	"bytes"
@@ -30,7 +30,7 @@ func TestPiAttachmentStatusSurvivesPaneClosure(t *testing.T) {
 	}
 	request := httptest.NewRequest(http.MethodGet, "/api/pi-bridge/attachments?id="+id+"&pane=closed-pane", nil)
 	response := httptest.NewRecorder()
-	handlePiBridgeAttachments(response, request)
+	testAPI().HandlePiBridgeAttachments(response, request)
 	var got attachmentSendResponse
 	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
@@ -58,7 +58,7 @@ func TestPiAttachmentPostPersistsRefusalAndIdempotentResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(http.HandlerFunc(handlePiBridgeAttachments))
+	server := httptest.NewServer(http.HandlerFunc(testAPI().HandlePiBridgeAttachments))
 	defer server.Close()
 	post := func(raw []byte) *http.Response {
 		req, _ := http.NewRequest(http.MethodPost, server.URL+"/api/pi-bridge/attachments", bytes.NewReader(raw))
@@ -102,12 +102,12 @@ func TestPiAttachmentDispatchRetainsValidatedTarget(t *testing.T) {
 	for _, change := range []string{"unchanged", "generation", "process"} {
 		t.Run(change, func(t *testing.T) {
 			withAttachmentTestGlobals(t)
-			b := startPiBridge(testBridgeHub())
+			b := startTestBridge(t)
 			if b == nil {
 				t.Fatal("bridge did not start")
 			}
 			defer b.Stop()
-			piBridge = b
+			testBridge = b
 			const pane = "pane-attachment-target"
 			env, _, managed := b.Provision(pane, true)
 			if !managed {
@@ -172,7 +172,7 @@ func TestPiAttachmentDispatchRetainsValidatedTarget(t *testing.T) {
 			}()
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 			defer cancel()
-			result, err := body.requestPrompt(ctx, []pibridge.AttachmentRef{{
+			result, err := testAPI().requestPrompt(body, ctx, []pibridge.AttachmentRef{{
 				Basename: "att-file.bin", MIMEType: "application/octet-stream", Kind: "file", SHA256: strings.Repeat("a", 64),
 			}}, false)
 			if change == "unchanged" {

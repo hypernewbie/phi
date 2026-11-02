@@ -1,4 +1,4 @@
-package main
+package piapp
 
 import (
 	"context"
@@ -112,7 +112,7 @@ func serveCompact(t *testing.T, body string, headers map[string]string) *httptes
 		req.Header.Set(k, v)
 	}
 	rec := httptest.NewRecorder()
-	handlePiBridgeCompact(rec, req)
+	testAPI().HandlePiBridgeCompact(rec, req)
 	if rec.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("Cache-Control %q, want no-store", rec.Header().Get("Cache-Control"))
 	}
@@ -129,7 +129,7 @@ func decodeCompactBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]
 }
 
 func TestBridgeCompactTelemetryViews(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -210,7 +210,7 @@ func TestBridgeCompactTelemetryViews(t *testing.T) {
 }
 
 func TestBridgeRequestPaneCompact(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -266,14 +266,14 @@ func TestBridgeRequestPaneCompact(t *testing.T) {
 }
 
 func TestHandlePiBridgeCompactStatuses(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
 	defer b.Stop()
-	prev := piBridge
-	piBridge = b
-	t.Cleanup(func() { piBridge = prev })
+	prev := testBridge
+	testBridge = b
+	t.Cleanup(func() { testBridge = prev })
 
 	// Unknown panes are unavailable before dispatch, with the fixed
 	// rejected-before-start vocabulary and no allocated ID.
@@ -297,7 +297,7 @@ func TestHandlePiBridgeCompactStatuses(t *testing.T) {
 		rec := httptest.NewRecorder()
 		done := make(chan struct{})
 		go func() {
-			handlePiBridgeCompact(rec, req)
+			testAPI().HandlePiBridgeCompact(rec, req)
 			close(done)
 		}()
 		got := answerCompactOnce(t, stream, outcome, reason)
@@ -371,14 +371,14 @@ func TestHandlePiBridgeCompactStatuses(t *testing.T) {
 }
 
 func TestHandlePiBridgeCompactRefusalAllocatesNothing(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
 	defer b.Stop()
-	prev := piBridge
-	piBridge = b
-	t.Cleanup(func() { piBridge = prev })
+	prev := testBridge
+	testBridge = b
+	t.Cleanup(func() { testBridge = prev })
 
 	stream, cancel, _, revStr := dialCompactPane(t, b, "pane-1")
 	defer cancel()
@@ -400,7 +400,7 @@ func TestHandlePiBridgeCompactRefusalAllocatesNothing(t *testing.T) {
 	rec = httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
-		handlePiBridgeCompact(rec, req)
+		testAPI().HandlePiBridgeCompact(rec, req)
 		close(done)
 	}()
 	got := answerCompactOnce(t, stream, pibridgepb.CompactOutcome_COMPACT_OUTCOME_COMPLETED, "")
@@ -421,14 +421,14 @@ func TestHandlePiBridgeCompactRefusalAllocatesNothing(t *testing.T) {
 }
 
 func TestHandlePiBridgeCompactUnknownAfterDispatch(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
 	defer b.Stop()
-	prev := piBridge
-	piBridge = b
-	t.Cleanup(func() { piBridge = prev })
+	prev := testBridge
+	testBridge = b
+	t.Cleanup(func() { testBridge = prev })
 
 	// A caller abort after dispatch is unknown with the ID, never a
 	// silent success and never unavailable-before-start.
@@ -443,7 +443,7 @@ func TestHandlePiBridgeCompactUnknownAfterDispatch(t *testing.T) {
 	rec := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
-		handlePiBridgeCompact(rec, req)
+		testAPI().HandlePiBridgeCompact(rec, req)
 		close(done)
 	}()
 	// Wait for the dispatch to land, then abort the caller wait.
@@ -489,7 +489,7 @@ func TestHandlePiBridgeCompactUnknownAfterDispatch(t *testing.T) {
 	rec2 := httptest.NewRecorder()
 	done2 := make(chan struct{})
 	go func() {
-		handlePiBridgeCompact(rec2, req2)
+		testAPI().HandlePiBridgeCompact(rec2, req2)
 		close(done2)
 	}()
 	ch2 := make(chan res, 1)
@@ -522,18 +522,18 @@ func TestHandlePiBridgeCompactUnknownAfterDispatch(t *testing.T) {
 }
 
 func TestHandlePiBridgeCompactValidation(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
 	defer b.Stop()
-	prev := piBridge
-	piBridge = b
-	t.Cleanup(func() { piBridge = prev })
+	prev := testBridge
+	testBridge = b
+	t.Cleanup(func() { testBridge = prev })
 
 	if req := httptest.NewRequest(http.MethodGet, "/api/pi-bridge/compact", nil); true {
 		rec := httptest.NewRecorder()
-		handlePiBridgeCompact(rec, req)
+		testAPI().HandlePiBridgeCompact(rec, req)
 		if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Cache-Control") != "no-store" {
 			t.Fatalf("GET code %d, want 405 no-store", rec.Code)
 		}
@@ -577,7 +577,7 @@ func TestHandlePiBridgeCompactValidation(t *testing.T) {
 			req.Header.Set("Content-Type", ct)
 		}
 		rec := httptest.NewRecorder()
-		handlePiBridgeCompact(rec, req)
+		testAPI().HandlePiBridgeCompact(rec, req)
 		if rec.Code != http.StatusBadRequest || rec.Header().Get("Cache-Control") != "no-store" {
 			t.Fatalf("content-type %q code %d, want 400 no-store", ct, rec.Code)
 		}
@@ -610,14 +610,14 @@ func TestHandlePiBridgeCompactValidation(t *testing.T) {
 }
 
 func TestHandlePiBridgeCompactRejectsBeforeInvocation(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
 	defer b.Stop()
-	prev := piBridge
-	piBridge = b
-	t.Cleanup(func() { piBridge = prev })
+	prev := testBridge
+	testBridge = b
+	t.Cleanup(func() { testBridge = prev })
 
 	stream, cancel, _, revStr := dialCompactPane(t, b, "pane-1")
 	defer cancel()
@@ -643,7 +643,7 @@ func TestHandlePiBridgeCompactRejectsBeforeInvocation(t *testing.T) {
 	rec := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
-		handlePiBridgeCompact(rec, req)
+		testAPI().HandlePiBridgeCompact(rec, req)
 		close(done)
 	}()
 	got := answerCompactOnce(t, stream, pibridgepb.CompactOutcome_COMPACT_OUTCOME_COMPLETED, "")
@@ -658,14 +658,14 @@ func TestHandlePiBridgeCompactRejectsBeforeInvocation(t *testing.T) {
 }
 
 func TestHandlePiBridgeCompactOrigin(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
 	defer b.Stop()
-	prev := piBridge
-	piBridge = b
-	t.Cleanup(func() { piBridge = prev })
+	prev := testBridge
+	testBridge = b
+	t.Cleanup(func() { testBridge = prev })
 
 	// Unknown panes prove the origin check passed (503) or failed
 	// (403) without needing a live peer.
@@ -700,7 +700,7 @@ func TestHandlePiBridgeCompactOrigin(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", "http://example.com:8080")
 	rec := httptest.NewRecorder()
-	handlePiBridgeCompact(rec, req)
+	testAPI().HandlePiBridgeCompact(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("port host code %d, want 503", rec.Code)
 	}
@@ -712,7 +712,7 @@ func TestHandlePiBridgeCompactOrigin(t *testing.T) {
 	tlsReq.Header.Set("Origin", "https://example.com")
 	tlsReq.Header.Set("X-Forwarded-Proto", "http")
 	tlsRec := httptest.NewRecorder()
-	handlePiBridgeCompact(tlsRec, tlsReq)
+	testAPI().HandlePiBridgeCompact(tlsRec, tlsReq)
 	if tlsRec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("tls code %d, want 503", tlsRec.Code)
 	}
@@ -721,7 +721,7 @@ func TestHandlePiBridgeCompactOrigin(t *testing.T) {
 	plainReq.Header.Set("Content-Type", "application/json")
 	plainReq.Header.Set("Origin", "https://example.com")
 	plainRec := httptest.NewRecorder()
-	handlePiBridgeCompact(plainRec, plainReq)
+	testAPI().HandlePiBridgeCompact(plainRec, plainReq)
 	if plainRec.Code != http.StatusForbidden {
 		t.Fatalf("plain https-origin code %d, want 403", plainRec.Code)
 	}

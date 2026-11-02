@@ -1,4 +1,4 @@
-package main
+package piapp
 
 import (
 	"context"
@@ -123,7 +123,7 @@ func serveReload(t *testing.T, body string, headers map[string]string) *httptest
 		req.Header.Set(k, v)
 	}
 	rec := httptest.NewRecorder()
-	handlePiBridgeReload(rec, req)
+	testAPI().HandlePiBridgeReload(rec, req)
 	if rec.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("Cache-Control %q, want no-store", rec.Header().Get("Cache-Control"))
 	}
@@ -145,7 +145,7 @@ func reloadBody(pane, proc, gen, rev, run, contextRev string) string {
 }
 
 func TestBridgeReloadTelemetryViews(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -193,7 +193,7 @@ func TestBridgeReloadTelemetryViews(t *testing.T) {
 }
 
 func TestBridgeRequestPaneReload(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -258,14 +258,14 @@ func TestBridgeRequestPaneReload(t *testing.T) {
 }
 
 func TestHandlePiBridgeReloadStatuses(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
 	defer b.Stop()
-	prev := piBridge
-	piBridge = b
-	t.Cleanup(func() { piBridge = prev })
+	prev := testBridge
+	testBridge = b
+	t.Cleanup(func() { testBridge = prev })
 
 	// Unknown panes name a target that moved on: stale, with no ID.
 	rec := serveReload(t, reloadBody("unknown", "proc", "1", "1", "0", "0"), nil)
@@ -295,7 +295,7 @@ func TestHandlePiBridgeReloadStatuses(t *testing.T) {
 		rec := httptest.NewRecorder()
 		done := make(chan struct{})
 		go func() {
-			handlePiBridgeReload(rec, req)
+			testAPI().HandlePiBridgeReload(rec, req)
 			close(done)
 		}()
 		got := answerReloadOnce(t, stream, outcome, reason)
@@ -353,14 +353,14 @@ func TestHandlePiBridgeReloadStatuses(t *testing.T) {
 }
 
 func TestHandlePiBridgeReloadUnknownAfterDispatch(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
 	defer b.Stop()
-	prev := piBridge
-	piBridge = b
-	t.Cleanup(func() { piBridge = prev })
+	prev := testBridge
+	testBridge = b
+	t.Cleanup(func() { testBridge = prev })
 
 	// A caller abort after dispatch is unknown with the ID, never a
 	// silent success and never unavailable-before-start.
@@ -375,7 +375,7 @@ func TestHandlePiBridgeReloadUnknownAfterDispatch(t *testing.T) {
 	rec := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
-		handlePiBridgeReload(rec, req)
+		testAPI().HandlePiBridgeReload(rec, req)
 		close(done)
 	}()
 	// Wait for the dispatch to land, then abort the caller wait.
@@ -421,7 +421,7 @@ func TestHandlePiBridgeReloadUnknownAfterDispatch(t *testing.T) {
 	rec2 := httptest.NewRecorder()
 	done2 := make(chan struct{})
 	go func() {
-		handlePiBridgeReload(rec2, req2)
+		testAPI().HandlePiBridgeReload(rec2, req2)
 		close(done2)
 	}()
 	ch2 := make(chan res, 1)
@@ -454,18 +454,18 @@ func TestHandlePiBridgeReloadUnknownAfterDispatch(t *testing.T) {
 }
 
 func TestHandlePiBridgeReloadValidation(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
 	defer b.Stop()
-	prev := piBridge
-	piBridge = b
-	t.Cleanup(func() { piBridge = prev })
+	prev := testBridge
+	testBridge = b
+	t.Cleanup(func() { testBridge = prev })
 
 	if req := httptest.NewRequest(http.MethodGet, "/api/pi-bridge/reload", nil); true {
 		rec := httptest.NewRecorder()
-		handlePiBridgeReload(rec, req)
+		testAPI().HandlePiBridgeReload(rec, req)
 		if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Cache-Control") != "no-store" {
 			t.Fatalf("GET code %d, want 405 no-store", rec.Code)
 		}
@@ -518,7 +518,7 @@ func TestHandlePiBridgeReloadValidation(t *testing.T) {
 			req.Header.Set("Content-Type", ct)
 		}
 		rec := httptest.NewRecorder()
-		handlePiBridgeReload(rec, req)
+		testAPI().HandlePiBridgeReload(rec, req)
 		if rec.Code != http.StatusBadRequest || rec.Header().Get("Cache-Control") != "no-store" {
 			t.Fatalf("content-type %q code %d, want 400 no-store", ct, rec.Code)
 		}
@@ -552,14 +552,14 @@ func TestHandlePiBridgeReloadValidation(t *testing.T) {
 }
 
 func TestHandlePiBridgeReloadRejectsBeforeInvocation(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
 	defer b.Stop()
-	prev := piBridge
-	piBridge = b
-	t.Cleanup(func() { piBridge = prev })
+	prev := testBridge
+	testBridge = b
+	t.Cleanup(func() { testBridge = prev })
 
 	stream, cancel, proc, revStr := dialReloadPane(t, b, "pane-1")
 	defer cancel()
@@ -585,7 +585,7 @@ func TestHandlePiBridgeReloadRejectsBeforeInvocation(t *testing.T) {
 	rec := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
-		handlePiBridgeReload(rec, req)
+		testAPI().HandlePiBridgeReload(rec, req)
 		close(done)
 	}()
 	got := answerReloadOnce(t, stream, pibridgepb.ReloadDispatchOutcome_RELOAD_DISPATCH_OUTCOME_DISPATCHED, "")
@@ -600,14 +600,14 @@ func TestHandlePiBridgeReloadRejectsBeforeInvocation(t *testing.T) {
 }
 
 func TestHandlePiBridgeReloadOrigin(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
 	defer b.Stop()
-	prev := piBridge
-	piBridge = b
-	t.Cleanup(func() { piBridge = prev })
+	prev := testBridge
+	testBridge = b
+	t.Cleanup(func() { testBridge = prev })
 
 	good := reloadBody("unknown", "proc", "1", "1", "0", "0")
 	// Same-origin navigation passes; the unknown pane then refuses
@@ -639,7 +639,7 @@ func TestHandlePiBridgeReloadOrigin(t *testing.T) {
 	tlsReq.Header.Set("Content-Type", "application/json")
 	tlsReq.Header.Set("Origin", "http://example.com")
 	tlsRec := httptest.NewRecorder()
-	handlePiBridgeReload(tlsRec, tlsReq)
+	testAPI().HandlePiBridgeReload(tlsRec, tlsReq)
 	if tlsRec.Code != http.StatusForbidden {
 		t.Fatalf("tls downgrade code %d, want 403", tlsRec.Code)
 	}

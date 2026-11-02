@@ -1,4 +1,4 @@
-package main
+package piapp
 
 import (
 	"bytes"
@@ -44,7 +44,7 @@ func (b *Bridge) handleSyncboard(ctx context.Context, processID string, req *pib
 	if ctx.Err() != nil {
 		return refuse(pibridge.SyncboardReasonCancelled)
 	}
-	cfg, err := loadConfigWithError()
+	cfg, err := b.syncConfig()
 	if err != nil {
 		return refuse(pibridge.SyncboardReasonInvalidConfig)
 	}
@@ -56,7 +56,7 @@ func (b *Bridge) handleSyncboard(ctx context.Context, processID string, req *pib
 		return refuse(pibridge.SyncboardReasonInvalidConfig)
 	}
 	if cfg.SyncCoordinator == "" || syncboardIsSelfTarget(cfg.SyncCoordinator, addr) {
-		return callSyncboardInternal(ctx, req)
+		return b.callSyncboardInternal(ctx, req)
 	}
 	return callSyncboardHTTP(ctx, base, req)
 }
@@ -119,7 +119,7 @@ func (w *syncboardResponseBuffer) Write(body []byte) (int, error) {
 	return len(body), nil
 }
 
-func callSyncboardInternal(ctx context.Context, req *pibridgepb.SyncboardRequest) *pibridgepb.SyncboardResponse {
+func (b *Bridge) callSyncboardInternal(ctx context.Context, req *pibridgepb.SyncboardRequest) *pibridgepb.SyncboardResponse {
 	refuse := func(reason string) *pibridgepb.SyncboardResponse {
 		return &pibridgepb.SyncboardResponse{Outcome: pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_NOT_SENT, Reason: reason}
 	}
@@ -148,7 +148,10 @@ func callSyncboardInternal(ctx context.Context, req *pibridgepb.SyncboardRequest
 		Body:   body,
 	}).WithContext(ctx)
 	writer := &syncboardResponseBuffer{header: make(http.Header)}
-	handleSyncMessages(writer, request)
+	if b.Syncboard == nil {
+		return refuse(pibridge.SyncboardReasonUnavailable)
+	}
+	b.Syncboard.ServeHTTP(writer, request)
 	if ctx.Err() != nil {
 		return unknown(pibridge.SyncboardReasonCancelled)
 	}

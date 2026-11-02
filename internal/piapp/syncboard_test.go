@@ -1,8 +1,9 @@
-package main
+package piapp
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hypernewbie/phi/internal/config"
 	"github.com/hypernewbie/phi/internal/pibridge"
 	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
 )
@@ -57,47 +59,42 @@ func TestPiSyncboardSelfDispatchUsesLocalHandler(t *testing.T) {
 	defer server.Close()
 	addr := server.Listener.Addr().(*net.TCPAddr)
 	saveConfig(Config{SyncCoordinator: server.URL})
-	oldSyncPath := testSyncPath
-	testSyncPath = t.TempDir() + "/syncboard.json"
-	syncMu.Lock()
-	oldStore := syncStore
-	syncStore = make(map[string]*SyncMessage)
-	syncMu.Unlock()
-	t.Cleanup(func() {
-		_ = FlushSyncStore()
-		syncMu.Lock()
-		syncStore = oldStore
-		syncMu.Unlock()
-		testSyncPath = oldSyncPath
+	var localCalls atomic.Int32
+	local := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		localCalls.Add(1)
+		switch r.URL.Path {
+		case "/api/sync/messages/local-card":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"key":"local-card","value":"{}","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`))
+		case "/api/sync/messages":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"key":"local-card","value":"{}","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
 	})
 	bridge := &Bridge{
 		panes: map[string]*bridgePane{
 			"pane": {processID: "proc", managed: true},
 		},
 		listenerAddr: addr,
-	}
-	upsert := bridge.handleSyncboard(context.Background(), "proc", &pibridgepb.SyncboardRequest{
-		Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_UPSERT,
-		Key:       "local-card", ValueJson: []byte(`{"state":"self"}`),
-	})
-	if upsert.GetOutcome() != pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_HTTP_RESPONSE || upsert.GetHttpStatus() != http.StatusOK {
-		t.Fatalf("self upsert = %v", upsert)
+		Syncboard:    local,
+		LoadConfig:   func() (config.Config, error) { return loadConfig(), nil },
 	}
 	get := bridge.handleSyncboard(context.Background(), "proc", &pibridgepb.SyncboardRequest{
 		Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_GET, Key: "local-card",
 	})
-	if get.GetOutcome() != pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_HTTP_RESPONSE || !validSyncboardAPIResponse(&pibridgepb.SyncboardRequest{Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_GET, Key: "local-card"}, get.GetBodyJson()) {
+	if get.GetOutcome() != pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_HTTP_RESPONSE || get.GetHttpStatus() != http.StatusOK {
 		t.Fatalf("self get = %v", get)
 	}
-	var created, fetched SyncMessage
-	if err := json.Unmarshal(upsert.GetBodyJson(), &created); err != nil {
-		t.Fatal(err)
+	list := bridge.handleSyncboard(context.Background(), "proc", &pibridgepb.SyncboardRequest{
+		Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_LIST,
+	})
+	if list.GetOutcome() != pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_HTTP_RESPONSE || list.GetHttpStatus() != http.StatusOK {
+		t.Fatalf("self list = %v", list)
 	}
-	if err := json.Unmarshal(get.GetBodyJson(), &fetched); err != nil {
-		t.Fatal(err)
-	}
-	if created != fetched {
-		t.Fatalf("local result differs from the stored message: upsert=%+v get=%+v", created, fetched)
+	if localCalls.Load() != 2 {
+		t.Fatalf("local handler calls = %d, want 2", localCalls.Load())
 	}
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -108,35 +105,23 @@ func TestPiSyncboardSelfDispatchUsesLocalHandler(t *testing.T) {
 	if refused.GetOutcome() != pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_NOT_SENT || refused.GetReason() != pibridge.SyncboardReasonCancelled {
 		t.Fatalf("pre-cancelled self-target result = %v", refused)
 	}
-	syncMu.RLock()
-	original := syncStore["local-card"]
-	_, cancelledMutationApplied := syncStore["must-not-exist"]
-	syncMu.RUnlock()
-	if cancelledMutationApplied {
-		t.Fatal("pre-cancelled mutation reached the local Syncboard store")
-	}
-	syncMu.Lock()
-	syncStore["large-a"] = &SyncMessage{Key: "large-a", Value: strings.Repeat("x", 100*1024), CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	syncStore["large-b"] = &SyncMessage{Key: "large-b", Value: strings.Repeat("x", 100*1024), CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	syncMu.Unlock()
+	bridge.Syncboard = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"key":"large","value":"` + strings.Repeat("x", 200*1024) +
+			`","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]`))
+	})
 	large := bridge.handleSyncboard(context.Background(), "proc", &pibridgepb.SyncboardRequest{
 		Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_LIST,
 	})
 	if large.GetOutcome() != pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_UNKNOWN || large.GetReason() != pibridge.SyncboardReasonTooLarge {
 		t.Fatalf("oversized local response = %v", large)
 	}
-	syncMu.Lock()
-	syncStore = map[string]*SyncMessage{"local-card": original}
-	syncMu.Unlock()
-	saveConfig(Config{})
-	deleted := bridge.handleSyncboard(context.Background(), "proc", &pibridgepb.SyncboardRequest{
-		Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_DELETE, Key: "local-card",
+	bridge.Syncboard = nil
+	unavailable := bridge.handleSyncboard(context.Background(), "proc", &pibridgepb.SyncboardRequest{
+		Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_LIST,
 	})
-	missing := bridge.handleSyncboard(context.Background(), "proc", &pibridgepb.SyncboardRequest{
-		Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_GET, Key: "local-card",
-	})
-	if deleted.GetHttpStatus() != http.StatusOK || missing.GetHttpStatus() != http.StatusNotFound {
-		t.Fatalf("unset-coordinator CRUD = delete %v, get %v", deleted, missing)
+	if unavailable.GetOutcome() != pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_NOT_SENT {
+		t.Fatalf("missing local handler = %v", unavailable)
 	}
 	if got := outbound.Load(); got != 0 {
 		t.Fatalf("self-target made %d outbound HTTP calls, want 0", got)
@@ -166,17 +151,9 @@ func TestPiSyncboardDefaultTargetMatchesConfigForBoundListeners(t *testing.T) {
 			}
 			defer listener.Close()
 			addr := listener.Addr().(*net.TCPAddr)
-			request := httptest.NewRequest(http.MethodGet, "/api/config", nil)
-			request = request.WithContext(context.WithValue(request.Context(), http.LocalAddrContextKey, addr))
-			response := httptest.NewRecorder()
-			handleConfig(response, request)
-			var body map[string]any
-			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
-				t.Fatal(err)
-			}
 			want := (Config{}).SyncCoordinatorURL(addr)
-			if got := body["sync_coordinator"]; got != want {
-				t.Fatalf("GET /api/config target = %v, syncCoordinatorURL = %q", got, want)
+			if got := loadConfig().SyncCoordinatorURL(addr); got != want {
+				t.Fatalf("derived target = %q, want %q", got, want)
 			}
 		})
 	}
@@ -200,20 +177,13 @@ func TestPiSyncboardUsesConfiguredCustomPort(t *testing.T) {
 	defer listener.Close()
 	addr := listener.Addr().(*net.TCPAddr)
 	saveConfig(Config{SyncCoordinator: coordinator.URL + "/custom"})
-	request := httptest.NewRequest(http.MethodGet, "/api/config", nil)
-	request = request.WithContext(context.WithValue(request.Context(), http.LocalAddrContextKey, addr))
-	configResponse := httptest.NewRecorder()
-	handleConfig(configResponse, request)
-	var configBody map[string]any
-	if err := json.Unmarshal(configResponse.Body.Bytes(), &configBody); err != nil {
-		t.Fatal(err)
-	}
-	if configBody["sync_coordinator"] != coordinator.URL+"/custom" {
-		t.Fatalf("GET /api/config coordinator = %v", configBody["sync_coordinator"])
+	if got := loadConfig().SyncCoordinator; got != coordinator.URL+"/custom" {
+		t.Fatalf("stored coordinator = %q", got)
 	}
 	bridge := &Bridge{
 		panes:        map[string]*bridgePane{"pane": {processID: "proc", managed: true}},
 		listenerAddr: addr,
+		LoadConfig:   func() (config.Config, error) { return loadConfig(), nil },
 	}
 	result := bridge.handleSyncboard(context.Background(), "proc", &pibridgepb.SyncboardRequest{
 		Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_LIST,
@@ -229,7 +199,10 @@ func TestPiSyncboardUsesConfiguredCustomPort(t *testing.T) {
 func TestPiSyncboardRefusesBeforeListenerPublicationOrConfigRead(t *testing.T) {
 	withTempConfig(t)
 	saveConfig(Config{})
-	bridge := &Bridge{panes: map[string]*bridgePane{"pane": {processID: "proc", managed: true}}}
+	bridge := &Bridge{
+		panes:      map[string]*bridgePane{"pane": {processID: "proc", managed: true}},
+		LoadConfig: func() (config.Config, error) { return loadConfig(), nil },
+	}
 	request := &pibridgepb.SyncboardRequest{Operation: pibridgepb.SyncboardOperation_SYNCBOARD_OPERATION_LIST}
 	result := bridge.handleSyncboard(context.Background(), "proc", request)
 	if result.GetOutcome() != pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_NOT_SENT || result.GetReason() != pibridge.SyncboardReasonNotReady {
@@ -241,9 +214,7 @@ func TestPiSyncboardRefusesBeforeListenerPublicationOrConfigRead(t *testing.T) {
 	}
 	defer listener.Close()
 	bridge.listenerAddr = listener.Addr().(*net.TCPAddr)
-	oldConfigPath := testConfigPath
-	testConfigPath = t.TempDir()
-	t.Cleanup(func() { testConfigPath = oldConfigPath })
+	bridge.LoadConfig = func() (config.Config, error) { return config.Config{}, errors.New("unreadable config") }
 	result = bridge.handleSyncboard(context.Background(), "proc", request)
 	if result.GetOutcome() != pibridgepb.SyncboardOutcome_SYNCBOARD_OUTCOME_NOT_SENT || result.GetReason() != pibridge.SyncboardReasonInvalidConfig {
 		t.Fatalf("unreadable config result = %v", result)

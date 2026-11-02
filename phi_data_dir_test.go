@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/hypernewbie/phi/internal/attachments"
+	"github.com/hypernewbie/phi/internal/piapp"
 	"github.com/hypernewbie/phi/pkg/system"
 )
 
@@ -24,10 +25,10 @@ func TestPhiDataDirRoutesStateWithoutMovingHome(t *testing.T) {
 			t.Errorf("%s: got %q, want %q", name, got, want)
 		}
 	}
-	if err := materializeStablePiBridgeAt(func() ([]byte, error) { return []byte("bundle"), nil }, "0.1.0"); err != nil {
+	if err := piapp.MaterializeStableAt(func() ([]byte, error) { return []byte("bundle"), nil }, "0.1.0"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(data, piBridgeStableDir, piBridgeArtifactName)); err != nil {
+	if _, err := os.Stat(filepath.Join(data, "pi-bridge", "pi-phi-extension.cjs")); err != nil {
 		t.Fatalf("bridge bundle outside Phi data dir: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".phi")); !os.IsNotExist(err) {

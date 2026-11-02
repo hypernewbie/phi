@@ -1,4 +1,4 @@
-package main
+package piapp
 
 import (
 	"context"
@@ -59,7 +59,7 @@ type attachmentSendResponse struct {
 	Reason string `json:"reason"`
 }
 
-func handlePiBridgeAttachmentContext(w http.ResponseWriter, r *http.Request) {
+func (a *API) HandlePiBridgeAttachmentContext(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
@@ -76,8 +76,8 @@ func handlePiBridgeAttachmentContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result := attachmentTargetContext{}
-	if piBridge != nil {
-		processID, view, ok := piBridge.AttachmentPaneView(pane)
+	if a.bridgeOrNil() != nil {
+		processID, view, ok := a.bridgeOrNil().AttachmentPaneView(pane)
 		if ok {
 			// Older runtimes keep their existing cached-context behavior.
 			// New runtimes sample Pi live: idle extension metadata can move
@@ -85,11 +85,11 @@ func handlePiBridgeAttachmentContext(w http.ResponseWriter, r *http.Request) {
 			if view.HasPeer && attachmentContainsString(view.Caps, pibridge.CapabilityState) {
 				ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 				defer cancel()
-				if err := piBridge.server.RefreshState(ctx, processID); err != nil {
+				if err := a.bridgeOrNil().server.RefreshState(ctx, processID); err != nil {
 					attachments.WriteJSONError(w, http.StatusServiceUnavailable, "unavailable")
 					return
 				}
-				currentProcess, currentView, current := piBridge.AttachmentPaneView(pane)
+				currentProcess, currentView, current := a.bridgeOrNil().AttachmentPaneView(pane)
 				if !current || currentProcess != processID || currentView.Generation != view.Generation {
 					attachments.WriteJSONError(w, http.StatusServiceUnavailable, "unavailable")
 					return
@@ -97,7 +97,7 @@ func handlePiBridgeAttachmentContext(w http.ResponseWriter, r *http.Request) {
 				view = currentView
 			}
 			result = attachmentContextFromView(processID, view)
-			result.Available = view.HasPeer && attachmentContainsString(view.Caps, pibridge.CapabilityAttachments) && view.AttachmentReadiness != nil && attachments.Default != nil
+			result.Available = view.HasPeer && attachmentContainsString(view.Caps, pibridge.CapabilityAttachments) && view.AttachmentReadiness != nil && a.attachmentStore() != nil
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -132,30 +132,30 @@ func attachmentContextFromView(processID string, view pibridge.StateView) attach
 	return result
 }
 
-func handlePiBridgeAttachments(w http.ResponseWriter, r *http.Request) {
+func (a *API) HandlePiBridgeAttachments(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	switch r.Method {
 	case http.MethodGet:
-		handlePiBridgeAttachmentStatus(w, r)
+		a.HandlePiBridgeAttachmentStatus(w, r)
 	case http.MethodPost:
-		handlePiBridgeAttachmentSend(w, r)
+		a.HandlePiBridgeAttachmentSend(w, r)
 	default:
 		w.Header().Set("Allow", "GET, POST")
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
-func handlePiBridgeAttachmentStatus(w http.ResponseWriter, r *http.Request) {
+func (a *API) HandlePiBridgeAttachmentStatus(w http.ResponseWriter, r *http.Request) {
 	id, pane := r.URL.Query().Get("id"), r.URL.Query().Get("pane")
 	if !attachments.CanonicalUUID(id) || pane == "" || len(pane) > attachments.PaneMaxBytes {
 		attachments.WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 		return
 	}
-	if attachments.Default == nil {
+	if a.attachmentStore() == nil {
 		attachments.WriteJSONError(w, http.StatusServiceUnavailable, "storage")
 		return
 	}
-	record, err := attachments.Default.Send(id, pane)
+	record, err := a.attachmentStore().Send(id, pane)
 	if errors.Is(err, attachments.ErrNotFound) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(attachmentSendResponse{ID: id, State: "missing"})
@@ -168,7 +168,7 @@ func handlePiBridgeAttachmentStatus(w http.ResponseWriter, r *http.Request) {
 	writeAttachmentSend(w, record)
 }
 
-func handlePiBridgeAttachmentSend(w http.ResponseWriter, r *http.Request) {
+func (a *API) HandlePiBridgeAttachmentSend(w http.ResponseWriter, r *http.Request) {
 	if !attachments.SameOrigin(r) {
 		attachments.WriteJSONError(w, http.StatusForbidden, "unavailable")
 		return
@@ -184,7 +184,7 @@ func handlePiBridgeAttachmentSend(w http.ResponseWriter, r *http.Request) {
 		attachments.WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 		return
 	}
-	if attachments.Default == nil {
+	if a.attachmentStore() == nil {
 		attachments.WriteJSONError(w, http.StatusServiceUnavailable, "storage")
 		return
 	}
@@ -210,7 +210,7 @@ func handlePiBridgeAttachmentSend(w http.ResponseWriter, r *http.Request) {
 		attachments.WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 		return
 	}
-	record, created, err := attachments.Default.BeginSend(body.ID, body.Pane, fingerprint)
+	record, created, err := a.attachmentStore().BeginSend(body.ID, body.Pane, fingerprint)
 	if err != nil {
 		attachments.WriteStoreError(w, err)
 		return
@@ -220,18 +220,18 @@ func handlePiBridgeAttachmentSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	refuse := func(reason string) {
-		if updateErr := attachments.Default.UpdateSend(body.ID, false, "refused", reason); updateErr != nil {
+		if updateErr := a.attachmentStore().UpdateSend(body.ID, false, "refused", reason); updateErr != nil {
 			attachments.WriteJSONError(w, http.StatusServiceUnavailable, "storage")
 			return
 		}
-		record, _ := attachments.Default.Send(body.ID, body.Pane)
+		record, _ := a.attachmentStore().Send(body.ID, body.Pane)
 		writeAttachmentSend(w, record)
 	}
 	if _, err := attachments.LivePiPane(body.Pane); err != nil {
 		refuse("unavailable")
 		return
 	}
-	current := currentAttachmentContext(body.Pane)
+	current := a.currentAttachmentContext(body.Pane)
 	if !current.Available {
 		refuse("unavailable")
 		return
@@ -249,7 +249,7 @@ func handlePiBridgeAttachmentSend(w http.ResponseWriter, r *http.Request) {
 	imageRequired := false
 	var totalBytes int64
 	for _, id := range body.AttachmentIDs {
-		item, itemErr := attachments.Default.Item(id, body.Pane)
+		item, itemErr := a.attachmentStore().Item(id, body.Pane)
 		if itemErr != nil {
 			refuse("missing-item")
 			return
@@ -267,13 +267,13 @@ func handlePiBridgeAttachmentSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	processID := *body.Context.ProcessID
-	_, refs, err := attachments.Default.CreateHandoff(processID, body.Pane, body.AttachmentIDs)
+	_, refs, err := a.attachmentStore().CreateHandoff(processID, body.Pane, body.AttachmentIDs)
 	if err != nil {
 		attachments.WriteStoreError(w, err)
-		_ = attachments.Default.UpdateSend(body.ID, false, "refused", attachmentStoreReason(err))
+		_ = a.attachmentStore().UpdateSend(body.ID, false, "refused", attachmentStoreReason(err))
 		return
 	}
-	if err := attachments.Default.UpdateSend(body.ID, true, "unknown", "uncertain"); err != nil {
+	if err := a.attachmentStore().UpdateSend(body.ID, true, "unknown", "uncertain"); err != nil {
 		attachments.WriteJSONError(w, http.StatusServiceUnavailable, "storage")
 		return
 	}
@@ -286,19 +286,19 @@ func handlePiBridgeAttachmentSend(w http.ResponseWriter, r *http.Request) {
 			Kind: ref.Kind, SHA256: ref.SHA256,
 		})
 	}
-	outcome, err := body.requestPrompt(ctx, bridgeRefs, imageRequired)
+	outcome, err := a.requestPrompt(body, ctx, bridgeRefs, imageRequired)
 	if err != nil {
 		var refusal *pibridge.AttachmentPromptRefusal
 		var unknown *pibridge.AttachmentPromptUnknown
 		switch {
 		case errors.As(err, &refusal):
-			_ = attachments.Default.UpdateSend(body.ID, true, "refused", refusal.Reason)
+			_ = a.attachmentStore().UpdateSend(body.ID, true, "refused", refusal.Reason)
 		case errors.As(err, &unknown):
-			_ = attachments.Default.UpdateSend(body.ID, true, "unknown", "uncertain")
+			_ = a.attachmentStore().UpdateSend(body.ID, true, "unknown", "uncertain")
 		default:
-			_ = attachments.Default.UpdateSend(body.ID, true, "unknown", "uncertain")
+			_ = a.attachmentStore().UpdateSend(body.ID, true, "unknown", "uncertain")
 		}
-		record, _ := attachments.Default.Send(body.ID, body.Pane)
+		record, _ := a.attachmentStore().Send(body.ID, body.Pane)
 		writeAttachmentSend(w, record)
 		return
 	}
@@ -311,33 +311,33 @@ func handlePiBridgeAttachmentSend(w http.ResponseWriter, r *http.Request) {
 	case pibridgepb.AttachmentPromptOutcome_ATTACHMENT_PROMPT_OUTCOME_UNKNOWN:
 		state, reason = "unknown", "uncertain"
 	}
-	if err := attachments.Default.UpdateSend(body.ID, true, state, reason); err != nil {
+	if err := a.attachmentStore().UpdateSend(body.ID, true, state, reason); err != nil {
 		attachments.WriteJSONError(w, http.StatusServiceUnavailable, "storage")
 		return
 	}
-	record, _ = attachments.Default.Send(body.ID, body.Pane)
+	record, _ = a.attachmentStore().Send(body.ID, body.Pane)
 	writeAttachmentSend(w, record)
 }
 
 // requestPrompt retains the validated snapshot's identity across preparation.
 // Sampling the latest process/generation here would retarget a stale send.
-func (body attachmentSendRequest) requestPrompt(ctx context.Context, refs []pibridge.AttachmentRef, imageRequired bool) (pibridge.AttachmentPromptResult, error) {
+func (a *API) requestPrompt(body attachmentSendRequest, ctx context.Context, refs []pibridge.AttachmentRef, imageRequired bool) (pibridge.AttachmentPromptResult, error) {
 	generation, _ := parsePositiveStamp(*body.Context.Generation)
 	var model *pibridgepb.ModelSnapshot
 	if body.Context.Model != nil {
 		model = &pibridgepb.ModelSnapshot{Provider: body.Context.Model.Provider, Model: body.Context.Model.ID}
 	}
-	return piBridge.RequestPaneAttachmentPrompt(ctx, body.Pane, *body.Context.ProcessID, generation, body.Context.SessionIDValue(), body.Context.LeafIDValue(), model, body.Text, refs, imageRequired)
+	return a.bridgeOrNil().RequestPaneAttachmentPrompt(ctx, body.Pane, *body.Context.ProcessID, generation, body.Context.SessionIDValue(), body.Context.LeafIDValue(), model, body.Text, refs, imageRequired)
 }
 
-func currentAttachmentContext(pane string) attachmentTargetContext {
-	if ptyManager == nil || piBridge == nil || attachments.Default == nil {
+func (a *API) currentAttachmentContext(pane string) attachmentTargetContext {
+	if a.paneManager() == nil || a.bridgeOrNil() == nil || a.attachmentStore() == nil {
 		return attachmentTargetContext{}
 	}
 	if _, err := attachments.LivePiPane(pane); err != nil {
 		return attachmentTargetContext{}
 	}
-	processID, view, ok := piBridge.AttachmentPaneView(pane)
+	processID, view, ok := a.bridgeOrNil().AttachmentPaneView(pane)
 	if !ok {
 		return attachmentTargetContext{}
 	}

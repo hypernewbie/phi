@@ -1,10 +1,12 @@
-package main
+package piapp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/hypernewbie/phi/internal/attachments"
+	"github.com/hypernewbie/phi/internal/config"
 	"github.com/hypernewbie/phi/internal/pibridge"
 	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
 	"github.com/hypernewbie/phi/pkg/pty"
@@ -53,6 +56,45 @@ const (
 // provisions per-pane leases before spawn, injects credentials and the
 // materialized runtime path, revokes on every exit path, and publishes
 // nonsecret bridge state plus settlement notifications to browsers.
+var errNoRuntime = errors.New("pi-phi: extension runtime unavailable")
+
+// API serves the Pi bridge endpoints. It owns the optional bridge plus the
+// attachment store and pane registry those routes need, so a nil bridge
+// degrades to a clear unavailable answer instead of a dead handler.
+type API struct {
+	bridge      func() *Bridge
+	attachments func() *attachments.AttachmentStore
+	pty         func() *pty.Manager
+}
+
+// NewAPI returns the Pi endpoint owner. Each provider may return nil; the
+// handlers then answer unavailable without touching process state.
+func NewAPI(bridge func() *Bridge, attachmentStore func() *attachments.AttachmentStore, panes func() *pty.Manager) *API {
+	return &API{bridge: bridge, attachments: attachmentStore, pty: panes}
+}
+
+func (a *API) bridgeOrNil() *Bridge {
+	if a == nil || a.bridge == nil {
+		return nil
+	}
+	return a.bridge()
+}
+
+func (a *API) attachmentStore() *attachments.AttachmentStore {
+	if a == nil || a.attachments == nil {
+		return nil
+	}
+	return a.attachments()
+}
+
+func (a *API) paneManager() *pty.Manager {
+	if a == nil || a.pty == nil {
+		return nil
+	}
+	return a.pty()
+}
+
+
 type Bridge struct {
 	server       *pibridge.Server
 	endpoint     *pibridge.Endpoint
@@ -61,6 +103,12 @@ type Bridge struct {
 	hub          *ws.Hub
 	artifact     string
 	reason       string
+	runtime      func() ([]byte, error)
+	version      string
+	// Syncboard handles local sync writes; nil keeps remote-only behavior.
+	Syncboard http.Handler
+	// LoadConfig reads the live config for sync routing; nil refuses sync.
+	LoadConfig func() (config.Config, error)
 
 	mu     sync.Mutex
 	panes  map[string]*bridgePane
@@ -101,7 +149,11 @@ type bridgePane struct {
 // serves the bridge. A listener failure returns nil so Pi startup
 // proceeds without integration. A runtime failure keeps the server but
 // marks every provisioning unavailable.
-func startPiBridge(hub *ws.Hub) *Bridge {
+// StartBridge serves the local IPC endpoint and returns the bridge owner. A
+// nil result means integration is disabled; launches then run unmanaged.
+// runtime returns the bundled extension bytes and version stamps the stable
+// copy written for manual installs.
+func StartBridge(hub *ws.Hub, runtime func() ([]byte, error), version string) *Bridge {
 	endpoint, err := pibridge.NewEndpoint()
 	if err != nil {
 		log.Printf("[pi-bridge] endpoint unavailable, integration disabled: %v", err)
@@ -114,6 +166,8 @@ func startPiBridge(hub *ws.Hub) *Bridge {
 		return nil
 	}
 	b := &Bridge{
+		runtime:  runtime,
+		version:  version,
 		server:   pibridge.NewServer(),
 		endpoint: endpoint,
 		listener: listener,
@@ -126,7 +180,7 @@ func startPiBridge(hub *ws.Hub) *Bridge {
 	}
 	// The stable copy serves manual installs; its failure never
 	// affects injection, so it only logs.
-	if err := materializeStablePiBridge(); err != nil {
+	if err := b.materializeStable(); err != nil {
 		log.Printf("[pi-bridge] stable copy unavailable: %v", err)
 	}
 	b.server.SetOnSettled(b.onSettled)
@@ -146,7 +200,10 @@ func startPiBridge(hub *ws.Hub) *Bridge {
 // directory for Pi --extension loading. The file inherits the
 // directory's private ownership; content is public bundle code.
 func (b *Bridge) materialize() error {
-	data, err := piPhiRuntime()
+	if b.runtime == nil {
+		return errNoRuntime
+	}
+	data, err := b.runtime()
 	if err != nil {
 		return err
 	}
@@ -204,17 +261,18 @@ func stampVersion(stamp string) ([3]int, bool) {
 // than the installed one, or when the stamps differ at the same
 // version (new content, same version number). An up-to-date copy
 // costs one small file read per phi start.
-func materializeStablePiBridge() error {
+func (b *Bridge) materializeStable() error {
 	if testing.Testing() {
-		// Tests cover this through materializeStablePiBridgeAt with
-		// a temp home. The real home must stay untouched: the repo
-		// isolates tests from ~/.phi the same way (see config.go).
+		// Tests cover this through MaterializeStableAt with a temp home.
+		// The real home must stay untouched under `go test`.
 		return nil
 	}
-	return materializeStablePiBridgeAt(piPhiRuntime, strings.TrimSpace(piPhiVersionAsset))
+	return MaterializeStableAt(b.runtime, b.version)
 }
 
-func materializeStablePiBridgeAt(runtime func() ([]byte, error), version string) error {
+// MaterializeStableAt writes the stable bundle copy when the given stamp is
+// newer than the installed one.
+func MaterializeStableAt(runtime func() ([]byte, error), version string) error {
 	if _, ok := stampVersion(version); !ok {
 		return fmt.Errorf("pi-phi: bundled version %q unparsable", version)
 	}
@@ -1124,7 +1182,7 @@ func outcomeName(outcome pibridgepb.RunOutcome) string {
 // bridge record. Other panes get no frame. The retained last run lets
 // a reconnecting browser catch up on a settlement it never saw.
 func (b *Bridge) encodeAttach(snapshot pty.PTYInstanceSnapshot) *wspb.TerminalBridgeState {
-	if b == nil || !piBridgeForCoder(snapshot.Coder) {
+	if b == nil || !ForCoder(snapshot.Coder) {
 		return nil
 	}
 	b.mu.Lock()
@@ -1156,9 +1214,17 @@ func (b *Bridge) encodeAttach(snapshot pty.PTYInstanceSnapshot) *wspb.TerminalBr
 	return encodeBridgeState(snapshot.ID, view)
 }
 
-// piBridgeForCoder reports whether a coder ID gets bridge provisioning.
-// Only interactive Pi PTY tabs are managed; shells and other backends
-// never receive credentials or extension args.
-func piBridgeForCoder(coderID string) bool {
+// syncConfig reads the live config for sync routing.
+func (b *Bridge) syncConfig() (config.Config, error) {
+	if b == nil || b.LoadConfig == nil {
+		return config.Config{}, errors.New("pi-phi: config store unavailable")
+	}
+	return b.LoadConfig()
+}
+
+// ForCoder reports whether a coder ID gets bridge provisioning. Only
+// interactive Pi PTY tabs are managed; shells and other backends never
+// receive credentials or extension args.
+func ForCoder(coderID string) bool {
 	return coderID == "pi"
 }

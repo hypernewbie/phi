@@ -1,4 +1,4 @@
-package main
+package piapp
 
 import (
 	"context"
@@ -31,7 +31,7 @@ func testBridgeHub() *ws.Hub {
 }
 
 func TestBridgeStartStopCleansOwnedPaths(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -55,7 +55,7 @@ func TestBridgeStartStopCleansOwnedPaths(t *testing.T) {
 }
 
 func TestBridgeProvisionCompleteRevoke(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -107,7 +107,7 @@ func TestBridgeProvisionCompleteRevoke(t *testing.T) {
 // runtime failed to materialize (corrupt embed, unwritable dir): every
 // pane launches unmanaged with a safe reason, never with extension args.
 func TestBridgeMissingArtifactProvisionsUnavailable(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -170,7 +170,7 @@ func dialBridge(t *testing.T, b *Bridge, pane, process, token string) (pibridgep
 
 func TestBridgeSettlementNotifiesHub(t *testing.T) {
 	hub := testBridgeHub()
-	b := startPiBridge(hub)
+	b := startTestBridgeWith(t, hub)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -257,7 +257,7 @@ func TestBridgeSettlementNotifiesHub(t *testing.T) {
 
 func TestBridgeConnectedTracksStream(t *testing.T) {
 	hub := testBridgeHub()
-	b := startPiBridge(hub)
+	b := startTestBridgeWith(t, hub)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -332,7 +332,7 @@ func TestBridgeConnectedTracksStream(t *testing.T) {
 
 func TestBridgeStaleSettlementDropped(t *testing.T) {
 	hub := testBridgeHub()
-	b := startPiBridge(hub)
+	b := startTestBridgeWith(t, hub)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -354,7 +354,7 @@ func TestBridgeStaleSettlementDropped(t *testing.T) {
 
 func TestBridgeAttachEncoding(t *testing.T) {
 	hub := testBridgeHub()
-	b := startPiBridge(hub)
+	b := startTestBridgeWith(t, hub)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -380,7 +380,7 @@ func TestBridgeAttachEncoding(t *testing.T) {
 
 func TestBridgeSnapshotCopiesRunningFlag(t *testing.T) {
 	hub := testBridgeHub()
-	b := startPiBridge(hub)
+	b := startTestBridgeWith(t, hub)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -401,7 +401,7 @@ func TestBridgeSnapshotCopiesRunningFlag(t *testing.T) {
 }
 
 func TestBridgeProvisionNoInject(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -459,7 +459,7 @@ func TestMaterializeStablePiBridge(t *testing.T) {
 	}
 
 	// Fresh install writes bundle and version.
-	if err := materializeStablePiBridgeAt(stub, "0.1.0"); err != nil {
+	if err := MaterializeStableAt(stub, "0.1.0"); err != nil {
 		t.Fatalf("fresh install: %v", err)
 	}
 	if raw, _ := os.ReadFile(stableFile()); string(raw) != "bundle-bytes" {
@@ -471,7 +471,7 @@ func TestMaterializeStablePiBridge(t *testing.T) {
 
 	// Older installed version is replaced.
 	newer := func() ([]byte, error) { return []byte("bundle-v2"), nil }
-	if err := materializeStablePiBridgeAt(newer, "0.2.0"); err != nil {
+	if err := MaterializeStableAt(newer, "0.2.0"); err != nil {
 		t.Fatalf("upgrade: %v", err)
 	}
 	if raw, _ := os.ReadFile(stableFile()); string(raw) != "bundle-v2" {
@@ -483,7 +483,7 @@ func TestMaterializeStablePiBridge(t *testing.T) {
 
 	// Newer installed version is left alone, byte for byte.
 	before, _ := os.ReadFile(stableFile())
-	if err := materializeStablePiBridgeAt(stub, "0.1.0"); err != nil {
+	if err := MaterializeStableAt(stub, "0.1.0"); err != nil {
 		t.Fatalf("downgrade guard: %v", err)
 	}
 	after, _ := os.ReadFile(stableFile())
@@ -495,7 +495,7 @@ func TestMaterializeStablePiBridge(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".phi", piBridgeStableDir, "VERSION"), []byte("garbage"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := materializeStablePiBridgeAt(newer, "0.2.0"); err != nil {
+	if err := MaterializeStableAt(newer, "0.2.0"); err != nil {
 		t.Fatalf("corrupt recovery: %v", err)
 	}
 	if stableVersion() != "0.2.0" {
@@ -503,7 +503,7 @@ func TestMaterializeStablePiBridge(t *testing.T) {
 	}
 
 	// Unparsable bundled version fails loud without touching the install.
-	if err := materializeStablePiBridgeAt(stub, "garbage"); err == nil {
+	if err := MaterializeStableAt(stub, "garbage"); err == nil {
 		t.Fatal("unparsable bundled version accepted")
 	}
 	if stableVersion() != "0.2.0" {
@@ -513,7 +513,7 @@ func TestMaterializeStablePiBridge(t *testing.T) {
 	// Same version, new content: the stamp decides, not the version
 	// number. A rebuilt bundle must not sit stale behind an equal
 	// version.
-	if err := materializeStablePiBridgeAt(stub, "0.2.0 hash-b"); err != nil {
+	if err := MaterializeStableAt(stub, "0.2.0 hash-b"); err != nil {
 		t.Fatalf("same-version refresh: %v", err)
 	}
 	if raw, _ := os.ReadFile(stableFile()); string(raw) != "bundle-bytes" {
@@ -524,7 +524,7 @@ func TestMaterializeStablePiBridge(t *testing.T) {
 	}
 
 	// Identical stamp: nothing is written again.
-	if err := materializeStablePiBridgeAt(newer, "0.2.0 hash-b"); err != nil {
+	if err := MaterializeStableAt(newer, "0.2.0 hash-b"); err != nil {
 		t.Fatalf("identical stamp: %v", err)
 	}
 	if raw, _ := os.ReadFile(stableFile()); string(raw) != "bundle-bytes" {
@@ -536,7 +536,7 @@ func TestMaterializeStablePiBridge(t *testing.T) {
 
 	// A newer installed version still wins over an older bundled one,
 	// even when the stamps differ.
-	if err := materializeStablePiBridgeAt(stub, "0.1.0 hash-c"); err != nil {
+	if err := MaterializeStableAt(stub, "0.1.0 hash-c"); err != nil {
 		t.Fatalf("newer install guard: %v", err)
 	}
 	if raw, _ := os.ReadFile(stableFile()); string(raw) != "bundle-bytes" {
@@ -550,7 +550,7 @@ func TestMaterializeStablePiBridge(t *testing.T) {
 // Settlements are scoped to their runtime generation: a newer generation
 // clears the obsolete retained run, and delayed old callbacks are dropped.
 func TestBridgeGenerationScopesSettlements(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -588,7 +588,7 @@ func TestBridgeGenerationScopesSettlements(t *testing.T) {
 
 // PaneSnapshot must not race with settlement updates.
 func TestBridgePaneSnapshotConcurrent(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -612,7 +612,7 @@ func TestBridgePaneSnapshotConcurrent(t *testing.T) {
 // A delayed old PTY exit after a restore retry reuses the pane ID must not
 // revoke the replacement lease.
 func TestBridgeDelayedExitPreservesReplacement(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -791,7 +791,7 @@ func answerSetModelOnce(t *testing.T, stream pibridgepb.Integration_ConnectClien
 }
 
 func TestBridgeThinkingLevelRetainedInBaselinesAndClearedOnNewGeneration(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -851,7 +851,7 @@ func TestBridgeThinkingLevelRetainedInBaselinesAndClearedOnNewGeneration(t *test
 }
 
 func TestBridgeRequestPaneHistory(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -909,20 +909,20 @@ func TestBridgeRequestPaneHistory(t *testing.T) {
 }
 
 func TestHandlePiBridgeHistory(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
 	defer b.Stop()
-	prev := piBridge
-	piBridge = b
-	t.Cleanup(func() { piBridge = prev })
+	prev := testBridge
+	testBridge = b
+	t.Cleanup(func() { testBridge = prev })
 
 	serve := func(method, target string) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequest(method, target, nil)
 		rec := httptest.NewRecorder()
-		handlePiBridgeHistory(rec, req)
+		testAPI().HandlePiBridgeHistory(rec, req)
 		return rec
 	}
 
@@ -964,7 +964,7 @@ func TestHandlePiBridgeHistory(t *testing.T) {
 	timedOut := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		r := httptest.NewRecorder()
-		handlePiBridgeHistory(r, httptest.NewRequest(http.MethodGet, "/api/pi-history?pane=pane-http", nil))
+		testAPI().HandlePiBridgeHistory(r, httptest.NewRequest(http.MethodGet, "/api/pi-history?pane=pane-http", nil))
 		timedOut <- r
 	}()
 	if _, err := stream.Recv(); err != nil {
@@ -988,7 +988,7 @@ func TestHandlePiBridgeHistory(t *testing.T) {
 }
 
 func TestBridgeRequestPaneModels(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -1045,7 +1045,7 @@ func TestBridgeRequestPaneModels(t *testing.T) {
 }
 
 func TestBridgeRequestPaneSetModel(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -1089,14 +1089,14 @@ func TestBridgeRequestPaneSetModel(t *testing.T) {
 }
 
 func TestHandlePiBridgeThinkingListRejectsReusedPane(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
 	defer b.Stop()
-	prev := piBridge
-	piBridge = b
-	t.Cleanup(func() { piBridge = prev })
+	prev := testBridge
+	testBridge = b
+	t.Cleanup(func() { testBridge = prev })
 
 	stream, cancel := dialBridgePane(t, b, "pane-reused-list", "pi.lifecycle.v1", "pi.thinking.v1")
 	defer cancel()
@@ -1104,7 +1104,7 @@ func TestHandlePiBridgeThinkingListRejectsReusedPane(t *testing.T) {
 	go func() {
 		req := httptest.NewRequest(http.MethodGet, "/api/pi-bridge/thinking-levels?pane=pane-reused-list", nil)
 		rec := httptest.NewRecorder()
-		handlePiBridgeThinkingLevels(rec, req)
+		testAPI().HandlePiBridgeThinkingLevels(rec, req)
 		result <- rec
 	}()
 	msg, err := stream.Recv()
@@ -1137,23 +1137,23 @@ func TestHandlePiBridgeThinkingListRejectsReusedPane(t *testing.T) {
 }
 
 func TestHandlePiBridgeThinkingEndpoints(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
 	defer b.Stop()
-	prev := piBridge
-	piBridge = b
-	t.Cleanup(func() { piBridge = prev })
+	prev := testBridge
+	testBridge = b
+	t.Cleanup(func() { testBridge = prev })
 
 	serve := func(method, path, body string) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
 		rec := httptest.NewRecorder()
 		if strings.HasPrefix(path, "/api/pi-bridge/thinking-levels") {
-			handlePiBridgeThinkingLevels(rec, req)
+			testAPI().HandlePiBridgeThinkingLevels(rec, req)
 		} else {
-			handlePiBridgeSetThinking(rec, req)
+			testAPI().HandlePiBridgeSetThinking(rec, req)
 		}
 		return rec
 	}
@@ -1235,20 +1235,20 @@ func TestHandlePiBridgeThinkingEndpoints(t *testing.T) {
 }
 
 func TestHandlePiBridgeModels(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
 	defer b.Stop()
-	prev := piBridge
-	piBridge = b
-	t.Cleanup(func() { piBridge = prev })
+	prev := testBridge
+	testBridge = b
+	t.Cleanup(func() { testBridge = prev })
 
 	serve := func(method, target string) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequest(method, target, nil)
 		rec := httptest.NewRecorder()
-		handlePiBridgeModels(rec, req)
+		testAPI().HandlePiBridgeModels(rec, req)
 		return rec
 	}
 
@@ -1297,7 +1297,7 @@ func TestHandlePiBridgeModels(t *testing.T) {
 		r := httptest.NewRecorder()
 		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 		defer cancel()
-		handlePiBridgeModels(r, httptest.NewRequest(http.MethodGet, "/api/pi-bridge/models?pane=pane-http", nil).WithContext(ctx))
+		testAPI().HandlePiBridgeModels(r, httptest.NewRequest(http.MethodGet, "/api/pi-bridge/models?pane=pane-http", nil).WithContext(ctx))
 		timedOut <- r
 	}()
 	if _, err := stream.Recv(); err != nil {
@@ -1321,14 +1321,14 @@ func TestHandlePiBridgeModels(t *testing.T) {
 }
 
 func TestHandlePiBridgeSetModel(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
 	defer b.Stop()
-	prev := piBridge
-	piBridge = b
-	t.Cleanup(func() { piBridge = prev })
+	prev := testBridge
+	testBridge = b
+	t.Cleanup(func() { testBridge = prev })
 
 	serve := func(method, body string) *httptest.ResponseRecorder {
 		t.Helper()
@@ -1340,7 +1340,7 @@ func TestHandlePiBridgeSetModel(t *testing.T) {
 		}
 		req := httptest.NewRequest(method, "/api/pi-bridge/model", reader)
 		rec := httptest.NewRecorder()
-		handlePiBridgeSetModel(rec, req)
+		testAPI().HandlePiBridgeSetModel(rec, req)
 		return rec
 	}
 
@@ -1438,7 +1438,7 @@ func drainBridgeFrames(t *testing.T, client *ws.Client, want int) []*wspb.Termin
 // for the accepted publication, none for the rest.
 func TestBridgeOnStateFencesPublicationOrder(t *testing.T) {
 	hub := testBridgeHub()
-	b := startPiBridge(hub)
+	b := startTestBridgeWith(t, hub)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -1470,7 +1470,7 @@ func TestBridgeOnStateFencesPublicationOrder(t *testing.T) {
 // HTTP snapshots and attach frames carry one coherent
 // (revision, model) pair from the same retained view.
 func TestBridgeSnapshotAndAttachShareOneRevision(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -1501,7 +1501,7 @@ func TestBridgeSnapshotAndAttachShareOneRevision(t *testing.T) {
 // publication of the prior record; delayed callbacks from the dead
 // lease can never apply.
 func TestBridgeReusedPaneStartsAboveOldPublications(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -1541,7 +1541,7 @@ func TestBridgeReusedPaneStartsAboveOldPublications(t *testing.T) {
 // model/usage unknown; a new generation also clears the stale
 // model/usage of the old process instead of inheriting it.
 func TestBridgeStatelessHelloKeepsModelUnknown(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -1574,7 +1574,7 @@ func TestBridgeStatelessHelloKeepsModelUnknown(t *testing.T) {
 // Publication floors are per pane: a stale callback for one pane
 // never disturbs another.
 func TestBridgePublicationFloorsArePerPane(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
@@ -1675,20 +1675,20 @@ func answerInvokeSkillOnce(t *testing.T, stream pibridgepb.Integration_ConnectCl
 }
 
 func TestHandlePiBridgeSkills(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
 	defer b.Stop()
-	prev := piBridge
-	piBridge = b
-	t.Cleanup(func() { piBridge = prev })
+	prev := testBridge
+	testBridge = b
+	t.Cleanup(func() { testBridge = prev })
 
 	serve := func(method, target string) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequest(method, target, nil)
 		rec := httptest.NewRecorder()
-		handlePiBridgeSkills(rec, req)
+		testAPI().HandlePiBridgeSkills(rec, req)
 		return rec
 	}
 
@@ -1740,7 +1740,7 @@ func TestHandlePiBridgeSkills(t *testing.T) {
 	timedOut := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		r := httptest.NewRecorder()
-		handlePiBridgeSkills(r, httptest.NewRequest(http.MethodGet, "/api/pi-bridge/skills?pane=pane-http", nil))
+		testAPI().HandlePiBridgeSkills(r, httptest.NewRequest(http.MethodGet, "/api/pi-bridge/skills?pane=pane-http", nil))
 		timedOut <- r
 	}()
 	if _, err := stream.Recv(); err != nil {
@@ -1764,20 +1764,20 @@ func TestHandlePiBridgeSkills(t *testing.T) {
 }
 
 func TestHandlePiBridgeInvokeSkill(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
 	defer b.Stop()
-	prev := piBridge
-	piBridge = b
-	t.Cleanup(func() { piBridge = prev })
+	prev := testBridge
+	testBridge = b
+	t.Cleanup(func() { testBridge = prev })
 
 	serve := func(method, body string) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequest(method, "/api/pi-bridge/skill", strings.NewReader(body))
 		rec := httptest.NewRecorder()
-		handlePiBridgeInvokeSkill(rec, req)
+		testAPI().HandlePiBridgeInvokeSkill(rec, req)
 		return rec
 	}
 

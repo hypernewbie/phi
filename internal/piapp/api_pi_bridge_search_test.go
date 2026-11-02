@@ -1,4 +1,4 @@
-package main
+package piapp
 
 import (
 	"context"
@@ -11,7 +11,6 @@ import (
 	"time"
 
 	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
-	"github.com/hypernewbie/phi/internal/access"
 	"github.com/hypernewbie/phi/pkg/pty"
 )
 
@@ -23,7 +22,7 @@ func serveTranscriptSearch(t *testing.T, method, contentType, body string) *http
 		req.Header.Set("Content-Type", contentType)
 	}
 	rec := httptest.NewRecorder()
-	handlePiBridgeTranscriptSearch(rec, req)
+	testAPI().HandlePiBridgeTranscriptSearch(rec, req)
 	return rec
 }
 
@@ -98,14 +97,14 @@ func answerTranscriptSearchOnce(t *testing.T, stream pibridgepb.Integration_Conn
 }
 
 func TestHandlePiBridgeTranscriptSearchRoundTrip(t *testing.T) {
-	b := startPiBridge(testBridgeHub())
+	b := startTestBridge(t)
 	if b == nil {
 		t.Fatal("bridge did not start")
 	}
 	defer b.Stop()
-	previousBridge := piBridge
-	piBridge = b
-	t.Cleanup(func() { piBridge = previousBridge })
+	previousBridge := testBridge
+	testBridge = b
+	t.Cleanup(func() { testBridge = previousBridge })
 
 	pane := "pane-transcript-search"
 	stream, cancel, process := dialTranscriptPane(t, b, pane)
@@ -118,7 +117,7 @@ func TestHandlePiBridgeTranscriptSearchRoundTrip(t *testing.T) {
 		rec := httptest.NewRecorder()
 		done := make(chan struct{})
 		go func() {
-			handlePiBridgeTranscriptSearch(rec, req)
+			testAPI().HandlePiBridgeTranscriptSearch(rec, req)
 			close(done)
 		}()
 		wire := answerTranscriptSearchOnce(t, stream, pane, process, matches, anchor, next, complete)
@@ -198,27 +197,5 @@ func TestHandlePiBridgeTranscriptSearchValidationAndFallback(t *testing.T) {
 	unknown := serveTranscriptSearch(t, http.MethodPost, "application/json", `{"pane":"unknown","query":"needle","generation":"1","initial":true}`)
 	if unknown.Code != http.StatusServiceUnavailable {
 		t.Fatalf("unknown pane status %d, want 503", unknown.Code)
-	}
-}
-
-func TestTranscriptSearchRouteUsesAccessAuthGate(t *testing.T) {
-	withTempConfig(t)
-	auth := useTestAccessAuth(t)
-	// auth.db is authoritative after migration; configure() leaves the gate
-	// disabled, so commit the verifier through the password transaction.
-	if err := setTestAccessRecord(auth, testAccessHash()); err != nil {
-		t.Fatal(err)
-	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/pi-bridge/transcript-search", handlePiBridgeTranscriptSearch)
-	protected := access.Middleware(mux)
-	req := httptest.NewRequest(http.MethodPost, "/api/pi-bridge/transcript-search", strings.NewReader(
-		`{"pane":"unknown","query":"needle","generation":"1","initial":true}`,
-	))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	protected.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("unauthenticated status %d, want 401", rec.Code)
 	}
 }

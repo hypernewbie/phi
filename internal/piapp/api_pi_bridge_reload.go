@@ -1,4 +1,4 @@
-package main
+package piapp
 
 import (
 	"context"
@@ -36,7 +36,7 @@ const piBridgeReloadMaxBody = 4096
 // dispatch), and unknown (504, dispatched but unresolved).
 // Malformed, forbidden, and wrong-method requests are 400, 403, and
 // 405. Nothing here is cached.
-func handlePiBridgeReload(w http.ResponseWriter, r *http.Request) {
+func (a *API) HandlePiBridgeReload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -104,7 +104,7 @@ func handlePiBridgeReload(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), piBridgeReloadTimeout)
 	defer cancel()
-	res, err := piBridge.RequestPaneReload(ctx, body.Pane, body.ProcessID, generation, pubRev, runID, contextRev)
+	res, err := a.bridgeOrNil().RequestPaneReload(ctx, body.Pane, body.ProcessID, generation, pubRev, runID, contextRev)
 	writeReloadResult(w, res, err)
 }
 
