@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hypernewbie/phi/internal/attachments"
 	"github.com/hypernewbie/phi/internal/pibridge"
 	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
 	"github.com/hypernewbie/phi/pkg/pty"
@@ -21,10 +22,10 @@ func TestPiAttachmentStatusSurvivesPaneClosure(t *testing.T) {
 	withAttachmentTestGlobals(t)
 	id := uuid.NewString()
 	hash := strings.Repeat("a", 64)
-	if _, _, err := attachmentStore.BeginSend(id, "closed-pane", hash); err != nil {
+	if _, _, err := attachments.Default.BeginSend(id, "closed-pane", hash); err != nil {
 		t.Fatal(err)
 	}
-	if err := attachmentStore.UpdateSend(id, true, "unknown", "uncertain"); err != nil {
+	if err := attachments.Default.UpdateSend(id, true, "unknown", "uncertain"); err != nil {
 		t.Fatal(err)
 	}
 	request := httptest.NewRequest(http.MethodGet, "/api/pi-bridge/attachments?id="+id+"&pane=closed-pane", nil)
@@ -223,7 +224,7 @@ func TestValidateAttachmentSendRequestBoundsItems(t *testing.T) {
 			if tc.valid && err != nil {
 				t.Fatalf("error = %v, want valid", err)
 			}
-			if !tc.valid && !errors.Is(err, errAttachmentInvalid) {
+			if !tc.valid && !errors.Is(err, attachments.ErrInvalid) {
 				t.Fatalf("error = %v, want invalid", err)
 			}
 		})

@@ -1,4 +1,4 @@
-package main
+package attachments
 
 import (
 	"crypto/rand"
@@ -16,9 +16,9 @@ import (
 	"github.com/hypernewbie/phi/pkg/system"
 )
 
-// attachmentDir is the on-disk destination for dropped files and clipboard
-// images. Resolved through a helper so tests can isolate Phi-owned files.
-func attachmentDir() string {
+// ClipboardDir is the on-disk destination for dropped files and clipboard
+// images. Exported so the data-directory routing test can assert it.
+func ClipboardDir() string {
 	return filepath.Join(system.PhiDataDir(), "clipboard")
 }
 
@@ -115,7 +115,7 @@ func attachmentSweep(dir string) {
 //   - 400 missing file, disallowed MIME, or multipart parse failure
 //   - 413 body exceeded attachmentMaxBytes
 //   - 500 filesystem failure
-func handleAttachments(w http.ResponseWriter, r *http.Request) {
+func HandleClipboard(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -148,7 +148,7 @@ func handleAttachments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dir := attachmentDir()
+	dir := ClipboardDir()
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		http.Error(w, "Failed to create clipboard dir: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -190,3 +190,7 @@ func handleAttachments(w http.ResponseWriter, r *http.Request) {
 		"mimeType":  mimeType,
 	})
 }
+
+// attachmentListMaxEntries caps a single attachment source listing. The
+// filesystem API uses the same bound for its own listings.
+const attachmentListMaxEntries = 1000

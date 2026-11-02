@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/hypernewbie/phi/internal/attachments"
 	pibridge "github.com/hypernewbie/phi/internal/pibridge"
 	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
 )
@@ -66,12 +67,12 @@ func handlePiBridgeAttachmentContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pane := r.URL.Query().Get("pane")
-	if pane == "" || len(pane) > attachmentPaneMaxBytes {
-		writeAttachmentJSONError(w, http.StatusBadRequest, "invalid-item")
+	if pane == "" || len(pane) > attachments.PaneMaxBytes {
+		attachments.WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 		return
 	}
-	if _, err := requireLivePiPane(pane); err != nil {
-		writeAttachmentJSONError(w, http.StatusNotFound, "unavailable")
+	if _, err := attachments.LivePiPane(pane); err != nil {
+		attachments.WriteJSONError(w, http.StatusNotFound, "unavailable")
 		return
 	}
 	result := attachmentTargetContext{}
@@ -85,18 +86,18 @@ func handlePiBridgeAttachmentContext(w http.ResponseWriter, r *http.Request) {
 				ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 				defer cancel()
 				if err := piBridge.server.RefreshState(ctx, processID); err != nil {
-					writeAttachmentJSONError(w, http.StatusServiceUnavailable, "unavailable")
+					attachments.WriteJSONError(w, http.StatusServiceUnavailable, "unavailable")
 					return
 				}
 				currentProcess, currentView, current := piBridge.AttachmentPaneView(pane)
 				if !current || currentProcess != processID || currentView.Generation != view.Generation {
-					writeAttachmentJSONError(w, http.StatusServiceUnavailable, "unavailable")
+					attachments.WriteJSONError(w, http.StatusServiceUnavailable, "unavailable")
 					return
 				}
 				view = currentView
 			}
 			result = attachmentContextFromView(processID, view)
-			result.Available = view.HasPeer && attachmentContainsString(view.Caps, pibridge.CapabilityAttachments) && view.AttachmentReadiness != nil && attachmentStore != nil
+			result.Available = view.HasPeer && attachmentContainsString(view.Caps, pibridge.CapabilityAttachments) && view.AttachmentReadiness != nil && attachments.Default != nil
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -146,45 +147,45 @@ func handlePiBridgeAttachments(w http.ResponseWriter, r *http.Request) {
 
 func handlePiBridgeAttachmentStatus(w http.ResponseWriter, r *http.Request) {
 	id, pane := r.URL.Query().Get("id"), r.URL.Query().Get("pane")
-	if !canonicalAttachmentUUID(id) || pane == "" || len(pane) > attachmentPaneMaxBytes {
-		writeAttachmentJSONError(w, http.StatusBadRequest, "invalid-item")
+	if !attachments.CanonicalUUID(id) || pane == "" || len(pane) > attachments.PaneMaxBytes {
+		attachments.WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 		return
 	}
-	if attachmentStore == nil {
-		writeAttachmentJSONError(w, http.StatusServiceUnavailable, "storage")
+	if attachments.Default == nil {
+		attachments.WriteJSONError(w, http.StatusServiceUnavailable, "storage")
 		return
 	}
-	record, err := attachmentStore.Send(id, pane)
-	if errors.Is(err, errAttachmentNotFound) {
+	record, err := attachments.Default.Send(id, pane)
+	if errors.Is(err, attachments.ErrNotFound) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(attachmentSendResponse{ID: id, State: "missing"})
 		return
 	}
 	if err != nil {
-		writeAttachmentStoreError(w, err)
+		attachments.WriteStoreError(w, err)
 		return
 	}
 	writeAttachmentSend(w, record)
 }
 
 func handlePiBridgeAttachmentSend(w http.ResponseWriter, r *http.Request) {
-	if !attachmentSameOrigin(r) {
-		writeAttachmentJSONError(w, http.StatusForbidden, "unavailable")
+	if !attachments.SameOrigin(r) {
+		attachments.WriteJSONError(w, http.StatusForbidden, "unavailable")
 		return
 	}
-	clearDeadline, ok := setAttachmentReadDeadline(w, r, piAttachmentJSONTimeout)
+	clearDeadline, ok := attachments.SetReadDeadline(w, r, piAttachmentJSONTimeout)
 	if !ok {
-		writeAttachmentJSONError(w, http.StatusServiceUnavailable, "unavailable")
+		attachments.WriteJSONError(w, http.StatusServiceUnavailable, "unavailable")
 		return
 	}
 	defer clearDeadline()
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
-		writeAttachmentJSONError(w, http.StatusBadRequest, "invalid-item")
+		attachments.WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 		return
 	}
-	if attachmentStore == nil {
-		writeAttachmentJSONError(w, http.StatusServiceUnavailable, "storage")
+	if attachments.Default == nil {
+		attachments.WriteJSONError(w, http.StatusServiceUnavailable, "storage")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, piAttachmentMaxBody)
@@ -192,26 +193,26 @@ func handlePiBridgeAttachmentSend(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&body); err != nil {
-		writeAttachmentJSONBodyError(w, err)
+		attachments.WriteJSONBodyError(w, err)
 		return
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		writeAttachmentJSONBodyError(w, errAttachmentInvalid)
+		writeAttachmentJSONBodyError(w, attachments.ErrInvalid)
 		return
 	}
 	if err := validateAttachmentSendRequest(body); err != nil {
-		writeAttachmentStoreError(w, err)
+		attachments.WriteStoreError(w, err)
 		return
 	}
 	fingerprint, err := attachmentSendHash(body)
 	if err != nil {
-		writeAttachmentJSONError(w, http.StatusBadRequest, "invalid-item")
+		attachments.WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 		return
 	}
-	record, created, err := attachmentStore.BeginSend(body.ID, body.Pane, fingerprint)
+	record, created, err := attachments.Default.BeginSend(body.ID, body.Pane, fingerprint)
 	if err != nil {
-		writeAttachmentStoreError(w, err)
+		attachments.WriteStoreError(w, err)
 		return
 	}
 	if !created {
@@ -219,14 +220,14 @@ func handlePiBridgeAttachmentSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	refuse := func(reason string) {
-		if updateErr := attachmentStore.UpdateSend(body.ID, false, "refused", reason); updateErr != nil {
-			writeAttachmentJSONError(w, http.StatusServiceUnavailable, "storage")
+		if updateErr := attachments.Default.UpdateSend(body.ID, false, "refused", reason); updateErr != nil {
+			attachments.WriteJSONError(w, http.StatusServiceUnavailable, "storage")
 			return
 		}
-		record, _ := attachmentStore.Send(body.ID, body.Pane)
+		record, _ := attachments.Default.Send(body.ID, body.Pane)
 		writeAttachmentSend(w, record)
 	}
-	if _, err := requireLivePiPane(body.Pane); err != nil {
+	if _, err := attachments.LivePiPane(body.Pane); err != nil {
 		refuse("unavailable")
 		return
 	}
@@ -244,11 +245,11 @@ func handlePiBridgeAttachmentSend(w http.ResponseWriter, r *http.Request) {
 		refuse("command")
 		return
 	}
-	items := make([]AttachmentItem, 0, len(body.AttachmentIDs))
+	items := make([]attachments.AttachmentItem, 0, len(body.AttachmentIDs))
 	imageRequired := false
 	var totalBytes int64
 	for _, id := range body.AttachmentIDs {
-		item, itemErr := attachmentStore.Item(id, body.Pane)
+		item, itemErr := attachments.Default.Item(id, body.Pane)
 		if itemErr != nil {
 			refuse("missing-item")
 			return
@@ -266,14 +267,14 @@ func handlePiBridgeAttachmentSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	processID := *body.Context.ProcessID
-	_, refs, err := attachmentStore.CreateHandoff(processID, body.Pane, body.AttachmentIDs)
+	_, refs, err := attachments.Default.CreateHandoff(processID, body.Pane, body.AttachmentIDs)
 	if err != nil {
-		writeAttachmentStoreError(w, err)
-		_ = attachmentStore.UpdateSend(body.ID, false, "refused", attachmentStoreReason(err))
+		attachments.WriteStoreError(w, err)
+		_ = attachments.Default.UpdateSend(body.ID, false, "refused", attachmentStoreReason(err))
 		return
 	}
-	if err := attachmentStore.UpdateSend(body.ID, true, "unknown", "uncertain"); err != nil {
-		writeAttachmentJSONError(w, http.StatusServiceUnavailable, "storage")
+	if err := attachments.Default.UpdateSend(body.ID, true, "unknown", "uncertain"); err != nil {
+		attachments.WriteJSONError(w, http.StatusServiceUnavailable, "storage")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), piAttachmentAckTimeout)
@@ -291,13 +292,13 @@ func handlePiBridgeAttachmentSend(w http.ResponseWriter, r *http.Request) {
 		var unknown *pibridge.AttachmentPromptUnknown
 		switch {
 		case errors.As(err, &refusal):
-			_ = attachmentStore.UpdateSend(body.ID, true, "refused", refusal.Reason)
+			_ = attachments.Default.UpdateSend(body.ID, true, "refused", refusal.Reason)
 		case errors.As(err, &unknown):
-			_ = attachmentStore.UpdateSend(body.ID, true, "unknown", "uncertain")
+			_ = attachments.Default.UpdateSend(body.ID, true, "unknown", "uncertain")
 		default:
-			_ = attachmentStore.UpdateSend(body.ID, true, "unknown", "uncertain")
+			_ = attachments.Default.UpdateSend(body.ID, true, "unknown", "uncertain")
 		}
-		record, _ := attachmentStore.Send(body.ID, body.Pane)
+		record, _ := attachments.Default.Send(body.ID, body.Pane)
 		writeAttachmentSend(w, record)
 		return
 	}
@@ -310,11 +311,11 @@ func handlePiBridgeAttachmentSend(w http.ResponseWriter, r *http.Request) {
 	case pibridgepb.AttachmentPromptOutcome_ATTACHMENT_PROMPT_OUTCOME_UNKNOWN:
 		state, reason = "unknown", "uncertain"
 	}
-	if err := attachmentStore.UpdateSend(body.ID, true, state, reason); err != nil {
-		writeAttachmentJSONError(w, http.StatusServiceUnavailable, "storage")
+	if err := attachments.Default.UpdateSend(body.ID, true, state, reason); err != nil {
+		attachments.WriteJSONError(w, http.StatusServiceUnavailable, "storage")
 		return
 	}
-	record, _ = attachmentStore.Send(body.ID, body.Pane)
+	record, _ = attachments.Default.Send(body.ID, body.Pane)
 	writeAttachmentSend(w, record)
 }
 
@@ -330,10 +331,10 @@ func (body attachmentSendRequest) requestPrompt(ctx context.Context, refs []pibr
 }
 
 func currentAttachmentContext(pane string) attachmentTargetContext {
-	if ptyManager == nil || piBridge == nil || attachmentStore == nil {
+	if ptyManager == nil || piBridge == nil || attachments.Default == nil {
 		return attachmentTargetContext{}
 	}
-	if _, err := requireLivePiPane(pane); err != nil {
+	if _, err := attachments.LivePiPane(pane); err != nil {
 		return attachmentTargetContext{}
 	}
 	processID, view, ok := piBridge.AttachmentPaneView(pane)
@@ -346,28 +347,28 @@ func currentAttachmentContext(pane string) attachmentTargetContext {
 }
 
 func validateAttachmentSendRequest(body attachmentSendRequest) error {
-	if !canonicalAttachmentUUID(body.ID) || body.Pane == "" || len(body.Pane) > attachmentPaneMaxBytes || !utf8.ValidString(body.Text) || len(body.Text) > piAttachmentTextMax || len(body.AttachmentIDs) < 1 || len(body.AttachmentIDs) > piAttachmentMaxItems {
-		return errAttachmentInvalid
+	if !attachments.CanonicalUUID(body.ID) || body.Pane == "" || len(body.Pane) > attachments.PaneMaxBytes || !utf8.ValidString(body.Text) || len(body.Text) > piAttachmentTextMax || len(body.AttachmentIDs) < 1 || len(body.AttachmentIDs) > piAttachmentMaxItems {
+		return attachments.ErrInvalid
 	}
 	seen := make(map[string]struct{}, len(body.AttachmentIDs))
 	for _, id := range body.AttachmentIDs {
-		if !canonicalAttachmentUUID(id) {
-			return errAttachmentInvalid
+		if !attachments.CanonicalUUID(id) {
+			return attachments.ErrInvalid
 		}
 		if _, ok := seen[id]; ok {
-			return errAttachmentInvalid
+			return attachments.ErrInvalid
 		}
 		seen[id] = struct{}{}
 	}
 	c := body.Context
 	if c.ProcessID == nil || c.Generation == nil || c.SessionID == nil || c.LeafID == nil || *c.ProcessID == "" || len(*c.ProcessID) > 256 || len(*c.SessionID) > 256 || len(*c.LeafID) > 256 {
-		return errAttachmentInvalid
+		return attachments.ErrInvalid
 	}
 	if _, ok := parsePositiveStamp(*c.Generation); !ok {
-		return errAttachmentInvalid
+		return attachments.ErrInvalid
 	}
 	if c.Model != nil && (c.Model.Provider == "" || c.Model.ID == "" || len(c.Model.Provider) > 256 || len(c.Model.ID) > 256) {
-		return errAttachmentInvalid
+		return attachments.ErrInvalid
 	}
 	return nil
 }
@@ -417,28 +418,28 @@ func attachmentContainsString(values []string, wanted string) bool {
 func writeAttachmentJSONBodyError(w http.ResponseWriter, err error) {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
-		writeAttachmentJSONError(w, http.StatusRequestEntityTooLarge, "limit")
+		attachments.WriteJSONError(w, http.StatusRequestEntityTooLarge, "limit")
 		return
 	}
-	writeAttachmentJSONError(w, http.StatusBadRequest, "invalid-item")
+	attachments.WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 }
 
 func attachmentStoreReason(err error) string {
 	switch {
-	case errors.Is(err, errAttachmentUnsupported):
+	case errors.Is(err, attachments.ErrUnsupported):
 		return "unsupported-image"
-	case errors.Is(err, errAttachmentLimit):
+	case errors.Is(err, attachments.ErrLimit):
 		return "limit"
-	case errors.Is(err, errAttachmentNotFound):
+	case errors.Is(err, attachments.ErrNotFound):
 		return "missing-item"
-	case errors.Is(err, errAttachmentInvalid):
+	case errors.Is(err, attachments.ErrInvalid):
 		return "invalid-item"
 	default:
 		return "storage"
 	}
 }
 
-func writeAttachmentSend(w http.ResponseWriter, record attachmentSendRecord) {
+func writeAttachmentSend(w http.ResponseWriter, record attachments.SendRecord) {
 	state := record.State
 	if state == "pending" {
 		state = "unknown"

@@ -1,4 +1,4 @@
-package main
+package attachments
 
 import (
 	"context"
@@ -41,13 +41,15 @@ const (
 )
 
 var (
-	errAttachmentInvalid     = errors.New("attachment: invalid request")
+	// ErrInvalid rejects a malformed request.
+	ErrInvalid = errors.New("attachment: invalid request")
 	errAttachmentConflict    = errors.New("attachment: id conflict")
 	errAttachmentReceiving   = errors.New("attachment: item is receiving")
-	errAttachmentNotFound    = errors.New("attachment: item not found")
+	// ErrNotFound reports a missing item owned by another pane or absent.
+	ErrNotFound = errors.New("attachment: item not found")
 	errAttachmentForbidden   = errors.New("attachment: owner mismatch")
-	errAttachmentLimit       = errors.New("attachment: limit reached")
-	errAttachmentUnsupported = errors.New("attachment: unsupported image")
+	ErrLimit       = errors.New("attachment: limit reached")
+	ErrUnsupported = errors.New("attachment: unsupported image")
 	errAttachmentChanged     = errors.New("attachment: source changed")
 	errAttachmentStorage     = errors.New("attachment: storage unavailable")
 )
@@ -70,7 +72,8 @@ type attachmentDiskItem struct {
 	PaneID string `json:"pane_id"`
 }
 
-type attachmentSendRecord struct {
+// SendRecord is the durable send tombstone for one attachment.
+type SendRecord struct {
 	ID          string `json:"id"`
 	PaneID      string `json:"pane_id"`
 	RequestHash string `json:"request_hash"`
@@ -118,7 +121,7 @@ type AttachmentStore struct {
 	mu              sync.Mutex
 	decodeMu        chan struct{}
 	items           map[string]AttachmentItem
-	sends           map[string]attachmentSendRecord
+	sends           map[string]SendRecord
 	receiving       map[string]attachmentReservation
 	usedBytes       int64
 	reserved        int64
@@ -128,7 +131,7 @@ type AttachmentStore struct {
 	closed          bool
 }
 
-var attachmentStore *AttachmentStore
+var Default *AttachmentStore
 
 // OpenAttachmentStore opens the one-writer v2 store. A failure disables only
 // attachment routes; callers must let Phi and unrelated bridge features run.
@@ -165,7 +168,7 @@ func openAttachmentStoreAt(root string, limits attachmentStoreLimits) (*Attachme
 		limits:     limits,
 		decodeMu:   make(chan struct{}, 1),
 		items:      make(map[string]AttachmentItem),
-		sends:      make(map[string]attachmentSendRecord),
+		sends:      make(map[string]SendRecord),
 		receiving:  make(map[string]attachmentReservation),
 	}
 	for _, dir := range []string{s.itemsDir, s.stagingDir, s.sendsDir, s.handoffDir} {
@@ -214,7 +217,8 @@ func (s *AttachmentStore) Close() error {
 	return s.lock.Close()
 }
 
-func canonicalAttachmentUUID(value string) bool {
+// CanonicalUUID reports whether value is a canonical attachment UUID.
+func CanonicalUUID(value string) bool {
 	parsed, err := uuid.Parse(value)
 	return err == nil && parsed.Version() == 4 && parsed.String() == value
 }
@@ -271,7 +275,7 @@ func (s *AttachmentStore) scan() error {
 		return err
 	}
 	for _, entry := range entries {
-		if !entry.IsDir() || !canonicalAttachmentUUID(entry.Name()) {
+		if !entry.IsDir() || !CanonicalUUID(entry.Name()) {
 			return fmt.Errorf("invalid item entry")
 		}
 		itemDir := filepath.Join(s.itemsDir, entry.Name())
@@ -316,14 +320,14 @@ func (s *AttachmentStore) scan() error {
 			return fmt.Errorf("invalid send entry")
 		}
 		id := strings.TrimSuffix(entry.Name(), ".json")
-		if !canonicalAttachmentUUID(id) {
+		if !CanonicalUUID(id) {
 			return fmt.Errorf("invalid send id")
 		}
 		data, err := os.ReadFile(filepath.Join(s.sendsDir, entry.Name()))
 		if err != nil {
 			return err
 		}
-		var record attachmentSendRecord
+		var record SendRecord
 		if err := json.Unmarshal(data, &record); err != nil || record.ID != id || record.PaneID == "" || record.RequestHash == "" {
 			return fmt.Errorf("invalid send record")
 		}
@@ -418,8 +422,8 @@ func (s *AttachmentStore) ItemStatus(id, paneID string) AttachmentStatus {
 }
 
 func (s *AttachmentStore) reserveUpload(id, paneID, name string) (string, bool, error) {
-	if !canonicalAttachmentUUID(id) || paneID == "" || len(paneID) > 256 || !utf8.ValidString(name) || len(name) > attachmentMaxNameBytes {
-		return "", false, errAttachmentInvalid
+	if !CanonicalUUID(id) || paneID == "" || len(paneID) > 256 || !utf8.ValidString(name) || len(name) > attachmentMaxNameBytes {
+		return "", false, ErrInvalid
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -433,15 +437,15 @@ func (s *AttachmentStore) reserveUpload(id, paneID, name string) (string, bool, 
 		return "", false, errAttachmentReceiving
 	}
 	if s.active >= s.limits.maxActive {
-		return "", false, errAttachmentLimit
+		return "", false, ErrLimit
 	}
 	_, exists := s.items[id]
 	if !exists && s.records+s.reservedRecords >= s.limits.maxRecords {
-		return "", false, errAttachmentLimit
+		return "", false, ErrLimit
 	}
 	reserve := s.limits.maxFileBytes + attachmentMaxNameBytes + 4096
 	if s.reserved+reserve > s.limits.maxReserve || s.usedBytes+s.reserved+reserve > s.limits.maxBytes {
-		return "", false, errAttachmentLimit
+		return "", false, ErrLimit
 	}
 	stageID, err := randomAttachmentID()
 	if err != nil {
@@ -496,16 +500,16 @@ func (s *AttachmentStore) releaseUpload(id, stage string, existed, committed boo
 // item store. The browser supplies only the path it selected and the listing
 // fingerprint; Pi receives the generated private snapshot path.
 func (s *AttachmentStore) SnapshotFile(ctx context.Context, id, paneID, sourcePath, expectedFingerprint string) (AttachmentItem, error) {
-	if !canonicalAttachmentUUID(id) || paneID == "" || len(paneID) > 256 || len(sourcePath) > 4096 || !filepath.IsAbs(sourcePath) || len(expectedFingerprint) != 64 {
-		return AttachmentItem{}, errAttachmentInvalid
+	if !CanonicalUUID(id) || paneID == "" || len(paneID) > 256 || len(sourcePath) > 4096 || !filepath.IsAbs(sourcePath) || len(expectedFingerprint) != 64 {
+		return AttachmentItem{}, ErrInvalid
 	}
 	if _, err := hex.DecodeString(expectedFingerprint); err != nil || strings.ToLower(expectedFingerprint) != expectedFingerprint {
-		return AttachmentItem{}, errAttachmentInvalid
+		return AttachmentItem{}, ErrInvalid
 	}
 	sourcePath = filepath.Clean(sourcePath)
 	name := filepath.Base(sourcePath)
 	if name == "." || name == string(filepath.Separator) || !utf8.ValidString(name) || len(name) > attachmentMaxNameBytes {
-		return AttachmentItem{}, errAttachmentInvalid
+		return AttachmentItem{}, ErrInvalid
 	}
 	file, err := openAttachmentSource(sourcePath)
 	if err != nil {
@@ -517,7 +521,7 @@ func (s *AttachmentStore) SnapshotFile(ctx context.Context, id, paneID, sourcePa
 		return AttachmentItem{}, errAttachmentChanged
 	}
 	if before.Size() > s.limits.maxFileBytes {
-		return AttachmentItem{}, errAttachmentLimit
+		return AttachmentItem{}, ErrLimit
 	}
 	// Put reserves the ingestion slot and quota before reading the source.
 	// Validate the descriptor and selected path again before publication.
@@ -567,13 +571,13 @@ func (s *AttachmentStore) Put(ctx context.Context, id, paneID, name, claimedMIME
 		_ = out.Close()
 		var tooLarge *http.MaxBytesError
 		if errors.As(copyErr, &tooLarge) {
-			return AttachmentItem{}, errAttachmentLimit
+			return AttachmentItem{}, ErrLimit
 		}
 		return AttachmentItem{}, errAttachmentStorage
 	}
 	if written > s.limits.maxFileBytes {
 		_ = out.Close()
-		return AttachmentItem{}, errAttachmentLimit
+		return AttachmentItem{}, ErrLimit
 	}
 	if err := ctx.Err(); err != nil {
 		_ = out.Close()
@@ -655,7 +659,7 @@ func (s *AttachmentStore) getItemOwned(id, paneID string) (AttachmentItem, error
 	defer s.mu.Unlock()
 	item, ok := s.items[id]
 	if !ok {
-		return AttachmentItem{}, errAttachmentNotFound
+		return AttachmentItem{}, ErrNotFound
 	}
 	if item.PaneID != paneID {
 		return AttachmentItem{}, errAttachmentForbidden
@@ -664,8 +668,8 @@ func (s *AttachmentStore) getItemOwned(id, paneID string) (AttachmentItem, error
 }
 
 func (s *AttachmentStore) Item(id, paneID string) (AttachmentItem, error) {
-	if !canonicalAttachmentUUID(id) || paneID == "" || len(paneID) > 256 {
-		return AttachmentItem{}, errAttachmentInvalid
+	if !CanonicalUUID(id) || paneID == "" || len(paneID) > 256 {
+		return AttachmentItem{}, ErrInvalid
 	}
 	return s.getItemOwned(id, paneID)
 }
@@ -673,7 +677,7 @@ func (s *AttachmentStore) Item(id, paneID string) (AttachmentItem, error) {
 // ProcessRoot creates the private handoff root for one provisioned Pi process.
 func (s *AttachmentStore) ProcessRoot(processID string) (string, error) {
 	if !safeHandoffProcessID(processID) {
-		return "", errAttachmentInvalid
+		return "", ErrInvalid
 	}
 	dir := filepath.Join(s.handoffDir, processID)
 	if err := ensureAttachmentDir(dir); err != nil {
@@ -694,7 +698,7 @@ type AttachmentHandoffRef struct {
 // directory. The generated basename is the only path component sent over IPC.
 func (s *AttachmentStore) CreateHandoff(processID, paneID string, ids []string) (string, []AttachmentHandoffRef, error) {
 	if len(ids) == 0 || len(ids) > attachmentHandoffMaxRefs || !safeHandoffProcessID(processID) {
-		return "", nil, errAttachmentInvalid
+		return "", nil, ErrInvalid
 	}
 	root, err := s.ProcessRoot(processID)
 	if err != nil {
@@ -703,7 +707,7 @@ func (s *AttachmentStore) CreateHandoff(processID, paneID string, ids []string) 
 	s.mu.Lock()
 	if s.closed || s.active >= s.limits.maxActive {
 		s.mu.Unlock()
-		return "", nil, errAttachmentLimit
+		return "", nil, ErrLimit
 	}
 	s.active++
 	s.mu.Unlock()
@@ -722,13 +726,13 @@ func (s *AttachmentStore) CreateHandoff(processID, paneID string, ids []string) 
 		}
 		total += item.SizeBytes
 		if total > attachmentHandoffMaxTotal {
-			return "", nil, errAttachmentLimit
+			return "", nil, ErrLimit
 		}
 		reserve := item.SizeBytes
 		s.mu.Lock()
 		if s.usedBytes+s.reserved+reserve > s.limits.maxBytes {
 			s.mu.Unlock()
-			return "", nil, errAttachmentLimit
+			return "", nil, ErrLimit
 		}
 		s.reserved += reserve
 		s.mu.Unlock()
@@ -822,27 +826,27 @@ func (s *AttachmentStore) copyHandoff(root string, item AttachmentItem) (Attachm
 	}, item.SizeBytes, nil
 }
 
-func (s *AttachmentStore) BeginSend(id, paneID, requestHash string) (attachmentSendRecord, bool, error) {
-	if !canonicalAttachmentUUID(id) || paneID == "" || len(paneID) > 256 || requestHash == "" || len(requestHash) != 64 {
-		return attachmentSendRecord{}, false, errAttachmentInvalid
+func (s *AttachmentStore) BeginSend(id, paneID, requestHash string) (SendRecord, bool, error) {
+	if !CanonicalUUID(id) || paneID == "" || len(paneID) > 256 || requestHash == "" || len(requestHash) != 64 {
+		return SendRecord{}, false, ErrInvalid
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return attachmentSendRecord{}, false, errAttachmentStorage
+		return SendRecord{}, false, errAttachmentStorage
 	}
 	if record, ok := s.sends[id]; ok {
 		if record.PaneID != paneID || record.RequestHash != requestHash {
-			return attachmentSendRecord{}, false, errAttachmentConflict
+			return SendRecord{}, false, errAttachmentConflict
 		}
 		return record, false, nil
 	}
 	if s.records+s.reservedRecords >= s.limits.maxRecords || s.usedBytes+s.reserved+1024 > s.limits.maxBytes {
-		return attachmentSendRecord{}, false, errAttachmentLimit
+		return SendRecord{}, false, ErrLimit
 	}
-	record := attachmentSendRecord{ID: id, PaneID: paneID, RequestHash: requestHash, State: "pending"}
+	record := SendRecord{ID: id, PaneID: paneID, RequestHash: requestHash, State: "pending"}
 	if err := s.writeSendLocked(record); err != nil {
-		return attachmentSendRecord{}, false, errAttachmentStorage
+		return SendRecord{}, false, errAttachmentStorage
 	}
 	data, _ := json.Marshal(record)
 	s.usedBytes += int64(len(data))
@@ -853,13 +857,13 @@ func (s *AttachmentStore) BeginSend(id, paneID, requestHash string) (attachmentS
 
 func (s *AttachmentStore) UpdateSend(id string, attempted bool, state, reason string) error {
 	if state != "pending" && state != "refused" && state != "dispatched" && state != "unknown" {
-		return errAttachmentInvalid
+		return ErrInvalid
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record, ok := s.sends[id]
 	if !ok {
-		return errAttachmentNotFound
+		return ErrNotFound
 	}
 	oldBytes, _ := json.Marshal(record)
 	record.Attempted = record.Attempted || attempted
@@ -867,7 +871,7 @@ func (s *AttachmentStore) UpdateSend(id string, attempted bool, state, reason st
 	record.Reason = reason
 	newBytes, _ := json.Marshal(record)
 	if int64(len(newBytes))-int64(len(oldBytes))+s.usedBytes+s.reserved > s.limits.maxBytes {
-		return errAttachmentLimit
+		return ErrLimit
 	}
 	if err := s.writeSendLocked(record); err != nil {
 		return errAttachmentStorage
@@ -877,20 +881,20 @@ func (s *AttachmentStore) UpdateSend(id string, attempted bool, state, reason st
 	return nil
 }
 
-func (s *AttachmentStore) Send(id, paneID string) (attachmentSendRecord, error) {
-	if !canonicalAttachmentUUID(id) || paneID == "" || len(paneID) > 256 {
-		return attachmentSendRecord{}, errAttachmentInvalid
+func (s *AttachmentStore) Send(id, paneID string) (SendRecord, error) {
+	if !CanonicalUUID(id) || paneID == "" || len(paneID) > 256 {
+		return SendRecord{}, ErrInvalid
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record, ok := s.sends[id]
 	if !ok || record.PaneID != paneID {
-		return attachmentSendRecord{}, errAttachmentNotFound
+		return SendRecord{}, ErrNotFound
 	}
 	return record, nil
 }
 
-func (s *AttachmentStore) writeSendLocked(record attachmentSendRecord) error {
+func (s *AttachmentStore) writeSendLocked(record SendRecord) error {
 	data, err := json.Marshal(record)
 	if err != nil {
 		return err

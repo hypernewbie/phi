@@ -1,4 +1,4 @@
-package main
+package attachments
 
 import (
 	"bytes"
@@ -27,24 +27,24 @@ func classifyAttachmentFile(path, name, claimedMIME string, decodeMu *chan struc
 	case bytes.HasPrefix(prefix, []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}):
 		animated, scanErr := hasAPNGAnimationFile(path)
 		if scanErr != nil || animated {
-			return "", "", "", errAttachmentUnsupported
+			return "", "", "", ErrUnsupported
 		}
 		mimeType, extension = "image/png", ".png"
 	case len(prefix) >= 3 && prefix[0] == 0xff && prefix[1] == 0xd8 && prefix[2] == 0xff:
 		mimeType, extension = "image/jpeg", ".jpg"
 	case bytes.HasPrefix(prefix, []byte("GIF87a")) || bytes.HasPrefix(prefix, []byte("GIF89a")):
-		return "", "", "", errAttachmentUnsupported
+		return "", "", "", ErrUnsupported
 	case len(prefix) >= 12 && string(prefix[:4]) == "RIFF" && string(prefix[8:12]) == "WEBP":
-		return "", "", "", errAttachmentUnsupported
+		return "", "", "", ErrUnsupported
 	case len(prefix) >= 2 && string(prefix[:2]) == "BM":
-		return "", "", "", errAttachmentUnsupported
+		return "", "", "", ErrUnsupported
 	case isUnsupportedISOImage(prefix):
-		return "", "", "", errAttachmentUnsupported
+		return "", "", "", ErrUnsupported
 	case looksLikeSVG(prefix) || strings.EqualFold(strings.TrimSpace(claimedMIME), "image/svg+xml"):
-		return "", "", "", errAttachmentUnsupported
+		return "", "", "", ErrUnsupported
 	default:
 		if claimed {
-			return "", "", "", errAttachmentUnsupported
+			return "", "", "", ErrUnsupported
 		}
 		return "file", "application/octet-stream", ".bin", nil
 	}
@@ -56,10 +56,10 @@ func classifyAttachmentFile(path, name, claimedMIME string, decodeMu *chan struc
 	cfg, format, cfgErr := image.DecodeConfig(cfgFile)
 	_ = cfgFile.Close()
 	if cfgErr != nil || format != "png" && format != "jpeg" {
-		return "", "", "", errAttachmentUnsupported
+		return "", "", "", ErrUnsupported
 	}
 	if cfg.Width < 1 || cfg.Height < 1 || cfg.Width > maxDimension || cfg.Height > maxDimension || int64(cfg.Width) > maxPixels/int64(cfg.Height) {
-		return "", "", "", errAttachmentUnsupported
+		return "", "", "", ErrUnsupported
 	}
 	if decodeMu != nil {
 		*decodeMu <- struct{}{}
@@ -72,7 +72,7 @@ func classifyAttachmentFile(path, name, claimedMIME string, decodeMu *chan struc
 	decoded, decodedFormat, decodeErr := image.Decode(full)
 	_ = full.Close()
 	if decodeErr != nil || decodedFormat != format || decoded == nil {
-		return "", "", "", errAttachmentUnsupported
+		return "", "", "", ErrUnsupported
 	}
 	return "image", mimeType, extension, nil
 }

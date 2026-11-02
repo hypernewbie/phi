@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/hypernewbie/phi/internal/access"
+	"github.com/hypernewbie/phi/internal/attachments"
+	"github.com/hypernewbie/phi/internal/gitapi"
 	"github.com/hypernewbie/phi/internal/pibridge"
 	"github.com/hypernewbie/phi/internal/webassets"
 	"github.com/hypernewbie/phi/pkg/bindaddr"
@@ -52,6 +54,11 @@ var (
 	serverPort     = 7070
 	staticHandler  http.Handler
 	fleetPoller    = fleet.NewPoller()
+	gitAPI         = gitapi.New(
+		func() string { return activeCWD },
+		func() *pty.Manager { return ptyManager },
+		func() []string { return workspaceRoots(loadConfig()) },
+	)
 
 	Version     = "dev"
 	Commit      = "none"
@@ -245,6 +252,7 @@ func main() {
 	})
 	startOpenCodeIdleWatcher()
 	wsHub = ws.NewHub(*cfg.ReplayBufferBytes)
+	gitAPI.StartReadLoop = func(inst *pty.PTYInstance) { ws.StartPTYReadLoop(inst, wsHub) }
 	// Adopt the generation loaded from config so the first upgrade is admitted
 	// and later password changes fence older sockets.
 	wsHub.RotateAuth(access.Default.AccessGeneration())
@@ -255,13 +263,14 @@ func main() {
 	if err := wsHub.SetRecordingDirectory(filepath.Join(system.PhiDataDir(), "recordings")); err != nil {
 		slog.Error("terminal recording directory unavailable", "err", err)
 	}
-	attachmentStore, err = OpenAttachmentStore()
+	attachments.Default, err = attachments.OpenAttachmentStore()
 	if err != nil {
 		slog.Warn("Pi attachments unavailable", "err", err)
-		attachmentStore = nil
+		attachments.Default = nil
 	} else {
-		defer func() { _ = attachmentStore.Close() }()
+		defer func() { _ = attachments.Default.Close() }()
 	}
+	attachments.SetPaneManager(func() *pty.Manager { return ptyManager })
 	// The Pi bridge serves before saved Pi tabs restore so relaunched
 	// panes provision against a live listener. A nil bridge (listener
 	// failure) leaves every launch on the unmanaged path.
@@ -317,14 +326,14 @@ func main() {
 	http.HandleFunc("/api/sessions", handleGetSessions)
 	http.HandleFunc("/api/terminals", handleSpawnTerminal)
 	http.HandleFunc("/api/session-meta", handleSessionMeta)
-	http.HandleFunc("/api/diff", handleGetDiff)
-	http.HandleFunc("/api/git/raw-diff", handleRawDiff)
-	http.HandleFunc("/api/git/raw-status", handleRawStatus)
-	http.HandleFunc("/api/git/raw-log", handleRawLog)
-	http.HandleFunc("/api/git/commits", handleGetCommits)
-	http.HandleFunc("/api/git/info", handleGitInfo)
-	http.HandleFunc("/api/git/status-files", handleGitStatusFiles)
-	http.HandleFunc("/api/git/action", handleGitAction)
+	http.HandleFunc("/api/diff", gitAPI.HandleGetDiff)
+	http.HandleFunc("/api/git/raw-diff", gitAPI.HandleRawDiff)
+	http.HandleFunc("/api/git/raw-status", gitAPI.HandleRawStatus)
+	http.HandleFunc("/api/git/raw-log", gitAPI.HandleRawLog)
+	http.HandleFunc("/api/git/commits", gitAPI.HandleGetCommits)
+	http.HandleFunc("/api/git/info", gitAPI.HandleGitInfo)
+	http.HandleFunc("/api/git/status-files", gitAPI.HandleGitStatusFiles)
+	http.HandleFunc("/api/git/action", gitAPI.HandleGitAction)
 	http.HandleFunc("/api/config", handleConfig)
 	http.HandleFunc("/api/config/pushover", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -422,11 +431,11 @@ func main() {
 	http.HandleFunc("/api/pi-bridge/skill", handlePiBridgeInvokeSkill)
 	http.HandleFunc("/api/pi-bridge/attachments/context", handlePiBridgeAttachmentContext)
 	http.HandleFunc("/api/pi-bridge/attachments", handlePiBridgeAttachments)
-	http.HandleFunc("/api/attachments/v2/browse", handleAttachmentsV2Browse)
-	http.HandleFunc("/api/attachments/v2/server-items", handleAttachmentsV2ServerItem)
-	http.HandleFunc("/api/attachments/v2/items/", handleAttachmentsV2Item)
+	http.HandleFunc("/api/attachments/v2/browse", attachments.HandleV2Browse)
+	http.HandleFunc("/api/attachments/v2/server-items", attachments.HandleV2ServerItem)
+	http.HandleFunc("/api/attachments/v2/items/", attachments.HandleV2Item)
 	http.HandleFunc("/api/pi-bridge/transcript-search", handlePiBridgeTranscriptSearch)
-	http.HandleFunc("/api/attachments", handleAttachments)
+	http.HandleFunc("/api/attachments", attachments.HandleClipboard)
 	http.HandleFunc("/api/clipboard", handleGetClipboard)
 	http.HandleFunc("/api/system/cpu", handleSystemCPU)
 	http.HandleFunc("/api/session-transcript", handleGetSessionTranscript)

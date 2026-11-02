@@ -1,4 +1,4 @@
-package main
+package gitapi
 
 import (
 	"bytes"
@@ -22,7 +22,6 @@ import (
 	"github.com/hypernewbie/phi/pkg/gitutil"
 	"github.com/hypernewbie/phi/pkg/obs"
 	"github.com/hypernewbie/phi/pkg/pty"
-	"github.com/hypernewbie/phi/pkg/ws"
 )
 
 // notGitRepoBody is the literal response body the raw git endpoints
@@ -30,6 +29,38 @@ import (
 // text and renders a muted "Not a git repository" line instead of
 // feeding the raw `fatal: not a git repository ...` stderr into the
 // terminal as a giant red message.
+// API serves the git read and action endpoints. It holds the environment the
+// handlers need instead of reaching for process globals, so its tests can run
+// without a live server.
+type API struct {
+	cwd   func() string
+	pty   func() *pty.Manager
+	roots func() []string
+	// StartReadLoop attaches the pane broadcaster to a spawned diff pane.
+	StartReadLoop func(*pty.PTYInstance)
+}
+
+// New returns the git API. defaultCWD reports the cwd used when a request
+// omits one, pty backs the diff/log/status spawns, and roots lists the
+// directories a repository must live under to be trusted.
+func New(defaultCWD func() string, ptyManager func() *pty.Manager, roots func() []string) *API {
+	return &API{cwd: defaultCWD, pty: ptyManager, roots: roots}
+}
+
+func (a *API) ptyManager() *pty.Manager {
+	if a != nil && a.pty != nil {
+		return a.pty()
+	}
+	return nil
+}
+
+func (a *API) defaultCWD() string {
+	if a != nil && a.cwd != nil {
+		return a.cwd()
+	}
+	return ""
+}
+
 const notGitRepoBody = "NOT_GIT_REPO"
 
 // gitHeadCache memoises the (HEAD, branch) pair per cwd so the
@@ -162,12 +193,12 @@ func runGitRevParse(ctx context.Context, cwd string, args ...string) ([]byte, er
 	return cmd.Output()
 }
 
-func handleGetDiff(w http.ResponseWriter, r *http.Request) {
+func (a *API) HandleGetDiff(w http.ResponseWriter, r *http.Request) {
 	cwd := r.URL.Query().Get("cwd")
 	diffType := r.URL.Query().Get("type")
 	commit := r.URL.Query().Get("commit")
 	if cwd == "" {
-		cwd = activeCWD
+		cwd = a.defaultCWD()
 	}
 
 	if !gitutil.IsGitRepo(r.Context(), cwd) {
@@ -180,11 +211,11 @@ func handleGetDiff(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if diffType == "log" {
-		inst, err = diff.SpawnLog(r.Context(), cwd, ptyManager)
+		inst, err = diff.SpawnLog(r.Context(), cwd, a.ptyManager())
 	} else if diffType == "status" {
-		inst, err = diff.SpawnStatus(r.Context(), cwd, ptyManager)
+		inst, err = diff.SpawnStatus(r.Context(), cwd, a.ptyManager())
 	} else {
-		inst, err = diff.SpawnDiff(r.Context(), cwd, commit, ptyManager)
+		inst, err = diff.SpawnDiff(r.Context(), cwd, commit, a.ptyManager())
 	}
 
 	if err != nil {
@@ -192,7 +223,9 @@ func handleGetDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ws.StartPTYReadLoop(inst, wsHub)
+		if a.StartReadLoop != nil {
+		a.StartReadLoop(inst)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{
@@ -275,13 +308,13 @@ func worktreeDiffOutput(ctx context.Context, cwd, colorFlag, contextLines string
 	return append(staged, unstaged...), nil
 }
 
-func handleRawDiff(w http.ResponseWriter, r *http.Request) {
+func (a *API) HandleRawDiff(w http.ResponseWriter, r *http.Request) {
 	cwd := r.URL.Query().Get("cwd")
 	commit := r.URL.Query().Get("commit")
 	contextVal := r.URL.Query().Get("context")
 	ansi := r.URL.Query().Get("ansi") == "1"
 	if cwd == "" {
-		cwd = activeCWD
+		cwd = a.defaultCWD()
 	}
 
 	if !gitutil.IsGitRepo(r.Context(), cwd) {
@@ -375,7 +408,7 @@ func handleRawDiff(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(out)
 }
 
-func handleRawLog(w http.ResponseWriter, r *http.Request) {
+func (a *API) HandleRawLog(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
@@ -386,7 +419,7 @@ func handleRawLog(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	cwd := r.URL.Query().Get("cwd")
 	if cwd == "" {
-		cwd = activeCWD
+		cwd = a.defaultCWD()
 	}
 	repo, notRepo, err := inspectGitRepository(ctx, cwd)
 	if err != nil {
@@ -413,10 +446,10 @@ func handleRawLog(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(out)
 }
 
-func handleRawStatus(w http.ResponseWriter, r *http.Request) {
+func (a *API) HandleRawStatus(w http.ResponseWriter, r *http.Request) {
 	cwd := r.URL.Query().Get("cwd")
 	if cwd == "" {
-		cwd = activeCWD
+		cwd = a.defaultCWD()
 	}
 
 	if !gitutil.IsGitRepo(r.Context(), cwd) {
@@ -444,10 +477,10 @@ type CommitEntry struct {
 	Subject string `json:"subject"`
 }
 
-func handleGetCommits(w http.ResponseWriter, r *http.Request) {
+func (a *API) HandleGetCommits(w http.ResponseWriter, r *http.Request) {
 	cwd := r.URL.Query().Get("cwd")
 	if cwd == "" {
-		cwd = activeCWD
+		cwd = a.defaultCWD()
 	}
 
 	// Run git log to fetch the last 10 commits on active branch
@@ -583,7 +616,7 @@ func parseGitStatusFiles(output []byte) []gitStatusFileEntry {
 
 // handleGitStatusFiles returns the working tree as structured entries so the
 // drawer can offer per-file staging without parsing colored text.
-func handleGitStatusFiles(w http.ResponseWriter, r *http.Request) {
+func (a *API) HandleGitStatusFiles(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
@@ -592,7 +625,7 @@ func handleGitStatusFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), gitReadTimeout)
 	defer cancel()
-	repo, notRepo, err := resolveAuthorizedGitRepository(ctx, r.URL.Query().Get("cwd"))
+	repo, notRepo, err := a.resolveAuthorizedGitRepository(ctx, r.URL.Query().Get("cwd"))
 	if err != nil {
 		writeGitAPIError(w, err)
 		return
@@ -748,10 +781,14 @@ func gitPathWithinAny(path string, roots []string) bool {
 	return false
 }
 
-func trustedGitRoots() []string {
+func (a *API) trustedRoots() []string {
 	seen := make(map[string]bool)
 	var roots []string
-	for _, root := range workspaceRoots(loadConfig()) {
+	var candidates []string
+	if a != nil && a.roots != nil {
+		candidates = a.roots()
+	}
+	for _, root := range candidates {
 		canonical, err := canonicalGitDirectory(root)
 		if err != nil || seen[canonical] {
 			continue
@@ -874,9 +911,9 @@ func registeredGitWorktrees(ctx context.Context, trustedRoots []string) ([]strin
 	return registered, nil
 }
 
-func resolveAuthorizedGitRepository(ctx context.Context, cwd string) (*gitActionRepository, bool, error) {
+func (a *API) resolveAuthorizedGitRepository(ctx context.Context, cwd string) (*gitActionRepository, bool, error) {
 	if cwd == "" {
-		cwd = activeCWD
+		cwd = a.defaultCWD()
 	}
 	if cwd == "" {
 		return nil, false, gitAPIErrorf(http.StatusNotFound, "Git workspace not found")
@@ -885,7 +922,7 @@ func resolveAuthorizedGitRepository(ctx context.Context, cwd string) (*gitAction
 	if err != nil {
 		return nil, false, gitAPIErrorf(http.StatusNotFound, "Git workspace not found")
 	}
-	trusted := trustedGitRoots()
+	trusted := a.trustedRoots()
 	var allowedRoots []string
 	insideTrusted := gitPathWithinAny(requested, trusted)
 	if insideTrusted {
@@ -1145,7 +1182,7 @@ func gitMutationPrecondition(ctx context.Context, repo *gitActionRepository, act
 	return "", nil
 }
 
-func handleGitInfo(w http.ResponseWriter, r *http.Request) {
+func (a *API) HandleGitInfo(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1153,7 +1190,7 @@ func handleGitInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), gitReadTimeout)
 	defer cancel()
-	repo, notRepo, err := resolveAuthorizedGitRepository(ctx, r.URL.Query().Get("cwd"))
+	repo, notRepo, err := a.resolveAuthorizedGitRepository(ctx, r.URL.Query().Get("cwd"))
 	if err != nil {
 		writeGitAPIError(w, err)
 		return
@@ -1264,7 +1301,7 @@ func gitActionLock(commonDir string) *sync.Mutex {
 
 var gitActionLocks sync.Map
 
-func handleGitAction(w http.ResponseWriter, r *http.Request) {
+func (a *API) HandleGitAction(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
@@ -1278,7 +1315,7 @@ func handleGitAction(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), gitMutationTimeout)
 	defer cancel()
-	repo, notRepo, err := resolveAuthorizedGitRepository(ctx, req.Cwd)
+	repo, notRepo, err := a.resolveAuthorizedGitRepository(ctx, req.Cwd)
 	if err != nil {
 		writeGitAPIError(w, err)
 		return

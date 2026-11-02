@@ -1,4 +1,4 @@
-package main
+package attachments
 
 import (
 	"bytes"
@@ -135,7 +135,7 @@ func TestAttachmentStoreRejectsClaimedAndRecognizableUnsupportedImages(t *testin
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := putTestItem(t, store, "pane", tc.name, tc.data)
-			if !errors.Is(err, errAttachmentUnsupported) {
+			if !errors.Is(err, ErrUnsupported) {
 				t.Fatalf("error = %v, want unsupported image", err)
 			}
 		})
@@ -153,7 +153,7 @@ func TestAttachmentStoreRejectsImageDimensionLimitBeforeDecode(t *testing.T) {
 	}
 	defer store.Close()
 	_, err = putTestItem(t, store, "pane", "wide.png", testPNG(t, 16_385, 1))
-	if !errors.Is(err, errAttachmentUnsupported) {
+	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("error = %v, want dimension refusal", err)
 	}
 }
@@ -219,7 +219,7 @@ func TestAttachmentStoreWriterLockAndInjectedQuota(t *testing.T) {
 	store.limits.maxBytes = used + 9
 	for i := 0; i < 20; i++ {
 		if _, _, err := store.CreateHandoff("process-1", "pane", []string{item.ID}); err != nil {
-			if !errors.Is(err, errAttachmentLimit) {
+			if !errors.Is(err, ErrLimit) {
 				t.Fatalf("handoff error = %v, want quota limit", err)
 			}
 			break
@@ -370,10 +370,10 @@ func TestAttachmentStoreHandoffEnforcesEightItemAndTotalLimits(t *testing.T) {
 			t.Fatalf("ref %d sha=%s want %s", i, ref.SHA256, wantSHA[i])
 		}
 	}
-	if _, _, err := store.CreateHandoff("process-1", "pane", append(ids, uuid.NewString())); !errors.Is(err, errAttachmentInvalid) {
+	if _, _, err := store.CreateHandoff("process-1", "pane", append(ids, uuid.NewString())); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("nine-item error = %v, want invalid", err)
 	}
-	if _, _, err := store.CreateHandoff("process-1", "pane", nil); !errors.Is(err, errAttachmentInvalid) {
+	if _, _, err := store.CreateHandoff("process-1", "pane", nil); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("empty error = %v, want invalid", err)
 	}
 	big := make([]string, 0, 3)
@@ -384,7 +384,7 @@ func TestAttachmentStoreHandoffEnforcesEightItemAndTotalLimits(t *testing.T) {
 		}
 		big = append(big, item.ID)
 	}
-	if _, _, err := store.CreateHandoff("process-1", "pane", big); !errors.Is(err, errAttachmentLimit) {
+	if _, _, err := store.CreateHandoff("process-1", "pane", big); !errors.Is(err, ErrLimit) {
 		t.Fatalf("oversize-total error = %v, want limit", err)
 	}
 }

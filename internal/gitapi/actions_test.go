@@ -1,4 +1,4 @@
-package main
+package gitapi
 
 import (
 	"bytes"
@@ -109,7 +109,7 @@ func gitFixtureInfo(t *testing.T, cwd string) (int, gitInfoResponse, *httptest.R
 	query := url.Values{"cwd": {cwd}}
 	req := httptest.NewRequest(http.MethodGet, "/api/git/info?"+query.Encode(), nil)
 	w := httptest.NewRecorder()
-	handleGitInfo(w, req)
+	testAPI().HandleGitInfo(w, req)
 	var response gitInfoResponse
 	if w.Code == http.StatusOK {
 		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
@@ -128,7 +128,7 @@ func gitFixtureActionRequest(t *testing.T, actionRequest gitActionRequest) *http
 	req := httptest.NewRequest(http.MethodPost, "/api/git/action", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	handleGitAction(w, req)
+	testAPI().HandleGitAction(w, req)
 	return w
 }
 
@@ -290,11 +290,11 @@ func TestGitReadersDoNotRefreshIndex(t *testing.T) {
 		commit  string
 		handler http.HandlerFunc
 	}{
-		{"raw-diff", "", handleRawDiff},
-		{"raw-diff-unstaged", "unstaged", handleRawDiff},
-		{"raw-diff-staged", "staged", handleRawDiff},
-		{"raw-status", "", handleRawStatus},
-		{"info", "", handleGitInfo},
+		{"raw-diff", "", testAPI().HandleRawDiff},
+		{"raw-diff-unstaged", "unstaged", testAPI().HandleRawDiff},
+		{"raw-diff-staged", "staged", testAPI().HandleRawDiff},
+		{"raw-status", "", testAPI().HandleRawStatus},
+		{"info", "", testAPI().HandleGitInfo},
 	} {
 		t.Run(reader.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "/api/git/"+reader.name+"?"+url.Values{"cwd": {fixture.project}, "commit": {reader.commit}}.Encode(), nil)
@@ -974,7 +974,7 @@ func TestGitRawLog(t *testing.T) {
 		query := url.Values{"cwd": {cwd}}
 		req := httptest.NewRequest(method, "/api/git/raw-log?"+query.Encode(), nil)
 		w := httptest.NewRecorder()
-		handleRawLog(w, req)
+		testAPI().HandleRawLog(w, req)
 		return w
 	}
 
@@ -1032,7 +1032,7 @@ func TestGitAPIRequestBoundaries(t *testing.T) {
 				req.Header.Set("Content-Type", test.contentType)
 			}
 			w := httptest.NewRecorder()
-			handleGitAction(w, req)
+			testAPI().HandleGitAction(w, req)
 			if w.Code != test.want {
 				t.Fatalf("status=%d want=%d body=%s", w.Code, test.want, w.Body.String())
 			}

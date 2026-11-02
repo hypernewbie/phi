@@ -1,4 +1,4 @@
-package main
+package attachments
 
 import (
 	"encoding/json"
@@ -15,17 +15,17 @@ import (
 
 const (
 	attachmentMultipartOverhead = 64 << 10
-	attachmentPaneMaxBytes      = 256
+	PaneMaxBytes      = 256
 )
 
 var attachmentPutReadTimeout = 10 * time.Minute
 
-func handleAttachmentsV2Item(w http.ResponseWriter, r *http.Request) {
+func HandleV2Item(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	prefix := "/api/attachments/v2/items/"
 	id := strings.TrimPrefix(r.URL.Path, prefix)
-	if id == r.URL.Path || strings.Contains(id, "/") || !canonicalAttachmentUUID(id) {
-		writeAttachmentJSONError(w, http.StatusBadRequest, "invalid-item")
+	if id == r.URL.Path || strings.Contains(id, "/") || !CanonicalUUID(id) {
+		WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 		return
 	}
 	switch r.Method {
@@ -41,42 +41,42 @@ func handleAttachmentsV2Item(w http.ResponseWriter, r *http.Request) {
 
 func handleAttachmentItemStatus(w http.ResponseWriter, r *http.Request, id string) {
 	pane := r.URL.Query().Get("pane")
-	if pane == "" || len(pane) > attachmentPaneMaxBytes {
-		writeAttachmentJSONError(w, http.StatusBadRequest, "invalid-item")
+	if pane == "" || len(pane) > PaneMaxBytes {
+		WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 		return
 	}
-	if attachmentStore == nil {
-		writeAttachmentJSONError(w, http.StatusServiceUnavailable, "storage")
+	if Default == nil {
+		WriteJSONError(w, http.StatusServiceUnavailable, "storage")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(attachmentStore.ItemStatus(id, pane))
+	_ = json.NewEncoder(w).Encode(Default.ItemStatus(id, pane))
 }
 
 func handleAttachmentItemPut(w http.ResponseWriter, r *http.Request, id string) {
-	if !attachmentSameOrigin(r) {
-		writeAttachmentJSONError(w, http.StatusForbidden, "unavailable")
+	if !SameOrigin(r) {
+		WriteJSONError(w, http.StatusForbidden, "unavailable")
 		return
 	}
-	clearDeadline, ok := setAttachmentReadDeadline(w, r, attachmentPutReadTimeout)
+	clearDeadline, ok := SetReadDeadline(w, r, attachmentPutReadTimeout)
 	if !ok {
-		writeAttachmentJSONError(w, http.StatusServiceUnavailable, "unavailable")
+		WriteJSONError(w, http.StatusServiceUnavailable, "unavailable")
 		return
 	}
 	defer clearDeadline()
-	if attachmentStore == nil {
-		writeAttachmentJSONError(w, http.StatusServiceUnavailable, "storage")
+	if Default == nil {
+		WriteJSONError(w, http.StatusServiceUnavailable, "storage")
 		return
 	}
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "multipart/form-data" {
-		writeAttachmentJSONError(w, http.StatusBadRequest, "invalid-item")
+		WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, attachmentUploadMaxBytes+attachmentMultipartOverhead)
 	reader, err := r.MultipartReader()
 	if err != nil {
-		writeAttachmentJSONError(w, http.StatusBadRequest, "invalid-item")
+		WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 		return
 	}
 	pane, name := "", ""
@@ -84,7 +84,7 @@ func handleAttachmentItemPut(w http.ResponseWriter, r *http.Request, id string) 
 	for {
 		part, partErr := reader.NextPart()
 		if errors.Is(partErr, io.EOF) {
-			writeAttachmentJSONError(w, http.StatusBadRequest, "missing-item")
+			WriteJSONError(w, http.StatusBadRequest, "missing-item")
 			return
 		}
 		if partErr != nil {
@@ -94,25 +94,25 @@ func handleAttachmentItemPut(w http.ResponseWriter, r *http.Request, id string) 
 		field := part.FormName()
 		switch field {
 		case "pane", "name":
-			limit := int64(attachmentPaneMaxBytes)
+			limit := int64(PaneMaxBytes)
 			if field == "name" {
 				limit = attachmentMaxNameBytes
 			}
 			value, readErr := io.ReadAll(io.LimitReader(part, limit+1))
 			_ = part.Close()
 			if readErr != nil || int64(len(value)) > limit {
-				writeAttachmentJSONError(w, http.StatusRequestEntityTooLarge, "limit")
+				WriteJSONError(w, http.StatusRequestEntityTooLarge, "limit")
 				return
 			}
 			if field == "pane" {
 				if seenPane {
-					writeAttachmentJSONError(w, http.StatusBadRequest, "invalid-item")
+					WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 					return
 				}
 				seenPane, pane = true, string(value)
 			} else {
 				if seenName {
-					writeAttachmentJSONError(w, http.StatusBadRequest, "invalid-item")
+					WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 					return
 				}
 				seenName, name = true, string(value)
@@ -120,12 +120,12 @@ func handleAttachmentItemPut(w http.ResponseWriter, r *http.Request, id string) 
 		case "file":
 			if !seenPane || !seenName || pane == "" {
 				_ = part.Close()
-				writeAttachmentJSONError(w, http.StatusBadRequest, "invalid-item")
+				WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 				return
 			}
-			if _, err := requireLivePiPane(pane); err != nil {
+			if _, err := LivePiPane(pane); err != nil {
 				_ = part.Close()
-				writeAttachmentJSONError(w, http.StatusNotFound, "unavailable")
+				WriteJSONError(w, http.StatusNotFound, "unavailable")
 				return
 			}
 			finish := func() error {
@@ -134,14 +134,14 @@ func handleAttachmentItemPut(w http.ResponseWriter, r *http.Request, id string) 
 					return nil
 				}
 				if extraErr != nil {
-					return errAttachmentInvalid
+					return ErrInvalid
 				}
 				_ = extra.Close()
-				return errAttachmentInvalid
+				return ErrInvalid
 			}
-			item, putErr := attachmentStore.Put(r.Context(), id, pane, name, part.Header.Get("Content-Type"), part, finish)
+			item, putErr := Default.Put(r.Context(), id, pane, name, part.Header.Get("Content-Type"), part, finish)
 			if putErr != nil {
-				writeAttachmentStoreError(w, putErr)
+				WriteStoreError(w, putErr)
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -149,24 +149,26 @@ func handleAttachmentItemPut(w http.ResponseWriter, r *http.Request, id string) 
 			return
 		default:
 			_ = part.Close()
-			writeAttachmentJSONError(w, http.StatusBadRequest, "invalid-item")
+			WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 			return
 		}
 	}
 }
 
-func requireLivePiPane(paneID string) (*pty.PTYInstance, error) {
-	if ptyManager == nil || paneID == "" || len(paneID) > attachmentPaneMaxBytes {
-		return nil, errAttachmentNotFound
+// LivePiPane returns the live PTY instance for a pane ID.
+func LivePiPane(paneID string) (*pty.PTYInstance, error) {
+	if paneManager() == nil || paneID == "" || len(paneID) > PaneMaxBytes {
+		return nil, ErrNotFound
 	}
-	inst, ok := ptyManager.Get(paneID)
+	inst, ok := paneManager().Get(paneID)
 	if !ok || inst == nil || inst.Coder != "pi" || inst.IsPtyDead() {
-		return nil, errAttachmentNotFound
+		return nil, ErrNotFound
 	}
 	return inst, nil
 }
 
-func setAttachmentReadDeadline(w http.ResponseWriter, r *http.Request, timeout time.Duration) (func(), bool) {
+// SetReadDeadline bounds how long a client may take to send a body.
+func SetReadDeadline(w http.ResponseWriter, r *http.Request, timeout time.Duration) (func(), bool) {
 	controller := http.NewResponseController(w)
 	if err := controller.SetReadDeadline(time.Now().Add(timeout)); err != nil {
 		return nil, false
@@ -174,7 +176,8 @@ func setAttachmentReadDeadline(w http.ResponseWriter, r *http.Request, timeout t
 	return func() { _ = controller.SetReadDeadline(time.Time{}) }, true
 }
 
-func attachmentSameOrigin(r *http.Request) bool {
+// SameOrigin reports whether the request passes the attachment CSRF check.
+func SameOrigin(r *http.Request) bool {
 	if origin := r.Header.Get("Origin"); origin != "" {
 		u, err := url.Parse(origin)
 		if err != nil || u.Host == "" || u.User != nil || u.Path != "" || u.RawPath != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" {
@@ -196,36 +199,49 @@ func attachmentSameOrigin(r *http.Request) bool {
 func writeMultipartError(w http.ResponseWriter, err error) {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
-		writeAttachmentJSONError(w, http.StatusRequestEntityTooLarge, "limit")
+		WriteJSONError(w, http.StatusRequestEntityTooLarge, "limit")
 		return
 	}
-	writeAttachmentJSONError(w, http.StatusBadRequest, "invalid-item")
+	WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 }
 
-func writeAttachmentStoreError(w http.ResponseWriter, err error) {
+func WriteStoreError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, errAttachmentInvalid):
-		writeAttachmentJSONError(w, http.StatusBadRequest, "invalid-item")
+	case errors.Is(err, ErrInvalid):
+		WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 	case errors.Is(err, errAttachmentChanged):
-		writeAttachmentJSONError(w, http.StatusConflict, "changed-source")
+		WriteJSONError(w, http.StatusConflict, "changed-source")
 	case errors.Is(err, errAttachmentConflict), errors.Is(err, errAttachmentReceiving):
-		writeAttachmentJSONError(w, http.StatusConflict, "invalid-item")
-	case errors.Is(err, errAttachmentNotFound):
-		writeAttachmentJSONError(w, http.StatusNotFound, "missing-item")
+		WriteJSONError(w, http.StatusConflict, "invalid-item")
+	case errors.Is(err, ErrNotFound):
+		WriteJSONError(w, http.StatusNotFound, "missing-item")
 	case errors.Is(err, errAttachmentForbidden):
-		writeAttachmentJSONError(w, http.StatusForbidden, "unavailable")
-	case errors.Is(err, errAttachmentLimit):
-		writeAttachmentJSONError(w, http.StatusRequestEntityTooLarge, "limit")
-	case errors.Is(err, errAttachmentUnsupported):
-		writeAttachmentJSONError(w, http.StatusUnsupportedMediaType, "unsupported-image")
+		WriteJSONError(w, http.StatusForbidden, "unavailable")
+	case errors.Is(err, ErrLimit):
+		WriteJSONError(w, http.StatusRequestEntityTooLarge, "limit")
+	case errors.Is(err, ErrUnsupported):
+		WriteJSONError(w, http.StatusUnsupportedMediaType, "unsupported-image")
 	default:
-		writeAttachmentJSONError(w, http.StatusServiceUnavailable, "storage")
+		WriteJSONError(w, http.StatusServiceUnavailable, "storage")
 	}
 }
 
-func writeAttachmentJSONError(w http.ResponseWriter, status int, reason string) {
+func WriteJSONError(w http.ResponseWriter, status int, reason string) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"reason": reason})
+}
+
+// writeAttachmentBodyError maps a JSON body decode failure to the route's
+// error contract: oversize bodies report the limit, everything else is an
+// invalid item.
+// WriteJSONBodyError maps a JSON body decode failure to the route contract.
+func WriteJSONBodyError(w http.ResponseWriter, err error) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		WriteJSONError(w, http.StatusRequestEntityTooLarge, "limit")
+		return
+	}
+	WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 }

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/hypernewbie/phi/internal/attachments"
 	"github.com/hypernewbie/phi/pkg/system"
 )
 
@@ -15,7 +16,7 @@ func TestPhiDataDirRoutesStateWithoutMovingHome(t *testing.T) {
 	system.SetPhiDataDir(data)
 	t.Cleanup(func() { system.SetPhiDataDir("") })
 	for name, got := range map[string]string{
-		"clipboard":           attachmentDir(),
+		"clipboard":           attachments.ClipboardDir(),
 		"syncboard.json":      syncFilePath(),
 		"prompt_history.json": promptHistoryPath(),
 	} {

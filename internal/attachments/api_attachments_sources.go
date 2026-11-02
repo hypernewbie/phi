@@ -1,4 +1,4 @@
-package main
+package attachments
 
 import (
 	"encoding/json"
@@ -36,21 +36,21 @@ type attachmentServerItemRequest struct {
 	ExpectedFingerprint string `json:"expected_fingerprint"`
 }
 
-func handleAttachmentsV2Browse(w http.ResponseWriter, r *http.Request) {
+func HandleV2Browse(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !attachmentSameOrigin(r) {
-		writeAttachmentJSONError(w, http.StatusForbidden, "unavailable")
+	if !SameOrigin(r) {
+		WriteJSONError(w, http.StatusForbidden, "unavailable")
 		return
 	}
 	pane := r.URL.Query().Get("pane")
-	inst, err := requireLivePiPane(pane)
+	inst, err := LivePiPane(pane)
 	if err != nil {
-		writeAttachmentJSONError(w, http.StatusNotFound, "unavailable")
+		WriteJSONError(w, http.StatusNotFound, "unavailable")
 		return
 	}
 	requested := r.URL.Query().Get("path")
@@ -58,18 +58,18 @@ func handleAttachmentsV2Browse(w http.ResponseWriter, r *http.Request) {
 		requested = inst.Cwd
 	}
 	if len(requested) > attachmentServerPathMaxBytes || !utf8.ValidString(requested) || !filepath.IsAbs(requested) {
-		writeAttachmentJSONError(w, http.StatusBadRequest, "invalid-item")
+		WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 		return
 	}
 	current := filepath.Clean(requested)
 	info, err := os.Lstat(current)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		writeAttachmentJSONError(w, http.StatusNotFound, "missing-item")
+		WriteJSONError(w, http.StatusNotFound, "missing-item")
 		return
 	}
 	entries, err := os.ReadDir(current)
 	if err != nil {
-		writeAttachmentJSONError(w, http.StatusNotFound, "unavailable")
+		WriteJSONError(w, http.StatusNotFound, "unavailable")
 		return
 	}
 	result := attachmentBrowseResponse{Path: current, Parent: filepath.Dir(current), Entries: []attachmentBrowseEntry{}}
@@ -102,33 +102,33 @@ func handleAttachmentsV2Browse(w http.ResponseWriter, r *http.Request) {
 		}
 		return strings.ToLower(a.Name) < strings.ToLower(b.Name)
 	})
-	if len(result.Entries) > fsListMaxEntries {
-		result.Entries = result.Entries[:fsListMaxEntries]
+	if len(result.Entries) > attachmentListMaxEntries {
+		result.Entries = result.Entries[:attachmentListMaxEntries]
 		result.Truncated = true
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(result)
 }
 
-func handleAttachmentsV2ServerItem(w http.ResponseWriter, r *http.Request) {
+func HandleV2ServerItem(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !attachmentSameOrigin(r) {
-		writeAttachmentJSONError(w, http.StatusForbidden, "unavailable")
+	if !SameOrigin(r) {
+		WriteJSONError(w, http.StatusForbidden, "unavailable")
 		return
 	}
-	clearDeadline, ok := setAttachmentReadDeadline(w, r, 15*time.Second)
+	clearDeadline, ok := SetReadDeadline(w, r, 15*time.Second)
 	if !ok {
-		writeAttachmentJSONError(w, http.StatusServiceUnavailable, "unavailable")
+		WriteJSONError(w, http.StatusServiceUnavailable, "unavailable")
 		return
 	}
 	defer clearDeadline()
-	if attachmentStore == nil {
-		writeAttachmentJSONError(w, http.StatusServiceUnavailable, "storage")
+	if Default == nil {
+		WriteJSONError(w, http.StatusServiceUnavailable, "storage")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
@@ -136,25 +136,25 @@ func handleAttachmentsV2ServerItem(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&body); err != nil {
-		writeAttachmentJSONBodyError(w, err)
+		WriteJSONBodyError(w, err)
 		return
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		writeAttachmentJSONError(w, http.StatusBadRequest, "invalid-item")
+		WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 		return
 	}
-	if !canonicalAttachmentUUID(body.ID) || body.Pane == "" || len(body.Pane) > attachmentPaneMaxBytes || len(body.Path) > attachmentServerPathMaxBytes || !utf8.ValidString(body.Path) || !filepath.IsAbs(body.Path) {
-		writeAttachmentJSONError(w, http.StatusBadRequest, "invalid-item")
+	if !CanonicalUUID(body.ID) || body.Pane == "" || len(body.Pane) > PaneMaxBytes || len(body.Path) > attachmentServerPathMaxBytes || !utf8.ValidString(body.Path) || !filepath.IsAbs(body.Path) {
+		WriteJSONError(w, http.StatusBadRequest, "invalid-item")
 		return
 	}
-	if _, err := requireLivePiPane(body.Pane); err != nil {
-		writeAttachmentJSONError(w, http.StatusNotFound, "unavailable")
+	if _, err := LivePiPane(body.Pane); err != nil {
+		WriteJSONError(w, http.StatusNotFound, "unavailable")
 		return
 	}
-	item, err := attachmentStore.SnapshotFile(r.Context(), body.ID, body.Pane, body.Path, body.ExpectedFingerprint)
+	item, err := Default.SnapshotFile(r.Context(), body.ID, body.Pane, body.Path, body.ExpectedFingerprint)
 	if err != nil {
-		writeAttachmentStoreError(w, err)
+		WriteStoreError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

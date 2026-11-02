@@ -1,4 +1,4 @@
-package main
+package gitapi
 
 import (
 	"encoding/json"
@@ -17,7 +17,7 @@ func gitFixtureStatusFiles(t *testing.T, cwd string) (int, gitStatusFilesRespons
 	query := url.Values{"cwd": {cwd}}
 	req := httptest.NewRequest(http.MethodGet, "/api/git/status-files?"+query.Encode(), nil)
 	w := httptest.NewRecorder()
-	handleGitStatusFiles(w, req)
+	testAPI().HandleGitStatusFiles(w, req)
 	var response gitStatusFilesResponse
 	if w.Code == http.StatusOK {
 		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {

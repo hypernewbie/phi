@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/hypernewbie/phi/internal/attachments"
 	"github.com/hypernewbie/phi/internal/pibridge"
 	pibridgepb "github.com/hypernewbie/phi/internal/pibridge/pb"
 	"github.com/hypernewbie/phi/pkg/pty"
@@ -319,8 +320,8 @@ func (b *Bridge) Provision(paneID string, inject bool) (env map[string]string, a
 		piBridgeEnvProcess: processID,
 		piBridgeEnvToken:   token,
 	}
-	if attachmentStore != nil {
-		if root, err := attachmentStore.ProcessRoot(processID); err == nil {
+	if attachments.Default != nil {
+		if root, err := attachments.Default.ProcessRoot(processID); err == nil {
 			env[piBridgeEnvAttachmentRoot] = root
 		}
 	}
