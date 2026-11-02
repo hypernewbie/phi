@@ -318,6 +318,50 @@ it.each([false, true])(
     },
 );
 
+it.each(['live', 'replay', 'fit'])(
+    'keeps the reading row across %s geometry',
+    async (path) => {
+        const source = encode(
+            Array.from({ length: 200 }, (_, n) => `${n}\r\n`).join(''),
+        );
+        h = replayHarness(source);
+        h.manager._terminalPanelVisible = () => true;
+        h.pty.ws.head({ epoch: 7, oldest: 0, head: source.length });
+        await h.settle();
+        h.term.onScroll(() => h.manager._readerAnchorScroll(h.tab));
+        h.term.scrollToLine(110);
+        h.manager._captureReaderAnchor(h.tab);
+        const reading = () =>
+            h.term.buffer.active
+                .getLine(h.term.buffer.active.viewportY)
+                .translateToString(true);
+        const before = reading();
+        if (path === 'live')
+            await h.manager._adoptLiveGeometry(h.tab, {
+                at_seq: source.length,
+                cols: 80,
+                rows: 22,
+                event_cursor: `v1.7.${source.length}.1`,
+            });
+        else if (path === 'replay')
+            await h.manager._parseRecordingRange(
+                h.tab,
+                {
+                    start: source.length,
+                    end: source.length,
+                    bytes: new Uint8Array(),
+                    resizes: [[source.length, 80, 22]],
+                },
+                () => true,
+            );
+        else {
+            h.tab.fitAddon = { fit: () => h.term.resize(80, 22) };
+            h.manager._fitVisibleTerminal(h.tab);
+        }
+        expect(reading()).toBe(before);
+    },
+);
+
 it('holds output and geometry together until each preceding write has parsed', async () => {
     h = replayHarness(new Uint8Array());
     h.manager._fitVisibleTerminal = () => {};

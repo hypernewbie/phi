@@ -21,6 +21,7 @@ const timestamp = '2026-10-03T00:00:00.000Z';
 const shellQuote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
 interface ObservedTerminal {
     element?: HTMLElement;
+    replayReady?: boolean;
     rows: number;
     buffer: {
         active: {
@@ -32,6 +33,23 @@ interface ObservedTerminal {
     };
 }
 async function observe(page: Page) {
+    // A cached preview can contain the final transcript before raw replay
+    // finishes. Do not mistake that preview for a scroll-ready attachment.
+    await page.addInitScript(async () => {
+        const modulePath = '/terminal.js';
+        const { TabManager } = await import(modulePath);
+        const bootstrap = TabManager.prototype._bootstrapDelta;
+        TabManager.prototype._bootstrapDelta = async function (
+            this: unknown,
+            tab: { term: ObservedTerminal },
+            ...args: unknown[]
+        ) {
+            tab.term.replayReady = false;
+            const result = await bootstrap.call(this, tab, ...args);
+            tab.term.replayReady = result?.kind === 'applied';
+            return result;
+        };
+    });
     await page.addInitScript(() => {
         type Constructor = new (
             opts: Record<string, unknown>,
@@ -58,7 +76,9 @@ async function view(page: Page, pane: string) {
         const w = window as unknown as { nativeTerms: ObservedTerminal[] };
         const t = w.nativeTerms.find(
             (term) =>
-                term.element?.closest('.term-container')?.id === `term-${id}`,
+                term.replayReady &&
+                term.element?.isConnected &&
+                term.element.closest('.term-container')?.id === `term-${id}`,
         );
         if (!t) return '';
         return Array.from(

@@ -3204,7 +3204,7 @@ export class TabManager {
                 return;
             }
             if (tabInfo.term && (tabInfo.term.cols !== cols || tabInfo.term.rows !== rows))
-                tabInfo.term.resize(cols, rows);
+                this._resizeWithReaderAnchor(tabInfo, () => tabInfo.term.resize(cols, rows));
             tabInfo._replayCursor = geom.event_cursor;
         } catch (_e) {
             try { socket.ws?.close(); } catch (_ignored) {}
@@ -3265,7 +3265,8 @@ export class TabManager {
             for (const [at, cols, rows] of changes) {
                 if (!await parse(Math.max(range.start, at))) return false;
                 if (!current()) return false;
-                if (tabInfo.term.cols !== cols || tabInfo.term.rows !== rows) tabInfo.term.resize(cols, rows);
+                if (tabInfo.term.cols !== cols || tabInfo.term.rows !== rows)
+                    this._resizeWithReaderAnchor(tabInfo, () => tabInfo.term.resize(cols, rows));
                 if (at >= range.start) tabInfo._replayCursor = `v1.${epoch}.${at}.${++ordinal}`;
             }
             return await parse(range.end);
@@ -3709,7 +3710,29 @@ export class TabManager {
             tabInfo._pendingPanelFit = true;
             return;
         }
-        tabInfo.fitAddon?.fit?.();
+        this._resizeWithReaderAnchor(tabInfo, () => tabInfo.fitAddon?.fit?.());
+    }
+
+    // A resize emits onScroll before the reader's marker has been restored.
+    // Do not replace that marker with the resize's temporary viewport row.
+    _resizeWithReaderAnchor(tabInfo, resize) {
+        const term = tabInfo.term;
+        const anchor = term?._phiReaderAnchor;
+        if (!anchor) { resize(); return; }
+        const restoring = this._restoringReaderAnchor;
+        this._restoringReaderAnchor = true;
+        try {
+            resize();
+            if (!anchor.marker.isDisposed && anchor.marker.line >= 0 &&
+                term.buffer.active.type === 'normal' && this._terminalPanelVisible(tabInfo)) {
+                // Browser xterm can still have its pre-resize pixel offset.
+                // Re-sync it before scrollToLine computes a relative move.
+                this._resyncViewportScroll(tabInfo, true);
+                term.scrollToLine(anchor.marker.line);
+            }
+        } finally {
+            this._restoringReaderAnchor = restoring;
+        }
     }
 
     _queueActiveRefresh() {
@@ -4969,6 +4992,7 @@ export class TabManager {
             // to the live tail. Lets the user "release" and re-follow
             // without needing to click Jump-to-bottom.
             term.onScroll(() => {
+                if (this._restoringReaderAnchor) return;
                 const b = tabInfo.term?.buffer?.active;
                 if (b && b.viewportY >= b.baseY) {
                     tabInfo.userFollowBottom = true;
@@ -14682,13 +14706,13 @@ export class TabManager {
     // user unable to reach scrollback after a reload. A synchronous
     // top→bottom round trip re-derives the position from the buffer; nothing
     // paints between the two calls, so it is visually inert.
-    _resyncViewportScroll(tabInfo) {
+    _resyncViewportScroll(tabInfo, includeReader = false) {
         const term = tabInfo?.term;
         const buffer = term?.buffer?.active;
         if (!term || !buffer) return;
         // Alternate-screen apps own the visible screen; normal scrollback is
         // not what their viewport is showing.
-        if (buffer.baseY <= 0 || buffer.viewportY < buffer.baseY) return;
+        if (buffer.baseY <= 0 || (!includeReader && buffer.viewportY < buffer.baseY)) return;
         try {
             term.scrollToTop();
             term.scrollToBottom();
@@ -15149,7 +15173,7 @@ export class TabManager {
                 scrollY = buffer.viewportY;
             }
 
-            activeTab.fitAddon.fit();
+            this._resizeWithReaderAnchor(activeTab, () => activeTab.fitAddon.fit());
             const fitMs = termPerfMeasureSince('fit', _fitT0);
             termPerfLogSlowFit(
                 fitMs,
@@ -15157,22 +15181,6 @@ export class TabManager {
                 activeTab.term.rows,
                 buffer.length,
             );
-
-            // Reflow moves the anchored row; put the viewport back on it. A
-            // marker the reflow disposed falls through to the next batch's
-            // expiry branch, which reports it once.
-            if (
-                readerAnchor &&
-                !readerAnchor.marker.isDisposed &&
-                readerAnchor.marker.line >= 0
-            ) {
-                this._restoringReaderAnchor = true;
-                try {
-                    activeTab.term.scrollToLine(readerAnchor.marker.line);
-                } finally {
-                    this._restoringReaderAnchor = false;
-                }
-            }
 
             // Restore scroll state POST-FIT using the unified helper to synchronise viewport
             this._spamScroll(activeTab, isAtBottom, scrollY);
