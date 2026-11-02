@@ -2,6 +2,12 @@ import { useEffect, useState } from 'react';
 import styles from './app.module.css';
 import { Button } from './components/ui/Button.tsx';
 import type { AuthSession } from './platform/auth-session.ts';
+import {
+    currentSearch,
+    isDirectServe,
+    navigateToLegacyMain,
+    resolveLegacyHandoff,
+} from './platform/legacy-handoff.ts';
 import { ConnectionScreen } from './screens/ConnectionScreen.tsx';
 import { LoginScreen } from './screens/LoginScreen.tsx';
 
@@ -11,6 +17,10 @@ export function App({ session }: { session: AuthSession }) {
     const [screen, setScreen] = useState<Screen>('connection');
     const [view, setView] = useState(session.view);
     useEffect(() => session.start(setView), [session]);
+    useEffect(() => {
+        if (resolveLegacyHandoff(isDirectServe(), view.phase, currentSearch()))
+            navigateToLegacyMain();
+    }, [view.phase]);
     return (
         <div className={styles.shell}>
             <header className={styles.header}>

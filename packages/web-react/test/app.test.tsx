@@ -2,6 +2,7 @@
 import { act, StrictMode } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { App } from '../src/App.tsx';
+import { resolveLegacyHandoff } from '../src/platform/legacy-handoff.ts';
 import type { AuthSession, AuthView } from '../src/platform/auth-session.ts';
 import { cleanup, mount } from './react-env.ts';
 
@@ -192,4 +193,19 @@ it('does not restore Retry after unmount', async () => {
     const focus = vi.spyOn(retry, 'focus');
     await cleanup();
     expect(focus).not.toHaveBeenCalled();
+});
+
+it.each([
+    ['hands off when direct and ready', true, 'ready', '', true],
+    ['stays in dev-proxy builds', false, 'ready', '', false],
+    ['stays before ready', true, 'sign-in', '', false],
+    ['stays with the review flag', true, 'ready', '?stay=1', false],
+])('%s', (_name, direct, phase, search, expected) => {
+    expect(
+        resolveLegacyHandoff(
+            direct as boolean,
+            phase as AuthView['phase'],
+            search as string,
+        ),
+    ).toBe(expected);
 });
