@@ -580,9 +580,7 @@ function queueSnapshotFromWire(
     };
 }
 
-function dialogsFromWire(
-    dialogs: readonly ExtensionUIDialog[],
-): WireDialog[] {
+function dialogsFromWire(dialogs: readonly ExtensionUIDialog[]): WireDialog[] {
     return dialogs.map((dialog) => {
         const out: WireDialog = {
             id: dialog.id,
@@ -741,7 +739,10 @@ export function resultFromWire(op: string, response: ControlResponse): unknown {
                     ref: attachment.ref,
                     name: attachment.name,
                     mimeType: attachment.mimeType,
-                    sizeBytes: safeNumber(attachment.sizeBytes, 'attachment size'),
+                    sizeBytes: safeNumber(
+                        attachment.sizeBytes,
+                        'attachment size',
+                    ),
                 })),
             };
             if (present(result.value.message) && result.value.message !== '')

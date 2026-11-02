@@ -2159,7 +2159,10 @@ export class TabManager {
 
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                this.sendStagedInput();
+                // Alt+Enter queues a follow-up behind the running turn on
+                // pi-rpc panes, matching Pi's TUI. Other coders keep the
+                // plain submit path.
+                this.sendStagedInput(e.altKey ? { followUp: true } : undefined);
             } else if (e.key === 'Escape') {
                 if (this._handlePiRpcEscape(e)) return;
                 // Return focus to terminal in Hybrid mode
@@ -5715,48 +5718,27 @@ export class TabManager {
         if (!paneId || !item) return;
         const tab = this.tabs.get(paneId);
         if (!tab) return;
+        // Text only: the browser never holds the bytes behind a queued
+        // attachment, so staging a chip here would send a path that does not
+        // exist. Pi's TUI restores queued text into the editor the same way.
         const text = typeof item.message === 'string' ? item.message : '';
-        const staged = (item.attachments || []).
-            filter((attachment) => attachment?.ref && attachment?.name).
-            map((attachment) => ({
-                id: `piq-${attachment.ref.slice(0, 12)}`,
-                ref: attachment.ref,
-                name: attachment.name,
-                type: attachment.mimeType,
-                sizeBytes: attachment.sizeBytes,
-                source: 'pi-queue',
-            }));
-        if (text === '' && staged.length === 0) return;
-        tab.draftAttachments = [...staged, ...(tab.draftAttachments || [])];
+        if (text === '') return;
         if (this.getActiveTab()?.paneId !== paneId) {
-            tab.draft = text !== '' && tab.draft?.trim()
-                ? `${text}\n\n${tab.draft}`
-                : text !== ''
-                  ? text
-                  : tab.draft;
+            tab.draft = tab.draft?.trim() ? `${text}\n\n${tab.draft}` : text;
             return;
         }
-        if (text !== '') {
-            const draft = this.inputTextArea.value;
-            this.inputTextArea.value = draft.trim()
-                ? `${text}\n\n${draft}`
-                : text;
-            this.lastInputValue = this.inputTextArea.value;
-            // Keep the tab's parked draft in step with the composer, the same
-            // way saveActiveDraft() does.
-            tab.draft = this.inputTextArea.value;
-            this._historyCursor = -1;
-            this._historyPreCycleValue = undefined;
-            this._resetPiRecall({ flush: true });
-            tab.chatHistoryCursor = -1;
-            tab.chatHistoryPreCycleValue = undefined;
-            this.adjustInputHeight();
-        }
-        if (staged.length > 0) {
-            this.stagedAttachments = [...staged, ...this.stagedAttachments];
-            tab.draftAttachments = this.stagedAttachments;
-            this._renderAttachmentStrip();
-        }
+        const draft = this.inputTextArea.value;
+        this.inputTextArea.value = draft.trim() ? `${text}\n\n${draft}` : text;
+        this.lastInputValue = this.inputTextArea.value;
+        // Keep the tab's parked draft in step with the composer, the same
+        // way saveActiveDraft() does.
+        tab.draft = this.inputTextArea.value;
+        this._historyCursor = -1;
+        this._historyPreCycleValue = undefined;
+        this._resetPiRecall({ flush: true });
+        tab.chatHistoryCursor = -1;
+        tab.chatHistoryPreCycleValue = undefined;
+        this.adjustInputHeight();
         this.inputTextArea.focus({ preventScroll: true });
         this._placeCursorAtEnd();
     }
@@ -11337,7 +11319,7 @@ export class TabManager {
         `;
     }
 
-    sendStagedInput() {
+    sendStagedInput(options) {
         const activeTab = this.getActiveTab();
         if (!activeTab) return;
 
@@ -11377,7 +11359,7 @@ export class TabManager {
         let payload = lines.join('\n');
 
         if (coder === 'pi-rpc') {
-            if (!rpcChatSend(activeTab.paneId, payload)) {
+            if (!rpcChatSend(activeTab.paneId, payload, options)) {
                 this.app.showToast('pi chat: not ready', { type: 'error' });
                 return;
             }

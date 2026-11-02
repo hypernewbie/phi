@@ -15,11 +15,6 @@ export type QueueItemState =
 /** Browser view of one Phi-owned queue ledger item. */
 export type QueueItem = WireQueueItem;
 
-export interface QueueAuthoritative {
-    steering: readonly string[];
-    followUp: readonly string[];
-}
-
 export interface QueueActions {
     copy?: (item: QueueItem) => void;
     discard?: (item: QueueItem) => void;
@@ -29,18 +24,13 @@ export interface QueueActions {
 export function renderQueuePanel(
     panel: HTMLElement,
     items: readonly QueueItem[],
-    authoritative: QueueAuthoritative = { steering: [], followUp: [] },
     actions: QueueActions = {},
 ): void {
     panel.replaceChildren();
     const visible = items.filter(
         (item) => item.state !== 'cancelled' && item.state !== 'consumed',
     );
-    if (
-        visible.length === 0 &&
-        authoritative.steering.length === 0 &&
-        authoritative.followUp.length === 0
-    ) {
+    if (visible.length === 0) {
         panel.classList.add('hidden');
         return;
     }
@@ -114,20 +104,5 @@ export function renderQueuePanel(
             row.appendChild(copy);
         }
         panel.appendChild(row);
-    }
-
-    for (const [delivery, messages] of [
-        ['steer', authoritative.steering],
-        ['followUp', authoritative.followUp],
-    ] as const) {
-        for (const message of messages) {
-            const row = document.createElement('div');
-            row.className = 'pi-queue-authoritative';
-            row.dataset.queueDelivery = delivery;
-            row.textContent = `${
-                delivery === 'followUp' ? 'Follow-up' : 'Steering'
-            }: ${message}`;
-            panel.appendChild(row);
-        }
     }
 }

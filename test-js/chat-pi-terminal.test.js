@@ -1565,8 +1565,20 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(rpcChatSend).toHaveBeenCalledWith(
             tab.paneId,
             'hello from Pi RPC',
+            undefined,
         );
         expect(tm.sendInput).not.toHaveBeenCalled();
+
+        // Alt+Enter forwards the follow-up flag, which is Pi's queue-behind
+        // binding, to the same call.
+        rpcChatSend.mockClear();
+        tm.inputTextArea.value = 'hello from Pi RPC';
+        tm.sendStagedInput({ followUp: true });
+        expect(rpcChatSend).toHaveBeenCalledWith(
+            tab.paneId,
+            'hello from Pi RPC',
+            { followUp: true },
+        );
     });
 
     it('finalizes Pi RPC by destroying its controller without a PTY DELETE', () => {

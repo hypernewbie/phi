@@ -215,6 +215,21 @@ describe('Pi native dialog focus and recovery', () => {
         expect(ctx.respond.mock.calls[0][1]).toEqual({ cancelled: true });
         expect(document.activeElement).toBe(prior);
 
+        // Escape after the user clicks away from the dialog: focus is in the
+        // pane, not in the dialog, and the pane-level handler still cancels.
+        const awayCtx = setup();
+        awayCtx.controller.setDialogs([selectRecord]);
+        awayCtx.fallback.focus();
+        awayCtx.host.dispatchEvent(
+            new KeyboardEvent('keydown', {
+                key: 'Escape',
+                bubbles: true,
+                cancelable: true,
+            }),
+        );
+        await Promise.resolve();
+        expect(awayCtx.respond.mock.calls[0][1]).toEqual({ cancelled: true });
+
         const enterCtx = setup();
         enterCtx.controller.setDialogs([selectRecord]);
         const enterOption = enterCtx.host.querySelector(
@@ -336,5 +351,11 @@ describe('Pi native dialog focus and recovery', () => {
         expect(
             ctx.host.querySelector('[data-dialog-id="server-1"]'),
         ).toBeNull();
+
+        const destroyed = setup();
+        destroyed.controller.setDialogs([selectRecord]);
+        destroyed.controller.destroy();
+        expect(destroyed.cancelAll).toHaveBeenCalledWith('tabClosed');
+        expect(destroyed.host.children).toHaveLength(0);
     });
 });

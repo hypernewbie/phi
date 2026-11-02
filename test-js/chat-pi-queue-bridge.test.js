@@ -142,6 +142,37 @@ describe('Pi RPC queue recovery bridge', () => {
             });
             await flush();
 
+            // Item identity, never message text, decides what the server
+            // already has: a different item carrying the same words must not
+            // retire the unsent row.
+            wire.emit({
+                t: 'evt',
+                sid: 's1',
+                seq: 2,
+                evt: 'queueChanged',
+                data: {
+                    sessionEpoch: 'epoch-1',
+                    items: [
+                        {
+                            id: 'server-same-text',
+                            sid: 's1',
+                            sessionEpoch: 'epoch-1',
+                            message: 'restore through controller',
+                            delivery: 'steer',
+                            state: 'sending',
+                            attachments: [],
+                            createdAt: 2,
+                        },
+                    ],
+                },
+            });
+            await flush();
+            expect(
+                [...root.querySelectorAll('.pi-queue-item')].map(
+                    (row) => row.dataset.queueId,
+                ),
+            ).toEqual(['server-same-text', 'local-bridge']);
+
             const restore = root.querySelector('.pi-queue-restore');
             expect(restore).not.toBeNull();
             restore.click();
@@ -171,17 +202,11 @@ describe('Pi RPC queue recovery bridge', () => {
             expect(terminal.inputTextArea.value).toBe(
                 'restore through controller',
             );
-            expect(terminal.stagedAttachments).toEqual([
-                expect.objectContaining({
-                    ref: 'b'.repeat(64),
-                    name: 'bridge.png',
-                }),
-            ]);
-            expect(
-                terminal.attachmentStrip.querySelector(
-                    '[data-id="' + 'piq-' + 'b'.repeat(12) + '"]',
-                ),
-            ).not.toBeNull();
+            // The browser never holds the bytes behind a queued attachment,
+            // so recovery restores the text and stages no chip that would
+            // resolve to a path that does not exist.
+            expect(terminal.stagedAttachments).toEqual([]);
+            expect(terminal.attachmentStrip.children).toHaveLength(0);
         } finally {
             document.removeEventListener('phi:pi-queue-recovery', onRecovery);
             terminal._piRpcStatusUnsubscribe?.();
@@ -292,9 +317,7 @@ describe('Pi RPC queue recovery bridge', () => {
         const activeElementBeforeRecovery = document.activeElement;
 
         const bootstrap = async (wire, sid, sessionEpoch) => {
-            const spawnFrame = wire.sent.find(
-                (frame) => frame.op === 'spawn',
-            );
+            const spawnFrame = wire.sent.find((frame) => frame.op === 'spawn');
             expect(spawnFrame).toBeDefined();
             wire.respond(spawnFrame.id, {
                 sid,
@@ -377,27 +400,12 @@ describe('Pi RPC queue recovery bridge', () => {
             expect(terminal.attachmentStrip.innerHTML).toBe(activeChipMarkup);
             expect(document.activeElement).toBe(activeElementBeforeRecovery);
             expect(targetTab.draft).toBe('restore target pane');
-            expect(targetTab.draftAttachments).toEqual([
-                expect.objectContaining({
-                    ref: targetRef,
-                    name: 'target.png',
-                }),
-            ]);
+            expect(targetTab.draftAttachments).toEqual([]);
 
             terminal.switchTab(targetPaneId);
             expect(terminal.activePaneId).toBe(targetPaneId);
             expect(terminal.inputTextArea.value).toBe('restore target pane');
-            expect(terminal.stagedAttachments).toEqual([
-                expect.objectContaining({
-                    ref: targetRef,
-                    name: 'target.png',
-                }),
-            ]);
-            expect(
-                terminal.attachmentStrip.querySelector(
-                    '[data-id="piq-' + targetRef.slice(0, 12) + '"]',
-                ),
-            ).not.toBeNull();
+            expect(terminal.stagedAttachments).toEqual([]);
 
             const activeLocal = {
                 id: 'local-active-bridge',
@@ -452,18 +460,7 @@ describe('Pi RPC queue recovery bridge', () => {
             expect(terminal.inputTextArea.value).toBe(
                 'restore active target\n\nrestore target pane',
             );
-            expect(terminal.stagedAttachments[0]).toEqual(
-                expect.objectContaining({
-                    ref: 'd'.repeat(64),
-                    name: 'active-target.png',
-                }),
-            );
-            expect(terminal.stagedAttachments).toHaveLength(2);
-            expect(
-                terminal.attachmentStrip.querySelector(
-                    '[data-id="piq-' + 'd'.repeat(12) + '"]',
-                ),
-            ).not.toBeNull();
+            expect(terminal.stagedAttachments).toEqual([]);
             expect(document.activeElement).toBe(terminal.inputTextArea);
         } finally {
             terminal._piRpcStatusUnsubscribe?.();

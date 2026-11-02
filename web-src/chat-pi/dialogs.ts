@@ -125,6 +125,9 @@ export function createPiDialogController(
     const isActive = options.isActive ?? (() => true);
     let activeId: string | null = null;
     let destroyed = false;
+    // Monotonic: entries.size repeats once a dialog is removed, and two
+    // dialogs sharing one aria-labelledby target would mislabel each other.
+    let titleSeq = 0;
 
     const focusables = (entry: DialogEntry): HTMLElement[] =>
         Array.from(
@@ -363,7 +366,7 @@ export function createPiDialogController(
         header.className = 'modal-header';
         const title = document.createElement('h3');
         title.className = 'pi-extension-dialog-title';
-        title.id = `pi-extension-dialog-title-${entries.size}`;
+        title.id = `pi-extension-dialog-title-${++titleSeq}`;
         title.textContent = record.title;
         header.appendChild(title);
         dialog.setAttribute('aria-labelledby', title.id);
@@ -390,6 +393,13 @@ export function createPiDialogController(
             countdown: null,
         };
 
+        if (record.message) {
+            const message = document.createElement('div');
+            message.className = 'pi-extension-dialog-message';
+            message.textContent = record.message;
+            content.appendChild(message);
+        }
+
         if (record.method === 'select') {
             for (const option of record.options ?? []) {
                 const button = document.createElement('button');
@@ -406,10 +416,6 @@ export function createPiDialogController(
                 submit(entry, { cancelled: true }),
             );
         } else if (record.method === 'confirm') {
-            const message = document.createElement('div');
-            message.className = 'pi-extension-dialog-message';
-            message.textContent = record.message ?? '';
-            content.appendChild(message);
             addButton(
                 entry,
                 'pi-extension-dialog-confirm',
@@ -452,7 +458,12 @@ export function createPiDialogController(
         // CountdownTimer). Editor dialogs never time out in Pi either.
         if (record.timeout > 0 && record.method !== 'editor') {
             const base = record.title;
-            const deadline = Date.now() + record.timeout;
+            // A retained dialog replayed after a reload keeps its original
+            // deadline. The server stamps createdAt in Unix milliseconds; a
+            // missing or implausible stamp starts the clock now instead.
+            const created =
+                record.createdAt >= 1e12 ? record.createdAt : Date.now();
+            const deadline = created + record.timeout;
             entry.countdown = setInterval(() => {
                 const remaining = Math.ceil((deadline - Date.now()) / 1000);
                 if (remaining <= 0) {
@@ -473,6 +484,19 @@ export function createPiDialogController(
         overlay.appendChild(dialog);
         return entry;
     };
+
+    // Escape must reach the dialog even after the user clicks outside it.
+    // The dialog's own handler stops propagation, so this only fires when
+    // focus is somewhere else in the pane.
+    const onHostKeydown = (event: KeyboardEvent): void => {
+        if (event.key !== 'Escape' || !activeId || destroyed) return;
+        if (!isActive()) return;
+        const entry = entries.get(activeId);
+        if (!entry) return;
+        event.preventDefault();
+        submit(entry, { cancelled: true });
+    };
+    options.host.addEventListener('keydown', onHostKeydown);
 
     const activate = (id: string): void => {
         if (!entries.has(id)) return;
@@ -534,7 +558,18 @@ export function createPiDialogController(
         destroy() {
             if (destroyed) return;
             destroyed = true;
-            for (const entry of entries.values()) entry.overlay.remove();
+            options.host.removeEventListener('keydown', onHostKeydown);
+            // Pi is blocked on every retained request and closing a tab does
+            // not kill the child, so release them instead of leaving Pi
+            // waiting for an answer that can no longer arrive.
+            if (entries.size > 0)
+                options.cancelAll('tabClosed').catch(() => {
+                    // The socket is already going away; nothing to report.
+                });
+            for (const entry of entries.values()) {
+                if (entry.countdown !== null) clearInterval(entry.countdown);
+                entry.overlay.remove();
+            }
             entries.clear();
             activeId = null;
         },

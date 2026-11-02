@@ -13219,11 +13219,8 @@ body.md-standalone #md-view-body {
     flex-direction: column;
     gap: 0.15em;
     padding: 0.4em 1em;
-    color: var(--text-secondary);
+    color: var(--text-muted);
     font-size: 0.9em;
-}
-.pi-queue-strip.hidden {
-    display: none;
 }
 .pi-queue-item,
 .pi-queue-authoritative {
@@ -13237,9 +13234,12 @@ body.md-standalone #md-view-body {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.pi-queue-error,
 .pi-queue-state {
     color: var(--text-muted);
+    flex: none;
+}
+.pi-queue-error {
+    color: var(--red);
     flex: none;
 }
 .pi-queue-strip button.pi-queue-restore,
@@ -13251,7 +13251,17 @@ body.md-standalone #md-view-body {
     cursor: pointer;
     flex: none;
     font: inherit;
-    padding: 0 0.2em;
+    /* A queued row is a touch target too: keep the label but give the button
+       a real hit area on coarse pointers. */
+    padding: 0.1em 0.35em;
+}
+@media (pointer: coarse) {
+    .pi-queue-strip button.pi-queue-restore,
+    .pi-queue-strip button.pi-queue-copy,
+    .pi-queue-strip button.pi-queue-discard {
+        min-height: 32px;
+        padding: 0.2em 0.6em;
+    }
 }
 .pi-queue-strip button:hover {
     color: var(--text-primary);
@@ -13276,11 +13286,20 @@ body.md-standalone #md-view-body {
     color: var(--text-primary);
     cursor: pointer;
     font: inherit;
-    padding: 0.35em 0.5em;
+    /* Reserved gutter keeps the label still when the arrow appears. */
+    padding: 0.35em 0.5em 0.35em 1.6em;
+    position: relative;
     text-align: left;
 }
 .pi-extension-dialog-option:hover {
     background-color: var(--bg-elevated);
+}
+/* Pi's selector marks the current row with an arrow as well as the accent
+   colour, so the cursor is not the only cue. */
+.pi-extension-dialog-option:focus::before {
+    content: "\2192";
+    left: 0.55em;
+    position: absolute;
 }
 .pi-extension-dialog-option:focus-visible,
 .pi-extension-dialog-option:focus {

@@ -41,7 +41,6 @@ describe('Pi RPC queue panel', () => {
                     state: 'accepted',
                 },
             ],
-            { steering: ['duplicate'], followUp: ['follow-up'] },
             actions,
         );
 
@@ -61,9 +60,6 @@ describe('Pi RPC queue panel', () => {
         expect(uncertain?.querySelector('.pi-queue-copy')).not.toBeNull();
         expect(uncertain?.querySelector('.pi-queue-discard')).not.toBeNull();
         expect(accepted?.querySelector('button')).toBeNull();
-        expect(panel.querySelectorAll('.pi-queue-authoritative')).toHaveLength(
-            2,
-        );
 
         uncertain.querySelector('.pi-queue-copy').click();
         local.querySelector('.pi-queue-restore').click();
@@ -94,21 +90,5 @@ describe('Pi RPC queue panel', () => {
         ]);
         expect(panel.querySelector('.pi-queue-item')).toBeNull();
         expect(panel.classList.contains('hidden')).toBe(true);
-    });
-
-    it('keeps duplicate authoritative text as separate Pi-owned rows', () => {
-        const panel = document.createElement('div');
-        renderQueuePanel(panel, [], {
-            steering: ['same', 'same'],
-            followUp: ['same'],
-        });
-        expect(panel.querySelectorAll('.pi-queue-authoritative')).toHaveLength(
-            3,
-        );
-        expect(
-            [...panel.querySelectorAll('.pi-queue-authoritative')].map(
-                (row) => row.textContent,
-            ),
-        ).toEqual(['Steering: same', 'Steering: same', 'Follow-up: same']);
     });
 });

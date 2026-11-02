@@ -96,8 +96,14 @@ export function syncPiSubagentStrip(paneId: string): void {
     else hideSubagentStrip();
 }
 
-export function rpcChatSend(paneId: string, payload: string): boolean {
-    return chats.get(paneId)?.send(payload) ?? false;
+/** `followUp` queues behind the running turn (Pi's Alt+Enter) instead of
+ * steering into it; the chat demotes it to a normal prompt while idle. */
+export function rpcChatSend(
+    paneId: string,
+    payload: string,
+    options?: { followUp?: boolean },
+): boolean {
+    return chats.get(paneId)?.send(payload, options) ?? false;
 }
 
 export function rpcChatSearch(

@@ -38,7 +38,7 @@ export interface ChatPiHandle {
     destroy(): void;
     /** Reports a refused control stream without discarding the transcript. */
     streamFailed(message: string): void;
-    send(text: string): boolean;
+    send(text: string, options?: { followUp?: boolean }): boolean;
     getModels(): Promise<PiModel[]>;
     getThinkingLevels(): Promise<string[]>;
     setModel(provider: string, modelId: string): Promise<unknown>;
@@ -255,8 +255,7 @@ function queueItemFromUnknown(value: unknown, epoch: string): QueueItem | null {
         attachments,
         state: typeof source.state === 'string' ? source.state : 'local',
         ...(typeof source.error === 'string' ? { error: source.error } : {}),
-        createdAt:
-            typeof source.createdAt === 'number' ? source.createdAt : 0,
+        createdAt: typeof source.createdAt === 'number' ? source.createdAt : 0,
     };
 }
 
@@ -291,8 +290,8 @@ function dialogFromUnknown(value: unknown): DialogRecord | null {
     )
         return null;
     const options = Array.isArray(source.options)
-        ? source.options.filter((option): option is string =>
-              typeof option === 'string',
+        ? source.options.filter(
+              (option): option is string => typeof option === 'string',
           )
         : [];
     return {
@@ -310,8 +309,7 @@ function dialogFromUnknown(value: unknown): DialogRecord | null {
             ? { prefill: source.prefill }
             : {}),
         timeout: typeof source.timeout === 'number' ? source.timeout : 0,
-        createdAt:
-            typeof source.createdAt === 'number' ? source.createdAt : 0,
+        createdAt: typeof source.createdAt === 'number' ? source.createdAt : 0,
     };
 }
 
@@ -482,12 +480,12 @@ export function mountChatPi(
     let queueItems: QueueItem[] = [];
     let queueSessionEpoch = '';
     let queueSeq = 0;
-    // Pi's steering/follow-up arrays carry no item identity and the control
-    // protocol does not expose them yet, so the display side stays empty.
-    const authoritativeQueue = {
-        steering: [] as string[],
-        followUp: [] as string[],
-    };
+    // Rows this browser created and the server has not confirmed yet. Their
+    // text exists only here, so restoring one must not wait for a round-trip.
+    const pendingLocalIds = new Set<string>();
+    // Cancellations the server has not confirmed yet. Retried on reconnect so
+    // a row restored while offline cannot still be delivered later.
+    const pendingDiscards = new Set<string>();
 
     const notifyStatus = (): void => onStatusChange(cloneStatus(localStatus));
     const notifyControls = (): void =>
@@ -645,7 +643,8 @@ export function mountChatPi(
         },
         cancelAll: () => {
             if (!sid || exited) return Promise.resolve();
-            return invokeControl(wire, 'extensionUiCancel', sid, {
+            const currentSid = sid;
+            return invokeControl(wire, 'extensionUiCancel', currentSid, {
                 reason: 'tabClosed',
             });
         },
@@ -865,28 +864,7 @@ export function mountChatPi(
                     dialogs?: unknown;
                 };
                 const queue = queueSnapshotFromUnknown(snapshotSource.queue);
-                if (queue) {
-                    if (queue.sessionEpoch !== '')
-                        queueSessionEpoch = queue.sessionEpoch;
-                    // A local row whose text is already in the new transcript
-                    // was delivered by a submit whose response was lost. Drop
-                    // it instead of sending a second copy.
-                    const landed = new Set(
-                        buffer
-                            .getMessages()
-                            .map((message: any) =>
-                                message?.role === 'user'
-                                    ? renderedUserText(message.content)
-                                    : '',
-                            ),
-                    );
-                    queueItems = queue.items.filter(
-                        (item) =>
-                            item.state !== 'local' ||
-                            !landed.has(item.message),
-                    );
-                    renderQueue();
-                }
+                if (queue) applyQueueSnapshot(queue);
                 dialogController.setDialogs(
                     dialogListFromUnknown(snapshotSource.dialogs),
                 );
@@ -1078,7 +1056,10 @@ export function mountChatPi(
         if (next) deliverPrompt(next);
     };
 
-    const send = (text: string): boolean => {
+    /** `followUp` is Pi's Alt+Enter: queue behind the running turn instead of
+     * steering into it. Pi demotes a follow-up to a normal prompt when idle,
+     * so the flag only changes the queued delivery mode. */
+    const send = (text: string, options?: { followUp?: boolean }): boolean => {
         // No sid will ever arrive for a failed bootstrap, and a stream that
         // failed a protocol check cannot send at all: keep the draft in the
         // composer instead of queueing it into a dead pane.
@@ -1102,7 +1083,10 @@ export function mountChatPi(
             busy &&
             dispatch.kind === 'prompt' &&
             queueSessionEpoch !== '' &&
-            submitLocalItem(dispatch.message, 'steer')
+            submitLocalItem(
+                dispatch.message,
+                options?.followUp === true ? 'followUp' : 'steer',
+            )
         )
             return true;
         const local: OutgoingPrompt = {
@@ -1157,91 +1141,174 @@ export function mountChatPi(
     // ── delivery queue ──
     const renderQueue = (): void => {
         if (destroyed) return;
-        renderQueuePanel(queueStrip, queueItems, authoritativeQueue, {
+        renderQueuePanel(queueStrip, queueItems, {
             restore: (item): void => {
-                void queueRestore(item.id);
+                queueRestore(item.id);
             },
             copy: (item): void => {
-                void queueCopy(item.id);
+                queueCopy(item.id);
             },
             discard: (item): void => {
-                void queueDiscard(item.id);
+                queueDiscard(item.id);
             },
         });
+    };
+
+    // A server snapshot owns every item it lists. A local row the server has
+    // never seen survives only inside the same session epoch: a restarted Pi
+    // cannot accept it, and Pi's TUI drops pending messages on a new session
+    // too. Item identity, never message text, decides what was delivered, so
+    // repeating a message cannot hide a queued row.
+    const applyQueueSnapshot = (snapshot: {
+        sessionEpoch: string;
+        items: QueueItem[];
+    }): void => {
+        const epoch = snapshot.sessionEpoch || queueSessionEpoch;
+        if (snapshot.sessionEpoch !== '')
+            queueSessionEpoch = snapshot.sessionEpoch;
+        const known = new Set(snapshot.items.map((item) => item.id));
+        for (const id of known) pendingLocalIds.delete(id);
+        const unsent = queueItems.filter(
+            (item) =>
+                item.state === 'local' &&
+                !known.has(item.id) &&
+                item.sessionEpoch === epoch,
+        );
+        queueItems = [...snapshot.items, ...unsent];
+        renderQueue();
     };
 
     const adoptQueueItem = (value: unknown): void => {
         const item = queueItemFromUnknown(value, queueSessionEpoch);
         if (!item) return;
+        pendingLocalIds.delete(item.id);
         queueItems = queueItems.filter((existing) => existing.id !== item.id);
         queueItems.push(item);
         renderQueue();
     };
 
-    const queueOperation = (
+    // One row action. A failure leaves the row in place so the user can try
+    // again; the reason goes to the status line instead of an unhandled
+    // rejection or a silently vanished row.
+    const runQueueAction = (
         op: 'queueRestore' | 'queueCopy' | 'queueDiscard',
         itemId: string,
-    ): Promise<unknown> => {
-        if (!sid || !ready || exited) return rejected('Pi RPC is not ready');
-        if (!queueSessionEpoch)
-            return rejected('Pi RPC queue is not hydrated yet');
-        return invokeControl(wire, op, sid, {
+        apply: (result: Record<string, any>) => void,
+    ): void => {
+        const currentSid = sid;
+        if (destroyed || !currentSid || !ready || exited) {
+            status.textContent = 'Error: Pi RPC is not ready';
+            return;
+        }
+        if (!queueSessionEpoch) {
+            status.textContent = 'Error: Pi RPC queue is not hydrated yet';
+            return;
+        }
+        void invokeControl(wire, op, currentSid, {
             itemId,
             sessionEpoch: queueSessionEpoch,
-        }).catch((error: unknown) => {
-            if (!destroyed) status.textContent = `Error: ${String(error)}`;
-            throw error;
-        });
+        })
+            .then((result: any) => {
+                if (destroyed || !result) return;
+                apply(result as Record<string, any>);
+            })
+            .catch((error: unknown) => {
+                if (destroyed) return;
+                status.textContent = `Error: ${String(error)}`;
+            });
     };
 
-    const queueRestore = (itemId: string): Promise<unknown> =>
-        queueOperation('queueRestore', itemId).then((result: any) => {
-            if (destroyed || result?.restored !== true) return result;
+    // A row the server never accepted lives only in this browser. Hand its
+    // text back now, then cancel the server copy in the background in case an
+    // earlier frame did land. Waiting for the round-trip would strand the
+    // user's text behind a dead link.
+    const restorePendingLocal = (item: QueueItem): void => {
+        pendingLocalIds.delete(item.id);
+        pendingDiscards.add(item.id);
+        queueItems = queueItems.filter((entry) => entry.id !== item.id);
+        renderQueue();
+        onQueueRecovery({ restored: true, item });
+        servePendingDiscards();
+    };
+
+    // Best-effort: a discard that never reached the server stays queued, so it
+    // is retried on reconnect instead of delivering the message later.
+    const servePendingDiscards = (): void => {
+        if (!sid || !ready || exited || !queueSessionEpoch) return;
+        for (const id of [...pendingDiscards]) {
+            runQueueAction('queueDiscard', id, (result) => {
+                if (result.discarded === true || result.reason === 'pi-owned')
+                    pendingDiscards.delete(id);
+            });
+        }
+    };
+
+    const queueRestore = (itemId: string): void => {
+        const pending = queueItems.find((entry) => entry.id === itemId);
+        if (
+            pending &&
+            pendingLocalIds.has(itemId) &&
+            pending.state === 'local'
+        ) {
+            restorePendingLocal(pending);
+            return;
+        }
+        runQueueAction('queueRestore', itemId, (result) => {
+            if (result.restored !== true) {
+                if (typeof result.reason === 'string')
+                    status.textContent = `Error: ${result.reason}`;
+                return;
+            }
             queueItems = queueItems.filter((item) => item.id !== itemId);
             renderQueue();
             // The composer belongs to the terminal: hand the draft back
             // instead of writing input state from two places.
             const item = queueItemFromUnknown(result.item, queueSessionEpoch);
             if (item) onQueueRecovery({ restored: true, item });
-            return result;
         });
+    };
 
-    const queueCopy = (itemId: string): Promise<unknown> =>
-        queueOperation('queueCopy', itemId).then((result: any) => {
-            if (destroyed || result?.copied !== true) return result;
+    const queueCopy = (itemId: string): void =>
+        runQueueAction('queueCopy', itemId, (result) => {
+            if (result.copied !== true) return;
             const source = queueItems.find((item) => item.id === itemId);
-            if (!source) return result;
-            const copied = queueItemFromUnknown(
-                {
-                    id: itemId,
-                    message: result.message,
-                    attachments: result.attachments,
-                },
-                queueSessionEpoch,
-            );
+            if (!source) return;
             // Copying never resubmits: the fresh draft goes to the composer.
             onQueueRecovery({
                 restored: true,
                 item: {
                     ...source,
-                    message: copied?.message ?? source.message,
-                    attachments: copied?.attachments ?? [],
+                    message:
+                        typeof result.message === 'string'
+                            ? result.message
+                            : source.message,
                 },
             });
-            return result;
         });
 
-    const queueDiscard = (itemId: string): Promise<unknown> =>
-        queueOperation('queueDiscard', itemId).then((result: any) => {
-            if (destroyed) return result;
-            if (result?.discarded === true) {
+    const queueDiscard = (itemId: string): void => {
+        const pending = queueItems.find((entry) => entry.id === itemId);
+        if (
+            pending &&
+            pendingLocalIds.has(itemId) &&
+            pending.state === 'local'
+        ) {
+            pendingLocalIds.delete(itemId);
+            pendingDiscards.add(itemId);
+            queueItems = queueItems.filter((entry) => entry.id !== itemId);
+            renderQueue();
+            servePendingDiscards();
+            return;
+        }
+        runQueueAction('queueDiscard', itemId, (result) => {
+            if (result.discarded === true) {
                 queueItems = queueItems.filter((item) => item.id !== itemId);
                 renderQueue();
-            } else if (typeof result?.reason === 'string') {
+            } else if (typeof result.reason === 'string') {
                 status.textContent = `Error: ${result.reason}`;
             }
-            return result;
         });
+    };
 
     // One queued send. A failed submit keeps the row as local: the text stays
     // visible, and the generated item ID makes the next attempt idempotent.
@@ -1284,6 +1351,7 @@ export function mountChatPi(
     ): boolean => {
         if (destroyed || !sid || !queueSessionEpoch) return false;
         const itemId = `phi-${++queueSeq}-${Date.now().toString(36)}`;
+        pendingLocalIds.add(itemId);
         queueItems.push({
             id: itemId,
             sid,
@@ -1305,6 +1373,7 @@ export function mountChatPi(
         for (const item of queueItems)
             if (item.state === 'local')
                 submitQueued(item.id, item.message, item.delivery);
+        servePendingDiscards();
     };
 
     const interrupt = (): Promise<unknown> => {
@@ -1485,12 +1554,7 @@ export function mountChatPi(
         }
         if (env.evt === 'queueChanged') {
             const queue = queueSnapshotFromUnknown(env.data);
-            if (queue) {
-                if (queue.sessionEpoch !== '')
-                    queueSessionEpoch = queue.sessionEpoch;
-                queueItems = queue.items;
-                renderQueue();
-            }
+            if (queue) applyQueueSnapshot(queue);
         }
         if (env.evt === 'extensionUiRequest') {
             const dialog = dialogFromUnknown(env.data);
