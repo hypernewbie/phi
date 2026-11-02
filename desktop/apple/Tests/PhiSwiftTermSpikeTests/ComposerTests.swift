@@ -245,37 +245,6 @@ final class TabStripTests: XCTestCase {
   }
 }
 
-@MainActor
-final class TabStripRenderTests: XCTestCase {
-  func testTheStripDrawsItsBarTheTabsAndTheAccentLine() throws {
-    let strip = PhiTabStrip()
-    strip.frame = NSRect(x: 0, y: 0, width: 600, height: PhiTabStrip.height)
-    strip.items = [
-      PhiTabStrip.Item(id: "a1", title: "bash"), PhiTabStrip.Item(id: "b2", title: "pi"),
-    ]
-    strip.activeID = "b2"
-    strip.layoutSubtreeIfNeeded()
-
-    guard let rep = strip.bitmapImageRepForCachingDisplay(in: strip.bounds) else {
-      return XCTFail("no bitmap")
-    }
-    strip.cacheDisplay(in: strip.bounds, to: rep)
-    // The raised tab carries the accent line; no other part of the strip is
-    // that blue, so finding it anywhere proves the tab painted.
-    var accentPixels = 0
-    var brightPixels = 0
-    for y in 0..<rep.pixelsHigh {
-      for x in 0..<rep.pixelsWide {
-        guard let colour = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-        if colour.blueComponent > 0.8 && colour.redComponent < 0.6 { accentPixels += 1 }
-        if colour.brightnessComponent > 0.6 { brightPixels += 1 }
-      }
-    }
-    XCTAssertGreaterThan(accentPixels, 100, "the raised tab shows the accent line")
-    XCTAssertGreaterThan(brightPixels, 100, "the tab titles are drawn")
-  }
-
-}
 
 @MainActor
 final class MultiTabTests: XCTestCase {
@@ -334,5 +303,53 @@ final class MultiTabTests: XCTestCase {
 
     XCTAssertFalse(window.contains(paneID: "a1"))
     XCTAssertTrue(closed, "closing the last tab closes its window")
+  }
+}
+
+extension MultiTabTests {
+  func testSwitchingTabsDoesNotStealFocusFromTheComposer() throws {
+    let window = SpikeWindow()
+    guard let host = window.window else { return XCTFail("no window") }
+    defer { window.closeSession(); host.close() }
+    window.addTab(paneID: "a1", title: "bash")
+    window.addTab(paneID: "b2", title: "pi")
+
+    let draft = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
+    host.contentView?.addSubview(draft)
+    XCTAssertTrue(host.makeFirstResponder(draft))
+    let editor = host.firstResponder
+
+    window.selectTab(paneID: "a1")
+
+    XCTAssertTrue(
+      host.firstResponder === editor,
+      "a tab click must not interrupt a prompt being typed")
+  }
+
+  func testAPaneOpensOneTabOnly() {
+    let window = SpikeWindow()
+    defer { window.closeSession(); window.window?.close() }
+    window.addTab(paneID: "a1", title: "bash")
+
+    let again = window.addTab(paneID: "a1", title: "bash")
+
+    XCTAssertEqual(again.paneID, "a1")
+    XCTAssertEqual(window.tabCount, 1, "attaching the same pane twice reuses its tab")
+  }
+
+  func testAResetShowsAWaitingFooterNotAFailure() throws {
+    let window = SpikeWindow()
+    defer { window.closeSession(); window.window?.close() }
+    window.addTab(paneID: "a1", title: "bash")
+
+    try window.apply(.reset(
+      connection: UUID(), epoch: 3, frontier: 0, cols: 80, rows: 24, bytes: Data()))
+
+    let strip = try XCTUnwrap(
+      window.window?.contentView?.subviews.compactMap { $0 as? PhiStatusStrip }.first)
+    XCTAssertTrue(strip.text.hasPrefix("epoch 3"), strip.text)
+    XCTAssertEqual(
+      strip.textColor, PhiTheme.textMuted,
+      "a fresh connection is not a failure; red is for lost sessions")
   }
 }

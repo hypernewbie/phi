@@ -144,6 +144,11 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
   /// for a test that only drives the window.
   @discardableResult
   func addTab(paneID: String, title: String) -> PaneTab {
+    // A pane has one tab: attaching it twice picks up the tab it already has.
+    if let existing = tabs.first(where: { $0.paneID == paneID }) {
+      selectTab(paneID: paneID)
+      return existing
+    }
     let view = SpikeTerminalView()
     view.frame = viewportBounds
     view.autoresizingMask = [.minYMargin]
@@ -161,12 +166,17 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     tabs.contains { $0.paneID == paneID }
   }
 
+  var tabCount: Int { tabs.count }
+
   func selectTab(paneID: String) {
     guard let tab = tabs.first(where: { $0.paneID == paneID }) else { return }
     if activeTab === tab {
       tabStrip.activeID = paneID
       return
     }
+    // Switching tabs keeps the keyboard where the user left it: a prompt being
+    // typed in the composer must not be interrupted by a tab click.
+    let focusFollowsTerminal = window?.firstResponder === activeTab?.terminalView
     if let current = activeTab, current.terminalView.superview === terminalContainer {
       current.terminalView.removeFromSuperview()
     }
@@ -178,7 +188,7 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     composer.draftKey = tab.draftKey
     renderStatus(statuses[tab.paneID])
     updateMinimumContentSize(for: tab.terminalView)
-    window?.makeFirstResponder(tab.terminalView)
+    if focusFollowsTerminal { window?.makeFirstResponder(tab.terminalView) }
   }
 
   func closeTab(paneID: String) {
@@ -257,7 +267,7 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     guard optimal.width > 0, optimal.height > 0 else { return }
     let cols = max(2, Int(viewportBounds.width / (optimal.width / CGFloat(current.cols))))
     let rows = max(1, Int(viewportBounds.height / (optimal.height / CGFloat(current.rows))))
-    tab.andFitAllowed { fitTerminalToViewport() }
+    if tab.allowsFit { fitTerminalToViewport() }
     tab.resize(cols: cols, rows: rows)
   }
 

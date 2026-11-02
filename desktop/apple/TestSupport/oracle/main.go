@@ -1,3 +1,5 @@
+//go:build cgo && (darwin || linux) && (amd64 || arm64)
+
 // Command oracle decodes a Phi ANSI checkpoint into a frame an independent
 // adapter can be compared against (§9.2).
 //

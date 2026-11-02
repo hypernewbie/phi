@@ -88,9 +88,10 @@ final class PaneTab {
       terminalView = replacement
       onTerminalReplaced?(retired, replacement)
       geometryRevision = replacesConnection ? 1 : geometryRevision &+ 1
+      // Waiting for the session to confirm this connection: grey, not red.
       publish(Status(
         text: "epoch \(epoch) · frontier \(frontier) · \(cols)×\(rows)",
-        attached: false, recovering: false))
+        attached: false, recovering: true))
 
     case .bytes, .resize:
       try terminalView.apply(event)
@@ -109,12 +110,10 @@ final class PaneTab {
     session?.resize(cols: cols, rows: rows)
   }
 
-  /// Whether the terminal view may fill the available area: either nothing has
-  /// attached yet, or the live connection is the one this view drew.
-  func andFitAllowed(_ fit: () -> Void) {
-    if terminalView.connectionID == nil || liveConnection == terminalView.connectionID {
-      fit()
-    }
+  /// Whether the visible terminal may fill the available area: either nothing
+  /// has attached yet, or the live connection is the one this view drew.
+  var allowsFit: Bool {
+    terminalView.connectionID == nil || liveConnection == terminalView.connectionID
   }
 
   func updateStatus(_ snapshot: PaneSession.Snapshot) {
