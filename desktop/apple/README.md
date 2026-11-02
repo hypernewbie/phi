@@ -155,6 +155,27 @@ The client wears Phi's own design tokens, taken from `web/style.css` and mirrore
 primary actions, muted grey secondary text, and a monospace voice for pane ids and the status line.
 A capture session does not overwrite the remembered server address.
 
+## Prompt composer
+
+Typing goes into a text field above the footer, not into the PTY. Only a submitted prompt crosses the
+link, so a distant pane costs one round trip per command instead of one per keystroke. This follows
+the web composer (`sendStagedInput` in `web/terminal.js`):
+
+| Input | Result |
+| --- | --- |
+| `Return` or **Send** | Sends the draft with a carriage return; the draft is cleared only when the send is accepted |
+| `Escape` | Leaves the field and focuses the terminal, for tools that need raw keys |
+| Empty or whitespace draft | Nothing is sent |
+
+A draft longer than 16 characters, or one with a line break, travels inside bracketed paste
+`ESC[200~ … ESC[201~`, and any `ESC` inside it becomes `U+241B`. That keeps a TUI from
+autocompleting or slowly painting the prompt. `PhiPrompt.bytes(for:)` owns this rule and is unit
+tested; `PhiComposerView` is the field and button.
+
+A capture may miss text that was set after the window opened, such as the footer status line: AppKit
+draws a layer-backed window only when it displays. The JSON sidecar records that text next to each
+terminal PNG, so the status is checked there.
+
 ## Sources and notices
 
 | Path | Purpose |

@@ -11,7 +11,8 @@ import SwiftTerm
 final class SpikeWindow: NSWindowController, NSWindowDelegate {
   private let rootView = NSView()
   private let terminalContainer = NSView()
-  private let statusLabel = PhiTheme.label("connecting", size: 11, color: PhiTheme.textMuted, monospaced: true)
+  private let composer = PhiComposerView()
+  private let statusStrip = PhiStatusStrip()
   /// The pane this window shows, used to focus an already open window.
   var paneID = ""
   private(set) var terminalView: SpikeTerminalView!
@@ -48,7 +49,9 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     rootView.autoresizingMask = [.width, .height]
     window.contentView = rootView
 
-    terminalContainer.frame = NSRect(x: 0, y: 22, width: 1000, height: 598)
+    terminalContainer.frame = NSRect(
+      x: 0, y: 22 + PhiComposerView.barHeight, width: 1000,
+      height: 598 - PhiComposerView.barHeight)
     terminalContainer.autoresizingMask = [.width, .height]
     terminalContainer.clipsToBounds = true
     rootView.addSubview(terminalContainer)
@@ -56,19 +59,19 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     terminalView.frame = terminalContainer.bounds
     terminalView.autoresizingMask = [.minYMargin]
     terminalContainer.addSubview(terminalView)
-    statusLabel.frame = NSRect(x: 10, y: 2, width: 980, height: 16)
-    statusLabel.autoresizingMask = [.width, .maxYMargin]
+    statusStrip.text = "connecting"
+    statusStrip.frame = NSRect(x: 0, y: 0, width: 1000, height: PhiStatusStrip.height)
+    statusStrip.autoresizingMask = [.width, .maxYMargin]
 
     // Phi's footer: a panel strip with a hairline above it.
-    let statusBar = PhiBackgroundView(frame: NSRect(x: 0, y: 0, width: 1000, height: 22))
-    statusBar.fillColor = PhiTheme.panel
-    statusBar.autoresizingMask = [.width, .maxYMargin]
-    rootView.addSubview(statusBar)
-    let hairline = PhiBackgroundView(frame: NSRect(x: 0, y: 21, width: 1000, height: 1))
-    hairline.fillColor = PhiTheme.border
-    hairline.autoresizingMask = [.width, .maxYMargin]
-    rootView.addSubview(hairline)
-    rootView.addSubview(statusLabel)
+    rootView.addSubview(statusStrip)
+
+    // The prompt bar sits above the status strip, like the web app's input bar.
+    composer.frame = NSRect(x: 0, y: 22, width: 1000, height: PhiComposerView.barHeight)
+    composer.autoresizingMask = [.width, .maxYMargin]
+    composer.onSend = { [weak self] text in self?.sendPrompt(text) ?? false }
+    composer.onEscape = { [weak self] in self?.focusTerminal() }
+    rootView.addSubview(composer)
     updateMinimumContentSize(for: terminalView)
   }
 
@@ -102,7 +105,9 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     session.resize(
       cols: terminalView.terminalDimensions.cols, rows: terminalView.terminalDimensions.rows)
     showWindow(nil)
-    window?.makeFirstResponder(terminalView)
+    // Typing starts in the composer: keystrokes stay local until a prompt is
+    // submitted. Click the terminal, or press Escape, to type at the PTY.
+    composer.focus()
     NSApplication.shared.activate(ignoringOtherApps: true)
     session.start()
   }
@@ -136,7 +141,7 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
       updateMinimumContentSize(for: replacement)
       if wasFirstResponder { window?.makeFirstResponder(replacement) }
       geometryRevision = replacesConnection ? 1 : geometryRevision &+ 1
-      statusLabel.stringValue = "epoch \(epoch) · frontier \(frontier) · \(cols)×\(rows)"
+      statusStrip.text = "epoch \(epoch) · frontier \(frontier) · \(cols)×\(rows)"
 
     case .bytes, .resize:
       try terminalView.apply(event)
@@ -184,6 +189,9 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     while view.diagnostics.frames <= initialFrames, ContinuousClock().now < deadline {
       try? await Task.sleep(for: .milliseconds(16))
     }
+    // The window must really be on screen: AppKit skips drawing for a window it
+    // considers hidden, and a status line set after launch would never appear.
+    window?.orderFrontRegardless()
     rootView.layoutSubtreeIfNeeded()
     let bytes = try SpikeUIDump.writePNG(of: rootView, compositing: [view], to: path)
     return (bytes, Int(rootView.bounds.width), Int(rootView.bounds.height))
@@ -229,7 +237,7 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
         if retiringViews.isEmpty { return }
         guard ContinuousClock.now < deadline else {
           retirementBlocked = true
-          if !closed { statusLabel.stringValue = "terminal teardown timed out; views retained" }
+          if !closed { statusStrip.text = "terminal teardown timed out; views retained" }
           return
         }
         do { try await Task.sleep(for: .milliseconds(10)) } catch {
@@ -382,11 +390,25 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     view.onGridResize = { [weak session] cols, rows in session?.resize(cols: cols, rows: rows) }
   }
 
+  /// Sends one submitted prompt. The composer keeps the draft when this fails.
+  private func sendPrompt(_ text: String) -> Bool {
+    guard let session, let bytes = PhiPrompt.bytes(for: text) else { return false }
+    session.send(bytes: bytes)
+    return true
+  }
+
+  /// The footer text, for the DEBUG capture record.
+  var statusText: String { statusStrip.text }
+
+  private func focusTerminal() {
+    window?.makeFirstResponder(terminalView)
+  }
+
   func updateStatus(_ snapshot: PaneSession.Snapshot) {
     guard !closed else { return }
     guard !retirementBlocked else {
-      statusLabel.stringValue = "terminal teardown timed out; views retained"
-      statusLabel.textColor = PhiTheme.danger
+      statusStrip.text = "terminal teardown timed out; views retained"
+      statusStrip.textColor = PhiTheme.danger
       return
     }
     if snapshot.status.attached, !snapshot.status.recovering,
@@ -396,9 +418,9 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
       fitTerminalToViewport()
     }
     let dimensions = terminalView.terminalDimensions
-    statusLabel.stringValue =
+    statusStrip.text =
       "\(snapshot.statusLine) · view \(dimensions.cols)×\(dimensions.rows)"
-    statusLabel.textColor =
+    statusStrip.textColor =
       snapshot.status.attached
       ? PhiTheme.active : (snapshot.status.recovering ? PhiTheme.textMuted : PhiTheme.danger)
   }
@@ -408,7 +430,8 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
     let optimal = view.getOptimalFrameSize()
     let minimum = NSSize(
       width: optimal.width / CGFloat(dimensions.cols) * 2,
-      height: optimal.height / CGFloat(dimensions.rows) + statusLabel.frame.height)
+      height: optimal.height / CGFloat(dimensions.rows) + PhiStatusStrip.height
+        + PhiComposerView.barHeight)
     window?.contentMinSize = minimum
   }
 

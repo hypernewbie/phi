@@ -72,7 +72,7 @@ enum SpikeUIDump {
       terminalRecords.append([
         "window": controller.window?.title ?? "", "file": path.lastPathComponent,
         "width": capture.width, "height": capture.height,
-        "pngBytes": capture.bytes,
+        "pngBytes": capture.bytes, "statusText": controller.statusText, "firstResponder": controller.window?.firstResponder.map { String(describing: type(of: $0)) } ?? "",
       ])
     }
     record["terminals"] = terminalRecords
@@ -84,15 +84,15 @@ enum SpikeUIDump {
 
   /// Writes `view`'s current pixels as PNG and returns the byte count.
   ///
-  /// A layer-backed view is rendered through its layer, which is the only way to
-  /// capture children that draw in their own layer, such as the terminal view.
-  /// A plain view falls back to AppKit's cached display, with the window
-  /// background painted first: a bare content view draws nothing behind its
-  /// labels, so the scanout would be transparent and read as black.
+  /// A window's layers are rendered, then any child that hosts its pixels in a
+  /// layer of its own, such as the terminal view, is drawn in at its frame.
+  /// A view without a window falls back to AppKit's cached display, which is
+  /// what the views a test builds need.
   static func writePNG(of view: NSView, compositing overlays: [NSView] = [], to path: URL) throws -> Int {
     view.layoutSubtreeIfNeeded()
-    // Layers only carry pixels after a display pass; a window shown without one
-    // renders empty.
+    // Layers only carry pixels after a display pass, and a view that has
+    // never drawn keeps an empty layer until it is marked dirty.
+    markDirty(view)
     view.displayIfNeeded()
     view.window?.displayIfNeeded()
     if view.wantsLayer, view.layer != nil, view.window != nil {
@@ -106,7 +106,7 @@ enum SpikeUIDump {
     NSGraphicsContext.saveGraphicsState()
     if let context = NSGraphicsContext(bitmapImageRep: rep) {
       NSGraphicsContext.current = context
-      NSColor.windowBackgroundColor.setFill()
+      PhiTheme.base.setFill()
       NSRect(origin: .zero, size: view.bounds.size).fill()
       context.flushGraphics()
     }
@@ -117,6 +117,11 @@ enum SpikeUIDump {
     }
     try data.write(to: path, options: .atomic)
     return data.count
+  }
+
+  private static func markDirty(_ view: NSView) {
+    view.needsDisplay = true
+    for subview in view.subviews { markDirty(subview) }
   }
 
   /// Renders one view's layer alone, at its own backing scale.

@@ -16,7 +16,7 @@ final class SwiftTermGeometryTests: XCTestCase {
       nativeWindow.close()
     }
     let contentView = try XCTUnwrap(nativeWindow.contentView)
-    let label = try XCTUnwrap(contentView.subviews.compactMap { $0 as? NSTextField }.first)
+    let label = try XCTUnwrap(contentView.subviews.compactMap { $0 as? PhiStatusStrip }.first)
     let initialHeight = contentView.bounds.height
 
     nativeWindow.setContentSize(NSSize(width: contentView.bounds.width, height: initialHeight + 200))
