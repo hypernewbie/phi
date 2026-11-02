@@ -12682,7 +12682,8 @@ export class TabManager {
                 tabInfo.coder === 'pi-rpc')
                 continue;
             tabInfo._protocolBlocked = true;
-            (this._protocolBlockedTabs ??= new Set()).add(tabInfo);
+            this._protocolBlockedTabs ??= new Set();
+            this._protocolBlockedTabs.add(tabInfo);
             this._showProtocolBlockedOverlay(tabInfo);
             // Quiet close: no disconnect overlay, no auto-reconnect spin.
             // The blocked overlay owns this tab until the server upgrades.

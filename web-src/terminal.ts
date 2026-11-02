@@ -4660,7 +4660,7 @@ export class TabManager {
                 historicalFence && historical
                     ? historicalFence.cursor
                     : throughCursor;
-            let d;
+            let d: ReplayPage | null;
             try {
                 // Through stays fenced at the attach head: the server
                 // caps each page at 2 MiB and the end cursor chains.
@@ -4836,10 +4836,10 @@ export class TabManager {
         try {
             const ordinal = tabInfo._replayCursor?.split('.').at(-1) ?? '0';
             let chained = `v1.${tabInfo.paneEpoch}.${from}.${ordinal}`;
-            let targetThrough;
-            let targetCursor;
+            let targetThrough: number | undefined;
+            let targetCursor: string | undefined;
             for (let cursor = from; cursor < to; ) {
-                let d;
+                let d: ReplayPage | null;
                 try {
                     // Resolve latest once, then keep that finite fence
                     // even if the process continues producing output.
@@ -4946,7 +4946,7 @@ export class TabManager {
         const ordinal = tabInfo._replayCursor?.split('.').at(-1) ?? '0';
         let after = `v1.${epoch}.${from}.${ordinal}`;
         let through = Number.MAX_SAFE_INTEGER;
-        let throughCursor;
+        let throughCursor: string | undefined;
         do {
             const page = await this._fetchReplayPages(
                 tabInfo.paneId,
@@ -15262,7 +15262,8 @@ export class TabManager {
             )
                 continue;
             tabInfo._protocolBlocked = true;
-            (this._protocolBlockedTabs ??= new Set()).add(tabInfo);
+            this._protocolBlockedTabs ??= new Set();
+            this._protocolBlockedTabs.add(tabInfo);
             this._showProtocolBlockedOverlay(tabInfo);
             // Quiet close: no disconnect overlay, no auto-reconnect spin.
             // The blocked overlay owns this tab until the server upgrades.
