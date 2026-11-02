@@ -16,10 +16,21 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
   static let terminalPadding: CGFloat = 8
   private let composer = PhiComposerView()
   private let statusStrip = PhiStatusStrip()
+  private let tabStrip = PhiTabStrip()
   /// The pane this window shows, used to focus an already open window and to
   /// key its saved draft.
   var paneID = "" {
-    didSet { composer.draftKey = PhiComposerView.draftKey(paneID: paneID) }
+    didSet {
+      composer.draftKey = PhiComposerView.draftKey(paneID: paneID)
+      tabStrip.items = [PhiTabStrip.Item(id: paneID, title: paneTitle)]
+    }
+  }
+  /// What the tab calls this pane: the pane title, or its coder.
+  var paneTitle = "pane" {
+    didSet {
+      guard !paneID.isEmpty else { return }
+      tabStrip.items = [PhiTabStrip.Item(id: paneID, title: paneTitle)]
+    }
   }
   private(set) var terminalView: SpikeTerminalView!
   private var session: PaneSession?
@@ -57,10 +68,17 @@ final class SpikeWindow: NSWindowController, NSWindowDelegate {
 
     terminalContainer.frame = NSRect(
       x: 0, y: 22 + PhiComposerView.barHeight, width: 1000,
-      height: 598 - PhiComposerView.barHeight)
+      height: 598 - PhiComposerView.barHeight - PhiTabStrip.height)
     terminalContainer.autoresizingMask = [.width, .height]
     terminalContainer.clipsToBounds = true
     rootView.addSubview(terminalContainer)
+
+    tabStrip.frame = NSRect(
+      x: 0, y: 620 - PhiTabStrip.height, width: 1000, height: PhiTabStrip.height)
+    tabStrip.autoresizingMask = [.width, .minYMargin]
+    tabStrip.onSelect = { [weak self] _ in self?.window?.makeKeyAndOrderFront(nil) }
+    tabStrip.onClose = { [weak self] _ in self?.window?.performClose(nil) }
+    rootView.addSubview(tabStrip)
     terminalView = SpikeTerminalView()
     terminalView.frame = viewportBounds
     terminalView.autoresizingMask = [.minYMargin]

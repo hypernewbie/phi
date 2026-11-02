@@ -120,7 +120,7 @@ final class SpikeApplicationDelegate: NSObject, NSApplicationDelegate {
     installMenu()
     switch options.launch {
     case .pane(let origin, let pane):
-      _ = open(origin: origin, pane: pane, password: nil)
+      _ = open(origin: origin, pane: pane, title: pane, password: nil)
     case .catalog:
       showCatalog()
     }
@@ -143,7 +143,9 @@ final class SpikeApplicationDelegate: NSObject, NSApplicationDelegate {
       catalog = SpikeCatalogWindow(
         stateDirectory: options.stateDirectory,
         onAttach: { [weak self] origin, pane, password in
-          self?.open(origin: origin, pane: pane, password: password)
+          guard let self else { return "window closed" }
+          return self.open(
+            origin: origin, pane: pane.id, title: Self.title(of: pane), password: password)
         })
       self.catalog = catalog
     }
@@ -169,11 +171,17 @@ final class SpikeApplicationDelegate: NSObject, NSApplicationDelegate {
   }
 #endif
 
+  /// The name a tab shows: the pane title, or its coder when it has none.
+  static func title(of pane: PaneCatalog.Pane) -> String {
+    guard let title = pane.title, !title.isEmpty else { return pane.coder }
+    return title
+  }
+
   /// Opens one pane window, or brings the existing one forward.
   /// Returns a message when the pane could not be opened.
   @discardableResult
   private func open(
-    origin: URL, pane: String, password: AccessAuth.PasswordProvider?
+    origin: URL, pane: String, title: String, password: AccessAuth.PasswordProvider?
   ) -> String? {
     if let existing = windows.first(where: { $0.paneID == pane }) {
       existing.window?.makeKeyAndOrderFront(nil)
@@ -181,6 +189,7 @@ final class SpikeApplicationDelegate: NSObject, NSApplicationDelegate {
     }
     let controller = SpikeWindow()
     controller.paneID = pane
+    controller.paneTitle = title
     let session: PaneSession
     do {
       session = try PaneSession(

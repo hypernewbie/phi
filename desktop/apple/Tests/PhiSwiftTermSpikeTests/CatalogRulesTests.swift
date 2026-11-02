@@ -34,7 +34,7 @@ final class CatalogRulesTests: XCTestCase {
   }
 
   @MainActor
-  private func makeCatalog(onAttach: @escaping (URL, String, AccessAuth.PasswordProvider?) -> String?)
+  private func makeCatalog(onAttach: @escaping (URL, PaneCatalog.Pane, AccessAuth.PasswordProvider?) -> String?)
     -> SpikeCatalogWindow
   {
     SpikeCatalogWindow(stateDirectory: workDirectory, onAttach: onAttach)
@@ -110,7 +110,7 @@ final class CatalogRulesTests: XCTestCase {
   func testASuccessfulAttachIsReportedOnce() async {
     var attached: [String] = []
     let catalog = makeCatalog(onAttach: { _, pane, _ in
-      attached.append(pane)
+      attached.append(pane.id)
       return nil
     })
     catalog.paneLoader = { _, _ in [self.pane("a1", coder: "bash")] }

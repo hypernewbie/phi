@@ -167,3 +167,112 @@ final class ComposerDraftTests: XCTestCase {
       "a narrower window would push the Send button over the field")
   }
 }
+
+@MainActor
+final class TabStripTests: XCTestCase {
+  func testTheFirstTabIsActiveAndTheSelectionFollowsAClick() {
+    let strip = PhiTabStrip()
+    var selected: [String] = []
+    strip.onSelect = { selected.append($0) }
+    strip.items = [
+      PhiTabStrip.Item(id: "a1", title: "bash"), PhiTabStrip.Item(id: "b2", title: "pi"),
+    ]
+
+    XCTAssertEqual(strip.activeID, "a1", "a fresh strip raises its first tab")
+    XCTAssertEqual(strip.tab("a1")?.isActive, true)
+    XCTAssertEqual(strip.tab("b2")?.isActive, false)
+
+    strip.tab("b2")?.onSelect?("b2")
+    strip.activeID = "b2"
+
+    XCTAssertEqual(selected, ["b2"])
+    XCTAssertEqual(strip.tab("b2")?.isActive, true)
+    XCTAssertEqual(strip.tab("a1")?.isActive, false, "only one tab is raised")
+  }
+
+  func testTheCloseGlyphClosesItsOwnPaneAndTheTitleSelects() {
+    let strip = PhiTabStrip()
+    var closed: [String] = []
+    strip.onClose = { closed.append($0) }
+    strip.items = [
+      PhiTabStrip.Item(id: "a1", title: "bash"), PhiTabStrip.Item(id: "b2", title: "pi"),
+    ]
+    strip.frame = NSRect(x: 0, y: 0, width: 600, height: PhiTabStrip.height)
+    strip.layoutSubtreeIfNeeded()
+    guard let tab = strip.tab("b2"), let other = strip.tab("a1") else {
+      return XCTFail("both tabs must exist")
+    }
+
+    XCTAssertEqual(tab.hit(at: NSPoint(x: 20, y: 19)), .select)
+    XCTAssertEqual(
+      tab.hit(at: NSPoint(x: tab.bounds.width - 17, y: 19)), .close,
+      "the × sits in the trailing inset")
+
+    tab.onClose?()
+    XCTAssertEqual(closed, ["b2"], "the × closes the tab it belongs to")
+    other.onClose?()
+    XCTAssertEqual(closed, ["b2", "a1"])
+  }
+
+  func testDroppingATabRemovesItsViewAndKeepsTheRest() {
+    let strip = PhiTabStrip()
+    strip.items = [
+      PhiTabStrip.Item(id: "a1", title: "bash"), PhiTabStrip.Item(id: "b2", title: "pi"),
+    ]
+    strip.activeID = "b2"
+
+    strip.items = [PhiTabStrip.Item(id: "b2", title: "pi")]
+
+    XCTAssertNil(strip.tab("a1"))
+    XCTAssertEqual(strip.activeID, "b2", "the raised tab stays raised when another closes")
+
+    strip.items = []
+    XCTAssertNil(strip.activeID)
+  }
+
+  func testASingleWideTabStopsAtTheMaximumWidth() {
+    let strip = PhiTabStrip()
+    strip.items = [PhiTabStrip.Item(id: "a1", title: "a very long pane title that cannot fit")]
+    strip.frame = NSRect(x: 0, y: 0, width: 600, height: PhiTabStrip.height)
+    strip.layoutSubtreeIfNeeded()
+
+    let tab = strip.tab("a1")
+    XCTAssertEqual(tab?.frame.height, PhiTabStrip.tabHeight)
+    XCTAssertEqual(
+      tab?.frame.width, PhiTabStrip.maximumTabWidth,
+      "one tab stops at the 240-point maximum instead of spanning the bar")
+    XCTAssertEqual(tab?.frame.maxY, PhiTabStrip.height, "tabs sit on the bar floor")
+  }
+}
+
+@MainActor
+final class TabStripRenderTests: XCTestCase {
+  func testTheStripDrawsItsBarTheTabsAndTheAccentLine() throws {
+    let strip = PhiTabStrip()
+    strip.frame = NSRect(x: 0, y: 0, width: 600, height: PhiTabStrip.height)
+    strip.items = [
+      PhiTabStrip.Item(id: "a1", title: "bash"), PhiTabStrip.Item(id: "b2", title: "pi"),
+    ]
+    strip.activeID = "b2"
+    strip.layoutSubtreeIfNeeded()
+
+    guard let rep = strip.bitmapImageRepForCachingDisplay(in: strip.bounds) else {
+      return XCTFail("no bitmap")
+    }
+    strip.cacheDisplay(in: strip.bounds, to: rep)
+    // The raised tab carries the accent line; no other part of the strip is
+    // that blue, so finding it anywhere proves the tab painted.
+    var accentPixels = 0
+    var brightPixels = 0
+    for y in 0..<rep.pixelsHigh {
+      for x in 0..<rep.pixelsWide {
+        guard let colour = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+        if colour.blueComponent > 0.8 && colour.redComponent < 0.6 { accentPixels += 1 }
+        if colour.brightnessComponent > 0.6 { brightPixels += 1 }
+      }
+    }
+    XCTAssertGreaterThan(accentPixels, 100, "the raised tab shows the accent line")
+    XCTAssertGreaterThan(brightPixels, 100, "the tab titles are drawn")
+  }
+
+}

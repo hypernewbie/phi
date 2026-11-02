@@ -55,6 +55,10 @@ final class PhiComposerView: NSView, NSTextFieldDelegate {
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
     wantsLayer = true
+    layer?.backgroundColor = PhiTheme.panel.cgColor
+    hairline.wantsLayer = true
+    hairline.layer?.backgroundColor = PhiTheme.border.cgColor
+    addSubview(hairline)
 
     field.placeholderString = "Type a prompt…"
     field.setAccessibilityLabel("Prompt")
@@ -82,18 +86,13 @@ final class PhiComposerView: NSView, NSTextFieldDelegate {
     }
   }
 
-  override var isOpaque: Bool { true }
-
-  override func draw(_ dirtyRect: NSRect) {
-    PhiTheme.panel.setFill()
-    dirtyRect.fill()
-    // The web bar is separated from the terminal by one hairline.
-    PhiTheme.border.setFill()
-    NSRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1).fill()
-  }
+  /// The bar is filled by its layer and separated from the terminal by one
+  /// hairline, so it composites like the controls inside it.
+  private let hairline = NSView()
 
   override func layout() {
     super.layout()
+    hairline.frame = NSRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1)
     let sendWidth = max(84, sendButton.intrinsicContentSize.width + 24)
     let fieldWidth = bounds.width - Self.sideInset * 2 - sendWidth - 8
     field.frame = NSRect(

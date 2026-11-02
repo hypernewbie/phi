@@ -15,7 +15,7 @@ final class SpikeCatalogWindow: NSWindowController, NSWindowDelegate,
 
   private let stateDirectory: URL
   /// Returns a message when the pane could not be opened, or nil on success.
-  private let onAttach: (URL, String, AccessAuth.PasswordProvider?) -> String?
+  private let onAttach: (URL, PaneCatalog.Pane, AccessAuth.PasswordProvider?) -> String?
 
   private let originField = NSTextField()
   private let passwordField = NSSecureTextField()
@@ -39,7 +39,7 @@ final class SpikeCatalogWindow: NSWindowController, NSWindowDelegate,
 
   init(
     stateDirectory: URL,
-    onAttach: @escaping (URL, String, AccessAuth.PasswordProvider?) -> String?
+    onAttach: @escaping (URL, PaneCatalog.Pane, AccessAuth.PasswordProvider?) -> String?
   ) {
     self.stateDirectory = stateDirectory
     self.onAttach = onAttach
@@ -273,7 +273,7 @@ final class SpikeCatalogWindow: NSWindowController, NSWindowDelegate,
     guard row >= 0, row < panes.count, let origin = enteredOrigin() else { return false }
     let pane = panes[row]
     tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-    if let failure = onAttach(origin, pane.id, passwordProvider) {
+    if let failure = onAttach(origin, pane, passwordProvider) {
       // Report the real outcome: nothing is shown as opened unless it opened.
       setStatus("Could not open \(name(of: pane)) · \(failure)", isError: true)
       return false

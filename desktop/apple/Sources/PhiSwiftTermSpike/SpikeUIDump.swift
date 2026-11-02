@@ -120,6 +120,9 @@ enum SpikeUIDump {
   }
 
   private static func markDirty(_ view: NSView) {
+    // A layer-backed view keeps whatever it last drew, so a capture taken
+    // after the text changed shows the old pixels unless the layer is told to
+    // redraw from the view.
     view.needsDisplay = true
     for subview in view.subviews { markDirty(subview) }
   }
