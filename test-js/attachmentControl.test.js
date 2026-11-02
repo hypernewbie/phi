@@ -248,6 +248,46 @@ describe('attachment control', () => {
         },
     );
 
+    it.each(['attempted', 'unknown'])(
+        'does not let a late %s claim overwrite an acknowledged submission',
+        async (state) => {
+            const { tm, tabA } = makeManager();
+            await vi.waitFor(() =>
+                expect(tabA._attachmentRestorePending).toBeNull(),
+            );
+            const snapshot = {
+                id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+                items: [],
+                state: 'sending',
+                outboxState: 'waiting',
+                owner: tm._captureAttachmentOwner(tabA),
+                scope: tm.app.scope,
+            };
+            tabA._attachmentPendingSnapshot = snapshot;
+            let releaseClaim;
+            vi.spyOn(tm.attachmentStore, 'claimSend').mockImplementation(
+                () =>
+                    new Promise((resolve) => {
+                        releaseClaim = resolve;
+                    }),
+            );
+            const fetch = mockFetch(() => ({
+                id: snapshot.id,
+                state: 'dispatched',
+                reason: '',
+            }));
+            const sending = tm._dispatchAttachmentSnapshot(tabA, snapshot);
+            expect(releaseClaim).toBeTypeOf('function');
+            tm._finishAttachmentSnapshot(tabA, snapshot, 'dispatched', '');
+            releaseClaim({ claimed: false, outbox: { state, reason: '' } });
+            await sending;
+            expect(tabA._attachmentPendingSnapshot).toBeNull();
+            expect(tabA._attachmentLastSubmitted).toBe(snapshot);
+            expect(tabA._attachmentNotice).toBe('Submitted to Pi.');
+            expect(fetch).not.toHaveBeenCalled();
+        },
+    );
+
     it('opens the picker synchronously and stages in the pane that opened it', async () => {
         const { tm, tabA, tabB } = makeManager();
         const click = vi
