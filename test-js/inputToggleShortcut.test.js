@@ -141,13 +141,13 @@ describe('Ctrl+` input box toggle shortcut', () => {
 
         it('is wired into terminal attachCustomKeyEventHandler', async () => {
             const { readFileSync } = await import('node:fs');
-            const termSrc = readFileSync('web/terminal.js', 'utf8');
+            const termSrc = readFileSync('web-src/terminal.ts', 'utf8');
             expect(termSrc).toContain('handleInputToggleShortcut');
         });
 
         it('is wired into app.js initGlobalShortcuts', async () => {
             const { readFileSync } = await import('node:fs');
-            const appSrc = readFileSync('web/app.js', 'utf8');
+            const appSrc = readFileSync('web-src/app.ts', 'utf8');
             expect(appSrc).toContain('handleInputToggleShortcut');
         });
     });

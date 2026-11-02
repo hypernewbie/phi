@@ -268,6 +268,8 @@ export class SessionsManager {
     quickLaunchReady;
     activeWorkspace;
     activeCWD;
+    /** The configured workspace roots, as the config payload lists them. */
+    workspaces;
     config;
     sessionList;
     newSessionBtn;
@@ -320,6 +322,7 @@ export class SessionsManager {
         this.quickLaunchReady = false;
         this.activeWorkspace = '';
         this.activeCWD = '';
+        this.workspaces = [];
         this.sessionList = document.getElementById('session-list');
         this.newSessionBtn = document.getElementById('new-session-btn');
         this.openCodeServiceRow = document.getElementById('opencode-service-row');
@@ -647,6 +650,7 @@ export class SessionsManager {
             this.app.config = data;
         }
         if (this.workspaceSelect && Array.isArray(data.workspaces)) {
+            this.workspaces = data.workspaces;
             this.workspaceSelect.innerHTML = '';
             data.workspaces.forEach((ws) => {
                 const opt = document.createElement('option');

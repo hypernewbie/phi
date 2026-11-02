@@ -14,20 +14,15 @@
 // All mutations are guarded against missing elements (return early)
 // so a partial page (e.g. the desktop main view before the brand
 // cluster is rendered) is safe to call.
-
-// CPU tier thresholds: >90 critical, >70 high, >30 moderate, else idle.
-// Mirrors `web/util.js`'s `cpuLevel` — kept here as a private
-// implementation detail because the public API takes a CPU percent
-// directly, not a tier name, and the helper computes the tier
-// itself. The thresholds are intentionally duplicated so this module
-// can be loaded in isolation (no dependency on `util.js`).
 function cpuLevel(cpuPercent) {
-    if (cpuPercent > 90) return 'cpu-critical';
-    if (cpuPercent > 70) return 'cpu-high';
-    if (cpuPercent > 30) return 'cpu-moderate';
+    if (cpuPercent > 90)
+        return 'cpu-critical';
+    if (cpuPercent > 70)
+        return 'cpu-high';
+    if (cpuPercent > 30)
+        return 'cpu-moderate';
     return 'cpu-idle';
 }
-
 /** Apply the brand-logo CPU-tier class to the `.brand .logo` and
  *  `.brand .brand-name` elements. Idempotent: returns early if the
  *  tier hasn't changed since the last call (the threshold transitions
@@ -44,23 +39,21 @@ function cpuLevel(cpuPercent) {
 export function applyBrandCpuTier(cpuPercent) {
     const logo = document.querySelector('.brand .logo');
     const brandName = document.querySelector('.brand .brand-name');
-    if (!logo) return;
+    if (!logo)
+        return;
     const clamped = Math.max(0, Math.min(100, Number(cpuPercent) || 0));
     const level = cpuLevel(clamped);
     // dataset.cpuPct is read by the self-state HUD on hover; keep it
     // fresh so the HUD's CPU line is accurate even when no tier
     // change occurred.
     logo.dataset.cpuPct = String(clamped);
-    if (logo.dataset.cpuLevel === level) return false;
+    if (logo.dataset.cpuLevel === level)
+        return false;
     const first = logo.dataset.cpuLevel === undefined;
     for (const el of [logo, brandName]) {
-        if (!el) continue;
-        el.classList.remove(
-            'cpu-idle',
-            'cpu-moderate',
-            'cpu-high',
-            'cpu-critical',
-        );
+        if (!el)
+            continue;
+        el.classList.remove('cpu-idle', 'cpu-moderate', 'cpu-high', 'cpu-critical');
         el.classList.add(level);
         el.dataset.cpuLevel = level;
     }
@@ -72,7 +65,6 @@ export function applyBrandCpuTier(cpuPercent) {
     //   - 'unchanged': the tier is the same as last call (no flourish)
     return first ? 'first' : 'changed';
 }
-
 /** Toggle the `#terminal-activity-indicator` between quiet and active
  *  states. The indicator sits between the brand "phi" text and the
  *  hostname display and reads as an em-dash (`—`) when no terminal
@@ -91,7 +83,8 @@ export function applyBrandCpuTier(cpuPercent) {
  *                       known by the time the main view is up. */
 export function applyTerminalActivityIndicator(hasActivity, hostnameKnown) {
     const indicator = document.getElementById('terminal-activity-indicator');
-    if (!indicator) return;
+    if (!indicator)
+        return;
     indicator.classList.toggle('hidden', !hostnameKnown);
     indicator.classList.toggle('is-active', Boolean(hasActivity));
     indicator.textContent = hasActivity ? '\u258D' : '\u2014';

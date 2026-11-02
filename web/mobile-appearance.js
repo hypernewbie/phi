@@ -160,7 +160,7 @@ export function effectiveAppearance(profile, desktop, mobile, inheritance = desk
 }
 export function appearanceRequestContext(scope) {
     return {
-        fetch: (url, init) => ownerFetch(scope, url, init),
+        fetch: (url, init) => ownerFetch(scope, String(url), init),
         credentialKey: scope.profileId
             ? `phi_access_credential_v1:${scope.profileId}`
             : 'phi_access_credential_v1',

@@ -56,9 +56,61 @@ export interface AppLike {
     applyTerminalBg?: (blob: any) => void;
     applyTerminalBgStyles?: () => void;
     clearCustomBg?: () => Promise<void>;
-    openConfigEditor?: (...args: any[]) => Promise<any>;
+    /** Modal form builder; resolves with the field values or null. */
+    openConfigEditor(options: {
+        title: string;
+        subtitle?: string;
+        fields?: Array<{
+            id: string;
+            label: string;
+            value?: string;
+            type?: string;
+            placeholder?: string;
+            pattern?: string;
+            multiline?: boolean;
+            required?: boolean;
+            monospace?: boolean;
+            path?: { startPath: string; relativeTo?: string } | null;
+        }>;
+        submitLabel?: string;
+    }): Promise<Record<string, string> | null>;
     importCmdsConfig?: (...args: any[]) => void;
     exportTerminalCommandsConfig?: (...args: any[]) => void;
+
+    // Members terminal.ts drives. Typed narrowly: each is one call site with
+    // a known shape, so a wrong argument fails here rather than at runtime.
+    kanbanManager?: {
+        openBoard(): Promise<void>;
+        cleanup?(): void;
+    } | null;
+    reviewManager?: {
+        cleanup?(): void;
+    } | null;
+    updateLayoutPosition?: (
+        shouldFit?: boolean,
+        resetDocumentScroll?: boolean,
+    ) => void;
+    openTabsDrawer?: () => void;
+    setTerminalActivity?: (active: boolean) => void;
+    mobileScrollbackRows?: number;
+    handlePanelResizeShortcut?: (event: KeyboardEvent) => void;
+    removeReadyPane?: (paneId: string) => void;
+    dismissToast?: (element: HTMLElement) => void;
+    captureToastContext?: () => unknown;
+    versionInfo?: {
+        version?: string;
+        commit?: string;
+        date?: string;
+        buildSource?: string;
+        started_at?: string;
+        /** Raw terminal replay protocol this server speaks. */
+        terminal_protocol?: string;
+    } | null;
+    syncRemoteClipboard?: () => void | Promise<void>;
+    codersPresetRegistry?: Record<string, unknown>;
+    exportModelsConfig?: (btn: HTMLElement | null) => void;
+    importModelsConfig?: (btn: HTMLElement | null) => void;
+    exportQuickCommandsConfig?: (btn: HTMLElement | null) => void;
 }
 
 // Optional browser bridge installed by web/auth.js. The desktop host uses it
@@ -75,8 +127,35 @@ export interface PhiAccessAuthBridge {
     refreshAccessIfDue?(): Promise<void> | undefined;
 }
 
+/** The \ keys the settings view edits. Unmodelled keys are read
+ *  generically by the settings reconciliation sweep. */
+export interface PhiConfig {
+    agy_theme_ansi?: boolean;
+    auto_reconnect?: 'off' | 'visible';
+    claude_dangerously_skip_permissions?: boolean;
+    fast_mode?: boolean;
+    opencode_idle_stop_minutes?: number;
+    pi_bridge_no_inject?: boolean;
+    pi_offline?: boolean;
+    [key: string]: unknown;
+}
+
 declare global {
+    interface Navigator {
+        /** Chromium-only reduced-entropy hint; absent elsewhere. */
+        readonly userAgentData?: { readonly mobile?: boolean };
+    }
+
     interface Window {
         phiAccessAuth?: PhiAccessAuthBridge;
+        /** Set by the desktop shell before the page loads. */
+        __phiDesktop?: boolean;
+        /** Set by App so the sync board and helpers can toast. */
+        __phiShowToast?: (message: string, opts?: ToastOptions) => void;
+        /** Set by the embedded desktop shell to switch backends. */
+        __phiEmbed?: {
+            switchTo(id: string, origin?: string): Promise<boolean>;
+            forget(id: string): void;
+        };
     }
 }

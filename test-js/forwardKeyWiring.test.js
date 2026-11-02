@@ -7,8 +7,8 @@ const terminalJsSrc = readFileSync(
     path.join(
         path.dirname(fileURLToPath(import.meta.url)),
         '..',
-        'web',
-        'terminal.js',
+        'web-src',
+        'terminal.ts',
     ),
     'utf8',
 );

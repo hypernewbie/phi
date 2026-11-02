@@ -1065,10 +1065,8 @@ describe('wheel-down escape hatch installed by createTab (drives the real handle
 describe('source contracts', () => {
     it('write path syncs the scroll area, scroll listener + escape hatch exist, no bottom slack', async () => {
         const fs = await import('node:fs');
-        const src = fs.readFileSync('web/terminal.js', 'utf8');
-        expect(src).toContain(
-            'tabInfo.term._core?.viewport?.syncScrollArea(true)',
-        );
+        const src = fs.readFileSync('web-src/terminal.ts', 'utf8');
+        expect(src).toContain('_core?.viewport?.syncScrollArea(true)');
         expect(src).toMatch(/termContainer\.addEventListener\(\s*'scroll'/);
         expect(src).toContain(
             'vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 1',

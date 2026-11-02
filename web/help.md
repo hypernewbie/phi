@@ -431,25 +431,13 @@ Disable update checks in config:
 
 ## Diagnostics
 
-Open **Settings → About → View counters**, or press `Ctrl+Shift+D`, for the
-diagnostics modal. It groups counts by owner and reports the change since the
-panel opened, because a count alone cannot say whether it is growing.
+`Ctrl+Shift+D` opens a diagnostics modal showing:
 
-- **Memory** — Go heap allocated / in use / reserved, goroutine stacks, live
-  heap objects, goroutine count, GC cycles.
-- **Terminals** — PTY count, scrollback used against its capacity, connected
-  WebSocket clients.
-- **This page** — the browser's JS heap and DOM node count.
-- **Panes** — one row per pane: clients, scrollback fill, busy state.
+- phi version and install method
+- uptime, goroutine count, memory allocation
+- PTY count and per-pane stats (client count, ring buffer fill, busy state, last activity)
 
-A row that keeps climbing is the subsystem to investigate. `GET /api/diag`
-serves the same numbers, and a count an older server does not send reads `—`
-rather than a zero.
-
-For native per-terminal bytes and heap profiles, use the profiling build
-(`make dev-server-profile`, documented in `docs/server-profiling.md`). It adds
-`/debug/phi` snapshots and `/debug/pprof/heap`, `/debug/pprof/goroutine` on a
-private loopback listener.
+The same data is available via `GET /api/diag`.
 
 ## Security Notes
 
@@ -461,7 +449,7 @@ Phi is a local developer tool.
 - It can spawn shells and coder CLIs on the host machine.
 - Saved Kanban passwords are encrypted in the backend config, but anyone with host-level access to your Phi config and key material should be treated as trusted.
 - The self-update endpoint (`POST /api/update/apply`) can replace the phi binary on disk. On an unauthenticated `0.0.0.0` bind, anyone on the network can trigger an update. This motivates adding an auth token in a future release. For now, run phi on trusted networks only.
-- The diagnostics endpoint (`GET /api/diag`) exposes runtime internals (goroutine count, memory, PTY state). It follows the same access rules as every other app route: guarded when access auth is configured, open when it is not. Same trusted-network caveat applies.
+- The diagnostics endpoint (`GET /api/diag`) exposes runtime internals (goroutine count, memory, PTY state) without authentication. Same trusted-network caveat applies.
 - The restart endpoint (`POST /api/restart`) can restart the phi process. Same trusted-network caveat applies.
 
 ## Files And State

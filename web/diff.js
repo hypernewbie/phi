@@ -186,8 +186,8 @@ export class DiffController {
     currentWs;
     term;
     fitAddon;
-    webglAddon;
     isPanelOpen;
+    webglAddon;
     diffPanel;
     headerDiffToggleBtn;
     closeDiffBtn;
@@ -302,6 +302,7 @@ export class DiffController {
         this.term = null;
         this.fitAddon = null;
         this.isPanelOpen = true;
+        this.webglAddon = null;
         this.diffPanel = document.getElementById('diff-panel');
         this.headerDiffToggleBtn = document.getElementById('header-diff-toggle-btn');
         this.closeDiffBtn = document.getElementById('close-diff-btn');
@@ -738,7 +739,7 @@ export class DiffController {
         if (!webgl)
             return;
         try {
-            webgl.dispose();
+            webgl.dispose?.();
         }
         catch (_e) {
             /* Disposing is best-effort; the DOM renderer takes over. */

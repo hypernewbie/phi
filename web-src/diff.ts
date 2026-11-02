@@ -353,8 +353,8 @@ export class DiffController {
     currentWs: PTYWebSocket | null;
     term: any;
     fitAddon: any;
-    webglAddon: any;
     isPanelOpen: boolean;
+    webglAddon: { dispose?(): void } | null;
     diffPanel: HTMLElement;
     headerDiffToggleBtn: HTMLElement;
     closeDiffBtn: HTMLElement;
@@ -470,6 +470,7 @@ export class DiffController {
         this.term = null;
         this.fitAddon = null;
         this.isPanelOpen = true;
+        this.webglAddon = null;
 
         this.diffPanel = document.getElementById('diff-panel')!;
         this.headerDiffToggleBtn = document.getElementById(
@@ -1009,7 +1010,7 @@ export class DiffController {
         this.webglAddon = null;
         if (!webgl) return;
         try {
-            webgl.dispose();
+            webgl.dispose?.();
         } catch (_e) {
             /* Disposing is best-effort; the DOM renderer takes over. */
         }

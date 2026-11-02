@@ -1017,7 +1017,7 @@ describe('openConfigEditor path fields', () => {
         expect(forwards.defaultPrevented).toBe(true);
         expect(document.activeElement).toBe(close);
 
-        const app = readFileSync('web/app.js', 'utf8');
+        const app = readFileSync('web-src/app.ts', 'utf8');
         expect(app).toContain('!element.disabled');
         expect(app).toContain('!element.hidden');
         expect(app).toContain("!element.closest('[hidden], .hidden')");

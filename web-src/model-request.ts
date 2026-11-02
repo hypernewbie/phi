@@ -51,11 +51,11 @@ function retryDelay(signal: AbortSignal, ms: number): Promise<void> {
  * Only GETs retry; a dispatched mutation may have landed even if its reply was
  * lost. Never replay one against either the original or a replacement session.
  */
-export async function modelRequestJson(
+export async function modelRequestJson<T = unknown>(
     url: string,
     init: RequestInit = {},
     options: ModelRequestOptions = {},
-): Promise<unknown> {
+): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), ModelRequestTimeout);
     const { signal } = controller;

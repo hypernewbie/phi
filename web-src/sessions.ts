@@ -359,6 +359,8 @@ export class SessionsManager {
     quickLaunchReady: boolean;
     activeWorkspace: string;
     activeCWD: string;
+    /** The configured workspace roots, as the config payload lists them. */
+    workspaces: string[];
     config: any;
     sessionList: HTMLElement;
     newSessionBtn: HTMLElement;
@@ -435,6 +437,7 @@ export class SessionsManager {
         this.quickLaunchReady = false;
         this.activeWorkspace = '';
         this.activeCWD = '';
+        this.workspaces = [];
 
         this.sessionList = document.getElementById('session-list')!;
         this.newSessionBtn = document.getElementById('new-session-btn')!;
@@ -837,6 +840,7 @@ export class SessionsManager {
         }
 
         if (this.workspaceSelect && Array.isArray(data.workspaces)) {
+            this.workspaces = data.workspaces;
             this.workspaceSelect.innerHTML = '';
             data.workspaces.forEach((ws: string) => {
                 const opt = document.createElement('option');

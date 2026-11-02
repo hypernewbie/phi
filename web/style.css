@@ -12088,15 +12088,6 @@ body.fast-mode .notifications-overlay:not(.hidden) .notifications-drawer {
     margin: 0;
 }
 
-/* Growth since the panel opened. The cell only exists when a counter moved,
-   so a stable system renders no marker at all. */
-.diag-delta {
-    margin-left: 8px;
-    font-size: calc(11px * var(--ui-scale));
-    color: var(--accent-bright);
-    white-space: nowrap;
-}
-
 /* Vikunja Features: native subtask roll-ups. */
 .kanban-view-switch {
     display: inline-flex;

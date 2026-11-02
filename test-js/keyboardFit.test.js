@@ -150,8 +150,8 @@ describe('NEVER source contract', () => {
     it('the coalescing scheduler is gone from all runtime sources', async () => {
         const { readFileSync } = await import('node:fs');
         for (const f of [
-            'web/terminal.js',
-            'web/app.js',
+            'web-src/terminal.ts',
+            'web-src/app.ts',
             'web-src/diff.ts',
             'web/diff.js',
         ]) {
@@ -167,7 +167,7 @@ describe('NEVER source contract', () => {
 
     it('focus/blur handlers fit nothing and schedule nothing', async () => {
         const { readFileSync } = await import('node:fs');
-        const src = readFileSync('web/terminal.js', 'utf8');
+        const src = readFileSync('web-src/terminal.ts', 'utf8');
         const focusStart = src.indexOf(
             "inputTextArea.addEventListener('focus'",
         );
@@ -200,8 +200,12 @@ describe('NEVER source contract', () => {
 
     it('updateDirectModeUI skips its fit only when asked', async () => {
         const { readFileSync } = await import('node:fs');
-        const src = readFileSync('web/terminal.js', 'utf8');
-        expect(src).toContain('updateDirectModeUI(tab, skipFit = false)');
+        const src = readFileSync('web-src/terminal.ts', 'utf8');
+        // Signature is type-annotated since the TS migration; the contract
+        // is the default, not the absence of an annotation.
+        expect(src).toMatch(
+            /updateDirectModeUI\(tab(?:: \w+)?, skipFit = false\)/,
+        );
         expect(src).toContain('if (!skipFit) this.fitActiveTerminal();');
     });
 

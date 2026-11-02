@@ -355,7 +355,7 @@ describe('Panel resize methods and shortcuts', () => {
 
         it('is wired into terminal attachCustomKeyEventHandler', async () => {
             const { readFileSync } = await import('node:fs');
-            const termSrc = readFileSync('web/terminal.js', 'utf8');
+            const termSrc = readFileSync('web-src/terminal.ts', 'utf8');
             expect(termSrc).toContain('handlePanelResizeShortcut');
         });
     });

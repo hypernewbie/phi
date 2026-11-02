@@ -47,7 +47,7 @@ export interface ChatPiHandle {
     setThinking(level: string): Promise<unknown>;
     compact(): Promise<unknown>;
     resetChat(): Promise<unknown>;
-    interrupt(): Promise<unknown>;
+    interrupt(): Promise<{ restored: string[] }>;
     setName(name: string): Promise<unknown>;
     searchTranscript(
         query: string,
@@ -1381,7 +1381,7 @@ export function mountChatPi(
         servePendingDiscards();
     };
 
-    const interrupt = (): Promise<unknown> => {
+    const interrupt = (): Promise<{ restored: string[] }> => {
         if (!sid || !ready || exited || !sessionActive)
             return rejected('Pi RPC is not active');
         if (abortInFlight) return rejected('Pi interrupt is already pending');
@@ -1394,7 +1394,10 @@ export function mountChatPi(
         abortInFlight = true;
         const currentSid = sid;
         return invokeControl(wire, 'abort', currentSid, {})
-            .then((data: any) => ({ ...(data ?? {}), restored }))
+            .then((data: unknown) => ({
+                ...((data as Record<string, unknown> | null | undefined) ?? {}),
+                restored,
+            }))
             .catch((error: unknown) => {
                 if (!destroyed && currentSid === sid)
                     status.textContent = `Error: ${String(error)}`;

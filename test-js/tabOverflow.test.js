@@ -1572,7 +1572,7 @@ describe('container drop on whitespace', () => {
 describe('overflow refresh timing in createTab', () => {
     it('updateTabOverflow appears AFTER tabs.set, not before', () => {
         const fs = require('node:fs');
-        const src = fs.readFileSync('web/terminal.js', 'utf8');
+        const src = fs.readFileSync('web-src/terminal.ts', 'utf8');
 
         const tabsSetIdx = src.indexOf('this.tabs.set(paneId, tabInfo)');
         expect(tabsSetIdx).toBeGreaterThan(0);
@@ -1586,10 +1586,10 @@ describe('overflow refresh timing in createTab', () => {
 
     it('createTab does NOT call updateTabOverflow before tabs.set', () => {
         const fs = require('node:fs');
-        const src = fs.readFileSync('web/terminal.js', 'utf8');
+        const src = fs.readFileSync('web-src/terminal.ts', 'utf8');
 
         const sigMatch = src.match(
-            /createTab\(\s*paneId,\s*sessionId,\s*title,\s*coder,/,
+            /createTab\(\s*paneId(?:\s*:\s*[^,]+)?,\s*sessionId(?:\s*:\s*[^,]+)?,\s*title(?:\s*:\s*[^,]+)?,\s*coder(?:\s*:\s*[^,]+)?,/,
         );
         const sigIdx = sigMatch?.index ?? -1;
         expect(sigIdx).toBeGreaterThan(0);

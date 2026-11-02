@@ -1202,7 +1202,10 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
         abortInFlight = true;
         const currentSid = sid;
         return invokeControl(wire, 'abort', currentSid, {})
-            .then((data) => ({ ...(data ?? {}), restored }))
+            .then((data) => ({
+            ...(data ?? {}),
+            restored,
+        }))
             .catch((error) => {
             if (!destroyed && currentSid === sid)
                 status.textContent = `Error: ${String(error)}`;

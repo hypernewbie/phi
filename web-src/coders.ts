@@ -618,7 +618,7 @@ function containsControlChar(s: string): boolean {
 // a step, the client version updates too.
 
 export function isOpenCodeMini(
-    tab: { coder?: string; opencodeMode?: string } | null | undefined,
+    tab: { coder?: string; opencodeMode?: string | null } | null | undefined,
 ): boolean {
     return tab?.coder === 'opencode' && tab.opencodeMode === 'mini';
 }
