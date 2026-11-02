@@ -1,4 +1,5 @@
 import type { AuthStatus, CredentialBundle } from '@phi/core';
+import { z } from 'zod';
 
 export type ConnectionResult =
     | 'disabled'
@@ -39,6 +40,42 @@ export type ConfigOutcome =
     | { kind: 'blocked' }
     | { kind: 'cancelled' };
 
+export type TogglePath =
+    | '/api/config/use-hidden-terminal'
+    | '/api/config/use-existing-terminal-tab'
+    | '/api/config/auto-reconnect'
+    | '/api/config/pi-offline'
+    | '/api/config/pi-bridge-no-inject'
+    | '/api/config/claude-dangerously-skip-permissions'
+    | '/api/config/agy-theme-ansi'
+    | '/api/config/opencode-idle-stop';
+
+export type PostOutcome =
+    | { kind: 'ok' }
+    | { kind: 'rejected'; status: number }
+    | { kind: 'unavailable' }
+    | { kind: 'unsupported' }
+    | { kind: 'blocked' }
+    | { kind: 'cancelled' };
+
+export interface VersionDocument {
+    readonly version: string;
+    readonly commit: string;
+    readonly date: string;
+    readonly buildSource: string;
+}
+
+export type DocumentOutcome<T> =
+    | { kind: 'ok'; document: T }
+    | { kind: 'rejected'; status: number }
+    | { kind: 'unavailable' }
+    | { kind: 'unsupported' }
+    | { kind: 'blocked' }
+    | { kind: 'cancelled' };
+
+export type ConfigDocumentOutcome = DocumentOutcome<ConfigDocument>;
+export type VersionOutcome = DocumentOutcome<VersionDocument>;
+
 export interface ConnectionService {
     readonly serverLabel: string;
     getStatus(signal: AbortSignal): Promise<ConnectionResult>;
@@ -52,6 +89,17 @@ export interface ConnectionService {
         signal: AbortSignal,
         bearer?: string,
     ): Promise<ConfigOutcome>;
+    getConfigDocument(
+        signal: AbortSignal,
+        bearer?: string,
+    ): Promise<ConfigDocumentOutcome>;
+    getVersion(signal: AbortSignal, bearer?: string): Promise<VersionOutcome>;
+    postConfig(
+        path: TogglePath,
+        bodyJson: string,
+        signal: AbortSignal,
+        bearer?: string,
+    ): Promise<PostOutcome>;
 }
 
 const ATTEMPT_TIMEOUT_MS = 15_000;
@@ -196,6 +244,78 @@ function decodeHostname(body: unknown): string | null {
     return hostname;
 }
 
+// Single source for the settings document shape: the wire decoder maps
+// into it and the settings store reuses it for cache validation. Unknown
+// fields are ignored.
+export const configDocumentSchema = z.object({
+    hostname: z.string().min(1).max(HOSTNAME_LIMIT),
+    workspaces: z.array(z.string()),
+    hiddenTerminal: z.boolean(),
+    reuseTab: z.boolean(),
+    autoReconnect: z.string(),
+    fastMode: z.boolean(),
+    piOffline: z.boolean(),
+    piBridgeNoInject: z.boolean(),
+    claudeSkipPermissions: z.boolean(),
+    agyThemeAnsi: z.boolean(),
+    opencodeIdleMinutes: z.number().int().min(0),
+});
+
+export type ConfigDocument = z.infer<typeof configDocumentSchema>;
+
+const configWireSchema = z.object({
+    hostname: z.string().min(1).max(HOSTNAME_LIMIT),
+    workspaces: z.array(z.string()),
+    use_hidden_terminal: z.boolean(),
+    use_existing_terminal_tab: z.boolean(),
+    auto_reconnect: z.string(),
+    fast_mode: z.boolean(),
+    pi_offline: z.boolean(),
+    pi_bridge_no_inject: z.boolean(),
+    claude_dangerously_skip_permissions: z.boolean(),
+    agy_theme_ansi: z.boolean(),
+    opencode_idle_stop_minutes: z.number().int().min(0),
+});
+
+function decodeConfigDocument(body: unknown): ConfigDocument | null {
+    const parsed = configWireSchema.safeParse(body);
+    if (!parsed.success) return null;
+    const wire = parsed.data;
+    const document: ConfigDocument = {
+        hostname: wire.hostname,
+        workspaces: wire.workspaces,
+        hiddenTerminal: wire.use_hidden_terminal,
+        reuseTab: wire.use_existing_terminal_tab,
+        autoReconnect: wire.auto_reconnect,
+        fastMode: wire.fast_mode,
+        piOffline: wire.pi_offline,
+        piBridgeNoInject: wire.pi_bridge_no_inject,
+        claudeSkipPermissions: wire.claude_dangerously_skip_permissions,
+        agyThemeAnsi: wire.agy_theme_ansi,
+        opencodeIdleMinutes: wire.opencode_idle_stop_minutes,
+    };
+    return document;
+}
+
+const versionWireSchema = z.object({
+    version: z.string().min(1),
+    commit: z.string().catch(''),
+    date: z.string().catch(''),
+    build_source: z.string().catch(''),
+});
+
+function decodeVersionDocument(body: unknown): VersionDocument | null {
+    const parsed = versionWireSchema.safeParse(body);
+    if (!parsed.success) return null;
+    const wire = parsed.data;
+    return {
+        version: wire.version,
+        commit: wire.commit,
+        date: wire.date,
+        buildSource: wire.build_source,
+    };
+}
+
 // Complete interval in milliseconds, or null without a usable wait.
 // Infinity marks a valid delay too large to represent safely: callers
 // must pause automatic work rather than shorten the server wait.
@@ -253,6 +373,13 @@ type ConfigAttempt =
     | 'blocked'
     | { rejected: number }
     | { hostname: string };
+
+type DocumentAttempt<T> =
+    | 'unavailable'
+    | 'unsupported'
+    | 'blocked'
+    | { rejected: number }
+    | { document: T };
 
 export function createConnectionService(
     fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
@@ -477,6 +604,129 @@ export function createConnectionService(
             return { kind: 'rejected', status: outcome.rejected };
         return { kind: 'ok', hostname: outcome.hostname };
     };
+    const getDocument = async <T>(
+        path: string,
+        decode: (body: unknown) => T | null,
+        caller: AbortSignal,
+        bearer?: string,
+    ): Promise<DocumentOutcome<T>> => {
+        const outcome = await withDeadline<DocumentAttempt<T>>(
+            caller,
+            async (signal) => {
+                let response: Response;
+                try {
+                    response = await fetchImpl(path, {
+                        method: 'GET',
+                        credentials: 'omit',
+                        redirect: 'error',
+                        cache: 'no-store',
+                        headers: headersFor(bearer, false),
+                        signal,
+                    });
+                } catch {
+                    return 'unavailable' as const;
+                }
+                try {
+                    if (response.redirected) return 'unavailable';
+                    if (
+                        response.headers.get(PROXY_ERROR_HEADER) ===
+                        UPSTREAM_MISMATCH
+                    )
+                        return 'blocked';
+                    if (response.status === 404 || response.status === 405)
+                        return 'unsupported';
+                    if (response.status === 401 || response.status === 403)
+                        return { rejected: response.status };
+                    if (response.status !== 200) return 'unavailable';
+                    const body = await readBoundedJson(
+                        response,
+                        CONFIG_BODY_LIMIT,
+                    );
+                    if (!body.ok) return 'unavailable';
+                    const document = decode(body.value);
+                    return document === null ? 'unavailable' : { document };
+                } finally {
+                    discardBody(response);
+                }
+            },
+        );
+        if (outcome === 'cancelled' || outcome === 'expired')
+            return outcome === 'cancelled'
+                ? { kind: 'cancelled' }
+                : { kind: 'unavailable' };
+        if (outcome === 'unavailable') return { kind: 'unavailable' };
+        if (outcome === 'unsupported') return { kind: 'unsupported' };
+        if (outcome === 'blocked') return { kind: 'blocked' };
+        if ('rejected' in outcome)
+            return { kind: 'rejected', status: outcome.rejected };
+        return { kind: 'ok', document: outcome.document };
+    };
+    const getConfigDocument = (
+        caller: AbortSignal,
+        bearer?: string,
+    ): Promise<ConfigDocumentOutcome> =>
+        getDocument('/api/config', decodeConfigDocument, caller, bearer);
+    const getVersion = (
+        caller: AbortSignal,
+        bearer?: string,
+    ): Promise<VersionOutcome> =>
+        getDocument('/api/version', decodeVersionDocument, caller, bearer);
+    // Toggle saves report status only; like legacy, the body is unread.
+    const postConfig = async (
+        path: TogglePath,
+        bodyJson: string,
+        caller: AbortSignal,
+        bearer?: string,
+    ): Promise<PostOutcome> => {
+        const outcome = await withDeadline<
+            | 'unavailable'
+            | 'unsupported'
+            | 'blocked'
+            | { rejected: number }
+            | { saved: true }
+        >(caller, async (signal) => {
+            let response: Response;
+            try {
+                response = await fetchImpl(path, {
+                    method: 'POST',
+                    credentials: 'omit',
+                    redirect: 'error',
+                    cache: 'no-store',
+                    headers: headersFor(bearer, true),
+                    body: bodyJson,
+                    signal,
+                });
+            } catch {
+                return 'unavailable' as const;
+            }
+            try {
+                if (response.redirected) return 'unavailable';
+                if (
+                    response.headers.get(PROXY_ERROR_HEADER) ===
+                    UPSTREAM_MISMATCH
+                )
+                    return 'blocked';
+                if (response.status === 404 || response.status === 405)
+                    return 'unsupported';
+                if (response.status === 401 || response.status === 403)
+                    return { rejected: response.status };
+                if (response.status !== 200) return 'unavailable';
+                return { saved: true };
+            } finally {
+                discardBody(response);
+            }
+        });
+        if (outcome === 'cancelled' || outcome === 'expired')
+            return outcome === 'cancelled'
+                ? { kind: 'cancelled' }
+                : { kind: 'unavailable' };
+        if (outcome === 'unavailable') return { kind: 'unavailable' };
+        if (outcome === 'unsupported') return { kind: 'unsupported' };
+        if (outcome === 'blocked') return { kind: 'blocked' };
+        if ('rejected' in outcome)
+            return { kind: 'rejected', status: outcome.rejected };
+        return { kind: 'ok' };
+    };
     return {
         serverLabel: upstreamOrigin,
         async getStatus(signal) {
@@ -538,5 +788,8 @@ export function createConnectionService(
         login,
         refresh,
         getConfigHostname,
+        getConfigDocument,
+        getVersion,
+        postConfig,
     };
 }

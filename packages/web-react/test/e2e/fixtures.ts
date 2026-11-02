@@ -65,7 +65,8 @@ export async function guardBrowserContext(
         const apiAllowed =
             request.method() === 'GET' &&
             (url.pathname === '/api/auth/v2/status' ||
-                url.pathname === '/api/config') &&
+                url.pathname === '/api/config' ||
+                url.pathname === '/api/version') &&
             url.origin === stack.reactUrl;
         const authAllowed =
             options.allowAuthPosts === true &&
@@ -73,9 +74,25 @@ export async function guardBrowserContext(
             (url.pathname === '/api/auth/v2/login' ||
                 url.pathname === '/api/auth/v2/refresh') &&
             url.origin === stack.reactUrl;
+        const configPostAllowed =
+            options.allowAuthPosts === true &&
+            request.method() === 'POST' &&
+            (url.pathname === '/api/config/use-hidden-terminal' ||
+                url.pathname === '/api/config/use-existing-terminal-tab' ||
+                url.pathname === '/api/config/auto-reconnect' ||
+                url.pathname === '/api/config/pi-offline' ||
+                url.pathname === '/api/config/pi-bridge-no-inject' ||
+                url.pathname ===
+                    '/api/config/claude-dangerously-skip-permissions' ||
+                url.pathname === '/api/config/agy-theme-ansi' ||
+                url.pathname === '/api/config/opencode-idle-stop') &&
+            url.origin === stack.reactUrl;
         if (
             !origins.has(url.origin) ||
-            (url.pathname.startsWith('/api') && !apiAllowed && !authAllowed) ||
+            (url.pathname.startsWith('/api') &&
+                !apiAllowed &&
+                !authAllowed &&
+                !configPostAllowed) ||
             url.pathname.startsWith('/ws')
         ) {
             violations.push(`${request.method()} ${url.origin}${url.pathname}`);
@@ -84,7 +101,10 @@ export async function guardBrowserContext(
         }
         // Both route.fetch and isolated forwarding ignore browser offline
         // emulation, so the guard aborts allowed API work itself.
-        if ((apiAllowed || authAllowed) && faults?.offline === true) {
+        if (
+            (apiAllowed || authAllowed || configPostAllowed) &&
+            faults?.offline === true
+        ) {
             await route.abort('internetdisconnected');
             return;
         }

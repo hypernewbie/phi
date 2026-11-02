@@ -111,6 +111,73 @@ Changed files stay inside the plan allowlist: `C/src/{auth.ts,index.ts}`, `R/src
 
 Chromium unit/browser evidence does not establish cross-browser or screen-reader behavior. These checks remain pending human operation, not passes or integration authority.
 
+## Stage 04 MVP status (settings page)
+
+**Date:** 2026-11-02. **State:** implemented in a worktree, not committed, not reviewed for integration. Deferred migration scope is not new implementation authority.
+
+| Reference | Value |
+| --- | --- |
+| Base | `origin/main` `1991137c` with Stage 03 (`724e303a..f18ae12d`) rebased atop, clean rebase |
+| Branch | `stage-04-settings`, from `frontend-auth-mvp` |
+| Worktree | `/Users/n0mad/code/phi-worktrees/stage-04-settings` |
+| Plan | `/Users/n0mad/code/phi/plan/2026-11-02_21-23-24_stage-04-settings.md` revision 3 |
+| Authorization | User supplied `EXECUTE` on 2026-11-02. Direct, non-independent review. No commit, push, merge, or deletion authorized. |
+
+Milestones M0 (rebase + baselines), M1 (authenticated read + About), and M2 (Behavior writes) are complete. M3 is this review; it adds no features. The MVP mirrors `web/config.html` as a page: About group, Behavior toggles, last-good cache, and refresh. Modal shell, Appearance, Security, mobile-appearance fence, This-browser profile, and native popout are full-stage scope, not this MVP.
+
+### Final verification block
+
+All commands ran from the worktree root on 2026-11-02. Browser commands used command-scoped `SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"` on loopback fixtures with synthetic passwords. No check used a user server, real-user state, or production service.
+
+| Final command | Exit | Result |
+| --- | --- | --- |
+| `pnpm build:web` | 0 | Required legacy web build, before pet |
+| `pnpm --dir desktop/pet build` | 0 | Required pet build; no tree drift afterward |
+| `pnpm typecheck` | 0 | All compiler passes |
+| `pnpm check:vendors` | 0 | Vendored bytes unchanged |
+| `pnpm exec biome ci ./packages/phi-core ./packages/web-react` | 0 | No findings in the changed packages |
+| `pnpm exec vitest run packages/phi-core/test packages/web-react/test --maxWorkers=4` | 0 | 14 files, 304 tests passed |
+| `pnpm exec playwright test --config packages/web-react/playwright.config.ts` (twice) | 0 | 82 Chromium cases each (desktop + narrow touch), including settings 12 |
+
+Changed files stay inside the plan allowlist: `R/package.json` + `pnpm-lock.yaml` (zod, user-approved), `R/src/{App.tsx,main.tsx,copy/settings.ts,platform/{auth-session,http,settings-store}.ts,screens/SettingsScreen.tsx}`, `R/test/{app,auth-session,settings,settings-store}.test.*`, `R/test/e2e/{fixtures.ts,connection.spec.ts,settings.spec.ts}`, and this document. `R` is `packages/web-react/`. No Go, legacy `web/`, or `phi-core` changes.
+
+### Functional results
+
+- Settings nav enables only when the session is ready; the page loads config plus version with the per-request session bearer (`credentials: omit`, no cookies).
+- About shows uppercased hostname, build source, workspace count, and version with short commit (`v?` fallback when the version read fails).
+- Last-good cache (schema 1, rendered fields only) renders on failure with a stale note; refresh never erases user-edited values.
+- All seven Behavior toggles save optimistically with keep-state-on-failure parity; hidden-terminal forces reuse-tab disabled in both directions; auto-reconnect maps on/off to `visible`/`off`.
+- OpenCode idle-stop posts `{minutes}` and ignores invalid values; low power stays browser-local under the legacy `phi_low_power` key with one-time server migration.
+- Successful saves broadcast `behavior` (toggles) or `low-power` with `{enabled}` on `phi_config_sync`, matching the legacy channel contract.
+- Zod schemas validate the wire and cache shapes from one definition (user-approved dependency; Stage 03 auth decoders stay manual).
+- Isolated Chrome DevTools checks (fresh context per milestone): About render, keyboard-only toggle flip persisted server-side, and 320px mobile/touch with no overflow. Console fully clean on the final pass.
+- One `connection.spec.ts` keyboard test gained a tab stop for the new Settings nav button; the product tab order is correct.
+
+### Design results
+
+- Settings is a page following the `config.html` precedent, not the modal; the modal shell belongs to the full stage.
+- No new CSS: the page reuses the shared card/server classes and native controls, so contrast and focus rings are inherited from verified tokens.
+- All controls are keyboard-reachable with visible focus; the idle select carries id and name; the region marks `aria-busy` while loading.
+- No horizontal overflow at 320/390/1280 px; no transitions, so reduced motion needs no override.
+
+### Intentional differences
+
+- Page-first instead of modal-first (see above); the modal shell, focus trap, and opener refocus arrive with the full stage.
+- Edited values survive refresh for the store lifetime (app session), where the legacy modal tracks edits per open dialog. Same rule, longer window; revisit if cross-tab edit conflicts surface.
+- No other departure from legacy save/error semantics.
+
+### Pending human checks
+
+| Check | Required evidence | Current result |
+| --- | --- | --- |
+| Safari visual comparison | Settings About + Behavior at 1280x800 and 390x844 | Pending |
+| Safari reflow and text zoom | 320 CSS px and actual 200% zoom, no clipped controls | Pending |
+| Safari keyboard/focus | Nav gating, toggle flips, disabled states, visible focus | Pending |
+| Safari reduced motion | No nonessential transitions | Pending |
+| macOS VoiceOver with Safari | Landmarks, toggle/select names, one polite announcement per note | Pending |
+
+Chromium unit/browser evidence does not establish cross-browser or screen-reader behavior. These checks remain pending human operation, not passes or integration authority.
+
 ## Architecture and ownership
 
 `@phi/core` exports an empty TypeScript module. Its source compiler excludes DOM and ambient Node types.

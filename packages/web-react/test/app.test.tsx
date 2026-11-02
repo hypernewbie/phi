@@ -4,7 +4,36 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { App } from '../src/App.tsx';
 import { resolveLegacyHandoff } from '../src/platform/legacy-handoff.ts';
 import type { AuthSession, AuthView } from '../src/platform/auth-session.ts';
+import type { SettingsStore } from '../src/platform/settings-store.ts';
 import { cleanup, mount } from './react-env.ts';
+
+function settingsFor(): SettingsStore {
+    return {
+        view: () => ({
+            ready: false,
+            pending: false,
+            about: null,
+            controls: {
+                hidden: false,
+                reuse: false,
+                reuseDisabled: false,
+                autoReconnect: true,
+                piOffline: false,
+                piBridgeNoInject: false,
+                claudeSkip: false,
+                agyTheme: false,
+                idleMinutes: 0,
+                lowPower: false,
+            },
+            note: null,
+        }),
+        start: vi.fn(() => () => {}),
+        retry: vi.fn(),
+        setToggle: vi.fn(),
+        setIdleMinutes: vi.fn(),
+        setLowPower: vi.fn(),
+    };
+}
 
 afterEach(cleanup);
 afterEach(() => vi.restoreAllMocks());
@@ -33,6 +62,7 @@ function sessionFor(initial: Partial<AuthView> = {}) {
         }),
         signIn: vi.fn(async () => 'cancelled' as const),
         retry: vi.fn(),
+        bearer: () => null,
     };
     const emit = async (patch: Partial<AuthView>) => {
         current = { ...current, ...patch };
@@ -51,7 +81,7 @@ it('starts the session, escapes the server label, and keeps mutations inside its
         const { session, emit } = sessionFor();
         const { host } = await mount(
             <StrictMode>
-                <App session={session} />
+                <App session={session} settings={settingsFor()} />
             </StrictMode>,
         );
         expect(session.start).toHaveBeenCalledTimes(2);
@@ -86,7 +116,9 @@ it('routes the sign-in phase to Login and other phases to the card', async () =>
         pending: false,
         canSignIn: true,
     });
-    const { host } = await mount(<App session={session} />);
+    const { host } = await mount(
+        <App session={session} settings={settingsFor()} />,
+    );
     expect(host.querySelector('input[type="password"]')).not.toBeNull();
     expect(host.querySelector('[role="status"]')).toBeNull();
     await emit({ phase: 'ready', protection: 'enabled', hostname: 'phi-1' });
@@ -104,7 +136,9 @@ it('labels cached hostnames as last known until confirmed', async () => {
         stale: true,
         pending: false,
     });
-    const { host } = await mount(<App session={session} />);
+    const { host } = await mount(
+        <App session={session} settings={settingsFor()} />,
+    );
     expect(host.textContent).toContain('Last known server');
     await emit({ stale: false });
     expect(host.textContent).not.toContain('Last known server');
@@ -117,14 +151,17 @@ it('retries only on explicit action and keeps the status node', async () => {
         pending: false,
         message: 'status-unavailable',
     });
-    const { host } = await mount(<App session={session} />);
+    const { host } = await mount(
+        <App session={session} settings={settingsFor()} />,
+    );
     const buttons = host.querySelectorAll('button');
-    expect(buttons).toHaveLength(2);
+    expect(buttons).toHaveLength(3);
     expect(buttons[0]?.getAttribute('aria-current')).toBe('page');
-    expect(buttons[1]?.textContent).toBe('Retry');
+    expect(buttons[1]?.textContent).toBe('Settings');
+    expect(buttons[2]?.textContent).toBe('Retry');
     const status = host.querySelector('[role="status"]');
     buttons[0]?.focus();
-    await act(async () => buttons[1]?.click());
+    await act(async () => buttons[2]?.click());
     expect(session.retry).toHaveBeenCalledTimes(1);
     await emit({ pending: true });
     expect(host.querySelector('[role="status"]')).toBe(status);
@@ -140,8 +177,10 @@ async function startRetry() {
         pending: false,
         message: 'status-unavailable',
     });
-    const { host } = await mount(<App session={session} />);
-    const retry = host.querySelectorAll('button')[1];
+    const { host } = await mount(
+        <App session={session} settings={settingsFor()} />,
+    );
+    const retry = host.querySelectorAll('button')[2];
     if (!retry) throw new Error('Retry button is missing.');
     retry.focus();
     await act(async () => {

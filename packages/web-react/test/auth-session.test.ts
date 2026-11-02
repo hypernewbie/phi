@@ -4,10 +4,13 @@ import type { AuthView } from '../src/platform/auth-session.ts';
 import { createAuthSession } from '../src/platform/auth-session.ts';
 import type {
     AuthStatusOutcome,
+    ConfigDocumentOutcome,
     ConfigOutcome,
     ConnectionService,
     LoginOutcome,
+    PostOutcome,
     RefreshOutcome,
+    VersionOutcome,
 } from '../src/platform/http.ts';
 import { createServerStateAdapter } from '../src/platform/server-state.ts';
 
@@ -51,6 +54,12 @@ function deferredHttp() {
             new Promise<ConfigOutcome>((resolve) => {
                 configs.push({ signal, bearer, resolve });
             }),
+        getConfigDocument: () =>
+            Promise.resolve({ kind: 'unavailable' } as ConfigDocumentOutcome),
+        getVersion: () =>
+            Promise.resolve({ kind: 'unavailable' } as VersionOutcome),
+        postConfig: () =>
+            Promise.resolve({ kind: 'unavailable' } as PostOutcome),
     };
     return { http, status, logins, refreshes, configs };
 }

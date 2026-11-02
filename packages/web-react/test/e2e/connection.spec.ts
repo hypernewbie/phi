@@ -331,6 +331,11 @@ test('keeps the status node, keyboard navigation, and disabled/busy retry behavi
         ).toBeFocused();
         statusMock.reply = { status: 405, raw: 'unsupported' };
         await page.keyboard.press('Tab');
+        // The Settings nav button is a tab stop once the session is ready.
+        await expect(
+            page.getByRole('button', { name: 'Settings', exact: true }),
+        ).toBeFocused();
+        await page.keyboard.press('Tab');
         const retry = page.getByRole('button', { name: 'Retry', exact: true });
         await expect(retry).toBeFocused();
         await retry.press('Enter');

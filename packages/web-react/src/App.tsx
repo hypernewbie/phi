@@ -10,10 +10,32 @@ import {
 } from './platform/legacy-handoff.ts';
 import { ConnectionScreen } from './screens/ConnectionScreen.tsx';
 import { LoginScreen } from './screens/LoginScreen.tsx';
+import { SettingsScreen } from './screens/SettingsScreen.tsx';
+import type { SettingsStore } from './platform/settings-store.ts';
 
-type Screen = 'connection';
+type Screen = 'connection' | 'settings';
 
-export function App({ session }: { session: AuthSession }) {
+function SettingsPanel({ store }: { store: SettingsStore }) {
+    const [view, setView] = useState(store.view);
+    useEffect(() => store.start(setView), [store]);
+    return (
+        <SettingsScreen
+            view={view}
+            onRetry={store.retry}
+            onToggle={store.setToggle}
+            onIdleMinutes={store.setIdleMinutes}
+            onLowPower={store.setLowPower}
+        />
+    );
+}
+
+export function App({
+    session,
+    settings,
+}: {
+    session: AuthSession;
+    settings: SettingsStore;
+}) {
     const [screen, setScreen] = useState<Screen>('connection');
     const [view, setView] = useState(session.view);
     useEffect(() => session.start(setView), [session]);
@@ -39,19 +61,29 @@ export function App({ session }: { session: AuthSession }) {
                     >
                         Connection
                     </Button>
+                    <Button
+                        aria-current={
+                            screen === 'settings' ? 'page' : undefined
+                        }
+                        disabled={view.phase !== 'ready'}
+                        onClick={() => setScreen('settings')}
+                    >
+                        Settings
+                    </Button>
                 </nav>
             </header>
             <main className={styles.main}>
-                {screen === 'connection' &&
-                    (view.phase === 'sign-in' ? (
-                        <LoginScreen
-                            view={view}
-                            signIn={session.signIn}
-                            onRetry={session.retry}
-                        />
-                    ) : (
-                        <ConnectionScreen view={view} onRetry={session.retry} />
-                    ))}
+                {screen === 'settings' ? (
+                    <SettingsPanel store={settings} />
+                ) : view.phase === 'sign-in' ? (
+                    <LoginScreen
+                        view={view}
+                        signIn={session.signIn}
+                        onRetry={session.retry}
+                    />
+                ) : (
+                    <ConnectionScreen view={view} onRetry={session.retry} />
+                )}
             </main>
         </div>
     );

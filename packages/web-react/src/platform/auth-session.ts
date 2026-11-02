@@ -42,6 +42,9 @@ export interface AuthSession {
     start(onView: (view: AuthView) => void): () => void;
     signIn(password: string): Promise<SignInOutcome>;
     retry(): void;
+    // Live in-memory bearer for authed platform clients. Read per request;
+    // never cache: the session owns renewal and revocation.
+    bearer(): string | null;
 }
 
 const LOGIN_COOLDOWN_DEFAULT_MS = 60_000;
@@ -1013,5 +1016,6 @@ export function createAuthSession(
             clearRecoveryTimer();
             void runChain().catch(() => {});
         },
+        bearer: () => token,
     };
 }
