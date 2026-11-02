@@ -353,6 +353,7 @@ export class DiffController {
     currentWs: PTYWebSocket | null;
     term: any;
     fitAddon: any;
+    webglAddon: any;
     isPanelOpen: boolean;
     diffPanel: HTMLElement;
     headerDiffToggleBtn: HTMLElement;
@@ -824,13 +825,11 @@ export class DiffController {
 
         this.term.open(this.diffTermContainer);
 
-        // Graceful WebGL load
-        try {
-            const webgl = new window.WebglAddon.WebglAddon();
-            this.term.loadAddon(webgl);
-        } catch (_e) {
-            /* WebGL is a progressive enhancement; ignore load failure */
-        }
+        // WebGL is attached by syncTermWebgl, which keeps the addon alive
+        // only while the panel is open: every live GL context holds a
+        // full-size framebuffer plus Chromium's GPU-side copies, and the
+        // panel is closed most of the time.
+        this.syncTermWebgl();
 
         // Copy plumbing for the diff/status/log pane. The main terminal
         // wires these (terminal.js:817-878) so users can drag-select +
@@ -983,6 +982,37 @@ export class DiffController {
         setTimeout(() => {
             this.app.tabManager.fitActiveTerminal();
         }, 150);
+
+        this.syncTermWebgl();
+    }
+
+    /**
+     * Attaches the xterm WebglAddon while the panel is visible and disposes
+     * it when the panel closes. Idempotent: xterm keeps rendering through
+     * the DOM renderer whenever the addon is absent, so the terminal keeps
+     * its buffer and scrollback either way.
+     */
+    syncTermWebgl(): void {
+        if (!this.term) return;
+        if (this.isPanelOpen) {
+            if (this.webglAddon) return;
+            try {
+                const webgl = new window.WebglAddon.WebglAddon();
+                this.term.loadAddon(webgl);
+                this.webglAddon = webgl;
+            } catch (_e) {
+                /* WebGL is a progressive enhancement; ignore load failure */
+            }
+            return;
+        }
+        const webgl = this.webglAddon;
+        this.webglAddon = null;
+        if (!webgl) return;
+        try {
+            webgl.dispose();
+        } catch (_e) {
+            /* Disposing is best-effort; the DOM renderer takes over. */
+        }
     }
 
     fitTerminal(): void {

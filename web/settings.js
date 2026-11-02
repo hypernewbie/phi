@@ -1,6 +1,5 @@
 import {
     displayHostname,
-    setServerHostOverride,
     readLowPowerLocal,
     writeLowPowerLocal,
 } from './util.js';
@@ -346,7 +345,6 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     behGroup.appendChild(hostRow);
     hostInput.addEventListener('input', () => {
         app.hostnameOverride = hostInput.value.trim();
-        setServerHostOverride(app.hostnameOverride);
         app._saveAppearanceLocal();
         debouncedPersist({ hostname_override: app.hostnameOverride });
     });
