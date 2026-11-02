@@ -2455,6 +2455,9 @@ func TestDiagContract(t *testing.T) {
 		"version", "install_method", "uptime_seconds", "goroutines", "mem_alloc_mb", "pty_count", "panes",
 		// M4: additive runtime fields.
 		"go_version", "gomaxprocs", "num_cpu", "num_gc",
+		// Additive memory counters.
+		"mem_sys_mb", "mem_heap_inuse_mb", "mem_stack_mb", "heap_objects",
+		"ring_bytes_total", "ring_capacity_total", "ws_clients_total",
 	}
 	for _, k := range requiredKeys {
 		if _, ok := d[k]; !ok {

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { setupDomHarness } from './_dom.js';
 import { MarkdownManager } from '../web/markdown.js';
 
@@ -23,6 +23,11 @@ function makeMm(app = {}) {
 }
 
 describe('openDiagModal', () => {
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+    });
+
     it('fetches /api/diag and renders tables', async () => {
         const fakeFetch = vi.fn().mockResolvedValue({
             ok: true,
@@ -51,13 +56,54 @@ describe('openDiagModal', () => {
         const mm = makeMm();
         await mm.openDiagModal();
 
-        expect(fakeFetch).toHaveBeenCalledWith('/api/diag');
+        // The refresh is bounded so a stalled link cannot stack requests;
+        // assert the endpoint, not the exact options bag.
+        expect(fakeFetch.mock.calls[0][0]).toBe('/api/diag');
+        expect(fakeFetch.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal);
         expect(mm.modalTitle.innerText).toBe('Phi Diagnostics');
         const html = mm.modalBody.innerHTML;
         expect(html).toContain('v0.8.0');
         expect(html).toContain('standalone');
         expect(html).toContain('42'); // goroutines
         expect(html).toContain('opencode-1');
+        // A payload from a server older than the memory fields must read as
+        // "no measurement", never as a measured zero.
+        expect(html).toContain('—');
+        expect(html).not.toContain('0.0 MB');
+    });
+
+    it('keeps the last reading when a later refresh fails', async () => {
+        vi.useFakeTimers();
+        const fakeFetch = vi
+            .fn()
+            .mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({
+                    version: 'v0.33.0',
+                    install_method: 'dev',
+                    uptime_seconds: 60,
+                    goroutines: 7,
+                    mem_alloc_mb: 3.5,
+                    pty_count: 0,
+                    panes: [],
+                }),
+            })
+            .mockRejectedValue(new Error('link down'));
+        vi.stubGlobal('fetch', fakeFetch);
+
+        const mm = makeMm();
+        await mm.openDiagModal();
+        expect(mm.modalBody.innerHTML).toContain('v0.33.0');
+
+        await vi.advanceTimersByTimeAsync(2000);
+
+        // The counters stay on screen; only the status line reports the miss.
+        expect(mm.modalBody.innerHTML).toContain('v0.33.0');
+        expect(mm.modalBody.innerHTML).not.toContain('md-list-error');
+        expect(document.getElementById('phi-diag-foot')?.textContent).toContain(
+            'Refresh failed',
+        );
+        if (mm._diagInterval) clearInterval(mm._diagInterval);
     });
 
     it('shows an error message when fetch fails', async () => {
