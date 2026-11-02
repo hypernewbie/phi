@@ -7,8 +7,8 @@ export const settingsCopy = {
     hostname: 'Hostname',
     buildSource: 'Build source',
     workspaces: 'Workspaces',
-    version: 'Version',
     retry: 'Retry',
+    unknownBuild: 'unknown build',
     toggles: {
         hidden: 'Use separate hidden terminal for commands',
         reuse: 'Reuse shell tab for terminal commands',

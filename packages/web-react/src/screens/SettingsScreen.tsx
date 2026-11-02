@@ -1,5 +1,6 @@
 import styles from '../app.module.css';
 import { Button } from '../components/ui/Button.tsx';
+import settings from './settings.module.css';
 import {
     StatusMessage,
     type StatusKind,
@@ -11,6 +12,16 @@ function versionText(about: SettingsView['about']): string {
     if (about === null || about.version === '') return 'v?';
     const short = about.commit.slice(0, 7);
     return short === '' ? `v${about.version}` : `v${about.version} · ${short}`;
+}
+
+// Mirrors the legacy tooltip: date plus build source, or 'unknown build'.
+function versionTitle(about: SettingsView['about']): string {
+    if (about === null) return settingsCopy.unknownBuild;
+    return (
+        [about.date, about.buildSource]
+            .filter((part) => part !== '')
+            .join(' · ') || settingsCopy.unknownBuild
+    );
 }
 
 export function SettingsScreen({
@@ -28,7 +39,7 @@ export function SettingsScreen({
 }) {
     const controls = view.controls;
     const checkbox = (key: ToggleKey, checked: boolean, label: string) => (
-        <label>
+        <label className={settings.check}>
             <input
                 type="checkbox"
                 checked={checked}
@@ -46,7 +57,9 @@ export function SettingsScreen({
             aria-busy={view.pending}
         >
             <h1 id="settings-title">{settingsCopy.title}</h1>
-            <p className={styles.server}>{versionText(view.about)}</p>
+            <p className={styles.server} title={versionTitle(view.about)}>
+                {versionText(view.about)}
+            </p>
             {view.about === null && view.pending && (
                 <StatusMessage kind="loading">Loading settings…</StatusMessage>
             )}
@@ -75,8 +88,10 @@ export function SettingsScreen({
                     </p>
                 </section>
             )}
-            <fieldset disabled={!view.ready}>
-                <legend>{settingsCopy.behavior}</legend>
+            <fieldset disabled={!view.ready} className={settings.group}>
+                <legend className={settings.legend}>
+                    {settingsCopy.behavior}
+                </legend>
                 <p>
                     {checkbox(
                         'hidden',
@@ -85,7 +100,7 @@ export function SettingsScreen({
                     )}
                 </p>
                 <p>
-                    <label>
+                    <label className={settings.check}>
                         <input
                             type="checkbox"
                             checked={controls.reuse}
@@ -105,7 +120,7 @@ export function SettingsScreen({
                     )}
                 </p>
                 <p>
-                    <label>
+                    <label className={settings.check}>
                         <input
                             type="checkbox"
                             checked={controls.lowPower}
@@ -150,7 +165,15 @@ export function SettingsScreen({
                         <select
                             id="settings-opencode-idle"
                             name="opencode-idle-stop"
-                            value={String(controls.idleMinutes)}
+                            value={
+                                settingsCopy.idleOptions.some(
+                                    (option) =>
+                                        option.value ===
+                                        String(controls.idleMinutes),
+                                )
+                                    ? String(controls.idleMinutes)
+                                    : '0'
+                            }
                             onChange={(event) =>
                                 onIdleMinutes(
                                     Number.parseInt(event.target.value, 10),

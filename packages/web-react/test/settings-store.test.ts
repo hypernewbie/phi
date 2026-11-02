@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
-import { createAuthSession } from '../src/platform/auth-session.ts';
 import type {
     AuthStatusOutcome,
     ConfigDocumentOutcome,
@@ -12,86 +11,11 @@ import type {
     VersionOutcome,
 } from '../src/platform/http.ts';
 import { createConnectionService } from '../src/platform/http.ts';
-import { createServerStateAdapter } from '../src/platform/server-state.ts';
 import { createSettingsStore } from '../src/platform/settings-store.ts';
 
 const UPSTREAM = 'http://fixture.invalid';
 const flush = () => new Promise<void>((done) => setTimeout(done, 0));
 const signal = () => new AbortController().signal;
-
-const BUNDLE = {
-    token: 'test-access-token',
-    expiresAt: 1_700_000_000,
-    expiresIn: 3600,
-    refreshIdleExpiresAt: 1_700_000_000,
-    refreshAbsoluteExpiresAt: 1_700_000_000,
-};
-
-function memoryStorage() {
-    const store = new Map<string, string>();
-    return {
-        store,
-        adapter: () =>
-            createServerStateAdapter(
-                {
-                    getItem: (key: string) => store.get(key) ?? null,
-                    setItem: (key: string, value: string) => {
-                        store.set(key, value);
-                    },
-                },
-                UPSTREAM,
-            ),
-    };
-}
-
-function sessionHarness() {
-    const status: Array<{ resolve: (value: AuthStatusOutcome) => void }> = [];
-    const logins: Array<{ resolve: (value: LoginOutcome) => void }> = [];
-    const memory = memoryStorage();
-    const http: ConnectionService = {
-        serverLabel: UPSTREAM,
-        getStatus: () => Promise.resolve('disabled'),
-        getAuthStatus: () =>
-            new Promise<AuthStatusOutcome>((resolve) => {
-                status.push({ resolve });
-            }),
-        login: () =>
-            new Promise<LoginOutcome>((resolve) => {
-                logins.push({ resolve });
-            }),
-        refresh: () => Promise.resolve({ kind: 'cancelled' } as RefreshOutcome),
-        getConfigHostname: () =>
-            Promise.resolve({ kind: 'unavailable' } as ConfigOutcome),
-        getConfigDocument: () =>
-            Promise.resolve({ kind: 'unavailable' } as ConfigDocumentOutcome),
-        getVersion: () =>
-            Promise.resolve({ kind: 'unavailable' } as VersionOutcome),
-        postConfig: () =>
-            Promise.resolve({ kind: 'unavailable' } as PostOutcome),
-    };
-    const session = createAuthSession(http, memory.adapter());
-    return { session, status, logins };
-}
-
-it('reads no bearer before sign-in', () => {
-    const { session } = sessionHarness();
-    expect(session.bearer()).toBeNull();
-});
-
-it('exposes the live bearer after an accepted sign-in', async () => {
-    const { session, status, logins } = sessionHarness();
-    const stop = session.start(() => {});
-    status[0]?.resolve({
-        kind: 'ok',
-        status: { enabled: true, authenticated: false, owned: true },
-    });
-    await flush();
-    const result = session.signIn('correct-horse');
-    logins[0]?.resolve({ kind: 'accepted', bundle: BUNDLE });
-    await expect(result).resolves.toBe('accepted');
-    expect(session.bearer()).toBe(BUNDLE.token);
-    stop();
-});
 
 const CONFIG = {
     hostname: 'fixture-phi',

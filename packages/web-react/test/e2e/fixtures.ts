@@ -45,7 +45,7 @@ export async function guardBrowserContext(
     options: {
         statusMock?: StatusMock;
         configMock?: StatusMock;
-        allowAuthPosts?: boolean;
+        allowPosts?: boolean;
         faults?: GuardFaults;
     } = {},
 ): Promise<GuardHandle> {
@@ -69,13 +69,13 @@ export async function guardBrowserContext(
                 url.pathname === '/api/version') &&
             url.origin === stack.reactUrl;
         const authAllowed =
-            options.allowAuthPosts === true &&
+            options.allowPosts === true &&
             request.method() === 'POST' &&
             (url.pathname === '/api/auth/v2/login' ||
                 url.pathname === '/api/auth/v2/refresh') &&
             url.origin === stack.reactUrl;
         const configPostAllowed =
-            options.allowAuthPosts === true &&
+            options.allowPosts === true &&
             request.method() === 'POST' &&
             (url.pathname === '/api/config/use-hidden-terminal' ||
                 url.pathname === '/api/config/use-existing-terminal-tab' ||
@@ -331,7 +331,7 @@ export const authTest = base.extend<{
         use,
     ) => {
         const guard = await guardBrowserContext(context, authStack, {
-            allowAuthPosts: true,
+            allowPosts: true,
             faults: authFaults,
             statusMock: authStatusMock,
             configMock,

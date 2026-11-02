@@ -38,6 +38,7 @@ function view(patch: Partial<SettingsView> = {}): SettingsView {
             workspaces: 2,
             version: '0.33.0',
             commit: 'abc1234567890',
+            date: '2026-11-02',
         },
         controls: CONTROLS,
         note: null,
@@ -66,6 +67,7 @@ it('hides the build-source row when unknown', async () => {
                     workspaces: 0,
                     version: '',
                     commit: '',
+                    date: '',
                 },
             })}
             onRetry={() => {}}
@@ -181,6 +183,28 @@ it('disables reuse while hidden is on', async () => {
     );
     expect(boxes[0]?.disabled).toBe(false);
     expect(boxes[1]?.disabled).toBe(true);
+});
+
+it('falls back to Off when the server idle value is not an option', async () => {
+    const { host } = await mount(
+        <SettingsScreen
+            view={view({
+                controls: { ...CONTROLS, idleMinutes: 45 },
+            })}
+            onRetry={() => {}}
+            {...noopHandlers}
+        />,
+    );
+    const select = host.querySelector('select');
+    expect(select?.value).toBe('0');
+});
+
+it('titles the version with the build date and source', async () => {
+    const { host } = await mount(
+        <SettingsScreen view={view()} onRetry={() => {}} {...noopHandlers} />,
+    );
+    const version = host.querySelector('p[title]');
+    expect(version?.getAttribute('title')).toBe('2026-11-02 · test');
 });
 
 it('shows a loading state without data on first load', async () => {

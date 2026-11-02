@@ -156,7 +156,8 @@ Changed files stay inside the plan allowlist: `R/package.json` + `pnpm-lock.yaml
 ### Design results
 
 - Settings is a page following the `config.html` precedent, not the modal; the modal shell belongs to the full stage.
-- No new CSS: the page reuses the shared card/server classes and native controls, so contrast and focus rings are inherited from verified tokens.
+- One scoped module (`settings.module.css`): the Behavior fieldset keeps native disabled-group semantics without the browser groove border, the legend matches the About h2, and checkbox rows wrap with a hanging indent. No new colors: contrast and focus rings are inherited from verified tokens.
+- The header nav is a wrapping flex row (one row on desktop, full-width lines on narrow screens); single-button screens render unchanged.
 - All controls are keyboard-reachable with visible focus; the idle select carries id and name; the region marks `aria-busy` while loading.
 - No horizontal overflow at 320/390/1280 px; no transitions, so reduced motion needs no override.
 

@@ -13,6 +13,7 @@ export interface SettingsAbout {
     readonly workspaces: number;
     readonly version: string;
     readonly commit: string;
+    readonly date: string;
 }
 
 export interface SettingsControls {
@@ -183,6 +184,7 @@ export function createSettingsStore(
                       workspaces: config.workspaces.length,
                       version: version?.version ?? '',
                       commit: version?.commit ?? '',
+                      date: version?.date ?? '',
                   },
         controls: controls(),
         note,
@@ -235,7 +237,6 @@ export function createSettingsStore(
         if (listener === null || pending) return;
         pending = true;
         emit();
-        controller?.abort();
         const own = new AbortController();
         controller = own;
         const token = bearer();

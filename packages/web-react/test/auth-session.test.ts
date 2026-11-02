@@ -105,6 +105,26 @@ function started() {
 
 const last = (views: AuthView[]) => views[views.length - 1] as AuthView;
 
+it('reads no bearer before sign-in', () => {
+    const { session, stop } = started();
+    expect(session.bearer()).toBeNull();
+    stop();
+});
+
+it('exposes the live bearer after an accepted sign-in', async () => {
+    const { session, status, logins, stop } = started();
+    status[0]?.resolve({
+        kind: 'ok',
+        status: { enabled: true, authenticated: false, owned: true },
+    });
+    await flush();
+    const result = session.signIn('correct-horse');
+    logins[0]?.resolve({ kind: 'accepted', bundle: BUNDLE });
+    await expect(result).resolves.toBe('accepted');
+    expect(session.bearer()).toBe(BUNDLE.token);
+    stop();
+});
+
 it('renders the cached hostname synchronously before any request', () => {
     const fake = deferredHttp();
     const memory = memoryStorage();
