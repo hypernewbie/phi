@@ -468,3 +468,39 @@ private actor HeldNonSend {
 
   func hasEntered() -> Bool { entered }
 }
+
+extension LiveTerminalSpikeTests {
+  /// The composer is the client's own send path: check its bytes reach the
+  /// remote shell instead of stopping at a unit test of `PhiPrompt`.
+  @MainActor
+  func testComposerPromptReachesTheShell() async throws {
+    let server = try OwnedLoopbackServer.fromEnvironment()
+    let stateDirectory = try makeStateDirectory()
+    let pane = try await server.spawn()
+    let view = SpikeTerminalView()
+    let sink = TerminalObservationSink(view: view)
+    let session = try PaneSession(
+      origin: server.origin, paneID: pane.id, stateDir: stateDirectory,
+      useKeychain: false, terminalObserver: { event in try await sink.apply(event) })
+    connect(view, to: session)
+    addOwnedTeardown(server: server, pane: pane, stateDirectory: stateDirectory, session: session)
+
+    session.resize(cols: view.terminalDimensions.cols, rows: view.terminalDimensions.rows)
+    session.start()
+    try await waitFor("initial attach") { session.snapshot.status.attached }
+
+    let composer = PhiComposerView(frame: NSRect(x: 0, y: 0, width: 600, height: 54))
+    composer.onSend = { text in
+      guard let bytes = PhiPrompt.bytes(for: text) else { return false }
+      view.send(data: bytes[...])
+      return true
+    }
+    let marker = "COMPOSER_ROUNDTRIP_9231"
+    composer.prompt = "printf '\(marker)\\n'"
+    composer.send()
+
+    try await waitFor("composer prompt output") { self.exactRowCount(view, marker) == 1 }
+    XCTAssertEqual(exactRowCount(view, marker), 1)
+    XCTAssertEqual(composer.prompt, "", "a sent prompt leaves the field empty")
+  }
+}
