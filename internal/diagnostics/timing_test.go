@@ -152,6 +152,12 @@ func TestTimingCaptureRoundTripWithWorkload(t *testing.T) {
 	if summary.ExportedSpanCounts["git.status"] != 3 {
 		t.Fatalf("span counts = %v", summary.ExportedSpanCounts)
 	}
+	if summary.ExportedRootCounts["http GET /api/version"] != 3 {
+		t.Fatalf("root counts = %v", summary.ExportedRootCounts)
+	}
+	if summary.ExportedRootTotal["http GET /api/version"] != summary.RootDurationNS {
+		t.Fatalf("root total = %v, root_duration_ns = %d", summary.ExportedRootTotal, summary.RootDurationNS)
+	}
 	if !summary.Complete || summary.ExportedSpanCounts == nil {
 		t.Fatalf("summary = %+v", summary)
 	}
@@ -335,6 +341,9 @@ func TestEncodeTimingProfileNestedWeights(t *testing.T) {
 		RootsAdmitted: 1,
 		RootsExported: 1,
 		NodesRecorded: 4,
+		RootCounts:    map[string]uint32{"http GET /api/git/raw-status": 1},
+		RootMaxNS:     map[string]int64{"http GET /api/git/raw-status": 900},
+		RootTotalNS:   map[string]int64{"http GET /api/git/raw-status": 900},
 		Roots: []*obs.TimingNode{{
 			Name:  "http GET /api/git/raw-status",
 			Start: epoch,
@@ -385,6 +394,18 @@ func TestEncodeTimingProfileNestedWeights(t *testing.T) {
 		weights["git.diff -> git.status -> http GET /api/git/raw-status"] != 50 {
 		t.Fatalf("weights = %v", weights)
 	}
+	// Aggregates carry inclusive root durations through serialization:
+	// 900 ns total/max despite 700 ns exclusive root self time.
+	var buf bytes.Buffer
+	if err := prof.Write(&buf); err != nil {
+		t.Fatalf("write profile: %v", err)
+	}
+	_, parsed := parseTimingProfile(t, buf.Bytes())
+	if parsed.ExportedRootCounts["http GET /api/git/raw-status"] != 1 ||
+		parsed.ExportedRootMaxNS["http GET /api/git/raw-status"] != 900 ||
+		parsed.ExportedRootTotal["http GET /api/git/raw-status"] != 900 {
+		t.Fatalf("root aggregates = %v/%v/%v", parsed.ExportedRootCounts, parsed.ExportedRootMaxNS, parsed.ExportedRootTotal)
+	}
 }
 
 func TestEncodeTimingProfileZeroAndEmpty(t *testing.T) {
@@ -394,6 +415,9 @@ func TestEncodeTimingProfileZeroAndEmpty(t *testing.T) {
 		RootsAdmitted: 1,
 		RootsExported: 1,
 		NodesRecorded: 1,
+		RootCounts:    map[string]uint32{"http GET /api/a": 1},
+		RootMaxNS:     map[string]int64{"http GET /api/a": 0},
+		RootTotalNS:   map[string]int64{"http GET /api/a": 0},
 		Roots:         []*obs.TimingNode{{Name: "http GET /api/a", Start: epoch, End: epoch}},
 	}
 	summary, prof, err := encodeTimingProfile(snapshot, "")
@@ -403,12 +427,26 @@ func TestEncodeTimingProfileZeroAndEmpty(t *testing.T) {
 	if len(prof.Sample) != 0 || summary.RootDurationNS != 0 || !summary.Complete {
 		t.Fatalf("zero summary = %+v samples = %d", summary, len(prof.Sample))
 	}
+	if summary.ExportedRootCounts["http GET /api/a"] != 1 {
+		t.Fatalf("zero counts = %v", summary.ExportedRootCounts)
+	}
+	if max, ok := summary.ExportedRootMaxNS["http GET /api/a"]; !ok || max != 0 {
+		t.Fatalf("zero max = %v", summary.ExportedRootMaxNS)
+	}
+	if total, ok := summary.ExportedRootTotal["http GET /api/a"]; !ok || total != 0 {
+		t.Fatalf("zero total = %v", summary.ExportedRootTotal)
+	}
 	empty, emptyProf, err := encodeTimingProfile(obs.TimingSnapshot{}, "")
 	if err != nil {
 		t.Fatalf("encode empty: %v", err)
 	}
 	if len(emptyProf.Sample) != 0 || empty.RootDurationNS != 0 || !empty.Complete {
 		t.Fatalf("empty summary = %+v", empty)
+	}
+	if empty.ExportedRootCounts == nil || len(empty.ExportedRootCounts) != 0 ||
+		empty.ExportedRootMaxNS == nil || len(empty.ExportedRootMaxNS) != 0 ||
+		empty.ExportedRootTotal == nil || len(empty.ExportedRootTotal) != 0 {
+		t.Fatalf("empty aggregates = %v/%v/%v", empty.ExportedRootCounts, empty.ExportedRootMaxNS, empty.ExportedRootTotal)
 	}
 }
 

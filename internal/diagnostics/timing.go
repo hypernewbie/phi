@@ -35,6 +35,9 @@ type timingSummary struct {
 	Complete           bool              `json:"complete"`
 	RootDurationNS     int64             `json:"root_duration_ns"`
 	ExportedSpanCounts map[string]uint64 `json:"exported_span_counts"`
+	ExportedRootCounts map[string]uint32 `json:"exported_root_counts"`
+	ExportedRootMaxNS  map[string]int64  `json:"exported_root_max_ns"`
+	ExportedRootTotal  map[string]int64  `json:"exported_root_total_ns"`
 }
 
 func (s *Server) handleTimingStatus(w http.ResponseWriter, r *http.Request) {
@@ -150,6 +153,18 @@ func encodeTimingProfile(snapshot obs.TimingSnapshot, commit string) (timingSumm
 		NodesDropped:       snapshot.NodesDropped,
 		Complete:           !snapshot.Canceled && snapshot.RootsDropped == 0 && snapshot.DiscardedOpen == 0 && snapshot.DiscardedInvalid == 0 && snapshot.DiscardedCapacity == 0 && snapshot.NodesDropped == 0,
 		ExportedSpanCounts: map[string]uint64{},
+		ExportedRootCounts: map[string]uint32{},
+		ExportedRootMaxNS:  map[string]int64{},
+		ExportedRootTotal:  map[string]int64{},
+	}
+	for name, count := range snapshot.RootCounts {
+		summary.ExportedRootCounts[name] = count
+	}
+	for name, max := range snapshot.RootMaxNS {
+		summary.ExportedRootMaxNS[name] = max
+	}
+	for name, total := range snapshot.RootTotalNS {
+		summary.ExportedRootTotal[name] = total
 	}
 	if snapshot.Canceled {
 		return timingSummary{}, nil, fmt.Errorf("cannot encode canceled timing capture")
