@@ -15,7 +15,7 @@
  *   - local pages load via `loadFile`; remote profile origins are
  *     sandboxed WebContentsView children with no preload bridge.
  */
-import { app, ipcMain, protocol, webContents } from 'electron';
+import { app, ipcMain, protocol } from 'electron';
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,7 +29,6 @@ import {
   realPlatform,
 } from './protocol.js';
 import { registerEmbeddedScheme } from './embedded-transport.js';
-import { installProcMetrics, METRICS_ENV_VAR } from './proc-metrics.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -201,16 +200,5 @@ ipcMain.on(DEEPLINK_CHANNEL, (_event, raw: unknown) => {
 });
 
 app.whenReady().then(() => {
-  // Opt-in memory sampling, off unless PHI_DESKTOP_METRICS selects an
-  // interval. It samples every process in the app, so the renderer of the
-  // optional pet overlay is covered by the same rows.
-  installProcMetrics(
-    {
-      getAppMetrics: () => app.getAppMetrics(),
-      getAllWebContents: () => webContents.getAllWebContents(),
-    },
-    process.env[METRICS_ENV_VAR],
-    (message) => console.log(message),
-  );
   void host.start(singleInstance);
 });

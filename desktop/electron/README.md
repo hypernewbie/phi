@@ -351,31 +351,6 @@ is exercised against a temp dir only, and the real Electron
 `setAsDefaultProtocolClient` is reachable only through `realPlatform`,
 which only the production CLI path uses.
 
-## Memory metrics
-
-`PHI_DESKTOP_METRICS` turns on process memory sampling. It is off by
-default; set it to `1` for a 10 s interval or to a millisecond value
-(minimum 1000).
-
-```sh
-PHI_DESKTOP_METRICS=1 pnpm --filter phi-desktop-electron run dev
-```
-
-Each sample prints one header and one row per process, sorted by working
-set, so the growing process is the first row after the header. Rows carry
-`pid`, `ws` (current), `peak`, `d` (change since the previous sample),
-`cpu`, and the renderer URL.
-
-```
-phi-metrics t=+120.0s total=4123MB main=88MB/120MB heap rss=210MB external=8MB arrayBuffers=0MB
-phi-metrics   Tab        pid=36485 ws=3800MB peak=4100MB d=+270MB cpu=1.2 url=phi-app://app
-phi-metrics   GPU        pid=36480 ws=180MB peak=220MB d=+2MB cpu=3.1
-```
-
-A `d=` that keeps growing without a matching drop is the leak. The pet
-overlay runs inside this app process, so its renderer is one of the rows;
-the pet package needs no separate instrumentation.
-
 ## Layout
 
 ```
@@ -393,7 +368,6 @@ src/protocol.ts         phi:// OS protocol registration (Platform + install/unin
 src/tray.ts             system tray (TrayDeps DI + menu builder + tooltip/unread + event wiring)
 src/controller.ts       profile controller (pure TS: store persistence, CRUD, same-host rule, MRU, unread/health, subscribe/emit)
 src/hotkeys.ts          global hotkey (globalShortcut + PHI_DESKTOP_HOTKEY override)
-src/proc-metrics.ts     opt-in per-process memory sampler (PHI_DESKTOP_METRICS)
 src/views.ts            ProfileViewManager: one retained WebContentsView per profile (pure TS, recording-fake testable)
 src/renderer.ts         rail renderer module (ESM -> dist/renderer.js; monogram list rebuild from phi:rail-state)
 src/renderer.html       the rail renderer page (72 px fixed sidebar + monogram list + add button)
