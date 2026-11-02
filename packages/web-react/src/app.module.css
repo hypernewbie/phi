@@ -31,7 +31,17 @@
 }
 
 .navigation {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
     max-width: 100%;
+}
+
+/* Share one row on wide screens; wrap to full-width lines when the
+   labels no longer fit side by side. */
+.navigation > * {
+    flex: 1 1 0;
+    min-width: max-content;
 }
 
 .main {

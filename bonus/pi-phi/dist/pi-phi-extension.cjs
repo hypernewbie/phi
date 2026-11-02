@@ -25014,7 +25014,7 @@ function invokeNativeReload(ctx, state) {
 // src/runtime.ts
 var import_node_crypto2 = require("node:crypto");
 
-// ../../node_modules/.pnpm/@earendil-works+pi-ai@1.0.1_@aws-sdk+credential-provider-node@3.972.84_@smithy+signatur_63728df7274c44e9f652e9f97f4c91c5/node_modules/@earendil-works/pi-ai/dist/models.js
+// ../../node_modules/.pnpm/@earendil-works+pi-ai@1.0.1_@aws-sdk+credential-provider-node@3.972.84_@smithy+signatur_303f23ddf937e2f19a0bf4028b6e60b2/node_modules/@earendil-works/pi-ai/dist/models.js
 var EXTENDED_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 function getSupportedThinkingLevels(model) {
   if (!model.reasoning)

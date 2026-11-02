@@ -1,0 +1,50 @@
+/* Local muted tone: the shared --text-muted is 4.16:1 on the card and
+   fails normal-text contrast. This keeps the hierarchy at 5.61:1. */
+.form {
+    --login-muted: #8e8ca0;
+}
+
+.subtitle {
+    color: var(--login-muted);
+    margin-bottom: var(--space-1);
+}
+
+.form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.form label {
+    color: var(--login-muted);
+    font-size: 13px;
+}
+
+.field {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--bg-border);
+    border-radius: 4px;
+    padding: var(--space-2) 10px;
+    color: var(--text-primary);
+    background: var(--bg-base);
+    font: inherit;
+}
+
+.field:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.help {
+    color: var(--login-muted);
+    font-size: 13px;
+}
+
+.error {
+    min-height: 1em;
+    color: var(--error);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+}
