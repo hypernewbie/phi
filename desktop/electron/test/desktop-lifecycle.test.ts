@@ -8,6 +8,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+const streamDeckRelayMocks = vi.hoisted(() => ({ instances: [] as unknown[] }));
+const streamDeckMenuTemplates = vi.hoisted(() => [] as unknown[][]);
+
 const fake = vi.hoisted(() => {
   type Listener = (...args: any[]) => void;
   class Events {
@@ -231,13 +234,48 @@ const fake = vi.hoisted(() => {
   };
 });
 
+function currentStreamDeckMenuEntry():
+  | { label?: string; checked?: boolean; click?: () => void }
+  | undefined {
+  for (const template of [...streamDeckMenuTemplates].reverse()) {
+    const entry = (
+      template as Array<{
+        label?: string;
+        checked?: boolean;
+        click?: () => void;
+      }>
+    ).find((item) => item.label === 'Stream Deck relay');
+    if (entry) return entry;
+  }
+  return undefined;
+}
+
+vi.mock('../src/streamdeck-relay.js', () => ({
+  StreamDeckRelay: class {
+    readonly options: unknown;
+    readonly start = vi.fn().mockResolvedValue(undefined);
+    readonly stop = vi.fn().mockResolvedValue(undefined);
+    readonly publishSnapshot = vi.fn(() => true);
+    constructor(options: unknown) {
+      this.options = options;
+      streamDeckRelayMocks.instances.push(this);
+    }
+  },
+}));
+
 vi.mock('electron', () => ({
   app: fake.app,
   ipcMain: fake.ipcMain,
   clipboard: { writeText: vi.fn(), readText: vi.fn(() => '') },
   BrowserWindow: fake.FakeBrowserWindow,
   WebContentsView: fake.FakeWebContentsView,
-  Menu: { setApplicationMenu: vi.fn(), buildFromTemplate: vi.fn(() => ({})) },
+  Menu: {
+    setApplicationMenu: vi.fn(),
+    buildFromTemplate: vi.fn((template: unknown[]) => {
+      streamDeckMenuTemplates.push(template);
+      return {};
+    }),
+  },
   Notification: class {
     show(): void {}
   },
@@ -274,6 +312,8 @@ describe('DesktopHost fake-Electron lifecycle', () => {
 
   beforeEach(() => {
     fake.reset();
+    streamDeckRelayMocks.instances.length = 0;
+    streamDeckMenuTemplates.length = 0;
     primary.installListener.mockClear();
     temp = mkdtempSync(path.join(os.tmpdir(), 'phi-desktop-lifecycle-'));
     fake.setUserData(temp);
@@ -411,6 +451,69 @@ describe('DesktopHost fake-Electron lifecycle', () => {
       expect.stringContaining('const enabled = false;'),
     );
   });
+
+  it('starts and stops the optional Stream Deck relay with the persisted preference', async () => {
+    const host = new DesktopHost();
+    await host.start(primary);
+    const controller = host.controller;
+    if (!controller) throw new Error('controller not initialized');
+    expect(streamDeckRelayMocks.instances).toHaveLength(0);
+
+    if (process.platform !== 'darwin') {
+      controller.setStreamDeckEnabled(true);
+      await flush();
+      expect(currentStreamDeckMenuEntry()).toBeUndefined();
+      expect(streamDeckRelayMocks.instances).toHaveLength(0);
+      return;
+    }
+
+    expect(currentStreamDeckMenuEntry()).toMatchObject({
+      checked: false,
+      label: 'Stream Deck relay',
+    });
+    currentStreamDeckMenuEntry()?.click?.();
+    await flush();
+    expect(controller.getStreamDeckEnabled()).toBe(true);
+    expect(currentStreamDeckMenuEntry()).toMatchObject({ checked: true });
+    expect(streamDeckRelayMocks.instances).toHaveLength(1);
+    const relay = streamDeckRelayMocks.instances[0] as {
+      options: unknown;
+      start: unknown;
+      stop: unknown;
+    };
+    expect(relay.options).toMatchObject({ primaryInstance: true });
+    expect(relay.start).toHaveBeenCalledTimes(1);
+
+    currentStreamDeckMenuEntry()?.click?.();
+    await flush();
+    expect(controller.getStreamDeckEnabled()).toBe(false);
+    expect(relay.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it.skipIf(process.platform !== 'darwin')(
+    'stops the relay before re-issuing quit',
+    async () => {
+      const host = new DesktopHost();
+      await host.start(primary);
+      const controller = host.controller;
+      if (!controller) throw new Error('controller not initialized');
+      controller.setStreamDeckEnabled(true);
+      await flush();
+      const relay = streamDeckRelayMocks.instances[0] as {
+        stop: unknown;
+      };
+      expect(relay).toBeDefined();
+
+      fake.app.quit.mockClear();
+      const event = { preventDefault: vi.fn() };
+      fake.app.emit('before-quit', event);
+      await vi.waitFor(() => {
+        expect(relay.stop).toHaveBeenCalledTimes(1);
+        expect(fake.app.quit).toHaveBeenCalledTimes(1);
+      });
+      expect(event.preventDefault).toHaveBeenCalledOnce();
+    },
+  );
 
   it('installs the second-instance listener exactly once during host.start (listener singleton)', async () => {
     const host = new DesktopHost();

@@ -318,6 +318,20 @@ export class ProfileViewManager {
     return this.views.get(this.activeId)?.view ?? null;
   }
 
+  /** The active body view only when its page has loaded and auth is clear. */
+  getActiveReadyView(): { profileId: string; view: WebContentsView } | null {
+    if (!this.activeId) return null;
+    const entry = this.views.get(this.activeId);
+    if (
+      !entry?.loaded ||
+      entry.obscured ||
+      entry.view.webContents.isDestroyed()
+    ) {
+      return null;
+    }
+    return { profileId: this.activeId, view: entry.view };
+  }
+
   /**
    * Closes + destroys every retained view and clears the manager
    * (before-quit teardown). Never throws: per-view failures are logged
@@ -420,6 +434,14 @@ export class ProfileViewManager {
     view.setBounds(bounds);
     entry.lastBounds = bounds;
     applyContentZoom(view.webContents, this.getContentZoomPercent());
+    view.webContents.on(
+      'did-start-navigation',
+      (_event, _url, isInPlace, isMainFrame) => {
+        if (!isMainFrame || isInPlace) return;
+        const current = this.views.get(id);
+        if (current?.view === view) current.loaded = false;
+      },
+    );
     view.webContents.on('did-finish-load', () => {
       const current = this.views.get(id);
       if (!current || current.view !== view) return; // removed meanwhile

@@ -93,7 +93,10 @@ const handle = (): PetHandle => ({
 });
 
 const enable = (host: DesktopHost, value: boolean): void => {
-  host.controller = { state: () => ({ petEnabled: value }) } as never;
+  host.controller = {
+    state: () => ({ petEnabled: value }),
+    getStreamDeckEnabled: () => false,
+  } as never;
 };
 
 beforeEach(() => {
@@ -249,6 +252,7 @@ describe('DesktopHost optional pet lifecycle', () => {
           syncAlerts: true,
           petZoomPercent: 100,
         }),
+        getStreamDeckEnabled: () => false,
       } as never;
       const retained = handle();
       retained.openSettings = vi.fn();

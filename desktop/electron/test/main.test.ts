@@ -988,7 +988,7 @@ describe('src/desktop.ts (observed rail identity + accent)', () => {
     const makeViewEndIdx = desktopSource.indexOf('return view;', makeViewIdx);
     const factoryRegion = desktopSource.slice(makeViewIdx, makeViewEndIdx);
     const titleIdx = factoryRegion.indexOf("'page-title-updated'");
-    const loadIdx = factoryRegion.indexOf("'did-finish-load'");
+    const loadIdx = factoryRegion.indexOf('this.loadedViews.add(view);');
     expect(titleIdx).toBeGreaterThan(-1);
     expect(loadIdx).toBeGreaterThan(-1);
     // Observation rides page-title-updated (post app-ready), never did-finish-load.

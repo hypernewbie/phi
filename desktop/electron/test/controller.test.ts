@@ -1055,6 +1055,69 @@ describe('Controller: pet-enabled preference', () => {
   });
 });
 
+describe('Controller: Stream Deck relay preference', () => {
+  it('defaults off for empty, legacy and malformed values', () => {
+    expect(makeController().getStreamDeckEnabled()).toBe(false);
+    for (const value of [undefined, 'true', 1, null]) {
+      writeFileSync(
+        persistPath(),
+        JSON.stringify({
+          profiles: [],
+          ...(value === undefined ? {} : { streamDeckEnabled: value }),
+        }),
+        'utf8',
+      );
+      expect(makeController().getStreamDeckEnabled()).toBe(false);
+    }
+  });
+
+  it('persists changes, emits once, and exposes a copied state value', () => {
+    const c = makeController();
+    const events: ControllerEvent[] = [];
+    c.subscribe((event) => events.push(event));
+    c.setStreamDeckEnabled(false);
+    c.setStreamDeckEnabled(true);
+    c.setStreamDeckEnabled(true);
+    expect(c.getStreamDeckEnabled()).toBe(true);
+    expect(events).toEqual([{ kind: 'streamdeck-enabled-changed' }]);
+    const state = c.state();
+    state.streamDeckEnabled = false;
+    expect(c.state().streamDeckEnabled).toBe(true);
+    expect(
+      new Controller({ persistPath: persistPath() }).getStreamDeckEnabled(),
+    ).toBe(true);
+    const saved = JSON.parse(readFileSync(persistPath(), 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    expect(saved.streamDeckEnabled).toBe(true);
+  });
+
+  it('rolls back when persistence fails and emits no event', () => {
+    const c = makeController();
+    const events: ControllerEvent[] = [];
+    c.subscribe((event) => events.push(event));
+    mkdirSync(persistPath());
+    expect(() => c.setStreamDeckEnabled(true)).toThrowError(ControllerError);
+    expect(c.getStreamDeckEnabled()).toBe(false);
+    expect(events).toEqual([]);
+  });
+
+  it('survives unrelated profile and preference writes', () => {
+    const c = makeController();
+    c.setStreamDeckEnabled(true);
+    const profile = c.add('http://127.0.0.1:7070/');
+    c.rename(profile.id, 'Home');
+    c.setCloseToTray(false);
+    c.setSyncAlerts(false);
+    c.setPetEnabled(true);
+    c.remove(profile.id);
+    expect(
+      new Controller({ persistPath: persistPath() }).getStreamDeckEnabled(),
+    ).toBe(true);
+  });
+});
+
 describe('Controller: configurable pet idle dwell (seconds)', () => {
   it('defaults missing, malformed, and unsupported persisted values to 10 seconds', () => {
     for (const value of [undefined, '10', 0, -1, 3601, 1.5, null]) {

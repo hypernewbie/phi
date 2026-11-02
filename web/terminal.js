@@ -389,6 +389,7 @@ export class TabManager {
         this.app = app;
         this.tabs = new Map(); // paneId -> TabInfo
         this.activePaneId = null;
+        this._streamDeckAdapterChanged = null;
 
         this.tabsContainer = document.getElementById('tabs-container');
         this.terminalsWrapper = document.getElementById('terminals-wrapper');
@@ -870,6 +871,7 @@ export class TabManager {
         }
         this.updateTabOverflow?.();
         this._refreshOverflowDropdown?.();
+        this._notifyStreamDeckAdapter();
     }
 
     // Splice `sourceId` into the order immediately before or after
@@ -1795,6 +1797,14 @@ export class TabManager {
 
     getActiveTab() {
         return this.tabs?.get(this.activePaneId);
+    }
+
+    _notifyStreamDeckAdapter() {
+        try {
+            this._streamDeckAdapterChanged?.();
+        } catch (err) {
+            console.warn('[term] Stream Deck state notification failed:', err);
+        }
     }
 
     // Browser chrome has a deliberately small, composable language:
@@ -5271,6 +5281,7 @@ export class TabManager {
                 });
             }
             this.renderPiRpcStatusBar();
+            this._notifyStreamDeckAdapter();
             return;
         }
 
@@ -5303,7 +5314,10 @@ export class TabManager {
         // Set new active tab
         this.activePaneId = paneId;
         const newTab = this.getActiveTab();
-        if (!newTab) return;
+        if (!newTab) {
+            this._notifyStreamDeckAdapter();
+            return;
+        }
         this._setPiRpcActionVisibility(newTab);
 
         newTab.tabEl.classList.add('active');
@@ -5350,6 +5364,7 @@ export class TabManager {
         this.saveTabsState();
         this.updateTabOverflow?.();
         this._refreshOverflowDropdown?.();
+        this._notifyStreamDeckAdapter();
 
         // Close-triggered selections use the same project synchronization as
         // any other tab selection so the sidebar matches the active tab.
@@ -5544,6 +5559,7 @@ export class TabManager {
         ) {
             this._showHieroPreview(tabInfo.tabEl);
         }
+        if (changed) this._notifyStreamDeckAdapter();
         return changed;
     }
 
@@ -5732,6 +5748,7 @@ export class TabManager {
         // An open hostname list stays open across strip-× soft-close:
         // closing rows must lose their cues and unread priority at once.
         this._refreshHostnameTabsDropdown?.();
+        this._notifyStreamDeckAdapter();
     }
 
     _selectTabAfterClose(paneId) {
@@ -5768,6 +5785,7 @@ export class TabManager {
         this.showEmptyState?.();
         this.updateDocumentTitle?.();
         this.saveTabsState?.();
+        this._notifyStreamDeckAdapter();
     }
 
     _softCloseRemainingSeconds(tab) {
@@ -5845,6 +5863,7 @@ export class TabManager {
         this.switchTab(paneId, { userInitiated: true });
         this.updateTabOverflow?.();
         this._refreshOverflowDropdown?.();
+        this._notifyStreamDeckAdapter();
     }
 
     // Actually kill the PTY, close WS, dispose term, drop from Map.
@@ -5987,6 +6006,7 @@ export class TabManager {
                 this.switchTab(survivor.paneId);
             }
         }
+        this._notifyStreamDeckAdapter();
     }
 
     // Closing-tab selection is handled immediately by _selectTabAfterClose;

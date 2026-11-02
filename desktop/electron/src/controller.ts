@@ -113,6 +113,8 @@ export interface ControllerState {
   lowPowerMode: boolean;
   /** The persisted desktop-pet preference (default false). */
   petEnabled: boolean;
+  /** The persisted optional Stream Deck relay preference (default false). */
+  streamDeckEnabled: boolean;
   /** The persisted desktop-pet zoom percentage (default 100). */
   petZoomPercent: number;
   /** The persisted global desktop-content zoom percentage (default 100). */
@@ -132,6 +134,7 @@ export type ControllerEvent =
   | { kind: 'low-memory-changed' }
   | { kind: 'low-power-changed' }
   | { kind: 'pet-enabled-changed' }
+  | { kind: 'streamdeck-enabled-changed' }
   | { kind: 'pet-zoom-changed' }
   | { kind: 'content-zoom-changed'; percent: number }
   | { kind: 'pet-idle-dwell-changed'; dwellSeconds: number };
@@ -424,6 +427,7 @@ interface LoadedStore {
   lowMemoryMode: boolean;
   lowPowerMode: boolean;
   petEnabled: boolean;
+  streamDeckEnabled: boolean;
   petZoomPercent: number;
   contentZoomPercent: number;
   petIdleDwellSeconds: number;
@@ -512,6 +516,7 @@ function readStore(
       lowMemoryMode: false,
       lowPowerMode: false,
       petEnabled: false,
+      streamDeckEnabled: false,
       petZoomPercent: PET_ZOOM_DEFAULT_PERCENT,
       contentZoomPercent: CONTENT_ZOOM_DEFAULT_PERCENT,
       petIdleDwellSeconds: PET_IDLE_DWELL_DEFAULT_SECONDS,
@@ -533,6 +538,7 @@ function readStore(
         lowMemoryMode: false,
         lowPowerMode: false,
         petEnabled: false,
+        streamDeckEnabled: false,
         petZoomPercent: PET_ZOOM_DEFAULT_PERCENT,
         contentZoomPercent: CONTENT_ZOOM_DEFAULT_PERCENT,
         petIdleDwellSeconds: PET_IDLE_DWELL_DEFAULT_SECONDS,
@@ -549,6 +555,7 @@ function readStore(
     closeToTray?: unknown;
     syncAlerts?: unknown;
     petEnabled?: unknown;
+    streamDeckEnabled?: unknown;
     petZoomPercent?: unknown;
     contentZoomPercent?: unknown;
     petIdleDwellSeconds?: unknown;
@@ -567,6 +574,7 @@ function readStore(
         lowMemoryMode: false,
         lowPowerMode: false,
         petEnabled: false,
+        streamDeckEnabled: false,
         petZoomPercent: PET_ZOOM_DEFAULT_PERCENT,
         contentZoomPercent: CONTENT_ZOOM_DEFAULT_PERCENT,
         petIdleDwellSeconds: PET_IDLE_DWELL_DEFAULT_SECONDS,
@@ -590,6 +598,8 @@ function readStore(
       : false;
   const petEnabled =
     typeof obj.petEnabled === 'boolean' ? obj.petEnabled : false;
+  const streamDeckEnabled =
+    typeof obj.streamDeckEnabled === 'boolean' ? obj.streamDeckEnabled : false;
   const hasZoomPercent = Object.hasOwn(obj, 'petZoomPercent');
   const petZoomPercent = isPetZoomPercent(obj.petZoomPercent)
     ? obj.petZoomPercent
@@ -645,6 +655,7 @@ function readStore(
     lowMemoryMode,
     lowPowerMode,
     petEnabled,
+    streamDeckEnabled,
     petZoomPercent,
     contentZoomPercent,
     petIdleDwellSeconds,
@@ -668,6 +679,7 @@ function saveStore(
   petZoomPercent: number,
   contentZoomPercent: number,
   petIdleDwellSeconds: number,
+  streamDeckEnabled: boolean,
 ): void {
   const dir = path.dirname(persistPath);
   mkdirSync(dir, { recursive: true });
@@ -702,6 +714,7 @@ function saveStore(
           lowMemoryMode,
           lowPowerMode,
           petEnabled,
+          streamDeckEnabled,
           petZoomPercent,
           contentZoomPercent,
           petIdleDwellSeconds,
@@ -780,6 +793,7 @@ export class Controller {
   private lowMemoryMode = false;
   private lowPowerMode = false;
   private petEnabled = false;
+  private streamDeckEnabled = false;
   private petZoomPercent = PET_ZOOM_DEFAULT_PERCENT;
   private contentZoomPercent = CONTENT_ZOOM_DEFAULT_PERCENT;
   private petIdleDwellSeconds = PET_IDLE_DWELL_DEFAULT_SECONDS;
@@ -794,6 +808,7 @@ export class Controller {
     this.lowMemoryMode = store.lowMemoryMode;
     this.lowPowerMode = store.lowPowerMode;
     this.petEnabled = store.petEnabled;
+    this.streamDeckEnabled = store.streamDeckEnabled ?? false;
     this.petZoomPercent = store.petZoomPercent;
     this.contentZoomPercent = store.contentZoomPercent;
     this.petIdleDwellSeconds = store.petIdleDwellSeconds;
@@ -839,6 +854,7 @@ export class Controller {
     this.lowMemoryMode = store.lowMemoryMode;
     this.lowPowerMode = store.lowPowerMode;
     this.petEnabled = store.petEnabled;
+    this.streamDeckEnabled = store.streamDeckEnabled ?? false;
     this.petZoomPercent = store.petZoomPercent;
     this.contentZoomPercent = store.contentZoomPercent;
     this.petIdleDwellSeconds = store.petIdleDwellSeconds;
@@ -887,6 +903,7 @@ export class Controller {
         this.petZoomPercent,
         this.contentZoomPercent,
         this.petIdleDwellSeconds,
+        this.streamDeckEnabled,
       );
     } catch (err) {
       this.profiles.pop();
@@ -930,6 +947,7 @@ export class Controller {
         this.petZoomPercent,
         this.contentZoomPercent,
         this.petIdleDwellSeconds,
+        this.streamDeckEnabled,
       );
     } catch (err) {
       this.profiles.splice(idx, 0, removed);
@@ -968,6 +986,7 @@ export class Controller {
       this.petZoomPercent,
       this.contentZoomPercent,
       this.petIdleDwellSeconds,
+      this.streamDeckEnabled,
     );
     this.emit({ kind: 'profiles-changed' });
   }
@@ -1013,6 +1032,7 @@ export class Controller {
         this.petZoomPercent,
         this.contentZoomPercent,
         this.petIdleDwellSeconds,
+        this.streamDeckEnabled,
       );
     } catch (err) {
       this.profiles.splice(insertAt, 1);
@@ -1040,6 +1060,7 @@ export class Controller {
       this.petZoomPercent,
       this.contentZoomPercent,
       this.petIdleDwellSeconds,
+      this.streamDeckEnabled,
     );
     this.emit({ kind: 'profiles-changed' });
   }
@@ -1068,6 +1089,7 @@ export class Controller {
         this.petZoomPercent,
         this.contentZoomPercent,
         this.petIdleDwellSeconds,
+        this.streamDeckEnabled,
       );
     } catch (err) {
       this.log(`controller: record last-used: ${String(err)}`);
@@ -1119,6 +1141,7 @@ export class Controller {
       this.petZoomPercent,
       this.contentZoomPercent,
       this.petIdleDwellSeconds,
+      this.streamDeckEnabled,
     );
     this.emit({ kind: 'close-to-tray-changed' });
   }
@@ -1153,6 +1176,7 @@ export class Controller {
       this.petZoomPercent,
       this.contentZoomPercent,
       this.petIdleDwellSeconds,
+      this.streamDeckEnabled,
     );
     this.emit({ kind: 'sync-alerts-changed' });
   }
@@ -1176,6 +1200,7 @@ export class Controller {
       this.petZoomPercent,
       this.contentZoomPercent,
       this.petIdleDwellSeconds,
+      this.streamDeckEnabled,
     );
     this.emit({ kind: 'low-memory-changed' });
   }
@@ -1205,6 +1230,7 @@ export class Controller {
       this.petZoomPercent,
       this.contentZoomPercent,
       this.petIdleDwellSeconds,
+      this.streamDeckEnabled,
     );
     this.emit({ kind: 'low-power-changed' });
   }
@@ -1237,8 +1263,39 @@ export class Controller {
       this.petZoomPercent,
       this.contentZoomPercent,
       this.petIdleDwellSeconds,
+      this.streamDeckEnabled,
     );
     this.emit({ kind: 'pet-enabled-changed' });
+  }
+
+  getStreamDeckEnabled(): boolean {
+    return this.streamDeckEnabled;
+  }
+
+  setStreamDeckEnabled(value: boolean): void {
+    this.refreshSharedStore();
+    if (value === this.streamDeckEnabled) return;
+    const oldValue = this.streamDeckEnabled;
+    this.streamDeckEnabled = value;
+    try {
+      saveStore(
+        this.persistPath,
+        this.profiles,
+        this.closeToTray,
+        this.syncAlerts,
+        this.lowMemoryMode,
+        this.lowPowerMode,
+        this.petEnabled,
+        this.petZoomPercent,
+        this.contentZoomPercent,
+        this.petIdleDwellSeconds,
+        this.streamDeckEnabled,
+      );
+    } catch (err) {
+      this.streamDeckEnabled = oldValue;
+      throw err;
+    }
+    this.emit({ kind: 'streamdeck-enabled-changed' });
   }
 
   /** The canonical persisted desktop-pet zoom percentage. */
@@ -1269,6 +1326,7 @@ export class Controller {
         this.petZoomPercent,
         this.contentZoomPercent,
         this.petIdleDwellSeconds,
+        this.streamDeckEnabled,
       );
     } catch (err) {
       this.petZoomPercent = oldPercent;
@@ -1306,6 +1364,7 @@ export class Controller {
         this.petZoomPercent,
         this.contentZoomPercent,
         this.petIdleDwellSeconds,
+        this.streamDeckEnabled,
       );
     } catch (err) {
       this.contentZoomPercent = oldPercent;
@@ -1337,6 +1396,7 @@ export class Controller {
         this.petZoomPercent,
         this.contentZoomPercent,
         this.petIdleDwellSeconds,
+        this.streamDeckEnabled,
       );
     } catch (err) {
       this.petIdleDwellSeconds = oldValue;
@@ -1392,6 +1452,7 @@ export class Controller {
       lowMemoryMode: this.lowMemoryMode,
       lowPowerMode: this.lowPowerMode,
       petEnabled: this.petEnabled,
+      streamDeckEnabled: this.streamDeckEnabled,
       petZoomPercent: this.petZoomPercent,
       contentZoomPercent: this.contentZoomPercent,
       petIdleDwellSeconds: this.petIdleDwellSeconds,

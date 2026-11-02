@@ -1,11 +1,5 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import {
-    mkdtempSync,
-    mkdirSync,
-    rmSync,
-    accessSync,
-    statSync,
-} from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, accessSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import net from 'node:net';
@@ -56,15 +50,24 @@ class FakeChild {
     }
 
     once(event, cb) {
-        const list = this.handlers.get(event) || [];
-        list.push((...args) => {
-            this.handlers.set(
-                event,
-                (this.handlers.get(event) || []).filter((h) => h !== cb),
-            );
+        const wrapper = (...args) => {
+            this.removeListener(event, wrapper);
             cb(...args);
-        });
+        };
+        wrapper.listener = cb;
+        const list = this.handlers.get(event) || [];
+        list.push(wrapper);
         this.handlers.set(event, list);
+        return this;
+    }
+
+    removeListener(event, cb) {
+        this.handlers.set(
+            event,
+            (this.handlers.get(event) || []).filter(
+                (handler) => handler !== cb && handler.listener !== cb,
+            ),
+        );
         return this;
     }
 
@@ -109,6 +112,7 @@ beforeEach(() => {
     spawn.mockImplementation((cmd) => {
         const child = new FakeChild();
         if (cmd === 'go') queueMicrotask(() => child.emit('exit', 0));
+        else queueMicrotask(() => child.emit('spawn'));
         return child;
     });
     global.fetch = vi.fn().mockResolvedValue({ ok: true });
@@ -129,9 +133,9 @@ function serverSpawn() {
 describe('startPhi fixture isolation', () => {
     test('setup failure removes the dir and spawns nothing', async () => {
         const boom = new Error('setup boom');
-        await expect(startPhi({ setup: () => Promise.reject(boom) })).rejects.toThrow(
-            'setup boom',
-        );
+        await expect(
+            startPhi({ setup: () => Promise.reject(boom) }),
+        ).rejects.toThrow('setup boom');
         expect(spawn).not.toHaveBeenCalled();
         expect(rmSync).toHaveBeenCalledTimes(1);
         expect(rmSync).toHaveBeenCalledWith(
@@ -151,17 +155,32 @@ describe('startPhi fixture isolation', () => {
         expect(rmSync).toHaveBeenCalledTimes(1);
     });
 
+    test('initial server spawn error rejects promptly and removes the dir once', async () => {
+        const spawnError = new Error('server spawn failed');
+        spawn.mockImplementation((cmd) => {
+            const child = new FakeChild();
+            if (cmd === 'go') queueMicrotask(() => child.emit('exit', 0));
+            else queueMicrotask(() => child.emit('error', spawnError));
+            return child;
+        });
+
+        await expect(startPhi()).rejects.toBe(spawnError);
+        expect(global.fetch).not.toHaveBeenCalled();
+        expect(rmSync).toHaveBeenCalledTimes(1);
+    });
+
     // Unix-only: Windows uses named pipes with no socket budget.
     test.skipIf(process.platform === 'win32')(
         'long temp root rejects before any spawn',
         async () => {
-        tmpdir.mockReturnValue(`/${'l'.repeat(200)}`);
-        await expect(startPhi()).rejects.toThrow(
-            /cannot host a 100-byte bridge socket/,
-        );
-        expect(spawn).not.toHaveBeenCalled();
-        expect(rmSync).toHaveBeenCalledTimes(1);
-    });
+            tmpdir.mockReturnValue(`/${'l'.repeat(200)}`);
+            await expect(startPhi()).rejects.toThrow(
+                /cannot host a 100-byte bridge socket/,
+            );
+            expect(spawn).not.toHaveBeenCalled();
+            expect(rmSync).toHaveBeenCalledTimes(1);
+        },
+    );
 
     test('windows skips POSIX mode and socket-budget checks', async () => {
         const realPlatform = process.platform;
@@ -197,11 +216,15 @@ describe('startPhi fixture isolation', () => {
     test.skipIf(process.platform === 'win32')(
         'non-private temp root rejects before any spawn',
         async () => {
-        statSync.mockReturnValue({ isDirectory: () => true, mode: 0o40755 });
-        await expect(startPhi()).rejects.toThrow(/not a private dir/);
-        expect(spawn).not.toHaveBeenCalled();
-        expect(rmSync).toHaveBeenCalledTimes(1);
-    });
+            statSync.mockReturnValue({
+                isDirectory: () => true,
+                mode: 0o40755,
+            });
+            await expect(startPhi()).rejects.toThrow(/not a private dir/);
+            expect(spawn).not.toHaveBeenCalled();
+            expect(rmSync).toHaveBeenCalledTimes(1);
+        },
+    );
 
     test('health failure reaps the child, removes the dir, returns no handle', async () => {
         vi.useFakeTimers();
@@ -235,6 +258,7 @@ describe('startPhi fixture isolation', () => {
                 // failed: exitCode stays null, signalCode is set, and
                 // the exit event already fired.
                 queueMicrotask(() => {
+                    child.emit('spawn');
                     child.signalCode = 'SIGTERM';
                     child.emit('exit', null, 'SIGTERM');
                 });
@@ -295,6 +319,23 @@ describe('startPhi fixture isolation', () => {
         expect(second.exitCode).toBeNull();
         await phi.stop();
         expect(second.killCalls).toEqual(['SIGTERM']);
+        expect(rmSync).toHaveBeenCalledTimes(1);
+    });
+
+    test('failed restart rejects on spawn error and removes the dir once', async () => {
+        const phi = await startPhi();
+        global.fetch.mockClear();
+        const spawnError = new Error('restart spawn failed');
+        spawn.mockImplementation(() => {
+            const child = new FakeChild();
+            queueMicrotask(() => child.emit('error', spawnError));
+            return child;
+        });
+
+        await expect(phi.restart()).rejects.toBe(spawnError);
+        expect(global.fetch).not.toHaveBeenCalled();
+        expect(rmSync).toHaveBeenCalledTimes(1);
+        await phi.stop();
         expect(rmSync).toHaveBeenCalledTimes(1);
     });
 

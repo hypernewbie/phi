@@ -1,4 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+    existsSync,
+    mkdirSync,
+    readFileSync,
+    statSync,
+    writeFileSync,
+} from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import { startPhi } from './_server.js';
@@ -21,7 +28,7 @@ case "$endpoint" in
     "unix:\${tmpdir}/"*) ;;
     *) echo 'pi wrapper: endpoint outside owned root' >&2; exit 3 ;;
 esac
-printf 'ok\\n' > "$HOME/wrapper-check.txt"
+printf '%s\\n' "$endpoint" > "$HOME/wrapper-check.txt"
 exec /usr/bin/env -i \\
     "PATH=${dirname(options.nodePath)}:/usr/bin:/bin" \\
     "HOME=$HOME" "TMPDIR=$TMPDIR" "TMP=$TMPDIR" "TEMP=$TMPDIR" \\
@@ -136,6 +143,21 @@ test('Pi PTY model status follows real TUI model switches', async ({
     });
 
     try {
+        const coordinator = await request.post(
+            `${phi.url}/api/config/sync-coordinator`,
+            { data: { sync_coordinator: phi.url } },
+        );
+        expect(coordinator.ok()).toBe(true);
+
+        const proxyTargets: string[] = [];
+        await page.route('**/api/proxy?*', (route) => {
+            const target = new URL(route.request().url()).searchParams.get(
+                'url',
+            );
+            if (target) proxyTargets.push(target);
+            return route.fulfill({ json: [] });
+        });
+
         const cwd = join(phi.dir, 'work dir with spaces');
         mkdirSync(cwd, { recursive: true });
         await page.setViewportSize({ width: 1440, height: 900 });
@@ -157,15 +179,49 @@ test('Pi PTY model status follows real TUI model switches', async ({
         expect(pane1.pi_bridge?.telemetry_revision).toMatch(/^[1-9][0-9]*$/);
 
         // The wrapper proved endpoint containment before exec. The
-        // marker carries only the result, never credentials.
+        // marker contains only the nonsecret socket path.
         await expect
             .poll(() => paneModel(request, phi.url, pane1.pane_id), {
                 timeout: 30_000,
             })
             .toBe('e2e-stub/probe-a');
-        expect(
-            readFileSync(join(phi.dir, 'home', 'wrapper-check.txt'), 'utf8'),
-        ).toBe('ok\n');
+        const wrapperEndpoint = readFileSync(
+            join(phi.dir, 'home', 'wrapper-check.txt'),
+            'utf8',
+        ).trim();
+        expect(wrapperEndpoint).toMatch(/^unix:/);
+        const socketPath = wrapperEndpoint.slice('unix:'.length);
+        expect(socketPath.startsWith(`${join(phi.dir, 't')}/`)).toBe(true);
+        const socket = statSync(socketPath);
+        const socketDir = statSync(dirname(socketPath));
+        expect(socket.isSocket()).toBe(true);
+        expect(socket.mode & 0o777).toBe(0o600);
+        expect(socketDir.isDirectory()).toBe(true);
+        expect(socketDir.mode & 0o777).toBe(0o700);
+        const currentUid = process.getuid?.();
+        if (currentUid !== undefined) {
+            expect(socket.uid).toBe(currentUid);
+            expect(socketDir.uid).toBe(currentUid);
+        }
+        if (process.platform === 'darwin') {
+            const pids = execFileSync(
+                '/usr/sbin/lsof',
+                ['-n', '-t', socketPath],
+                { encoding: 'utf8' },
+            )
+                .trim()
+                .split('\n')
+                .filter(Boolean);
+            const listenerPid = pids.find((pid) => {
+                const command = execFileSync(
+                    '/bin/ps',
+                    ['-p', pid, '-o', 'comm='],
+                    { encoding: 'utf8' },
+                ).trim();
+                return command === 'phi' || command.endsWith('/phi');
+            });
+            expect(listenerPid).toMatch(/^\d+$/);
+        }
 
         // Both Pi panes and the shell must exist before page load: the
         // UI renders the server tab list once at startup.
@@ -201,7 +257,12 @@ test('Pi PTY model status follows real TUI model switches', async ({
 
         // One pasted line plus Enter: the TUI switches without the
         // autocomplete dropdown ever opening.
-        await paneInput(request, phi.url, pane1.pane_id, '/model e2e-stub/probe-b');
+        await paneInput(
+            request,
+            phi.url,
+            pane1.pane_id,
+            '/model e2e-stub/probe-b',
+        );
         await expect
             .poll(() => paneModel(request, phi.url, pane1.pane_id), {
                 timeout: 30_000,
@@ -219,7 +280,9 @@ test('Pi PTY model status follows real TUI model switches', async ({
         await expect(modelLabel).toHaveText(/probe-b/, { timeout: 5_000 });
 
         // Panes without a bridge keep the bar hidden.
-        const shellTab = page.locator(`.tab[data-pane-id="${shellPane.pane_id}"]`);
+        const shellTab = page.locator(
+            `.tab[data-pane-id="${shellPane.pane_id}"]`,
+        );
         await expect(shellTab).toBeVisible({ timeout: 10_000 });
         await shellTab.click();
         await expect(page.locator('#pi-rpc-status-bar')).toBeHidden();
@@ -238,6 +301,10 @@ test('Pi PTY model status follows real TUI model switches', async ({
             /pi.bridge|telemetry/i.test(text),
         );
         expect(failures).toEqual([]);
+        expect(proxyTargets.length).toBeGreaterThan(0);
+        expect(
+            proxyTargets.every((target) => new URL(target).origin === phi.url),
+        ).toBe(true);
     } finally {
         const dir = phi.dir;
         await phi.stop();

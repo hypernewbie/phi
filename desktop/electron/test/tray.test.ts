@@ -185,6 +185,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
     selectProfile: () => {},
     toggleCloseToTray: () => {},
     toggleSyncAlerts: () => {},
+    toggleStreamDeck: () => {},
     toggleLowPower: () => {},
     toggleLowMemory: () => {},
     togglePet: () => {},
@@ -1178,6 +1179,37 @@ describe('setupTray (wiring, recording fakes)', () => {
     expect(
       lastTemplate().find((e) => e.label === 'Sync board alerts')?.checked,
     ).toBe(true);
+  });
+
+  it('renders the Stream Deck relay checkbox from the optional preference getter', () => {
+    let enabled = false;
+    const { handle } = setupTrayForTest({
+      deps: { getStreamDeckEnabled: () => enabled },
+    });
+    expect(
+      lastTemplate().find((entry) => entry.label === 'Stream Deck relay'),
+    ).toMatchObject({
+      type: 'checkbox',
+      checked: false,
+    });
+    enabled = true;
+    handle.rebuildMenu();
+    expect(
+      lastTemplate().find((entry) => entry.label === 'Stream Deck relay')
+        ?.checked,
+    ).toBe(true);
+  });
+
+  it('posts the Stream Deck relay toggle intent from the checkbox entry', () => {
+    const { ipcSend } = setupTrayForTest({
+      deps: { getStreamDeckEnabled: () => false },
+    });
+    clickEntry(
+      lastTemplate().find((entry) => entry.label === 'Stream Deck relay'),
+    );
+    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
+      kind: 'toggle-streamdeck',
+    });
   });
 
   it('posts the toggle-close-to-tray intent from the checkbox entry', () => {

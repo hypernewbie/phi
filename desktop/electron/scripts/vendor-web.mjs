@@ -56,6 +56,7 @@ const WEB_JS_MODULES = [
   'settings.js',
   'quota.js',
   'desktop.js',
+  'streamdeck-adapter.js',
   'config.js',
   'header-state.js',
   'theme.js',

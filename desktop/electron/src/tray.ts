@@ -75,6 +75,7 @@ export type TrayCommand =
   | { kind: 'select-profile'; id: string }
   | { kind: 'toggle-close-to-tray' }
   | { kind: 'toggle-sync-alerts' }
+  | { kind: 'toggle-streamdeck' }
   | { kind: 'toggle-low-memory' }
   | { kind: 'toggle-low-power' }
   | { kind: 'toggle-pet' }
@@ -118,6 +119,8 @@ export interface TrayDeps {
   getCloseToTray(): boolean;
   /** The persisted sync-board desktop-alert preference (the menu checkbox state). */
   getSyncAlerts(): boolean;
+  /** The persisted Stream Deck relay preference; omitted in older tray hosts. */
+  getStreamDeckEnabled?(): boolean | null;
   /** The persisted low-memory mode preference (default false, massively aggro: 1 tab). */
   getLowMemoryMode(): boolean;
   /** The persisted low-power mode preference (default false, one switch
@@ -185,6 +188,7 @@ export interface TrayMenuHandlers {
   selectProfile: (id: string) => void;
   toggleCloseToTray: () => void;
   toggleSyncAlerts: () => void;
+  toggleStreamDeck: () => void;
   toggleLowMemory: () => void;
   toggleLowPower: () => void;
   togglePet: () => void;
@@ -313,6 +317,7 @@ export function buildTrayMenu(
   petEnabled: boolean = false,
   petZoomPercent = PET_ZOOM_DEFAULT_PERCENT,
   contentZoomPercent: number | null = null,
+  streamDeckEnabled: boolean | null = null,
 ): TrayMenuEntry[] {
   const entries: TrayMenuEntry[] = [
     { label: 'Show Phi', click: handlers.show },
@@ -338,6 +343,14 @@ export function buildTrayMenu(
     checked: syncAlerts,
     click: handlers.toggleSyncAlerts,
   });
+  if (streamDeckEnabled !== null) {
+    entries.push({
+      label: 'Stream Deck relay',
+      type: 'checkbox',
+      checked: streamDeckEnabled,
+      click: handlers.toggleStreamDeck,
+    });
+  }
   entries.push({
     label: 'Low power mode',
     type: 'checkbox',
@@ -545,6 +558,8 @@ export function setupTray(deps: TrayDeps): TrayHandle {
       deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-close-to-tray' }),
     toggleSyncAlerts: () =>
       deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-sync-alerts' }),
+    toggleStreamDeck: () =>
+      deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-streamdeck' }),
     toggleLowMemory: () =>
       deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-low-memory' }),
     toggleLowPower: () =>
@@ -590,6 +605,7 @@ export function setupTray(deps: TrayDeps): TrayHandle {
       deps.getPetEnabled(),
       deps.getPetZoomPercent(),
       process.platform === 'darwin' ? null : deps.getContentZoomPercent(),
+      deps.getStreamDeckEnabled?.() ?? null,
     ),
   );
   const refreshNativeMenu = wireTrayEvents(tray, () => menu, process.platform);
@@ -611,6 +627,7 @@ export function setupTray(deps: TrayDeps): TrayHandle {
         deps.getPetEnabled(),
         deps.getPetZoomPercent(),
         process.platform === 'darwin' ? null : deps.getContentZoomPercent(),
+        deps.getStreamDeckEnabled?.() ?? null,
       ),
     );
     refreshNativeMenu();

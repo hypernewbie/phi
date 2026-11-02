@@ -11,6 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join, relative, isAbsolute } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
 import net from 'node:net';
 
 // Shared live-server fixture for e2e specs: builds phi once, runs it
@@ -87,11 +88,7 @@ function checkRuntimeTmp(runTmp: string, dir: string): void {
     if (!st.isDirectory() || (st.mode & 0o777) !== 0o700) {
         throw new Error(`phi fixture temp ${runTmp} is not a private dir`);
     }
-    const candidate = join(
-        runTmp,
-        `phi-pi-${'f'.repeat(16)}`,
-        'bridge.sock',
-    );
+    const candidate = join(runTmp, `phi-pi-${'f'.repeat(16)}`, 'bridge.sock');
     const publishable =
         !candidate.includes('%') &&
         !candidate.includes('@') &&
@@ -213,19 +210,22 @@ export async function startPhi(
         await run('go', ['build', '-o', bin, '.'], process.cwd());
         const args = ['--port', String(port), '--ip', '127.0.0.1'];
         if (options.web !== undefined) args.push('--web', options.web);
-        const launch = (): ChildProcess =>
-            spawn(bin, args, {
+        const launch = async (): Promise<ChildProcess> => {
+            const child = spawn(bin, args, {
                 cwd: dir,
                 env: fixtureEnv(home, runTmp, options.env),
                 stdio: ['ignore', 'pipe', 'pipe'],
             });
+            await once(child, 'spawn');
+            return child;
+        };
         const logPath = join(dir, 'server.log');
         const capture = (child: ChildProcess) => {
             child.stdout?.on('data', (data) => appendFileSync(logPath, data));
             child.stderr?.on('data', (data) => appendFileSync(logPath, data));
             return child;
         };
-        server = capture(launch());
+        server = capture(await launch());
         await waitForHealth(port);
 
         return {
@@ -239,7 +239,7 @@ export async function startPhi(
                 await terminate(old);
                 try {
                     await beforeStart?.();
-                    server = capture(launch());
+                    server = capture(await launch());
                     await waitForHealth(port);
                 } catch (err) {
                     await fail(err);

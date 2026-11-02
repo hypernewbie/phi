@@ -92,6 +92,12 @@ import {
   type TrayHandle,
 } from './tray.js';
 import {
+  StreamDeckRelay,
+  type StreamDeckRelayRequest,
+  type StreamDeckRelayRequestContext,
+} from './streamdeck-relay.js';
+import { StreamDeckViewSession } from './streamdeck-view.js';
+import {
   INSTALL_FILE_ACTION_SCRIPT,
   READ_FILE_ACTION_SCRIPT,
   parseFileAction,
@@ -431,6 +437,11 @@ export class DesktopHost {
   // The retained per-profile view manager + the rail child view.
   profileViews: ProfileViewManager | null = null;
   railView: WebContentsView | null = null;
+  private primaryInstance = false;
+  private streamDeckRelay: StreamDeckRelay | null = null;
+  private streamDeckView: StreamDeckViewSession | null = null;
+  private streamDeckTransition: Promise<void> = Promise.resolve();
+  private streamDeckLifecycleActive = false;
   hooks: DesktopHooksManager | null = null;
   private fullscreenOverride: boolean | null = null;
   private lastRecordedFullscreen = false;
@@ -561,6 +572,7 @@ export class DesktopHost {
     // this window is destroyed and no longer the closing fence key.
     if (win.isDestroyed() && this.mainWindow !== win) return;
     this.closingWindow = win;
+    this.streamDeckView?.invalidate();
     if (this.mainWindow === win) {
       this.mainWindow = null;
       this.mainPageReady = false;
@@ -690,6 +702,10 @@ export class DesktopHost {
       getUnread: (id) => this.controller?.state().unread.get(id) ?? 0,
       getCloseToTray: () => this.controller?.state().closeToTray ?? true,
       getSyncAlerts: () => this.controller?.state().syncAlerts ?? true,
+      getStreamDeckEnabled: () =>
+        process.platform === 'darwin'
+          ? (this.controller?.getStreamDeckEnabled() ?? false)
+          : null,
       getLowMemoryMode: () => this.controller?.state().lowMemoryMode ?? false,
       getLowPowerMode: () => this.controller?.state().lowPowerMode ?? false,
       getPetAvailable: () => isPetAvailable(this.petRoot),
@@ -757,6 +773,19 @@ export class DesktopHost {
             } catch (err) {
               console.log(
                 `phi-desktop: tray toggle-sync-alerts: ${String(err)}`,
+              );
+            }
+            break;
+          }
+          case 'toggle-streamdeck': {
+            const ctrl = this.controller;
+            if (!ctrl || !this.primaryInstance || process.platform !== 'darwin')
+              break;
+            try {
+              ctrl.setStreamDeckEnabled(!ctrl.getStreamDeckEnabled());
+            } catch (err) {
+              console.log(
+                `phi-desktop: tray toggle-streamdeck: ${String(err)}`,
               );
             }
             break;
@@ -842,6 +871,98 @@ export class DesktopHost {
     const tray = setupTray(deps);
     this.trayHandle = tray;
     return tray;
+  }
+
+  private syncStreamDeckRelay(enabled: boolean): void {
+    if (this.quitting) return;
+    if (enabled && this.primaryInstance && process.platform === 'darwin') {
+      this.streamDeckLifecycleActive = true;
+    }
+    this.streamDeckTransition = this.streamDeckTransition
+      .then(async () => {
+        const shouldEnable =
+          enabled &&
+          !this.quitting &&
+          this.primaryInstance &&
+          process.platform === 'darwin' &&
+          this.controller?.getStreamDeckEnabled() === true;
+        if (!shouldEnable) {
+          await this.streamDeckView?.stopWatching();
+          await this.streamDeckRelay?.stop();
+          if (
+            !this.controller?.getStreamDeckEnabled() ||
+            !this.primaryInstance ||
+            process.platform !== 'darwin'
+          ) {
+            this.streamDeckLifecycleActive = false;
+          }
+          return;
+        }
+        if (!this.streamDeckView) {
+          this.streamDeckView = new StreamDeckViewSession({
+            getActiveReadyView: () => {
+              const controller = this.controller;
+              const views = this.profileViews;
+              if (
+                this.quitting ||
+                !this.liveMainWindow() ||
+                !controller ||
+                !views
+              ) {
+                return null;
+              }
+              const active = views.getActiveReadyView();
+              if (!active || controller.state().activeId !== active.profileId) {
+                return null;
+              }
+              return {
+                profileId: active.profileId,
+                webContents: active.view.webContents,
+              };
+            },
+          });
+        }
+        if (!this.streamDeckRelay) {
+          this.streamDeckRelay = new StreamDeckRelay({
+            homeDir: app.getPath('home'),
+            primaryInstance: this.primaryInstance,
+            handleRequest: (request, context) =>
+              this.handleStreamDeckRequest(request, context),
+          });
+        }
+        const relay = this.streamDeckRelay;
+        const view = this.streamDeckView;
+        await relay.start();
+        if (
+          this.quitting ||
+          !this.primaryInstance ||
+          !this.controller?.getStreamDeckEnabled()
+        ) {
+          await view.stopWatching();
+          await relay.stop();
+          return;
+        }
+        view.startWatching((state) => relay.publishSnapshot(state));
+      })
+      .catch(() => {
+        console.log('phi-desktop: Stream Deck relay unavailable');
+      });
+  }
+
+  private handleStreamDeckRequest(
+    request: StreamDeckRelayRequest,
+    context: StreamDeckRelayRequestContext,
+  ): Promise<unknown> {
+    if (
+      !this.primaryInstance ||
+      process.platform !== 'darwin' ||
+      !this.controller?.getStreamDeckEnabled() ||
+      !context.isCurrent() ||
+      !this.streamDeckView
+    ) {
+      return Promise.resolve({ status: 'unavailable' });
+    }
+    return this.streamDeckView.handleRequest(request, context);
   }
 
   private async handleInstallPet(): Promise<void> {
@@ -2875,6 +2996,7 @@ export class DesktopHost {
    * single-instance gate (that side quits at boot).
    */
   async start(singleInstance: SingleInstanceHandle): Promise<void> {
+    this.primaryInstance = singleInstance.primary;
     app.on('before-quit', (event) => {
       // before-quit fires before windows close, so setting the flag here
       // lets every real quit (tray Quit, Cmd+Q, window-all-closed) through.
@@ -2906,6 +3028,25 @@ export class DesktopHost {
       this.petRunningUnsubscribe?.();
       this.petRunningUnsubscribe = null;
       this.petHandle?.stop();
+      const hasStreamDeckCleanup =
+        this.streamDeckLifecycleActive ||
+        this.streamDeckRelay !== null ||
+        this.streamDeckView !== null;
+      const stopStreamDeck = this.streamDeckTransition
+        .then(async () => {
+          const view = this.streamDeckView;
+          const relay = this.streamDeckRelay;
+          this.streamDeckView = null;
+          this.streamDeckRelay = null;
+          await view?.stopWatching();
+          await relay?.stop();
+        })
+        .catch(() => {
+          console.log('phi-desktop: Stream Deck relay shutdown incomplete');
+        })
+        .finally(() => {
+          this.streamDeckLifecycleActive = false;
+        });
       // Tear every retained view down before the app quits. The first
       // before-quit defers the quit until destroyAll() (and the rail view
       // teardown) completes, then re-quits; the guard flag keeps the
@@ -2913,33 +3054,38 @@ export class DesktopHost {
       if (this.profileViews && !this.viewsTornDown) {
         this.viewsTornDown = true;
         event.preventDefault();
-        void this.profileViews.destroyAll().then(() => {
-          // The rail view is NEVER hidden during the app's life; it is
-          // removed only here, at quit, alongside the profile views
-          // (WebContentsView teardown = webContents.close() + removeChildView).
-          // Guard for mainWindow/contentView being torn down concurrently.
-          if (this.railView) {
-            try {
-              if (!this.railView.webContents.isDestroyed())
-                this.railView.webContents.close();
-            } catch (err) {
-              console.log(`phi-desktop: rail view close: ${String(err)}`);
-            }
-            try {
-              if (
-                this.mainWindow &&
-                !this.mainWindow.isDestroyed() &&
-                this.mainWindow.contentView
-              ) {
-                this.mainWindow.contentView.removeChildView(this.railView);
+        void Promise.all([this.profileViews.destroyAll(), stopStreamDeck]).then(
+          () => {
+            // The rail view is NEVER hidden during the app's life; it is
+            // removed only here, at quit, alongside the profile views
+            // (WebContentsView teardown = webContents.close() + removeChildView).
+            // Guard for mainWindow/contentView being torn down concurrently.
+            if (this.railView) {
+              try {
+                if (!this.railView.webContents.isDestroyed())
+                  this.railView.webContents.close();
+              } catch (err) {
+                console.log(`phi-desktop: rail view close: ${String(err)}`);
               }
-            } catch (err) {
-              console.log(`phi-desktop: rail view detach: ${String(err)}`);
+              try {
+                if (
+                  this.mainWindow &&
+                  !this.mainWindow.isDestroyed() &&
+                  this.mainWindow.contentView
+                ) {
+                  this.mainWindow.contentView.removeChildView(this.railView);
+                }
+              } catch (err) {
+                console.log(`phi-desktop: rail view detach: ${String(err)}`);
+              }
+              this.railView = null;
             }
-            this.railView = null;
-          }
-          app.quit();
-        });
+            app.quit();
+          },
+        );
+      } else if (hasStreamDeckCleanup) {
+        event.preventDefault();
+        void stopStreamDeck.then(() => app.quit());
       }
     });
     app.on('window-all-closed', () => {
@@ -3077,6 +3223,7 @@ export class DesktopHost {
           ctrl.state().profiles.find((p) => p.id === event.id) ?? null;
         if (profile) this.trayHandle?.setActiveProfile(profile);
         this.syncDividersOnSwitch(event.id);
+        this.streamDeckView?.invalidate();
         // The retained-view switch follows the controller's active id (the
         // manager owns the view lifecycle — create/hide/show).
         this.profileViews?.setActive(event.id);
@@ -3109,6 +3256,9 @@ export class DesktopHost {
         if (this.controller?.getLowMemoryMode()) {
           this.applyLowMemoryMode(true);
         }
+      } else if (event.kind === 'streamdeck-enabled-changed') {
+        this.trayHandle?.rebuildMenu();
+        this.syncStreamDeckRelay(ctrl.getStreamDeckEnabled());
       } else if (event.kind === 'pet-enabled-changed') {
         this.trayHandle?.rebuildMenu();
         if (this.controller?.state().petEnabled) void this.startPet();
@@ -3138,6 +3288,8 @@ export class DesktopHost {
         event.kind === 'close-to-tray-changed' ||
         event.kind === 'sync-alerts-changed'
       ) {
+        if (event.kind === 'profiles-changed')
+          this.streamDeckView?.invalidate();
         if (event.kind === 'unread-changed') {
           this.trayHandle?.setUnread(event.id, event.n);
         }
@@ -3154,6 +3306,7 @@ export class DesktopHost {
       this.layoutCurrentSession();
     });
     this.syncTrayFromController();
+    this.syncStreamDeckRelay(this.controller.getStreamDeckEnabled());
     // Restore a previously-enabled pet on launch.
     if (this.controller.state().petEnabled) void this.startPet();
     // Retained per-profile views + rail renderer. The manager (src/views.ts)
@@ -3190,6 +3343,15 @@ export class DesktopHost {
             webSecurity: true,
             session: sharedSession,
           },
+        });
+        view.webContents.on(
+          'did-start-navigation',
+          (_event, _url, isInPlace, isMainFrame) => {
+            if (isMainFrame && !isInPlace) this.streamDeckView?.invalidate();
+          },
+        );
+        view.webContents.on('did-finish-load', () => {
+          queueMicrotask(() => this.streamDeckView?.invalidate());
         });
         // Obsidian blank so reloads don't flashbang white for 1 frame
         try {
@@ -4015,6 +4177,7 @@ export class DesktopHost {
         current.webContents.isDestroyed()
       )
         return;
+      this.streamDeckView?.invalidate();
       current.webContents.send('phi:body-obscuring', obscured);
       this.profileViews?.setObscured(obscured);
     };

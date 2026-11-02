@@ -26,6 +26,7 @@ import { initQuotaButton } from './quota.js';
 import { bootstrapAccessAuth } from './auth.js';
 import { openSettingsModal, broadcastConfigSync } from './settings.js';
 import { markDesktopView } from './desktop.js';
+import { installStreamDeckAdapter } from './streamdeck-adapter.js';
 import { formatPickedDir, mountDirectoryTree } from './path-picker.js';
 import { ACCENT_COLORS, applyThemeTokens } from './theme.js';
 export { ACCENT_COLORS };
@@ -2968,12 +2969,18 @@ export class App {
 // Start Application on DOM Load. Access bootstrap happens before App.init so
 // protected API calls and PTY WebSockets never start before authentication.
 window.addEventListener('DOMContentLoaded', async () => {
-    if (document.documentElement.hasAttribute('data-phi-config-page')) return;
+    if (
+        document.documentElement.hasAttribute('data-phi-config-page') ||
+        document.documentElement.hasAttribute('data-phi-desktop-root')
+    )
+        return;
     try {
         const auth = await bootstrapAccessAuth();
         const app = new App();
         app.accessAuthEnabled = auth.enabled;
-        app.init();
+        void app.init().then(() => {
+            window.__phiStreamDeck = installStreamDeckAdapter(app.tabManager);
+        });
     } catch (err) {
         console.error('[auth] Phi startup blocked:', err);
         const overlay = document.createElement('div');

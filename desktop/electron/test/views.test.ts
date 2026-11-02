@@ -38,6 +38,7 @@ interface RecordingView {
   destroyCalls: number;
   focusCalls: number;
   loadHandlers: Array<() => void>;
+  navigationHandlers: Array<(...args: unknown[]) => void>;
   beforeInputHandlers: Array<(event: unknown, input: unknown) => void>;
   eventListeners: Map<string, Array<() => void>>;
   zoomModes: string[];
@@ -52,6 +53,7 @@ function makeFakeView(): RecordingView {
   const setVisibleCalls: boolean[] = [];
   const loadURLCalls: string[] = [];
   const loadHandlers: Array<() => void> = [];
+  const navigationHandlers: Array<(...args: unknown[]) => void> = [];
   const beforeInputHandlers: Array<(event: unknown, input: unknown) => void> =
     [];
   const eventListeners = new Map<string, Array<() => void>>();
@@ -70,6 +72,11 @@ function makeFakeView(): RecordingView {
           if (!eventListeners.has(event)) eventListeners.set(event, []);
           eventListeners.get(event)!.push(cb);
           if (event === 'did-finish-load') loadHandlers.push(cb);
+          if (event === 'did-start-navigation') {
+            navigationHandlers.push(
+              cb as unknown as (...args: unknown[]) => void,
+            );
+          }
           if (event === 'before-input-event') beforeInputHandlers.push(cb);
         },
         loadURL: (url: string) => {
@@ -104,6 +111,7 @@ function makeFakeView(): RecordingView {
     destroyCalls: 0,
     focusCalls: 0,
     loadHandlers,
+    navigationHandlers,
     beforeInputHandlers,
     eventListeners,
     zoomModes,
@@ -380,6 +388,31 @@ describe('ProfileViewManager (retained per-profile views)', () => {
     expect(manager.getView('ghost')).toBeNull();
     manager.removeProfile('p1');
     expect(manager.getView('p1')).toBeNull();
+  });
+
+  it('exposes only the loaded, unobscured active view for bounded integrations', () => {
+    const { manager, views } = makeManager();
+    manager.addProfile('p1', 'http://127.0.0.1:7070/');
+    manager.setActive('p1');
+    expect(manager.getActiveReadyView()).toBeNull();
+
+    views[0].loadHandlers[0]();
+    expect(manager.getActiveReadyView()).toEqual({
+      profileId: 'p1',
+      view: views[0].view,
+    });
+    manager.setObscured(true);
+    expect(manager.getActiveReadyView()).toBeNull();
+    manager.setObscured(false);
+    expect(manager.getActiveReadyView()?.view).toBe(views[0].view);
+    views[0].navigationHandlers[0](undefined, '#section', true, true);
+    expect(manager.getActiveReadyView()?.view).toBe(views[0].view);
+    views[0].navigationHandlers[0](undefined, 'http://example/', false, true);
+    expect(manager.getActiveReadyView()).toBeNull();
+    views[0].loadHandlers[0]();
+    expect(manager.getActiveReadyView()?.view).toBe(views[0].view);
+    manager.setActive(null);
+    expect(manager.getActiveReadyView()).toBeNull();
   });
 
   it('does NOT block same-host profiles (browser origin rules isolate server origins)', () => {
